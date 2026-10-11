@@ -81,6 +81,19 @@ static void test_promote_establishes_ssa(void)
           (ir_verify(r->m, r->d) & IR_PROP_SSA) != 0);
     check("the function has no locals left",
           ir_func_at(r->m, 0)->n_locals == 0);
+    ir_func_t *function = ir_func_at(r->m, 0);
+    ir_value_t *write = ir_value_find(function, "x_0");
+    ir_value_t *read = ir_value_find(function, "res");
+    ir_annot_t *write_marker = write && write->def
+        ? ir_annot_get(&write->def->annots, "ir.promoted_local_write")
+        : nullptr;
+    check("promoted local copies retain write semantics",
+          write_marker && write_marker->kind == IR_ANNOT_BOOL
+              && write_marker->b);
+    check("ordinary value copies do not become writes",
+          read && read->def
+              && !ir_annot_get(&read->def->annots,
+                               "ir.promoted_local_write"));
 
     snap(r);
     check("and no local destination survives in the text",

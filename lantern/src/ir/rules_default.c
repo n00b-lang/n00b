@@ -446,6 +446,7 @@ static ir_rule_result_t rule_compare(ir_module_t *m, ir_instr_t *in,
 
 static th_type *record_of(ir_module_t *m, th_type *t)
 {
+    t = th_resolve(t);
     if (!t) {
         return nullptr;
     }
@@ -1562,6 +1563,63 @@ static ir_rule_result_t rule_index(ir_module_t *m, ir_instr_t *in,
     th_type *out = th_ind(ir_ctx_types(m->ctx), attrs, elem);
 
     return ACCEPT(ir_type_intern(m, out));
+}
+
+static ir_rule_result_t rule_sequence_length(ir_module_t *m, ir_instr_t *in,
+                                             ir_diags_t *d, void *state)
+{
+    (void)state;
+    th_type *sequence = opd_type(in, 0);
+    if (!sequence) return DECLINE;
+    if (th_kind_of(th_resolve(sequence)) != TH_SEQUENCE) {
+        complain(m, d, IR_DIAG_TYPE_CLASS, in, "this operation",
+                 "sequence.length requires a sequence value");
+        return REJECT;
+    }
+    th_type *result = in->dest ? in->dest->type : nullptr;
+    if (!result || ir_machine_of(m, result).class != IR_CLASS_UINT) {
+        complain(m, d, IR_DIAG_TYPE_CLASS, in, "this operation",
+                 "sequence.length requires an unsigned result");
+        return REJECT;
+    }
+    return ACCEPT(result);
+}
+
+static ir_rule_result_t rule_sequence_get(ir_module_t *m, ir_instr_t *in,
+                                          ir_diags_t *d, void *state)
+{
+    (void)state;
+    th_type *sequence = opd_type(in, 0);
+    th_type *index = opd_type(in, 1);
+    if (!sequence || !index) return DECLINE;
+    if (th_kind_of(th_resolve(sequence)) != TH_SEQUENCE
+        || !is_int(ir_machine_of(m, index).class)) {
+        complain(m, d, IR_DIAG_TYPE_CLASS, in, "this operation",
+                 "sequence.get requires a sequence value and integer index");
+        return REJECT;
+    }
+    return ACCEPT(ir_type_intern(m, th_seq_elem(th_resolve(sequence))));
+}
+
+static ir_rule_result_t rule_sequence_set(ir_module_t *m, ir_instr_t *in,
+                                          ir_diags_t *d, void *state)
+{
+    (void)state;
+    th_type *pointer = opd_type(in, 0);
+    th_type *index = opd_type(in, 1);
+    th_type *value = opd_type(in, 2);
+    if (!pointer || !index || !value) return DECLINE;
+    th_type *sequence = th_ind_referent(pointer);
+    if (!sequence || th_kind_of(th_resolve(sequence)) != TH_SEQUENCE
+        || !is_int(ir_machine_of(m, index).class)
+        || !same(m, ir_type_intern(m,
+            th_seq_elem(th_resolve(sequence))), value)) {
+        complain(m, d, IR_DIAG_TYPE_CLASS, in, "this operation",
+                 "sequence.set requires a sequence address, integer index, "
+                 "and matching element value");
+        return REJECT;
+    }
+    return ACCEPT(nullptr);
 }
 
 static ir_rule_result_t rule_offset(ir_module_t *m, ir_instr_t *in,
@@ -3120,6 +3178,9 @@ static const entry DEFAULTS[] = {
     {IR_OP_GLOBAL_STORE, "ir.global.store", rule_global_store},
     {IR_OP_FIELD, "ir.field", rule_field},
     {IR_OP_INDEX, "ir.index", rule_index},
+    {IR_OP_SEQUENCE_LENGTH, "ir.sequence.length", rule_sequence_length},
+    {IR_OP_SEQUENCE_GET, "ir.sequence.get", rule_sequence_get},
+    {IR_OP_SEQUENCE_SET, "ir.sequence.set", rule_sequence_set},
     {IR_OP_OFFSET, "ir.offset", rule_offset},
     {IR_OP_DIFF, "ir.diff", rule_diff},
     {IR_OP_MEMCPY, "ir.memcpy", rule_mem},

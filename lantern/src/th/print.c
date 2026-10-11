@@ -672,8 +672,10 @@ th_print_with_options(th_ctx *ctx, th_type *type,
     core_buffer_t b = {0};
 
     emit(&c, &b, type);
-    emit_free_where(&c, &b, type);
-    emit_binder_where(&c, &b, type);
+    if (!options || !options->omit_constraints) {
+        emit_free_where(&c, &b, type);
+        emit_binder_where(&c, &b, type);
+    }
 
     if (!b.data) {
         return th_strdup(ctx, "", 0);

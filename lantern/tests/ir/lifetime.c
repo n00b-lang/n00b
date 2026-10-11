@@ -562,6 +562,34 @@ static void test_pointer_join_and_derived_aliases(void)
     ir_ctx_free(ctx);
 }
 
+static void test_fresh_construction_storage(void)
+{
+    ir_ctx_t *ctx = ir_ctx_new();
+    ir_module_t *module = ir_module_new(ctx, "fresh_lifetime",
+        &ir_profile_bce, "test");
+    ir_func_t *caller = ir_func_add(module, "caller",
+        ir_type_parse(module, "() -> void"), IR_LINK_INTERNAL);
+    ir_block_t *entry = ir_block_add(caller, "entry");
+    ir_instr_t *storage = ir_instr_add(entry, IR_OP_ALLOC);
+    ir_instr_operand_type(storage, ir_type_parse(module, "i32"));
+    ir_instr_set_dest(storage, "storage",
+        ir_type_parse(module, "ptr[i32]"));
+    ir_value_t *initializer = ir_alloc(ctx, sizeof(*initializer));
+    initializer->kind = IR_VAL_FUNC;
+    initializer->type = ir_type_parse(module, "(inout i32) -> void");
+    ir_instr_t *call = ir_instr_add(entry, IR_OP_CALL);
+    bool built = ir_instr_operand_value(call, initializer)
+        && ir_instr_operand_fresh(call, storage->dest);
+    ir_instr_t *load = ir_instr_add(entry, IR_OP_LOAD);
+    built = built && ir_instr_operand_value(load, storage->dest);
+    ir_instr_set_dest(load, "result", ir_type_parse(module, "i32"));
+    ir_instr_add(entry, IR_OP_RETURN);
+
+    check("fresh modify construction does not make local storage escape",
+          built && ir_allocation_has_only_local_uses(caller, storage));
+    ir_ctx_free(ctx);
+}
+
 int main(void)
 {
     test_branch_paths();
@@ -575,5 +603,6 @@ int main(void)
     test_pointer_escape_stays_unknown();
     test_pointer_copy_aliases();
     test_pointer_join_and_derived_aliases();
+    test_fresh_construction_storage();
     return fails != 0;
 }

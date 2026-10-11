@@ -152,7 +152,9 @@ static th_type *call_shape(ictx *c, parse_tree_t *call, th_type *result)
             if (!node_is(c->v->grammar, arg, "expression")) continue;
             core_list_push(params, ((th_param){
                 .mode = TH_IN,
-                .type = node_type(c, arg),
+                .type = core_tree_node_value(arg).argument_type
+                    ? core_tree_node_value(arg).argument_type
+                    : node_type(c, arg),
             }));
         }
     }
@@ -171,7 +173,9 @@ static th_type *call_shape(ictx *c, parse_tree_t *call, th_type *result)
             core_list_push(kwparams, ((th_kwparam){
                 .name = name.data,
                 .mode = TH_IN,
-                .type = node_type(c, value),
+                .type = core_tree_node_value(value).argument_type
+                    ? core_tree_node_value(value).argument_type
+                    : node_type(c, value),
             }));
         }
     }
@@ -246,8 +250,9 @@ static th_type *slice_call_shape(ictx *c, th_type *result)
     for (size_t i = 0; contents && !core_tree_is_leaf(contents) &&
          i < core_tree_num_children(contents); i++) {
         parse_tree_t *part = core_tree_child(contents, i);
-        if (core_tree_is_leaf(part) &&
-            parse_tree_leaf_is(part, CORE_STRING_STATIC(":"))) {
+        if (node_is(c->v->grammar, part, "range-sep")
+            || (core_tree_is_leaf(part) &&
+                parse_tree_leaf_is(part, CORE_STRING_STATIC(":")))) {
             if (colon) return nullptr;
             colon = true;
         } else if (node_is(c->v->grammar, part, "expression")) {
@@ -303,6 +308,8 @@ static th_type *index_store_call_shape(ictx *c, th_type *result)
 
     parse_tree_t *contents = nullptr;
     parse_tree_t *index_contents = core_tree_child(node, 2);
+    if (!node_is(c->v->grammar, index_contents, "index-contents"))
+        return nullptr;
     size_t expression_count = 0;
     for (size_t i = 0; index_contents && !core_tree_is_leaf(index_contents) &&
          i < core_tree_num_children(index_contents); i++) {
@@ -322,9 +329,44 @@ static th_type *index_store_call_shape(ictx *c, th_type *result)
 
     th_param parameters[] = {
         {.mode = TH_IN, .type = node_type(c, contents)},
-        {.mode = TH_IN, .type = node_type(c, value)},
+        {.mode = TH_IN, .type = core_tree_node_value(value).argument_type
+            ? core_tree_node_value(value).argument_type
+            : node_type(c, value)},
     };
     return th_func(c->tc, result, parameters, 2, nullptr, nullptr, 0);
+}
+
+static th_type *slice_store_call_shape(ictx *c, th_type *result)
+{
+    parse_tree_t *node = c->v->node;
+    parse_tree_t *assignment = nullptr;
+    for (parse_tree_t *parent = c->v->parent; parent;
+         parent = core_tree_node_value(parent).parent) {
+        if (node_is(c->v->grammar, parent, "assign-stmt")) {
+            assignment = parent;
+            break;
+        }
+        if (is_index_postfix(c->v->grammar, parent) &&
+            tree_contains(core_tree_child(parent, 0), node))
+            return nullptr;
+    }
+    if (!node_is(c->v->grammar, assignment, "assign-stmt") ||
+        !tree_contains(core_tree_child(assignment, 0), node) ||
+        !node_is(c->v->grammar, core_tree_child(node, 2), "slice-contents") ||
+        !slice_call_shape(c, result))
+        return nullptr;
+    parse_tree_t *value = core_tree_child(assignment, 2);
+    if (!node_is(c->v->grammar, value, "expression")) return nullptr;
+    th_type *integer = th_name(c->tc, "int");
+    th_arg option_arg = {.kind = TH_ARG_TYPE, .type = integer};
+    th_type *bound = th_apply(c->tc, "option", &option_arg, 1);
+    th_param parameters[] = {
+        {.mode = TH_IN, .type = bound},
+        {.mode = TH_IN, .type = bound},
+        {.mode = TH_IN, .type = th_name(c->tc, "bool")},
+        {.mode = TH_IN, .type = node_type(c, value)},
+    };
+    return th_func(c->tc, result, parameters, 4, nullptr, nullptr, 0);
 }
 
 static bool index_is_assignment_target(parse_visit_t *visit,
@@ -362,26 +404,52 @@ static bool unify_method_call_shape(ictx *c, th_type *signature,
     if (!call_shape) return true;
 
     size_t actual_count = th_func_nparams(call_shape);
+    size_t keyword_count = th_func_nkw(call_shape);
     size_t formal_count = th_func_nparams(signature);
     if (actual_count > formal_count - 1 && !th_func_rest(signature))
         return false;
+    size_t argument_count = actual_count + keyword_count;
+    const th_type **sources = argument_count
+        ? core_alloc_array(const th_type *, argument_count) : nullptr;
+    th_type **copies = argument_count
+        ? core_alloc_array(th_type *, argument_count) : nullptr;
+    if (argument_count && (!sources || !copies)) {
+        core_free(sources);
+        core_free(copies);
+        return false;
+    }
     for (size_t i = 0; i < actual_count; i++) {
         const th_param *actual = th_func_param(call_shape, i);
+        sources[i] = actual ? actual->type : nullptr;
+    }
+    for (size_t i = 0; i < keyword_count; i++) {
+        const th_kwparam *actual = th_func_kw(call_shape, i);
+        sources[actual_count + i] = actual ? actual->type : nullptr;
+    }
+    bool matched = th_type_clone_many(c->tc, sources, copies,
+                                      argument_count);
+    for (size_t i = 0; i < actual_count; i++) {
         const th_param *formal = i + 1 < formal_count
             ? th_func_param(signature, i + 1) : th_func_rest(signature);
-        if (!actual || !formal ||
-            !th_unify_in_place(c->tc, actual->type, formal->type))
-            return false;
+        if (!matched || !copies[i] || !formal ||
+            !th_unify_in_place(c->tc, formal->type, copies[i])) {
+            matched = false;
+            break;
+        }
     }
-    for (size_t i = 0; i < th_func_nkw(call_shape); i++) {
+    for (size_t i = 0; matched && i < keyword_count; i++) {
         const th_kwparam *actual = th_func_kw(call_shape, i);
         const th_kwparam *formal = actual
             ? th_func_kw_lookup(signature, actual->name) : nullptr;
-        if (!actual || !formal ||
-            !th_unify_in_place(c->tc, actual->type, formal->type))
-            return false;
+        if (!actual || !copies[actual_count + i]
+            || (th_func_nkw(signature) && !formal)
+            || (formal && !th_unify_in_place(c->tc, formal->type,
+                                             copies[actual_count + i])))
+            matched = false;
     }
-    return true;
+    core_free(sources);
+    core_free(copies);
+    return matched;
 }
 
 static bool
@@ -404,9 +472,9 @@ unify_function_call_shape(ictx *c, th_type *signature, th_type *call_shape)
         const th_kwparam *actual = th_func_kw(call_shape, i);
         const th_kwparam *formal = actual
             ? th_func_kw_lookup(signature, actual->name) : nullptr;
-        if (!actual || !formal || !th_unify_probe(
-                c->tc, formal->type, actual->type)
-            || !th_unify_in_place(c->tc, formal->type, actual->type))
+        if (!actual || (th_func_nkw(signature) && !formal) ||
+            (formal && (!th_unify_probe(c->tc, formal->type, actual->type)
+                || !th_unify_in_place(c->tc, formal->type, actual->type))))
             return false;
     }
     return true;
@@ -767,6 +835,14 @@ project(ictx *c, parse_infer_proj_t op, th_type *t,
     case PARSE_INFER_SLICE_OF: {
         parse_tree_t *slice_node = c->v->node;
         th_type *result = node_type(c, slice_node);
+        if (index_is_assignment_target(c->v, slice_node)) {
+            th_type *call_shape = slice_store_call_shape(c, result);
+            if (call_shape && other_name.data)
+                return infer_method_obligation(c, t, other_name.data,
+                                               result, call_shape);
+            c->failed = true;
+            return result;
+        }
         th_type *call_shape = slice_call_shape(c, result);
         if (!call_shape || !explicit_name.data) {
             c->failed = true;

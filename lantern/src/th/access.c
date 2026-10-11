@@ -182,14 +182,20 @@ bool th_trait_requirement_at(const th_type *t, size_t i,
     return true;
 }
 
-static bool same_named_type(const th_type *left, const th_type *right)
+static bool same_named_type(th_ctx *ctx, const th_type *left,
+                            const th_type *right)
 {
     const char *left_name = nullptr, *right_name = nullptr;
     size_t left_len = 0, right_len = 0;
-    return th_named_info(left, &left_name, &left_len, nullptr, nullptr)
-        && th_named_info(right, &right_name, &right_len, nullptr, nullptr)
-        && left_len == right_len
-        && !memcmp(left_name, right_name, left_len);
+    if (!th_named_info(left, &left_name, &left_len, nullptr, nullptr)
+        || !th_named_info(right, &right_name, &right_len, nullptr, nullptr)
+        || left_len != right_len
+        || memcmp(left_name, right_name, left_len)) return false;
+    if (left != right
+        && (!th_is_closed(ctx, (th_type *)left)
+            || !th_is_closed(ctx, (th_type *)right))) return false;
+    return th_hash(ctx, (th_type *)left)
+        == th_hash(ctx, (th_type *)right);
 }
 
 bool th_type_define(th_ctx *ctx, th_type *type, th_type *definition)
@@ -198,7 +204,7 @@ bool th_type_define(th_ctx *ctx, th_type *type, th_type *definition)
         return false;
     for (size_t i = 0; i < ctx->type_definitions.len; i++) {
         th_type_definition_t *entry = &ctx->type_definitions.data[i];
-        if (!same_named_type(entry->type, type)) continue;
+        if (!same_named_type(ctx, entry->type, type)) continue;
         if (entry->definition == definition
             || th_hash(ctx, entry->definition) == th_hash(ctx, definition))
             return true;
@@ -209,18 +215,57 @@ bool th_type_define(th_ctx *ctx, th_type *type, th_type *definition)
     return true;
 }
 
-th_type *th_type_definition(const th_ctx *ctx, const th_type *type)
+th_type *th_type_definition(th_ctx *ctx, const th_type *type)
 {
     if (!ctx || !type) return nullptr;
     type = th_resolve_c(type);
     for (size_t i = 0; i < ctx->type_definitions.len; i++) {
         const th_type_definition_t *entry = &ctx->type_definitions.data[i];
-        if (same_named_type(entry->type, type)) return entry->definition;
+        if (same_named_type(ctx, entry->type, type)) return entry->definition;
+    }
+    const char *name = nullptr;
+    size_t name_len = 0, nargs = 0;
+    if (!th_named_info(type, &name, &name_len, nullptr, &nargs) || !nargs)
+        return nullptr;
+    for (size_t i = 0; i < ctx->type_definitions.len; i++) {
+        const th_type_definition_t *entry = &ctx->type_definitions.data[i];
+        const char *candidate = nullptr;
+        size_t candidate_len = 0, candidate_args = 0;
+        if (!th_named_info(entry->type, &candidate, &candidate_len,
+                           nullptr, &candidate_args)
+            || candidate_len != name_len || candidate_args != nargs
+            || memcmp(candidate, name, name_len)) continue;
+        const th_type **from = core_alloc_array(const th_type *, nargs);
+        th_type **to = core_alloc_array(th_type *, nargs);
+        bool valid = from && to;
+        for (size_t j = 0; valid && j < nargs; j++) {
+            const th_arg *parameter = th_named_arg(entry->type, j);
+            const th_arg *argument = th_named_arg(type, j);
+            valid = parameter && argument
+                && parameter->kind == TH_ARG_TYPE
+                && argument->kind == TH_ARG_TYPE
+                && th_kind_of(th_resolve(parameter->type)) == TH_VAR;
+            if (valid) {
+                from[j] = parameter->type;
+                to[j] = argument->type;
+            }
+        }
+        th_type *definition = valid
+            ? th_type_clone_replacing(ctx, entry->definition, from, to, nargs)
+            : nullptr;
+        core_free(to);
+        core_free(from);
+        if (!definition) continue;
+        if (th_is_closed(ctx, (th_type *)type))
+            core_list_push(ctx->type_definitions,
+                           ((th_type_definition_t){(th_type *)type,
+                                                   definition}));
+        return definition;
     }
     return nullptr;
 }
 
-th_type *th_record_lookup_in(const th_ctx *ctx, const th_type *type,
+th_type *th_record_lookup_in(th_ctx *ctx, const th_type *type,
                              const char *name)
 {
     th_type *member = th_record_lookup(type, name);

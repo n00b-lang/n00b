@@ -683,9 +683,83 @@ static void test_array_option_method(void) {
   th_ctx_free(types);
 }
 
+static void test_record_method_argument(void) {
+  th_ctx *types = th_ctx_new();
+  th_env *environment = th_env_new();
+  th_param required[] = {
+      {.mode = TH_INOUT, .type = th_var(types)},
+      {.mode = TH_IN, .type = th_var(types)},
+      {.mode = TH_IN, .type = th_var(types)},
+  };
+  th_type *requirement = th_func_with_error(types, th_var(types),
+      th_var(types), required, 3, nullptr, nullptr, 0);
+  th_type *element = th_var(types);
+  th_param parameters[] = {
+      {.mode = TH_INOUT, .type = th_array(types, element)},
+      {.mode = TH_IN, .type = th_name(types, "int")},
+      {.mode = TH_IN, .type = element},
+  };
+  th_type *signature = th_func_with_error(types, th_name(types, "nil"),
+      th_name(types, "nil"), parameters, 3, nullptr, nullptr, 0);
+  bool registered = requirement && signature &&
+      th_env_register_trait_contracts(environment, "Index_Write", "builtins",
+          "base", TH_ENV_PUBLIC,
+          method_record(types, "__write", requirement)) &&
+      th_env_register_function_contract(environment, "builtins.array_write",
+          "__write", "builtins", "base", TH_ENV_PUBLIC,
+          th_env_signature_contract(types, signature, th_name(types, "nil"))) &&
+      th_env_freeze(environment);
+  check("register generic array write method", registered);
+
+  for (size_t test = 0; registered && test < 4; test++) {
+    th_ctx *use = th_ctx_new();
+    th_type *pair = th_name(use, "client.Pair");
+    th_member fields[] = {{.name = "left", .type = th_name(use, "int")},
+                          {.name = "right", .type = th_name(use, "int")}};
+    th_type *definition = th_record(use, fields, 2);
+    th_member wrong_fields[] = {
+        {.name = "left", .type = th_name(use, "int")},
+        {.name = "other", .type = th_name(use, "int")},
+    };
+    th_type *inferred_left = th_var(use);
+    th_member inferred_fields[] = {
+        {.name = "left", .type = inferred_left},
+        {.name = "right", .type = th_name(use, "int")},
+    };
+    th_type *actual = test == 2 ? th_record(use, wrong_fields, 2)
+                    : test == 3 ? th_record(use, inferred_fields, 2)
+                                : th_record(use, fields, 2);
+    th_param arguments[] = {
+        {.mode = TH_IN, .type = th_name(use, "int")},
+        {.mode = TH_IN, .type = actual},
+    };
+    th_type *result = th_var(use);
+    th_type *call = th_func(use, result, arguments, 2, nullptr, nullptr, 0);
+    th_type *receiver = th_var(use);
+    bool ready = pair && definition && actual && call && receiver &&
+        th_type_define(use, pair, definition) &&
+        th_require_method(use, receiver, "__write", result, call);
+    if (test != 0)
+      th_ctx_set_method_argument_coercions(use, TH_COERCE_RECORD_CONSTRUCT);
+    bool bound = ready && th_unify_in_place(use, receiver,
+        th_array(use, pair)) &&
+        th_ctx_set_environment(use, environment, "client", "base");
+    check(test == 0 ? "record method argument rejects implicit construction by default"
+                    : test == 1 ? "record method argument accepts matching nominal shape"
+                    : test == 2 ? "record method argument rejects mismatched nominal shape"
+                                : "record method argument binds matching field types",
+          bound == (test == 1 || test == 3) &&
+          (test != 3 || th_kind_of(th_resolve(inferred_left)) == TH_NAMED));
+    th_ctx_free(use);
+  }
+  th_env_free(environment);
+  th_ctx_free(types);
+}
+
 int main(void) {
   test_consume_ref_method();
   test_array_option_method();
+  test_record_method_argument();
   test_kind_constraint_archive();
   test_trait_type_identity();
   th_env *env = th_env_new();
@@ -2217,6 +2291,35 @@ int main(void) {
   }
   check("matching partial and complete method obligations share one slot",
         repeated_complete);
+  th_type *overloaded_receiver = th_var(method_error_context);
+  th_type *integer_result = th_name(method_error_context, "int");
+  th_type *string_result = th_name(method_error_context, "string");
+  th_type *integer_call = th_func(method_error_context, integer_result,
+                                 nullptr, 0, nullptr, nullptr, 0);
+  th_type *string_call = th_func(method_error_context, string_result,
+                                nullptr, 0, nullptr, nullptr, 0);
+  check("repeated method overload matches beyond the first slot",
+        th_require_method(method_error_context, overloaded_receiver,
+            "render", integer_result, integer_call)
+        && th_require_method(method_error_context, overloaded_receiver,
+            "render", string_result, string_call)
+        && th_require_method(method_error_context, overloaded_receiver,
+            "render", string_result, string_call)
+        && th_var_constraint_count(overloaded_receiver) == 2);
+  th_type *fresh_receiver = th_var(method_error_context);
+  th_type *fresh_first = th_var(method_error_context);
+  th_type *fresh_second = th_var(method_error_context);
+  th_type *fresh_first_call = th_func(method_error_context, fresh_first,
+                                     nullptr, 0, nullptr, nullptr, 0);
+  th_type *fresh_second_call = th_func(method_error_context, fresh_second,
+                                      nullptr, 0, nullptr, nullptr, 0);
+  check("repeated method calls unify fresh result variables",
+        th_require_method(method_error_context, fresh_receiver, "hash",
+            fresh_first, fresh_first_call)
+        && th_require_method(method_error_context, fresh_receiver, "hash",
+            fresh_second, fresh_second_call)
+        && th_var_constraint_count(fresh_receiver) == 1
+        && th_resolve(fresh_first) == th_resolve(fresh_second));
   th_type *merge_partial = th_var(method_error_context);
   th_type *merge_complete = th_var(method_error_context);
   th_type *merge_result = th_name(method_error_context, "string");

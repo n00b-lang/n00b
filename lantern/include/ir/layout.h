@@ -139,6 +139,8 @@ bool ir_layout_copy_final(ir_module_t *m, th_type *destination,
                           th_type *source, const char *target);
 const ir_final_layout_t *ir_layout_final(ir_module_t *m, th_type *t,
                                         const char *target);
+const ir_final_layout_t *ir_layout_final_visible(ir_module_t *m, th_type *t,
+                                                const char *target);
 bool ir_layout_final_byte_extent(const ir_final_layout_t *layout,
                                  uint64_t *bytes);
 bool ir_layout_final_stride_bits(const ir_final_layout_t *layout,

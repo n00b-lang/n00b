@@ -1102,7 +1102,9 @@ static bool typed_operand(ir_visit_t *vi)
     }
     else if (val && !(vi->instr->op == IR_OP_ADDRESS_OF
                       && vi->index == 0)
-             && !(vi->instr->op == IR_OP_STORE && vi->index == 0
+             && !((vi->instr->op == IR_OP_STORE
+                   || vi->instr->op == IR_OP_SEQUENCE_SET)
+                  && vi->index == 0
                   && val->kind == IR_VAL_INSTR && val->def
                   && (val->def->op == IR_OP_ADDRESS_OF
                       || val->def->op == IR_OP_ALLOC))) {
@@ -1204,7 +1206,8 @@ static bool typed_instr_end(ir_visit_t *vi)
         && in->dest_local)
         check_binding_write(v, in, vi->block,
                            ir_local_value(vi->func, in->dest_local));
-    else if (in->op == IR_OP_STORE && in->n_operands) {
+    else if ((in->op == IR_OP_STORE || in->op == IR_OP_SEQUENCE_SET)
+             && in->n_operands) {
         check_store_target_write(v, in, vi->block,
                                  ir_operand_value(&in->operands[0]));
     }

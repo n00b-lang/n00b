@@ -611,6 +611,12 @@ ir_global_t *ir_global_at(ir_module_t *m, size_t i);
 
 ir_func_t   *ir_func_add(ir_module_t *m, const char *name, th_type *type,
                          ir_linkage_t linkage);
+/* Copy a function's graph into its module while substituting type variables.
+ * Analyses depending on value identity must be rerun for the copy. */
+ir_func_t   *ir_func_clone_replacing(ir_func_t *source, const char *name,
+                                    const th_type *const *from,
+                                    th_type *const *to, size_t count,
+                                    const char **failure);
 ir_func_t   *ir_func_find(ir_module_t *m, const char *name);
 /* Preserve a universally quantified callable contract separately from the
  * function's IR parameter/result shape. Calls instantiate this contract per

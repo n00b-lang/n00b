@@ -62,12 +62,21 @@ static const char *derived_name(P *p, const ir_local_t *l, uint32_t nth)
 static ir_value_t *fresh(P *p, ir_instr_t *in, const ir_local_t *l)
 {
     const char *name = derived_name(p, l, p->counter[l->index]++);
+    bool promoted_copy_write = in->op == IR_OP_COPY
+        && in->dest_kind == IR_DEST_LOCAL;
     ir_value_t *value = ir_instr_set_dest(in, name, l->type)
         ? in->dest : nullptr;
     ir_annots_t *source = ir_value_annots(
         ir_local_value(p->f, (ir_local_t *)l));
     ir_annots_t *target = ir_value_annots(value);
     ir_ctx_t *ctx = p->m->ctx;
+    if (value && promoted_copy_write
+        && !ir_annot_set(ctx, &in->annots, (ir_annot_t){
+            .key = "ir.promoted_local_write", .kind = IR_ANNOT_BOOL,
+            .b = true})) {
+        p->ok = false;
+        return nullptr;
+    }
     for (uint32_t i = 0; value && source && target
          && i < ir_annot_count(source); i++) {
         if (!ir_annot_set(ctx, target, *ir_annot_at(source, i))) {

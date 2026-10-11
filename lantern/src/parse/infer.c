@@ -459,7 +459,9 @@ r_project(parse_reduce_t *r)
         }
         if (r->n_kids == 8) {
             e->other_name = dup_text(kid_text(r, 6));
-            if (e->proj != PARSE_INFER_ELEMENT_OF || !e->other_name.data)
+            if ((e->proj != PARSE_INFER_ELEMENT_OF
+                 && e->proj != PARSE_INFER_SLICE_OF)
+                || !e->other_name.data)
                 fail(r);
         }
     }

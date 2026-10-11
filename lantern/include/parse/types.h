@@ -140,6 +140,7 @@ typedef struct parse_nt_node_t {
     parse_scope_t     *scope;
     parse_sym_entry_t *sym;
     th_type         *type;
+    th_type         *argument_type;
     th_type         *error_type;
     core_string_t unresolved_name;
     parse_node_resolution_t resolution;
@@ -150,6 +151,7 @@ typedef struct parse_nt_node_t {
     int64_t integer_range_minimum;
     int64_t integer_range_maximum;
     void *integer_literal_origin;
+    void *record_literal_origin;
 } parse_nt_node_t;
 
 typedef void *(*parse_walk_action_t)(parse_nt_node_t *node,

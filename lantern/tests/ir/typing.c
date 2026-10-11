@@ -33,6 +33,41 @@ test_context_owned_named_types(void)
           !ir_type_define(consumer, named,
                           ir_type_parse(consumer, "(x: u64, y: i32)")));
 
+    th_ctx *types = ir_ctx_types(ctx);
+    th_type *parameter = th_var_named(types, "T");
+    th_arg template_arg = {.kind = TH_ARG_TYPE, .type = parameter};
+    th_type *template = th_apply(types, "pkg.Box", &template_arg, 1);
+    th_member member = {.name = "item", .type = parameter};
+    th_type *template_shape = th_record(types, &member, 1);
+    th_arg concrete_arg = {.kind = TH_ARG_TYPE,
+                           .type = ir_type_parse(owner, "i32")};
+    th_type *concrete = th_apply(types, "pkg.Box", &concrete_arg, 1);
+    check("generic IR definitions specialize in another module",
+          template && template_shape && concrete
+              && ir_type_define(owner, template, template_shape)
+              && ir_type_eq(consumer,
+                  th_record_lookup(ir_type_definition(consumer, concrete),
+                                   "item"), concrete_arg.type));
+
+    th_type *key = th_var_named(types, "K");
+    th_type *value = th_var_named(types, "V");
+    th_arg map_args[] = {{.kind = TH_ARG_TYPE, .type = key},
+                         {.kind = TH_ARG_TYPE, .type = value}};
+    th_type *map_template = th_apply(types, "pkg.Map", map_args, 2);
+    th_type *pair_members[] = {key, value};
+    th_type *pairs = th_array(types, th_tuple(types, pair_members, 2));
+    th_member map_member = {.name = "pairs", .type = pairs};
+    th_type *map_shape = th_record(types, &map_member, 1);
+    th_arg map_concrete_args[] = {
+        {.kind = TH_ARG_TYPE, .type = ir_type_parse(owner, "string")},
+        {.kind = TH_ARG_TYPE, .type = ir_type_parse(owner, "i32")},
+    };
+    th_type *map_concrete = th_apply(types, "pkg.Map", map_concrete_args, 2);
+    check("nested two-parameter IR definitions specialize in another module",
+          map_template && map_shape && map_concrete
+              && ir_type_define(owner, map_template, map_shape)
+              && ir_type_definition(consumer, map_concrete) != nullptr);
+
     th_type *callable = ir_type_parse(owner, "() -> i32 fail: string");
     th_type *outcome = ir_call_outcome_type(owner, callable);
     check("the defining module owns the call outcome type",
@@ -788,6 +823,54 @@ static void test_memory(void)
     ir_instr_operand_value(ixseq, val(e, "u32"));
     check("a sequence is indexable however it is referenced",
           accepts_as(e, ixseq, "ref[i32]"));
+
+    ir_instr_t *length = op(e, IR_OP_SEQUENCE_LENGTH);
+    ir_instr_set_dest(length, "length", ir_type_parse(e->m, "u64"));
+    ir_instr_operand_value(length, val(e, "array[i32; 4]"));
+    check("sequence.length yields an unsigned extent",
+          accepts_as(e, length, "u64"));
+
+    ir_instr_t *length_bad = op(e, IR_OP_SEQUENCE_LENGTH);
+    ir_instr_set_dest(length_bad, "bad_length", ir_type_parse(e->m,
+                                                               "u64"));
+    ir_instr_operand_value(length_bad, val(e, "i32"));
+    check("sequence.length rejects scalar operands",
+          apply(e, length_bad) == IR_RULE_REJECT);
+
+    ir_instr_t *get = op(e, IR_OP_SEQUENCE_GET);
+
+    ir_instr_operand_value(get, val(e, "array[i32; 4]"));
+    ir_instr_operand_value(get, val(e, "u32"));
+    check("sequence.get reads an element from a sequence value",
+          accepts_as(e, get, "i32"));
+
+    ir_instr_t *get_bad = op(e, IR_OP_SEQUENCE_GET);
+
+    ir_instr_operand_value(get_bad, val(e, "array[i32; 4]"));
+    ir_instr_operand_value(get_bad, val(e, "f64"));
+    check("sequence.get requires an integer index",
+          apply(e, get_bad) == IR_RULE_REJECT);
+
+    ir_instr_t *set = op(e, IR_OP_SEQUENCE_SET);
+    ir_instr_operand_value(set, val(e, "ref[array[i32; 4]]"));
+    ir_instr_operand_value(set, val(e, "u32"));
+    ir_instr_operand_value(set, val(e, "i32"));
+    check("sequence.set writes a matching element through a sequence address",
+          accepts_as(e, set, nullptr));
+
+    ir_instr_t *set_bad = op(e, IR_OP_SEQUENCE_SET);
+    ir_instr_operand_value(set_bad, val(e, "ref[array[i32; 4]]"));
+    ir_instr_operand_value(set_bad, val(e, "u32"));
+    ir_instr_operand_value(set_bad, val(e, "f64"));
+    check("sequence.set rejects a mismatched element",
+          apply(e, set_bad) == IR_RULE_REJECT);
+
+    ir_instr_t *set_float_index = op(e, IR_OP_SEQUENCE_SET);
+    ir_instr_operand_value(set_float_index, val(e, "ref[array[i32; 4]]"));
+    ir_instr_operand_value(set_float_index, val(e, "f64"));
+    ir_instr_operand_value(set_float_index, val(e, "i32"));
+    check("sequence.set requires an integer index",
+          apply(e, set_float_index) == IR_RULE_REJECT);
 
     ir_instr_t *ixref = op(e, IR_OP_INDEX);
 
@@ -1598,6 +1681,18 @@ static void test_aggregates_and_variants(void)
     ir_instr_operand_name(nx, "b");
     check("extract resolves a named record through the type table",
           accepts_as(e, nx, "u64"));
+
+    th_type *inferred_pair = th_var(ir_ctx_types(e->ctx));
+    ir_value_t *inferred_value = ir_param_add(e->f, "inferred_pair",
+                                              inferred_pair);
+    ir_instr_t *inferred_extract = op(e, IR_OP_EXTRACT);
+    ir_instr_operand_value(inferred_extract, inferred_value);
+    ir_instr_operand_name(inferred_extract, "b");
+    check("extract resolves a type variable bound to a named record",
+          inferred_pair && inferred_value
+              && th_unify_in_place(ir_ctx_types(e->ctx), inferred_pair,
+                                   ir_type_parse(e->m, "Pair"))
+              && accepts_as(e, inferred_extract, "u64"));
 
     close_env(e);
 }

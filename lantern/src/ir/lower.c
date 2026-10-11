@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "ir/lower.h"
+#include "ir/typelang.h"
 #include "private/ir/internal.h"
 #include "private/parse/grammar.h"
 #include "lib/dict.h"
@@ -861,8 +862,17 @@ lower_builtin_action(ir_lower_context_t *context, const char *action,
         if (!value)
             return lower_failure(context, IR_DIAG_INTERNAL, span,
                                  "could not emit a local read");
+        bool open_function_reference = result_type
+            && value->kind == IR_VAL_FUNC
+            && th_kind_of(th_resolve(value->type)) == TH_FUNCTION
+            && th_kind_of(th_resolve(result_type)) == TH_FUNCTION
+            && !th_is_closed(ir_module_types(context->module), value->type)
+            && !th_is_closed(ir_module_types(context->module), result_type)
+            && th_unify_probe(ir_module_types(context->module), value->type,
+                              result_type);
         if (result_type && !ir_type_eq(context->module, value->type,
-                                       result_type))
+                                       result_type)
+            && !open_function_reference)
             return lower_failure(context, IR_DIAG_TYPE_MISMATCH, span,
                                  "reference and inferred node types differ");
         return (ir_lower_result_t){IR_LOWER_VALUE, value};

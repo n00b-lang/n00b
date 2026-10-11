@@ -1217,6 +1217,10 @@ bool th_ctx_set_environment(th_ctx *ctx, const th_env *env, const char *module,
   return th_ctx_validate_constraints(ctx);
 }
 
+const th_env *th_ctx_environment(const th_ctx *ctx) {
+  return ctx ? ctx->environment : NULL;
+}
+
 bool th_ctx_set_scope(th_ctx *ctx, const char *module, const char *package) {
   if (!ctx) return false;
   module = module ? module : "";
@@ -1499,6 +1503,67 @@ static bool intrinsic_type_matches(th_ctx *ctx, const th_env_trait_t *trait,
   return query.matched;
 }
 
+static bool trait_methods_match(th_ctx *ctx, th_type *receiver,
+                                const th_env_trait_t *trait,
+                                th_type *methods, size_t ordinal) {
+  if (ordinal == contract_len(methods)) return true;
+  const th_member *method = contract_method(methods, ordinal);
+  if (!method) return false;
+  core_list_t(th_env_function_ptr_t) candidates =
+      candidate_functions(ctx, trait, method->name);
+  bool matched = false;
+  for (size_t i = 0; !matched && i < candidates.len; i++) {
+    const th_env_function_t *function = candidates.data[i];
+    th_type *attempt = fresh_pattern(ctx, methods);
+    th_type *required = contract_lookup(attempt, method->name);
+    th_type *provided = fresh_pattern(ctx, function->contract);
+    th_type *required_signature = nullptr, *required_error = nullptr;
+    th_type *provided_signature = nullptr, *provided_error = nullptr;
+    signature_channels_raw(ctx, required, &required_signature,
+                           &required_error);
+    signature_channels_raw(ctx, provided, &provided_signature,
+                           &provided_error);
+    th_type *needed_receiver = first_parameter(required_signature);
+    th_type *provided_receiver = first_parameter(provided_signature);
+    if (!required_signature || !provided_signature || !required_error
+        || !provided_error || !needed_receiver || !provided_receiver)
+      continue;
+    for (size_t promotion = 0; !matched && promotion < 2; promotion++) {
+      th_type *actual = promotion ? provided_receiver : receiver;
+      if (promotion && !th_type_promotes_to(ctx, receiver,
+                                            provided_receiver))
+        continue;
+      th_type *branch = fresh_pattern(ctx, attempt);
+      th_type *branch_required = contract_lookup(branch, method->name);
+      if (branch_required
+          && th_kind_of(th_resolve(branch_required)) == TH_BINDER)
+        branch_required = fresh_pattern(ctx, branch_required);
+      th_type *branch_provided = fresh_pattern(ctx, function->contract);
+      th_type *branch_signature = nullptr, *branch_error = nullptr;
+      th_type *implementation_signature = nullptr,
+              *implementation_error = nullptr;
+      signature_channels_raw(ctx, branch_required, &branch_signature,
+                             &branch_error);
+      signature_channels_raw(ctx, branch_provided,
+                             &implementation_signature,
+                             &implementation_error);
+      th_type *need[] = {first_parameter(branch_signature),
+                         first_parameter(implementation_signature),
+                         branch_required};
+      th_type *actual_copy = fresh_pattern(ctx, actual);
+      th_type *have[] = {actual_copy, actual_copy, branch_provided};
+      if (!need[0] || !need[1] || !actual_copy
+          || !th_unify_in_place(ctx, th_tuple(ctx, need, 3),
+                                th_tuple(ctx, have, 3)))
+        continue;
+      matched = trait_methods_match(ctx, receiver, trait, branch,
+                                    ordinal + 1);
+    }
+  }
+  core_list_free(candidates);
+  return matched;
+}
+
 bool th_env_implements(th_ctx *ctx, th_type *receiver, const char *trait_name) {
   if (!ctx || !ctx->environment || !ctx->environment->frozen || !receiver ||
       !trait_name || th_kind_of(th_resolve(receiver)) == TH_VAR)
@@ -1509,24 +1574,7 @@ bool th_env_implements(th_ctx *ctx, th_type *receiver, const char *trait_name) {
   th_type *methods = fresh_pattern(ctx, trait->contracts);
   if (!contract_len(methods))
     return intrinsic_type_matches(ctx, trait, receiver);
-  for (size_t m = 0; m < contract_len(methods); m++) {
-    const th_member *required = contract_method(methods, m);
-    core_list_t(th_env_function_ptr_t) candidates =
-        candidate_functions(ctx, trait, required->name);
-    bool found = false;
-    for (size_t i = 0; required && i < candidates.len; i++) {
-      const th_env_function_t *function = candidates.data[i];
-      if (function_matches_with_promotion(ctx, receiver, trait, function,
-                                          required->name)) {
-        found = true;
-        break;
-      }
-    }
-    core_list_free(candidates);
-    if (!found)
-      return false;
-  }
-  return true;
+  return trait_methods_match(ctx, receiver, trait, methods, 0);
 }
 
 th_env_method_status_t th_env_method_resolve(th_ctx *ctx, th_type *receiver,

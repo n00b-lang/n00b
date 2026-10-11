@@ -101,6 +101,19 @@ test_shape_metadata(void)
     check("shape descriptors can represent empty sequence values",
           empty_shape);
 
+    ir_shape_t *materialized = ir_shape_new(ctx, i32, 1);
+    bool static_value_retained = materialized
+        && ir_shape_set_extent(materialized, 0, (ir_shape_extent_t){
+            .kind = IR_SHAPE_EXTENT_STATIC,
+            .static_value = 3,
+            .value = runtime_bound,
+        })
+        && ir_shape_extent(materialized, 0, &empty_extent)
+        && empty_extent.static_value == 3
+        && empty_extent.value == runtime_bound;
+    check("static extents can retain their materialized SSA value",
+          static_value_retained);
+
     ir_func_t *locals = module
         ? ir_func_add(module, "local", ir_type_parse(module, "() -> nil"),
                       IR_LINK_INTERNAL) : nullptr;
@@ -175,7 +188,8 @@ test_shape_metadata(void)
             .kind = IR_SHAPE_EXTENT_STATIC, .static_value = 3})
         && ir_shape_set_extent(deferred, 1, (ir_shape_extent_t){
             .kind = IR_SHAPE_EXTENT_COMPTIME,
-            .expression = &source_expression})
+            .expression = &source_expression,
+            .value = comptime_bound})
         && ir_shape_set_storage(deferred, 2, true)
         && ir_shape_set_element_count(deferred, (ir_shape_measure_t){
             .kind = IR_SHAPE_MEASURE_COMPTIME,
@@ -185,6 +199,7 @@ test_shape_metadata(void)
         && ir_shape_extent(deferred, 1, &second)
         && second.kind == IR_SHAPE_EXTENT_STATIC
         && second.static_value == 4
+        && second.value == comptime_bound
         && ir_shape_element_count(deferred, &count)
         && count.kind == IR_SHAPE_MEASURE_STATIC
         && count.static_value == 12

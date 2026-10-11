@@ -223,20 +223,24 @@ ir_storage_origin_new(ir_func_t *const *reachable, size_t count,
                             ? ir_operand_value(&address->operands[0]) : nullptr;
                     if (target && target->kind == IR_VAL_GLOBAL
                         && !(instruction->op == IR_OP_LOAD && operand == 0)) {
-                        const ir_value_t *source = instruction->op == IR_OP_STORE
-                            && instruction->n_operands == 2 && operand == 0
-                                ? ir_operand_value(&instruction->operands[1])
-                                : nullptr;
+                        const ir_value_t *source = operand == 0
+                            && (instruction->op == IR_OP_STORE
+                                || instruction->op == IR_OP_SEQUENCE_SET)
+                            ? ir_operand_value(&instruction->operands[
+                                instruction->op == IR_OP_STORE ? 1 : 2])
+                            : nullptr;
                         if (!append_assignment(analysis,
                                 global_identity(target->global), source))
                             goto failed;
                     }
                     if (address && address->op == IR_OP_FIELD
                         && !(instruction->op == IR_OP_LOAD && operand == 0)) {
-                        const ir_value_t *source = instruction->op == IR_OP_STORE
-                            && instruction->n_operands == 2 && operand == 0
-                                ? ir_operand_value(&instruction->operands[1])
-                                : nullptr;
+                        const ir_value_t *source = operand == 0
+                            && (instruction->op == IR_OP_STORE
+                                || instruction->op == IR_OP_SEQUENCE_SET)
+                            ? ir_operand_value(&instruction->operands[
+                                instruction->op == IR_OP_STORE ? 1 : 2])
+                            : nullptr;
                         if (!append_field_assignment(analysis, address, source))
                             goto failed;
                     }

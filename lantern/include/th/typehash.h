@@ -92,6 +92,7 @@ typedef struct {
     void            *context;
     const char      *sequence;
     const char      *reference;
+    bool             omit_constraints;
 } th_print_options_t;
 
 typedef th_type *(*th_method_resolver_fn)(th_ctx *ctx, th_type *receiver,
@@ -222,8 +223,13 @@ typedef struct {
 
 th_ctx *th_ctx_new(void);
 void    th_ctx_free(th_ctx *ctx);
+uint64_t th_type_graph_revision(th_type *const *roots, size_t count);
 /* Deep-copy a type graph into another type context, preserving graph sharing. */
 th_type *th_type_clone(th_ctx *destination, const th_type *source);
+/* Clone related roots with one graph map, retaining shared variables and
+ * constraint references between roots. */
+bool th_type_clone_many(th_ctx *destination, const th_type *const *sources,
+                        th_type **copies, size_t count);
 /* Clone a graph while replacing selected source nodes with existing nodes.
  * Replacements are borrowed and must outlive the result. */
 th_type *th_type_clone_replacing(th_ctx *destination, const th_type *source,
@@ -262,8 +268,8 @@ void     th_record_fill(th_ctx *ctx, th_type *stub, const th_member *members,
 /* Associate a named type with its structural definition in this type context.
  * Definitions are semantic metadata and do not change the named type's identity. */
 bool     th_type_define(th_ctx *ctx, th_type *type, th_type *definition);
-th_type *th_type_definition(const th_ctx *ctx, const th_type *type);
-th_type *th_record_lookup_in(const th_ctx *ctx, const th_type *type,
+th_type *th_type_definition(th_ctx *ctx, const th_type *type);
+th_type *th_record_lookup_in(th_ctx *ctx, const th_type *type,
                              const char *name);
 th_type *th_func(th_ctx *ctx, th_type *ret, const th_param *params, size_t np,
                  const th_param *rest, const th_kwparam *kw, size_t nkw);
@@ -380,7 +386,11 @@ typedef enum : uint8_t {
     TH_COERCE_DEREF       = 1 << 1,
     TH_COERCE_OPTION_WRAP = 1 << 2,
     TH_COERCE_CUSTOM      = 1 << 3,
+    TH_COERCE_NIL_OPTION  = 1 << 4,
+    TH_COERCE_RECORD_CONSTRUCT = 1 << 5,
 } th_coerce_flag;
+
+void th_ctx_set_method_argument_coercions(th_ctx *ctx, uint8_t allowed);
 
 typedef struct {
     uint8_t  allow;

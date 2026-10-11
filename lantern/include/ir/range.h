@@ -35,3 +35,16 @@ ir_instr_t *ir_range_analysis_failure_source(
 bool ir_range_analysis_bounds(const ir_range_analysis_t *analysis,
                               const ir_value_t *value, int64_t *minimum,
                               int64_t *maximum);
+
+typedef struct ir_index_proofs ir_index_proofs_t;
+
+/* Conservative, loop-aware bounds proofs over promoted SSA. The module must
+ * have IR_PROP_SSA; a false result retains the normal runtime check. */
+ir_index_proofs_t *ir_index_proofs_new(ir_func_t *function);
+bool ir_index_proven(const ir_index_proofs_t *proofs,
+                    const ir_instr_t *index);
+void ir_index_proofs_free(ir_index_proofs_t *proofs);
+
+/* A checked inner subtraction bounds its result by its left operand.
+ * This proves limit - (bounded - value) safe when bounded < limit. */
+bool ir_unsigned_sub_proven_safe(const ir_instr_t *sub);

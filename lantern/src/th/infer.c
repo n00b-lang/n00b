@@ -188,11 +188,21 @@ static bool same_method_type_ref(th_ctx *ctx, th_type *a, th_type *a_owner,
             && th_hash(ctx, resolved_a) == th_hash(ctx, resolved_b));
 }
 
+static bool same_method_output(th_ctx *ctx, th_type *a, th_type *a_owner,
+                               th_type *b, th_type *b_owner)
+{
+    th_type *left = th_resolve(a);
+    th_type *right = th_resolve(b);
+    return same_method_type_ref(ctx, a, a_owner, b, b_owner)
+        || (left && right
+            && (left->kind == TH_VAR || right->kind == TH_VAR));
+}
+
 static bool same_method_obligation(th_ctx *ctx, const th_constraint *a,
                                    th_type *a_owner,
                                    const th_constraint *b, th_type *b_owner)
 {
-    if (!same_method_type_ref(ctx, a->method.result, a_owner,
+    if (!same_method_output(ctx, a->method.result, a_owner,
                               b->method.result, b_owner)) return false;
     th_type *a_call = th_resolve(a->method.call);
     th_type *b_call = th_resolve(b->method.call);
@@ -201,10 +211,10 @@ static bool same_method_obligation(th_ctx *ctx, const th_constraint *a,
         || a_call->fn.np != b_call->fn.np
         || a_call->fn.nkw != b_call->fn.nkw
         || !!a_call->fn.rest != !!b_call->fn.rest
-        || !same_method_type_ref(ctx, a_call->fn.ret, a_owner,
+        || !same_method_output(ctx, a_call->fn.ret, a_owner,
                                  b_call->fn.ret, b_owner)) return false;
     if (a_call->fn.error && b_call->fn.error
-        && !same_method_type_ref(ctx, a_call->fn.error, a_owner,
+        && !same_method_output(ctx, a_call->fn.error, a_owner,
                                  b_call->fn.error, b_owner)) return false;
     for (size_t i = 0; i < a_call->fn.np; i++)
         if (a_call->fn.params[i].mode != b_call->fn.params[i].mode
@@ -245,13 +255,33 @@ static bool set_method_failure(th_ctx *ctx, th_constraint *constraint,
     return constraint->method.call != nullptr;
 }
 
-static bool complete_method_failure(th_ctx *ctx, th_constraint *slot,
+static bool complete_method_failure(th_ctx *ctx, th_type *owner,
+                                    th_constraint *slot,
                                     const th_constraint *incoming)
 {
     th_type *have = th_resolve(slot->method.call);
     th_type *want = th_resolve(incoming->method.call);
     if (!have || !want || have->fn.error || !want->fn.error) return true;
-    return set_method_failure(ctx, slot, want->fn.error);
+    bool completed = set_method_failure(ctx, slot, want->fn.error);
+    if (completed) owner->revision++;
+    return completed;
+}
+
+static bool merge_method_obligation(th_ctx *ctx, th_type *owner,
+                                    th_constraint *slot,
+                                    const th_constraint *incoming)
+{
+    th_type *have_call = th_resolve(slot->method.call);
+    th_type *want_call = th_resolve(incoming->method.call);
+    return th_unify_in_place(ctx, incoming->method.result,
+               slot->method.result)
+        && (!have_call || !want_call
+            || (th_unify_in_place(ctx, want_call->fn.ret,
+                    have_call->fn.ret)
+                && (!have_call->fn.error || !want_call->fn.error
+                    || th_unify_in_place(ctx, want_call->fn.error,
+                        have_call->fn.error))))
+        && complete_method_failure(ctx, owner, slot, incoming);
 }
 
 bool th_var_constrain(th_ctx *ctx, th_type *var, th_constraint c)
@@ -275,10 +305,17 @@ bool th_var_constrain(th_ctx *ctx, th_type *var, th_constraint c)
             c.has_scope = true;
         }
         c.method.name = th_strdup(ctx, c.method.name, strlen(c.method.name));
-        th_constraint *slot = con_same_slot(var, c);
-        if (slot && same_method_obligation(ctx, slot, var, &c, var))
-            return complete_method_failure(ctx, slot, &c);
+        for (size_t i = 0; i < var->var.cons.len; i++) {
+            th_constraint *slot = &var->var.cons.data[i];
+            if (slot->kind == TH_CON_METHOD
+                && !strcmp(slot->method.name, c.method.name)
+                && same_constraint_scope(slot, &c)
+                && same_method_obligation(ctx, slot, var, &c, var)) {
+                return merge_method_obligation(ctx, var, slot, &c);
+            }
+        }
         core_list_push(var->var.cons, c);
+        var->revision++;
         return true;
     }
 
@@ -324,6 +361,7 @@ bool th_var_constrain(th_ctx *ctx, th_type *var, th_constraint c)
     }
 
     core_list_push(var->var.cons, c);
+    var->revision++;
 
     return true;
 }
@@ -376,7 +414,9 @@ bool th_method_obligation_set_error(th_ctx *ctx, th_type *receiver,
                 break;
             }
         }
-    return match && set_method_failure(ctx, match, error);
+    bool updated = match && set_method_failure(ctx, match, error);
+    if (updated) variable->revision++;
+    return updated;
 }
 
 size_t th_var_constraint_count(const th_type *var)
@@ -806,6 +846,45 @@ static th_type *option_of(th_type *t)
     return t->named.args[0].type;
 }
 
+void th_ctx_set_method_argument_coercions(th_ctx *ctx, uint8_t allowed)
+{
+    if (ctx) ctx->method_argument_coercions = allowed;
+}
+
+static bool method_argument_unifies(th_ctx *ctx, th_type *actual,
+                                    th_type *formal, th_mode mode,
+                                    core_dict_t *seen)
+{
+    if (!actual || !formal) return false;
+    if (!(ctx->method_argument_coercions
+          & (TH_COERCE_OPTION_WRAP | TH_COERCE_NIL_OPTION
+             | TH_COERCE_RECORD_CONSTRUCT)))
+        return uni(ctx, actual, formal, seen);
+    if (th_unify_probe(ctx, actual, formal))
+        return uni(ctx, actual, formal, seen);
+    th_type *resolved_actual = th_resolve(actual);
+    th_type *resolved_formal = th_resolve(formal);
+    if (mode == TH_IN
+        && (ctx->method_argument_coercions & TH_COERCE_RECORD_CONSTRUCT)
+        && th_kind_of(resolved_actual) == TH_RECORD
+        && th_kind_of(resolved_formal) == TH_NAMED) {
+        th_type *definition = th_type_definition(ctx, resolved_formal);
+        if (definition && th_kind_of(th_resolve(definition)) == TH_RECORD
+            && th_unify_probe(ctx, resolved_actual, definition))
+            return uni(ctx, resolved_actual, definition, seen);
+    }
+    th_type *inner = mode == TH_IN ? option_of(formal) : nullptr;
+    if (!inner) return false;
+    actual = th_resolve(actual);
+    if ((ctx->method_argument_coercions & TH_COERCE_NIL_OPTION)
+        && actual->kind == TH_NAMED && actual->named.nargs == 0
+        && actual->named.name && !strcmp(actual->named.name, "nil"))
+        return true;
+    return (ctx->method_argument_coercions & TH_COERCE_OPTION_WRAP)
+        && th_unify_probe(ctx, actual, inner)
+        && uni(ctx, actual, inner, seen);
+}
+
 th_type *th_coerce(th_ctx *ctx, th_type *from, th_coerce_policy policy)
 {
     th_type *bottom = th_name(ctx, TH_BOTTOM);
@@ -883,15 +962,23 @@ static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to,
     if (bt && bt->kind == TH_VAR) {
         for (size_t i = 0; i < var->var.cons.len; i++) {
             th_constraint constraint = var->var.cons.data[i];
-            th_constraint *slot = con_same_slot(bt, constraint);
-            if (constraint.kind == TH_CON_METHOD && slot) {
-                if (same_method_obligation(ctx, slot, bt, &constraint,
-                                           (th_type *)var)) {
-                    if (!complete_method_failure(ctx, slot, &constraint))
+            bool matched = false;
+            if (constraint.kind == TH_CON_METHOD) {
+                for (size_t j = 0; j < bt->var.cons.len; j++) {
+                    th_constraint *slot = &bt->var.cons.data[j];
+                    if (slot->kind != TH_CON_METHOD
+                        || strcmp(slot->method.name,
+                                  constraint.method.name)
+                        || !same_constraint_scope(slot, &constraint)
+                        || !same_method_obligation(ctx, slot, bt,
+                            &constraint, (th_type *)var)) continue;
+                    if (!merge_method_obligation(ctx, bt, slot, &constraint))
                         return false;
-                    continue;
+                    matched = true;
+                    break;
                 }
             }
+            if (matched) continue;
             if (!th_var_constrain(ctx, bt, constraint)) {
                 return false;
             }
@@ -1125,15 +1212,16 @@ static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to,
                 const th_param *formal = i + 1 < target_nparams
                     ? th_func_param(signature, i + 1)
                     : th_func_rest(signature);
-                matches = actual && formal &&
-                    uni(ctx, actual->type, formal->type, seen);
+                matches = actual && formal && method_argument_unifies(ctx,
+                    actual->type, formal->type, formal->mode, seen);
             }
             for (size_t i = 0; matches && call && i < th_func_nkw(call); i++) {
                 const th_kwparam *actual = th_func_kw(call, i);
                 const th_kwparam *formal = actual
                     ? th_func_kw_lookup(signature, actual->name) : nullptr;
-                matches = actual && formal &&
-                    uni(ctx, actual->type, formal->type, seen);
+                matches = actual && (!th_func_nkw(signature) || formal) &&
+                    (!formal || method_argument_unifies(ctx, actual->type,
+                        formal->type, formal->mode, seen));
             }
             ctx->active_environment_constraints.len--;
             leave_constraint_scope(ctx, previous);
@@ -1413,6 +1501,89 @@ static void fv_walk(th_ctx *ctx, th_type *root, core_dict_t *acc,
     }
 
     core_list_free(st);
+}
+
+uint64_t th_type_graph_revision(th_type *const *roots, size_t count)
+{
+    core_dict_t seen;
+    core_dict_init(&seen, nullptr, nullptr);
+    core_list_t(th_occ_ptr_t) pending = {0};
+    for (size_t i = 0; i < count; i++)
+        if (roots[i]) core_list_push(pending, roots[i]);
+    uint64_t revision = 0;
+#define VISIT(child) do { if (child) core_list_push(pending, (child)); } while (0)
+    while (pending.len) {
+        th_type *type = pending.data[--pending.len];
+        if (!type || core_dict_contains(&seen, type)) continue;
+        core_dict_put(&seen, type, type);
+        revision += type->revision;
+        switch (type->kind) {
+        case TH_VAR:
+            VISIT(type->var.ref);
+            for (size_t i = 0; i < type->var.cons.len; i++) {
+                const th_constraint *c = &type->var.cons.data[i];
+                switch (c->kind) {
+                case TH_CON_UNIFIES:
+                case TH_CON_PROMOTES:
+                case TH_CON_EXCLUDES: VISIT(c->target); break;
+                case TH_CON_ONE_OF:
+                    for (size_t j = 0; j < c->one_of.n; j++)
+                        VISIT(c->one_of.types[j]);
+                    break;
+                case TH_CON_HAS_FIELD: VISIT(c->field.type); break;
+                case TH_CON_HAS_PARAM: VISIT(c->param.type); break;
+                case TH_CON_METHOD:
+                    VISIT(c->method.result);
+                    VISIT(c->method.call);
+                    break;
+                default: break;
+                }
+            }
+            break;
+        case TH_NAMED:
+            for (size_t i = 0; i < type->named.nargs; i++)
+                if (type->named.args[i].kind == TH_ARG_TYPE)
+                    VISIT(type->named.args[i].type);
+            break;
+        case TH_INDIRECTION: VISIT(type->ind.referent); break;
+        case TH_SEQUENCE: VISIT(type->seq.elem); break;
+        case TH_RECORD:
+            for (size_t i = 0; i < type->record.n; i++)
+                VISIT(type->record.members[i].type);
+            break;
+        case TH_TRAIT:
+            for (size_t i = 0; i < type->trait.n; i++)
+                VISIT(type->trait.methods[i].type);
+            for (size_t i = 0; i < type->trait.nr; i++) {
+                VISIT(type->trait.requirements[i].subject);
+                VISIT(type->trait.requirements[i].target);
+            }
+            break;
+        case TH_FUNCTION:
+            VISIT(type->fn.ret);
+            VISIT(type->fn.error);
+            for (size_t i = 0; i < type->fn.np; i++)
+                VISIT(type->fn.params[i].type);
+            if (type->fn.rest) VISIT(type->fn.rest->type);
+            for (size_t i = 0; i < type->fn.nkw; i++)
+                VISIT(type->fn.kw[i].type);
+            break;
+        case TH_BINDER:
+            VISIT(type->binder.body);
+            for (size_t i = 0; i < type->binder.arity; i++)
+                VISIT(type->binder.qvars[i]);
+            break;
+        case TH_SUM:
+            for (size_t i = 0; i < type->sum.n; i++)
+                VISIT(type->sum.arms[i]);
+            break;
+        default: break;
+        }
+    }
+#undef VISIT
+    core_list_free(pending);
+    core_dict_free(&seen);
+    return revision;
 }
 
 size_t th_free_vars(th_ctx *ctx, th_type *t, th_type ***out)
@@ -2117,6 +2288,7 @@ static bool uni(th_ctx *ctx, th_type *a0, th_type *b0, core_dict_t *seen)
                 break;
             }
             a->var.ref = b;
+            a->revision++;
 
             continue;
         }
@@ -2160,8 +2332,11 @@ static void uni_seen_free(core_dict_t *seen)
 th_type *th_unify(th_ctx *ctx, th_type *a, th_type *b)
 {
     if (!ctx || !a || !b) return nullptr;
-    th_type *ia     = th_type_clone(ctx, a);
-    th_type *ib     = th_type_clone(ctx, b);
+    const th_type *sources[] = {a, b};
+    th_type *copies[2];
+    if (!th_type_clone_many(ctx, sources, copies, 2)) return nullptr;
+    th_type *ia = copies[0];
+    th_type *ib = copies[1];
     size_t   before = th_error_count(ctx);
 
     if (!ia || !ib) return nullptr;

@@ -871,6 +871,61 @@ static void test_named_type_record_definitions(void)
     th_ctx_free(ctx);
 }
 
+static void test_generic_record_definitions(void)
+{
+    th_ctx *ctx = th_ctx_new();
+    th_type *key = th_var_named(ctx, "K");
+    th_type *value = th_var_named(ctx, "V");
+    th_arg parameters[] = {
+        {.kind = TH_ARG_TYPE, .type = key},
+        {.kind = TH_ARG_TYPE, .type = value},
+    };
+    th_type *template = th_apply(ctx, "Pair", parameters, 2);
+    th_member members[] = {
+        {.name = "left", .type = key},
+        {.name = "right", .type = value},
+    };
+    th_type *definition = th_record(ctx, members, 2);
+    th_type *integer = th_name(ctx, "int");
+    th_type *string = th_name(ctx, "string");
+    th_arg arguments[] = {
+        {.kind = TH_ARG_TYPE, .type = integer},
+        {.kind = TH_ARG_TYPE, .type = string},
+    };
+    th_type *concrete = th_apply(ctx, "Pair", arguments, 2);
+    th_type *bare = th_name(ctx, "Pair");
+    check("generic records retain their ordered field template",
+          th_type_define(ctx, template, definition)
+          && th_type_definition(ctx, template) == definition
+          && th_type_definition(ctx, bare) == nullptr);
+    th_type *specialized = th_type_definition(ctx, concrete);
+    check("generic record fields specialize without refining the template",
+          specialized && th_kind_of(specialized) == TH_RECORD
+          && th_hash(ctx, th_record_lookup_in(ctx, concrete, "left"))
+              == th_hash(ctx, integer)
+          && th_hash(ctx, th_record_lookup_in(ctx, concrete, "right"))
+              == th_hash(ctx, string)
+          && th_record_lookup(definition, "left") == key
+          && th_record_lookup(definition, "right") == value
+          && th_type_definition(ctx, concrete) == specialized);
+    th_type *first = th_var_named(ctx, "First");
+    th_type *second = th_var_named(ctx, "Second");
+    th_arg first_args[] = {
+        {.kind = TH_ARG_TYPE, .type = first},
+        {.kind = TH_ARG_TYPE, .type = string},
+    };
+    th_arg second_args[] = {
+        {.kind = TH_ARG_TYPE, .type = second},
+        {.kind = TH_ARG_TYPE, .type = string},
+    };
+    th_type *first_pair = th_apply(ctx, "Pair", first_args, 2);
+    th_type *second_pair = th_apply(ctx, "Pair", second_args, 2);
+    check("open generic records preserve distinct variable identities",
+          th_record_lookup_in(ctx, first_pair, "left") == first
+          && th_record_lookup_in(ctx, second_pair, "left") == second);
+    th_ctx_free(ctx);
+}
+
 static void test_unification_probe(void)
 {
     th_ctx *ctx = th_ctx_new();
@@ -950,11 +1005,51 @@ static void test_clone_replacing(void)
               && th_seq_elem(sequence) == original);
     check("clone replacement can replace its root",
           th_type_clone_replacing(ctx, original, from, to, 1) == declared);
+    th_type *alias = th_type_clone(ctx, original);
+    th_type *aliased_sequence = alias ? th_array(ctx, alias) : nullptr;
+    th_type *aliased_copy = aliased_sequence
+        ? th_type_clone_replacing(ctx, aliased_sequence, from, to, 1)
+        : nullptr;
+    check("clone replacement follows copied variable identity",
+          aliased_copy && th_seq_elem(aliased_copy) == declared);
+    th_type *unrelated = th_var_named(ctx, "T");
+    th_type *unrelated_sequence = th_array(ctx, unrelated);
+    th_type *unrelated_copy = th_type_clone_replacing(ctx,
+        unrelated_sequence, from, to, 1);
+    check("clone replacement leaves a distinct same-name variable alone",
+          unrelated_copy && th_seq_elem(unrelated_copy) != declared);
     const th_type *conflicting_from[] = {original, original};
     th_type *conflicting_to[] = {declared, original};
     check("clone replacement rejects conflicting mappings",
           !th_type_clone_replacing(ctx, sequence, conflicting_from,
                                    conflicting_to, 2));
+    th_ctx_free(ctx);
+}
+
+static void test_clone_shared_constraint_context(void)
+{
+    th_ctx *ctx = th_ctx_new();
+    th_type *shared = th_var(ctx);
+    th_type *constrained = th_var(ctx);
+    th_constraint link = {.kind = TH_CON_UNIFIES, .target = shared};
+    th_constraint trait = {.kind = TH_CON_IMPLEMENTS, .iface = "Example",
+                           .scope_module = "module", .scope_package = "package",
+                           .has_scope = true};
+    const th_type *sources[] = {constrained, shared};
+    th_type *copies[2] = {0};
+    th_constraint copied_link = {0};
+    th_constraint copied_trait = {0};
+    check("shared constraint context is cloned without source aliases",
+          th_var_constrain(ctx, constrained, link)
+              && th_var_constrain(ctx, shared, trait)
+              && th_type_clone_many(ctx, sources, copies, 2)
+              && copies[0] != constrained && copies[1] != shared
+              && th_var_constraint_at(copies[0], 0, &copied_link)
+              && copied_link.target == copies[1]
+              && th_var_constraint_at(copies[1], 0, &copied_trait)
+              && copied_trait.has_scope
+              && !strcmp(copied_trait.scope_module, "module")
+              && !strcmp(copied_trait.scope_package, "package"));
     th_ctx_free(ctx);
 }
 
@@ -992,10 +1087,12 @@ int main(void)
     test_method_resolvers_derive_signatures();
     test_function_error_channels_unify_and_generalize();
     test_named_type_record_definitions();
+    test_generic_record_definitions();
     test_unification_probe();
     test_configurable_type_printing();
     test_name_syntax();
     test_clone_replacing();
+    test_clone_shared_constraint_context();
 
     return report("th constraints");
 }

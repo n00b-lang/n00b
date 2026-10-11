@@ -123,6 +123,7 @@ core_list_decl(th_env_metadata_record_t);
 
 struct th_type {
   th_kind kind;
+  uint64_t revision;
   union {
     struct {
       const char *name;
@@ -181,6 +182,7 @@ struct th_type {
     } sum;
     struct {
       uint64_t index;
+      uint64_t origin;
       bool has_index;
       th_type *ref;
       const char *name;
@@ -223,6 +225,7 @@ struct th_ctx {
   core_list_t(th_active_constraint_t) active_environment_constraints;
   th_coerce_fn custom;
   void *custom_user;
+  uint8_t method_argument_coercions;
   th_span_t span;
   th_span_t related;
   bool has_related;

@@ -704,6 +704,39 @@ static void test_final_layout_is_bit_precise_and_owned(void)
     close_env(e);
 }
 
+static void test_imported_final_layout_uses_definition_owner(void)
+{
+    ir_ctx_t *ctx = ir_ctx_new();
+    th_ctx *types = ir_ctx_types(ctx);
+    ir_module_t *owner = ir_module_new(ctx, "owner", &ir_profile_bce,
+                                       "x86_64");
+    ir_module_t *consumer = ir_module_new(ctx, "consumer", &ir_profile_bce,
+                                          "x86_64");
+    th_type *named = th_name(types, "owner.Record");
+    th_type *field = th_name(types, "u64");
+    th_member member = {.name = "value", .type = field};
+    th_type *record = th_record(types, &member, 1);
+    ir_final_member_layout_t layout_member = {
+        .name = "value", .type = field, .ordinal = 0, .bit_offset = 0,
+    };
+    ir_final_layout_t layout = {
+        .intrinsic_bits = 64, .alignment_bytes = 8,
+        .members = &layout_member, .n_members = 1,
+    };
+    bool defined = owner && consumer && named && record
+        && ir_type_define(owner, named, record);
+    check("an owner publishes an imported record layout", defined
+        && ir_layout_publish_final(owner, named, "x86_64", &layout));
+    check("an importer retains no locally published final layout",
+          ir_layout_final(consumer, named, "x86_64") == nullptr);
+    check("an importer reads the defining module's visible final layout",
+          ir_layout_final_visible(consumer, named, "x86_64")
+              == ir_layout_final(owner, named, "x86_64"));
+    check("an importer does not inherit a layout for another target",
+          ir_layout_final_visible(consumer, named, "wasm32") == nullptr);
+    ir_ctx_free(ctx);
+}
+
 static void test_inline_member_layout(void)
 {
     env *e = open_env("x86_64");
@@ -1525,6 +1558,7 @@ int main(void)
     test_trait_value_abi_keeps_data_and_vtable_indirect();
     test_descriptors_are_keyed_and_scoped();
     test_final_layout_is_bit_precise_and_owned();
+    test_imported_final_layout_uses_definition_owner();
     test_inline_member_layout();
     test_final_layout_copy_preserves_representation();
     test_zero_sized_member_keeps_logical_offset();

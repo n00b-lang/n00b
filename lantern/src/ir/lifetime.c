@@ -988,6 +988,8 @@ address_has_only_local_uses(const ir_func_t *function,
                         break;
                     }
                     if (referenced != addresses[cursor]) continue;
+                    if (operand->kind == IR_OPD_FRESH
+                        && use->op == IR_OP_CALL) continue;
                     if (operand->kind == IR_OPD_VALUE
                         && call_argument_is_noescape(use, k, &probe))
                         continue;
@@ -995,7 +997,8 @@ address_has_only_local_uses(const ir_func_t *function,
                         local = false;
                         break;
                     }
-                    if (use->op == IR_OP_LOAD || use->op == IR_OP_STORE)
+                    if (use->op == IR_OP_LOAD || use->op == IR_OP_STORE
+                        || use->op == IR_OP_SEQUENCE_SET)
                         continue;
                     bool projection = use->op == IR_OP_FIELD
                         || use->op == IR_OP_INDEX

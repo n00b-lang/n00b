@@ -159,6 +159,16 @@ static void test_types(void)
               && ir_type_eq(m, inferred, a)
               && ir_type_id(m, inferred) == ir_type_id(m, a));
 
+    th_type *named = ir_type_parse(m, "Named");
+    th_type *named_variable = th_var(types);
+    th_member field = {.name = "value", .type = a};
+    th_type *definition = th_record(types, &field, 1);
+    check("a resolved variable can define and retrieve a named type",
+          named && named_variable && definition
+              && th_unify_in_place(types, named_variable, named)
+              && ir_type_define(m, named_variable, definition)
+              && ir_type_definition(m, named_variable) == definition);
+
     th_type *r1 = ir_type_parse(m, "(x: i32, y: i32)");
     th_type *r2 = ir_type_parse(m, "(y: i32, x: i32)");
 
@@ -731,6 +741,59 @@ static void test_node_annots(void)
     ir_ctx_free(ctx);
 }
 
+static void test_function_type_clone(void)
+{
+    ir_ctx_t *ctx = ir_ctx_new();
+    ir_module_t *module = ir_module_new(ctx, "m", &ir_profile_bce, "test");
+    th_ctx *types = ir_ctx_types(ctx);
+    th_type *variable = th_var(types);
+    th_type *integer = ir_type_parse(module, "i32");
+    th_param parameter = {.mode = TH_IN, .type = variable};
+    th_type *signature = th_func(types, variable, &parameter, 1,
+                                 nullptr, nullptr, 0);
+    ir_func_t *original = ir_func_add(module, "identity", signature,
+                                     IR_LINK_EXTERNAL);
+    ir_value_t *argument = ir_param_add(original, "value", variable);
+    ir_local_t *local = ir_local_add(original, "temporary", variable);
+    ir_block_t *entry = ir_block_add(original, "entry");
+    ir_instr_t *call = ir_instr_add(entry, IR_OP_CALL);
+    ir_value_t *callee = ir_func_address(module, original);
+    check("generic clone fixture is built",
+        argument && local && call && callee
+        && ir_instr_set_dest(call, "result", variable)
+        && ir_instr_operand_value(call, callee)
+        && ir_instr_operand_value(call, argument)
+        && ir_instr_set_call_signature(call, signature));
+    ir_instr_t *ret = ir_instr_add(entry, IR_OP_RETURN);
+    check("generic clone fixture returns the call result",
+        ret && ir_instr_operand_value(ret, call->dest));
+    const th_type *from[] = {variable};
+    th_type *to[] = {integer};
+    ir_func_t *copy = ir_func_clone_replacing(original, "identity$i32",
+                                              from, to, 1, nullptr);
+    check("function graph clones with a concrete type", copy != nullptr);
+    if (copy) {
+        ir_instr_t *bound_call = copy->blocks[0]->instrs[0];
+        check("signature, parameter, local, and result are concrete",
+            ir_type_eq(module, copy->type,
+                ir_type_parse(module, "(i32) -> i32"))
+            && ir_type_eq(module, copy->params[0]->type, integer)
+            && ir_type_eq(module, copy->locals[0]->type, integer)
+            && ir_type_eq(module, bound_call->dest->type, integer)
+            && ir_type_eq(module, ir_instr_call_signature(bound_call),
+                copy->type));
+        check("recursive callee and return use cloned graph",
+            ir_operand_value(&bound_call->operands[0])->owner == copy
+            && ir_operand_value(&bound_call->operands[1]) == copy->params[0]
+            && ir_operand_value(&copy->blocks[0]->instrs[1]->operands[0])
+                == bound_call->dest);
+        check("original remains generic",
+            original->params[0]->type == variable
+            && ir_operand_value(&call->operands[0])->owner == original);
+    }
+    ir_ctx_free(ctx);
+}
+
 int main(void)
 {
     test_ops();
@@ -746,6 +809,7 @@ int main(void)
     test_structure();
     test_cross_module_global_address();
     test_node_annots();
+    test_function_type_clone();
 
     return report("ir core");
 }

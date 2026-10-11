@@ -127,7 +127,7 @@ ir_shape_set_extent(ir_shape_t *shape, uint32_t dimension,
             || extent.producer_identifier) return false;
         break;
     case IR_SHAPE_EXTENT_STATIC:
-        if (extent.value || extent.expression || extent.producer
+        if (extent.expression || extent.producer
             || extent.producer_identifier)
             return false;
         break;
@@ -184,9 +184,11 @@ ir_shape_fold_comptime_extent(ir_shape_t *shape, uint32_t dimension,
         else complete = false;
     }
 
+    ir_value_t *extent_value = shape->extents[dimension].value;
     shape->extents[dimension] = (ir_shape_extent_t){
         .kind = IR_SHAPE_EXTENT_STATIC,
         .static_value = value,
+        .value = extent_value,
     };
     if (complete) {
         shape->element_count = (ir_shape_measure_t){

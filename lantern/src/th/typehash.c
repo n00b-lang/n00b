@@ -2,6 +2,7 @@
 #include <xxhash.h>
 
 #include <stdio.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -78,6 +79,7 @@ void th_ctx_free(th_ctx *ctx)
 typedef struct {
     const th_type *source;
     th_type *copy;
+    bool replacement;
 } th_clone_entry_t;
 core_list_decl(th_clone_entry_t);
 
@@ -89,6 +91,9 @@ clone_string(th_ctx *destination, const char *source)
 
 static th_type *clone_type_graph(th_ctx *destination, const th_type *source,
                                  core_list_t(th_clone_entry_t) *seen);
+
+static atomic_uint_fast64_t next_var_origin = 1;
+
 
 static bool
 clone_constraint_graph(th_ctx *destination, const th_constraint *source,
@@ -148,6 +153,12 @@ clone_type_graph(th_ctx *destination, const th_type *source,
     if (!source) return nullptr;
     for (size_t i = 0; i < seen->len; i++)
         if (seen->data[i].source == source) return seen->data[i].copy;
+    if (source->kind == TH_VAR && source->var.origin)
+        for (size_t i = 0; i < seen->len; i++)
+            if (seen->data[i].replacement
+                && seen->data[i].source->kind == TH_VAR
+                && seen->data[i].source->var.origin == source->var.origin)
+                return seen->data[i].copy;
 
     th_type *copy = th_alloc(destination, sizeof(*copy));
     if (!copy) return nullptr;
@@ -299,6 +310,7 @@ clone_type_graph(th_ctx *destination, const th_type *source,
         return copy;
     case TH_VAR:
         copy->var.index = source->var.index;
+        copy->var.origin = source->var.origin;
         copy->var.has_index = source->var.has_index;
         copy->var.name = clone_string(destination, source->var.name);
         copy->var.ref = clone_type_graph(destination, source->var.ref, seen);
@@ -319,6 +331,24 @@ th_type *
 th_type_clone(th_ctx *destination, const th_type *source)
 {
     return th_type_clone_replacing(destination, source, nullptr, nullptr, 0);
+}
+
+bool
+th_type_clone_many(th_ctx *destination, const th_type *const *sources,
+                   th_type **copies, size_t count)
+{
+    if (!destination || (count && (!sources || !copies))) return false;
+    core_list_t(th_clone_entry_t) seen = core_list_new(th_clone_entry_t);
+    bool ok = true;
+    for (size_t i = 0; i < count; i++) {
+        copies[i] = clone_type_graph(destination, sources[i], &seen);
+        if (sources[i] && !copies[i]) {
+            ok = false;
+            break;
+        }
+    }
+    core_list_free(seen);
+    return ok;
 }
 
 th_type *
@@ -345,7 +375,7 @@ th_type_clone_replacing(th_ctx *destination, const th_type *source,
             break;
         }
         if (!duplicate)
-            core_list_push(seen, ((th_clone_entry_t){from[i], to[i]}));
+            core_list_push(seen, ((th_clone_entry_t){from[i], to[i], true}));
     }
     th_type *copy = clone_type_graph(destination, source, &seen);
     core_list_free(seen);
@@ -1603,6 +1633,7 @@ th_type *th_var(th_ctx *ctx)
 
     t->var.has_index = false;
     t->var.index     = ctx->next_var++;
+    t->var.origin    = atomic_fetch_add(&next_var_origin, 1);
     t->var.ref       = nullptr;
     t->var.name      = nullptr;
 

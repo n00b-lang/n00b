@@ -266,6 +266,7 @@ bool th_env_is_frozen(const th_env *environment);
 /* Attach once, after the environment is frozen. It remains borrowed. */
 bool th_ctx_set_environment(th_ctx *context, const th_env *environment,
                             const char *module, const char *package);
+const th_env *th_ctx_environment(const th_ctx *context);
 /* Changes the visibility perspective while retaining the attached snapshot. */
 bool th_ctx_set_environment_scope(th_ctx *context, const char *module,
                                  const char *package);
