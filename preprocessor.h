@@ -18,8 +18,8 @@ typedef bool (*n00bb_preprocessor_prepare_import_fn)(
 typedef bool (*n00bb_preprocessor_selected_body_fn)(
     void *context, core_translation_unit_t *unit, parse_tree_t *body);
 typedef bool (*n00bb_preprocessor_litmod_fn)(
-    void *context, core_translation_unit_t *unit, parse_tree_t *call,
-    core_string_t modifier, core_string_t kind, core_string_t function_name);
+    void *context, core_translation_unit_t *unit,
+    parse_tree_t *declaration, core_string_t modifier, core_string_t kind);
 
 typedef enum {
     N00BB_PREPROCESSOR_VALUE_BOOL,

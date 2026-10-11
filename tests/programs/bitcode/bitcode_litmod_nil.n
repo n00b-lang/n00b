@@ -1,0 +1,9 @@
+litmod<nil> make_true() -> bool fail: string {
+    return true
+}
+
+comptime {
+    require nil'make_true
+} else {
+    require nil'make_true
+}

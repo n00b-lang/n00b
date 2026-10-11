@@ -35,6 +35,19 @@ bool n00bb_abi_pack_tables(const core_target_desc_t *target,
                            n00bb_abi_packed_tables_t *out);
 void n00bb_abi_packed_tables_release(n00bb_abi_packed_tables_t *packed);
 
+typedef struct {
+    uint64_t typehash;
+    uint32_t index;
+} n00bb_abi_comptime_type_t;
+
+bool n00bb_abi_emit_comptime_catalog(
+    ir_ctx_t *context, ir_module_t *module,
+    ir_func_t *const *functions, size_t function_count,
+    const core_target_desc_t *target,
+    n00bb_abi_comptime_type_t **out_types, size_t *out_type_count,
+    uint8_t **out_object, size_t *out_object_bytes,
+    size_t *out_metadata_bytes);
+
 /* `extra_sections` follow the metadata section, which is section 1 in
  * `symbols` and `relocations`. The object and packed tables have separate
  * ownership. */

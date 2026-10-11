@@ -1,11 +1,8 @@
-declare_litmod("outer", "string", "make_outer")
-declare_litmod("inner", "string", "identity")
-
-func make_outer(raw: string) -> string fail: string {
+litmod<quotes> make_outer, outer(raw: string) -> string fail: string {
     return "an inner long string payload"'inner
 }
 
-func identity(raw: string) -> string fail: string {
+litmod<quotes> identity, inner(raw: string) -> string fail: string {
     return raw
 }
 

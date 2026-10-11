@@ -42,6 +42,11 @@ runtime_abi_support = static_library(
     install: true,
 )
 
+comptime_allocate_support = static_library(
+    'n00b-comptime-allocate', 'comptime_allocate.c',
+    dependencies: runtime_abi_headers,
+)
+
 n00bb_exe = executable(
     'n00bb',
     ['main.c', 'driver.c', 'preprocessor.c', 'rich_string.c', 'abi_string.c',

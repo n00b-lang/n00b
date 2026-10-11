@@ -1,0 +1,54 @@
+litmod<quotes> echo, e(raw: string) -> string fail: string {
+    return raw
+}
+
+litmod<int> echo, e(repr: string) -> string fail: string {
+    return repr
+}
+
+litmod<hex> hex_text, ht(digits: string) -> string fail: string {
+    return digits
+}
+
+litmod<float> float_text, ft(digits: string) -> string fail: string {
+    return digits
+}
+
+litmod<quotes> solo(raw: string) -> string fail: string {
+    return raw
+}
+
+func alias_quote() -> string {
+    return "hello"'e
+}
+
+func primary_quote() -> string {
+    return "world"'echo
+}
+
+func alias_int() -> string {
+    return 123'e
+}
+
+func alias_hex() -> string {
+    return 0x2a'ht
+}
+
+func alias_float() -> string {
+    return 1.5'ft
+}
+
+comptime {
+} else {
+    builtin.io.debug.raw_debug(alias_quote())
+    builtin.io.debug.raw_debug("|")
+    builtin.io.debug.raw_debug(primary_quote())
+    builtin.io.debug.raw_debug("|")
+    builtin.io.debug.raw_debug(alias_int())
+    builtin.io.debug.raw_debug("|")
+    builtin.io.debug.raw_debug(alias_hex())
+    builtin.io.debug.raw_debug("|")
+    builtin.io.debug.raw_debug(alias_float())
+    builtin.io.debug.raw_debug("|")
+    builtin.io.debug.raw_debug("last"'solo)
+}

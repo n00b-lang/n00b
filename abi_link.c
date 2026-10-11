@@ -457,6 +457,7 @@ static bool nonconcrete_key_init(abi_link_key_t *key);
 static bool link_key_from_owner_type(abi_link_key_t *key,
                                      uint32_t type_index, uint32_t kind);
 static bool link_key_from_type_argument(abi_link_key_t *key);
+static bool link_key_from_member(abi_link_key_t *key, uint32_t kind);
 
 static core_hash_value_t
 link_key_hash(void *value)
@@ -527,6 +528,11 @@ link_key_init(abi_link_key_t *key, uint32_t kind)
     }
     case N00B_ABI_TABLE_TYPE_ARGUMENT:
         return link_key_from_type_argument(key);
+    case N00B_ABI_TABLE_FIELD:
+    case N00B_ABI_TABLE_ARM:
+    case N00B_ABI_TABLE_ENUM_ITEM:
+    case N00B_ABI_TABLE_TRAIT_METHOD:
+        return link_key_from_member(key, kind);
     case N00B_ABI_TABLE_PACKAGE:
         return link_key_string(key,
             &((const n00b_abi_package_v1 *)key->row)->name);
@@ -618,6 +624,38 @@ link_key_from_type_argument(abi_link_key_t *key)
     core_buffer_free(owner.owned_bytes);
     key->bytes = (const uint8_t *)key->owned_bytes->data;
     key->length = key->owned_bytes->byte_len;
+    return true;
+}
+
+static bool
+link_key_from_member(abi_link_key_t *key, uint32_t kind)
+{
+    n00bb_abi_member_facts_t facts = n00bb_abi_member_facts(kind, key->row);
+    const n00b_abi_type_v1 *type = facts.parent
+        ? n00bb_abi_object_row(key->view, N00B_ABI_TABLE_TYPE,
+                               facts.parent) : nullptr;
+    if (!type) return false;
+    abi_link_key_t owner = *key;
+    owner.row = type;
+    owner.local_index = facts.parent;
+    owner.owned_bytes = nullptr;
+    owner.unique = false;
+    if (!link_key_init(&owner, N00B_ABI_TABLE_TYPE)) {
+        core_buffer_free(owner.owned_bytes);
+        return false;
+    }
+    key->unique = owner.unique;
+    key->auxiliary = owner.auxiliary;
+    if (!key->unique) {
+        key->owned_bytes = core_buffer_empty();
+        core_buffer_append(key->owned_bytes, (const char *)owner.bytes,
+                           owner.length);
+        core_buffer_append(key->owned_bytes, (const char *)&facts.ordinal,
+                           sizeof(facts.ordinal));
+        key->bytes = (const uint8_t *)key->owned_bytes->data;
+        key->length = key->owned_bytes->byte_len;
+    }
+    core_buffer_free(owner.owned_bytes);
     return true;
 }
 
@@ -3876,6 +3914,15 @@ n00bb_abi_merge_rows(const n00bb_abi_selected_objects_t *selected,
                         }
                         replace = (!old->owner_module_index
                             && next->owner_module_index)
+                            || (!old->layout_index && next->layout_index
+                                && (!old->tracing_index
+                                    || next->tracing_index)
+                                && (!old->call_signature_index
+                                    || next->call_signature_index)
+                                && (!old->fields_or_arms.count
+                                    || next->fields_or_arms.count)
+                                && (!old->components.count
+                                    || next->components.count))
                             || (old->kind == N00B_ABI_TYPE_OPTION
                                 && !old->tracing_index
                                 && next->tracing_index)

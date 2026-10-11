@@ -1,6 +1,4 @@
-declare_litmod("binary_result", "string", "make_binary")
-
-func make_binary(raw: string) -> string fail: string {
+litmod<quotes> make_binary, binary_result(raw: string) -> string fail: string {
     return "abc"'binary
 }
 

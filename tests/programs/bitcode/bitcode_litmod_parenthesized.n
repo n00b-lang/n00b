@@ -1,0 +1,65 @@
+litmod<tuple> tuple_items(items: Array[int]) -> Array[int] fail: string {
+    return items
+}
+
+litmod<record> record_items(items: Array[Tuple[string, int]]) -> Array[Tuple[string, int]] fail: string {
+    return items
+}
+
+litmod<bool> flip_bool(value: bool) -> bool fail: string {
+    return value == false
+}
+
+litmod<nil> nil_number() -> int fail: string {
+    return 7
+}
+
+litmod<tuple> mixed_tuple_count(items: Array[int | string]) -> int fail: string {
+    return 2
+}
+
+litmod<record> mixed_record_count(items: Array[Tuple[string, int | string]]) -> int fail: string {
+    return 2
+}
+
+func static_tuple() -> Array[int] {
+    return (1, 2)'tuple_items
+}
+
+func dynamic_tuple(x: int) -> Array[int] {
+    return (x, 2)'tuple_items
+}
+
+func static_record() -> Array[Tuple[string, int]] {
+    return (left: int = 1, right: int = 2)'record_items
+}
+
+func dynamic_record(x: int) -> Array[Tuple[string, int]] {
+    return (left: int = x, right: int = 2)'record_items
+}
+
+func dynamic_mixed_tuple(value: string) -> int {
+    return (1, value)'mixed_tuple_count
+}
+
+func dynamic_mixed_record(value: string) -> int {
+    return (first: int = 1, second: string = value)'mixed_record_count
+}
+
+comptime {
+    require true'flip_bool == false
+    require false'flip_bool
+    require nil'nil_number == 7
+    require (1, "two")'mixed_tuple_count == 2
+    require (first: int = 1, second: string = "two")'mixed_record_count == 2
+} else {
+    require true'flip_bool == false
+    require false'flip_bool
+    require nil'nil_number == 7
+    require dynamic_mixed_tuple("two") == 2
+    require dynamic_mixed_record("two") == 2
+    static_tuple()
+    dynamic_tuple(3)
+    static_record()
+    dynamic_record(4)
+}

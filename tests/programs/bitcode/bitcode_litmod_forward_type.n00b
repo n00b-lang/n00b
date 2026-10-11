@@ -1,10 +1,8 @@
-declare_litmod("number", "string", "make_number")
-
 func value() -> int {
     return "ignored"'number
 }
 
-func make_number(raw: string) -> int fail: string {
+litmod<quotes> make_number, number(raw: string) -> int fail: string {
     return 42
 }
 

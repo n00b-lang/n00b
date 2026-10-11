@@ -479,7 +479,8 @@ func trace_value(marker: Ref[builtin.gc.Marker]?,
                                   builtin.abi.string_backing_at(address))
             return
         }
-        if row.kind == cast[u32](builtin.abi.Type_Kind.box_type) {
+        if row.kind == cast[u32](builtin.abi.Type_Kind.box_type) or
+            row.kind == cast[u32](builtin.abi.Type_Kind.union_type) {
             require start_index == 0
             let box: Ref[builtin.abi.Box_Value] = unsafe_cast[Ref[builtin.abi.Box_Value]] address
             let item_index: u32 = box.type_field & 0x7fffffff

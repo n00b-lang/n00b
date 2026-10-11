@@ -74,8 +74,10 @@ fi
     "$program_dir/bitcode_litmod_float.n00b"
 "$tmp/litmod_float"
 "$compiler" build --output "$tmp/litmod_string" \
-    "$program_dir/bitcode_litmod_string.n00b"
-"$tmp/litmod_string"
+    "$program_dir/bitcode_litmod_declaration.n"
+"$tmp/litmod_string" 2>"$tmp/litmod_declaration.out"
+test "$(cat "$tmp/litmod_declaration.out")" = \
+    'hello|world|123|2a|1.5|last'
 "$compiler" build --output "$tmp/litmod_static_strings" \
     "$program_dir/bitcode_litmod_static_strings.n00b"
 "$tmp/litmod_static_strings"
@@ -85,6 +87,9 @@ fi
 "$compiler" build --output "$tmp/litmod_bool" \
     "$program_dir/bitcode_litmod_bool.n00b"
 "$tmp/litmod_bool"
+"$compiler" build --output "$tmp/litmod_parenthesized" \
+    "$program_dir/bitcode_litmod_parenthesized.n"
+"$tmp/litmod_parenthesized"
 "$compiler" build --output "$tmp/litmod_fence" \
     "$program_dir/bitcode_litmod_fence.n00b"
 "$tmp/litmod_fence"

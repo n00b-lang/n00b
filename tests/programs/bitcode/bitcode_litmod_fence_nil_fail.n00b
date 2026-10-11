@@ -1,6 +1,4 @@
-declare_litmod("noop", "fence", "fail_fence")
-
-func fail_fence(contents: string) -> nil fail: string {
+litmod<fence> fail_fence, noop(contents: string) -> nil fail: string {
     fail "fence failed"
 }
 

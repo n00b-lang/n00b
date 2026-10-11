@@ -660,67 +660,65 @@ builtin_argument_count(pp_context_t *ctx, parse_tree_t *call)
 }
 
 static bool
-collect_litmod_arguments(parse_grammar_t *grammar, parse_tree_t *node,
-                         parse_tree_t **arguments, size_t *count)
+register_litmod_aliases(pp_context_t *ctx, parse_tree_t *function,
+                        parse_tree_t *node, core_string_t kind)
 {
-    if (!node || core_tree_is_leaf(node)) return true;
-    if (is_name(grammar, node, "expression")) {
-        if (*count == 3) return false;
-        arguments[(*count)++] = node;
-        return true;
+    if (!node) return true;
+    if (core_tree_is_leaf(node)) {
+        parse_token_info_t *token = parse_node_token(node);
+        if (!token || !core_string_eq(parse_terminal_name(ctx->grammar,
+                token->tid), CORE_STRING_STATIC("IDENTIFIER"))) return true;
+        core_string_t alias = leaf_text(ctx, node);
+        if (ctx->options->register_litmod(ctx->options->litmod_context,
+                ctx->unit, function, alias, kind)) return true;
+        pp_error(ctx, node, "duplicate literal modifier name and kind");
+        return false;
     }
     for (size_t i = 0; i < core_tree_num_children(node); i++)
-        if (!collect_litmod_arguments(grammar, core_tree_child(node, i),
-                                      arguments, count)) return false;
+        if (!register_litmod_aliases(ctx, function,
+                core_tree_child(node, i), kind)) return false;
     return true;
 }
 
 static bool
-register_litmod(pp_context_t *ctx, parse_tree_t *call)
+register_litmod_declaration(pp_context_t *ctx, parse_tree_t *function)
 {
-    while (call && !core_tree_is_leaf(call)
-           && core_tree_num_children(call) == 1)
-        call = core_tree_child(call, 0);
-    if (builtin_argument_count(ctx, call) != 3) {
-        pp_error(ctx, call, "declare_litmod requires three positional string arguments");
-        return false;
-    }
-    parse_tree_t *args = child_named(ctx->grammar, call, "call-args");
-    parse_tree_t *arguments[3] = {0};
-    size_t count = 0;
-    if (!args || !collect_litmod_arguments(ctx->grammar,
-            child_named(ctx->grammar, args, "positional-args"),
-            arguments, &count) || count != 3) {
-        pp_error(ctx, call, "cannot read declare_litmod arguments");
-        return false;
-    }
-    core_string_t values[3];
-    for (size_t i = 0; i < 3; i++) {
-        pp_value_t value;
-        if (!eval_expr(ctx, arguments[i], &value)) return false;
-        if (value.kind != PP_STRING) {
-            pp_error(ctx, arguments[i],
-                     "declare_litmod arguments must have type string");
-            return false;
-        }
-        values[i] = value.as.string;
-    }
-    core_string_t kind = values[1];
-    if (!core_string_eq(kind, CORE_STRING_STATIC("string"))
+    parse_tree_t *prelude = child_named(ctx->grammar, function,
+                                        "litmod-prelude");
+    if (!prelude) return true;
+    parse_tree_t *kind_node = child_named(ctx->grammar, prelude,
+                                          "litmod-kind");
+    parse_tree_t *primary = core_tree_child(function, 1);
+    core_string_t kind = first_leaf_text(ctx, kind_node);
+    core_string_t function_name = leaf_text(ctx, primary);
+    if (!core_string_eq(kind, CORE_STRING_STATIC("set"))
+        && !core_string_eq(kind, CORE_STRING_STATIC("hex"))
         && !core_string_eq(kind, CORE_STRING_STATIC("array"))
         && !core_string_eq(kind, CORE_STRING_STATIC("dict"))
-        && !core_string_eq(kind, CORE_STRING_STATIC("set"))
+        && !core_string_eq(kind, CORE_STRING_STATIC("int"))
+        && !core_string_eq(kind, CORE_STRING_STATIC("bool"))
+        && !core_string_eq(kind, CORE_STRING_STATIC("nil"))
+        && !core_string_eq(kind, CORE_STRING_STATIC("float"))
+        && !core_string_eq(kind, CORE_STRING_STATIC("quotes"))
+        && !core_string_eq(kind, CORE_STRING_STATIC("tuple"))
+        && !core_string_eq(kind, CORE_STRING_STATIC("record"))
         && !core_string_eq(kind, CORE_STRING_STATIC("fence"))) {
-        pp_error(ctx, arguments[1], "unknown literal modifier shape");
+        pp_error(ctx, kind_node, "unknown literal modifier kind");
         return false;
     }
-    if (!ctx->options || !ctx->options->register_litmod
-        || !ctx->options->register_litmod(ctx->options->litmod_context,
-            ctx->unit, call, values[0], kind, values[2])) {
-        pp_error(ctx, call, "cannot register literal modifier");
+    if (!kind.data || !function_name.data || !ctx->options
+        || !ctx->options->register_litmod) {
+        pp_error(ctx, function, "invalid literal modifier declaration");
         return false;
     }
-    return true;
+    if (!ctx->options->register_litmod(ctx->options->litmod_context,
+            ctx->unit, function, function_name, kind)) {
+        pp_error(ctx, primary, "duplicate literal modifier name and kind");
+        return false;
+    }
+    parse_tree_t *aliases = parse_tree_find_child_by_nt_name(ctx->grammar,
+        function, CORE_STRING_STATIC("litmod-aliases"));
+    return register_litmod_aliases(ctx, function, aliases, kind);
 }
 
 static bool
@@ -1071,10 +1069,6 @@ eval_builtin(pp_context_t *ctx, parse_tree_t *call, pp_value_t *out)
         callee = core_tree_child(callee, 0);
     core_string_t name = callee && core_tree_is_leaf(callee)
         ? leaf_text(ctx, callee) : (core_string_t){0};
-    if (core_string_eq(name, CORE_STRING_STATIC("declare_litmod"))) {
-        pp_error(ctx, call, "declare_litmod is only allowed as a statement");
-        return false;
-    }
     size_t argument_count = builtin_argument_count(ctx, call);
     bool needs_string = core_string_eq(name, CORE_STRING_STATIC("preproc_env"))
         || core_string_eq(name, CORE_STRING_STATIC("preproc_env_defines"))
@@ -1647,8 +1641,7 @@ n00bb_preprocessor_builtin_name(core_string_t name)
         "preproc_utc_hour", "preproc_utc_minute", "preproc_utc_second",
         "n00b_major", "n00b_minor", "n00b_patch", "n00b_impl",
         "preproc_env", "preproc_env_defines", "preproc_defines",
-        "preproc_value", "compile_warning", "compile_error",
-        "declare_litmod", nullptr,
+        "preproc_value", "compile_warning", "compile_error", nullptr,
     };
     for (size_t i = 0; names[i]; i++)
         if (core_string_eq(name, core_string_from_cstr(names[i]))) return true;
@@ -1959,8 +1952,7 @@ replace_builtin(pp_context_t *ctx, parse_tree_t **slot,
     core_string_t name = builtin_name(ctx, node);
     if (!n00bb_preprocessor_builtin_name(name)
         || core_string_eq(name, CORE_STRING_STATIC("compile_warning"))
-        || core_string_eq(name, CORE_STRING_STATIC("compile_error"))
-        || core_string_eq(name, CORE_STRING_STATIC("declare_litmod")))
+        || core_string_eq(name, CORE_STRING_STATIC("compile_error")))
         return false;
     pp_value_t value;
     if (!eval_builtin(ctx, node, &value)) return false;
@@ -2080,6 +2072,9 @@ process_node(pp_context_t *ctx, parse_tree_t **slot, parse_tree_t *parent,
     if (!node || core_tree_is_leaf(node) || ctx->failed) return;
     if (is_name(ctx->grammar, node, "body")) current_body = node;
 
+    if (is_name(ctx->grammar, node, "func-def")
+        && !register_litmod_declaration(ctx, node)) return;
+
     bool scoped_body = is_name(ctx->grammar, node, "body")
         || is_name(ctx->grammar, node, "value-body")
         || is_name(ctx->grammar, node, "try-body");
@@ -2112,9 +2107,7 @@ process_node(pp_context_t *ctx, parse_tree_t **slot, parse_tree_t *parent,
             if (core_string_eq(diagnostic_name,
                                CORE_STRING_STATIC("compile_warning"))
                 || core_string_eq(diagnostic_name,
-                                  CORE_STRING_STATIC("compile_error"))
-                || core_string_eq(diagnostic_name,
-                                  CORE_STRING_STATIC("declare_litmod")))
+                                  CORE_STRING_STATIC("compile_error")))
                 break;
             if (core_tree_num_children(expression) != 1) break;
             expression = core_tree_child(expression, 0);
@@ -2126,11 +2119,6 @@ process_node(pp_context_t *ctx, parse_tree_t **slot, parse_tree_t *parent,
             pp_value_t ignored;
             eval_builtin(ctx, expression, &ignored);
             *slot = nullptr;
-            return;
-        }
-        if (core_string_eq(diagnostic_name,
-                           CORE_STRING_STATIC("declare_litmod"))) {
-            if (register_litmod(ctx, expression)) *slot = nullptr;
             return;
         }
     }

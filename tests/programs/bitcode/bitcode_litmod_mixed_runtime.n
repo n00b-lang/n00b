@@ -1,0 +1,21 @@
+litmod<tuple> tuple_count(items: Array[int | string]) -> int fail: string {
+    return 2
+}
+
+litmod<record> record_count(items: Array[Tuple[string, int | string]]) -> int fail: string {
+    return 2
+}
+
+func dynamic_tuple(value: string) -> int {
+    return (1, value)'tuple_count
+}
+
+func dynamic_record(value: string) -> int {
+    return (first: int = 1, second: string = value)'record_count
+}
+
+comptime {
+} else {
+    require dynamic_tuple("two") == 2
+    require dynamic_record("two") == 2
+}

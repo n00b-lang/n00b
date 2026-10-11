@@ -1,11 +1,8 @@
-declare_litmod("bundle", "string", "identity")
-declare_litmod("dynamic", "array", "from_items")
-
-func identity(raw: string) -> Tuple[string, int] fail: string {
+litmod<quotes> identity, bundle(raw: string) -> Tuple[string, int] fail: string {
     return (raw, 7)
 }
 
-func from_items(items: Array[int]) -> Tuple[string, int] fail: string {
+litmod<array> from_items, dynamic(items: Array[int]) -> Tuple[string, int] fail: string {
     return ("runtime", 9)
 }
 

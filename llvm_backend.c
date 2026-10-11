@@ -305,7 +305,8 @@ static LLVMTypeRef
 value_type(ir_module_t *module, th_type *type, LLVMContextRef context)
 {
     th_kind kind = th_kind_of(th_resolve(type));
-    if (kind == TH_VAR || kind == TH_TRAIT) return box_llvm_type(context);
+    if (kind == TH_VAR || kind == TH_TRAIT || kind == TH_SUM)
+        return box_llvm_type(context);
     th_type *definition = ir_type_definition(module, type);
     if (type && !definition && th_kind_of(th_resolve(type)) == TH_RECORD)
         definition = th_resolve(type);
@@ -1061,6 +1062,9 @@ literal_element_layout_matches(ir_module_t *module, th_type *type,
                 == LLVMPointerTypeKind
             && LLVMGetTypeKind(LLVMStructGetTypeAtIndex(native, 1))
                 == LLVMPointerTypeKind;
+    if (th_kind_of(th_resolve(type)) == TH_SUM)
+        return layout->intrinsic_bits == 128
+            && native == box_llvm_type(LLVMGetTypeContext(native));
 
     const char *name = nullptr;
     size_t count = 0;
@@ -1511,10 +1515,12 @@ dynamic_array(lower_state_t *state, ir_instr_t *instruction)
     LLVMTypeRef allocator_params[] = {i32, i32, i64, i32, pointer};
     LLVMTypeRef allocator_type = LLVMFunctionType(pointer,
         allocator_params, 5, false);
+    const char *allocator_name = ir_func_execution_phase(state->function)
+        == IR_PHASE_COMPTIME ? "n00b_comptime_allocate" : "n00b_allocate";
     LLVMValueRef allocator = LLVMGetNamedFunction(state->module,
-        "n00b_allocate");
+        allocator_name);
     if (!allocator)
-        allocator = LLVMAddFunction(state->module, "n00b_allocate",
+        allocator = LLVMAddFunction(state->module, allocator_name,
                                     allocator_type);
     LLVMValueRef allocator_args[] = {
         LLVMConstInt(i32, N00B_ABI_ALLOCATOR_GC, false),
@@ -2150,10 +2156,13 @@ box_value(lower_state_t *state, LLVMValueRef value, th_type *type)
         LLVMTypeRef parameters[] = {i32, i32, word_type, i32, pointer};
         LLVMTypeRef signature = LLVMFunctionType(pointer, parameters,
                                                   5, false);
+        const char *allocator_name = ir_func_execution_phase(state->function)
+            == IR_PHASE_COMPTIME ? "n00b_comptime_allocate"
+                                 : "n00b_allocate";
         LLVMValueRef allocator = LLVMGetNamedFunction(state->module,
-                                                      "n00b_allocate");
+                                                      allocator_name);
         if (!allocator)
-            allocator = LLVMAddFunction(state->module, "n00b_allocate",
+            allocator = LLVMAddFunction(state->module, allocator_name,
                                         signature);
         if (!allocator || LLVMGlobalGetValueType(allocator) != signature)
             return nullptr;
@@ -5988,8 +5997,8 @@ lower_phase(n00bb_llvm_backend_t *backend, bool comptime,
                       !comptime && backend->emit_frame_maps,
                       comptime ? nullptr : backend->phase_arrays,
                       comptime ? 0 : backend->phase_array_count,
-                      comptime ? nullptr : backend->type_indices,
-                      comptime ? 0 : backend->type_index_count,
+                      backend->type_indices,
+                      backend->type_index_count,
                       comptime ? nullptr : backend->function_indices,
                       comptime ? 0 : backend->function_index_count,
                       comptime ? nullptr : backend->global_bindings,
@@ -6880,7 +6889,7 @@ n00bb_llvm_backend_emit_object(n00bb_llvm_backend_t *backend,
             "entry");
         LLVMBuilderRef builder = LLVMCreateBuilderInContext(context);
         LLVMPositionBuilderAtEnd(builder, block);
-        if (!comptime) {
+        if (metadata_bytes) {
             LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
             LLVMTypeRef fields[] = {
                 result, result, pointer, LLVMInt64TypeInContext(context)
@@ -6912,18 +6921,20 @@ n00bb_llvm_backend_emit_object(n00bb_llvm_backend_t *backend,
             LLVMTypeRef bind_params[] = {pointer, result};
             LLVMTypeRef bind_type = LLVMFunctionType(result, bind_params,
                                                       2, false);
-            LLVMValueRef bind = LLVMAddFunction(module,
-                "n00b_abi_v1_bind_runtime_function_addresses", bind_type);
-            LLVMValueRef bind_args[] = {function_addresses,
-                LLVMConstInt(result, function_address_count, false)};
-            LLVMValueRef bound = LLVMBuildCall2(builder, bind_type, bind,
-                bind_args, 2, "function.addresses");
             LLVMValueRef failed = LLVMBuildICmp(builder, LLVMIntNE, status,
                 LLVMConstInt(result, 0, false), "registration.failed");
-            LLVMValueRef bind_failed = LLVMBuildICmp(builder, LLVMIntNE,
-                bound, LLVMConstNull(result), "function.addresses.failed");
-            failed = LLVMBuildOr(builder, failed, bind_failed,
-                                 "initialization.failed");
+            if (!comptime) {
+                LLVMValueRef bind = LLVMAddFunction(module,
+                    "n00b_abi_v1_bind_runtime_function_addresses", bind_type);
+                LLVMValueRef bind_args[] = {function_addresses,
+                    LLVMConstInt(result, function_address_count, false)};
+                LLVMValueRef bound = LLVMBuildCall2(builder, bind_type, bind,
+                    bind_args, 2, "function.addresses");
+                LLVMValueRef bind_failed = LLVMBuildICmp(builder, LLVMIntNE,
+                    bound, LLVMConstNull(result), "function.addresses.failed");
+                failed = LLVMBuildOr(builder, failed, bind_failed,
+                                     "initialization.failed");
+            }
             LLVMBasicBlockRef rejected = LLVMAppendBasicBlockInContext(context,
                 entry, "metadata.invalid");
             LLVMBasicBlockRef ready = LLVMAppendBasicBlockInContext(context,

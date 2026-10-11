@@ -96,6 +96,23 @@ check_structural_record(ir_module_t *module,
 }
 
 static int
+check_union_box(ir_module_t *module, const core_target_desc_t *target,
+                th_ctx *types)
+{
+    th_type *arms[] = {th_name(types, "u32"), th_name(types, "string")};
+    th_type *union_type = th_sum(types, TH_UNION, arms, 2);
+    bool handled = false;
+    if (!union_type || !n00bb_abi_publish_direct_layout(module, union_type,
+            target, &handled) || !handled) return 0;
+    const ir_final_layout_t *final = ir_layout_final(module, union_type,
+                                                     target->triple);
+    return final && final->intrinsic_bits == 128
+        && final->alignment_bytes == 8
+        && n00bb_abi_publish_direct_layout(module, union_type, target,
+                                            &handled) && handled;
+}
+
+static int
 check_nested_value_stride(ir_module_t *module,
                           const core_target_desc_t *target, th_ctx *types)
 {
@@ -346,6 +363,7 @@ int main(void)
             && empty_record_layout->intrinsic_bits == 0
             && empty_record_layout->alignment_bytes == 1;
         ok = ok && check_structural_record(module, &target, types);
+        ok = ok && check_union_box(module, &target, types);
         th_type *ir_only = th_bits(types, 73);
         th_type *failed_type = nullptr;
         ok = ok && ir_type_intern(module, ir_only)

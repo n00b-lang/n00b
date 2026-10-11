@@ -533,6 +533,165 @@ n00bb_abi_packed_tables_release(n00bb_abi_packed_tables_t *packed)
 }
 
 bool
+n00bb_abi_emit_comptime_catalog(
+    ir_ctx_t *context, ir_module_t *module,
+    ir_func_t *const *functions, size_t function_count,
+    const core_target_desc_t *target,
+    n00bb_abi_comptime_type_t **out_types, size_t *out_type_count,
+    uint8_t **out_object, size_t *out_object_bytes,
+    size_t *out_metadata_bytes)
+{
+    if (!context || !module || !target || !out_types || !out_type_count || !out_object
+        || !out_object_bytes || !out_metadata_bytes) return false;
+    ir_module_t *catalog = ir_module_new(context,
+        "__n00bb_comptime_catalog", ir_module_profile(module),
+        ir_module_target(module));
+    n00bb_abi_name_pool_t *names = n00bb_abi_name_pool_new();
+    n00bb_abi_type_index_t *index = n00bb_abi_type_index_new(catalog);
+    n00bb_abi_type_identity_rows_t types = {0};
+    n00bb_abi_type_components_t components = {0};
+    n00bb_abi_type_layout_rows_t layouts = {0};
+    n00bb_abi_packed_tables_t packed = {0};
+    n00bb_abi_comptime_type_t *bindings = nullptr;
+    uint8_t *object = nullptr;
+    size_t object_bytes = 0;
+    bool valid = catalog && names && index
+        && n00bb_abi_type_index_collect_comptime_functions(index,
+            functions, function_count);
+    ir_module_t **owners = valid
+        ? core_alloc_array(ir_module_t *, function_count + 1) : nullptr;
+    size_t owner_count = 0;
+    valid = valid && owners != nullptr;
+    for (size_t f = 0; valid && f < function_count; f++) {
+        ir_module_t *owner = functions[f] ? functions[f]->owner : nullptr;
+        if (!owner) { valid = false; break; }
+        bool seen = owner == catalog;
+        for (size_t p = 0; p < owner_count; p++)
+            seen |= owners[p] == owner;
+        if (!seen) owners[owner_count++] = owner;
+    }
+    for (uint32_t i = 0; valid && i < n00bb_abi_type_index_count(index); i++) {
+        bool handled = false;
+        th_type *type = n00bb_abi_type_index_at(index, i);
+        valid = n00bb_abi_publish_direct_layout(catalog, type, target,
+                                                &handled);
+        for (size_t f = 0; valid && f < owner_count; f++)
+            valid = n00bb_abi_publish_direct_layout(owners[f], type, target,
+                                                    &handled);
+    }
+    core_free(owners);
+    if (valid) valid = n00bb_abi_type_identity_rows_build(index,
+        catalog, catalog, nullptr, nullptr, nullptr, names, &types);
+    if (valid) valid = n00bb_abi_type_components_build(index, catalog, 1,
+        &types, &components);
+    if (valid) valid = n00bb_abi_type_layout_rows_build(index,
+        catalog, catalog, 1 + (uint32_t)components.count, nullptr, names,
+        &types, &layouts);
+    size_t stream_count = 1 + components.count + layouts.stream_index_count;
+    uint32_t *stream = valid ? core_alloc_array(uint32_t, stream_count)
+                             : nullptr;
+    valid = valid && stream != nullptr;
+    n00bb_abi_table_rows_t rows[] = {
+        {N00B_ABI_TABLE_TYPE, types.rows, types.count},
+        {N00B_ABI_TABLE_TYPE_ARGUMENT, types.arguments,
+         types.argument_count},
+        {N00B_ABI_TABLE_LAYOUT, layouts.layouts, layouts.layout_count},
+        {N00B_ABI_TABLE_PHYSICAL_RUN, layouts.runs, layouts.run_count},
+        {N00B_ABI_TABLE_PACKED_RUN, layouts.packed_runs,
+         layouts.packed_run_count},
+        {N00B_ABI_TABLE_FIELD, layouts.fields, layouts.field_count},
+        {N00B_ABI_TABLE_ARM, layouts.arms, layouts.arm_count},
+        {N00B_ABI_TABLE_TAG_EXTRACTOR, layouts.tag_extractors,
+         layouts.tag_extractor_count},
+        {N00B_ABI_TABLE_TRACE, layouts.traces, layouts.trace_count},
+        {N00B_ABI_TABLE_TRACE_CHILD, layouts.trace_children,
+         layouts.trace_child_count},
+        {N00B_ABI_TABLE_TRACE_ARM, layouts.trace_arms,
+         layouts.trace_arm_count},
+        {N00B_ABI_TABLE_U32_STREAM, stream, stream_count},
+    };
+    size_t table_count = sizeof(rows) / sizeof(*rows);
+    if (valid) {
+        if (components.count)
+            memcpy(stream + 1, components.indexes,
+                   components.count * sizeof(*stream));
+        if (layouts.stream_index_count)
+            memcpy(stream + 1 + components.count, layouts.stream_indexes,
+                   layouts.stream_index_count * sizeof(*stream));
+        valid = n00bb_abi_pack_tables(target, 0, rows, table_count,
+                                      &packed);
+    }
+    core_free(stream);
+    size_t row_count = n00bb_abi_type_index_count(index);
+    if (valid) {
+        bindings = core_alloc_array(n00bb_abi_comptime_type_t, row_count);
+        valid = bindings != nullptr;
+        for (uint32_t i = 0; valid && i < row_count; i++)
+            bindings[i] = (n00bb_abi_comptime_type_t){
+                .typehash = types.rows[i].typehash, .index = i,
+            };
+    }
+    n00bb_abi_image_key_t key;
+    n00bb_abi_image_header_t header;
+    n00bb_abi_directory_entry_t *entries = valid
+        ? core_alloc_array(n00bb_abi_directory_entry_t, table_count)
+        : nullptr;
+    size_t schema_count = 0;
+    const n00bb_abi_table_schema_t *schemas =
+        n00bb_abi_v1_table_schemas(&schema_count);
+    if (valid) valid = entries
+        && n00bb_abi_image_key_for_target(target, &key)
+        && n00bb_abi_container_read(packed.bytes, packed.byte_count,
+            &key, schemas, schema_count, false, &header, entries,
+            table_count);
+    core_object_emit_absolute64_t *relocations = nullptr;
+    size_t relocation_count = 0;
+    if (valid) valid = n00bb_abi_name_pool_relocations(names, entries,
+        table_count, &relocations,
+        &relocation_count);
+    size_t pool_size = n00bb_abi_name_pool_size(names);
+    core_object_emit_section_t section = {
+        .name = target->object_format == CORE_TARGET_OBJECT_MACH_O
+            ? "__n00b_strings"
+            : target->object_format == CORE_TARGET_OBJECT_COFF
+                ? ".rdata$S" : ".rodata.n00b_strings",
+        .segment = target->object_format == CORE_TARGET_OBJECT_MACH_O
+            ? "__TEXT" : nullptr,
+        .bytes = n00bb_abi_name_pool_bytes(names),
+        .size = pool_size, .alignment = 1,
+    };
+    core_object_emit_symbol_t symbols[] = {
+        {.name = "n00b_string_pool", .section_index = 2},
+        {.name = target->object_format == CORE_TARGET_OBJECT_MACH_O
+            ? "_n00b_abi_metadata" : "n00b_abi_metadata", .section_index = 1,
+         .exported = true},
+    };
+    if (valid) valid = n00bb_abi_write_object(target, &packed,
+        pool_size ? &section : nullptr, pool_size != 0,
+        pool_size ? symbols : &symbols[1], pool_size ? 2 : 1,
+        relocations, relocation_count, &object, &object_bytes);
+    core_free(relocations);
+    core_free(entries);
+    n00bb_abi_packed_tables_release(&packed);
+    n00bb_abi_type_layout_rows_release(&layouts);
+    n00bb_abi_type_components_release(&components);
+    n00bb_abi_type_identity_rows_release(&types);
+    n00bb_abi_type_index_free(index);
+    n00bb_abi_name_pool_free(names);
+    if (!valid) {
+        core_free(bindings);
+        core_free(object);
+        return false;
+    }
+    *out_types = bindings;
+    *out_type_count = row_count;
+    *out_object = object;
+    *out_object_bytes = object_bytes;
+    *out_metadata_bytes = header.total_extent;
+    return true;
+}
+
+bool
 n00bb_abi_write_object(
     const core_target_desc_t *target,
     const n00bb_abi_packed_tables_t *packed,

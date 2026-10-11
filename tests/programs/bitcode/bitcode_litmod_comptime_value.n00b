@@ -1,6 +1,4 @@
-declare_litmod("raw", "string", "identity")
-
-func identity(contents: string) -> string fail: string {
+litmod<quotes> identity, raw(contents: string) -> string fail: string {
     return contents
 }
 

@@ -1,15 +1,12 @@
-declare_litmod("outer", "string", "make_outer")
-declare_litmod("inner", "string", "make_inner")
-
 func value() -> int {
     return "ignored"'outer
 }
 
-func make_outer(raw: string) fail: string {
+litmod<quotes> make_outer, outer(raw: string) -> int fail: string {
     return "ignored"'inner
 }
 
-func make_inner(raw: string) -> int fail: string {
+litmod<quotes> make_inner, inner(raw: string) -> int fail: string {
     return 42
 }
 

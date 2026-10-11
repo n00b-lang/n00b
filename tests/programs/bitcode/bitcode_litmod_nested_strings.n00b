@@ -1,6 +1,4 @@
-declare_litmod("bundle", "array", "identity")
-
-func identity(items: Array[Array[string]]) -> Array[Array[string]] fail: string {
+litmod<array> identity, bundle(items: Array[Array[string]]) -> Array[Array[string]] fail: string {
     return items
 }
 

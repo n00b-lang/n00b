@@ -1,6 +1,4 @@
-declare_litmod("chars", "string", "make_chars")
-
-func make_chars(raw: string) -> Array[char] fail: string {
+litmod<quotes> make_chars, chars(raw: string) -> Array[char] fail: string {
     return "abc"'u32
 }
 

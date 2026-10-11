@@ -359,6 +359,13 @@ publish_direct_or_alias(ir_module_t *module, th_type *type,
         storage_bits = semantic_bits = 128;
         alignment_bytes = 8;
     }
+    else if (th_kind_of(type) == TH_SUM) {
+        *handled = true;
+        if (target->pointer_bits != 64
+            || target->pointer_alignment_bytes != 8) return false;
+        storage_bits = semantic_bits = 128;
+        alignment_bytes = 8;
+    }
     else if (th_kind_of(type) == TH_RECORD)
         return publish_structural_record_layout(module, type, target,
                                                 seen, handled);

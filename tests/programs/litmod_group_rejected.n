@@ -1,0 +1,7 @@
+litmod<tuple> identity(items: Array[int]) -> Array[int] fail: string {
+    return items
+}
+
+func value(x: int) -> int {
+    return (x)'identity
+}

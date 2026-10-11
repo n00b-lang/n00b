@@ -1630,6 +1630,7 @@ N00B_PATH="$script_dir/programs/link_records" "$compiler" compile \
 N00B_PATH="$script_dir/programs/link_records" "$compiler" compile \
     --output "$tmp/record_dep_abi.o" record_dep
 [ -s "$tmp/record_dep_abi.o" ]
+"$abi_link_input_test" --field "$tmp/record_dep_abi.o"
 "$abi_link_input_test" --records "$tmp/import_record_abi.o" \
     "$tmp/record_dep_abi.o"
 N00B_PATH="$script_dir/programs/link_records" "$compiler" library \
@@ -3430,8 +3431,8 @@ grep -q 'literal handler cannot specialize for this payload' \
     cat "$tmp/litmod_registration.err"
     exit 1
 }
-if grep -Fq 'declare_litmod' "$tmp/litmod_registration.tree"; then
-    echo 'literal modifier registration remained in the compiled tree' >&2
+if ! grep -Fq '<litmod-prelude>' "$tmp/litmod_registration.tree"; then
+    echo 'literal modifier declaration was lost during preprocessing' >&2
     exit 1
 fi
 "$compiler" lower "$script_dir/programs/litmod_registration.n00b" \
@@ -3450,8 +3451,17 @@ if "$compiler" lower "$script_dir/programs/litmod_registration_invalid.n00b" \
     echo 'invalid literal handler signature unexpectedly compiled' >&2
     exit 1
 fi
-grep -Fq "literal modifier 'json' requires a same-module function" \
+grep -Fq "literal modifier 'json' requires one explicitly typed" \
     "$tmp/litmod_registration_invalid.out"
+for excluded in litmod_group_rejected litmod_char_rejected \
+    litmod_type_rejected; do
+    if "$compiler" lower "$script_dir/programs/$excluded.n" \
+        >"$tmp/$excluded.out" 2>&1; then
+        echo "$excluded unexpectedly lowered" >&2
+        exit 1
+    fi
+    grep -Eq 'N00BB-T0010|N00BB-T0030' "$tmp/$excluded.out"
+done
 
 "$compiler" lower --dump-ir --dump-control-flow \
     "$script_dir/programs/litmod_prelude_order.n00b" \

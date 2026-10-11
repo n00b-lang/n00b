@@ -1,7 +1,9 @@
-declare_litmod("stamp", "string", "make_stamp")
-
-func make_stamp(raw: string) -> int fail: string {
+litmod<quotes> make_stamp, stamp(raw: string) -> int fail: string {
     return 42
+}
+
+litmod<tuple> count_pair(items: Array[Tuple[int, int] | string]) -> int fail: string {
+    return 2
 }
 
 public func value() -> int {
@@ -10,5 +12,6 @@ public func value() -> int {
 
 comptime {
     require value() == 42
+    require ((1, 2), "three")'count_pair == 2
 } else {
 }

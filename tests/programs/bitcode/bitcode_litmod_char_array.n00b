@@ -1,6 +1,4 @@
-declare_litmod("wrap", "array", "identity")
-
-func identity(items: Array[char]) -> Array[char] fail: string {
+litmod<array> identity, wrap(items: Array[char]) -> Array[char] fail: string {
     return items
 }
 

@@ -1,11 +1,8 @@
-declare_litmod("yes", "string", "is_yes")
-declare_litmod("no", "string", "is_no")
-
-func is_yes(raw: string) -> bool fail: string {
+litmod<quotes> is_yes, yes(raw: string) -> bool fail: string {
     return true
 }
 
-func is_no(raw: string) -> bool fail: string {
+litmod<quotes> is_no, no(raw: string) -> bool fail: string {
     return false
 }
 

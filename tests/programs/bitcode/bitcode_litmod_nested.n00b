@@ -1,11 +1,8 @@
-declare_litmod("raw", "string", "identity_string")
-declare_litmod("bundle", "array", "identity_array")
-
-func identity_string(raw: string) -> string fail: string {
+litmod<quotes> identity_string, raw(raw: string) -> string fail: string {
     return raw
 }
 
-func identity_array(items: Array[string]) -> Array[string] fail: string {
+litmod<array> identity_array, bundle(items: Array[string]) -> Array[string] fail: string {
     return items
 }
 

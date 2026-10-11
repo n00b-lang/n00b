@@ -1,6 +1,4 @@
-declare_litmod("pair", "string", "make_pair")
-
-func make_pair(raw: string) -> Tuple[bool, string] fail: string {
+litmod<quotes> make_pair, pair(raw: string) -> Tuple[bool, string] fail: string {
     return (true, raw)
 }
 

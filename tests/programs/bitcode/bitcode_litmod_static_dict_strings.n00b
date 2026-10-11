@@ -1,11 +1,8 @@
-declare_litmod("mirror", "dict", "identity")
-declare_litmod("pairs", "array", "identity_pairs")
-
-func identity(items: Array[Tuple[string, int]]) -> Array[Tuple[string, int]] fail: string {
+litmod<dict> identity, mirror(items: Array[Tuple[string, int]]) -> Array[Tuple[string, int]] fail: string {
     return items
 }
 
-func identity_pairs(items: Array[Tuple[string, string, int]]) -> Array[Tuple[string, string, int]] fail: string {
+litmod<array> identity_pairs, pairs(items: Array[Tuple[string, string, int]]) -> Array[Tuple[string, string, int]] fail: string {
     return items
 }
 

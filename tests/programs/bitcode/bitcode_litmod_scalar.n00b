@@ -1,6 +1,4 @@
-declare_litmod("number", "string", "read_number")
-
-func read_number(raw: string) -> int fail: string {
+litmod<quotes> read_number, number(raw: string) -> int fail: string {
     return 7
 }
 

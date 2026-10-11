@@ -1,6 +1,4 @@
-declare_litmod("reject", "string", "reject_text")
-
-func reject_text(raw: string) -> string fail: string {
+litmod<quotes> reject_text, reject(raw: string) -> string fail: string {
     fail "bad literal"
 }
 

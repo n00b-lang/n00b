@@ -1,0 +1,3 @@
+func value(x: int'identity) -> int {
+    return x
+}

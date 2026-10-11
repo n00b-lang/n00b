@@ -1,6 +1,4 @@
-declare_litmod("mirror", "dict", "build_dict")
-
-func build_dict(items: Array[Tuple[int, int]]) -> Array[Tuple[int, int]] fail: string {
+litmod<dict> build_dict, mirror(items: Array[Tuple[int, int]]) -> Array[Tuple[int, int]] fail: string {
     return items
 }
 

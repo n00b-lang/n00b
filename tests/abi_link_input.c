@@ -633,6 +633,48 @@ find_named_type(const n00bb_abi_object_view_t *view, const char *spelling)
 }
 
 static void
+test_duplicate_record_field(const char *path)
+{
+    size_t left_bytes, right_bytes;
+    uint8_t *left_object = read_object(path, &left_bytes);
+    uint8_t *right_object = read_object(path, &right_bytes);
+    core_target_desc_t target;
+    assert(core_target_profile(host_triple(), 0, &target));
+    n00bb_abi_object_view_t views[2] = {0};
+    assert(n00bb_abi_object_open(&target, left_object, left_bytes, &views[0])
+        && n00bb_abi_object_open(&target, right_object, right_bytes,
+            &views[1]));
+    n00bb_abi_selected_objects_t duplicated = {.views = views, .count = 2};
+    n00bb_abi_index_plan_t *plan = n00bb_abi_index_plan_build(&duplicated);
+    assert(plan);
+    const n00bb_abi_directory_entry_t *fields = n00bb_abi_object_table(
+        &views[0], N00B_ABI_TABLE_FIELD);
+    uint32_t merged_fields = 0;
+    assert(fields && n00bb_abi_index_plan_count(plan,
+        N00B_ABI_TABLE_FIELD, &merged_fields)
+        && merged_fields == fields->record_count);
+    n00bb_abi_index_plan_free(plan);
+    uint32_t type_index = find_named_type(&views[1],
+        "record_dep.SharedRecord");
+    const n00b_abi_type_v1 *owned = n00bb_abi_object_row(
+        &views[1], N00B_ABI_TABLE_TYPE, type_index);
+    assert(type_index && owned && owned->fields_or_arms.count == 1);
+    const uint8_t *field_slot = n00bb_abi_object_row(&views[1],
+        N00B_ABI_TABLE_U32_STREAM, owned->fields_or_arms.first);
+    assert(field_slot);
+    n00b_abi_field_v1 *field = (void *)n00bb_abi_object_row(
+        &views[1], N00B_ABI_TABLE_FIELD,
+        core_le_load_u32(field_slot));
+    assert(field);
+    field->logical_bit_offset ^= 1;
+    assert(!n00bb_abi_index_plan_build(&duplicated));
+    n00bb_abi_object_close(&views[0]);
+    n00bb_abi_object_close(&views[1]);
+    free(left_object);
+    free(right_object);
+}
+
+static void
 test_imported_record_selection(const char *root_path, const char *dep_path)
 {
     core_translation_unit_t root = {0}, dep = {0};
@@ -731,38 +773,7 @@ test_imported_record_selection(const char *root_path, const char *dep_path)
     assert(!n00bb_abi_link_selected_objects(&selected, &target,
         &linked, &linked_bytes) && !linked && !linked_bytes);
     mutable_requirement->contract_type_index = saved_contract;
-    size_t duplicate_bytes;
-    uint8_t *duplicate_object = read_object(dep_path, &duplicate_bytes);
-    n00bb_abi_object_view_t duplicate_views[2] = {0};
-    assert(n00bb_abi_object_open(&target, dep_object, dep_bytes,
-        &duplicate_views[0])
-        && n00bb_abi_object_open(&target, duplicate_object,
-            duplicate_bytes, &duplicate_views[1]));
-    n00bb_abi_selected_objects_t duplicated = {
-        .views = duplicate_views, .count = 2,
-    };
-    n00bb_abi_index_plan_t *duplicate_plan = n00bb_abi_index_plan_build(
-        &duplicated);
-    assert(duplicate_plan);
-    n00bb_abi_index_plan_free(duplicate_plan);
-    uint32_t duplicate_type = find_named_type(&duplicate_views[1],
-        "record_dep.SharedRecord");
-    const n00b_abi_type_v1 *owned = n00bb_abi_object_row(
-        &duplicate_views[1], N00B_ABI_TABLE_TYPE, duplicate_type);
-    assert(duplicate_type && owned && owned->fields_or_arms.count == 1);
-    const uint8_t *field_slot = n00bb_abi_object_row(&duplicate_views[1],
-        N00B_ABI_TABLE_U32_STREAM, owned->fields_or_arms.first);
-    assert(field_slot);
-    n00b_abi_field_v1 *field = (void *)n00bb_abi_object_row(
-        &duplicate_views[1], N00B_ABI_TABLE_FIELD,
-        core_le_load_u32(field_slot));
-    assert(field);
-    field->logical_bit_offset ^= 1;
-    assert(!n00bb_abi_index_plan_build(&duplicated));
-    field->logical_bit_offset ^= 1;
-    n00bb_abi_object_close(&duplicate_views[0]);
-    n00bb_abi_object_close(&duplicate_views[1]);
-    free(duplicate_object);
+    test_duplicate_record_field(dep_path);
     n00bb_abi_index_plan_free(plan);
     n00bb_abi_selected_objects_release(&selected);
     core_link_unit_free(link);
@@ -3605,6 +3616,8 @@ main(int argc, char **argv)
             test_duplicate_member(argv[2], true);
         else if (!strcmp(argv[1], "--enum"))
             test_duplicate_member(argv[2], false);
+        else if (!strcmp(argv[1], "--field"))
+            test_duplicate_record_field(argv[2]);
         else if (!strcmp(argv[1], "--callback"))
             test_imported_callback_reference(argv[2]);
         else if (!strcmp(argv[1], "--signature"))

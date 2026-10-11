@@ -1,6 +1,4 @@
-declare_litmod("raw", "fence", "parse_raw")
-
-func parse_raw(contents: string) -> string fail: string {
+litmod<fence> parse_raw, raw(contents: string) -> string fail: string {
     return contents
 }
 

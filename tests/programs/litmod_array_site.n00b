@@ -1,6 +1,4 @@
-declare_litmod("json", "array", "parse_json")
-
-func parse_json(items: Array[int]) -> Array[int] fail: string {
+litmod<array> parse_json, json(items: Array[int]) -> Array[int] fail: string {
     return items
 }
 

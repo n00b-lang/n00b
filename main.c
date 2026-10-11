@@ -168,7 +168,7 @@ typedef struct {
 typedef struct {
     core_string_t modifier;
     core_string_t kind;
-    core_string_t function_name;
+    parse_tree_t *declaration;
     parse_sym_entry_t *function;
     core_diag_location_t location;
 } n00bb_user_litmod_t;
@@ -1435,7 +1435,6 @@ free_tu_state(void *data)
         for (size_t i = 0; i < state->literal_modifiers.len; i++) {
             core_free(state->literal_modifiers.data[i].modifier.data);
             core_free(state->literal_modifiers.data[i].kind.data);
-            core_free(state->literal_modifiers.data[i].function_name.data);
         }
         core_list_free(state->literal_modifiers);
         for (size_t i = 0; i < state->package_declarations.len; i++)
@@ -1496,13 +1495,24 @@ user_litmod(n00bb_tu_state_t *state, core_string_t modifier,
 
 static bool
 register_user_litmod(void *context, core_translation_unit_t *unit,
-                     parse_tree_t *call, core_string_t modifier,
-                     core_string_t kind, core_string_t function_name)
+                     parse_tree_t *declaration, core_string_t modifier,
+                     core_string_t kind)
 {
     (void)context;
     n00bb_tu_state_t *state = tu_state(unit);
-    if (!state || !modifier.u8_bytes || !function_name.u8_bytes)
+    if (!state || !modifier.u8_bytes || !declaration)
         return false;
+    n00bb_literal_shape_t shape =
+        core_string_eq(kind, CORE_STRING_STATIC("quotes"))
+            ? N00BB_LITERAL_STRING_SHAPE
+        : core_string_eq(kind, CORE_STRING_STATIC("array"))
+            ? N00BB_LITERAL_SEQUENCE_SHAPE
+        : N00BB_LITERAL_BRACE_SHAPE;
+    if ((core_string_eq(kind, CORE_STRING_STATIC("quotes"))
+            || core_string_eq(kind, CORE_STRING_STATIC("array"))
+            || core_string_eq(kind, CORE_STRING_STATIC("dict"))
+            || core_string_eq(kind, CORE_STRING_STATIC("set")))
+        && n00bb_literal_handler(modifier, shape)) return false;
     for (size_t i = 0; i < state->literal_modifiers.len; i++) {
         n00bb_user_litmod_t *existing = &state->literal_modifiers.data[i];
         if (core_string_eq(existing->modifier, modifier)
@@ -1512,10 +1522,9 @@ register_user_litmod(void *context, core_translation_unit_t *unit,
         .modifier = core_string_from_raw(modifier.data,
                                          (int64_t)modifier.u8_bytes),
         .kind = core_string_from_raw(kind.data, (int64_t)kind.u8_bytes),
-        .function_name = core_string_from_raw(function_name.data,
-                                              (int64_t)function_name.u8_bytes),
+        .declaration = declaration,
     };
-    parse_token_info_t *token = parse_tree_find_first_terminal(call);
+    parse_token_info_t *token = parse_tree_find_first_terminal(declaration);
     if (token) registration.location = (core_diag_location_t){
         .line = token->line,
         .column = token->column,
@@ -1523,11 +1532,9 @@ register_user_litmod(void *context, core_translation_unit_t *unit,
         .end_column = token->endcol,
         .has_location = true,
     };
-    if (!registration.modifier.data || !registration.kind.data
-        || !registration.function_name.data) {
+    if (!registration.modifier.data || !registration.kind.data) {
         core_free(registration.modifier.data);
         core_free(registration.kind.data);
-        core_free(registration.function_name.data);
         return false;
     }
     core_list_push(state->literal_modifiers, registration);
@@ -1639,13 +1646,41 @@ static core_string_t
 literal_modifier(parse_grammar_t *grammar, parse_tree_t *node)
 {
     (void)grammar;
-    if (!node || core_tree_is_leaf(node)) return (core_string_t){0};
-    parse_tree_t *last = core_tree_num_children(node)
-        ? core_tree_child(node, core_tree_num_children(node) - 1) : nullptr;
-    if (!last || !core_tree_is_leaf(last)) return (core_string_t){0};
+    if (!node) return (core_string_t){0};
+    parse_tree_t *last = node;
+    while (last && !core_tree_is_leaf(last)) {
+        size_t count = core_tree_num_children(last);
+        last = count ? core_tree_child(last, count - 1) : nullptr;
+    }
     parse_token_info_t *token = parse_node_token(last);
     return token && core_option_is_set(token->postfix_modifier)
         ? core_option_get(token->postfix_modifier) : (core_string_t){0};
+}
+
+static bool
+literal_modifier_terminal(parse_grammar_t *grammar, parse_tree_t *leaf,
+                          parse_tree_t *parent)
+{
+    parse_token_info_t *token = parse_node_token(leaf);
+    if (!token || !parent) return false;
+    core_string_t terminal = parse_terminal_name(grammar, token->tid);
+    if (nt_is(grammar, parent, "simple-lit"))
+        return core_string_eq(terminal, CORE_STRING_STATIC("INT_LIT"))
+            || core_string_eq(terminal, CORE_STRING_STATIC("HEX_LIT"))
+            || core_string_eq(terminal, CORE_STRING_STATIC("FLOAT_LIT"))
+            || core_string_eq(terminal, CORE_STRING_STATIC("STRING_LIT"))
+            || parse_tree_leaf_is(leaf, CORE_STRING_STATIC("nil"));
+    if (nt_is(grammar, parent, "bool-lit"))
+        return parse_tree_leaf_is(leaf, CORE_STRING_STATIC("true"))
+            || parse_tree_leaf_is(leaf, CORE_STRING_STATIC("false"));
+    if (nt_is(grammar, parent, "embed-lit"))
+        return core_string_eq(terminal, CORE_STRING_STATIC("EMBED"));
+    if (nt_is(grammar, parent, "list-lit"))
+        return parse_tree_leaf_is(leaf, CORE_STRING_STATIC("]"));
+    if (nt_is(grammar, parent, "dict-or-set-lit"))
+        return parse_tree_leaf_is(leaf, CORE_STRING_STATIC("}"));
+    return nt_is(grammar, parent, "tuple-or-paren")
+        && parse_tree_leaf_is(leaf, CORE_STRING_STATIC(")"));
 }
 
 static core_string_t
@@ -12910,6 +12945,9 @@ n00bb_lower_nil_literal(ir_lower_context_t *context, parse_visit_t *visit,
     (void)operands;
     (void)state;
     n00bb_lower_context_t *lower = context ? context->user : nullptr;
+    n00bb_tu_state_t *tu = lower ? tu_state(lower->unit) : nullptr;
+    if (tu && visit && core_dict_contains(&tu->literal_sites, visit->node))
+        return (ir_lower_result_t){IR_LOWER_NO_VALUE, nullptr};
     th_type *flagset_type = nullptr;
     for (parse_tree_t *parent = visit && visit->node
             ? core_tree_node_value(visit->node).parent : nullptr;
@@ -13527,6 +13565,11 @@ n00bb_lower_named_field_parts(ir_lower_context_t *context,
     return parts->values.len != 0;
 }
 
+static ir_lower_result_t
+n00bb_lower_user_literal(ir_lower_context_t *context, parse_visit_t *visit,
+                         n00bb_litmod_site_t *site, th_type *result_type,
+                         ir_span_t span);
+
 static bool
 n00bb_lower_tuple_literal(ir_lower_context_t *context, parse_visit_t *visit,
                           bool entering, void *state)
@@ -13535,6 +13578,19 @@ n00bb_lower_tuple_literal(ir_lower_context_t *context, parse_visit_t *visit,
     if (entering || !nt_is(visit->grammar, visit->node, "tuple-or-paren"))
         return true;
     n00bb_lower_context_t *lower = context->user;
+    n00bb_tu_state_t *tu = lower ? tu_state(lower->unit) : nullptr;
+    n00bb_litmod_site_t *site = tu
+        ? core_dict_get(&tu->literal_sites, visit->node, nullptr) : nullptr;
+    if (site) {
+        if ((lower->has_active_literal
+                && lower->active_literal.node == visit->node)
+            || ir_lower_node_value(context, visit->node)) return true;
+        ir_lower_result_t result = n00bb_lower_user_literal(context, visit,
+            site, core_tree_node_value(visit->node).type,
+            lower_span_for_tree(context, visit->node));
+        return result.status == IR_LOWER_VALUE && result.value
+            && ir_lower_set_node_value(context, visit->node, result.value);
+    }
     size_t child_count = core_tree_num_children(visit->node);
     parse_tree_t *named_fields = child_nt(visit->grammar, visit->node,
                                           "named-field-list");
@@ -13642,10 +13698,6 @@ n00bb_lower_char_literal(ir_lower_context_t *context, parse_visit_t *visit,
     constant->span = span;
     return (ir_lower_result_t){IR_LOWER_VALUE, constant->dest};
 }
-
-static ir_lower_result_t n00bb_lower_user_literal(
-    ir_lower_context_t *context, parse_visit_t *visit,
-    n00bb_litmod_site_t *site, th_type *result_type, ir_span_t span);
 
 static ir_lower_result_t
 n00bb_lower_string_literal(ir_lower_context_t *context,
@@ -13815,6 +13867,37 @@ n00bb_lower_string_literal(ir_lower_context_t *context,
 }
 
 static ir_lower_result_t
+n00bb_lower_literal_element(ir_lower_context_t *context, ir_value_t *value,
+                            th_type *target, ir_span_t span)
+{
+    if (!value || !target)
+        return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
+                           "literal element has no value or target type");
+    if (ir_type_eq(context->module, value->type, target))
+        return (ir_lower_result_t){IR_LOWER_VALUE, value};
+    th_comb comb;
+    bool union_type = th_sum_comb(th_resolve(target), &comb)
+        && comb == TH_UNION;
+    bool arm = false;
+    for (size_t i = 0; union_type && i < th_sum_len(target); i++)
+        arm |= ir_type_eq(context->module, value->type,
+                          th_sum_arm(target, i));
+    if (!arm)
+        return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
+                           "literal element does not match its union type");
+    ir_instr_t *box = ir_instr_add(context->block, IR_OP_BOX);
+    char name[64];
+    snprintf(name, sizeof(name), "__n00bb_litmod_element_%llu",
+             (unsigned long long)context->next_value_id++);
+    if (!box || !ir_instr_set_dest(box, name, target)
+        || !ir_instr_operand_value(box, value))
+        return lower_error(context, IR_DIAG_INTERNAL, span,
+                           "could not promote literal element into its union");
+    box->span = span;
+    return (ir_lower_result_t){IR_LOWER_VALUE, box->dest};
+}
+
+static ir_lower_result_t
 n00bb_lower_sequence_aggregate(ir_lower_context_t *context,
                              parse_visit_t *visit,
                              ir_value_t *const *operands,
@@ -13847,17 +13930,30 @@ n00bb_lower_sequence_aggregate(ir_lower_context_t *context,
         return lower_error(context, IR_DIAG_VERIFY_PARSED, span,
                            "sequence literal element has no lowered value");
     }
-    ir_instr_t *instruction = ir_instr_add(context->block, IR_OP_AGGREGATE);
+    core_list_t(n00bb_ir_value_ptr_t) promoted_values =
+        core_list_new(n00bb_ir_value_ptr_t);
+    bool ok = true;
+    th_type *element_type = is_array
+        ? th_seq_elem(resolved_type) : nullptr;
+    for (size_t i = 0; ok && i < values.len; i++) {
+        ir_lower_result_t promoted = element_type
+            ? n00bb_lower_literal_element(context, values.data[i],
+                                          element_type, span)
+            : (ir_lower_result_t){IR_LOWER_VALUE, values.data[i]};
+        ok = promoted.status == IR_LOWER_VALUE && promoted.value;
+        if (ok) core_list_push(promoted_values, promoted.value);
+    }
+    ir_instr_t *instruction = ok
+        ? ir_instr_add(context->block, IR_OP_AGGREGATE) : nullptr;
     char name[48];
     snprintf(name, sizeof(name), "__n00bb_%llu",
              (unsigned long long)context->next_value_id++);
-    bool ok = instruction
-        && ir_instr_set_dest(instruction, name, result_type);
+    ok = instruction && ir_instr_set_dest(instruction, name, result_type);
     if (ok && is_list)
         ok = ir_instr_set_aggregate_form(instruction,
                                          IR_AGGREGATE_ELEMENTS);
-    for (size_t i = 0; ok && i < values.len; i++)
-        ok = ir_instr_operand_value(instruction, values.data[i]);
+    for (size_t i = 0; ok && i < promoted_values.len; i++)
+        ok = ir_instr_operand_value(instruction, promoted_values.data[i]);
     th_type *element = th_resolve(result_type);
     uint32_t rank = 0;
     while (ok && th_kind_of(element) == TH_SEQUENCE) {
@@ -13895,6 +13991,7 @@ n00bb_lower_sequence_aggregate(ir_lower_context_t *context,
         ok = ir_shape_set_extent(shape, d, extent);
     }
     if (ok && shape) ok = ir_value_set_shape(instruction->dest, shape);
+    core_list_free(promoted_values);
     core_list_free(values);
     if (!ok)
         return lower_error(context, IR_DIAG_INTERNAL, span,
@@ -13997,15 +14094,35 @@ n00bb_lower_user_brace_payload(ir_lower_context_t *context,
         core_list_new(n00bb_ir_value_ptr_t);
     ok = ok && element_type;
     for (size_t i = 0; ok && i < values.len; i += dictionary ? 2 : 1) {
-        ir_value_t *item = values.data[i];
+        th_type *first_type = element_type;
+        th_type *second_type = nullptr;
         if (dictionary) {
+            const th_arg *first = th_named_arg(th_resolve(element_type), 0);
+            const th_arg *second = th_named_arg(th_resolve(element_type), 1);
+            first_type = first && first->kind == TH_ARG_TYPE
+                ? first->type : nullptr;
+            second_type = second && second->kind == TH_ARG_TYPE
+                ? second->type : nullptr;
+        }
+        ir_lower_result_t first = n00bb_lower_literal_element(context,
+            values.data[i], first_type, span);
+        ok = first.status == IR_LOWER_VALUE && first.value;
+        if (!ok) break;
+        ir_value_t *item = first.value;
+        if (dictionary) {
+            ir_lower_result_t second = ok
+                ? n00bb_lower_literal_element(context, values.data[i + 1],
+                                              second_type, span)
+                : (ir_lower_result_t){IR_LOWER_FAILED, nullptr};
+            ok = second.status == IR_LOWER_VALUE && second.value;
+            if (!ok) break;
             ir_instr_t *pair = ir_instr_add(context->block, IR_OP_AGGREGATE);
             char pair_name[64];
             snprintf(pair_name, sizeof(pair_name), "__n00bb_pair_%llu",
                      (unsigned long long)context->next_value_id++);
             ok = pair && ir_instr_set_dest(pair, pair_name, element_type)
                 && ir_instr_operand_value(pair, item)
-                && ir_instr_operand_value(pair, values.data[i + 1]);
+                && ir_instr_operand_value(pair, second.value);
             if (!ok) break;
             pair->span = span;
             item = pair->dest;
@@ -14030,6 +14147,101 @@ n00bb_lower_user_brace_payload(ir_lower_context_t *context,
     return (ir_lower_result_t){IR_LOWER_VALUE, array->dest};
 }
 
+static bool collect_static_expressions(n00bb_tu_state_t *state,
+    parse_tree_t *node, core_list_t(parse_tree_ptr_t) *expressions);
+static bool collect_static_named_fields(n00bb_tu_state_t *state,
+    parse_tree_t *node, core_list_t(parse_tree_ptr_t) *fields);
+static core_string_t named_field_identifier(parse_grammar_t *grammar,
+    parse_tree_t *field);
+
+static ir_lower_result_t
+n00bb_lower_user_parenthesized_payload(ir_lower_context_t *context,
+                                       parse_visit_t *visit,
+                                       n00bb_litmod_site_t *site,
+                                       ir_span_t span)
+{
+    bool record = core_string_eq(site->registration->kind,
+                                 CORE_STRING_STATIC("record"));
+    n00bb_lower_context_t *lower = context->user;
+    n00bb_tu_state_t *tu = lower ? tu_state(lower->unit) : nullptr;
+    parse_tree_t *fields = record
+        ? child_nt(visit->grammar, visit->node, "named-field-list")
+        : visit->node;
+    core_list_t(parse_tree_ptr_t) expressions =
+        core_list_new(parse_tree_ptr_t);
+    core_list_t(n00bb_ir_value_ptr_t) values =
+        core_list_new(n00bb_ir_value_ptr_t);
+    bool ok = record
+        ? collect_static_named_fields(tu, fields, &expressions)
+        : collect_static_expressions(tu, fields, &expressions);
+    th_type *element_type = site->payload_type
+        ? th_seq_elem(th_resolve(site->payload_type)) : nullptr;
+    th_type *string_type = record && tu
+        ? th_name(tu->types, "string") : nullptr;
+    ok = ok && element_type && (!record || string_type);
+    for (size_t i = 0; ok && i < expressions.len; i++) {
+        parse_tree_t *item = expressions.data[i];
+        parse_tree_t *expression = record
+            ? child_nt(visit->grammar, item, "expression") : item;
+        ir_value_t *value = expression
+            ? ir_lower_node_value(context, expression) : nullptr;
+        if (!value) { ok = false; break; }
+        th_type *value_type = element_type;
+        if (record) {
+            const th_arg *member = th_named_arg(th_resolve(element_type), 1);
+            value_type = member && member->kind == TH_ARG_TYPE
+                ? member->type : nullptr;
+        }
+        ir_lower_result_t promoted = n00bb_lower_literal_element(context,
+            value, value_type, span);
+        if (promoted.status != IR_LOWER_VALUE || !promoted.value) {
+            ok = false;
+            break;
+        }
+        value = promoted.value;
+        if (record) {
+            core_string_t field = named_field_identifier(visit->grammar,
+                                                         item);
+            ir_instr_t *name = field.data
+                ? ir_instr_add(context->block, IR_OP_CONST) : nullptr;
+            char name_id[64];
+            snprintf(name_id, sizeof(name_id), "__n00bb_field_%llu",
+                     (unsigned long long)context->next_value_id++);
+            ok = name && ir_instr_set_dest(name, name_id, string_type)
+                && ir_instr_set_const_bytes(name,
+                    (const uint8_t *)field.data, field.u8_bytes);
+            if (!ok) break;
+            name->span = span;
+            ir_instr_t *pair = ir_instr_add(context->block, IR_OP_AGGREGATE);
+            char pair_id[64];
+            snprintf(pair_id, sizeof(pair_id), "__n00bb_field_pair_%llu",
+                     (unsigned long long)context->next_value_id++);
+            ok = pair && ir_instr_set_dest(pair, pair_id, element_type)
+                && ir_instr_operand_value(pair, name->dest)
+                && ir_instr_operand_value(pair, value);
+            if (!ok) break;
+            pair->span = span;
+            value = pair->dest;
+        }
+        core_list_push(values, value);
+    }
+    ir_instr_t *array = ok
+        ? ir_instr_add(context->block, IR_OP_AGGREGATE) : nullptr;
+    char name[64];
+    snprintf(name, sizeof(name), "__n00bb_parenthesized_%llu",
+             (unsigned long long)context->next_value_id++);
+    ok = array && ir_instr_set_dest(array, name, site->payload_type)
+        && ir_instr_set_aggregate_form(array, IR_AGGREGATE_ELEMENTS);
+    for (size_t i = 0; ok && i < values.len; i++)
+        ok = ir_instr_operand_value(array, values.data[i]);
+    core_list_free(values);
+    core_list_free(expressions);
+    if (!ok) return lower_error(context, IR_DIAG_INTERNAL, span,
+        "could not construct the tuple or record handler payload");
+    array->span = span;
+    return (ir_lower_result_t){IR_LOWER_VALUE, array->dest};
+}
+
 static ir_lower_result_t
 n00bb_lower_user_literal(ir_lower_context_t *context,
                                parse_visit_t *visit,
@@ -14048,7 +14260,10 @@ n00bb_lower_user_literal(ir_lower_context_t *context,
         ? module_for_phase(state, lower->comptime_phase) : nullptr;
     ir_value_t *callee = function && module
         ? ir_func_address(module, function) : nullptr;
-    if (!site || !site->payload_type || !site->signature || !callee
+    bool no_payload = site && core_string_eq(site->registration->kind,
+                                             CORE_STRING_STATIC("nil"));
+    if (!site || (!no_payload && !site->payload_type) || !site->signature
+        || !callee
         || !result_type || !ir_type_eq(context->module, result_type,
                                       th_func_ret(site->signature)))
         return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
@@ -14063,14 +14278,58 @@ n00bb_lower_user_literal(ir_lower_context_t *context,
                             CORE_STRING_STATIC("set")))
         payload = n00bb_lower_user_brace_payload(context, visit, site, span);
     else if (core_string_eq(site->registration->kind,
-                            CORE_STRING_STATIC("string"))) {
+                            CORE_STRING_STATIC("tuple"))
+        || core_string_eq(site->registration->kind,
+                            CORE_STRING_STATIC("record")))
+        payload = n00bb_lower_user_parenthesized_payload(context, visit,
+                                                           site, span);
+    else if (core_string_eq(site->registration->kind,
+                            CORE_STRING_STATIC("bool"))) {
+        parse_token_info_t *token = parse_tree_find_first_terminal(visit->node);
+        core_string_t spelling = token && core_option_is_set(token->value)
+            ? core_option_get(token->value) : (core_string_t){0};
+        bool value = core_string_eq(spelling, CORE_STRING_STATIC("true"));
+        if (value || core_string_eq(spelling, CORE_STRING_STATIC("false"))) {
+            ir_instr_t *constant = ir_instr_add(context->block, IR_OP_CONST);
+            char name[64];
+            snprintf(name, sizeof(name), "__n00bb_litmod_bool_%llu",
+                     (unsigned long long)context->next_value_id++);
+            if (constant && ir_instr_set_dest(constant, name,
+                                               site->payload_type)
+                && ir_instr_operand_int(constant, value ? 1 : 0)) {
+                constant->span = span;
+                payload = (ir_lower_result_t){IR_LOWER_VALUE, constant->dest};
+            }
+        }
+    }
+    else if (core_string_eq(site->registration->kind,
+                            CORE_STRING_STATIC("quotes"))
+        || core_string_eq(site->registration->kind,
+                          CORE_STRING_STATIC("int"))
+        || core_string_eq(site->registration->kind,
+                          CORE_STRING_STATIC("hex"))
+        || core_string_eq(site->registration->kind,
+                          CORE_STRING_STATIC("float"))) {
         parse_token_info_t *token =
             parse_tree_find_first_terminal(visit->node);
         core_buffer_t *decoded = core_buffer_empty();
-        bool valid = token && decoded
-            && core_option_is_set(token->value)
-            && n00bb_decode_string_literal(core_option_get(token->value),
-                                           decoded);
+        bool quotes = core_string_eq(site->registration->kind,
+                                     CORE_STRING_STATIC("quotes"));
+        core_string_t spelling = token && core_option_is_set(token->value)
+            ? core_option_get(token->value) : (core_string_t){0};
+        bool valid = token && decoded && spelling.data;
+        if (valid && quotes)
+            valid = n00bb_decode_string_literal(spelling, decoded);
+        else if (valid) {
+            bool hex = core_string_eq(site->registration->kind,
+                                      CORE_STRING_STATIC("hex"));
+            valid = !hex || (spelling.u8_bytes >= 2
+                && spelling.data[0] == '0' && spelling.data[1] == 'x');
+            if (valid)
+                core_buffer_append(decoded,
+                    spelling.data + (hex ? 2 : 0),
+                    spelling.u8_bytes - (hex ? 2 : 0));
+        }
         ir_instr_t *constant = valid
             ? ir_instr_add(context->block, IR_OP_CONST) : nullptr;
         char name[64];
@@ -14114,7 +14373,8 @@ n00bb_lower_user_literal(ir_lower_context_t *context,
             }
         }
     }
-    if (payload.status != IR_LOWER_VALUE || !payload.value)
+    if (!no_payload
+        && (payload.status != IR_LOWER_VALUE || !payload.value))
         return (ir_lower_result_t){IR_LOWER_FAILED, nullptr};
     th_type *outcome_type = ir_call_outcome_type(context->module,
                                                 site->signature);
@@ -14125,7 +14385,7 @@ n00bb_lower_user_literal(ir_lower_context_t *context,
              (unsigned long long)context->next_value_id++);
     if (!call || !ir_instr_set_dest(call, name, outcome_type)
         || !ir_instr_operand_value(call, callee)
-        || !ir_instr_operand_value(call, payload.value)
+        || (!no_payload && !ir_instr_operand_value(call, payload.value))
         || !ir_instr_set_call_signature(call, site->signature))
         return lower_error(context, IR_DIAG_INTERNAL, span,
                            "could not emit the literal handler call");
@@ -14237,7 +14497,21 @@ n00bb_lower_static_litmod(ir_lower_context_t *context,
                   && !core_string_eq(site->registration->kind,
                                      CORE_STRING_STATIC("set"))
                   && !core_string_eq(site->registration->kind,
-                                     CORE_STRING_STATIC("string"))
+                                     CORE_STRING_STATIC("quotes"))
+                  && !core_string_eq(site->registration->kind,
+                                     CORE_STRING_STATIC("int"))
+                  && !core_string_eq(site->registration->kind,
+                                     CORE_STRING_STATIC("hex"))
+                  && !core_string_eq(site->registration->kind,
+                                     CORE_STRING_STATIC("float"))
+                  && !core_string_eq(site->registration->kind,
+                                     CORE_STRING_STATIC("bool"))
+                  && !core_string_eq(site->registration->kind,
+                                     CORE_STRING_STATIC("nil"))
+                  && !core_string_eq(site->registration->kind,
+                                     CORE_STRING_STATIC("tuple"))
+                  && !core_string_eq(site->registration->kind,
+                                     CORE_STRING_STATIC("record"))
                   && !core_string_eq(site->registration->kind,
                                      CORE_STRING_STATIC("fence")))) return true;
     if (entering) {
@@ -17981,11 +18255,10 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         if (analysis && !queued)
             core_list_push(analysis->comptime_functions, symbol);
     }
-    ir_module_t *callee_module = !no_function_body
-        ? module_for_phase(callee_state, lower->comptime_phase) : nullptr;
     ir_value_t *callee_value = callback_call && receiver_node
         ? ir_lower_node_value(context, receiver_node)
-        : callee_module ? ir_func_address(callee_module, callee_function)
+        : callee_function
+            ? ir_func_address(callee_function->owner, callee_function)
                         : nullptr;
     if (callback_call && !callee_value)
         return lower_error(context, IR_DIAG_UNDEFINED_SYMBOL, span,
@@ -24548,6 +24821,11 @@ cache_static_literal_node(parse_grammar_t *grammar,
 {
     bool is_static = nt_is(grammar, node, "simple-lit")
         || nt_is(grammar, node, "embed-lit");
+    if (!is_static && nt_is(grammar, node, "named-field")) {
+        parse_tree_t *value = child_nt(grammar, node, "expression");
+        is_static = value
+            && core_dict_contains(&state->static_literal_nodes, value);
+    }
     if (!is_static && core_tree_num_children(node) == 1) {
         parse_tree_t *child = core_tree_child(node, 0);
         is_static = !core_tree_is_leaf(child)
@@ -24559,6 +24837,8 @@ cache_static_literal_node(parse_grammar_t *grammar,
              || nt_is(grammar, node, "dict-entries")
              || nt_is(grammar, node, "set-entries")
              || nt_is(grammar, node, "dict-or-set-lit")
+             || nt_is(grammar, node, "expr-comma-list")
+             || nt_is(grammar, node, "named-field-list")
              || nt_is(grammar, node, "tuple-or-paren"))) {
         is_static = true;
         for (size_t i = 0; i < core_tree_num_children(node); i++) {
@@ -26863,6 +27143,15 @@ append_function_contract_identity(core_translation_unit_t *unit,
                                   core_buffer_t *key)
 {
     if (!symbol || symbol->kind != PARSE_SYM_FUNCTION) return true;
+    n00bb_tu_state_t *state = tu_state(unit);
+    for (size_t i = 0; state && i < state->literal_modifiers.len; i++) {
+        n00bb_user_litmod_t *registration =
+            &state->literal_modifiers.data[i];
+        if (registration->declaration != symbol->decl_node) continue;
+        core_buffer_printf(key, "#litmod_%.*s",
+            (int)registration->kind.u8_bytes, registration->kind.data);
+        return true;
+    }
     bool overloaded = false;
     for (parse_sym_entry_t *candidate = symbol->scope
             ? symbol->scope->first_in_scope : nullptr;
@@ -26874,7 +27163,6 @@ append_function_contract_identity(core_translation_unit_t *unit,
         }
     }
     if (!overloaded) return true;
-    n00bb_tu_state_t *state = tu_state(unit);
     th_type *contract = symbol->callable_contract
         ? symbol->callable_contract : symbol->type;
     const uint8_t *encoding = nullptr;
@@ -29753,8 +30041,7 @@ diagnose_unused_link_symbols(parse_grammar_t *grammar,
                 if (native_root) continue;
                 bool literal_handler = false;
                 for (size_t r = 0; r < state->literal_modifiers.len; r++)
-                    if (core_string_eq(symbol->name,
-                            state->literal_modifiers.data[r].function_name)) {
+                    if (symbol == state->literal_modifiers.data[r].function) {
                         literal_handler = true;
                         break;
                     }
@@ -35863,7 +36150,9 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         && ir_lowerer_register_nt_visit(lowerer,
         "dict-or-set-lit", n00bb_lower_static_litmod, nullptr)
         && ir_lowerer_register_nt_visit(lowerer,
-        "embed-lit", n00bb_lower_static_litmod, nullptr);
+        "embed-lit", n00bb_lower_static_litmod, nullptr)
+        && ir_lowerer_register_nt_visit(lowerer,
+        "tuple-or-paren", n00bb_lower_static_litmod, nullptr);
     ok = ok && ir_lowerer_register_nt_visit(lowerer,
         "new-expr", n00bb_mark_constructor_lvalues, nullptr);
     ok = ok && ir_lowerer_register_nt_visit(lowerer,
@@ -46045,22 +46334,41 @@ infer_user_literal_type(parse_grammar_t *grammar, parse_tree_t *node,
                         n00bb_tu_state_t *state)
 {
     parse_tree_t *sequence = nt_is(grammar, node, "list-lit") ? node : nullptr;
-    parse_tree_t *string = nt_is(grammar, node, "simple-lit")
-        && parse_tree_find_first_terminal(node)
-        && core_string_eq(parse_terminal_name(grammar,
-            parse_tree_find_first_terminal(node)->tid),
-            CORE_STRING_STATIC("STRING_LIT")) ? node : nullptr;
+    parse_token_info_t *scalar = nt_is(grammar, node, "simple-lit")
+        ? parse_tree_find_first_terminal(node) : nullptr;
+    core_string_t scalar_kind = scalar
+        ? parse_terminal_name(grammar, scalar->tid) : (core_string_t){0};
     parse_tree_t *fence = nt_is(grammar, node, "embed-lit") ? node : nullptr;
     parse_tree_t *braces = nt_is(grammar, node, "dict-or-set-lit")
         ? node : nullptr;
+    parse_tree_t *parenthesized = nt_is(grammar, node, "tuple-or-paren")
+        ? node : nullptr;
+    parse_tree_t *record_fields = child_nt(grammar, parenthesized,
+                                            "named-field-list");
+    bool tuple = parenthesized && !record_fields
+        && core_tree_num_children(parenthesized) == 5;
     parse_tree_t *dict_entries = child_nt(grammar, braces, "dict-entries");
     parse_tree_t *set_entries = child_nt(grammar, braces, "set-entries");
     core_string_t modifier = literal_modifier(grammar, node);
     core_string_t kind = sequence ? CORE_STRING_STATIC("array")
-        : string ? CORE_STRING_STATIC("string")
+        : core_string_eq(scalar_kind, CORE_STRING_STATIC("STRING_LIT"))
+            ? CORE_STRING_STATIC("quotes")
+        : core_string_eq(scalar_kind, CORE_STRING_STATIC("INT_LIT"))
+            ? CORE_STRING_STATIC("int")
+        : core_string_eq(scalar_kind, CORE_STRING_STATIC("HEX_LIT"))
+            ? CORE_STRING_STATIC("hex")
+        : core_string_eq(scalar_kind, CORE_STRING_STATIC("FLOAT_LIT"))
+            ? CORE_STRING_STATIC("float")
+        : core_string_eq(scalar_kind, CORE_STRING_STATIC("true"))
+            || core_string_eq(scalar_kind, CORE_STRING_STATIC("false"))
+            ? CORE_STRING_STATIC("bool")
+        : core_string_eq(first_token_text(node), CORE_STRING_STATIC("nil"))
+            ? CORE_STRING_STATIC("nil")
         : fence ? CORE_STRING_STATIC("fence")
         : dict_entries ? CORE_STRING_STATIC("dict")
-        : set_entries ? CORE_STRING_STATIC("set") : (core_string_t){0};
+        : set_entries ? CORE_STRING_STATIC("set")
+        : record_fields ? CORE_STRING_STATIC("record")
+        : tuple ? CORE_STRING_STATIC("tuple") : (core_string_t){0};
     if (braces && !kind.data) {
         bool has_dict = user_litmod(state, modifier,
             CORE_STRING_STATIC("dict")) != nullptr;
@@ -46073,7 +46381,9 @@ infer_user_literal_type(parse_grammar_t *grammar, parse_tree_t *node,
     if (!kind.data) return false;
     n00bb_user_litmod_t *registration = user_litmod(state, modifier, kind);
     if (!registration) return false;
-    th_type *input_type = th_name(state->types, "string");
+    th_type *input_type = th_name(state->types,
+        core_string_eq(kind, CORE_STRING_STATIC("bool"))
+            ? "bool" : "string");
     if (sequence) {
         parse_tree_t *entries = child_nt(grammar, sequence, "list-elems");
         core_list_t(parse_tree_ptr_t) expressions =
@@ -46130,15 +46440,42 @@ infer_user_literal_type(parse_grammar_t *grammar, parse_tree_t *node,
         core_list_free(first_types);
         core_list_free(expressions);
     }
-    if (!input_type) return false;
+    else if (tuple || record_fields) {
+        core_list_t(parse_tree_ptr_t) items =
+            core_list_new(parse_tree_ptr_t);
+        core_list_t(th_type_ptr_t) types =
+            core_list_new(th_type_ptr_t);
+        bool ok = record_fields
+            ? collect_static_named_fields(state, record_fields, &items)
+            : collect_static_expressions(state, parenthesized, &items);
+        for (size_t i = 0; ok && i < items.len; i++) {
+            th_type *item_type = core_tree_node_value(items.data[i]).type;
+            if (!item_type) ok = false;
+            else core_list_push(types, item_type);
+        }
+        th_type *value = ok && types.len
+            ? th_sum(state->types, TH_UNION, types.data, types.len)
+            : ok ? th_var(state->types) : nullptr;
+        th_type *element = value;
+        if (record_fields && value) {
+            th_type *pair_types[] = {
+                th_name(state->types, "string"), value,
+            };
+            element = th_tuple(state->types, pair_types, 2);
+        }
+        input_type = element ? th_array(state->types, element) : nullptr;
+        core_list_free(types);
+        core_list_free(items);
+    }
+    bool no_payload = core_string_eq(kind, CORE_STRING_STATIC("nil"));
+    if (!input_type && !no_payload) return false;
     th_param param = {.mode = TH_IN, .type = input_type};
     th_type *expected = th_func_with_error(state->types,
         th_var(state->types), th_name(state->types, "string"),
-        &param, 1, nullptr, nullptr, 0);
-    parse_scope_t *scope = module_scope(state);
-    parse_sym_entry_t *function = scope
-        ? parse_symtab_lookup_in(scope, registration->function_name)
-        : nullptr;
+        no_payload ? nullptr : &param, no_payload ? 0 : 1,
+        nullptr, nullptr, 0);
+    parse_sym_entry_t *function = registration->declaration
+        ? core_tree_node_value(registration->declaration).sym : nullptr;
     th_type *signature = function && function->type
         ? th_resolve(function->type) : nullptr;
     bool deferred = !signature;
@@ -46168,11 +46505,12 @@ infer_user_literal_type(parse_grammar_t *grammar, parse_tree_t *node,
     else parsed->type = result;
     n00bb_litmod_site_t *site = core_arena_alloc(
         &state->semantic_values, sizeof(*site));
-    const th_param *specialized_param = th_func_param(specialized, 0);
-    if (!site || !specialized_param) return false;
+    const th_param *specialized_param = no_payload ? nullptr
+        : th_func_param(specialized, 0);
+    if (!site || (!no_payload && !specialized_param)) return false;
     *site = (n00bb_litmod_site_t){
         .registration = registration,
-        .payload_type = specialized_param->type,
+        .payload_type = specialized_param ? specialized_param->type : nullptr,
         .signature = specialized,
         .deferred = deferred,
     };
@@ -46185,14 +46523,13 @@ resolve_forward_literal_sites(core_translation_unit_t *unit,
                               n00bb_tu_state_t *state)
 {
     bool valid = true;
-    parse_scope_t *scope = module_scope(state);
     core_dict_foreach(&state->literal_sites, item) {
         n00bb_litmod_site_t *site = item->value;
         if (!site || !site->deferred) continue;
         parse_tree_t *node = item->key;
-        parse_sym_entry_t *function = scope
-            ? parse_symtab_lookup_in(scope,
-                site->registration->function_name) : nullptr;
+        parse_sym_entry_t *function = site->registration->declaration
+            ? core_tree_node_value(site->registration->declaration).sym
+            : nullptr;
         th_type *signature = function && function->type
             ? th_resolve(function->type) : nullptr;
         th_type *specialized = nullptr;
@@ -46203,9 +46540,11 @@ resolve_forward_literal_sites(core_translation_unit_t *unit,
         th_type *unified = result && core_tree_node_value(node).type
             ? th_unify_in_place(state->types,
                 core_tree_node_value(node).type, result) : nullptr;
-        const th_param *parameter = specialized
+        bool no_payload = core_string_eq(site->registration->kind,
+                                         CORE_STRING_STATIC("nil"));
+        const th_param *parameter = specialized && !no_payload
             ? th_func_param(specialized, 0) : nullptr;
-        if (!unified || !parameter) {
+        if (!unified || (!no_payload && !parameter)) {
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit), unit,
                 CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0030"),
@@ -46217,7 +46556,7 @@ resolve_forward_literal_sites(core_translation_unit_t *unit,
         }
         core_tree_node_value(node).type = unified;
         site->signature = specialized;
-        site->payload_type = parameter->type;
+        site->payload_type = parameter ? parameter->type : nullptr;
         site->deferred = false;
     }
     return valid;
@@ -46534,6 +46873,23 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
     bool intrinsic_unary = !entering
         && unary_operator_dispatch_for_node(grammar, node,
             &operator_trait, &operator_method);
+    parse_token_info_t *literal_token = nt_is(grammar, node, "simple-lit")
+        ? parse_tree_find_first_terminal(node) : nullptr;
+    core_string_t literal_terminal = literal_token
+        ? parse_terminal_name(grammar, literal_token->tid)
+        : (core_string_t){0};
+    bool modified_numeric = literal_token
+        && core_option_is_set(literal_token->postfix_modifier)
+        && (core_string_eq(literal_terminal, CORE_STRING_STATIC("INT_LIT"))
+            || core_string_eq(literal_terminal, CORE_STRING_STATIC("HEX_LIT"))
+            || core_string_eq(literal_terminal,
+                              CORE_STRING_STATIC("FLOAT_LIT"))
+            || core_string_eq(first_token_text(node),
+                              CORE_STRING_STATIC("true"))
+            || core_string_eq(first_token_text(node),
+                              CORE_STRING_STATIC("false"))
+            || core_string_eq(first_token_text(node),
+                              CORE_STRING_STATIC("nil")));
     operator_site.dispatch_trait = operator_trait;
     operator_site.dispatch_method = operator_method;
     intrinsic_binary = intrinsic_binary
@@ -46553,15 +46909,21 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             && (!flagset_field || kinds[i] != PARSE_ANNOT_INFER)
             && (!type_reference || kinds[i] != PARSE_ANNOT_INFER)
             && (!invalid_field_access || kinds[i] != PARSE_ANNOT_INFER)
+            && (!modified_numeric || kinds[i] != PARSE_ANNOT_LITERAL)
+            && (!(modified_numeric
+                    && core_string_eq(first_token_text(node),
+                        CORE_STRING_STATIC("nil")))
+                || kinds[i] != PARSE_ANNOT_INFER)
             && (!(intrinsic_binary || intrinsic_unary)
                 || kinds[i] != PARSE_ANNOT_INFER))
             filtered_kinds[filtered_count++] = kinds[i];
     const parse_annot_kind_t *node_kinds = variant_payload || flagset_field
         || type_reference || invalid_field_access
-        || intrinsic_binary || intrinsic_unary
+        || intrinsic_binary || intrinsic_unary || modified_numeric
         ? filtered_kinds : kinds;
     size_t node_kind_count = variant_payload || flagset_field || type_reference
         || invalid_field_access || intrinsic_binary || intrinsic_unary
+        || modified_numeric
         ? filtered_count : sizeof(kinds) / sizeof(kinds[0]);
     parse_annot_kind_t filtered_reference_kinds[
         sizeof(reference_kinds) / sizeof(reference_kinds[0])];
@@ -46833,6 +47195,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         return;
     }
     if (!entering && nt_is(grammar, node, "simple-lit")
+        && !modified_numeric
         && !refine_integer_literal_type(grammar, unit, node, state))
         return;
     if (!entering && !cache_ordered_array_dimensions(grammar, state, node)) {
@@ -46941,12 +47304,21 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             if (!nt_is(grammar, node, "simple-lit")) return;
         }
         else {
-            if (nt_is(grammar, node, "simple-lit") && !string_literal) {
-                core_diagnostics_report_at(
-                    core_translation_unit_diagnostics(unit), unit,
-                    CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0010"),
-                    CORE_STRING_STATIC("this literal shape does not support modifiers"),
-                    link_source_location(node));
+            bool numeric_literal = literal_token
+                && (core_string_eq(literal_terminal,
+                    CORE_STRING_STATIC("INT_LIT"))
+                    || core_string_eq(literal_terminal,
+                        CORE_STRING_STATIC("HEX_LIT"))
+                    || core_string_eq(literal_terminal,
+                        CORE_STRING_STATIC("FLOAT_LIT"))
+                    || core_string_eq(first_token_text(node),
+                        CORE_STRING_STATIC("true"))
+                    || core_string_eq(first_token_text(node),
+                        CORE_STRING_STATIC("false"))
+                    || core_string_eq(first_token_text(node),
+                        CORE_STRING_STATIC("nil")));
+            if (nt_is(grammar, node, "simple-lit")
+                && !string_literal && !numeric_literal) {
                 return;
             }
             bool sequence = nt_is(grammar, node, "list-lit");
@@ -47221,6 +47593,19 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             }
         }
         if (nt_is(grammar, node, "tuple-or-paren")
+            && literal_modifier(grammar, node).data) {
+            bool shape = child_nt(grammar, node, "named-field-list")
+                || core_tree_num_children(node) == 5;
+            if (!shape || !infer_user_literal_type(grammar, node, state))
+                core_diagnostics_report_at(
+                    core_translation_unit_diagnostics(unit), unit,
+                    CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0030"),
+                    core_string_from_cstr(shape
+                        ? "literal handler cannot specialize for this payload"
+                        : "literal modifier requires a tuple or record literal"),
+                    link_source_location(node));
+        }
+        else if (nt_is(grammar, node, "tuple-or-paren")
             && child_nt(grammar, node, "named-field-list")
             && !infer_anonymous_record(grammar, node, state)) {
             core_diagnostics_report_at(
@@ -47232,6 +47617,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             return;
         }
         if (nt_is(grammar, node, "tuple-or-paren")
+            && !literal_modifier(grammar, node).data
             && !child_nt(grammar, node, "named-field-list")
             && !infer_tuple_literal_type(grammar, node, state)) {
             core_diagnostics_report_at(
@@ -47378,10 +47764,7 @@ semantic_annotate_tree(annotation_context_t *context,
         parse_token_info_t *token = parse_node_token(node);
         parse_grammar_t *grammar = context->grammar;
         if (token && core_option_is_set(token->postfix_modifier)
-            && !nt_is(grammar, parent, "simple-lit")
-            && !nt_is(grammar, parent, "list-lit")
-            && !nt_is(grammar, parent, "dict-or-set-lit")
-            && !nt_is(grammar, parent, "embed-lit"))
+            && !literal_modifier_terminal(grammar, node, parent))
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit), unit,
                 CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0010"),
@@ -49928,41 +50311,85 @@ n00bb_link_stage_symbols(core_link_unit_t *link, uint32_t stage_kind,
 }
 
 static bool
-validate_user_litmod_signatures(core_translation_unit_t *unit)
+validate_user_litmod_signatures(parse_grammar_t *grammar,
+                                core_translation_unit_t *unit)
 {
     n00bb_tu_state_t *state = tu_state(unit);
     if (!state || !state->literal_modifiers.len) return true;
-    parse_scope_t *scope = module_scope(state);
     bool valid = true;
     for (size_t i = 0; i < state->literal_modifiers.len; i++) {
         n00bb_user_litmod_t *registration =
             &state->literal_modifiers.data[i];
-        parse_sym_entry_t *symbol = scope
-            ? parse_symtab_lookup_in(scope, registration->function_name)
-            : nullptr;
+        bool seen = false;
+        for (size_t j = 0; j < i; j++) {
+            n00bb_user_litmod_t *prior = &state->literal_modifiers.data[j];
+            if (prior->declaration == registration->declaration) {
+                registration->function = prior->function;
+                seen = true;
+                break;
+            }
+        }
+        if (seen) continue;
+        parse_sym_entry_t *symbol = registration->declaration
+            ? core_tree_node_value(registration->declaration).sym : nullptr;
         th_type *signature = symbol && symbol->type
             ? th_resolve(symbol->type) : nullptr;
+        parse_tree_t *declaration = symbol ? symbol->decl_node : nullptr;
+        parse_tree_t *syntax = child_nt(grammar, declaration,
+                                        "func-type-signature");
+        parse_tree_t *result_syntax = child_nt(grammar, syntax,
+                                               "function-result");
+        n00bb_function_parameter_facts_t *facts = symbol
+            ? parse_sym_binding(symbol,
+                CORE_STRING_STATIC("n00bb.function.parameter-facts"))
+            : nullptr;
+        bool no_payload = core_string_eq(registration->kind,
+                                         CORE_STRING_STATIC("nil"));
         bool shape_valid = symbol && symbol->kind == PARSE_SYM_FUNCTION
+            && declaration && child_nt(grammar, declaration,
+                                         "litmod-prelude")
+            && child_nt(grammar, result_syntax, "return-type")
+            && child_nt(grammar, result_syntax, "error-type")
+            && facts && !facts->has_inferred_parameter
+            && facts->param_count == (no_payload ? 0 : 1)
+            && (no_payload || (!facts->params[0].variadic
+                && facts->params[0].symbol
+                && !facts->params[0].symbol->is_optional))
             && signature && th_kind_of(signature) == TH_FUNCTION
-            && th_func_nparams(signature) == 1
+            && th_func_nparams(signature) == (no_payload ? 0 : 1)
             && !th_func_rest(signature) && !th_func_nkw(signature);
-        const th_param *param = shape_valid
+        const th_param *param = shape_valid && !no_payload
             ? th_func_param(signature, 0) : nullptr;
         th_type *payload = param ? th_resolve(param->type) : nullptr;
-        shape_valid = shape_valid && param && param->mode == TH_IN
-            && payload && th_func_ret(signature)
+        shape_valid = shape_valid
+            && (no_payload || (param && param->mode == TH_IN && payload))
+            && th_func_ret(signature)
             && th_func_error(signature);
         bool raw = core_string_eq(registration->kind,
-                                  CORE_STRING_STATIC("string"))
+                              CORE_STRING_STATIC("quotes"))
+            || core_string_eq(registration->kind,
+                              CORE_STRING_STATIC("int"))
+            || core_string_eq(registration->kind,
+                              CORE_STRING_STATIC("hex"))
+            || core_string_eq(registration->kind,
+                              CORE_STRING_STATIC("float"))
             || core_string_eq(registration->kind,
                               CORE_STRING_STATIC("fence"));
+        bool boolean = core_string_eq(registration->kind,
+                                      CORE_STRING_STATIC("bool"));
         bool dictionary = core_string_eq(registration->kind,
-                                         CORE_STRING_STATIC("dict"));
+                                         CORE_STRING_STATIC("dict"))
+            || core_string_eq(registration->kind,
+                              CORE_STRING_STATIC("record"));
         if (shape_valid && raw) {
             shape_valid = th_hash(state->types, payload)
                 == th_hash(state->types, th_name(state->types, "string"));
         }
-        else if (shape_valid) {
+        else if (shape_valid && boolean) {
+            shape_valid = th_hash(state->types, payload)
+                == th_hash(state->types, th_name(state->types, "bool"));
+        }
+        else if (shape_valid && !no_payload) {
             shape_valid = th_kind_of(payload) == TH_SEQUENCE;
             if (shape_valid && dictionary) {
                 th_type *element = th_resolve(th_seq_elem(payload));
@@ -49973,6 +50400,14 @@ validate_user_litmod_signatures(core_translation_unit_t *unit)
                     &length, nullptr, &arity)
                     && length == strlen(TH_TUPLE)
                     && !memcmp(name, TH_TUPLE, length) && arity == 2;
+                if (shape_valid && core_string_eq(registration->kind,
+                                    CORE_STRING_STATIC("record"))) {
+                    const th_arg *first = th_named_arg(element, 0);
+                    shape_valid = first && first->kind == TH_ARG_TYPE
+                        && th_hash(state->types, th_resolve(first->type))
+                            == th_hash(state->types,
+                                th_name(state->types, "string"));
+                }
             }
         }
         if (shape_valid) {
@@ -49989,17 +50424,29 @@ validate_user_litmod_signatures(core_translation_unit_t *unit)
         if (!shape_valid) {
             core_buffer_t *message = core_buffer_empty();
             core_buffer_printf(message,
-                "literal modifier '%.*s' requires a same-module function "
-                "with one shape-compatible input, a non-nil result "
-                "(except fences), and fail: string",
+                "literal modifier '%.*s' requires %s"
+                "an explicit return type "
+                "(non-nil except for fences), and fail: string",
                 (int)registration->modifier.u8_bytes,
-                registration->modifier.data);
+                registration->modifier.data,
+                no_payload ? "no parameters, "
+                           : "one explicitly typed shape-compatible input, ");
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit), unit,
                 CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0029"),
                 core_string_borrow(message->data, message->byte_len),
                 registration->location);
             core_buffer_free(message);
+            valid = false;
+        }
+        else if (!parse_sym_set_binding(symbol,
+            CORE_STRING_STATIC("n00bb.litmod.declaration"),
+            registration->declaration)) {
+            core_diagnostics_report_at(
+                core_translation_unit_diagnostics(unit), unit,
+                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0029"),
+                CORE_STRING_STATIC("could not retain the literal modifier declaration"),
+                registration->location);
             valid = false;
         }
         else registration->function = symbol;
@@ -50038,7 +50485,8 @@ n00bb_link_stage_semantics(core_link_unit_t *link, uint32_t stage_kind,
         return CORE_LINK_STAGE_RESULT_FAILED;
     }
     for (size_t i = 0; i < units->len; i++)
-        if (!validate_user_litmod_signatures(units->data[i]))
+        if (!validate_user_litmod_signatures(analysis->grammar,
+                                             units->data[i]))
             return CORE_LINK_STAGE_RESULT_FAILED;
     for (size_t i = 0; i < units->len; i++)
         finalize_module_inference(units->data[i]);
@@ -51838,18 +52286,18 @@ n00bb_write_temporary_object(const void *bytes, size_t length)
 }
 
 static char *
-n00bb_runtime_archive_path(const char *compiler_path)
+n00bb_archive_path(const char *compiler_path, const char *archive_name)
 {
     char *executable = n00bb_executable_path(compiler_path);
     const char *slash = executable ? strrchr(executable, '/') : nullptr;
     core_buffer_t archive = {0};
     if (slash) {
-        core_buffer_printf(&archive, "%.*s/libn00b-abi-runtime.a",
-            (int)(slash - executable), executable);
+        core_buffer_printf(&archive, "%.*s/%s",
+            (int)(slash - executable), executable, archive_name);
         if (access(archive.data, R_OK)) {
             core_buffer_release(&archive);
-            core_buffer_printf(&archive, "%.*s/../lib/libn00b-abi-runtime.a",
-                (int)(slash - executable), executable);
+            core_buffer_printf(&archive, "%.*s/../lib/%s",
+                (int)(slash - executable), executable, archive_name);
         }
     }
     char *path = archive.data && !access(archive.data, R_OK)
@@ -52305,7 +52753,7 @@ n00bb_execute_comptime(core_link_unit_t *link,
     }
     size_t count = order.len;
     char **names = calloc(count, sizeof(*names));
-    char **objects = calloc(count, sizeof(*objects));
+    char **objects = calloc(count + 1, sizeof(*objects));
     size_t binding_count = analysis->phase_results.len;
     size_t *producer_bindings = binding_count
         ? calloc(binding_count, sizeof(*producer_bindings)) : nullptr;
@@ -52332,6 +52780,36 @@ n00bb_execute_comptime(core_link_unit_t *link,
         ? calloc(producer_count, sizeof(*producers)) : nullptr;
     ok = names && objects && (!binding_count || producer_bindings)
         && (!producer_count || producers);
+    n00bb_abi_comptime_type_t *catalog_types = nullptr;
+    n00bb_llvm_type_index_t *comptime_type_indices = nullptr;
+    size_t catalog_type_count = 0;
+    size_t catalog_metadata_bytes = 0;
+    uint8_t *catalog_object = nullptr;
+    size_t catalog_object_bytes = 0;
+    core_translation_unit_t *root = core_link_unit_root(link, 0);
+    n00bb_tu_state_t *root_state = root ? tu_state(root) : nullptr;
+    if (ok) ok = root_state && root_state->comptime_ir_module
+        && n00bb_abi_emit_comptime_catalog(analysis->ir_context,
+            root_state->comptime_ir_module,
+            analysis->comptime_reachable_functions.data,
+            analysis->comptime_reachable_functions.len, &analysis->target,
+            &catalog_types, &catalog_type_count, &catalog_object,
+            &catalog_object_bytes, &catalog_metadata_bytes);
+    if (ok) {
+        comptime_type_indices = calloc(catalog_type_count,
+            sizeof(*comptime_type_indices));
+        ok = comptime_type_indices != nullptr;
+        for (size_t i = 0; ok && i < catalog_type_count; i++)
+            comptime_type_indices[i] = (n00bb_llvm_type_index_t){
+                .typehash = catalog_types[i].typehash,
+                .index = catalog_types[i].index,
+            };
+    }
+    if (ok) objects[count] = n00bb_write_temporary_object(
+        catalog_object, catalog_object_bytes);
+    ok = ok && objects[count];
+    core_free(catalog_object);
+    core_free(catalog_types);
     size_t initializer_count = 0;
     for (size_t i = 0; ok && i < count; i++) {
         n00bb_tu_state_t *state = tu_state(order.data[i]);
@@ -52481,6 +52959,8 @@ n00bb_execute_comptime(core_link_unit_t *link,
         ok = n00bb_llvm_backend_bind_reachable_functions(backend, true,
             analysis->comptime_reachable_functions.data,
             analysis->comptime_reachable_functions.len);
+        if (ok) ok = n00bb_llvm_backend_bind_type_indices(backend,
+            comptime_type_indices, catalog_type_count);
         core_buffer_t object = {0};
         bool is_root = order.data[i] == core_link_unit_root(link, 0);
         if (ok) ok = n00bb_llvm_backend_emit_object(backend, true,
@@ -52488,7 +52968,8 @@ n00bb_execute_comptime(core_link_unit_t *link,
             is_root ? initializer_count : 0,
             is_root ? producers : nullptr,
             is_root ? producer_count : 0,
-            0, &object, diagnostics);
+            is_root ? catalog_metadata_bytes : 0,
+            &object, diagnostics);
         n00bb_llvm_backend_free(backend);
         if (ok) objects[i] = n00bb_write_temporary_object(
             object.data, object.byte_len);
@@ -52512,16 +52993,21 @@ n00bb_execute_comptime(core_link_unit_t *link,
 #else
         const char *linker = "clang";
 #endif
-        char *archive = n00bb_runtime_archive_path(compiler_path);
-        char **arguments = calloc(count + 5,
+        char *archive = n00bb_archive_path(compiler_path,
+            "libn00b-abi-runtime.a");
+        char *comptime_archive = n00bb_archive_path(compiler_path,
+            "libn00b-comptime-allocate.a");
+        char **arguments = calloc(count + 7,
                                   sizeof(*arguments));
-        ok = arguments && archive;
+        ok = arguments && archive && comptime_archive;
         if (ok) {
             arguments[0] = (char *)linker;
             for (size_t i = 0; i < count; i++)
                 arguments[i + 1] = objects[i];
             size_t next = count + 1;
-            if (archive) arguments[next++] = archive;
+            arguments[next++] = objects[count];
+            arguments[next++] = comptime_archive;
+            arguments[next++] = archive;
             arguments[next++] = "-o";
             arguments[next] = executable_path;
             pid_t child = 0;
@@ -52533,6 +53019,7 @@ n00bb_execute_comptime(core_link_unit_t *link,
         }
         free(arguments);
         core_free(archive);
+        core_free(comptime_archive);
     }
     int result_fd = -1;
     if (ok && producer_count) {
@@ -52664,14 +53151,16 @@ n00bb_execute_comptime(core_link_unit_t *link,
     core_free(failure_bytes);
     if (result_fd >= 0) close(result_fd);
     if (path_created) unlink(executable_path);
-    for (size_t i = 0; i < count; i++) {
+    for (size_t i = 0; i <= count; i++) {
         if (objects && objects[i]) {
             unlink(objects[i]);
             core_free(objects[i]);
         }
-        if (names && names[i]) core_free(names[i]);
     }
+    for (size_t i = 0; i < count; i++)
+        if (names && names[i]) core_free(names[i]);
     free(objects);
+    free(comptime_type_indices);
     free(names);
     for (size_t i = 0; i < producer_count; i++) {
         core_free((void *)producers[i].symbol);
@@ -53242,7 +53731,8 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             unlink(staging);
         }
     } else ok = false;
-    char *archive = n00bb_runtime_archive_path(compiler_path);
+    char *archive = n00bb_archive_path(compiler_path,
+        "libn00b-abi-runtime.a");
     if (ok && archive) {
 #ifdef __APPLE__
         const char *linker = "/usr/bin/clang";

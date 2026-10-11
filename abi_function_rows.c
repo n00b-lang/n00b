@@ -172,7 +172,11 @@ n00bb_abi_function_rows_build(
             .failure_type_index = signature->failure_type_index,
             .variadic_type_index = N00B_ABI_V1_NO_TYPE_INDEX,
         };
-        valid = n00bb_abi_name_pool_encode(names, symbol->name,
+        core_string_t row_name = parse_sym_binding(symbol,
+            CORE_STRING_STATIC("n00bb.litmod.declaration"))
+            ? core_string_borrow(function->name, strlen(function->name))
+            : symbol->name;
+        valid = n00bb_abi_name_pool_encode(names, row_name,
             N00B_ABI_TABLE_FUNCTION, (uint32_t)rows.len,
             offsetof(n00b_abi_function_v1, name), &row.name);
         size_t first = stream.len;

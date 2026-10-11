@@ -307,6 +307,12 @@
 
 <func-def> @scope("function", $1) @declares($1, "function") ::=
     <func-prelude> %IDENTIFIER <func-type-signature> <body>
+<func-def> @scope("function", $1) @declares($1, "function") ::=
+    <litmod-prelude> %IDENTIFIER <litmod-aliases>? <func-type-signature> <body>
+
+<litmod-prelude> ::= %"litmod" %"<" <litmod-kind> %">"
+<litmod-kind> ::= %IDENTIFIER | %"record" | %"nil"
+<litmod-aliases> ::= %"," %IDENTIFIER (%"," %IDENTIFIER)*
 
 <member-visibility> @visibility("public") ::= %"public"
 <member-visibility> @visibility("private") ::= %"private"
