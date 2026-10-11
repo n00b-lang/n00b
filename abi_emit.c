@@ -20,6 +20,7 @@
 #include "abi_trait_method_rows.h"
 #include "frame_roots.h"
 #include "n00b-abi-v1.h"
+#include "th/environment.h"
 #include "lib/alloc.h"
 #include "lib/buffer.h"
 #include "lib/byteorder.h"
@@ -30,6 +31,7 @@
 #include "lib/object_section.h"
 #include "ir/typelang.h"
 #include "parse/tree_util.h"
+#include "signature_typevars.h"
 
 core_list_decl(core_object_emit_section_t);
 
@@ -72,12 +74,25 @@ collect_frame_payload_types(core_translation_unit_t *unit,
         n00bb_abi_record_member_t *members = payload
             ? core_alloc_array(n00bb_abi_record_member_t, roots) : nullptr;
         bool valid = payload && members;
+        const th_member *failed_member = nullptr;
         for (size_t j = 0; valid && j < roots; j++) {
             const th_member *member = th_record_member(payload, j);
             bool handled = false;
             valid = member && n00bb_abi_publish_direct_layout(runtime,
-                member->type, target, &handled)
-                && ir_layout_final(runtime, member->type, target->triple);
+                member->type, target, &handled);
+            if (valid && !ir_layout_final(runtime, member->type,
+                                          target->triple)) {
+                ir_module_t *owner = ir_type_definition_owner(runtime,
+                    member->type);
+                const ir_final_layout_t *layout = owner
+                    ? ir_layout_final(owner, member->type, target->triple)
+                    : nullptr;
+                valid = layout && ir_layout_publish_final(runtime,
+                    member->type, target->triple, layout);
+            }
+            valid = valid && ir_layout_final(runtime, member->type,
+                                             target->triple);
+            if (!valid) failed_member = member;
             if (valid) members[j] = (n00bb_abi_record_member_t){
                 .name = member->name,
                 .type = member->type,
@@ -92,10 +107,13 @@ collect_frame_payload_types(core_translation_unit_t *unit,
         if (!valid) {
             core_buffer_t message = {0};
             core_buffer_printf(&message,
-                "could not lay out frame payload for %s: %s",
+                "could not lay out frame payload for %s at %s: %s",
                 function->name,
-                payload ? th_print(ir_module_types(runtime), payload)
-                        : "<missing type>");
+                failed_member ? failed_member->name : "<record>",
+                failed_member
+                    ? th_print(ir_module_types(runtime), failed_member->type)
+                    : payload ? th_print(ir_module_types(runtime), payload)
+                              : "<missing type>");
             bool result = abi_unit_error(unit, message.data);
             core_buffer_release(&message);
             return result;
@@ -130,9 +148,9 @@ frame_info(n00bb_abi_type_index_t *index,
         if (!layout || layout->alignment_bytes > 16
             || layout->n_members != roots
             || !ir_layout_final_stride_bits(layout, &stride)
-            || stride % 64 || stride / 64 > SIZE_MAX) return false;
+            || stride / 64 > SIZE_MAX - (stride % 64 != 0)) return false;
         info.roots = roots;
-        info.slots = (size_t)(stride / 64);
+        info.slots = (size_t)(stride / 64 + (stride % 64 != 0));
         info.shadow_type_index = payload_index;
         info.layout = layout;
     }
@@ -532,15 +550,22 @@ n00bb_abi_packed_tables_release(n00bb_abi_packed_tables_t *packed)
     *packed = (n00bb_abi_packed_tables_t){0};
 }
 
+static bool
+publish_catalog_record_specializations(n00bb_abi_type_index_t *index,
+    ir_module_t *module, const core_target_desc_t *target,
+    n00bb_abi_type_owner_lookup_fn type_owner, void *type_owner_context);
+
 bool
 n00bb_abi_emit_comptime_catalog(
     ir_ctx_t *context, ir_module_t *module,
     ir_func_t *const *functions, size_t function_count,
     const core_target_desc_t *target,
+    n00bb_abi_type_owner_lookup_fn type_owner, void *type_owner_context,
     n00bb_abi_comptime_type_t **out_types, size_t *out_type_count,
     uint8_t **out_object, size_t *out_object_bytes,
-    size_t *out_metadata_bytes)
+    size_t *out_metadata_bytes, const char **out_failure_stage)
 {
+    if (out_failure_stage) *out_failure_stage = nullptr;
     if (!context || !module || !target || !out_types || !out_type_count || !out_object
         || !out_object_bytes || !out_metadata_bytes) return false;
     ir_module_t *catalog = ir_module_new(context,
@@ -555,6 +580,7 @@ n00bb_abi_emit_comptime_catalog(
     n00bb_abi_comptime_type_t *bindings = nullptr;
     uint8_t *object = nullptr;
     size_t object_bytes = 0;
+    const char *stage = "comptime type collection";
     bool valid = catalog && names && index
         && n00bb_abi_type_index_collect_comptime_functions(index,
             functions, function_count);
@@ -570,6 +596,7 @@ n00bb_abi_emit_comptime_catalog(
             seen |= owners[p] == owner;
         if (!seen) owners[owner_count++] = owner;
     }
+    if (valid) stage = "comptime type layouts";
     for (uint32_t i = 0; valid && i < n00bb_abi_type_index_count(index); i++) {
         bool handled = false;
         th_type *type = n00bb_abi_type_index_at(index, i);
@@ -578,15 +605,31 @@ n00bb_abi_emit_comptime_catalog(
         for (size_t f = 0; valid && f < owner_count; f++)
             valid = n00bb_abi_publish_direct_layout(owners[f], type, target,
                                                     &handled);
+        if (!valid || ir_layout_final(catalog, type, target->triple))
+            continue;
+        for (size_t f = 0; valid && f < owner_count; f++) {
+            const ir_final_layout_t *source = ir_layout_final(
+                owners[f], type, target->triple);
+            if (!source) continue;
+            valid = ir_layout_publish_final(catalog, type,
+                                            target->triple, source);
+            break;
+        }
     }
     core_free(owners);
+    if (valid) valid = publish_catalog_record_specializations(index,
+        catalog, target, type_owner, type_owner_context);
+    if (valid) stage = "comptime type identity rows";
     if (valid) valid = n00bb_abi_type_identity_rows_build(index,
-        catalog, catalog, nullptr, nullptr, nullptr, names, &types);
+        catalog, catalog, true, nullptr, type_owner, type_owner_context,
+        names, &types);
+    if (valid) stage = "comptime type components";
     if (valid) valid = n00bb_abi_type_components_build(index, catalog, 1,
         &types, &components);
+    if (valid) stage = "comptime type layout rows";
     if (valid) valid = n00bb_abi_type_layout_rows_build(index,
-        catalog, catalog, 1 + (uint32_t)components.count, nullptr, names,
-        &types, &layouts);
+        catalog, catalog, true, 1 + (uint32_t)components.count, nullptr, names,
+        &types, &layouts, nullptr);
     size_t stream_count = 1 + components.count + layouts.stream_index_count;
     uint32_t *stream = valid ? core_alloc_array(uint32_t, stream_count)
                              : nullptr;
@@ -611,6 +654,7 @@ n00bb_abi_emit_comptime_catalog(
         {N00B_ABI_TABLE_U32_STREAM, stream, stream_count},
     };
     size_t table_count = sizeof(rows) / sizeof(*rows);
+    if (valid) stage = "comptime table packing";
     if (valid) {
         if (components.count)
             memcpy(stream + 1, components.indexes,
@@ -666,6 +710,7 @@ n00bb_abi_emit_comptime_catalog(
             ? "_n00b_abi_metadata" : "n00b_abi_metadata", .section_index = 1,
          .exported = true},
     };
+    if (valid) stage = "comptime catalog object";
     if (valid) valid = n00bb_abi_write_object(target, &packed,
         pool_size ? &section : nullptr, pool_size != 0,
         pool_size ? symbols : &symbols[1], pool_size ? 2 : 1,
@@ -679,6 +724,7 @@ n00bb_abi_emit_comptime_catalog(
     n00bb_abi_type_index_free(index);
     n00bb_abi_name_pool_free(names);
     if (!valid) {
+        if (out_failure_stage) *out_failure_stage = stage;
         core_free(bindings);
         core_free(object);
         return false;
@@ -974,9 +1020,103 @@ publish_catalog_direct_layouts(core_translation_unit_t *unit,
 }
 
 static bool
+publish_catalog_record_specializations(n00bb_abi_type_index_t *index,
+    ir_module_t *module, const core_target_desc_t *target,
+    n00bb_abi_type_owner_lookup_fn type_owner, void *type_owner_context)
+{
+    bool progress;
+    do {
+        progress = false;
+        for (size_t i = 1; i < n00bb_abi_type_index_count(index); i++) {
+            th_type *type = n00bb_abi_type_index_at(index, (uint32_t)i);
+            size_t arguments = 0;
+            if (!type || !th_named_info(th_resolve(type), nullptr, nullptr,
+                    nullptr, &arguments) || !arguments
+                || !th_is_closed(ir_module_types(module), type)
+                || ir_layout_final(module, type, target->triple)) continue;
+            th_type *definition = ir_type_definition(module, type);
+            if (!definition || th_kind_of(definition) != TH_RECORD) continue;
+            parse_sym_entry_t *symbol = type_owner
+                ? type_owner(type_owner_context, type) : nullptr;
+            if (symbol && parse_sym_binding(symbol,
+                    CORE_STRING_STATIC("n00bb.record-layout-request")))
+                continue;
+            size_t count = th_record_len(definition);
+            if (count > UINT32_MAX) return false;
+            bool variant = false;
+            th_named_info(type, nullptr, nullptr, &variant, nullptr);
+            n00bb_abi_record_member_t *members = count && !variant
+                ? core_alloc_array(n00bb_abi_record_member_t, count)
+                : nullptr;
+            n00bb_abi_variant_arm_t *arms = count && variant
+                ? core_alloc_array(n00bb_abi_variant_arm_t, count)
+                : nullptr;
+            bool ready = !count || (variant ? arms != nullptr
+                                           : members != nullptr);
+            for (size_t j = 0; ready && j < count; j++) {
+                const th_member *field = th_record_member(definition, j);
+                th_type *child = field ? field->type : nullptr;
+                bool handled = false;
+                uint64_t extent = 0;
+                if (!child || (th_kind_of(th_resolve(child)) == TH_SEQUENCE
+                        && th_seq_extent(child, &extent))
+                    || !n00bb_abi_publish_direct_layout(module, child,
+                        target, &handled)) {
+                    ready = false;
+                    break;
+                }
+                const ir_final_layout_t *layout = ir_layout_final(module,
+                    child, target->triple);
+                if (!layout) {
+                    ir_module_t *child_owner = ir_type_definition_owner(
+                        module, child);
+                    const ir_final_layout_t *shared = child_owner
+                        ? ir_layout_final(child_owner, child,
+                            target->triple) : nullptr;
+                    if (shared && ir_layout_publish_final(module, child,
+                            target->triple, shared))
+                        layout = ir_layout_final(module, child,
+                            target->triple);
+                }
+                if (!layout) { ready = false; break; }
+                if (variant)
+                    arms[j] = (n00bb_abi_variant_arm_t){
+                        .name = field->name, .type = child,
+                        .ordinal = (uint32_t)j,
+                    };
+                else
+                    members[j] = (n00bb_abi_record_member_t){
+                        .name = field->name, .type = child,
+                        .ordinal = (uint32_t)j,
+                        .packed = n00bb_abi_layout_packable(layout)
+                            && !layout->n_reserved,
+                    };
+            }
+            if (ready) {
+                ready = variant
+                    ? n00bb_abi_publish_variant_layout(module, type,
+                        target, arms, count)
+                    : n00bb_abi_publish_record_layout(module, type,
+                        target, N00BB_RECORD_DEFAULT, false, members, count);
+                if (!ready) {
+                    core_free(arms);
+                    core_free(members);
+                    return false;
+                }
+                progress = true;
+            }
+            core_free(arms);
+            core_free(members);
+        }
+    } while (progress);
+    return true;
+}
+
+static bool
 append_imported_type_requirements(
     n00bb_abi_type_index_t *index,
-    const n00bb_abi_type_identity_rows_t *types,
+    th_ctx *type_context,
+    n00bb_abi_type_identity_rows_t *types,
     const core_translation_unit_t *unit,
     n00bb_abi_node_source_fn node_source, void *source_context,
     n00bb_abi_type_owner_lookup_fn type_owner, void *type_owner_context,
@@ -998,13 +1138,35 @@ append_imported_type_requirements(
         parse_sym_entry_t *owner = graph_type
             ? type_owner(type_owner_context, graph_type) : nullptr;
         if (!owner || !owner->decl_node) continue;
+        uint32_t declaration_index;
+        if (!owner->type || !n00bb_abi_type_index_find(index, owner->type,
+                &declaration_index)) {
+            core_buffer_t message = {0};
+            core_buffer_printf(&message,
+                "imported type declaration '%.*s' is absent from the ABI type catalog",
+                (int)owner->name.u8_bytes, owner->name.data);
+            core_diagnostics_report(core_translation_unit_diagnostics(
+                (core_translation_unit_t *)unit), (core_translation_unit_t *)unit,
+                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-B0007"),
+                core_string_borrow(message.data, message.byte_len));
+            core_buffer_release(&message);
+            return false;
+        }
+        if (declaration_index != i) continue;
         const core_translation_unit_t *declaring_unit = nullptr;
         parse_token_stream_t *declaring_tokens = nullptr;
         if (!node_source(source_context, owner->decl_node,
                 &declaring_unit, &declaring_tokens)
             || !declaring_unit || !declaring_tokens
             || declaring_unit == unit || !owner->name.data
-            || !owner->name.u8_bytes || !owner->phases) return false;
+            || !owner->name.u8_bytes || !owner->phases) {
+            core_diagnostics_report(core_translation_unit_diagnostics(
+                (core_translation_unit_t *)unit), (core_translation_unit_t *)unit,
+                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-B0007"),
+                CORE_STRING_STATIC(
+                    "imported type declaration has no source owner"));
+            return false;
+        }
         core_buffer_t path = {0};
         core_buffer_append(&path, declaring_unit->module.identifier.data,
             declaring_unit->module.identifier.u8_bytes);
@@ -1023,8 +1185,35 @@ append_imported_type_requirements(
             N00B_ABI_TABLE_REQUIREMENT, (uint32_t)next,
             offsetof(n00b_abi_requirement_v1, full_path),
             &requirements[next].full_path);
+        const char *reason = nullptr;
+        if (valid)
+            valid = n00bb_abi_type_variables_bind_import(index,
+                type_context, owner, owner->type, (uint32_t)next,
+                types, &reason);
+        for (parse_sym_entry_t *member = (type->kind == N00B_ABI_TYPE_CALLBACK
+                || type->kind == N00B_ABI_TYPE_TRAIT) && owner->member_scope
+                ? owner->member_scope->first_in_scope : nullptr;
+             valid && member; member = member->next_in_scope) {
+            if (member->kind != PARSE_SYM_FUNCTION || !member->type)
+                continue;
+            valid = n00bb_abi_type_variables_bind_import(index,
+                type_context, member, member->type, (uint32_t)next,
+                types, &reason);
+        }
         core_buffer_release(&path);
-        if (!valid) return false;
+        if (!valid) {
+            core_buffer_t message = {0};
+            core_buffer_printf(&message,
+                "cannot bind imported type variables for %.*s: %s",
+                (int)owner->name.u8_bytes, owner->name.data,
+                reason ? reason : "invalid import requirement");
+            core_diagnostics_report(core_translation_unit_diagnostics(
+                (core_translation_unit_t *)unit), (core_translation_unit_t *)unit,
+                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-B0007"),
+                core_string_borrow(message.data, message.byte_len));
+            core_buffer_release(&message);
+            return false;
+        }
     }
     return true;
 }
@@ -1059,21 +1248,17 @@ imported_module_symbol(const core_link_reference_t *reference,
     if (kind != PARSE_SYM_FUNCTION && kind != PARSE_SYM_VARIABLE
         && kind != PARSE_SYM_TYPEDEF)
         return true;
-    parse_node_resolution_t resolution = parse_tree_resolution(
-        core_link_reference_use_site(reference));
-    if (resolution.kind != PARSE_NODE_RESOLUTION_SYMBOL
-        || !resolution.target.symbol
-        || resolution.target.symbol->kind != kind) {
+    parse_sym_entry_t *symbol = core_link_declaration_binding(target,
+        CORE_STRING_STATIC("n00bb.semantic.symbol"));
+    if (!symbol || symbol->kind != kind) {
         core_string_t module = core_link_reference_module(reference);
         core_string_t key = core_link_reference_key(reference);
         core_buffer_t message = {0};
         core_buffer_printf(&message,
-            "ABI import '%.*s:%.*s' targets symbol kind %u, but its use node resolves to kind %u",
+            "ABI import '%.*s:%.*s' targets symbol kind %u, but its declaration binds kind %u",
             (int)module.u8_bytes, module.data,
             (int)key.u8_bytes, key.data, kind,
-            resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
-                && resolution.target.symbol
-                ? (unsigned)resolution.target.symbol->kind : 0);
+            symbol ? (unsigned)symbol->kind : 0);
         core_translation_unit_t *referrer =
             core_link_reference_referrer(reference);
         core_diagnostics_report(core_translation_unit_diagnostics(referrer),
@@ -1082,7 +1267,6 @@ imported_module_symbol(const core_link_reference_t *reference,
         core_buffer_release(&message);
         return false;
     }
-    parse_sym_entry_t *symbol = resolution.target.symbol;
     if (!symbol->scope || !core_string_eq(symbol->scope->scope_tag,
             CORE_STRING_STATIC("module"))) return true;
     *out_symbol = symbol;
@@ -1120,6 +1304,44 @@ collect_imported_symbol_types(core_link_unit_t *link,
 }
 
 static bool
+collect_environment_traits(ir_module_t *module,
+                           n00bb_abi_type_index_t *index)
+{
+    th_ctx *types = ir_module_types(module);
+    const th_env *environment = th_ctx_environment(types);
+    if (!environment) return true;
+    for (size_t i = 0; i < th_env_declaration_count(environment); i++) {
+        th_env_declaration_view_t declaration;
+        if (!th_env_declaration_at(environment, i, &declaration))
+            return false;
+        if (declaration.kind == TH_ENV_DECLARATION_TRAIT
+            && declaration.contract
+            && th_kind_of(th_resolve(declaration.contract)) == TH_TRAIT
+            && declaration.module
+            && !strcmp(declaration.module, "builtins")
+            && !n00bb_abi_type_index_add(index, declaration.contract,
+                                         nullptr))
+            return false;
+    }
+    return true;
+}
+
+static bool
+collect_imported_nominal_declarations(n00bb_abi_type_index_t *index,
+    n00bb_abi_type_owner_lookup_fn type_owner, void *context)
+{
+    if (!type_owner) return true;
+    for (size_t i = 1; i < n00bb_abi_type_index_count(index); i++) {
+        th_type *type = n00bb_abi_type_index_at(index, (uint32_t)i);
+        parse_sym_entry_t *owner = type ? type_owner(context, type) : nullptr;
+        if (owner && owner->decl_node && owner->type
+            && !n00bb_abi_type_index_add(index, owner->type, nullptr))
+            return false;
+    }
+    return true;
+}
+
+static bool
 append_imported_symbol_requirements(core_link_unit_t *link,
     const core_translation_unit_t *unit, n00bb_abi_type_index_t *index,
     th_ctx *type_context, n00bb_abi_type_identity_rows_t *types,
@@ -1142,13 +1364,13 @@ append_imported_symbol_requirements(core_link_unit_t *link,
             break;
         }
         if (!symbol || kind != selected_kind) continue;
-        core_link_declaration_t *target = core_link_reference_target(reference);
         bool inserted = false;
-        if (!core_indexed_table_intern(seen, target, target, &inserted)) {
+        if (!core_indexed_table_intern(seen, symbol, symbol, &inserted)) {
             valid = false;
             break;
         }
         if (!inserted) continue;
+        core_link_declaration_t *target = core_link_reference_target(reference);
         th_type *type = core_link_declaration_binding(target,
             CORE_STRING_STATIC("n00bb.semantic.type"));
         uint32_t type_index;
@@ -1159,6 +1381,16 @@ append_imported_symbol_requirements(core_link_unit_t *link,
             || type_index >= types->count
             || (kind == N00B_ABI_SYMBOL_FUNCTION
                 && types->rows[type_index].kind != N00B_ABI_TYPE_FUNCTION)) {
+            core_buffer_t message = {0};
+            core_buffer_printf(&message,
+                "cannot describe imported %.*s.%.*s in the ABI type catalog",
+                (int)module.u8_bytes, module.data,
+                (int)symbol->name.u8_bytes, symbol->name.data);
+            core_diagnostics_report(core_translation_unit_diagnostics(
+                (core_translation_unit_t *)unit), (core_translation_unit_t *)unit,
+                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-B0007"),
+                core_string_borrow(message.data, message.byte_len));
+            core_buffer_release(&message);
             valid = false;
             break;
         }
@@ -1182,9 +1414,23 @@ append_imported_symbol_requirements(core_link_unit_t *link,
             offsetof(n00b_abi_requirement_v1, full_path),
             &requirements[next].full_path);
         core_buffer_release(&path);
+        const char *reason = nullptr;
         if (valid && kind == N00B_ABI_SYMBOL_FUNCTION)
             valid = n00bb_abi_type_variables_bind_import(index,
-                type_context, symbol, type, (uint32_t)next, types);
+                type_context, symbol, type, (uint32_t)next, types, &reason);
+        if (!valid && kind == N00B_ABI_SYMBOL_FUNCTION) {
+            core_buffer_t message = {0};
+            core_buffer_printf(&message,
+                "cannot bind imported function type variables for %.*s.%.*s: %s",
+                (int)module.u8_bytes, module.data,
+                (int)symbol->name.u8_bytes, symbol->name.data,
+                reason ? reason : "invalid import requirement");
+            core_diagnostics_report(core_translation_unit_diagnostics(
+                (core_translation_unit_t *)unit), (core_translation_unit_t *)unit,
+                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-B0007"),
+                core_string_borrow(message.data, message.byte_len));
+            core_buffer_release(&message);
+        }
     }
     core_indexed_table_free(seen);
     return valid;
@@ -1350,6 +1596,11 @@ symbol_in_unit(void *opaque, const parse_sym_entry_t *symbol,
     parse_tree_t *node = symbol->decl_node;
     if (!node && symbol->definition_count)
         node = symbol->definition_nodes[0];
+    if (!node && parse_sym_binding((parse_sym_entry_t *)symbol,
+            CORE_STRING_STATIC("n00bb.generated-value-method"))) {
+        *include = true;
+        return true;
+    }
     if (!node) {
         *include = false;
         return true;
@@ -1373,6 +1624,7 @@ n00bb_abi_emit_unit(
     n00bb_abi_declaration_lookup_fn lookup, void *lookup_context,
     n00bb_abi_node_source_fn node_source, void *source_context,
     n00bb_abi_type_owner_lookup_fn type_owner, void *type_owner_context,
+    const n00bb_abi_graph_source_t *graphs,
     n00bb_abi_packed_tables_t *out_tables,
     uint8_t **out_object, size_t *out_object_bytes)
 {
@@ -1549,6 +1801,8 @@ n00bb_abi_emit_unit(
         requirements = core_realloc(requirements,
             (import_count + reference_count + 1) * sizeof(*requirements));
     const char *failed_stage = "setup";
+    const char *typevar_failure = nullptr;
+    uint32_t failed_layout_type = UINT32_MAX;
     abi_symbol_owner_t symbol_owner = {
         .unit = unit, .source = node_source, .context = source_context,
     };
@@ -1565,26 +1819,36 @@ n00bb_abi_emit_unit(
                 node_source ? symbol_in_unit : nullptr, &symbol_owner))
         && ABI_STAGE("imported type collection",
             collect_imported_symbol_types(link, unit, type_index))
+        && ABI_STAGE("trait type collection",
+            collect_environment_traits((ir_module_t *)runtime_ir,
+                                       type_index))
+        && ABI_STAGE("imported nominal declarations",
+            collect_imported_nominal_declarations(type_index, type_owner,
+                type_owner_context))
         && ABI_STAGE("direct type layouts",
             publish_catalog_direct_layouts(unit, type_index,
                 (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir,
                 target))
+        && ABI_STAGE("imported record specialization layouts",
+            publish_catalog_record_specializations(type_index,
+                (ir_module_t *)runtime_ir, target, type_owner,
+                type_owner_context))
         && ABI_STAGE("frame payload type collection",
             collect_frame_payload_types(unit, type_index,
                 (ir_module_t *)runtime_ir, target))
         && ABI_STAGE("type identity rows",
             n00bb_abi_type_identity_rows_build(type_index,
                 (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir,
-                symbols, type_owner, type_owner_context, pool,
+                false, symbols, type_owner, type_owner_context, pool,
                 &type_rows))
         && ABI_STAGE("imported function requirements",
             append_imported_symbol_requirements(link, unit, type_index,
                 ir_module_types((ir_module_t *)runtime_ir), &type_rows, pool,
                 requirements, &requirement_count, N00B_ABI_SYMBOL_FUNCTION))
-        && ABI_STAGE("type variable binding",
+        && ABI_STAGE(typevar_failure ? typevar_failure : "type variable binding",
             n00bb_abi_type_variables_bind(type_index,
                 ir_module_types((ir_module_t *)runtime_ir), declarations,
-                &type_rows))
+                &type_rows, &typevar_failure))
         && ABI_STAGE("type components",
             n00bb_abi_type_components_build(type_index,
                 (ir_module_t *)runtime_ir, prefix_stream_count,
@@ -1592,8 +1856,9 @@ n00bb_abi_emit_unit(
         && ABI_STAGE("type layouts",
             n00bb_abi_type_layout_rows_build(type_index,
                 (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir,
-                prefix_stream_count + (uint32_t)components.count,
-                declarations, pool, &type_rows, &layout_rows))
+                false, prefix_stream_count + (uint32_t)components.count,
+                declarations, pool, &type_rows, &layout_rows,
+                &failed_layout_type))
         && ABI_STAGE("enum items",
             n00bb_abi_enum_rows_build(type_index, declarations, pool,
                 prefix_stream_count + (uint32_t)components.count
@@ -1631,7 +1896,8 @@ n00bb_abi_emit_unit(
                              (ir_module_t *)runtime_ir, &frame_rows))
         && ABI_STAGE("trait methods",
             n00bb_abi_trait_method_rows_build(type_index, &type_rows,
-                declarations, &trait_method_rows))
+                declarations, th_ctx_environment(ir_module_types(
+                    (ir_module_t *)runtime_ir)), &trait_method_rows))
         && ABI_STAGE("type constraints",
             n00bb_abi_constraint_rows_build(type_index, &type_rows,
                 declarations, &function_rows, pool,
@@ -1653,7 +1919,7 @@ n00bb_abi_emit_unit(
                     + (uint32_t)declaration_rows.stream_index_count
                     + (uint32_t)function_rows.stream_index_count
                     + (uint32_t)constraint_rows.stream_index_count,
-                lookup, lookup_context, &storage_rows));
+                lookup, lookup_context, graphs, &storage_rows));
 #undef ABI_STAGE
     if (valid) {
         modules[1].comptime_initializer =
@@ -1687,7 +1953,8 @@ n00bb_abi_emit_unit(
                 (import_count + type_rows.count + reference_count + 1)
                     * sizeof(*requirements));
             valid = append_imported_type_requirements(type_index,
-                &type_rows, unit, node_source, source_context,
+                ir_module_types((ir_module_t *)runtime_ir), &type_rows,
+                unit, node_source, source_context,
                 type_owner, type_owner_context, pool, requirements,
                 &requirement_count)
                 && append_imported_symbol_requirements(link, unit,
@@ -1696,7 +1963,6 @@ n00bb_abi_emit_unit(
                     N00B_ABI_SYMBOL_VARIABLE);
         }
     }
-    n00bb_abi_type_index_free(type_index);
     if (valid) {
         modules[1].static_storage = storage_rows.static_range;
         modules[1].tls_storage = storage_rows.tls_range;
@@ -1739,6 +2005,44 @@ n00bb_abi_emit_unit(
             &tls_metadata);
     }
     if (!valid) {
+        core_buffer_t message = {0};
+        core_buffer_printf(&message, "could not build ABI %s", failed_stage);
+        if (!strcmp(failed_stage, "type identity rows")
+            && type_rows.failed_type_index) {
+            th_type *failed_type = n00bb_abi_type_index_at(type_index,
+                type_rows.failed_type_index);
+            const char *spelling = failed_type
+                ? th_print(ir_module_types((ir_module_t *)runtime_ir),
+                           failed_type) : nullptr;
+            if (spelling) core_buffer_printf(&message, " for %s", spelling);
+            if (type_rows.failed_reason)
+                core_buffer_printf(&message, ": %s", type_rows.failed_reason);
+            if (failed_type && type_rows.failed_reason
+                && !strcmp(type_rows.failed_reason, "conflicting phase layouts")) {
+                const char *target_name = ir_module_target((ir_module_t *)runtime_ir);
+                const ir_final_layout_t *runtime_layout = ir_layout_final(
+                    (ir_module_t *)runtime_ir, failed_type, target_name);
+                const ir_final_layout_t *comptime_layout = comptime_ir
+                    ? ir_layout_final((ir_module_t *)comptime_ir,
+                                      failed_type, target_name) : nullptr;
+                if (runtime_layout && comptime_layout)
+                    core_buffer_printf(&message,
+                        " (runtime %llu bits/%llu-byte alignment, comptime %llu bits/%llu-byte alignment)",
+                        (unsigned long long)runtime_layout->intrinsic_bits,
+                        (unsigned long long)runtime_layout->alignment_bytes,
+                        (unsigned long long)comptime_layout->intrinsic_bits,
+                        (unsigned long long)comptime_layout->alignment_bytes);
+            }
+        }
+        if (!strcmp(failed_stage, "type layouts")
+            && failed_layout_type != UINT32_MAX) {
+            th_type *failed_type = n00bb_abi_type_index_at(type_index,
+                failed_layout_type);
+            const char *spelling = failed_type
+                ? th_print(ir_module_types((ir_module_t *)runtime_ir),
+                           failed_type) : nullptr;
+            if (spelling) core_buffer_printf(&message, " for %s", spelling);
+        }
         core_free(requirements);
         native_bindings_release(&native_bindings);
         tls_metadata_release(&tls_metadata);
@@ -1755,12 +2059,13 @@ n00bb_abi_emit_unit(
         n00bb_abi_type_identity_rows_release(&type_rows);
         n00bb_abi_name_pool_free(pool);
         n00bb_abi_decl_index_free(declarations);
-        core_buffer_t message = {0};
-        core_buffer_printf(&message, "could not build ABI %s", failed_stage);
+        n00bb_abi_type_index_free(type_index);
         bool result = abi_unit_error(unit, message.data);
         core_buffer_release(&message);
         return result;
     }
+
+    n00bb_abi_type_index_free(type_index);
 
     size_t stream_count = prefix_stream_count + components.count
         + layout_rows.stream_index_count
@@ -2099,6 +2404,12 @@ n00bb_abi_emit_unit(
             sizeof(entries) / sizeof(*entries));
     core_object_emit_absolute64_t *relocations = nullptr;
     size_t relocation_count = 0;
+    size_t storage_base_symbols =
+        (storage_input_indexes[N00B_ABI_STORAGE_READ_ONLY] != 0)
+        + (storage_input_indexes[N00B_ABI_STORAGE_WRITABLE] != 0);
+    size_t storage_base_first = (has_pool ? 1 : 0)
+        + (has_aggregates ? 1 : 0);
+    const char *object_failure = "native object emission";
     if (valid)
         valid = n00bb_abi_name_pool_relocations(pool, entries,
             sizeof(entries) / sizeof(*entries), &relocations,
@@ -2130,13 +2441,27 @@ n00bb_abi_emit_unit(
                     == N00BB_ABI_RELOC_STRING_POOL && has_pool ? 0
                     : source->target_kind == N00BB_ABI_RELOC_AGGREGATE
                         && has_aggregates ? (has_pool ? 1 : 0)
+                    : source->target_kind == N00B_ABI_STORAGE_READ_ONLY
+                        && storage_input_indexes[N00B_ABI_STORAGE_READ_ONLY]
+                        ? (uint32_t)storage_base_first
+                    : source->target_kind == N00B_ABI_STORAGE_WRITABLE
+                        && storage_input_indexes[N00B_ABI_STORAGE_WRITABLE]
+                        ? (uint32_t)(storage_base_first
+                            + (storage_input_indexes[
+                                N00B_ABI_STORAGE_READ_ONLY] != 0))
                         : UINT32_MAX;
                 size_t target_size = source->target_kind
                     == N00BB_ABI_RELOC_STRING_POOL
                     ? n00bb_abi_name_pool_size(pool)
-                    : storage_rows.aggregates.byte_len;
+                    : source->target_kind == N00BB_ABI_RELOC_AGGREGATE
+                        ? storage_rows.aggregates.byte_len
+                    : source->target_kind == N00B_ABI_STORAGE_READ_ONLY
+                        ? storage_rows.read_only.byte_len
+                    : source->target_kind == N00B_ABI_STORAGE_WRITABLE
+                        ? storage_rows.writable.byte_len : 0;
                 if (!section || target_symbol == UINT32_MAX
                     || source->target_offset >= target_size) {
+                    object_failure = "static storage relocation target";
                     valid = false;
                     break;
                 }
@@ -2150,7 +2475,8 @@ n00bb_abi_emit_unit(
             }
             size_t ordinal = 0;
             size_t template_symbols = (has_pool ? 1 : 0)
-                + (has_aggregates ? 1 : 0) + native_bindings.count - 1;
+                + (has_aggregates ? 1 : 0) + storage_base_symbols
+                + native_bindings.count - 1;
             size_t bootstrap_symbol = template_symbols
                 + tls_descriptor_count;
             for (size_t i = 1; valid && i < native_bindings.count; i++) {
@@ -2180,6 +2506,7 @@ n00bb_abi_emit_unit(
     size_t object_bytes = 0;
     size_t symbol_count = (has_pool ? 1 : 0)
         + (has_aggregates ? 1 : 0)
+        + storage_base_symbols
         + native_bindings.count - 1
         + (tls_descriptor_count ? tls_descriptor_count + 1 : 0);
     core_object_emit_symbol_t *object_symbols = symbol_count
@@ -2190,9 +2517,24 @@ n00bb_abi_emit_unit(
     if (has_pool) object_symbols[0] = string_symbol;
     if (has_aggregates) object_symbols[has_pool ? 1 : 0]
         = aggregate_symbol;
+    size_t storage_base_ordinal = storage_base_first;
+    if (storage_input_indexes[N00B_ABI_STORAGE_READ_ONLY])
+        object_symbols[storage_base_ordinal++] =
+            (core_object_emit_symbol_t){
+                .name = "__n00bb_read_only_storage_base",
+                .section_index =
+                    storage_input_indexes[N00B_ABI_STORAGE_READ_ONLY],
+            };
+    if (storage_input_indexes[N00B_ABI_STORAGE_WRITABLE])
+        object_symbols[storage_base_ordinal++] =
+            (core_object_emit_symbol_t){
+                .name = "__n00bb_writable_storage_base",
+                .section_index =
+                    storage_input_indexes[N00B_ABI_STORAGE_WRITABLE],
+            };
     for (size_t i = 1; i < native_bindings.count; i++) {
         const n00b_abi_storage_v1 *row = &storage_rows.rows[i];
-        object_symbols[(has_pool ? 1 : 0) + (has_aggregates ? 1 : 0) + i - 1] =
+        object_symbols[storage_base_first + storage_base_symbols + i - 1] =
             (core_object_emit_symbol_t){
                 .name = native_bindings.names[i],
                 .section_index = row->segment_kind == N00B_ABI_STORAGE_TLS
@@ -2258,7 +2600,12 @@ n00bb_abi_emit_unit(
     n00bb_abi_decl_index_free(declarations);
     if (!valid) {
         n00bb_abi_packed_tables_release(&packed);
-        return abi_unit_error(unit, "could not write ABI object");
+        core_buffer_t message = {0};
+        core_buffer_printf(&message, "could not write ABI object: %s",
+            object_failure);
+        bool reported = abi_unit_error(unit, message.data);
+        core_buffer_release(&message);
+        return reported;
     }
     *out_tables = packed;
     *out_object = object;

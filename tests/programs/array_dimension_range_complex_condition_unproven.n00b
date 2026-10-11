@@ -13,4 +13,4 @@ comptime {
     }
 }
 
-var complex_condition_unproven: int[extent] = new[int[extent]]()
+var complex_condition_unproven: Array[int][extent] = new[Array[int][extent]]()

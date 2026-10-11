@@ -1,0 +1,7 @@
+comptime {} else {
+    var original: List[int] = [1, 2]
+    var copy: List[int] = original
+    copy.append(3)
+    require len(original) == 2
+    require len(copy) == 3
+}

@@ -6,7 +6,7 @@ func signed_i128_min() -> i128 {
     return -170141183460469231731687303715884105728
 }
 
-var zero_extent: int[0]
-var negative_extent: int[-1]
-var too_wide_extent: int[too_wide()]
-var overflowing_product: int[4294967296][2]
+var zero_extent: Array[int][0]
+var negative_extent: Array[int][-1]
+var too_wide_extent: Array[int][too_wide()]
+var overflowing_product: Array[int][4294967296][2]

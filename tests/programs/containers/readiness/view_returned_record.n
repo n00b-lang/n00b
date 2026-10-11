@@ -1,0 +1,23 @@
+import builtin.cursor
+import builtin.containers.view
+
+type Pair {
+    left: int
+    right: int
+}
+
+func selected_pairs() -> builtin.containers.view.View[Pair] {
+    let first: Pair = (left = 2, right = 3)
+    let second: Pair = (left = 5, right = 7)
+    let values: Array[Pair] = [first, second]'array
+    return values[0:2]
+}
+
+comptime {} else {
+    let selected: builtin.containers.view.View[Pair] = selected_pairs()
+    var total: int = 0
+    for let pair: Pair in selected {
+        total += pair.left + pair.right
+    }
+    require total == 17
+}

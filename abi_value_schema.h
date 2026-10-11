@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "n00b-abi-v1.h"
+#include "lib/byteorder.h"
 
 typedef struct {
     uint32_t row_kind;
@@ -27,7 +28,8 @@ static const n00bb_abi_value_column_t n00bb_abi_value_columns[] = {
         N00B_ABI_TYPE_ARG_TYPE, N00B_ABI_TYPE_ARG_STRING),
     ABI_BITS(TYPE, type, flags, N00B_ABI_TYPE_FLAG_SIGNED
         | N00B_ABI_TYPE_FLAG_OPAQUE | N00B_ABI_TYPE_FLAG_PACKABLE
-        | N00B_ABI_TYPE_FLAG_NON_CONCRETE | N00B_ABI_TYPE_FLAG_BITS),
+        | N00B_ABI_TYPE_FLAG_NON_CONCRETE | N00B_ABI_TYPE_FLAG_BITS
+        | N00B_ABI_TYPE_FLAG_PLAIN_REF),
     ABI_BITS(ENUM_ITEM, enum_item, flags, N00B_ABI_ENUM_ITEM_FLAG_PRIMITIVE),
     ABI_VALUE(CONSTRAINT, constraint, kind,
         N00B_ABI_CONSTRAINT_UNIFIES, N00B_ABI_CONSTRAINT_TYPE_FAMILY),
@@ -105,6 +107,18 @@ n00bb_abi_row_values_valid(uint32_t kind, const void *row,
             || (!column->allowed_bits && (value < column->minimum
                 || value > column->maximum))) {
             if (invalid_offset) *invalid_offset = offset;
+            return false;
+        }
+    }
+    if (kind == N00B_ABI_TABLE_TYPE) {
+        uint32_t flags = core_le_load_u32(bytes
+            + offsetof(n00b_abi_type_v1, flags));
+        uint32_t type_kind = core_le_load_u32(bytes
+            + offsetof(n00b_abi_type_v1, kind));
+        if ((flags & N00B_ABI_TYPE_FLAG_PLAIN_REF)
+            && type_kind != N00B_ABI_TYPE_REFERENCE) {
+            if (invalid_offset) *invalid_offset = offsetof(
+                n00b_abi_type_v1, flags);
             return false;
         }
     }

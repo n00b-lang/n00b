@@ -1,0 +1,16 @@
+type Holder {
+    values: Array[int]
+}
+
+func bump(modify value: int) {
+    value += 1
+}
+
+comptime {} else {
+    let element: Holder = (values = [11, 29]'array)
+    var original: Array[Holder] = [element]'array
+    var copy = original
+    bump(copy[0].values[0])
+    require copy[0].values[0] == 12
+    require original[0].values[0] == 12
+}

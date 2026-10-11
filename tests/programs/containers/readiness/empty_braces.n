@@ -1,0 +1,12 @@
+func empty_set() -> Set[int] {
+    return {}
+}
+
+func empty_dict() -> Dict[int, int] {
+    return {}
+}
+
+comptime {} else {
+    require builtin.containers.set.len(empty_set()) == 0
+    require builtin.containers.dict.len(empty_dict()) == 0
+}

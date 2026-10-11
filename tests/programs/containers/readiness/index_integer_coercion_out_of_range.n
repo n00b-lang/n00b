@@ -1,0 +1,5 @@
+comptime {} else {
+    var values: Array[u8] = new[Array[u8]](1)
+    let too_large: int = 256
+    values[0] = too_large
+}

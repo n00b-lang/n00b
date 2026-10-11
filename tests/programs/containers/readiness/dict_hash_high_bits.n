@@ -1,0 +1,28 @@
+import builtin.containers.dict
+
+type High_Key {
+    value: u64
+}
+
+func hash(self: High_Key) -> u128 {
+    return cast[u128](self.value) << 64
+}
+
+comptime {} else {
+    var values: Dict[High_Key, int] = new[Dict[High_Key, int]]()
+    var i: u64 = 0
+    while i < 40 {
+        let key: High_Key = (value = i)
+        require builtin.containers.dict.add(values, key, cast[int] i)
+        i += 1
+    }
+    i = 0
+    while i < 40 {
+        let key: High_Key = (value = i)
+        let found: int? = builtin.containers.dict.get(values, key)
+        require found != nil
+        require found.get() == cast[int] i
+        i += 1
+    }
+    require builtin.containers.dict.len(values) == 40
+}

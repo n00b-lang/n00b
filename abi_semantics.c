@@ -52,8 +52,7 @@ add_receiver(th_ctx *ctx, const n00bb_abi_merged_table_t *types,
     if (!index) return true;
     const n00b_abi_type_v1 *row = (const void *)(types->records
         + (size_t)index * types->record_bytes);
-    if (!row->owner_module_index
-        || (row->flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE)
+    if ((row->flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE)
         || row->kind == N00B_ABI_TYPE_TRAIT) return true;
     for (size_t i = 0; i < receivers->len; i++)
         if (receivers->data[i].index == index) return true;
@@ -90,7 +89,15 @@ function_index_for_method(th_ctx *ctx,
             n00bb_abi_string_view_t name;
             if (!n00bb_abi_object_string(view, &function->name, &name))
                 return false;
-            if (!same_string(name, method->root_name)) continue;
+            const char *qualified_leaf = method->qualified_name
+                ? strrchr(method->qualified_name, '.') : nullptr;
+            qualified_leaf = qualified_leaf ? qualified_leaf + 1 : nullptr;
+            size_t leaf_length = qualified_leaf
+                ? strcspn(qualified_leaf, "#") : 0;
+            bool named = same_string(name, method->root_name)
+                || (qualified_leaf && name.length == leaf_length
+                    && !memcmp(name.bytes, qualified_leaf, leaf_length));
+            if (!named) continue;
             const n00b_abi_symbol_v1 *symbol = n00bb_abi_object_row(view,
                 N00B_ABI_TABLE_SYMBOL, function->symbol_index);
             const n00b_abi_type_v1 *signature = symbol
@@ -378,10 +385,12 @@ n00bb_abi_link_semantic_rows(
                 uint32_t function_index = 0;
                 valid = th_env_method_resolve(ctx, receiver.type,
                     trait.qualified_name, method->name, &chosen)
-                        == TH_ENV_METHOD_FOUND
-                    && function_index_for_method(ctx, selected, plan,
-                        &chosen, &function_index)
-                    && entries.len < UINT32_MAX;
+                        == TH_ENV_METHOD_FOUND;
+                if (!valid) break;
+                if (chosen.module && !strcmp(chosen.module, "builtins"))
+                    continue;
+                valid = function_index_for_method(ctx, selected, plan,
+                    &chosen, &function_index) && entries.len < UINT32_MAX;
                 if (valid) core_list_push(entries,
                     ((n00b_abi_dispatch_entry_v1){
                         receiver.index, function_index,
@@ -397,6 +406,7 @@ n00bb_abi_link_semantic_rows(
         receiver_t receiver = receivers.data[i];
         n00b_abi_type_v1 *row = (void *)(types->records
             + (size_t)receiver.index * types->record_bytes);
+        if (!row->owner_module_index) continue;
         th_type *reference = th_ind(ctx, 0, receiver.type);
         if (!reference || !scope_for_type_owner(ctx, selected, plan,
                                                  row->owner_module_index)) {

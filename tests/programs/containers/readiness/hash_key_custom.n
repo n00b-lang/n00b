@@ -1,0 +1,21 @@
+import builtin.containers.dict
+import builtin.containers.set
+import builtin.hash
+
+type Key {
+    value: int
+}
+
+func __equal(self: Key, other: Key) -> bool {
+    return self.value == other.value
+}
+
+func hash(self: Key) -> u128 {
+    return self.value.hash()
+}
+
+comptime {} else {
+    let key: Key = (value = 7)
+    let map: Dict[Key, int] = {key: 1}
+    let members: Set[Key] = {key}
+}

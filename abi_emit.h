@@ -13,6 +13,7 @@
 #include "scanner/token_stream.h"
 #include "abi_function_rows.h"
 #include "abi_declarations.h"
+#include "abi_storage.h"
 
 typedef struct {
     uint32_t kind;
@@ -44,9 +45,10 @@ bool n00bb_abi_emit_comptime_catalog(
     ir_ctx_t *context, ir_module_t *module,
     ir_func_t *const *functions, size_t function_count,
     const core_target_desc_t *target,
+    n00bb_abi_type_owner_lookup_fn type_owner, void *type_owner_context,
     n00bb_abi_comptime_type_t **out_types, size_t *out_type_count,
     uint8_t **out_object, size_t *out_object_bytes,
-    size_t *out_metadata_bytes);
+    size_t *out_metadata_bytes, const char **out_failure_stage);
 
 /* `extra_sections` follow the metadata section, which is section 1 in
  * `symbols` and `relocations`. The object and packed tables have separate
@@ -71,5 +73,6 @@ bool n00bb_abi_emit_unit(
     n00bb_abi_declaration_lookup_fn lookup, void *lookup_context,
     n00bb_abi_node_source_fn node_source, void *source_context,
     n00bb_abi_type_owner_lookup_fn type_owner, void *type_owner_context,
+    const n00bb_abi_graph_source_t *graphs,
     n00bb_abi_packed_tables_t *out_tables,
     uint8_t **out_object, size_t *out_object_bytes);

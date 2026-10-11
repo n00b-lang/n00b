@@ -87,7 +87,7 @@ func dead_in_block(marker: Ref[builtin.gc.Marker],
             dead = dead & ~__atomic_load_relaxed(marks)
         }
         while dead != 0 {
-            let bit: uint = cast[uint](__count_trailing_zeros(cast[uint](dead)))
+            let bit: uint = __count_trailing_zeros(cast[uint](dead))
             dead = dead & (dead - 1)
             let offset: uint = (index * builtin.gc.word_bits + bit) * builtin.gc.granule_bytes
             let header: Ref[builtin.gc.Object_Header] = builtin.gc.block_object_header_at(base, offset)
@@ -165,7 +165,7 @@ public func mark_locked(marker: Ref[builtin.gc.Marker]) {
         let batch: Ref[builtin.gc.Final_Batch] = running.get()
         var index: uint = 0
         while index < batch.n {
-            let payload: Ref[byte]? = batch.objects[cast[int] index]
+            let payload: Ref[byte]? = batch.objects[index]
             if payload != nil {
                 builtin.gc.mark.mark_object(marker, payload.get())
             } else { require false }
@@ -193,7 +193,7 @@ public func run(heap: Ref[builtin.gc.Heap], maximum: uint) -> uint {
             if storage != nil {
                 heap.finq_n -= 1
                 let payload: Ref[byte]? = final_entry_at(storage.get(), heap.finq_n).payload
-                batch.objects[cast[int] index] = payload
+                batch.objects[index] = payload
             } else { require false }
             index += 1
         }
@@ -212,7 +212,7 @@ public func run(heap: Ref[builtin.gc.Heap], maximum: uint) -> uint {
         builtin.gc.sync.event_signal(ref heap.fin_progress)
         index = 0
         while index < count {
-            let payload: Ref[byte]? = batch.objects[cast[int] index]
+            let payload: Ref[byte]? = batch.objects[index]
             if payload != nil {
                 let address: Ref[byte] = payload.get()
                 __gc_invoke_finalizer(builtin.gc.header_of(address).type_index,

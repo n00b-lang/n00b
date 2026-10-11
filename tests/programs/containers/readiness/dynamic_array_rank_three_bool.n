@@ -1,0 +1,10 @@
+comptime {} else {
+    var cube: Array[Array[Array[bool]]] =
+        new[Array[Array[Array[bool]]]](2, 3, 3)
+    cube[0][2][2] = true
+    cube[1][0][0] = true
+    require cube[0][2][2]
+    require cube[1][0][0]
+    require !cube[0][0][0]
+    require !cube[1][2][2]
+}

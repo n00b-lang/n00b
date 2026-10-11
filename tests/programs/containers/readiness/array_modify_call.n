@@ -1,0 +1,11 @@
+func change(modify values: Array[int]) {
+    values[0] = 41
+}
+
+comptime {} else {
+    var original = [11, 29]'array
+    var copy = original
+    change(copy)
+    require copy[0] == 41
+    require original[0] == 11
+}

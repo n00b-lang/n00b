@@ -1,0 +1,36 @@
+type First {
+    value: int
+}
+
+type Second {
+    value: int
+}
+
+trait Transfer {
+    func transfer(modify self: `S, out result: int, value: int) -> nil
+}
+
+func transfer(modify self: First, out result: int, value: int) {
+    self.value = value
+    result = value + 1
+}
+
+func transfer(modify self: Second, out result: int, value: int) {
+    self.value = value + 2
+    result = value + 3
+}
+
+func apply(modify target: `S, value: int) -> int where `S: Transfer {
+    var result: int
+    target.transfer(result, value)
+    return result
+}
+
+comptime {} else {
+    var first: First = (value = 0)
+    var second: Second = (value = 0)
+    require apply(first, 10) == 11
+    require first.value == 10
+    require apply(second, 10) == 13
+    require second.value == 12
+}

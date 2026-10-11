@@ -41,7 +41,7 @@ public func cache_take(heap: Ref[builtin.gc.Heap], total: uint) -> Ref[builtin.g
     let first: uint = size_class(total)
     var index: uint = first
     while index <= first + 1 and index < builtin.gc.los_classes {
-        let slot: Ref[Ref[builtin.gc.Los_Obj]?] = ref heap.los_cache[cast[int](index)]
+        let slot: Ref[Ref[builtin.gc.Los_Obj]?] = ref heap.los_cache[index]
         let candidate: Ref[builtin.gc.Los_Obj]? = ref_read(slot)
         if candidate != nil {
             let object: Ref[builtin.gc.Los_Obj] = candidate.get()
@@ -59,7 +59,7 @@ public func cache_take(heap: Ref[builtin.gc.Heap], total: uint) -> Ref[builtin.g
 public func cache_drain(heap: Ref[builtin.gc.Heap]) {
     var index: uint = 0
     while index < builtin.gc.los_classes {
-        let slot: Ref[Ref[builtin.gc.Los_Obj]?] = ref heap.los_cache[cast[int](index)]
+        let slot: Ref[Ref[builtin.gc.Los_Obj]?] = ref heap.los_cache[index]
         var candidate: Ref[builtin.gc.Los_Obj]? = ref_read(slot)
         while candidate != nil {
             let object: Ref[builtin.gc.Los_Obj] = candidate.get()
@@ -94,12 +94,12 @@ public func release(heap: Ref[builtin.gc.Heap], object: Ref[builtin.gc.Los_Obj])
                 let end: Ref[byte] = __gc_byte_offset(object.mapping, object.bytes)
                 let bytes: int = __gc_byte_diff(end, payload)
                 require bytes >= 0
-                __gc_memset(payload, cast[byte](0xdb), cast[uint](bytes))
+                __gc_memset(payload, 0xdb, cast[uint](bytes))
             } else {
                 require false
             }
         }
-        let slot: Ref[Ref[builtin.gc.Los_Obj]?] = ref heap.los_cache[cast[int](index)]
+        let slot: Ref[Ref[builtin.gc.Los_Obj]?] = ref heap.los_cache[index]
         object.next = ref_read(slot)
         let cached: Ref[builtin.gc.Los_Obj]? = object
         ref_write(slot, cached)
@@ -114,7 +114,7 @@ public func allocate_locked(heap: Ref[builtin.gc.Heap],
                             mutator: Ref[builtin.gc.Mutator],
                             type_index: u32, payload_bytes: uint,
                             alignment: uint, finalizable: bool,
-                            instance_descriptor: Ref[byte]? = nil,
+                            instance_descriptor: Ref[builtin.abi.Array_Descriptor_Header]? = nil,
                             slot: Ref[Ref[byte]?]? = nil) -> Ref[byte]? {
     if type_index == 0 { return nil }
     let row: Ref[builtin.abi.Type_Record]? = builtin.abi.type_at(type_index)
@@ -156,7 +156,7 @@ public func allocate_locked(heap: Ref[builtin.gc.Heap],
                 builtin.gc.payload_of(header), payload_bytes, type_index,
                 instance_descriptor.get())
         }
-        header.meta = builtin.gc.meta_make(cast[u64](payload_bytes), flags)
+        header.meta = builtin.gc.meta_make(payload_bytes, flags)
         __atomic_store(ref reused.marked, epoch)
         builtin.gc.registry.region_set_type(heap, header, type_index)
     } elif !builtin.gc.over_max(heap, mapped_bytes) {
@@ -174,7 +174,7 @@ public func allocate_locked(heap: Ref[builtin.gc.Heap],
                     builtin.gc.payload_of(ref fresh.hdr), payload_bytes,
                     type_index, instance_descriptor.get())
             }
-            fresh.hdr.meta = builtin.gc.meta_make(cast[u64](payload_bytes),
+            fresh.hdr.meta = builtin.gc.meta_make(payload_bytes,
                 flags)
             __atomic_store(ref fresh.marked, epoch)
             if builtin.gc.registry.los_register(heap, fresh) {

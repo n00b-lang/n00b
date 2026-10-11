@@ -1,0 +1,15 @@
+import builtin.containers.dict
+
+comptime {} else {
+    var values: Dict[int, int] = new[Dict[int, int]]()
+    values[1] = 2
+    values[3] = 4
+    let first: int? = values[1]
+    require first != nil
+    require first.get() == 2
+    values[1] = 9
+    let updated: int? = values[1]
+    require updated != nil
+    require updated.get() == 9
+    require values[2] == nil
+}

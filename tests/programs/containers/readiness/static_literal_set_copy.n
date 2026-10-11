@@ -1,0 +1,13 @@
+import builtin.containers.set
+
+func make_values() -> Set[int] {
+    return {3, 5}'set
+}
+
+comptime {} else {
+    var first = make_values()
+    var second = make_values()
+    require builtin.containers.set.add(first, 11)
+    require builtin.containers.set.contains(first, 11)
+    require !builtin.containers.set.contains(second, 11)
+}

@@ -83,9 +83,12 @@ n00bb_abi_decl_index_new(const parse_symtab_t *symbols)
          scope = scope->all_next) {
         for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
              symbol = symbol->next_in_scope) {
-            if (symbol->is_synthetic || symbol->binding_origin
+            bool generated = parse_sym_binding(symbol,
+                CORE_STRING_STATIC("n00bb.generated-value-method")) != nullptr;
+            if ((symbol->is_synthetic && !generated) || symbol->binding_origin
                 || symbol->kind == PARSE_SYM_MODULE
-                || (!symbol->decl_node && !symbol->definition_count))
+                || (!symbol->decl_node && !symbol->definition_count
+                    && !generated))
                 continue;
             if (symbol->scope != scope || !add_scope_chain(index, scope)
                 || !core_indexed_table_intern(index->symbols, symbol,

@@ -137,7 +137,7 @@ public func scan_stack(marker: Ref[builtin.gc.Marker], sp: Ref[byte],
         start = frame.get()
         let caller: uint = stack_word_at(frame.get())
         if caller <= address or caller >= limit { break }
-        frame = __gc_byte_offset(frame.get(), cast[i128](caller - address))
+        frame = __gc_byte_offset(frame.get(), caller - address)
     }
     if limit > __abi_ref_address(start) {
         scan_words(marker, start, high)
@@ -160,7 +160,7 @@ func scan_native_frame(marker: Ref[builtin.gc.Marker], low: Ref[byte],
     index = 0
     while index < frame_info.root_count {
         let offset: i32 = builtin.abi.native_frame_root_offset(frame_info, index)
-        let slot: Ref[byte] = __gc_byte_offset(fp, cast[i128](offset))
+        let slot: Ref[byte] = __gc_byte_offset(fp, offset)
         builtin.gc.mark.mark_ambiguous(marker, stack_word_at(slot))
         marker.frame_slots += 1
         index += 1
@@ -174,7 +174,7 @@ func scan_context_registers(marker: Ref[builtin.gc.Marker],
     var index: uint = 0
     while index < snapshot.nregs {
         builtin.gc.mark.mark_ambiguous(marker,
-            snapshot.regs [cast[int](index)])
+            snapshot.regs [index])
         index += 1
     }
 }
@@ -336,7 +336,7 @@ public func drain_barrier_buffers(marker: Ref[builtin.gc.Marker]) {
         if mutator.write_buffer_epoch == heap.mark_epoch {
             var index: uint = 0
             while index < mutator.write_buffer_count {
-                let slot: Ref[Ref[byte]?] = ref mutator.write_buffer[cast[int](index)]
+                let slot: Ref[Ref[byte]?] = ref mutator.write_buffer[index]
                 builtin.gc.mark.mark_object(marker,
                     ref_read(slot))
                 index += 1
@@ -357,7 +357,7 @@ func mark_black_lines(block: Ref[builtin.gc.Block_Metadata], epoch: u32) {
     while word < word_count {
         var bits: u64 = __atomic_load_relaxed(builtin.gc.mark_word_at(base, word))
         while bits != 0 {
-            let bit: uint = cast[uint](__count_trailing_zeros(cast[uint](bits)))
+            let bit: uint = __count_trailing_zeros(cast[uint](bits))
             let granule: uint = word * builtin.gc.word_bits + bit
             let offset: uint = granule * builtin.gc.granule_bytes
             let header: Ref[builtin.gc.Object_Header] = builtin.gc.block_object_header_at(base, offset)
@@ -390,7 +390,7 @@ public func sweep_block(heap: Ref[builtin.gc.Heap], block: Ref[builtin.gc.Block_
         when debug_enabled() {
             var dead: u64 = starts & ~marks
             while dead != 0 {
-                let bit: uint = cast[uint](__count_trailing_zeros(cast[uint](dead)))
+                let bit: uint = __count_trailing_zeros(cast[uint](dead))
                 let offset: uint = (word * builtin.gc.word_bits + bit) * builtin.gc.granule_bytes
                 let header: Ref[builtin.gc.Object_Header] = builtin.gc.block_object_header_at(base, offset)
                 assert (header.meta & builtin.gc.obj_final) == 0
@@ -416,7 +416,7 @@ public func sweep_block(heap: Ref[builtin.gc.Heap], block: Ref[builtin.gc.Block_
             if heap.cfg.poison_free {
                 let line_base: Ref[byte] = __gc_byte_offset(base,
                     line * builtin.gc.line_bytes)
-                __gc_memset(line_base, cast[byte](0xdb), builtin.gc.line_bytes)
+                __gc_memset(line_base, 0xdb, builtin.gc.line_bytes)
             }
         }
         line += 1
@@ -558,7 +558,7 @@ public func begin_epoch_locked(heap: Ref[builtin.gc.Heap]) {
         __gc_memset(ref heap.cycle, 0,
             builtin.abi.size_bytes(row.get()))
     } else { require false }
-    heap.cycle.epoch = cast[u64](heap.mark_epoch)
+    heap.cycle.epoch = heap.mark_epoch
     heap.cycle.rounds = cast[u32](heap.hs_rounds)
     heap.cycle.stragglers = cast[u32](heap.hs_stragglers)
     heap.cycle_start = builtin.os.now_ns()

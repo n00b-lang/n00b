@@ -1,0 +1,25 @@
+type Pair {
+    first: bool
+    second: bool
+}
+
+func array_with(item: `T) -> Array[`T] {
+    var items: Array[`T] = new[Array[`T]](2)
+    items[0] = item
+    return items
+}
+
+func first(items: Array[`T]) -> `T {
+    return items[0]
+}
+
+comptime {} else {
+    let value: Pair = (first = false, second = true)
+    let items: Array[Pair] = array_with(value)
+    require first(items).second
+    require !first(items).first
+
+    var direct: Array[Pair] = new[Array[Pair]](1)
+    direct[0] = value
+    require direct[0].second
+}

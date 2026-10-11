@@ -1,0 +1,91 @@
+import builtin.containers.traits
+
+type Word {
+    text: int
+}
+
+type NumberMap {
+    key: int
+    value: int
+    present: bool
+}
+
+type WordMap {
+    key: bool
+    value: Word
+    present: bool
+}
+
+func get(self: NumberMap, key: int) -> int? {
+    if self.present and self.key == key { return self.value }
+    return nil
+}
+
+func put(modify self: NumberMap, key: int, value: int) -> int? {
+    var old: int? = nil
+    if self.present and self.key == key { old = self.value }
+    self.key = key
+    self.value = value
+    self.present = true
+    return old
+}
+
+func remove(modify self: NumberMap, key: int) -> bool {
+    if !self.present or self.key != key { return false }
+    self.present = false
+    return true
+}
+
+func contains(self: NumberMap, key: int) -> bool {
+    return self.present and self.key == key
+}
+
+func get(self: WordMap, key: bool) -> Word? {
+    if self.present and self.key == key { return self.value }
+    return nil
+}
+
+func put(modify self: WordMap, key: bool, value: Word) -> Word? {
+    var old: Word? = nil
+    if self.present and self.key == key { old = self.value }
+    self.key = key
+    self.value = value
+    self.present = true
+    return old
+}
+
+func remove(modify self: WordMap, key: bool) -> bool {
+    if !self.present or self.key != key { return false }
+    self.present = false
+    return true
+}
+
+func contains(self: WordMap, key: bool) -> bool {
+    return self.present and self.key == key
+}
+
+func store(modify table: `M, key: `K, value: `V) -> bool where `M: builtin.containers.traits.Associative {
+    _ = table.put(key, value)
+    _ = table.get(key)
+    return table.contains(key)
+}
+
+func erase(modify table: `M, key: `K) -> bool where `M: builtin.containers.traits.Associative {
+    return table.remove(key)
+}
+
+comptime {} else {
+    var numbers: NumberMap = (key = 0, value = 0, present = false)
+    require store(numbers, 4, 17)
+    require numbers.value == 17
+    require erase(numbers, 4)
+    require !numbers.present
+
+    let blank: Word = (text = 0)
+    let word: Word = (text = 23)
+    var words: WordMap = (key = false, value = blank, present = false)
+    require store(words, true, word)
+    require words.value.text == 23
+    require erase(words, true)
+    require !words.present
+}

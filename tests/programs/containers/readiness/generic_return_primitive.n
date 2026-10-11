@@ -1,0 +1,7 @@
+func identity(value: `T) -> `T {
+    return value
+}
+
+comptime {} else {
+    require identity(7) == 7
+}

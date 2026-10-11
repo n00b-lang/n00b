@@ -2272,13 +2272,20 @@ process_module(pp_context_t *ctx, core_translation_unit_t *unit,
     bool previous_cycle_warning = ctx->cycle_warning_emitted;
     ctx->unit = unit;
     ctx->cycle_warning_emitted = false;
-    if (ctx->options && ctx->options->load_implicit_import
-        && !ctx->options->load_implicit_import(
-            ctx->options->import_context, ctx->grammar, unit,
-            CORE_STRING_STATIC("builtin.io.debug"))) {
+    const core_string_t implicit_imports[] = {
+        CORE_STRING_STATIC("builtin.io.debug"),
+        CORE_STRING_STATIC("builtin.containers.list"),
+        CORE_STRING_STATIC("builtin.containers.dict"),
+        CORE_STRING_STATIC("builtin.containers.set"),
+    };
+    for (size_t i = 0; ctx->options && ctx->options->load_implicit_import
+         && i < sizeof(implicit_imports) / sizeof(implicit_imports[0]); i++) {
+        if (ctx->options->load_implicit_import(ctx->options->import_context,
+                ctx->grammar, unit, implicit_imports[i])) continue;
         if (!core_diagnostics_failed(core_translation_unit_diagnostics(unit)))
             pp_error(ctx, tree, "cannot load an implicit import");
         ctx->failed = true;
+        break;
     }
     core_list_t(pp_deferred_stmt_t) imports =
         core_list_new(pp_deferred_stmt_t);

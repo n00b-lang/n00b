@@ -1,0 +1,14 @@
+import builtin.containers.dict
+
+type Key {
+    value: int
+}
+
+func __equal(self: Key, other: Key) -> bool {
+    return self.value == other.value
+}
+
+comptime {} else {
+    let key: Key = (value = 7)
+    let map: Dict[Key, int] = {key: 1}
+}

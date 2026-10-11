@@ -7,6 +7,7 @@
 #include "lib/alloc.h"
 #include "lib/list.h"
 #include "parse/tree.h"
+#include "th/environment.h"
 
 core_list_decl(n00b_abi_trait_method_v1);
 
@@ -31,6 +32,7 @@ n00bb_abi_trait_method_rows_build(
     n00bb_abi_type_index_t *index,
     const n00bb_abi_type_identity_rows_t *types,
     const n00bb_abi_decl_index_t *declarations,
+    const th_env *environment,
     n00bb_abi_trait_method_rows_t *out)
 {
     if (!index || !types || !types->rows || !types->owners
@@ -40,8 +42,55 @@ n00bb_abi_trait_method_rows_build(
     core_list_push(rows, ((n00b_abi_trait_method_v1){0}));
     bool valid = true;
     for (size_t i = 1; valid && i < types->count; i++) {
-        if (types->rows[i].kind != N00B_ABI_TYPE_TRAIT
-            || !types->owners[i]) continue;
+        if (types->rows[i].kind != N00B_ABI_TYPE_TRAIT) continue;
+        if (!types->owners[i]) {
+            const th_type *trait = n00bb_abi_type_index_at(index, (uint32_t)i);
+            bool builtin = false;
+            for (size_t j = 0; environment
+                 && j < th_env_declaration_count(environment); j++) {
+                th_env_declaration_view_t declaration;
+                uint32_t declaration_index = 0;
+                if (!th_env_declaration_at(environment, j, &declaration)) {
+                    valid = false;
+                    break;
+                }
+                if (declaration.kind == TH_ENV_DECLARATION_TRAIT
+                    && declaration.module
+                    && !strcmp(declaration.module, "builtins")
+                    && declaration.contract
+                    && n00bb_abi_type_index_find(index,
+                        declaration.contract, &declaration_index)
+                    && declaration_index == i) builtin = true;
+            }
+            if (!valid) break;
+            if (!builtin) continue;
+            if (!trait || th_kind_of((th_type *)trait) != TH_TRAIT
+                || th_trait_len(trait) > UINT32_MAX) {
+                valid = false;
+                break;
+            }
+            for (size_t ordinal = 0; ordinal < th_trait_len(trait);
+                 ordinal++) {
+                const th_member *method = th_trait_method(trait, ordinal);
+                uint32_t signature_index = 0;
+                if (!method || !method->type
+                    || !n00bb_abi_type_index_find(index, method->type,
+                                                   &signature_index)
+                    || signature_index >= types->count
+                    || types->rows[signature_index].kind
+                        != N00B_ABI_TYPE_FUNCTION
+                    || rows.len >= UINT32_MAX) {
+                    valid = false;
+                    break;
+                }
+                core_list_push(rows, ((n00b_abi_trait_method_v1){
+                    .trait_type_index = (uint32_t)i,
+                    .declaration_ordinal = (uint32_t)ordinal,
+                    .signature_type_index = signature_index,
+                }));
+            }
+            continue;
+        }
         parse_sym_entry_t *owner = types->owners[i];
         th_type *trait = n00bb_abi_type_index_at(index, (uint32_t)i);
         if (!trait || th_kind_of(trait) != TH_TRAIT

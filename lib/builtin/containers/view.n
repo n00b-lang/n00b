@@ -1,0 +1,26 @@
+public type View {
+    items: Array[`T]
+    start_ix: int
+    end_ix: int
+}
+
+func __init(modify self: View[`T], consume items: Array[`T],
+            start_ix: int, end_ix: int) {
+    self.items = items
+    self.start_ix = start_ix
+    self.end_ix = end_ix
+}
+
+public func __slice(self: Array[`T], start_ix: int, end_ix: int) -> View[`T] {
+    var snapshot: Array[`T] = self
+    return new[View[`T]](snapshot, start_ix, end_ix)
+}
+
+public func __read(self: View[`T], index: int) -> `T {
+    require index >= 0 and index < self.end_ix - self.start_ix
+    return self.items[self.start_ix + index]
+}
+
+public func len(self: View[`T]) -> int {
+    return self.end_ix - self.start_ix
+}

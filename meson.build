@@ -11,7 +11,7 @@ project(
 
 lantern = dependency('ir', method: 'pkg-config', required: true)
 llvm = dependency('llvm', method: 'config-tool',
-                  modules: ['core', 'bitwriter', 'bitreader'], required: true)
+                  modules: ['core', 'bitwriter', 'bitreader', 'linker'], required: true)
 grammar_path = meson.current_source_dir() / 'grammar' / 'n00b.bnf'
 
 add_project_arguments(
@@ -31,27 +31,70 @@ runtime_abi_headers = lantern.partial_dependency(
     compile_args: true, includes: true,
 )
 
-runtime_abi_support = static_library(
-    'n00b-abi-runtime',
-    ['runtime_abi.c', 'runtime_allocate.c', 'runtime_abi_io.c',
+runtime_abi_sources = ['runtime_abi.c', 'runtime_allocate.c', 'runtime_abi_io.c',
+     'runtime_abi_box.c', 'runtime_abi_hash.c',
+     'runtime_literal_graph.c',
      'runtime_abi_storage.c', 'native_frame_runtime.c', 'builtin_os.c',
      'builtin_os_stw.c',
-     'builtin_abi.c', 'abi_directory.c', 'abi_string.c'],
+     'builtin_abi.c', 'abi_directory.c', 'abi_string.c']
+
+runtime_abi_support = static_library(
+    'n00b-abi-runtime', runtime_abi_sources,
     dependencies: runtime_abi_headers,
-    override_options: ['optimization=1'],
+    override_options: ['optimization=3'],
     install: true,
 )
 
+runtime_abi_lto = static_library(
+    'n00b-abi-runtime-lto', runtime_abi_sources,
+    dependencies: runtime_abi_headers,
+    override_options: ['optimization=3', 'b_lto=true'],
+)
+runtime_abi_bitcode = custom_target(
+    'n00b-abi-runtime-bitcode',
+    input: runtime_abi_lto,
+    output: 'libn00b-abi-runtime.bc',
+    command: [find_program('tools/merge_runtime_bitcode.sh'), '@INPUT@',
+              '@OUTPUT@', find_program('llvm-ar'), find_program('llvm-link')],
+    build_by_default: true,
+    install: true,
+    install_dir: get_option('libdir'),
+)
+
 comptime_allocate_support = static_library(
-    'n00b-comptime-allocate', 'comptime_allocate.c',
+    'n00b-comptime-allocate', ['comptime_allocate.c', 'comptime_graph.c'],
     dependencies: runtime_abi_headers,
 )
+
+comptime_allocate_test = executable(
+    'comptime-allocate-test', 'tests/comptime_allocate.c',
+    link_with: [comptime_allocate_support, runtime_abi_support],
+)
+
+test('comptime-allocate', comptime_allocate_test)
+
+abi_static_graph_test = executable(
+    'abi-static-graph-test',
+    ['tests/abi_static_graph.c', 'abi_static_graph.c'],
+    dependencies: lantern,
+)
+
+test('abi-static-graph', abi_static_graph_test)
+
+runtime_literal_graph_test = executable(
+    'runtime-literal-graph-test',
+    ['tests/runtime_literal_graph.c', 'runtime_literal_graph.c'],
+    dependencies: runtime_abi_headers,
+)
+test('runtime-literal-graph', runtime_literal_graph_test)
 
 n00bb_exe = executable(
     'n00bb',
     ['main.c', 'driver.c', 'preprocessor.c', 'rich_string.c', 'abi_string.c',
+     'specialize.c',
      'runtime_native_roots.c',
-     'abi_layout.c', 'abi_record_layout.c', 'abi_directory.c',
+     'abi_layout.c', 'abi_record_layout.c', 'abi_static_graph.c',
+     'abi_directory.c',
      'abi_container.c', 'abi_index_patch.c', 'abi_emit.c', 'abi_link.c',
      'abi_link_finish.c', 'abi_link_strings.c', 'abi_semantics.c',
      'abi_emit_strings.c',
@@ -94,6 +137,14 @@ runtime_abi_io_test = executable(
 )
 
 test('runtime-abi-io', runtime_abi_io_test)
+
+runtime_hash_test = executable(
+    'runtime-hash-test',
+    'tests/runtime_hash.c',
+    link_with: runtime_abi_support,
+)
+
+test('runtime-hash', runtime_hash_test)
 
 runtime_abi_test = executable(
     'runtime-abi-test',
@@ -371,6 +422,15 @@ llvm_frame_roots_test = executable(
     dependencies: [lantern, llvm],
 )
 test('llvm-frame-roots', llvm_frame_roots_test)
+
+test(
+    'lto-n00b', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'containers' / 'readiness' / 'dict_basic.n'],
+    suite: 'regression',
+)
 
 test(
     'builtin-os-n00b',
@@ -850,6 +910,15 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_array_index_write.n'],
+)
+
+test(
+    'array-uint-index-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'array_uint_index.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'],
+    suite: 'regression',
 )
 
 test(

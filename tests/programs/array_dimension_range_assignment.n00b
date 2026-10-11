@@ -4,4 +4,4 @@ comptime {
     extent = 2
 }
 
-var positive_assignment: int[extent] = new[int[extent]]()
+var positive_assignment: Array[int][extent] = new[Array[int][extent]]()

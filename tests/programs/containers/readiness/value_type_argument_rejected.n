@@ -1,0 +1,8 @@
+type Element {
+    value: int
+}
+
+const count: uint = 4
+
+func invalid(value: Element[count]) {
+}

@@ -1,0 +1,51 @@
+type Holder {
+    flag: bool
+    value: `T
+}
+
+type Plain {
+    flag: bool
+    value: `T
+}
+
+func __init(modify self: Holder[`T], flag: bool, value: `T) {
+    self.flag = flag
+    self.value = value
+}
+
+func make_holder(flag: bool, value: `T) -> Holder[`T] {
+    return new[Holder[`T]](flag, value)
+}
+
+func get(holder: Holder[`T]) -> `T {
+    return holder.value
+}
+
+func get_plain(holder: Plain[`T]) -> `T {
+    return holder.value
+}
+
+comptime {} else {
+    let booleans: Holder[bool] = make_holder(false, true)
+    require get(booleans)
+    let bool_literal: Plain[bool] = (flag = false, value = true)
+    require get_plain(bool_literal)
+
+    let numbers: Holder[int] = make_holder(true, 12)
+    require get(numbers) == 12
+    let int_literal: Plain[int] = (flag = true, value = 12)
+    require get_plain(int_literal) == 12
+
+    let wide: Holder[bits:64] = make_holder(false, cast[bits:64] 42)
+    require get(wide) == cast[bits:64] 42
+    let wide_literal: Plain[bits:64] = (flag = true,
+        value = cast[bits:64] 51)
+    require get_plain(wide_literal) == cast[bits:64] 51
+
+    let packed_wide: Holder[bits:127] = make_holder(false,
+        cast[bits:127] 43)
+    require get(packed_wide) == cast[bits:127] 43
+    let packed_wide_literal: Plain[bits:127] = (flag = true,
+        value = cast[bits:127] 52)
+    require get_plain(packed_wide_literal) == cast[bits:127] 52
+}

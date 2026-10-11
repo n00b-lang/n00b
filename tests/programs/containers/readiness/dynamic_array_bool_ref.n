@@ -1,0 +1,14 @@
+func flip(target: Ref[bool]) {
+    let old: bool = ref_read(target)
+    ref_write(target, !old)
+}
+
+comptime {} else {
+    var grid: Array[Array[bool]] = new[Array[Array[bool]]](2, 3)
+    let cell: Ref[bool] = ref grid[1][0]
+    flip(cell)
+    require grid[1][0]
+    require !grid[0][2]
+    flip(cell)
+    require !grid[1][0]
+}

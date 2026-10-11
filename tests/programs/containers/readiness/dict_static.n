@@ -1,0 +1,10 @@
+import builtin.containers.dict
+
+const pairs: Dict[int, int] = {1: 2}'dict
+
+comptime {} else {
+    require builtin.containers.dict.len(pairs) == 1
+    let found: int? = builtin.containers.dict.get(pairs, 1)
+    require found != nil
+    require found.get() == 2
+}

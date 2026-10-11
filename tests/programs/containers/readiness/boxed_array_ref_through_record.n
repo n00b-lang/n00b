@@ -1,0 +1,37 @@
+type Entry {
+    value: `T
+}
+
+type Carrier {
+    items: Array[Entry[`T]]
+}
+
+type Payload {
+    left: int
+    right: int
+}
+
+func first(self: Carrier[`T]) -> `T {
+    let entry: Ref[Entry[`T]] = ref self.items[0]
+    return entry.value
+}
+
+comptime {} else {
+    var numbers: Array[Entry[int]] = new[Array[Entry[int]]](1)
+    numbers[0] = (value = 7)
+    let number_carrier: Carrier[int] = (items = numbers)
+    require first(number_carrier) == 7
+
+    var records: Array[Entry[Payload]] = new[Array[Entry[Payload]]](2)
+    let initial_entry: Entry[Payload] =
+        (value = (left = 11, right = 13))
+    records[0] = initial_entry
+    records[1] = (value = (left = 17, right = 19))
+    let second: Entry[Payload] = records[1]
+    require second.value.left == 17
+    require second.value.right == 19
+    let record_carrier: Carrier[Payload] = (items = records)
+    let payload: Payload = first(record_carrier)
+    require payload.left == 11
+    require payload.right == 13
+}

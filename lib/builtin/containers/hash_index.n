@@ -1,0 +1,172 @@
+public type Hash_Index_Slot {
+    hash_hi: u64
+    hash_lo: u64
+    entry: uint
+}
+
+public type Hash_Index {
+    slots: Array[Hash_Index_Slot]
+    count: uint
+}
+
+public func __init(modify self: Hash_Index) {
+    self.slots = new[Array[Hash_Index_Slot]](0)
+    self.count = 0
+}
+
+public inline func capacity(self: Hash_Index) -> uint {
+    return __array_length(self.slots)
+}
+
+public inline func home(hash: u128, capacity: uint) -> uint {
+    require capacity > 0 and (capacity & (capacity - 1)) == 0
+    return cast[uint]((hash ^ (hash >> 64)) & cast[u128](capacity - 1))
+}
+
+inline func slot_hash(slot: Hash_Index_Slot) -> u128 {
+    return (cast[u128](slot.hash_hi) << 64) | cast[u128](slot.hash_lo)
+}
+
+inline func make_slot(hash: u128, entry: uint) -> Hash_Index_Slot {
+    let slot: Hash_Index_Slot =
+        (hash_hi = cast[u64](hash >> 64),
+         hash_lo = cast[u64](hash & cast[u128]0xffffffffffffffff),
+         entry = entry)
+    return slot
+}
+
+inline func distance(at: uint, hash: u128, size: uint) -> uint {
+    let start: uint = home(hash, size)
+    if at >= start { return at - start }
+    return size - (start - at)
+}
+
+public inline func find_slot(index: Ref[Hash_Index], hash: u128) -> uint? {
+    let size: uint = __array_length(index.slots)
+    if size == 0 { return nil }
+    var at: uint = home(hash, size)
+    var traveled: uint = 0
+    while traveled < size {
+        let slot: Hash_Index_Slot = index.slots[at]
+        if slot.entry == 0 { return nil }
+        let resident_hash: u128 = slot_hash(slot)
+        if resident_hash == hash { return at }
+        if distance(at, resident_hash, size) < traveled { return nil }
+        at = (at + 1) & (size - 1)
+        traveled += 1
+    }
+    return nil
+}
+
+public inline func index_insert(modify self: Hash_Index, hash: u128, entry: uint) {
+    let size: uint = capacity(self)
+    require size > self.count
+    var current: Hash_Index_Slot = make_slot(hash, entry + 1)
+    var at: uint = home(hash, size)
+    var traveled: uint = 0
+    while true {
+        let existing: Hash_Index_Slot = self.slots[at]
+        if existing.entry == 0 {
+            self.slots[at] = current
+            self.count += 1
+            return
+        }
+        let existing_distance: uint = distance(at, slot_hash(existing), size)
+        if existing_distance < traveled {
+            self.slots[at] = current
+            current = existing
+            traveled = existing_distance
+        }
+        at = (at + 1) & (size - 1)
+        traveled += 1
+    }
+}
+
+public inline func index_insert_unique(modify self: Hash_Index, hash: u128,
+                                       entry: uint) -> bool {
+    let size: uint = capacity(self)
+    require size > self.count
+    var current: Hash_Index_Slot = make_slot(hash, entry + 1)
+    var at: uint = home(hash, size)
+    var traveled: uint = 0
+    var check_duplicate: bool = true
+    while traveled < size {
+        let existing: Hash_Index_Slot = self.slots[at]
+        if existing.entry == 0 {
+            self.slots[at] = current
+            self.count += 1
+            return true
+        }
+        let resident_hash: u128 = slot_hash(existing)
+        if check_duplicate and resident_hash == hash { return false }
+        let existing_distance: uint = distance(at, resident_hash, size)
+        if existing_distance < traveled {
+            self.slots[at] = current
+            current = existing
+            traveled = existing_distance
+            // Lookup would stop at this displacement, so a duplicate cannot follow.
+            check_duplicate = false
+        }
+        at = (at + 1) & (size - 1)
+        traveled += 1
+    }
+    require false
+    return false
+}
+
+public inline func has_room(self: Hash_Index, additional: uint) -> bool {
+    let size: uint = capacity(self)
+    return size != 0 and (self.count + additional) * 4 <= size * 3
+}
+
+public func ensure_capacity(modify self: Hash_Index, additional: uint) {
+    let size: uint = capacity(self)
+    if has_room(self, additional) { return }
+    var next_size: uint = 16
+    if size != 0 { next_size = size * 2 }
+    let previous: Array[Hash_Index_Slot] = self.slots
+    self.slots = new[Array[Hash_Index_Slot]](cast[int] next_size)
+    self.count = 0
+    var at: uint = 0
+    while at < size {
+        let slot: Hash_Index_Slot = previous[at]
+        if slot.entry != 0 { index_insert(self, slot_hash(slot), slot.entry - 1) }
+        at += 1
+    }
+}
+
+public func remove_at(modify self: Hash_Index, slot: uint) {
+    let size: uint = capacity(self)
+    require size > 0
+    require self.slots[slot].entry != 0
+    var hole: uint = slot
+    var next: uint = (hole + 1) & (size - 1)
+    while true {
+        let occupied: Hash_Index_Slot = self.slots[next]
+        if occupied.entry == 0 or distance(next, slot_hash(occupied), size) == 0 {
+            break
+        }
+        self.slots[hole] = occupied
+        hole = next
+        next = (next + 1) & (size - 1)
+    }
+    let empty: Hash_Index_Slot = make_slot(0, 0)
+    self.slots[hole] = empty
+    self.count -= 1
+}
+
+public func replace_entry(modify self: Hash_Index, hash: u128,
+                          old_entry: uint, new_entry: uint) {
+    let size: uint = capacity(self)
+    require size > 0
+    var at: uint = home(hash, size)
+    while true {
+        let slot: Hash_Index_Slot = self.slots[at]
+        require slot.entry != 0
+        if slot.entry == old_entry + 1 and slot_hash(slot) == hash {
+            self.slots[at] = make_slot(hash, new_entry + 1)
+            return
+        }
+        at = (at + 1) & (size - 1)
+    }
+}

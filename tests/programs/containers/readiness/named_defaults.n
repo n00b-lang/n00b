@@ -1,0 +1,9 @@
+func choose(value: int, front: bool = false) -> int {
+    if front { return value + 1 }
+    return value
+}
+
+comptime {} else {
+    require choose(7) == 7
+    require choose(7, front = true) == 8
+}

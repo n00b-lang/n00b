@@ -19,6 +19,13 @@ int32_t n00bb_comptime_emit_nested_array(
     const n00b_abi_array_descriptor_header_v1 *descriptor,
     uint32_t inner_stride, const uint8_t *byte_mask);
 
+int32_t n00bb_comptime_emit_record_array(
+    int32_t fd, const void *record, uint32_t record_size,
+    uint32_t array_offset, const void *data,
+    const n00b_abi_array_descriptor_header_v1 *descriptor,
+    uint32_t stride, const uint32_t *string_offsets, uint32_t offset_count,
+    const uint8_t *byte_mask);
+
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -131,6 +138,33 @@ int main(void)
         .header = {.total_count = 1, .rank = 1, .flat_rank = 1},
         .extent = 1,
     };
+    uint64_t item = 17;
+    struct {
+        n00b_abi_array_value_v1 items;
+        uint64_t count;
+    } record = {{&item, &descriptor.header}, 1};
+    assert(n00bb_comptime_emit_record_array(fds[1], &record,
+        sizeof(record), 0, &item, &descriptor.header, sizeof(item),
+        NULL, 0, NULL) == 0);
+    uint8_t serialized_record[sizeof(uint64_t) + sizeof(record)
+                              + sizeof(uint64_t) + sizeof(item)];
+    assert(read(fds[0], serialized_record, sizeof(serialized_record))
+        == sizeof(serialized_record));
+    uint64_t record_word = 0;
+    memcpy(&record_word, serialized_record, sizeof(record_word));
+    assert(record_word == 1);
+    for (size_t i = sizeof(uint64_t);
+         i < sizeof(uint64_t) + sizeof(n00b_abi_array_value_v1); i++)
+        assert(serialized_record[i] == 0);
+    memcpy(&record_word, serialized_record + sizeof(uint64_t)
+        + sizeof(n00b_abi_array_value_v1), sizeof(record_word));
+    assert(record_word == 1);
+    memcpy(&record_word, serialized_record + sizeof(uint64_t)
+        + sizeof(record), sizeof(record_word));
+    assert(record_word == 1);
+    memcpy(&record_word, serialized_record + sizeof(uint64_t)
+        + sizeof(record) + sizeof(uint64_t), sizeof(record_word));
+    assert(record_word == item);
     uint8_t element[48];
     uint8_t mask[sizeof(element)] = {0};
     memset(element, 0xa5, sizeof(element));

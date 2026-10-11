@@ -1,0 +1,14 @@
+import default_scope_dep
+
+const fallback: int = 99
+
+comptime {} else {
+    require default_scope_dep.choose(7) == 7
+    require default_scope_dep.choose(7, selected = 11) == 11
+    var source: int = 13
+    let pointer: Ref[int] = ref source
+    let selected: Ref[int] = default_scope_dep.choose(pointer)
+    require ref_read(selected) == 13
+    let chained: Ref[int] = default_scope_dep.chain(pointer)
+    require ref_read(chained) == 13
+}

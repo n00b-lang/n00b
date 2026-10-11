@@ -1,0 +1,16 @@
+func first(items: Array[`T]) -> `T {
+    return items[0]
+}
+
+func at(items: Array[`T], index: int) -> `T {
+    return items[index]
+}
+
+comptime {} else {
+    let flags: Array[bool] = [true, false, false, false, false,
+                              false, false, true, false, true]'array
+    require first(flags)
+    require at(flags, 7)
+    require at(flags, 8) == false
+    require at(flags, -1)
+}

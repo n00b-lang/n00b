@@ -18,6 +18,7 @@ bool n00bb_abi_trait_method_rows_build(
     n00bb_abi_type_index_t *index,
     const n00bb_abi_type_identity_rows_t *types,
     const n00bb_abi_decl_index_t *declarations,
+    const th_env *environment,
     n00bb_abi_trait_method_rows_t *out);
 bool n00bb_abi_trait_method_rows_attach(
     n00bb_abi_type_identity_rows_t *types,

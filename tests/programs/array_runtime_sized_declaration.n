@@ -1,4 +1,4 @@
 func allocate(count: uint) -> Array[byte] {
-    var bytes: byte[count] = new[byte[count]]()
+    var bytes: Array[byte][count] = new[Array[byte][count]]()
     return bytes
 }

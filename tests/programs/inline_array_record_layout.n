@@ -1,11 +1,11 @@
 public type Block layout(c) {
-    public marks: byte[4]
-    public bits: Atomic[u64][2]
+    public marks: Array[byte][4]
+    public bits: Array[Atomic[u64]][2]
 }
 
 public type Plain {
-    public marks: byte[4]
-    public bits: Atomic[u64][2]
+    public marks: Array[byte][4]
+    public bits: Array[Atomic[u64]][2]
 }
 
 public func first_mark(block: Ref[Block]) -> Ref[byte] {

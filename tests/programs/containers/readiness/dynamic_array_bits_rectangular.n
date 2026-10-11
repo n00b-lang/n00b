@@ -1,0 +1,15 @@
+comptime {} else {
+    var grid: Array[Array[bits:5]] = new[Array[Array[bits:5]]](3, 3)
+    grid[0][2] = cast[bits:5] 7
+    grid[1][0] = cast[bits:5] 11
+    grid[2][2] = cast[bits:5] 23
+    require grid[0][2] == cast[bits:5] 7
+    require grid[1][0] == cast[bits:5] 11
+    require grid[2][2] == cast[bits:5] 23
+    let cell: Ref[bits:5] = ref grid[1][0]
+    ref_write(cell, cast[bits:5] 19)
+    require ref_read(cell) == cast[bits:5] 19
+    grid[0] = grid[2]
+    require grid[0][2] == cast[bits:5] 23
+    require grid[1][0] == cast[bits:5] 19
+}

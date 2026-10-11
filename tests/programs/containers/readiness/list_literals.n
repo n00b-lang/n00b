@@ -1,0 +1,10 @@
+comptime {} else {
+    let first: List[int] = [1, 2]'list
+    let second: List[int] = [3, 4]'l
+    let empty: List[int] = []
+    require builtin.containers.list.len(first) == 2
+    require builtin.containers.list.len(second) == 2
+    require builtin.containers.list.len(empty) == 0
+    require first[0] == 1
+    require second[1] == 4
+}

@@ -1,1 +1,1 @@
-var invalid_order: int[][6]
+var invalid_order: Array[int][][6]

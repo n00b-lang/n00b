@@ -7,6 +7,7 @@
 #include "ir/typelang.h"
 #include "lib/alloc.h"
 #include "lib/list.h"
+#include "th/environment.h"
 #include "abi_layout.h"
 #include "enum_value.h"
 #include "flagset_value.h"
@@ -93,8 +94,10 @@ type_category(ir_module_t *module, th_type *type,
                  || name_is(name, name_len, "Option"))
             row->kind = N00B_ABI_TYPE_OPTION;
         else if (name_is(name, name_len, "ref")
-                 || name_is(name, name_len, "Ref"))
+                 || name_is(name, name_len, "Ref")) {
             row->kind = N00B_ABI_TYPE_REFERENCE;
+            row->flags |= N00B_ABI_TYPE_FLAG_PLAIN_REF;
+        }
         else if (name_is(name, name_len, "atomic")
                  || name_is(name, name_len, "Atomic"))
             row->kind = N00B_ABI_TYPE_ATOMIC;
@@ -129,9 +132,13 @@ type_category(ir_module_t *module, th_type *type,
         }
         return true;
     }
-    case TH_INDIRECTION:
+    case TH_INDIRECTION: {
+        uint8_t attrs = 0;
+        if (!th_ind_attrs(type, &attrs)) return false;
         row->kind = N00B_ABI_TYPE_REFERENCE;
+        if (!attrs) row->flags |= N00B_ABI_TYPE_FLAG_PLAIN_REF;
         return true;
+    }
     case TH_SEQUENCE:
         row->kind = N00B_ABI_TYPE_ARRAY;
         return true;
@@ -166,7 +173,8 @@ type_category(ir_module_t *module, th_type *type,
 bool
 n00bb_abi_type_identity_rows_build(
     n00bb_abi_type_index_t *index, ir_module_t *comptime,
-    ir_module_t *runtime, const parse_symtab_t *symbols,
+    ir_module_t *runtime, bool include_external_definitions,
+    const parse_symtab_t *symbols,
     n00bb_abi_type_owner_lookup_fn lookup, void *lookup_context,
     n00bb_abi_name_pool_t *names, n00bb_abi_type_identity_rows_t *out)
 {
@@ -199,7 +207,10 @@ n00bb_abi_type_identity_rows_build(
     }
     th_ctx *types = ir_module_types(runtime);
     bool valid = types != nullptr;
+    size_t failing_index = SIZE_MAX;
+    const char *failed_reason = "type category";
     for (size_t i = 0; valid && i < count; i++) {
+        failing_index = i;
         th_type *type = n00bb_abi_type_index_at(index, (uint32_t)i);
         parse_sym_entry_t *owner = owners[i];
         parse_sym_entry_t *category_owner = owner ? owner
@@ -208,7 +219,10 @@ n00bb_abi_type_identity_rows_build(
         valid = type && type_category(runtime, type, category_owner, row);
         if (!valid) break;
         if (row->kind == N00B_ABI_TYPE_VARIABLE) continue;
-        const char *spelling = th_print(types, type);
+        failed_reason = "canonical type name";
+        th_print_options_t print_options = {.omit_constraints = true};
+        const char *spelling = th_print_with_options(types, type,
+                                                     &print_options);
         valid = spelling && n00bb_abi_name_pool_encode(names,
                 core_string_borrow(spelling, strlen(spelling)),
                 N00B_ABI_TABLE_TYPE,
@@ -217,6 +231,7 @@ n00bb_abi_type_identity_rows_build(
         if (!valid) break;
         row->typehash = th_hash(types, type);
         if (th_kind_of(type) == TH_NAMED) {
+            failed_reason = "named constructor";
             const char *constructor = nullptr;
             size_t constructor_bytes = 0;
             valid = th_named_info(type, &constructor, &constructor_bytes,
@@ -237,6 +252,7 @@ n00bb_abi_type_identity_rows_build(
             if (n) row->named_arguments = (n00b_abi_range_v1){
                 .first = (uint32_t)arguments.len, .count = (uint32_t)n,
             };
+            failed_reason = "named type argument";
             for (size_t ordinal = 0; valid && ordinal < n; ordinal++) {
                 const th_arg *arg = th_named_arg(type, ordinal);
                 n00b_abi_type_argument_v1 value = {
@@ -276,6 +292,7 @@ n00bb_abi_type_identity_rows_build(
             if (!valid) break;
         }
         if (category_owner && row->kind == N00B_ABI_TYPE_ENUM) {
+            failed_reason = "enum range";
             const n00bb_enum_range_t *range = parse_sym_binding(category_owner,
                 CORE_STRING_STATIC("n00bb.enum-range"));
             uint64_t width = range
@@ -289,6 +306,7 @@ n00bb_abi_type_identity_rows_build(
                 row->flags |= N00B_ABI_TYPE_FLAG_SIGNED;
         }
         if (category_owner && row->kind == N00B_ABI_TYPE_FLAGSET) {
+            failed_reason = "flagset information";
             const n00bb_flagset_info_t *info = parse_sym_binding(
                 category_owner, CORE_STRING_STATIC("n00bb.flagset-info"));
             if (!info || !info->atomic_count || info->atomic_count > 128) {
@@ -297,21 +315,40 @@ n00bb_abi_type_identity_rows_build(
             }
             row->semantic_width_bits = info->atomic_count;
         }
-        if (!th_is_closed(types, type))
+        parse_sym_entry_t *declaration_owner = owner;
+        if (!declaration_owner && category_owner && category_owner->type
+            && th_hash(types, type) ==
+                th_hash(types, category_owner->type))
+            declaration_owner = category_owner;
+        n00bb_signature_typevars_t *type_parameters = declaration_owner
+            && declaration_owner->kind == PARSE_SYM_TYPEDEF
+            ? parse_sym_binding(declaration_owner, N00BB_SIGNATURE_TYPEVARS_KEY)
+            : nullptr;
+        if (!th_is_closed(types, type)
+            || (type_parameters && type_parameters->len))
             row->flags |= N00B_ABI_TYPE_FLAG_NON_CONCRETE;
         ir_module_t *definition_owner = ir_type_definition_owner(runtime,
             type);
-        bool external = !owner && definition_owner
-            && definition_owner != runtime && definition_owner != comptime
+        size_t named_arguments = 0;
+        bool specialization = th_named_info(th_resolve(type), nullptr,
+            nullptr, nullptr, &named_arguments) && named_arguments != 0;
+        bool external = !include_external_definitions && !owner
+            && definition_owner && definition_owner != runtime
+            && definition_owner != comptime
             && row->kind != N00B_ABI_TYPE_ATOMIC;
-        const ir_final_layout_t *final = external ? nullptr
-            : ir_layout_final(runtime, type, ir_module_target(runtime));
-        const ir_final_layout_t *compile_layout = external || !comptime
-            ? nullptr
-            : ir_layout_final(comptime, type, ir_module_target(runtime));
+        const ir_final_layout_t *final = ir_layout_final(runtime, type,
+            ir_module_target(runtime));
+        const ir_final_layout_t *compile_layout = comptime
+            ? ir_layout_final(comptime, type, ir_module_target(runtime))
+            : nullptr;
+        if (external && (!specialization || (!final && !compile_layout))) {
+            final = nullptr;
+            compile_layout = nullptr;
+        }
         if (final && compile_layout
             && (final->intrinsic_bits != compile_layout->intrinsic_bits
                 || final->alignment_bytes != compile_layout->alignment_bytes)) {
+            failed_reason = "conflicting phase layouts";
             valid = false;
             break;
         }
@@ -330,6 +367,7 @@ n00bb_abi_type_identity_rows_build(
                 || row->kind == N00B_ABI_TYPE_FLAGSET
                 || row->kind == N00B_ABI_TYPE_ATOMIC) {
                 if (final->intrinsic_bits > UINT32_MAX) {
+                    failed_reason = "primitive storage width";
                     valid = false;
                     break;
                 }
@@ -341,6 +379,7 @@ n00bb_abi_type_identity_rows_build(
                     ir_layout_bit_run_t run = final->occupied[j];
                     if (run.offset > final->intrinsic_bits
                         || run.width > final->intrinsic_bits - run.offset) {
+                        failed_reason = "atomic occupied range";
                         valid = false;
                         break;
                     }
@@ -348,6 +387,7 @@ n00bb_abi_type_identity_rows_build(
                         semantic_bits = run.offset + run.width;
                 }
                 if (!valid || !semantic_bits || semantic_bits > UINT32_MAX) {
+                    failed_reason = "atomic semantic width";
                     valid = false;
                     break;
                 }
@@ -358,6 +398,9 @@ n00bb_abi_type_identity_rows_build(
             row->alignment_bytes = 1;
     }
     if (!valid || rows[0].kind != N00B_ABI_TYPE_NIL) {
+        out->failed_type_index = failing_index < count
+            ? (uint32_t)failing_index : 0;
+        out->failed_reason = failed_reason;
         core_free(owners);
         core_free(rows);
         core_list_free(arguments);
@@ -365,6 +408,7 @@ n00bb_abi_type_identity_rows_build(
     }
     *out = (n00bb_abi_type_identity_rows_t){
         .rows = rows, .owners = owners, .count = count,
+        .owner_lookup = lookup, .owner_lookup_context = lookup_context,
         .arguments = arguments.data, .argument_count = arguments.len,
     };
     return true;
@@ -373,8 +417,10 @@ n00bb_abi_type_identity_rows_build(
 bool
 n00bb_abi_type_variables_bind_import(n00bb_abi_type_index_t *index,
     th_ctx *types, const parse_sym_entry_t *symbol, th_type *signature,
-    uint32_t requirement_index, n00bb_abi_type_identity_rows_t *rows)
+    uint32_t requirement_index, n00bb_abi_type_identity_rows_t *rows,
+    const char **reason)
 {
+    if (reason) *reason = "invalid import type-variable binding";
     if (!index || !types || !symbol || !signature || !requirement_index
         || !rows || !rows->rows
         || rows->count != n00bb_abi_type_index_count(index)) return false;
@@ -385,19 +431,33 @@ n00bb_abi_type_variables_bind_import(n00bb_abi_type_index_t *index,
     for (size_t ordinal = 0; variables && ordinal < variables->len;
          ordinal++) {
         th_type *variable = variables->data[ordinal].type;
-        if (!variable) return false;
+        if (!variable) {
+            if (reason) *reason = "missing declared type variable";
+            return false;
+        }
         variable = th_resolve(variable);
         if (th_kind_of(variable) != TH_VAR) continue;
         uint32_t type_index = 0;
         if (!n00bb_abi_type_index_find(index, variable, &type_index))
             continue;
         n00b_abi_type_v1 *row = &rows->rows[type_index];
-        if (row->kind != N00B_ABI_TYPE_VARIABLE
-            || row->typevar_owner_scope_index
-            || (row->typevar_import_requirement_index
-                && (row->typevar_import_requirement_index
-                    != requirement_index || row->typevar_ordinal != ordinal)))
+        if (row->kind != N00B_ABI_TYPE_VARIABLE) {
+            if (reason) *reason = "declared type variable resolves to a non-variable type";
             return false;
+        }
+        if (row->typevar_owner_scope_index) {
+            if (reason) *reason = "declared type variable has a local declaration owner";
+            return false;
+        }
+        if (row->typevar_import_requirement_index
+            && (row->typevar_import_requirement_index != requirement_index
+                || row->typevar_ordinal != ordinal)) {
+            if (reason) *reason = th_resolve(variable)
+                == th_resolve(n00bb_abi_type_index_at(index, type_index))
+                ? "declared type variable belongs to another import"
+                : "distinct imported type variables share a catalog row";
+            return false;
+        }
         row->typevar_import_requirement_index = requirement_index;
         row->typevar_ordinal = (uint32_t)ordinal;
     }
@@ -406,17 +466,29 @@ n00bb_abi_type_variables_bind_import(n00bb_abi_type_index_t *index,
     size_t next_ordinal = variables ? variables->len : 0;
     for (size_t i = 0; i < free_count; i++) {
         uint32_t type_index = 0;
-        if (!n00bb_abi_type_index_find(index, free_vars[i], &type_index))
+        if (!n00bb_abi_type_index_find(index, free_vars[i], &type_index)) {
+            if (symbol->kind == PARSE_SYM_TYPEDEF || symbol->owner_type)
+                continue;
+            if (reason) *reason = "free type variable missing from catalog";
             return false;
+        }
         n00b_abi_type_v1 *row = &rows->rows[type_index];
         if (row->kind != N00B_ABI_TYPE_VARIABLE
-            || row->typevar_owner_scope_index) return false;
+            || row->typevar_owner_scope_index) {
+            if (reason) *reason = "free type variable has a declaration owner";
+            return false;
+        }
         if (row->typevar_import_requirement_index) {
-            if (row->typevar_import_requirement_index != requirement_index)
+            if (row->typevar_import_requirement_index != requirement_index) {
+                if (reason) *reason = "free type variable belongs to another import";
                 return false;
+            }
             continue;
         }
-        if (next_ordinal > UINT32_MAX) return false;
+        if (next_ordinal > UINT32_MAX) {
+            if (reason) *reason = "too many free type variables";
+            return false;
+        }
         row->typevar_import_requirement_index = requirement_index;
         row->typevar_ordinal = (uint32_t)next_ordinal++;
     }
@@ -426,10 +498,41 @@ n00bb_abi_type_variables_bind_import(n00bb_abi_type_index_t *index,
 bool
 n00bb_abi_type_variables_bind(n00bb_abi_type_index_t *index, th_ctx *types,
     const n00bb_abi_decl_index_t *declarations,
-    n00bb_abi_type_identity_rows_t *rows)
+    n00bb_abi_type_identity_rows_t *rows, const char **reason)
 {
+    if (reason) *reason = "invalid local type-variable binding";
     if (!index || !types || !declarations || !rows || !rows->rows
         || rows->count != n00bb_abi_type_index_count(index)) return false;
+    const th_env *environment = th_ctx_environment(types);
+    for (size_t i = 0; environment
+         && i < th_env_declaration_count(environment); i++) {
+        th_env_declaration_view_t declaration;
+        if (!th_env_declaration_at(environment, i, &declaration)) return false;
+        if (declaration.kind != TH_ENV_DECLARATION_TRAIT
+            || !declaration.module
+            || strcmp(declaration.module, "builtins")
+            || !declaration.contract
+            || th_kind_of(th_resolve(declaration.contract)) != TH_TRAIT)
+            continue;
+        uint32_t owner_index = 0;
+        if (!n00bb_abi_type_index_find(index, declaration.contract,
+                                       &owner_index)) return false;
+        th_type **variables = nullptr;
+        size_t count = th_free_vars(types, declaration.contract, &variables);
+        if (count > UINT32_MAX) return false;
+        for (size_t ordinal = 0; ordinal < count; ordinal++) {
+            uint32_t type_index = 0;
+            if (!n00bb_abi_type_index_find(index, variables[ordinal],
+                                           &type_index)) return false;
+            n00b_abi_type_v1 *row = &rows->rows[type_index];
+            if (row->kind != N00B_ABI_TYPE_VARIABLE
+                || row->typevar_owner_scope_index
+                || row->typevar_import_requirement_index) return false;
+            if (row->typevar_owner_trait_index) continue;
+            row->typevar_owner_trait_index = owner_index;
+            row->typevar_ordinal = (uint32_t)ordinal;
+        }
+    }
     for (size_t i = 1; i < n00bb_abi_decl_symbol_count(declarations); i++) {
         parse_sym_entry_t *symbol = n00bb_abi_decl_symbol_at(declarations,
             (uint32_t)i);
@@ -456,7 +559,12 @@ n00bb_abi_type_variables_bind(n00bb_abi_type_index_t *index, th_ctx *types,
                 || row->typevar_import_requirement_index
                 || (row->typevar_owner_scope_index
                     && (row->typevar_owner_scope_index != scope_index
-                        || row->typevar_ordinal != ordinal))) return false;
+                        || row->typevar_ordinal != ordinal))) {
+                if (reason) *reason = row->typevar_import_requirement_index
+                    ? "local type variable is owned by an imported function"
+                    : "local type variable has a conflicting declaration owner";
+                return false;
+            }
             row->typevar_owner_scope_index = scope_index;
             row->typevar_ordinal = (uint32_t)ordinal;
         }
@@ -478,11 +586,17 @@ n00bb_abi_type_variables_bind(n00bb_abi_type_index_t *index, th_ctx *types,
         uint32_t scope_index = 0;
         for (size_t i = 0; i < free_count; i++) {
             uint32_t type_index = 0;
-            if (!n00bb_abi_type_index_find(index, free_vars[i], &type_index))
+            if (!n00bb_abi_type_index_find(index, free_vars[i], &type_index)) {
+                if (reason) *reason = "local function type variable missing from catalog";
                 return false;
+            }
             n00b_abi_type_v1 *row = &rows->rows[type_index];
-            if (row->kind != N00B_ABI_TYPE_VARIABLE) return false;
+            if (row->kind != N00B_ABI_TYPE_VARIABLE) {
+                if (reason) *reason = "local function variable has non-variable type";
+                return false;
+            }
             if (row->typevar_owner_scope_index
+                || row->typevar_owner_trait_index
                 || row->typevar_import_requirement_index) continue;
             if (!scope_index) {
                 parse_scope_t *scope = core_tree_node_value(
@@ -498,7 +612,11 @@ n00bb_abi_type_variables_bind(n00bb_abi_type_index_t *index, th_ctx *types,
     for (size_t i = 1; i < rows->count; i++)
         if (rows->rows[i].kind == N00B_ABI_TYPE_VARIABLE
             && !rows->rows[i].typevar_owner_scope_index
-            && !rows->rows[i].typevar_import_requirement_index) return false;
+            && !rows->rows[i].typevar_owner_trait_index
+            && !rows->rows[i].typevar_import_requirement_index) {
+            if (reason) *reason = "catalog has an unowned type variable";
+            return false;
+        }
     return true;
 }
 

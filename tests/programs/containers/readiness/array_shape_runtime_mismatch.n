@@ -1,0 +1,8 @@
+func require_three(items: Array[int][3]) {
+    require __array_length(items) == 3
+}
+
+comptime {} else {
+    let items: Array[int] = new[Array[int]](2)
+    require_three(items)
+}

@@ -9,6 +9,9 @@ const n00bb_runtime_native_root_t n00bb_runtime_native_roots[] = {
         sizeof(allocator_unmanaged_parameters)
             / sizeof(allocator_unmanaged_parameters[0])},
     {"builtin.gc.alloc.mutator_for_native", "n00b_gc_mutator", nullptr, 0},
+    {"builtin.gc.alloc.native_root_depth", "n00b_gc_root_depth", nullptr, 0},
+    {"builtin.gc.alloc.native_root_push", "n00b_gc_root_push", nullptr, 0},
+    {"builtin.gc.alloc.native_root_pop", "n00b_gc_root_pop", nullptr, 0},
     {"builtin.gc.alloc.barrier_runtime", "n00b_gc_barrier_value", nullptr, 0},
     {"builtin.gc.alloc.barrier_pointer_runtime", nullptr, nullptr, 0},
 };

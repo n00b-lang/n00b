@@ -1,0 +1,25 @@
+func echo_unsigned(value: uint) -> uint {
+    return value
+}
+
+func return_unsigned() -> uint {
+    let small: int = 1
+    return small
+}
+
+func echo_wide(value: u128) -> u128 {
+    return value
+}
+
+func return_wide(value: uint) -> u128 {
+    return value
+}
+
+comptime {} else {
+    let small: int = 1
+    require echo_unsigned(small) == 1
+    require return_unsigned() == 1
+    let wide_source: uint = 1
+    require echo_wide(wide_source) == 1
+    require return_wide(wide_source) == 1
+}

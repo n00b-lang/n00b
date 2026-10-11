@@ -1,0 +1,14 @@
+func replace(modify target: `T, source: `T) {
+    target = source
+}
+
+comptime {} else {
+    var original = [11, 29]'array
+    var copy = original
+    let replacement: Array[int] = [41, 43]'array
+    replace(copy, replacement)
+    require copy[0] == 41
+    require copy[1] == 43
+    require original[0] == 11
+    require replacement[0] == 41
+}

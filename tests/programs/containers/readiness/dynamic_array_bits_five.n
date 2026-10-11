@@ -1,0 +1,15 @@
+comptime {} else {
+    var values: Array[bits:5] = new[Array[bits:5]](13)
+    require values[0] == cast[bits:5] 0
+    values[0] = cast[bits:5] 17
+    values[1] = cast[bits:5] 31
+    values[12] = cast[bits:5] 9
+    require values[0] == cast[bits:5] 17
+    require values[1] == cast[bits:5] 31
+    require values[2] == cast[bits:5] 0
+    require values[12] == cast[bits:5] 9
+    var copied: Array[bits:5] = values
+    values[0] = cast[bits:5] 3
+    require copied[0] == cast[bits:5] 17
+    require values[0] == cast[bits:5] 3
+}

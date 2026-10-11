@@ -87,8 +87,17 @@ typedef struct {
     size_t input;
     uint32_t table_kind;
     uint32_t row_index;
+    uint32_t owner_type_index;
+    uint32_t owner_row_index;
+    uint32_t type_kind;
+    uint32_t type_flags;
+    uint64_t typehash;
     size_t prior_input;
     uint32_t prior_row_index;
+    uint32_t constraint_count;
+    uint32_t prior_constraint_count;
+    bool imported_type_variable;
+    bool prior_imported_type_variable;
     n00bb_abi_string_view_t name;
     n00bb_abi_string_view_t prior_name;
     const char *reason;

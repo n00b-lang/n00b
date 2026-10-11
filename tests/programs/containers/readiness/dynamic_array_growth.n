@@ -1,0 +1,25 @@
+type Item {
+    value: int
+}
+
+func rebuild(consume old: Array[Item], used: int, capacity: int) -> Array[Item] {
+    var next: Array[Item] = new[Array[Item]](capacity)
+    var index: int = 0
+    while index < used {
+        next[index] = old[index]
+        index += 1
+    }
+    return next
+}
+
+comptime {} else {
+    var empty: Array[Item] = new[Array[Item]](0)
+    var one: Array[Item] = new[Array[Item]](1)
+    var first: Item = (value = 17)
+    one[0] = first
+    var two: Array[Item] = rebuild(one, 1, 2)
+    require two[0].value == 17
+    var second: Item = (value = 29)
+    two[1] = second
+    require two[1].value == 29
+}

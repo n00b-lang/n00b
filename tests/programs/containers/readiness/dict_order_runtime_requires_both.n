@@ -1,0 +1,22 @@
+import builtin.containers.dict
+
+type Key { value: int }
+type Payload { value: int }
+
+func hash(self: Key) -> u128 { return cast[u128] self.value }
+func __cmp(self: Key, other: Key) -> Comparison {
+    if self.value < other.value { return Comparison.less }
+    if self.value > other.value { return Comparison.greater }
+    return Comparison.equal
+}
+
+func choose_order(flag: bool) -> builtin.containers.dict.Sort_Order {
+    if flag { return builtin.containers.dict.Sort_Order.key }
+    return builtin.containers.dict.Sort_Order.none
+}
+
+comptime {} else {
+    var items: Dict[Key, Payload] = new[Dict[Key, Payload]]()
+    let order: builtin.containers.dict.Sort_Order = choose_order(true)
+    _ = builtin.containers.dict.keys(items, order)
+}

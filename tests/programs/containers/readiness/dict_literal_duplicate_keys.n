@@ -1,0 +1,16 @@
+import builtin.containers.dict
+import builtin.containers.view
+
+comptime {} else {
+    var items: Dict[int, int] = {2: 20, 1: 10, 2: 99}'dict
+    require builtin.containers.dict.len(items) == 2
+    let value: int? = builtin.containers.dict.get(items, 2)
+    require value != nil
+    require value.get() == 99
+
+    let ordered = builtin.containers.dict.keys(
+        items, builtin.containers.dict.Sort_Order.insertion)
+    require builtin.containers.view.len(ordered) == 2
+    require ordered[0] == 2
+    require ordered[1] == 1
+}

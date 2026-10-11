@@ -1,0 +1,5 @@
+const pairs: Dict[string, int] = {"a dictionary key longer than the inline string limit": 7}'dict
+
+comptime {} else {
+    require pairs.contains("a dictionary key longer than the inline string limit")
+}

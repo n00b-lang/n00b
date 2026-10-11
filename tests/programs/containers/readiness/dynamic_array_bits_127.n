@@ -1,0 +1,9 @@
+comptime {} else {
+    var values: Array[bits:127] = new[Array[bits:127]](3)
+    values[0] = cast[bits:127] 1
+    values[1] = cast[bits:127] 123
+    values[2] = cast[bits:127] 37
+    require values[0] == cast[bits:127] 1
+    require values[1] == cast[bits:127] 123
+    require values[2] == cast[bits:127] 37
+}

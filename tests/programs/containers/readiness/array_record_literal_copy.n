@@ -1,0 +1,19 @@
+type Holder {
+    items: Array[int]
+}
+
+func echo(items: Array[int]) -> Array[int] {
+    return items
+}
+
+func bump(modify value: int) {
+    value += 1
+}
+
+comptime {} else {
+    var source = [11, 29]'array
+    var holder: Holder = (items = echo(source))
+    bump(holder.items[0])
+    require holder.items[0] == 12
+    require source[0] == 11
+}

@@ -1,0 +1,13 @@
+import record_write_dep
+
+func first(items: Array[`T]) -> `T {
+    return items[0]
+}
+
+comptime {} else {
+    let pair: record_write_dep.Pair = (left = 3, right = 5)
+    var items: Array[record_write_dep.Pair] = [pair]'array
+    items[0] = (left = 11, right = 13)
+    let result: record_write_dep.Pair = first(items)
+    require result.left == 11
+}

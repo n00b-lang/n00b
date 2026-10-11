@@ -1,0 +1,31 @@
+import builtin.hash
+
+type Digit {
+    value: int
+}
+
+func __equal(self: Digit, other: Digit) -> bool {
+    return self.value % 10 == other.value % 10
+}
+
+func hash(self: Digit) -> u128 {
+    return cast[u128](self.value % 10)
+}
+
+type Key {
+    digit: Digit
+    label: int
+}
+
+comptime {} else {
+    let first_digit: Digit = (value = 21)
+    let same_digit: Digit = (value = 31)
+    let other_digit: Digit = (value = 32)
+    let first: Key = (digit = first_digit, label = 4)
+    let same: Key = (digit = same_digit, label = 4)
+    let other: Key = (digit = other_digit, label = 4)
+    require first == same
+    require first != other
+    require first.hash() == same.hash()
+    require first.hash() != other.hash()
+}

@@ -278,6 +278,7 @@ typed_requirements_resolved(const n00bb_abi_selected_objects_t *selected,
                 request->contract_type_index);
             if (!contract || !contract->typehash) return false;
             size_t matches = 0;
+            const char *mismatch = nullptr;
             for (size_t provider_input = 0;
                  provider_input < selected->count; provider_input++) {
                 const n00bb_abi_object_view_t *provider =
@@ -309,10 +310,11 @@ typed_requirements_resolved(const n00bb_abi_selected_objects_t *selected,
                         provider, N00B_ABI_TABLE_SCOPE, symbol->scope_index);
                     if (!scope || scope->parent_scope_index
                         || scope->module_index != 1) continue;
-                    if ((symbol->visibility == N00B_ABI_VISIBILITY_PRIVATE
-                         && provider_input != input)
-                        || (symbol->visibility == N00B_ABI_VISIBILITY_PACKAGE
-                            && provider_package != requesting_package))
+                    if (request->symbol_kind != N00B_ABI_SYMBOL_TYPE
+                        && ((symbol->visibility == N00B_ABI_VISIBILITY_PRIVATE
+                             && provider_input != input)
+                            || (symbol->visibility == N00B_ABI_VISIBILITY_PACKAGE
+                                && provider_package != requesting_package)))
                         continue;
                     n00bb_abi_string_view_t name;
                     if (!n00bb_abi_object_string(provider, &symbol->name,
@@ -332,18 +334,41 @@ typed_requirements_resolved(const n00bb_abi_selected_objects_t *selected,
                             && definition->kind != N00B_ABI_TYPE_FUNCTION))
                         return false;
                     if (definition->kind != contract->kind
-                        || definition->typehash != contract->typehash
-                        || (symbol->phase_mask
-                            & request->required_phase_mask)
-                            != request->required_phase_mask
-                        || (provider->header.artifact_capabilities
-                            & request->required_capabilities)
-                            != request->required_capabilities)
+                        || definition->typehash != contract->typehash) {
+                        mismatch = "typed requirement signature mismatch";
                         continue;
+                    }
+                    if ((symbol->phase_mask
+                            & request->required_phase_mask)
+                            != request->required_phase_mask) {
+                        mismatch = "typed requirement phase mismatch";
+                        continue;
+                    }
+                    if ((provider->header.artifact_capabilities
+                            & request->required_capabilities)
+                            != request->required_capabilities) {
+                        mismatch = "typed requirement capability mismatch";
+                        continue;
+                    }
                     if (!n00bb_abi_index_plan_map(plan, provider_input,
                             N00B_ABI_TABLE_TYPE, symbol->type_index,
                             &definition_index)) return false;
-                    if (definition_index != contract_index) continue;
+                    if (definition_index != contract_index) {
+                        mismatch = ((definition->flags ^ contract->flags)
+                            & N00B_ABI_TYPE_FLAG_NON_CONCRETE)
+                            ? "typed requirement non-concrete classification mismatch"
+                            : definition->components.count
+                                != contract->components.count
+                                ? "typed requirement component count mismatch"
+                            : !!definition->call_signature_index
+                                != !!contract->call_signature_index
+                                ? "typed requirement call-signature presence mismatch"
+                            : definition->named_arguments.count
+                                != contract->named_arguments.count
+                                ? "typed requirement generic argument count mismatch"
+                            : "typed requirement type-variable origin mismatch";
+                        continue;
+                    }
                     if (request->symbol_kind == N00B_ABI_SYMBOL_FUNCTION) {
                         const n00bb_abi_directory_entry_t *functions =
                             n00bb_abi_object_table(provider,
@@ -357,7 +382,10 @@ typed_requirements_resolved(const n00bb_abi_selected_objects_t *selected,
                             if (function && function->symbol_index == j)
                                 defined = true;
                         }
-                        if (!defined) continue;
+                        if (!defined) {
+                            mismatch = "typed requirement has no function body";
+                            continue;
+                        }
                     }
                     if (request->symbol_kind == N00B_ABI_SYMBOL_VARIABLE
                         && (request->required_phase_mask
@@ -394,7 +422,7 @@ typed_requirements_resolved(const n00bb_abi_selected_objects_t *selected,
                     .row_index = i,
                     .name = wanted,
                     .reason = matches ? "ambiguous typed requirement"
-                                      : "unresolved typed requirement",
+                        : mismatch ? mismatch : "unresolved typed requirement",
                 };
                 return false;
             }

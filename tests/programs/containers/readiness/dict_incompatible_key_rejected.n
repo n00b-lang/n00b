@@ -1,0 +1,12 @@
+import builtin.containers.dict
+
+type Key { value: int }
+
+func __equal(self: Key, other: Key) -> bool {
+    return self.value == other.value
+}
+
+comptime {} else {
+    let items: Dict[Key, int] = new[Dict[Key, int]]()
+    _ = items
+}

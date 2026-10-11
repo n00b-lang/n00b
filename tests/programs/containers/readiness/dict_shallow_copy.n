@@ -1,0 +1,15 @@
+import builtin.containers.dict
+
+comptime {} else {
+    var first: Dict[int, int] = new[Dict[int, int]]()
+    _ = builtin.containers.dict.put(first, 1, 10)
+    var second: Dict[int, int] = first
+    _ = builtin.containers.dict.put(first, 2, 20)
+    require builtin.containers.dict.len(second) == 2
+    let added: int? = builtin.containers.dict.get(second, 2)
+    require added != nil
+    require added.get() == 20
+    require builtin.containers.dict.remove(second, 1)
+    require builtin.containers.dict.len(first) == 1
+    require builtin.containers.dict.get(first, 1) == nil
+}

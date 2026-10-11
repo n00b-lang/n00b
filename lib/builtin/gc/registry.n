@@ -138,7 +138,7 @@ public func los_register(heap: Ref[builtin.gc.Heap],
             los_table_value(object))
         granule += 1
     }
-    let index: int = cast[int] level
+    let index: uint = level
     let count_cell: Ref[uint] = ref heap.los_level_n[index]
     var count: uint = ref_read(count_cell)
     count += 1
@@ -163,7 +163,7 @@ public func los_unregister(heap: Ref[builtin.gc.Heap],
             los_table_value(object))
         granule += 1
     }
-    let index: int = cast[int] level
+    let index: uint = level
     let count_cell: Ref[uint] = ref heap.los_level_n[index]
     var count: uint = ref_read(count_cell)
     count -= 1

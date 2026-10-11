@@ -37,6 +37,7 @@ static const abi_ref_column_t abi_index_columns[] = {
     ABI_REF(TYPE, type, finalizer_function_index, FUNCTION),
     ABI_REF(TYPE, type, call_signature_index, CALL_SIGNATURE),
     ABI_REF(TYPE, type, typevar_owner_scope_index, SCOPE),
+    ABI_REF(TYPE, type, typevar_owner_trait_index, TYPE),
     ABI_REQUIRED_REF(TYPE_ARGUMENT, type_argument, owner_type_index, TYPE),
     ABI_REF(TYPE_ARGUMENT, type_argument, type_index, TYPE),
     ABI_REQUIRED_REF(ENUM_ITEM, enum_item, parent_type_index, TYPE),

@@ -1,11 +1,5 @@
-trait Index_Write {
-    func __write(self: `T, index: int, item: Array[int])
-}
-
-func __write(self: Array[Array[int]], index: int, item: Array[int]) {}
-
 func make_rows() {
-    var rows: int[][] = new[Array[Array[int]]](3)
+    var rows: Array[int][][] = new[Array[Array[int]]](3)
     rows [0] = new[Array[int]](5)
     rows [1] = new[Array[int]](2)
 }

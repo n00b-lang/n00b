@@ -1,0 +1,20 @@
+func identity_or_fail(value: `T, fail_now: bool) -> `T fail: string {
+    if fail_now {
+        fail "requested"
+    }
+    return value
+}
+
+comptime {} else {
+    try {
+        require identity_or_fail(7, false)! == 7
+    } else err {
+        require false
+    }
+    try {
+        _ = identity_or_fail(7, true)!
+        require false
+    } else err {
+        require true
+    }
+}

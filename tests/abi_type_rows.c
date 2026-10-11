@@ -4,6 +4,7 @@
 
 #include "abi_string.h"
 #include "abi_type_rows.h"
+#include "abi_value_schema.h"
 #include "ir/layout.h"
 #include "ir/typelang.h"
 #include "lib/alloc.h"
@@ -11,6 +12,18 @@
 int
 main(void)
 {
+    n00b_abi_type_v1 reference = {
+        .kind = N00B_ABI_TYPE_REFERENCE,
+        .flags = N00B_ABI_TYPE_FLAG_PLAIN_REF,
+    };
+    size_t invalid_offset = SIZE_MAX;
+    assert(n00bb_abi_row_values_valid(N00B_ABI_TABLE_TYPE,
+        &reference, sizeof(reference), &invalid_offset));
+    reference.kind = N00B_ABI_TYPE_PRIMITIVE;
+    assert(!n00bb_abi_row_values_valid(N00B_ABI_TABLE_TYPE,
+        &reference, sizeof(reference), &invalid_offset)
+        && invalid_offset == offsetof(n00b_abi_type_v1, flags));
+
     ir_ctx_t *context = ir_ctx_new();
     const ir_profile_t profile = {.name = "n00b"};
     ir_module_t *runtime = ir_module_new(context, "example", &profile,
@@ -44,7 +57,7 @@ main(void)
     n00bb_abi_name_pool_t *names = n00bb_abi_name_pool_new();
     n00bb_abi_type_identity_rows_t rows = {0};
     assert(n00bb_abi_type_identity_rows_build(index, comptime, runtime,
-                                               symbols, nullptr, nullptr,
+                                               false, symbols, nullptr, nullptr,
                                                names, &rows));
     assert(rows.count == 3 && string_index != record_index);
     assert(rows.rows[0].kind == N00B_ABI_TYPE_NIL
@@ -139,7 +152,7 @@ main(void)
                                    &bits3_layout));
     n00bb_abi_type_identity_rows_t handle_rows = {0};
     assert(n00bb_abi_type_identity_rows_build(handles, comptime, runtime,
-                                               nullptr, nullptr, nullptr,
+                                               false, nullptr, nullptr, nullptr,
                                                handle_names,
                                                &handle_rows));
     for (size_t i = 0; i < sizeof(handle_kinds) / sizeof(*handle_kinds); i++)
@@ -221,7 +234,7 @@ main(void)
                                    &conflicting));
     n00bb_abi_type_identity_rows_t rejected = {0};
     assert(!n00bb_abi_type_identity_rows_build(index, comptime, runtime,
-                                                symbols, nullptr, nullptr,
+                                                false, symbols, nullptr, nullptr,
                                                 names, &rejected));
     assert(!rejected.rows && !rejected.count);
 

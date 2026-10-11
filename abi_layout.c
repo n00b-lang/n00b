@@ -341,7 +341,16 @@ publish_direct_or_alias(ir_module_t *module, th_type *type,
         const char *child_name = nullptr;
         th_named_info(th_resolve(referent), &child_name, nullptr,
                       nullptr, nullptr);
-        bool packable = n00bb_abi_layout_packable(child)
+        th_type *bits_type = th_resolve(referent);
+        if (th_kind_of(bits_type) == TH_NAMED)
+            bits_type = ir_type_definition(module, bits_type);
+        uint64_t width = 0;
+        th_bitint_flavor flavor = TH_BITINT_UNSIGNED;
+        bool explicit_bits = bits_type
+            && th_kind_of(bits_type) == TH_BITINT
+            && th_bitint_info(bits_type, &width, &flavor)
+            && flavor == TH_BITINT_BITS;
+        bool packable = (explicit_bits || n00bb_abi_layout_packable(child))
             && (!child_name || strcmp(child_name, "atomic"));
         *handled = true;
         storage_bits = semantic_bits = packable ? 128 : 64;

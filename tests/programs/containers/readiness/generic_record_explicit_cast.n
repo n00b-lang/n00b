@@ -1,0 +1,13 @@
+type Pair {
+    left: `A
+    right: `B
+}
+
+func first(value: Pair[int, string]) -> int {
+    return value.left
+}
+
+comptime {} else {
+    let pair: Pair[int, string] = cast[Pair[int, string]] (left = 7, right = "seven")
+    require first(pair) == 7
+}

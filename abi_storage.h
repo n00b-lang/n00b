@@ -9,6 +9,18 @@
 #include "lib/buffer.h"
 
 typedef struct {
+    void *context;
+    size_t node_count;
+    size_t edge_count;
+    bool (*root)(void *context, const char *identifier, size_t *index);
+    bool (*node)(void *context, size_t index, const uint8_t **bytes,
+                 size_t *size, uint32_t *alignment, uint64_t *typehash);
+    bool (*edge)(void *context, size_t index, size_t *source,
+                 size_t *source_offset, size_t *target,
+                 size_t *target_offset);
+} n00bb_abi_graph_source_t;
+
+typedef struct {
     uint32_t source_kind;
     uint64_t byte_offset;
     uint32_t target_kind;
@@ -58,5 +70,6 @@ bool n00bb_abi_storage_rows_build(
     ir_module_t *runtime, n00bb_abi_name_pool_t *pool,
     uint32_t stream_base,
     n00bb_abi_declaration_lookup_fn lookup, void *lookup_context,
+    const n00bb_abi_graph_source_t *graphs,
     n00bb_abi_storage_rows_t *out);
 void n00bb_abi_storage_rows_release(n00bb_abi_storage_rows_t *rows);

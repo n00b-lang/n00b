@@ -1,0 +1,9 @@
+func bump(modify value: int) {
+    value += 1
+}
+
+comptime {} else {
+    var value: int = 7
+    bump(value)
+    require value == 8
+}

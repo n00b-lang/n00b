@@ -1,0 +1,20 @@
+type Pair {
+    key: `T
+    value: int
+}
+
+func first(items: Array[Pair[`T]]) -> `T {
+    return items[0].key
+}
+
+comptime {} else {
+    var items: Array[Pair[int]] = new[Array[Pair[int]]](1)
+    items[0] = (key = 7, value = 11)
+    require first(items) == 7
+
+    let saved: Pair[int] = items[0]
+    items[0] = (key = 13, value = 17)
+    require saved.key == 7
+    require saved.value == 11
+    require first(items) == 13
+}

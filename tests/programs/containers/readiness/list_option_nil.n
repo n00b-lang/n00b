@@ -1,0 +1,14 @@
+comptime {} else {
+    var values: List[int?] = new[List[int?]]()
+    let first: int? = 4
+    let second: int? = 7
+    values.append(first)
+    values.append(second)
+    values[0] = nil
+    require builtin.containers.list.len(values) == 2
+    require values[0] == nil
+    require values[1] != nil
+    values[0:1] = []
+    require builtin.containers.list.len(values) == 1
+    require values[0] != nil
+}

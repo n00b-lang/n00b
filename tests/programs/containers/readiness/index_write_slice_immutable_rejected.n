@@ -1,0 +1,12 @@
+type Slots { value: int }
+
+func __write_slice(modify self: Slots, start_ix: int?, end_ix: int?,
+                   inclusive: bool, values: Array[int]) -> nil {
+    self.value = values[0]
+}
+
+comptime {} else {
+    let slots: Slots = (value = 0)
+    let values: Array[int] = [7]'array
+    slots[0:0] = values
+}

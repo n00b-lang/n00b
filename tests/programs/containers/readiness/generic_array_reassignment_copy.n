@@ -1,0 +1,14 @@
+func detached(value: Array[`T], replacement: `T) -> Array[`T] {
+    var left: Array[`T] = value
+    var right: Array[`T] = value
+    right = left
+    left[0] = replacement
+    return right
+}
+
+comptime {} else {
+    var original = [7]'array
+    let result = detached(original, 9)
+    require result[0] == 7
+    require original[0] == 7
+}

@@ -1,0 +1,11 @@
+func first(items: Array[`T]) -> `T {
+    return items[0]
+}
+
+comptime {} else {
+    var rows: Array[Array[int]] = new[Array[Array[int]]](2)
+    rows[0] = new[Array[int]](3)
+    rows[0][1] = 41
+    let row: Array[int] = first(rows)
+    require row[1] == 41
+}

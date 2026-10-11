@@ -1,0 +1,65 @@
+import builtin.sort
+import builtin.io.debug
+
+type Entry {
+    key: int
+    payload: int
+}
+
+func __cmp(left: Entry, right: Entry) -> Comparison {
+    if left.key < right.key { return Comparison.less }
+    if left.key > right.key { return Comparison.greater }
+    return Comparison.equal
+}
+
+func input_value(index: int, count: int, pattern: int) -> int {
+    if pattern == 0 { return index }
+    if pattern == 1 { return count - index }
+    if pattern == 2 { return index % 8 }
+    if index < count / 2 { return index }
+    return count - index
+}
+
+func bench_int(pattern: int, count: int) {
+    var items: Array[int] = new[Array[int]](count)
+    var i: int = 0
+    while i < count {
+        items[i] = input_value(i, count, pattern)
+        i += 1
+    }
+    builtin.io.debug.raw_debug("start int\n")
+    builtin.sort.sort(items)
+    builtin.io.debug.raw_debug("end int\n")
+    i = 1
+    while i < count {
+        require items[i - 1] <= items[i]
+        i += 1
+    }
+}
+
+func bench_entry(pattern: int, count: int) {
+    var items: Array[Entry] = new[Array[Entry]](count)
+    var i: int = 0
+    while i < count {
+        items[i] = (key = input_value(i, count, pattern), payload = i)
+        i += 1
+    }
+    builtin.io.debug.raw_debug("start record\n")
+    builtin.sort.sort(items)
+    builtin.io.debug.raw_debug("end record\n")
+    i = 1
+    while i < count {
+        require items[i - 1].key <= items[i].key
+        i += 1
+    }
+}
+
+comptime {} else {
+    let count: int = 2048
+    var pattern: int = 0
+    while pattern < 4 {
+        bench_int(pattern, count)
+        bench_entry(pattern, count)
+        pattern += 1
+    }
+}

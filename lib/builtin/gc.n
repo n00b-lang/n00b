@@ -88,28 +88,35 @@ public func array_backing_offset(type_index: u32,
 }
 
 public func initialize_array_backing(payload: Ref[byte], payload_bytes: uint,
-                                     type_index: u32, descriptor: Ref[byte]) -> bool {
-    let shape: Ref[builtin.abi.Array_Descriptor_Header] = array_descriptor_at(descriptor)
+                                     type_index: u32,
+                                     shape: Ref[builtin.abi.Array_Descriptor_Header]) -> bool {
     let offset: uint = array_backing_offset(type_index, shape)
     if offset == 0 or offset > payload_bytes { return false }
     let element: Ref[builtin.abi.Type_Record]? = array_flat_element(
         type_index, shape.flat_rank)
     if element == nil { return false }
-    let alignment: uint = builtin.abi.alignment_bytes(element.get())
-    let element_bytes: uint = builtin.abi.size_bytes(element.get())
-    if alignment == 0 or element_bytes > ~cast[uint](0) - alignment + 1 {
-        return false
-    }
-    let stride: uint = (element_bytes + alignment - 1) / alignment * alignment
-    if stride == 0 or shape.total_count > cast[u64]((payload_bytes - offset) / stride) {
-        return false
+    let packed_bits: uint = builtin.abi.packed_array_stride_bits(element.get())
+    if packed_bits != 0 {
+        let required_bits: u128 = cast[u128](shape.total_count) * cast[u128](packed_bits)
+        let required_bytes: u128 = (required_bits + 7) / 8
+        if required_bytes > cast[u128](payload_bytes - offset) { return false }
+    } else {
+        let alignment: uint = builtin.abi.alignment_bytes(element.get())
+        let element_bytes: uint = builtin.abi.size_bytes(element.get())
+        if alignment == 0 or element_bytes > ~cast[uint](0) - alignment + 1 {
+            return false
+        }
+        let stride: uint = (element_bytes + alignment - 1) / alignment * alignment
+        if stride == 0 or shape.total_count > cast[u64]((payload_bytes - offset) / stride) {
+            return false
+        }
     }
     let shape_row: Ref[builtin.abi.Type_Record]? = builtin.abi.reference_target(
         typeof(shape))
     if shape_row == nil { return false }
     let descriptor_bytes: uint = builtin.abi.size_bytes(shape_row.get()) + cast[uint](shape.rank) * 8
     __gc_memset(payload, 0, payload_bytes)
-    __gc_memcpy(payload, descriptor, descriptor_bytes)
+    __gc_memcpy(payload, unsafe_cast[Ref[byte]] shape, descriptor_bytes)
     return true
 }
 
@@ -134,9 +141,9 @@ public type Block_Metadata layout(c) {
     public all_next: Ref[Block_Metadata]?
     public all_prev: Ref[Block_Metadata]?
     public own_next: Ref[Block_Metadata]?
-    public line_marks: Atomic[u8][lines_per_block]
-    public mark_bits: Atomic[u64][bitmap_words]
-    public start_bits: Atomic[u64][bitmap_words]
+    public line_marks: Array[Atomic[u8]][lines_per_block]
+    public mark_bits: Array[Atomic[u64]][bitmap_words]
+    public start_bits: Array[Atomic[u64]][bitmap_words]
 }
 
 public type Bump layout(c) {
@@ -186,14 +193,14 @@ public inline func payload_of(header: Ref[Object_Header]) -> Ref[byte] {
 }
 
 public inline func header_of(payload: Ref[byte]) -> Ref[Object_Header] {
-    let distance: i128 = cast[i128](object_header_bytes())
+    let distance: i128 = object_header_bytes()
     let base: Ref[byte] = __gc_byte_offset(payload, -distance)
     return unsafe_cast[Ref[Object_Header]] base
 }
 
 public inline func block_of_bytes(address_in_block: Ref[byte]) -> Ref[Block_Metadata] {
     let address: uint = __abi_ref_address(address_in_block)
-    let distance: i128 = cast[i128](address % block_bytes)
+    let distance: i128 = address % block_bytes
     let base: Ref[byte] = __gc_byte_offset(address_in_block, -distance)
     return block_metadata_at(base)
 }
@@ -232,7 +239,7 @@ public func los_header_offset() -> uint {
 }
 
 public func los_of(header: Ref[Object_Header]) -> Ref[Los_Obj] {
-    let distance: i128 = cast[i128](los_header_offset())
+    let distance: i128 = los_header_offset()
     let base: Ref[byte] = __gc_byte_offset(unsafe_cast[Ref[byte]] header, -distance)
     return unsafe_cast[Ref[Los_Obj]] base
 }
@@ -312,7 +319,7 @@ public type Final_Entry layout(c) {
 }
 
 public type Final_Batch layout(c) {
-    public objects: (Ref[byte]?)[final_batch]
+    public objects: Array[Ref[byte]?][final_batch]
     public n: uint
     public next: Ref[Final_Batch]?
     public prev: Ref[Final_Batch]?
@@ -339,7 +346,7 @@ public type Packet_Entry layout(c) {
 public type Packet layout(c) {
     public next: Ref[Packet]?
     public n: uint
-    public entries: Packet_Entry[packet_cap]
+    public entries: Array[Packet_Entry][packet_cap]
 }
 
 public type Packet_Chunk layout(c) {
@@ -366,7 +373,7 @@ public const lock_slots: u32 = 64
 public type Ticket_Lock layout(c) {
     public next: Atomic[u32]
     public owner: Atomic[u32]
-    public slot: Event[lock_slots]
+    public slot: Array[Event][lock_slots]
 }
 
 public type Heap layout(c) {
@@ -399,7 +406,7 @@ public type Heap layout(c) {
     public running_n: uint
     public finalizers_run: u64
     public release_los: Ref[Los_Obj]?
-    public los_cache: (Ref[Los_Obj]?)[los_classes]
+    public los_cache: Array[Ref[Los_Obj]?][los_classes]
     public target_bytes: uint
     public alloc_budget: uint
     public live_bytes: uint
@@ -407,7 +414,7 @@ public type Heap layout(c) {
     public blocks: builtin.gc.hash.Hash_Tab
     public large: builtin.gc.hash.Hash_Tab
     public los_levels: uint
-    public los_level_n: uint[word_bits]
+    public los_level_n: Array[uint][word_bits]
     public heap_lo: uint
     public heap_hi: uint
     public reg_rw: Atomic[u32]
@@ -500,7 +507,7 @@ public type Mutator layout(c) {
     public cap_roots: uint
     public tls_roots: Ref[byte]?
     public ntls_roots: uint
-    public write_buffer: (Ref[byte]?)[write_buffer_cap]
+    public write_buffer: Array[Ref[byte]?][write_buffer_cap]
     public write_buffer_count: uint
     public write_buffer_epoch: u32
     public hs_state: Atomic[u32]
@@ -723,7 +730,7 @@ public func block_init(heap: Ref[Heap], blk: Ref[Block_Metadata]) {
                 lines_per_block)
     if heap.cfg.poison_free {
         let payload: Ref[byte] = __gc_byte_offset(base, first_payload)
-        __gc_memset(payload, cast[byte](0xdb), block_bytes - first_payload)
+        __gc_memset(payload, 0xdb, block_bytes - first_payload)
     }
     blk.all_prev = nil
     blk.all_next = heap.all_blocks

@@ -1,1 +1,1 @@
-var first: int[2], second: int[3]
+var first: Array[int][2], second: Array[int][3]

@@ -1,0 +1,14 @@
+comptime {} else {
+    var values: List[bool] = [true, false, true]
+    let last: bool? = values.pop()
+    require last != nil
+    require last.get()
+    values[0:1] = []
+    require builtin.containers.list.len(values) == 1
+    require !values[0]
+    values.append(true)
+    require values[1]
+    require builtin.containers.list.remove(values, true) == 1
+    require builtin.containers.list.len(values) == 1
+    require !values[0]
+}

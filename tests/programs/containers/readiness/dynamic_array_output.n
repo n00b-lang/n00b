@@ -1,0 +1,10 @@
+func set_value(out target: int?) {
+    target = 7
+}
+
+comptime {} else {
+    var values: Array[int?] = new[Array[int?]](2)
+    set_value(values[0])
+    let slot: Ref[int?] = ref values[0]
+    require ref_read(slot) != nil
+}

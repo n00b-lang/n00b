@@ -1,0 +1,10 @@
+func identity(value: `T) -> `T {
+    return value
+}
+
+comptime {} else {
+    var value: int = 7
+    let pointer: Ref[int] = ref value
+    let result: Ref[int] = identity(pointer)
+    require ref_read(result) == 7
+}

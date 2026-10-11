@@ -1,1 +1,1 @@
-var positive_arithmetic: int[1 + 2]
+var positive_arithmetic: Array[int][1 + 2]

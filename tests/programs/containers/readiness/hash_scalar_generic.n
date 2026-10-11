@@ -1,0 +1,13 @@
+import builtin.hash
+
+func hash_generic(value: `T) -> u128 where `T: builtin.hash.Hash {
+    return value.hash()
+}
+
+comptime {} else {
+    let first: int = 17
+    let second: int = 17
+    let third: int = 18
+    require hash_generic(first) == hash_generic(second)
+    require hash_generic(first) != hash_generic(third)
+}

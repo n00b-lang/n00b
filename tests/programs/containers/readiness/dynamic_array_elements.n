@@ -1,0 +1,24 @@
+type Item {
+    value: int
+}
+
+func set_record(out target: Item) {
+    target = (value = 9)
+}
+
+func set_reference(out target: Ref[Item]?, item: Ref[Item]) {
+    target = item
+}
+
+comptime {} else {
+    var records: Array[Item] = new[Array[Item]](3)
+    set_record(records[2])
+    let record_slot: Ref[Item] = ref records[2]
+    require ref_read(record_slot).value == 9
+
+    var item: Item = (value = 13)
+    var references: Array[Ref[Item]?] = new[Array[Ref[Item]?]](2)
+    set_reference(references[1], ref item)
+    let reference_slot: Ref[Ref[Item]?] = ref references[1]
+    require ref_read(reference_slot) != nil
+}

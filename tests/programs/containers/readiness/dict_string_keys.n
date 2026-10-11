@@ -1,0 +1,15 @@
+import builtin.containers.dict
+
+comptime {} else {
+    var values: Dict[string, int] = new[Dict[string, int]]()
+    require builtin.containers.dict.add(values, "alpha", 1)
+    require builtin.containers.dict.add(values, "a longer string key", 2)
+    let first: int? = builtin.containers.dict.get(values, "alpha")
+    let second: int? = builtin.containers.dict.get(values, "a longer string key")
+    require first != nil
+    require first.get() == 1
+    require second != nil
+    require second.get() == 2
+    require builtin.containers.dict.remove(values, "alpha")
+    require !builtin.containers.dict.contains(values, "alpha")
+}

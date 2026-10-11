@@ -1,0 +1,11 @@
+func present(value: int?) -> bool {
+    return value != nil
+}
+
+comptime {} else {
+    require present(4)
+    var values: List[int?] = new[List[int?]]()
+    values.append(7)
+    require builtin.containers.list.len(values) == 1
+    require values[0] != nil
+}

@@ -1,0 +1,26 @@
+public trait Hash {
+    func hash(self: `T) -> u128
+}
+
+public func xxh3_128(bytes: Array[byte]) -> u128 {
+    return __xxh3_128(bytes)
+}
+
+public inline func hash(self: bool) -> u128 { return __hash_scalar(self) }
+public inline func hash(self: byte) -> u128 { return __hash_scalar(self) }
+public inline func hash(self: char) -> u128 { return __hash_scalar(self) }
+public inline func hash(self: int) -> u128 { return __hash_scalar(self) }
+public inline func hash(self: uint) -> u128 { return __hash_scalar(self) }
+public inline func hash(self: i8) -> u128 { return __hash_scalar(self) }
+public inline func hash(self: i16) -> u128 { return __hash_scalar(self) }
+public inline func hash(self: i32) -> u128 { return __hash_scalar(self) }
+public inline func hash(self: i64) -> u128 { return __hash_scalar(self) }
+public inline func hash(self: i128) -> u128 { return __hash_scalar(self) }
+public inline func hash(self: u8) -> u128 { return __hash_scalar(self) }
+public inline func hash(self: u16) -> u128 { return __hash_scalar(self) }
+public inline func hash(self: u32) -> u128 { return __hash_scalar(self) }
+public inline func hash(self: u64) -> u128 { return __hash_scalar(self) }
+public inline func hash(self: u128) -> u128 { return __hash_scalar(self) }
+public inline func hash(self: float) -> u128 { return __hash_scalar(self) }
+public inline func hash(self: string) -> u128 { return __hash_string(self) }
+public inline func hash(self: Ref[`T]) -> u128 { return __hash_scalar(self) }

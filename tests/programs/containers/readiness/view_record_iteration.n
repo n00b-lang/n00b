@@ -1,0 +1,23 @@
+import builtin.cursor
+import builtin.containers.view
+
+type Pair {
+    left: int
+    right: int
+}
+
+comptime {} else {
+    let first: Pair = (left = 2, right = 3)
+    let second: Pair = (left = 5, right = 7)
+    var values: Array[Pair] = [first, second]'array
+    let selected: builtin.containers.view.View[Pair] = values[0:2]
+    let replacement: Pair = (left = 13, right = 17)
+    values[0] = replacement
+    var sum: int = 0
+    for let value: Pair in selected {
+        sum += value.left
+    }
+    require sum == 7
+    let changed: Pair = values[0]
+    require changed.left == 13
+}

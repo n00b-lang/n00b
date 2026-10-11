@@ -1,0 +1,17 @@
+type Cell {
+    value: int
+}
+
+func __init(modify self: Cell, value: int) {
+    self.value = value
+}
+
+func make(value: int) -> Ref[Cell] {
+    let cell: Cell = new[Cell](value)
+    return ref cell
+}
+
+comptime {} else {
+    let shared: Ref[Cell] = make(7)
+    require ref_read(shared).value == 7
+}

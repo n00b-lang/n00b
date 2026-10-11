@@ -1,0 +1,8 @@
+import builtin.containers.view
+
+comptime {} else {
+    let values: Array[int] = [2, 3, 5]'array
+    let selected: builtin.containers.view.View[int] =
+        builtin.containers.view.__slice(values, 0, 3)
+    require selected[1] == 3
+}

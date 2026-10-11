@@ -1,0 +1,10 @@
+import builtin.hash
+
+func generic_hash(value: `T) -> u128 where `T: builtin.hash.Hash {
+    return value.hash()
+}
+
+comptime {} else {
+    let value: string = "a string longer than fourteen bytes"
+    require generic_hash(value) == value.hash()
+}

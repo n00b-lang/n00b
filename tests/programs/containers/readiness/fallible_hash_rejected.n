@@ -1,0 +1,13 @@
+import builtin.hash
+
+type Key {
+    value: int
+}
+
+func hash(self: Key) -> u128 fail: string {
+    fail "hash failed"
+}
+
+func use_hash(value: Key) -> u128 {
+    return value.hash()
+}

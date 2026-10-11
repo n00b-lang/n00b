@@ -1,0 +1,16 @@
+import builtin.containers.dict
+
+comptime {} else {
+    var items: Dict[int, int] = new[Dict[int, int]]()
+    require builtin.containers.dict.add(items, 3, 30)
+    require builtin.containers.dict.add(items, 1, 10)
+
+    let keys = builtin.containers.dict.keys(items,
+        sort_order = builtin.containers.dict.Sort_Order.key)
+    let values = builtin.containers.dict.values(items,
+        sort_order = builtin.containers.dict.Sort_Order.key)
+    require keys[0] == 1
+    require keys[1] == 3
+    require values[0] == 10
+    require values[1] == 30
+}

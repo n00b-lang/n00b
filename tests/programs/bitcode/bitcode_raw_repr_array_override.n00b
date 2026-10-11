@@ -4,7 +4,7 @@ public func raw_repr(self: `T[], fd: i32) -> i32 {
     return __fd_write(fd, "array override\n")
 }
 
-public func raw_repr(self: int[], fd: i32) -> i32 {
+public func raw_repr(self: Array[int][], fd: i32) -> i32 {
     return __fd_write(fd, "int array override\n")
 }
 

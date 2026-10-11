@@ -1,0 +1,25 @@
+import builtin.containers.dict
+
+type Key { value: int }
+type Payload { value: int }
+
+func hash(self: Key) -> u128 { return cast[u128] self.value }
+func __cmp(self: Payload, other: Payload) -> Comparison {
+    if self.value < other.value { return Comparison.less }
+    if self.value > other.value { return Comparison.greater }
+    return Comparison.equal
+}
+
+comptime {} else {
+    var items: Dict[Key, Payload] = new[Dict[Key, Payload]]()
+    let first: Key = (value = 1)
+    let second: Key = (value = 2)
+    let high: Payload = (value = 9)
+    let low: Payload = (value = 4)
+    _ = builtin.containers.dict.put(items, first, high)
+    _ = builtin.containers.dict.put(items, second, low)
+    let ordered = builtin.containers.dict.values(items,
+        builtin.containers.dict.Sort_Order.value)
+    require ordered[0].value == 4
+    require ordered[1].value == 9
+}

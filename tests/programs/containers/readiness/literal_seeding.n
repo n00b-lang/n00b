@@ -1,0 +1,20 @@
+func make_list() -> List[int] {
+    return [1, 2]
+}
+
+func make_dict() -> Dict[string, int] {
+    return {"one": 1}
+}
+
+func make_set() -> Set[int] {
+    return {1, 2}
+}
+
+comptime {} else {
+    let list = make_list()
+    let dict = make_dict()
+    let set = make_set()
+    require len(list) == 2
+    require len(dict) == 1
+    require len(set) == 2
+}

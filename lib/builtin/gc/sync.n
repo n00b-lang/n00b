@@ -41,7 +41,7 @@ public func ticket_lock(lock: Ref[builtin.gc.Ticket_Lock]) {
             continue
         }
         spins = 0
-        let index: int = cast[int](ticket % builtin.gc.lock_slots)
+        let index: uint = ticket % builtin.gc.lock_slots
         let event: Ref[builtin.gc.Event] = ref lock.slot[index]
         let seq: u32 = event_enter(event)
         if __atomic_load(ref lock.owner) != ticket { event_sleep(event, seq) }
@@ -59,6 +59,6 @@ public func ticket_unlock(lock: Ref[builtin.gc.Ticket_Lock]) {
     let owner: u32 = ticket_next(__atomic_load(ref lock.owner))
     __atomic_store(ref lock.owner, owner)
     if __atomic_load(ref lock.next) == owner { return }
-    let index: int = cast[int](owner % builtin.gc.lock_slots)
+    let index: uint = owner % builtin.gc.lock_slots
     event_signal(ref lock.slot[index])
 }

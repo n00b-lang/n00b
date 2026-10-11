@@ -1,0 +1,12 @@
+type Holder {
+    value: `T
+}
+
+func get(holder: Holder[`T]) -> `T {
+    return holder.value
+}
+
+comptime {} else {
+    let holder: Holder[int] = (value = 7)
+    require get(holder) == 7
+}

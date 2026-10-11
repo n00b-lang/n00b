@@ -8,4 +8,4 @@ comptime {
     }
 }
 
-var uncertain_branch_join: int[extent] = new[int[extent]]()
+var uncertain_branch_join: Array[int][extent] = new[Array[int][extent]]()

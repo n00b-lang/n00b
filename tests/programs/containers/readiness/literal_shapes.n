@@ -1,0 +1,27 @@
+func make_list() -> List[int] {
+    return [1, 2]
+}
+
+func make_dict() -> Dict[string, int] {
+    return {"one": 1}
+}
+
+func make_set() -> Set[int] {
+    return {1, 2}
+}
+
+func empty_set() -> Set[int] {
+    return {}
+}
+
+func empty_dict() -> Dict[string, int] {
+    return {}
+}
+
+comptime {} else {
+    make_list()
+    make_dict()
+    make_set()
+    empty_set()
+    empty_dict()
+}

@@ -21,6 +21,6 @@ func box_reference(value: int) -> any {
     return cast[any] ref value
 }
 
-func box_array(value: int[4]) -> any {
+func box_array(value: Array[int][4]) -> any {
     return cast[any] value
 }

@@ -438,8 +438,27 @@ grep -Eq 'func @shape_parameter\(%input: array\[array\[int\]\].*\) -> array\[arr
     "$tmp/array_shape_types.lower"
 grep -Fq 'func @shape_return() -> array[int]' \
     "$tmp/array_shape_types.lower"
-grep -q 'warning\[N00BB-W0004\].*mixes explicit array syntax with dimension shorthand' \
-    "$tmp/array_shape_types.err"
+
+"$compiler" lower "$script_dir/programs/containers/readiness/type_bracket_resolution.n" \
+    >"$tmp/type_bracket_resolution.out" 2>"$tmp/type_bracket_resolution.err" || {
+    cat "$tmp/type_bracket_resolution.err"
+    exit 1
+}
+"$compiler" lower "$script_dir/programs/containers/readiness/tuple_one_type_argument.n" \
+    >"$tmp/tuple_one_type_argument.out" 2>"$tmp/tuple_one_type_argument.err" || {
+    cat "$tmp/tuple_one_type_argument.err"
+    exit 1
+}
+for rejected in legacy_array_syntax_rejected value_type_argument_rejected nil_union_type_rejected; do
+    if "$compiler" lower "$script_dir/programs/containers/readiness/$rejected.n" \
+        >"$tmp/$rejected.out" 2>"$tmp/$rejected.err"; then
+        echo "$rejected unexpectedly lowered" >&2
+        exit 1
+    fi
+done
+grep -q 'error\[N00BB-T0030\]' "$tmp/legacy_array_syntax_rejected.err"
+grep -q 'error\[N00BB-T0007\]' "$tmp/value_type_argument_rejected.err"
+grep -q 'error\[N00BB-T0029\]' "$tmp/nil_union_type_rejected.err"
 
 "$compiler" lower --dump-symbols --dump-link-unit \
     "$script_dir/programs/preprocessor/grouped_array_declarations.n00b" \
@@ -4348,10 +4367,14 @@ fi
     cat "$tmp/array_ragged.err"
     exit 1
 }
-test "$(grep -c '= array.new ' "$tmp/array_ragged.ir")" -eq 3
+awk '/  func @make_rows\(/,/^  \}/' "$tmp/array_ragged.ir" \
+    >"$tmp/array_ragged.make_rows.ir"
+test "$(grep -c '= array.new ' "$tmp/array_ragged.make_rows.ir")" -eq 3
 test "$(grep -c '!ir.array.element_initialization("language_zero")' \
-    "$tmp/array_ragged.ir")" -eq 3
-test "$(grep -c '= call @__write,' "$tmp/array_ragged.ir")" -eq 2
+    "$tmp/array_ragged.make_rows.ir")" -eq 3
+test "$(grep -c '= index ' "$tmp/array_ragged.make_rows.ir")" -eq 2
+test "$(grep -c '^      store %__n00bb_index_address_' \
+    "$tmp/array_ragged.make_rows.ir")" -eq 2
 
 "$compiler" lower --dump-ir "$script_dir/programs/array_slice_lowering.n00b" \
     >"$tmp/array_slice.ir" 2>"$tmp/array_slice.err" || {

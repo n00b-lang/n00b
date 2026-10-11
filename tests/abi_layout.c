@@ -273,7 +273,11 @@ int main(void)
         ok = ok && check_scalar(module, &target,
                 th_ind(types, 0, th_bitint(types, 64, false)), 64, 64, 8)
             && check_scalar(module, &target,
-                th_ind(types, 0, th_name(types, "bool")), 128, 128, 8);
+                th_ind(types, 0, th_name(types, "bool")), 128, 128, 8)
+            && check_scalar(module, &target,
+                th_ind(types, 0, th_bits(types, 127)), 128, 128, 8)
+            && check_scalar(module, &target,
+                th_ind(types, 0, th_bits(types, 128)), 128, 128, 8);
         th_type *unresolved_ref = th_ind(types, 0,
             th_name(types, "foreign.Unknown"));
         bool unresolved_handled = true;

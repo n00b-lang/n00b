@@ -1,0 +1,4 @@
+public type Pair {
+    public left: int
+    public right: int
+}

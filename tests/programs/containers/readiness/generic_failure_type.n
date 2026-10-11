@@ -1,0 +1,20 @@
+func maybe_fail(value: int, reason: `E, fail_now: bool) -> int fail: `E {
+    if fail_now {
+        fail reason
+    }
+    return value
+}
+
+comptime {} else {
+    try {
+        require maybe_fail(7, "requested", false)! == 7
+    } else err {
+        require false
+    }
+    try {
+        _ = maybe_fail(7, "requested", true)!
+        require false
+    } else err {
+        require true
+    }
+}

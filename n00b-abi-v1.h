@@ -64,6 +64,8 @@ typedef struct {
     /* `rank` uint64_t extents follow this header. */
 } n00b_abi_array_descriptor_header_v1;
 
+enum { N00B_ABI_ARRAY_ORIGIN_BIT_MASK = 7u };
+
 typedef struct {
     uint64_t total_count;
     uint64_t origin_bit;
@@ -195,6 +197,7 @@ typedef enum {
     N00B_ABI_TYPE_FLAG_PACKABLE = 1u << 2,
     N00B_ABI_TYPE_FLAG_NON_CONCRETE = 1u << 3,
     N00B_ABI_TYPE_FLAG_BITS = 1u << 4,
+    N00B_ABI_TYPE_FLAG_PLAIN_REF = 1u << 5,
 } n00b_abi_type_flag_v1;
 
 typedef enum {
@@ -393,6 +396,8 @@ typedef struct {
     n00b_abi_string_v1 named_constructor;
     n00b_abi_range_v1 named_arguments; /* Direct TYPE_ARGUMENT row span. */
     uint32_t finalizer_function_index;
+    /* Generic variables in compiler-provided traits have this owner. */
+    uint32_t typevar_owner_trait_index;
 } n00b_abi_type_v1;
 
 typedef struct {
@@ -870,6 +875,14 @@ const n00b_abi_storage_v1 *n00b_abi_v1_storage(
 /* Returns only concrete type rows; non-concrete shape hashes are not unique. */
 int32_t n00b_abi_v1_find_typehash(const n00b_abi_snapshot_v1 *snapshot,
                                   uint64_t typehash, uint32_t *type_index);
+int32_t n00b_abi_v1_find_unary_type(const n00b_abi_snapshot_v1 *snapshot,
+                                    uint32_t kind, uint32_t element_index,
+                                    uint32_t *type_index);
+int32_t n00b_abi_v1_find_named_type(const n00b_abi_snapshot_v1 *snapshot,
+                                    const uint8_t *name, size_t name_bytes,
+                                    const uint32_t *arguments,
+                                    uint32_t argument_count,
+                                    uint32_t *type_index);
 int32_t n00b_abi_v1_find_module(const n00b_abi_snapshot_v1 *snapshot,
                                 n00b_abi_string_v1 full_path,
                                 uint32_t *module_index);

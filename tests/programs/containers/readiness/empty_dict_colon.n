@@ -1,0 +1,4 @@
+comptime {} else {
+    var pairs: Dict[int, int] = {:}
+    require builtin.containers.dict.len(pairs) == 0
+}

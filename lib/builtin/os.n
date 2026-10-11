@@ -7,7 +7,7 @@ public type Thread_Context layout(c) {
     public sp: Ref[byte]?
     public fp: Ref[byte]?
     public nregs: uint
-    public regs: uint[context_registers]
+    public regs: Array[uint][context_registers]
     public parked: Atomic[u32]
     public handle: uint
     public thread_id: u64

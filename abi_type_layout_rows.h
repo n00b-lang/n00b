@@ -36,10 +36,11 @@ typedef struct {
  * layout and the TU's indexed symbol declarations. */
 bool n00bb_abi_type_layout_rows_build(
     n00bb_abi_type_index_t *index, ir_module_t *comptime,
-    ir_module_t *runtime, uint32_t stream_base,
+    ir_module_t *runtime, bool include_external_definitions,
+    uint32_t stream_base,
     const n00bb_abi_decl_index_t *declarations,
     n00bb_abi_name_pool_t *names,
     n00bb_abi_type_identity_rows_t *types,
-    n00bb_abi_type_layout_rows_t *out);
+    n00bb_abi_type_layout_rows_t *out, uint32_t *failed_type_index);
 void n00bb_abi_type_layout_rows_release(
     n00bb_abi_type_layout_rows_t *rows);

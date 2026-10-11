@@ -1,0 +1,26 @@
+public type List {
+    public item: `T
+}
+
+public type Dict {
+    public key: `K
+    public value: `V
+}
+
+public type Pair {
+    public first: `A
+    public second: `B
+}
+
+public type Set {
+    public item: `T
+}
+
+public type View {
+    public item: `T
+}
+
+public type Cursor {
+    public source: View[`T]
+    public index: int
+}

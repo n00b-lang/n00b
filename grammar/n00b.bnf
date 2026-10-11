@@ -32,6 +32,7 @@
                    | <assert-stmt>
                    | <import-stmt>
                    | <visible-inferred-assign>
+                   | <discard-stmt>
                    | <assign-stmt>
                    | <binop-assign-stmt>
                    | <expression-stmt>
@@ -70,6 +71,7 @@
                          | <assert-stmt>
                          | <import-stmt>
                          | <export-stmt>
+                         | <discard-stmt>
                          | <assign-stmt>
                          | <binop-assign-stmt>
                          | <expression-stmt>
@@ -259,6 +261,7 @@
 <range-sep> ::= %"to" <operator-continuation>?
               | %"until" <operator-continuation>?
               | %".." <operator-continuation>?
+              | %":" <operator-continuation>?
 
 <break-stmt> @jump("break") ::= %"break" %IDENTIFIER?
 <continue-stmt> @jump("continue") ::= %"continue" %IDENTIFIER?
@@ -423,6 +426,7 @@
 <flagset-name> @varref($0) ::= %IDENTIFIER
 
 <assign-stmt> @assigns($0, $2) ::= <expression> <assign-op> <expression>
+<discard-stmt> ::= %_ <assign-op> <expression>
 
 <binop-assign-stmt> @assigns($0, $2) @emit("compound_assign", $0, $2) @infer("$0 unify method_result($0, $2, __add)") ::= <expression> <plus-assign-op> <expression>
 <binop-assign-stmt> @assigns($0, $2) @emit("compound_assign", $0, $2) @infer("$0 unify method_result($0, $2, __subtract)") ::= <expression> <minus-assign-op> <expression>
@@ -520,7 +524,7 @@
 
 <postfix-expr> @emit("module_member") @infer("field_return_auto_deref($0)") ::= <postfix-expr> %"." %IDENTIFIER
 <postfix-expr> @emit("call") @infer("element_of($0, __read, __write)") ::= <postfix-expr> %"[" <index-contents> %"]"
-<postfix-expr> @emit("call") @infer("slice_of($0, __slice)") ::= <postfix-expr> %"[" <slice-contents> %"]"
+<postfix-expr> @emit("call") @infer("slice_of($0, __slice, __write_slice)") ::= <postfix-expr> %"[" <slice-contents> %"]"
 <postfix-expr> @operator("unwrap_result") @infer("unwrap_result($0)") ::= <postfix-expr> %"!"
 <postfix-expr> @emit("call") @infer("return_of($0)") @call($0) ::= <postfix-expr> %"(" %")"
 <postfix-expr> @emit("call") @infer("return_of($0)") @call($0, $2) ::= <postfix-expr> %"(" <call-args> %")"
@@ -528,7 +532,7 @@
 
 <index-contents> ::= <expression>
 
-<slice-contents> ::= <expression> %":" <expression>
+<slice-contents> ::= <expression> <range-sep> <expression>
                    | <expression> %":"
                    | %":" <expression>
                    | %":"
@@ -616,6 +620,8 @@
        %"{" <dict-entries> %"}"
 <dict-or-set-lit> @emit("brace_literal") @infer("`t") ::=
        %"{" <set-entries> %"}"
+<dict-or-set-lit> @emit("brace_literal") @infer("`t") ::=
+       %"{" %":" %"}"
 <dict-or-set-lit> @emit("brace_literal") @infer("`t") @constrain($0, Brace_Literal) ::= %"{" %"}"
 
 <dict-entries> @infer("$0 unify $1") ::= <dict-entry> %"," <dict-entries>
@@ -661,9 +667,9 @@
                     | <tspec-func>
                     | %"(" <union-tspec> %")"
 
-<tspec-application> @disambig(n00bb_not_generic_type, 100) ::=
+<tspec-application> ::=
     %"[" <tspec-list> %"]"
-<array-dimensions> @disambig(n00bb_generic_type, 100) ::=
+<array-dimensions> @disambig(n00bb_prefer_type_application, 100) ::=
     <array-dimension>+
 <array-dimension> ::= %"[" <expression>? %"]"
 

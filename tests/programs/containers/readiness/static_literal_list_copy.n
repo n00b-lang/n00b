@@ -1,0 +1,13 @@
+import builtin.containers.list
+
+func make_values() -> List[int] {
+    return [3, 5]'list
+}
+
+comptime {} else {
+    var first = make_values()
+    var second = make_values()
+    first[0] = 11
+    require first[0] == 11
+    require second[0] == 3
+}

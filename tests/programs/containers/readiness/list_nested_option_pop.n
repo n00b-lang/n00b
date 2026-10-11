@@ -1,0 +1,15 @@
+comptime {} else {
+    var values: List[int?] = new[List[int?]]()
+    values.append(4)
+    values.append(nil)
+    let absent_item: Option[int?] = values.pop()
+    require absent_item != nil
+    require absent_item.get() == nil
+    let present_item: Option[int?] = values.pop()
+    require present_item != nil
+    let inner: int? = present_item.get()
+    require inner != nil
+    require inner.get() == 4
+    let empty: Option[int?] = values.pop()
+    require empty == nil
+}

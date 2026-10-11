@@ -1,0 +1,10 @@
+comptime {} else {
+    var source: Array[bool] = new[Array[bool]](9)
+    source[0] = true
+    source[8] = true
+    var copied: Array[bool] = source
+    copied[0] = false
+    require source[0]
+    require !copied[0]
+    require copied[8]
+}

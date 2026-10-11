@@ -1,0 +1,8 @@
+comptime {} else {
+    var rows: Array[Array[int]] = new[Array[Array[int]]](2)
+    rows[0] = new[Array[int]](3)
+    let row: Ref[Array[int]] = ref rows[0]
+    let loaded: Array[int] = ref_read(row)
+    require loaded[0] == 0
+    require ref_read(row)[0] == 0
+}

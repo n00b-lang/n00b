@@ -1,0 +1,7 @@
+const words: List[string] = ["red", "blue"]'list
+
+comptime {} else {
+    require builtin.containers.list.len(words) == 2
+    require words[0] == "red"
+    require words[1] == "blue"
+}

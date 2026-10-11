@@ -1,6 +1,6 @@
 import builtin.io.raw
 
-public func raw_repr(self: int[], fd: i32) -> i32 {
+public func raw_repr(self: Array[int][], fd: i32) -> i32 {
     return __fd_write(fd, "inner")
 }
 

@@ -1,0 +1,8 @@
+import builtin.containers.list
+
+comptime {} else {
+    var values: List[uint] = []
+    let small: int = 1
+    values.append(small)
+    require values[0] == 1
+}

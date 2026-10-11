@@ -1,0 +1,10 @@
+type Slots { value: int }
+
+func __write(modify self: Slots, index: int, item: int) -> nil {
+    self.value = item
+}
+
+comptime {} else {
+    let slots: Slots = (value = 0)
+    slots[0] = 7
+}

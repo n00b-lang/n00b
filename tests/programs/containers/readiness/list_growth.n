@@ -1,0 +1,21 @@
+comptime {} else {
+    var values: List[int] = [1, 2]
+    require builtin.containers.list.len(values) == 2
+    values.append(3)
+    require builtin.containers.list.len(values) == 3
+    values.append(0, front = true)
+    require builtin.containers.list.len(values) == 4
+    let first: int? = values.pop(front = true)
+    if first != nil {
+        require first.get() == 0
+    } else {
+        require false
+    }
+    let last: int? = values.pop(false)
+    if last != nil {
+        require last.get() == 3
+    } else {
+        require false
+    }
+    require builtin.containers.list.len(values) == 2
+}

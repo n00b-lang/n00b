@@ -1,0 +1,62 @@
+import builtin.containers.dict
+
+type Key {
+    value: int
+}
+
+func hash(self: Key) -> u128 {
+    if self.value % 2 == 0 { return cast[u128](self.value * 256 + 7) }
+    return cast[u128](self.value * 256 + 8)
+}
+
+comptime {} else {
+    var values: Dict[Key, int] = new[Dict[Key, int]]()
+    var i: int = 0
+    while i < 80 {
+        let key: Key = (value = i)
+        require builtin.containers.dict.add(values, key, i * 3)
+        i += 1
+    }
+    require builtin.containers.dict.len(values) == 80
+    var total: int = 0
+    for key, value in values {
+        require value == key.value * 3
+        total += 1
+    }
+    require total == 80
+    i = 1
+    while i < 80 {
+        let key: Key = (value = i)
+        require builtin.containers.dict.remove(values, key)
+        i += 2
+    }
+    require builtin.containers.dict.len(values) == 40
+    i = 0
+    while i < 80 {
+        let key: Key = (value = i)
+        let found: int? = builtin.containers.dict.get(values, key)
+        if i % 2 == 0 {
+            require found != nil
+            require found.get() == i * 3
+        } else {
+            require found == nil
+        }
+        i += 1
+    }
+    i = 1
+    while i < 80 {
+        let key: Key = (value = i)
+        require builtin.containers.dict.put(values, key, i * 5) == nil
+        i += 2
+    }
+    require builtin.containers.dict.len(values) == 80
+    i = 0
+    while i < 80 {
+        let key: Key = (value = i)
+        let found: int? = builtin.containers.dict.get(values, key)
+        require found != nil
+        if i % 2 == 0 { require found.get() == i * 3 }
+        else { require found.get() == i * 5 }
+        i += 1
+    }
+}

@@ -1,0 +1,168 @@
+import builtin.hash
+import builtin.containers.hash_index
+import builtin.cursor
+
+type Set_State {
+    keys: Array[`T]
+    count: uint
+    index: builtin.containers.hash_index.Hash_Index
+}
+
+public type Set {
+    state: Ref[Set_State[`T]]
+}
+
+func __init(modify self: Set_State[`T]) {
+    self.keys = new[Array[`T]](0)
+    self.count = 0
+    self.index = new[builtin.containers.hash_index.Hash_Index]()
+}
+
+func ensure_keys(modify self: Set[`T], needed: uint) {
+    let capacity: uint = __array_length(self.state.keys)
+    if needed <= capacity { return }
+    var next_capacity: uint = 16
+    if capacity != 0 { next_capacity = capacity * 2 }
+    while next_capacity < needed { next_capacity *= 2 }
+    var next: Array[`T] = new[Array[`T]](cast[int] next_capacity)
+    var at: uint = 0
+    while at < self.state.count {
+        next[at] = self.state.keys[at]
+        at += 1
+    }
+    self.state.keys = next
+}
+
+public func __init(modify self: Set[`T], items: Array[`T] = []) where `T: builtin.hash.Hash {
+    var state: Set_State[`T] = new[Set_State[`T]]()
+    self.state = ref state
+    for value in items { _ = add(self, value) }
+}
+
+public func len(self: Set[`T]) -> uint {
+    return self.state.count
+}
+
+public func contains(self: Set[`T], value: `T) -> bool where `T: builtin.hash.Hash {
+    return builtin.containers.hash_index.find_slot(ref self.state.index,
+        value.hash()) != nil
+}
+
+public func add(modify self: Set[`T], value: `T) -> bool where `T: builtin.hash.Hash {
+    let hash: u128 = value.hash()
+    if builtin.containers.hash_index.find_slot(ref self.state.index, hash) != nil {
+        return false
+    }
+    ensure_keys(self, self.state.count + 1)
+    builtin.containers.hash_index.ensure_capacity(self.state.index, 1)
+    self.state.keys[self.state.count] = value
+    builtin.containers.hash_index.index_insert(self.state.index, hash,
+        self.state.count)
+    self.state.count += 1
+    return true
+}
+
+public func remove(modify self: Set[`T], value: `T) -> bool where `T: builtin.hash.Hash {
+    let hash: u128 = value.hash()
+    let found: uint? = builtin.containers.hash_index.find_slot(
+        ref self.state.index, hash)
+    if found == nil { return false }
+    let slot: builtin.containers.hash_index.Hash_Index_Slot =
+        self.state.index.slots[found.get()]
+    let removed: uint = slot.entry - 1
+    builtin.containers.hash_index.remove_at(self.state.index, found.get())
+    let last: uint = self.state.count - 1
+    if removed != last {
+        let moved: `T = self.state.keys[last]
+        self.state.keys[removed] = moved
+        builtin.containers.hash_index.replace_entry(self.state.index,
+            moved.hash(), last, removed)
+    }
+    __array_clear(ref self.state.keys, last)
+    self.state.count = last
+    return true
+}
+
+public func clear(modify self: Set[`T]) {
+    self.state.keys = new[Array[`T]](0)
+    self.state.count = 0
+    self.state.index = new[builtin.containers.hash_index.Hash_Index]()
+}
+
+public func iter(self: Set[`T]) -> builtin.cursor.Cursor[`T] {
+    let count: int = cast[int] self.state.count
+    var items: Array[`T] = new[Array[`T]](count)
+    var at: int = 0
+    while at < count {
+        items[at] = self.state.keys[at]
+        at += 1
+    }
+    return builtin.cursor.iter(items)
+}
+
+public func is_subset(left: Set[`T], right: Set[`T]) -> bool where `T: builtin.hash.Hash {
+    for value in left {
+        if !contains(right, value) { return false }
+    }
+    return true
+}
+
+public func is_superset(left: Set[`T], right: Set[`T]) -> bool where `T: builtin.hash.Hash {
+    return is_subset(right, left)
+}
+
+public func is_disjoint(left: Set[`T], right: Set[`T]) -> bool where `T: builtin.hash.Hash {
+    for value in left {
+        if contains(right, value) { return false }
+    }
+    return true
+}
+
+public func __equal(self: Set[`T], other: Set[`T]) -> bool where `T: builtin.hash.Hash {
+    return len(self) == len(other) and is_subset(self, other)
+}
+
+public func hash(self: Set[`T]) -> u128 where `T: builtin.hash.Hash {
+    var result: u128 = len(self)
+    for value in self { result = result ^ value.hash() }
+    return result
+}
+
+public func __add(left: Set[`T], right: Set[`T]) -> Set[`T] where `T: builtin.hash.Hash {
+    var result: Set[`T] = new[Set[`T]]()
+    for value in left { _ = add(result, value) }
+    for value in right { _ = add(result, value) }
+    return result
+}
+
+public func __subtract(left: Set[`T], right: Set[`T]) -> Set[`T] where `T: builtin.hash.Hash {
+    var result: Set[`T] = new[Set[`T]]()
+    for value in left {
+        if !contains(right, value) { _ = add(result, value) }
+    }
+    return result
+}
+
+public func __bit_and(left: Set[`T], right: Set[`T]) -> Set[`T] where `T: builtin.hash.Hash {
+    var result: Set[`T] = new[Set[`T]]()
+    for value in left {
+        if contains(right, value) { _ = add(result, value) }
+    }
+    return result
+}
+
+public func __bit_xor(left: Set[`T], right: Set[`T]) -> Set[`T] where `T: builtin.hash.Hash {
+    var result: Set[`T] = new[Set[`T]]()
+    for value in left {
+        if !contains(right, value) { _ = add(result, value) }
+    }
+    for value in right {
+        if !contains(left, value) { _ = add(result, value) }
+    }
+    return result
+}
+
+litmod<set> set, s(items: Array[`T]) -> Set[`T] fail: string {
+    return new[Set[`T]](items)
+}
+

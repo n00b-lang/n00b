@@ -1,0 +1,11 @@
+comptime {} else {
+    var total: int = 0
+    for i from 0:3 {
+        total += i
+    }
+    require total == 3
+    switch total {
+        case 3:4 { require true }
+        else { require false }
+    }
+}

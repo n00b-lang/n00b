@@ -1,6 +1,7 @@
 #include "abi_type_index.h"
 
 #include <limits.h>
+#include <string.h>
 #include "ir/typelang.h"
 #include "lib/alloc.h"
 #include "lib/dict.h"
@@ -38,6 +39,10 @@ type_key_equal(const void *left, const void *right)
 static bool add_type(n00bb_abi_type_index_t *index, th_type *type,
                      uint32_t *out_index);
 static bool add_children(n00bb_abi_type_index_t *index, th_type *type);
+static bool collect_call_specializations(n00bb_abi_type_index_t *index,
+                                         ir_module_t *module,
+                                         ir_func_t *const *functions,
+                                         size_t function_count);
 
 static bool
 add_optional(n00bb_abi_type_index_t *index, th_type *type)
@@ -112,6 +117,15 @@ add_constraint(n00bb_abi_type_index_t *index, th_constraint constraint)
 }
 
 static bool
+add_reference_to_closed_child(n00bb_abi_type_index_t *index, th_type *child)
+{
+    if (!child || !th_is_closed(ir_module_types(index->module), child))
+        return true;
+    th_type *reference = th_ind(ir_module_types(index->module), 0, child);
+    return reference && add_type(index, reference, nullptr);
+}
+
+static bool
 add_children(n00bb_abi_type_index_t *index, th_type *type)
 {
     switch (th_kind_of(type)) {
@@ -131,11 +145,14 @@ add_children(n00bb_abi_type_index_t *index, th_type *type)
     case TH_INDIRECTION:
         return add_optional(index, th_ind_referent(type));
     case TH_SEQUENCE:
-        return add_optional(index, th_seq_elem(type));
+        return add_optional(index, th_seq_elem(type))
+            && add_reference_to_closed_child(index, th_seq_elem(type));
     case TH_RECORD:
         for (size_t i = 0; i < th_record_len(type); i++) {
             const th_member *member = th_record_member(type, i);
-            if (!member || !add_optional(index, member->type)) return false;
+            if (!member || !add_optional(index, member->type)
+                || !add_reference_to_closed_child(index, member->type))
+                return false;
         }
         return true;
     case TH_FUNCTION:
@@ -316,7 +333,7 @@ n00bb_abi_type_index_collect_module_types(n00bb_abi_type_index_t *index,
         if (th_is_closed(types, type)
             && !add_type(index, type, nullptr)) return false;
     }
-    return true;
+    return collect_call_specializations(index, module, nullptr, 0);
 }
 
 bool
@@ -384,6 +401,191 @@ add_closed_type(n00bb_abi_type_index_t *index, th_type *type)
         || add_type(index, type, nullptr);
 }
 
+typedef struct {
+    const th_type *variable;
+    th_type *actual;
+} call_type_binding_t;
+core_list_decl(call_type_binding_t);
+
+typedef struct {
+    ir_func_t *target;
+    th_type *actual;
+    uint64_t hash;
+} call_specialization_t;
+core_list_decl(call_specialization_t);
+
+static bool
+match_call_type(th_ctx *types, th_type *pattern, th_type *actual,
+                core_list_t(call_type_binding_t) *bindings, unsigned depth)
+{
+    if (!pattern || !actual || depth > 64) return false;
+    pattern = th_resolve(pattern);
+    actual = th_resolve(actual);
+    th_kind kind = th_kind_of(pattern);
+    if (kind == TH_VAR) {
+        for (size_t i = 0; i < bindings->len; i++)
+            if (bindings->data[i].variable == pattern)
+                return th_hash(types, bindings->data[i].actual)
+                    == th_hash(types, actual);
+        core_list_push(*bindings, ((call_type_binding_t){pattern, actual}));
+        return true;
+    }
+    if (kind != th_kind_of(actual)) return true;
+    if (kind == TH_SEQUENCE)
+        return match_call_type(types, th_seq_elem(pattern),
+            th_seq_elem(actual), bindings, depth + 1);
+    if (kind == TH_INDIRECTION)
+        return match_call_type(types, th_ind_referent(pattern),
+            th_ind_referent(actual), bindings, depth + 1);
+    if (kind == TH_NAMED) {
+        const char *left = nullptr, *right = nullptr;
+        size_t left_count = 0, right_count = 0;
+        if (!th_named_info(pattern, &left, nullptr, nullptr, &left_count)
+            || !th_named_info(actual, &right, nullptr, nullptr, &right_count)
+            || !left || !right || strcmp(left, right)
+            || left_count != right_count) return false;
+        for (size_t i = 0; i < left_count; i++) {
+            const th_arg *a = th_named_arg(pattern, i);
+            const th_arg *b = th_named_arg(actual, i);
+            if (!a || !b || a->kind != b->kind) return false;
+            if (a->kind == TH_ARG_TYPE
+                && !match_call_type(types, a->type, b->type,
+                    bindings, depth + 1)) return false;
+        }
+        return true;
+    }
+    if (kind == TH_FUNCTION) {
+        if (th_func_nparams(pattern) != th_func_nparams(actual)
+            || !match_call_type(types, th_func_ret(pattern),
+                th_func_ret(actual), bindings, depth + 1)) return false;
+        th_type *left_error = th_func_error(pattern);
+        th_type *right_error = th_func_error(actual);
+        if (!!left_error != !!right_error
+            || (left_error && !match_call_type(types, left_error,
+                right_error, bindings, depth + 1))) return false;
+        for (size_t i = 0; i < th_func_nparams(pattern); i++) {
+            const th_param *a = th_func_param(pattern, i);
+            const th_param *b = th_func_param(actual, i);
+            if (!a || !b || !match_call_type(types, a->type, b->type,
+                    bindings, depth + 1)) return false;
+        }
+    }
+    return true;
+}
+
+static bool
+collect_specialized_type(n00bb_abi_type_index_t *index, th_type *type,
+                         const th_type **from, th_type **to, size_t count)
+{
+    if (!type || th_is_closed(ir_module_types(index->module), type))
+        return add_closed_type(index, type);
+    th_type *closed = th_type_clone_replacing(ir_module_types(index->module),
+        type, from, to, count);
+    return closed && add_closed_type(index, closed);
+}
+
+static bool
+append_call_specialization(n00bb_abi_type_index_t *index,
+                           core_list_t(call_specialization_t) *pending,
+                           ir_instr_t *instruction, const th_type **from,
+                           th_type **to, size_t count)
+{
+    if (instruction->op != IR_OP_CALL || !instruction->n_operands)
+        return true;
+    ir_value_t *callee = ir_operand_value(&instruction->operands[0]);
+    ir_func_t *target = callee && callee->kind == IR_VAL_FUNC
+        ? callee->owner : nullptr;
+    th_type *actual = ir_instr_call_signature(instruction);
+    th_ctx *types = ir_module_types(index->module);
+    if (!target || !target->type || !actual) return true;
+    if (count && !th_is_closed(types, actual))
+        actual = th_type_clone_replacing(types, actual, from, to, count);
+    if (!actual) return false;
+    if (!th_is_closed(types, actual)) return true;
+    uint64_t hash = th_hash(types, actual);
+    for (size_t i = 0; i < pending->len; i++)
+        if (pending->data[i].target == target
+            && pending->data[i].hash == hash) return true;
+    core_list_push(*pending, ((call_specialization_t){target, actual,
+                                                     hash}));
+    return true;
+}
+
+static bool
+collect_specialized_body(n00bb_abi_type_index_t *index, ir_func_t *function,
+                         const th_type **from, th_type **to, size_t count,
+                         core_list_t(call_specialization_t) *pending)
+{
+    for (uint32_t i = 0; i < function->n_locals; i++)
+        if (!collect_specialized_type(index, function->locals[i]->type,
+                from, to, count)) return false;
+    for (uint32_t b = 0; b < function->n_blocks; b++) {
+        ir_block_t *block = function->blocks[b];
+        for (uint32_t i = 0; i < block->n_instrs; i++) {
+            ir_instr_t *instruction = block->instrs[i];
+            if (!append_call_specialization(index, pending, instruction,
+                    from, to, count)) return false;
+            if (instruction->dest
+                && !collect_specialized_type(index, instruction->dest->type,
+                    from, to, count)) return false;
+            for (uint32_t o = 0; o < instruction->n_operands; o++) {
+                ir_operand_t *operand = &instruction->operands[o];
+                ir_value_t *value = ir_operand_value(operand);
+                if ((value && !collect_specialized_type(index, value->type,
+                        from, to, count))
+                    || (operand->kind == IR_OPD_TYPE
+                        && !collect_specialized_type(index, operand->type,
+                            from, to, count))) return false;
+            }
+        }
+    }
+    return true;
+}
+
+static bool
+collect_call_specializations(n00bb_abi_type_index_t *index,
+                             ir_module_t *module,
+                             ir_func_t *const *functions,
+                             size_t function_count)
+{
+    th_ctx *types = ir_module_types(index->module);
+    core_list_t(call_specialization_t) pending = {0};
+    bool valid = true;
+    size_t count = module ? ir_func_count(module) : function_count;
+    for (size_t f = 0; f < count; f++) {
+        ir_func_t *caller = module ? ir_func_at(module, f) : functions[f];
+        for (uint32_t b = 0; b < caller->n_blocks; b++) {
+            ir_block_t *block = caller->blocks[b];
+            for (uint32_t i = 0; valid && i < block->n_instrs; i++)
+                valid = append_call_specialization(index, &pending,
+                    block->instrs[i], nullptr, nullptr, 0);
+        }
+    }
+    for (size_t i = 0; valid && i < pending.len; i++) {
+        call_specialization_t *specialization = &pending.data[i];
+        core_list_t(call_type_binding_t) bindings = {0};
+        valid = match_call_type(types, specialization->target->type,
+            specialization->actual, &bindings, 0);
+        const th_type **from = valid && bindings.len
+            ? core_alloc_array(const th_type *, bindings.len) : nullptr;
+        th_type **to = valid && bindings.len
+            ? core_alloc_array(th_type *, bindings.len) : nullptr;
+        if (valid && bindings.len && (!from || !to)) valid = false;
+        for (size_t n = 0; valid && n < bindings.len; n++) {
+            from[n] = bindings.data[n].variable;
+            to[n] = bindings.data[n].actual;
+        }
+        if (valid && bindings.len)
+            valid = collect_specialized_body(index,
+                specialization->target, from, to, bindings.len, &pending);
+        core_free(from);
+        core_free(to);
+        core_list_free(bindings);
+    }
+    core_list_free(pending);
+    return valid;
+}
+
 bool
 n00bb_abi_type_index_collect_comptime_functions(
     n00bb_abi_type_index_t *index, ir_func_t *const *functions,
@@ -423,7 +625,8 @@ n00bb_abi_type_index_collect_comptime_functions(
             }
         }
     }
-    return true;
+    return collect_call_specializations(index, nullptr, functions,
+                                        function_count);
 }
 
 static th_type *
@@ -496,10 +699,13 @@ n00bb_abi_type_index_collect_symbols(n00bb_abi_type_index_t *index,
          scope; scope = scope->all_next) {
         for (const parse_sym_entry_t *symbol = scope->first_in_scope;
              symbol; symbol = symbol->next_in_scope) {
-            if (symbol->is_synthetic || symbol->binding_origin
+            bool generated = parse_sym_binding(symbol,
+                CORE_STRING_STATIC("n00bb.generated-value-method")) != nullptr;
+            if ((symbol->is_synthetic && !generated) || symbol->binding_origin
                 || symbol->kind == PARSE_SYM_MODULE)
                 continue;
-            if (!symbol->decl_node && !symbol->definition_count) continue;
+            if (!symbol->decl_node && !symbol->definition_count
+                && !generated) continue;
             bool include = true;
             if (select && !select(context, symbol, &include)) return false;
             if (!include) continue;

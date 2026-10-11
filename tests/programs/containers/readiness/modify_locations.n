@@ -1,0 +1,17 @@
+type Holder {
+    value: int
+}
+
+func bump(modify value: int) {
+    value += 1
+}
+
+comptime {} else {
+    var holder: Holder = (value = 7)
+    bump(holder.value)
+    require holder.value == 8
+
+    var values = [11, 29]'array
+    bump(values[0])
+    require values[0] == 12
+}

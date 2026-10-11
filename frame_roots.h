@@ -40,7 +40,8 @@ static inline bool
 n00bb_frame_native_pointer(ir_module_t *module, th_type *type)
 {
     return ir_machine_of(module, type).class == IR_CLASS_PTR
-        || n00bb_frame_pointer_option(type);
+        || n00bb_frame_pointer_option(type)
+        || th_kind_of(th_resolve(type)) == TH_SEQUENCE;
 }
 
 static inline th_type *
@@ -55,8 +56,29 @@ n00bb_frame_root_type(n00bb_frame_root_kind_t kind, ir_value_t *value,
 }
 
 static inline bool
+n00bb_frame_pointer_free_value(ir_module_t *module, th_type *type)
+{
+    type = th_resolve(type);
+    ir_class_t machine = ir_machine_of(module, type).class;
+    if (machine == IR_CLASS_BOOL || machine == IR_CLASS_SINT
+        || machine == IR_CLASS_UINT || machine == IR_CLASS_FLOAT)
+        return true;
+    th_type *definition = ir_type_definition(module, type);
+    if (!definition) definition = type;
+    definition = th_resolve(definition);
+    if (th_kind_of(definition) != TH_RECORD) return false;
+    for (size_t i = 0; i < th_record_len(definition); i++) {
+        const th_member *member = th_record_member(definition, i);
+        if (!member || !n00bb_frame_pointer_free_value(module, member->type))
+            return false;
+    }
+    return true;
+}
+
+static inline bool
 n00bb_frame_traced_value(ir_func_t *function, th_type *type)
 {
+    if (n00bb_frame_pointer_free_value(function->owner, type)) return false;
     th_kind kind = th_kind_of(th_resolve(type));
     if (kind == TH_VAR || kind == TH_TRAIT) return true;
     ir_class_t category = ir_machine_of(function->owner, type).class;
@@ -77,9 +99,7 @@ n00bb_frame_roots_filtered(ir_func_t *function, bool pointers_only,
     for (uint32_t i = 0; i < function->n_params; i++) {
         ir_value_t *value = function->params[i];
         if (!value || !value->type) return false;
-        ir_class_t category = ir_machine_of(function->owner,
-                                             value->type).class;
-        if (category != IR_CLASS_PTR && !n00bb_frame_pointer_option(value->type)
+        if (!n00bb_frame_native_pointer(function->owner, value->type)
             && (pointers_only
                 || !n00bb_frame_traced_value(function, value->type))) continue;
         if (visit && !visit(context, N00BB_FRAME_ROOT_PARAM, next,
@@ -89,9 +109,7 @@ n00bb_frame_roots_filtered(ir_func_t *function, bool pointers_only,
     for (uint32_t i = 0; i < function->n_locals; i++) {
         ir_local_t *local = function->locals[i];
         if (!local || !local->type) return false;
-        ir_class_t category = ir_machine_of(function->owner,
-                                             local->type).class;
-        if (category != IR_CLASS_PTR && !n00bb_frame_pointer_option(local->type)
+        if (!n00bb_frame_native_pointer(function->owner, local->type)
             && (pointers_only
                 || !n00bb_frame_traced_value(function, local->type))) continue;
         if (visit && !visit(context, N00BB_FRAME_ROOT_LOCAL, next,
@@ -108,10 +126,7 @@ n00bb_frame_roots_filtered(ir_func_t *function, bool pointers_only,
                 ? instruction->dest : nullptr;
             if (!value) continue;
             if (!value->type) return false;
-            ir_class_t category = ir_machine_of(function->owner,
-                                                 value->type).class;
-            if (category != IR_CLASS_PTR
-                && !n00bb_frame_pointer_option(value->type)
+            if (!n00bb_frame_native_pointer(function->owner, value->type)
                 && (pointers_only
                     || !n00bb_frame_traced_value(function, value->type)))
                 continue;

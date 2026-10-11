@@ -1,1 +1,1 @@
-var invalid_dimension: int[true]
+var invalid_dimension: Array[int][true]

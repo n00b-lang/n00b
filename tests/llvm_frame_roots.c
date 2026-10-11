@@ -1,6 +1,7 @@
 #include "llvm_backend.h"
 #include "llvm_stack_maps.h"
 #include "native_frame_maps.h"
+#include "frame_roots.h"
 
 #include <llvm-c/Core.h>
 #include <llvm-c/TargetMachine.h>
@@ -22,8 +23,8 @@ typedef struct {
     unsigned optional_sentinels;
     unsigned distinct_roots;
     unsigned distinct_sentinels;
-    unsigned conservative_roots;
-    unsigned conservative_sentinels;
+    unsigned record_roots;
+    unsigned record_sentinels;
 } map_counts_t;
 
 static bool
@@ -50,13 +51,13 @@ check_root(void *context, const n00bb_llvm_stack_location_t *location)
     bool pin_distinct = location->function.length >= length
         && !memcmp(location->function.bytes
             + location->function.length - length, name, length);
-    name = "pin_conservative_caller";
+    name = "pin_record_caller";
     length = strlen(name);
-    bool pin_conservative = location->function.length >= length
+    bool pin_record = location->function.length >= length
         && !memcmp(location->function.bytes
             + location->function.length - length, name, length);
     if (!pin_root && !pin_inlined && !pin_optional && !pin_distinct
-        && !pin_conservative)
+        && !pin_record)
         return true;
     if (pin_root) {
         if (location->id == N00BB_LLVM_FRAME_SENTINEL_ID)
@@ -73,10 +74,10 @@ check_root(void *context, const n00bb_llvm_stack_location_t *location)
         if (location->id == N00BB_LLVM_FRAME_SENTINEL_ID)
             counts->distinct_sentinels++;
         else counts->distinct_roots++;
-    } else if (pin_conservative) {
+    } else if (pin_record) {
         if (location->id == N00BB_LLVM_FRAME_SENTINEL_ID)
-            counts->conservative_sentinels++;
-        else counts->conservative_roots++;
+            counts->record_sentinels++;
+        else counts->record_roots++;
     }
     CHECK(location->size_bytes == sizeof(void *));
     CHECK(location->frame_offset < 0);
@@ -142,6 +143,25 @@ main(void)
         && ir_layout_publish_final(runtime, number, target, &number_layout)
         && ir_type_define(runtime, point, point_definition)
         && ir_layout_publish_final(runtime, point, target, &point_layout));
+    th_type *with_reference = ir_type_parse(runtime,
+        "(value: ref[uint])");
+    CHECK(with_reference && n00bb_frame_pointer_free_value(runtime, point)
+        && !n00bb_frame_pointer_free_value(runtime, with_reference));
+    ir_func_t *plain_record = ir_func_add(runtime, "plain_record",
+        ir_type_parse(runtime, "(Point) -> uint"), IR_LINK_INTERNAL);
+    ir_func_t *referenced_record = ir_func_add(runtime, "referenced_record",
+        ir_type_parse(runtime, "((value: ref[uint])) -> uint"),
+        IR_LINK_INTERNAL);
+    size_t plain_roots = 0, referenced_roots = 0;
+    CHECK(plain_record && referenced_record
+        && ir_param_add(plain_record, "value", point)
+        && ir_local_add(plain_record, "local", point)
+        && ir_param_add(referenced_record, "value", with_reference)
+        && ir_local_add(referenced_record, "local", with_reference)
+        && n00bb_frame_roots(plain_record, nullptr, nullptr, &plain_roots)
+        && n00bb_frame_roots(referenced_record, nullptr, nullptr,
+                             &referenced_roots)
+        && plain_roots == 0 && referenced_roots == 2);
     ir_func_t *function = ir_func_add(runtime, "pin_root",
         ir_type_parse(runtime, "(ref[Point]) -> ref[Point]"), IR_LINK_INTERNAL);
     ir_value_t *parameter = function
@@ -283,41 +303,41 @@ main(void)
         ? ir_instr_add(distinct_entry, IR_OP_RETURN) : nullptr;
     CHECK(distinct_first && distinct_second && distinct_return
         && ir_instr_operand_value(distinct_return, distinct_first));
-    ir_func_t *conservative_helper = ir_func_add(runtime,
-        "pin_conservative_helper", inline_helper->type, IR_LINK_INTERNAL);
-    ir_value_t *conservative_input = conservative_helper
-        ? ir_param_add(conservative_helper, "root", parameter->type) : nullptr;
-    ir_local_t *conservative_local = conservative_helper
-        ? ir_local_add(conservative_helper, "aggregate", point) : nullptr;
-    ir_block_t *conservative_entry = conservative_helper
-        ? ir_block_add(conservative_helper, "entry") : nullptr;
-    ir_instr_t *conservative_return = conservative_entry
-        ? ir_instr_add(conservative_entry, IR_OP_RETURN) : nullptr;
-    CHECK(conservative_input && conservative_local && conservative_return
-        && ir_instr_operand_value(conservative_return, conservative_input)
-        && ir_func_set_always_inline(context, conservative_helper, true));
-    ir_func_t *conservative_caller = ir_func_add(runtime,
-        "pin_conservative_caller", inline_helper->type, IR_LINK_INTERNAL);
-    ir_value_t *caller_input = conservative_caller
-        ? ir_param_add(conservative_caller, "root", parameter->type) : nullptr;
-    ir_block_t *conservative_caller_entry = conservative_caller
-        ? ir_block_add(conservative_caller, "entry") : nullptr;
-    ir_instr_t *conservative_call = conservative_caller_entry
-        ? ir_instr_add(conservative_caller_entry, IR_OP_CALL) : nullptr;
-    ir_instr_t *conservative_caller_return = conservative_caller_entry
-        ? ir_instr_add(conservative_caller_entry, IR_OP_RETURN) : nullptr;
-    CHECK(caller_input && conservative_call && conservative_caller_return
-        && ir_instr_set_dest(conservative_call, "result", parameter->type)
-        && ir_instr_operand_value(conservative_call,
-            ir_func_address(runtime, conservative_helper))
-        && ir_instr_operand_value(conservative_call, caller_input)
-        && ir_instr_set_call_signature(conservative_call,
-            conservative_helper->type)
-        && ir_instr_operand_value(conservative_caller_return,
-            conservative_call->dest));
+    ir_func_t *record_helper = ir_func_add(runtime,
+        "pin_record_helper", inline_helper->type, IR_LINK_INTERNAL);
+    ir_value_t *record_input = record_helper
+        ? ir_param_add(record_helper, "root", parameter->type) : nullptr;
+    ir_local_t *record_local = record_helper
+        ? ir_local_add(record_helper, "aggregate", point) : nullptr;
+    ir_block_t *record_entry = record_helper
+        ? ir_block_add(record_helper, "entry") : nullptr;
+    ir_instr_t *record_return = record_entry
+        ? ir_instr_add(record_entry, IR_OP_RETURN) : nullptr;
+    CHECK(record_input && record_local && record_return
+        && ir_instr_operand_value(record_return, record_input)
+        && ir_func_set_always_inline(context, record_helper, true));
+    ir_func_t *record_caller = ir_func_add(runtime,
+        "pin_record_caller", inline_helper->type, IR_LINK_INTERNAL);
+    ir_value_t *caller_input = record_caller
+        ? ir_param_add(record_caller, "root", parameter->type) : nullptr;
+    ir_block_t *record_caller_entry = record_caller
+        ? ir_block_add(record_caller, "entry") : nullptr;
+    ir_instr_t *record_call = record_caller_entry
+        ? ir_instr_add(record_caller_entry, IR_OP_CALL) : nullptr;
+    ir_instr_t *record_caller_return = record_caller_entry
+        ? ir_instr_add(record_caller_entry, IR_OP_RETURN) : nullptr;
+    CHECK(caller_input && record_call && record_caller_return
+        && ir_instr_set_dest(record_call, "result", parameter->type)
+        && ir_instr_operand_value(record_call,
+            ir_func_address(runtime, record_helper))
+        && ir_instr_operand_value(record_call, caller_input)
+        && ir_instr_set_call_signature(record_call,
+            record_helper->type)
+        && ir_instr_operand_value(record_caller_return,
+            record_call->dest));
     ir_func_t *reachable[] = {function, unmanaged, pointer_local, opaque_local,
                               inline_helper, inlined, optional, distinct,
-                              conservative_helper, conservative_caller};
+                              record_helper, record_caller};
     ir_storage_origin_t *origin = ir_storage_origin_new(reachable, 10,
         no_mapping_source, unmanaged_parameter, nullptr, false,
         unmanaged_param);
@@ -345,8 +365,8 @@ main(void)
         && counts.inlined_roots >= 2 && counts.inlined_sentinels == 1
         && counts.optional_roots == 1 && counts.optional_sentinels == 1
         && counts.distinct_roots == 2 && counts.distinct_sentinels == 1
-        && counts.conservative_roots == 0
-        && counts.conservative_sentinels == 0);
+        && counts.record_roots == 2
+        && counts.record_sentinels == 1);
     core_target_desc_t native_target;
 #if defined(__APPLE__) && defined(__aarch64__)
     CHECK(core_target_profile("arm64-macos", 0, &native_target));

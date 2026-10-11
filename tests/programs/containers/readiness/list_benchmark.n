@@ -1,0 +1,26 @@
+import builtin.containers.list
+
+comptime {} else {
+    var items: List[int] = new[List[int]]()
+    var i: int = 0
+    while i < 100000 {
+        builtin.containers.list.append(items, i)
+        i += 1
+    }
+    require builtin.containers.list.len(items) == 100000
+    var sum: int = 0
+    i = 0
+    while i < 100000 {
+        sum += items[i]
+        i += 1
+    }
+    require sum == 4999950000
+    i = 0
+    while i < 50000 {
+        let value: int? = builtin.containers.list.pop(items)
+        require value != nil
+        require value.get() == 99999 - i
+        i += 1
+    }
+    require builtin.containers.list.len(items) == 50000
+}

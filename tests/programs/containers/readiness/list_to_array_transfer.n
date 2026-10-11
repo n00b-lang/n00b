@@ -1,0 +1,19 @@
+func returned_input(values: Array[int]) -> Array[int] {
+    return values
+}
+
+comptime {} else {
+    var values: List[int] = [2, 3]
+    values.append(5)
+    var retained: List[int] = values
+    var taken: Array[int] = builtin.containers.list.to_array(values)
+    require __array_length(taken) == 3
+    require taken[0] == 2
+    require taken[2] == 5
+    taken[1] = 17
+    require retained[1] == 17
+    var independent: Array[int] = returned_input(taken)
+    independent[1] = 29
+    require taken[1] == 17
+    require independent[1] == 29
+}

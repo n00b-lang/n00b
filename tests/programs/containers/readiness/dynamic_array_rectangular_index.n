@@ -1,0 +1,7 @@
+comptime {} else {
+    var grid: Array[Array[int]] = new[Array[Array[int]]](2, 3)
+    grid[0][1] = 41
+    grid[1][2] = 17
+    require grid[0][1] == 41
+    require grid[1][2] == 17
+}

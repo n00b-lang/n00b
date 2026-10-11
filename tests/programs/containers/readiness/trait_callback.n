@@ -1,0 +1,22 @@
+trait Add_Amount {
+    func add_amount(self: `T, amount: int) -> int
+}
+
+func add_amount(self: int, amount: int) -> int {
+    return self + amount
+}
+
+callback Add_One {
+    call(value: int) -> int
+    handler(value: int) -> int
+}
+
+func add_one(value: int) -> int {
+    return value + 1
+}
+
+comptime {} else {
+    let wrapped = callback[Add_One](ref add_one)
+    require 7.add_amount(1) == 8
+    require wrapped.call(8) == 9
+}

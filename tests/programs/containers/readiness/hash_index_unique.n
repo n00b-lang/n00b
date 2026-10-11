@@ -1,0 +1,63 @@
+import builtin.containers.hash_index
+import builtin.containers.dict
+
+comptime {} else {
+    var index: builtin.containers.hash_index.Hash_Index =
+        new[builtin.containers.hash_index.Hash_Index]()
+    builtin.containers.hash_index.ensure_capacity(index, 1)
+    require builtin.containers.hash_index.capacity(index) == 16
+
+    require builtin.containers.hash_index.index_insert_unique(index, 0, 0)
+    require builtin.containers.hash_index.index_insert_unique(index, 1, 1)
+    require builtin.containers.hash_index.index_insert_unique(index, 16, 2)
+    require !builtin.containers.hash_index.index_insert_unique(index, 1, 99)
+
+    require builtin.containers.hash_index.index_insert_unique(index, 15, 3)
+    require builtin.containers.hash_index.index_insert_unique(index, 31, 4)
+    require !builtin.containers.hash_index.index_insert_unique(index, 31, 99)
+
+    var i: uint = 0
+    while i < 7 {
+        require builtin.containers.hash_index.index_insert_unique(
+            index, cast[u128](100 + i), 5 + i)
+        i += 1
+    }
+    require !builtin.containers.hash_index.has_room(index, 1)
+    builtin.containers.hash_index.ensure_capacity(index, 1)
+    require builtin.containers.hash_index.capacity(index) == 32
+    require builtin.containers.hash_index.index_insert_unique(index, 47, 12)
+    let high_hash: u128 = (cast[u128]1 << 64) | cast[u128]15
+    require builtin.containers.hash_index.index_insert_unique(index, high_hash, 13)
+    require !builtin.containers.hash_index.index_insert_unique(index, high_hash, 99)
+
+    require builtin.containers.hash_index.find_slot(ref index, 0) != nil
+    require builtin.containers.hash_index.find_slot(ref index, 1) != nil
+    require builtin.containers.hash_index.find_slot(ref index, 16) != nil
+    require builtin.containers.hash_index.find_slot(ref index, 15) != nil
+    require builtin.containers.hash_index.find_slot(ref index, 31) != nil
+    require builtin.containers.hash_index.find_slot(ref index, 47) != nil
+    require builtin.containers.hash_index.find_slot(ref index, high_hash) != nil
+    i = 0
+    while i < 7 {
+        require builtin.containers.hash_index.find_slot(ref index,
+            cast[u128](100 + i)) != nil
+        i += 1
+    }
+
+    var values: Dict[int, int] = new[Dict[int, int]]()
+    var j: int = 0
+    while j < 12 {
+        require builtin.containers.dict.add(values, j, j * 3)
+        j += 1
+    }
+    require !builtin.containers.dict.add(values, 1, 99)
+    require builtin.containers.dict.len(values) == 12
+    require builtin.containers.dict.add(values, 12, 36)
+    j = 0
+    while j < 13 {
+        let found: int? = builtin.containers.dict.get(values, j)
+        require found != nil
+        require found.get() == j * 3
+        j += 1
+    }
+}

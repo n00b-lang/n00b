@@ -1,0 +1,135 @@
+public callback Comparator {
+    call(left: `T, right: `T) -> Comparison
+    handler(left: `T, right: `T) -> Comparison
+}
+
+type Sort_Range {
+    low: int
+    high: int
+    depth: uint
+}
+
+func natural_compare(left: `T, right: `T) -> Comparison where `T: Comparable {
+    return left.__cmp(right)
+}
+
+inline func order(by: Comparator[`T], left: `T, right: `T) -> Comparison {
+    let result: Comparison = by.call(left, right)
+    require result != Comparison.unordered
+    return result
+}
+
+inline func swap(left: Ref[`T], right: Ref[`T]) {
+    let value: `T = ref_read(left)
+    ref_write(left, ref_read(right))
+    ref_write(right, value)
+}
+
+public func sort_by(modify items: Array[`T], by: Comparator[`T]) {
+    let count: uint = __array_length(items)
+    var height: uint = count
+    var max_depth: uint = 0
+    while height > 1 {
+        height /= 2
+        max_depth += 2
+    }
+    var pending: Array[Sort_Range] =
+        new[Array[Sort_Range]](cast[int] (max_depth + 1))
+    var top: int = 0
+    var low: int = 0
+    var high: int = cast[int] count
+    var depth: uint = max_depth
+    while true {
+        while high - low > 16 {
+            if depth == 0 {
+                let length: int = high - low
+                var root: int = length / 2
+                var remaining: int = length
+                while root > 0 or remaining > 1 {
+                    var at: int = 0
+                    if root > 0 {
+                        root -= 1
+                        at = root
+                    } else {
+                        remaining -= 1
+                        swap(ref items[low], ref items[low + remaining])
+                    }
+                    while at * 2 + 1 < remaining {
+                        var child: int = at * 2 + 1
+                        if child + 1 < remaining and
+                           order(by, items[low + child],
+                                     items[low + child + 1]) == Comparison.less {
+                            child += 1
+                        }
+                        if order(by, items[low + at],
+                                     items[low + child]) != Comparison.less {
+                            break
+                        }
+                        swap(ref items[low + at], ref items[low + child])
+                        at = child
+                    }
+                }
+                low = high
+                break
+            }
+            depth -= 1
+            let mid: int = low + (high - low) / 2
+            if order(by, items[mid], items[low]) == Comparison.less {
+                swap(ref items[mid], ref items[low])
+            }
+            if order(by, items[high - 1], items[mid]) == Comparison.less {
+                swap(ref items[high - 1], ref items[mid])
+            }
+            if order(by, items[mid], items[low]) == Comparison.less {
+                swap(ref items[mid], ref items[low])
+            }
+            let pivot: `T = items[mid]
+            var left: int = low
+            var at: int = low
+            var right: int = high
+            while at < right {
+                let relation: Comparison = order(by, items[at], pivot)
+                if relation == Comparison.less {
+                    swap(ref items[left], ref items[at])
+                    left += 1
+                    at += 1
+                } elif relation == Comparison.greater {
+                    right -= 1
+                    swap(ref items[at], ref items[right])
+                } else {
+                    at += 1
+                }
+            }
+            if left - low < high - right {
+                pending[top] = (low = right, high = high, depth = depth)
+                top += 1
+                high = left
+            } else {
+                pending[top] = (low = low, high = left, depth = depth)
+                top += 1
+                low = right
+            }
+        }
+        var i: int = low + 1
+        while i < high {
+            var j: int = i
+            while j > low and
+                  order(by, items[j], items[j - 1]) == Comparison.less {
+                swap(ref items[j], ref items[j - 1])
+                j -= 1
+            }
+            i += 1
+        }
+        if top == 0 { break }
+        top -= 1
+        let next: Sort_Range = pending[top]
+        low = next.low
+        high = next.high
+        depth = next.depth
+    }
+}
+
+public func sort(modify items: Array[`T]) where `T: Comparable {
+    let by: Comparator[`T] = callback[Comparator](ref natural_compare)
+    sort_by(items, by)
+}

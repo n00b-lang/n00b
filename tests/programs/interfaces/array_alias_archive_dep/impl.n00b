@@ -1,4 +1,4 @@
-public alias FixedRowBase = int[4]
+public alias FixedRowBase = Array[int][4]
 public alias FixedRow = FixedRowBase
 
 public func echo_row(input: FixedRow) -> FixedRow {

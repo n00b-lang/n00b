@@ -1,0 +1,7 @@
+func make(count: int) -> Array[int?] {
+    return new[Array[int?]](count)
+}
+
+comptime {} else {
+    make(2)
+}

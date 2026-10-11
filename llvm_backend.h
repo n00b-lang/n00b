@@ -7,6 +7,7 @@
 #include "ir/storage_origin.h"
 #include "lib/buffer.h"
 #include "lib/diagnostic.h"
+#include "abi_static_graph.h"
 
 typedef struct n00bb_llvm_backend_t n00bb_llvm_backend_t;
 
@@ -20,6 +21,11 @@ typedef enum {
     N00BB_LLVM_LITERAL_NESTED_RELOC,
     N00BB_LLVM_LITERAL_RAW_VALUE,
     N00BB_LLVM_LITERAL_EFFECT,
+    N00BB_LLVM_LITERAL_RECORD_ARRAY,
+    N00BB_LLVM_LITERAL_RECORD_RELOC,
+    N00BB_LLVM_LITERAL_RECORD_FIELDS_ARRAY,
+    N00BB_LLVM_LITERAL_RECORD_FIELDS_RELOC,
+    N00BB_LLVM_LITERAL_GRAPH,
 } n00bb_llvm_literal_kind_t;
 
 typedef struct {
@@ -29,12 +35,24 @@ typedef struct {
     n00bb_llvm_literal_kind_t kind;
     uint32_t element_stride;
     uint32_t inner_stride;
+    uint32_t record_size;
+    uint32_t array_field_offset;
+    uint32_t array_field_index;
     const uint32_t *string_offsets;
     size_t string_offset_count;
     const uint8_t *byte_mask;
     bool comptime_consumer;
     bool after_initializers;
 } n00bb_llvm_array_producer_t;
+
+typedef struct {
+    const char *symbol;
+    uint64_t typehash;
+    size_t size;
+    uint32_t alignment;
+    bool allocation;
+    bool immutable;
+} n00bb_llvm_graph_node_t;
 
 typedef struct {
     const char *identifier;
@@ -47,12 +65,18 @@ typedef struct {
     uint32_t inner_stride;
     const uint32_t *string_offsets;
     size_t string_offset_count;
+    const n00bb_llvm_graph_node_t *graph_nodes;
+    size_t graph_node_count;
+    const n00bb_static_graph_edge_t *graph_edges;
+    size_t graph_edge_count;
+    size_t graph_root_index;
 } n00bb_llvm_phase_array_t;
 
 typedef struct {
     uint64_t typehash;
     uint32_t index;
     bool finalizable;
+    bool array_type;
 } n00bb_llvm_type_index_t;
 
 typedef struct {
@@ -107,4 +131,20 @@ bool n00bb_llvm_backend_emit_object(
     const n00bb_llvm_array_producer_t *array_producers,
     size_t array_producer_count,
     size_t metadata_bytes,
+    core_buffer_t *out, core_diagnostics_t *diagnostics);
+bool n00bb_llvm_backend_emit_linkable_bitcode(
+    n00bb_llvm_backend_t *backend,
+    const char *const *entry_initializers, size_t initializer_count,
+    size_t metadata_bytes, core_buffer_t *out,
+    core_diagnostics_t *diagnostics);
+
+typedef struct {
+    const void *data;
+    size_t length;
+    bool native_support;
+} n00bb_llvm_bitcode_input_t;
+
+bool n00bb_llvm_backend_link_bitcode(
+    const n00bb_llvm_bitcode_input_t *inputs, size_t count,
+    bool debug_enabled, bool native_cpu, bool emit_frame_maps,
     core_buffer_t *out, core_diagnostics_t *diagnostics);

@@ -1,0 +1,18 @@
+func echo_unsigned(value: uint) -> uint {
+    return value
+}
+
+comptime {} else {
+    var values: Array[uint] = new[Array[uint]](2)
+    values[0] = 0
+    values[1] = 1
+    let small: int = 1
+    var scalar: uint = 0
+    scalar = small
+    require scalar == 1
+    require echo_unsigned(small) == 1
+    values[0] = small
+    values[1] = small + 1
+    require values[0] == 1
+    require values[1] == 2
+}

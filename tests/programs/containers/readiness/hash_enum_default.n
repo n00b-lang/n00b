@@ -1,0 +1,18 @@
+import builtin.hash
+
+enum Status { ready = 1, done = 2 }
+flagset Mode { read, write }
+
+comptime {} else {
+    let first: Status = Status.ready
+    let same: Status = Status.ready
+    let other: Status = Status.done
+    require first == same
+    require first.hash() == same.hash()
+    require first.hash() != other.hash()
+    let flags: Mode = Mode.read
+    let same_flags: Mode = Mode.read
+    let other_flags: Mode = Mode.write
+    require flags.hash() == same_flags.hash()
+    require flags.hash() != other_flags.hash()
+}

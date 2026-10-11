@@ -1,0 +1,15 @@
+import builtin.hash
+
+comptime {} else {
+    let short_a: string = "equal"
+    let short_b: string = "equal"
+    let short_c: string = "other"
+    require short_a.hash() == short_b.hash()
+    require short_a.hash() != short_c.hash()
+
+    let long_a: string = "a string longer than fourteen bytes"
+    let long_b: string = "a string longer than fourteen bytes"
+    let long_c: string = "a string longer than fourteen byteS"
+    require long_a.hash() == long_b.hash()
+    require long_a.hash() != long_c.hash()
+}

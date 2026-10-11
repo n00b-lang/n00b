@@ -1,0 +1,10 @@
+func make(count: int) -> Array[int?] {
+    var values = new[Array[int?]](count)
+    values[0] = 7
+    return values
+}
+
+comptime {} else {
+    let values = make(2)
+    require values[0] != nil
+}

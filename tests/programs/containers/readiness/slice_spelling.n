@@ -1,0 +1,9 @@
+comptime {} else {
+    let values: Array[int] = [1, 2, 3, 4]
+    let a = values[1 until 3]
+    let b = values[1 to 2]
+    let c = values[1:3]
+    require a[0] == 2
+    require b[0] == 2
+    require c[0] == 2
+}

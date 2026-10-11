@@ -757,6 +757,27 @@ test_imported_record_selection(const char *root_path, const char *dep_path)
     assert(n00bb_abi_link_selected_objects(&selected, &target,
         &linked, &linked_bytes));
     core_free(linked);
+    const n00bb_abi_directory_entry_t *dep_symbols =
+        n00bb_abi_object_table(dep_view, N00B_ABI_TABLE_SYMBOL);
+    n00b_abi_symbol_v1 *type_symbol = nullptr;
+    for (uint32_t i = 1; dep_symbols && i < dep_symbols->record_count; i++) {
+        n00b_abi_symbol_v1 *candidate = (void *)n00bb_abi_object_row(
+            dep_view, N00B_ABI_TABLE_SYMBOL, i);
+        if (candidate && candidate->kind == N00B_ABI_SYMBOL_TYPE
+            && candidate->type_index == dep_type) {
+            type_symbol = candidate;
+            break;
+        }
+    }
+    assert(type_symbol);
+    uint32_t saved_visibility = type_symbol->visibility;
+    type_symbol->visibility = N00B_ABI_VISIBILITY_PRIVATE;
+    linked = nullptr;
+    linked_bytes = 0;
+    assert(n00bb_abi_link_selected_objects(&selected, &target,
+        &linked, &linked_bytes));
+    core_free(linked);
+    type_symbol->visibility = saved_visibility;
     n00b_abi_requirement_v1 *mutable_requirement = (void *)type_requirement;
     uint64_t saved_capabilities = mutable_requirement->required_capabilities;
     mutable_requirement->required_capabilities = UINT64_MAX;

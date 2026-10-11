@@ -267,10 +267,12 @@ n00bb_abi_constraint_rows_build(
     bool valid = true;
     for (size_t i = 1; valid && i < types->count; i++) {
         n00b_abi_type_v1 *type_row = &types->rows[i];
-        if (type_row->kind != N00B_ABI_TYPE_VARIABLE) continue;
+        if (type_row->kind != N00B_ABI_TYPE_VARIABLE
+            || type_row->typevar_import_requirement_index) continue;
         th_type *variable = n00bb_abi_type_index_at(index, (uint32_t)i);
         if (!variable || th_kind_of(th_resolve(variable)) != TH_VAR
             || (!type_row->typevar_owner_scope_index
+                && !type_row->typevar_owner_trait_index
                 && !type_row->typevar_import_requirement_index)) {
             valid = false;
             break;

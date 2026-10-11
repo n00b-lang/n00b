@@ -1,0 +1,30 @@
+import builtin.containers.dict
+
+type Large_Value {
+    first: int
+    second: int
+    third: int
+}
+
+comptime {} else {
+    var values: Dict[int, Option[Large_Value]] =
+        new[Dict[int, Option[Large_Value]]]()
+    let unset: Option[Large_Value] = nil
+    _ = builtin.containers.dict.put(values, 1, unset)
+    let present_unset: Option[Option[Large_Value]] =
+        builtin.containers.dict.get(values, 1)
+    require present_unset != nil
+    require present_unset.get() == nil
+
+    let item: Large_Value = (first = 11, second = 13, third = 17)
+    _ = builtin.containers.dict.put(values, 1, item)
+    let present_set: Option[Option[Large_Value]] =
+        builtin.containers.dict.get(values, 1)
+    require present_set != nil
+    let stored: Option[Large_Value] = present_set.get()
+    require stored != nil
+    let result: Large_Value = stored.get()
+    require result.first == 11
+    require result.second == 13
+    require result.third == 17
+}

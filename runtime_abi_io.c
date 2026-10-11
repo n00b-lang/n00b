@@ -131,6 +131,55 @@ int32_t n00bb_bootstrap_fd_write(int32_t fd, uint64_t low, uint64_t high)
     return n00b_abi_v1_raw_fd_write(fd, text);
 }
 
+int32_t n00bb_bootstrap_string_equal(uint64_t left_low, uint64_t left_high,
+                                     uint64_t right_low, uint64_t right_high)
+{
+    n00b_abi_string_v1 left = {.words = {left_low, left_high}};
+    n00b_abi_string_v1 right = {.words = {right_low, right_high}};
+    n00bb_abi_string_header_t left_header, right_header;
+    if (!n00bb_abi_string_decode((const uint8_t *)&left, sizeof(left),
+                                 &left_header)
+        || !n00bb_abi_string_decode((const uint8_t *)&right, sizeof(right),
+                                    &right_header)
+        || left_header.tag == N00BB_ABI_STRING_RICH
+        || right_header.tag == N00BB_ABI_STRING_RICH) __builtin_trap();
+    if (left_header.length != right_header.length) return 0;
+    const uint8_t *left_bytes = left_header.tag == N00BB_ABI_STRING_SHORT
+        ? left.short_value.bytes : left.long_value.data;
+    const uint8_t *right_bytes = right_header.tag == N00BB_ABI_STRING_SHORT
+        ? right.short_value.bytes : right.long_value.data;
+    for (uint64_t i = 0; i < left_header.length; i++)
+        if (left_bytes[i] != right_bytes[i]) return 0;
+    return 1;
+}
+
+int32_t n00bb_bootstrap_string_compare(uint64_t left_low, uint64_t left_high,
+                                       uint64_t right_low, uint64_t right_high)
+{
+    n00b_abi_string_v1 left = {.words = {left_low, left_high}};
+    n00b_abi_string_v1 right = {.words = {right_low, right_high}};
+    n00bb_abi_string_header_t left_header, right_header;
+    if (!n00bb_abi_string_decode((const uint8_t *)&left, sizeof left,
+                                 &left_header)
+        || !n00bb_abi_string_decode((const uint8_t *)&right, sizeof right,
+                                    &right_header)
+        || left_header.tag == N00BB_ABI_STRING_RICH
+        || right_header.tag == N00BB_ABI_STRING_RICH) __builtin_trap();
+    const uint8_t *left_bytes = left_header.tag == N00BB_ABI_STRING_SHORT
+        ? left.short_value.bytes : left.long_value.data;
+    const uint8_t *right_bytes = right_header.tag == N00BB_ABI_STRING_SHORT
+        ? right.short_value.bytes : right.long_value.data;
+    uint64_t common = left_header.length < right_header.length
+        ? left_header.length : right_header.length;
+    for (uint64_t i = 0; i < common; i++) {
+        if (left_bytes[i] < right_bytes[i]) return -1;
+        if (left_bytes[i] > right_bytes[i]) return 1;
+    }
+    if (left_header.length < right_header.length) return -1;
+    if (left_header.length > right_header.length) return 1;
+    return 0;
+}
+
 static bool write_all(int32_t fd, const uint8_t *bytes, uint64_t count)
 {
     while (count) {
@@ -307,6 +356,17 @@ int32_t n00bb_bootstrap_type_is_array(uint32_t type_field)
         ? n00b_abi_v1_type(snapshot, type_field & UINT32_C(0x7fffffff))
         : NULL;
     return type && type->kind == N00B_ABI_TYPE_ARRAY;
+}
+
+int32_t n00bb_bootstrap_type_specializes(uint32_t type_field,
+                                         uint32_t general_type_index)
+{
+    const n00b_abi_snapshot_v1 *snapshot = n00b_abi_v1_current_snapshot();
+    if (!snapshot || !general_type_index) __builtin_trap();
+    int32_t match = n00b_abi_v1_type_specializes(snapshot,
+        type_field & UINT32_C(0x7fffffff), general_type_index);
+    if (match < 0) __builtin_trap();
+    return match;
 }
 
 static int32_t repr_array(const n00b_abi_snapshot_v1 *snapshot, int32_t fd,
@@ -629,6 +689,31 @@ int32_t n00bb_comptime_emit_reloc_array(
         if (!write_reloc_element(fd, (const uint8_t *)data + i * stride,
                 stride, string_offsets, offset_count, byte_mask)) return -1;
     return 0;
+}
+
+int32_t n00bb_comptime_emit_record_array(
+    int32_t fd, const void *record, uint32_t record_size,
+    uint32_t array_offset, const void *data,
+    const n00b_abi_array_descriptor_header_v1 *descriptor,
+    uint32_t stride, const uint32_t *string_offsets, uint32_t offset_count,
+    const uint8_t *byte_mask)
+{
+    const uint64_t one = 1;
+    const uint8_t zero_array[sizeof(n00b_abi_array_value_v1)] = {0};
+    if (fd < 0 || !record || !data || !descriptor || !stride
+        || array_offset > record_size
+        || record_size - array_offset < sizeof(zero_array)
+        || !write_all(fd, (const uint8_t *)&one, sizeof(one))
+        || !write_all(fd, record, array_offset)
+        || !write_all(fd, zero_array, sizeof(zero_array))
+        || !write_all(fd, (const uint8_t *)record + array_offset
+            + sizeof(zero_array),
+            record_size - array_offset - sizeof(zero_array)))
+        return -1;
+    return offset_count
+        ? n00bb_comptime_emit_reloc_array(fd, data, descriptor, stride,
+            string_offsets, offset_count, byte_mask)
+        : n00bb_comptime_emit_array(fd, data, descriptor, stride);
 }
 
 int32_t n00bb_comptime_emit_failure(int32_t fd, uint64_t low, uint64_t high)

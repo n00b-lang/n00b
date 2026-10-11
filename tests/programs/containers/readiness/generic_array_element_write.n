@@ -1,0 +1,25 @@
+func replace_first(modify items: Array[`T], value: `T) {
+    items[0] = value
+}
+
+type Pair {
+    left: int
+    right: int
+}
+
+comptime {} else {
+    var numbers: Array[int] = [1]'array
+    replace_first(numbers, 7)
+    require numbers[0] == 7
+
+    var flags: Array[bool] = [false]'array
+    replace_first(flags, true)
+    require flags[0]
+
+    let initial: Pair = (left = 1, right = 2)
+    let replacement: Pair = (left = 3, right = 4)
+    var pairs: Array[Pair] = [initial]'array
+    replace_first(pairs, replacement)
+    require pairs[0].left == 3
+    require pairs[0].right == 4
+}

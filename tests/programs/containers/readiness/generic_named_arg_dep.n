@@ -1,0 +1,7 @@
+public type Element {
+    public value: int
+}
+
+public type Holder {
+    public value: `T
+}

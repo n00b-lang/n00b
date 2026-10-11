@@ -1,0 +1,6 @@
+type Element {
+    value: int
+}
+
+func invalid(items: Array[Element][int]) {
+}

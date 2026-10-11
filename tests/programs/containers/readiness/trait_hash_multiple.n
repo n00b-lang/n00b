@@ -1,0 +1,34 @@
+import builtin.hash
+
+type Alpha {
+    value: int
+}
+
+type Beta {
+    value: int
+}
+
+func hash(self: Alpha) -> u128 {
+    return cast[u128](self.value + 10)
+}
+
+func hash(self: Beta) -> u128 {
+    return cast[u128](self.value + 20)
+}
+
+func hash_erased(value: builtin.hash.Hash) -> u128 {
+    return value.hash()
+}
+
+func hash_generic(value: `T) -> u128 where `T: builtin.hash.Hash {
+    return value.hash()
+}
+
+comptime {} else {
+    let alpha: Alpha = (value = 1)
+    let beta: Beta = (value = 2)
+    require hash_erased(alpha) == 11
+    require hash_erased(beta) == 22
+    require hash_generic(alpha) == 11
+    require hash_generic(beta) == 22
+}

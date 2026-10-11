@@ -6,9 +6,9 @@ func typecase_generic(item: Atomic[int]) -> int {
     }
 }
 
-func typecase_array(item: int[4]) -> int {
+func typecase_array(item: Array[int][4]) -> int {
     typecase(item) {
-        case int[4] {
+        case Array[int][4] {
             return 2
         }
     }

@@ -1,0 +1,22 @@
+import builtin.containers.dict
+import builtin.containers.view
+
+type Key { value: int }
+type Payload { value: int }
+
+func hash(self: Key) -> u128 { return cast[u128] self.value }
+
+comptime {} else {
+    var items: Dict[Key, Payload] = new[Dict[Key, Payload]]()
+    let key: Key = (value = 7)
+    let payload: Payload = (value = 9)
+    _ = builtin.containers.dict.put(items, key, payload)
+    let dense = builtin.containers.dict.keys(items,
+        builtin.containers.dict.Sort_Order.none)
+    let inserted = builtin.containers.dict.values(items,
+        builtin.containers.dict.Sort_Order.insertion)
+    require builtin.containers.view.len(dense) == 1
+    require builtin.containers.view.len(inserted) == 1
+    require dense[0].value == 7
+    require inserted[0].value == 9
+}

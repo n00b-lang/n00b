@@ -1,7 +1,7 @@
 const extent: uint = 4
 
 type Deferred_Array {
-    items: int[extent]
+    items: Array[int][extent]
 }
 
 type Pair layout(c) {

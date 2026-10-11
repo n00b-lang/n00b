@@ -1,0 +1,8 @@
+func make(count: int) -> Array[int?] {
+    return new[Array[int?]](count)
+}
+
+comptime {} else {
+    var values: Array[int?] = make(2)
+    require __abi_ref_address(ref values[0]) != 0
+}

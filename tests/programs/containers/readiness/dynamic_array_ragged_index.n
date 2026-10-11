@@ -1,0 +1,9 @@
+comptime {} else {
+    var rows: Array[Array[int]] = new[Array[Array[int]]](2)
+    rows[0] = new[Array[int]](3)
+    rows[1] = new[Array[int]](1)
+    rows[0][1] = 41
+    rows[1][0] = 17
+    require rows[0][1] == 41
+    require rows[1][0] == 17
+}

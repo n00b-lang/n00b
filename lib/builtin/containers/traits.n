@@ -1,0 +1,22 @@
+public trait Container {
+    func len(self: `C) -> uint
+}
+
+public trait ListLike {
+    func append(modify self: `L, value: `T, front: bool) -> nil
+    func pop(modify self: `L, front: bool) -> `T?
+    func insert(modify self: `L, index: int, value: `T) -> nil
+}
+
+public trait Associative {
+    func get(self: `D, key: `K) -> `V?
+    func put(modify self: `D, key: `K, value: `V) -> `V?
+    func remove(modify self: `D, key: `K) -> bool
+    func contains(self: `D, key: `K) -> bool
+}
+
+public trait SetLike {
+    func contains(self: `S, value: `T) -> bool
+    func add(modify self: `S, value: `T) -> bool
+    func remove(modify self: `S, value: `T) -> bool
+}

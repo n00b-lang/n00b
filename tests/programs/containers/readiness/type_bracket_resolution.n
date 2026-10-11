@@ -1,0 +1,18 @@
+type Box {
+    item: `T
+}
+
+const count: uint = 3
+
+func take_box(value: Box[int]) {
+    require value.item == 4
+}
+
+func take_array(value: Array[Box][count]) {
+    require count == 3
+}
+
+comptime {} else {
+    let boxed: Box[int] = (item = 4)
+    take_box(boxed)
+}

@@ -1,0 +1,45 @@
+func first_via_ref(items: Array[`T]) -> `T {
+    let address: Ref[`T] = ref items[0]
+    return ref_read(address)
+}
+
+func read_ref(address: Ref[`T]) -> `T {
+    return ref_read(address)
+}
+
+func identity_ref(address: Ref[`T]) -> Ref[`T] {
+    return address
+}
+
+func replace_ref(address: Ref[`T], value: `T) {
+    ref_write(address, value)
+}
+
+func local_via_ref(value: `T, replacement: `T) -> `T {
+    var local: `T = value
+    let address: Ref[`T] = ref local
+    ref_write(address, replacement)
+    return ref_read(address)
+}
+
+comptime {} else {
+    let numbers: Array[int] = [7]'array
+    require first_via_ref(numbers) == 7
+    require read_ref(identity_ref(ref numbers[0])) == 7
+    replace_ref(ref numbers[0], 9)
+    require numbers[0] == 9
+    require local_via_ref(9, 11) == 11
+
+    let flags: Array[bool] = [true]'array
+    require first_via_ref(flags)
+    require read_ref(identity_ref(ref flags[0]))
+    replace_ref(ref flags[0], false)
+    require !flags[0]
+    require !local_via_ref(true, false)
+
+    var bits: Array[bits:64] = new[Array[bits:64]](1)
+    bits[0] = cast[bits:64] 42
+    require first_via_ref(bits) == cast[bits:64] 42
+    replace_ref(ref bits[0], cast[bits:64] 51)
+    require bits[0] == cast[bits:64] 51
+}

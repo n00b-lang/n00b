@@ -1,7 +1,7 @@
 import array_shape_chain_dep
 
-public var values: int[array_shape_chain_dep.extent()]
+public var values: Array[int][array_shape_chain_dep.extent()]
 
-public func echo(input: int[array_shape_chain_dep.extent()]) -> int[array_shape_chain_dep.extent()] {
+public func echo(input: Array[int][array_shape_chain_dep.extent()]) -> Array[int][array_shape_chain_dep.extent()] {
     return input
 }

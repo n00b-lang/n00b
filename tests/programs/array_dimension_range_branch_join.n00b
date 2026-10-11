@@ -15,4 +15,4 @@ comptime {
     }
 }
 
-var positive_branch_join: int[extent] = new[int[extent]]()
+var positive_branch_join: Array[int][extent] = new[Array[int][extent]]()

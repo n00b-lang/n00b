@@ -1,0 +1,26 @@
+import builtin.sort
+
+type Entry {
+    key: int
+}
+
+func __cmp(left: Entry, right: Entry) -> Comparison {
+    if left.key < right.key { return Comparison.less }
+    if left.key > right.key { return Comparison.greater }
+    return Comparison.equal
+}
+
+comptime {} else {
+    var values: Array[Entry] = new[Array[Entry]](5)
+    values[0] = (key = 9)
+    values[1] = (key = 2)
+    values[2] = (key = 2)
+    values[3] = (key = 7)
+    values[4] = (key = 1)
+    builtin.sort.sort(values)
+    require values[0].key == 1
+    require values[1].key == 2
+    require values[2].key == 2
+    require values[3].key == 7
+    require values[4].key == 9
+}

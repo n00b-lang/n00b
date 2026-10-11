@@ -1,0 +1,33 @@
+import builtin.containers.view
+
+public type Cursor {
+    view: builtin.containers.view.View[`T]
+    index: int
+}
+
+func __init(modify self: Cursor[`T], view: builtin.containers.view.View[`T]) {
+    self.view = view
+    self.index = 0
+}
+
+public func iter(self: builtin.containers.view.View[`T]) -> Cursor[`T] {
+    return new[Cursor[`T]](self)
+}
+
+public func iter(self: Array[`T]) -> Cursor[`T] {
+    let count: int = cast[int] __array_length(self)
+    let view: builtin.containers.view.View[`T] =
+        builtin.containers.view.__slice(self, 0, count)
+    return new[Cursor[`T]](view)
+}
+
+public func next(modify self: Cursor[`T]) -> `T? {
+    if self.index >= builtin.containers.view.len(self.view) {
+        return nil
+    }
+    let value: `T = self.view[self.index]
+    self.index += 1
+    return value
+}
+
+public func cleanup(consume self: Cursor[`T]) { }

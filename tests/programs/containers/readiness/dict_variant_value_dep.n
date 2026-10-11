@@ -1,0 +1,17 @@
+public variant Payload {
+    number: int
+    text: string
+}
+
+public func make_payload() -> Payload {
+    var value: Payload = new[Payload]()
+    value.text = "imported variant text"
+    return value
+}
+
+public func is_expected(payload: Payload) -> bool {
+    switch payload {
+        case number { return false }
+        case text { return payload.text == "imported variant text" }
+    }
+}

@@ -1506,6 +1506,99 @@ trace_child_at(const core_object_section_t *metadata,
     return row_at(metadata, children, index);
 }
 
+static void
+check_generic_record(const core_object_section_t *metadata,
+                     const n00bb_abi_directory_entry_t *entries,
+                     size_t count)
+{
+    const n00bb_abi_directory_entry_t *types = entry_for(entries, count,
+        N00B_ABI_TABLE_TYPE);
+    const n00bb_abi_directory_entry_t *symbols = entry_for(entries, count,
+        N00B_ABI_TABLE_SYMBOL);
+    const n00bb_abi_directory_entry_t *requirements = entry_for(entries,
+        count, N00B_ABI_TABLE_REQUIREMENT);
+    const n00bb_abi_directory_entry_t *layouts = entry_for(entries, count,
+        N00B_ABI_TABLE_LAYOUT);
+    assert(types && symbols && requirements && layouts);
+    th_ctx *context = th_ctx_new();
+    assert(context);
+    th_type *bare = th_name(context, "generic_record_dep.Generic_Link");
+    th_arg args[] = {
+        {.kind = TH_ARG_TYPE, .type = th_name(context, "int")},
+        {.kind = TH_ARG_TYPE, .type = th_name(context, "string")},
+    };
+    th_type *concrete = th_apply(context, "generic_record_dep.Generic_Link",
+        args, 2);
+    uint64_t bare_hash = th_hash(context, bare);
+    uint64_t concrete_hash = th_hash(context, concrete);
+    uint32_t bare_index = 0, concrete_index = 0;
+    for (uint32_t i = 1; i < types->record_count; i++) {
+        const n00b_abi_type_v1 *type = row_at(metadata, types, i);
+        if (type->typehash == bare_hash) {
+            assert(!bare_index);
+            bare_index = i;
+            assert(type->kind == N00B_ABI_TYPE_RECORD
+                && (type->flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE)
+                && !type->layout_index && !type->tracing_index);
+        }
+        if (type->typehash == concrete_hash) {
+            assert(!concrete_index);
+            concrete_index = i;
+            assert(type->kind == N00B_ABI_TYPE_RECORD
+                && !(type->flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE)
+                && !type->owner_module_index && type->layout_index
+                && type->layout_index < layouts->record_count
+                && type->size_bits == 256 && type->fields_or_arms.count == 3);
+        }
+    }
+    assert(bare_index);
+    bool provides = false;
+    for (uint32_t i = 1; i < symbols->record_count; i++) {
+        const n00b_abi_symbol_v1 *symbol = row_at(metadata, symbols, i);
+        if (!short_name_is(&symbol->name, "Generic_Link")) continue;
+        assert(!provides && symbol->kind == N00B_ABI_SYMBOL_TYPE
+            && symbol->type_index == bare_index);
+        provides = true;
+    }
+    const n00b_abi_type_v1 *bare_row = row_at(metadata, types, bare_index);
+    if (provides) {
+        assert(bare_row->owner_module_index == 1 && !concrete_index);
+    } else {
+        assert(!bare_row->owner_module_index && concrete_index);
+        unsigned matches = 0;
+        for (uint32_t i = 1; i < requirements->record_count; i++) {
+            const n00b_abi_requirement_v1 *request = row_at(metadata,
+                requirements, i);
+            if (request->symbol_kind != N00B_ABI_SYMBOL_TYPE
+                || request->contract_type_index != bare_index) continue;
+            assert(!request->required_layout_index
+                && request->required_phase_mask);
+            matches++;
+        }
+        assert(matches == 1);
+        const n00b_abi_field_v1 *text = record_field_named(metadata, entries,
+            count, concrete_index, "second");
+        const n00b_abi_field_v1 *address = record_field_named(metadata,
+            entries, count, concrete_index, "address");
+        const n00b_abi_trace_v1 *trace = trace_for_type(metadata, entries,
+            count, concrete_index);
+        assert(trace->fixed_children.count == 2);
+        bool text_found = false, address_found = false;
+        for (uint32_t i = 0; i < trace->fixed_children.count; i++) {
+            const n00b_abi_trace_child_v1 *child = trace_child_at(metadata,
+                entries, count, trace->fixed_children, i);
+            if (child->child_type_index == text->child_type_index
+                && child->byte_offset == text->logical_bit_offset / 8)
+                text_found = true;
+            if (child->child_type_index == address->child_type_index
+                && child->byte_offset == address->logical_bit_offset / 8)
+                address_found = true;
+        }
+        assert(text_found && address_found);
+    }
+    th_ctx_free(context);
+}
+
 static uint64_t
 record_bits(const uint8_t *bytes, uint64_t offset, unsigned width)
 {
@@ -2561,6 +2654,7 @@ main(int argc, char **argv)
             || !strcmp(argv[2], "flagset")
             || !strcmp(argv[2], "generic")
             || !strcmp(argv[2], "generic-local")
+            || !strcmp(argv[2], "generic-record")
             || !strcmp(argv[2], "atomic")
             || !strcmp(argv[2], "atomic-option")
             || !strcmp(argv[2], "atomic-aggregates")
@@ -2613,6 +2707,13 @@ main(int argc, char **argv)
         header.directory_count, N00B_ABI_TABLE_U32_STREAM);
     assert(types && fields && symbols && layouts && runs && locations_table
         && stream);
+
+    if (argc == 3 && !strcmp(argv[2], "generic-record")) {
+        check_generic_record(&metadata, entries, header.directory_count);
+        free(entries);
+        free(object);
+        return 0;
+    }
 
     if (argc == 3 && !strcmp(argv[2], "alias")) {
         const n00b_abi_symbol_v1 *alias = nullptr;

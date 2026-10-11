@@ -142,7 +142,7 @@ check_type_descriptor_storage(void)
     n00bb_abi_name_pool_t *names = n00bb_abi_name_pool_new();
     n00bb_abi_type_identity_rows_t types_rows = {0};
     assert(names && n00bb_abi_type_identity_rows_build(index, nullptr,
-        runtime, symbols, nullptr, nullptr, names, &types_rows));
+        runtime, false, symbols, nullptr, nullptr, names, &types_rows));
     n00bb_abi_decl_index_t *declarations = n00bb_abi_decl_index_new(symbols);
     assert(declarations && n00bb_abi_decl_symbol_count(declarations) == 2);
     assert(n00bb_abi_decl_symbol_at(declarations, 1) == symbol);
@@ -157,7 +157,8 @@ check_type_descriptor_storage(void)
         && types_rows.rows[type_index].alignment_bytes == 4);
     n00bb_abi_storage_rows_t rows = {0};
     assert(n00bb_abi_storage_rows_build(index, declarations, &types_rows,
-        runtime, names, 0, selected_type_declaration, declaration, &rows));
+        runtime, names, 0, selected_type_declaration, declaration,
+        nullptr, &rows));
     assert(rows.row_count == 2 && rows.index_patch_count == 1);
     const n00bb_abi_storage_index_patch_t *patch = &rows.index_patches[0];
     const n00b_abi_storage_v1 *storage = &rows.rows[1];
@@ -177,7 +178,7 @@ check_type_descriptor_storage(void)
     assert(n00bb_abi_emit_unit(link, &unit, CORE_STRING_STATIC("default"),
         symbols, tokens, comptime, runtime, false, &target, N00B_ABI_CAP_DEBUG,
         selected_type_declaration, declaration,
-        descriptor_node_source, &source_owner, nullptr, nullptr,
+        descriptor_node_source, &source_owner, nullptr, nullptr, nullptr,
         &packed, &object, &object_bytes));
     core_object_section_t metadata;
     assert(core_object_section_find(object, object_bytes,
@@ -232,7 +233,7 @@ check_type_descriptor_storage(void)
         && n00bb_abi_emit_unit(nullptr, &prior_unit,
             CORE_STRING_STATIC("default"), prior_symbols, prior_tokens,
             prior_comptime, prior_runtime, false, &target, N00B_ABI_CAP_DEBUG,
-            nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+            nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
             &prior_packed, &prior_object, &prior_object_bytes));
     core_link_unit_t *combined = core_link_unit_new();
     assert(combined && core_link_unit_add_root(combined, &prior_unit)
@@ -333,7 +334,7 @@ check_empty_unit(const char *triple, uint32_t target_id,
         CORE_STRING_STATIC("default"),
         symbols, tokens, comptime, runtime, false,
         &target, N00B_ABI_CAP_DEBUG, nullptr, nullptr, nullptr, nullptr,
-        nullptr, nullptr,
+        nullptr, nullptr, nullptr,
         &packed, &object, &object_bytes));
     assert(!core_translation_unit_has_fatal_diagnostics(&unit));
 
@@ -469,7 +470,7 @@ check_empty_unit(const char *triple, uint32_t target_id,
     assert(!n00bb_abi_emit_unit(nullptr, &unit,
         CORE_STRING_STATIC("default"),
         symbols, tokens, comptime, runtime, false, &target, N00B_ABI_CAP_DEBUG,
-        nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+        nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
         &rejected, &rejected_object, &rejected_bytes));
     assert(!rejected.bytes && !rejected_object && !rejected_bytes);
     assert(core_translation_unit_has_fatal_diagnostics(&unit));

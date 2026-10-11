@@ -8,6 +8,7 @@ import builtin.gc.los
 import builtin.gc.mark
 import builtin.gc.mutator
 import builtin.gc.registry
+import builtin.gc.roots
 import builtin.gc.sync
 import builtin.os
 
@@ -163,7 +164,7 @@ inline func allocate_reserved_validated(mutator: Ref[builtin.gc.Mutator],
                                  bump: Ref[builtin.gc.Bump], type_index: u32,
                                  payload_bytes: uint, finalizable: bool,
                                  bytes: uint, header_bytes: uint,
-                                 instance_descriptor: Ref[byte]?,
+                                 instance_descriptor: Ref[builtin.abi.Array_Descriptor_Header]?,
                                  slot: Ref[Ref[byte]?]?) -> Ref[byte]? {
     let granule: uint = builtin.gc.granule_bytes
     let candidate: Ref[byte]? = bump.cursor
@@ -176,7 +177,7 @@ inline func allocate_reserved_validated(mutator: Ref[builtin.gc.Mutator],
 
         let header: Ref[builtin.gc.Object_Header] = unsafe_cast[Ref[builtin.gc.Object_Header]] memory
         let payload: Ref[byte] = __gc_byte_offset(memory,
-            cast[i128](header_bytes))
+            header_bytes)
         if instance_descriptor != nil {
             require builtin.gc.initialize_array_backing(payload,
                 payload_bytes, type_index, instance_descriptor.get())
@@ -187,7 +188,7 @@ inline func allocate_reserved_validated(mutator: Ref[builtin.gc.Mutator],
         if instance_descriptor != nil {
             flags = flags | cast[u32](builtin.gc.obj_array_backing)
         }
-        header.meta = builtin.gc.meta_make(cast[u64](payload_bytes), flags)
+        header.meta = builtin.gc.meta_make(payload_bytes, flags)
         let granule_index: uint = (address - base) / granule
         let word: uint = granule_index / builtin.gc.word_bits
         let mask: u64 = cast[u64](1) << (granule_index % builtin.gc.word_bits)
@@ -221,7 +222,7 @@ public func allocate_reserved(mutator: Ref[builtin.gc.Mutator],
                               bump: Ref[builtin.gc.Bump], type_index: u32,
                               payload_bytes: uint, alignment: uint,
                               finalizable: bool,
-                              instance_descriptor: Ref[byte]? = nil,
+                              instance_descriptor: Ref[builtin.abi.Array_Descriptor_Header]? = nil,
                               slot: Ref[Ref[byte]?]? = nil) -> Ref[byte]? {
     if type_index == 0 or alignment == 0 or
         alignment > builtin.gc.granule_bytes or
@@ -321,7 +322,7 @@ func allocate_in_blocks_slow(mutator: Ref[builtin.gc.Mutator],
                              type_index: u32, payload_bytes: uint,
                              finalizable: bool, bytes: uint,
                              header_bytes: uint,
-                             instance_descriptor: Ref[byte]?,
+                             instance_descriptor: Ref[builtin.abi.Array_Descriptor_Header]?,
                              slot: Ref[Ref[byte]?]?) -> Ref[byte]? {
     let heap: Ref[builtin.gc.Heap] = mutator.heap
     var retried: bool = false
@@ -366,7 +367,7 @@ func allocate_in_blocks_slow(mutator: Ref[builtin.gc.Mutator],
 inline func allocate_in_blocks(mutator: Ref[builtin.gc.Mutator],
                         type_index: u32, payload_bytes: uint,
                         finalizable: bool, bytes: uint, header_bytes: uint,
-                        instance_descriptor: Ref[byte]?,
+                        instance_descriptor: Ref[builtin.abi.Array_Descriptor_Header]?,
                         slot: Ref[Ref[byte]?]?) -> Ref[byte]? {
     let small_bump: Ref[builtin.gc.Bump] = ref mutator.small
     if builtin.gc.bump_room(small_bump) >= bytes {
@@ -387,7 +388,7 @@ inline func allocate_in_blocks(mutator: Ref[builtin.gc.Mutator],
 public func allocate_large(mutator: Ref[builtin.gc.Mutator],
                            type_index: u32, payload_bytes: uint,
                            alignment: uint, finalizable: bool,
-                           instance_descriptor: Ref[byte]? = nil,
+                           instance_descriptor: Ref[builtin.abi.Array_Descriptor_Header]? = nil,
                            slot: Ref[Ref[byte]?]? = nil) -> Ref[byte]? {
     let heap: Ref[builtin.gc.Heap] = mutator.heap
     if type_index == 0 { return nil }
@@ -436,7 +437,7 @@ public func allocate_large(mutator: Ref[builtin.gc.Mutator],
 inline func allocate_runtime_known_on_mutator_into(mutator: Ref[builtin.gc.Mutator],
                                       type_index: u32, byte_size: u64,
                                       alignment: u32, finalizable: bool,
-                                      instance_descriptor: Ref[byte]?,
+                                      instance_descriptor: Ref[builtin.abi.Array_Descriptor_Header]?,
                                       slot: Ref[Ref[byte]?]?) -> Ref[byte]? {
     if type_index == 0 or alignment == 0 or
         (alignment & (alignment - 1)) != 0 { return nil }
@@ -453,7 +454,7 @@ inline func allocate_runtime_known_on_mutator_into(mutator: Ref[builtin.gc.Mutat
     if bytes > builtin.gc.los.los_threshold or
         cast[uint](alignment) > builtin.gc.granule_bytes {
         return allocate_large(mutator, type_index, payload_bytes,
-            cast[uint](alignment), finalizable, instance_descriptor, slot)
+            alignment, finalizable, instance_descriptor, slot)
     }
     return allocate_in_blocks(mutator, type_index, payload_bytes,
         finalizable, bytes, header_bytes, instance_descriptor, slot)
@@ -462,20 +463,20 @@ inline func allocate_runtime_known_on_mutator_into(mutator: Ref[builtin.gc.Mutat
 inline func allocate_runtime_known_on_mutator(mutator: Ref[builtin.gc.Mutator],
                                       type_index: u32, byte_size: u64,
                                       alignment: u32, finalizable: bool,
-                                      instance_descriptor: Ref[byte]?) -> Ref[byte]? {
+                                      instance_descriptor: Ref[builtin.abi.Array_Descriptor_Header]?) -> Ref[byte]? {
     return allocate_runtime_known_on_mutator_into(mutator, type_index,
         byte_size, alignment, finalizable, instance_descriptor, nil)
 }
 
 func allocation_type(type_index: u32,
-                     instance_descriptor: Ref[byte]?) -> Ref[builtin.abi.Type_Record]? {
+                     instance_descriptor: Ref[builtin.abi.Array_Descriptor_Header]?) -> Ref[builtin.abi.Type_Record]? {
     if type_index == 0 { return nil }
     let row: Ref[builtin.abi.Type_Record]? = builtin.abi.type_at(type_index)
     if row == nil { return nil }
     if instance_descriptor != nil {
         if row.get().kind != cast[u32](builtin.abi.Type_Kind.array_type) or
             builtin.gc.array_backing_offset(type_index,
-                builtin.gc.array_descriptor_at(instance_descriptor.get())) == 0 {
+                instance_descriptor.get()) == 0 {
             return nil
         }
     }
@@ -484,7 +485,7 @@ func allocation_type(type_index: u32,
 
 func allocate_runtime_checked(type_index: u32, byte_size: u64,
                               alignment: u32,
-                              instance_descriptor: Ref[byte]?,
+                              instance_descriptor: Ref[builtin.abi.Array_Descriptor_Header]?,
                               slot: Ref[Ref[byte]?]?) -> Ref[byte]? {
     let row: Ref[builtin.abi.Type_Record]? = allocation_type(type_index,
         instance_descriptor)
@@ -498,14 +499,14 @@ func allocate_runtime_checked(type_index: u32, byte_size: u64,
 
 public func allocate_runtime(type_index: u32, byte_size: u64,
                              alignment: u32,
-                             instance_descriptor: Ref[byte]?) -> Ref[byte]? {
+                             instance_descriptor: Ref[builtin.abi.Array_Descriptor_Header]?) -> Ref[byte]? {
     return allocate_runtime_checked(type_index, byte_size, alignment,
         instance_descriptor, nil)
 }
 
 public func allocate_runtime_into(type_index: u32, byte_size: u64,
                                   alignment: u32,
-                                  instance_descriptor: Ref[byte]?,
+                                  instance_descriptor: Ref[builtin.abi.Array_Descriptor_Header]?,
                                   slot: Ref[Ref[byte]?]) -> Ref[byte]? {
     return allocate_runtime_checked(type_index, byte_size, alignment,
         instance_descriptor, slot)
@@ -513,4 +514,22 @@ public func allocate_runtime_into(type_index: u32, byte_size: u64,
 
 func mutator_for_native() -> Ref[builtin.gc.Mutator]? {
     return active_mutator()
+}
+
+func native_root_depth() -> uint {
+    let mutator: Ref[builtin.gc.Mutator]? = active_mutator()
+    require mutator != nil
+    return builtin.gc.roots.depth(mutator.get())
+}
+
+func native_root_push(slot: Ref[Ref[byte]?]) {
+    let mutator: Ref[builtin.gc.Mutator]? = active_mutator()
+    require mutator != nil
+    require builtin.gc.roots.push(mutator.get(), slot)
+}
+
+func native_root_pop(depth: uint) {
+    let mutator: Ref[builtin.gc.Mutator]? = active_mutator()
+    require mutator != nil
+    builtin.gc.roots.pop(mutator.get(), depth)
 }

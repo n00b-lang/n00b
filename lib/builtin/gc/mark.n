@@ -175,7 +175,7 @@ public func write_barrier(mutator: Ref[builtin.gc.Mutator],
         }
         let index: uint = mutator.write_buffer_count
         assert index < builtin.gc.write_buffer_cap
-        mutator.write_buffer[cast[int](index)] = value
+        mutator.write_buffer[index] = value
         __gc_signal_fence()
         mutator.write_buffer_count = index + 1
         if mutator.write_buffer_count == builtin.gc.write_buffer_cap {
@@ -296,13 +296,13 @@ func pointer_word_at(address: Ref[byte]) -> Ref[Atomic[Ref[byte]?]] {
 
 func trace_unit(address: Ref[byte], bits: u32) -> u64 {
     if bits == 8 {
-        return cast[u64](__atomic_load(unsafe_cast[Ref[Atomic[u8]]] address))
+        return __atomic_load(unsafe_cast[Ref[Atomic[u8]]] address)
     }
     if bits == 16 {
-        return cast[u64](__atomic_load(unsafe_cast[Ref[Atomic[u16]]] address))
+        return __atomic_load(unsafe_cast[Ref[Atomic[u16]]] address)
     }
     if bits == 32 {
-        return cast[u64](__atomic_load(unsafe_cast[Ref[Atomic[u32]]] address))
+        return __atomic_load(unsafe_cast[Ref[Atomic[u32]]] address)
     }
     if bits == 64 {
         return __atomic_load(unsafe_cast[Ref[Atomic[u64]]] address)
@@ -335,7 +335,7 @@ func option_is_set(address: Ref[byte], trace: Ref[builtin.abi.Trace_Record],
     if found != nil {
         let tag: Ref[builtin.abi.Tag_Extractor_Record] = found.get()
         let unit: Ref[byte] = __gc_byte_offset(address,
-            cast[uint](tag.unit_byte_offset))
+            tag.unit_byte_offset)
         if tag.kind == cast[u32](builtin.abi.Tag_Kind.direct_bits) {
             return (trace_unit(unit, tag.unit_width_bits) & tag.mask) != 0
         }
@@ -365,7 +365,7 @@ func trace_variant(marker: Ref[builtin.gc.Marker]?,
         let tag: Ref[builtin.abi.Tag_Extractor_Record] = found.get()
         require tag.kind == cast[u32](builtin.abi.Tag_Kind.direct_bits)
         let unit: Ref[byte] = __gc_byte_offset(address,
-            cast[uint](tag.unit_byte_offset))
+            tag.unit_byte_offset)
         let active: u64 = (trace_unit(unit, tag.unit_width_bits) & tag.mask) >> tag.lsb_position
         if active == 0 { return }
         var ordinal: u32 = 0
@@ -688,7 +688,7 @@ public inline func push(marker: Ref[builtin.gc.Marker], header: Ref[builtin.gc.O
     let output: Ref[builtin.gc.Packet]? = marker.output
     if output != nil {
         let packet: Ref[builtin.gc.Packet] = output.get()
-        let entry: Ref[builtin.gc.Packet_Entry] = ref packet.entries[cast[int](packet.n)]
+        let entry: Ref[builtin.gc.Packet_Entry] = ref packet.entries[packet.n]
         entry.header = header
         entry.value_address = builtin.gc.payload_of(header)
         entry.type_index = header.type_index
@@ -707,7 +707,7 @@ func push_continuation(marker: Ref[builtin.gc.Marker],
     let output: Ref[builtin.gc.Packet]? = marker.output
     if output != nil {
         let packet: Ref[builtin.gc.Packet] = output.get()
-        let entry: Ref[builtin.gc.Packet_Entry] = ref packet.entries[cast[int](packet.n)]
+        let entry: Ref[builtin.gc.Packet_Entry] = ref packet.entries[packet.n]
         entry.header = header
         entry.value_address = address
         entry.type_index = type_index
@@ -782,7 +782,7 @@ public func marker_drain(marker: Ref[builtin.gc.Marker], budget: uint) -> uint {
                 }
                 if packet.n > prefetch_ahead {
                     let ahead: Ref[builtin.gc.Packet_Entry] =
-                        ref packet.entries[cast[int](packet.n - 1 - prefetch_ahead)]
+                        ref packet.entries[packet.n - 1 - prefetch_ahead]
                     let header: Ref[builtin.gc.Object_Header]? = ahead.header
                     if header != nil {
                         __gc_prefetch(header.get())
@@ -793,7 +793,7 @@ public func marker_drain(marker: Ref[builtin.gc.Marker], budget: uint) -> uint {
                 }
                 packet.n -= 1
                 let entry: Ref[builtin.gc.Packet_Entry] = ref packet.entries[
-                    cast[int](packet.n)]
+                    packet.n]
                 let header: Ref[builtin.gc.Object_Header]? = entry.header
                 let address: Ref[byte]? = entry.value_address
                 if address != nil {

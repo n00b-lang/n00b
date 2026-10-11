@@ -1,0 +1,43 @@
+import builtin.containers.set
+
+comptime {} else {
+    let empty_contextual: Set[int] = {}
+    let empty_modified: Set[int] = {}'s
+    require builtin.containers.set.len(empty_contextual) == 0
+    require builtin.containers.set.len(empty_modified) == 0
+    var left: Set[int] = {1, 2, 3}'set
+    let right: Set[int] = {3, 4}
+    require builtin.containers.set.len(left) == 3
+    require builtin.containers.set.contains(left, 2)
+    require !builtin.containers.set.add(left, 2)
+    require builtin.containers.set.remove(left, 2)
+    require !builtin.containers.set.contains(left, 2)
+    require builtin.containers.set.add(left, 2)
+
+    let united: Set[int] = left + right
+    let difference: Set[int] = left - right
+    let intersection: Set[int] = left & right
+    let symmetric: Set[int] = left ^ right
+    require builtin.containers.set.len(united) == 4
+    require builtin.containers.set.len(difference) == 2
+    require builtin.containers.set.len(intersection) == 1
+    require builtin.containers.set.len(symmetric) == 3
+    require builtin.containers.set.contains(united, 4)
+    require builtin.containers.set.contains(difference, 1)
+    require builtin.containers.set.contains(intersection, 3)
+    require !builtin.containers.set.contains(symmetric, 3)
+    require builtin.containers.set.is_subset(intersection, left)
+    require builtin.containers.set.is_superset(left, intersection)
+    require builtin.containers.set.is_disjoint(difference, right)
+    require left == {3, 2, 1}'s
+
+    var total: int = 0
+    for value in left { total += value }
+    require total == 6
+
+    var shallow: Set[int] = left
+    require builtin.containers.set.add(shallow, 5)
+    require builtin.containers.set.contains(left, 5)
+    builtin.containers.set.clear(shallow)
+    require builtin.containers.set.len(left) == 0
+}

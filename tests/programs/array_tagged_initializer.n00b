@@ -1,1 +1,1 @@
-var rectangular_literal: int[2][2] = [[1, 2]'a, [3, 4]'a]'a
+var rectangular_literal: Array[int][2][2] = [[1, 2]'a, [3, 4]'a]'a

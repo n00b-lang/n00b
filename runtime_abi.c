@@ -91,6 +91,10 @@ struct n00b_abi_snapshot_v1 {
     uint64_t metadata_bytes;
     uint32_t *typehash_slots;
     size_t typehash_capacity;
+    uint32_t *unary_type_slots;
+    uint32_t unary_type_count;
+    uint32_t *named_type_slots;
+    size_t named_type_capacity;
     uint32_t *module_name_slots;
     size_t module_name_capacity;
     n00bb_abi_directory_entry_t tables[N00B_ABI_TABLE_CALL_SHAPE + 1];
@@ -207,6 +211,7 @@ invalid_record(n00b_abi_error_v1 *error, uint32_t kind,
     registration_error(error, N00B_ABI_BAD_METADATA, kind, index, offset);
     return false;
 }
+
 
 static uint32_t
 member_table_kind(uint32_t type_kind)
@@ -337,8 +342,20 @@ metadata_references_valid(const n00b_abi_snapshot_v1 *snapshot,
     uint32_t type_count = n00b_abi_v1_table_count(snapshot, N00B_ABI_TABLE_TYPE);
     for (uint32_t i = 0; i < type_count; i++) {
         const n00b_abi_type_v1 *type = n00b_abi_v1_type(snapshot, i);
+        if (type && type->kind == N00B_ABI_TYPE_VARIABLE
+            && type->typevar_import_requirement_index)
+            return invalid_record(error, N00B_ABI_TABLE_TYPE, i,
+                offsetof(n00b_abi_type_v1,
+                    typevar_import_requirement_index));
         if (!n00bb_abi_type_variable_final_valid(type))
             return invalid_record(error, N00B_ABI_TABLE_TYPE, i, 0);
+        if (type && type->typevar_owner_trait_index) {
+            const n00b_abi_type_v1 *owner = n00b_abi_v1_type(snapshot,
+                type->typevar_owner_trait_index);
+            if (!owner || owner->kind != N00B_ABI_TYPE_TRAIT)
+                return invalid_record(error, N00B_ABI_TABLE_TYPE, i,
+                    offsetof(n00b_abi_type_v1, typevar_owner_trait_index));
+        }
         if (type->layout_index) {
             const n00b_abi_layout_v1 *layout = n00b_abi_v1_layout(snapshot,
                 type->layout_index);
@@ -1401,7 +1418,9 @@ metadata_traces_valid(const n00b_abi_snapshot_v1 *snapshot,
                 || !!type->tracing_index != type_needs_trace(child))
                 return invalid_record(error, N00B_ABI_TABLE_TYPE, i, 0);
         }
-        if (type->tracing_index || (type->kind != N00B_ABI_TYPE_RECORD
+        if (type->tracing_index
+            || (type->flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE)
+            || (type->kind != N00B_ABI_TYPE_RECORD
             && type->kind != N00B_ABI_TYPE_TUPLE
             && type->kind != N00B_ABI_TYPE_VARIANT)) continue;
         for (uint32_t j = 0; j < type->fields_or_arms.count; j++) {
@@ -2191,6 +2210,14 @@ snapshot_candidate_free(n00b_abi_snapshot_v1 *candidate)
     if (candidate->typehash_slots)
         snapshot_free(candidate->typehash_slots,
             candidate->typehash_capacity * sizeof(*candidate->typehash_slots));
+    if (candidate->unary_type_slots)
+        snapshot_free(candidate->unary_type_slots,
+            (size_t)candidate->unary_type_count * 2
+                * sizeof(*candidate->unary_type_slots));
+    if (candidate->named_type_slots)
+        snapshot_free(candidate->named_type_slots,
+            candidate->named_type_capacity
+                * sizeof(*candidate->named_type_slots));
     if (candidate->module_name_slots)
         snapshot_free(candidate->module_name_slots,
             candidate->module_name_capacity
@@ -2238,6 +2265,118 @@ typehash_cache_build(n00b_abi_snapshot_v1 *snapshot,
             slot = (slot + 1) & (capacity - 1);
         }
         slots[slot] = i + 1;
+    }
+    return true;
+}
+
+static bool
+unary_type_cache_build(n00b_abi_snapshot_v1 *snapshot,
+                       n00b_abi_error_v1 *error)
+{
+    uint32_t count = n00b_abi_v1_table_count(snapshot, N00B_ABI_TABLE_TYPE);
+    if (!count || (size_t)count > SIZE_MAX / (2 * sizeof(uint32_t)))
+        return false;
+    uint32_t *slots = snapshot_alloc((size_t)count * 2 * sizeof(*slots));
+    if (!slots) return false;
+    snapshot->unary_type_slots = slots;
+    snapshot->unary_type_count = count;
+    for (uint32_t index = 1; index < count; index++) {
+        const n00b_abi_type_v1 *type = n00b_abi_v1_type(snapshot, index);
+        if (!type) return false;
+        bool reference = type->kind == N00B_ABI_TYPE_REFERENCE
+            && (type->flags & N00B_ABI_TYPE_FLAG_PLAIN_REF);
+        if (!reference && type->kind != N00B_ABI_TYPE_ARRAY) continue;
+        uint32_t child = 0;
+        if (type->components.count != 1
+            || n00b_abi_v1_index_at(snapshot, type->components, 0,
+                                    &child) != 1 || child >= count)
+            return invalid_record(error, N00B_ABI_TABLE_TYPE, index, 0);
+        uint32_t *slot = &slots[(reference ? 0 : count) + child];
+        if (*slot)
+            return invalid_record(error, N00B_ABI_TABLE_TYPE, index, 0);
+        *slot = index + 1;
+    }
+    return true;
+}
+
+static uint64_t
+named_type_hash(const uint8_t *name, size_t name_bytes, uint32_t count)
+{
+    return XXH3_64bits_withSeed(name, name_bytes, count);
+}
+
+static uint64_t
+named_type_hash_argument(uint64_t hash, uint32_t type_index)
+{
+    return XXH3_64bits_withSeed(&type_index, sizeof(type_index), hash);
+}
+
+static bool
+named_type_cache_build(n00b_abi_snapshot_v1 *snapshot,
+                       n00b_abi_error_v1 *error)
+{
+    uint32_t count = n00b_abi_v1_table_count(snapshot, N00B_ABI_TABLE_TYPE);
+    size_t capacity = 0;
+    if (!hash_cache_capacity(count, &capacity)) return false;
+    uint32_t *slots = snapshot_alloc(capacity * sizeof(*slots));
+    if (!slots) return false;
+    snapshot->named_type_slots = slots;
+    snapshot->named_type_capacity = capacity;
+    for (uint32_t index = 1; index < count; index++) {
+        const n00b_abi_type_v1 *type = n00b_abi_v1_type(snapshot, index);
+        const uint8_t *name = NULL;
+        uint64_t length = 0;
+        if (!type || n00b_abi_v1_string_bytes(snapshot,
+                &type->named_constructor, &name, &length) != 1
+            || length > SIZE_MAX)
+            return invalid_record(error, N00B_ABI_TABLE_TYPE, index, 0);
+        if (!length) continue;
+        uint32_t nargs = type->named_arguments.count;
+        uint64_t hash = named_type_hash(name, (size_t)length, nargs);
+        bool eligible = true;
+        for (uint32_t ordinal = 0; ordinal < nargs; ordinal++) {
+            const n00b_abi_type_argument_v1 *argument =
+                n00b_abi_v1_type_argument(snapshot,
+                    type->named_arguments.first + ordinal);
+            if (!argument) return invalid_record(error,
+                N00B_ABI_TABLE_TYPE, index, 0);
+            if (argument->kind != N00B_ABI_TYPE_ARG_TYPE) {
+                eligible = false;
+                break;
+            }
+            hash = named_type_hash_argument(hash, argument->type_index);
+        }
+        if (!eligible) continue;
+        size_t slot = (size_t)hash & (capacity - 1);
+        while (slots[slot]) {
+            uint32_t prior_index = slots[slot] - 1;
+            const n00b_abi_type_v1 *prior = n00b_abi_v1_type(snapshot,
+                                                               prior_index);
+            const uint8_t *prior_name = NULL;
+            uint64_t prior_length = 0;
+            if (!prior || n00b_abi_v1_string_bytes(snapshot,
+                    &prior->named_constructor, &prior_name,
+                    &prior_length) != 1)
+                return invalid_record(error, N00B_ABI_TABLE_TYPE, index, 0);
+            bool same = prior_length == length
+                && prior->named_arguments.count == nargs
+                && !memcmp(prior_name, name, (size_t)length);
+            for (uint32_t ordinal = 0; same && ordinal < nargs; ordinal++) {
+                const n00b_abi_type_argument_v1 *left =
+                    n00b_abi_v1_type_argument(snapshot,
+                        prior->named_arguments.first + ordinal);
+                const n00b_abi_type_argument_v1 *right =
+                    n00b_abi_v1_type_argument(snapshot,
+                        type->named_arguments.first + ordinal);
+                same = left && right && left->kind == N00B_ABI_TYPE_ARG_TYPE
+                    && right->kind == N00B_ABI_TYPE_ARG_TYPE
+                    && left->type_index == right->type_index;
+            }
+            if (same) return invalid_record(error, N00B_ABI_TABLE_TYPE,
+                                             index, 0);
+            slot = (slot + 1) & (capacity - 1);
+        }
+        slots[slot] = index + 1;
     }
     return true;
 }
@@ -2317,6 +2456,8 @@ snapshot_contents_valid(n00b_abi_snapshot_v1 *candidate,
         && specialization_graph_valid(candidate)
         && metadata_owned_rows_valid(candidate, error)
         && typehash_cache_build(candidate, error)
+        && unary_type_cache_build(candidate, error)
+        && named_type_cache_build(candidate, error)
         && module_name_cache_build(candidate, error);
 }
 
@@ -2369,6 +2510,8 @@ prepare_image(const n00b_abi_image_descriptor_v1 *image,
     if (valid) valid = validate_contents
         ? snapshot_contents_valid(candidate, error)
         : typehash_cache_build(candidate, error)
+            && unary_type_cache_build(candidate, error)
+            && named_type_cache_build(candidate, error)
             && module_name_cache_build(candidate, error);
     if (!valid) {
         snapshot_candidate_free(candidate);
@@ -2631,6 +2774,66 @@ n00b_abi_v1_find_typehash(const n00b_abi_snapshot_v1 *snapshot,
         const n00b_abi_type_v1 *type = n00b_abi_v1_type(snapshot, entry - 1);
         if (!type) return -1;
         if (type->typehash == typehash) {
+            *type_index = entry - 1;
+            return 1;
+        }
+        slot = (slot + 1) & (capacity - 1);
+    }
+    return -1;
+}
+
+int32_t
+n00b_abi_v1_find_unary_type(const n00b_abi_snapshot_v1 *snapshot,
+                             uint32_t kind, uint32_t element_index,
+                             uint32_t *type_index)
+{
+    if (!snapshot || !type_index || !snapshot->unary_type_slots
+        || element_index >= snapshot->unary_type_count
+        || (kind != N00B_ABI_TYPE_REFERENCE
+            && kind != N00B_ABI_TYPE_ARRAY)) return -1;
+    uint32_t slot = snapshot->unary_type_slots[
+        (kind == N00B_ABI_TYPE_REFERENCE ? 0
+            : snapshot->unary_type_count) + element_index];
+    if (!slot) return 0;
+    *type_index = slot - 1;
+    return 1;
+}
+
+int32_t
+n00b_abi_v1_find_named_type(const n00b_abi_snapshot_v1 *snapshot,
+                             const uint8_t *name, size_t name_bytes,
+                             const uint32_t *arguments,
+                             uint32_t argument_count, uint32_t *type_index)
+{
+    if (!snapshot || !name || !name_bytes || !type_index
+        || (argument_count && !arguments) || !snapshot->named_type_slots
+        || !snapshot->named_type_capacity) return -1;
+    uint64_t hash = named_type_hash(name, name_bytes, argument_count);
+    for (uint32_t i = 0; i < argument_count; i++)
+        hash = named_type_hash_argument(hash, arguments[i]);
+    size_t capacity = snapshot->named_type_capacity;
+    size_t slot = (size_t)hash & (capacity - 1);
+    for (size_t probes = 0; probes < capacity; probes++) {
+        uint32_t entry = snapshot->named_type_slots[slot];
+        if (!entry) return 0;
+        const n00b_abi_type_v1 *type = n00b_abi_v1_type(snapshot, entry - 1);
+        const uint8_t *candidate_name = NULL;
+        uint64_t candidate_bytes = 0;
+        if (!type || n00b_abi_v1_string_bytes(snapshot,
+                &type->named_constructor, &candidate_name,
+                &candidate_bytes) != 1) return -1;
+        bool match = candidate_bytes == name_bytes
+            && type->named_arguments.count == argument_count
+            && !memcmp(candidate_name, name, name_bytes);
+        for (uint32_t ordinal = 0; match && ordinal < argument_count;
+             ordinal++) {
+            const n00b_abi_type_argument_v1 *argument =
+                n00b_abi_v1_type_argument(snapshot,
+                    type->named_arguments.first + ordinal);
+            match = argument && argument->kind == N00B_ABI_TYPE_ARG_TYPE
+                && argument->type_index == arguments[ordinal];
+        }
+        if (match) {
             *type_index = entry - 1;
             return 1;
         }

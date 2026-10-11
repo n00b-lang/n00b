@@ -8,4 +8,4 @@ comptime {
     }
 }
 
-var loop_unproven: int[extent] = new[int[extent]]()
+var loop_unproven: Array[int][extent] = new[Array[int][extent]]()
