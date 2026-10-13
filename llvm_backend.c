@@ -25,6 +25,7 @@
 #include <string.h>
 
 #include "lib/alloc.h"
+#include "lib/dict.h"
 #include "lib/hash.h"
 #include "lib/indexed_table.h"
 #include "lib/list.h"
@@ -37,8 +38,35 @@ typedef struct {
 } callback_binding_t;
 core_list_decl(callback_binding_t);
 
+typedef struct {
+    ir_module_t *module;
+    th_type *type;
+    LLVMContextRef context;
+} native_type_key_t;
+
+static core_hash_value_t
+native_type_key_hash(void *opaque)
+{
+    const native_type_key_t *key = opaque;
+    uintptr_t parts[] = {(uintptr_t)key->module, (uintptr_t)key->type,
+                         (uintptr_t)key->context};
+    return core_hash_raw(parts, sizeof parts);
+}
+
+static bool
+native_type_key_eq(const void *left, const void *right)
+{
+    const native_type_key_t *a = left, *b = right;
+    return a->module == b->module && a->type == b->type
+        && a->context == b->context;
+}
+
+static _Thread_local core_dict_t *active_native_types;
+
 struct n00bb_llvm_backend_t {
     LLVMContextRef context;
+    core_dict_t native_types;
+    bool native_types_ready;
     LLVMModuleRef comptime;
     LLVMModuleRef runtime;
     const ir_module_t *comptime_source;
@@ -495,7 +523,30 @@ aggregate_option_type(ir_module_t *module, th_type *type,
 }
 
 static LLVMTypeRef
+value_type_uncached(ir_module_t *module, th_type *type,
+                    LLVMContextRef context);
+
+static LLVMTypeRef
 value_type(ir_module_t *module, th_type *type, LLVMContextRef context)
+{
+    th_type *resolved = th_resolve(type);
+    if (!active_native_types || !resolved)
+        return value_type_uncached(module, type, context);
+    native_type_key_t lookup = {module, resolved, context};
+    bool found = false;
+    LLVMTypeRef native = core_dict_get(active_native_types, &lookup, &found);
+    if (found) return native;
+    native = value_type_uncached(module, resolved, context);
+    if (!native) return nullptr;
+    native_type_key_t *key = core_alloc(native_type_key_t);
+    *key = lookup;
+    if (!core_dict_add(active_native_types, key, native)) core_free(key);
+    return native;
+}
+
+static LLVMTypeRef
+value_type_uncached(ir_module_t *module, th_type *type,
+                    LLVMContextRef context)
 {
     type = th_resolve(type);
     th_kind kind = th_kind_of(th_resolve(type));
@@ -10824,6 +10875,9 @@ n00bb_llvm_backend_prepare(const ir_module_t *comptime_ir,
         backend_error(diagnostics, "could not allocate LLVM backend state");
         return nullptr;
     }
+    core_dict_init(&backend->native_types, native_type_key_hash,
+                   native_type_key_eq);
+    backend->native_types_ready = true;
     backend->debug_enabled = debug_enabled;
     if (native_cpu) {
         backend->cpu_name = LLVMGetHostCPUName();
@@ -10859,6 +10913,11 @@ void
 n00bb_llvm_backend_free(n00bb_llvm_backend_t *backend)
 {
     if (!backend) return;
+    if (backend->native_types_ready) {
+        core_dict_foreach(&backend->native_types, item)
+            core_free(item->key);
+        core_dict_free(&backend->native_types);
+    }
     core_list_free(backend->callback_bindings);
     if (backend->comptime) LLVMDisposeModule(backend->comptime);
     if (backend->runtime) LLVMDisposeModule(backend->runtime);
@@ -11002,7 +11061,10 @@ lower_phase(n00bb_llvm_backend_t *backend, bool comptime,
     bool *lowered = comptime ? &backend->comptime_lowered
                              : &backend->runtime_lowered;
     if (*lowered) return true;
-    if (!lower_module(comptime ? backend->comptime : backend->runtime,
+    core_dict_t *previous_native_types = active_native_types;
+    active_native_types = &backend->native_types;
+    bool module_lowered = lower_module(
+                      comptime ? backend->comptime : backend->runtime,
                       comptime ? backend->comptime_source
                                : backend->runtime_source,
                       !comptime && backend->emit_frame_maps,
@@ -11022,8 +11084,9 @@ lower_phase(n00bb_llvm_backend_t *backend, bool comptime,
                       comptime ? backend->comptime_reachable_bound
                                : backend->runtime_reachable_bound,
                       comptime ? nullptr : &backend->callback_bindings,
-                      diagnostics))
-        return false;
+                      diagnostics);
+    active_native_types = previous_native_types;
+    if (!module_lowered) return false;
     if (!comptime) {
         LLVMPassBuilderOptionsRef options = LLVMCreatePassBuilderOptions();
         LLVMErrorRef error = LLVMRunPasses(backend->runtime, "always-inline",

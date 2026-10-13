@@ -341,6 +341,9 @@ n00bb_abi_link_semantic_rows(
             valid = add_receiver(ctx, types, &receivers,
                 ir_type_at(module, i));
     }
+    bool *matches = receivers.len
+        ? core_alloc_array(bool, receivers.len) : nullptr;
+    valid = valid && (!receivers.len || matches != nullptr);
     for (size_t i = 0; valid && i < declarations; i++) {
         th_env_declaration_view_t trait;
         valid = th_env_declaration_at(facts->environment, i, &trait);
@@ -361,7 +364,9 @@ n00bb_abi_link_semantic_rows(
         }
         for (size_t r = 0; valid && r < receivers.len; r++) {
             receiver_t receiver = receivers.data[r];
-            if (th_env_implements(ctx, receiver.type, trait.qualified_name))
+            matches[r] = th_env_implements(ctx, receiver.type,
+                                            trait.qualified_name);
+            if (matches[r])
                 core_list_push(specializations, ((specialization_t){
                     receiver.index, trait_index,
                 }));
@@ -379,8 +384,7 @@ n00bb_abi_link_semantic_rows(
             };
             for (size_t r = 0; valid && r < receivers.len; r++) {
                 receiver_t receiver = receivers.data[r];
-                if (!th_env_implements(ctx, receiver.type,
-                                       trait.qualified_name)) continue;
+                if (!matches[r]) continue;
                 th_env_method_t chosen = {0};
                 uint32_t function_index = 0;
                 valid = th_env_method_resolve(ctx, receiver.type,
@@ -429,6 +433,7 @@ n00bb_abi_link_semantic_rows(
     core_list_free(dispatch);
     core_list_free(specializations);
     core_list_free(receivers);
+    core_free(matches);
     th_ctx_free(ctx);
     return valid;
 }
