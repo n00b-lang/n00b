@@ -2,6 +2,41 @@
 
 #include "lib/alloc.h"
 #include "lib/buffer.h"
+#include "lib/dict.h"
+
+typedef struct {
+    uint32_t kind;
+    uint32_t producer_stage;
+    core_link_dependency_state_t state;
+    core_link_declaration_t *from;
+    core_link_declaration_t *to;
+    core_translation_unit_t *source_unit;
+    const void *source_site;
+} core_link_dependency_key_t;
+
+static core_hash_value_t
+dependency_key_hash(void *opaque)
+{
+    const core_link_dependency_key_t *key = opaque;
+    uintptr_t fields[] = {
+        key->kind, key->producer_stage, key->state,
+        (uintptr_t)key->from, (uintptr_t)key->to,
+        (uintptr_t)key->source_unit, (uintptr_t)key->source_site,
+    };
+    return core_hash_raw(fields, sizeof fields);
+}
+
+static bool
+dependency_key_eq(const void *left, const void *right)
+{
+    const core_link_dependency_key_t *a = left;
+    const core_link_dependency_key_t *b = right;
+    return a->kind == b->kind
+        && a->producer_stage == b->producer_stage
+        && a->state == b->state && a->from == b->from && a->to == b->to
+        && a->source_unit == b->source_unit
+        && a->source_site == b->source_site;
+}
 
 typedef struct {
     core_string_t module;
@@ -149,6 +184,8 @@ struct core_link_unit_t {
     core_link_dependency_t *dependencies;
     size_t dependency_count;
     size_t dependency_capacity;
+    core_dict_t dependency_index;
+    bool dependency_index_ready;
     core_diagnostics_t *diagnostics;
     uint64_t graph_generation;
     bool collected;
@@ -158,6 +195,49 @@ struct core_link_unit_t {
     bool validated;
     bool validation_valid;
 };
+
+static core_link_dependency_key_t
+dependency_key(const core_link_dependency_t *dependency)
+{
+    return (core_link_dependency_key_t){
+        .kind = dependency->kind,
+        .producer_stage = dependency->producer_stage,
+        .state = dependency->state,
+        .from = dependency->from,
+        .to = dependency->to,
+        .source_unit = dependency->source_unit,
+        .source_site = dependency->source_site,
+    };
+}
+
+static void
+clear_dependency_index(core_link_unit_t *link)
+{
+    if (!link->dependency_index_ready) return;
+    core_dict_foreach(&link->dependency_index, item)
+        core_free(item->key);
+    core_dict_free(&link->dependency_index);
+    link->dependency_index_ready = false;
+}
+
+static void
+index_dependency(core_link_unit_t *link, size_t index)
+{
+    core_link_dependency_key_t *key = core_alloc(core_link_dependency_key_t);
+    *key = dependency_key(&link->dependencies[index]);
+    core_dict_add(&link->dependency_index, key, index + 1);
+}
+
+static void
+ensure_dependency_index(core_link_unit_t *link)
+{
+    if (link->dependency_index_ready) return;
+    core_dict_init(&link->dependency_index, dependency_key_hash,
+                   dependency_key_eq);
+    link->dependency_index_ready = true;
+    for (size_t i = 0; i < link->dependency_count; i++)
+        index_dependency(link, i);
+}
 
 typedef struct {
     core_link_unit_t *link;
@@ -191,6 +271,7 @@ clear_contribution_payload(core_link_contribution_t *contribution)
 static void
 remove_stage_dependencies(core_link_unit_t *link, const bool *invalidated)
 {
+    clear_dependency_index(link);
     for (size_t i = 0; i < link->dependency_count;) {
         core_link_dependency_t *dependency = &link->dependencies[i];
         core_link_stage_record_t *producer = dependency->producer_stage
@@ -512,6 +593,7 @@ void
 core_link_unit_free(core_link_unit_t *link)
 {
     if (!link) return;
+    clear_dependency_index(link);
     for (size_t i = 0; i < link->declaration_count; i++) {
         core_link_declaration_t *decl = link->declarations[i];
         if (decl->ownership == CORE_LINK_PAYLOAD_OWNED)
@@ -2181,17 +2263,18 @@ core_link_unit_add_dependency(
             "dependency fact has an endpoint, source, or producer outside its link analysis");
         return false;
     }
-    for (size_t i = 0; i < link->dependency_count; i++) {
-        core_link_dependency_t *dependency = &link->dependencies[i];
-        if (dependency->kind == kind
-            && dependency->producer_stage == producer_stage
-            && dependency->state == state
-            && dependency->from == from && dependency->to == to
-            && dependency->source_unit == source_unit
-            && dependency->source_site == source_site) {
-            if (out) *out = dependency;
-            return true;
-        }
+    ensure_dependency_index(link);
+    core_link_dependency_key_t key = {
+        .kind = kind, .producer_stage = producer_stage, .state = state,
+        .from = from, .to = to, .source_unit = source_unit,
+        .source_site = source_site,
+    };
+    bool found = false;
+    size_t existing = (size_t)(uintptr_t)core_dict_get(
+        &link->dependency_index, &key, &found);
+    if (found) {
+        if (out) *out = &link->dependencies[existing - 1];
+        return true;
     }
     grow_array((void **)&link->dependencies,
         &link->dependency_capacity, link->dependency_count + 1,
@@ -2212,6 +2295,7 @@ core_link_unit_add_dependency(
         .provenance_version = provenance_version,
     };
     link->validated = false;
+    index_dependency(link, link->dependency_count - 1);
     if (out) *out = dependency;
     return true;
 }
