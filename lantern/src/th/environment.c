@@ -131,6 +131,15 @@ static bool pattern_equal(const th_type *a, const th_type *b,
     return true;
   if (!a || !b || a->kind != b->kind)
     return false;
+  if (a->kind == TH_VAR) {
+    for (size_t i = 0; i < seen->len; i++) {
+      const type_pair_t *pair = &seen->data[i];
+      if (pair->left == a || pair->right == b)
+        return pair->left == a && pair->right == b;
+    }
+    core_list_push(*seen, ((type_pair_t){a, b}));
+    return true;
+  }
   if (pair_seen(seen, a, b))
     return true;
   switch (a->kind) {
@@ -224,6 +233,13 @@ static bool pattern_equal(const th_type *a, const th_type *b,
     return true;
   }
   return false;
+}
+
+static bool same_type_pattern(const th_type *a, const th_type *b) {
+  core_list_t(type_pair_t) seen = core_list_new(type_pair_t);
+  bool equal = pattern_equal(a, b, &seen);
+  core_list_free(seen);
+  return equal;
 }
 
 static bool pattern_subsumes(const th_type *general, const th_type *specific,
@@ -717,10 +733,7 @@ bool th_env_register_type_shape(th_env *env, const char *name,
       return true;
     }
     if (origin->shape_kind != shape_kind) return false;
-    core_list_t(type_pair_t) seen = core_list_new(type_pair_t);
-    bool equal = pattern_equal(origin->shape, shape, &seen);
-    core_list_free(seen);
-    return equal;
+    return same_type_pattern(origin->shape, shape);
   }
   return false;
 }
@@ -844,8 +857,14 @@ bool th_env_register_trait_contracts(th_env *env, const char *name,
   if (!env || env->frozen || !name || !*name || !module || !package ||
       !method_contracts || visibility > TH_ENV_PUBLIC ||
       (th_kind_of(method_contracts) != TH_RECORD &&
-       th_kind_of(method_contracts) != TH_TRAIT) || trait_named(env, name))
+       th_kind_of(method_contracts) != TH_TRAIT))
     return false;
+  th_env_trait_t *existing = trait_named(env, name);
+  if (existing)
+    return !strcmp(existing->module, module) &&
+           !strcmp(existing->package, package) &&
+           existing->visibility == visibility &&
+           same_type_pattern(existing->contracts, method_contracts);
   const char *contract_name = nullptr;
   if (th_kind_of(method_contracts) == TH_TRAIT &&
       (!th_trait_name(method_contracts, &contract_name, nullptr) ||
@@ -894,8 +913,8 @@ bool th_env_register_intrinsic_type_pattern(th_env *env,
   for (size_t i = 0; i < env->intrinsic_types.len; i++) {
     const th_env_intrinsic_type_t *fact = &env->intrinsic_types.data[i];
     if (!strcmp(fact->trait_name, trait_name) &&
-        fact->receiver_pattern == receiver_pattern)
-      return false;
+        same_type_pattern(fact->receiver_pattern, receiver_pattern))
+      return true;
   }
   core_list_push(env->intrinsic_types,
       ((th_env_intrinsic_type_t){
@@ -938,7 +957,11 @@ bool th_env_register_function_contract(
                                  &error_type)) return false;
   for (size_t i = 0; i < env->functions.len; i++)
     if (!strcmp(env->functions.data[i].qualified_name, qualified_name))
-      return false;
+      return !strcmp(env->functions.data[i].root_name, root_name) &&
+             !strcmp(env->functions.data[i].module, module) &&
+             !strcmp(env->functions.data[i].package, package) &&
+             env->functions.data[i].visibility == visibility &&
+             same_type_pattern(env->functions.data[i].contract, contract);
   core_list_push(
       env->functions,
       ((th_env_function_t){
@@ -969,7 +992,8 @@ bool th_env_register_value(th_env *env, const char *qualified_name,
     return !strcmp(current->module, module) &&
         !strcmp(current->package, package) &&
         current->visibility == visibility &&
-        th_hash(env->types, current->type) == th_hash(env->types, value_type);
+        !strcmp(current->root_name, root_name) &&
+        same_type_pattern(current->type, value_type);
   }
   core_list_push(env->values, ((th_env_value_t){
       .qualified_name = th_strdup(env->types, qualified_name,
@@ -1023,7 +1047,8 @@ bool th_env_register_metadata(th_env *env, th_env_metadata_owner_t owner_kind,
     const th_env_metadata_record_t *current = &env->metadata.data[i];
     if (current->owner_kind == owner_kind &&
         !strcmp(current->owner_name, owner_name) && !strcmp(current->key, key))
-      return false;
+      return current->version == version && current->size == size &&
+             (!size || !memcmp(current->data, data, size));
   }
 
   uint8_t *owned_data = size ? th_alloc(env->types, size) : nullptr;

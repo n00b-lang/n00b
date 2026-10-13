@@ -2373,6 +2373,16 @@ int main(void) {
             !strcmp(persisted_environment_metadata.key,
                     "language.package"));
 
+  const th_env *duplicate_import_inputs[] = {base_library,
+                                             persisted_library};
+  th_env_compose_error_t duplicate_import_error = {0};
+  th_env *duplicate_imports = th_env_compose_diagnose(
+      duplicate_import_inputs, 2, &duplicate_import_error);
+  check("compose identical source and archived module declarations",
+        duplicate_imports &&
+            duplicate_import_error.status == TH_ENV_COMPOSE_OK);
+  th_env_free(duplicate_imports);
+
   th_env *conflicting_library = th_env_new();
   check("build library with a duplicate function identity",
         th_env_register_function(
@@ -2444,6 +2454,68 @@ int main(void) {
             !strcmp(compose_error.identity, "Box"));
   th_env_free(shape_conflict_library);
   th_ctx_free(conflicting_shape_types);
+
+  th_ctx *generic_left_types = th_ctx_new();
+  th_ctx *generic_right_types = th_ctx_new();
+  th_env *generic_left = th_env_new_in_context(generic_left_types);
+  th_env *generic_right = th_env_new_in_context(generic_right_types);
+  th_type *left_item = th_var(generic_left_types);
+  th_type *right_item = th_var(generic_right_types);
+  th_member left_fields[] = {
+      {.name = "first", .type = left_item},
+      {.name = "second", .type = left_item},
+  };
+  th_member right_fields[] = {
+      {.name = "first", .type = right_item},
+      {.name = "second", .type = right_item},
+  };
+  check("register matching generic shapes in independent environments",
+        th_env_register_type(generic_left, "Pair", "generic", "base",
+                             TH_ENV_PUBLIC) &&
+            th_env_register_type_shape(generic_left, "Pair",
+                TH_ENV_TYPE_SHAPE_RECORD,
+                th_record(generic_left_types, left_fields, 2)) &&
+            th_env_freeze(generic_left) &&
+            th_env_register_type(generic_right, "Pair", "generic", "base",
+                                 TH_ENV_PUBLIC) &&
+            th_env_register_type_shape(generic_right, "Pair",
+                TH_ENV_TYPE_SHAPE_RECORD,
+                th_record(generic_right_types, right_fields, 2)) &&
+            th_env_freeze(generic_right));
+  const th_env *matching_generic_inputs[] = {generic_left, generic_right};
+  th_env *matching_generic = th_env_compose_diagnose(
+      matching_generic_inputs, 2, &compose_error);
+  check("matching generic shapes compose across type contexts",
+        matching_generic && compose_error.status == TH_ENV_COMPOSE_OK);
+  th_env_free(matching_generic);
+
+  th_ctx *generic_mismatch_types = th_ctx_new();
+  th_env *generic_mismatch = th_env_new_in_context(generic_mismatch_types);
+  th_member mismatched_fields[] = {
+      {.name = "first", .type = th_var(generic_mismatch_types)},
+      {.name = "second", .type = th_var(generic_mismatch_types)},
+  };
+  check("register generic shape with distinct field variables",
+        th_env_register_type(generic_mismatch, "Pair", "generic", "base",
+                             TH_ENV_PUBLIC) &&
+            th_env_register_type_shape(generic_mismatch, "Pair",
+                TH_ENV_TYPE_SHAPE_RECORD,
+                th_record(generic_mismatch_types, mismatched_fields, 2)) &&
+            th_env_freeze(generic_mismatch));
+  const th_env *mismatched_generic_inputs[] = {generic_left,
+                                               generic_mismatch};
+  th_env *mismatched_generic = th_env_compose_diagnose(
+      mismatched_generic_inputs, 2, &compose_error);
+  check("generic variable sharing remains part of shape identity",
+        !mismatched_generic &&
+            compose_error.status == TH_ENV_COMPOSE_TYPE_CONFLICT);
+  th_env_free(mismatched_generic);
+  th_env_free(generic_mismatch);
+  th_ctx_free(generic_mismatch_types);
+  th_env_free(generic_right);
+  th_env_free(generic_left);
+  th_ctx_free(generic_right_types);
+  th_ctx_free(generic_left_types);
 
   const th_env *base_libraries[] = {persisted_library};
   th_env *linked_library = th_env_compose(base_libraries, 1);
