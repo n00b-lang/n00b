@@ -8816,32 +8816,28 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                     || machine.class == IR_CLASS_UINT
                     || machine.class == IR_CLASS_FLOAT
                     || machine.class == IR_CLASS_PTR);
-            LLVMValueRef result_slot = entry_alloca(state, result_type);
-            if (!result_slot) break;
-            if (known && machine.width == 64
+            if (known
                 && (machine.class == IR_CLASS_SINT
                     || machine.class == IR_CLASS_UINT)) {
-                LLVMTypeRef integer = LLVMInt64TypeInContext(context);
-                LLVMTypeRef parameters[] = {integer, pointer};
-                LLVMTypeRef signature = LLVMFunctionType(
-                    LLVMVoidTypeInContext(context), parameters, 2, false);
-                LLVMValueRef helper = LLVMGetNamedFunction(state->module,
-                    "n00bb_bootstrap_hash_integer_64");
-                if (!helper) helper = LLVMAddFunction(state->module,
-                    "n00bb_bootstrap_hash_integer_64", signature);
                 LLVMValueRef number = lowered_value(state, operands[1].value);
-                if (!helper || LLVMGlobalGetValueType(helper) != signature
-                    || !number) break;
-                if (LLVMTypeOf(number) == box_type)
+                bool boxed = number && LLVMTypeOf(number) == box_type;
+                if (boxed && machine.width <= 64)
                     number = LLVMBuildExtractValue(state->builder, number, 3,
                         "hash.integer.payload");
-                if (LLVMTypeOf(number) != integer) break;
-                LLVMValueRef args[] = {number, result_slot};
-                LLVMBuildCall2(state->builder, signature, helper, args, 2, "");
-                LLVMValueRef result = LLVMBuildLoad2(state->builder,
-                    result_type, result_slot, "hash.integer");
-                return save_result(state, instruction, result);
+                if (number && LLVMGetTypeKind(LLVMTypeOf(number))
+                    == LLVMIntegerTypeKind) {
+                    if (boxed && machine.width < 64)
+                        number = LLVMBuildTrunc(state->builder, number,
+                            LLVMIntTypeInContext(context, machine.width),
+                            "hash.integer.bits");
+                    LLVMValueRef result = LLVMBuildIntCast2(state->builder,
+                        number, result_type,
+                        machine.class == IR_CLASS_SINT, "hash.integer");
+                    return save_result(state, instruction, result);
+                }
             }
+            LLVMValueRef result_slot = entry_alloca(state, result_type);
+            if (!result_slot) break;
             LLVMValueRef value = lowered_value(state, operands[1].value);
             if (value && LLVMTypeOf(value) != box_type)
                 value = box_value(state, value, operands[1].value->type);
@@ -8849,11 +8845,14 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
             LLVMTypeRef parameters[] = {i32,
                 LLVMInt64TypeInContext(context), i32, i32, pointer};
-            if (!known) parameters[2] = pointer;
+            bool known_helper = known
+                && machine.class != IR_CLASS_SINT
+                && machine.class != IR_CLASS_UINT;
+            if (!known_helper) parameters[2] = pointer;
             LLVMTypeRef signature = LLVMFunctionType(
                 LLVMVoidTypeInContext(context), parameters,
-                known ? 5 : 3, false);
-            const char *helper_name = known
+                known_helper ? 5 : 3, false);
+            const char *helper_name = known_helper
                 ? "n00bb_bootstrap_hash_scalar_known"
                 : "n00bb_bootstrap_hash_scalar";
             LLVMValueRef helper = LLVMGetNamedFunction(state->module,
@@ -8866,11 +8865,12 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                 LLVMBuildExtractValue(state->builder, value, 2, "hash.type"),
                 LLVMBuildExtractValue(state->builder, value, 3,
                                       "hash.payload"),
-                known ? LLVMConstInt(i32, machine.width, false) : result_slot,
+                known_helper ? LLVMConstInt(i32, machine.width, false)
+                    : result_slot,
                 LLVMConstInt(i32, machine.class == IR_CLASS_FLOAT, false),
                 result_slot};
             LLVMBuildCall2(state->builder, signature, helper, args,
-                known ? 5 : 3, "");
+                known_helper ? 5 : 3, "");
             result = LLVMBuildLoad2(state->builder, result_type, result_slot,
                                     "hash.scalar");
             return save_result(state, instruction, result);

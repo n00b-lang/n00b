@@ -6,6 +6,13 @@ comptime {} else {
     let eight: int = 8
     require seven.hash() == copy.hash()
     require seven.hash() != eight.hash()
+    require seven.hash() == cast[u128] 7
+    let negative: int = -1
+    require negative.hash() == ~cast[u128] 0
+    let narrow_negative: i8 = -1
+    require narrow_negative.hash() == negative.hash()
+    let narrow_positive: u8 = 255
+    require narrow_positive.hash() == cast[u128] 255
 
     let negative_zero: float = -0.0
     let positive_zero: float = 0.0
@@ -17,6 +24,11 @@ comptime {} else {
     let other_wide: u128 = cast[u128] 1 << 101
     require wide.hash() == same_wide.hash()
     require wide.hash() != other_wide.hash()
+    require wide.hash() == wide
+    let signed_wide: i128 = -1
+    require signed_wide.hash() == ~cast[u128] 0
+    let highest: u128 = ~cast[u128] 0
+    require highest.hash() == highest
 
     let yes: bool = true
     let no: bool = false

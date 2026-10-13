@@ -10,4 +10,11 @@ comptime {} else {
     let third: int = 18
     require hash_generic(first) == hash_generic(second)
     require hash_generic(first) != hash_generic(third)
+    require hash_generic(first) == cast[u128] 17
+    let negative: int = -1
+    require hash_generic(negative) == ~cast[u128] 0
+    let wide: u128 = cast[u128] 1 << 100
+    require hash_generic(wide) == wide
+    let signed_wide: i128 = -1
+    require hash_generic(signed_wide) == ~cast[u128] 0
 }

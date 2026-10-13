@@ -74,11 +74,19 @@ void n00bb_bootstrap_hash_scalar_known(uint32_t type_field, uint64_t payload,
     hash_scalar_bytes(source, bits, floating != 0, result);
 }
 
-void n00bb_bootstrap_hash_integer_64(uint64_t value, uint64_t result[2])
+static void hash_integer_value(const uint8_t *source, uint32_t bits,
+                               bool signed_integer, uint64_t result[2])
 {
-    XXH128_hash_t hash = XXH3_128bits(&value, sizeof value);
-    result[0] = hash.low64;
-    result[1] = hash.high64;
+    __uint128_t value = 0;
+    __builtin_memcpy(&value, source, (bits + 7u) / 8u);
+    if (bits < 128) {
+        __uint128_t mask = ((__uint128_t)1 << bits) - 1;
+        value &= mask;
+        if (signed_integer && (value & ((__uint128_t)1 << (bits - 1))))
+            value |= ~mask;
+    }
+    result[0] = (uint64_t)value;
+    result[1] = (uint64_t)(value >> 64);
 }
 
 void n00bb_bootstrap_hash_scalar(uint32_t type_field, uint64_t payload,
@@ -105,13 +113,26 @@ void n00bb_bootstrap_hash_scalar(uint32_t type_field, uint64_t payload,
     if (!bits || bits > 128 || (uint64_t)bits > bytes * 8)
         __builtin_trap();
     bool floating = false;
-    if (type->kind == N00B_ABI_TYPE_PRIMITIVE && bits == 64) {
-            const uint8_t *name = NULL;
-            uint64_t length = 0;
-            if (n00b_abi_v1_string_bytes(snapshot, &type->canonical_name,
-                                         &name, &length) != 1) __builtin_trap();
-            floating = (length == 3 && !__builtin_memcmp(name, "f64", 3))
-                || (length == 5 && !__builtin_memcmp(name, "float", 5));
+    if (type->kind == N00B_ABI_TYPE_PRIMITIVE) {
+        const uint8_t *name = NULL;
+        uint64_t length = 0;
+        if (n00b_abi_v1_string_bytes(snapshot, &type->canonical_name,
+                                    &name, &length) != 1) __builtin_trap();
+        bool signed_integer = (length == 3
+            && !__builtin_memcmp(name, "int", 3))
+            || (length > 1 && name[0] == 'i'
+                && (name[1] == ':' || (name[1] >= '0' && name[1] <= '9')));
+        bool unsigned_integer = (length == 4
+            && !__builtin_memcmp(name, "uint", 4))
+            || (length > 1 && name[0] == 'u'
+                && (name[1] == ':' || (name[1] >= '0' && name[1] <= '9')));
+        if (signed_integer || unsigned_integer) {
+            hash_integer_value(source, bits, signed_integer, result);
+            return;
+        }
+        floating = bits == 64
+            && ((length == 3 && !__builtin_memcmp(name, "f64", 3))
+                || (length == 5 && !__builtin_memcmp(name, "float", 5)));
     }
     hash_scalar_bytes(source, bits, floating, result);
 }

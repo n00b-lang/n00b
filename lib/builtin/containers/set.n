@@ -43,16 +43,25 @@ public func len(self: Set[`T]) -> uint {
     return self.state.count
 }
 
-public func contains(self: Set[`T], value: `T) -> bool where `T: builtin.hash.Hash {
+public inline func contains(self: Set[`T], value: `T) -> bool where `T: builtin.hash.Hash {
     return builtin.containers.hash_index.find_slot(ref self.state.index,
         value.hash()) != nil
 }
 
-public func add(modify self: Set[`T], value: `T) -> bool where `T: builtin.hash.Hash {
+public inline func add(modify self: Set[`T], value: `T) -> bool where `T: builtin.hash.Hash {
     let hash: u128 = value.hash()
-    if builtin.containers.hash_index.find_slot(ref self.state.index, hash) != nil {
-        return false
+    let state: Ref[Set_State[`T]] = self.state
+    if state.count < __array_length(state.keys) and
+       builtin.containers.hash_index.has_room(state.index, 1) {
+        if !builtin.containers.hash_index.index_insert_unique_ref(
+            ref self.state.index, hash, state.count) {
+            return false
+        }
+        state.keys[state.count] = value
+        state.count += 1
+        return true
     }
+    if builtin.containers.hash_index.find_slot(ref state.index, hash) != nil { return false }
     ensure_keys(self, self.state.count + 1)
     builtin.containers.hash_index.ensure_capacity(self.state.index, 1)
     self.state.keys[self.state.count] = value
@@ -62,7 +71,7 @@ public func add(modify self: Set[`T], value: `T) -> bool where `T: builtin.hash.
     return true
 }
 
-public func remove(modify self: Set[`T], value: `T) -> bool where `T: builtin.hash.Hash {
+public inline func remove(modify self: Set[`T], value: `T) -> bool where `T: builtin.hash.Hash {
     let hash: u128 = value.hash()
     let found: uint? = builtin.containers.hash_index.find_slot(
         ref self.state.index, hash)

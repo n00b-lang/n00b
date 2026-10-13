@@ -72,7 +72,7 @@ public func hash(self: Dict[`K, `V]) -> u128 {
     return builtin.hash.hash(self.state)
 }
 
-public func get(self: Dict[`K, `V], key: `K) -> `V? where `K: builtin.hash.Hash {
+public inline func get(self: Dict[`K, `V], key: `K) -> `V? where `K: builtin.hash.Hash {
     let state: Ref[Dict_State[`K, `V]] = self.state
     let index: Ref[builtin.containers.hash_index.Hash_Index] = ref state.index
     let slot: uint? = builtin.containers.hash_index.find_slot(index, key_hash(key))
@@ -117,13 +117,13 @@ public func put(modify self: Dict[`K, `V], key: `K, value: `V) -> `V? where `K: 
     return nil
 }
 
-public func add(modify self: Dict[`K, `V], key: `K, value: `V) -> bool where `K: builtin.hash.Hash {
+public inline func add(modify self: Dict[`K, `V], key: `K, value: `V) -> bool where `K: builtin.hash.Hash {
     let hash: u128 = key_hash(key)
     let state: Ref[Dict_State[`K, `V]] = self.state
     if state.count < __array_length(state.entries) and
        builtin.containers.hash_index.has_room(state.index, 1) {
-        if !builtin.containers.hash_index.index_insert_unique(
-            self.state.index, hash, state.count) {
+        if !builtin.containers.hash_index.index_insert_unique_ref(
+            ref self.state.index, hash, state.count) {
             return false
         }
         let inserted: Entry[`K, `V] =
@@ -145,7 +145,7 @@ public func replace(modify self: Dict[`K, `V], key: `K, value: `V) -> bool where
     return true
 }
 
-public func remove(modify self: Dict[`K, `V], key: `K) -> bool where `K: builtin.hash.Hash {
+public inline func remove(modify self: Dict[`K, `V], key: `K) -> bool where `K: builtin.hash.Hash {
     let hash: u128 = key_hash(key)
     let found: uint? = builtin.containers.hash_index.find_slot(ref self.state.index, hash)
     if found == nil { return false }
