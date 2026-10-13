@@ -157,6 +157,12 @@ parse_symtab_new(void)
 }
 
 void
+parse_symtab_set_owner_unit(parse_symtab_t *st, core_translation_unit_t *unit)
+{
+    if (st) st->owner_unit = unit;
+}
+
+void
 parse_symtab_free(parse_symtab_t *st)
 {
     if (!st) {
@@ -490,6 +496,7 @@ parse_symtab_add(parse_symtab_t *st, core_string_t ns_name, core_string_t name,
     memset(entry, 0, sizeof(*entry));
 
     entry->name        = core_string_dup(name);
+    entry->owner_unit  = st->owner_unit;
     entry->kind        = kind;
     entry->scope_depth = scope->depth;
     entry->decl_node   = decl_node;

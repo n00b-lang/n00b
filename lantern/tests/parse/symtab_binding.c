@@ -1,5 +1,24 @@
 #include "parse/symtab.h"
+#include "lib/module.h"
 #include "harness.h"
+
+static void
+test_symbol_unit_ownership(void)
+{
+    core_translation_unit_t unit = {0};
+    parse_symtab_t *symbols = parse_symtab_new();
+    parse_sym_entry_t *unowned = parse_symtab_add(symbols,
+        CORE_STRING_STATIC(""), CORE_STRING_STATIC("unowned"),
+        PARSE_SYM_VARIABLE, nullptr);
+    parse_symtab_set_owner_unit(symbols, &unit);
+    parse_sym_entry_t *owned = parse_symtab_add(symbols,
+        CORE_STRING_STATIC(""), CORE_STRING_STATIC("owned"),
+        PARSE_SYM_VARIABLE, nullptr);
+    check("symbols retain the owning translation unit",
+          unowned && !unowned->owner_unit
+              && owned && owned->owner_unit == &unit);
+    parse_symtab_free(symbols);
+}
 
 static void
 test_namespaced_symbol_bindings(void)
@@ -53,6 +72,7 @@ test_symbol_binding_origins(void)
 int
 main(void)
 {
+    test_symbol_unit_ownership();
     test_namespaced_symbol_bindings();
     test_symbol_binding_origins();
     return fails != 0;

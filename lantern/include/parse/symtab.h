@@ -26,6 +26,7 @@ typedef enum {
 typedef struct parse_sym_entry_t parse_sym_entry_t;
 typedef struct parse_namespace_t parse_namespace_t;
 typedef struct parse_symtab_t    parse_symtab_t;
+typedef struct core_translation_unit_t core_translation_unit_t;
 
 typedef enum {
     PARSE_SYM_PHASE_NONE      = 0,
@@ -138,6 +139,7 @@ typedef struct {
 
 struct parse_sym_entry_t {
     core_string_t             name;
+    core_translation_unit_t  *owner_unit;
     parse_sym_kind_t           kind;
     parse_sym_mutability_t     mutability;
     core_string_t             direction;
@@ -235,6 +237,7 @@ struct parse_namespace_t {
 };
 
 struct parse_symtab_t {
+    core_translation_unit_t  *owner_unit;
     parse_namespace_t **namespaces;
     int32_t           ns_count;
     int32_t           ns_cap;
@@ -254,6 +257,8 @@ typedef bool (*parse_symtab_symbol_visitor_fn)(parse_sym_entry_t *symbol,
 
 parse_symtab_t *parse_symtab_new(void);
 void          parse_symtab_free(parse_symtab_t *st);
+void parse_symtab_set_owner_unit(parse_symtab_t *st,
+                                 core_translation_unit_t *unit);
 
 parse_namespace_t *parse_symtab_ns(parse_symtab_t *st, core_string_t ns_name);
 bool parse_symtab_visit_namespace_scopes(
