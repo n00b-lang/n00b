@@ -694,6 +694,15 @@ ir_liveness_t ir_value_alias_liveness_after(const ir_value_t *value,
 ir_liveness_t ir_value_alias_liveness_on_edge(const ir_value_t *value,
                                               const ir_block_t *from,
                                               const ir_block_t *to);
+typedef struct ir_liveness_query ir_liveness_query_t;
+/* Reuses alias facts while the value's IR and annotations remain unchanged. */
+ir_liveness_query_t *ir_liveness_query_new(const ir_value_t *value);
+void ir_liveness_query_free(ir_liveness_query_t *query);
+ir_liveness_t ir_liveness_query_alias_after(
+    const ir_liveness_query_t *query, const ir_instr_t *point);
+ir_liveness_t ir_liveness_query_alias_on_edge(
+    const ir_liveness_query_t *query, const ir_block_t *from,
+    const ir_block_t *to);
 typedef struct {
     ir_func_t *function;
     ir_value_t *binding;
@@ -710,6 +719,9 @@ typedef bool (*ir_lifetime_endpoint_visitor_fn)(
 bool ir_value_visit_lifetime_endpoints(
     const ir_value_t *value, ir_lifetime_endpoint_visitor_fn visitor,
     void *context);
+bool ir_liveness_query_visit_endpoints(
+    const ir_liveness_query_t *query,
+    ir_lifetime_endpoint_visitor_fn visitor, void *context);
 /* Checks alias/lifetime facts at a candidate point; does not schedule or
  * guarantee finalization or reclamation. */
 bool         ir_value_can_finalize_at(const ir_value_t *value,

@@ -64,6 +64,11 @@ static void test_branch_paths(void)
     bool endpoint_scan = pointer_facts
         && ir_value_visit_lifetime_endpoints(
             value, collect_lifetime_endpoint, &endpoints);
+    ir_liveness_query_t *query = pointer_facts
+        ? ir_liveness_query_new(value) : NULL;
+    endpoint_collector_t cached_endpoints = {0};
+    bool cached_scan = query && ir_liveness_query_visit_endpoints(query,
+        collect_lifetime_endpoint, &cached_endpoints);
 
     check("a use on any reachable successor path keeps a value live",
           ir_value_liveness_after(value, point) == IR_LIVENESS_LIVE);
@@ -83,6 +88,20 @@ static void test_branch_paths(void)
               && endpoints.function == function && endpoints.binding == value
               && endpoints.point == right_return && endpoints.edge_count == 1
               && endpoints.from == entry && endpoints.to == left);
+    check("cached alias queries match one-shot liveness and endpoints",
+          query && cached_scan
+              && ir_liveness_query_alias_after(query, left_return)
+                  == ir_value_alias_liveness_after(value, left_return)
+              && ir_liveness_query_alias_on_edge(query, entry, left)
+                  == ir_value_alias_liveness_on_edge(value, entry, left)
+              && ir_liveness_query_alias_on_edge(query, entry, right)
+                  == ir_value_alias_liveness_on_edge(value, entry, right)
+              && cached_endpoints.point_count == endpoints.point_count
+              && cached_endpoints.edge_count == endpoints.edge_count
+              && cached_endpoints.point == endpoints.point
+              && cached_endpoints.from == endpoints.from
+              && cached_endpoints.to == endpoints.to);
+    ir_liveness_query_free(query);
     ir_ctx_free(ctx);
 }
 
@@ -173,6 +192,14 @@ static void test_incomplete_facts(void)
               == IR_LIVENESS_UNKNOWN
               && !ir_value_visit_lifetime_endpoints(
                     open_point->dest, collect_lifetime_endpoint, &endpoints));
+    ir_liveness_query_t *query = ir_liveness_query_new(open_point->dest);
+    check("cached queries preserve incomplete-fact results",
+          query
+              && ir_liveness_query_alias_after(query, open_point)
+                  == IR_LIVENESS_UNKNOWN
+              && !ir_liveness_query_visit_endpoints(query,
+                  collect_lifetime_endpoint, &endpoints));
+    ir_liveness_query_free(query);
 
     ir_func_t *malformed = ir_func_add(module, "multiple_terminators",
         ir_type_parse(module, "(bool) -> void"), IR_LINK_EXTERNAL);

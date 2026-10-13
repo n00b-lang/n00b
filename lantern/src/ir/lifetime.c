@@ -13,6 +13,12 @@ typedef struct {
     size_t capacity;
 } value_set_t;
 
+struct ir_liveness_query {
+    const ir_value_t *value;
+    value_set_t aliases;
+    bool complete;
+};
+
 static ir_annot_t *value_annot(const ir_value_t *value, const char *key)
 {
     return ir_annot_get(ir_value_annots((ir_value_t *)value), key);
@@ -649,6 +655,44 @@ alias_liveness_on_edge_closure(const value_set_t *work,
     return unknown ? IR_LIVENESS_UNKNOWN : IR_LIVENESS_DEAD;
 }
 
+ir_liveness_query_t *
+ir_liveness_query_new(const ir_value_t *value)
+{
+    if (!value) return NULL;
+    ir_liveness_query_t *query = calloc(1, sizeof(*query));
+    if (!query) return NULL;
+    query->value = value;
+    query->complete = collect_alias_closure(value, &query->aliases);
+    return query;
+}
+
+void
+ir_liveness_query_free(ir_liveness_query_t *query)
+{
+    if (!query) return;
+    free(query->aliases.items);
+    free(query);
+}
+
+ir_liveness_t
+ir_liveness_query_alias_after(const ir_liveness_query_t *query,
+                              const ir_instr_t *point)
+{
+    return query && query->complete
+        ? alias_liveness_after_closure(&query->aliases, point)
+        : IR_LIVENESS_UNKNOWN;
+}
+
+ir_liveness_t
+ir_liveness_query_alias_on_edge(const ir_liveness_query_t *query,
+                                const ir_block_t *from,
+                                const ir_block_t *to)
+{
+    return query && query->complete
+        ? alias_liveness_on_edge_closure(&query->aliases, from, to)
+        : IR_LIVENESS_UNKNOWN;
+}
+
 ir_liveness_t
 ir_value_alias_liveness_after(const ir_value_t *value,
                               const ir_instr_t *point)
@@ -737,10 +781,10 @@ value_starts_at_instruction(const ir_value_t *value,
 }
 
 bool
-ir_value_visit_lifetime_endpoints(
-    const ir_value_t *value, ir_lifetime_endpoint_visitor_fn visitor,
-    void *context)
+ir_liveness_query_visit_endpoints(const ir_liveness_query_t *query,
+    ir_lifetime_endpoint_visitor_fn visitor, void *context)
 {
+    const ir_value_t *value = query ? query->value : NULL;
     if (!value || !visitor || !value->owner || !value->owner->n_blocks
         || (value->kind != IR_VAL_PARAM && value->kind != IR_VAL_LOCAL
             && value->kind != IR_VAL_INSTR)) return false;
@@ -771,15 +815,15 @@ ir_value_visit_lifetime_endpoints(
         }
     }
 
-    value_set_t aliases = {0};
-    bool alias_complete = collect_alias_closure(value, &aliases);
+    const value_set_t *aliases = &query->aliases;
+    bool alias_complete = query->complete;
     for (uint32_t b = 0; b < function->n_blocks; b++) {
         ir_block_t *block = function->blocks[b];
         ir_instr_t *terminator = ir_block_terminator(block);
         for (uint32_t i = 0; i < block->n_instrs; i++) {
             ir_instr_t *point = block->instrs[i];
             ir_liveness_t after = alias_complete
-                ? alias_liveness_after_closure(&aliases, point)
+                ? alias_liveness_after_closure(aliases, point)
                 : IR_LIVENESS_UNKNOWN;
             if (after != IR_LIVENESS_DEAD) continue;
             bool starts_here = value_starts_at_instruction(
@@ -787,9 +831,9 @@ ir_value_visit_lifetime_endpoints(
             bool is_entry_parameter = value->kind == IR_VAL_PARAM
                 && block == entry && i == 0;
             ir_liveness_t before = i
-                ? alias_liveness_after_closure(&aliases,
+                ? alias_liveness_after_closure(aliases,
                     block->instrs[i - 1])
-                : alias_liveness_at_block_entry(&aliases, alias_complete,
+                : alias_liveness_at_block_entry(aliases, alias_complete,
                     function, block);
             bool terminator_fallback = point == terminator
                 && before == IR_LIVENESS_UNKNOWN;
@@ -801,7 +845,6 @@ ir_value_visit_lifetime_endpoints(
                     .binding = (ir_value_t *)value,
                     .point = point,
                 })) {
-                free(aliases.items);
                 return false;
             }
         }
@@ -811,11 +854,11 @@ ir_value_visit_lifetime_endpoints(
         ir_block_t *block = function->blocks[b];
         ir_instr_t *terminator = ir_block_terminator(block);
         if (!alias_complete
-            || alias_liveness_after_closure(&aliases, terminator)
+            || alias_liveness_after_closure(aliases, terminator)
             != IR_LIVENESS_LIVE) continue;
         for (uint32_t s = 0; s < ir_succ_count(terminator); s++) {
             ir_block_t *target = ir_succ_at(terminator, s);
-            if (alias_liveness_on_edge_closure(&aliases, block, target)
+            if (alias_liveness_on_edge_closure(aliases, block, target)
                 != IR_LIVENESS_DEAD) continue;
             if (!visitor(context, (ir_lifetime_endpoint_t){
                     .function = function,
@@ -823,13 +866,23 @@ ir_value_visit_lifetime_endpoints(
                     .from = block,
                     .to = target,
                 })) {
-                free(aliases.items);
                 return false;
             }
         }
     }
-    free(aliases.items);
     return true;
+}
+
+bool
+ir_value_visit_lifetime_endpoints(
+    const ir_value_t *value, ir_lifetime_endpoint_visitor_fn visitor,
+    void *context)
+{
+    ir_liveness_query_t *query = ir_liveness_query_new(value);
+    if (!query) return false;
+    bool result = ir_liveness_query_visit_endpoints(query, visitor, context);
+    ir_liveness_query_free(query);
+    return result;
 }
 
 bool
