@@ -658,9 +658,6 @@ static bool resolve_module_member_site(parse_grammar_t *grammar,
                                        parse_tree_t *node);
 static bool has_deferred_method_constraint(th_type *receiver,
                                            core_string_t method_name);
-static core_link_reference_t *link_reference_for_site(
-    core_link_unit_t *link, core_translation_unit_t *unit,
-    n00bb_link_use_site_t *site);
 static bool n00bb_context_has_hook(parse_grammar_t *grammar,
                                     parse_sym_entry_t *symbol,
                                     const char *name);
@@ -930,8 +927,6 @@ typedef struct {
     core_translation_unit_t *unit;
     n00bb_lex_result_t *lex;
     parse_annot_result_t *annotations;
-    parse_tree_walk_t *annotation_walk;
-    parse_tree_walk_t *reference_walk;
     parse_tree_t *annotation_root;
     core_list_t(parse_tree_ptr_t) module_top_level_statements;
     core_list_t(parse_tree_ptr_t) array_type_nodes;
@@ -1491,8 +1486,6 @@ free_tu_state(void *data)
         core_list_free(state->integer_range_bindings);
         core_csp_store_free(state->integer_range_store);
         core_arena_free(&state->semantic_values);
-        parse_tree_walk_free(state->annotation_walk);
-        parse_tree_walk_free(state->reference_walk);
         parse_annot_result_free(state->annotations);
         if (state->lex) {
             parse_pwz_free(state->lex->parser);
@@ -8839,7 +8832,7 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
             n00bb_link_use_site_t *site = member
                 ? link_use_site_for_node(state, member) : nullptr;
             core_link_reference_t *reference = site
-                ? link_reference_for_site(link, unit, site) : nullptr;
+                ? site->reference : nullptr;
             if (!site || !site->function_owner || !site->symbol
                 || !site->symbol->owner_type || !reference
                 || !core_link_reference_is_deferred(reference)) continue;
@@ -30454,18 +30447,6 @@ typedef struct {
     core_list_t(n00bb_cleanup_fact_t) cleanup_facts;
 } n00bb_link_payload_t;
 
-static core_link_reference_t *
-link_reference_for_site(core_link_unit_t *link,
-                       core_translation_unit_t *unit,
-                       n00bb_link_use_site_t *site)
-{
-    if (site && site->reference) return site->reference;
-    if (!link || !unit || !site
-        || core_link_unit_reference_count_at(link, unit, site->node) != 1)
-        return nullptr;
-    return core_link_unit_reference_at_use_site(link, unit, site->node, 0);
-}
-
 static core_link_declaration_t *linked_method_declaration(
     core_link_unit_t *link, const th_env_method_t *method);
 static core_link_declaration_t *register_builtin_method_declaration(
@@ -30478,8 +30459,7 @@ resolve_linked_method(core_link_unit_t *link, n00bb_link_use_site_t *site,
                      core_translation_unit_t *unit,
                      const th_env_method_t *method)
 {
-    core_link_reference_t *reference = link_reference_for_site(
-        link, unit, site);
+    core_link_reference_t *reference = site ? site->reference : nullptr;
     if (!reference || !method
         || !method->module || !method->root_name) return nullptr;
     parse_sym_entry_t *builtin_symbol = nullptr;
@@ -30510,18 +30490,8 @@ resolve_linked_method(core_link_unit_t *link, n00bb_link_use_site_t *site,
             core_buffer_printf(&builtin_key, "%u:%s",
                 (unsigned)PARSE_SYM_FUNCTION, method->root_name);
             core_string_t key_name = core_string_from_cstr(builtin_key.data);
-            for (size_t d = 0; d < core_link_unit_declaration_count(link);
-                 d++) {
-                core_link_declaration_t *candidate =
-                    core_link_unit_declaration_at(link, d);
-                if (core_string_eq(core_link_declaration_module(candidate),
-                                   CORE_STRING_STATIC("builtins"))
-                    && core_string_eq(core_link_declaration_key(candidate),
-                                      key_name)) {
-                    declaration = candidate;
-                    break;
-                }
-            }
+            declaration = core_link_unit_find_declaration(link,
+                CORE_STRING_STATIC("builtins"), key_name);
             bool registered = declaration || core_link_unit_require_external(
                 link, CORE_STRING_STATIC("builtins"), key_name, &metadata,
                 &declaration);
@@ -32960,8 +32930,7 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
                                                   unit, site)) return false;
                 continue;
             }
-            core_link_reference_t *reference = site->semantic_dispatch
-                ? site->reference : link_reference_for_site(link, unit, site);
+            core_link_reference_t *reference = site->reference;
             if (!reference
                 && (site->operator_dispatch || site->semantic_dispatch)) {
                 if (site->operator_dispatch
@@ -36270,8 +36239,7 @@ publish_link_call_dependencies(core_link_unit_t *link,
                     site, site->symbol) : nullptr;
             core_link_declaration_t *target = callee
                 ? link_declaration_for_symbol(analysis, callee) : nullptr;
-            core_link_reference_t *reference = link_reference_for_site(
-                link, unit, site);
+            core_link_reference_t *reference = site->reference;
             if (!reference && primitive_operator_site(state, site)) continue;
             bool resolved = target && (!caller || source)
                 && reference && !core_link_reference_is_deferred(reference);
@@ -44266,8 +44234,7 @@ n00bb_callback_method_signature(th_ctx *types, th_type *receiver,
 }
 
 static bool
-prepare_initial_symbols(parse_grammar_t *grammar,
-                        core_translation_unit_t *unit, th_ctx *types)
+prepare_initial_symbols(core_translation_unit_t *unit, th_ctx *types)
 {
     n00bb_tu_state_t *state = tu_state(unit);
     if (!state || !types) return false;
@@ -44286,14 +44253,6 @@ prepare_initial_symbols(parse_grammar_t *grammar,
     parse_annot_result_set_node_callback(state->annotations,
                                          initial_symbol_node,
                                          state->annotations);
-    parse_tree_walk_t *walk = parse_tree_walk_new(grammar, state->annotations);
-    parse_annot_register_pass(walk, state->annotations, state->types, nullptr,
-                              PARSE_ANNOT_PASS_INITIAL_SYMBOLS);
-    state->annotation_walk = walk;
-    state->reference_walk = parse_tree_walk_new(grammar, state->annotations);
-    parse_annot_register_pass(state->reference_walk, state->annotations,
-                              state->types, nullptr,
-                              PARSE_ANNOT_PASS_CFLOW);
     return true;
 }
 
@@ -49951,11 +49910,49 @@ expected_expression_child_type(parse_grammar_t *grammar,
     return nullptr;
 }
 
+static const parse_annot_kind_t semantic_kinds[] = {
+    PARSE_ANNOT_SCOPE_OPEN, PARSE_ANNOT_ADT, PARSE_ANNOT_NAMESPACE,
+    PARSE_ANNOT_DECLARES, PARSE_ANNOT_TYPE_DECL, PARSE_ANNOT_FIELD,
+    PARSE_ANNOT_METHOD, PARSE_ANNOT_TYPE, PARSE_ANNOT_EXPOSES,
+    PARSE_ANNOT_INHERITS, PARSE_ANNOT_VISIBILITY, PARSE_ANNOT_STATIC,
+    PARSE_ANNOT_ABSTRACT, PARSE_ANNOT_LITERAL, PARSE_ANNOT_RECORD,
+    PARSE_ANNOT_MUTABILITY, PARSE_ANNOT_DIRECTION, PARSE_ANNOT_PASS_BY,
+    PARSE_ANNOT_CONSTRAIN, PARSE_ANNOT_INFER, PARSE_ANNOT_SIZE,
+    PARSE_ANNOT_ALIGNMENT, PARSE_ANNOT_OFFSET, PARSE_ANNOT_WIDTH,
+};
+
+static const parse_annot_kind_t semantic_reference_kinds[] = {
+    PARSE_ANNOT_BRANCH, PARSE_ANNOT_LOOP, PARSE_ANNOT_SWITCH,
+    PARSE_ANNOT_JUMP, PARSE_ANNOT_CAPTURE, PARSE_ANNOT_ASSIGNS,
+    PARSE_ANNOT_VARREF, PARSE_ANNOT_OPERATOR, PARSE_ANNOT_NOTRIVIA,
+    PARSE_ANNOT_CALL,
+};
+
+typedef struct {
+    bool type_reference;
+    bool modified_numeric;
+    parse_token_info_t *literal_token;
+    core_string_t literal_terminal;
+} semantic_annotation_cache_t;
+
+typedef enum {
+    SEMANTIC_PREPARE_ENTER,
+    SEMANTIC_AFTER_ENTER,
+    SEMANTIC_PREPARE_EXIT,
+    SEMANTIC_AFTER_REFERENCE_EXIT,
+    SEMANTIC_AFTER_EXIT,
+} semantic_step_t;
+
 static void
 semantic_annotation_node(void *context, core_translation_unit_t *unit,
                          parse_tree_t *node, parse_tree_t *parent,
-                         int32_t depth, int32_t child_index, bool entering)
+                         semantic_step_t step,
+                         parse_visit_t *visit,
+                         semantic_annotation_cache_t *cache)
 {
+    bool entering = step <= SEMANTIC_AFTER_ENTER;
+    bool before_annotations = step == SEMANTIC_PREPARE_ENTER
+        || step == SEMANTIC_PREPARE_EXIT;
     annotation_context_t *annotation_context = context;
     parse_grammar_t *grammar = annotation_context->grammar;
     n00bb_tu_state_t *state = tu_state(unit);
@@ -49965,7 +49962,8 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                               package.data)) return;
     }
     if (!state || !node || !prepare_initial_symbols(
-            grammar, unit, annotation_context->types)) return;
+            unit, annotation_context->types)) return;
+    if (before_annotations) {
     if (entering && nt_is(grammar, node, "assign-stmt")
         && core_tree_num_children(node) == 3
         && n00bb_index_expression_node(grammar,
@@ -50033,44 +50031,6 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         return;
     }
 
-    static const parse_annot_kind_t kinds[] = {
-        PARSE_ANNOT_SCOPE_OPEN,
-        PARSE_ANNOT_ADT,
-        PARSE_ANNOT_NAMESPACE,
-        PARSE_ANNOT_DECLARES,
-        PARSE_ANNOT_TYPE_DECL,
-        PARSE_ANNOT_FIELD,
-        PARSE_ANNOT_METHOD,
-        PARSE_ANNOT_TYPE,
-        PARSE_ANNOT_EXPOSES,
-        PARSE_ANNOT_INHERITS,
-        PARSE_ANNOT_VISIBILITY,
-        PARSE_ANNOT_STATIC,
-        PARSE_ANNOT_ABSTRACT,
-        PARSE_ANNOT_LITERAL,
-        PARSE_ANNOT_RECORD,
-        PARSE_ANNOT_MUTABILITY,
-        PARSE_ANNOT_DIRECTION,
-        PARSE_ANNOT_PASS_BY,
-        PARSE_ANNOT_CONSTRAIN,
-        PARSE_ANNOT_INFER,
-        PARSE_ANNOT_SIZE,
-        PARSE_ANNOT_ALIGNMENT,
-        PARSE_ANNOT_OFFSET,
-        PARSE_ANNOT_WIDTH,
-    };
-    static const parse_annot_kind_t reference_kinds[] = {
-        PARSE_ANNOT_BRANCH,
-        PARSE_ANNOT_LOOP,
-        PARSE_ANNOT_SWITCH,
-        PARSE_ANNOT_JUMP,
-        PARSE_ANNOT_CAPTURE,
-        PARSE_ANNOT_ASSIGNS,
-        PARSE_ANNOT_VARREF,
-        PARSE_ANNOT_OPERATOR,
-        PARSE_ANNOT_NOTRIVIA,
-        PARSE_ANNOT_CALL,
-    };
     bool variant_payload = !entering
         && prepare_variant_payload_type(grammar, unit, node);
     parse_node_resolution_t member_resolution = parse_tree_resolution(node);
@@ -50118,52 +50078,41 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
     intrinsic_unary = intrinsic_unary
         && (primitive_operator_site(state, &operator_site)
             || n00bb_flagset_operator_site(grammar, unit, state, node));
-    parse_annot_kind_t filtered_kinds[
-        sizeof(kinds) / sizeof(kinds[0])];
-    size_t filtered_count = 0;
-    for (size_t i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++)
-        if ((!variant_payload || kinds[i] != PARSE_ANNOT_INFER)
-            && (!flagset_field || kinds[i] != PARSE_ANNOT_INFER)
-            && (!type_reference || kinds[i] != PARSE_ANNOT_INFER)
-            && (!invalid_field_access || kinds[i] != PARSE_ANNOT_INFER)
-            && (!modified_numeric || kinds[i] != PARSE_ANNOT_LITERAL)
-            && (!(modified_numeric
-                    && core_string_eq(first_token_text(node),
-                        CORE_STRING_STATIC("nil")))
-                || kinds[i] != PARSE_ANNOT_INFER)
-            && (!(intrinsic_binary || intrinsic_unary)
-                || kinds[i] != PARSE_ANNOT_INFER))
-            filtered_kinds[filtered_count++] = kinds[i];
-    const parse_annot_kind_t *node_kinds = variant_payload || flagset_field
-        || type_reference || invalid_field_access
-        || intrinsic_binary || intrinsic_unary || modified_numeric
-        ? filtered_kinds : kinds;
-    size_t node_kind_count = variant_payload || flagset_field || type_reference
+    if (cache) *cache = (semantic_annotation_cache_t){
+        .type_reference = type_reference,
+        .modified_numeric = modified_numeric,
+        .literal_token = literal_token,
+        .literal_terminal = literal_terminal,
+    };
+    if (variant_payload || flagset_field || type_reference
         || invalid_field_access || intrinsic_binary || intrinsic_unary
-        || modified_numeric
-        ? filtered_count : sizeof(kinds) / sizeof(kinds[0]);
-    parse_annot_kind_t filtered_reference_kinds[
-        sizeof(reference_kinds) / sizeof(reference_kinds[0])];
-    size_t filtered_reference_count = 0;
-    for (size_t i = 0; i < sizeof(reference_kinds)
-                            / sizeof(reference_kinds[0]); i++)
-        if (!type_reference || reference_kinds[i] != PARSE_ANNOT_VARREF)
-            filtered_reference_kinds[filtered_reference_count++] =
-                reference_kinds[i];
-    const parse_annot_kind_t *node_reference_kinds = type_reference
-        ? filtered_reference_kinds : reference_kinds;
-    size_t node_reference_kind_count = type_reference
-        ? filtered_reference_count
-        : sizeof(reference_kinds) / sizeof(reference_kinds[0]);
+        || (modified_numeric
+            && core_string_eq(first_token_text(node),
+                              CORE_STRING_STATIC("nil"))))
+        (void)parse_visit_suppress_annotation(visit, PARSE_ANNOT_INFER);
+    if (modified_numeric)
+        (void)parse_visit_suppress_annotation(visit, PARSE_ANNOT_LITERAL);
+    if (type_reference)
+        (void)parse_visit_suppress_annotation(visit, PARSE_ANNOT_VARREF);
+    if (step == SEMANTIC_PREPARE_EXIT && nt_is(grammar, node, "tspec-tvar")
+        && !signature_typevar_for_node(grammar, unit, node))
+        core_diagnostics_report_at(
+            core_translation_unit_diagnostics(unit), unit,
+            CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0002"),
+            CORE_STRING_STATIC(
+                "could not bind this type variable to its callable signature"),
+            link_source_location(node));
+    return;
+    }
+    bool type_reference = cache && cache->type_reference;
+    bool modified_numeric = cache && cache->modified_numeric;
+    parse_token_info_t *literal_token = cache ? cache->literal_token : nullptr;
+    core_string_t literal_terminal = cache
+        ? cache->literal_terminal : (core_string_t){0};
     if (entering) {
-        parse_tree_walk_apply_node(state->annotation_walk, node, parent,
-            depth, child_index, node_kinds, node_kind_count, true);
         if (nt_is(grammar, node, "postfix-expr"))
             core_tree_node_value(node).index_address_access =
                 n00bb_index_reference_storage(grammar, node);
-        parse_tree_walk_apply_node(state->reference_walk, node, parent,
-            depth, child_index, node_reference_kinds,
-            node_reference_kind_count, true);
         if (field_record_declaration(grammar, node)) {
             parse_sym_entry_t *symbol = core_tree_node_value(node).sym;
             if (!symbol || symbol->kind != PARSE_SYM_TYPEDEF) {
@@ -50200,19 +50149,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 link_source_location(node));
     }
     else {
-        if (nt_is(grammar, node, "tspec-tvar")
-            && !signature_typevar_for_node(grammar, unit, node)) {
-            core_diagnostics_report_at(
-                core_translation_unit_diagnostics(unit), unit,
-                CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0002"),
-                CORE_STRING_STATIC(
-                    "could not bind this type variable to its callable signature"),
-                link_source_location(node));
-            return;
-        }
-        parse_tree_walk_apply_node(state->reference_walk, node, parent,
-            depth, child_index, node_reference_kinds,
-            node_reference_kind_count, false);
+        if (step == SEMANTIC_AFTER_REFERENCE_EXIT) {
         if (nt_is(grammar, node, "tuple-or-paren")
             && core_tree_num_children(node) == 3) {
             parse_tree_t *inner = core_tree_child(node, 1);
@@ -50313,8 +50250,8 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 record_literal_expected_type(grammar,
                     core_tree_child(node, 2)));
         }
-        parse_tree_walk_apply_node(state->annotation_walk, node, parent,
-            depth, child_index, node_kinds, node_kind_count, false);
+        return;
+        }
         if (core_tree_num_children(node) == 1) {
             parse_tree_t *child = core_tree_child(node, 0);
             if (!core_tree_is_leaf(child))
@@ -51036,122 +50973,265 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
     }
 }
 
-static void
-semantic_annotate_tree(annotation_context_t *context,
-                       core_translation_unit_t *unit, parse_tree_t *node,
-                       parse_tree_t *parent, int32_t depth,
-                       int32_t child_index, bool in_expression,
-                       th_type *expected)
+typedef struct {
+    th_type *expected;
+    parse_scope_t *flow_scope;
+    parse_scope_t *previous_scope;
+    semantic_annotation_cache_t annotation_cache;
+    bool in_expression;
+} semantic_walk_frame_t;
+core_list_decl(semantic_walk_frame_t);
+
+typedef struct {
+    annotation_context_t *context;
+    core_translation_unit_t *unit;
+    core_list_t(semantic_walk_frame_t) frames;
+} semantic_walk_context_t;
+
+static parse_visit_outcome_t
+semantic_walk_status(semantic_walk_context_t *walk)
 {
-    if (!node) return;
-    if (core_tree_is_leaf(node)) {
-        parse_token_info_t *token = parse_node_token(node);
-        parse_grammar_t *grammar = context->grammar;
+    return core_diagnostics_failed(
+        core_translation_unit_diagnostics(walk->unit))
+        ? PARSE_VISIT_ERROR : PARSE_VISIT_CONTINUE;
+}
+
+static parse_visit_outcome_t
+semantic_walk_prepare(parse_visit_t *visit)
+{
+    semantic_walk_context_t *walk = visit->user;
+    annotation_context_t *context = walk->context;
+    core_translation_unit_t *unit = walk->unit;
+    n00bb_tu_state_t *state = tu_state(unit);
+    parse_symtab_t *symtab = state->annotations->symtab;
+    while (walk->frames.len <= (size_t)visit->depth)
+        core_list_push(walk->frames, ((semantic_walk_frame_t){0}));
+    semantic_walk_frame_t *frame = &walk->frames.data[visit->depth];
+    *frame = (semantic_walk_frame_t){0};
+    if (visit->depth > 0) {
+        semantic_walk_frame_t *parent = &walk->frames.data[visit->depth - 1];
+        frame->expected = expected_expression_child_type(context->grammar,
+            visit->parent, visit->node, parent->expected);
+        frame->in_expression = parent->in_expression;
+        if (parent->flow_scope) {
+            frame->previous_scope = parse_symtab_current_scope(symtab,
+                CORE_STRING_STATIC(""));
+            parse_symtab_enter_scope_all(symtab, parent->flow_scope);
+        }
+    }
+    if (core_tree_is_leaf(visit->node)) {
+        parse_token_info_t *token = parse_node_token(visit->node);
         if (token && core_option_is_set(token->postfix_modifier)
-            && !literal_modifier_terminal(grammar, node, parent))
+            && !literal_modifier_terminal(context->grammar, visit->node,
+                                          visit->parent))
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit), unit,
                 CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0010"),
                 CORE_STRING_STATIC("literal modifier requires a supported literal shape"),
-                link_source_location(parent ? parent : node));
-        return;
+                link_source_location(visit->parent ? visit->parent
+                                                   : visit->node));
+        return semantic_walk_status(walk);
     }
-    if (expected && nt_is(context->grammar, node, "list-lit")
-        && th_kind_of(th_resolve(expected)) == TH_SEQUENCE
-        && !core_tree_node_value(node).type)
-        core_tree_node_value(node).type = expected;
-    in_expression |= nt_is(context->grammar, node, "expression");
-    semantic_annotation_node(context, unit, node, parent, depth, child_index,
-                             true);
-    n00bb_tu_state_t *state = tu_state(unit);
-    parse_symtab_t *symtab = state && state->annotations
-        ? state->annotations->symtab : nullptr;
-    parse_scope_t *flow_scope = nullptr;
-    bool body_statement_sequence = nt_is(context->grammar, node,
-        "body-stmt-list") || (core_tree_node_value(node).group_top && parent
-        && nt_is(context->grammar, parent, "body-stmt-list"));
-    for (size_t i = 0; i < core_tree_num_children(node); i++) {
-        parse_tree_t *child = core_tree_child(node, i);
-        parse_scope_t *previous = flow_scope
-            ? parse_symtab_current_scope(symtab, CORE_STRING_STATIC(""))
-            : nullptr;
-        if (flow_scope) parse_symtab_enter_scope_all(symtab, flow_scope);
-        th_type *child_expected = expected_expression_child_type(
-            context->grammar, node, child, expected);
-        semantic_annotate_tree(context, unit, child, node, depth + 1,
-                               (int32_t)i, in_expression, child_expected);
-        if (flow_scope) parse_symtab_enter_scope_all(symtab, previous);
-        if (symtab && body_statement_sequence
-            && nt_is(context->grammar, child, "body-stmt")) {
-            bool condition_truth = false;
-            parse_tree_t *condition = n00bb_exiting_guard_condition(
-                context->grammar, child);
-            if (!condition) {
-                parse_tree_t *assertion = child_nt(context->grammar, child,
-                                                    "assert-stmt");
-                if (assertion
-                    && core_string_eq(first_token_text(assertion),
-                                      CORE_STRING_STATIC("require"))) {
-                    condition = child_nt(context->grammar, assertion,
-                                         "expression");
-                    condition_truth = true;
-                }
-            }
-            if (condition) {
-                parse_scope_t *saved = parse_symtab_current_scope(
-                    symtab, CORE_STRING_STATIC(""));
-                if (flow_scope) parse_symtab_enter_scope_all(symtab, flow_scope);
-                parse_symtab_push_scope_all(symtab,
-                    CORE_STRING_STATIC("flow"));
-                parse_scope_t *new_scope = parse_symtab_current_scope(
-                    symtab, CORE_STRING_STATIC(""));
-                bool bound = new_scope
-                    && n00bb_bind_option_condition_shadows(context->grammar,
-                        unit, symtab, new_scope, condition, condition_truth);
-                parse_symtab_enter_scope_all(symtab, saved);
-                if (!bound) {
-                    core_diagnostics_report_at(
-                        core_translation_unit_diagnostics(unit), unit,
-                        CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0015"),
-                        CORE_STRING_STATIC(
-                            "could not bind the option refinement after this guard"),
-                        link_source_location(child));
-                    break;
-                }
-                flow_scope = new_scope;
-            }
-        }
-        if (nt_is(context->grammar, node, "func-def")
-            && nt_is(context->grammar, child, "func-type-signature")) {
-            record_cached_declared_function_signature(context->grammar,
-                unit, child, tu_state(unit));
-            bind_function_body_signature(unit, child, tu_state(unit));
-        }
-        if (nt_is(context->grammar, node, "context-def")
-            && nt_is(context->grammar, child, "context-spec"))
-            record_context_signature(context->grammar, unit, node,
-                                     tu_state(unit));
-        if ((nt_is(context->grammar, node, "context-exit")
-             || nt_is(context->grammar, node, "context-error")
-             || nt_is(context->grammar, node, "context-ensure"))
-            && nt_is(context->grammar, child, "context-hook-params"))
-            record_context_hook_signature(context->grammar, unit, node,
-                                            tu_state(unit));
+    if (frame->expected && nt_is(context->grammar, visit->node, "list-lit")
+        && th_kind_of(th_resolve(frame->expected)) == TH_SEQUENCE
+        && !core_tree_node_value(visit->node).type)
+        core_tree_node_value(visit->node).type = frame->expected;
+    frame->in_expression |= nt_is(context->grammar, visit->node,
+                                   "expression");
+    semantic_annotation_node(context, unit, visit->node, visit->parent,
+                             SEMANTIC_PREPARE_ENTER, visit,
+                             &frame->annotation_cache);
+    return semantic_walk_status(walk);
+}
+
+static parse_visit_outcome_t
+semantic_walk_after_enter(parse_visit_t *visit)
+{
+    semantic_walk_context_t *walk = visit->user;
+    semantic_walk_frame_t *frame = &walk->frames.data[visit->depth];
+    semantic_annotation_node(walk->context, walk->unit, visit->node,
+                             visit->parent, SEMANTIC_AFTER_ENTER, nullptr,
+                             &frame->annotation_cache);
+    return semantic_walk_status(walk);
+}
+
+static parse_visit_outcome_t
+semantic_walk_before_exit(parse_visit_t *visit)
+{
+    semantic_walk_context_t *walk = visit->user;
+    semantic_walk_frame_t *frame = &walk->frames.data[visit->depth];
+    if (core_tree_is_leaf(visit->node)) {
+        if (frame->previous_scope)
+            parse_symtab_enter_scope_all(tu_state(walk->unit)->annotations->symtab,
+                                         frame->previous_scope);
+        return PARSE_VISIT_CONTINUE;
     }
-    semantic_annotation_node(context, unit, node, parent, depth, child_index,
-                             false);
-    if (in_expression
-        && !cache_alias_edges(context->grammar, node, tu_state(unit)))
-        core_diagnostics_report_at(core_translation_unit_diagnostics(unit),
-            unit, CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0004"),
+    semantic_annotation_node(walk->context, walk->unit, visit->node,
+                             visit->parent, SEMANTIC_PREPARE_EXIT, visit,
+                             &frame->annotation_cache);
+    return semantic_walk_status(walk);
+}
+
+static parse_visit_outcome_t
+semantic_walk_after_reference_exit(parse_visit_t *visit)
+{
+    semantic_walk_context_t *walk = visit->user;
+    semantic_walk_frame_t *frame = &walk->frames.data[visit->depth];
+    semantic_annotation_node(walk->context, walk->unit, visit->node,
+                             visit->parent, SEMANTIC_AFTER_REFERENCE_EXIT,
+                             nullptr, &frame->annotation_cache);
+    return semantic_walk_status(walk);
+}
+
+static parse_visit_outcome_t
+semantic_walk_after_exit(parse_visit_t *visit)
+{
+    semantic_walk_context_t *walk = visit->user;
+    semantic_walk_frame_t *frame = &walk->frames.data[visit->depth];
+    semantic_annotation_node(walk->context, walk->unit, visit->node,
+                             visit->parent, SEMANTIC_AFTER_EXIT, nullptr,
+                             &frame->annotation_cache);
+    if (frame->in_expression
+        && !cache_alias_edges(walk->context->grammar, visit->node,
+                              tu_state(walk->unit)))
+        core_diagnostics_report_at(core_translation_unit_diagnostics(walk->unit),
+            walk->unit, CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0004"),
             CORE_STRING_STATIC("could not retain alias edges"),
-            link_source_location(node));
-    if (in_expression
-        && !cache_escape_edges(context->grammar, node, tu_state(unit)))
-        core_diagnostics_report_at(core_translation_unit_diagnostics(unit),
-            unit, CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0004"),
+            link_source_location(visit->node));
+    if (frame->in_expression
+        && !cache_escape_edges(walk->context->grammar, visit->node,
+                               tu_state(walk->unit)))
+        core_diagnostics_report_at(core_translation_unit_diagnostics(walk->unit),
+            walk->unit, CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0004"),
             CORE_STRING_STATIC("could not retain escape edges"),
-            link_source_location(node));
+            link_source_location(visit->node));
+    if (frame->previous_scope)
+        parse_symtab_enter_scope_all(tu_state(walk->unit)->annotations->symtab,
+                                     frame->previous_scope);
+    return semantic_walk_status(walk);
+}
+
+static parse_visit_outcome_t
+semantic_walk_child_complete(parse_visit_t *visit)
+{
+    semantic_walk_context_t *walk = visit->user;
+    annotation_context_t *context = walk->context;
+    core_translation_unit_t *unit = walk->unit;
+    parse_tree_t *node = visit->node;
+    parse_tree_t *child = visit->completed_child;
+    semantic_walk_frame_t *frame = &walk->frames.data[visit->depth];
+    parse_symtab_t *symtab = tu_state(unit)->annotations->symtab;
+    bool body_statement_sequence = nt_is(context->grammar, node,
+        "body-stmt-list") || (core_tree_node_value(node).group_top
+        && visit->parent && nt_is(context->grammar, visit->parent,
+                                  "body-stmt-list"));
+    if (body_statement_sequence && nt_is(context->grammar, child,
+                                          "body-stmt")) {
+        bool condition_truth = false;
+        parse_tree_t *condition = n00bb_exiting_guard_condition(
+            context->grammar, child);
+        if (!condition) {
+            parse_tree_t *assertion = child_nt(context->grammar, child,
+                                               "assert-stmt");
+            if (assertion
+                && core_string_eq(first_token_text(assertion),
+                                  CORE_STRING_STATIC("require"))) {
+                condition = child_nt(context->grammar, assertion,
+                                     "expression");
+                condition_truth = true;
+            }
+        }
+        if (condition) {
+            parse_scope_t *saved = parse_symtab_current_scope(symtab,
+                CORE_STRING_STATIC(""));
+            if (frame->flow_scope)
+                parse_symtab_enter_scope_all(symtab, frame->flow_scope);
+            parse_symtab_push_scope_all(symtab, CORE_STRING_STATIC("flow"));
+            parse_scope_t *new_scope = parse_symtab_current_scope(symtab,
+                CORE_STRING_STATIC(""));
+            bool bound = new_scope
+                && n00bb_bind_option_condition_shadows(context->grammar,
+                    unit, symtab, new_scope, condition, condition_truth);
+            parse_symtab_enter_scope_all(symtab, saved);
+            if (!bound) {
+                core_diagnostics_report_at(
+                    core_translation_unit_diagnostics(unit), unit,
+                    CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0015"),
+                    CORE_STRING_STATIC(
+                        "could not bind the option refinement after this guard"),
+                    link_source_location(child));
+                return PARSE_VISIT_ERROR;
+            }
+            frame->flow_scope = new_scope;
+        }
+    }
+    if (nt_is(context->grammar, node, "func-def")
+        && nt_is(context->grammar, child, "func-type-signature")) {
+        record_cached_declared_function_signature(context->grammar,
+            unit, child, tu_state(unit));
+        bind_function_body_signature(unit, child, tu_state(unit));
+    }
+    if (nt_is(context->grammar, node, "context-def")
+        && nt_is(context->grammar, child, "context-spec"))
+        record_context_signature(context->grammar, unit, node,
+                                 tu_state(unit));
+    if ((nt_is(context->grammar, node, "context-exit")
+         || nt_is(context->grammar, node, "context-error")
+         || nt_is(context->grammar, node, "context-ensure"))
+        && nt_is(context->grammar, child, "context-hook-params"))
+        record_context_hook_signature(context->grammar, unit, node,
+                                      tu_state(unit));
+    return semantic_walk_status(walk);
+}
+
+static bool
+semantic_annotate_tree(annotation_context_t *context,
+                       core_translation_unit_t *unit, parse_tree_t *root)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    if (!root || !prepare_initial_symbols(unit, context->types)) return false;
+    semantic_walk_context_t walk_context = {
+        .context = context,
+        .unit = unit,
+    };
+    parse_tree_walk_t *walk = parse_tree_walk_new(context->grammar,
+                                                  &walk_context);
+    parse_annot_kind_t order[
+        sizeof(semantic_kinds) / sizeof(semantic_kinds[0])
+        + sizeof(semantic_reference_kinds)
+            / sizeof(semantic_reference_kinds[0])];
+    size_t count = 0;
+    for (size_t i = 0; i < sizeof(semantic_kinds)
+                            / sizeof(semantic_kinds[0]); i++)
+        order[count++] = semantic_kinds[i];
+    for (size_t i = 0; i < sizeof(semantic_reference_kinds)
+                            / sizeof(semantic_reference_kinds[0]); i++)
+        order[count++] = semantic_reference_kinds[i];
+    bool configured = walk && parse_walk_set_annotation_order(walk, order,
+                                                               count);
+    if (configured)
+        configured = parse_walk_on_annotation_boundary(walk,
+            sizeof(semantic_kinds) / sizeof(semantic_kinds[0]),
+            nullptr, semantic_walk_after_reference_exit, nullptr);
+    if (configured) {
+        parse_annot_register(walk, state->annotations, state->types, nullptr);
+        parse_walk_on_stage(walk, PARSE_WALK_PREPARE,
+                            semantic_walk_prepare, nullptr);
+        parse_walk_on_stage(walk, PARSE_WALK_AFTER_ENTER,
+                            semantic_walk_after_enter, nullptr);
+        parse_walk_on_stage(walk, PARSE_WALK_BEFORE_EXIT,
+                            semantic_walk_before_exit, nullptr);
+        parse_walk_on_stage(walk, PARSE_WALK_AFTER_EXIT,
+                            semantic_walk_after_exit, nullptr);
+        parse_walk_on_stage(walk, PARSE_WALK_CHILD_COMPLETE,
+                            semantic_walk_child_complete, nullptr);
+        parse_tree_walk_run(walk, root);
+    }
+    bool ok = configured && !parse_tree_walk_failed(walk)
+        && !core_diagnostics_failed(core_translation_unit_diagnostics(unit));
+    parse_tree_walk_free(walk);
+    core_list_free(walk_context.frames);
+    return ok;
 }
 
 static bool
@@ -51176,8 +51256,7 @@ semantic_annotate_import_closure(annotation_context_t *context,
     if (!tree) return false;
     double annotation_start = getenv("N00BB_PROFILE_COMPILE")
         ? n00bb_profile_seconds() : 0;
-    semantic_annotate_tree(context, unit, tree, nullptr, 0, -1, false,
-                           nullptr);
+    if (!semantic_annotate_tree(context, unit, tree)) return false;
     if (!resolve_forward_literal_sites(unit, state)) return false;
     if (core_translation_unit_has_fatal_diagnostics(unit)
         || core_diagnostics_failed(core_translation_unit_diagnostics(unit)))

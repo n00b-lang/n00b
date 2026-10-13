@@ -16,6 +16,7 @@
 #include "parse/rewrite.h"
 #include "parse/token.h"
 #include "parse/tree_util.h"
+#include "parse/tree_visit.h"
 #include "unicode/encoding.h"
 
 typedef enum {
@@ -64,8 +65,6 @@ core_list_decl(size_t);
 typedef struct {
     parse_tree_t *parent;
     parse_tree_t *statement;
-    int32_t depth;
-    int32_t child_index;
 } pp_deferred_stmt_t;
 core_list_decl(pp_deferred_stmt_t);
 
@@ -1950,10 +1949,9 @@ make_value_literal(pp_context_t *ctx, pp_value_t value)
 }
 
 static bool
-replace_builtin(pp_context_t *ctx, parse_tree_t **slot,
-                parse_tree_t *parent, int32_t child_index)
+replace_builtin(pp_context_t *ctx, parse_visit_t *visit)
 {
-    parse_tree_t *node = *slot;
+    parse_tree_t *node = visit->node;
     core_string_t name = builtin_name(ctx, node);
     if (!n00bb_preprocessor_builtin_name(name)
         || core_string_eq(name, CORE_STRING_STATIC("compile_warning"))
@@ -2002,14 +2000,8 @@ replace_builtin(pp_context_t *ctx, parse_tree_t **slot,
         pp_error(ctx, node, "cannot rewrite processor-time literal");
         return false;
     }
-    if (parent && child_index >= 0
-        && !core_tree_set_child(parent, (size_t)child_index, postfix)) {
-        parse_tree_free(postfix);
-        pp_error(ctx, node, "cannot attach processor-time result to its parent");
-        return false;
-    }
-    *slot = postfix;
-    parse_tree_free(node);
+    visit->replace = postfix;
+    visit->revisit_replacement = true;
     return true;
 }
 
@@ -2067,45 +2059,72 @@ process_import(pp_context_t *ctx, parse_tree_t *statement)
     return succeeded;
 }
 
-static void
-process_node(pp_context_t *ctx, parse_tree_t **slot, parse_tree_t *parent,
-             int32_t depth, int32_t child_index,
-             parse_tree_t *selected_import_body,
-             parse_tree_t *current_body)
+typedef struct {
+    parse_tree_t *selected_import_body;
+    parse_tree_t *current_body;
+    parse_tree_t *revisit_body;
+    size_t binding_mark;
+    bool scoped_body;
+} pp_walk_frame_t;
+core_list_decl(pp_walk_frame_t);
+
+typedef struct {
+    pp_context_t *ctx;
+    core_list_t(pp_walk_frame_t) frames;
+} pp_walk_t;
+
+static parse_visit_outcome_t
+preprocess_prepare(parse_visit_t *visit)
 {
-    parse_tree_t *node = *slot;
-    if (!node || core_tree_is_leaf(node) || ctx->failed) return;
-    if (is_name(ctx->grammar, node, "body")) current_body = node;
-
-    if (is_name(ctx->grammar, node, "func-def")
-        && !register_litmod_declaration(ctx, node)) return;
-
-    bool scoped_body = is_name(ctx->grammar, node, "body")
+    pp_walk_t *walk = visit->user;
+    pp_context_t *ctx = walk->ctx;
+    parse_tree_t *node = visit->node;
+    if (ctx->failed) return PARSE_VISIT_ERROR;
+    if (!node || core_tree_is_leaf(node)) return PARSE_VISIT_CONTINUE;
+    while (walk->frames.len <= (size_t)visit->depth)
+        core_list_push(walk->frames, ((pp_walk_frame_t){0}));
+    pp_walk_frame_t *frame = &walk->frames.data[visit->depth];
+    if (frame->revisit_body == node) {
+        frame->selected_import_body = node;
+        frame->current_body = node;
+        frame->revisit_body = nullptr;
+    }
+    else {
+        pp_walk_frame_t *parent = visit->depth > 0
+            ? &walk->frames.data[visit->depth - 1] : nullptr;
+        *frame = (pp_walk_frame_t){
+            .selected_import_body = parent ? parent->selected_import_body : nullptr,
+            .current_body = parent ? parent->current_body : nullptr,
+        };
+    }
+    if (is_name(ctx->grammar, node, "body")) frame->current_body = node;
+    frame->scoped_body = is_name(ctx->grammar, node, "body")
         || is_name(ctx->grammar, node, "value-body")
         || is_name(ctx->grammar, node, "try-body");
-    size_t binding_mark = ctx->bindings.len;
+    frame->binding_mark = ctx->bindings.len;
 
+    if (is_name(ctx->grammar, node, "func-def")
+        && !register_litmod_declaration(ctx, node)) return PARSE_VISIT_ERROR;
     if (is_name(ctx->grammar, node, "import-stmt")) {
-        if (current_body && current_body != selected_import_body) {
+        if (frame->current_body
+            && frame->current_body != frame->selected_import_body) {
             pp_error(ctx, node,
                 "imports are only allowed at module level or directly in a selected when branch");
-            return;
+            return PARSE_VISIT_ERROR;
         }
-        process_import(ctx, node);
-        return;
+        if (!process_import(ctx, node)) return PARSE_VISIT_ERROR;
+        return PARSE_VISIT_PRUNE;
     }
-
     if (is_name(ctx->grammar, node, "assert-stmt")
         && core_string_eq(first_leaf_text(ctx, node),
                           CORE_STRING_STATIC("assert"))
         && ctx->options && ctx->options->release_mode) {
-        *slot = nullptr;
-        return;
+        visit->remove = true;
+        return PARSE_VISIT_CONTINUE;
     }
-
     if (is_name(ctx->grammar, node, "expression-stmt")) {
-        parse_tree_t *expression = child_named(
-            ctx->grammar, node, "expression");
+        parse_tree_t *expression = child_named(ctx->grammar, node,
+                                                "expression");
         core_string_t diagnostic_name = {0};
         while (expression && !core_tree_is_leaf(expression)) {
             diagnostic_name = builtin_name(ctx, expression);
@@ -2123,48 +2142,39 @@ process_node(pp_context_t *ctx, parse_tree_t **slot, parse_tree_t *parent,
                               CORE_STRING_STATIC("compile_error"))) {
             pp_value_t ignored;
             eval_builtin(ctx, expression, &ignored);
-            *slot = nullptr;
-            return;
+            if (ctx->failed) return PARSE_VISIT_ERROR;
+            visit->remove = true;
+            return PARSE_VISIT_CONTINUE;
         }
     }
-
     if (is_name(ctx->grammar, node, "variable-decl")) {
         remember_const(ctx, node);
-        if (ctx->failed) return;
+        if (ctx->failed) return PARSE_VISIT_ERROR;
     }
     if (is_name(ctx->grammar, node, "when-stmt")) {
         parse_tree_t *body = selected_when_body(ctx, node);
-        if (ctx->failed) return;
-        if (body) {
-            parse_tree_t *replacement = parse_tree_clone(body);
-            if (!replacement) {
-                pp_error(ctx, node, "cannot copy the selected when body");
-                return;
-            }
-            if (ctx->options && ctx->options->selected_body
-                && !ctx->options->selected_body(
-                    ctx->options->selected_body_context, ctx->unit,
-                    replacement)) {
-                parse_tree_free(replacement);
-                pp_error(ctx, node, "cannot retain the selected when body");
-                return;
-            }
-            if (parent && child_index >= 0
-                && !core_tree_set_child(parent, (size_t)child_index,
-                                        replacement)) {
-                parse_tree_free(replacement);
-                pp_error(ctx, node, "cannot attach the selected when body");
-                return;
-            }
-            *slot = replacement;
-            parse_tree_free(node);
-            process_node(ctx, slot, parent, depth, child_index, replacement,
-                         replacement);
+        if (ctx->failed) return PARSE_VISIT_ERROR;
+        if (!body) {
+            visit->remove = true;
+            return PARSE_VISIT_CONTINUE;
         }
-        else {
-            *slot = nullptr;
+        parse_tree_t *replacement = parse_tree_clone(body);
+        if (!replacement) {
+            pp_error(ctx, node, "cannot copy the selected when body");
+            return PARSE_VISIT_ERROR;
         }
-        return;
+        if (ctx->options && ctx->options->selected_body
+            && !ctx->options->selected_body(
+                ctx->options->selected_body_context, ctx->unit,
+                replacement)) {
+            parse_tree_free(replacement);
+            pp_error(ctx, node, "cannot retain the selected when body");
+            return PARSE_VISIT_ERROR;
+        }
+        frame->revisit_body = replacement;
+        visit->replace = replacement;
+        visit->revisit_replacement = true;
+        return PARSE_VISIT_CONTINUE;
     }
     bool invocation = is_name(ctx->grammar, node, "postfix-expr")
         && postfix_has_token(node, "(");
@@ -2174,39 +2184,43 @@ process_node(pp_context_t *ctx, parse_tree_t **slot, parse_tree_t *parent,
         || core_string_eq(processor_name, CORE_STRING_STATIC("compile_error"))) {
         pp_value_t ignored;
         eval_builtin(ctx, node, &ignored);
-        if (ctx->failed) return;
+        if (ctx->failed) return PARSE_VISIT_ERROR;
     }
-    if (replace_builtin(ctx, slot, parent, child_index)) node = *slot;
-    if (ctx->failed || !node) return;
-    for (size_t i = 0; i < core_tree_num_children(node);) {
-        parse_tree_t *child = core_tree_child(node, i);
-        process_node(ctx, &child, node, depth + 1, (int32_t)i,
-                     selected_import_body, current_body);
-        if (!child) {
-            parse_tree_t *removed = core_tree_remove_child(node, i);
-            parse_tree_free(removed);
-        }
-        else {
-            core_tree_set_child(node, i, child);
-            i++;
-        }
-    }
+    (void)replace_builtin(ctx, visit);
+    return ctx->failed ? PARSE_VISIT_ERROR : PARSE_VISIT_CONTINUE;
+}
+
+static parse_visit_outcome_t
+preprocess_after_exit(parse_visit_t *visit)
+{
+    if (core_tree_is_leaf(visit->node)) return PARSE_VISIT_CONTINUE;
+    pp_walk_t *walk = visit->user;
+    pp_context_t *ctx = walk->ctx;
+    parse_tree_t *node = visit->node;
+    pp_walk_frame_t *frame = &walk->frames.data[visit->depth];
     if (!core_tree_num_children(node)
         && (is_name(ctx->grammar, node, "top-level-stmt")
             || is_name(ctx->grammar, node, "body-stmt")
             || is_name(ctx->grammar, node, "expression-stmt")))
-        *slot = nullptr;
-    if (scoped_body) ctx->bindings.len = binding_mark;
+        visit->remove = true;
+    if (frame->scoped_body) ctx->bindings.len = frame->binding_mark;
+    return ctx->failed ? PARSE_VISIT_ERROR : PARSE_VISIT_CONTINUE;
 }
 
-static void
-process_module_statements(pp_context_t *ctx, parse_tree_t *node,
-                          parse_tree_t *parent,
-                          int32_t depth, int32_t child_index,
-                          core_list_t(pp_deferred_stmt_t) *imports,
-                          core_list_t(pp_deferred_stmt_t) *deferred)
+typedef struct {
+    pp_context_t *ctx;
+    core_list_t(pp_deferred_stmt_t) *imports;
+    core_list_t(pp_deferred_stmt_t) *deferred;
+} pp_discovery_t;
+
+static parse_visit_outcome_t
+preprocess_discover(parse_visit_t *visit)
 {
-    if (!node || core_tree_is_leaf(node)) return;
+    pp_discovery_t *discovery = visit->user;
+    pp_context_t *ctx = discovery->ctx;
+    parse_tree_t *node = visit->node;
+    if (ctx->failed) return PARSE_VISIT_ERROR;
+    if (!node || core_tree_is_leaf(node)) return PARSE_VISIT_CONTINUE;
     if (is_name(ctx->grammar, node, "top-level-stmt")) {
         parse_tree_t *import = child_named(ctx->grammar, node, "import-stmt");
         if (import) {
@@ -2215,41 +2229,36 @@ process_module_statements(pp_context_t *ctx, parse_tree_t *node,
                     ctx->options->import_context, ctx->grammar, import,
                     ctx->unit)) {
                 ctx->failed = true;
-                return;
+                return PARSE_VISIT_ERROR;
             }
-            if (parent)
-                core_list_push(*imports, ((pp_deferred_stmt_t){
-                    .parent = parent, .statement = node, .depth = depth,
-                    .child_index = child_index,
+            if (visit->parent)
+                core_list_push(*discovery->imports, ((pp_deferred_stmt_t){
+                    .parent = visit->parent, .statement = node,
                 }));
         }
         else {
-            if (parent)
-                core_list_push(*deferred, ((pp_deferred_stmt_t){
-                    .parent = parent, .statement = node, .depth = depth,
-                    .child_index = child_index,
+            if (visit->parent)
+                core_list_push(*discovery->deferred, ((pp_deferred_stmt_t){
+                    .parent = visit->parent, .statement = node,
                 }));
         }
-        return;
+        return PARSE_VISIT_PRUNE;
     }
-    for (size_t i = 0; i < core_tree_num_children(node); i++)
-        process_module_statements(ctx, core_tree_child(node, i), node,
-                                  depth + 1, (int32_t)i, imports, deferred);
+    return PARSE_VISIT_CONTINUE;
 }
 
 static bool
-process_deferred_statement(pp_context_t *ctx, pp_deferred_stmt_t deferred)
+process_deferred_statement(pp_context_t *ctx, parse_tree_walk_t *walk,
+                           pp_deferred_stmt_t deferred)
 {
     for (size_t i = 0; i < core_tree_num_children(deferred.parent); i++) {
         if (core_tree_child(deferred.parent, i) != deferred.statement) continue;
-        parse_tree_t *statement = deferred.statement;
-        process_node(ctx, &statement, deferred.parent, deferred.depth,
-                     (int32_t)i, nullptr, nullptr);
-        if (!statement) {
-            parse_tree_free(core_tree_remove_child(deferred.parent, i));
-        }
-        else core_tree_set_child(deferred.parent, i, statement);
-        return true;
+        parse_tree_walk_run_with_parent(walk, deferred.statement,
+                                       deferred.parent, 0, (int32_t)i);
+        parse_tree_t *detached;
+        while ((detached = parse_tree_walk_take_detached(walk)))
+            parse_tree_free(detached);
+        return ctx->failed || !parse_tree_walk_failed(walk);
     }
     return false;
 }
@@ -2296,17 +2305,39 @@ process_module(pp_context_t *ctx, core_translation_unit_t *unit,
         core_list_new(pp_deferred_stmt_t);
     core_list_t(pp_deferred_stmt_t) deferred =
         core_list_new(pp_deferred_stmt_t);
-    process_module_statements(ctx, tree, nullptr, 0, -1, &imports, &deferred);
+    pp_discovery_t discovery = {
+        .ctx = ctx, .imports = &imports, .deferred = &deferred,
+    };
+    parse_tree_walk_t *discovery_walk = parse_tree_walk_new(ctx->grammar,
+                                                             &discovery);
+    parse_walk_on_stage(discovery_walk, PARSE_WALK_PREPARE,
+                        preprocess_discover, nullptr);
+    parse_tree_walk_run(discovery_walk, tree);
+    if (parse_tree_walk_failed(discovery_walk)) ctx->failed = true;
+    parse_tree_walk_free(discovery_walk);
+    pp_walk_t evaluation = {
+        .ctx = ctx, .frames = core_list_new(pp_walk_frame_t),
+    };
+    parse_tree_walk_t *evaluation_walk = parse_tree_walk_new(ctx->grammar,
+                                                              &evaluation);
+    parse_walk_on_stage(evaluation_walk, PARSE_WALK_PREPARE,
+                        preprocess_prepare, nullptr);
+    parse_walk_on_stage(evaluation_walk, PARSE_WALK_AFTER_EXIT,
+                        preprocess_after_exit, nullptr);
     for (size_t i = 0; i < imports.len && !ctx->failed; i++)
-        if (!process_deferred_statement(ctx, imports.data[i])) {
+        if (!process_deferred_statement(ctx, evaluation_walk,
+                                        imports.data[i])) {
             pp_error(ctx, tree, "module import tree changed during preprocessing");
             break;
         }
     for (size_t i = 0; i < deferred.len && !ctx->failed; i++)
-        if (!process_deferred_statement(ctx, deferred.data[i])) {
+        if (!process_deferred_statement(ctx, evaluation_walk,
+                                        deferred.data[i])) {
             pp_error(ctx, tree, "module statement tree changed during preprocessing");
             break;
         }
+    parse_tree_walk_free(evaluation_walk);
+    core_list_free(evaluation.frames);
     core_list_free(imports);
     core_list_free(deferred);
     bool succeeded = !ctx->failed
@@ -2368,13 +2399,3 @@ n00bb_preprocessor_free(n00bb_preprocessor_t *preprocessor)
     core_free(preprocessor);
 }
 
-bool
-n00bb_preprocess(parse_grammar_t *grammar, parse_tree_t *tree,
-                 core_translation_unit_t *unit,
-                 const n00bb_preprocessor_options_t *options)
-{
-    n00bb_preprocessor_t *preprocessor = n00bb_preprocessor_new(options);
-    bool success = n00bb_preprocessor_run(preprocessor, grammar, tree, unit);
-    n00bb_preprocessor_free(preprocessor);
-    return success;
-}
