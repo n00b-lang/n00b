@@ -260,6 +260,7 @@ typedef struct {
     bool conflict;
     parse_tree_t **return_expressions;
     size_t return_expression_count;
+    size_t returned_parameter;
 } n00bb_function_return_facts_t;
 typedef enum {
     N00BB_RETURN_SOURCE_NONE,
@@ -529,6 +530,7 @@ typedef struct {
     const core_string_t *native_roots;
     size_t native_root_count;
     bool may_link_further;
+    bool returned_parameters_computed;
     n00bb_resolver_t *resolver;
 } n00bb_link_analysis_t;
 
@@ -2467,6 +2469,7 @@ record_function_exit_fact(parse_grammar_t *grammar,
             return;
         }
         memset(facts, 0, sizeof(*facts));
+        facts->returned_parameter = SIZE_MAX;
     }
 
     bool success_channel = nt_is(grammar, node, "return-stmt");
@@ -36573,24 +36576,10 @@ returned_source_matches_formal(parse_grammar_t *grammar,
         owner, argument, formal_index);
 }
 
-static bool
-function_returned_parameter(parse_grammar_t *grammar,
-                            n00bb_link_analysis_t *analysis,
-                            parse_sym_entry_t *function,
-                            size_t *formal_index)
+static void
+compute_returned_parameters(parse_grammar_t *grammar,
+                            n00bb_link_analysis_t *analysis)
 {
-    if (!grammar || !analysis || !function) return false;
-    if (!function->decl_node
-        || !nt_is(grammar, function->decl_node, "func-def")) {
-        n00bb_function_lifetime_effects_t effects = {0};
-        if (!function_lifetime_effects_for_symbol(analysis, function,
-                                                   &effects)
-            || effects.return_kind != N00BB_RETURN_ALIAS_PARAMETER)
-            return false;
-        if (formal_index) *formal_index = effects.return_parameter;
-        return true;
-    }
-
     static const core_string_t facts_key =
         CORE_STRING_STATIC("n00bb.function.return-facts");
     core_list_t(n00bb_return_candidate_t) candidates =
@@ -36664,24 +36653,51 @@ function_returned_parameter(parse_grammar_t *grammar,
         }
     } while (changed);
 
-    n00bb_return_candidate_t *result = return_candidate_for_symbol(
-        &candidates, function);
-    size_t selected = SIZE_MAX;
-    for (size_t i = 0; result && i < result->formal_count; i++) {
-        if (!result->possible[i]) continue;
-        if (selected != SIZE_MAX) {
-            selected = SIZE_MAX;
-            break;
+    for (size_t f = 0; f < candidates.len; f++) {
+        n00bb_return_candidate_t *candidate = &candidates.data[f];
+        size_t selected = SIZE_MAX;
+        for (size_t i = 0; i < candidate->formal_count; i++) {
+            if (!candidate->possible[i]) continue;
+            if (selected != SIZE_MAX) {
+                selected = SIZE_MAX;
+                break;
+            }
+            selected = i;
         }
-        selected = i;
+        candidate->facts->returned_parameter = selected;
     }
     for (size_t i = 0; i < candidates.len; i++) {
         core_free(candidates.data[i].formals);
         core_free(candidates.data[i].possible);
     }
     core_list_free(candidates);
-    if (selected == SIZE_MAX) return false;
-    if (formal_index) *formal_index = selected;
+    analysis->returned_parameters_computed = true;
+}
+
+static bool
+function_returned_parameter(parse_grammar_t *grammar,
+                            n00bb_link_analysis_t *analysis,
+                            parse_sym_entry_t *function,
+                            size_t *formal_index)
+{
+    if (!grammar || !analysis || !function) return false;
+    if (!function->decl_node
+        || !nt_is(grammar, function->decl_node, "func-def")) {
+        n00bb_function_lifetime_effects_t effects = {0};
+        if (!function_lifetime_effects_for_symbol(analysis, function,
+                                                   &effects)
+            || effects.return_kind != N00BB_RETURN_ALIAS_PARAMETER)
+            return false;
+        if (formal_index) *formal_index = effects.return_parameter;
+        return true;
+    }
+    if (!analysis->returned_parameters_computed)
+        compute_returned_parameters(grammar, analysis);
+    n00bb_function_return_facts_t *facts = parse_sym_binding(function,
+        CORE_STRING_STATIC("n00bb.function.return-facts"));
+    if (!facts || !facts->return_expression_count
+        || facts->returned_parameter == SIZE_MAX) return false;
+    if (formal_index) *formal_index = facts->returned_parameter;
     return true;
 }
 
