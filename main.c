@@ -4,12 +4,15 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <spawn.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
 extern char **environ;
+
+static double n00bb_profile_seconds(void);
 
 #include "driver.h"
 #include "abi_layout.h"
@@ -37707,10 +37710,17 @@ publish_returned_parameter_aliases(core_link_unit_t *link,
                                    n00bb_link_analysis_t *analysis,
                                    uint32_t producer_stage)
 {
+    core_dict_t returned_parameters;
+    core_dict_init(&returned_parameters, nullptr, nullptr);
+    size_t cache_misses = 0;
+    bool ok = true;
     size_t count = core_link_unit_dependency_count(link);
     for (size_t i = 0; i < count; i++) {
         core_link_dependency_view_t call;
-        if (!core_link_unit_dependency_at(link, i, &call)) return false;
+        if (!core_link_unit_dependency_at(link, i, &call)) {
+            ok = false;
+            break;
+        }
         if ((call.kind != N00BB_LINK_DEPENDENCY_CALL
                 && call.kind != N00BB_LINK_DEPENDENCY_TRAIT_DISPATCH
                 && call.kind != N00BB_LINK_DEPENDENCY_CONTEXT_CALL)
@@ -37720,9 +37730,20 @@ publish_returned_parameter_aliases(core_link_unit_t *link,
             continue;
         n00bb_link_payload_t *payload = core_link_declaration_payload(call.to);
         parse_sym_entry_t *callee = payload ? payload->symbol : nullptr;
+        if (!callee) continue;
         size_t parameter_index = 0;
-        bool returns_parameter = function_returned_parameter(
-            analysis->grammar, analysis, callee, &parameter_index);
+        bool cached = false;
+        uintptr_t encoded = (uintptr_t)core_dict_get(
+            &returned_parameters, callee, &cached);
+        if (!cached) {
+            cache_misses++;
+            bool returns_parameter = function_returned_parameter(
+                analysis->grammar, analysis, callee, &parameter_index);
+            encoded = returns_parameter ? parameter_index + 2 : 1;
+            core_dict_put(&returned_parameters, callee, encoded);
+        }
+        else if (encoded > 1) parameter_index = encoded - 2;
+        bool returns_parameter = encoded > 1;
         if (!returns_parameter) continue;
         parse_tree_t *argument = call_argument_for_parameter(
             analysis->grammar, (parse_tree_t *)call.source_site, callee,
@@ -37734,7 +37755,10 @@ publish_returned_parameter_aliases(core_link_unit_t *link,
         if (!global) continue;
         core_link_declaration_t *target = link_declaration_for_symbol(
             analysis, global);
-        if (!target) return false;
+        if (!target) {
+            ok = false;
+            break;
+        }
 
         core_link_declaration_t *source = call.from;
         if (!source) {
@@ -37754,16 +37778,23 @@ publish_returned_parameter_aliases(core_link_unit_t *link,
                     producer_stage, CORE_LINK_DEPENDENCY_RESOLVED,
                     source, target, call.source_unit, call.source_site,
                     call.source_location, call.provenance,
-                    call.provenance_version, nullptr)) return false;
+                    call.provenance_version, nullptr)) {
+                ok = false;
+                break;
+            }
         }
         else if (!core_link_unit_add_dependency(link,
                 N00BB_LINK_DEPENDENCY_INITIALIZER_USE, producer_stage,
                 CORE_LINK_DEPENDENCY_RESOLVED, nullptr, target,
                 call.source_unit, call.source_site, call.source_location,
                 call.provenance, call.provenance_version, nullptr))
-            return false;
+            { ok = false; break; }
     }
-    return true;
+    if (getenv("N00BB_PROFILE_COMPILE"))
+        fprintf(stderr, "PROFILE returned-parameter-cache %zu/%zu\n",
+            cache_misses, count);
+    core_dict_free(&returned_parameters);
+    return ok;
 }
 
 static bool
@@ -37910,14 +37941,26 @@ publish_function_effect_summaries(core_link_unit_t *link,
                                   core_link_contribution_state_t call_state,
                                   core_link_contribution_state_t *state_out)
 {
+    bool profile_compile = getenv("N00BB_PROFILE_COMPILE") != nullptr;
+    double profile_start = profile_compile ? n00bb_profile_seconds() : 0;
     bool complete = direct_state == CORE_LINK_CONTRIBUTION_COMPLETE
         && call_state == CORE_LINK_CONTRIBUTION_COMPLETE;
-    if (!restore_context_effect_dependencies(link, producer_stage)
-        || !publish_returned_parameter_aliases(link, analysis, producer_stage))
+    if (!restore_context_effect_dependencies(link, producer_stage))
         return false;
+    if (profile_compile)
+        fprintf(stderr, "PROFILE effect-restore %.3f\n",
+            n00bb_profile_seconds() - profile_start);
+    if (!publish_returned_parameter_aliases(link, analysis, producer_stage))
+        return false;
+    if (profile_compile)
+        fprintf(stderr, "PROFILE effect-aliases %.3f\n",
+            n00bb_profile_seconds() - profile_start);
     bool builtin_effects_complete = false;
     if (!publish_builtin_reference_global_effects(link, analysis,
             producer_stage, &builtin_effects_complete)) return false;
+    if (profile_compile)
+        fprintf(stderr, "PROFILE effect-builtin-refs %.3f\n",
+            n00bb_profile_seconds() - profile_start);
     complete &= builtin_effects_complete;
     size_t call_count = core_link_unit_dependency_count(link);
     for (size_t c = 0; c < call_count; c++) {
@@ -37965,43 +38008,64 @@ publish_function_effect_summaries(core_link_unit_t *link,
                 call.provenance_version, nullptr)) return false;
     }
 
-    bool changed;
-    do {
-        changed = false;
-        size_t fact_count = core_link_unit_dependency_count(link);
-        for (size_t c = 0; c < fact_count; c++) {
-            core_link_dependency_view_t call;
-            if (!core_link_unit_dependency_at(link, c, &call)) return false;
-            if ((call.kind != N00BB_LINK_DEPENDENCY_CALL
-                    && call.kind != N00BB_LINK_DEPENDENCY_TRAIT_DISPATCH
-                    && call.kind != N00BB_LINK_DEPENDENCY_CONTEXT_CALL)
-                || !call.from || !call.to
-                || call.state != CORE_LINK_DEPENDENCY_RESOLVED) continue;
-            for (size_t e = 0; e < fact_count; e++) {
-                core_link_dependency_view_t effect;
-                if (!core_link_unit_dependency_at(link, e, &effect))
-                    return false;
-                uint32_t summary_kind = effect_summary_kind(effect.kind);
-                if (!summary_kind || effect.from != call.to
-                    || (!effect.to && summary_kind
-                        != N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_UNKNOWN))
-                    continue;
-                bool resolved = effect.state == CORE_LINK_DEPENDENCY_RESOLVED
-                    && summary_kind
-                        != N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_UNKNOWN;
-                size_t before = core_link_unit_dependency_count(link);
-                if (!core_link_unit_add_dependency(link, summary_kind,
-                        producer_stage, resolved
-                            ? CORE_LINK_DEPENDENCY_RESOLVED
-                            : CORE_LINK_DEPENDENCY_UNAVAILABLE,
-                        call.from, effect.to, call.source_unit,
-                        call.source_site, call.source_location,
-                        call.provenance, call.provenance_version, nullptr))
-                    return false;
-                changed |= core_link_unit_dependency_count(link) != before;
+    if (profile_compile)
+        fprintf(stderr, "PROFILE effect-prelude %.3f facts=%zu\n",
+            n00bb_profile_seconds() - profile_start,
+            core_link_unit_dependency_count(link));
+    size_t fact_count = core_link_unit_dependency_count(link);
+    core_link_dependency_view_t *calls = core_alloc_array(
+        core_link_dependency_view_t, fact_count);
+    size_t resolved_call_count = 0;
+    bool propagated = true;
+    for (size_t c = 0; c < fact_count; c++) {
+        core_link_dependency_view_t call;
+        if (!core_link_unit_dependency_at(link, c, &call)) {
+            propagated = false;
+            break;
+        }
+        if ((call.kind == N00BB_LINK_DEPENDENCY_CALL
+                || call.kind == N00BB_LINK_DEPENDENCY_TRAIT_DISPATCH
+                || call.kind == N00BB_LINK_DEPENDENCY_CONTEXT_CALL)
+            && call.from && call.to
+            && call.state == CORE_LINK_DEPENDENCY_RESOLVED)
+            calls[resolved_call_count++] = call;
+    }
+    for (size_t e = 0; propagated
+         && e < core_link_unit_dependency_count(link); e++) {
+        core_link_dependency_view_t effect;
+        if (!core_link_unit_dependency_at(link, e, &effect)) {
+            propagated = false;
+            break;
+        }
+        uint32_t summary_kind = effect_summary_kind(effect.kind);
+        if (!summary_kind || !effect.from
+            || (!effect.to && summary_kind
+                != N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_UNKNOWN))
+            continue;
+        bool resolved = effect.state == CORE_LINK_DEPENDENCY_RESOLVED
+            && summary_kind
+                != N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_UNKNOWN;
+        for (size_t c = 0; c < resolved_call_count; c++) {
+            const core_link_dependency_view_t *call = &calls[c];
+            if (call->to != effect.from) continue;
+            if (!core_link_unit_add_dependency(link, summary_kind,
+                    producer_stage, resolved
+                        ? CORE_LINK_DEPENDENCY_RESOLVED
+                        : CORE_LINK_DEPENDENCY_UNAVAILABLE,
+                    call->from, effect.to, call->source_unit,
+                    call->source_site, call->source_location,
+                    call->provenance, call->provenance_version, nullptr)) {
+                propagated = false;
+                break;
             }
         }
-    } while (changed);
+    }
+    core_free(calls);
+    if (!propagated) return false;
+    if (profile_compile)
+        fprintf(stderr, "PROFILE effect-propagation %.3f facts=%zu->%zu calls=%zu\n",
+            n00bb_profile_seconds() - profile_start, fact_count,
+            core_link_unit_dependency_count(link), resolved_call_count);
     *state_out = complete ? CORE_LINK_CONTRIBUTION_COMPLETE
                           : CORE_LINK_CONTRIBUTION_UNAVAILABLE;
     return true;
@@ -38290,6 +38354,7 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
                      bool dump_control_flow, bool dump_pdg,
                      bool dump_layout, bool interface_closure_only)
 {
+    double profile_start = n00bb_profile_seconds();
     if (analysis) analysis->ir_context = ir_context;
     core_link_contribution_view_t semantic_analysis;
     core_link_contribution_view_t bootstrap_analysis;
@@ -38310,6 +38375,9 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         core_list_push(units,
             core_link_unit_translation_unit(link, i));
     ok = ok && units.len;
+    if (getenv("N00BB_PROFILE_COMPILE"))
+        fprintf(stderr, "PROFILE lower-bindings %.3f\n",
+            n00bb_profile_seconds() - profile_start);
     for (size_t i = 0; ok && i < units.len; i++) {
         n00bb_tu_state_t *state = tu_state(units.data[i]);
         if (!state) ok = false;
@@ -38421,6 +38489,9 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
     ok = ok && ir_lowerer_register_visit(lowerer, PARSE_ANNOT_OPERATOR,
                                          n00bb_lower_operator_annotation,
                                          nullptr);
+    if (getenv("N00BB_PROFILE_COMPILE"))
+        fprintf(stderr, "PROFILE lower-register %.3f\n",
+            n00bb_profile_seconds() - profile_start);
     for (size_t i = 0; ok && !interface_closure_only && i < units.len; i++) {
         core_translation_unit_t *unit = units.data[i];
         n00bb_tu_state_t *state = tu_state(unit);
@@ -38438,6 +38509,9 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         }
         core_list_free(scopes);
     }
+    if (getenv("N00BB_PROFILE_COMPILE"))
+        fprintf(stderr, "PROFILE lower-functions %.3f\n",
+            n00bb_profile_seconds() - profile_start);
     for (size_t i = 0; ok && !interface_closure_only && i < units.len; i++) {
         core_translation_unit_t *unit = units.data[i];
         n00bb_tu_state_t *state = tu_state(unit);
@@ -38478,6 +38552,9 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
     }
     core_list_t(core_translation_unit_ptr_t) comptime_init_order =
         core_list_new(core_translation_unit_ptr_t);
+    if (getenv("N00BB_PROFILE_COMPILE"))
+        fprintf(stderr, "PROFILE lower-contexts %.3f\n",
+            n00bb_profile_seconds() - profile_start);
     ok = ok && collect_link_unit_initializer_order(link,
         "n00bb.comptime-module-initializer-order", &comptime_init_order);
     core_list_t(core_translation_unit_ptr_t) runtime_init_order =
@@ -38524,6 +38601,9 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         comptime_phase_succeeds, &runtime_init_order);
     if (ok && !interface_closure_only) ok = validate_thread_function_reads(link, analysis,
         comptime_phase_succeeds, &runtime_init_order);
+    if (getenv("N00BB_PROFILE_COMPILE"))
+        fprintf(stderr, "PROFILE lower-initializers %.3f\n",
+            n00bb_profile_seconds() - profile_start);
 
     if (ok && dump_ir) {
         for (size_t i = 0; i < units.len; i++) {
@@ -38561,6 +38641,9 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
                 && (properties & verified) == verified;
         }
     }
+    if (getenv("N00BB_PROFILE_COMPILE"))
+        fprintf(stderr, "PROFILE lower-verify %.3f\n",
+            n00bb_profile_seconds() - profile_start);
     if (ok && !interface_closure_only) {
         ir_policy_t *policy = ir_policy_new(ir_context);
         ok = policy
@@ -38582,15 +38665,32 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
             }
         }
     }
+    if (getenv("N00BB_PROFILE_COMPILE"))
+        fprintf(stderr, "PROFILE lower-analyze %.3f\n",
+            n00bb_profile_seconds() - profile_start);
     if (ok && !interface_closure_only)
         ok = n00bb_validate_consume_states(analysis, &units);
+    if (getenv("N00BB_PROFILE_COMPILE"))
+        fprintf(stderr, "PROFILE lower-consume %.3f\n",
+            n00bb_profile_seconds() - profile_start);
     if (ok && !interface_closure_only)
         ok = core_link_unit_run_stage(link,
-                                     N00BB_LINK_STAGE_CFG_LIVENESS)
-            && core_link_unit_run_stage(link,
-                N00BB_LINK_STAGE_CLEANUP_OBLIGATIONS)
-            && core_link_unit_run_stage(link,
+                                     N00BB_LINK_STAGE_CFG_LIVENESS);
+    if (getenv("N00BB_PROFILE_COMPILE"))
+        fprintf(stderr, "PROFILE lower-cfg-liveness %.3f\n",
+            n00bb_profile_seconds() - profile_start);
+    if (ok && !interface_closure_only)
+        ok = core_link_unit_run_stage(link,
+                N00BB_LINK_STAGE_CLEANUP_OBLIGATIONS);
+    if (getenv("N00BB_PROFILE_COMPILE"))
+        fprintf(stderr, "PROFILE lower-cleanup %.3f\n",
+            n00bb_profile_seconds() - profile_start);
+    if (ok && !interface_closure_only)
+        ok = core_link_unit_run_stage(link,
                 N00BB_LINK_STAGE_STORAGE_LIFETIMES);
+    if (getenv("N00BB_PROFILE_COMPILE"))
+        fprintf(stderr, "PROFILE lower-lifetime %.3f\n",
+            n00bb_profile_seconds() - profile_start);
     static const ir_pass_t *const lowering_passes[] = {
         &ir_pass_promote,
         &ir_pass_structure,
@@ -38627,6 +38727,9 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
             }
         }
     }
+    if (getenv("N00BB_PROFILE_COMPILE"))
+        fprintf(stderr, "PROFILE lower-passes %.3f\n",
+            n00bb_profile_seconds() - profile_start);
     if (ok && dump_layout)
         for (size_t i = 0; i < units.len; i++)
             dump_layout_for_unit(grammar, units.data[i]);
@@ -53284,6 +53387,7 @@ static core_link_stage_result_t
 n00bb_link_stage_inputs(core_link_unit_t *link, uint32_t stage_kind,
                         void *opaque)
 {
+    double profile_start = n00bb_profile_seconds();
     (void)stage_kind;
     n00bb_link_analysis_t *analysis = opaque;
     if (!core_link_unit_collect(link)
@@ -53304,6 +53408,9 @@ n00bb_link_stage_inputs(core_link_unit_t *link, uint32_t stage_kind,
             CORE_STRING_STATIC("n00bb.import-preprocessing"), 1, nullptr,
             CORE_LINK_PAYLOAD_BORROWED, nullptr))
         return CORE_LINK_STAGE_RESULT_FAILED;
+    if (getenv("N00BB_PROFILE_COMPILE"))
+        fprintf(stderr, "PROFILE stage-inputs %.3f\n",
+            n00bb_profile_seconds() - profile_start);
     return CORE_LINK_STAGE_RESULT_COMPLETE;
 }
 
@@ -53311,6 +53418,7 @@ static core_link_stage_result_t
 n00bb_link_stage_symbols(core_link_unit_t *link, uint32_t stage_kind,
                         void *opaque)
 {
+    double profile_start = n00bb_profile_seconds();
     (void)stage_kind;
     n00bb_link_analysis_t *analysis = opaque;
     for (size_t i = 0; i < analysis->units.len; i++)
@@ -53350,6 +53458,9 @@ n00bb_link_stage_symbols(core_link_unit_t *link, uint32_t stage_kind,
     if (!bind_link_references_to_nodes(link))
         return CORE_LINK_STAGE_RESULT_FAILED;
     bind_return_call_sources(analysis);
+    if (getenv("N00BB_PROFILE_COMPILE"))
+        fprintf(stderr, "PROFILE stage-symbols %.3f\n",
+            n00bb_profile_seconds() - profile_start);
     return CORE_LINK_STAGE_RESULT_COMPLETE;
 }
 
@@ -53501,6 +53612,7 @@ static core_link_stage_result_t
 n00bb_link_stage_semantics(core_link_unit_t *link, uint32_t stage_kind,
                            void *opaque)
 {
+    double profile_start = n00bb_profile_seconds();
     n00bb_link_analysis_t *analysis = opaque;
     if (!analysis || !analysis->units.len)
         return CORE_LINK_STAGE_RESULT_FAILED;
@@ -53743,6 +53855,9 @@ n00bb_link_stage_semantics(core_link_unit_t *link, uint32_t stage_kind,
         return CORE_LINK_STAGE_RESULT_FAILED;
     }
     analysis->environment = environment;
+    if (getenv("N00BB_PROFILE_COMPILE"))
+        fprintf(stderr, "PROFILE stage-semantics %.3f\n",
+            n00bb_profile_seconds() - profile_start);
     return CORE_LINK_STAGE_RESULT_COMPLETE;
 }
 
@@ -53750,6 +53865,7 @@ static core_link_stage_result_t
 n00bb_link_stage_contributions(core_link_unit_t *link, uint32_t stage_kind,
                                void *opaque)
 {
+    double profile_start = n00bb_profile_seconds();
     n00bb_link_analysis_t *analysis = opaque;
     if (!analysis || !select_storage_classes(&analysis->units))
         return CORE_LINK_STAGE_RESULT_FAILED;
@@ -53818,6 +53934,9 @@ n00bb_link_stage_contributions(core_link_unit_t *link, uint32_t stage_kind,
             return CORE_LINK_STAGE_RESULT_FAILED;
     }
     core_link_contribution_state_t call_graph_state;
+    if (getenv("N00BB_PROFILE_COMPILE"))
+        fprintf(stderr, "PROFILE contributions-preamble %.3f\n",
+            n00bb_profile_seconds() - profile_start);
     if (!publish_link_call_dependencies(link, analysis, stage_kind,
                                         &call_graph_state)
         || !core_link_unit_set_contribution(link, (core_string_t){0},
@@ -53826,6 +53945,9 @@ n00bb_link_stage_contributions(core_link_unit_t *link, uint32_t stage_kind,
             CORE_STRING_STATIC("n00bb.post-inference-call-sites"), 1,
             nullptr, CORE_LINK_PAYLOAD_BORROWED, nullptr))
         return CORE_LINK_STAGE_RESULT_FAILED;
+    if (getenv("N00BB_PROFILE_COMPILE"))
+        fprintf(stderr, "PROFILE contributions-calls %.3f\n",
+            n00bb_profile_seconds() - profile_start);
     core_link_contribution_state_t direct_effect_state;
     if (!publish_function_global_effects(link, analysis, stage_kind,
                                          &direct_effect_state)
@@ -53835,6 +53957,9 @@ n00bb_link_stage_contributions(core_link_unit_t *link, uint32_t stage_kind,
             CORE_STRING_STATIC("n00bb.annotation-reference-sites"), 1,
             nullptr, CORE_LINK_PAYLOAD_BORROWED, nullptr))
         return CORE_LINK_STAGE_RESULT_FAILED;
+    if (getenv("N00BB_PROFILE_COMPILE"))
+        fprintf(stderr, "PROFILE contributions-direct-effects %.3f\n",
+            n00bb_profile_seconds() - profile_start);
     core_link_contribution_state_t call_effect_state;
     if (!publish_function_effect_summaries(link, analysis, stage_kind,
             direct_effect_state, call_graph_state, &call_effect_state)
@@ -53846,6 +53971,9 @@ n00bb_link_stage_contributions(core_link_unit_t *link, uint32_t stage_kind,
             CORE_STRING_STATIC("n00bb.canonical-call-fixed-point"), 1,
             nullptr, CORE_LINK_PAYLOAD_BORROWED, nullptr))
         return CORE_LINK_STAGE_RESULT_FAILED;
+    if (getenv("N00BB_PROFILE_COMPILE"))
+        fprintf(stderr, "PROFILE contributions-call-effects %.3f\n",
+            n00bb_profile_seconds() - profile_start);
     core_link_contribution_state_t direct_initializer_state;
     if (!publish_link_initializer_uses(link, analysis, stage_kind,
                                        &direct_initializer_state)
@@ -53855,6 +53983,9 @@ n00bb_link_stage_contributions(core_link_unit_t *link, uint32_t stage_kind,
             CORE_STRING_STATIC("n00bb.annotation-reference-sites"), 1,
             nullptr, CORE_LINK_PAYLOAD_BORROWED, nullptr))
         return CORE_LINK_STAGE_RESULT_FAILED;
+    if (getenv("N00BB_PROFILE_COMPILE"))
+        fprintf(stderr, "PROFILE contributions-init-uses %.3f\n",
+            n00bb_profile_seconds() - profile_start);
     if (!core_link_unit_set_contribution(link, (core_string_t){0},
             CORE_STRING_STATIC("n00bb.initializer-phase-uses"), 1,
             stage_kind, direct_initializer_state,
@@ -53917,6 +54048,9 @@ n00bb_link_stage_contributions(core_link_unit_t *link, uint32_t stage_kind,
             CORE_STRING_STATIC("n00bb.phase-initializer-dependencies"), 1,
             nullptr, CORE_LINK_PAYLOAD_BORROWED, nullptr))
         return CORE_LINK_STAGE_RESULT_FAILED;
+    if (getenv("N00BB_PROFILE_COMPILE"))
+        fprintf(stderr, "PROFILE stage-contributions %.3f\n",
+            n00bb_profile_seconds() - profile_start);
     return core_link_unit_set_contribution(link, (core_string_t){0},
         CORE_STRING_STATIC("n00bb.bootstrap-pipeline-ran"), 1, stage_kind,
         CORE_LINK_CONTRIBUTION_COMPLETE,
@@ -54782,6 +54916,8 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
                 th_env **environment_out, core_link_unit_t **link_out,
                 n00bb_link_analysis_t **analysis_out)
 {
+    bool profile_compile = getenv("N00BB_PROFILE_COMPILE") != nullptr;
+    double profile_tick = profile_compile ? n00bb_profile_seconds() : 0;
     if (environment_out) *environment_out = nullptr;
     if (link_out) *link_out = nullptr;
     if (analysis_out) *analysis_out = nullptr;
@@ -54892,6 +55028,12 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
                    core_source_file_size(&unit->source));
         }
     }
+    if (profile_compile) {
+        double now = n00bb_profile_seconds();
+        fprintf(stderr, "PROFILE roots %.3f modules=%zu\n",
+            now - profile_tick, requests->len);
+        profile_tick = now;
+    }
 
     if (preprocess && parse) {
         bool runtime_support_loaded = false;
@@ -54942,6 +55084,12 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
         }
         n00bb_preprocessor_free(preprocessor);
         preprocessor = nullptr;
+        if (profile_compile) {
+            double now = n00bb_profile_seconds();
+            fprintf(stderr, "PROFILE preprocess %.3f modules=%zu\n",
+                now - profile_tick, requests->len);
+            profile_tick = now;
+        }
         if (success) {
             for (size_t i = 0; i < root_request_count; i++) {
                 if (!requests->data[i].root_input) continue;
@@ -54951,6 +55099,12 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
                         &annotation_context, &loader, unit))
                     success = false;
             }
+        }
+        if (profile_compile) {
+            double now = n00bb_profile_seconds();
+            fprintf(stderr, "PROFILE annotate %.3f modules=%zu\n",
+                now - profile_tick, requests->len);
+            profile_tick = now;
         }
         if (success) {
             core_link_unit_t *link = core_link_unit_new();
@@ -55055,6 +55209,12 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
                 && core_link_unit_run_stage(link,
                     N00BB_LINK_STAGE_CONTRIBUTIONS)
                 && !core_link_unit_has_fatal_diagnostics(link);
+            if (profile_compile) {
+                double now = n00bb_profile_seconds();
+                fprintf(stderr, "PROFILE link-stages %.3f\n",
+                    now - profile_tick);
+                profile_tick = now;
+            }
             if (environment_out) *environment_out = analysis->environment;
             if (link_out) *link_out = link;
             else core_link_unit_free(link);
@@ -58111,6 +58271,14 @@ n00bb_write_library_abi_artifact(core_link_unit_t *link,
     return saved;
 }
 
+static double
+n00bb_profile_seconds(void)
+{
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (double)now.tv_sec + (double)now.tv_nsec / 1000000000.0;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -58303,6 +58471,8 @@ main(int argc, char **argv)
         }
         core_free(grammar_path);
     }
+    bool profile_compile = getenv("N00BB_PROFILE_COMPILE") != nullptr;
+    double profile_tick = profile_compile ? n00bb_profile_seconds() : 0;
     bool located = scheduled && options_valid && run_locate_jobs(queue, resolver, &requests,
         grammar, !locate_only, show_tokens,
         !locate_only && !lex_command, show_tree,
@@ -58317,6 +58487,11 @@ main(int argc, char **argv)
         &preprocessor_options,
         ir_context, types, (size_t)requested_jobs, &environment, &link,
         &link_analysis);
+    if (profile_compile) {
+        double now = n00bb_profile_seconds();
+        fprintf(stderr, "PROFILE jobs %.3f\n", now - profile_tick);
+        profile_tick = now;
+    }
     bool interface_closure_only = library_command && emit_interface
         && interface_requires_comptime_ir(link_analysis);
     if (located && (lower_command || build_command || compile_command
@@ -58335,6 +58510,11 @@ main(int argc, char **argv)
             parse_cmdr_flag_present(args, CORE_STRING_STATIC("--dump-pdg")),
             parse_cmdr_flag_present(args, CORE_STRING_STATIC("--dump-layout")),
             interface_closure_only);
+    if (profile_compile) {
+        double now = n00bb_profile_seconds();
+        fprintf(stderr, "PROFILE lower %.3f\n", now - profile_tick);
+        profile_tick = now;
+    }
     if (located && library_command && emit_interface && link_analysis) {
         th_env *interface_environment = link_analysis->interface_environment;
         located = register_unit_comptime_ir_metadata(link_analysis, link)
@@ -58372,6 +58552,11 @@ main(int argc, char **argv)
         located = n00bb_execute_comptime(link, link_analysis,
             !preprocessor_options.release_mode, native_cpu, argv[0],
             cli_diagnostics);
+        if (profile_compile) {
+            double now = n00bb_profile_seconds();
+            fprintf(stderr, "PROFILE comptime %.3f\n", now - profile_tick);
+            profile_tick = now;
+        }
         if (located && !n00bb_finalize_comptime_layout(link_analysis)) {
             core_diagnostics_report(cli_diagnostics, nullptr,
                 CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-B0013"),
@@ -58394,14 +58579,29 @@ main(int argc, char **argv)
                     : "could not specialize runtime calls"));
             core_buffer_release(&failure);
         }
+        if (profile_compile) {
+            double now = n00bb_profile_seconds();
+            fprintf(stderr, "PROFILE specialize %.3f\n", now - profile_tick);
+            profile_tick = now;
+        }
     }
     if (located && build_command) {
         located = n00bb_emit_abi_artifacts(link, link_analysis,
             !preprocessor_options.release_mode, true);
+        if (profile_compile) {
+            double now = n00bb_profile_seconds();
+            fprintf(stderr, "PROFILE abi %.3f\n", now - profile_tick);
+            profile_tick = now;
+        }
         if (located)
             located = n00bb_build_executable(link, link_analysis, args,
                 !preprocessor_options.release_mode, native_cpu, argv[0],
                 cli_diagnostics);
+        if (profile_compile) {
+            double now = n00bb_profile_seconds();
+            fprintf(stderr, "PROFILE native %.3f\n", now - profile_tick);
+            profile_tick = now;
+        }
     }
     if (located && compile_command) {
         located = n00bb_emit_abi_artifacts(link, link_analysis,

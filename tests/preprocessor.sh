@@ -2449,6 +2449,18 @@ grep -q 'function-global-read-summary\[resolved\] function_global_effects:1:forw
 grep -q 'function-global-write-summary\[resolved\] function_global_effects:1:forward_write -> function_global_effects:0:effect_global' \
     "$tmp/function_global_effects.out"
 
+"$compiler" preprocess --dump-link-unit \
+    "$program_dir/recursive_global_effects.n" \
+    >"$tmp/recursive_global_effects.out" \
+    2>"$tmp/recursive_global_effects.err" || {
+    cat "$tmp/recursive_global_effects.err"
+    exit 1
+}
+grep -q 'function-global-read-write-summary\[resolved\] recursive_global_effects:1:first -> recursive_global_effects:0:shared' \
+    "$tmp/recursive_global_effects.out"
+grep -q 'function-global-read-write-summary\[resolved\] recursive_global_effects:1:second -> recursive_global_effects:0:shared' \
+    "$tmp/recursive_global_effects.out"
+
 "$compiler" lower --dump-ir --dump-link-unit \
     "$program_dir/lower_record_type.n00b" \
     >"$tmp/lower_record_type.ir" 2>"$tmp/lower_record_type.err" || {
