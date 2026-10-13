@@ -53073,7 +53073,20 @@ materialize_interface_module_symbols(locate_worker_context_t *loader,
             }
             parse_sym_entry_t *existing = parse_symtab_lookup_in(
                 scope, core_string_borrow(name, strlen(name)));
-            if (existing) continue;
+            if (existing && !is_function) continue;
+            bool already_materialized = false;
+            for (parse_sym_entry_t *prior = existing; is_function && prior;
+                 prior = prior->shadowed) {
+                if (prior->scope != scope) continue;
+                const char *qualified = parse_sym_binding(prior,
+                    CORE_STRING_STATIC("n00bb.interface-qualified-name"));
+                if (qualified && !strcmp(qualified,
+                                          declaration.qualified_name)) {
+                    already_materialized = true;
+                    break;
+                }
+            }
+            if (already_materialized) continue;
             parse_scope_t *saved = parse_symtab_current_scope(symtab,
                                                                namespace_name);
             parse_symtab_enter_scope(symtab, namespace_name, scope);
@@ -53087,6 +53100,17 @@ materialize_interface_module_symbols(locate_worker_context_t *loader,
             if (!symbol) {
                 if (failure) *failure = "could not add interface symbol";
                 return false;
+            }
+            if (is_function) {
+                core_string_t qualified = store_semantic_string(state,
+                    core_string_from_cstr(declaration.qualified_name));
+                if (!qualified.data || !parse_sym_set_binding(symbol,
+                        CORE_STRING_STATIC("n00bb.interface-qualified-name"),
+                        qualified.data)) {
+                    if (failure) *failure =
+                        "could not retain interface function identity";
+                    return false;
+                }
             }
             th_env_metadata_owner_t metadata_kind = is_function
                 ? TH_ENV_METADATA_FUNCTION
@@ -53165,6 +53189,9 @@ materialize_interface_module_symbols(locate_worker_context_t *loader,
                 }
             }
             else {
+                parse_sym_set_phases(symbol, PARSE_SYM_PHASE_BOTH,
+                                     PARSE_SYM_PHASE_NONE,
+                                     PARSE_SYM_PHASE_NONE);
                 if (declaration.type_shape_kind ==
                     TH_ENV_TYPE_SHAPE_VARIANT) {
                     core_list_t(th_arg) payloads = core_list_new(th_arg);

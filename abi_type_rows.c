@@ -609,6 +609,14 @@ n00bb_abi_type_variables_bind(n00bb_abi_type_index_t *index, th_ctx *types,
             row->typevar_ordinal = (uint32_t)next_ordinal++;
         }
     }
+    return true;
+}
+
+bool
+n00bb_abi_type_variables_validate(const n00bb_abi_type_identity_rows_t *rows,
+                                  const char **reason)
+{
+    if (!rows || !rows->rows) return false;
     for (size_t i = 1; i < rows->count; i++)
         if (rows->rows[i].kind == N00B_ABI_TYPE_VARIABLE
             && !rows->rows[i].typevar_owner_scope_index

@@ -1137,7 +1137,7 @@ append_imported_type_requirements(
         th_type *graph_type = n00bb_abi_type_index_at(index, i);
         parse_sym_entry_t *owner = graph_type
             ? type_owner(type_owner_context, graph_type) : nullptr;
-        if (!owner || !owner->decl_node) continue;
+        if (!owner || (!owner->decl_node && !owner->owner_unit)) continue;
         uint32_t declaration_index;
         if (!owner->type || !n00bb_abi_type_index_find(index, owner->type,
                 &declaration_index)) {
@@ -1153,12 +1153,13 @@ append_imported_type_requirements(
             return false;
         }
         if (declaration_index != i) continue;
-        const core_translation_unit_t *declaring_unit = nullptr;
+        const core_translation_unit_t *declaring_unit = owner->owner_unit;
         parse_token_stream_t *declaring_tokens = nullptr;
-        if (!node_source(source_context, owner->decl_node,
-                &declaring_unit, &declaring_tokens)
-            || !declaring_unit || !declaring_tokens
-            || declaring_unit == unit || !owner->name.data
+        if ((owner->decl_node
+                && (!node_source(source_context, owner->decl_node,
+                        &declaring_unit, &declaring_tokens)
+                    || !declaring_tokens))
+            || !declaring_unit || declaring_unit == unit || !owner->name.data
             || !owner->name.u8_bytes || !owner->phases) {
             core_diagnostics_report(core_translation_unit_diagnostics(
                 (core_translation_unit_t *)unit), (core_translation_unit_t *)unit,
@@ -1189,6 +1190,12 @@ append_imported_type_requirements(
         if (valid)
             valid = n00bb_abi_type_variables_bind_import(index,
                 type_context, owner, owner->type, (uint32_t)next,
+                types, &reason);
+        th_type *definition = valid
+            ? th_type_definition(type_context, owner->type) : nullptr;
+        if (valid && definition && definition != owner->type)
+            valid = n00bb_abi_type_variables_bind_import(index,
+                type_context, owner, definition, (uint32_t)next,
                 types, &reason);
         for (parse_sym_entry_t *member = (type->kind == N00B_ABI_TYPE_CALLBACK
                 || type->kind == N00B_ABI_TYPE_TRAIT) && owner->member_scope
@@ -1962,6 +1969,12 @@ n00bb_abi_emit_unit(
                     &type_rows, pool, requirements, &requirement_count,
                     N00B_ABI_SYMBOL_VARIABLE);
         }
+    }
+    if (valid && !n00bb_abi_type_variables_validate(&type_rows,
+                                                    &typevar_failure)) {
+        failed_stage = typevar_failure ? typevar_failure
+                                       : "type variable validation";
+        valid = false;
     }
     if (valid) {
         modules[1].static_storage = storage_rows.static_range;

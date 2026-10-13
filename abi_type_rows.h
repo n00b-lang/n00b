@@ -43,8 +43,7 @@ bool n00bb_abi_type_identity_rows_build(
 void n00bb_abi_type_identity_rows_release(
     n00bb_abi_type_identity_rows_t *rows);
 
-/* Assigns variable identities from cached declaration signatures. Unbound
- * provisional inference variables cannot be persisted. */
+/* Assigns variable identities from cached declaration signatures. */
 bool n00bb_abi_type_variables_bind(
     n00bb_abi_type_index_t *index, th_ctx *types,
     const n00bb_abi_decl_index_t *declarations,
@@ -55,6 +54,10 @@ bool n00bb_abi_type_variables_bind_import(
     const parse_sym_entry_t *symbol, th_type *signature,
     uint32_t requirement_index, n00bb_abi_type_identity_rows_t *rows,
     const char **reason);
+
+/* Run after both local and imported identities have been assigned. */
+bool n00bb_abi_type_variables_validate(
+    const n00bb_abi_type_identity_rows_t *rows, const char **reason);
 
 /* Adds TYPE component ranges to the shared U32 stream at stream_base. */
 bool n00bb_abi_type_components_build(
