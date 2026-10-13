@@ -590,20 +590,15 @@ collect_structural_aliases(const ir_value_t *value, value_set_t *work)
     return true;
 }
 
-ir_liveness_t
-ir_value_alias_liveness_after(const ir_value_t *value,
-                              const ir_instr_t *point)
+static bool
+collect_alias_closure(const ir_value_t *value, value_set_t *work)
 {
-    value_set_t work = {0};
     bool already_present = false;
-    if (!value || !value_set_add(&work, value, &already_present)) {
-        free(work.items);
-        return IR_LIVENESS_UNKNOWN;
-    }
+    if (!value || !value_set_add(work, value, &already_present)) return false;
 
     bool complete = true;
-    for (size_t i = 0; complete && i < work.count; i++) {
-        const ir_value_t *current = work.items[i];
+    for (size_t i = 0; complete && i < work->count; i++) {
+        const ir_value_t *current = work->items[i];
         bool analysis_complete = false;
         bool escapes = false;
         bool unresolved = false;
@@ -618,28 +613,52 @@ ir_value_alias_liveness_after(const ir_value_t *value,
             && !unresolved
             && annot_uint(current, "ir.alias_count", &aliases)
             && annot_uint(current, "ir.aliased_by_count", &aliased_by)
-            && collect_alias_edges(current, "alias", aliases, &work)
-            && collect_alias_edges(current, "aliased_by", aliased_by, &work)
-            && collect_inverse_alias_edges(current, &work)
-            && collect_structural_aliases(current, &work);
+            && collect_alias_edges(current, "alias", aliases, work)
+            && collect_alias_edges(current, "aliased_by", aliased_by, work)
+            && collect_inverse_alias_edges(current, work)
+            && collect_structural_aliases(current, work);
     }
+    return complete;
+}
 
-    if (!complete) {
-        free(work.items);
-        return IR_LIVENESS_UNKNOWN;
-    }
-
+static ir_liveness_t
+alias_liveness_after_closure(const value_set_t *work,
+                             const ir_instr_t *point)
+{
     bool unknown = false;
-    for (size_t i = 0; i < work.count; i++) {
-        ir_liveness_t state = ir_value_liveness_after(work.items[i], point);
-        if (state == IR_LIVENESS_LIVE) {
-            free(work.items);
-            return IR_LIVENESS_LIVE;
-        }
+    for (size_t i = 0; i < work->count; i++) {
+        ir_liveness_t state = ir_value_liveness_after(work->items[i], point);
+        if (state == IR_LIVENESS_LIVE) return IR_LIVENESS_LIVE;
         unknown |= state == IR_LIVENESS_UNKNOWN;
     }
-    free(work.items);
     return unknown ? IR_LIVENESS_UNKNOWN : IR_LIVENESS_DEAD;
+}
+
+static ir_liveness_t
+alias_liveness_on_edge_closure(const value_set_t *work,
+                               const ir_block_t *from,
+                               const ir_block_t *to)
+{
+    bool unknown = false;
+    for (size_t i = 0; i < work->count; i++) {
+        ir_liveness_t state = ir_value_liveness_on_edge(work->items[i], from,
+                                                        to);
+        if (state == IR_LIVENESS_LIVE) return IR_LIVENESS_LIVE;
+        unknown |= state == IR_LIVENESS_UNKNOWN;
+    }
+    return unknown ? IR_LIVENESS_UNKNOWN : IR_LIVENESS_DEAD;
+}
+
+ir_liveness_t
+ir_value_alias_liveness_after(const ir_value_t *value,
+                              const ir_instr_t *point)
+{
+    value_set_t work = {0};
+    bool complete = collect_alias_closure(value, &work);
+    ir_liveness_t result = complete
+        ? alias_liveness_after_closure(&work, point) : IR_LIVENESS_UNKNOWN;
+    free(work.items);
+    return result;
 }
 
 ir_liveness_t
@@ -648,58 +667,21 @@ ir_value_alias_liveness_on_edge(const ir_value_t *value,
                                 const ir_block_t *to)
 {
     value_set_t work = {0};
-    bool already_present = false;
-    if (!value || !value_set_add(&work, value, &already_present)) {
-        free(work.items);
-        return IR_LIVENESS_UNKNOWN;
-    }
-
-    bool complete = true;
-    for (size_t i = 0; complete && i < work.count; i++) {
-        const ir_value_t *current = work.items[i];
-        bool analysis_complete = false;
-        bool escapes = false;
-        bool unresolved = false;
-        uint64_t aliases = 0;
-        uint64_t aliased_by = 0;
-        complete = annot_bool(current, "ir.alias_analysis_complete",
-                              &analysis_complete)
-            && analysis_complete
-            && annot_bool(current, "ir.lifetime_escapes", &escapes)
-            && !escapes
-            && annot_bool(current, "ir.alias_unresolved", &unresolved)
-            && !unresolved
-            && annot_uint(current, "ir.alias_count", &aliases)
-            && annot_uint(current, "ir.aliased_by_count", &aliased_by)
-            && collect_alias_edges(current, "alias", aliases, &work)
-            && collect_alias_edges(current, "aliased_by", aliased_by, &work)
-            && collect_inverse_alias_edges(current, &work)
-            && collect_structural_aliases(current, &work);
-    }
-    if (!complete) {
-        free(work.items);
-        return IR_LIVENESS_UNKNOWN;
-    }
-
-    bool unknown = false;
-    for (size_t i = 0; i < work.count; i++) {
-        ir_liveness_t state = ir_value_liveness_on_edge(work.items[i], from,
-                                                        to);
-        if (state == IR_LIVENESS_LIVE) {
-            free(work.items);
-            return IR_LIVENESS_LIVE;
-        }
-        unknown |= state == IR_LIVENESS_UNKNOWN;
-    }
+    bool complete = collect_alias_closure(value, &work);
+    ir_liveness_t result = complete
+        ? alias_liveness_on_edge_closure(&work, from, to)
+        : IR_LIVENESS_UNKNOWN;
     free(work.items);
-    return unknown ? IR_LIVENESS_UNKNOWN : IR_LIVENESS_DEAD;
+    return result;
 }
 
 static ir_liveness_t
-alias_liveness_at_block_entry(const ir_value_t *value,
+alias_liveness_at_block_entry(const value_set_t *aliases,
+                              bool alias_complete,
                               const ir_func_t *function,
                               const ir_block_t *block)
 {
+    if (!alias_complete) return IR_LIVENESS_UNKNOWN;
     bool found_predecessor = false;
     bool found_live = false;
     bool found_unknown = false;
@@ -709,8 +691,8 @@ alias_liveness_at_block_entry(const ir_value_t *value,
         for (uint32_t s = 0; terminator && s < ir_succ_count(terminator); s++) {
             if (ir_succ_at(terminator, s) != block) continue;
             found_predecessor = true;
-            ir_liveness_t state = ir_value_alias_liveness_on_edge(
-                value, predecessor, (ir_block_t *)block);
+            ir_liveness_t state = alias_liveness_on_edge_closure(
+                aliases, predecessor, (ir_block_t *)block);
             found_live |= state == IR_LIVENESS_LIVE;
             found_unknown |= state == IR_LIVENESS_UNKNOWN;
         }
@@ -789,20 +771,26 @@ ir_value_visit_lifetime_endpoints(
         }
     }
 
+    value_set_t aliases = {0};
+    bool alias_complete = collect_alias_closure(value, &aliases);
     for (uint32_t b = 0; b < function->n_blocks; b++) {
         ir_block_t *block = function->blocks[b];
         ir_instr_t *terminator = ir_block_terminator(block);
         for (uint32_t i = 0; i < block->n_instrs; i++) {
             ir_instr_t *point = block->instrs[i];
-            ir_liveness_t after = ir_value_alias_liveness_after(value, point);
+            ir_liveness_t after = alias_complete
+                ? alias_liveness_after_closure(&aliases, point)
+                : IR_LIVENESS_UNKNOWN;
             if (after != IR_LIVENESS_DEAD) continue;
             bool starts_here = value_starts_at_instruction(
                 value, point, local_starts_at_entry);
             bool is_entry_parameter = value->kind == IR_VAL_PARAM
                 && block == entry && i == 0;
             ir_liveness_t before = i
-                ? ir_value_alias_liveness_after(value, block->instrs[i - 1])
-                : alias_liveness_at_block_entry(value, function, block);
+                ? alias_liveness_after_closure(&aliases,
+                    block->instrs[i - 1])
+                : alias_liveness_at_block_entry(&aliases, alias_complete,
+                    function, block);
             bool terminator_fallback = point == terminator
                 && before == IR_LIVENESS_UNKNOWN;
             if (!starts_here && !is_entry_parameter
@@ -812,27 +800,35 @@ ir_value_visit_lifetime_endpoints(
                     .function = function,
                     .binding = (ir_value_t *)value,
                     .point = point,
-                })) return false;
+                })) {
+                free(aliases.items);
+                return false;
+            }
         }
     }
 
     for (uint32_t b = 0; b < function->n_blocks; b++) {
         ir_block_t *block = function->blocks[b];
         ir_instr_t *terminator = ir_block_terminator(block);
-        if (ir_value_alias_liveness_after(value, terminator)
+        if (!alias_complete
+            || alias_liveness_after_closure(&aliases, terminator)
             != IR_LIVENESS_LIVE) continue;
         for (uint32_t s = 0; s < ir_succ_count(terminator); s++) {
             ir_block_t *target = ir_succ_at(terminator, s);
-            if (ir_value_alias_liveness_on_edge(value, block, target)
+            if (alias_liveness_on_edge_closure(&aliases, block, target)
                 != IR_LIVENESS_DEAD) continue;
             if (!visitor(context, (ir_lifetime_endpoint_t){
                     .function = function,
                     .binding = (ir_value_t *)value,
                     .from = block,
                     .to = target,
-                })) return false;
+                })) {
+                free(aliases.items);
+                return false;
+            }
         }
     }
+    free(aliases.items);
     return true;
 }
 
