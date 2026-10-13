@@ -164,7 +164,9 @@ clone_type_graph(th_ctx *destination, const th_type *source,
     if (!copy) return nullptr;
     memset(copy, 0, sizeof(*copy));
     copy->kind = source->kind;
-    core_list_push(*seen, ((th_clone_entry_t){source, copy}));
+    core_list_push(*seen, ((th_clone_entry_t){
+        .source = source, .copy = copy,
+    }));
     switch (source->kind) {
     case TH_NAMED:
         copy->named = source->named;
@@ -1229,6 +1231,36 @@ bool th_encode(th_ctx *ctx, th_type *t, const uint8_t **out, size_t *len)
 {
     th_normalize(t);
     ctx->scratch.byte_len = 0;
+
+    th_type *resolved = th_resolve(t);
+    if (resolved && (resolved->kind == TH_BITINT
+                     || resolved->kind == TH_BOUND
+                     || (resolved->kind == TH_NAMED
+                         && !resolved->named.nargs))) {
+        core_buffer_t *encoded = &ctx->scratch;
+        u8(encoded, (uint8_t)(resolved->kind + 1));
+        switch (resolved->kind) {
+        case TH_NAMED:
+            u8(encoded, resolved->named.is_variant ? 1 : 0);
+            if (!name(ctx, encoded, resolved->named.name,
+                      resolved->named.nlen)) return false;
+            u64(encoded, 0);
+            break;
+        case TH_BITINT:
+            u64(encoded, resolved->bitint.width);
+            u8(encoded, resolved->bitint.flavor);
+            break;
+        case TH_BOUND:
+            u64(encoded, resolved->bound.distance);
+            u64(encoded, resolved->bound.position);
+            break;
+        default:
+            break;
+        }
+        *out = (const uint8_t *)encoded->data;
+        *len = encoded->byte_len;
+        return true;
+    }
 
     th_enc e = {.ctx = ctx, .ok = true};
 
