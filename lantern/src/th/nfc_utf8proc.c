@@ -13,6 +13,18 @@ static bool nfc(void *state, const char *in, size_t inlen, const char **out,
                 size_t *outlen)
 {
     (void)state;
+    bool ascii = true;
+    for (size_t i = 0; i < inlen; i++) {
+        if ((unsigned char)in[i] >= 0x80) {
+            ascii = false;
+            break;
+        }
+    }
+    if (ascii) {
+        *out = in;
+        *outlen = inlen;
+        return true;
+    }
     nfc_state        *st = &g_nfc;
     utf8proc_uint8_t *r  = nullptr;
     utf8proc_ssize_t  n  = utf8proc_map((const utf8proc_uint8_t *)in,

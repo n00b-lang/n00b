@@ -1209,6 +1209,12 @@ static void norm_walk(th_norm *s, th_type *root)
 
 void th_normalize(th_type *t)
 {
+    th_type *resolved = th_resolve(t);
+    if (!resolved) return;
+    if (resolved->kind == TH_BITINT || resolved->kind == TH_BOUND
+        || (resolved->kind == TH_NAMED && !resolved->named.nargs))
+        return;
+
     th_ctx  tmp = {0};
     th_norm s   = {.ctx = &tmp};
 
