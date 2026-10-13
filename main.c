@@ -52278,10 +52278,24 @@ process_locate_job(locate_worker_context_t *context, core_work_job_t *job)
     }
     core_module_spec_t resolved = {0};
     core_source_file_t source = {0};
-    core_module_resolve_status_t status = n00bb_locate_operand(
-        context->resolver, operand, &resolved, &source);
+    const core_module_spec_t *module = core_work_job_module(job);
+    bool logical_import = !root_input && module && operand
+        && strlen(operand) == module->identifier.u8_bytes
+        && !memcmp(operand, module->identifier.data,
+                   module->identifier.u8_bytes);
+    core_module_resolve_status_t status = CORE_MODULE_NOT_FOUND;
+    if (logical_import
+        && make_interface_module_source(context, module, &source)) {
+        if (core_module_spec_init(&resolved, module->identifier))
+            status = CORE_MODULE_RESOLVED;
+        else {
+            core_source_file_release(&source);
+            status = CORE_MODULE_RESOLVE_ERROR;
+        }
+    }
+    else status = n00bb_locate_operand(context->resolver, operand,
+                                      &resolved, &source);
     if (status == CORE_MODULE_NOT_FOUND && !root_input) {
-        const core_module_spec_t *module = core_work_job_module(job);
         if (module && make_interface_module_source(context, module, &source)) {
             core_module_spec_release(&resolved);
             if (core_module_spec_init(&resolved, module->identifier))
@@ -53101,6 +53115,8 @@ materialize_interface_module_symbols(locate_worker_context_t *loader,
                 if (declaration.type_shape &&
                     declaration.type_shape_kind !=
                         TH_ENV_TYPE_SHAPE_ALIAS &&
+                    declaration.type_shape_kind !=
+                        TH_ENV_TYPE_SHAPE_ENUM &&
                     !th_type_define(state->types, symbol->type,
                                     declaration.type_shape)) {
                     if (failure) *failure =
