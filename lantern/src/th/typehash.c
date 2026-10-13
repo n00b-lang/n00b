@@ -314,7 +314,7 @@ clone_type_graph(th_ctx *destination, const th_type *source,
         copy->var.has_index = source->var.has_index;
         copy->var.name = clone_string(destination, source->var.name);
         copy->var.ref = clone_type_graph(destination, source->var.ref, seen);
-        copy->var.cons = core_list_new(th_constraint);
+        copy->var.cons = (core_list_t(th_constraint)){0};
         for (size_t i = 0; i < source->var.cons.len; i++) {
             th_constraint constraint;
             if (!clone_constraint_graph(destination,
