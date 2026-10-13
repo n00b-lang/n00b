@@ -4,12 +4,14 @@
 #include "private/parse/grammar.h"
 #include "scanner/scan_builtins.h"
 #include "scanner/scanner.h"
+#include "scanner/tokenizer.h"
 #include "unicode/identifiers.h"
 #include "lib/alloc.h"
 #include "lib/buffer.h"
 
 #include "annot_bnf.h"
 #include "infer_bnf.h"
+#include "lex_bnf.h"
 
 #include <pthread.h>
 #include <string.h>
@@ -17,6 +19,7 @@
 static parse_grammar_t *grammar;
 static _Thread_local parse_grammar_t *building;
 static pthread_mutex_t grammar_lock = PTHREAD_MUTEX_INITIALIZER;
+static bool annot_scan(parse_scanner_t *s);
 
 bool
 parse_annot_building(void)
@@ -112,12 +115,19 @@ parse_annot_grammar(void)
     parse_grammar_t *g = parse_grammar_new();
 
     parse_grammar_set_error_recovery(g, false);
+    scan_tokenizer_register(CORE_STRING_STATIC("annotation-bootstrap"),
+                            annot_scan);
+    scan_grammar_set_tokenizer(g,
+                               CORE_STRING_STATIC("annotation-bootstrap"));
 
     building = g;
 
     bool ok = parse_bnf_load(CORE_STRING_STATIC(ANNOT_BNF),
                            CORE_STRING_STATIC("a-ref"),
                            g);
+
+    ok = ok && parse_bnf_load(CORE_STRING_STATIC(LEX_BNF),
+                              CORE_STRING_STATIC("lex-file"), g);
 
     ok = ok
       && load_hook(g,
@@ -201,7 +211,15 @@ after_tick(parse_scanner_t *s)
 static bool
 annot_scan(parse_scanner_t *s)
 {
-    scan_skip_whitespace(s);
+    for (;;) {
+        scan_skip_whitespace(s);
+        if (scan_peek(s, 0) != '#') {
+            break;
+        }
+        while (!scan_at_eof(s) && scan_peek(s, 0) != '\n') {
+            scan_advance(s);
+        }
+    }
 
     if (scan_at_eof(s)) {
         return false;

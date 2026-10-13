@@ -232,7 +232,6 @@ main(void)
           load_ok("<top> ::= \"b\"\n", "top"));
 
     round_trips("toy.bnf", "prog");
-    round_trips("../../grammars/n00b.bnf", "module");
     round_trips("../../grammars/c_ncc.bnf", "translation_unit");
 
     return report("fe bnf-print");

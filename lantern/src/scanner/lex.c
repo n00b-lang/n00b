@@ -1,13 +1,16 @@
 #include "scanner/lex.h"
+#include "parse/annotation.h"
 #include "lib/alloc.h"
 #include "lib/list.h"
 #include "private/parse/grammar.h"
+#include "private/scanner/lex_decl.h"
 #include "private/parse/unicode_class.h"
 #include "private/scanner/lex_program.h"
 #include "private/scanner/unicode_profile.h"
 #include "scanner/token_stream.h"
 #include "scanner/tokenizer.h"
 #include "unicode/encoding.h"
+#include "default_lex.h"
 
 #include <pthread.h>
 #include <stddef.h>
@@ -1513,22 +1516,6 @@ void scan_lex_free(scan_lex_t *lex) {
     return;
   }
 
-  if (lex->image_owner) {
-    if (--lex->refs) {
-      return;
-    }
-    lex_image_owner_t *owner = lex->image_owner;
-    for (size_t i = 0; i < lex->embed_count; i++) {
-      scan_lex_free(lex->embed_programs[i]);
-    }
-    scan_unicode_profile_free(lex->identifier_profile);
-    if (!--owner->live_programs) {
-      core_free(owner->storage);
-      core_free(owner);
-    }
-    return;
-  }
-
   if (--lex->refs) {
     return;
   }
@@ -2037,10 +2024,6 @@ static size_t bucket_count(const lex_bucket_t buckets[256]) {
 }
 
 static size_t program_resident_bytes(const scan_lex_t *lex) {
-  if (lex->image_owner) {
-    return lex->image_owner->storage_bytes;
-  }
-
   size_t bytes = sizeof(*lex);
 #define LIST_BYTES(field) bytes += lex->field.cap * sizeof(*lex->field.data)
   LIST_BYTES(term_nodes);
@@ -2326,15 +2309,21 @@ const scan_lex_spec_t *scan_grammar_lex(parse_grammar_t *g) {
   }
 
   if (!g->lex_resolved) {
-    const scan_lex_spec_t *built = scan_lex_spec_from_grammar(g);
-
     g->lex_resolved = true;
-
-    if (built) {
-      g->lex_spec = built;
-      g->lex_spec_owned = true;
-    } else if (!scan_lex_build_error()) {
+    if (parse_grammar_find_annot(g, PARSE_ANNOT_LEXER)) {
+      scan_lex_note_unresolved_import();
+    } else {
       g->lex_spec = scan_lex_for(scan_grammar_tokenizer(g));
+      if (!g->lex_spec && core_string_eq(scan_grammar_tokenizer(g),
+                           CORE_STRING_STATIC(SCAN_TOKENIZER_DEFAULT))) {
+        core_list_t(scan_lex_decl_t) decls = core_list_new(scan_lex_decl_t);
+        if (scan_lex_parse_file(CORE_STRING_STATIC(DEFAULT_LEX),
+                                CORE_STRING_STATIC("default.lex"), &decls)) {
+          g->lex_spec = scan_lex_spec_from_decls(g, &decls);
+          g->lex_spec_owned = g->lex_spec != nullptr;
+        }
+        scan_lex_decls_free(&decls);
+      }
     }
   }
 
@@ -2342,8 +2331,8 @@ const scan_lex_spec_t *scan_grammar_lex(parse_grammar_t *g) {
 }
 
 scan_lex_t *scan_grammar_lex_compiled(parse_grammar_t *g) {
-  pthread_mutex_lock(&lex_compile_lock);
   const scan_lex_spec_t *spec = scan_grammar_lex(g);
+  pthread_mutex_lock(&lex_compile_lock);
 
   if (!spec) {
     pthread_mutex_unlock(&lex_compile_lock);

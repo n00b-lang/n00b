@@ -9,6 +9,8 @@
 #include "scanner/token_stream.h"
 #include "harness.h"
 
+static bool produced[IR_DIAG_COUNT];
+
 typedef struct {
     size_t enters;
     size_t exits;
@@ -671,6 +673,27 @@ main(void)
           tree_sum.status == IR_LOWER_VALUE && tree_sum.value
               && tree_sum.value->def
               && tree_sum.value->def->op == IR_OP_ADD);
+    if (right_node) {
+        parse_sym_entry_t unbound_symbol = {
+            .name = CORE_STRING_STATIC("unbound"), .type = i32,
+        };
+        parse_sym_entry_t *saved = core_tree_node_value(right_node).sym;
+        ir_diags_t *unbound_diags = ir_diags_new(ctx, nullptr);
+        ir_lower_context_t unbound_context = lower;
+        unbound_context.diagnostics = unbound_diags;
+        core_tree_node_value(right_node).sym = &unbound_symbol;
+        ir_lower_result_t unbound = ir_lower_tree(lowerer, &unbound_context,
+                                                  grammar, right_node);
+        core_tree_node_value(right_node).sym = saved;
+        const ir_diag_t *diagnostic = ir_diags_at(unbound_diags, 0);
+        check("an unbound reference fails without emitting a value",
+              unbound.status == IR_LOWER_FAILED && !unbound.value);
+        check("an unbound reference reports its own diagnostic",
+              ir_diags_count(unbound_diags) == 1 && diagnostic
+                  && diagnostic->code == IR_DIAG_UNDEFINED_SYMBOL);
+        produced[IR_DIAG_UNDEFINED_SYMBOL] = diagnostic
+            && diagnostic->code == IR_DIAG_UNDEFINED_SYMBOL;
+    }
     check("emitted instructions retain the source tree span",
           tree_sum.value && ir_span_known(tree_sum.value->def->span)
               && tree_sum.value->def->span.file == file_id
@@ -1052,6 +1075,7 @@ main(void)
     parse_grammar_free(grammar);
 
     test_nonterminal_lowering_callbacks();
+    dump_produced_codes("produced-codes-lower.txt", produced);
     ir_ctx_free(ctx);
     return report("IR lowering");
 }

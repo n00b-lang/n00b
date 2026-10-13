@@ -96,6 +96,7 @@ const ir_diag_t *ir_diags_at(ir_diags_t *d, uint32_t i);
 bool             ir_diags_failed(const ir_diags_t *d);
 uint32_t         ir_diags_count_of(const ir_diags_t *d, ir_severity_t sev);
 bool             ir_diags_merge(ir_diags_t *dst, ir_diags_t *src);
+uint32_t         ir_import_type_errors(ir_module_t *m, ir_diags_t *d);
 
 void             ir_diags_sort(ir_diags_t *d);
 

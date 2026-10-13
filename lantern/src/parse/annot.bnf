@@ -69,18 +69,6 @@
         | %"alignof" %"(" <type> %")"
         | %"offsetof" %"(" <type> %"," %IDENTIFIER %")"
 
-<a-lex> ::= <lex-opts>
-
-<lex-opts> ::= <lex-opt> | <lex-opt> %"," <lex-opts>
-
-<lex-opt> ::= <tag> | <lex-flag> | <lex-call>
-
-<lex-flag> ::= %IDENTIFIER
-
-<lex-call> ::= %IDENTIFIER %"(" <lex-args> %")"
-
-<lex-args> ::= <tag> | <tag> %"," <lex-args>
-
 <pred> ::= %IDENTIFIER | <pred-call>
 
 <pred-call> ::= %IDENTIFIER %"(" %")"

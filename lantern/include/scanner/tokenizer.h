@@ -5,7 +5,6 @@
 
 #define SCAN_TOKENIZER_DEFAULT "text"
 
-void          scan_tokenizers_register_builtin(void);
 
 bool          scan_tokenizer_register(core_string_t name, parse_scan_cb_t fn);
 parse_scan_cb_t scan_tokenizer_for(core_string_t name);

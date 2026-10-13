@@ -58,7 +58,6 @@ struct ir_module_t {
     parse_tree_t   *tree;
     parse_grammar_t      *tree_grammar;
     parse_symtab_t       *symtab;
-    parse_annot_result_t *tree_annots;
 
     ir_typeslot_t *types;
     size_t         n_types;

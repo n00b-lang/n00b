@@ -475,7 +475,11 @@ test_notrivia_clears_it(void)
     }
 
     parse_tree_t   *tree = parse_pwz_get_tree(p);
-    parse_annot_result_t *r    = parse_annot_walk_tree(g, tree, nullptr, nullptr);
+    parse_annot_result_t *r = parse_annot_result_new(nullptr);
+    parse_tree_walk_t *walk = parse_tree_walk_new(g, r);
+    parse_annot_register(walk, r, nullptr, nullptr);
+    parse_tree_walk_run(walk, tree);
+    parse_tree_walk_free(walk);
 
     parse_tree_t *b   = core_tree_child(tree, 1);
     parse_token_info_t *tok = b ? parse_tree_find_first_terminal(b) : nullptr;

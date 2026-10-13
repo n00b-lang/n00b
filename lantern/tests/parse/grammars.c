@@ -32,7 +32,6 @@ static const struct {
     {"typescript.bnf", "source-file",            "s.ts"   },
     {"c_ncc.bnf",      "translation_unit",       "s.c"    },
     {"bce.bnf",        "translation_unit",       "s.bce"  },
-    {"n00b.bnf",       "module",                 "s.n00b" },
 };
 
 static const struct {
@@ -55,7 +54,6 @@ static const struct {
     {"swift.bnf",      "swift.lex"     },
     {"typescript.bnf", "typescript.lex"},
     {"json.bnf",       "json.lex"      },
-    {"n00b.bnf",       "n00b.lex"      },
 };
 
 static void test_external_lexer_files_stay_separate(const char *dir)
@@ -139,9 +137,6 @@ static void test_external_lexers_cover_distinct_recipe_families(const char *dir)
         {"typescript.bnf", "source-file", "/x/g; `x${y}` ",
          {"REGEX_LIT", "TEMPLATE_HEAD", "TEMPLATE_TAIL"}},
         {"json.bnf", "json", "{\"x\": 1}", {nullptr}},
-        {"n00b.bnf", "module",
-         "ffi[- body -] 0x1f \"line\\n\\u0041\" '\\x41' ",
-         {"EMBED", "HEX_LIT", "STRING_LIT", "CHAR_LIT"}},
     };
     char what[256];
 
@@ -201,7 +196,6 @@ static void test_character_literal_width_rules(const char *dir)
         {"go.bnf",     "source-file",           "'ab' ", false},
         {"java.bnf",   "compilation-unit",      "'ab' ", false},
         {"kotlin.bnf", "kotlin-file",           "'ab' ", false},
-        {"n00b.bnf",   "module",                "'ab' ", false},
         {"rust.bnf",   "crate",                 "'ab' ", false},
     };
     char what[256];
@@ -387,8 +381,7 @@ static void test_every_grammar_tokenizes_its_own_language(const char *dir,
 
         check(what, unmapped == 0);
 
-        if (!strcmp(CORPUS[i].file, "n00b.bnf")
-            || !strcmp(CORPUS[i].file, "json.bnf")) {
+        if (!strcmp(CORPUS[i].file, "json.bnf")) {
             scan_stream_reset(ts);
 
             parse_pwz_parser_t *parser = parse_pwz_new_for_start(

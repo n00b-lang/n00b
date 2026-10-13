@@ -487,7 +487,7 @@ static void test_lexer_files_are_relative_to_the_grammar(void) {
   assert(!parse_bnf_load_file("lexer_invalid.bnf", CORE_STRING_STATIC("file"),
                               invalid));
   assert(parse_bnf_error() != nullptr);
-  assert(strstr(parse_bnf_error(), "only lexical declarations") != nullptr);
+  assert(strstr(parse_bnf_error(), "syntax error") != nullptr);
   parse_grammar_free(invalid);
 
   parse_grammar_t *malformed = parse_grammar_new();
@@ -496,7 +496,7 @@ static void test_lexer_files_are_relative_to_the_grammar(void) {
                               malformed));
   assert(parse_bnf_error() != nullptr);
   assert(strstr(parse_bnf_error(), "lexer_malformed.lex") != nullptr);
-  assert(strstr(parse_bnf_error(), "not valid BNF") != nullptr);
+  assert(strstr(parse_bnf_error(), "syntax error") != nullptr);
   parse_grammar_free(malformed);
 
   parse_grammar_t *cycle = parse_grammar_new();
@@ -533,27 +533,24 @@ static void test_lexer_files_are_relative_to_the_grammar(void) {
 
   parse_grammar_t *removed = parse_grammar_new();
 
-  assert(parse_bnf_load_file("lexer_remove_used.bnf",
-                             CORE_STRING_STATIC("file"), removed));
-  assert(scan_grammar_lex(removed) == nullptr);
+  assert(!parse_bnf_load_file("lexer_remove_used.bnf",
+                              CORE_STRING_STATIC("file"), removed));
   assert(scan_lex_build_error() != nullptr);
   assert(strstr(scan_lex_build_error(), "grammar uses") != nullptr);
   parse_grammar_free(removed);
 
   parse_grammar_t *unknown = parse_grammar_new();
 
-  assert(parse_bnf_load_file("lexer_unknown_set.bnf",
-                             CORE_STRING_STATIC("file"), unknown));
-  assert(scan_grammar_lex(unknown) == nullptr);
+  assert(!parse_bnf_load_file("lexer_unknown_set.bnf",
+                              CORE_STRING_STATIC("file"), unknown));
   assert(scan_lex_build_error() != nullptr);
   assert(strstr(scan_lex_build_error(), "unknown set 'missing'") != nullptr);
   parse_grammar_free(unknown);
 
   parse_grammar_t *package_error = parse_grammar_new();
 
-  assert(parse_bnf_load_file("lexer_package_error.bnf",
-                             CORE_STRING_STATIC("file"), package_error));
-  assert(scan_grammar_lex(package_error) == nullptr);
+  assert(!parse_bnf_load_file("lexer_package_error.bnf",
+                              CORE_STRING_STATIC("file"), package_error));
   assert(scan_lex_build_error() != nullptr);
   assert(strstr(scan_lex_build_error(), "remove absent operator") != nullptr);
   assert(strstr(scan_lex_build_error(), "lexer_package_error.lex") != nullptr);

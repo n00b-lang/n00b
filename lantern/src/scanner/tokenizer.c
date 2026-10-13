@@ -22,24 +22,17 @@ core_list_decl(tokenizer_t);
 static core_list_t(tokenizer_t) registry;
 static pthread_once_t          registry_once = PTHREAD_ONCE_INIT;
 static pthread_mutex_t         registry_lock = PTHREAD_MUTEX_INITIALIZER;
-static _Thread_local bool      seeding_registry;
 
 static void
 initialize_registry(void)
 {
-    seeding_registry = true;
     registry = core_list_new(tokenizer_t);
-
-    scan_tokenizers_register_builtin();
-    seeding_registry = false;
 }
 
 static void
 seed(void)
 {
-    if (!seeding_registry) {
-        pthread_once(&registry_once, initialize_registry);
-    }
+    pthread_once(&registry_once, initialize_registry);
 }
 
 static tokenizer_t *
@@ -143,7 +136,9 @@ scan_tokenizer_for(core_string_t name)
 
     pthread_mutex_unlock(&registry_lock);
 
-    return fn;
+    return fn ? fn : (core_string_eq(name,
+                                    CORE_STRING_STATIC(SCAN_TOKENIZER_DEFAULT))
+                           ? scan_lex_scan : nullptr);
 }
 
 size_t

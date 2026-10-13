@@ -81,7 +81,11 @@ int main(int argc, char **argv)
     ir_ctx_t *ctx   = ir_ctx_new();
     th_ctx   *types = ir_ctx_types(ctx);
 
-    parse_annot_result_t *r = parse_annot_walk_tree(g, tree, types, nullptr);
+    parse_annot_result_t *r = parse_annot_result_new(nullptr);
+    parse_tree_walk_t *walk = parse_tree_walk_new(g, r);
+    parse_annot_register(walk, r, types, nullptr);
+    parse_tree_walk_run(walk, tree);
+    parse_tree_walk_free(walk);
 
     check("the annotation walk produces a result", r != nullptr);
 
@@ -163,6 +167,48 @@ int main(int argc, char **argv)
           ir_module_symtab(m) != nullptr);
     check("and reaches the one type universe",
           ir_module_types(m) == types);
+
+    ir_global_t *old_global = ir_global_add(m, "old", want(types, "int"));
+    ir_func_t *old_function = ir_func_add(m, "old_function",
+        th_func(types, want(types, "int"), nullptr, 0, nullptr, nullptr, 0),
+        IR_LINK_INTERNAL);
+    parse_sym_entry_t *old_symbol = parse_symtab_add(ir_module_symtab(m),
+        S(""), S("old_symbol"), PARSE_SYM_VARIABLE, tree);
+    ir_module_set_span(m, (ir_span_t){.file = 7});
+    bool old_annotation = ir_annot_set(ctx, ir_module_annots(m),
+        (ir_annot_t){.key = "old.tree.note", .kind = IR_ANNOT_BOOL,
+                     .b = true});
+    ir_module_establish(m, IR_PROP_SCOPED | IR_PROP_SYMBOLS
+                              | IR_PROP_CFLOW | IR_PROP_TREE_TYPED);
+    parse_tree_t *second_tree = core_tree_child(tree, 0);
+    check("the replacement tree is distinct", second_tree != nullptr
+                                          && second_tree != tree);
+    ir_module_set_tree(m, g, second_tree);
+    check("replacing a tree drops derived properties and IR",
+          ir_module_props(m) == IR_PROP_TREE
+              && ir_module_tree(m) == second_tree
+              && ir_global_find(m, "old") == nullptr
+              && ir_global_count(m) == 0
+              && ir_func_find(m, "old_function") == nullptr
+              && ir_func_count(m) == 0
+              && ir_module_span(m).file == -1
+              && ir_annot_get(ir_module_annots(m), "old.tree.note") == nullptr
+              && parse_symtab_lookup_scoped(ir_module_symtab(m), nullptr,
+                  S(""), S("old_symbol")) == nullptr);
+    check("the replacement can define the old name afresh",
+          old_global && ir_global_add(m, "old", want(types, "int"))
+              != nullptr && old_function && old_symbol && old_annotation);
+    bool replacement_annotation = ir_annot_set(ctx, ir_module_annots(m),
+        (ir_annot_t){.key = "replacement.tree.note", .kind = IR_ANNOT_BOOL,
+                     .b = true});
+    ir_module_set_tree(m, g, nullptr);
+    check("clearing a tree drops its IR and grammar",
+          ir_module_props(m) == 0 && ir_module_tree(m) == nullptr
+              && ir_module_grammar(m) == nullptr
+              && ir_global_find(m, "old") == nullptr
+              && replacement_annotation
+              && ir_annot_get(ir_module_annots(m),
+                              "replacement.tree.note") == nullptr);
 
     parse_tree_t *decl = nullptr;
 

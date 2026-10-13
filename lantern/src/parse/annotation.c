@@ -90,24 +90,6 @@ parse_annot_clone(const parse_annotation_t *a)
         }
     }
 
-    if (core_list_len(a->lex_opts) > 0) {
-        c->lex_opts = core_list_new(parse_lex_opt_t);
-
-        for (size_t i = 0; i < core_list_len(a->lex_opts); i++) {
-            parse_lex_opt_t s = a->lex_opts.data[i];
-            parse_lex_opt_t d = {
-                .name = core_string_dup(s.name),
-                .args = core_list_new(core_string_t),
-            };
-
-            for (size_t j = 0; j < core_list_len(s.args); j++) {
-                core_list_push(d.args, core_string_dup(s.args.data[j]));
-            }
-
-            core_list_push(c->lex_opts, d);
-        }
-    }
-
     c->val_ref.name         = core_string_dup(a->val_ref.name);
     c->name_ref.name        = core_string_dup(a->name_ref.name);
     c->type_ref.name        = core_string_dup(a->type_ref.name);
@@ -171,19 +153,6 @@ parse_annot_free(parse_annotation_t *a)
     for (size_t i = 0; i < core_list_len(a->emit_operands); i++)
         core_free(a->emit_operands.data[i].name.data);
     core_list_free(a->emit_operands);
-
-    for (size_t i = 0; i < core_list_len(a->lex_opts); i++) {
-        parse_lex_opt_t *o = &a->lex_opts.data[i];
-
-        for (size_t j = 0; j < core_list_len(o->args); j++) {
-            core_free(o->args.data[j].data);
-        }
-
-        core_list_free(o->args);
-        core_free(o->name.data);
-    }
-
-    core_list_free(a->lex_opts);
 
     core_free(a);
 }

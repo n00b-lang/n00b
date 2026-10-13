@@ -6,6 +6,7 @@
 #include "parse/pwz.h"
 #include "private/parse/annot_grammar.h"
 #include "private/parse/grammar.h"
+#include "private/scanner/lex_decl.h"
 #include "scanner/scan_builtins.h"
 #include "scanner/scanner.h"
 #include "scanner/token_stream.h"
@@ -1005,6 +1006,8 @@ static void *bnf_walk_syntax(parse_nt_node_t *pn, void *children, void *thunk) {
 static parse_grammar_t *build_bnf_grammar(void) {
   parse_grammar_t *g = parse_grammar_new();
   parse_grammar_set_error_recovery(g, false);
+  scan_tokenizer_register(CORE_STRING_STATIC("bnf-bootstrap"), bnf_scan);
+  scan_grammar_set_tokenizer(g, CORE_STRING_STATIC("bnf-bootstrap"));
 
   int64_t LANGLE = BNF_TOK_LANGLE;
   int64_t RANGLE = BNF_TOK_RANGLE;
@@ -2070,9 +2073,9 @@ static char *relative_to(const char *origin, core_string_t imported) {
   return result;
 }
 
-static bool load_lexer_file(const char *path, core_string_t start_symbol,
-                            parse_grammar_t *grammar,
-                            core_list_t(core_string_t) * stack) {
+static bool load_lexer_file(const char *path,
+                            core_list_t(scan_lex_decl_t) *decls,
+                            core_list_t(core_string_t) *stack) {
   for (size_t i = 0; i < core_list_len(*stack); i++) {
     if (core_string_eq(stack->data[i], core_string_from_cstr(path))) {
       snprintf(bnf_error, sizeof(bnf_error), "lexer import cycle reaches '%s'",
@@ -2092,9 +2095,8 @@ static bool load_lexer_file(const char *path, core_string_t start_symbol,
 
   core_list_push(*stack, core_string_borrow(path, strlen(path)));
 
-  size_t annot_start = parse_grammar_annot_count(grammar);
-  size_t rules_start = core_list_len(grammar->rules);
-  bool success = parse_bnf_load(text, start_symbol, grammar);
+  size_t decl_start = decls->len;
+  bool success = scan_lex_parse_file(text, core_string_from_cstr(path), decls);
 
   core_free(text.data);
 
@@ -2102,47 +2104,24 @@ static bool load_lexer_file(const char *path, core_string_t start_symbol,
     char reason[sizeof(bnf_error)];
 
     snprintf(reason, sizeof(reason), "%s",
-             bnf_error[0] ? bnf_error : "invalid BNF");
+             scan_lex_parse_error() ? scan_lex_parse_error() : "invalid lexer");
     snprintf(bnf_error, sizeof(bnf_error), "lexer '%s': %.900s", path, reason);
     return false;
   }
 
-  size_t annot_end = parse_grammar_annot_count(grammar);
+  size_t decl_end = decls->len;
+  for (size_t i = decl_start; i < decl_end; i++) {
+    scan_lex_decl_t *a = &decls->data[i];
 
-  for (size_t i = annot_start; i < annot_end; i++) {
-    parse_annotation_t *a = parse_grammar_annot_at(grammar, i);
-    if (a && !a->source_origin.data) {
-      a->source_origin = core_string_from_cstr(path);
-    }
-  }
-
-  if (core_list_len(grammar->rules) != rules_start) {
-    snprintf(bnf_error, sizeof(bnf_error),
-             "lexer '%s' may contain only lexical declarations", path);
-
-    return false;
-  }
-
-  for (size_t i = annot_start; i < annot_end; i++) {
-    parse_annotation_t *a = parse_grammar_annot_at(grammar, i);
-
-    if (a && (a->kind < PARSE_ANNOT_LEX_COMMENT ||
-              a->kind > PARSE_ANNOT_LEX_SOFT_KEYWORDS)) {
-      snprintf(bnf_error, sizeof(bnf_error),
-               "lexer '%s' may contain only lexical declarations", path);
-
-      return false;
-    }
-  }
-
-  for (size_t i = annot_start; i < annot_end; i++) {
-    parse_annotation_t *a = parse_grammar_annot_at(grammar, i);
-
-    if (!a || a->kind != PARSE_ANNOT_LEX_USE) {
+    if (a->kind != SCAN_LEX_USE) {
       continue;
     }
 
-    char *fragment_path = relative_to(path, a->scope_tag);
+    core_string_t imported = {0};
+    if (a->lex_opts.len && a->lex_opts.data[0].args.len) {
+      imported = a->lex_opts.data[0].args.data[0];
+    }
+    char *fragment_path = relative_to(path, imported);
 
     if (!fragment_path) {
       snprintf(bnf_error, sizeof(bnf_error),
@@ -2151,7 +2130,7 @@ static bool load_lexer_file(const char *path, core_string_t start_symbol,
       return false;
     }
 
-    success = load_lexer_file(fragment_path, start_symbol, grammar, stack);
+    success = load_lexer_file(fragment_path, decls, stack);
     core_free(fragment_path);
 
     if (!success) {
@@ -2216,12 +2195,26 @@ bool parse_bnf_load_with_origin(core_string_t text, const char *origin,
   }
 
   char *lexer_path = relative_to(origin, lexer->scope_tag);
-  core_string_t import_start = resolved_start;
-
+  core_list_t(scan_lex_decl_t) decls = core_list_new(scan_lex_decl_t);
   core_list_t(core_string_t) stack = core_list_new(core_string_t);
 
-  success = load_lexer_file(lexer_path, import_start, user_g, &stack);
+  success = lexer_path && load_lexer_file(lexer_path, &decls, &stack);
 
+  if (success) {
+    const scan_lex_spec_t *spec = scan_lex_spec_from_decls(user_g, &decls);
+    if (!spec) {
+      snprintf(bnf_error, sizeof(bnf_error), "lexer '%s': %s",
+               lexer_path, scan_lex_build_error()
+                                  ? scan_lex_build_error()
+                                  : "contains no declarations");
+      success = false;
+    } else {
+      scan_grammar_set_lex(user_g, spec);
+      user_g->lex_spec_owned = true;
+    }
+  }
+
+  scan_lex_decls_free(&decls);
   core_list_free(stack);
   core_free(lexer_path);
   core_free(resolved_start.data);

@@ -27,7 +27,6 @@ suites = [
     ['ir-cli',              'ir/cli.c',              {}],
     ['ir-pdg',              'ir/pdg.c',              {}],
     ['ir-walk',             'ir/walk.c',             {}],
-    ['ir-tree-passes',      'ir/tree_pass.c',        {}],
     ['ir-typemap',          'ir/typemap.c',          {'args': [d_ir]}],
     ['ir-text',             'ir/text.c',      {'args': [golden, '25']}],
     ['ir-diagnostics',      'ir/diag.c',             {'args': [golden]}],
@@ -79,7 +78,6 @@ suites = [
     ['fe-lex',              'scanner/lex.c',         {}],
     ['fe-bnf',              'parse/bnf.c',        {'workdir': d_parse}],
     ['fe-annot',            'parse/annot.c',      {'workdir': d_parse}],
-    ['fe-bnf-slay',         'parse/bnf_slay.c',   {'workdir': d_parse}],
     ['fe-bnf-print',        'parse/bnf_print.c',  {'workdir': d_parse}],
     ['fe-grammars',         'parse/grammars.c',
      {'args': [d_gram, d_samp], 'timeout': 120}],
@@ -124,12 +122,6 @@ benchmark('lexer-throughput', lexer_perf_test, timeout: 180)
 
 bnfcheck = executable('bnfcheck', 'parse/bnfcheck.c', dependencies: ir_dep)
 
-test(
-    'fe-language-spec-check',
-    bnfcheck,
-    args: [d_gram / 'n00b.bnf', 'module'],
-)
-
 gate_bins = [
     built['ir-diagnostics'],
     built['ir-text'],
@@ -139,7 +131,7 @@ gate_bins = [
     built['ir-promote'],
     built['ir-structure'],
     built['ir-pdg'],
-    built['ir-tree-passes'],
+    built['ir-lower'],
 ]
 
 benchmark(

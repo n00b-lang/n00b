@@ -1053,6 +1053,36 @@ static void test_clone_shared_constraint_context(void)
     th_ctx_free(ctx);
 }
 
+static void test_call_unification_keeps_declared_constraints(void)
+{
+    th_ctx *ctx = th_ctx_new();
+    th_type *variable = th_var_named(ctx, "item");
+    th_constraint excludes_string = {
+        .kind = TH_CON_EXCLUDES,
+        .target = th_name(ctx, "string"),
+    };
+    th_param parameter = {.mode = TH_IN, .type = variable};
+    th_type *declared = th_func(ctx, variable, &parameter, 1,
+                                nullptr, nullptr, 0);
+    th_type *integer = th_name(ctx, "int");
+    th_type *string = th_name(ctx, "string");
+    th_param int_parameter = {.mode = TH_IN, .type = integer};
+    th_param string_parameter = {.mode = TH_IN, .type = string};
+    th_type *int_call = th_func(ctx, integer, &int_parameter, 1,
+                                nullptr, nullptr, 0);
+    th_type *string_call = th_func(ctx, string, &string_parameter, 1,
+                                   nullptr, nullptr, 0);
+    check("a declared constraint accepts a compatible call",
+          th_var_constrain(ctx, variable, excludes_string)
+              && th_unify(ctx, declared, int_call) != nullptr);
+    check("copy-then-unify rejects a call excluded by the declaration",
+          th_unify(ctx, declared, string_call) == nullptr);
+    check("call specialization does not refine the declaration",
+          th_resolve(variable) == variable
+              && th_var_constraint_count(variable) == 1);
+    th_ctx_free(ctx);
+}
+
 int main(void)
 {
     th_ctx *ctx = th_ctx_new();
@@ -1093,6 +1123,7 @@ int main(void)
     test_name_syntax();
     test_clone_replacing();
     test_clone_shared_constraint_context();
+    test_call_unification_keeps_declared_constraints();
 
     return report("th constraints");
 }

@@ -37,18 +37,6 @@ typedef struct {
     void *type_node_resolver_context;
 } parse_annot_result_t;
 
-typedef enum : uint8_t {
-    PARSE_ANNOT_PASS_SCOPE,
-    PARSE_ANNOT_PASS_SYMBOLS,
-    PARSE_ANNOT_PASS_REFINE,
-    PARSE_ANNOT_PASS_CFLOW,
-    PARSE_ANNOT_PASS_INFER,
-    PARSE_ANNOT_PASS_INITIAL_SYMBOLS,
-    PARSE_ANNOT_PASS_ALL,
-} parse_annot_pass_t;
-
-core_string_t parse_annot_pass_name(parse_annot_pass_t p);
-
 parse_annot_result_t *parse_annot_result_new(parse_symtab_t *borrowed);
 void parse_annot_result_set_node_callback(
     parse_annot_result_t *result, parse_annot_node_callback_fn callback,
@@ -69,17 +57,6 @@ size_t parse_annot_resolve_undefined(parse_annot_result_t *result);
 
 void parse_annot_register(parse_tree_walk_t *w, parse_annot_result_t *out,
                         th_ctx *types, ir_module_t *m);
-
-void parse_annot_register_pass(parse_tree_walk_t    *w,
-                             parse_annot_result_t *out,
-                             th_ctx             *types,
-                             ir_module_t        *m,
-                             parse_annot_pass_t    which);
-
-parse_annot_result_t *parse_annot_walk_tree(parse_grammar_t    *g,
-                                        parse_tree_t *tree,
-                                        th_ctx           *types,
-                                        ir_module_t      *m);
 
 void parse_annot_result_free(parse_annot_result_t *r);
 

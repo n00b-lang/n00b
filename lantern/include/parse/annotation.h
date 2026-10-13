@@ -54,32 +54,7 @@
     X(SIZE, "size") \
     X(ALIGNMENT, "alignment") \
     X(OFFSET, "offset") \
-    X(WIDTH, "width") \
-    X(LEX_COMMENT, "lex-comment") \
-    X(LEX_REGION, "lex-region") \
-    X(LEX_STRING, "lex-string") \
-    X(LEX_STRING_FAMILY, "lex-string-family") \
-    X(LEX_STRING_ESCAPES, "lex-string-escapes") \
-    X(LEX_NUMBER, "lex-number") \
-    X(LEX_NUMBER_SUFFIXES, "lex-number-suffixes") \
-    X(LEX_LAYOUT, "lex-layout") \
-    X(LEX_SIGIL, "lex-sigil") \
-    X(LEX_REGEX, "lex-regex") \
-    X(LEX_HEREDOC_HEADER, "lex-heredoc-header") \
-    X(LEX_HEREDOC, "lex-heredoc") \
-    X(LEX_IDENT, "lex-ident") \
-    X(LEX_IDENT_PROFILE, "lex-ident-profile") \
-    X(LEX_EMBED, "lex-embed") \
-    X(LEX_FENCE, "lex-fence") \
-    X(LEX_USE, "lex-use") \
-    X(LEX_OPERATOR_SET, "lex-operator-set") \
-    X(LEX_OPERATORS, "lex-operators") \
-    X(LEX_WHITESPACE, "lex-whitespace") \
-    X(LEX_FALLBACK, "lex-fallback") \
-    X(LEX_DIRECTIVE, "lex-directive") \
-    X(LEX_LITERAL_HOOK, "lex-literal-hook") \
-    X(LEX_RECOVER, "lex-recover") \
-    X(LEX_SOFT_KEYWORDS, "lex-soft-keywords")
+    X(WIDTH, "width")
 
 typedef enum {
 #define PARSE_ANNOT_ENUM(sym, spelling) PARSE_ANNOT_##sym,
@@ -102,13 +77,6 @@ typedef struct {
 } parse_con_spec_t;
 
 core_list_decl(parse_con_spec_t);
-
-typedef struct {
-    core_string_t             name;
-    core_list_t(core_string_t) args;
-} parse_lex_opt_t;
-
-core_list_decl(parse_lex_opt_t);
 
 typedef struct {
     parse_role_kind_t kind;
@@ -161,7 +129,6 @@ struct parse_annotation_t {
     core_string_t     emit_action;
     core_list_t(parse_child_ref_t) emit_operands;
     core_list_t(parse_con_spec_t) constraints;
-    core_list_t(parse_lex_opt_t)  lex_opts;
 
     parse_child_ref_t  val_ref;
     int64_t          val_int;

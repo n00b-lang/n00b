@@ -388,12 +388,6 @@ typedef struct {
 extern scan_lex_t *scan_lex_compile(const scan_lex_spec_t *spec,
                                   parse_grammar_t        *g);
 extern void       scan_lex_free(scan_lex_t *lex);
-extern core_string_t scan_lex_image_encode(const scan_lex_t *program);
-extern scan_lex_t   *scan_lex_image_load(core_string_t image,
-                                         parse_grammar_t *grammar);
-extern bool          scan_grammar_set_lex_image(parse_grammar_t *grammar,
-                                                core_string_t image);
-extern const char   *scan_lex_image_error(void);
 extern scan_lex_session_t *scan_lex_session_new(const scan_lex_t *program);
 extern void       *scan_lex_session_clone(const void *session);
 extern bool        scan_lex_session_equal(const void *left,
@@ -418,7 +412,6 @@ extern core_string_t scan_lex_unicode_version(void);
 extern bool                  scan_lex_register(const scan_lex_spec_t *spec);
 extern const scan_lex_spec_t *scan_lex_for(core_string_t name);
 
-extern const scan_lex_spec_t *scan_lex_spec_from_grammar(parse_grammar_t *g);
 extern void                  scan_lex_spec_free(const scan_lex_spec_t *spec);
 extern const char           *scan_lex_build_error(void);
 extern const char           *scan_lex_compile_error(void);

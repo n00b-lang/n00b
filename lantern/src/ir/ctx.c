@@ -5,6 +5,7 @@
 #include "private/ir/internal.h"
 #include "ir/typelang.h"
 #include "ir/walk.h"
+#include "parse/annot_walk.h"
 
 #include "lib/dict.h"
 
@@ -91,6 +92,16 @@ static void drop_dict(void *p)
     core_free(p);
 }
 
+static void clear_dict(void *p)
+{
+    if (!p) return;
+    core_dict_t *dict = p;
+    core_hash_fn hash = dict->hash_fn;
+    core_dict_key_eq_fn equal = dict->key_eq;
+    core_dict_free(dict);
+    core_dict_init(dict, hash, equal);
+}
+
 void ir_ctx_on_free(ir_ctx_t *ctx, void (*fn)(void *), void *arg)
 {
     ir_cleanup_t *c = ir_alloc(ctx, sizeof(ir_cleanup_t));
@@ -123,7 +134,8 @@ th_ctx *ir_ctx_types(ir_ctx_t *ctx)
 
 static void free_symtab(void *p)
 {
-    parse_symtab_free(p);
+    ir_module_t *m = p;
+    parse_symtab_free(m->symtab);
 }
 
 ir_module_t *ir_module_new(ir_ctx_t *ctx, const char *name,
@@ -139,9 +151,10 @@ ir_module_t *ir_module_new(ir_ctx_t *ctx, const char *name,
     m->name    = ir_strdup(ctx, name);
     m->target  = target ? ir_strdup(ctx, target) : nullptr;
     m->profile = profile;
+    m->span    = IR_SPAN_UNKNOWN;
     m->symtab  = parse_symtab_new();
 
-    ir_ctx_on_free(ctx, free_symtab, m->symtab);
+    ir_ctx_on_free(ctx, free_symtab, m);
 
     return m;
 }
@@ -154,7 +167,26 @@ void ir_module_set_tree(ir_module_t      *m,
         return;
     }
 
-    m->tree_grammar = g;
+    if (m->tree && (m->tree != tree || m->tree_grammar != g)) {
+        clear_dict(m->annots.index);
+        m->annots.n = 0;
+        ir_module_invalidate(m, (ir_props_t)~(ir_props_t)0);
+        parse_symtab_free(m->symtab);
+        m->symtab = parse_symtab_new();
+        m->n_types = 0;
+        clear_dict(m->type_index);
+        m->n_ids = 0;
+        clear_dict(m->id_index);
+        m->n_files = 0;
+        clear_dict(m->file_index);
+        m->n_globals = 0;
+        clear_dict(m->global_index);
+        m->n_funcs = 0;
+        clear_dict(m->func_index);
+        m->span = IR_SPAN_UNKNOWN;
+    }
+
+    m->tree_grammar = tree ? g : nullptr;
     m->tree         = tree;
 
     if (tree) {

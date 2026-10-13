@@ -1,6 +1,6 @@
 #include "scanner/lex.h"
 #include "scanner/tokenizer.h"
-#include "parse/annotation.h"
+#include "private/scanner/lex_decl.h"
 #include "private/parse/grammar.h"
 #include "lib/alloc.h"
 #include "lib/dict.h"
@@ -64,6 +64,7 @@ core_list_decl(lex_string_escape_set_t);
 
 typedef struct {
     scan_lex_spec_t                    spec;
+    core_list_t(scan_lex_decl_t)       decls;
     core_list_t(scan_lex_comment_t)    comments;
     core_list_t(scan_lex_region_t)     regions;
     core_list_t(scan_lex_string_t)     strings;
@@ -252,6 +253,7 @@ lex_build_free(lex_build_t *b)
     string_map_free(&b->string_escape_set_declarations);
     string_map_free(&b->heredoc_header_index);
     string_map_free(&b->identifier_profile_index);
+    scan_lex_decls_free(&b->decls);
     core_free(b);
 }
 
@@ -261,15 +263,23 @@ scan_lex_build_error(void)
     return lex_build_err[0] ? lex_build_err : scan_lex_compile_error();
 }
 
+void
+scan_lex_note_unresolved_import(void)
+{
+    snprintf(lex_build_err, sizeof(lex_build_err),
+             "@lexer import was not resolved; load the grammar with "
+             "parse_bnf_load_file");
+}
+
 static bool
-named(const parse_lex_opt_t *o, const char *what)
+named(const scan_lex_opt_t *o, const char *what)
 {
     return o->name.data && o->name.u8_bytes == strlen(what)
         && !memcmp(o->name.data, what, o->name.u8_bytes);
 }
 
 static core_string_t
-arg(const parse_lex_opt_t *o, size_t i)
+arg(const scan_lex_opt_t *o, size_t i)
 {
     return i < core_list_len(o->args) ? o->args.data[i]
                                      : (core_string_t){0};
@@ -285,7 +295,7 @@ string_is(core_string_t value, const char *expected)
 }
 
 static bool
-layout_policy(lex_build_t *b, const parse_lex_opt_t *o,
+layout_policy(lex_build_t *b, const scan_lex_opt_t *o,
               scan_lex_indent_policy_t *out)
 {
     core_string_t value = arg(o, 0);
@@ -320,7 +330,7 @@ layout_policy(lex_build_t *b, const parse_lex_opt_t *o,
 }
 
 static bool
-layout_line_policy(lex_build_t *b, const parse_lex_opt_t *o,
+layout_line_policy(lex_build_t *b, const scan_lex_opt_t *o,
                    scan_lex_indent_line_policy_t *out)
 {
     core_string_t value = arg(o, 0);
@@ -355,7 +365,7 @@ layout_line_policy(lex_build_t *b, const parse_lex_opt_t *o,
 }
 
 static bool
-layout_tab_width(lex_build_t *b, const parse_lex_opt_t *o, uint8_t *out)
+layout_tab_width(lex_build_t *b, const scan_lex_opt_t *o, uint8_t *out)
 {
     core_string_t value = arg(o, 0);
     uint32_t      width = 0;
@@ -390,12 +400,12 @@ layout_tab_width(lex_build_t *b, const parse_lex_opt_t *o, uint8_t *out)
 }
 
 static core_string_t
-positional(const core_list_t(parse_lex_opt_t) *opts, size_t which)
+positional(const core_list_t(scan_lex_opt_t) *opts, size_t which)
 {
     size_t seen = 0;
 
     for (size_t i = 0; i < core_list_len(*opts); i++) {
-        const parse_lex_opt_t *o = &opts->data[i];
+        const scan_lex_opt_t *o = &opts->data[i];
 
         if (o->name.data) {
             continue;
@@ -442,7 +452,7 @@ oops(lex_build_t *b, const char *kind, core_string_t name)
 }
 
 static void
-build_comment(lex_build_t *b, const parse_annotation_t *a)
+build_comment(lex_build_t *b, const scan_lex_decl_t *a)
 {
     scan_lex_comment_t item = {0};
     scan_lex_comment_t *c   = &item;
@@ -452,7 +462,7 @@ build_comment(lex_build_t *b, const parse_annotation_t *a)
     c->kind   = c->closer.data ? SCAN_LEX_BLOCK : SCAN_LEX_LINE;
 
     for (size_t i = 0; i < core_list_len(a->lex_opts); i++) {
-        const parse_lex_opt_t *o = &a->lex_opts.data[i];
+        const scan_lex_opt_t *o = &a->lex_opts.data[i];
 
         if (!o->name.data) {
             continue;
@@ -494,7 +504,7 @@ build_comment(lex_build_t *b, const parse_annotation_t *a)
 }
 
 static void
-build_region(lex_build_t *b, const parse_annotation_t *a)
+build_region(lex_build_t *b, const scan_lex_decl_t *a)
 {
     scan_lex_region_t region = {
         .opener = positional(&a->lex_opts, 0),
@@ -594,7 +604,7 @@ package_add_escape(lex_build_t *b, lex_string_escape_set_t *set,
 static bool
 build_string_option(lex_build_t *b, scan_lex_string_t *s,
                     core_list_t(scan_lex_escape_t) *escapes,
-                    const parse_lex_opt_t *o, const char *kind)
+                    const scan_lex_opt_t *o, const char *kind)
 {
     if (named(o, "escape")) {
         s->escape = arg(o, 0);
@@ -707,7 +717,7 @@ build_string_option(lex_build_t *b, scan_lex_string_t *s,
 }
 
 static void
-build_string_escapes(lex_build_t *b, const parse_annotation_t *a)
+build_string_escapes(lex_build_t *b, const scan_lex_decl_t *a)
 {
     core_string_t name = positional(&a->lex_opts, 0);
 
@@ -732,7 +742,7 @@ build_string_escapes(lex_build_t *b, const parse_annotation_t *a)
     };
 
     for (size_t i = 0; i < core_list_len(a->lex_opts); i++) {
-        const parse_lex_opt_t *o = &a->lex_opts.data[i];
+        const scan_lex_opt_t *o = &a->lex_opts.data[i];
 
         if (!o->name.data) {
             continue;
@@ -949,7 +959,7 @@ joined_opener(lex_build_t *b, core_string_t prefix, core_string_t quote)
 }
 
 static void
-build_string(lex_build_t *b, const parse_annotation_t *a)
+build_string(lex_build_t *b, const scan_lex_decl_t *a)
 {
     scan_lex_string_t item = {0};
     core_list_t(scan_lex_escape_t) escapes
@@ -963,7 +973,7 @@ build_string(lex_build_t *b, const parse_annotation_t *a)
     }
 
     for (size_t i = 0; i < core_list_len(a->lex_opts); i++) {
-        const parse_lex_opt_t *o = &a->lex_opts.data[i];
+        const scan_lex_opt_t *o = &a->lex_opts.data[i];
 
         if (!o->name.data) {
             continue;
@@ -981,7 +991,7 @@ build_string(lex_build_t *b, const parse_annotation_t *a)
 }
 
 static void
-build_string_family(lex_build_t *b, const parse_annotation_t *a)
+build_string_family(lex_build_t *b, const scan_lex_decl_t *a)
 {
     scan_lex_string_t prototype = {0};
     core_list_t(scan_lex_escape_t) escapes
@@ -993,7 +1003,7 @@ build_string_family(lex_build_t *b, const parse_annotation_t *a)
     bool plain = false;
 
     for (size_t i = 0; i < core_list_len(a->lex_opts); i++) {
-        const parse_lex_opt_t *o = &a->lex_opts.data[i];
+        const scan_lex_opt_t *o = &a->lex_opts.data[i];
 
         if (!o->name.data) {
             if (!b->err[0]) {
@@ -1093,12 +1103,12 @@ build_string_family(lex_build_t *b, const parse_annotation_t *a)
 }
 
 static void
-build_legacy_number(lex_build_t *b, const parse_annotation_t *a)
+build_legacy_number(lex_build_t *b, const scan_lex_decl_t *a)
 {
     scan_lex_number_t *n = &b->spec.number;
 
     for (size_t i = 0; i < core_list_len(a->lex_opts); i++) {
-        const parse_lex_opt_t *o = &a->lex_opts.data[i];
+        const scan_lex_opt_t *o = &a->lex_opts.data[i];
 
         if (!o->name.data) {
             continue;
@@ -1137,10 +1147,10 @@ build_legacy_number(lex_build_t *b, const parse_annotation_t *a)
 }
 
 static bool
-number_form_syntax(const parse_annotation_t *a)
+number_form_syntax(const scan_lex_decl_t *a)
 {
     for (size_t i = 0; i < core_list_len(a->lex_opts); i++) {
-        const parse_lex_opt_t *o = &a->lex_opts.data[i];
+        const scan_lex_opt_t *o = &a->lex_opts.data[i];
 
         if (named(o, "prefix") || named(o, "digits")
             || named(o, "point") || named(o, "exponent_digits")) {
@@ -1168,7 +1178,7 @@ own_suffix_rules(lex_build_t *b,
 }
 
 static scan_lex_suffix_t
-number_suffix_option(lex_build_t *b, const parse_lex_opt_t *o)
+number_suffix_option(lex_build_t *b, const scan_lex_opt_t *o)
 {
     uint8_t forms = SCAN_LEX_SUFFIX_INTEGER | SCAN_LEX_SUFFIX_FLOAT;
 
@@ -1200,7 +1210,7 @@ number_suffix_set(lex_build_t *b, core_string_t name)
 }
 
 static void
-build_number_suffixes(lex_build_t *b, const parse_annotation_t *a)
+build_number_suffixes(lex_build_t *b, const scan_lex_decl_t *a)
 {
     core_string_t name = positional(&a->lex_opts, 0);
 
@@ -1224,7 +1234,7 @@ build_number_suffixes(lex_build_t *b, const parse_annotation_t *a)
     };
 
     for (size_t i = 0; i < core_list_len(a->lex_opts); i++) {
-        const parse_lex_opt_t *o = &a->lex_opts.data[i];
+        const scan_lex_opt_t *o = &a->lex_opts.data[i];
 
         if (!o->name.data) {
             continue;
@@ -1319,14 +1329,14 @@ build_number_suffixes(lex_build_t *b, const parse_annotation_t *a)
 }
 
 static void
-build_number_form(lex_build_t *b, const parse_annotation_t *a)
+build_number_form(lex_build_t *b, const scan_lex_decl_t *a)
 {
     scan_lex_number_form_t form = {0};
     core_list_t(scan_lex_suffix_t) suffixes
         = core_list_new(scan_lex_suffix_t);
 
     for (size_t i = 0; i < core_list_len(a->lex_opts); i++) {
-        const parse_lex_opt_t *o = &a->lex_opts.data[i];
+        const scan_lex_opt_t *o = &a->lex_opts.data[i];
 
         if (!o->name.data) {
             oops(b, "number", (core_string_t){0});
@@ -1477,7 +1487,7 @@ build_number_form(lex_build_t *b, const parse_annotation_t *a)
 }
 
 static void
-build_number(lex_build_t *b, const parse_annotation_t *a)
+build_number(lex_build_t *b, const scan_lex_decl_t *a)
 {
     if (number_form_syntax(a)) {
         build_number_form(b, a);
@@ -1488,10 +1498,10 @@ build_number(lex_build_t *b, const parse_annotation_t *a)
 }
 
 static void
-build_layout(lex_build_t *b, const parse_annotation_t *a)
+build_layout(lex_build_t *b, const scan_lex_decl_t *a)
 {
     for (size_t i = 0; i < core_list_len(a->lex_opts); i++) {
-        const parse_lex_opt_t *o = &a->lex_opts.data[i];
+        const scan_lex_opt_t *o = &a->lex_opts.data[i];
 
         if (!o->name.data) {
             continue;
@@ -1560,7 +1570,7 @@ build_layout(lex_build_t *b, const parse_annotation_t *a)
 }
 
 static void
-build_sigil(lex_build_t *b, const parse_annotation_t *a)
+build_sigil(lex_build_t *b, const scan_lex_decl_t *a)
 {
     scan_lex_sigil_t item = {0};
     scan_lex_sigil_t *g   = &item;
@@ -1568,7 +1578,7 @@ build_sigil(lex_build_t *b, const parse_annotation_t *a)
     g->prefix = positional(&a->lex_opts, 0);
 
     for (size_t i = 0; i < core_list_len(a->lex_opts); i++) {
-        const parse_lex_opt_t *o = &a->lex_opts.data[i];
+        const scan_lex_opt_t *o = &a->lex_opts.data[i];
 
         if (!o->name.data) {
             continue;
@@ -1602,7 +1612,7 @@ build_sigil(lex_build_t *b, const parse_annotation_t *a)
 }
 
 static void
-build_regex(lex_build_t *b, const parse_annotation_t *a)
+build_regex(lex_build_t *b, const scan_lex_decl_t *a)
 {
     scan_lex_regex_t item = {0};
     scan_lex_regex_t *r   = &item;
@@ -1616,7 +1626,7 @@ build_regex(lex_build_t *b, const parse_annotation_t *a)
     }
 
     for (size_t i = 0; i < core_list_len(a->lex_opts); i++) {
-        const parse_lex_opt_t *o = &a->lex_opts.data[i];
+        const scan_lex_opt_t *o = &a->lex_opts.data[i];
 
         if (!o->name.data) {
             continue;
@@ -1649,7 +1659,7 @@ build_regex(lex_build_t *b, const parse_annotation_t *a)
 }
 
 static void
-build_heredoc_header(lex_build_t *b, const parse_annotation_t *a)
+build_heredoc_header(lex_build_t *b, const scan_lex_decl_t *a)
 {
     scan_lex_heredoc_header_t header = {
         .name = positional(&a->lex_opts, 0),
@@ -1671,7 +1681,7 @@ build_heredoc_header(lex_build_t *b, const parse_annotation_t *a)
     }
 
     for (size_t i = 0; i < core_list_len(a->lex_opts); i++) {
-        const parse_lex_opt_t *o = &a->lex_opts.data[i];
+        const scan_lex_opt_t *o = &a->lex_opts.data[i];
 
         if (!o->name.data) {
             continue;
@@ -1733,7 +1743,7 @@ heredoc_header(lex_build_t *b, core_string_t name)
 }
 
 static uint8_t
-heredoc_quote_mask(lex_build_t *b, const parse_lex_opt_t *o)
+heredoc_quote_mask(lex_build_t *b, const scan_lex_opt_t *o)
 {
     uint8_t result = 0;
 
@@ -1757,7 +1767,7 @@ heredoc_quote_mask(lex_build_t *b, const parse_lex_opt_t *o)
 }
 
 static void
-build_heredoc(lex_build_t *b, const parse_annotation_t *a)
+build_heredoc(lex_build_t *b, const scan_lex_decl_t *a)
 {
     scan_lex_heredoc_t item = {0};
     scan_lex_heredoc_t *h   = &item;
@@ -1771,7 +1781,7 @@ build_heredoc(lex_build_t *b, const parse_annotation_t *a)
     };
 
     for (size_t i = 0; i < core_list_len(a->lex_opts); i++) {
-        const parse_lex_opt_t *o = &a->lex_opts.data[i];
+        const scan_lex_opt_t *o = &a->lex_opts.data[i];
 
         if (!o->name.data) {
             continue;
@@ -1849,7 +1859,7 @@ build_heredoc(lex_build_t *b, const parse_annotation_t *a)
 }
 
 static void
-build_embed(lex_build_t *b, const parse_annotation_t *a)
+build_embed(lex_build_t *b, const scan_lex_decl_t *a)
 {
     scan_lex_embed_t item = {0};
     scan_lex_embed_t *e   = &item;
@@ -1858,7 +1868,7 @@ build_embed(lex_build_t *b, const parse_annotation_t *a)
     e->close = positional(&a->lex_opts, 1);
 
     for (size_t i = 0; i < core_list_len(a->lex_opts); i++) {
-        const parse_lex_opt_t *o = &a->lex_opts.data[i];
+        const scan_lex_opt_t *o = &a->lex_opts.data[i];
 
         if (!o->name.data) {
             continue;
@@ -1935,7 +1945,7 @@ build_embed(lex_build_t *b, const parse_annotation_t *a)
 }
 
 static void
-build_fence(lex_build_t *b, const parse_annotation_t *a)
+build_fence(lex_build_t *b, const scan_lex_decl_t *a)
 {
     scan_lex_fence_t item = {0};
     scan_lex_fence_t *f   = &item;
@@ -1945,7 +1955,7 @@ build_fence(lex_build_t *b, const parse_annotation_t *a)
     f->minimum     = 1;
 
     for (size_t i = 0; i < core_list_len(a->lex_opts); i++) {
-        const parse_lex_opt_t *o = &a->lex_opts.data[i];
+        const scan_lex_opt_t *o = &a->lex_opts.data[i];
 
         if (!o->name.data) {
             continue;
@@ -2041,7 +2051,7 @@ build_fence(lex_build_t *b, const parse_annotation_t *a)
 }
 
 static void
-build_directive(lex_build_t *b, const parse_annotation_t *a)
+build_directive(lex_build_t *b, const scan_lex_decl_t *a)
 {
     scan_lex_directive_t item = {0};
     scan_lex_directive_t *d   = &item;
@@ -2049,7 +2059,7 @@ build_directive(lex_build_t *b, const parse_annotation_t *a)
     d->open = positional(&a->lex_opts, 0);
 
     for (size_t i = 0; i < core_list_len(a->lex_opts); i++) {
-        const parse_lex_opt_t *o = &a->lex_opts.data[i];
+        const scan_lex_opt_t *o = &a->lex_opts.data[i];
 
         if (!o->name.data) {
             continue;
@@ -2074,7 +2084,7 @@ build_directive(lex_build_t *b, const parse_annotation_t *a)
 }
 
 static void
-build_literal_hook(lex_build_t *b, const parse_annotation_t *a)
+build_literal_hook(lex_build_t *b, const scan_lex_decl_t *a)
 {
     scan_lex_literal_hook_t item = {
         .token = positional(&a->lex_opts, 0),
@@ -2083,7 +2093,7 @@ build_literal_hook(lex_build_t *b, const parse_annotation_t *a)
     core_list_t(core_string_t) types   = core_list_new(core_string_t);
 
     for (size_t i = 0; i < core_list_len(a->lex_opts); i++) {
-        const parse_lex_opt_t *o = &a->lex_opts.data[i];
+        const scan_lex_opt_t *o = &a->lex_opts.data[i];
 
         if (!o->name.data) {
             continue;
@@ -2121,7 +2131,7 @@ build_literal_hook(lex_build_t *b, const parse_annotation_t *a)
 }
 
 static void
-build_recovery(lex_build_t *b, const parse_annotation_t *a)
+build_recovery(lex_build_t *b, const scan_lex_decl_t *a)
 {
     scan_lex_recovery_t item = {
         .token = positional(&a->lex_opts, 0),
@@ -2129,7 +2139,7 @@ build_recovery(lex_build_t *b, const parse_annotation_t *a)
     core_list_t(core_string_t) synchronize = core_list_new(core_string_t);
 
     for (size_t i = 0; i < core_list_len(a->lex_opts); i++) {
-        const parse_lex_opt_t *o = &a->lex_opts.data[i];
+        const scan_lex_opt_t *o = &a->lex_opts.data[i];
 
         if (!o->name.data) {
             continue;
@@ -2166,7 +2176,7 @@ build_recovery(lex_build_t *b, const parse_annotation_t *a)
 }
 
 static void
-build_identifier_profile(lex_build_t *b, const parse_annotation_t *a)
+build_identifier_profile(lex_build_t *b, const scan_lex_decl_t *a)
 {
     scan_lex_identifier_profile_t profile = {
         .name = positional(&a->lex_opts, 0),
@@ -2175,7 +2185,7 @@ build_identifier_profile(lex_build_t *b, const parse_annotation_t *a)
     core_list_t(core_string_t) scripts = core_list_new(core_string_t);
 
     for (size_t i = 0; i < core_list_len(a->lex_opts); i++) {
-        const parse_lex_opt_t *o = &a->lex_opts.data[i];
+        const scan_lex_opt_t *o = &a->lex_opts.data[i];
         if (!o->name.data) {
             continue;
         }
@@ -2264,10 +2274,10 @@ identifier_profile(lex_build_t *b, core_string_t name)
 }
 
 static void
-build_ident(lex_build_t *b, const parse_annotation_t *a)
+build_ident(lex_build_t *b, const scan_lex_decl_t *a)
 {
     for (size_t i = 0; i < core_list_len(a->lex_opts); i++) {
-        const parse_lex_opt_t *o = &a->lex_opts.data[i];
+        const scan_lex_opt_t *o = &a->lex_opts.data[i];
 
         if (!o->name.data) {
             continue;
@@ -2304,7 +2314,7 @@ build_ident(lex_build_t *b, const parse_annotation_t *a)
 }
 
 static void
-build_fallback(lex_build_t *b, const parse_annotation_t *a)
+build_fallback(lex_build_t *b, const scan_lex_decl_t *a)
 {
     core_string_t mode = positional(&a->lex_opts, 0);
 
@@ -2320,7 +2330,7 @@ build_fallback(lex_build_t *b, const parse_annotation_t *a)
 }
 
 static void
-build_whitespace(lex_build_t *b, const parse_annotation_t *a)
+build_whitespace(lex_build_t *b, const scan_lex_decl_t *a)
 {
     core_string_t mode = positional(&a->lex_opts, 0);
 
@@ -2385,7 +2395,7 @@ operator_remove(lex_build_t *b, core_string_t op, core_string_t origin)
 }
 
 static void
-build_operator_set(lex_build_t *b, const parse_annotation_t *a)
+build_operator_set(lex_build_t *b, const scan_lex_decl_t *a)
 {
     core_string_t name = positional(&a->lex_opts, 0);
 
@@ -2414,7 +2424,7 @@ build_operator_set(lex_build_t *b, const parse_annotation_t *a)
     core_dict_init(&seen, string_key_hash, string_key_eq);
 
     for (size_t i = 0; i < core_list_len(a->lex_opts); i++) {
-        const parse_lex_opt_t *o = &a->lex_opts.data[i];
+        const scan_lex_opt_t *o = &a->lex_opts.data[i];
 
         if (!o->name.data) {
             core_string_t value = arg(o, 0);
@@ -2502,10 +2512,10 @@ build_operator_set(lex_build_t *b, const parse_annotation_t *a)
 }
 
 static void
-build_operators(lex_build_t *b, const parse_annotation_t *a)
+build_operators(lex_build_t *b, const scan_lex_decl_t *a)
 {
     for (size_t i = 0; i < core_list_len(a->lex_opts); i++) {
-        const parse_lex_opt_t *o = &a->lex_opts.data[i];
+        const scan_lex_opt_t *o = &a->lex_opts.data[i];
 
         if (named(o, "use")) {
             for (size_t j = 0; j < core_list_len(o->args); j++) {
@@ -2546,10 +2556,10 @@ build_operators(lex_build_t *b, const parse_annotation_t *a)
 
 static void
 build_soft_keywords(lex_build_t *b, parse_grammar_t *g,
-                    const parse_annotation_t *a)
+                    const scan_lex_decl_t *a)
 {
     for (size_t i = 0; i < a->lex_opts.len; i++) {
-        const parse_lex_opt_t *o = &a->lex_opts.data[i];
+        const scan_lex_opt_t *o = &a->lex_opts.data[i];
 
         if (o->name.data || o->args.len != 1) {
             oops(b, "soft-keywords", o->name);
@@ -2631,14 +2641,14 @@ validate_regex_contexts(lex_build_t *b, parse_grammar_t *g)
 }
 
 static core_dict_t *
-package_declarations(lex_build_t *b, parse_annot_kind_t kind)
+package_declarations(lex_build_t *b, scan_lex_kind_t kind)
 {
     switch (kind) {
-    case PARSE_ANNOT_LEX_OPERATOR_SET:
+    case SCAN_LEX_OPERATOR_SET:
         return &b->operator_set_declarations;
-    case PARSE_ANNOT_LEX_NUMBER_SUFFIXES:
+    case SCAN_LEX_NUMBER_SUFFIXES:
         return &b->number_suffix_set_declarations;
-    case PARSE_ANNOT_LEX_STRING_ESCAPES:
+    case SCAN_LEX_STRING_ESCAPES:
         return &b->string_escape_set_declarations;
     default:
         return nullptr;
@@ -2646,14 +2656,14 @@ package_declarations(lex_build_t *b, parse_annot_kind_t kind)
 }
 
 static bool
-package_built(lex_build_t *b, parse_annot_kind_t kind, core_string_t name)
+package_built(lex_build_t *b, scan_lex_kind_t kind, core_string_t name)
 {
     switch (kind) {
-    case PARSE_ANNOT_LEX_OPERATOR_SET:
+    case SCAN_LEX_OPERATOR_SET:
         return operator_set(b, name) != nullptr;
-    case PARSE_ANNOT_LEX_NUMBER_SUFFIXES:
+    case SCAN_LEX_NUMBER_SUFFIXES:
         return number_suffix_set(b, name) != nullptr;
-    case PARSE_ANNOT_LEX_STRING_ESCAPES:
+    case SCAN_LEX_STRING_ESCAPES:
         return string_escape_set(b, name) != nullptr;
     default:
         return true;
@@ -2661,10 +2671,10 @@ package_built(lex_build_t *b, parse_annot_kind_t kind, core_string_t name)
 }
 
 static bool
-package_dependencies_ready(lex_build_t *b, const parse_annotation_t *a)
+package_dependencies_ready(lex_build_t *b, const scan_lex_decl_t *a)
 {
     for (size_t i = 0; i < a->lex_opts.len; i++) {
-        const parse_lex_opt_t *o = &a->lex_opts.data[i];
+        const scan_lex_opt_t *o = &a->lex_opts.data[i];
         if (!named(o, "use")) {
             continue;
         }
@@ -2678,25 +2688,26 @@ package_dependencies_ready(lex_build_t *b, const parse_annotation_t *a)
 }
 
 static void
-build_package(lex_build_t *b, const parse_annotation_t *a)
+build_package(lex_build_t *b, const scan_lex_decl_t *a)
 {
     switch (a->kind) {
-    case PARSE_ANNOT_LEX_OPERATOR_SET: build_operator_set(b, a); break;
-    case PARSE_ANNOT_LEX_NUMBER_SUFFIXES:
+    case SCAN_LEX_OPERATOR_SET: build_operator_set(b, a); break;
+    case SCAN_LEX_NUMBER_SUFFIXES:
         build_number_suffixes(b, a);
         break;
-    case PARSE_ANNOT_LEX_STRING_ESCAPES: build_string_escapes(b, a); break;
+    case SCAN_LEX_STRING_ESCAPES: build_string_escapes(b, a); break;
     default: break;
     }
 }
 
 static void
-resolve_packages(lex_build_t *b, parse_grammar_t *g, size_t n)
+resolve_packages(lex_build_t *b, core_list_t(scan_lex_decl_t) *decls)
 {
+    size_t n = decls->len;
     size_t unresolved = 0;
 
     for (size_t i = 0; i < n; i++) {
-        parse_annotation_t *a = parse_grammar_annot_at(g, i);
+        scan_lex_decl_t *a = &decls->data[i];
         core_dict_t *declarations = a ? package_declarations(b, a->kind)
                                       : nullptr;
         if (!declarations) {
@@ -2704,19 +2715,19 @@ resolve_packages(lex_build_t *b, parse_grammar_t *g, size_t n)
         }
         core_string_t name = positional(&a->lex_opts, 0);
         if (!name.data || !name.u8_bytes) {
-            oops(b, parse_annot_kind_name(a->kind) + 4,
+            oops(b, scan_lex_kind_name(a->kind) + 4,
                  CORE_STRING_STATIC("name"));
             continue;
         }
         if (string_map_get(declarations, name)) {
             if (!b->err[0]) {
                 size_t prior_index = string_map_get(declarations, name) - 1;
-                parse_annotation_t *prior
-                    = parse_grammar_annot_at(g, prior_index);
+                scan_lex_decl_t *prior
+                    = &decls->data[prior_index];
 
                 snprintf(b->err, sizeof(b->err),
                          "@%s: duplicate set/package '%.*s'",
-                         parse_annot_kind_name(a->kind),
+                         scan_lex_kind_name(a->kind),
                          (int)name.u8_bytes, name.data);
                 if (prior) {
                     append_error_origin(b, prior->source_origin,
@@ -2734,7 +2745,7 @@ resolve_packages(lex_build_t *b, parse_grammar_t *g, size_t n)
     while (!b->err[0] && unresolved) {
         size_t before = unresolved;
         for (size_t i = 0; i < n; i++) {
-            parse_annotation_t *a = parse_grammar_annot_at(g, i);
+            scan_lex_decl_t *a = &decls->data[i];
             if (!a || !package_declarations(b, a->kind)) {
                 continue;
             }
@@ -2753,7 +2764,7 @@ resolve_packages(lex_build_t *b, parse_grammar_t *g, size_t n)
 
     if (!b->err[0] && unresolved) {
         for (size_t i = 0; i < n; i++) {
-            parse_annotation_t *a = parse_grammar_annot_at(g, i);
+            scan_lex_decl_t *a = &decls->data[i];
             core_dict_t *decls = a ? package_declarations(b, a->kind)
                                    : nullptr;
             if (!decls) {
@@ -2764,7 +2775,7 @@ resolve_packages(lex_build_t *b, parse_grammar_t *g, size_t n)
                 continue;
             }
             for (size_t j = 0; j < a->lex_opts.len; j++) {
-                const parse_lex_opt_t *o = &a->lex_opts.data[j];
+                const scan_lex_opt_t *o = &a->lex_opts.data[j];
                 if (!named(o, "use")) {
                     continue;
                 }
@@ -2772,7 +2783,7 @@ resolve_packages(lex_build_t *b, parse_grammar_t *g, size_t n)
                     if (!string_map_get(decls, o->args.data[k])) {
                         snprintf(b->err, sizeof(b->err),
                                  "@%s: package '%.*s' uses unknown package '%.*s'",
-                                 parse_annot_kind_name(a->kind),
+                                 scan_lex_kind_name(a->kind),
                                  (int)name.u8_bytes, name.data,
                                  (int)o->args.data[k].u8_bytes,
                                  o->args.data[k].data);
@@ -2784,7 +2795,7 @@ resolve_packages(lex_build_t *b, parse_grammar_t *g, size_t n)
             }
             snprintf(b->err, sizeof(b->err),
                      "@%s: package dependency cycle reaches '%.*s'",
-                     parse_annot_kind_name(a->kind),
+                     scan_lex_kind_name(a->kind),
                      (int)name.u8_bytes, name.data);
             append_error_origin(b, a->source_origin, "declared in");
             return;
@@ -2793,34 +2804,15 @@ resolve_packages(lex_build_t *b, parse_grammar_t *g, size_t n)
 }
 
 const scan_lex_spec_t *
-scan_lex_spec_from_grammar(parse_grammar_t *g)
+scan_lex_spec_from_decls(parse_grammar_t *g,
+                         core_list_t(scan_lex_decl_t) *decls)
 {
-    size_t n = parse_grammar_annot_count(g);
-    bool   any = false;
-    bool   imported = false;
+    size_t n = decls ? decls->len : 0;
 
     lex_build_err[0] = '\0';
     scan_lex_compile_error_reset();
 
-    for (size_t i = 0; i < n; i++) {
-        parse_annotation_t *a = parse_grammar_annot_at(g, i);
-
-        if (a && a->kind == PARSE_ANNOT_LEXER) {
-            imported = true;
-        }
-        else if (a && a->kind >= PARSE_ANNOT_LEX_COMMENT
-            && a->kind <= PARSE_ANNOT_LEX_SOFT_KEYWORDS) {
-            any = true;
-        }
-    }
-
-    if (!any) {
-        if (imported) {
-            snprintf(lex_build_err, sizeof(lex_build_err),
-                     "@lexer import was not resolved; load the grammar with "
-                     "parse_bnf_load_file");
-        }
-
+    if (!n) {
         return nullptr;
     }
 
@@ -2849,21 +2841,21 @@ scan_lex_spec_from_grammar(parse_grammar_t *g)
 
     b->spec.name = scan_grammar_tokenizer(g);
 
-    resolve_packages(b, g, n);
+    resolve_packages(b, decls);
 
     for (size_t i = 0; i < n; i++) {
-        parse_annotation_t *a = parse_grammar_annot_at(g, i);
+        scan_lex_decl_t *a = &decls->data[i];
 
-        if (a && a->kind == PARSE_ANNOT_LEX_HEREDOC_HEADER) {
+        if (a && a->kind == SCAN_LEX_HEREDOC_HEADER) {
             build_heredoc_header(b, a);
         }
-        else if (a && a->kind == PARSE_ANNOT_LEX_IDENT_PROFILE) {
+        else if (a && a->kind == SCAN_LEX_IDENT_PROFILE) {
             build_identifier_profile(b, a);
         }
     }
 
     for (size_t i = 0; i < n; i++) {
-        parse_annotation_t *a = parse_grammar_annot_at(g, i);
+        scan_lex_decl_t *a = &decls->data[i];
 
         if (!a) {
             continue;
@@ -2884,34 +2876,34 @@ scan_lex_spec_from_grammar(parse_grammar_t *g)
         size_t soft_before = b->soft_keywords.len;
 
         switch (a->kind) {
-        case PARSE_ANNOT_LEX_COMMENT: build_comment(b, a); break;
-        case PARSE_ANNOT_LEX_REGION: build_region(b, a); break;
-        case PARSE_ANNOT_LEX_STRING:  build_string(b, a);  break;
-        case PARSE_ANNOT_LEX_STRING_FAMILY:
+        case SCAN_LEX_COMMENT: build_comment(b, a); break;
+        case SCAN_LEX_REGION: build_region(b, a); break;
+        case SCAN_LEX_STRING:  build_string(b, a);  break;
+        case SCAN_LEX_STRING_FAMILY:
             build_string_family(b, a);
             break;
-        case PARSE_ANNOT_LEX_STRING_ESCAPES: break;
-        case PARSE_ANNOT_LEX_NUMBER:  build_number(b, a);  break;
-        case PARSE_ANNOT_LEX_NUMBER_SUFFIXES: break;
-        case PARSE_ANNOT_LEX_LAYOUT:  build_layout(b, a);  break;
-        case PARSE_ANNOT_LEX_SIGIL:   build_sigil(b, a);   break;
-        case PARSE_ANNOT_LEX_REGEX:   build_regex(b, a);   break;
-        case PARSE_ANNOT_LEX_HEREDOC_HEADER: break;
-        case PARSE_ANNOT_LEX_HEREDOC: build_heredoc(b, a); break;
-        case PARSE_ANNOT_LEX_EMBED:   build_embed(b, a);   break;
-        case PARSE_ANNOT_LEX_FENCE:   build_fence(b, a);   break;
-        case PARSE_ANNOT_LEX_OPERATOR_SET: break;
-        case PARSE_ANNOT_LEX_OPERATORS: build_operators(b, a); break;
-        case PARSE_ANNOT_LEX_WHITESPACE: build_whitespace(b, a); break;
-        case PARSE_ANNOT_LEX_FALLBACK: build_fallback(b, a); break;
-        case PARSE_ANNOT_LEX_DIRECTIVE: build_directive(b, a); break;
-        case PARSE_ANNOT_LEX_LITERAL_HOOK: build_literal_hook(b, a); break;
-        case PARSE_ANNOT_LEX_RECOVER: build_recovery(b, a); break;
-        case PARSE_ANNOT_LEX_SOFT_KEYWORDS:
+        case SCAN_LEX_STRING_ESCAPES: break;
+        case SCAN_LEX_NUMBER:  build_number(b, a);  break;
+        case SCAN_LEX_NUMBER_SUFFIXES: break;
+        case SCAN_LEX_LAYOUT:  build_layout(b, a);  break;
+        case SCAN_LEX_SIGIL:   build_sigil(b, a);   break;
+        case SCAN_LEX_REGEX:   build_regex(b, a);   break;
+        case SCAN_LEX_HEREDOC_HEADER: break;
+        case SCAN_LEX_HEREDOC: build_heredoc(b, a); break;
+        case SCAN_LEX_EMBED:   build_embed(b, a);   break;
+        case SCAN_LEX_FENCE:   build_fence(b, a);   break;
+        case SCAN_LEX_OPERATOR_SET: break;
+        case SCAN_LEX_OPERATORS: build_operators(b, a); break;
+        case SCAN_LEX_WHITESPACE: build_whitespace(b, a); break;
+        case SCAN_LEX_FALLBACK: build_fallback(b, a); break;
+        case SCAN_LEX_DIRECTIVE: build_directive(b, a); break;
+        case SCAN_LEX_LITERAL_HOOK: build_literal_hook(b, a); break;
+        case SCAN_LEX_RECOVER: build_recovery(b, a); break;
+        case SCAN_LEX_SOFT_KEYWORDS:
             build_soft_keywords(b, g, a);
             break;
-        case PARSE_ANNOT_LEX_IDENT:   build_ident(b, a);   break;
-        case PARSE_ANNOT_LEX_IDENT_PROFILE: break;
+        case SCAN_LEX_IDENT:   build_ident(b, a);   break;
+        case SCAN_LEX_IDENT_PROFILE: break;
         default: break;
         }
 
@@ -3092,6 +3084,8 @@ scan_lex_spec_from_grammar(parse_grammar_t *g)
         b->spec.declarations = b->declarations.data;
     }
 
+    b->decls = *decls;
+    *decls = (core_list_t(scan_lex_decl_t)){0};
     return &b->spec;
 }
 

@@ -18,6 +18,22 @@ typedef struct {
 
 core_list_decl(visitor_t);
 
+typedef struct {
+    parse_walk_stage_fn fn;
+    void *thunk;
+} stage_visitor_t;
+
+core_list_decl(stage_visitor_t);
+
+typedef struct {
+    size_t before_kind;
+    parse_walk_stage_fn entering;
+    parse_walk_stage_fn exiting;
+    void *thunk;
+} annotation_boundary_t;
+
+core_list_decl(annotation_boundary_t);
+
 typedef core_list_t(int32_t) chain_t;
 
 typedef struct {
@@ -28,9 +44,15 @@ typedef struct {
     int32_t           next_child;
     bool              entered;
     bool              descend;
+    bool              skip_callbacks;
+    bool              removed;
+    uint64_t suppressed[(PARSE_ANNOT_KIND_COUNT + 63) / 64];
 } frame_t;
 
 core_list_decl(frame_t);
+core_list_decl(parse_tree_ptr_t);
+
+static void fill(parse_tree_walk_t *w, parse_visit_t *v, frame_t *f);
 
 struct parse_tree_walk_t {
     parse_grammar_t          *g;
@@ -39,13 +61,20 @@ struct parse_tree_walk_t {
     chain_t                 any;
     chain_t                 leaf;
     chain_t                 by_annot[PARSE_ANNOT_KIND_COUNT];
+    parse_annot_kind_t     *annot_order;
+    size_t                  annot_order_len;
+    core_list_t(annotation_boundary_t) boundaries;
+    core_list_t(stage_visitor_t) stages[PARSE_WALK_CHILD_COMPLETE + 1];
     core_dict_t             *by_nt;
     core_list_t(frame_t)     stack;
     struct parse_reduce_state_t *reduce;
     int32_t                 max_phase;
     bool                    stopped;
+    bool                    failed;
     uint32_t                replaced;
     parse_tree_t       *new_root;
+    bool                    root_removed;
+    core_list_t(parse_tree_ptr_t) detached;
 };
 
 static int32_t
@@ -103,15 +132,15 @@ parse_tree_walk_free(parse_tree_walk_t *w)
     core_free(w->any.data);
     core_free(w->leaf.data);
     core_free(w->visitors.data);
+    core_free(w->annot_order);
+    core_list_free(w->boundaries);
+    for (size_t i = 0; i <= PARSE_WALK_CHILD_COMPLETE; i++) {
+        core_free(w->stages[i].data);
+    }
     core_free(w->stack.data);
+    core_list_free(w->detached);
     reduce_release(w);
     core_free(w);
-}
-
-void *
-parse_tree_walk_user(parse_tree_walk_t *w)
-{
-    return w ? w->user : nullptr;
 }
 
 void
@@ -125,6 +154,70 @@ void
 parse_walk_on_leaf(parse_tree_walk_t *w, parse_visit_fn fn, void *thunk)
 {
     core_list_push(w->leaf, add_visitor(w, fn, nullptr, thunk, 0));
+}
+
+void
+parse_walk_on_stage(parse_tree_walk_t *w, parse_walk_stage_t stage,
+                    parse_walk_stage_fn fn, void *thunk)
+{
+    if (!w || !fn || stage < PARSE_WALK_PREPARE
+        || stage > PARSE_WALK_CHILD_COMPLETE) return;
+    core_list_push(w->stages[stage],
+                   ((stage_visitor_t){.fn = fn, .thunk = thunk}));
+}
+
+bool
+parse_visit_suppress_annotation(parse_visit_t *v, parse_annot_kind_t kind)
+{
+    if (!v || !v->walk || kind < 0 || kind >= PARSE_ANNOT_KIND_COUNT)
+        return false;
+    parse_tree_walk_t *w = v->walk;
+    if (!w->stack.len || w->stack.data[w->stack.len - 1].node != v->node)
+        return false;
+    frame_t *f = &w->stack.data[w->stack.len - 1];
+    f->suppressed[kind / 64] |= UINT64_C(1) << (kind % 64);
+    return true;
+}
+
+bool
+parse_walk_set_annotation_order(parse_tree_walk_t *w,
+                                const parse_annot_kind_t *kinds,
+                                size_t kind_count)
+{
+    if (!w || (kind_count && !kinds)) return false;
+    for (size_t i = 0; i < kind_count; i++) {
+        if (kinds[i] < 0 || kinds[i] >= PARSE_ANNOT_KIND_COUNT) return false;
+        for (size_t j = 0; j < i; j++) {
+            if (kinds[i] == kinds[j]) return false;
+        }
+    }
+    parse_annot_kind_t *copy = nullptr;
+    if (kind_count) {
+        copy = core_alloc_array(parse_annot_kind_t, kind_count);
+        if (!copy) return false;
+        memcpy(copy, kinds, kind_count * sizeof(*copy));
+    }
+    core_free(w->annot_order);
+    w->annot_order = copy;
+    w->annot_order_len = kind_count;
+    return true;
+}
+
+bool
+parse_walk_on_annotation_boundary(parse_tree_walk_t *w, size_t before_kind,
+                                  parse_walk_stage_fn entering,
+                                  parse_walk_stage_fn exiting, void *thunk)
+{
+    if (!w || !w->annot_order || !before_kind
+        || before_kind >= w->annot_order_len || (!entering && !exiting))
+        return false;
+    core_list_push(w->boundaries, ((annotation_boundary_t){
+        .before_kind = before_kind,
+        .entering = entering,
+        .exiting = exiting,
+        .thunk = thunk,
+    }));
+    return true;
 }
 
 void
@@ -189,7 +282,7 @@ run_chain(parse_tree_walk_t *w, chain_t *c, parse_visit_t *v, bool pre,
           bool reverse, int32_t phase)
 {
     bool asked = false;
-    bool wants = false;
+    bool wants = true;
 
     if (!c) {
         return true;
@@ -210,11 +303,69 @@ run_chain(parse_tree_walk_t *w, chain_t *c, parse_visit_t *v, bool pre,
 
         if (pre) {
             asked = true;
-            wants = wants || want;
+            wants = wants && want;
         }
+
+        if (w->stopped) break;
     }
 
     return !asked || wants;
+}
+
+static parse_visit_outcome_t
+run_stage(parse_tree_walk_t *w, parse_walk_stage_t stage, parse_visit_t *v)
+{
+    parse_visit_outcome_t result = PARSE_VISIT_CONTINUE;
+    for (size_t i = 0; i < w->stages[stage].len; i++) {
+        stage_visitor_t *callback = &w->stages[stage].data[i];
+        v->thunk = callback->thunk;
+        parse_visit_outcome_t outcome = callback->fn(v);
+        if (outcome == PARSE_VISIT_ERROR) {
+            w->failed = true;
+            w->stopped = true;
+            return outcome;
+        }
+        if (outcome == PARSE_VISIT_STOP || w->stopped) {
+            w->stopped = true;
+            return PARSE_VISIT_STOP;
+        }
+        if (outcome == PARSE_VISIT_PRUNE) result = outcome;
+    }
+    return result;
+}
+
+static parse_visit_outcome_t
+run_annotation_boundaries(parse_tree_walk_t *w, parse_visit_t *v,
+                          size_t position, bool entering)
+{
+    parse_visit_outcome_t result = PARSE_VISIT_CONTINUE;
+    v->annot = nullptr;
+    for (size_t i = 0; i < w->boundaries.len; i++) {
+        annotation_boundary_t *boundary = &w->boundaries.data[i];
+        parse_walk_stage_fn fn = entering ? boundary->entering
+                                          : boundary->exiting;
+        if (boundary->before_kind != position || !fn) continue;
+        v->thunk = boundary->thunk;
+        parse_visit_outcome_t outcome = fn(v);
+        if (outcome == PARSE_VISIT_ERROR) {
+            w->failed = w->stopped = true;
+            return outcome;
+        }
+        if (outcome == PARSE_VISIT_STOP || w->stopped) {
+            w->stopped = true;
+            return PARSE_VISIT_STOP;
+        }
+        if (outcome == PARSE_VISIT_PRUNE) result = outcome;
+    }
+    return result;
+}
+
+static bool
+annotation_suppressed(parse_tree_walk_t *w, parse_annot_kind_t kind)
+{
+    if (!w->stack.len) return false;
+    frame_t *f = &w->stack.data[w->stack.len - 1];
+    return (f->suppressed[kind / 64] & (UINT64_C(1) << (kind % 64))) != 0;
 }
 
 static bool
@@ -225,24 +376,32 @@ run_annots(parse_tree_walk_t *w, parse_visit_t *v, bool pre, bool reverse)
     size_t n_rule  = parse_rule_annot_count(v->rule);
     size_t total   = n_nt + n_rule;
 
-    for (int32_t p = 0; p <= w->max_phase; p++) {
-        int32_t phase = reverse ? w->max_phase - p : p;
-
-        for (size_t k = 0; k < total; k++) {
-            size_t            i = reverse ? total - 1 - k : k;
-            parse_annotation_t *a
-                = i < n_nt ? parse_nt_annot_at(v->nt, i)
-                           : parse_rule_annot_at(v->rule, i - n_nt);
-
-            if (!a) {
-                continue;
+    size_t kind_passes = w->annot_order ? w->annot_order_len : 1;
+    for (size_t kp = 0; kp < kind_passes && !w->stopped; kp++) {
+        size_t kind_index = reverse ? kind_passes - 1 - kp : kp;
+        parse_annot_kind_t selected = PARSE_ANNOT_NONE;
+        if (w->annot_order) {
+            selected = w->annot_order[kind_index];
+        }
+        for (int32_t p = 0; p <= w->max_phase && !w->stopped; p++) {
+            int32_t phase = reverse ? w->max_phase - p : p;
+            for (size_t k = 0; k < total; k++) {
+                size_t i = reverse ? total - 1 - k : k;
+                parse_annotation_t *a = i < n_nt
+                    ? parse_nt_annot_at(v->nt, i)
+                    : parse_rule_annot_at(v->rule, i - n_nt);
+                if (!a || (w->annot_order && a->kind != selected)
+                    || annotation_suppressed(w, a->kind)) continue;
+                v->annot = a;
+                if (!run_chain(w, &w->by_annot[a->kind], v, pre, reverse,
+                               phase)) descend = false;
+                if (w->stopped) break;
             }
-
-            v->annot = a;
-
-            if (!run_chain(w, &w->by_annot[a->kind], v, pre, reverse, phase)) {
-                descend = false;
-            }
+        }
+        if (w->annot_order && !w->stopped) {
+            size_t position = pre ? kind_index + 1 : kind_index;
+            if (run_annotation_boundaries(w, v, position, pre)
+                == PARSE_VISIT_PRUNE) descend = false;
         }
     }
 
@@ -251,88 +410,75 @@ run_annots(parse_tree_walk_t *w, parse_visit_t *v, bool pre, bool reverse)
     return descend;
 }
 
-static void fill(parse_tree_walk_t *w, parse_visit_t *v, frame_t *f);
-
-static void
-run_annot_kinds(parse_tree_walk_t *w, parse_visit_t *v,
-                const parse_annot_kind_t *kinds, size_t kind_count,
-                bool entering)
+static bool
+replace_frame_node(parse_tree_walk_t *w, frame_t *f, parse_tree_t *replacement)
 {
-    if (!v->nt || !kinds) {
-        return;
+    if (!replacement || replacement == f->node) return true;
+    parse_tree_t *old = f->node;
+    if (f->parent) {
+        if (f->child_index < 0
+            || (size_t)f->child_index >= core_tree_num_children(f->parent)
+            || core_tree_child(f->parent, (size_t)f->child_index) != old)
+            return false;
+        if (!core_tree_set_child(f->parent, (size_t)f->child_index,
+                                 replacement)) return false;
     }
-
-    size_t n_nt = parse_nt_annot_count(v->nt);
-    size_t n_rule = parse_rule_annot_count(v->rule);
-    size_t total = n_nt + n_rule;
-
-    for (size_t k = 0; k < kind_count; k++) {
-        size_t kind_ix = entering ? k : kind_count - 1 - k;
-        parse_annot_kind_t kind = kinds[kind_ix];
-        if (kind < 0 || kind >= PARSE_ANNOT_KIND_COUNT) {
-            continue;
-        }
-
-        for (int32_t p = 0; p <= w->max_phase; p++) {
-            int32_t phase = entering ? p : w->max_phase - p;
-            for (size_t j = 0; j < total; j++) {
-                size_t annot_ix = entering ? j : total - 1 - j;
-                parse_annotation_t *annot
-                    = annot_ix < n_nt
-                          ? parse_nt_annot_at(v->nt, annot_ix)
-                          : parse_rule_annot_at(v->rule, annot_ix - n_nt);
-                if (!annot || annot->kind != kind) {
-                    continue;
-                }
-
-                v->annot = annot;
-                run_chain(w, &w->by_annot[kind], v, entering,
-                          !entering, phase);
-            }
-        }
-    }
-
-    v->annot = nullptr;
+    else w->new_root = replacement;
+    f->node = replacement;
+    core_list_push(w->detached, old);
+    w->replaced++;
+    return true;
 }
 
-void
-parse_tree_walk_apply_node(parse_tree_walk_t *w, parse_tree_t *node,
-                           parse_tree_t *parent, int32_t depth,
-                           int32_t child_index,
-                           const parse_annot_kind_t *kinds,
-                           size_t kind_count, bool entering)
+static bool
+remove_frame_node(parse_tree_walk_t *w, frame_t *f)
 {
-    if (!w || !node) {
-        return;
+    parse_tree_t *old = f->node;
+    if (f->parent) {
+        if (f->child_index < 0
+            || (size_t)f->child_index >= core_tree_num_children(f->parent)
+            || core_tree_child(f->parent, (size_t)f->child_index) != old)
+            return false;
+        if (core_tree_remove_child(f->parent, (size_t)f->child_index) != old)
+            return false;
     }
+    else w->root_removed = true;
+    core_list_push(w->detached, old);
+    f->node = nullptr;
+    f->removed = true;
+    w->replaced++;
+    return true;
+}
 
-    frame_t f = {.node = node, .parent = parent, .depth = depth,
-                 .child_index = child_index};
-    parse_visit_t v;
-    fill(w, &v, &f);
+static bool
+apply_frame_edit(parse_tree_walk_t *w, frame_t *f, parse_visit_t *v,
+                 bool allow_revisit)
+{
+    if ((v->remove && v->replace)
+        || (v->revisit_replacement
+            && (!allow_revisit || !v->replace || v->replace == f->node)))
+        return false;
+    if (v->remove) return remove_frame_node(w, f);
+    return replace_frame_node(w, f, v->replace);
+}
 
-    if (core_tree_is_leaf(node)) {
-        if (entering) {
-            run_chain(w, &w->leaf, &v, true, false, -1);
-        }
-        return;
-    }
-
-    if (entering) {
-        run_chain(w, &w->any, &v, true, false, -1);
-        if (v.nt) {
-            run_chain(w, nt_chain(w, v.pn->id), &v, true, false, -1);
-        }
-    }
-
-    run_annot_kinds(w, &v, kinds, kind_count, entering);
-
-    if (!entering) {
-        if (v.nt) {
-            run_chain(w, nt_chain(w, v.pn->id), &v, false, true, -1);
-        }
-        run_chain(w, &w->any, &v, false, true, -1);
-    }
+static void
+complete_frame(parse_tree_walk_t *w)
+{
+    size_t top = w->stack.len - 1;
+    frame_t finished = w->stack.data[top];
+    w->stack.len = top;
+    if (!top || w->stopped) return;
+    frame_t *parent = &w->stack.data[top - 1];
+    if (finished.removed && parent->next_child > 0)
+        parent->next_child--;
+    parse_visit_t visit;
+    fill(w, &visit, parent);
+    visit.completed_child = finished.removed ? nullptr : finished.node;
+    visit.completed_child_index = finished.child_index;
+    parse_visit_outcome_t outcome = run_stage(w, PARSE_WALK_CHILD_COMPLETE,
+                                               &visit);
+    if (outcome == PARSE_VISIT_PRUNE) parent->descend = false;
 }
 
 static void
@@ -393,6 +539,10 @@ parse_tree_walk_run_with_parent(parse_tree_walk_t *w, parse_tree_t *root,
     }
 
     w->stopped   = false;
+    w->failed    = false;
+    w->replaced  = 0;
+    w->new_root  = nullptr;
+    w->root_removed = false;
     w->stack.len = 0;
 
     push_frame(w, root, parent, depth, child_index);
@@ -408,12 +558,37 @@ parse_tree_walk_run_with_parent(parse_tree_walk_t *w, parse_tree_t *root,
 
             fill(w, &v, f);
 
-            if (core_tree_is_leaf(f->node)) {
-                if (!w->stopped) {
-                    run_chain(w, &w->leaf, &v, true, false, -1);
-                }
+            parse_visit_outcome_t outcome = w->stopped ? PARSE_VISIT_STOP
+                : run_stage(w, PARSE_WALK_PREPARE, &v);
+            f = &w->stack.data[top];
+            if (!w->stopped && !apply_frame_edit(w, f, &v, true)) {
+                w->failed = w->stopped = true;
+            }
+            if (!w->stopped && v.revisit_replacement) {
+                f->entered = false;
+                f->descend = false;
+                f->next_child = 0;
+                memset(f->suppressed, 0, sizeof(f->suppressed));
+                continue;
+            }
+            if (outcome == PARSE_VISIT_PRUNE) f->skip_callbacks = true;
+            if (w->stopped || f->skip_callbacks || f->removed) {
+                complete_frame(w);
+                continue;
+            }
+            fill(w, &v, f);
 
-                w->stack.len--;
+            if (core_tree_is_leaf(f->node)) {
+                run_chain(w, &w->leaf, &v, true, false, -1);
+                parse_visit_outcome_t leaf_exit = w->stopped
+                    ? PARSE_VISIT_STOP
+                    : run_stage(w, PARSE_WALK_BEFORE_EXIT, &v);
+                if (!w->stopped && leaf_exit != PARSE_VISIT_PRUNE)
+                    run_stage(w, PARSE_WALK_AFTER_EXIT, &v);
+                if (!w->stopped
+                    && !apply_frame_edit(w, &w->stack.data[top], &v, false))
+                    w->failed = w->stopped = true;
+                complete_frame(w);
                 continue;
             }
 
@@ -429,6 +604,11 @@ parse_tree_walk_run_with_parent(parse_tree_walk_t *w, parse_tree_t *root,
 
                 if (v.nt && !run_annots(w, &v, true, false)) {
                     f->descend = false;
+                }
+                if (!w->stopped) {
+                    parse_visit_outcome_t after_enter = run_stage(
+                        w, PARSE_WALK_AFTER_ENTER, &v);
+                    if (after_enter == PARSE_VISIT_PRUNE) f->descend = false;
                 }
             }
 
@@ -450,6 +630,17 @@ parse_tree_walk_run_with_parent(parse_tree_walk_t *w, parse_tree_t *root,
 
         fill(w, &v, &w->stack.data[top]);
 
+        parse_visit_outcome_t exit_outcome = w->stopped ? PARSE_VISIT_STOP
+            : run_stage(w, PARSE_WALK_BEFORE_EXIT, &v);
+        if (exit_outcome == PARSE_VISIT_PRUNE) {
+            complete_frame(w);
+            continue;
+        }
+        if (w->stopped) {
+            complete_frame(w);
+            continue;
+        }
+
         if (v.nt) {
             run_annots(w, &v, false, true);
             run_chain(w, nt_chain(w, v.pn->id), &v, false, true, -1);
@@ -457,19 +648,14 @@ parse_tree_walk_run_with_parent(parse_tree_walk_t *w, parse_tree_t *root,
 
         run_chain(w, &w->any, &v, false, true, -1);
 
-        if (v.replace && v.replace != v.node) {
-            if (v.parent && v.child_index >= 0) {
-                core_tree_set_child(v.parent, (size_t)v.child_index,
-                                   v.replace);
-            }
-            else {
-                w->new_root = v.replace;
-            }
+        if (!w->stopped)
+            run_stage(w, PARSE_WALK_AFTER_EXIT, &v);
 
-            w->replaced++;
-        }
+        if (!w->stopped
+            && !apply_frame_edit(w, &w->stack.data[top], &v, false))
+            w->failed = w->stopped = true;
 
-        w->stack.len = top;
+        complete_frame(w);
     }
 }
 
@@ -485,7 +671,7 @@ parse_tree_walk_rewrite(parse_tree_walk_t *w, parse_tree_t *root)
 
     parse_tree_walk_run(w, root);
 
-    return w->new_root ? w->new_root : root;
+    return w->root_removed ? nullptr : w->new_root ? w->new_root : root;
 }
 
 uint32_t
@@ -506,6 +692,19 @@ bool
 parse_tree_walk_stopped(parse_tree_walk_t *w)
 {
     return w && w->stopped;
+}
+
+bool
+parse_tree_walk_failed(parse_tree_walk_t *w)
+{
+    return w && w->failed;
+}
+
+parse_tree_t *
+parse_tree_walk_take_detached(parse_tree_walk_t *w)
+{
+    if (!w || !w->detached.len) return nullptr;
+    return w->detached.data[--w->detached.len];
 }
 
 typedef struct {

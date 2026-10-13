@@ -44,7 +44,6 @@ static const language_t LANGUAGES[] = {
     {"typescript", "typescript.bnf", "source-file",           ".ts.tsx.mts"   },
     {"c",          "c_ncc.bnf",      "translation_unit",      ".c.h"          },
     {"bce",        "bce.bnf",        "translation_unit",      ".bce"          },
-    {"n00b",       "n00b.bnf",       "module",                ".n00b"         },
 };
 
 #define N_LANGUAGES (sizeof(LANGUAGES) / sizeof(LANGUAGES[0]))

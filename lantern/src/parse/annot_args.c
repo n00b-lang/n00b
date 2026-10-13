@@ -24,7 +24,6 @@ typedef enum : uint8_t {
     AA_LEAF,
     AA_ARGS,
     AA_CON,
-    AA_LEXOPT,
 } aa_tag;
 
 typedef struct aa_node *aa_node_ptr_t;
@@ -384,130 +383,6 @@ r_con_list(parse_reduce_t *r)
 }
 
 static void *
-r_lex_opt(parse_reduce_t *r)
-{
-    for (size_t i = 0; i < r->n_kids; i++) {
-        aa_node *k = as_aa(r->kids[i]);
-
-        if (k && k->tag != AA_LEAF) {
-            return k;
-        }
-    }
-
-    fail(r);
-
-    return aa_new(r, AA_LEXOPT);
-}
-
-static void *
-r_lex_flag(parse_reduce_t *r)
-{
-    aa_node *n  = aa_new(r, AA_LEXOPT);
-    aa_node *lf = kid(r, 0);
-
-    n->str = lf ? dup(lf->str) : (core_string_t){0};
-    n->owns_str = n->str.data != nullptr;
-
-    return n;
-}
-
-static bool
-aa_push(parse_reduce_t *r, aa_node *n, aa_node *item)
-{
-    (void)r;
-    if (!n->items.data) {
-        n->items = core_list_new(aa_node_ptr_t);
-    }
-    core_list_push(n->items, item);
-    n->n++;
-
-    return true;
-}
-
-static void
-aa_splice(parse_reduce_t *r, aa_node *n, aa_node *from)
-{
-    for (size_t j = 0; j < from->n; j++) {
-        if (!aa_push(r, n, from->items.data[j])) {
-            return;
-        }
-    }
-}
-
-static void *
-r_lex_call(parse_reduce_t *r)
-{
-    aa_node *n  = aa_new(r, AA_LEXOPT);
-    aa_node *lf = kid(r, 0);
-
-    n->str = lf ? dup(lf->str) : (core_string_t){0};
-    n->owns_str = n->str.data != nullptr;
-
-    for (size_t i = 1; i < r->n_kids; i++) {
-        aa_node *k = as_aa(r->kids[i]);
-
-        if (!k) {
-            continue;
-        }
-
-        if (k->tag == AA_ARGS) {
-            aa_splice(r, n, k);
-        }
-        else if (k->tag == AA_TAG) {
-            aa_push(r, n, k);
-        }
-    }
-
-    return n;
-}
-
-static void *
-r_lex_args(parse_reduce_t *r)
-{
-    aa_node *n = aa_new(r, AA_ARGS);
-
-    for (size_t i = 0; i < r->n_kids; i++) {
-        aa_node *k = as_aa(r->kids[i]);
-
-        if (!k) {
-            continue;
-        }
-
-        if (k->tag == AA_TAG) {
-            aa_push(r, n, k);
-        }
-        else if (k->tag == AA_ARGS) {
-            aa_splice(r, n, k);
-        }
-    }
-
-    return n;
-}
-
-static void *
-r_lex_opts(parse_reduce_t *r)
-{
-    aa_node *n = aa_new(r, AA_ARGS);
-
-    for (size_t i = 0; i < r->n_kids; i++) {
-        aa_node *k = as_aa(r->kids[i]);
-
-        if (!k) {
-            continue;
-        }
-
-        if (k->tag == AA_TAG || k->tag == AA_LEXOPT) {
-            aa_push(r, n, k);
-        }
-        else if (k->tag == AA_ARGS) {
-            aa_splice(r, n, k);
-        }
-    }
-
-    return n;
-}
-
-static void *
 r_args(parse_reduce_t *r)
 {
     aa_node *n = aa_new(r, AA_ARGS);
@@ -604,31 +479,6 @@ static struct {
     {PARSE_ANNOT_OFFSET,     CORE_STRING_STATIC("a-val")},
     {PARSE_ANNOT_WIDTH,      CORE_STRING_STATIC("a-val")},
     {PARSE_ANNOT_LEXER,      CORE_STRING_STATIC("a-tag")},
-    {PARSE_ANNOT_LEX_COMMENT, CORE_STRING_STATIC("a-lex")},
-    {PARSE_ANNOT_LEX_REGION,  CORE_STRING_STATIC("a-lex")},
-    {PARSE_ANNOT_LEX_STRING,  CORE_STRING_STATIC("a-lex")},
-    {PARSE_ANNOT_LEX_STRING_FAMILY, CORE_STRING_STATIC("a-lex")},
-    {PARSE_ANNOT_LEX_STRING_ESCAPES, CORE_STRING_STATIC("a-lex")},
-    {PARSE_ANNOT_LEX_NUMBER,  CORE_STRING_STATIC("a-lex")},
-    {PARSE_ANNOT_LEX_NUMBER_SUFFIXES, CORE_STRING_STATIC("a-lex")},
-    {PARSE_ANNOT_LEX_LAYOUT,  CORE_STRING_STATIC("a-lex")},
-    {PARSE_ANNOT_LEX_SIGIL,   CORE_STRING_STATIC("a-lex")},
-    {PARSE_ANNOT_LEX_REGEX,   CORE_STRING_STATIC("a-lex")},
-    {PARSE_ANNOT_LEX_HEREDOC_HEADER, CORE_STRING_STATIC("a-lex")},
-    {PARSE_ANNOT_LEX_HEREDOC, CORE_STRING_STATIC("a-lex")},
-    {PARSE_ANNOT_LEX_IDENT,   CORE_STRING_STATIC("a-lex")},
-    {PARSE_ANNOT_LEX_IDENT_PROFILE, CORE_STRING_STATIC("a-lex")},
-    {PARSE_ANNOT_LEX_EMBED,   CORE_STRING_STATIC("a-lex")},
-    {PARSE_ANNOT_LEX_FENCE,   CORE_STRING_STATIC("a-lex")},
-    {PARSE_ANNOT_LEX_USE,     CORE_STRING_STATIC("a-tag")},
-    {PARSE_ANNOT_LEX_OPERATOR_SET, CORE_STRING_STATIC("a-lex")},
-    {PARSE_ANNOT_LEX_OPERATORS, CORE_STRING_STATIC("a-lex")},
-    {PARSE_ANNOT_LEX_WHITESPACE, CORE_STRING_STATIC("a-lex")},
-    {PARSE_ANNOT_LEX_FALLBACK, CORE_STRING_STATIC("a-lex")},
-    {PARSE_ANNOT_LEX_DIRECTIVE, CORE_STRING_STATIC("a-lex")},
-    {PARSE_ANNOT_LEX_LITERAL_HOOK, CORE_STRING_STATIC("a-lex")},
-    {PARSE_ANNOT_LEX_RECOVER, CORE_STRING_STATIC("a-lex")},
-    {PARSE_ANNOT_LEX_SOFT_KEYWORDS, CORE_STRING_STATIC("a-lex")},
 };
 
 core_string_t
@@ -666,12 +516,6 @@ install(parse_tree_walk_t *w, aa_ctx *c)
     REG(CORE_STRING_STATIC("val"), r_val);
     REG(CORE_STRING_STATIC("con"), r_con);
     REG(CORE_STRING_STATIC("con-list"), r_con_list);
-
-    REG(CORE_STRING_STATIC("lex-opt"), r_lex_opt);
-    REG(CORE_STRING_STATIC("lex-opts"), r_lex_opts);
-    REG(CORE_STRING_STATIC("lex-flag"), r_lex_flag);
-    REG(CORE_STRING_STATIC("lex-call"), r_lex_call);
-    REG(CORE_STRING_STATIC("lex-args"), r_lex_args);
 
     for (size_t i = 0; i < sizeof(SIGS) / sizeof(SIGS[0]); i++) {
         REG(SIGS[i].nt, r_args);
@@ -771,46 +615,6 @@ decode_cons(parse_annotation_t *a, aa_node *list)
     }
 }
 
-static void
-decode_lex(parse_annotation_t *a, aa_node *list)
-{
-    if (!list || list->tag != AA_ARGS) {
-        return;
-    }
-
-    a->lex_opts = core_list_new(parse_lex_opt_t);
-
-    for (size_t i = 0; i < list->n; i++) {
-        aa_node *o = list->items.data[i];
-
-        if (!o) {
-            continue;
-        }
-
-        parse_lex_opt_t opt = {.args = core_list_new(core_string_t)};
-
-        if (o->tag == AA_TAG) {
-            core_list_push(opt.args, dup(o->str));
-        }
-        else if (o->tag == AA_LEXOPT) {
-            opt.name = dup(o->str);
-
-            for (size_t j = 0; j < o->n; j++) {
-                if (o->items.data[j] && o->items.data[j]->tag == AA_TAG) {
-                    core_list_push(opt.args, dup(o->items.data[j]->str));
-                }
-            }
-        }
-        else {
-            core_list_free(opt.args);
-
-            continue;
-        }
-
-        core_list_push(a->lex_opts, opt);
-    }
-}
-
 static bool
 decode(parse_annotation_t *a, aa_node *args)
 {
@@ -875,7 +679,6 @@ decode(parse_annotation_t *a, aa_node *args)
     case PARSE_ANNOT_JUMP:
     case PARSE_ANNOT_TOKENIZER:
     case PARSE_ANNOT_LEXER:
-    case PARSE_ANNOT_LEX_USE:
         a->scope_tag = arg_tag(args, 0);
         break;
 
@@ -972,33 +775,6 @@ decode(parse_annotation_t *a, aa_node *args)
                 core_list_push(a->emit_operands, ref);
             }
         }
-        break;
-
-    case PARSE_ANNOT_LEX_COMMENT:
-    case PARSE_ANNOT_LEX_REGION:
-    case PARSE_ANNOT_LEX_STRING:
-    case PARSE_ANNOT_LEX_STRING_FAMILY:
-    case PARSE_ANNOT_LEX_STRING_ESCAPES:
-    case PARSE_ANNOT_LEX_NUMBER:
-    case PARSE_ANNOT_LEX_NUMBER_SUFFIXES:
-    case PARSE_ANNOT_LEX_LAYOUT:
-    case PARSE_ANNOT_LEX_SIGIL:
-    case PARSE_ANNOT_LEX_REGEX:
-    case PARSE_ANNOT_LEX_HEREDOC_HEADER:
-    case PARSE_ANNOT_LEX_HEREDOC:
-    case PARSE_ANNOT_LEX_IDENT:
-    case PARSE_ANNOT_LEX_IDENT_PROFILE:
-    case PARSE_ANNOT_LEX_EMBED:
-    case PARSE_ANNOT_LEX_FENCE:
-    case PARSE_ANNOT_LEX_OPERATOR_SET:
-    case PARSE_ANNOT_LEX_OPERATORS:
-    case PARSE_ANNOT_LEX_WHITESPACE:
-    case PARSE_ANNOT_LEX_FALLBACK:
-    case PARSE_ANNOT_LEX_DIRECTIVE:
-    case PARSE_ANNOT_LEX_LITERAL_HOOK:
-    case PARSE_ANNOT_LEX_RECOVER:
-    case PARSE_ANNOT_LEX_SOFT_KEYWORDS:
-        decode_lex(a, args && args->n ? args->items.data[0] : nullptr);
         break;
 
     case PARSE_ANNOT_SIZE:

@@ -1392,54 +1392,6 @@ infer_propagate(parse_visit_t *v)
     return true;
 }
 
-static bool
-scope_reenter(parse_visit_t *v)
-{
-    actx_t *a = (actx_t *)v->thunk;
-
-    if (v->pn->scope) {
-        parse_symtab_enter_scope_all(a->out->symtab, v->pn->scope);
-    }
-
-    return true;
-}
-
-static bool
-scope_leave(parse_visit_t *v)
-{
-    actx_t *a = (actx_t *)v->thunk;
-
-    if (v->pn->scope) {
-        parse_symtab_leave_scope_all(a->out->symtab);
-        a->last_sym = nullptr;
-    }
-
-    return true;
-}
-
-core_string_t
-parse_annot_pass_name(parse_annot_pass_t p)
-{
-    switch (p) {
-    case PARSE_ANNOT_PASS_SCOPE:
-        return CORE_STRING_STATIC("annot.scope");
-    case PARSE_ANNOT_PASS_SYMBOLS:
-        return CORE_STRING_STATIC("annot.symbols");
-    case PARSE_ANNOT_PASS_INITIAL_SYMBOLS:
-        return CORE_STRING_STATIC("annot.initial-symbols");
-    case PARSE_ANNOT_PASS_REFINE:
-        return CORE_STRING_STATIC("annot.refine");
-    case PARSE_ANNOT_PASS_CFLOW:
-        return CORE_STRING_STATIC("annot.cflow");
-    case PARSE_ANNOT_PASS_INFER:
-        return CORE_STRING_STATIC("annot.infer");
-    case PARSE_ANNOT_PASS_ALL:
-        return CORE_STRING_STATIC("annot.all");
-    }
-
-    return CORE_STRING_STATIC("?");
-}
-
 parse_annot_result_t *
 parse_annot_result_new(parse_symtab_t *borrowed)
 {
@@ -1548,11 +1500,10 @@ parse_annot_resolve_undefined(parse_annot_result_t *result)
 }
 
 void
-parse_annot_register_pass(parse_tree_walk_t    *w,
-                        parse_annot_result_t *out,
-                        th_ctx             *types,
-                        ir_module_t        *m,
-                        parse_annot_pass_t    which)
+parse_annot_register(parse_tree_walk_t    *w,
+                     parse_annot_result_t *out,
+                     th_ctx             *types,
+                     ir_module_t        *m)
 {
     if (!w || !out) {
         return;
@@ -1571,39 +1522,24 @@ parse_annot_register_pass(parse_tree_walk_t    *w,
     a->types  = types;
     a->module = m;
 
-    bool all = which == PARSE_ANNOT_PASS_ALL;
-    bool initial_symbols = which == PARSE_ANNOT_PASS_INITIAL_SYMBOLS;
-
     parse_walk_on_node(w, node_enter, node_leave, a);
 
-    if (all || initial_symbols || which == PARSE_ANNOT_PASS_SCOPE) {
-        parse_walk_on_annot_phase(w, PARSE_ANNOT_SCOPE_OPEN, PHASE_SCOPE,
-                                scope_open, scope_close, a);
-        parse_walk_on_annot_phase(w, PARSE_ANNOT_ADT, PHASE_SCOPE, adt_scope_open,
-                                scope_close, a);
-    }
-    else {
-        parse_walk_on_annot_phase(w, PARSE_ANNOT_SCOPE_OPEN, PHASE_SCOPE,
-                                scope_reenter, scope_leave, a);
-        parse_walk_on_annot_phase(w, PARSE_ANNOT_ADT, PHASE_SCOPE, scope_reenter,
-                                scope_leave, a);
-    }
+    parse_walk_on_annot_phase(w, PARSE_ANNOT_SCOPE_OPEN, PHASE_SCOPE,
+                            scope_open, scope_close, a);
+    parse_walk_on_annot_phase(w, PARSE_ANNOT_ADT, PHASE_SCOPE, adt_scope_open,
+                            scope_close, a);
 
-    bool symbols = all || initial_symbols || which == PARSE_ANNOT_PASS_SYMBOLS;
-    bool refine  = all || initial_symbols || which == PARSE_ANNOT_PASS_REFINE;
-    bool cflow   = all || which == PARSE_ANNOT_PASS_CFLOW;
-
-    if (all || initial_symbols || which == PARSE_ANNOT_PASS_INFER) {
+    {
         parse_walk_on_node(w, nullptr, infer_propagate, a);
         parse_walk_on_annot_phase(w, PARSE_ANNOT_INFER, PHASE_INFER, nullptr,
                                 annot_infer, a);
-        parse_walk_on_annot_phase(w, PARSE_ANNOT_SIZE, PHASE_INFER, annot_repr,
-                                nullptr, a);
-        parse_walk_on_annot_phase(w, PARSE_ANNOT_ALIGNMENT, PHASE_INFER,
-                                annot_repr, nullptr, a);
+        parse_walk_on_annot_phase(w, PARSE_ANNOT_SIZE, PHASE_DECL, nullptr,
+                                annot_repr, a);
+        parse_walk_on_annot_phase(w, PARSE_ANNOT_ALIGNMENT, PHASE_DECL,
+                                nullptr, annot_repr, a);
     }
 
-    if (symbols) {
+    {
     parse_walk_on_annot_phase(w, PARSE_ANNOT_NAMESPACE, PHASE_SCOPE,
                             annot_namespace, nullptr, a);
     parse_walk_on_annot_phase(w, PARSE_ANNOT_DECLARES, PHASE_DECL, annot_declares,
@@ -1620,7 +1556,7 @@ parse_annot_register_pass(parse_tree_walk_t    *w,
                             nullptr, a);
     }
 
-    if (refine) {
+    {
     parse_walk_on_annot_phase(w, PARSE_ANNOT_TYPE, PHASE_REFINE, annot_type,
                             nullptr, a);
     parse_walk_on_annot_phase(w, PARSE_ANNOT_EXPOSES, PHASE_REFINE, annot_exposes,
@@ -1653,7 +1589,7 @@ parse_annot_register_pass(parse_tree_walk_t    *w,
                             nullptr, a);
     }
 
-    if (cflow) {
+    {
     parse_walk_on_annot_phase(w, PARSE_ANNOT_BRANCH, PHASE_CF, cf_branch, nullptr,
                             a);
     parse_walk_on_annot_phase(w, PARSE_ANNOT_LOOP, PHASE_CF, cf_loop, nullptr, a);
@@ -1672,35 +1608,6 @@ parse_annot_register_pass(parse_tree_walk_t    *w,
     parse_walk_on_annot_phase(w, PARSE_ANNOT_NOTRIVIA, PHASE_CF, cf_notrivia,
                             nullptr, a);
     }
-}
-
-void
-parse_annot_register(parse_tree_walk_t    *w,
-                   parse_annot_result_t *out,
-                   th_ctx             *types,
-                   ir_module_t        *m)
-{
-    parse_annot_register_pass(w, out, types, m, PARSE_ANNOT_PASS_ALL);
-}
-
-parse_annot_result_t *
-parse_annot_walk_tree(parse_grammar_t    *g,
-                    parse_tree_t *tree,
-                    th_ctx           *types,
-                    ir_module_t      *m)
-{
-    if (!g || !tree) {
-        return nullptr;
-    }
-
-    parse_annot_result_t *r = parse_annot_result_new(nullptr);
-    parse_tree_walk_t    *w = parse_tree_walk_new(g, r);
-
-    parse_annot_register(w, r, types, m);
-    parse_tree_walk_run(w, tree);
-    parse_tree_walk_free(w);
-
-    return r;
 }
 
 void

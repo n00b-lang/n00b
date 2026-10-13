@@ -15,6 +15,20 @@ infer_bnf_h = custom_target(
     command: [embed, embed_script, '@INPUT@', '@OUTPUT@', 'INFER_BNF'],
 )
 
+lex_bnf_h = custom_target(
+    'lex_bnf.h',
+    input: 'scanner/lex.bnf',
+    output: 'lex_bnf.h',
+    command: [embed, embed_script, '@INPUT@', '@OUTPUT@', 'LEX_BNF'],
+)
+
+default_lex_h = custom_target(
+    'default_lex.h',
+    input: 'scanner/default.lex',
+    output: 'default_lex.h',
+    command: [embed, embed_script, '@INPUT@', '@OUTPUT@', 'DEFAULT_LEX'],
+)
+
 typelang_bnf_h = custom_target(
     'typelang_bnf.h',
     input: 'th/typelang.bnf',
@@ -29,7 +43,7 @@ ir_bnf_h = custom_target(
     command: [embed, embed_script, '@INPUT@', '@OUTPUT@', 'IR_BNF'],
 )
 
-ir_generated = [annot_bnf_h, infer_bnf_h, typelang_bnf_h, ir_bnf_h]
+ir_generated = [annot_bnf_h, infer_bnf_h, lex_bnf_h, default_lex_h, typelang_bnf_h, ir_bnf_h]
 
 th_sources = files(
     'th/typehash.c',
@@ -100,13 +114,12 @@ scanner_sources = files(
     'scanner/lex_analysis.c',
     'scanner/lex_conformance.c',
     'scanner/lex_build.c',
-    'scanner/lex_image.c',
+    'scanner/lex_parse.c',
     'scanner/literal_hook.c',
     'scanner/scan_builtins.c',
     'scanner/scanner.c',
     'scanner/token_stream.c',
     'scanner/tokenizer.c',
-    'scanner/tokenizers.c',
     'scanner/unicode_profile.c',
 )
 
@@ -143,9 +156,7 @@ ir_sources = files(
     'ir/span.c',
     'ir/storage_origin.c',
     'ir/structure.c',
-    'ir/symcheck.c',
     'ir/trait.c',
-    'ir/tree_pass.c',
     'ir/type_diags.c',
     'ir/typelang.c',
     'ir/verify.c',
@@ -181,7 +192,6 @@ ir_public_headers = files(
     '../include/ir/text.h',
     '../include/ir/verify.h',
     '../include/ir/pass.h',
-    '../include/ir/tree_pass.h',
     '../include/ir/rule.h',
     '../include/ir/layout.h',
     '../include/ir/shape.h',

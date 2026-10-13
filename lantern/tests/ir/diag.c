@@ -3,8 +3,10 @@
 #include <string.h>
 
 #include "ir/diag.h"
+#include "ir/typelang.h"
 #include "ir/verify.h"
 #include "lib/module.h"
+#include "th/typehash.h"
 #include "harness.h"
 
 static bool produced[IR_DIAG_COUNT];
@@ -615,6 +617,31 @@ static void test_pass_declarations(void)
     ir_ctx_free(ctx);
 }
 
+static void test_type_errors_import_once(void)
+{
+    ir_ctx_t *ctx = ir_ctx_new();
+    ir_module_t *m = mod(ctx);
+    th_ctx *types = ir_module_types(m);
+    th_type *integer = ir_type_parse(m, "int");
+    th_type *string = ir_type_parse(m, "string");
+    ir_diags_t *diags = ir_diags_new(ctx, nullptr);
+
+    check("mismatched types produce a type error",
+          integer && string && !th_unify_in_place(types, integer, string)
+              && th_error_count(types) == 1);
+    check("type errors become IR diagnostics exactly once",
+          ir_import_type_errors(m, diags) == 1
+              && ir_import_type_errors(m, diags) == 0
+              && th_error_count(types) == 0);
+    const ir_diag_t *diagnostic = ir_diags_at(diags, 0);
+    check("the diagnostic retains both type names",
+          diagnostic && diagnostic->code == IR_DIAG_TYPE_MISMATCH
+              && strstr(diagnostic->message, "int")
+              && strstr(diagnostic->message, "string"));
+    produced[IR_DIAG_TYPE_MISMATCH] = diagnostic != nullptr;
+    ir_ctx_free(ctx);
+}
+
 static void test_merge(void)
 {
     ir_ctx_t   *ctx = ir_ctx_new();
@@ -797,6 +824,7 @@ int main(int argc, char **argv)
     test_ordering();
     test_ordering_is_deterministic();
     test_pass_declarations();
+    test_type_errors_import_once();
     test_errors_do_not_stop_the_pipeline();
     test_merge();
     test_rendering(golden);

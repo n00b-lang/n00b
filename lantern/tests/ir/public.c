@@ -105,34 +105,6 @@ int main(void)
           && th_unify_in_place(types, open_type, closed_type)
           && ir_type_id(m, open_type) == closed_id);
 
-    size_t np    = ir_tree_pass_count();
-    bool   named = np > 0;
-    bool   saw_symcheck = false, saw_type_diags = false;
-
-    for (size_t i = 0; i < np; i++) {
-        const ir_pass_t *tp = ir_tree_pass_at(i);
-
-        named = named && tp && tp->name && *tp->name && tp->run;
-
-        if (tp == &ir_pass_symcheck) {
-            saw_symcheck = true;
-        }
-
-        if (tp == &ir_pass_type_diags) {
-            saw_type_diags = true;
-        }
-    }
-
-    check("every tree pass is enumerable and named", named);
-    check("ir_tree_pass_at is exhaustive: symcheck is in it", saw_symcheck);
-    check("ir_tree_pass_at is exhaustive: type-diags is in it",
-          saw_type_diags);
-    check("a pass past the end is nullptr, not out of bounds",
-          ir_tree_pass_at(np) == nullptr);
-    check("a tree pass on a module with no tree does not run",
-          ir_tree_pass_run(&ir_pass_annot_scope, m, nullptr, nullptr, d)
-              != IR_PASS_OK);
-
     free(text);
     free(again);
     free(extern_text);

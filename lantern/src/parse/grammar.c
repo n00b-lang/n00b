@@ -1359,6 +1359,8 @@ parse_grammar_finalize(parse_grammar_t *g)
         return;
     }
 
+    const scan_lex_spec_t *lex_spec = scan_grammar_lex(g);
+
     pthread_mutex_lock(&grammar_finalize_lock);
 
     if (g->finalized) {
@@ -1377,8 +1379,6 @@ parse_grammar_finalize(parse_grammar_t *g)
         }
         if (g->has_adjacency) break;
     }
-
-    const scan_lex_spec_t *lex_spec = scan_grammar_lex(g);
 
     parse_grammar_prepare_contextual(
         g, lex_spec ? lex_spec->soft_keywords : nullptr,

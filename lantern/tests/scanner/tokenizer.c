@@ -85,64 +85,10 @@ count_tokens(parse_grammar_t *g, const char *src)
 }
 
 static void
-test_the_builtin_tokenizers(void)
-{
-    static const char *const NAMES[] = {"text", "json", "lisp", "shell", "c"};
-
-    for (size_t i = 0; i < sizeof(NAMES) / sizeof(NAMES[0]); i++) {
-        if (!scan_tokenizer_for(S(NAMES[i]))) {
-            printf("FAIL  the %s tokenizer is not registered\n", NAMES[i]);
-            fails++;
-        }
-    }
-
-    parse_grammar_t *g = parse_grammar_new();
-
-    scan_grammar_set_tokenizer(g, S("json"));
-
-    check("json: a whole object is 9 tokens",
-          count_tokens(g, "{\"a\": [1, 2.5e3]}") == 9);
-    check("json: true is one token, not four",
-          count_tokens(g, "true") == 1);
-    check("json: a negative float is one token",
-          count_tokens(g, "-0.5") == 1);
-
-    scan_grammar_set_tokenizer(g, S("lisp"));
-
-    check("lisp: a form is its parens plus its atoms",
-          count_tokens(g, "(cons 'a \"s\")") == 6);
-    check("lisp: a semicolon comment is skipped",
-          count_tokens(g, "(a) ; note\n(b)") == 6);
-    check("lisp: a hyphenated symbol stays one token",
-          count_tokens(g, "call-with-x") == 1);
-
-    scan_grammar_set_tokenizer(g, S("shell"));
-
-    check("shell: redirects and pipes precede the synthetic line ending",
-          count_tokens(g, "a > b | c") == 6);
-    check("shell: a hash comment is skipped",
-          count_tokens(g, "a # note\n") == 2);
-
-    scan_grammar_set_tokenizer(g, S("c"));
-
-    check("c: both comment forms are skipped",
-          count_tokens(g, "a // x\n/* y */ b") == 2);
-    check("c: a char literal is one token",
-          count_tokens(g, "'x'") == 1);
-    check("c: a hex literal is one token",
-          count_tokens(g, "0x1f") == 1);
-    check("c: an exponent stays in the float",
-          count_tokens(g, "2.5e3") == 1);
-
-    parse_grammar_free(g);
-}
-
-static void
 test_the_grammar_is_the_operator_table(void)
 {
     parse_grammar_t *bare = parse_grammar_new();
 
-    scan_grammar_set_tokenizer(bare, S("c"));
 
     check("an operator the grammar never declares is not one token",
           count_tokens(bare, "a <<= b") == 5);
@@ -150,7 +96,6 @@ test_the_grammar_is_the_operator_table(void)
 
     parse_grammar_t *g = parse_grammar_new();
 
-    scan_grammar_set_tokenizer(g, S("c"));
 
     static const char *const OPS[] = {"<<=", "->", "==", "<", "=", "-", ">"};
 
@@ -172,7 +117,6 @@ static void
 test_stream_token_to_trivia(void)
 {
     parse_grammar_t *g = parse_grammar_new();
-    scan_grammar_set_tokenizer(g, S("c"));
     parse_register_terminal(g, S("+"));
 
     core_buffer_t *buf = nullptr;
@@ -209,7 +153,7 @@ test_stream_token_to_trivia(void)
 int
 main(void)
 {
-    check("the default tokenizer is always registered",
+    check("the default tokenizer is available",
           scan_tokenizer_for(S(SCAN_TOKENIZER_DEFAULT)) != nullptr);
     check("an unregistered name resolves to nothing",
           scan_tokenizer_for(S("nope")) == nullptr);
@@ -277,7 +221,6 @@ main(void)
 
     parse_grammar_free(m);
 
-    test_the_builtin_tokenizers();
     test_the_grammar_is_the_operator_table();
     test_stream_token_to_trivia();
 

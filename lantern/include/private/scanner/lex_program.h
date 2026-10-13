@@ -48,12 +48,6 @@ typedef struct {
     int32_t                    replacement_tid;
 } lex_recovery_t;
 
-typedef struct {
-    void  *storage;
-    size_t storage_bytes;
-    size_t live_programs;
-} lex_image_owner_t;
-
 core_list_decl(lex_term_node_t);
 core_list_decl(lex_term_edge_t);
 
@@ -68,7 +62,6 @@ struct scan_lex_t {
     const scan_lex_spec_t *spec;
     parse_grammar_t       *g;
     size_t                 refs;
-    lex_image_owner_t     *image_owner;
 
     size_t opwidth[256];
     core_list_t(lex_term_node_t) term_nodes;

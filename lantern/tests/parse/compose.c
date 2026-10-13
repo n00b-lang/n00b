@@ -341,6 +341,71 @@ static void test_a_visitor_can_stop_a_reduce(void)
     parse_grammar_free(g);
 }
 
+typedef struct {
+    parse_tree_t *first;
+    parse_tree_t *second;
+    parse_tree_t *third;
+    parse_tree_t *replacement;
+    char visits[8];
+    size_t count;
+} edit_walk_t;
+
+static parse_visit_outcome_t edit_children(parse_visit_t *v)
+{
+    edit_walk_t *edit = v->user;
+    if (v->node == edit->first) {
+        edit->visits[edit->count++] = 'a';
+        v->remove = true;
+    }
+    else if (v->node == edit->second) {
+        edit->visits[edit->count++] = 'b';
+        v->replace = edit->replacement;
+        v->revisit_replacement = true;
+    }
+    else if (v->node == edit->replacement)
+        edit->visits[edit->count++] = 'r';
+    else if (v->node == edit->third)
+        edit->visits[edit->count++] = 'c';
+    edit->visits[edit->count] = '\0';
+    return PARSE_VISIT_CONTINUE;
+}
+
+static void test_tree_editing_keeps_shifted_siblings(void)
+{
+    edit_walk_t edit = {0};
+    parse_tree_t *root = core_tree_node(parse_nt_node_t,
+        parse_token_info_ptr_t, ((parse_nt_node_t){.id = PARSE_EMPTY_STRING}));
+    edit.first = core_tree_leaf(parse_nt_node_t, parse_token_info_ptr_t,
+                                tk(PARSE_TOK_IDENTIFIER, "a", 0));
+    edit.second = core_tree_leaf(parse_nt_node_t, parse_token_info_ptr_t,
+                                 tk(PARSE_TOK_IDENTIFIER, "b", 1));
+    edit.third = core_tree_leaf(parse_nt_node_t, parse_token_info_ptr_t,
+                                tk(PARSE_TOK_IDENTIFIER, "c", 2));
+    edit.replacement = core_tree_leaf(parse_nt_node_t, parse_token_info_ptr_t,
+                                      tk(PARSE_TOK_IDENTIFIER, "r", 3));
+    core_tree_add_child(root, edit.first);
+    core_tree_add_child(root, edit.second);
+    core_tree_add_child(root, edit.third);
+    parse_tree_walk_t *walk = parse_tree_walk_new(nullptr, &edit);
+    parse_walk_on_stage(walk, PARSE_WALK_PREPARE, edit_children, nullptr);
+    parse_tree_walk_run(walk, root);
+    check("removal revisits the shifted sibling and replacement is prepared",
+          !strcmp(edit.visits, "abrc") && !parse_tree_walk_failed(walk));
+    check("only the retained children remain attached in order",
+          core_tree_num_children(root) == 2
+              && core_tree_child(root, 0) == edit.replacement
+              && core_tree_child(root, 1) == edit.third);
+    parse_tree_t *second = parse_tree_walk_take_detached(walk);
+    parse_tree_t *first = parse_tree_walk_take_detached(walk);
+    check("removed and replaced nodes transfer back to the caller",
+          second == edit.second && first == edit.first
+              && !parse_tree_walk_take_detached(walk));
+    parse_tree_walk_free(walk);
+    parse_tree_free(first);
+    parse_tree_free(second);
+    parse_tree_free(root);
+}
+
 int main(void)
 {
     test_the_parts_load_in_either_order();
@@ -349,6 +414,7 @@ int main(void)
     test_a_failed_load_changes_nothing();
     test_a_reduce_folds_children_into_a_value();
     test_a_visitor_can_stop_a_reduce();
+    test_tree_editing_keeps_shifted_siblings();
 
     return report("fe compose");
 }

@@ -27,6 +27,26 @@ S(const char *s)
 
 static th_ctx *types;
 
+static void
+annotate_once(parse_grammar_t *g, parse_tree_t *tree,
+              parse_annot_result_t *result, th_ctx *context,
+              ir_module_t *module)
+{
+    parse_tree_walk_t *walk = parse_tree_walk_new(g, result);
+    parse_annot_register(walk, result, context, module);
+    parse_tree_walk_run(walk, tree);
+    parse_tree_walk_free(walk);
+}
+
+static parse_annot_result_t *
+annotate_new(parse_grammar_t *g, parse_tree_t *tree, th_ctx *context)
+{
+    if (!g || !tree) return nullptr;
+    parse_annot_result_t *result = parse_annot_result_new(nullptr);
+    annotate_once(g, tree, result, context, nullptr);
+    return result;
+}
+
 static bool
 is_type(th_type *t, const char *typelang)
 {
@@ -1297,13 +1317,7 @@ test_implements_is_checked_not_carried(void)
     th_ctx             *tc = th_ctx_new();
     parse_annot_result_t *r  = parse_annot_result_new(nullptr);
 
-    for (int ph = PARSE_ANNOT_PASS_SCOPE; ph <= PARSE_ANNOT_PASS_INFER; ph++) {
-        parse_tree_walk_t *w = parse_tree_walk_new(g, r);
-
-        parse_annot_register_pass(w, r, tc, nullptr, (parse_annot_pass_t)ph);
-        parse_tree_walk_run(w, tree);
-        parse_tree_walk_free(w);
-    }
+    annotate_once(g, tree, r, tc, nullptr);
 
     parse_sym_entry_t *d = nullptr;
 
@@ -1377,14 +1391,7 @@ test_an_adt_builds_a_variant_type(void)
 
     parse_annot_result_t *r = parse_annot_result_new(nullptr);
 
-    for (int ph = PARSE_ANNOT_PASS_SCOPE; ph <= PARSE_ANNOT_PASS_INFER; ph++) {
-        parse_tree_walk_t *w = parse_tree_walk_new(g, r);
-
-        parse_annot_register_pass(w, r, types, nullptr,
-                                (parse_annot_pass_t)ph);
-        parse_tree_walk_run(w, tree);
-        parse_tree_walk_free(w);
-    }
+    annotate_once(g, tree, r, types, nullptr);
 
     th_type *var = nullptr;
 
@@ -1453,14 +1460,7 @@ test_the_repr_annotations_reach_the_layout_descriptor(void)
 
     parse_annot_result_t *r = parse_annot_result_new(nullptr);
 
-    for (int ph = PARSE_ANNOT_PASS_SCOPE; ph <= PARSE_ANNOT_PASS_INFER; ph++) {
-        parse_tree_walk_t *w = parse_tree_walk_new(g, r);
-
-        parse_annot_register_pass(w, r, ir_module_types(m), m,
-                                (parse_annot_pass_t)ph);
-        parse_tree_walk_run(w, tree);
-        parse_tree_walk_free(w);
-    }
+    annotate_once(g, tree, r, ir_module_types(m), m);
 
     th_type *rec = nullptr;
 
@@ -1571,14 +1571,7 @@ test_trait_method_inference_uses_visible_requirement(void)
     bool attached = registered && th_ctx_set_environment(
         inference, environment, "client", "base");
     parse_annot_result_t *annotations = parse_annot_result_new(nullptr);
-    for (int phase = PARSE_ANNOT_PASS_SCOPE;
-         attached && phase <= PARSE_ANNOT_PASS_INFER; phase++) {
-        parse_tree_walk_t *walk = parse_tree_walk_new(g, annotations);
-        parse_annot_register_pass(walk, annotations, inference, nullptr,
-                                  (parse_annot_pass_t)phase);
-        parse_tree_walk_run(walk, tree);
-        parse_tree_walk_free(walk);
-    }
+    if (attached) annotate_once(g, tree, annotations, inference, nullptr);
     parse_tree_t *access = tree;
     parse_tree_t *use = find_node(g, tree, "use");
     th_type *actual = access ? core_tree_node_value(access).type : nullptr;
@@ -1634,14 +1627,8 @@ test_trait_method_inference_uses_visible_requirement(void)
     bool multi_attached = multi_registered && th_ctx_set_environment(
         multi_inference, multi_env, "client", "base");
     parse_annot_result_t *multi_annotations = parse_annot_result_new(nullptr);
-    for (int phase = PARSE_ANNOT_PASS_SCOPE;
-         multi_attached && phase <= PARSE_ANNOT_PASS_INFER; phase++) {
-        parse_tree_walk_t *walk = parse_tree_walk_new(g, multi_annotations);
-        parse_annot_register_pass(walk, multi_annotations, multi_inference,
-                                  nullptr, (parse_annot_pass_t)phase);
-        parse_tree_walk_run(walk, multi_tree);
-        parse_tree_walk_free(walk);
-    }
+    if (multi_attached) annotate_once(g, multi_tree, multi_annotations,
+                                     multi_inference, nullptr);
     parse_tree_t *multi_access = multi_tree;
     parse_tree_t *multi_use = find_node(g, multi_tree, "use");
     th_type *multi_actual = multi_access
@@ -1728,14 +1715,7 @@ test_ordering_inference_uses_comparable_trait(void)
     bool attached = registered &&
         th_ctx_set_environment(inference, environment, "client", "base");
     parse_annot_result_t *annotations = parse_annot_result_new(nullptr);
-    for (int phase = PARSE_ANNOT_PASS_SCOPE;
-         attached && phase <= PARSE_ANNOT_PASS_INFER; phase++) {
-        parse_tree_walk_t *walk = parse_tree_walk_new(g, annotations);
-        parse_annot_register_pass(walk, annotations, inference, nullptr,
-                                  (parse_annot_pass_t)phase);
-        parse_tree_walk_run(walk, tree);
-        parse_tree_walk_free(walk);
-    }
+    if (attached) annotate_once(g, tree, annotations, inference, nullptr);
     parse_tree_t *comparison = find_node(g, tree, "comparison");
     th_type *actual = comparison
         ? core_tree_node_value(comparison).type : nullptr;
@@ -1820,14 +1800,7 @@ test_index_inference_uses_index_load_trait(void)
     bool attached = registered && th_ctx_set_environment(
         inference, environment, "client", "base");
     parse_annot_result_t *annotations = parse_annot_result_new(nullptr);
-    for (int phase = PARSE_ANNOT_PASS_SCOPE;
-         attached && phase <= PARSE_ANNOT_PASS_INFER; phase++) {
-        parse_tree_walk_t *walk = parse_tree_walk_new(g, annotations);
-        parse_annot_register_pass(walk, annotations, inference, nullptr,
-                                  (parse_annot_pass_t)phase);
-        parse_tree_walk_run(walk, tree);
-        parse_tree_walk_free(walk);
-    }
+    if (attached) annotate_once(g, tree, annotations, inference, nullptr);
     parse_tree_t *access = find_node(g, tree, "access");
     th_type *actual = access ? core_tree_node_value(access).type : nullptr;
     check("index result comes from the Index_Load contract",
@@ -1911,14 +1884,7 @@ test_slice_inference_uses_index_slice_trait(void)
         parse_tree_t *tree = parse_toy(g, "top", sources[i], &parser, &tokens);
         parse_annot_result_t *annotations = parse_annot_result_new(nullptr);
         bool ok = tree != nullptr;
-        for (int phase = PARSE_ANNOT_PASS_SCOPE;
-             ok && phase <= PARSE_ANNOT_PASS_INFER; phase++) {
-            parse_tree_walk_t *walk = parse_tree_walk_new(g, annotations);
-            parse_annot_register_pass(walk, annotations, inference, nullptr,
-                                      (parse_annot_pass_t)phase);
-            parse_tree_walk_run(walk, tree);
-            parse_tree_walk_free(walk);
-        }
+        if (ok) annotate_once(g, tree, annotations, inference, nullptr);
         parse_tree_t *access = tree ? find_node(g, tree, "access") : nullptr;
         th_type *actual = access ? core_tree_node_value(access).type : nullptr;
         all_inferred = all_inferred && ok && actual &&
@@ -1970,7 +1936,7 @@ test_the_representation_and_declaration_annotations(void)
 
     types = types ? types : th_ctx_new();
 
-    parse_annot_result_t *r = parse_annot_walk_tree(g, tree, types, nullptr);
+    parse_annot_result_t *r = annotate_new(g, tree, types);
 
     parse_sym_entry_t *a = nullptr;
     parse_sym_entry_t *q = nullptr;
@@ -2028,19 +1994,18 @@ test_initial_symbol_walk_callback(parse_grammar_t *g)
     node_probe_t probe = {0};
     parse_annot_result_set_node_callback(result, count_annot_nodes, &probe);
     parse_tree_walk_t *walk = parse_tree_walk_new(g, result);
-    parse_annot_register_pass(walk, result, nullptr, nullptr,
-                              PARSE_ANNOT_PASS_INITIAL_SYMBOLS);
+    parse_annot_register(walk, result, nullptr, nullptr);
     parse_tree_walk_run(walk, tree);
 
-    check("initial-symbol pass visits each nonterminal on entry and exit",
+    check("annotation walk visits each nonterminal on entry and exit",
           probe.enters > 0 && probe.enters == probe.exits);
-    check("initial-symbol pass creates its module scope",
+    check("annotation walk creates its module scope",
           core_tree_node_value(tree).scope != nullptr);
     parse_tree_t *decl = find_node(g, tree, "decl");
     check("ordinary nodes retain their enclosing lexical scope",
           decl && core_tree_node_value(decl).scope
               == core_tree_node_value(tree).scope);
-    check("initial-symbol pass records the declared name",
+    check("annotation walk records the declared name",
           parse_symtab_lookup_scoped(result->symtab,
               core_tree_node_value(tree).scope, S(""), S("a")) != nullptr);
     parse_sym_entry_t *inferred = parse_symtab_lookup_scoped(
@@ -2069,54 +2034,6 @@ test_initial_symbol_walk_callback(parse_grammar_t *g)
 }
 
 static void
-test_apply_ordered_annotation_kinds(parse_grammar_t *g)
-{
-    parse_pwz_parser_t *p;
-    parse_token_stream_t *ts;
-    parse_tree_t *tree = parse_toy(g, "prog", "vaT;{vbU;}?xyztcV;", &p, &ts);
-    check("single-node annotation sample parses", tree != nullptr);
-    if (!tree) return;
-
-    parse_annot_result_t *result = parse_annot_result_new(nullptr);
-    node_probe_t probe = {0};
-    parse_annot_result_set_node_callback(result, count_annot_nodes, &probe);
-    parse_tree_walk_t *walk = parse_tree_walk_new(g, result);
-    parse_annot_register_pass(walk, result, nullptr, nullptr,
-                              PARSE_ANNOT_PASS_INITIAL_SYMBOLS);
-    const parse_annot_kind_t kinds[] = {PARSE_ANNOT_SCOPE_OPEN};
-
-    parse_tree_walk_apply_node(walk, tree, nullptr, 0, -1, kinds,
-                               sizeof(kinds) / sizeof(kinds[0]), true);
-    check("single-node entry applies only the requested scope annotation",
-          core_tree_node_value(tree).scope != nullptr && probe.enters == 1
-              && probe.exits == 0);
-    parse_tree_walk_apply_node(walk, tree, nullptr, 0, -1, kinds,
-                               sizeof(kinds) / sizeof(kinds[0]), false);
-    check("single-node exit balances the node callback without descending",
-          probe.enters == 1 && probe.exits == 1);
-
-    parse_tree_walk_free(walk);
-    parse_annot_result_free(result);
-    parse_pwz_free(p);
-    scan_token_stream_free(ts);
-}
-
-static void
-apply_selected_tree(parse_tree_walk_t *walk, parse_tree_t *node,
-                    parse_tree_t *parent, int32_t depth, int32_t child_index,
-                    const parse_annot_kind_t *kinds, size_t kind_count)
-{
-    parse_tree_walk_apply_node(walk, node, parent, depth, child_index,
-                               kinds, kind_count, true);
-    for (size_t i = 0; i < core_tree_num_children(node); i++) {
-        apply_selected_tree(walk, core_tree_child(node, i), node, depth + 1,
-                            (int32_t)i, kinds, kind_count);
-    }
-    parse_tree_walk_apply_node(walk, node, parent, depth, child_index,
-                               kinds, kind_count, false);
-}
-
-static void
 test_selected_type_annotations_per_node(parse_grammar_t *g)
 {
     parse_pwz_parser_t *p;
@@ -2127,15 +2044,16 @@ test_selected_type_annotations_per_node(parse_grammar_t *g)
 
     parse_annot_result_t *result = parse_annot_result_new(nullptr);
     parse_tree_walk_t *walk = parse_tree_walk_new(g, result);
-    parse_annot_register_pass(walk, result, types, nullptr,
-                              PARSE_ANNOT_PASS_INITIAL_SYMBOLS);
+    parse_annot_register(walk, result, types, nullptr);
     const parse_annot_kind_t kinds[] = {
         PARSE_ANNOT_SCOPE_OPEN,
         PARSE_ANNOT_DECLARES,
         PARSE_ANNOT_TYPE,
     };
-    apply_selected_tree(walk, tree, nullptr, 0, -1, kinds,
-                        sizeof(kinds) / sizeof(kinds[0]));
+    check("type annotation subset is accepted",
+          parse_walk_set_annotation_order(walk, kinds,
+                                          sizeof(kinds) / sizeof(kinds[0])));
+    parse_tree_walk_run(walk, tree);
 
     parse_scope_t *scope = core_tree_node_value(tree).scope;
     parse_sym_entry_t *symbol = parse_symtab_lookup_scoped(
@@ -2231,15 +2149,16 @@ test_inference_result_is_propagated(void)
 
     parse_annot_result_t *result = parse_annot_result_new(nullptr);
     parse_tree_walk_t *walk = parse_tree_walk_new(g, result);
-    parse_annot_register_pass(walk, result, types, nullptr,
-                              PARSE_ANNOT_PASS_INITIAL_SYMBOLS);
+    parse_annot_register(walk, result, types, nullptr);
     const parse_annot_kind_t kinds[] = {
         PARSE_ANNOT_SCOPE_OPEN,
         PARSE_ANNOT_DECLARES,
         PARSE_ANNOT_INFER,
     };
-    apply_selected_tree(walk, tree, nullptr, 0, -1, kinds,
-                        sizeof(kinds) / sizeof(kinds[0]));
+    check("inference annotation subset is accepted",
+          parse_walk_set_annotation_order(walk, kinds,
+                                          sizeof(kinds) / sizeof(kinds[0])));
+    parse_tree_walk_run(walk, tree);
 
     parse_scope_t *scope = core_tree_node_value(tree).scope;
     parse_sym_entry_t *symbol = parse_symtab_lookup_scoped(
@@ -2280,8 +2199,7 @@ test_symbol_records_declaration_definition_and_use_nodes(void)
                                    &parser, &tokens);
     check("symbol site sample parses", tree != nullptr);
     if (tree) {
-        parse_annot_result_t *result = parse_annot_walk_tree(
-            grammar, tree, nullptr, nullptr);
+        parse_annot_result_t *result = annotate_new(grammar, tree, nullptr);
         parse_scope_t *scope = core_tree_node_value(tree).scope;
         parse_sym_entry_t *symbol = parse_symtab_lookup_scoped(
             result->symtab, scope, S(""), S("a"));
@@ -2325,7 +2243,7 @@ test_symbol_lookup_instantiates_schemes(void)
     }
 
     th_ctx *tc = th_ctx_new();
-    parse_annot_result_t *result = parse_annot_walk_tree(g, tree, tc, nullptr);
+    parse_annot_result_t *result = annotate_new(g, tree, tc);
     parse_scope_t *scope = core_tree_node_value(tree).scope;
     parse_tree_t *expr_node = find_node(g, tree, "expr");
     th_type *variable = th_var(tc);
@@ -2625,7 +2543,7 @@ test_function_visibility_does_not_leak_to_parameters(void)
         : nullptr;
     th_ctx *types = th_ctx_new();
     parse_annot_result_t *result = tree
-        ? parse_annot_walk_tree(grammar, tree, types, nullptr) : nullptr;
+        ? annotate_new(grammar, tree, types) : nullptr;
     parse_tree_t *func_node = result ? find_node(grammar, tree, "func") : nullptr;
     parse_sym_entry_t *function = func_node
         ? core_tree_node_value(func_node).sym : nullptr;
@@ -2658,7 +2576,7 @@ test_visibility_prefix_binds_to_non_function_declaration(void)
         ? parse_toy(grammar, "top", "Pf;", &parser, &tokens) : nullptr;
     th_ctx *types = th_ctx_new();
     parse_annot_result_t *result = tree
-        ? parse_annot_walk_tree(grammar, tree, types, nullptr) : nullptr;
+        ? annotate_new(grammar, tree, types) : nullptr;
     parse_tree_t *trait_node = tree ? find_node(grammar, tree, "trait") : nullptr;
     parse_sym_entry_t *trait = trait_node
         ? core_tree_node_value(trait_node).sym : nullptr;
@@ -2696,7 +2614,7 @@ test_field_visibility_in_non_type_tagged_scope(void)
         ? parse_toy(grammar, "top", "Pr{pf}", &parser, &tokens) : nullptr;
     th_ctx *types = th_ctx_new();
     parse_annot_result_t *result = tree
-        ? parse_annot_walk_tree(grammar, tree, types, nullptr) : nullptr;
+        ? annotate_new(grammar, tree, types) : nullptr;
     parse_scope_t *module_scope = tree
         ? core_tree_node_value(tree).scope : nullptr;
     parse_sym_entry_t *record = result && module_scope
@@ -2741,8 +2659,7 @@ test_scoped_declaration_is_bound_outside_its_body(void)
 
     parse_annot_result_t *result = parse_annot_result_new(nullptr);
     parse_tree_walk_t *walk = parse_tree_walk_new(g, result);
-    parse_annot_register_pass(walk, result, nullptr, nullptr,
-                              PARSE_ANNOT_PASS_INITIAL_SYMBOLS);
+    parse_annot_register(walk, result, nullptr, nullptr);
     parse_tree_walk_run(walk, tree);
     parse_tree_t *func = find_node(g, tree, "func");
     parse_sym_entry_t *symbol = func
@@ -2830,7 +2747,6 @@ main(void)
     test_the_representation_and_declaration_annotations();
     test_initial_symbol_walk_callback(g);
     test_symbol_records_declaration_definition_and_use_nodes();
-    test_apply_ordered_annotation_kinds(g);
     test_selected_type_annotations_per_node(g);
     test_frontend_type_node_resolver();
     test_inference_result_is_propagated();

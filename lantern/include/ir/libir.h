@@ -18,6 +18,5 @@
 #include "ir/range.h"
 #include "ir/typelang.h"
 #include "ir/grammar.h"
-#include "ir/tree_pass.h"
 
 #endif

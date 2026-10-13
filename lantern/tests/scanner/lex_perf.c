@@ -154,50 +154,28 @@ int
 main(void)
 {
     parse_grammar_t *compiled = grammar(true);
-    scan_lex_t *compiled_program = scan_grammar_lex_compiled(compiled);
-    core_string_t image = scan_lex_image_encode(compiled_program);
-    parse_grammar_t *loaded = grammar(true);
-    check("generated scanner image loads for performance comparison",
-          scan_grammar_set_lex_image(loaded, image));
     parse_grammar_t *handwritten = grammar(false);
     core_buffer_t *small = source_of_size(1 << 20);
     core_buffer_t *large = source_of_size(2 << 20);
 
     run_t warm_compiled = run(compiled, small, 1);
     run_t warm_hand = run(handwritten, small, 1);
-    run_t warm_loaded = run(loaded, small, 1);
     run_t compiled_small = run(compiled, small, 3);
     run_t compiled_large = run(compiled, large, 3);
     run_t hand_large = run(handwritten, large, 3);
-    run_t loaded_large = run(loaded, large, 3);
 
     check("compiled and handwritten lexers produce the same token count",
           warm_compiled.tokens == warm_hand.tokens);
     check("compiled and handwritten lexers produce the same token kinds",
           warm_compiled.checksum == warm_hand.checksum);
-    check("generated and runtime-compiled scanners produce the same tokens",
-          warm_loaded.tokens == warm_compiled.tokens
-              && warm_loaded.checksum == warm_compiled.checksum);
     check("compiled lexer throughput scales linearly with source size",
           compiled_large.seconds < compiled_small.seconds * 2.8);
     check("compiled dispatch stays within 4x of a direct handwritten scanner",
           compiled_large.seconds < hand_large.seconds * 4.0);
-    check("generated scanner throughput is no worse than runtime compilation",
-          loaded_large.seconds < compiled_large.seconds * 1.35);
-
-    scan_lex_info_t compiled_info = {0};
-    scan_lex_info_t loaded_info = {0};
-    scan_lex_inspect(compiled_program, &compiled_info);
-    scan_lex_inspect(scan_grammar_lex_compiled(loaded), &loaded_info);
-    check("generated scanner resident memory is no worse than runtime compilation",
-          loaded_info.resident_bytes <= compiled_info.resident_bytes);
-
-    printf("      compiled %.1f MiB/s, generated %.1f MiB/s, handwritten "
-           "%.1f MiB/s, ratio %.2fx, 2x scaling %.2fx\n",
+    printf("      compiled %.1f MiB/s, handwritten %.1f MiB/s, "
+           "ratio %.2fx, 2x scaling %.2fx\n",
            (3.0 * large->byte_len / (1024.0 * 1024.0))
                / compiled_large.seconds,
-           (3.0 * large->byte_len / (1024.0 * 1024.0))
-               / loaded_large.seconds,
            (3.0 * large->byte_len / (1024.0 * 1024.0)) / hand_large.seconds,
            compiled_large.seconds / hand_large.seconds,
            compiled_large.seconds / compiled_small.seconds);
@@ -205,8 +183,6 @@ main(void)
     core_buffer_free(small);
     core_buffer_free(large);
     parse_grammar_free(compiled);
-    parse_grammar_free(loaded);
     parse_grammar_free(handwritten);
-    core_free(image.data);
     return report("lexer performance");
 }

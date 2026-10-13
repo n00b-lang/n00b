@@ -10,7 +10,7 @@ layout_bin="${6:-}"
 promote_bin="${7:-}"
 structure_bin="${8:-}"
 pdg_bin="${9:-}"
-tree_bin="${10:-}"
+lower_bin="${10:-}"
 inc="$root/include/ir"
 src="$root/src"
 priv="$root/include/private"
@@ -208,12 +208,12 @@ else
     fail "no pdg binary was given, so coverage cannot be checked" ""
 fi
 
-if [ -n "$tree_bin" ] && [ -x "$tree_bin" ]; then
-    "$tree_bin" "$work" >/dev/null 2>&1 \
-        || fail "the tree-pass test did not pass, so its code coverage is unknown" ""
-    cat "$work/produced-codes-tree.txt" >> "$produced" 2>/dev/null
+if [ -n "$lower_bin" ] && [ -x "$lower_bin" ]; then
+    "$lower_bin" >/dev/null 2>&1 \
+        || fail "the lowering test did not pass, so its code coverage is unknown" ""
+    cat "$work/produced-codes-lower.txt" >> "$produced" 2>/dev/null
 else
-    fail "no tree-pass binary was given, so coverage cannot be checked" ""
+    fail "no lowering binary was given, so coverage cannot be checked" ""
 fi
 
 if [ -n "$text_bin" ] && [ -x "$text_bin" ]; then

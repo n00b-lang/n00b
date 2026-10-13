@@ -1,5 +1,4 @@
 #include "private/ir/internal.h"
-#include "ir/tree_pass.h"
 #include "ir/typelang.h"
 #include "ir/text.h"
 #include "ir/diag.h"
@@ -136,23 +135,3 @@ uint32_t ir_import_type_errors(ir_module_t *m, ir_diags_t *d)
     return made;
 }
 
-static bool
-import_types(ir_module_t *m, ir_diags_t *d, void *state)
-{
-    (void)state;
-
-    if (!m) {
-        return false;
-    }
-
-    ir_import_type_errors(m, d);
-
-    return true;
-}
-
-const ir_pass_t ir_pass_type_diags = {
-    .name        = "annot.type-diags",
-    .requires    = IR_PROP_TREE | IR_PROP_SCOPED | IR_PROP_SYMBOLS,
-    .establishes = 0,
-    .run         = import_types,
-};

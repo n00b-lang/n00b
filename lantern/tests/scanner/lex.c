@@ -10,6 +10,7 @@
 #include "parse/pwz.h"
 #include "parse/tree_util.h"
 #include "private/parse/grammar.h"
+#include "private/scanner/lex_decl.h"
 #include "scanner/lex.h"
 #include "scanner/lex_conformance.h"
 #include "scanner/token_stream.h"
@@ -19,23 +20,57 @@
 
 #define HEX "0123456789abcdefABCDEF"
 
+static const scan_lex_string_t JSON_STRINGS[] = {
+    {.opener = S("\""), .closer = S("\""), .escape = S("\\"),
+     .tok = S("STRING")},
+    {},
+};
+
+static const scan_lex_spec_t JSON = {
+    .name = S("json"),
+    .strings = JSON_STRINGS,
+    .number = {.sign = S("-"), .exponent = S("eE"),
+               .tok_int = S("INT_LIT"), .tok_float = S("FLOAT_LIT")},
+    .tok_ident = S("IDENTIFIER"),
+};
+
 static scan_status_t source_status(parse_grammar_t *g, const char *source);
 static parse_grammar_t *unicode_identifier_grammar(const char *version);
 static atomic_size_t literal_hook_calls;
 
-typedef struct {
-  uint64_t magic;
-  uint32_t format;
-  uint32_t endian;
-  uint32_t pointer_bytes;
-  uint32_t size_bytes;
-  uint64_t abi;
-  uint64_t grammar;
-  uint64_t payload_bytes;
-  uint64_t root_offset;
-  uint64_t relocation_count;
-  uint64_t checksum;
-} test_lex_image_header_t;
+static bool
+load_test_grammar(core_string_t source, core_string_t start,
+                  parse_grammar_t *grammar)
+{
+  if (source.u8_bytes < 5 || memcmp(source.data, "@lex-", 5)) {
+    return parse_bnf_load(source, start, grammar);
+  }
+
+  size_t split = source.u8_bytes;
+  for (size_t i = 0; i + 1 < source.u8_bytes; i++) {
+    if (source.data[i] == '\n' && source.data[i + 1] == '<') {
+      split = i + 1;
+      break;
+    }
+  }
+
+  core_string_t bnf = core_string_borrow(source.data + split,
+                                         source.u8_bytes - split);
+  if (bnf.u8_bytes && !parse_bnf_load(bnf, start, grammar)) {
+    return false;
+  }
+
+  core_list_t(scan_lex_decl_t) decls = core_list_new(scan_lex_decl_t);
+  bool ok = scan_lex_parse_file(core_string_borrow(source.data, split),
+                                S("inline.lex"), &decls);
+  if (ok) {
+    const scan_lex_spec_t *spec = scan_lex_spec_from_decls(grammar, &decls);
+    scan_grammar_set_lex(grammar, spec);
+    grammar->lex_spec_owned = spec != nullptr;
+  }
+  scan_lex_decls_free(&decls);
+  return ok;
+}
 
 static scan_lex_literal_borrowed_result_t
 test_literal_hook(const scan_lex_literal_input_t *input) {
@@ -542,7 +577,7 @@ static parse_grammar_t *indent_policy_grammar(const char *policies) {
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, source);
 
-  if (!parse_bnf_load(source, CORE_STRING_STATIC("file"), g)) {
+  if (!load_test_grammar(source, CORE_STRING_STATIC("file"), g)) {
     fprintf(stderr, "indent policy grammar: %s\n", parse_bnf_error());
     parse_grammar_free(g);
     g = nullptr;
@@ -771,7 +806,7 @@ static parse_grammar_t *layout_matching_grammar(bool colon_block) {
   core_string_t text = core_string_from_cstr(colon_block ? BLOCK : OUTSIDE);
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
-  bool loaded = parse_bnf_load(text, S("file"), g);
+  bool loaded = load_test_grammar(text, S("file"), g);
   if (!loaded) {
     fprintf(stderr, "layout grammar load failed: %s\n", parse_bnf_error());
   }
@@ -902,7 +937,7 @@ static parse_grammar_t *embedded_grammar(const char *lexer, bool tokens) {
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, source);
 
-  if (!parse_bnf_load(source, CORE_STRING_STATIC("file"), g)) {
+  if (!load_test_grammar(source, CORE_STRING_STATIC("file"), g)) {
     parse_grammar_free(g);
     g = nullptr;
   }
@@ -920,7 +955,7 @@ static void embed_error(const char *label, const char *declaration,
 
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, source);
-  bool loaded = parse_bnf_load(source, CORE_STRING_STATIC("file"), g);
+  bool loaded = load_test_grammar(source, CORE_STRING_STATIC("file"), g);
   scan_lex_t *compiled = loaded ? scan_grammar_lex_compiled(g) : nullptr;
   const char *error = scan_lex_build_error();
 
@@ -1075,14 +1110,6 @@ static void test_embedded_lexer_switching(void) {
   compiled = scan_grammar_lex_compiled(deep);
   check("embedded lexer nesting is not limited to 64 levels",
         compiled != nullptr);
-  core_string_t deep_image =
-      compiled ? scan_lex_image_encode(compiled) : (core_string_t){0};
-  parse_grammar_t *deep_loaded = embedded_grammar("embed-depth-0", true);
-  check("deep embedded lexer graphs survive image loading",
-        deep_image.data && deep_loaded &&
-            scan_grammar_set_lex_image(deep_loaded, deep_image));
-  core_free(deep_image.data);
-  parse_grammar_free(deep_loaded);
   parse_grammar_free(deep);
 
   embed_error("delegated embeds name unknown lexers",
@@ -1103,7 +1130,7 @@ static void test_embedded_lexer_switching(void) {
   parse_grammar_set_error_recovery(legacy, false);
   parse_bnf_declare_terminals(legacy, legacy_source);
   check("legacy embedded regions load alongside delegated embeds",
-        parse_bnf_load(legacy_source, S("file"), legacy));
+        load_test_grammar(legacy_source, S("file"), legacy));
 
   ts = scan_tokenize_incremental_owned(legacy);
   check("a legacy opener prefix waits at an incremental boundary",
@@ -1286,7 +1313,7 @@ static void test_heredoc_families(void) {
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, source);
   check("named heredoc header profiles load",
-        parse_bnf_load(source, S("file"), g));
+        load_test_grammar(source, S("file"), g));
 
   const char *input = "call <<A <<'B'\n"
                       "  one\n"
@@ -1407,7 +1434,7 @@ static parse_grammar_t *literal_hook_grammar(void) {
 
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, source);
-  bool loaded = parse_bnf_load(source, S("file"), g);
+  bool loaded = load_test_grammar(source, S("file"), g);
   core_free(source.data);
 
   if (!loaded) {
@@ -1510,7 +1537,7 @@ static void test_literal_postprocessing_hooks(void) {
   parse_grammar_t *unknown = parse_grammar_new();
   parse_grammar_set_error_recovery(unknown, false);
   parse_bnf_declare_terminals(unknown, unknown_source);
-  bool loaded = parse_bnf_load(unknown_source, S("file"), unknown);
+  bool loaded = load_test_grammar(unknown_source, S("file"), unknown);
   check("unknown literal hooks fail during lexer construction",
         loaded && !scan_grammar_lex_compiled(unknown) &&
             scan_lex_compile_error() &&
@@ -1556,7 +1583,7 @@ static void test_a_grammar_declares_its_own_lexis(void) {
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
 
-  if (!parse_bnf_load(text, CORE_STRING_STATIC("file"), g)) {
+  if (!load_test_grammar(text, CORE_STRING_STATIC("file"), g)) {
     check("a grammar with @lex- declarations loads", false);
     parse_grammar_free(g);
 
@@ -1587,7 +1614,7 @@ static parse_grammar_t *region_grammar(void) {
   parse_grammar_t *g = parse_grammar_new();
   core_string_t text = core_string_from_cstr(G);
   parse_bnf_declare_terminals(g, text);
-  bool loaded = parse_bnf_load(text, S("region.lex"), g);
+  bool loaded = load_test_grammar(text, S("region.lex"), g);
   if (!loaded)
     fprintf(stderr, "region grammar load failed: %s\n", parse_bnf_error());
   core_free(text.data);
@@ -1736,7 +1763,7 @@ static void test_string_families_expand_once(void) {
 
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
-  bool loaded = parse_bnf_load(text, CORE_STRING_STATIC("file"), g);
+  bool loaded = load_test_grammar(text, CORE_STRING_STATIC("file"), g);
 
   check("a declarative string family loads", loaded);
   kinds(g, "a string family expands prefixes across quote styles",
@@ -1772,7 +1799,7 @@ static void test_string_families_reject_duplicate_openers(void) {
 
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
-  bool loaded = parse_bnf_load(text, CORE_STRING_STATIC("file"), g);
+  bool loaded = load_test_grammar(text, CORE_STRING_STATIC("file"), g);
   scan_lex_t *lex = loaded ? scan_grammar_lex_compiled(g) : nullptr;
   const char *error = scan_lex_build_error();
 
@@ -1791,7 +1818,7 @@ static void family_error(const char *label, const char *source,
 
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
-  bool loaded = parse_bnf_load(text, CORE_STRING_STATIC("file"), g);
+  bool loaded = load_test_grammar(text, CORE_STRING_STATIC("file"), g);
   scan_lex_t *lex = loaded ? scan_grammar_lex_compiled(g) : nullptr;
   const char *error = scan_lex_build_error();
 
@@ -1840,7 +1867,7 @@ static void test_paired_string_families_nest(void) {
 
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
-  bool loaded = parse_bnf_load(text, CORE_STRING_STATIC("file"), g);
+  bool loaded = load_test_grammar(text, CORE_STRING_STATIC("file"), g);
   scan_lex_info_t info = {0};
 
   check("paired string families compile their delimiter product",
@@ -1895,7 +1922,7 @@ static void test_composable_string_escape_profiles(void) {
 
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
-  bool loaded = parse_bnf_load(text, CORE_STRING_STATIC("file"), g);
+  bool loaded = load_test_grammar(text, CORE_STRING_STATIC("file"), g);
 
   check("string escape profiles resolve before their users", loaded);
   check("composed escape profiles accept simple and fixed-width escapes",
@@ -1965,7 +1992,7 @@ static void test_literal_string_escape_prefixes(void) {
 
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
-  bool loaded = parse_bnf_load(text, CORE_STRING_STATIC("file"), g);
+  bool loaded = load_test_grammar(text, CORE_STRING_STATIC("file"), g);
   check("exact multi-byte string escape prefixes compile",
         loaded && scan_grammar_lex_compiled(g));
   check("exact multi-byte string escape prefixes are accepted",
@@ -1983,7 +2010,7 @@ static void test_literal_string_escape_prefixes(void) {
   text = core_string_from_cstr(BAD);
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
-  bool bad_loaded = parse_bnf_load(text, CORE_STRING_STATIC("file"), g);
+  bool bad_loaded = load_test_grammar(text, CORE_STRING_STATIC("file"), g);
   bool rejected = !bad_loaded || !scan_grammar_lex_compiled(g);
   check("exact string escape prefixes cannot be empty", rejected);
   parse_grammar_free(g);
@@ -2013,7 +2040,7 @@ static void test_large_string_family_dispatch_is_bounded(void) {
 
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
-  bool loaded = parse_bnf_load(text, CORE_STRING_STATIC("file"), g);
+  bool loaded = load_test_grammar(text, CORE_STRING_STATIC("file"), g);
   scan_lex_t *lex = loaded ? scan_grammar_lex_compiled(g) : nullptr;
   scan_lex_info_t info = {0};
 
@@ -2064,7 +2091,7 @@ static void test_large_number_suffix_dispatch_is_bounded(void) {
   };
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
-  bool loaded = parse_bnf_load(text, CORE_STRING_STATIC("file"), g);
+  bool loaded = load_test_grammar(text, CORE_STRING_STATIC("file"), g);
   scan_lex_t *lex = loaded ? scan_grammar_lex_compiled(g) : nullptr;
   scan_lex_info_t info = {0};
 
@@ -2115,7 +2142,7 @@ static void test_long_numeric_trie_paths_resume_linearly(void) {
   };
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
-  bool loaded = parse_bnf_load(text, CORE_STRING_STATIC("file"), g);
+  bool loaded = load_test_grammar(text, CORE_STRING_STATIC("file"), g);
 
   parse_token_stream_t *ts =
       loaded ? scan_tokenize_incremental_owned(g) : nullptr;
@@ -2157,7 +2184,7 @@ static void test_an_unknown_option_is_named(void) {
 
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
-  parse_bnf_load(text, CORE_STRING_STATIC("file"), g);
+  load_test_grammar(text, CORE_STRING_STATIC("file"), g);
 
   core_buffer_t *buf = nullptr;
   parse_scanner_t *sc = nullptr;
@@ -2187,7 +2214,7 @@ static void test_an_unknown_option_is_named(void) {
   text = core_string_from_cstr(R);
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
-  parse_bnf_load(text, CORE_STRING_STATIC("file"), g);
+  load_test_grammar(text, CORE_STRING_STATIC("file"), g);
 
   ts = scan_tokenize(g, "/x/", 3, &buf, &sc);
   err = scan_lex_build_error();
@@ -2229,19 +2256,17 @@ static void test_lex_declarations_have_no_fixed_limit(void) {
     core_buffer_printf(source, "@lex-directive(\"d%zu\")\n", i);
   }
 
-  core_buffer_puts(source, "<file> ::= %IDENTIFIER\n");
-
   parse_grammar_t *g = parse_grammar_new();
   core_string_t text = {.data = source->data, .u8_bytes = source->byte_len};
+  core_list_t(scan_lex_decl_t) decls = core_list_new(scan_lex_decl_t);
 
   parse_grammar_set_error_recovery(g, false);
-  parse_bnf_declare_terminals(g, text);
-
-  bool loaded = parse_bnf_load(text, CORE_STRING_STATIC("file"), g);
+  bool loaded = scan_lex_parse_file(text, S("many.lex"), &decls);
   check("many lexer declarations load", loaded);
 
   const scan_lex_spec_t *spec =
-      loaded ? scan_lex_spec_from_grammar(g) : nullptr;
+      loaded ? scan_lex_spec_from_decls(g, &decls) : nullptr;
+  scan_lex_decls_free(&decls);
 
   check("many lexer declarations build", spec != nullptr);
   if (spec) {
@@ -2288,7 +2313,7 @@ static parse_grammar_t *fence_grammar(void) {
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
 
-  if (!parse_bnf_load(text, CORE_STRING_STATIC("file"), g)) {
+  if (!load_test_grammar(text, CORE_STRING_STATIC("file"), g)) {
     parse_grammar_free(g);
     g = nullptr;
   }
@@ -2311,7 +2336,7 @@ static parse_grammar_t *hash_fence_grammar(void) {
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
 
-  if (!parse_bnf_load(text, CORE_STRING_STATIC("file"), g)) {
+  if (!load_test_grammar(text, CORE_STRING_STATIC("file"), g)) {
     parse_grammar_free(g);
     g = nullptr;
   }
@@ -2384,7 +2409,7 @@ static void test_fence_padding_requires_both_boundaries(void) {
   core_string_t text = core_string_from_cstr(GRAMMAR);
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
-  bool loaded = parse_bnf_load(text, S("file"), g);
+  bool loaded = load_test_grammar(text, S("file"), g);
   check("a padded fence declaration loads", loaded);
   core_free(text.data);
   if (!loaded) {
@@ -2542,7 +2567,7 @@ static void test_filled_block_comment_delimiters(void) {
   core_string_t grammar_text = core_string_from_cstr(GRAMMAR);
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, grammar_text);
-  bool loaded = parse_bnf_load(grammar_text, S("file"), g);
+  bool loaded = load_test_grammar(grammar_text, S("file"), g);
   check("a repeated-fill block comment declaration loads", loaded);
   core_free(grammar_text.data);
   if (!loaded) {
@@ -3160,223 +3185,6 @@ static void test_convenience_tokenization_owns_its_resources(void) {
   parse_grammar_free(g);
 }
 
-static parse_grammar_t *soft_image_grammar(void) {
-  static const char *const SPEC =
-      "@lex-ident(as(\"IDENTIFIER\"))\n"
-      "@lex-soft-keywords(\"match\", \"case\")\n"
-      "@lex-fallback(\"reject\")\n"
-      "<file> ::= %\"match\" %IDENTIFIER %\"case\"\n";
-  core_string_t text = core_string_from_cstr(SPEC);
-  parse_grammar_t *grammar = parse_grammar_new();
-
-  parse_grammar_set_error_recovery(grammar, false);
-  parse_bnf_declare_terminals(grammar, text);
-  if (!parse_bnf_load(text, S("file"), grammar)) {
-    parse_grammar_free(grammar);
-    grammar = nullptr;
-  }
-  core_free(text.data);
-  return grammar;
-}
-
-static void test_generated_scanner_images(void) {
-  static const char *const TERMS[] = {
-      "IDENTIFIER",    "INTEGER",       "FLOAT",
-      "STRING",        "TEMPLATE_HEAD", "TEMPLATE_MIDDLE",
-      "TEMPLATE_TAIL", "REGEX_LIT",     nullptr,
-  };
-  parse_grammar_t *source = mk(&JS, TERMS);
-  scan_lex_t *compiled = scan_grammar_lex_compiled(source);
-  core_string_t first = scan_lex_image_encode(compiled);
-  core_string_t second = scan_lex_image_encode(compiled);
-  parse_grammar_t *equivalent = mk(&JS, TERMS);
-  core_string_t independently_encoded =
-      scan_lex_image_encode(scan_grammar_lex_compiled(equivalent));
-
-  check("compiled scanner images encode successfully",
-        first.data && first.u8_bytes > 0 && !scan_lex_image_error());
-  check("compiled scanner image emission is deterministic",
-        first.u8_bytes == second.u8_bytes &&
-            !memcmp(first.data, second.data, first.u8_bytes));
-  check("equivalent independently compiled scanners emit identical images",
-        first.u8_bytes == independently_encoded.u8_bytes &&
-            !memcmp(first.data, independently_encoded.data, first.u8_bytes));
-
-  parse_grammar_t *loaded = bare_grammar(TERMS);
-  check("a scanner image installs without a registered specification",
-        scan_grammar_set_lex_image(loaded, first));
-  if (loaded->lex_compiled) {
-    scan_lex_info_t source_info = {0};
-    scan_lex_info_t loaded_info = {0};
-    scan_lex_inspect(compiled, &source_info);
-    scan_lex_inspect(loaded->lex_compiled, &loaded_info);
-    check("loaded scanner images retain their compiled table sizes",
-          source_info.terminal_nodes == loaded_info.terminal_nodes &&
-              source_info.terminal_edges == loaded_info.terminal_edges &&
-              source_info.opener_nodes == loaded_info.opener_nodes &&
-              source_info.number_prefix_nodes ==
-                  loaded_info.number_prefix_nodes &&
-              source_info.number_suffix_nodes ==
-                  loaded_info.number_suffix_nodes);
-    kinds(loaded, "loaded scanner images produce the runtime scanner's tokens",
-          "name = 0x1f + /ab+c/i; `x${name}` // tail\n",
-          "IDENTIFIER = INTEGER + REGEX_LIT ; TEMPLATE_HEAD IDENTIFIER "
-          "TEMPLATE_TAIL");
-  }
-
-  parse_grammar_t *mismatch = bare_grammar(TERMS);
-  parse_register_terminal(mismatch, S("EXTRA"));
-  check("scanner images reject a different terminal vocabulary",
-        !scan_grammar_set_lex_image(mismatch, first) &&
-            scan_lex_image_error() &&
-            strstr(scan_lex_image_error(), "vocabulary") != nullptr);
-
-  parse_grammar_t *codepoint_source = mk(&JS, TERMS);
-  parse_nonterm_t *source_file = parse_nonterm(codepoint_source, S("file"));
-  parse_add_rule(codepoint_source, source_file, PARSE_CHAR('+'));
-  core_string_t codepoint_image =
-      scan_lex_image_encode(scan_grammar_lex_compiled(codepoint_source));
-  parse_grammar_t *codepoint_target = bare_grammar(TERMS);
-  parse_nonterm_t *target_file = parse_nonterm(codepoint_target, S("file"));
-  parse_add_rule(codepoint_target, target_file, PARSE_CHAR('-'));
-  check("scanner images bind codepoint terminal vocabularies",
-        !scan_grammar_set_lex_image(codepoint_target, codepoint_image) &&
-            scan_lex_image_error() &&
-            strstr(scan_lex_image_error(), "vocabulary") != nullptr);
-  core_free(codepoint_image.data);
-  parse_grammar_free(codepoint_target);
-  parse_grammar_free(codepoint_source);
-
-  char *damaged_data = core_alloc_size(1, first.u8_bytes);
-  memcpy(damaged_data, first.data, first.u8_bytes);
-  damaged_data[first.u8_bytes / 2] ^= 0x5a;
-  core_string_t damaged = core_string_borrow(damaged_data, first.u8_bytes);
-  parse_grammar_t *damaged_target = bare_grammar(TERMS);
-  check("scanner images reject corrupted payloads",
-        !scan_grammar_set_lex_image(damaged_target, damaged) &&
-            scan_lex_image_error() &&
-            strstr(scan_lex_image_error(), "checksum") != nullptr);
-
-  memcpy(damaged_data, first.data, first.u8_bytes);
-  damaged_data[first.u8_bytes - 1] ^= 0x5a;
-  check("scanner images checksum relocation metadata",
-        !scan_grammar_set_lex_image(damaged_target, damaged) &&
-            scan_lex_image_error() &&
-            strstr(scan_lex_image_error(), "checksum") != nullptr);
-
-  memcpy(damaged_data, first.data, first.u8_bytes);
-  test_lex_image_header_t *changed_root = (void *)damaged_data;
-  changed_root->root_offset ^= sizeof(void *);
-  check("scanner images checksum header metadata",
-        !scan_grammar_set_lex_image(damaged_target, damaged) &&
-            scan_lex_image_error() &&
-            strstr(scan_lex_image_error(), "checksum") != nullptr);
-
-  memcpy(damaged_data, first.data, first.u8_bytes);
-  test_lex_image_header_t *oversized = (void *)damaged_data;
-  oversized->payload_bytes = UINT64_MAX;
-  check("scanner images reject overflowing section lengths",
-        !scan_grammar_set_lex_image(damaged_target, damaged) &&
-            scan_lex_image_error() &&
-            strstr(scan_lex_image_error(), "bounds") != nullptr);
-
-  core_free(damaged_data);
-  core_free(first.data);
-  core_free(second.data);
-  core_free(independently_encoded.data);
-  parse_grammar_free(damaged_target);
-  parse_grammar_free(mismatch);
-  parse_grammar_free(loaded);
-  parse_grammar_free(source);
-  parse_grammar_free(equivalent);
-
-  parse_grammar_t *fence_source = fence_grammar();
-  parse_grammar_t *fence_loaded = fence_grammar();
-  core_string_t fence_image =
-      scan_lex_image_encode(scan_grammar_lex_compiled(fence_source));
-  check("scanner images preserve variable-width fence dispatch",
-        scan_grammar_set_lex_image(fence_loaded, fence_image) &&
-            source_status(fence_loaded, "[==ffi[body]==]") ==
-                SCAN_STATUS_COMPLETE);
-  core_free(fence_image.data);
-  parse_grammar_free(fence_loaded);
-  parse_grammar_free(fence_source);
-
-  parse_grammar_t *embed_source = embedded_grammar("json", true);
-  parse_grammar_t *embed_loaded = embedded_grammar("json", true);
-  core_string_t embed_image =
-      scan_lex_image_encode(scan_grammar_lex_compiled(embed_source));
-  check("scanner images preserve nested compiled lexer graphs",
-        scan_grammar_set_lex_image(embed_loaded, embed_image) &&
-            source_status(embed_loaded, "a {{1 \"x\"}} b") ==
-                SCAN_STATUS_COMPLETE);
-  core_free(embed_image.data);
-  parse_grammar_free(embed_loaded);
-  parse_grammar_free(embed_source);
-
-  static const char *const RUBY_TERMS[] = {
-      "IDENTIFIER", "INTEGER", "HEREDOC", "CVAR", "IVAR", "GVAR", nullptr,
-  };
-  parse_grammar_t *heredoc_source = mk(&RUBY, RUBY_TERMS);
-  parse_grammar_t *heredoc_loaded = mk(&RUBY, RUBY_TERMS);
-  core_string_t heredoc_image =
-      scan_lex_image_encode(scan_grammar_lex_compiled(heredoc_source));
-  check("scanner images preserve heredoc recipes",
-        scan_grammar_set_lex_image(heredoc_loaded, heredoc_image) &&
-            source_status(heredoc_loaded, "x = <<~END\nbody\nEND\n") ==
-                SCAN_STATUS_COMPLETE);
-  core_free(heredoc_image.data);
-  parse_grammar_free(heredoc_loaded);
-  parse_grammar_free(heredoc_source);
-
-  parse_grammar_t *hook_source = literal_hook_grammar();
-  parse_grammar_t *hook_loaded = literal_hook_grammar();
-  core_string_t hook_image =
-      scan_lex_image_encode(scan_grammar_lex_compiled(hook_source));
-  check("scanner images resolve registered pure literal hooks",
-        scan_grammar_set_lex_image(hook_loaded, hook_image) &&
-            source_status(hook_loaded, "\"value\"") == SCAN_STATUS_COMPLETE);
-  core_free(hook_image.data);
-  parse_grammar_free(hook_loaded);
-  parse_grammar_free(hook_source);
-
-  parse_grammar_t *unicode_source = unicode_identifier_grammar(nullptr);
-  parse_grammar_t *unicode_loaded = unicode_identifier_grammar(nullptr);
-  core_string_t unicode_image =
-      scan_lex_image_encode(scan_grammar_lex_compiled(unicode_source));
-  check("scanner images reacquire compatible Unicode providers",
-        scan_grammar_set_lex_image(unicode_loaded, unicode_image) &&
-            source_status(unicode_loaded, "caf\xC3\xA9") ==
-                SCAN_STATUS_COMPLETE);
-  core_free(unicode_image.data);
-  parse_grammar_free(unicode_loaded);
-  parse_grammar_free(unicode_source);
-
-  parse_grammar_t *soft_source = soft_image_grammar();
-  parse_grammar_t *soft_loaded = soft_image_grammar();
-  core_string_t soft_image =
-      scan_lex_image_encode(scan_grammar_lex_compiled(soft_source));
-  bool soft_installed = scan_grammar_set_lex_image(soft_loaded, soft_image);
-  parse_token_stream_t *soft_tokens =
-      soft_installed
-          ? scan_tokenize_owned(soft_loaded, "match subject case", 18)
-          : nullptr;
-  parse_pwz_parser_t *soft_parser =
-      soft_installed
-          ? parse_pwz_new_for_start(
-                soft_loaded,
-                parse_nonterm_id(parse_find_nonterm(soft_loaded, S("file"))))
-          : nullptr;
-  check("scanner images restore contextual-keyword preparation",
-        soft_parser && soft_tokens &&
-            parse_pwz_parse(soft_parser, soft_tokens));
-  parse_pwz_free(soft_parser);
-  scan_token_stream_free(soft_tokens);
-  core_free(soft_image.data);
-  parse_grammar_free(soft_loaded);
-  parse_grammar_free(soft_source);
-}
-
 static void test_terminals_have_no_byte_width_limit(void) {
   static const char *const TERMS[] = {"IDENTIFIER", nullptr};
   parse_grammar_t *g = mk(&JS, TERMS);
@@ -3492,7 +3300,7 @@ static bool recovery_declaration_fails(const char *source,
 
   parse_grammar_set_error_recovery(grammar, false);
   parse_bnf_declare_terminals(grammar, text);
-  bool loaded = parse_bnf_load(text, S("file"), grammar);
+  bool loaded = load_test_grammar(text, S("file"), grammar);
   scan_lex_t *program = loaded ? scan_grammar_lex_compiled(grammar) : nullptr;
   const char *error = scan_lex_build_error();
   if (!error) {
@@ -3676,35 +3484,6 @@ static void test_malformed_token_recovery(void) {
   core_buffer_free(buffer);
   parse_grammar_free(editor);
 
-  parse_grammar_t *image_source = mk(&RECOVERY_LEXER, TERMS);
-  core_string_t image =
-      scan_lex_image_encode(scan_grammar_lex_compiled(image_source));
-  parse_grammar_t *image_target = bare_grammar(TERMS);
-  bool image_loaded = scan_grammar_set_lex_image(image_target, image);
-  buffer = nullptr;
-  scanner = nullptr;
-  source = "1__oops; next";
-  ts = image_loaded ? scan_tokenize(image_target, source, strlen(source),
-                                    &buffer, &scanner)
-                    : nullptr;
-  if (scanner) {
-    scan_scanner_set_recovery(scanner, true);
-  }
-  error = ts ? scan_stream_next(ts) : nullptr;
-  while (ts && scan_stream_next(ts)) {
-  }
-  check("scanner images containing recovery tables load", image_loaded);
-  check("generated scanner images preserve recovery tables",
-        image_loaded && error &&
-            error->tid == parse_lookup_terminal(image_target, S("ERROR")) &&
-            scan_status(scanner) == SCAN_STATUS_RECOVERED);
-  scan_token_stream_free(ts);
-  scan_scanner_free(scanner);
-  core_buffer_free(buffer);
-  core_free(image.data);
-  parse_grammar_free(image_target);
-  parse_grammar_free(image_source);
-
   static const char *const GRAMMAR_TEXT =
       "@lex-number(digits(\"0123456789\"), sep(\"_\"), "
       "int(\"INTEGER\"))\n"
@@ -3716,7 +3495,7 @@ static void test_malformed_token_recovery(void) {
   parse_grammar_t *declared = parse_grammar_new();
   parse_grammar_set_error_recovery(declared, false);
   parse_bnf_declare_terminals(declared, grammar_text);
-  bool grammar_loaded = parse_bnf_load(grammar_text, S("file"), declared);
+  bool grammar_loaded = load_test_grammar(grammar_text, S("file"), declared);
   core_free(grammar_text.data);
 
   buffer = nullptr;
@@ -3795,7 +3574,7 @@ static parse_grammar_t *number_form_grammar(void) {
 
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
-  if (!parse_bnf_load(text, CORE_STRING_STATIC("file"), g)) {
+  if (!load_test_grammar(text, CORE_STRING_STATIC("file"), g)) {
     parse_grammar_free(g);
     g = nullptr;
   }
@@ -3852,7 +3631,7 @@ static void number_error(const char *label, const char *source,
 
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
-  bool loaded = parse_bnf_load(text, CORE_STRING_STATIC("file"), g);
+  bool loaded = load_test_grammar(text, CORE_STRING_STATIC("file"), g);
   scan_lex_t *lex = loaded ? scan_grammar_lex_compiled(g) : nullptr;
   const char *error = scan_lex_build_error();
 
@@ -3916,7 +3695,7 @@ static void test_reusable_lexical_packages(void) {
 
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
-  bool loaded = parse_bnf_load(text, S("file"), g);
+  bool loaded = load_test_grammar(text, S("file"), g);
   check("lexical packages resolve forward and compose by ordered set algebra",
         loaded && scan_grammar_lex_compiled(g));
   if (loaded) {
@@ -3979,7 +3758,7 @@ static void test_soft_keywords(void) {
 
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
-  bool loaded = parse_bnf_load(text, S("statement"), g);
+  bool loaded = load_test_grammar(text, S("statement"), g);
   check("soft-keyword declarations construct a lexer", loaded);
 
   if (loaded) {
@@ -4088,7 +3867,7 @@ static void test_reject_fallback_accepts_declared_codepoints_only(void) {
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
   check("a rejecting fallback grammar loads",
-        parse_bnf_load(text, CORE_STRING_STATIC("file"), g));
+        load_test_grammar(text, CORE_STRING_STATIC("file"), g));
 
   core_buffer_t *buf = nullptr;
   parse_scanner_t *sc = nullptr;
@@ -4127,7 +3906,7 @@ static parse_grammar_t *unicode_identifier_grammar(const char *version) {
 
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
-  if (!parse_bnf_load(text, CORE_STRING_STATIC("file"), g)) {
+  if (!load_test_grammar(text, CORE_STRING_STATIC("file"), g)) {
     parse_grammar_free(g);
     g = nullptr;
   }
@@ -4147,7 +3926,7 @@ static parse_grammar_t *unicode_confusable_grammar(void) {
 
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
-  if (!parse_bnf_load(text, CORE_STRING_STATIC("file"), g)) {
+  if (!load_test_grammar(text, CORE_STRING_STATIC("file"), g)) {
     parse_grammar_free(g);
     g = nullptr;
   }
@@ -4269,7 +4048,7 @@ static void test_unicode_identifier_profiles(void) {
   g = parse_grammar_new();
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, bad_text);
-  bool loaded = parse_bnf_load(bad_text, CORE_STRING_STATIC("file"), g);
+  bool loaded = load_test_grammar(bad_text, CORE_STRING_STATIC("file"), g);
   check("identifier profiles reject unknown script names at construction",
         loaded && !scan_grammar_lex_compiled(g) && scan_lex_build_error() &&
             strstr(scan_lex_build_error(), "unknown script"));
@@ -4473,7 +4252,7 @@ static void test_lexer_spec_conflict_analysis(void) {
   parse_grammar_t *shadowed = parse_grammar_new();
   parse_grammar_set_error_recovery(shadowed, false);
   parse_bnf_declare_terminals(shadowed, shadowed_text);
-  bool shadowed_loaded = parse_bnf_load(shadowed_text, S("file"), shadowed);
+  bool shadowed_loaded = load_test_grammar(shadowed_text, S("file"), shadowed);
   scan_lex_t *shadowed_lex =
       shadowed_loaded ? scan_grammar_lex_compiled(shadowed) : nullptr;
   scan_lex_issue_t shadowed_issue = {0};
@@ -4647,16 +4426,6 @@ static void test_lexer_spec_conflict_analysis(void) {
             core_string_eq(issue.token, S("STRING")) &&
             core_string_eq(issue.origin, S("literals.lex")));
 
-  core_string_t image = scan_lex_image_encode(lex);
-  scan_lex_t *loaded = scan_lex_image_load(image, g);
-  issue = (scan_lex_issue_t){0};
-  check("generated scanners preserve construction-time analysis issues",
-        loaded && scan_lex_issue_count(loaded) == 1 &&
-            scan_lex_issue(loaded, 0, &issue) &&
-            core_string_eq(issue.token, S("STRING")) &&
-            core_string_eq(issue.origin, S("literals.lex")));
-  scan_lex_free(loaded);
-  core_free(image.data);
   scan_lex_free(lex);
   parse_grammar_free(g);
 
@@ -4954,16 +4723,6 @@ static void test_spec_driven_conformance_cases(void) {
   scan_lex_free(prefix_program);
   parse_grammar_free(prefix_grammar);
 
-  core_string_t image = scan_lex_image_encode(program);
-  scan_lex_t *loaded = scan_lex_image_load(image, boundary);
-  scan_lex_conformance_suite_t *loaded_suite =
-      scan_lex_conformance_generate(loaded, 0);
-  check("generated scanners produce identical conformance cases",
-        loaded_suite && scan_lex_conformance_fingerprint(suite) ==
-                            scan_lex_conformance_fingerprint(loaded_suite));
-  scan_lex_conformance_free(loaded_suite);
-  scan_lex_free(loaded);
-  core_free(image.data);
   scan_lex_conformance_free(suite);
   parse_grammar_free(boundary);
 
@@ -4996,6 +4755,7 @@ static void test_spec_driven_conformance_cases(void) {
 }
 
 int main(void) {
+  scan_lex_register(&JSON);
   test_indentation_becomes_tokens();
   test_newline_each_line();
   test_layout_tokens_ignore_only_when_unmatched();
@@ -5036,7 +4796,6 @@ int main(void) {
   test_incremental_source_edits();
   test_incremental_scanning_is_linear();
   test_convenience_tokenization_owns_its_resources();
-  test_generated_scanner_images();
   test_terminals_have_no_byte_width_limit();
   test_scanner_diagnostics_have_a_stable_view();
   test_grammar_finalization_is_thread_safe();

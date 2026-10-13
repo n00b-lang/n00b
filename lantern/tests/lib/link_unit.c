@@ -828,6 +828,46 @@ test_link_unit_stage_driver(void)
 }
 
 static void
+test_link_unit_stage_refresh(void)
+{
+    core_translation_unit_t root = {0};
+    core_translation_unit_t added = {0};
+    core_translation_unit_t unrelated = {0};
+    init_unit(&root, "pkg.refresh_stage");
+    init_unit(&added, "pkg.refresh_stage_dependency");
+    init_unit(&unrelated, "pkg.unrelated_stage");
+    core_link_unit_t *changed = core_link_unit_new();
+    core_link_unit_t *other = core_link_unit_new();
+    stage_probe_t changed_probe = {.result = CORE_LINK_STAGE_RESULT_COMPLETE};
+    stage_probe_t other_probe = {.result = CORE_LINK_STAGE_RESULT_COMPLETE};
+    check("unfinalized link graphs can run independent stages",
+          core_link_unit_add_root(changed, &root)
+              && core_link_unit_add_root(other, &unrelated)
+              && core_link_unit_register_stage(changed, 1, nullptr, 0,
+                  CORE_STRING_STATIC("test.refresh"), false,
+                  run_probe_stage, &changed_probe)
+              && core_link_unit_register_stage(other, 1, nullptr, 0,
+                  CORE_STRING_STATIC("test.unrelated"), false,
+                  run_probe_stage, &other_probe)
+              && core_link_unit_run_stage(changed, 1)
+              && core_link_unit_run_stage(other, 1));
+    check("a changed import resets only its link unit stage",
+          core_translation_unit_add_import(&root, &added)
+              && core_link_unit_collect(changed)
+              && core_link_unit_stage_state(changed, 1)
+                     == CORE_LINK_STAGE_PENDING
+              && core_link_unit_stage_state(other, 1)
+                     == CORE_LINK_STAGE_COMPLETE
+              && core_link_unit_run_stage(changed, 1)
+              && changed_probe.calls == 2 && other_probe.calls == 1);
+    core_link_unit_free(changed);
+    core_link_unit_free(other);
+    core_translation_unit_release(&root);
+    core_translation_unit_release(&added);
+    core_translation_unit_release(&unrelated);
+}
+
+static void
 test_link_unit_deferred_references(void)
 {
     core_translation_unit_t root = {0};
@@ -1152,6 +1192,7 @@ main(void)
     test_link_unit_graph_refresh();
     test_link_unit_typed_declarations();
     test_link_unit_stage_driver();
+    test_link_unit_stage_refresh();
     test_link_unit_contributions();
     test_link_unit_dependencies();
     test_link_unit_deferred_references();
