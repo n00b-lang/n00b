@@ -39698,19 +39698,29 @@ materialize_interface_export_origin(locate_worker_context_t *loader,
                                     parse_sym_entry_t *symbol,
                                     th_env_metadata_owner_t owner_kind,
                                     const char *external_name,
+                                    const char *declaration_module,
                                     const char **failure)
 {
     size_t size = 0;
     const uint8_t *data = interface_owned_metadata(loader, owner_kind,
         external_name, "n00b.export-origin", 1, &size);
-    if (!data || size < 12 || memcmp(data, "N0EO", 4)) {
+    bool local_declaration = declaration_module
+        && core_string_eq(core_string_from_cstr(declaration_module),
+                          state->unit->module.identifier);
+    if (!data && !local_declaration) {
         if (failure) *failure = "interface export has no valid canonical origin";
         return false;
     }
-    uint32_t module_size = read_u32_le(data + 4);
-    uint32_t declaration_size = read_u32_le(data + 8);
+    if (data && (size < 12 || memcmp(data, "N0EO", 4))) {
+        if (failure) *failure = "interface export has no valid canonical origin";
+        return false;
+    }
+    size_t module_size = data ? read_u32_le(data + 4)
+                              : strlen(declaration_module);
+    size_t declaration_size = data ? read_u32_le(data + 8)
+                                   : strlen(external_name);
     if (!module_size || !declaration_size
-        || (size_t)module_size + (size_t)declaration_size != size - 12) {
+        || (data && module_size + declaration_size != size - 12)) {
         if (failure) *failure = "interface export has malformed canonical origin metadata";
         return false;
     }
@@ -39724,9 +39734,11 @@ materialize_interface_export_origin(locate_worker_context_t *loader,
         if (failure) *failure = "could not retain interface export origin";
         return false;
     }
-    memcpy(module, data + 12, module_size);
+    memcpy(module, data ? (const char *)data + 12 : declaration_module,
+           module_size);
     module[module_size] = '\0';
-    memcpy(declaration, data + 12 + module_size, declaration_size);
+    memcpy(declaration, data ? (const char *)data + 12 + module_size
+                             : external_name, declaration_size);
     declaration[declaration_size] = '\0';
     *origin = (n00bb_export_origin_t){
         .module = core_string_borrow(module, module_size),
@@ -47453,6 +47465,17 @@ register_package_context_effect_metadata(n00bb_link_analysis_t *analysis)
     for (size_t u = 0; u < analysis->units.len; u++) {
         core_translation_unit_t *unit = analysis->units.data[u];
         n00bb_tu_state_t *state = tu_state(unit);
+        if (state && !state->interface_module) {
+            core_string_t package_id = n00bb_package_id(unit);
+            core_string_t module = unit->module.identifier;
+            char *module_name = core_strndup(module.data, module.u8_bytes);
+            bool registered = module_name && th_env_register_metadata(
+                environment, TH_ENV_METADATA_ENVIRONMENT, module_name,
+                "n00b.module-interface", 1, package_id.data,
+                package_id.u8_bytes + 1);
+            core_free(module_name);
+            if (!registered) return false;
+        }
         for (size_t p = 0; state && p < state->package_declarations.len; p++) {
             n00bb_package_declaration_t *package =
                 &state->package_declarations.data[p];
@@ -52026,7 +52049,8 @@ interface_package_for_module(locate_worker_context_t *context,
             th_env_metadata_view_t metadata = {0};
             if (!th_env_metadata_at(environment, m, &metadata)
                 || metadata.owner_kind != TH_ENV_METADATA_ENVIRONMENT
-                || strcmp(metadata.key, "n00b.package-interface")
+                || (strcmp(metadata.key, "n00b.package-interface")
+                    && strcmp(metadata.key, "n00b.module-interface"))
                 || metadata.version != 1
                 || strlen(metadata.owner_name) != module.u8_bytes
                 || memcmp(metadata.owner_name, module.data,
@@ -52934,7 +52958,8 @@ materialize_interface_module_symbols(locate_worker_context_t *loader,
                 : declaration.kind == TH_ENV_DECLARATION_TRAIT
                     ? TH_ENV_METADATA_TRAIT : TH_ENV_METADATA_TYPE;
             if (!materialize_interface_export_origin(loader, state, symbol,
-                    metadata_kind, declaration.qualified_name, failure))
+                    metadata_kind, declaration.qualified_name,
+                    declaration.module, failure))
                 return false;
             n00bb_export_origin_t *origin = parse_sym_binding(symbol,
                 CORE_STRING_STATIC("n00bb.export-origin"));
