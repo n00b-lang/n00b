@@ -45800,7 +45800,8 @@ select_storage_placement(n00bb_link_analysis_t *analysis)
 }
 
 static bool
-n00bb_has_deferred_shape_layout(n00bb_link_analysis_t *analysis)
+n00bb_has_deferred_shape_layout(n00bb_link_analysis_t *analysis,
+                                bool report_unresolved)
 {
     for (size_t u = 0; u < analysis->units.len; u++) {
         n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
@@ -45810,7 +45811,23 @@ n00bb_has_deferred_shape_layout(n00bb_link_analysis_t *analysis)
              scope; scope = scope->all_next)
             for (parse_sym_entry_t *symbol = scope->first_in_scope;
                  symbol; symbol = symbol->next_in_scope)
-                if (symbol_has_comptime_shape(symbol)) return true;
+                if (symbol_has_comptime_shape(symbol)) {
+                    if (report_unresolved) {
+                        core_buffer_t message = {0};
+                        core_buffer_printf(&message,
+                            "compile-time array extent remains unresolved for '%.*s'",
+                            (int)symbol->name.u8_bytes, symbol->name.data);
+                        core_diagnostics_report_at(
+                            core_translation_unit_diagnostics(
+                                analysis->units.data[u]),
+                            analysis->units.data[u], CORE_DIAG_FATAL,
+                            CORE_STRING_STATIC("N00BB-B0013"),
+                            core_string_from_cstr(message.data),
+                            link_source_location(symbol->decl_node));
+                        core_buffer_release(&message);
+                    }
+                    return true;
+                }
     }
     return false;
 }
@@ -47525,6 +47542,25 @@ register_package_context_effect_metadata(n00bb_link_analysis_t *analysis)
                 environment, TH_ENV_METADATA_ENVIRONMENT, module_name,
                 "n00b.module-interface", 1, package_id.data,
                 package_id.u8_bytes + 1);
+            core_buffer_t imports = {0};
+            size_t import_count = core_translation_unit_import_count(unit);
+            if (registered && import_count <= UINT32_MAX)
+                registered = append_u32_le(&imports, (uint32_t)import_count);
+            else registered = false;
+            for (size_t i = 0; registered && i < import_count; i++) {
+                core_translation_unit_t *imported =
+                    core_translation_unit_import(unit, i);
+                core_string_t name = imported->module.identifier;
+                registered = name.u8_bytes <= UINT32_MAX
+                    && append_u32_le(&imports, (uint32_t)name.u8_bytes);
+                if (registered)
+                    core_buffer_append(&imports, name.data, name.u8_bytes);
+            }
+            if (registered)
+                registered = th_env_register_metadata(environment,
+                    TH_ENV_METADATA_ENVIRONMENT, module_name,
+                    "n00b.module-imports", 1, imports.data, imports.byte_len);
+            core_buffer_release(&imports);
             core_free(module_name);
             if (!registered) return false;
         }
@@ -52965,7 +53001,12 @@ materialize_interface_module_symbols(locate_worker_context_t *loader,
         for (size_t i = 0; i < th_env_declaration_count(environment); i++) {
             th_env_declaration_view_t declaration = {0};
             if (!th_env_declaration_at(environment, i, &declaration)
-                || !declaration.module)
+                || !declaration.module
+                || strlen(declaration.module)
+                    != unit->module.identifier.u8_bytes
+                || memcmp(declaration.module,
+                    unit->module.identifier.data,
+                    unit->module.identifier.u8_bytes))
                 continue;
             const char *declaration_name = declaration.qualified_name
                 ? strrchr(declaration.qualified_name, '.') : nullptr;
@@ -53334,6 +53375,10 @@ discover_package_import(import_driver_t *driver,
 }
 
 static bool
+load_interface_imports(import_driver_t *driver, parse_grammar_t *grammar,
+                       core_translation_unit_t *unit);
+
+static bool
 load_import_module(import_driver_t *driver, parse_grammar_t *grammar,
                    parse_tree_t *statement, core_translation_unit_t *importer,
                    core_module_spec_t *module, const char *operand,
@@ -53398,6 +53443,8 @@ load_import_module(import_driver_t *driver, parse_grammar_t *grammar,
         }
         bool ok = n00bb_preprocessor_run(driver->preprocessor, grammar, tree,
                                          imported);
+        if (ok && state && state->interface_module)
+            ok = load_interface_imports(driver, grammar, imported);
         if (core_translation_unit_has_fatal_diagnostics(imported)) ok = false;
         core_work_complete_tu(driver->queue, preprocess_job, imported, ok);
         if (!ok) return false;
@@ -53408,6 +53455,56 @@ load_import_module(import_driver_t *driver, parse_grammar_t *grammar,
     *imported_out = imported;
     *tree_out = tree;
     return true;
+}
+
+static bool
+load_interface_imports(import_driver_t *driver, parse_grammar_t *grammar,
+                       core_translation_unit_t *unit)
+{
+    core_string_t module = unit->module.identifier;
+    char *module_name = core_strndup(module.data, module.u8_bytes);
+    size_t size = 0;
+    const uint8_t *data = module_name
+        ? interface_owned_metadata(driver->loader,
+            TH_ENV_METADATA_ENVIRONMENT, module_name,
+            "n00b.module-imports", 1, &size)
+        : nullptr;
+    bool package_only = !data && module_name
+        && !interface_owned_metadata(driver->loader,
+            TH_ENV_METADATA_ENVIRONMENT, module_name,
+            "n00b.module-interface", 1, nullptr);
+    core_free(module_name);
+    if (package_only) return true;
+    if (!data || size < 4) {
+        import_error(unit, nullptr, "interface module has no import graph");
+        return false;
+    }
+    size_t offset = 4;
+    uint32_t count = read_u32_le(data);
+    for (uint32_t i = 0; i < count; i++) {
+        if (size - offset < 4) break;
+        uint32_t length = read_u32_le(data + offset);
+        offset += 4;
+        if (!length || length > size - offset
+            || memchr(data + offset, '\0', length)) break;
+        core_string_t name = core_string_borrow(
+            (const char *)data + offset, length);
+        core_module_spec_t spec = {0};
+        char *operand = core_strndup(name.data, name.u8_bytes);
+        core_translation_unit_t *imported = nullptr;
+        parse_tree_t *tree = nullptr;
+        bool ok = operand && core_module_spec_init(&spec, name)
+            && load_import_module(driver, grammar, nullptr, unit, &spec,
+                                  operand, &imported, &tree);
+        core_module_spec_release(&spec);
+        core_free(operand);
+        if (!ok) return false;
+        offset += length;
+        if (i + 1 == count && offset == size) return true;
+    }
+    if (!count && offset == size) return true;
+    import_error(unit, nullptr, "interface module has malformed import graph");
+    return false;
 }
 
 static bool
@@ -54161,7 +54258,8 @@ n00bb_link_stage_ir_bindings(core_link_unit_t *link, uint32_t stage_kind,
                 CORE_STRING_STATIC("could not bind link declarations to Lantern IR"));
         return CORE_LINK_STAGE_RESULT_FAILED;
     }
-    analysis->layout_deferred = n00bb_has_deferred_shape_layout(analysis);
+    analysis->layout_deferred = n00bb_has_deferred_shape_layout(analysis,
+                                                                false);
     if (analysis->layout_deferred
         ? (!publish_known_scalar_layouts(analysis)
             || !publish_requested_c_record_layouts(analysis, true)
@@ -56478,7 +56576,7 @@ static bool
 n00bb_finalize_comptime_layout(n00bb_link_analysis_t *analysis)
 {
     if (!analysis->layout_deferred) return true;
-    if (n00bb_has_deferred_shape_layout(analysis)) return false;
+    if (n00bb_has_deferred_shape_layout(analysis, true)) return false;
     if (!select_storage_placement(analysis)) return false;
     for (size_t u = 0; u < analysis->units.len; u++) {
         core_translation_unit_t *unit = analysis->units.data[u];

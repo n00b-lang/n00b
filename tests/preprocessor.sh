@@ -13,6 +13,20 @@ trap 'rm -rf "$tmp"' EXIT
 
 interface_programs="$script_dir/programs/interfaces"
 
+N00B_PATH="$program_dir" "$compiler" library --emit-interface \
+    "$tmp/cycle_graph.n00bi" cycle_x \
+    >"$tmp/cycle_graph_library.out" \
+    2>"$tmp/cycle_graph_library.err"
+N00B_PATH="$program_dir" "$compiler" lower --dump-link-unit \
+    --link-interface "$tmp/cycle_graph.n00bi" \
+    "$interface_programs/cycle_archive_user.n00b" \
+    >"$tmp/cycle_graph_user.out" 2>"$tmp/cycle_graph_user.err"
+grep -q '^module cycle_x {' "$tmp/cycle_graph_user.out"
+for module in cycle_y cycle_z; do
+    grep -q "site-provenance\[library\]=<interface:$module>" \
+        "$tmp/cycle_graph_user.out"
+done
+
 if "$compiler" lower "$program_dir/invalid-module-name.n00b" \
     >"$tmp/invalid_module_name.out" 2>"$tmp/invalid_module_name.err"; then
     echo 'invalid module filename unexpectedly lowered' >&2
