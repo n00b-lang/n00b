@@ -13,6 +13,13 @@ N00B_PATH="$programs:$programs/../../../lib" \
 test ! -s "$tmp/stdout"
 test "$(cat "$tmp/stderr")" = ok
 
+N00B_PATH="$programs:$programs/../../../lib" \
+    "$compiler" library --emit-interface "$tmp/inline.n00bi" \
+    inline_helper >"$tmp/interface.out" 2>"$tmp/interface.err"
+N00B_PATH="$programs:$programs/../../../lib" \
+    "$compiler" lower --link-interface "$tmp/inline.n00bi" \
+    "$programs/inline_main.n" >"$tmp/lower.out" 2>"$tmp/lower.err"
+
 if N00B_PATH="$programs:$programs/../../../lib" \
     "$compiler" --release --output "$tmp/recursive" \
     "$programs/inline_recursive.n" >"$tmp/recursive.out" \
