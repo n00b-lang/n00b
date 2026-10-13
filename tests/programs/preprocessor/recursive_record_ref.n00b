@@ -1,5 +1,0 @@
-type Node {
-    next: Ref[Node]
-}
-
-func identity(value: Node) -> Node { return value }

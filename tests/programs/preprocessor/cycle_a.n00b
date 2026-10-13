@@ -1,6 +1,0 @@
-import cycle_b
-when enabled {
-    var cycle_selected = 1
-} else {
-    var cycle_removed = 2
-}

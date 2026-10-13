@@ -1,5 +1,0 @@
-func write_out(out target: int, input: int) { target = input }
-
-func reject_temporary(input: int) {
-    write_out(input + 1, input)
-}

@@ -1,3 +1,0 @@
-when preproc_value("MISSING") == true {
-    var selected = 1
-}

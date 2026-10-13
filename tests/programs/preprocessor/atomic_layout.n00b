@@ -1,3 +1,0 @@
-func hold(value: Atomic[bits:17]) -> Atomic[bits:17] {
-    return value
-}

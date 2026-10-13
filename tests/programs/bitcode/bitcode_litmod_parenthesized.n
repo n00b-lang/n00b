@@ -52,7 +52,9 @@ comptime {
     require nil'nil_number == 7
     require (1, "two")'mixed_tuple_count == 2
     require (first: int = 1, second: string = "two")'mixed_record_count == 2
-} else {
+}
+
+func run_test() {
     require true'flip_bool == false
     require false'flip_bool
     require nil'nil_number == 7

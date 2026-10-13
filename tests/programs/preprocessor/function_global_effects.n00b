@@ -1,8 +1,0 @@
-var effect_global: int = 0
-func read_effect() -> int { return effect_global }
-func write_effect(new_value: int) { effect_global = new_value }
-func update_effect() { effect_global += 1 }
-func read_middle() -> int { return read_effect() }
-func forward_read() -> int { return read_middle() }
-func write_middle(new_value: int) { write_effect(new_value) }
-func forward_write(new_value: int) { write_middle(new_value) }

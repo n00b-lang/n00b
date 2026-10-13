@@ -1,7 +1,0 @@
-public thread var worker_state: int
-
-func initialize_worker_state() {
-    worker_state = 42
-}
-
-initialize_worker_state()

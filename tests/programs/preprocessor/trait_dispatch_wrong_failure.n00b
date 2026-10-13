@@ -1,5 +1,0 @@
-trait ReadFailure {
-    func read_failure(self: `T) -> string fail: string
-}
-func read_failure(self: int) -> string fail: int { return "value" }
-func wrong_failure(item: int) -> string { return item.read_failure() }

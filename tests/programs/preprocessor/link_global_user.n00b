@@ -1,2 +1,0 @@
-import link_global_dep
-func read_remote() -> int { return link_global_dep.remote_global }

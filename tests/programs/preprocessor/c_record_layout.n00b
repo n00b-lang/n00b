@@ -1,4 +1,0 @@
-type Header layout(c) {
-    count: u32
-    active: bool
-}

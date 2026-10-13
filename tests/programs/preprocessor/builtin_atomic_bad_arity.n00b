@@ -1,3 +1,0 @@
-func invalid_atomic_type(item: List[Atomic[int, bool]]) -> int {
-    return 0
-}

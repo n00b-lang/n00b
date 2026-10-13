@@ -1,8 +1,0 @@
-var runtime_value: int = 1
-comptime {
-    var build_value: int = 2
-    runtime_value = build_value
-}
-func phase_access() -> int {
-    return runtime_value
-}

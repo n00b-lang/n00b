@@ -1,2 +1,0 @@
-type First { value: int }
-type Second { value: First }

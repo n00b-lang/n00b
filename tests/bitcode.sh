@@ -22,119 +22,18 @@ test "$(cat "$tmp/bootstrap_io_compile")" = "compile"
 "$tmp/bootstrap_io" >"$tmp/bootstrap_io_runtime"
 test "$(cat "$tmp/bootstrap_io_runtime")" = \
     "runtime0123456789abcdef0123456789abcdef"
-"$compiler" build --output "$tmp/comptime_ok" \
-    "$program_dir/bitcode_comptime_ok.n00b"
-"$tmp/comptime_ok"
-"$compiler" build --output "$tmp/comptime_scalar_call" \
-    "$program_dir/bitcode_comptime_scalar_call.n00b"
-"$tmp/comptime_scalar_call"
-"$compiler" build --output "$tmp/failable_success" \
-    "$program_dir/bitcode_failable_success.n00b"
-"$tmp/failable_success"
-"$compiler" build --output "$tmp/litmod_static" \
-    "$program_dir/../litmod_array_site.n00b"
-"$tmp/litmod_static"
-"$compiler" build --output "$tmp/litmod_runtime" \
-    "$program_dir/bitcode_litmod_runtime.n00b"
-"$tmp/litmod_runtime"
-"$compiler" build --output "$tmp/litmod_runtime_failure" \
-    "$program_dir/bitcode_litmod_runtime_failure.n00b"
-"$tmp/litmod_runtime_failure"
+N00B_PATH="$program_dir:$program_dir/.." \
+    "$compiler" build --output "$tmp/litmod_suite" \
+    "$program_dir/bitcode_litmod_suite.n00b"
+"$tmp/litmod_suite" 2>"$tmp/litmod_declaration.out"
+test "$(cat "$tmp/litmod_declaration.out")" = \
+    'hello|world|123|2a|1.5|last'
 "$compiler" build --output "$tmp/litmod_runtime_trap" \
     "$program_dir/bitcode_litmod_runtime_trap.n00b"
 if (ulimit -c 0; "$tmp/litmod_runtime_trap") >/dev/null 2>&1; then
     echo 'uncaught runtime literal failure unexpectedly returned' >&2
     exit 1
 fi
-"$compiler" build --output "$tmp/litmod_nested" \
-    "$program_dir/bitcode_litmod_nested.n00b"
-"$tmp/litmod_nested"
-"$compiler" build --output "$tmp/litmod_set_shape" \
-    "$program_dir/bitcode_litmod_set_shape.n00b"
-"$tmp/litmod_set_shape"
-"$compiler" build --output "$tmp/litmod_generic_set" \
-    "$program_dir/bitcode_litmod_generic_set.n00b"
-"$tmp/litmod_generic_set"
-"$compiler" build --output "$tmp/litmod_dict_shape" \
-    "$program_dir/bitcode_litmod_dict_shape.n00b"
-"$tmp/litmod_dict_shape"
-"$compiler" build --output "$tmp/litmod_static_dict_strings" \
-    "$program_dir/bitcode_litmod_static_dict_strings.n00b"
-"$tmp/litmod_static_dict_strings"
-"$compiler" build --output "$tmp/litmod_nested_arrays" \
-    "$program_dir/bitcode_litmod_nested_arrays.n00b"
-"$tmp/litmod_nested_arrays"
-"$compiler" build --output "$tmp/litmod_nested_strings" \
-    "$program_dir/bitcode_litmod_nested_strings.n00b"
-"$tmp/litmod_nested_strings"
-"$compiler" build --output "$tmp/litmod_scalar_tuple" \
-    "$program_dir/bitcode_litmod_scalar_tuple.n00b"
-"$tmp/litmod_scalar_tuple"
-"$compiler" build --output "$tmp/litmod_float" \
-    "$program_dir/bitcode_litmod_float.n00b"
-"$tmp/litmod_float"
-"$compiler" build --output "$tmp/litmod_string" \
-    "$program_dir/bitcode_litmod_declaration.n"
-"$tmp/litmod_string" 2>"$tmp/litmod_declaration.out"
-test "$(cat "$tmp/litmod_declaration.out")" = \
-    'hello|world|123|2a|1.5|last'
-"$compiler" build --output "$tmp/litmod_static_strings" \
-    "$program_dir/bitcode_litmod_static_strings.n00b"
-"$tmp/litmod_static_strings"
-"$compiler" build --output "$tmp/litmod_scalar" \
-    "$program_dir/bitcode_litmod_scalar.n00b"
-"$tmp/litmod_scalar"
-"$compiler" build --output "$tmp/litmod_bool" \
-    "$program_dir/bitcode_litmod_bool.n00b"
-"$tmp/litmod_bool"
-"$compiler" build --output "$tmp/litmod_parenthesized" \
-    "$program_dir/bitcode_litmod_parenthesized.n"
-"$tmp/litmod_parenthesized"
-"$compiler" build --output "$tmp/litmod_fence" \
-    "$program_dir/bitcode_litmod_fence.n00b"
-"$tmp/litmod_fence"
-"$compiler" build --output "$tmp/litmod_fence_nil" \
-    "$program_dir/bitcode_litmod_fence_nil.n00b"
-"$tmp/litmod_fence_nil"
-"$compiler" build --output "$tmp/litmod_comptime_value" \
-    "$program_dir/bitcode_litmod_comptime_value.n00b"
-"$tmp/litmod_comptime_value"
-"$compiler" build --output "$tmp/litmod_handler_dependency" \
-    "$program_dir/bitcode_litmod_handler_dependency.n00b"
-"$tmp/litmod_handler_dependency"
-N00B_PATH="$program_dir" "$compiler" build --output "$tmp/litmod_import" \
-    "$program_dir/bitcode_litmod_import_root.n00b"
-"$tmp/litmod_import"
-"$compiler" build --output "$tmp/litmod_forward_type" \
-    "$program_dir/bitcode_litmod_forward_type.n00b"
-"$tmp/litmod_forward_type"
-"$compiler" build --output "$tmp/litmod_forward_chain" \
-    "$program_dir/bitcode_litmod_forward_chain.n00b"
-"$tmp/litmod_forward_chain"
-"$compiler" build --output "$tmp/builtin_u32" \
-    "$program_dir/bitcode_builtin_u32.n00b"
-"$tmp/builtin_u32"
-"$compiler" build --output "$tmp/litmod_char_array" \
-    "$program_dir/bitcode_litmod_char_array.n00b"
-"$tmp/litmod_char_array"
-"$compiler" build --output "$tmp/litmod_string_to_chars" \
-    "$program_dir/bitcode_litmod_string_to_chars.n00b"
-"$tmp/litmod_string_to_chars"
-"$compiler" build --output "$tmp/litmod_binary_result" \
-    "$program_dir/bitcode_litmod_binary_result.n00b"
-"$tmp/litmod_binary_result"
-"$compiler" build --output "$tmp/litmod_bool_tuple" \
-    "$program_dir/bitcode_litmod_bool_tuple.n00b"
-"$tmp/litmod_bool_tuple"
-"$compiler" build --output "$tmp/litmod_bool_string_tuple" \
-    "$program_dir/bitcode_litmod_bool_string_tuple.n00b"
-"$tmp/litmod_bool_string_tuple"
-"$compiler" build --output "$tmp/litmod_bool_tuple_array" \
-    "$program_dir/bitcode_litmod_bool_tuple_array.n00b"
-"$tmp/litmod_bool_tuple_array"
-"$compiler" build --output "$tmp/litmod_bool_string_tuple_array" \
-    "$program_dir/bitcode_litmod_bool_string_tuple_array.n00b"
-"$tmp/litmod_bool_string_tuple_array"
 if "$compiler" build --output "$tmp/litmod_comptime_fail" \
     "$program_dir/bitcode_litmod_comptime_fail.n00b" \
     >"$tmp/litmod_comptime_fail.out" 2>&1; then
@@ -152,7 +51,7 @@ if "$compiler" build --output "$tmp/litmod_fence_nil_fail" \
 fi
 grep -q 'fatal\[N00BB-B0014\]: fence failed' \
     "$tmp/litmod_fence_nil_fail.out"
-grep -q 'bitcode_litmod_fence_nil_fail.n00b:9:5' \
+grep -q 'bitcode_litmod_fence_nil_fail.n00b:7:5' \
     "$tmp/litmod_fence_nil_fail.out"
 test ! -e "$tmp/litmod_fence_nil_fail"
 if "$compiler" build --output "$tmp/litmod_string_fail" \
@@ -163,28 +62,18 @@ if "$compiler" build --output "$tmp/litmod_string_fail" \
 fi
 grep -q 'fatal\[N00BB-B0014\]: bad literal' \
     "$tmp/litmod_string_fail.out"
-grep -q 'bitcode_litmod_string_fail.n00b:8:12' \
+grep -q 'bitcode_litmod_string_fail.n00b:6:12' \
     "$tmp/litmod_string_fail.out"
 test ! -e "$tmp/litmod_string_fail"
-"$compiler" build --output "$tmp/value_handles" \
-    "$program_dir/bitcode_value_handles.n00b"
-"$tmp/value_handles"
 if "$compiler" build --output "$tmp/comptime_failed" \
     "$program_dir/bitcode_comptime_fail.n00b" \
     >"$tmp/comptime.out" 2>&1; then
     echo 'failing comptime initializer unexpectedly built' >&2
     exit 1
 fi
-grep -q 'compile-time execution failed' "$tmp/comptime.out"
+grep -q 'fatal\[N00BB-B0014\]: compile-time execution' \
+    "$tmp/comptime.out"
 test ! -e "$tmp/comptime_failed"
-if "$compiler" build --output "$tmp/comptime_state" \
-    "$program_dir/bitcode_comptime_state.n00b" \
-    >"$tmp/comptime_state.out" 2>&1; then
-    echo 'unmaterialized compile-time state unexpectedly built' >&2
-    exit 1
-fi
-grep -q 'cannot materialize compile-time results' "$tmp/comptime_state.out"
-test ! -e "$tmp/comptime_state"
 "$compiler" build --output "$tmp/trap" "$program_dir/bitcode_runtime_trap.n00b"
 if (ulimit -c 0; "$tmp/trap") >/dev/null 2>&1; then
     echo 'failing require unexpectedly returned' >&2

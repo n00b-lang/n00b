@@ -1,2 +1,0 @@
-var copied_value: int = uninitialized_value
-var uninitialized_value: int

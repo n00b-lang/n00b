@@ -1,7 +1,0 @@
-type FieldCheck {
-    present: int
-}
-
-func read_missing(item: FieldCheck) -> int {
-    return item.absent
-}

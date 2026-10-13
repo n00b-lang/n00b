@@ -1,1 +1,0 @@
-func get_item(items) { return items [0] }

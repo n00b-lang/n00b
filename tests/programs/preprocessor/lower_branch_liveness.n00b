@@ -1,5 +1,0 @@
-func branch_liveness(flag: bool) -> int {
-    var item: int = 7
-    if flag { return item }
-    return 0
-}

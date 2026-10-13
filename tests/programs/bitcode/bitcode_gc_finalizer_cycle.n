@@ -1,13 +1,13 @@
-import builtin.abi
-import builtin.gc
-import builtin.gc.alloc
-import builtin.gc.finalize
-import builtin.gc.heap
-import builtin.gc.mark
-import builtin.gc.mutator
-import builtin.gc.registry
-import builtin.gc.sync
-import builtin.os
+import sys.abi
+import sys.gc.core
+import sys.gc.alloc
+import sys.gc.finalize
+import sys.gc.heap
+import sys.gc.mark
+import sys.gc.mutator
+import sys.gc.registry
+import sys.gc.sync
+import sys.memory
 
 type Twin {
     other: Ref[Twin]?
@@ -39,9 +39,9 @@ func __finalize(consume self: Ref[Twin]) {
     finalized += 1
 }
 
-func allocate_twin(mutator: Ref[builtin.gc.Mutator], type_index: u32,
+func allocate_twin(mutator: Ref[sys.gc.core.Mutator], type_index: u32,
                    bytes: uint, alignment: uint, id: int) -> Ref[Twin]? {
-    let allocated: Ref[byte]? = builtin.gc.alloc.allocate_reserved(
+    let allocated: Ref[byte]? = sys.gc.alloc.allocate_reserved(
         mutator, ref mutator.small, type_index, bytes, alignment, true)
     if allocated == nil { return nil }
     let twin: Ref[Twin] = unsafe_cast[Ref[Twin]] allocated.get()
@@ -52,42 +52,42 @@ func allocate_twin(mutator: Ref[builtin.gc.Mutator], type_index: u32,
 }
 
 comptime {} else {
-    let created: Ref[builtin.gc.Heap]? = builtin.gc.heap.create(nil)
+    let created: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(nil)
     require created != nil
-    let heap: Ref[builtin.gc.Heap] = created.get()
-    let mapping: Ref[byte]? = builtin.os.map_zeroed(
-        builtin.gc.block_bytes, builtin.gc.block_bytes)
+    let heap: Ref[sys.gc.core.Heap] = created.get()
+    let mapping: Ref[byte]? = sys.memory.map_zeroed(
+        sys.gc.core.block_bytes, sys.gc.core.block_bytes)
     require mapping != nil
     let base: Ref[byte] = mapping.get()
-    let end: Ref[byte] = __gc_byte_offset(base, builtin.gc.block_bytes)
-    require builtin.gc.registry.region_add(heap, base, end)
-    let block: Ref[builtin.gc.Block_Metadata] = builtin.gc.block_metadata_at(base)
-    builtin.gc.block_init(heap, block)
-    let attached: Ref[builtin.gc.Mutator]? = builtin.gc.mutator.create(heap)
+    let end: Ref[byte] = __gc_byte_offset(base, sys.gc.core.block_bytes)
+    require sys.gc.registry.region_add(heap, base, end)
+    let block: Ref[sys.gc.core.Block_Metadata] = sys.gc.core.block_metadata_at(base)
+    sys.gc.core.block_init(heap, block)
+    let attached: Ref[sys.gc.core.Mutator]? = sys.gc.mutator.create(heap)
     require attached != nil
-    let mutator: Ref[builtin.gc.Mutator] = attached.get()
-    var owned: Ref[builtin.gc.Block_Metadata]? = nil
-    builtin.gc.own(heap, mutator, block, ref owned)
-    let assigned: Ref[builtin.gc.Block_Metadata]? = block
-    builtin.gc.bump_attach(mutator, ref mutator.small, assigned)
-    require builtin.gc.bump_next_hole(ref mutator.small, 48)
+    let mutator: Ref[sys.gc.core.Mutator] = attached.get()
+    var owned: Ref[sys.gc.core.Block_Metadata]? = nil
+    sys.gc.core.own(heap, mutator, block, ref owned)
+    let assigned: Ref[sys.gc.core.Block_Metadata]? = block
+    sys.gc.core.bump_attach(mutator, ref mutator.small, assigned)
+    require sys.gc.core.bump_next_hole(ref mutator.small, 48)
 
     let probe: Ref[Twin]? = nil
-    let option_row: Ref[builtin.abi.Type_Record]? = builtin.abi.type_for(
+    let option_row: Ref[sys.abi.Type_Record]? = sys.abi.type_for(
         typeof(probe))
     require option_row != nil
-    let reference_index: i64 = builtin.abi.range_index(
+    let reference_index: i64 = sys.abi.range_index(
         option_row.get().components, 0)
     require reference_index > 0
-    let reference_row: Ref[builtin.abi.Type_Record]? = builtin.abi.type_at(
+    let reference_row: Ref[sys.abi.Type_Record]? = sys.abi.type_at(
         cast[u32] reference_index)
     require reference_row != nil
-    let index: i64 = builtin.abi.range_index(reference_row.get().components, 0)
+    let index: i64 = sys.abi.range_index(reference_row.get().components, 0)
     require index > 0
-    let row: Ref[builtin.abi.Type_Record]? = builtin.abi.type_at(cast[u32] index)
+    let row: Ref[sys.abi.Type_Record]? = sys.abi.type_at(cast[u32] index)
     require row != nil
-    let bytes: uint = builtin.abi.size_bytes(row.get())
-    let alignment: uint = builtin.abi.alignment_bytes(row.get())
+    let bytes: uint = sys.abi.size_bytes(row.get())
+    let alignment: uint = sys.abi.alignment_bytes(row.get())
     let first: Ref[Twin]? = allocate_twin(mutator, cast[u32] index,
         bytes, alignment, 0)
     let second: Ref[Twin]? = allocate_twin(mutator, cast[u32] index,
@@ -98,17 +98,17 @@ comptime {} else {
     a.other = b
     b.other = a
 
-    var marker: builtin.gc.Marker
-    builtin.gc.mark.marker_init(ref marker, heap, false)
-    builtin.gc.sync.ticket_lock(ref heap.lock)
-    builtin.gc.finalize.find_dead_locked(ref marker)
-    builtin.gc.heap.unlock(heap)
+    var marker: sys.gc.core.Marker
+    sys.gc.mark.marker_init(ref marker, heap, false)
+    sys.gc.sync.ticket_lock(ref heap.lock)
+    sys.gc.finalize.find_dead_locked(ref marker)
+    sys.gc.heap.unlock(heap)
     require heap.finq_n == 2
-    require builtin.gc.finalize.run(heap, 0) == 2
+    require sys.gc.finalize.run(heap, 0) == 2
     require finalized == 2
     require seen_first and seen_second
 
-    builtin.gc.mutator.destroy(mutator)
-    builtin.gc.heap.destroy(heap)
+    sys.gc.mutator.destroy(mutator)
+    sys.gc.heap.destroy(heap)
     __fd_write(2, "ok")
 }

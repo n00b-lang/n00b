@@ -1,7 +1,0 @@
-when false {
-    var first_removed = true
-} else when 1 == 1 {
-    var middle_selected = true
-} else {
-    var final_removed = true
-}

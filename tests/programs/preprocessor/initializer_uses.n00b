@@ -1,4 +1,0 @@
-var dependency_source: int = 1
-var dependency_target: int = dependency_source
-const comptime_source: int = 2
-comptime { var comptime_block_value: int = comptime_source }

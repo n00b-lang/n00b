@@ -1,3 +1,0 @@
-func truth() -> bool {
-    return true
-}

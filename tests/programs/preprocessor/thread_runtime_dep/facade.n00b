@@ -1,5 +1,0 @@
-import thread_runtime_dep.impl
-
-package thread_runtime_dep {
-    export thread_runtime_dep.impl.worker_state
-}

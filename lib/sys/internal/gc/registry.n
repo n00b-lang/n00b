@@ -1,0 +1,277 @@
+import internal.abi
+import internal.gc.core
+import internal.gc.hash
+import internal.gc.sync
+
+const reg_writer:      u32  = 1 << 31
+const los_min_level:   u32  = 12
+const los_scaled_from: u32  = 20
+const los_level_bits:  uint = 6
+
+func registry_read_lock(heap: Ref[internal.gc.core.Heap]) {
+    while true {
+        let seq:   u32 = internal.gc.sync.event_enter(ref heap.reg_changed)
+        let state: u32 = __atomic_load(ref heap.reg_rw)
+        if (state & reg_writer) == 0 {
+            if __atomic_compare_exchange(ref heap.reg_rw, state, state + 1) {
+                internal.gc.sync.event_leave(ref heap.reg_changed)
+                return
+            }
+            internal.gc.sync.event_leave(ref heap.reg_changed)
+        } else {
+            internal.gc.sync.event_sleep(ref heap.reg_changed, seq)
+            internal.gc.sync.event_leave(ref heap.reg_changed)
+        }
+    }
+}
+
+func registry_read_unlock(heap: Ref[internal.gc.core.Heap]) {
+    if __atomic_fetch_sub(ref heap.reg_rw, 1) == (reg_writer | 1) {
+        internal.gc.sync.event_signal(ref heap.reg_changed)
+    }
+}
+
+func write_lock(heap: Ref[internal.gc.core.Heap]) {
+    __atomic_fetch_or(ref heap.reg_rw, reg_writer)
+    while true {
+        let seq: u32 = internal.gc.sync.event_enter(ref heap.reg_changed)
+        if __atomic_load(ref heap.reg_rw) == reg_writer {
+            internal.gc.sync.event_leave(ref heap.reg_changed)
+            return
+        }
+        internal.gc.sync.event_sleep(ref heap.reg_changed, seq)
+        internal.gc.sync.event_leave(ref heap.reg_changed)
+    }
+}
+
+func write_unlock(heap: Ref[internal.gc.core.Heap]) {
+    __atomic_fetch_and(ref heap.reg_rw, ~reg_writer)
+    internal.gc.sync.event_signal(ref heap.reg_changed)
+}
+
+func widen_bounds(heap: Ref[internal.gc.core.Heap], start: uint, end: uint) {
+    if heap.heap_lo == 0 or start < heap.heap_lo {
+        heap.heap_lo = start
+    }
+    if end > heap.heap_hi {
+        heap.heap_hi = end
+    }
+}
+
+func region_add(heap: Ref[internal.gc.core.Heap], start: Ref[byte],
+                       end: Ref[byte]) -> bool {
+    let start_address: uint = __abi_ref_address(start)
+    let end_address:   uint = __abi_ref_address(end)
+    let n:             uint = (end_address - start_address) / internal.gc.core.block_bytes
+    write_lock(heap)
+    if !internal.gc.hash.tab_reserve(ref heap.blocks, n) {
+        write_unlock(heap)
+        return false
+    }
+    var address: uint = start_address
+    while address < end_address {
+        assert internal.gc.hash.tab_lookup(ref heap.blocks,
+                                          address / internal.gc.core.block_bytes) == nil
+        let block: Ref[byte] = __gc_byte_offset(start, address - start_address)
+        internal.gc.hash.tab_insert(ref heap.blocks,
+                                   address / internal.gc.core.block_bytes, block)
+        address += internal.gc.core.block_bytes
+    }
+    widen_bounds(heap, start_address, end_address)
+    write_unlock(heap)
+    return true
+}
+
+func region_release_block(heap: Ref[internal.gc.core.Heap],
+                                 block: Ref[internal.gc.core.Block_Metadata]) {
+    let address: uint = __abi_ref_address(block)
+    write_lock(heap)
+    internal.gc.hash.tab_delete(ref heap.blocks,
+        address / internal.gc.core.block_bytes, internal.gc.core.block_base(block))
+    write_unlock(heap)
+}
+
+func region_set_type(heap: Ref[internal.gc.core.Heap],
+                            header: Ref[internal.gc.core.Object_Header],
+                            type_index: u32) {
+    write_lock(heap)
+    header.type_index = type_index
+    write_unlock(heap)
+}
+
+func regions_free(heap: Ref[internal.gc.core.Heap]) {
+    internal.gc.hash.tab_free(ref heap.blocks)
+    internal.gc.hash.tab_free(ref heap.large)
+}
+
+func highest_bit(value: uint) -> u32 {
+    require value != 0
+    return cast[u32](internal.gc.core.word_bits - 1) - __count_leading_zeros(value)
+}
+
+func los_level(bytes: uint) -> u32 {
+    let level: u32 = highest_bit(bytes)
+    if level < los_scaled_from {
+        return los_min_level
+    }
+    return level - 4
+}
+
+func los_key(address: uint, level: u32) -> uint {
+    return ((address >> level) << los_level_bits) | cast[uint]level
+}
+
+func los_table_value(object: Ref[internal.gc.core.Los_Obj]) -> Ref[byte] {
+    require (object.hdr.meta & internal.gc.core.obj_large) != 0
+    return unsafe_cast[Ref[byte]] object
+}
+
+func los_register(heap: Ref[internal.gc.core.Heap],
+                         object: Ref[internal.gc.core.Los_Obj]) -> bool {
+    let level: u32  = los_level(object.bytes)
+    let start: uint = __abi_ref_address(object)
+    let last:  uint = start + object.bytes - 1
+    write_lock(heap)
+    if !internal.gc.hash.tab_reserve(ref heap.large,
+                                    (last >> level) - (start >> level) + 1) {
+        write_unlock(heap)
+        return false
+    }
+    var granule: uint = start >> level
+    while granule <= last >> level {
+        internal.gc.hash.tab_insert(ref heap.large,
+            los_key(granule << level, level),
+            los_table_value(object))
+        granule += 1
+    }
+    let index:      uint      = level
+    let count_cell: Ref[uint] = ref heap.los_level_n[index]
+    var count:      uint      = ref_read(count_cell)
+    count += 1
+    ref_write(count_cell, count)
+    let bit: uint = 1
+    heap.los_levels = heap.los_levels | (bit << level)
+    widen_bounds(heap, start, start + object.bytes)
+    write_unlock(heap)
+    return true
+}
+
+func los_unregister(heap: Ref[internal.gc.core.Heap],
+                           object: Ref[internal.gc.core.Los_Obj]) {
+    let level: u32  = los_level(object.bytes)
+    let start: uint = __abi_ref_address(object)
+    let last:  uint = start + object.bytes - 1
+    write_lock(heap)
+    var granule: uint = start >> level
+    while granule <= last >> level {
+        internal.gc.hash.tab_delete(ref heap.large,
+            los_key(granule << level, level),
+            los_table_value(object))
+        granule += 1
+    }
+    let index:      uint      = level
+    let count_cell: Ref[uint] = ref heap.los_level_n[index]
+    var count:      uint      = ref_read(count_cell)
+    count -= 1
+    ref_write(count_cell, count)
+    if count == 0 {
+        let bit: uint = 1
+        heap.los_levels = heap.los_levels & ~(bit << level)
+    }
+    write_unlock(heap)
+}
+
+func los_find(heap: Ref[internal.gc.core.Heap], address: uint) -> Ref[internal.gc.core.Los_Obj]? {
+    let table:  Ref[internal.gc.hash.Hash_Tab] = ref heap.large
+    var levels: uint                          = heap.los_levels
+    if levels == 0 {
+        return nil
+    }
+    let slots:  Ref[internal.gc.hash.Hash_Slot] = internal.gc.hash.tab_slots(table)
+    let stride: uint                           = internal.abi.size_bytes(internal.gc.hash.hash_slot_record())
+    let bit:    uint                           = 1
+    let mask:   uint                           = (bit << table.bits) - 1
+    while levels != 0 {
+        let level: u32  = __count_trailing_zeros(levels)
+        let key:   uint = los_key(address, level)
+        var index: uint = internal.gc.hash.tab_home(table, key)
+        while true {
+            let slot:      Ref[internal.gc.hash.Hash_Slot] = internal.gc.hash.hash_slot_at(slots, index, stride)
+            let candidate: Ref[byte]?                     = slot.val
+            if candidate != nil {
+                if slot.key == key {
+                    let object: Ref[internal.gc.core.Los_Obj] = unsafe_cast[Ref[internal.gc.core.Los_Obj]] candidate.get()
+                    let start:  uint                    = __abi_ref_address(object)
+                    if address >= start and address - start < object.bytes {
+                        return object
+                    }
+                }
+                index = (index + 1) & mask
+            } else {
+                break
+            }
+        }
+        levels = levels & (levels - 1)
+    }
+    return nil
+}
+
+func find_block_object(base: Ref[byte], address: uint) -> Ref[internal.gc.core.Object_Header]? {
+    let offset:          uint = address - __abi_ref_address(base)
+    let header_bytes:    uint = internal.gc.core.header_lines() * internal.gc.core.line_bytes
+    let header_granules: uint = header_bytes / internal.gc.core.granule_bytes
+    if offset < header_granules * internal.gc.core.granule_bytes {
+        return nil
+    }
+
+    let granule: uint = offset / internal.gc.core.granule_bytes
+    var word:    uint = granule / internal.gc.core.word_bits
+    var bits:    u64  = __atomic_load_relaxed(internal.gc.core.start_word_at(base, word))
+    let bit:     uint = granule % internal.gc.core.word_bits
+    if bit != internal.gc.core.word_bits - 1 {
+        bits = bits & ((cast[u64](1) << (bit + 1)) - 1)
+    }
+    while bits == 0 {
+        if word == header_granules / internal.gc.core.word_bits {
+            return nil
+        }
+        word -= 1
+        bits = __atomic_load_relaxed(internal.gc.core.start_word_at(base, word))
+    }
+
+    let start: uint = word * internal.gc.core.word_bits + cast[uint](highest_bit(cast[uint](bits)))
+    if start < header_granules {
+        return nil
+    }
+    let header: Ref[internal.gc.core.Object_Header] = internal.gc.core.block_object_header_at(
+        base, start * internal.gc.core.granule_bytes)
+    let bytes:         uint = internal.gc.core.object_bytes(header)
+    let granule_bytes: uint = internal.gc.core.granule_bytes
+    let rounded:       uint = (bytes + granule_bytes - 1) / granule_bytes * granule_bytes
+    if offset >= start * internal.gc.core.granule_bytes + rounded {
+        return nil
+    }
+    return header
+}
+
+func find_object(heap: Ref[internal.gc.core.Heap], address: uint)
+                -> Ref[internal.gc.core.Object_Header]? {
+    if address < heap.heap_lo or address >= heap.heap_hi {
+        return nil
+    }
+
+    let key:       uint       = address / internal.gc.core.block_bytes
+    let candidate: Ref[byte]? = internal.gc.hash.tab_lookup(ref heap.blocks, key)
+    if candidate != nil {
+        return find_block_object(candidate.get(), address)
+    }
+
+    let large: Ref[internal.gc.core.Los_Obj]? = los_find(heap, address)
+    if large != nil {
+        let object: Ref[internal.gc.core.Los_Obj] = large.get()
+        if object.hdr.type_index != 0 {
+            return ref object.hdr
+        }
+    }
+    return nil
+}

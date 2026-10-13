@@ -1,4 +1,4 @@
-import builtin.abi
+import sys.abi
 
 type Layout_Probe layout(c) {
     value: u64

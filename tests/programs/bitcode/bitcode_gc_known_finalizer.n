@@ -1,4 +1,4 @@
-import builtin.abi
+import sys.abi
 
 type Finalized_Record {
     payload: int
@@ -21,7 +21,7 @@ comptime {} else {
     let value: Ref[Finalized_Record] = construct()
     require value.payload == 42
     let exemplar: Finalized_Record = new[Finalized_Record](42)
-    let row: Ref[builtin.abi.Type_Record]? = builtin.abi.type_for(
+    let row: Ref[sys.abi.Type_Record]? = sys.abi.type_for(
         typeof(exemplar))
     require row != nil
     require row.get().finalizer_function_index != 0

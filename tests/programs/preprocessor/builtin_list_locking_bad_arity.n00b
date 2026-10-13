@@ -1,3 +1,0 @@
-func invalid_list_locking_type(item: List_Locking[int, bool]) -> int {
-    return 0
-}

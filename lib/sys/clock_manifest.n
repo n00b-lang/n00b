@@ -1,0 +1,5 @@
+import internal.clock
+
+package sys.clock {
+    export internal.clock
+}

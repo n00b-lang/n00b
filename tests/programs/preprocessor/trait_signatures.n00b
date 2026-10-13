@@ -1,3 +1,0 @@
-public trait Combine {
-    func combine(self: `T, other: `T) -> `T fail: string
-}

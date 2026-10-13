@@ -1,4 +1,0 @@
-func cyclic(first: int = second, second: int = first) -> int {
-    return first
-}
-func use_cyclic_defaults() -> int { return cyclic() }

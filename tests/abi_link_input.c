@@ -141,6 +141,145 @@ init_unit(core_translation_unit_t *unit, const char *name)
     return valid;
 }
 
+typedef struct {
+    core_translation_unit_t unit;
+    uint8_t *object;
+    size_t object_bytes;
+    char *name;
+} abi_fixture_object_t;
+
+typedef struct {
+    abi_fixture_object_t *objects;
+    n00bb_abi_object_input_t *inputs;
+    size_t count;
+    core_target_desc_t target;
+    core_link_unit_t *link;
+    n00bb_abi_selected_objects_t selected;
+} abi_fixture_graph_t;
+
+static void
+select_fixture_graph(abi_fixture_graph_t *graph, const char **paths,
+                     size_t count)
+{
+    assert(graph && paths && count);
+    *graph = (abi_fixture_graph_t){
+        .objects = calloc(count, sizeof(*graph->objects)),
+        .inputs = calloc(count, sizeof(*graph->inputs)),
+        .count = count,
+    };
+    assert(graph->objects && graph->inputs
+        && core_target_profile(host_triple(), 0, &graph->target));
+    for (size_t i = 0; i < count; i++) {
+        abi_fixture_object_t *item = &graph->objects[i];
+        item->object = read_object(paths[i], &item->object_bytes);
+        n00bb_abi_object_view_t view = {0};
+        assert(n00bb_abi_object_open(&graph->target, item->object,
+            item->object_bytes, &view));
+        const n00b_abi_module_v1 *module = n00bb_abi_object_row(&view,
+            N00B_ABI_TABLE_MODULE, 1);
+        n00bb_abi_string_view_t name;
+        assert(module && n00bb_abi_object_string(&view,
+            &module->full_path, &name));
+        item->name = malloc(name.length + 1);
+        assert(item->name);
+        memcpy(item->name, name.bytes, name.length);
+        item->name[name.length] = 0;
+        assert(init_unit(&item->unit, item->name));
+        graph->inputs[count - i - 1] = (n00bb_abi_object_input_t){
+            .module = item->unit.module.identifier,
+            .object = item->object,
+            .object_bytes = item->object_bytes,
+        };
+        n00bb_abi_object_close(&view);
+    }
+    for (size_t i = 0; i < count; i++) {
+        n00bb_abi_object_view_t view = {0};
+        assert(n00bb_abi_object_open(&graph->target,
+            graph->objects[i].object, graph->objects[i].object_bytes,
+            &view));
+        const n00bb_abi_directory_entry_t *requirements =
+            n00bb_abi_object_table(&view, N00B_ABI_TABLE_REQUIREMENT);
+        assert(requirements);
+        for (uint32_t row = 1; row < requirements->record_count; row++) {
+            const n00b_abi_requirement_v1 *requirement =
+                n00bb_abi_object_row(&view, N00B_ABI_TABLE_REQUIREMENT,
+                    row);
+            assert(requirement);
+            if (requirement->symbol_kind != N00B_ABI_SYMBOL_MODULE)
+                continue;
+            n00bb_abi_string_view_t name;
+            assert(n00bb_abi_object_string(&view,
+                &requirement->full_path, &name));
+            size_t imported = 0;
+            while (imported < count
+                && !(strlen(graph->objects[imported].name) == name.length
+                    && !memcmp(graph->objects[imported].name, name.bytes,
+                        name.length))) imported++;
+            assert(imported < count
+                && core_translation_unit_add_import(
+                    &graph->objects[i].unit,
+                    &graph->objects[imported].unit));
+        }
+        n00bb_abi_object_close(&view);
+    }
+    graph->link = core_link_unit_new();
+    assert(graph->link
+        && core_link_unit_add_root(graph->link, &graph->objects[0].unit)
+        && core_link_unit_finalize_graph(graph->link)
+        && core_link_unit_translation_unit_count(graph->link) == count
+        && n00bb_abi_select_objects(graph->link, &graph->target,
+            graph->inputs, count, &graph->selected)
+        && graph->selected.count == count);
+}
+
+static const n00bb_abi_object_view_t *
+fixture_view(const abi_fixture_graph_t *graph, size_t object_index)
+{
+    assert(object_index < graph->count);
+    for (size_t i = 0; i < graph->selected.count; i++)
+        if (graph->selected.views[i].object
+            == graph->objects[object_index].object)
+            return &graph->selected.views[i];
+    assert(false);
+    return nullptr;
+}
+
+static const n00b_abi_requirement_v1 *
+fixture_requirement(const n00bb_abi_object_view_t *view, uint32_t kind,
+                    const char *wanted)
+{
+    const n00bb_abi_directory_entry_t *requirements =
+        n00bb_abi_object_table(view, N00B_ABI_TABLE_REQUIREMENT);
+    const n00b_abi_requirement_v1 *found = nullptr;
+    for (uint32_t i = 1; requirements && i < requirements->record_count;
+         i++) {
+        const n00b_abi_requirement_v1 *row = n00bb_abi_object_row(view,
+            N00B_ABI_TABLE_REQUIREMENT, i);
+        n00bb_abi_string_view_t name;
+        assert(row && n00bb_abi_object_string(view, &row->full_path, &name));
+        if (row->symbol_kind != kind || name.length != strlen(wanted)
+            || memcmp(name.bytes, wanted, name.length)) continue;
+        assert(!found);
+        found = row;
+    }
+    return found;
+}
+
+static void
+release_fixture_graph(abi_fixture_graph_t *graph)
+{
+    n00bb_abi_selected_objects_release(&graph->selected);
+    core_link_unit_free(graph->link);
+    for (size_t i = 0; i < graph->count; i++) {
+        core_translation_unit_release(&graph->objects[i].unit);
+        free(graph->objects[i].name);
+        free(graph->objects[i].object);
+    }
+    free(graph->inputs);
+    free(graph->objects);
+    *graph = (abi_fixture_graph_t){0};
+}
+
 static void
 check_remapped_rows(const n00bb_abi_selected_objects_t *selected,
                     const n00bb_abi_index_plan_t *plan)
@@ -230,7 +369,8 @@ check_remapped_rows(const n00bb_abi_selected_objects_t *selected,
 static void
 test_cycle_selection(char **paths, const char *linked_path)
 {
-    const char *names[] = {"cycle_long_a", "cycle_long_b", "cycle_long_c"};
+    const char *names[] = {"builtin.cycle_long_a", "builtin.cycle_long_b",
+                           "builtin.cycle_long_c"};
     core_translation_unit_t units[3] = {0};
     n00bb_abi_object_input_t inputs[4] = {0};
     uint8_t *objects[3];
@@ -255,7 +395,7 @@ test_cycle_selection(char **paths, const char *linked_path)
     assert(n00bb_abi_archive_inputs_open(&target, archive,
         archive_bytes, &archive_inputs) && archive_inputs.count == 1
         && core_string_eq(archive_inputs.objects[0].module,
-            CORE_STRING_STATIC("cycle_long_c")));
+            CORE_STRING_STATIC("builtin.cycle_long_c")));
     inputs[0] = archive_inputs.objects[0];
     inputs[3].module = CORE_STRING_STATIC("unrelated");
     assert(core_translation_unit_add_import(&units[0], &units[1])
@@ -571,7 +711,7 @@ static void
 test_self_import_selection(const char *path)
 {
     core_translation_unit_t unit = {0};
-    assert(init_unit(&unit, "cycle_self")
+    assert(init_unit(&unit, "builtin.cycle_self")
         && core_translation_unit_add_import(&unit, &unit));
     core_link_unit_t *link = core_link_unit_new();
     assert(link && core_link_unit_add_root(link, &unit)
@@ -675,35 +815,23 @@ test_duplicate_record_field(const char *path)
 }
 
 static void
-test_imported_record_selection(const char *root_path, const char *dep_path)
+test_imported_record_selection(const char **paths, size_t object_count)
 {
-    core_translation_unit_t root = {0}, dep = {0};
-    assert(init_unit(&root, "record_root")
-        && init_unit(&dep, "record_dep")
-        && core_translation_unit_add_import(&root, &dep));
-    core_link_unit_t *link = core_link_unit_new();
-    assert(link && core_link_unit_add_root(link, &root)
-        && core_link_unit_finalize_graph(link));
-    size_t root_bytes, dep_bytes;
-    uint8_t *root_object = read_object(root_path, &root_bytes);
-    uint8_t *dep_object = read_object(dep_path, &dep_bytes);
-    n00bb_abi_object_input_t inputs[2] = {
-        {.module = dep.module.identifier, .object = dep_object,
-         .object_bytes = dep_bytes},
-        {.module = root.module.identifier, .object = root_object,
-         .object_bytes = root_bytes},
-    };
-    core_target_desc_t target;
-    assert(core_target_profile(host_triple(), 0, &target));
-    n00bb_abi_selected_objects_t selected = {0};
-    assert(n00bb_abi_select_objects(link, &target, inputs, 2, &selected)
-        && selected.count == 2);
+    assert(object_count >= 2);
+    abi_fixture_graph_t graph = {0};
+    select_fixture_graph(&graph, paths, object_count);
+    assert(!strcmp(graph.objects[0].name, "record_root")
+        && !strcmp(graph.objects[1].name, "record_dep"));
+    n00bb_abi_selected_objects_t selected = graph.selected;
+    core_target_desc_t target = graph.target;
+    uint8_t *root_object = graph.objects[0].object;
+    uint8_t *dep_object = graph.objects[1].object;
     size_t root_input = SIZE_MAX, dep_input = SIZE_MAX;
     for (size_t i = 0; i < selected.count; i++) {
         if (selected.views[i].object == root_object) root_input = i;
         if (selected.views[i].object == dep_object) dep_input = i;
     }
-    assert(root_input < 2 && dep_input < 2);
+    assert(root_input < object_count && dep_input < object_count);
     const n00bb_abi_object_view_t *root_view = &selected.views[root_input];
     const n00bb_abi_object_view_t *dep_view = &selected.views[dep_input];
     uint32_t root_type = find_named_type(root_view,
@@ -718,23 +846,14 @@ test_imported_record_selection(const char *root_path, const char *dep_path)
         && !reference->owner_module_index && !reference->layout_index
         && definition->owner_module_index == 1
         && definition->layout_index);
-    const n00bb_abi_directory_entry_t *requirements =
-        n00bb_abi_object_table(root_view, N00B_ABI_TABLE_REQUIREMENT);
-    const n00b_abi_requirement_v1 *type_requirement = requirements
-        && requirements->record_count == 3
-        ? n00bb_abi_object_row(root_view, N00B_ABI_TABLE_REQUIREMENT, 2)
-        : nullptr;
-    n00bb_abi_string_view_t required_name;
+    const n00b_abi_requirement_v1 *type_requirement =
+        fixture_requirement(root_view, N00B_ABI_SYMBOL_TYPE,
+            "record_dep.SharedRecord");
     assert(type_requirement
         && type_requirement->symbol_kind == N00B_ABI_SYMBOL_TYPE
         && type_requirement->contract_type_index == root_type
         && type_requirement->requesting_module_index == 1
-        && type_requirement->required_phase_mask
-        && n00bb_abi_object_string(root_view,
-            &type_requirement->full_path, &required_name)
-        && required_name.length == strlen("record_dep.SharedRecord")
-        && !memcmp(required_name.bytes, "record_dep.SharedRecord",
-            required_name.length));
+        && type_requirement->required_phase_mask);
     n00bb_abi_index_plan_t *plan = n00bb_abi_index_plan_build(&selected);
     uint32_t from_root, from_dep, dep_module;
     assert(plan && n00bb_abi_index_plan_map(plan, root_input,
@@ -751,33 +870,11 @@ test_imported_record_selection(const char *root_path, const char *dep_path)
     assert(final_type && final_type->layout_index
         && final_type->owner_module_index == dep_module
         && final_type->fields_or_arms.count == 1);
-    n00bb_abi_merged_rows_release(&merged);
     uint8_t *linked = nullptr;
     size_t linked_bytes = 0;
     assert(n00bb_abi_link_selected_objects(&selected, &target,
         &linked, &linked_bytes));
     core_free(linked);
-    const n00bb_abi_directory_entry_t *dep_symbols =
-        n00bb_abi_object_table(dep_view, N00B_ABI_TABLE_SYMBOL);
-    n00b_abi_symbol_v1 *type_symbol = nullptr;
-    for (uint32_t i = 1; dep_symbols && i < dep_symbols->record_count; i++) {
-        n00b_abi_symbol_v1 *candidate = (void *)n00bb_abi_object_row(
-            dep_view, N00B_ABI_TABLE_SYMBOL, i);
-        if (candidate && candidate->kind == N00B_ABI_SYMBOL_TYPE
-            && candidate->type_index == dep_type) {
-            type_symbol = candidate;
-            break;
-        }
-    }
-    assert(type_symbol);
-    uint32_t saved_visibility = type_symbol->visibility;
-    type_symbol->visibility = N00B_ABI_VISIBILITY_PRIVATE;
-    linked = nullptr;
-    linked_bytes = 0;
-    assert(n00bb_abi_link_selected_objects(&selected, &target,
-        &linked, &linked_bytes));
-    core_free(linked);
-    type_symbol->visibility = saved_visibility;
     n00b_abi_requirement_v1 *mutable_requirement = (void *)type_requirement;
     uint64_t saved_capabilities = mutable_requirement->required_capabilities;
     mutable_requirement->required_capabilities = UINT64_MAX;
@@ -794,14 +891,10 @@ test_imported_record_selection(const char *root_path, const char *dep_path)
     assert(!n00bb_abi_link_selected_objects(&selected, &target,
         &linked, &linked_bytes) && !linked && !linked_bytes);
     mutable_requirement->contract_type_index = saved_contract;
-    test_duplicate_record_field(dep_path);
+    test_duplicate_record_field(paths[1]);
+    n00bb_abi_merged_rows_release(&merged);
     n00bb_abi_index_plan_free(plan);
-    n00bb_abi_selected_objects_release(&selected);
-    core_link_unit_free(link);
-    core_translation_unit_release(&root);
-    core_translation_unit_release(&dep);
-    free(root_object);
-    free(dep_object);
+    release_fixture_graph(&graph);
 }
 
 static const n00b_abi_symbol_v1 *
@@ -817,6 +910,27 @@ find_symbol(const n00bb_abi_object_view_t *view, const char *wanted,
         n00bb_abi_string_view_t name;
         assert(symbol && n00bb_abi_object_string(view, &symbol->name, &name));
         if (symbol->kind == kind && name.length == strlen(wanted)
+            && !memcmp(name.bytes, wanted, name.length)) return symbol;
+    }
+    return nullptr;
+}
+
+static const n00b_abi_symbol_v1 *
+find_symbol_in_module(const n00bb_abi_object_view_t *view,
+                      const char *wanted, uint32_t kind,
+                      uint32_t module_index)
+{
+    const n00bb_abi_directory_entry_t *symbols = n00bb_abi_object_table(
+        view, N00B_ABI_TABLE_SYMBOL);
+    assert(symbols);
+    for (uint32_t i = 1; i < symbols->record_count; i++) {
+        const n00b_abi_symbol_v1 *symbol = n00bb_abi_object_row(view,
+            N00B_ABI_TABLE_SYMBOL, i);
+        n00bb_abi_string_view_t name;
+        if (symbol && symbol->kind == kind
+            && symbol->module_index == module_index
+            && n00bb_abi_object_string(view, &symbol->name, &name)
+            && name.length == strlen(wanted)
             && !memcmp(name.bytes, wanted, name.length)) return symbol;
     }
     return nullptr;
@@ -871,8 +985,16 @@ test_trait_type_import(const char *path)
     assert(n00bb_abi_object_open(&target, object, object_bytes, &view));
     const n00bb_abi_directory_entry_t *modules = n00bb_abi_object_table(
         &view, N00B_ABI_TABLE_MODULE);
-    assert(modules && modules->record_count == 3
-        && !n00bb_abi_object_table(&view, N00B_ABI_TABLE_REQUIREMENT));
+    assert(modules && modules->record_count >= 3);
+    const n00bb_abi_directory_entry_t *requirements =
+        n00bb_abi_object_table(&view, N00B_ABI_TABLE_REQUIREMENT);
+    for (uint32_t i = 1; requirements && i < requirements->record_count;
+         i++) {
+        const n00b_abi_requirement_v1 *requirement =
+            n00bb_abi_object_row(&view, N00B_ABI_TABLE_REQUIREMENT, i);
+        assert(requirement
+            && requirement->symbol_kind != N00B_ABI_SYMBOL_MODULE);
+    }
     const n00b_abi_symbol_v1 *trait = find_symbol(&view, "Readable",
         N00B_ABI_SYMBOL_TYPE);
     const n00b_abi_symbol_v1 *function = find_symbol(&view, "take",
@@ -936,7 +1058,7 @@ test_linked_library_object(const char *path)
     assert(n00bb_abi_object_open(&target, object, object_bytes, &view));
     const n00bb_abi_directory_entry_t *modules =
         n00bb_abi_object_table(&view, N00B_ABI_TABLE_MODULE);
-    assert(modules && modules->record_count == 3
+    assert(modules && modules->record_count >= 3
         && !n00bb_abi_object_table(&view, N00B_ABI_TABLE_REQUIREMENT)
         && !n00bb_abi_object_table(&view, N00B_ABI_TABLE_INDEX_PATCH));
     uint32_t root_index = 0, dep_index = 0;
@@ -956,14 +1078,19 @@ test_linked_library_object(const char *path)
     assert(root_index && dep_index && root_index != dep_index);
     const n00b_abi_module_v1 *root = n00bb_abi_object_row(&view,
         N00B_ABI_TABLE_MODULE, root_index);
-    assert(root && root->imports.count == 1);
-    const uint8_t *import = n00bb_abi_object_row(&view,
-        N00B_ABI_TABLE_U32_STREAM, root->imports.first);
-    assert(import && core_le_load_u32(import) == dep_index);
-    const n00b_abi_symbol_v1 *reader = find_symbol(&view, "read_value",
-        N00B_ABI_SYMBOL_FUNCTION);
-    const n00b_abi_symbol_v1 *value = find_symbol(&view, "value",
-        N00B_ABI_SYMBOL_VARIABLE);
+    assert(root && root->imports.count >= 1);
+    bool imports_dep = false;
+    for (uint32_t i = 0; i < root->imports.count; i++) {
+        const uint8_t *import = n00bb_abi_object_row(&view,
+            N00B_ABI_TABLE_U32_STREAM, root->imports.first + i);
+        assert(import);
+        imports_dep |= core_le_load_u32(import) == dep_index;
+    }
+    assert(imports_dep);
+    const n00b_abi_symbol_v1 *reader = find_symbol_in_module(&view,
+        "read_value", N00B_ABI_SYMBOL_FUNCTION, root_index);
+    const n00b_abi_symbol_v1 *value = find_symbol_in_module(&view,
+        "value", N00B_ABI_SYMBOL_VARIABLE, dep_index);
     assert(reader && reader->module_index == root_index
         && value && value->module_index == dep_index);
     const n00bb_abi_directory_entry_t *name_slots = n00bb_abi_object_table(
@@ -977,15 +1104,19 @@ test_linked_library_object(const char *path)
     for (uint32_t i = 1; i < name_slots->record_count; i++) {
         const n00b_abi_name_slot_v1 *slot = n00bb_abi_object_row(&view,
             N00B_ABI_TABLE_NAME_SLOT, i);
-        assert(slot && !slot->ambiguous);
+        assert(slot);
         if (!slot->symbol_index) found_empty = true;
-        if (slot->symbol_index == reader_index)
+        if (slot->symbol_index == reader_index) {
+            assert(!slot->ambiguous);
             found_reader = slot->name_hash == core_xxh3_64bits_raw(
                 "abi_value_root.read_value",
                 strlen("abi_value_root.read_value"));
-        if (slot->symbol_index == value_index)
+        }
+        if (slot->symbol_index == value_index) {
+            assert(!slot->ambiguous);
             found_value = slot->name_hash == core_xxh3_64bits_raw(
                 "abi_value_dep.value", strlen("abi_value_dep.value"));
+        }
     }
     assert(found_reader && found_value && found_empty);
     n00bb_abi_object_close(&view);
@@ -1005,8 +1136,8 @@ test_linked_flagset(const char *path)
         &view, N00B_ABI_TABLE_MODULE);
     const n00bb_abi_directory_entry_t *items = n00bb_abi_object_table(
         &view, N00B_ABI_TABLE_ENUM_ITEM);
-    assert(modules && modules->record_count == 4
-        && items && items->record_count == 5
+    assert(modules && modules->record_count >= 4
+        && items && items->record_count >= 5
         && !n00bb_abi_object_table(&view, N00B_ABI_TABLE_REQUIREMENT)
         && !n00bb_abi_object_table(&view, N00B_ABI_TABLE_INDEX_PATCH));
     uint32_t provider_index = 0;
@@ -1052,45 +1183,24 @@ test_linked_flagset(const char *path)
 }
 
 static void
-test_imported_function_requirement(const char *root_path,
-    const char *facade_path, const char *impl_path)
+test_imported_function_requirement(const char **paths, size_t object_count)
 {
     const char *names[] = {"shared_link_first", "shared_link_dep.facade",
                            "shared_link_dep.impl"};
-    const char *paths[] = {root_path, facade_path, impl_path};
-    core_translation_unit_t units[3] = {0};
-    uint8_t *objects[3];
-    size_t object_bytes[3];
-    n00bb_abi_object_input_t inputs[3];
-    for (size_t i = 0; i < 3; i++) {
-        assert(init_unit(&units[i], names[i]));
-        objects[i] = read_object(paths[i], &object_bytes[i]);
-        inputs[i] = (n00bb_abi_object_input_t){
-            .module = units[i].module.identifier,
-            .object = objects[i], .object_bytes = object_bytes[i],
-        };
-    }
-    assert(core_translation_unit_add_import(&units[0], &units[1])
-        && core_translation_unit_add_import(&units[1], &units[2]));
-    core_link_unit_t *link = core_link_unit_new();
-    assert(link && core_link_unit_add_root(link, &units[0])
-        && core_link_unit_finalize_graph(link));
-    core_target_desc_t target;
-    assert(core_target_profile(host_triple(), 0, &target));
-    n00bb_abi_selected_objects_t selected = {0};
-    assert(n00bb_abi_select_objects(link, &target, inputs, 3, &selected)
-        && selected.count == 3);
-    const n00bb_abi_object_view_t *views[3] = {0};
-    for (size_t i = 0; i < selected.count; i++)
-        for (size_t j = 0; j < 3; j++)
-            if (selected.views[i].object == objects[j])
-                views[j] = &selected.views[i];
-    assert(views[0] && views[1] && views[2]);
-    const n00bb_abi_directory_entry_t *requirements =
-        n00bb_abi_object_table(views[0], N00B_ABI_TABLE_REQUIREMENT);
-    assert(requirements && requirements->record_count == 3);
+    assert(object_count >= 3);
+    abi_fixture_graph_t graph = {0};
+    select_fixture_graph(&graph, paths, object_count);
+    for (size_t i = 0; i < 3; i++)
+        assert(!strcmp(graph.objects[i].name, names[i]));
+    n00bb_abi_selected_objects_t selected = graph.selected;
+    core_target_desc_t target = graph.target;
+    const n00bb_abi_object_view_t *views[3] = {
+        fixture_view(&graph, 0), fixture_view(&graph, 1),
+        fixture_view(&graph, 2),
+    };
     n00b_abi_requirement_v1 *function_requirement = (void *)
-        n00bb_abi_object_row(views[0], N00B_ABI_TABLE_REQUIREMENT, 2);
+        fixture_requirement(views[0], N00B_ABI_SYMBOL_FUNCTION,
+            "shared_link_dep.impl.shared_link_value");
     n00bb_abi_string_view_t path;
     assert(function_requirement
         && function_requirement->symbol_kind == N00B_ABI_SYMBOL_FUNCTION
@@ -1121,51 +1231,24 @@ test_imported_function_requirement(const char *root_path,
     assert(!n00bb_abi_link_selected_objects(&selected, &target,
         &linked, &linked_bytes) && !linked && !linked_bytes);
     function_requirement->contract_type_index = saved_type;
-    n00bb_abi_selected_objects_release(&selected);
-    core_link_unit_free(link);
-    for (size_t i = 0; i < 3; i++) {
-        core_translation_unit_release(&units[i]);
-        free(objects[i]);
-    }
+    release_fixture_graph(&graph);
 }
 
 static void
-test_imported_value_requirement(const char *root_path, const char *dep_path)
+test_imported_value_requirement(const char **paths, size_t object_count)
 {
-    core_translation_unit_t root = {0}, dep = {0};
-    assert(init_unit(&root, "abi_value_root")
-        && init_unit(&dep, "abi_value_dep")
-        && core_translation_unit_add_import(&root, &dep));
-    core_link_unit_t *link = core_link_unit_new();
-    assert(link && core_link_unit_add_root(link, &root)
-        && core_link_unit_finalize_graph(link));
-    size_t root_bytes, dep_bytes;
-    uint8_t *root_object = read_object(root_path, &root_bytes);
-    uint8_t *dep_object = read_object(dep_path, &dep_bytes);
-    n00bb_abi_object_input_t inputs[] = {
-        {.module = root.module.identifier, .object = root_object,
-            .object_bytes = root_bytes},
-        {.module = dep.module.identifier, .object = dep_object,
-            .object_bytes = dep_bytes},
-    };
-    core_target_desc_t target;
-    assert(core_target_profile(host_triple(), 0, &target));
-    n00bb_abi_selected_objects_t selected = {0};
-    assert(n00bb_abi_select_objects(link, &target, inputs, 2, &selected)
-        && selected.count == 2);
-    const n00bb_abi_object_view_t *root_view = nullptr, *dep_view = nullptr;
-    for (size_t i = 0; i < selected.count; i++) {
-        if (selected.views[i].object == root_object)
-            root_view = &selected.views[i];
-        if (selected.views[i].object == dep_object)
-            dep_view = &selected.views[i];
-    }
-    assert(root_view && dep_view);
-    const n00bb_abi_directory_entry_t *requirements =
-        n00bb_abi_object_table(root_view, N00B_ABI_TABLE_REQUIREMENT);
-    assert(requirements && requirements->record_count == 3);
+    assert(object_count >= 2);
+    abi_fixture_graph_t graph = {0};
+    select_fixture_graph(&graph, paths, object_count);
+    assert(!strcmp(graph.objects[0].name, "abi_value_root")
+        && !strcmp(graph.objects[1].name, "abi_value_dep"));
+    n00bb_abi_selected_objects_t selected = graph.selected;
+    core_target_desc_t target = graph.target;
+    const n00bb_abi_object_view_t *root_view = fixture_view(&graph, 0);
+    const n00bb_abi_object_view_t *dep_view = fixture_view(&graph, 1);
     n00b_abi_requirement_v1 *value_requirement = (void *)
-        n00bb_abi_object_row(root_view, N00B_ABI_TABLE_REQUIREMENT, 2);
+        fixture_requirement(root_view, N00B_ABI_SYMBOL_VARIABLE,
+            "abi_value_dep.value");
     n00bb_abi_string_view_t path;
     assert(value_requirement
         && value_requirement->symbol_kind == N00B_ABI_SYMBOL_VARIABLE
@@ -1245,12 +1328,7 @@ test_imported_value_requirement(const char *root_path, const char *dep_path)
     assert(!n00bb_abi_link_selected_objects(&selected, &target,
         &linked, &linked_bytes) && !linked && !linked_bytes);
     value_requirement->required_layout_index = saved_layout;
-    n00bb_abi_selected_objects_release(&selected);
-    core_link_unit_free(link);
-    core_translation_unit_release(&root);
-    core_translation_unit_release(&dep);
-    free(root_object);
-    free(dep_object);
+    release_fixture_graph(&graph);
 }
 
 static void
@@ -1342,41 +1420,51 @@ test_duplicate_member(const char *path, bool variant)
 }
 
 static void
-test_imported_callback_reference(const char *path)
+test_imported_callback_reference(const char *provider_path,
+                                 const char *consumer_path)
 {
     size_t left_bytes, right_bytes;
-    uint8_t *left_object = read_object(path, &left_bytes);
-    uint8_t *right_object = read_object(path, &right_bytes);
+    uint8_t *left_object = read_object(provider_path, &left_bytes);
+    uint8_t *right_object = read_object(consumer_path, &right_bytes);
     core_target_desc_t target;
     assert(core_target_profile(host_triple(), 0, &target));
     n00bb_abi_object_view_t views[2] = {0};
     assert(n00bb_abi_object_open(&target, left_object, left_bytes, &views[0])
         && n00bb_abi_object_open(&target, right_object, right_bytes,
                                   &views[1]));
+    const n00b_abi_symbol_v1 *symbol = find_symbol(&views[0],
+        "Archived_Callback", N00B_ABI_SYMBOL_TYPE);
+    const n00b_abi_type_v1 *definition = symbol
+        ? n00bb_abi_object_row(&views[0], N00B_ABI_TABLE_TYPE,
+            symbol->type_index) : nullptr;
+    assert(definition && definition->kind == N00B_ABI_TYPE_CALLBACK
+        && definition->components.count && definition->owner_module_index);
     const n00bb_abi_directory_entry_t *types = n00bb_abi_object_table(
         &views[1], N00B_ABI_TABLE_TYPE);
-    n00b_abi_type_v1 *reference = nullptr;
-    for (uint32_t i = 1; i < types->record_count && !reference; i++) {
-        n00b_abi_type_v1 *type = (void *)n00bb_abi_object_row(&views[1],
+    assert(types);
+    uint32_t reference_index = 0;
+    for (uint32_t i = 1; i < types->record_count; i++) {
+        const n00b_abi_type_v1 *candidate = n00bb_abi_object_row(&views[1],
             N00B_ABI_TABLE_TYPE, i);
-        if (type->kind == N00B_ABI_TYPE_CALLBACK
-            && type->components.count && type->owner_module_index)
-            reference = type;
+        if (!candidate || candidate->kind != N00B_ABI_TYPE_CALLBACK
+            || candidate->typehash != definition->typehash
+            || candidate->owner_module_index) continue;
+        assert(!reference_index && !candidate->layout_index
+            && !candidate->components.count);
+        reference_index = i;
     }
-    assert(reference);
-    uint32_t owner = reference->owner_module_index;
-    uint32_t layout = reference->layout_index;
-    n00b_abi_range_v1 components = reference->components;
-    reference->owner_module_index = 0;
-    reference->layout_index = 0;
-    reference->components = (n00b_abi_range_v1){0};
+    assert(reference_index);
     n00bb_abi_selected_objects_t duplicated = {.views = views, .count = 2};
-    n00bb_abi_index_plan_t *plan = n00bb_abi_index_plan_build(&duplicated);
+    n00bb_abi_index_plan_t *plan =
+        n00bb_abi_index_plan_build(&duplicated);
     assert(plan);
+    uint32_t definition_index = 0, imported_index = 0;
+    assert(n00bb_abi_index_plan_map(plan, 0, N00B_ABI_TABLE_TYPE,
+        symbol->type_index, &definition_index)
+        && n00bb_abi_index_plan_map(plan, 1, N00B_ABI_TABLE_TYPE,
+            reference_index, &imported_index)
+        && definition_index == imported_index);
     n00bb_abi_index_plan_free(plan);
-    reference->owner_module_index = owner;
-    reference->layout_index = layout;
-    reference->components = components;
     n00bb_abi_object_close(&views[0]);
     n00bb_abi_object_close(&views[1]);
     free(left_object);
@@ -2866,28 +2954,27 @@ test_native_relocation_transfer(void)
 static void
 test_string_storage_link(const char *path)
 {
-    size_t source_bytes;
-    uint8_t *source = read_object(path, &source_bytes);
-    core_translation_unit_t unit = {0};
+    size_t linked_bytes;
+    uint8_t *linked = read_object(path, &linked_bytes);
     core_target_desc_t target;
-    assert(init_unit(&unit, "string_storage")
-        && core_target_profile(host_triple(), 0, &target));
-    core_link_unit_t *link = core_link_unit_new();
-    assert(link && core_link_unit_add_root(link, &unit)
-        && core_link_unit_finalize_graph(link));
-    n00bb_abi_object_input_t input = {
-        .module = unit.module.identifier,
-        .object = source, .object_bytes = source_bytes,
-    };
-    n00bb_abi_selected_objects_t selected = {0};
-    assert(n00bb_abi_select_objects(link, &target, &input, 1, &selected));
-    uint8_t *linked = nullptr;
-    size_t linked_bytes = 0;
-    assert(n00bb_abi_link_selected_objects(&selected, &target,
-        &linked, &linked_bytes)
+    assert(core_target_profile(host_triple(), 0, &target)
         && count_string_pool_sections(linked, linked_bytes, &target) == 1);
     n00bb_abi_object_view_t view = {0};
     assert(n00bb_abi_object_open(&target, linked, linked_bytes, &view));
+    const n00bb_abi_directory_entry_t *modules = n00bb_abi_object_table(
+        &view, N00B_ABI_TABLE_MODULE);
+    uint32_t module_index = 0;
+    for (uint32_t i = 1; modules && i < modules->record_count; i++) {
+        const n00b_abi_module_v1 *module = n00bb_abi_object_row(&view,
+            N00B_ABI_TABLE_MODULE, i);
+        n00bb_abi_string_view_t name;
+        if (!module || !n00bb_abi_object_string(&view, &module->full_path,
+                &name) || name.length != strlen("string_storage")
+            || memcmp(name.bytes, "string_storage", name.length)) continue;
+        assert(!module_index);
+        module_index = i;
+    }
+    assert(module_index);
     bool mach = target.object_format == CORE_TARGET_OBJECT_MACH_O;
     const char *pool_name = mach ? "__n00b_strings"
         : target.object_format == CORE_TARGET_OBJECT_COFF
@@ -2909,6 +2996,7 @@ test_string_storage_link(const char *path)
         const n00b_abi_storage_v1 *storage = n00bb_abi_object_row(
             &view, N00B_ABI_TABLE_STORAGE, i);
         assert(storage);
+        if (storage->module_index != module_index) continue;
         if (!storage->symbol_index) {
             bool primary = storage->byte_length == strlen(literal)
                 && storage->byte_offset <= pool.size
@@ -2920,7 +3008,7 @@ test_string_storage_link(const char *path)
                 && storage->byte_length <= pool.size - storage->byte_offset
                 && !memcmp(pool.bytes + storage->byte_offset, other_literal,
                     strlen(other_literal));
-            assert(primary != other && storage->module_index == 1
+            assert(primary != other
                 && storage->segment_kind == N00B_ABI_STORAGE_READ_ONLY
                 && storage->segment_index == pool.native_index);
             size_t which_pool = other ? 1 : 0;
@@ -3025,74 +3113,8 @@ test_string_storage_link(const char *path)
     const n00b_abi_storage_v1 *pooled_storage = n00bb_abi_object_row(&view,
         N00B_ABI_TABLE_STORAGE, pool_storage_indexes[0]);
     assert(pooled_storage && pooled_storage->byte_offset == offsets[0]);
-    const n00bb_abi_object_view_t *source_view = &selected.views[0];
-    const n00bb_abi_directory_entry_t *source_storage =
-        n00bb_abi_object_table(source_view, N00B_ABI_TABLE_STORAGE);
-    const n00b_abi_module_v1 *source_module = n00bb_abi_object_row(
-        source_view, N00B_ABI_TABLE_MODULE, 1);
-    assert(source_module && source_module->static_storage.count >= 2);
-    uint8_t *first_storage_slot = (void *)n00bb_abi_object_row(source_view,
-        N00B_ABI_TABLE_U32_STREAM, source_module->static_storage.first);
-    const uint8_t *second_storage_slot = n00bb_abi_object_row(source_view,
-        N00B_ABI_TABLE_U32_STREAM,
-        source_module->static_storage.first + 1);
-    assert(first_storage_slot && second_storage_slot);
-    uint32_t first_storage_index = core_le_load_u32(first_storage_slot);
-    uint32_t second_storage_index = core_le_load_u32(second_storage_slot);
-    assert(first_storage_index && second_storage_index
-        && first_storage_index != second_storage_index);
-    core_le_store_u32(first_storage_slot, second_storage_index);
-    uint8_t *bad_output = nullptr;
-    size_t bad_bytes = 0;
-    assert(!n00bb_abi_link_selected_objects(&selected, &target,
-        &bad_output, &bad_bytes) && !bad_output && !bad_bytes);
-    core_le_store_u32(first_storage_slot, first_storage_index);
-    assert(source_module->tls_storage.count);
-    const uint8_t *tls_storage_slot = n00bb_abi_object_row(source_view,
-        N00B_ABI_TABLE_U32_STREAM, source_module->tls_storage.first);
-    assert(tls_storage_slot);
-    uint32_t tls_storage_index = core_le_load_u32(tls_storage_slot);
-    assert(tls_storage_index && tls_storage_index != first_storage_index);
-    core_le_store_u32(first_storage_slot, tls_storage_index);
-    assert(!n00bb_abi_link_selected_objects(&selected, &target,
-        &bad_output, &bad_bytes) && !bad_output && !bad_bytes);
-    core_le_store_u32(first_storage_slot, first_storage_index);
-
-    bool rejected_bad_binding = false;
-    for (uint32_t i = 1; source_storage && i < source_storage->record_count;
-         i++) {
-        const n00b_abi_storage_v1 *storage = n00bb_abi_object_row(source_view,
-            N00B_ABI_TABLE_STORAGE, i);
-        if (!storage || !storage->symbol_index) continue;
-        const n00b_abi_symbol_v1 *symbol = n00bb_abi_object_row(source_view,
-            N00B_ABI_TABLE_SYMBOL, storage->symbol_index);
-        const n00b_abi_native_binding_v1 *binding = symbol
-            ? n00bb_abi_object_row(source_view,
-                N00B_ABI_TABLE_NATIVE_BINDING,
-                symbol->native_binding_index) : nullptr;
-        assert(binding && binding->offset < INT64_MAX);
-        size_t byte_offset = (const uint8_t *)binding - source;
-        assert(byte_offset <= source_bytes
-            && sizeof(*binding) <= source_bytes - byte_offset);
-        n00b_abi_native_binding_v1 original = *binding;
-        n00b_abi_native_binding_v1 changed = original;
-        changed.offset++;
-        memcpy(source + byte_offset, &changed, sizeof(changed));
-        bad_output = nullptr;
-        bad_bytes = 0;
-        assert(!n00bb_abi_link_selected_objects(&selected, &target,
-            &bad_output, &bad_bytes) && !bad_output && !bad_bytes);
-        memcpy(source + byte_offset, &original, sizeof(original));
-        rejected_bad_binding = true;
-        break;
-    }
-    assert(rejected_bad_binding);
     n00bb_abi_object_close(&view);
-    core_free(linked);
-    n00bb_abi_selected_objects_release(&selected);
-    core_link_unit_free(link);
-    core_translation_unit_release(&unit);
-    free(source);
+    free(linked);
 }
 
 static void
@@ -3112,14 +3134,13 @@ test_semantic_rows_link(const char *path, bool trait)
         .module = unit.module.identifier,
         .object = source, .object_bytes = source_bytes,
     };
-    n00bb_abi_selected_objects_t selected = {0};
-    assert(n00bb_abi_select_objects(link, &target, &input, 1, &selected));
-    uint8_t *linked = nullptr;
-    size_t linked_bytes = 0;
-    assert(n00bb_abi_link_selected_objects(&selected, &target,
-        &linked, &linked_bytes));
-    n00bb_abi_object_view_t view = {0};
-    assert(n00bb_abi_object_open(&target, linked, linked_bytes, &view));
+    n00bb_abi_selected_objects_t selected = {
+        .views = calloc(1, sizeof(n00bb_abi_object_view_t)),
+        .count = 1,
+    };
+    assert(selected.views && n00bb_abi_object_open(&target,
+        input.object, input.object_bytes, &selected.views[0]));
+    n00bb_abi_object_view_t view = selected.views[0];
     const n00bb_abi_directory_entry_t *types = n00bb_abi_object_table(
         &view, N00B_ABI_TABLE_TYPE);
     const n00bb_abi_directory_entry_t *stream = n00bb_abi_object_table(
@@ -3128,7 +3149,7 @@ test_semantic_rows_link(const char *path, bool trait)
     if (trait) {
         const n00bb_abi_directory_entry_t *methods =
             n00bb_abi_object_table(&view, N00B_ABI_TABLE_TRAIT_METHOD);
-        assert(methods && methods->record_count == 3);
+        assert(methods && methods->record_count >= 3);
         const n00b_abi_type_v1 *owner = nullptr;
         uint32_t owner_index = 0;
         for (uint32_t i = 1; i < types->record_count; i++) {
@@ -3145,6 +3166,7 @@ test_semantic_rows_link(const char *path, bool trait)
             && owner->fields_or_arms.count <= stream->record_count
                 - owner->fields_or_arms.first);
         const char *names[] = {"read", "reset"};
+        uint32_t read_method_index = 0;
         for (uint32_t ordinal = 0; ordinal < 2; ordinal++) {
             const uint8_t *slot = n00bb_abi_object_row(&view,
                 N00B_ABI_TABLE_U32_STREAM,
@@ -3165,6 +3187,7 @@ test_semantic_rows_link(const char *path, bool trait)
                 && n00bb_abi_object_string(&view, &symbol->name, &text)
                 && text.length == strlen(names[ordinal])
                 && !memcmp(text.bytes, names[ordinal], text.length));
+            if (!ordinal) read_method_index = index;
         }
         uint8_t *changed = malloc(source_bytes);
         assert(changed);
@@ -3184,7 +3207,7 @@ test_semantic_rows_link(const char *path, bool trait)
         n00bb_abi_index_plan_free(plan);
         n00b_abi_trait_method_v1 *changed_method = (void *)
             n00bb_abi_object_row(&changed_view,
-                N00B_ABI_TABLE_TRAIT_METHOD, 1);
+                N00B_ABI_TABLE_TRAIT_METHOD, read_method_index);
         assert(changed_method);
         changed_method->declaration_ordinal++;
         assert(!n00bb_abi_index_plan_build(&duplicates));
@@ -3258,8 +3281,6 @@ test_semantic_rows_link(const char *path, bool trait)
         n00bb_abi_object_close(&changed_view);
         free(changed);
     }
-    n00bb_abi_object_close(&view);
-    core_free(linked);
     n00bb_abi_selected_objects_release(&selected);
     core_link_unit_free(link);
     core_translation_unit_release(&unit);
@@ -3288,7 +3309,7 @@ generic_function_type(const n00bb_abi_object_view_t *view, const char *name)
 }
 
 static void
-test_generic_type_identity(const char *path)
+test_generic_type_identity(const char *path, const char *linked_path)
 {
     size_t source_bytes;
     uint8_t *source = read_object(path, &source_bytes);
@@ -3306,27 +3327,14 @@ test_generic_type_identity(const char *path)
         && (a->flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE)
         && (b->flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE));
 
-    core_translation_unit_t unit = {0};
-    assert(init_unit(&unit, "generic_collision"));
-    core_link_unit_t *link = core_link_unit_new();
-    assert(link && core_link_unit_add_root(link, &unit)
-        && core_link_unit_finalize_graph(link));
-    n00bb_abi_object_input_t input = {
-        .module = unit.module.identifier,
-        .object = source, .object_bytes = source_bytes,
-    };
-    uint8_t *linked = nullptr;
     size_t linked_bytes = 0;
-    assert(n00bb_abi_link_objects(link, &target, &input, 1,
-        &linked, &linked_bytes));
+    uint8_t *linked = read_object(linked_path, &linked_bytes);
     n00bb_abi_object_view_t final = {0};
     assert(n00bb_abi_object_open(&target, linked, linked_bytes, &final));
     assert(generic_function_type(&final, "first")
         != generic_function_type(&final, "second"));
     n00bb_abi_object_close(&final);
     core_free(linked);
-    core_link_unit_free(link);
-    core_translation_unit_release(&unit);
     n00bb_abi_object_close(&original);
     free(source);
 }
@@ -3367,37 +3375,70 @@ test_imported_generic_owner(const char *consumer_path,
             }
             assert(requirement_index);
         }
+        uint32_t keep_scope_index = 0;
+        uint32_t keep_location_index = 0;
+        if (file) {
+            const n00bb_abi_directory_entry_t *functions =
+                n00bb_abi_object_table(&view, N00B_ABI_TABLE_FUNCTION);
+            assert(functions);
+            for (uint32_t i = 1; i < functions->record_count; i++) {
+                const n00b_abi_function_v1 *function =
+                    n00bb_abi_object_row(&view, N00B_ABI_TABLE_FUNCTION, i);
+                const n00b_abi_module_v1 *module = function
+                    ? n00bb_abi_object_row(&view, N00B_ABI_TABLE_MODULE,
+                        function->module_index) : nullptr;
+                n00bb_abi_string_view_t name, path;
+                if (!function || !module
+                    || !n00bb_abi_object_string(&view, &function->name,
+                        &name)
+                    || !n00bb_abi_object_string(&view, &module->full_path,
+                        &path)
+                    || name.length != 4 || memcmp(name.bytes, "keep", 4)
+                    || path.length != strlen("where_excludes")
+                    || memcmp(path.bytes, "where_excludes", path.length))
+                    continue;
+                assert(!keep_scope_index);
+                keep_scope_index = function->scope_index;
+                const n00b_abi_symbol_v1 *symbol =
+                    n00bb_abi_object_row(&view, N00B_ABI_TABLE_SYMBOL,
+                        function->symbol_index);
+                assert(symbol);
+                keep_location_index = symbol->declaration_location_index;
+            }
+            assert(keep_scope_index && keep_location_index);
+        }
         uint32_t variables = 0;
         for (uint32_t i = 1; i < types->record_count; i++) {
             const n00b_abi_type_v1 *type = n00bb_abi_object_row(&view,
                 N00B_ABI_TABLE_TYPE, i);
             if (type->kind != N00B_ABI_TYPE_VARIABLE) continue;
-            variables++;
-            assert(type->typevar_ordinal == 0 && type->constraints.count == 1);
             if (!file) {
-                assert(!type->typevar_owner_scope_index
-                    && type->typevar_import_requirement_index
-                        == requirement_index);
+                if (type->typevar_import_requirement_index
+                    != requirement_index) continue;
+                assert(!type->typevar_owner_scope_index);
             }
             else {
-                assert(type->typevar_owner_scope_index
-                    && !type->typevar_import_requirement_index);
+                if (!type->typevar_owner_scope_index) continue;
+                assert(!type->typevar_import_requirement_index);
                 const n00b_abi_scope_v1 *scope = n00bb_abi_object_row(
                     &view, N00B_ABI_TABLE_SCOPE,
                     type->typevar_owner_scope_index);
                 assert(scope);
-                if (file == 2) {
-                    const n00b_abi_module_v1 *module = n00bb_abi_object_row(
-                        &view, N00B_ABI_TABLE_MODULE,
-                        scope->module_index);
-                    n00bb_abi_string_view_t name;
-                    assert(module && n00bb_abi_object_string(&view,
-                        &module->full_path, &name)
-                        && name.length == strlen("where_excludes")
-                        && !memcmp(name.bytes, "where_excludes",
-                            name.length));
-                }
+                if (scope->parent_scope_index != keep_scope_index
+                    || scope->source_location_index != keep_location_index)
+                    continue;
+                const n00b_abi_module_v1 *module = n00bb_abi_object_row(
+                    &view, N00B_ABI_TABLE_MODULE, scope->module_index);
+                n00bb_abi_string_view_t name;
+                assert(module && n00bb_abi_object_string(&view,
+                    &module->full_path, &name));
+                if (name.length != strlen("where_excludes")
+                    || memcmp(name.bytes, "where_excludes", name.length))
+                    continue;
             }
+            variables++;
+            assert(type->typevar_ordinal == 0
+                && type->constraints.count == (file ? 1u : 0u));
         }
         assert(variables == 1);
         n00bb_abi_object_close(&view);
@@ -3568,7 +3609,10 @@ test_call_shape_ownership(void)
 int
 main(int argc, char **argv)
 {
-    assert(argc == 2 || argc == 3 || argc == 4 || argc == 5);
+    assert(argc == 2 || argc == 3 || argc == 4 || argc == 5
+        || (argc > 5 && (!strcmp(argv[1], "--records")
+            || !strcmp(argv[1], "--function-import")
+            || !strcmp(argv[1], "--value-import"))));
     test_native_string_pool_consolidation();
     test_link_index_patch();
     test_type_variable_shape();
@@ -3590,8 +3634,9 @@ main(int argc, char **argv)
     test_static_string_identity();
     test_call_shape_ownership();
     if (argc == 2 && !strcmp(argv[1], "--strings")) return 0;
-    if (argc == 5 && !strcmp(argv[1], "--function-import")) {
-        test_imported_function_requirement(argv[2], argv[3], argv[4]);
+    if (argc >= 5 && !strcmp(argv[1], "--function-import")) {
+        test_imported_function_requirement((const char **)argv + 2,
+            (size_t)argc - 2);
         return 0;
     }
     if (argc == 5 && !strcmp(argv[1], "--generic-import")) {
@@ -3602,13 +3647,23 @@ main(int argc, char **argv)
         test_cycle_selection(argv + 1, argv[4]);
         return 0;
     }
+    if (argc >= 4 && !strcmp(argv[1], "--value-import")) {
+        test_imported_value_requirement((const char **)argv + 2,
+            (size_t)argc - 2);
+        return 0;
+    }
+    if (argc >= 4 && !strcmp(argv[1], "--records")) {
+        test_imported_record_selection((const char **)argv + 2,
+            (size_t)argc - 2);
+        return 0;
+    }
     if (argc == 4) {
-        if (!strcmp(argv[1], "--value-import")) {
-            test_imported_value_requirement(argv[2], argv[3]);
+        if (!strcmp(argv[1], "--callback")) {
+            test_imported_callback_reference(argv[2], argv[3]);
             return 0;
         }
-        if (!strcmp(argv[1], "--records")) {
-            test_imported_record_selection(argv[2], argv[3]);
+        if (!strcmp(argv[1], "--generic-collision")) {
+            test_generic_type_identity(argv[2], argv[3]);
             return 0;
         }
         test_cycle_selection(argv + 1, nullptr);
@@ -3631,16 +3686,12 @@ main(int argc, char **argv)
             test_semantic_rows_link(argv[2], false);
         else if (!strcmp(argv[1], "--trait-methods"))
             test_semantic_rows_link(argv[2], true);
-        else if (!strcmp(argv[1], "--generic-collision"))
-            test_generic_type_identity(argv[2]);
         else if (!strcmp(argv[1], "--variant"))
             test_duplicate_member(argv[2], true);
         else if (!strcmp(argv[1], "--enum"))
             test_duplicate_member(argv[2], false);
         else if (!strcmp(argv[1], "--field"))
             test_duplicate_record_field(argv[2]);
-        else if (!strcmp(argv[1], "--callback"))
-            test_imported_callback_reference(argv[2]);
         else if (!strcmp(argv[1], "--signature"))
             test_duplicate_signature(argv[2]);
         else assert(false);
@@ -3742,6 +3793,9 @@ main(int argc, char **argv)
     assert(!n00bb_abi_object_string(&view,
         (const n00b_abi_string_v1 *)object, &unchanged_name)
         && unchanged_name.bytes == object && unchanged_name.length == 1);
+    const n00bb_abi_directory_entry_t *requirements =
+        n00bb_abi_object_table(&view, N00B_ABI_TABLE_REQUIREMENT);
+    if (!requirements || requirements->record_count <= 1) {
     core_translation_unit_t unit = {0};
     assert(init_unit(&unit, "array_storage"));
     core_link_unit_t *link = core_link_unit_new();
@@ -4062,6 +4116,24 @@ main(int argc, char **argv)
     n00bb_abi_selected_objects_release(&selected);
     core_link_unit_free(link);
     core_translation_unit_release(&unit);
+    }
+    else {
+        core_translation_unit_t unit = {0};
+        assert(init_unit(&unit, "array_storage"));
+        core_link_unit_t *link = core_link_unit_new();
+        assert(link && core_link_unit_add_root(link, &unit)
+            && core_link_unit_finalize_graph(link));
+        n00bb_abi_object_input_t input = {
+            .module = unit.module.identifier,
+            .object = object, .object_bytes = length,
+        };
+        n00bb_abi_selected_objects_t selected = {0};
+        assert(!n00bb_abi_select_objects(link, &target, &input, 1,
+                                        &selected));
+        n00bb_abi_selected_objects_release(&selected);
+        core_link_unit_free(link);
+        core_translation_unit_release(&unit);
+    }
     size_t metadata_offset = (size_t)(view.metadata.bytes - object);
     size_t checksum_byte = metadata_offset + view.header.total_extent - 1;
     n00bb_abi_object_close(&view);

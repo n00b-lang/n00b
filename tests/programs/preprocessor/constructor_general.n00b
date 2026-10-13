@@ -1,2 +1,0 @@
-public func __init(modify self: Option[`T]) {
-}

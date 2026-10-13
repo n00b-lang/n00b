@@ -1,3 +1,0 @@
-when true or ordinary_function() {
-    var selected = true
-}

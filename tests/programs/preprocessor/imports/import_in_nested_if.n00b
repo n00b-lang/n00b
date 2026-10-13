@@ -1,5 +1,0 @@
-when true {
-    if true {
-        import dep
-    }
-}

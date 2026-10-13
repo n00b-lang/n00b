@@ -1,5 +1,0 @@
-thread const worker_seed: int = 7
-
-func mutate_worker_seed() {
-    worker_seed = 8
-}

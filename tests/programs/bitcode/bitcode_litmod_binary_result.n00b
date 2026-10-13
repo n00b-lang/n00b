@@ -8,6 +8,8 @@ func values() -> string {
 
 comptime {
     values()
-} else {
+}
+
+func run_test() {
     values()
 }

@@ -1,6 +1,0 @@
-import alias_forwarder.impl
-
-package alias_forwarder {
-    export alias_forwarder.impl.forward_reference
-    export alias_forwarder.impl.reference_global
-}

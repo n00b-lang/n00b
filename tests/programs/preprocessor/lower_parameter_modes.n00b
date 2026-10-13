@@ -1,8 +1,0 @@
-func copy_modify(modify target: int, incoming: int) { target = incoming }
-func write_out(out target: int, incoming: int) { target = incoming }
-func exercise_modes(initial: int) -> int {
-    var local: int
-    write_out(local, initial)
-    copy_modify(local, initial)
-    return local
-}

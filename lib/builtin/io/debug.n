@@ -1,7 +1,7 @@
-import builtin.io.raw
+import io.raw
 
 const stderr_fd: i32 = 2
 
-public func raw_debug(s: string) -> nil {
+func raw_debug(s: string) -> nil {
     s.raw_repr(stderr_fd)
 }

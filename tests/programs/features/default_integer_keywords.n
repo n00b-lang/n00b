@@ -1,0 +1,18 @@
+func unsigned(capacity: uint = 0) -> uint { return capacity }
+func unsigned_nonzero(capacity: uint = 17) -> uint { return capacity }
+func unsigned_computed(capacity: uint = 4 + 3) -> uint { return capacity }
+func tiny(value: byte = 23) -> byte { return value }
+func tiny_computed(value: byte = 4 + 3) -> byte { return value }
+func signed(value: int = 31) -> int { return value }
+
+comptime {} else {
+    require unsigned() == 0
+    require unsigned(capacity = 9) == 9
+    require unsigned_nonzero() == 17
+    require unsigned_computed() == 7
+    require tiny() == 23
+    require tiny_computed() == 7
+    require tiny(value = 42) == 42
+    require signed() == 31
+    require signed(value = 37) == 37
+}

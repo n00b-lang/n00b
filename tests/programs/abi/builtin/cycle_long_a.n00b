@@ -1,0 +1,2 @@
+import builtin.cycle_long_b
+public func a() -> int { return 1 }

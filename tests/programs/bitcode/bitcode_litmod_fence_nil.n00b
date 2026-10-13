@@ -3,6 +3,8 @@ litmod<fence> do_nothing, noop(contents: string) -> nil fail: string {
 }
 
 comptime {
-} else {
+}
+
+func run_test() {
     [- body -]'noop
 }

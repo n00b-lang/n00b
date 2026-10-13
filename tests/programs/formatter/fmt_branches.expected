@@ -1,0 +1,95 @@
+func classify(value: int) -> int {
+    switch value {
+        case 1 {
+            return 10
+        }
+        case 2 {
+            let doubled: int = value * 2
+            return doubled
+        }
+        else {
+            return 0
+        }
+    }
+}
+
+func classify_type(value: any) -> int {
+    typecase value {
+        case int {
+            return value
+        }
+        case string {
+            let fallback: int = 7
+            return fallback
+        }
+        else {
+            return 0
+        }
+    }
+}
+
+func choose(value: int) -> int {
+    return switch value {
+        case 1 {
+            = 10
+        }
+        else {
+            = 0
+        }
+    }
+}
+
+func choose_type(value: any) -> int {
+    return typecase value {
+        case int {
+            = value
+        }
+        else {
+            = 0
+        }
+    }
+}
+
+func compact(value: int) -> int {
+    return switch value {
+        case 1 {
+            = 2
+        }
+        else {
+            = 3
+        }
+    }
+}
+
+func compact_type(value: any) -> int {
+    return typecase value {
+        case int {
+            = value
+        }
+        case string {
+            = 4
+        }
+        else {
+            = 0
+        }
+    }
+}
+
+func nested(value: int) -> int {
+    switch value {
+        case 1 {
+            // Keep this comment with the inner switch.
+            switch value {
+                case 1 {
+                    return 11
+                }
+                else {
+                    return 0
+                }
+            }
+        }
+        else {
+            return 3
+        }
+    }
+}

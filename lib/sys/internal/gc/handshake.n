@@ -1,0 +1,435 @@
+import internal.gc.core
+import internal.gc.collect
+import internal.gc.finalize
+import internal.gc.hash
+import internal.gc.heap
+import internal.gc.mark
+import internal.gc.registry
+import internal.gc.sync
+import internal.threads
+import internal.clock
+
+enum Response_Mode { self, stopped, blocked }
+const max_rounds: u32 = 8
+
+func reserve_own_hole(bump: Ref[internal.gc.core.Bump], epoch: u32) {
+    let candidate: Ref[internal.gc.core.Block_Metadata]? = bump.blk
+    let cursor:    Ref[byte]?                      = bump.cursor
+    let limit:     Ref[byte]?                      = bump.limit
+    if candidate != nil {
+        let base: Ref[byte] = internal.gc.core.block_base(candidate.get())
+        if cursor != nil {
+            let start: Ref[byte] = cursor.get()
+            if limit != nil {
+                let end: Ref[byte] = limit.get()
+                if __gc_byte_diff(end, start) <= 0 {
+                    return
+                }
+                let first: uint = cast[uint](__gc_byte_diff(start, base)) / internal.gc.core.line_bytes
+                let last:  uint = cast[uint](__gc_byte_diff(end, base) - 1) / internal.gc.core.line_bytes
+                internal.gc.core.mark_lines(base, first * internal.gc.core.line_bytes,
+                                      (last - first + 1) * internal.gc.core.line_bytes, epoch)
+            }
+        }
+    }
+}
+
+func sweep_if_stale(heap: Ref[internal.gc.core.Heap],
+                    candidate: Ref[internal.gc.core.Block_Metadata]?, epoch: u32) {
+    if candidate != nil {
+        let block: Ref[internal.gc.core.Block_Metadata] = candidate.get()
+        if block.state == cast[u8](internal.gc.core.Block_State.owned) and
+            block.sweep_epoch != epoch {
+            internal.gc.collect.sweep_block(heap, block, epoch)
+        }
+    }
+}
+
+func sweep_bump(heap: Ref[internal.gc.core.Heap], bump: Ref[internal.gc.core.Bump],
+                epoch: u32) {
+    sweep_if_stale(heap, bump.blk, epoch)
+    var candidate: Ref[internal.gc.core.Block_Metadata]? = __atomic_load(ref bump.cache)
+    while candidate != nil {
+        let block: Ref[internal.gc.core.Block_Metadata] = candidate.get()
+        sweep_if_stale(heap, candidate, epoch)
+        candidate = block.next
+    }
+}
+
+func sweep_own_blocks(heap: Ref[internal.gc.core.Heap],
+                             mutator: Ref[internal.gc.core.Mutator], epoch: u32) {
+    reserve_own_hole(ref mutator.small, epoch)
+    reserve_own_hole(ref mutator.overflow, epoch)
+    sweep_bump(heap, ref mutator.small, epoch)
+    sweep_bump(heap, ref mutator.overflow, epoch)
+}
+
+func sweep_stopped_blocks(heap: Ref[internal.gc.core.Heap],
+                          mutator: Ref[internal.gc.core.Mutator],
+                          marker: Ref[internal.gc.core.Marker], epoch: u32) {
+    internal.gc.collect.reserve_bump(marker, ref mutator.small, true)
+    internal.gc.collect.reserve_bump(marker, ref mutator.overflow, true)
+    var current: Ref[internal.gc.core.Block_Metadata]? = heap.owned
+    while current != nil {
+        let block: Ref[internal.gc.core.Block_Metadata] = current.get()
+        let owner: Ref[internal.gc.core.Mutator]?       = block.owner
+        if owner != nil {
+            if owner.get() == mutator {
+                sweep_if_stale(heap, current, epoch)
+            }
+        }
+        current = block.own_next
+    }
+}
+
+func respond(heap: Ref[internal.gc.core.Heap], mutator: Ref[internal.gc.core.Mutator],
+             kind: u32, mode: Response_Mode) {
+    var marker: internal.gc.core.Marker
+    internal.gc.mark.marker_init(ref marker, heap, false)
+    let stopped: bool = mode == Response_Mode.stopped
+
+    if kind == cast[u32](internal.gc.core.Handshake_Kind.on) {
+        mutator.black = true
+        let small: Ref[internal.gc.core.Block_Metadata]? = mutator.small.blk
+        if small != nil {
+            internal.gc.core.raise_black(small.get(),
+                heap.mark_epoch)
+        }
+        let overflow: Ref[internal.gc.core.Block_Metadata]? = mutator.overflow.blk
+        if overflow != nil {
+            internal.gc.core.raise_black(overflow.get(),
+                heap.mark_epoch)
+        }
+        if stopped {
+            internal.gc.collect.mark_thread_roots(ref marker, mutator, true)
+        }
+    } elif kind == cast[u32](internal.gc.core.Handshake_Kind.scan) {
+        if mutator.write_buffer_epoch == heap.mark_epoch {
+            var index: uint = 0
+            while index < mutator.write_buffer_count {
+                internal.gc.mark.mark_object(ref marker,
+                    ref_read(ref mutator.write_buffer[index]))
+                index += 1
+            }
+        }
+        mutator.write_buffer_count = 0
+        if stopped {
+            internal.gc.collect.reserve_bump(ref marker, ref mutator.small, true)
+            internal.gc.collect.reserve_bump(ref marker, ref mutator.overflow, true)
+        }
+        if mode == Response_Mode.self and heap.cfg.scan_stacks {
+            internal.gc.registry.registry_read_lock(heap)
+            internal.gc.collect.mark_thread_roots(ref marker, mutator, false)
+            internal.gc.registry.registry_read_unlock(heap)
+        } else {
+            internal.gc.collect.mark_thread_roots(ref marker, mutator, stopped)
+        }
+    } elif kind == cast[u32](internal.gc.core.Handshake_Kind.sweep) {
+        if stopped {
+            sweep_stopped_blocks(heap, mutator, ref marker, heap.epoch)
+        } else {
+            sweep_own_blocks(heap, mutator, heap.epoch)
+        }
+        mutator.black = false
+        mutator.write_buffer_count = 0
+    } else {
+        require false
+    }
+
+    internal.gc.mark.marker_flush(ref marker)
+    if marker.marked != 0 and
+        kind == cast[u32](internal.gc.core.Handshake_Kind.scan) {
+        __atomic_store(ref heap.round_dirty, true)
+    }
+    internal.gc.mark.marker_stats(ref marker)
+}
+
+func safepoint(mutator: Ref[internal.gc.core.Mutator]) {
+    let requested: u32 = cast[u32](internal.gc.core.Handshake_State.requested)
+    let busy:      u32 = cast[u32](internal.gc.core.Handshake_State.busy)
+    if __atomic_load(ref mutator.hs_state) != requested or
+        !__atomic_compare_exchange(ref mutator.hs_state, requested, busy) {
+        return
+    }
+    let heap: Ref[internal.gc.core.Heap] = mutator.heap
+    respond(heap, mutator, __atomic_load(ref heap.hs_kind), Response_Mode.self)
+    __atomic_store(ref mutator.hs_state,
+        cast[u32](internal.gc.core.Handshake_State.done))
+    __atomic_fetch_sub(ref heap.hs_pending, 1)
+    internal.gc.sync.event_signal(ref heap.hs_answered)
+}
+
+func enter_blocking(mutator: Ref[internal.gc.core.Mutator]) {
+    internal.threads.thread_capture_self(ref mutator.captured)
+    mutator.blocked_sp = mutator.captured.sp
+    __atomic_store(ref mutator.blocking, 1)
+    safepoint(mutator)
+}
+
+func leave_blocking(mutator: Ref[internal.gc.core.Mutator]) {
+    while true {
+        let seq: u32 = internal.gc.sync.event_enter(ref mutator.unblocked)
+        if __atomic_compare_exchange(ref mutator.blocking, 1, 0) {
+            internal.gc.sync.event_leave(ref mutator.unblocked)
+            break
+        }
+        internal.gc.sync.event_sleep(ref mutator.unblocked, seq)
+        internal.gc.sync.event_leave(ref mutator.unblocked)
+    }
+    safepoint(mutator)
+}
+
+func cycle_pending(heap: Ref[internal.gc.core.Heap]) -> bool {
+    return __atomic_load(ref heap.cycle_active) or
+        (__atomic_load(ref heap.cycle_requested) and
+         __atomic_load(ref heap.nworkers) != 0)
+}
+
+func wait_for_cycle(heap: Ref[internal.gc.core.Heap]) {
+    internal.gc.sync.ticket_lock(ref heap.lock)
+    let found: Ref[byte]? = internal.gc.hash.tab_lookup(
+        ref heap.threads, internal.threads.thread_id())
+    internal.gc.heap.unlock(heap)
+
+    var mine: Ref[internal.gc.core.Mutator]? = nil
+    if found != nil {
+        let first: Ref[internal.gc.core.Mutator] = internal.gc.core.thread_index_mutator(
+            found.get(), internal.threads.thread_id())
+        var current: Ref[internal.gc.core.Mutator] = first
+        while true {
+            if __atomic_load(ref current.blocking) == 0 {
+                current.wait_next = mine
+                mine = current
+            }
+            let next: Ref[internal.gc.core.Mutator]? = current.thread_next
+            if next == nil {
+                break
+            }
+            if next.get() == first {
+                break
+            }
+            current = next.get()
+        }
+    }
+
+    var current: Ref[internal.gc.core.Mutator]? = mine
+    while current != nil {
+        let mutator: Ref[internal.gc.core.Mutator] = current.get()
+        enter_blocking(mutator)
+        current = mutator.wait_next
+    }
+    while true {
+        let seq: u32 = internal.gc.sync.event_enter(ref heap.cycle_ended)
+        if !cycle_pending(heap) {
+            internal.gc.sync.event_leave(ref heap.cycle_ended)
+            break
+        }
+        internal.gc.sync.event_sleep(ref heap.cycle_ended, seq)
+        internal.gc.sync.event_leave(ref heap.cycle_ended)
+    }
+    current = mine
+    while current != nil {
+        let mutator: Ref[internal.gc.core.Mutator] = current.get()
+        leave_blocking(mutator)
+        current = mutator.wait_next
+    }
+}
+
+func any_pending(heap: Ref[internal.gc.core.Heap]) -> bool {
+    return __atomic_load(ref heap.hs_pending) != 0
+}
+
+func handshake(heap: Ref[internal.gc.core.Heap], kind: internal.gc.core.Handshake_Kind) {
+    let started: u64  = internal.clock.now_ns()
+    var claimed: uint = 0
+
+    internal.gc.sync.ticket_lock(ref heap.lock)
+    __atomic_store(ref heap.hs_kind, cast[u32](kind))
+    heap.hs_active = true
+    __atomic_store(ref heap.hs_pending, cast[u32](heap.nmutators))
+    var current: Ref[internal.gc.core.Mutator]? = heap.mutators
+    while current != nil {
+        let mutator: Ref[internal.gc.core.Mutator] = current.get()
+        __atomic_store(ref mutator.hs_state,
+            cast[u32](internal.gc.core.Handshake_State.requested))
+        current = mutator.next
+    }
+    current = heap.mutators
+    while current != nil {
+        let mutator: Ref[internal.gc.core.Mutator] = current.get()
+        if __atomic_compare_exchange(ref mutator.blocking, 1, 2) {
+            let requested: u32 = cast[u32](internal.gc.core.Handshake_State.requested)
+            if __atomic_compare_exchange(ref mutator.hs_state, requested,
+                cast[u32](internal.gc.core.Handshake_State.claimed)) {
+                respond(heap, mutator, cast[u32](kind), Response_Mode.blocked)
+                __atomic_store(ref mutator.hs_state,
+                    cast[u32](internal.gc.core.Handshake_State.done))
+                __atomic_fetch_sub(ref heap.hs_pending, 1)
+                heap.hs_blocking += 1
+            }
+            __atomic_store(ref mutator.blocking, 1)
+            internal.gc.sync.event_signal(ref mutator.unblocked)
+        }
+        current = mutator.next
+    }
+    internal.gc.heap.unlock(heap)
+
+    let limit: u64 = cast[u64](heap.cfg.handshake_timeout_us) * 1000
+    while true {
+        let seq:    u32 = internal.gc.sync.event_enter(ref heap.hs_answered)
+        let waited: u64 = internal.clock.now_ns() - started
+        if !any_pending(heap) or waited >= limit {
+            internal.gc.sync.event_leave(ref heap.hs_answered)
+            break
+        }
+        internal.gc.sync.event_sleep(ref heap.hs_answered, seq)
+        internal.gc.sync.event_leave(ref heap.hs_answered)
+    }
+
+    internal.gc.sync.ticket_lock(ref heap.lock)
+    current = heap.mutators
+    while current != nil {
+        let mutator: Ref[internal.gc.core.Mutator] = current.get()
+        if __atomic_compare_exchange(ref mutator.hs_state,
+            cast[u32](internal.gc.core.Handshake_State.requested),
+            cast[u32](internal.gc.core.Handshake_State.claimed)) {
+            claimed += 1
+        }
+        current = mutator.next
+    }
+    current = heap.mutators
+    while current != nil {
+        let mutator: Ref[internal.gc.core.Mutator] = current.get()
+        while __atomic_load(ref mutator.hs_state) == cast[u32](internal.gc.core.Handshake_State.busy) {
+            let seq: u32 = internal.gc.sync.event_enter(ref heap.hs_answered)
+            if __atomic_load(ref mutator.hs_state) == cast[u32](internal.gc.core.Handshake_State.busy) {
+                internal.gc.sync.event_sleep(ref heap.hs_answered, seq)
+            }
+            internal.gc.sync.event_leave(ref heap.hs_answered)
+        }
+        current = mutator.next
+    }
+    if claimed != 0 {
+        internal.gc.collect.stop_world(heap)
+        current = heap.mutators
+        while current != nil {
+            let mutator: Ref[internal.gc.core.Mutator] = current.get()
+            if __atomic_load(ref mutator.hs_state) == cast[u32](internal.gc.core.Handshake_State.claimed) {
+                respond(heap, mutator, cast[u32](kind), Response_Mode.stopped)
+                __atomic_store(ref mutator.hs_state,
+                    cast[u32](internal.gc.core.Handshake_State.done))
+                __atomic_fetch_sub(ref heap.hs_pending, 1)
+            }
+            current = mutator.next
+        }
+        internal.gc.collect.start_world(heap)
+        heap.hs_stragglers += cast[u64](claimed)
+    }
+    require __atomic_load(ref heap.hs_pending) == 0
+    current = heap.mutators
+    while current != nil {
+        let mutator: Ref[internal.gc.core.Mutator] = current.get()
+        __atomic_store(ref mutator.hs_state,
+            cast[u32](internal.gc.core.Handshake_State.idle))
+        current = mutator.next
+    }
+    heap.hs_active = false
+    internal.gc.heap.unlock(heap)
+}
+
+func help_until_quiescent(heap: Ref[internal.gc.core.Heap]) {
+    var marker: internal.gc.core.Marker
+    internal.gc.mark.marker_init(ref marker, heap, false)
+    internal.gc.mark.drain_to_termination(ref marker)
+    internal.gc.mark.marker_stats(ref marker)
+}
+
+func run_handshake_cycle(heap: Ref[internal.gc.core.Heap]) {
+    internal.gc.sync.ticket_lock(ref heap.lock)
+    if __atomic_load(ref heap.phase) == cast[u32](internal.gc.core.Phase.marking) {
+        internal.gc.heap.unlock(heap)
+        return
+    }
+    internal.gc.collect.begin_epoch_locked(heap)
+    var owned: Ref[internal.gc.core.Block_Metadata]? = heap.owned
+    while owned != nil {
+        let block: Ref[internal.gc.core.Block_Metadata] = owned.get()
+        if block.state == cast[u8](internal.gc.core.Block_State.owned) {
+            internal.gc.core.ensure_mark_epoch(
+                internal.gc.core.block_base(block), heap.mark_epoch)
+        }
+        owned = block.own_next
+    }
+    heap.black_alloc = true
+    __atomic_store(ref heap.marking, true)
+    __atomic_store(ref heap.phase, cast[u32](internal.gc.core.Phase.marking))
+    internal.gc.heap.unlock(heap)
+
+    handshake(heap, internal.gc.core.Handshake_Kind.on)
+    var marker: internal.gc.core.Marker
+    internal.gc.mark.marker_init(ref marker, heap, false)
+    internal.gc.sync.ticket_lock(ref heap.lock)
+    internal.gc.collect.mark_global_roots(ref marker)
+    internal.gc.finalize.mark_locked(ref marker)
+    internal.gc.heap.unlock(heap)
+    internal.gc.mark.marker_flush(ref marker)
+    internal.gc.mark.marker_stats(ref marker)
+
+    var round: u32 = 0
+    while true {
+        help_until_quiescent(heap)
+        if round >= max_rounds {
+            internal.gc.sync.ticket_lock(ref heap.lock)
+            heap.cycle.kind = 2
+            internal.gc.collect.finish_cycle(heap, false)
+            heap.hs_fallbacks += 1
+            internal.gc.heap.unlock(heap)
+            heap.hs_cycles += 1
+            return
+        }
+        __atomic_store(ref heap.round_dirty, false)
+        handshake(heap, internal.gc.core.Handshake_Kind.scan)
+
+        internal.gc.mark.marker_init(ref marker, heap, false)
+        internal.gc.sync.ticket_lock(ref heap.lock)
+        internal.gc.collect.mark_global_roots(ref marker)
+        internal.gc.mark.barrier_queue_drain(ref marker)
+        internal.gc.finalize.mark_locked(ref marker)
+        internal.gc.heap.unlock(heap)
+        internal.gc.mark.marker_flush(ref marker)
+        if marker.marked != 0 {
+            __atomic_store(ref heap.round_dirty, true)
+        }
+        internal.gc.mark.marker_stats(ref marker)
+        help_until_quiescent(heap)
+        heap.hs_rounds += 1
+        if !__atomic_load(ref heap.round_dirty) {
+            break
+        }
+        round += 1
+    }
+
+    internal.gc.mark.marker_init(ref marker, heap, false)
+    internal.gc.sync.ticket_lock(ref heap.lock)
+    internal.gc.finalize.find_dead_locked(ref marker)
+    internal.gc.heap.unlock(heap)
+    internal.gc.mark.marker_flush(ref marker)
+    internal.gc.mark.marker_stats(ref marker)
+    help_until_quiescent(heap)
+
+    internal.gc.sync.ticket_lock(ref heap.lock)
+    heap.sweep_ready = false
+    internal.gc.collect.end_epoch_locked(heap)
+    internal.gc.heap.unlock(heap)
+
+    handshake(heap, internal.gc.core.Handshake_Kind.sweep)
+
+    internal.gc.sync.ticket_lock(ref heap.lock)
+    internal.gc.collect.prune_owned(heap, false)
+    heap.sweep_ready = true
+    internal.gc.collect.emit_cycle(heap, 1)
+    internal.gc.heap.unlock(heap)
+
+    heap.hs_cycles += 1
+    internal.gc.sync.event_signal(ref heap.work_progress)
+}

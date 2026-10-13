@@ -1,2 +1,0 @@
-import fatal_import_dep
-func main() -> int { return 0 }

@@ -1,2 +1,0 @@
-import link_render_contract
-func use_plugin(item: int) -> int { return item.render() }

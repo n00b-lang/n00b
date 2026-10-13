@@ -1,3 +1,0 @@
-when preproc_value("TOO_BIG") > 0 {
-    var impossible = true
-}

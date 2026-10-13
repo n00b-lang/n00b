@@ -8,6 +8,8 @@ func values() -> Array[char] {
 
 comptime {
     values()
-} else {
+}
+
+func run_test() {
     values()
 }

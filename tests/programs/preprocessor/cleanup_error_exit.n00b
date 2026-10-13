@@ -1,4 +1,0 @@
-func cleanup_error_exit() -> int fail: int {
-    let before_failure: int = 5
-    fail 7
-}

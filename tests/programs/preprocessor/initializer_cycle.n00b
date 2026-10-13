@@ -1,2 +1,0 @@
-var cycle_first: int = cycle_second
-var cycle_second: int = cycle_first

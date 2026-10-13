@@ -1,5 +1,0 @@
-import record_cycle_import.b
-
-public type Left {
-    right: Ref[record_cycle_import.b.Right]
-}

@@ -1,11 +1,11 @@
-import builtin.abi
+import sys.abi
 
 func check_type_only_probe() {
     let probe: Ref[byte]? = nil
-    let target: Ref[builtin.abi.Type_Record]? = builtin.abi.optional_reference_target(
+    let target: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(
         typeof(probe))
     if target != nil {
-        assert builtin.abi.size_bytes(target.get()) == 1
+        assert sys.abi.size_bytes(target.get()) == 1
     } else { require false }
 }
 

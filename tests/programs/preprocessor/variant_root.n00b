@@ -1,7 +1,0 @@
-import variant_dep
-func inspect_remote(item: variant_dep.RemoteValue) -> int {
-    switch item {
-        case number { return item.number }
-        case text { return 0 }
-    }
-}

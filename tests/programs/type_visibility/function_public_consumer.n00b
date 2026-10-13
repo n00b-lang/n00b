@@ -1,2 +1,0 @@
-import functions_dep
-func accept() { functions_dep.public_function() }

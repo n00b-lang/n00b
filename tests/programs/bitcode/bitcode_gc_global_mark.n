@@ -1,14 +1,14 @@
-import builtin.abi
-import builtin.gc
-import builtin.gc.alloc
-import builtin.gc.collect
-import builtin.gc.heap
-import builtin.gc.handshake
-import builtin.gc.mark
-import builtin.gc.mutator
-import builtin.gc.registry
-import builtin.gc.roots
-import builtin.os
+import sys.abi
+import sys.gc.core
+import sys.gc.alloc
+import sys.gc.collect
+import sys.gc.heap
+import sys.gc.handshake
+import sys.gc.mark
+import sys.gc.mutator
+import sys.gc.registry
+import sys.gc.roots
+import sys.memory
 import gc_root_support
 
 variant Root_Variant {
@@ -32,133 +32,133 @@ var nested_root: Nested_Root
 
 comptime {} else {
     variant_root = new[Root_Variant]()
-    let created: Ref[builtin.gc.Heap]? = builtin.gc.heap.create(nil)
+    let created: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(nil)
     if created != nil {
-        let heap: Ref[builtin.gc.Heap] = created.get()
-        let mapping: Ref[byte]? = builtin.os.map_zeroed(
-            builtin.gc.block_bytes, builtin.gc.block_bytes)
+        let heap: Ref[sys.gc.core.Heap] = created.get()
+        let mapping: Ref[byte]? = sys.memory.map_zeroed(
+            sys.gc.core.block_bytes, sys.gc.core.block_bytes)
         if mapping != nil {
             let base: Ref[byte] = mapping.get()
-            let end: Ref[byte] = __gc_byte_offset(base, builtin.gc.block_bytes)
-            require builtin.gc.registry.region_add(heap, base, end)
-            let block: Ref[builtin.gc.Block_Metadata] = builtin.gc.block_metadata_at(base)
-            builtin.gc.block_init(heap, block)
-            let attached: Ref[builtin.gc.Mutator]? = builtin.gc.mutator.create(heap)
+            let end: Ref[byte] = __gc_byte_offset(base, sys.gc.core.block_bytes)
+            require sys.gc.registry.region_add(heap, base, end)
+            let block: Ref[sys.gc.core.Block_Metadata] = sys.gc.core.block_metadata_at(base)
+            sys.gc.core.block_init(heap, block)
+            let attached: Ref[sys.gc.core.Mutator]? = sys.gc.mutator.create(heap)
             if attached != nil {
-                let mutator: Ref[builtin.gc.Mutator] = attached.get()
-                var owned: Ref[builtin.gc.Block_Metadata]? = nil
-                builtin.gc.own(heap, mutator, block, ref owned)
-                let assigned: Ref[builtin.gc.Block_Metadata]? = block
-                builtin.gc.bump_attach(mutator, ref mutator.small, assigned)
-                require builtin.gc.bump_next_hole(ref mutator.small, 48)
+                let mutator: Ref[sys.gc.core.Mutator] = attached.get()
+                var owned: Ref[sys.gc.core.Block_Metadata]? = nil
+                sys.gc.core.own(heap, mutator, block, ref owned)
+                let assigned: Ref[sys.gc.core.Block_Metadata]? = block
+                sys.gc.core.bump_attach(mutator, ref mutator.small, assigned)
+                require sys.gc.core.bump_next_hole(ref mutator.small, 48)
                 let sample: byte = 0
                 let type_index: u32 = cast[u32](typeof(sample))
-                let first: Ref[byte]? = builtin.gc.alloc.allocate_reserved(
+                let first: Ref[byte]? = sys.gc.alloc.allocate_reserved(
                     mutator, ref mutator.small, type_index, 8,
-                    builtin.gc.granule_bytes, false)
-                let second: Ref[byte]? = builtin.gc.alloc.allocate_reserved(
+                    sys.gc.core.granule_bytes, false)
+                let second: Ref[byte]? = sys.gc.alloc.allocate_reserved(
                     mutator, ref mutator.small, type_index, 8,
-                    builtin.gc.granule_bytes, false)
-                let third: Ref[byte]? = builtin.gc.alloc.allocate_reserved(
+                    sys.gc.core.granule_bytes, false)
+                let third: Ref[byte]? = sys.gc.alloc.allocate_reserved(
                     mutator, ref mutator.small, type_index, 8,
-                    builtin.gc.granule_bytes, false)
+                    sys.gc.core.granule_bytes, false)
                 if first != nil and second != nil and third != nil {
                     let slot_probe: Ref[byte]? = nil
-                    let slot_row: Ref[builtin.abi.Type_Record]? = builtin.abi.type_for(typeof(slot_probe))
-                    let marker_probe: Ref[builtin.gc.Marker]? = nil
-                    let marker_row: Ref[builtin.abi.Type_Record]? = builtin.abi.optional_reference_target(typeof(marker_probe))
+                    let slot_row: Ref[sys.abi.Type_Record]? = sys.abi.type_for(typeof(slot_probe))
+                    let marker_probe: Ref[sys.gc.core.Marker]? = nil
+                    let marker_row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(typeof(marker_probe))
                     if slot_row != nil and marker_row != nil {
-                        let slot_bytes: uint = builtin.abi.size_bytes(slot_row.get())
-                        let marker_bytes: uint = builtin.abi.size_bytes(marker_row.get())
-                        let slot_map: Ref[byte]? = builtin.os.map_zeroed(
-                            slot_bytes, builtin.abi.alignment_bytes(slot_row.get()))
-                        let marker_map: Ref[byte]? = builtin.os.map_zeroed(
-                            marker_bytes, builtin.abi.alignment_bytes(marker_row.get()))
+                        let slot_bytes: uint = sys.abi.size_bytes(slot_row.get())
+                        let marker_bytes: uint = sys.abi.size_bytes(marker_row.get())
+                        let slot_map: Ref[byte]? = sys.memory.map_zeroed(
+                            slot_bytes, sys.abi.alignment_bytes(slot_row.get()))
+                        let marker_map: Ref[byte]? = sys.memory.map_zeroed(
+                            marker_bytes, sys.abi.alignment_bytes(marker_row.get()))
                         if slot_map != nil and marker_map != nil {
                             let slot: Ref[Ref[byte]?] = unsafe_cast[Ref[Ref[byte]?]] slot_map.get()
-                            let marker: Ref[builtin.gc.Marker] = unsafe_cast[Ref[builtin.gc.Marker]] marker_map.get()
+                            let marker: Ref[sys.gc.core.Marker] = unsafe_cast[Ref[sys.gc.core.Marker]] marker_map.get()
                             ref_write(slot, first)
-                            require builtin.gc.roots.add_global(heap, slot)
-                            builtin.gc.mark.marker_init(marker, heap, false)
-                            builtin.gc.collect.mark_global_roots(marker)
-                            assert builtin.gc.mark.is_marked(heap, first.get())
-                            assert !builtin.gc.mark.is_marked(heap, second.get())
-                            builtin.gc.roots.remove_global(heap, slot)
+                            require sys.gc.roots.add_global(heap, slot)
+                            sys.gc.mark.marker_init(marker, heap, false)
+                            sys.gc.collect.mark_global_roots(marker)
+                            assert sys.gc.mark.is_marked(heap, first.get())
+                            assert !sys.gc.mark.is_marked(heap, second.get())
+                            sys.gc.roots.remove_global(heap, slot)
                             ref_write(slot, second)
-                            require builtin.gc.roots.push(mutator, slot)
-                            builtin.gc.collect.mark_roots(marker)
-                            assert builtin.gc.mark.is_marked(heap, second.get())
-                            builtin.gc.roots.pop(mutator, 0)
-                            assert !builtin.gc.mark.is_marked(heap, third.get())
+                            require sys.gc.roots.push(mutator, slot)
+                            sys.gc.collect.mark_roots(marker)
+                            assert sys.gc.mark.is_marked(heap, second.get())
+                            sys.gc.roots.pop(mutator, 0)
+                            assert !sys.gc.mark.is_marked(heap, third.get())
                             __atomic_store(ref heap.marking, true)
-                            builtin.gc.mark.barrier_pointer(mutator, slot_map.get())
+                            sys.gc.mark.barrier_pointer(mutator, slot_map.get())
                             assert mutator.write_buffer_count == 0
-                            builtin.gc.mark.barrier_pointer(mutator, third)
+                            sys.gc.mark.barrier_pointer(mutator, third)
                             assert mutator.write_buffer_count == 1
                             __atomic_store(ref heap.hs_kind,
-                                cast[u32](builtin.gc.Handshake_Kind.scan))
+                                cast[u32](sys.gc.core.Handshake_Kind.scan))
                             __atomic_store(ref mutator.hs_state,
-                                cast[u32](builtin.gc.Handshake_State.requested))
+                                cast[u32](sys.gc.core.Handshake_State.requested))
                             __atomic_store(ref heap.hs_pending, 1)
-                            builtin.gc.handshake.safepoint(mutator)
-                            assert builtin.gc.mark.is_marked(heap, third.get())
+                            sys.gc.handshake.safepoint(mutator)
+                            assert sys.gc.mark.is_marked(heap, third.get())
                             assert mutator.write_buffer_count == 0
                             assert __atomic_load(ref heap.round_dirty)
-                            let fourth: Ref[byte]? = builtin.gc.alloc.allocate_reserved(
+                            let fourth: Ref[byte]? = sys.gc.alloc.allocate_reserved(
                                 mutator, ref mutator.small, type_index, 8,
-                                builtin.gc.granule_bytes, false)
+                                sys.gc.core.granule_bytes, false)
                             if fourth != nil {
                                 var count: uint = 0
-                                while count < builtin.gc.write_buffer_cap {
-                                    builtin.gc.mark.write_barrier(mutator, fourth)
+                                while count < sys.gc.core.write_buffer_cap {
+                                    sys.gc.mark.write_barrier(mutator, fourth)
                                     count += 1
                                 }
                                 assert mutator.write_buffer_count == 0
-                                assert heap.barrier_queue_count == builtin.gc.write_buffer_cap
-                                builtin.gc.mark.barrier_queue_drain(marker)
+                                assert heap.barrier_queue_count == sys.gc.core.write_buffer_cap
+                                sys.gc.mark.barrier_queue_drain(marker)
                                 assert heap.barrier_queue_count == 0
-                                assert builtin.gc.mark.is_marked(heap, fourth.get())
-                                let fifth: Ref[byte]? = builtin.gc.alloc.allocate_reserved(
+                                assert sys.gc.mark.is_marked(heap, fourth.get())
+                                let fifth: Ref[byte]? = sys.gc.alloc.allocate_reserved(
                                     mutator, ref mutator.small, type_index, 8,
-                                    builtin.gc.granule_bytes, false)
+                                    sys.gc.core.granule_bytes, false)
                                 if fifth != nil {
                                     var word: uint = __abi_ref_address(fifth.get())
                                     let low: Ref[byte] = unsafe_cast[Ref[byte]] ref word
-                                    let word_row: Ref[builtin.abi.Type_Record]? = builtin.abi.type_for(typeof(word))
+                                    let word_row: Ref[sys.abi.Type_Record]? = sys.abi.type_for(typeof(word))
                                     if word_row != nil {
                                         let high: Ref[byte] = __gc_byte_offset(low,
-                                            builtin.abi.size_bytes(word_row.get()))
-                                        assert !builtin.gc.mark.is_marked(heap, fifth.get())
-                                        builtin.gc.collect.scan_words(marker, low, high)
-                                        assert builtin.gc.mark.is_marked(heap, fifth.get())
+                                            sys.abi.size_bytes(word_row.get()))
+                                        assert !sys.gc.mark.is_marked(heap, fifth.get())
+                                        sys.gc.collect.scan_words(marker, low, high)
+                                        assert sys.gc.mark.is_marked(heap, fifth.get())
                                     } else { require false }
                                 } else { require false }
                             } else { require false }
-                            let rooted: Ref[byte]? = builtin.gc.alloc.allocate_reserved(
+                            let rooted: Ref[byte]? = sys.gc.alloc.allocate_reserved(
                                 mutator, ref mutator.small, type_index, 8,
-                                builtin.gc.granule_bytes, false)
+                                sys.gc.core.granule_bytes, false)
                             if rooted != nil {
-                                assert !builtin.gc.mark.is_marked(heap, rooted.get())
+                                assert !sys.gc.mark.is_marked(heap, rooted.get())
                                 static_root = rooted
-                                builtin.gc.collect.mark_global_roots(marker)
-                                assert builtin.gc.mark.is_marked(heap, rooted.get())
+                                sys.gc.collect.mark_global_roots(marker)
+                                assert sys.gc.mark.is_marked(heap, rooted.get())
                                 static_root = nil
                             } else { require false }
-                            let imported: Ref[byte]? = builtin.gc.alloc.allocate_reserved(
+                            let imported: Ref[byte]? = sys.gc.alloc.allocate_reserved(
                                 mutator, ref mutator.small, type_index, 8,
-                                builtin.gc.granule_bytes, false)
+                                sys.gc.core.granule_bytes, false)
                             if imported != nil {
-                                assert !builtin.gc.mark.is_marked(heap, imported.get())
+                                assert !sys.gc.mark.is_marked(heap, imported.get())
                                 gc_root_support.imported_root = imported
-                                builtin.gc.collect.mark_global_roots(marker)
-                                assert builtin.gc.mark.is_marked(heap, imported.get())
+                                sys.gc.collect.mark_global_roots(marker)
+                                assert sys.gc.mark.is_marked(heap, imported.get())
                                 gc_root_support.imported_root = nil
                             } else { require false }
-                            let variant_value: Ref[byte]? = builtin.gc.alloc.allocate_reserved(
+                            let variant_value: Ref[byte]? = sys.gc.alloc.allocate_reserved(
                                 mutator, ref mutator.small, type_index, 8,
-                                builtin.gc.granule_bytes, false)
+                                sys.gc.core.granule_bytes, false)
                             if variant_value != nil {
-                                assert !builtin.gc.mark.is_marked(heap, variant_value.get())
+                                assert !sys.gc.mark.is_marked(heap, variant_value.get())
                                 variant_root.payload = variant_value.get()
                                 switch variant_root {
                                     case payload {
@@ -166,8 +166,8 @@ comptime {} else {
                                     }
                                     case empty { require false }
                                 }
-                                builtin.gc.collect.mark_global_roots(marker)
-                                assert builtin.gc.mark.is_marked(heap, variant_value.get())
+                                sys.gc.collect.mark_global_roots(marker)
+                                assert sys.gc.mark.is_marked(heap, variant_value.get())
                                 variant_root.empty = nil
                                 switch variant_root {
                                     case payload { require false }
@@ -175,29 +175,29 @@ comptime {} else {
                                 }
                                 variant_root = new[Root_Variant]()
                             } else { require false }
-                            let nested_value: Ref[byte]? = builtin.gc.alloc.allocate_reserved(
+                            let nested_value: Ref[byte]? = sys.gc.alloc.allocate_reserved(
                                 mutator, ref mutator.small, type_index, 8,
-                                builtin.gc.granule_bytes, false)
+                                sys.gc.core.granule_bytes, false)
                             if nested_value != nil {
-                                assert !builtin.gc.mark.is_marked(heap, nested_value.get())
+                                assert !sys.gc.mark.is_marked(heap, nested_value.get())
                                 nested_root.data = (child = nested_value)
-                                builtin.gc.collect.mark_global_roots(marker)
-                                assert builtin.gc.mark.is_marked(heap, nested_value.get())
+                                sys.gc.collect.mark_global_roots(marker)
+                                assert sys.gc.mark.is_marked(heap, nested_value.get())
                                 nested_root.empty = nil
                             } else { require false }
                             let words_before: uint = marker.stack_words
                             heap.cfg.scan_stacks = true
-                            builtin.gc.collect.mark_roots(marker)
+                            sys.gc.collect.mark_roots(marker)
                             assert marker.stack_words > words_before
                             heap.cfg.scan_stacks = false
-                            builtin.os.unmap(marker, marker_bytes)
-                            builtin.os.unmap(slot, slot_bytes)
+                            sys.memory.unmap(marker, marker_bytes)
+                            sys.memory.unmap(slot, slot_bytes)
                         } else { require false }
                     } else { require false }
                 } else { require false }
-                builtin.gc.mutator.destroy(mutator)
+                sys.gc.mutator.destroy(mutator)
             } else { require false }
-            builtin.gc.heap.destroy(heap)
+            sys.gc.heap.destroy(heap)
             __fd_write(2, "ok")
         } else { require false }
     } else { require false }

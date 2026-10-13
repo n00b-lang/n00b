@@ -1,6 +1,0 @@
-func typecase_narrowing(item: (int | string)) -> int {
-    typecase(item) {
-        case int { return item + 1 }
-        case string { return 2 }
-    }
-}

@@ -1,5 +1,0 @@
-type LoweredPoint {
-    x: int
-    y: float
-}
-func identity_point(pt: LoweredPoint) -> LoweredPoint { return pt }

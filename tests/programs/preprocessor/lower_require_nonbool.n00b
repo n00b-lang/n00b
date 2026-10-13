@@ -1,3 +1,0 @@
-func bad_requirement() {
-    require 1
-}

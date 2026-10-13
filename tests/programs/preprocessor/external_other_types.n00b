@@ -1,6 +1,0 @@
-when preproc_defines("TEXT") and preproc_value("TEXT") == "hello" and preproc_value("SCALE") == 1.5 {
-    var text_value = preproc_value("TEXT")
-    var float_value = preproc_value("SCALE")
-} else {
-    var missing_definition = true
-}

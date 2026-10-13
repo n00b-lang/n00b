@@ -1,4 +1,0 @@
-import record_field_dep
-func get_value(item: record_field_dep.RemoteRecord) -> int {
-    return item.amount
-}

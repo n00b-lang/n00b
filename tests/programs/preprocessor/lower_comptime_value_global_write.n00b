@@ -1,8 +1,0 @@
-var produced_value: int = 0
-
-func write_during_value_production() -> int {
-    return comptime {
-        produced_value = 11
-        = 11
-    }
-}

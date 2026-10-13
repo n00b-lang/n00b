@@ -1,3 +1,0 @@
-type Bad layout(other) {
-    value: int
-}

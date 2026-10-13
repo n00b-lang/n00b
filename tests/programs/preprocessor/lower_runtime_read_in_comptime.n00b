@@ -1,4 +1,0 @@
-thread var runtime_only: int = 1
-comptime {
-    var result: int = runtime_only
-}

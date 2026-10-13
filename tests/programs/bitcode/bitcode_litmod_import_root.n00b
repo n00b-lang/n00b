@@ -12,7 +12,9 @@ func forwarded_value() -> int {
 comptime {
     require litmod_import_dep.value() == 42
     require forwarded_value() == 42
-} else {
+}
+
+func run_test() {
     require litmod_import_dep.value() == 42
     require forwarded_value() == 42
 }

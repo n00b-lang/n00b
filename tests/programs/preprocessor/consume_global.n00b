@@ -1,8 +1,0 @@
-var global_value: int = 1
-
-func take(consume item: int) {}
-
-func consume_global() -> int {
-    take(global_value)
-    return global_value
-}

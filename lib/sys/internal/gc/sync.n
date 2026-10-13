@@ -1,0 +1,76 @@
+import internal.threads
+import internal.gc.core
+
+const near_spins: u32 = 2000
+const far_spins:  u32 = 100
+const max_ticket: u32 = 0xffffffff
+
+func event_enter(event: Ref[internal.gc.core.Event]) -> u32 {
+    __atomic_fetch_add(ref event.sleepers, 1)
+    return __atomic_load(ref event.seq)
+}
+
+func event_leave(event: Ref[internal.gc.core.Event]) {
+    __atomic_fetch_sub(ref event.sleepers, 1)
+}
+
+func event_sleep(event: Ref[internal.gc.core.Event], seq: u32) {
+    if __atomic_load(ref event.seq) == seq {
+        internal.threads.thread_yield()
+    }
+}
+
+func event_signal(event: Ref[internal.gc.core.Event]) {
+    __atomic_fetch_add(ref event.seq, 1)
+}
+
+func ticket_next(value: u32) -> u32 {
+    if value == max_ticket {
+        return 0
+    }
+    return value + 1
+}
+
+func ticket_lock(lock: Ref[internal.gc.core.Ticket_Lock]) {
+    let ticket: u32 = __atomic_fetch_add(ref lock.next, 1)
+    var spins:  u32 = 0
+    while true {
+        let owner: u32 = __atomic_load(ref lock.owner)
+        if owner == ticket {
+            return
+        }
+        spins += 1
+        var limit: u32 = far_spins
+        if ticket_next(owner) == ticket {
+            limit = near_spins
+        }
+        if spins < limit {
+            internal.threads.cpu_relax()
+            continue
+        }
+        spins = 0
+        let index: uint                  = ticket % internal.gc.core.lock_slots
+        let event: Ref[internal.gc.core.Event] = ref lock.slot[index]
+        let seq:   u32                   = event_enter(event)
+        if __atomic_load(ref lock.owner) != ticket {
+            event_sleep(event, seq)
+        }
+        event_leave(event)
+    }
+}
+
+func ticket_trylock(lock: Ref[internal.gc.core.Ticket_Lock]) -> bool {
+    let owner: u32 = __atomic_load(ref lock.owner)
+    return __atomic_compare_exchange(ref lock.next, owner,
+        ticket_next(owner))
+}
+
+func ticket_unlock(lock: Ref[internal.gc.core.Ticket_Lock]) {
+    let owner: u32 = ticket_next(__atomic_load(ref lock.owner))
+    __atomic_store(ref lock.owner, owner)
+    if __atomic_load(ref lock.next) == owner {
+        return
+    }
+    let index: uint = owner % internal.gc.core.lock_slots
+    event_signal(ref lock.slot[index])
+}

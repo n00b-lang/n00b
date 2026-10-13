@@ -1,0 +1,19 @@
+public const PROT_NONE:         u32  = 0
+public const PROT_READ:         u32  = 1
+public const PROT_WRITE:        u32  = 2
+
+func page_size() -> uint {
+    return __os_page_size()
+}
+
+func map_zeroed(bytes: uint, alignment: uint) -> Ref[byte]? {
+    return __os_map_zeroed(bytes, alignment)
+}
+
+func unmap(address: Ref[`T], bytes: uint) -> i32 {
+    return __os_unmap(address, bytes)
+}
+
+func protect(address: Ref[byte], bytes: uint, flags: u32) -> i32 {
+    return __os_protect(address, bytes, flags)
+}

@@ -1,5 +1,0 @@
-import option_layout
-
-func echo(value: Option[Ref[int]]) -> Option[Ref[int]] {
-    return value
-}

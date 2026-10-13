@@ -1,8 +1,0 @@
-func literal_shapes() {
-    unresolved_list = []
-    unresolved_braces = {}
-    var empty_list: List[int] = []
-    var empty_array: Array[int] = []
-    var empty_set: Set[int] = {}
-    var empty_dict: Dict[string, int] = {}
-}

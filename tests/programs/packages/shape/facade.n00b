@@ -1,6 +1,6 @@
-import shape.impl
+import impl
 
 package shape {
-    export shape.impl.Point
-    export shape.impl.Secret
+    export impl.Point
+    export impl.Secret
 }

@@ -1,3 +1,0 @@
-when n00b_major() == 0 and n00b_minor() == 1 and n00b_patch() == 0 and n00b_impl() == "n00bb" and target_is_little_endian() {
-    var implementation_selected = true
-}

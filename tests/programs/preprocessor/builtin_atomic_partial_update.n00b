@@ -1,7 +1,0 @@
-type Pair {
-    first: int
-}
-
-func update_pair(pair: Atomic[Pair]) {
-    pair.first = 1
-}

@@ -1,0 +1,25 @@
+// top-level comment
+record Commented {
+// field comment
+    value: int
+/* before record closer */
+}
+
+func comment_layout(flag: bool) -> int {
+// first statement
+    let value: int = 1
+    if flag {
+// nested line
+        /* nested block
+         * second line */
+        return value
+// before closer
+    }
+    return 0
+}
+
+comptime {
+/* empty body */
+} else {
+    require comment_layout(true) == 1
+}

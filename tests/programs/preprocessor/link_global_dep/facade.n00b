@@ -1,5 +1,0 @@
-import link_global_dep.impl
-
-package link_global_dep {
-    export link_global_dep.impl.remote_global
-}

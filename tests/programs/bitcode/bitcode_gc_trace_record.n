@@ -1,7 +1,7 @@
-import builtin.gc
-import builtin.gc.alloc
-import builtin.gc.heap
-import builtin.gc.los
+import sys.gc.core
+import sys.gc.alloc
+import sys.gc.heap
+import sys.gc.los
 
 type Stress_Node {
     value: int
@@ -27,15 +27,15 @@ comptime {} else {
         index = index + 1
     }
 
-    var config: builtin.gc.Config
-    builtin.gc.heap.config_default(ref config)
+    var config: sys.gc.core.Config
+    sys.gc.heap.config_default(ref config)
     let sample: byte = 0
     let type_index: u32 = cast[u32](typeof(sample))
-    let bytes: uint = 2 * builtin.gc.los.los_threshold
+    let bytes: uint = 2 * sys.gc.los.los_threshold
     var churned: uint = 0
     while churned < 2 * config.initial_heap_bytes {
-        let allocated: Ref[byte]? = builtin.gc.alloc.allocate_runtime(
-            type_index, cast[u64](bytes), cast[u32](builtin.gc.granule_bytes),
+        let allocated: Ref[byte]? = sys.gc.alloc.allocate_runtime(
+            type_index, cast[u64](bytes), cast[u32](sys.gc.core.granule_bytes),
             nil)
         require allocated != nil
         churned += bytes

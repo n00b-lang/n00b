@@ -1,7 +1,0 @@
-func choose(item: `T) -> int where `T: != int {
-    return 1
-}
-
-func choose(item: `T) -> int where `T: != string {
-    return 2
-}

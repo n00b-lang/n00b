@@ -1,5 +1,0 @@
-import record_cycle_inline.b
-
-public type Left {
-    right: record_cycle_inline.b.Right
-}

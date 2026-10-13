@@ -1,2 +1,0 @@
-func identity(item: int) -> int { return item }
-func call_identity(item: int) -> int { return identity(item) }

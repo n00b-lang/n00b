@@ -1,6 +1,0 @@
-func choose_value(code: int) -> int {
-    return switch code {
-        case 1 { = 10 }
-        else { = 20 }
-    }
-}

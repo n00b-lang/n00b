@@ -1,85 +1,95 @@
-import builtin.containers.traits
-import builtin.containers.view
-import builtin.cursor
+import containers.traits
+import containers.view
+import cursor
 
-public type List {
+record List {
     items: Array[`T]
     count: uint
 }
 
-public func __init(modify self: List[`T], items: Array[`T] = []) {
+func __init(modify self: List[`T], items : Array[`T] = []) {
     self.items = items
     self.count = __array_length(items)
 }
 
-public func len(self: List[`T]) -> uint {
+func len(self: List[`T]) -> uint {
     return self.count
 }
 
 func checked_index(self: List[`T], index: int) -> int {
     var at: int = index
-    if at < 0 { at += cast[int] self.count }
-    require at >= 0 and cast[uint] at < self.count
+    if at < 0 {
+        at += cast[int]self.count
+    }
+    require at >= 0 and cast[uint]at < self.count
     return at
 }
 
-public func __read(self: List[`T], index: int) -> `T {
+func __read(self: List[`T], index: int) -> `T {
     return self.items[checked_index(self, index)]
 }
 
-public func __write(modify self: List[`T], index: int, value: `T) {
+func __write(modify self: List[`T], index: int, value: `T) {
     self.items[checked_index(self, index)] = value
 }
 
-public func __slice(self: List[`T], start_ix: int,
-                    end_ix: int) -> builtin.containers.view.View[`T] {
+func __slice(self: List[`T], start_ix: int,
+                    end_ix: int) -> containers.view.View[`T] {
     require start_ix >= 0 and end_ix >= start_ix
-    require cast[uint] end_ix <= self.count
-    let length: int = end_ix - start_ix
-    var items: Array[`T] = new[Array[`T]](length)
-    var at: int = 0
+    require cast[uint]end_ix <= self.count
+    let length: int       = end_ix - start_ix
+    var items:  Array[`T] = new[Array[`T]](length)
+    var at:     int       = 0
     while at < length {
         items[at] = self.items[start_ix + at]
         at += 1
     }
-    return builtin.containers.view.__slice(items, 0, length)
+    return containers.view.__slice(items, 0, length)
 }
 
-public func __write_slice(modify self: List[`T], start_ix: int?,
+func __write_slice(modify self: List[`T], start_ix: int?,
                           end_ix: int?, inclusive: bool,
                           values: List[`T]) {
     var start: int = 0
-    if start_ix != nil { start = start_ix.get() }
-    var end: int = cast[int] self.count
+    if start_ix != nil {
+        start = start_ix.get()
+    }
+    var end: int = cast[int]self.count
     if end_ix != nil {
         end = end_ix.get()
-        if end < 0 { end += cast[int] self.count }
-        if inclusive { end += 1 }
+        if end < 0 {
+            end += cast[int]self.count
+        }
+        if inclusive {
+            end += 1
+        }
     }
-    if start < 0 { start += cast[int] self.count }
+    if start < 0 {
+        start += cast[int]self.count
+    }
     require start >= 0 and end >= start
-    require cast[uint] end <= self.count
+    require cast[uint]end <= self.count
 
-    let incoming: uint = values.count
-    var snapshot: Array[`T] = new[Array[`T]](cast[int] incoming)
-    var at: uint = 0
+    let incoming: uint      = values.count
+    var snapshot: Array[`T] = new[Array[`T]](cast[int]incoming)
+    var at:       int       = 0
     while at < incoming {
         snapshot[at] = values.items[at]
         at += 1
     }
     let removed: uint = cast[uint](end - start)
-    let length: uint = self.count - removed + incoming
+    let length:  uint = self.count - removed + incoming
     ensure_capacity(self, length)
     if incoming > removed {
         let growth: uint = incoming - removed
-        var tail: uint = self.count
-        while tail > cast[uint] end {
+        var tail:   uint = self.count
+        while tail > cast[uint]end {
             tail -= 1
             self.items[tail + growth] = self.items[tail]
         }
     } elif incoming < removed {
         let shrink: uint = removed - incoming
-        var tail: uint = cast[uint] end
+        var tail:   uint = cast[uint]end
         while tail < self.count {
             self.items[tail - shrink] = self.items[tail]
             tail += 1
@@ -87,7 +97,7 @@ public func __write_slice(modify self: List[`T], start_ix: int?,
     }
     at = 0
     while at < incoming {
-        self.items[cast[uint] start + at] = snapshot[at]
+        self.items[start + at] = snapshot[at]
         at += 1
     }
     if length < self.count {
@@ -102,13 +112,15 @@ public func __write_slice(modify self: List[`T], start_ix: int?,
 
 func ensure_capacity(modify self: List[`T], needed: uint) {
     let capacity: uint = __array_length(self.items)
-    if needed <= capacity { return }
+    if needed <= capacity {
+        return
+    }
     var next_capacity: uint = 16
     while next_capacity < needed {
         next_capacity *= 2
     }
-    var next: Array[`T] = new[Array[`T]](cast[int] next_capacity)
-    var index: uint = 0
+    var next:  Array[`T] = new[Array[`T]](cast[int]next_capacity)
+    var index: uint      = 0
     while index < self.count {
         let value: `T = self.items[index]
         next[index] = value
@@ -117,8 +129,8 @@ func ensure_capacity(modify self: List[`T], needed: uint) {
     self.items = next
 }
 
-public func append(modify self: List[`T], value: `T,
-                   front: bool = false) {
+func append(modify self: List[`T], value: `T,
+                   front : bool = false) {
     ensure_capacity(self, self.count + 1)
     if front {
         var index: uint = self.count
@@ -133,11 +145,11 @@ public func append(modify self: List[`T], value: `T,
     self.count += 1
 }
 
-public func insert(modify self: List[`T], index: int, value: `T) {
-    require index >= 0 and cast[uint] index <= self.count
+func insert(modify self: List[`T], index: int, value: `T) {
+    require index >= 0 and cast[uint]index <= self.count
     ensure_capacity(self, self.count + 1)
     var at: uint = self.count
-    while at > cast[uint] index {
+    while at > cast[uint]index {
         self.items[at] = self.items[at - 1]
         at -= 1
     }
@@ -145,10 +157,14 @@ public func insert(modify self: List[`T], index: int, value: `T) {
     self.count += 1
 }
 
-public func pop(modify self: List[`T], front: bool = false) -> `T? {
-    if self.count == 0 { return nil }
+func pop(modify self: List[`T], front : bool = false) -> `T? {
+    if self.count == 0 {
+        return nil
+    }
     var index: uint = self.count - 1
-    if front { index = 0 }
+    if front {
+        index = 0
+    }
     let value: `T = self.items[index]
     if front {
         while index + 1 < self.count {
@@ -161,26 +177,30 @@ public func pop(modify self: List[`T], front: bool = false) -> `T? {
     return value
 }
 
-public func find(self: List[`T], value: `T) -> int? where `T: Equal {
+func find(self: List[`T], value: `T) -> int? where ` T : Equal {
     var at: uint = 0
     while at < self.count {
-        if self.items[at] == value { return cast[int] at }
+        if self.items[at] == value {
+            return cast[int]at
+        }
         at += 1
     }
     return nil
 }
 
-public func remove(modify self: List[`T], value: `T,
-                   all: bool = true) -> uint where `T: Equal {
-    var read: uint = 0
-    var write: uint = 0
+func remove(modify self: List[`T], value: `T,
+                   all : bool = true) -> uint where ` T : Equal {
+    var read:    uint = 0
+    var write:   uint = 0
     var removed: uint = 0
     while read < self.count {
         let item: `T = self.items[read]
         if (all or removed == 0) and item == value {
             removed += 1
         } else {
-            if write != read { self.items[write] = item }
+            if write != read {
+                self.items[write] = item
+            }
             write += 1
         }
         read += 1
@@ -194,19 +214,19 @@ public func remove(modify self: List[`T], value: `T,
     return removed
 }
 
-public func clear(modify self: List[`T]) {
+func clear(modify self: List[`T]) {
     self.items = new[Array[`T]](0)
     self.count = 0
 }
 
-public func to_array(consume self: List[`T]) -> Array[`T] {
+func to_array(consume self: List[`T]) -> Array[`T] {
     return __array_prefix(self.items, self.count)
 }
 
-public func __add(self: List[`T], other: List[`T]) -> List[`T] {
-    let size: uint = self.count + other.count
-    var items: Array[`T] = new[Array[`T]](cast[int] size)
-    var at: uint = 0
+func __add(self: List[`T], other: List[`T]) -> List[`T] {
+    let size:  uint      = self.count + other.count
+    var items: Array[`T] = new[Array[`T]](cast[int]size)
+    var at:    uint      = 0
     while at < self.count {
         items[at] = self.items[at]
         at += 1
@@ -220,18 +240,18 @@ public func __add(self: List[`T], other: List[`T]) -> List[`T] {
     return new[List[`T]](items)
 }
 
-public func iter(self: List[`T]) -> builtin.cursor.Cursor[`T] {
-    var items: Array[`T] = new[Array[`T]](cast[int] self.count)
-    var at: uint = 0
+func iter(self: List[`T]) -> cursor.Cursor[`T] {
+    var items: Array[`T] = new[Array[`T]](cast[int]self.count)
+    var at:    uint      = 0
     while at < self.count {
         items[at] = self.items[at]
         at += 1
     }
-    let view: builtin.containers.view.View[`T] =
-        builtin.containers.view.__slice(items, 0, cast[int] self.count)
-    return new[builtin.cursor.Cursor[`T]](view)
+    let view: containers.view.View[`T] =
+        containers.view.__slice(items, 0, cast[int]self.count)
+    return new[cursor.Cursor[`T]](view)
 }
 
-litmod<array> list, l(items: Array[`T]) -> List[`T] fail: string {
+litmod < array > list, l(items: Array[`T]) -> List[`T] fail: string {
     return new[List[`T]](items)
 }

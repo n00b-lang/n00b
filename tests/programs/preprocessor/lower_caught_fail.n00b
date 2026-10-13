@@ -1,3 +1,0 @@
-func catch_direct_failure() -> int fail: int {
-    try { fail 7 } else err { return 42 }
-}

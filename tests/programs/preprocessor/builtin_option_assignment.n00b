@@ -1,6 +1,0 @@
-func option_assignment(input: int) -> int? {
-    var item: int? = nil
-    item = input
-    item = nil
-    return item
-}

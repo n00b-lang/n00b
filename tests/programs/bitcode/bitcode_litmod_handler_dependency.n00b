@@ -12,6 +12,8 @@ func observe(value: string) {
 
 comptime {
     observe("ignored"'outer)
-} else {
+}
+
+func run_test() {
     observe("ignored"'outer)
 }

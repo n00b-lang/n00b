@@ -1,9 +1,0 @@
-context BodyFailure() fail: int {
-    enter() {}
-    exit() {}
-    error(problem) {}
-    ensure() {}
-}
-func propagate_body_failure() -> nil fail: int {
-    with BodyFailure() { fail 23 }
-}

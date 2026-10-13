@@ -1,10 +1,10 @@
-import builtin.os
+import sys.memory
 
 comptime {
 } else {
-    let page: uint = builtin.os.page_size()
-    let source: Ref[byte]? = builtin.os.map_zeroed(page, page)
-    let destination: Ref[byte]? = builtin.os.map_zeroed(page, page)
+    let page: uint = sys.memory.page_size()
+    let source: Ref[byte]? = sys.memory.map_zeroed(page, page)
+    let destination: Ref[byte]? = sys.memory.map_zeroed(page, page)
     if source != nil {
         if destination != nil {
             let src: Ref[byte] = source.get()
@@ -22,8 +22,8 @@ comptime {
             let last: Ref[byte] = __gc_byte_offset(dst, page - 1)
             assert ref_read(dst) == pattern
             assert ref_read(last) == pattern
-            builtin.os.unmap(src, page)
-            builtin.os.unmap(dst, page)
+            sys.memory.unmap(src, page)
+            sys.memory.unmap(dst, page)
             __fd_write(2, "ok")
         } else { require false }
     } else { require false }

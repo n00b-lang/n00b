@@ -1,4 +1,0 @@
-const character = 'x'
-when character == "x" {
-    var selected = true
-}

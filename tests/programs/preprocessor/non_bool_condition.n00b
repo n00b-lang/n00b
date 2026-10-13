@@ -1,3 +1,0 @@
-when 1 {
-    var impossible = true
-}

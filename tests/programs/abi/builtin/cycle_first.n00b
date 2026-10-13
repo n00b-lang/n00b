@@ -1,0 +1,2 @@
+import builtin.cycle_second
+public func first() -> int { return 1 }

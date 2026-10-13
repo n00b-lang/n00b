@@ -1,0 +1,3 @@
+func now_ns() -> u64 {
+    return __os_now_ns()
+}

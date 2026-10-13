@@ -1,5 +1,0 @@
-func atomic_identity(item: Atomic[int]) -> Atomic[int] {
-    var copy: Atomic[int] = item
-    copy = item
-    return copy
-}

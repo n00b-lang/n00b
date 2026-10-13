@@ -1,7 +1,0 @@
-func classify(item: Array[int]) -> int {
-    typecase(item) {
-        case Array[`T] {
-            return 1
-        }
-    }
-}

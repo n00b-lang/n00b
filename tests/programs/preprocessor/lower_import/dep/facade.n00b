@@ -1,5 +1,0 @@
-import dep.impl
-
-package dep {
-    export dep.impl.imported
-}

@@ -1,5 +1,0 @@
-func invalid_range_bindings() {
-    for first, second from 1 to 3 {
-        continue
-    }
-}

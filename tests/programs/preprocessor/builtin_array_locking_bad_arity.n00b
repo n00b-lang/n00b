@@ -1,3 +1,0 @@
-func invalid_array_locking_type(item: Array_Locking[int, bool]) -> int {
-    return 0
-}

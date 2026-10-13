@@ -6,7 +6,7 @@
 
 extern _Atomic(void *) worker_heap
     __asm("__$bitcode_gc_worker_live$worker_heap");
-extern void gc_worker(void *) __asm("_builtin.gc.collect.worker");
+extern void gc_worker(void *) __asm("_sys.internal.gc.collect.worker");
 
 static pthread_t thread;
 static _Atomic bool stop_wait;

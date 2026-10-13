@@ -1,3 +1,0 @@
-var before_initializer: int = after_initializer
-func compute_after_initializer() -> int { return 2 }
-var after_initializer: int = compute_after_initializer()

@@ -1,0 +1,3 @@
+import beta.impl
+
+require beta.impl.read() == 7

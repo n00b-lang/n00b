@@ -1,8 +1,0 @@
-trait DirectCall {
-    func direct_call(self: `T) -> string
-}
-func direct_call(self: int) -> string { return "ok" }
-func valid_member(item: int) -> string { return item.direct_call() }
-func wrong_direct_argument(item: string) -> string {
-    return direct_call(item)
-}

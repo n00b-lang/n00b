@@ -1,5 +1,0 @@
-import record_field_dep
-
-func read_missing(item: record_field_dep.RemoteRecord) -> int {
-    return item.absent
-}

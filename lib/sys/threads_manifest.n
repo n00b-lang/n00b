@@ -1,0 +1,5 @@
+import internal.threads
+
+package sys.threads {
+    export internal.threads
+}

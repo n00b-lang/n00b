@@ -1,7 +1,0 @@
-func choose_range(code: int) -> int {
-    switch code {
-    case 1 to 3, 8 { return 1 }
-    case 4 until 7 { return 2 }
-    else { return 0 }
-    }
-}

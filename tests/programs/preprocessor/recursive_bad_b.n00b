@@ -1,4 +1,0 @@
-import recursive_bad_a
-public func from_b() {
-    if true { return recursive_bad_a.from_a() } else { return "text" }
-}

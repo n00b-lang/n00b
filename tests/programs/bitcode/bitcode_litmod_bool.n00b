@@ -9,7 +9,9 @@ litmod<quotes> is_no, no(raw: string) -> bool fail: string {
 comptime {
     require "yes"'yes
     require "no"'no == false
-} else {
+}
+
+func run_test() {
     require "yes"'yes
     require "no"'no == false
 }

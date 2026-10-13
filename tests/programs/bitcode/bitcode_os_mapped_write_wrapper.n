@@ -1,14 +1,14 @@
-import builtin.os
+import sys.memory
 
 const stderr_fd: i32 = 2
 
 func map_page(size: uint) -> Ref[byte]? {
-    return builtin.os.map_zeroed(size, size)
+    return sys.memory.map_zeroed(size, size)
 }
 
 comptime {
 } else {
-    let page: uint = builtin.os.page_size()
+    let page: uint = sys.memory.page_size()
     let mapped: Ref[byte]? = map_page(page)
     if mapped != nil {
         let base: Ref[byte] = mapped.get()
@@ -20,7 +20,7 @@ comptime {
         } else {
             __fd_write(stderr_fd, "bad value\n")
         }
-        builtin.os.unmap(base, page)
+        sys.memory.unmap(base, page)
     } else {
         __fd_write(stderr_fd, "map failed\n")
     }

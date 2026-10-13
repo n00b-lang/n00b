@@ -1,1 +1,0 @@
-var matches = has_type(1, typeof(1))

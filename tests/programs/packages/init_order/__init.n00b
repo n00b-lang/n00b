@@ -1,0 +1,7 @@
+import state
+
+package init_order {
+    export package child
+}
+
+state.mark(1)

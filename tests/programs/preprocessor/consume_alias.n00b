@@ -1,7 +1,0 @@
-func take(consume item: int) {}
-
-func use_alias_after(value: int) -> int {
-    var borrowed = ref value
-    take(value)
-    return ref_read(borrowed)
-}

@@ -1,4 +1,0 @@
-func anonymous_field_read() -> int {
-    let item = (answer = 42)
-    return item.answer
-}

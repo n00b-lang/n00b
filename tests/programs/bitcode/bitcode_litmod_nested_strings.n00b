@@ -18,7 +18,9 @@ func observe(items: Array[Array[string]]) {
 comptime {
     observe([["a comptime long string payload", "five"]'array,
                    ["six"]'array]'bundle)
-} else {
+}
+
+func run_test() {
     observe(values())
     observe(dynamic("a runtime long string payload"))
 }

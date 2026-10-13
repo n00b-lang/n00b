@@ -1,3 +1,0 @@
-when preproc_value("LEVEL") == 2 {
-    var last_definition_wins = true
-}

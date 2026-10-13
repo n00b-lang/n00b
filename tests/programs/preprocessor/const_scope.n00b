@@ -1,8 +1,0 @@
-when true {
-    when true {
-        const hidden = true
-    }
-    when hidden {
-        var leaked = true
-    }
-}

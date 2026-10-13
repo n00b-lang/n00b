@@ -1,5 +1,0 @@
-const fixed_value: int = 1
-
-func mutate_at_runtime() {
-    fixed_value = 2
-}

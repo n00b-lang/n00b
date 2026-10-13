@@ -1,0 +1,9 @@
+import impl
+
+package first_public {
+    export impl.first
+}
+
+package second_public {
+    export impl.second
+}

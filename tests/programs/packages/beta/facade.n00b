@@ -1,5 +1,5 @@
-import beta.impl
+import impl
 
 package beta {
-    export beta.impl
+    export impl
 }

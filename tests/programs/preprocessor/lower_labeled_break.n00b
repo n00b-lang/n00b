@@ -1,5 +1,0 @@
-func labeled_break(flag: bool) {
-    outer: while flag {
-        while flag { break outer }
-    }
-}

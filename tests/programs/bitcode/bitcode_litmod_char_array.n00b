@@ -12,7 +12,9 @@ func dynamic_values(value: char) -> Array[char] {
 
 comptime {
     static_values()
-} else {
+}
+
+func run_test() {
     static_values()
     dynamic_values('b')
 }

@@ -1,9 +1,0 @@
-when true or preproc_value("MISSING") == 1 {
-    var short_circuit_selected = true
-}
-when false and preproc_value("ALSO_MISSING") == 1 {
-    var second_short_circuit = true
-}
-when true or (1 / 0 == 0) {
-    var skipped_arithmetic_selected = true
-}

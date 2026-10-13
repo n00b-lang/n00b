@@ -1,6 +1,0 @@
-func range_for_step(start: int, end: int, stride: int) -> int {
-    for index from start .. end step stride {
-        continue
-    }
-    return 0
-}

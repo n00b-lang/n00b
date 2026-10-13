@@ -1,0 +1,1081 @@
+import internal.threads
+import internal.abi
+import internal.gc.hash
+
+public const granule_bytes:     uint = 16
+public const line_bytes:        uint = 128
+public const block_bytes:       uint = 32768
+public const word_bits:         uint = 64
+const lines_per_block:          uint = block_bytes / line_bytes
+const granules_per_block:       uint = block_bytes / granule_bytes
+const bitmap_words:             uint = granules_per_block / 64
+public const block_magic:       u32  = 0x6d616e69
+public const cache_max:         uint = 8
+public const los_classes:       uint = 256
+public const obj_large:         uint = 1 << 0
+public const obj_array_backing: uint = 1 << 1
+public const obj_final:         uint = 1 << 3
+const empty_word:               uint = 0
+const mark_clearing:            u32  = 0x80000000
+public const meta_flag_bits:    uint = 8
+const meta_flag_mask:           uint = 0xff
+public const packet_cap:        uint = 500
+public const final_batch:       uint = 256
+public const packet_chunk:      uint = 64
+public const write_buffer_cap:  uint = 128
+public const lock_slots:        u32  = 64
+
+var object_header_size:         uint = 0
+var block_header_line_count:    uint = 0
+
+
+enum Block_State     { owned, retired, free, recyclable, full }
+enum Phase           { idle, marking, sweeping }
+enum Handshake_State { idle, requested, busy, claimed, done }
+enum Handshake_Kind  { on, scan, sweep }
+
+record Object_Header layout(c) {
+    type_index:    u32
+    reserved_zero: u32
+    meta:          uint
+}
+
+record Block_Metadata layout(c) {
+    magic:       u32
+    state:       u8
+    on_owned:    bool
+    free_lines:  u16
+    sweep_epoch: u32
+    mark_epoch:  Atomic[u32]
+    black_epoch: Atomic[u32]
+    nfinal:      Atomic[u32]
+    in_final:    Atomic[bool]
+    final_next:  Ref[Block_Metadata]?
+    owner:       Ref[Mutator]?
+    next:        Ref[Block_Metadata]?
+    all_next:    Ref[Block_Metadata]?
+    all_prev:    Ref[Block_Metadata]?
+    own_next:    Ref[Block_Metadata]?
+    line_marks:  Array[Atomic[u8]][lines_per_block]
+    mark_bits:   Array[Atomic[uint]][bitmap_words]
+    start_bits:  Array[Atomic[uint]][bitmap_words]
+}
+
+record Bump layout(c) {
+    cursor:     Ref[byte]?
+    limit:      Ref[byte]?
+    blk:        Ref[Block_Metadata]?
+    line:       uint
+    seen_epoch: u32
+    cache:      Atomic[Ref[Block_Metadata]?]
+}
+
+// Los Large Object Store
+record Los_Obj layout(c) {
+    next:         Ref[Los_Obj]?
+    final_next:   Ref[Los_Obj]?
+    bytes:        uint
+    marked:       Atomic[u32]
+    mapping:      Ref[byte]
+    mapped_bytes: uint
+    hdr:          Object_Header
+}
+
+record Cycle_Info layout(c) {
+    epoch:           uint
+    kind:            i32
+    duration_ns:     uint
+    pause_ns:        uint
+    pauses:          u32
+    rounds:          u32
+    stragglers:      u32
+    marked_objects:  uint
+    marked_bytes:    uint
+    allocated_bytes: uint
+}
+
+record Config layout(c) {
+    initial_heap_bytes:      uint
+    growth_factor:           f64
+    max_heap_bytes:          uint
+    poison_free:             bool
+    handshake_timeout_us:    u32
+    scan_stacks:             bool
+    world_timeout_ms:        u32
+    finalizer_backlog_limit: uint
+    finalizer_assist:        bool
+    on_pause:                Ref[(uint, Ref[byte]?) -> nil]?
+    on_cycle:                Ref[(Cycle_Info, Ref[byte]?) -> nil]?
+    finalizers_ready:        Ref[(Ref[byte]?) -> nil]?
+    telemetry_user:          Ref[byte]?
+}
+
+record Stats layout(c) {
+    collections:            uint
+    objects_allocated:      uint
+    bytes_allocated:        uint
+    blocks_total:           uint
+    blocks_free:            uint
+    blocks_recyclable:      uint
+    blocks_full:            uint
+    blocks_owned:           uint
+    los_objects:            uint
+    los_bytes:              uint
+    last_marked_objects:    uint
+    last_marked_bytes:      uint
+    committed_bytes:        uint
+    live_bytes:             uint
+    target_bytes:           uint
+    alloc_budget:           uint
+    alloc_since_gc:         uint
+    refills:                uint
+    locked_refills:         uint
+    last_stack_words:       uint
+    last_frame_slots:       uint
+    last_conservative_hits: uint
+    last_worker_objects:    uint
+    blocks_unswept:         uint
+    workers:                u32
+    phase:                  i32
+    pauses:                 uint
+    last_pause_ns:          uint
+    max_pause_ns:           uint
+    total_pause_ns:         uint
+    hs_cycles:              uint
+    hs_rounds:              uint
+    hs_stragglers:          uint
+    hs_blocking:            uint
+    hs_fallbacks:           uint
+    hs_alloc_waits:         uint
+    finalizers_pending:     uint
+    finalizers_run:         uint
+}
+
+record Final_Entry layout(c) {
+    payload: Ref[byte]
+}
+
+record Final_Batch layout(c) {
+    objects: Array[Ref[byte]?][final_batch]
+    n:       uint
+    next:    Ref[Final_Batch]?
+    prev:    Ref[Final_Batch]?
+}
+
+record Event layout(c) {
+    seq:      Atomic[u32]
+    sleepers: Atomic[u32]
+}
+
+record Packet_Entry layout(c) {
+    header:        Ref[Object_Header]?
+    value_address: Ref[byte]?
+    type_index:    u32
+    reserved_zero: u32
+    start_index:   uint
+}
+
+record Packet layout(c) {
+    next:    Ref[Packet]?
+    n:       uint
+    entries: Array[Packet_Entry][packet_cap]
+}
+
+record Packet_Chunk layout(c) {
+    next:  Ref[Packet_Chunk]?
+    bytes: uint
+}
+
+record Marker layout(c) {
+    heap:        Ref[Heap]
+    input:       Ref[Packet]?
+    output:      Ref[Packet]?
+    holding:     bool
+    worker:      bool
+    marked:      uint
+    objects:     uint
+    bytes:       uint
+    stack_words: uint
+    frame_slots: uint
+    hits:        uint
+}
+
+record Ticket_Lock layout(c) {
+    next:  Atomic[u32]
+    owner: Atomic[u32]
+    slot:  Array[Event][lock_slots]
+}
+
+record Heap layout(c) {
+    cfg:                    Config
+    lock:                   Ticket_Lock
+    all_blocks:             Ref[Block_Metadata]?
+    nblocks:                uint
+    free_blocks:            Ref[Block_Metadata]?
+    nfree:                  uint
+    recyclable_blocks:      Ref[Block_Metadata]?
+    nrecyclable:            uint
+    nfull:                  uint
+    nowned:                 Atomic[uint]
+    nunswept:               Atomic[uint]
+    los_bytes:              uint
+    los_cache_bytes:        uint
+    los:                    Ref[Los_Obj]?
+    los_count:              uint
+    final_blocks:           Atomic[Ref[Block_Metadata]?]
+    final_los:              Ref[Los_Obj]?
+    fin:                    Ticket_Lock
+    fin_held:               bool
+    fin_assisting:          Atomic[bool]
+    fin_notify:             Atomic[bool]
+    fin_progress:           Event
+    finq:                   Ref[byte]?
+    finq_n:                 uint
+    finq_cap:               uint
+    running:                Ref[Final_Batch]?
+    running_n:              uint
+    finalizers_run:         uint
+    release_los:            Ref[Los_Obj]?
+    los_cache:              Array[Ref[Los_Obj]?][los_classes]
+    target_bytes:           uint
+    alloc_budget:           uint
+    live_bytes:             uint
+    last_marked_bytes:      uint
+    blocks:                 internal.gc.hash.Hash_Tab
+    large:                  internal.gc.hash.Hash_Tab
+    los_levels:             uint
+    los_level_n:            Array[uint][word_bits]
+    heap_lo:                uint
+    heap_hi:                uint
+    reg_rw:                 Atomic[u32]
+    reg_changed:            Event
+    pool_lock:              Atomic[u32]
+    pool_free:              Event
+    mark_progress:          Event
+    pool_full:              Ref[Packet]?
+    pool_empty:             Ref[Packet]?
+    pool_active:            uint
+    pool_chunks:            Ref[Packet_Chunk]?
+    work_progress:          Event
+    cnt_objects:            Atomic[uint]
+    cnt_bytes:              Atomic[uint]
+    cnt_worker_objects:     Atomic[uint]
+    cnt_stack_words:        Atomic[uint]
+    cnt_frame_slots:        Atomic[uint]
+    cnt_hits:               Atomic[uint]
+    owned:                  Ref[Block_Metadata]?
+    sweep_cursor:           Ref[Block_Metadata]?
+    los_cursor:             Ref[Ref[Los_Obj]?]
+    sweep_ready:            bool
+    phase:                  Atomic[u32]
+    marking:                Atomic[bool]
+    stw:                    Atomic[bool]
+    barrier_queue:          Ref[byte]?
+    barrier_queue_count:    uint
+    barrier_queue_capacity: uint
+    nworkers:               Atomic[u32]
+    shutdown:               Atomic[bool]
+    cycle_requested:        Atomic[bool]
+    cycle_active:           Atomic[bool]
+    cycle_ended:            Event
+    hs_answered:            Event
+    hs_pending:             Atomic[u32]
+    hs_kind:                Atomic[u32]
+    hs_active:              bool
+    round_dirty:            Atomic[bool]
+    hs_cycles:              uint
+    hs_rounds:              uint
+    hs_stragglers:          uint
+    hs_blocking:            uint
+    hs_fallbacks:           uint
+    hs_alloc_waits:         Atomic[uint]
+    mutators:               Ref[Mutator]?
+    nmutators:              uint
+    threads:                internal.gc.hash.Hash_Tab
+    globals:                Ref[byte]?
+    nglobals:               uint
+    cap_globals:            uint
+    global_index:           internal.gc.hash.Index_Tab
+    epoch:                  u32
+    mark_epoch:             u32
+    black_alloc:            bool
+    keep_bytes:             uint
+    alloc_since_gc:         uint
+    collections:            uint
+    retired_objects:        uint
+    retired_bytes:          uint
+    retired_refills:        uint
+    retired_locked_refills: uint
+    last_marked_objects:    uint
+    last_worker_objects:    uint
+    last_stack_words:       uint
+    last_frame_slots:       uint
+    last_conservative_hits: uint
+    cycle:                  Cycle_Info
+    cycle_start:            uint
+    pause_start:            uint
+    pauses:                 uint
+    last_pause_ns:          uint
+    max_pause_ns:           uint
+    total_pause_ns:         uint
+}
+
+record Mutator layout(c) {
+    heap:               Ref[Heap]
+    next:               Ref[Mutator]?
+    prev:               Ref[Mutator]?
+    thread_id:          uint
+    thread_control:     uint
+    thread_primary:     bool
+    thread_next:        Ref[Mutator]?
+    thread_prev:        Ref[Mutator]?
+    small:              Bump
+    overflow:           Bump
+    last_alloc:         Ref[byte]?
+    roots:              Ref[byte]?
+    nroots:             uint
+    cap_roots:          uint
+    tls_roots:          Ref[byte]?
+    ntls_roots:         uint
+    write_buffer:       Array[Ref[byte]?][write_buffer_cap]
+    write_buffer_count: uint
+    write_buffer_epoch: u32
+    hs_state:           Atomic[u32]
+    black:              bool
+    blocking:           Atomic[u32]
+    unblocked:          Event
+    wait_next:          Ref[Mutator]?
+    blocked_sp:         Ref[byte]?
+    stack_hi:           Ref[byte]?
+    ctx_valid:          bool
+    captured:           internal.threads.Thread_Context
+    in_finalizers:      bool
+    pace_wait:          bool
+    objects_allocated:  uint
+    bytes_allocated:    uint
+    refills:            uint
+    locked_refills:     uint
+}
+
+inline func meta_make(payload_bytes: uint, flags: u32) -> uint {
+    require payload_bytes <= (~cast[uint](0) >> meta_flag_bits)
+
+    return (payload_bytes << meta_flag_bits) | (cast[uint](flags) & meta_flag_mask)
+}
+
+inline func meta_payload_bytes(meta: uint) -> uint {
+    return meta >> meta_flag_bits
+}
+
+inline func array_descriptor_at(address: Ref[byte])
+                        -> Ref[internal.abi.Array_Descriptor_Header] {
+    return unsafe_cast[Ref[internal.abi.Array_Descriptor_Header]] address
+}
+
+func array_flat_element_index(type_index: u32, flat_rank: u32) -> u32 {
+    var current: u32 = type_index
+    var level:   u32 = 0
+
+    while level < flat_rank {
+        let array: Ref[internal.abi.Type_Record]? = internal.abi.type_at(current)
+
+        if array != nil {
+            if array.get().kind != cast[u32](internal.abi.Type_Kind.array_type) {
+                return 0
+            }
+            let component: int = internal.abi.range_index(array.get().components, 0)
+            if component <= 0 {
+                return 0
+            }
+            current = cast[u32](component)
+        } else {
+            return 0
+        }
+        level += 1
+    }
+    return current
+}
+
+func array_flat_element(type_index: u32, flat_rank: u32)
+                       -> Ref[internal.abi.Type_Record]? {
+    let index: u32 = array_flat_element_index(type_index, flat_rank)
+
+    if index == 0 {
+        return nil
+    }
+
+    return internal.abi.type_at(index)
+}
+
+func array_backing_offset(type_index: u32,
+                          shape     : Ref[internal.abi.Array_Descriptor_Header]
+                         ) -> uint {
+    if shape.rank == 0 or shape.flat_rank == 0 or shape.flat_rank > shape.rank {
+        return 0
+    }
+
+    let element: Ref[internal.abi.Type_Record]?
+    element = array_flat_element(type_index, shape.flat_rank)
+
+    if element == nil {
+        return 0
+    }
+
+    let alignment: uint = internal.abi.alignment_bytes(element.get())
+
+    if alignment == 0 or (alignment & (alignment - 1)) != 0 {
+        return 0
+    }
+
+    let shape_row: Ref[internal.abi.Type_Record]?
+    shape_row = internal.abi.reference_target(typeof(shape))
+
+    if shape_row == nil {
+        return 0
+    }
+
+    let maximum:      uint = ~cast[uint](0)
+    let header_bytes: uint = internal.abi.size_bytes(shape_row.get())
+
+    if cast[uint](shape.rank) > (maximum - header_bytes) / 8 {
+        return 0
+    }
+
+    let descriptor_bytes: uint = header_bytes + cast[uint](shape.rank) * 8
+    var data_alignment:   uint = alignment
+
+    if data_alignment < 8 {
+        data_alignment = 8
+    }
+
+    if descriptor_bytes > maximum - data_alignment + 1 {
+        return 0
+    }
+
+    return (descriptor_bytes + data_alignment - 1) / data_alignment * data_alignment
+}
+
+func initialize_array_backing(payload      : Ref[byte],
+                              payload_bytes: uint,
+                              type_index   : u32,
+                              shape        : Ref[internal.abi.Array_Descriptor_Header]
+                             ) -> bool {
+    let offset: uint = array_backing_offset(type_index, shape)
+
+    if offset == 0 or offset > payload_bytes {
+        return false
+    }
+
+    let element: Ref[internal.abi.Type_Record]?
+    element = array_flat_element(type_index, shape.flat_rank)
+
+    if element == nil {
+        return false
+    }
+
+    let packed_bits: uint = internal.abi.packed_array_stride_bits(element.get())
+
+    if packed_bits != 0 {
+        let required_bits:  u128 = cast[u128](shape.total_count) * cast[u128](packed_bits)
+        let required_bytes: u128 = (required_bits + 7) / 8
+
+        if required_bytes > cast[u128](payload_bytes - offset) {
+            return false
+        }
+    } else {
+        let alignment:     uint = internal.abi.alignment_bytes(element.get())
+        let element_bytes: uint = internal.abi.size_bytes(element.get())
+
+        if alignment == 0 or element_bytes > ~cast[uint](0) - alignment + 1 {
+            return false
+        }
+        let stride: uint = (element_bytes + alignment - 1) / alignment * alignment
+
+        if stride == 0 or shape.total_count > cast[uint]((payload_bytes - offset) / stride) {
+            return false
+        }
+    }
+
+    let shape_row: Ref[internal.abi.Type_Record]?
+
+    shape_row = internal.abi.reference_target(typeof(shape))
+    if shape_row == nil {
+        return false
+    }
+
+    let descriptor_bytes: uint
+    descriptor_bytes = internal.abi.size_bytes(shape_row.get()) + cast[uint](shape.rank) * 8
+
+    __gc_memset(payload, 0, payload_bytes)
+    __gc_memcpy(payload, unsafe_cast[Ref[byte]] shape, descriptor_bytes)
+    return true
+}
+
+
+func resolve_object_header_bytes() -> uint {
+    let probe: Ref[Object_Header]?           = nil
+    let row:   Ref[internal.abi.Type_Record]? = internal.abi.optional_reference_target(typeof(probe))
+
+    if row != nil {
+        return internal.abi.size_bytes(row.get())
+    }
+
+    require false
+}
+
+comptime {
+    /* nada, runtime init only */
+} else {
+    object_header_size      = resolve_object_header_bytes()
+    block_header_line_count = resolve_header_lines()
+}
+
+inline func object_header_bytes() -> uint {
+    return object_header_size
+}
+
+inline func object_bytes(header: Ref[Object_Header]) -> uint {
+    return object_header_bytes() + cast[uint](meta_payload_bytes(header.meta))
+}
+
+inline func payload_of(header: Ref[Object_Header]) -> Ref[byte] {
+    return __gc_byte_offset(unsafe_cast[Ref[byte]] header, object_header_bytes())
+}
+
+inline func header_of(payload: Ref[byte]) -> Ref[Object_Header] {
+    let distance: i128      = object_header_bytes()
+    let base:     Ref[byte] = __gc_byte_offset(payload, -distance)
+
+    return unsafe_cast[Ref[Object_Header]] base
+}
+
+inline func block_of_bytes(address_in_block: Ref[byte]) -> Ref[Block_Metadata] {
+    let address:  uint      = __abi_ref_address(address_in_block)
+    let distance: i128      = address % block_bytes
+    let base:     Ref[byte] = __gc_byte_offset(address_in_block, -distance)
+
+    return block_metadata_at(base)
+}
+
+inline func block_of(header: Ref[Object_Header]) -> Ref[Block_Metadata] {
+    return block_of_bytes(unsafe_cast[Ref[byte]] header)
+}
+
+func los_header_offset() -> uint {
+    let los_probe:    Ref[Los_Obj]?                 = nil
+    let header_probe: Ref[Object_Header]?           = nil
+    let los_type:     Ref[internal.abi.Type_Record]? = internal.abi.optional_reference_target(typeof(los_probe))
+    let header_type:  Ref[internal.abi.Type_Record]? = internal.abi.optional_reference_target(typeof(header_probe))
+
+    if los_type != nil {
+        let los_row: Ref[internal.abi.Type_Record] = los_type.get()
+
+        if header_type != nil {
+            let header_row: Ref[internal.abi.Type_Record] = header_type.get()
+            let fields:     internal.abi.Range            = los_row.fields_or_arms
+
+            require fields.count != 0
+
+            let field_index: int = internal.abi.range_index(fields, fields.count - 1)
+
+            if field_index >= 0 {
+                let field: Ref[internal.abi.Field_Record]? = internal.abi.field_at(cast[u32](field_index))
+
+                if field != nil {
+                    let field_row: Ref[internal.abi.Field_Record] = field.get()
+                    let child:     Ref[internal.abi.Type_Record]? = internal.abi.type_at(field_row.child_type_index)
+
+                    if child != nil {
+                        require child.get().typehash == header_row.typehash
+                        require field_row.logical_bit_offset % 8 == 0
+
+                        return cast[uint](field_row.logical_bit_offset / 8)
+                    }
+                }
+            }
+        }
+    }
+
+    require false
+}
+
+func los_of(header: Ref[Object_Header]) -> Ref[Los_Obj] {
+    let distance: i128      = los_header_offset()
+    let base:     Ref[byte] = __gc_byte_offset(unsafe_cast[Ref[byte]] header, -distance)
+
+    return unsafe_cast[Ref[Los_Obj]] base
+}
+
+func committed_bytes(heap: Ref[Heap]) -> uint {
+    return heap.nblocks * block_bytes + heap.los_bytes + heap.los_cache_bytes
+}
+
+func over_max(heap: Ref[Heap], request: uint) -> bool {
+    if heap.cfg.max_heap_bytes == 0 {
+        return false
+    }
+
+    let used: uint = committed_bytes(heap)
+
+    return used > heap.cfg.max_heap_bytes or request > heap.cfg.max_heap_bytes - used
+}
+
+inline func bump_room(b: Ref[Bump]) -> uint {
+    let cursor: Ref[byte]? = b.cursor
+    let limit:  Ref[byte]? = b.limit
+
+    if cursor != nil {
+        if limit != nil {
+            let distance: int = __gc_byte_diff(limit.get(), cursor.get())
+
+            assert distance >= 0
+
+            return cast[uint](distance)
+        }
+        require false
+        // should be unreachable
+    }
+    return 0
+}
+
+func cache_pop(b: Ref[Bump]) -> Ref[Block_Metadata]? {
+    let empty: Ref[Block_Metadata]? = nil
+    let list:  Ref[Block_Metadata]? = __atomic_exchange(ref b.cache, empty)
+
+    if list != nil {
+        let block: Ref[Block_Metadata] = list.get()
+
+        __atomic_store(ref b.cache, block.next)
+    }
+
+    return list
+}
+
+inline func block_metadata_at(base: Ref[byte]) -> Ref[Block_Metadata] {
+    assert __abi_ref_address(base) % block_bytes == 0
+
+    return unsafe_cast[Ref[Block_Metadata]] base
+}
+
+inline func block_base(block: Ref[Block_Metadata]) -> Ref[byte] {
+    assert __abi_ref_address(block) % block_bytes == 0
+
+    return unsafe_cast[Ref[byte]] block
+}
+
+func block_object_header_at(base: Ref[byte], offset: uint) -> Ref[Object_Header] {
+    require __abi_ref_address(base) % block_bytes == 0
+    require offset >= header_lines() * line_bytes
+    require offset % granule_bytes == 0
+    require offset <= block_bytes - object_header_bytes()
+
+    return unsafe_cast[Ref[Object_Header]] __gc_byte_offset(base, offset)
+}
+
+func thread_index_value(mutator: Ref[Mutator]) -> Ref[byte] {
+    return unsafe_cast[Ref[byte]] mutator
+}
+
+func thread_index_mutator(value: Ref[byte], thread_id: uint) -> Ref[Mutator] {
+    let mutator: Ref[Mutator] = unsafe_cast[Ref[Mutator]] value
+
+    require mutator.thread_id == thread_id
+    return mutator
+}
+
+func read_epoch(blk: Ref[Block_Metadata]) -> u32 {
+    return __volatile_load(ref blk.sweep_epoch)
+}
+
+func capacity(blk: Ref[Block_Metadata]) -> uint {
+    return cast[uint](blk.free_lines) * line_bytes
+}
+
+func pop_list(head: Ref[Ref[Block_Metadata]?], count: Ref[uint])
+             -> Ref[Block_Metadata]? {
+    let first: Ref[Block_Metadata]? = ref_read(head)
+
+    if first != nil {
+        let blk:           Ref[Block_Metadata] = first.get()
+        let current_count: uint                = ref_read(count)
+
+        ref_write(head, blk.next)
+        ref_write(count, current_count - 1)
+    }
+    return first
+}
+
+func set_block_state(heap: Ref[Heap], blk: Ref[Block_Metadata], state: Block_State) {
+    let was_owned: bool = blk.state == cast[u8](Block_State.owned)
+    let now_owned: bool = state == Block_State.owned
+
+    if was_owned != now_owned {
+        if was_owned {
+            __atomic_fetch_sub(ref heap.nowned, 1)
+        } else {
+            __atomic_fetch_add(ref heap.nowned, 1)
+        }
+    }
+    blk.state = cast[u8](state)
+}
+
+func push_free(heap: Ref[Heap], blk: Ref[Block_Metadata]) {
+    set_block_state(heap, blk, Block_State.free)
+
+    blk.next = heap.free_blocks
+    heap.free_blocks = blk
+    heap.nfree += 1
+}
+
+func take_block(heap: Ref[Heap], prefer_free: bool) -> Ref[Block_Metadata]? {
+    if !prefer_free and heap.recyclable_blocks != nil {
+        return pop_list(ref heap.recyclable_blocks, ref heap.nrecyclable)
+    }
+    if heap.free_blocks != nil {
+        return pop_list(ref heap.free_blocks, ref heap.nfree)
+    }
+
+    return pop_list(ref heap.recyclable_blocks, ref heap.nrecyclable)
+}
+
+func batch_size(heap: Ref[Heap]) -> uint {
+    var mutators: uint = heap.nmutators
+
+    if mutators == 0 {
+        mutators = 1
+    }
+    let share: uint = (heap.nfree + heap.nrecyclable) / (2 * mutators)
+
+    if share < 1 {
+        return 1
+    }
+    if share > cache_max {
+        return cache_max
+    }
+    return share
+}
+
+func own(heap   : Ref[Heap],
+         mutator: Ref[Mutator],
+         blk    : Ref[Block_Metadata],
+         list   : Ref[Ref[Block_Metadata]?]) {
+    if heap.black_alloc {
+        ensure_mark_epoch(block_base(blk), heap.mark_epoch)
+    }
+    set_block_state(heap, blk, Block_State.owned)
+
+    blk.owner = mutator
+    blk.next = ref_read(list)
+
+    let owned: Ref[Block_Metadata]? = blk
+
+    ref_write(list, owned)
+
+    if !blk.on_owned {
+        blk.on_owned = true
+        blk.own_next = heap.owned
+        heap.owned = blk
+    }
+
+    heap.alloc_since_gc += capacity(blk)
+}
+
+func take_batch(heap       : Ref[Heap],
+                mutator    : Ref[Mutator],
+                prefer_free: bool) -> Ref[Block_Metadata]? {
+    var list:  Ref[Block_Metadata]? = nil
+    let count: uint                 = batch_size(heap)
+    var index: uint                 = 0
+
+    while index < count {
+        let candidate: Ref[Block_Metadata]? = take_block(heap, prefer_free)
+
+        if candidate != nil {
+            own(heap, mutator, candidate.get(), ref list)
+            index += 1
+        } else {
+            break
+        }
+    }
+    return list
+}
+
+func resolve_header_lines() -> uint {
+    let probe: Ref[Block_Metadata]? = nil
+    let row:   Ref[internal.abi.Type_Record]?
+
+    row = internal.abi.optional_reference_target(typeof(probe))
+
+    if row != nil {
+        let metadata_bytes: uint = internal.abi.size_bytes(row.get())
+        return (metadata_bytes + line_bytes - 1) / line_bytes
+    }
+    require false
+}
+
+inline func header_lines() -> uint {
+    return block_header_line_count
+}
+
+func bump_attach(mutator: Ref[Mutator],
+                 bump   : Ref[Bump],
+                 blk    : Ref[Block_Metadata]?) {
+    var seen: u32 = 0
+    bump.cursor = nil
+    bump.limit = nil
+    bump.line = header_lines()
+
+    if blk != nil {
+        seen = read_epoch(blk.get())
+    }
+
+    bump.seen_epoch = seen
+    bump.blk = blk
+
+    if blk != nil {
+        if mutator.black {
+            raise_black(blk.get(), mutator.heap.mark_epoch)
+        }
+    }
+}
+
+func block_init(heap: Ref[Heap], blk: Ref[Block_Metadata]) {
+    let base:          Ref[byte] = block_base(blk)
+    let first_payload: uint      = header_lines() * line_bytes
+
+    blk.magic = block_magic
+    blk.free_lines = cast[u16]((block_bytes - first_payload) / line_bytes)
+    blk.sweep_epoch = heap.epoch
+    blk.state = cast[u8](Block_State.retired)
+
+    __atomic_store(ref blk.mark_epoch, heap.mark_epoch)
+    __atomic_store(ref blk.black_epoch, 0)
+    __atomic_store(ref blk.nfinal, 0)
+    __atomic_store(ref blk.in_final, false)
+
+    let invalid_mark: u8 = cast[u8]((cast[uint]heap.epoch + 128) % 256)
+
+    __gc_memset(ref blk.line_marks[0],
+                cast[byte](invalid_mark),
+                lines_per_block)
+
+    if heap.cfg.poison_free {
+        let payload: Ref[byte] = __gc_byte_offset(base, first_payload)
+
+        __gc_memset(payload, 0xdb, block_bytes - first_payload)
+    }
+
+    blk.all_prev = nil
+    blk.all_next = heap.all_blocks
+
+    let previous: Ref[Block_Metadata]? = heap.all_blocks
+
+    if previous != nil {
+        previous.get().all_prev = blk
+    }
+
+    heap.all_blocks = blk
+    heap.nblocks += 1
+}
+
+inline func block_mark_word(block: Ref[Block_Metadata], index: uint)
+                           -> Ref[Atomic[uint]] {
+    return ref block.mark_bits[index]
+}
+
+inline func block_start_word(block: Ref[Block_Metadata], index: uint)
+                            -> Ref[Atomic[uint]] {
+    return ref block.start_bits[index]
+}
+
+inline func mark_word_at(base: Ref[byte], index: uint) -> Ref[Atomic[uint]] {
+    return block_mark_word(block_metadata_at(base), index)
+}
+
+inline func start_word_at(base: Ref[byte], index: uint) -> Ref[Atomic[uint]] {
+    return block_start_word(block_metadata_at(base), index)
+}
+
+func bitmap_contains(word: Ref[Atomic[uint]], bit: uint) -> bool {
+    let mask: uint = cast[uint](1) << bit
+    let bits: uint = __atomic_load_relaxed(word)
+
+    return (bits & mask) != empty_word
+}
+
+func object_started(base: Ref[byte], offset: uint) -> bool {
+    require offset % granule_bytes == 0
+
+    let granule: uint = offset / granule_bytes
+
+    return bitmap_contains(start_word_at(base, granule / 64), granule % 64)
+}
+
+func clear_mark_word(base: Ref[byte], index: uint) {
+    __atomic_store_relaxed(mark_word_at(base, index), empty_word)
+}
+
+func ensure_mark_epoch(base: Ref[byte], epoch: u32) {
+    require (epoch & mark_clearing) == 0
+
+    let metadata: Ref[Block_Metadata] = block_metadata_at(base)
+    let word:     Ref[Atomic[u32]]    = ref metadata.mark_epoch
+    var seen:     u32                 = __atomic_load_acquire(word)
+
+    while seen != epoch {
+        if (seen & mark_clearing) == 0 {
+            if __atomic_compare_exchange(word, seen, epoch | mark_clearing) {
+                let words: uint = (block_bytes / granule_bytes) / 64
+                var index: uint = 0
+
+                while index < words {
+                    clear_mark_word(base, index)
+                    index += 1
+                }
+                __atomic_store_release(word, epoch)
+                return
+            }
+        }
+        seen = __atomic_load_acquire(word)
+    }
+}
+
+func raise_black(metadata: Ref[Block_Metadata], epoch: u32) {
+    let word:    Ref[Atomic[u32]] = ref metadata.black_epoch
+    var current: u32              = __atomic_load(word)
+
+    while current < epoch {
+        if __atomic_compare_exchange(word, current, epoch) {
+            return
+        }
+        current = __atomic_load(word)
+    }
+}
+
+inline func line_mark_at(base: Ref[byte], line: uint) -> Ref[Atomic[u8]] {
+    require line < block_bytes / line_bytes
+
+    let metadata: Ref[Block_Metadata] = block_metadata_at(base)
+
+    return ref metadata.line_marks[line]
+}
+
+inline func line_marked_in(base: Ref[byte], line: uint, epoch: u32) -> bool {
+    let mark: u8 = __atomic_load_relaxed(line_mark_at(base, line))
+
+    return mark == cast[u8](cast[uint](epoch) % 256)
+}
+
+inline func mark_lines(base  : Ref[byte],
+                       offset: uint,
+                       bytes : uint,
+                       epoch : u32) {
+    let mark:  u8   = cast[u8](cast[uint](epoch) % 256)
+    let first: uint = offset / line_bytes
+    var last:  uint = first
+    var line:  uint = first
+
+
+    if bytes > line_bytes {
+        last = (offset + bytes - 1) / line_bytes
+    }
+    while line <= last {
+        __atomic_store_relaxed(line_mark_at(base, line), mark)
+        line += 1
+    }
+}
+
+inline func line_live(base: Ref[byte], line: uint) -> bool {
+    let metadata: Ref[Block_Metadata] = block_metadata_at(base)
+    let mark:     u8                  = __atomic_load_relaxed(line_mark_at(base, line))
+    let sweep:    u8                  = cast[u8](cast[uint](metadata.sweep_epoch) % 256)
+
+    return mark == sweep or mark == cast[u8](
+        (cast[uint](sweep) + 1) % 256)
+}
+
+inline func line_used(base: Ref[byte], line: uint) -> bool {
+    if line_live(base, line) {
+        return true
+    }
+
+    if line > header_lines() {
+        return line_live(base, line - 1)
+    }
+
+    return false
+}
+
+func scan_for_hole(bump : Ref[Bump], blk: Ref[Block_Metadata],
+                   bytes: uint) -> bool {
+    let base:  Ref[byte] = block_base(blk)
+    let lines: uint      = block_bytes / line_bytes
+    var line:  uint      = bump.line
+
+    while line < lines {
+        while line < lines and line_used(base, line) {
+            line += 1
+        }
+
+        if line == lines {
+            break
+        }
+
+        var end: uint = line
+
+        while end < lines and !line_used(base, end) {
+            end += 1
+        }
+
+        if (end - line) * line_bytes >= bytes {
+            let limit: Ref[byte] = __gc_byte_offset(base, end * line_bytes)
+
+            bump.limit = limit
+            __gc_signal_fence()
+
+            let cursor: Ref[byte] = __gc_byte_offset(base, line * line_bytes)
+
+            bump.cursor = cursor
+            bump.line = end
+            __gc_signal_fence()
+
+            let clear:    byte = 0
+            let distance: int  = __gc_byte_diff(limit, cursor)
+
+            require distance >= 0
+            __gc_memset(cursor, clear, cast[uint](distance))
+
+            return true
+        }
+        line = end
+    }
+    bump.line = lines
+
+    return false
+}
+
+func bump_next_hole(bump: Ref[Bump], bytes: uint) -> bool {
+    let candidate: Ref[Block_Metadata]? = bump.blk
+
+    if candidate != nil {
+        let blk: Ref[Block_Metadata] = candidate.get()
+
+        while true {
+            let epoch: u32 = read_epoch(blk)
+
+            if epoch != bump.seen_epoch {
+                bump.seen_epoch = epoch
+                bump.line = header_lines()
+            }
+
+            let found: bool = scan_for_hole(bump, blk, bytes)
+
+            __gc_signal_fence()
+
+            if read_epoch(blk) == epoch {
+                return found
+            }
+        }
+    }
+    return false
+}

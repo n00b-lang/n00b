@@ -1,7 +1,0 @@
-func typecase_function(input: (int, string) -> bool fail: string) -> int {
-    typecase(input) {
-        case (int, string) -> bool fail: string {
-            return 1
-        }
-    }
-}

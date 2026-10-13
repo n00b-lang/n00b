@@ -1,0 +1,9 @@
+import state
+import child_impl
+
+package init_order.child {
+    export child_impl.stage
+}
+
+require state.current() == 1
+state.mark(2)

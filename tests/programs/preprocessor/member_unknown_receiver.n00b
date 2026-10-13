@@ -1,3 +1,0 @@
-func read_unknown(item) {
-    return item.payload
-}

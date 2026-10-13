@@ -1,6 +1,0 @@
-func first() {
-    if true { return second() } else { return 0 }
-}
-func second() {
-    if true { return 1 } else { return first() }
-}

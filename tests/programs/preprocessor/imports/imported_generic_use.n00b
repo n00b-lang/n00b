@@ -1,5 +1,0 @@
-import dep
-func use_imported_generics() {
-    first = dep.imported_identity(1)
-    second = dep.imported_identity("text")
-}

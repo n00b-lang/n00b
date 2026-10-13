@@ -10,3 +10,9 @@ func choose(value: uint) -> uint {
 func loaded_is_positive(value: Atomic[uint]) -> bool {
     return __atomic_load(ref value) > 0
 }
+
+func byte_literals(value: byte) -> bool {
+    var zero: byte = 0
+    zero = 255
+    return value == 0 or value == zero
+}

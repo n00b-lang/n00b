@@ -1,5 +1,0 @@
-type Wide = i:65
-
-func use_wide(value: Wide) -> Wide {
-    return value
-}

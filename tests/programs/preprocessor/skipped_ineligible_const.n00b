@@ -1,4 +1,0 @@
-const character = 'x'
-when true or character == "x" {
-    var impossible = true
-}

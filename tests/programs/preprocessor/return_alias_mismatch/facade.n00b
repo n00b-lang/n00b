@@ -1,7 +1,0 @@
-import return_alias_mismatch.a
-import return_alias_mismatch.b
-
-package return_alias_mismatch {
-    export return_alias_mismatch.a.from_a
-    export return_alias_mismatch.b.from_b
-}

@@ -1,0 +1,176 @@
+import internal.abi
+import internal.gc.core
+import internal.gc.alloc
+import internal.gc.hash
+import internal.gc.handshake
+import internal.gc.heap
+import internal.gc.mark
+import internal.gc.roots
+import internal.gc.sync
+import internal.threads
+import internal.memory
+
+func mutator_record() -> Ref[internal.abi.Type_Record] {
+    let probe: Ref[internal.gc.core.Mutator]?      = nil
+    let row:   Ref[internal.abi.Type_Record]? = internal.abi.optional_reference_target(typeof(probe))
+    if row != nil {
+        return row.get()
+    }
+    require false
+}
+
+func create(heap: Ref[internal.gc.core.Heap]) -> Ref[internal.gc.core.Mutator]? {
+    let thread_id: uint = internal.threads.thread_id()
+    if thread_id == 0 {
+        return nil
+    }
+    let thread_control: uint = internal.threads.thread_control_self()
+    if thread_control == 0 {
+        return nil
+    }
+    let stack_hi: Ref[byte]? = internal.threads.thread_stack_high_self()
+    if heap.cfg.scan_stacks and stack_hi == nil {
+        return nil
+    }
+    let row:    Ref[internal.abi.Type_Record] = mutator_record()
+    let mapped: Ref[byte]?                   = internal.memory.map_zeroed(
+        internal.abi.size_bytes(row), internal.abi.alignment_bytes(row))
+    if mapped != nil {
+        let mutator: Ref[internal.gc.core.Mutator] = unsafe_cast[Ref[internal.gc.core.Mutator]] mapped.get()
+        mutator.heap = heap
+        mutator.thread_id = thread_id
+        mutator.thread_control = thread_control
+        mutator.stack_hi = stack_hi
+        if !internal.gc.roots.capture_tls(mutator) {
+            internal.memory.unmap(mutator, internal.abi.size_bytes(row))
+            return nil
+        }
+        internal.gc.sync.ticket_lock(ref heap.lock)
+        let found: Ref[byte]? = internal.gc.hash.tab_lookup(ref heap.threads, thread_id)
+        if found != nil {
+            let primary: Ref[internal.gc.core.Mutator]  = internal.gc.core.thread_index_mutator(found.get(), thread_id)
+            let next:    Ref[internal.gc.core.Mutator]? = primary.thread_next
+            if next != nil {
+                mutator.thread_next = next
+                mutator.thread_prev = primary
+                next.get().thread_prev = mutator
+                primary.thread_next = mutator
+            } else {
+                require false
+            }
+        } else {
+            if !internal.gc.hash.tab_reserve(ref heap.threads, 1) {
+                internal.gc.heap.unlock(heap)
+                internal.gc.roots.free_tls(mutator)
+                internal.memory.unmap(mutator, internal.abi.size_bytes(row))
+                return nil
+            }
+            internal.gc.hash.tab_insert(ref heap.threads, thread_id,
+                internal.gc.core.thread_index_value(mutator))
+            mutator.thread_primary = true
+            mutator.thread_next = mutator
+            mutator.thread_prev = mutator
+        }
+        mutator.black = heap.black_alloc
+        if heap.hs_active {
+            __atomic_store(ref mutator.hs_state,
+                cast[u32](internal.gc.core.Handshake_State.requested))
+            __atomic_fetch_add(ref heap.hs_pending, 1)
+        } else {
+            __atomic_store(ref mutator.hs_state,
+                cast[u32](internal.gc.core.Handshake_State.idle))
+        }
+        let old: Ref[internal.gc.core.Mutator]? = heap.mutators
+        mutator.next = old
+        if old != nil {
+            old.get().prev = mutator
+        }
+        heap.mutators = mutator
+        heap.nmutators += 1
+        internal.gc.heap.unlock(heap)
+        return mutator
+    }
+    return nil
+}
+
+func set_stack_hi(mutator: Ref[internal.gc.core.Mutator], stack_hi: Ref[byte]) {
+    mutator.stack_hi = stack_hi
+}
+
+func lock_answered(mutator: Ref[internal.gc.core.Mutator]) {
+    let heap: Ref[internal.gc.core.Heap] = mutator.heap
+    while true {
+        internal.gc.handshake.safepoint(mutator)
+        internal.gc.sync.ticket_lock(ref heap.lock)
+        if __atomic_load(ref mutator.hs_state) != cast[u32](internal.gc.core.Handshake_State.requested) {
+            return
+        }
+        internal.gc.heap.unlock(heap)
+    }
+}
+
+func park(mutator: Ref[internal.gc.core.Mutator]) {
+    let heap: Ref[internal.gc.core.Heap] = mutator.heap
+    lock_answered(mutator)
+    internal.gc.alloc.bump_release(heap, ref mutator.small)
+    internal.gc.alloc.bump_release(heap, ref mutator.overflow)
+    mutator.last_alloc = nil
+    internal.gc.heap.unlock(heap)
+}
+
+func destroy(mutator: Ref[internal.gc.core.Mutator]) {
+    let heap: Ref[internal.gc.core.Heap] = mutator.heap
+    lock_answered(mutator)
+
+    let previous: Ref[internal.gc.core.Mutator]? = mutator.prev
+    let next:     Ref[internal.gc.core.Mutator]? = mutator.next
+    if previous != nil {
+        previous.get().next = next
+    }
+    else {
+        heap.mutators = next
+    }
+    if next != nil {
+        next.get().prev = previous
+    }
+    heap.nmutators -= 1
+
+    let following: Ref[internal.gc.core.Mutator]? = mutator.thread_next
+    let preceding: Ref[internal.gc.core.Mutator]? = mutator.thread_prev
+    if following != nil {
+        if preceding != nil {
+            if following.get() == mutator {
+                internal.gc.hash.tab_delete(ref heap.threads, mutator.thread_id,
+                    internal.gc.core.thread_index_value(mutator))
+            } else {
+                if mutator.thread_primary {
+                    let successor: Ref[internal.gc.core.Mutator] = following.get()
+                    successor.thread_primary = true
+                    let slot: Ref[internal.gc.hash.Hash_Slot] = internal.gc.hash.tab_find(
+                        ref heap.threads, mutator.thread_id,
+                        internal.gc.core.thread_index_value(mutator))
+                    slot.val = internal.gc.core.thread_index_value(successor)
+                }
+                preceding.get().thread_next = following
+                following.get().thread_prev = preceding
+            }
+        } else {
+            require false
+        }
+    } else {
+        require false
+    }
+
+    internal.gc.alloc.bump_release(heap, ref mutator.small)
+    internal.gc.alloc.bump_release(heap, ref mutator.overflow)
+    internal.gc.mark.barrier_flush_locked(mutator)
+    heap.retired_objects += mutator.objects_allocated
+    heap.retired_bytes += mutator.bytes_allocated
+    heap.retired_refills += mutator.refills
+    heap.retired_locked_refills += mutator.locked_refills
+    internal.gc.heap.unlock(heap)
+
+    internal.gc.roots.free(mutator)
+    internal.gc.roots.free_tls(mutator)
+    internal.memory.unmap(mutator, internal.abi.size_bytes(mutator_record()))
+}

@@ -1,6 +1,0 @@
-func take(consume item: int) {}
-
-func use_after(value: int) -> int {
-    take(value)
-    return value
-}

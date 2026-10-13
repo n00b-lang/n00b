@@ -1,2 +1,0 @@
-import render_contract
-func use_plugin(item: int) -> string { return item.render() }

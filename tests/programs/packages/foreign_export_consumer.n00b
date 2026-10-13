@@ -1,0 +1,3 @@
+import foreign_export
+
+require foreign_export.read() == 7

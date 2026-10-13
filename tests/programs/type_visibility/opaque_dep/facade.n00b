@@ -1,3 +1,0 @@
-import opaque_dep.impl
-
-package opaque_dep { export opaque_dep.impl }

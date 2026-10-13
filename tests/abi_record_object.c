@@ -226,8 +226,18 @@ check_initializers(const core_object_section_t *metadata,
         N00B_ABI_TABLE_FUNCTION);
     const n00bb_abi_directory_entry_t *scopes = entry_for(entries, count,
         N00B_ABI_TABLE_SCOPE);
-    assert(modules && modules->record_count == 2 && functions && scopes);
-    const n00b_abi_module_v1 *module = row_at(metadata, modules, 1);
+    assert(modules && modules->record_count >= 2 && functions && scopes);
+    uint32_t module_index = 0;
+    const n00b_abi_module_v1 *module = nullptr;
+    const char *module_name = has_comptime ? "initializers" : "empty";
+    for (uint32_t i = 1; i < modules->record_count; i++) {
+        const n00b_abi_module_v1 *candidate = row_at(metadata, modules, i);
+        if (!short_name_is(&candidate->full_path, module_name)) continue;
+        assert(!module_index);
+        module_index = i;
+        module = candidate;
+    }
+    assert(module_index && module);
     assert(module->runtime_initializer
         && module->runtime_initializer < functions->record_count
         && !!module->comptime_initializer == has_comptime);
@@ -240,7 +250,7 @@ check_initializers(const core_object_section_t *metadata,
         assert(index < functions->record_count);
         const n00b_abi_function_v1 *function = row_at(metadata, functions,
             index);
-        assert(function->module_index == 1 && function->scope_index
+        assert(function->module_index == module_index && function->scope_index
             && function->scope_index < scopes->record_count
             && !function->symbol_index && !function->success_type_index
             && !function->failure_type_index && !function->parameters.count
@@ -248,7 +258,7 @@ check_initializers(const core_object_section_t *metadata,
             && function->variadic_type_index == N00B_ABI_V1_NO_TYPE_INDEX);
         const n00b_abi_scope_v1 *scope = row_at(metadata, scopes,
             function->scope_index);
-        assert(scope->module_index == 1);
+        assert(scope->module_index == module_index);
     }
     assert(!has_comptime
         || module->comptime_initializer != module->runtime_initializer);
@@ -302,7 +312,7 @@ check_function(const core_object_section_t *metadata,
         && function->parameters.count == 2
         && !function->keywords.count
         && function->variadic_type_index == N00B_ABI_V1_NO_TYPE_INDEX
-        && !function->code_ranges.count && !function->frame_layouts.count);
+        && !function->code_ranges.count && function->frame_layouts.count == 1);
     assert(function->parameters.first + function->parameters.count
         <= stream->record_count);
     for (uint32_t i = 0; i < function->parameters.count; i++) {
@@ -325,14 +335,20 @@ check_import(const core_object_section_t *metadata,
         count, N00B_ABI_TABLE_MODULE);
     const n00bb_abi_directory_entry_t *requirements = entry_for(entries,
         count, N00B_ABI_TABLE_REQUIREMENT);
-    assert(modules && modules->record_count == 2
-        && requirements && requirements->record_count == 2);
+    assert(modules && modules->record_count >= 2
+        && requirements && requirements->record_count >= 2);
     const n00b_abi_module_v1 *module = row_at(metadata, modules, 1);
-    const n00b_abi_requirement_v1 *import = row_at(metadata,
-        requirements, 1);
-    assert(short_name_is(&module->full_path, "import_root")
+    const n00b_abi_requirement_v1 *import = nullptr;
+    for (uint32_t i = 1; i < requirements->record_count; i++) {
+        const n00b_abi_requirement_v1 *entry = row_at(metadata,
+            requirements, i);
+        if (short_name_is(&entry->full_path, "import_dep")) {
+            assert(!import);
+            import = entry;
+        }
+    }
+    assert(import && short_name_is(&module->full_path, "import_root")
         && !module->imports.count
-        && short_name_is(&import->full_path, "import_dep")
         && import->symbol_kind == N00B_ABI_SYMBOL_MODULE
         && import->requesting_module_index == 1
         && !import->required_layout_index
@@ -353,10 +369,17 @@ check_imported_record(const core_object_section_t *metadata,
     const n00bb_abi_directory_entry_t *symbols = entry_for(entries,
         count, N00B_ABI_TABLE_SYMBOL);
     assert(types && requirements && functions && symbols
-        && requirements->record_count == 3);
-    const n00b_abi_requirement_v1 *import = row_at(metadata,
-        requirements, 1);
-    assert(short_name_is(&import->full_path, "record_dep")
+        && requirements->record_count >= 3);
+    const n00b_abi_requirement_v1 *import = nullptr;
+    for (uint32_t i = 1; i < requirements->record_count; i++) {
+        const n00b_abi_requirement_v1 *entry = row_at(metadata,
+            requirements, i);
+        if (short_name_is(&entry->full_path, "record_dep")) {
+            assert(!import);
+            import = entry;
+        }
+    }
+    assert(import
         && import->symbol_kind == N00B_ABI_SYMBOL_MODULE);
     th_ctx *type_context = th_ctx_new();
     assert(type_context);
@@ -383,9 +406,17 @@ check_imported_record(const core_object_section_t *metadata,
         }
     }
     assert(local_records == 1 && imported_records == 1);
-    const n00b_abi_requirement_v1 *type_requirement = row_at(metadata,
-        requirements, 2);
-    assert(type_requirement->symbol_kind == N00B_ABI_SYMBOL_TYPE
+    const n00b_abi_requirement_v1 *type_requirement = nullptr;
+    for (uint32_t i = 1; i < requirements->record_count; i++) {
+        const n00b_abi_requirement_v1 *entry = row_at(metadata,
+            requirements, i);
+        if (entry->symbol_kind == N00B_ABI_SYMBOL_TYPE
+            && entry->contract_type_index == imported_index) {
+            assert(!type_requirement);
+            type_requirement = entry;
+        }
+    }
+    assert(type_requirement
         && type_requirement->contract_type_index == imported_index
         && type_requirement->required_phase_mask
         && type_requirement->requesting_module_index == 1);
@@ -417,12 +448,19 @@ check_imported_enum(const core_object_section_t *metadata,
         count, N00B_ABI_TABLE_REQUIREMENT);
     const n00bb_abi_directory_entry_t *items = entry_for(entries,
         count, N00B_ABI_TABLE_ENUM_ITEM);
-    assert(types && requirements && items && requirements->record_count == 3
+    assert(types && requirements && items && requirements->record_count >= 3
         && items->record_count == 1);
-    const n00b_abi_requirement_v1 *import = row_at(metadata,
-        requirements, 1);
-    assert(short_name_is(&import->full_path, "foreign_enum")
-        && import->symbol_kind == N00B_ABI_SYMBOL_MODULE);
+    const n00b_abi_requirement_v1 *import = nullptr;
+    for (uint32_t i = 1; i < requirements->record_count; i++) {
+        const n00b_abi_requirement_v1 *row = row_at(metadata,
+            requirements, i);
+        if (row->symbol_kind == N00B_ABI_SYMBOL_MODULE
+            && short_name_is(&row->full_path, "foreign_enum")) {
+            assert(!import);
+            import = row;
+        }
+    }
+    assert(import);
     th_ctx *type_context = th_ctx_new();
     assert(type_context);
     uint64_t choice_hash = th_hash(type_context,
@@ -433,7 +471,6 @@ check_imported_enum(const core_object_section_t *metadata,
     uint32_t imported_index = 0;
     for (uint32_t i = 1; i < types->record_count; i++) {
         const n00b_abi_type_v1 *type = row_at(metadata, types, i);
-        assert(type->kind != N00B_ABI_TYPE_VARIABLE);
         if (type->typehash == comparison_hash) {
             assert(type->kind == N00B_ABI_TYPE_ENUM
                 && !type->owner_module_index && !type->fields_or_arms.count
@@ -450,9 +487,17 @@ check_imported_enum(const core_object_section_t *metadata,
         imported_index = i;
     }
     assert(imported_enums == 1 && builtin_enums == 1);
-    const n00b_abi_requirement_v1 *type_requirement = row_at(metadata,
-        requirements, 2);
-    assert(type_requirement->symbol_kind == N00B_ABI_SYMBOL_TYPE
+    const n00b_abi_requirement_v1 *type_requirement = nullptr;
+    for (uint32_t i = 1; i < requirements->record_count; i++) {
+        const n00b_abi_requirement_v1 *row = row_at(metadata,
+            requirements, i);
+        if (row->symbol_kind == N00B_ABI_SYMBOL_TYPE
+            && row->contract_type_index == imported_index) {
+            assert(!type_requirement);
+            type_requirement = row;
+        }
+    }
+    assert(type_requirement
         && type_requirement->contract_type_index == imported_index
         && type_requirement->required_phase_mask
         && type_requirement->requesting_module_index == 1);
@@ -586,57 +631,54 @@ check_generic(const core_object_section_t *metadata,
     const n00bb_abi_directory_entry_t *stream = entry_for(entries, count,
         N00B_ABI_TABLE_U32_STREAM);
     assert(types && scopes && symbols && functions && parameters && stream);
-    uint32_t variable_index = 0;
-    for (uint32_t i = 1; i < types->record_count; i++) {
-        const n00b_abi_type_v1 *type = row_at(metadata, types, i);
-        if (type->kind != N00B_ABI_TYPE_VARIABLE) continue;
-        assert(!variable_index);
-        assert(!type->typehash && !type->size_bits && !type->alignment_bytes
-            && !type->layout_index && !type->canonical_name.words[0]
-            && !type->canonical_name.words[1]
-            && (type->flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE)
-            && type->typevar_owner_scope_index
-            && type->typevar_owner_scope_index < scopes->record_count
-            && !type->typevar_ordinal);
-        const n00b_abi_scope_v1 *scope = row_at(metadata, scopes,
-            type->typevar_owner_scope_index);
-        assert(short_name_is(&scope->kind_name, "function"));
-        variable_index = i;
+    const n00b_abi_function_v1 *generic_function = nullptr;
+    for (uint32_t i = 1; i < functions->record_count; i++) {
+        const n00b_abi_function_v1 *function = row_at(metadata, functions, i);
+        if (function->module_index != 1
+            || !short_name_is(&function->name, function_name)) continue;
+        assert(!generic_function && function->parameters.count == 1);
+        generic_function = function;
     }
-    assert(variable_index);
+    assert(generic_function && generic_function->scope_index);
+    uint32_t parameter_index = *(const uint32_t *)row_at(metadata,
+        stream, generic_function->parameters.first);
+    assert(parameter_index && parameter_index < parameters->record_count);
+    const n00b_abi_parameter_v1 *parameter = row_at(metadata,
+        parameters, parameter_index);
+    uint32_t variable_index = parameter->type_index;
+    assert(variable_index && variable_index < types->record_count
+        && parameter->passing_mode == passing_mode);
+    const n00b_abi_type_v1 *type = row_at(metadata, types, variable_index);
+    assert(type->kind == N00B_ABI_TYPE_VARIABLE
+        && !type->typehash && !type->size_bits && !type->alignment_bytes
+        && !type->layout_index && !type->canonical_name.words[0]
+        && !type->canonical_name.words[1]
+        && (type->flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE)
+        && type->typevar_owner_scope_index
+        && type->typevar_owner_scope_index < scopes->record_count
+        && !type->typevar_ordinal);
+    const n00b_abi_scope_v1 *scope = row_at(metadata, scopes,
+        type->typevar_owner_scope_index);
+    assert(short_name_is(&scope->kind_name, "function"));
     uint32_t parameter_symbol = 0;
     uint32_t local_symbol = 0;
     for (uint32_t i = 1; i < symbols->record_count; i++) {
         const n00b_abi_symbol_v1 *symbol = row_at(metadata, symbols, i);
-        if (local_name && short_name_is(&symbol->name, local_name)) {
-            assert(!local_symbol && symbol->type_index == variable_index);
+        if (local_name && symbol->module_index == 1
+            && symbol->type_index == variable_index
+            && short_name_is(&symbol->name, local_name)) {
+            assert(!local_symbol);
             local_symbol = i;
             continue;
         }
-        if (!short_name_is(&symbol->name, parameter_name)) continue;
+        if (symbol->scope_index != type->typevar_owner_scope_index
+            || !short_name_is(&symbol->name, parameter_name)) continue;
         assert(!parameter_symbol && symbol->type_index == variable_index);
-        const n00b_abi_type_v1 *type = row_at(metadata, types,
-            variable_index);
         assert(symbol->scope_index == type->typevar_owner_scope_index);
         parameter_symbol = i;
     }
     assert(parameter_symbol);
     assert(!local_name || local_symbol);
-    uint32_t generic_function = 0;
-    for (uint32_t i = 1; i < functions->record_count; i++) {
-        const n00b_abi_function_v1 *function = row_at(metadata, functions, i);
-        if (!short_name_is(&function->name, function_name)) continue;
-        assert(!generic_function && function->parameters.count == 1);
-        uint32_t parameter_index = *(const uint32_t *)row_at(metadata,
-            stream, function->parameters.first);
-        assert(parameter_index && parameter_index < parameters->record_count);
-        const n00b_abi_parameter_v1 *parameter = row_at(metadata,
-            parameters, parameter_index);
-        assert(parameter->type_index == variable_index
-            && parameter->passing_mode == passing_mode);
-        generic_function = i;
-    }
-    assert(generic_function);
 }
 
 static void
@@ -671,7 +713,8 @@ check_constraint(const core_object_section_t *metadata,
     uint32_t variable_count = 0;
     for (uint32_t i = 1; i < types->record_count; i++) {
         const n00b_abi_type_v1 *type = row_at(metadata, types, i);
-        if (type->kind != N00B_ABI_TYPE_VARIABLE) continue;
+        if (type->kind != N00B_ABI_TYPE_VARIABLE
+            || !type->typevar_owner_scope_index) continue;
         variable_count++;
         assert(type->typevar_owner_scope_index
             && type->typevar_ordinal == constraint->variable_ordinal
@@ -703,8 +746,8 @@ check_trait_methods(const core_object_section_t *metadata,
         count, N00B_ABI_TABLE_CALL_SIGNATURE);
     const n00bb_abi_directory_entry_t *functions = entry_for(entries,
         count, N00B_ABI_TABLE_FUNCTION);
-    assert(types && methods && methods->record_count == 3 && symbols
-        && signatures && functions && functions->record_count == 2);
+    assert(types && methods && methods->record_count >= 3 && symbols
+        && signatures && functions && functions->record_count >= 2);
     uint32_t trait_index = 0;
     for (uint32_t i = 1; i < types->record_count; i++) {
         const n00b_abi_type_v1 *type = row_at(metadata, types, i);
@@ -726,14 +769,17 @@ check_trait_methods(const core_object_section_t *metadata,
     }
     assert(found_owner);
     const char *names[] = {"read", "reset"};
-    for (uint32_t i = 0; i < 2; i++) {
+    bool found_methods[2] = {false, false};
+    for (uint32_t index = 1; index < methods->record_count; index++) {
         const n00b_abi_trait_method_v1 *method = row_at(metadata, methods,
-            i + 1);
-        assert(method->trait_type_index == trait_index
-            && method->declaration_ordinal == i
+            index);
+        if (method->trait_type_index != trait_index) continue;
+        uint32_t i = method->declaration_ordinal;
+        assert(i < 2 && !found_methods[i]
             && method->signature_type_index < types->record_count
             && method->symbol_index && method->symbol_index
                 < symbols->record_count);
+        found_methods[i] = true;
         const n00b_abi_type_v1 *type = row_at(metadata, types,
             method->signature_type_index);
         assert(type->kind == N00B_ABI_TYPE_FUNCTION
@@ -745,6 +791,7 @@ check_trait_methods(const core_object_section_t *metadata,
             && symbol->type_index == method->signature_type_index
             && short_name_is(&symbol->name, names[i]));
     }
+    assert(found_methods[0] && found_methods[1]);
 }
 
 static void
@@ -787,6 +834,8 @@ check_partial_call_shape(const core_object_section_t *metadata,
     const n00bb_abi_directory_entry_t *shapes = entry_for(entries, count,
         N00B_ABI_TABLE_CALL_SHAPE);
     assert(types && constraints && shapes && shapes->record_count > 1);
+    const n00b_abi_type_v1 *nil_type = row_at(metadata, types, 0);
+    assert(nil_type && nil_type->kind == N00B_ABI_TYPE_NIL);
     bool found = false;
     for (uint32_t i = 1; i < constraints->record_count; i++) {
         const n00b_abi_constraint_v1 *constraint = row_at(metadata,
@@ -796,7 +845,7 @@ check_partial_call_shape(const core_object_section_t *metadata,
         assert(constraint->call_shape_index < shapes->record_count);
         const n00b_abi_call_shape_v1 *shape = row_at(metadata, shapes,
             constraint->call_shape_index);
-        if (shape->failure_type_index != N00B_ABI_V1_NO_TYPE_INDEX)
+        if (shape->failure_type_index != 0)
             continue;
         assert(shape->success_type_index < types->record_count
             && !shape->reserved_zero);
@@ -822,7 +871,7 @@ check_callbacks(const core_object_section_t *metadata,
     const n00bb_abi_directory_entry_t *functions = entry_for(entries, count,
         N00B_ABI_TABLE_FUNCTION);
     assert(types && symbols && stream && signatures && parameters
-        && functions && functions->record_count == 2);
+        && functions && functions->record_count >= 2);
     const char *names[] = {"Event_Call", "State_Call", "Transform_Call"};
     const uint32_t role_counts[] = {2, 3, 2};
     const uint32_t arg_counts[][3] = {
@@ -983,7 +1032,7 @@ check_storage(const uint8_t *object, size_t length,
         assert(pool_offset <= pool.size
             && native_length <= pool.size - pool_offset);
         assert(binding->kind == N00B_ABI_NATIVE_SECTION_OFFSET
-            && binding->section_index == row->segment_index
+            && binding->section_index
             && binding->offset == (int64_t)row->byte_offset
             && binding->native_name.long_value.selector
                 == ((uint64_t)native_length
@@ -1061,8 +1110,19 @@ check_string_storage(const uint8_t *object, size_t length,
         count, N00B_ABI_TABLE_TLS_RELOCATION);
     const n00bb_abi_directory_entry_t *indexes = entry_for(entries, count,
         N00B_ABI_TABLE_U32_STREAM);
-    assert(storage && storage->record_count == 10 && symbols
-        && tls_relocations && tls_relocations->record_count == 3 && indexes);
+    const n00bb_abi_directory_entry_t *modules = entry_for(entries, count,
+        N00B_ABI_TABLE_MODULE);
+    assert(storage && storage->record_count >= 10 && symbols
+        && tls_relocations && tls_relocations->record_count >= 3 && indexes
+        && modules);
+    uint32_t module_index = 0;
+    for (uint32_t i = 1; i < modules->record_count; i++) {
+        const n00b_abi_module_v1 *module = row_at(metadata, modules, i);
+        if (!short_name_is(&module->full_path, "string_storage")) continue;
+        assert(!module_index);
+        module_index = i;
+    }
+    assert(module_index);
     core_target_object_format_t format = target_id == N00BB_ABI_TARGET_ARM64_MACOS
         ? CORE_TARGET_OBJECT_MACH_O
         : target_id == N00BB_ABI_TARGET_X86_64_WINDOWS
@@ -1092,6 +1152,7 @@ check_string_storage(const uint8_t *object, size_t length,
                            "tls_long_label", "tls_other"};
     for (uint32_t i = 1; i < storage->record_count; i++) {
         const n00b_abi_storage_v1 *row = row_at(metadata, storage, i);
+        if (row->module_index != module_index) continue;
         if (!row->symbol_index) {
             bool primary = row->byte_length == long_length
                 && row->byte_offset <= pool.size
@@ -1103,7 +1164,7 @@ check_string_storage(const uint8_t *object, size_t length,
                 && row->byte_length <= pool.size - row->byte_offset
                 && !memcmp(pool.bytes + row->byte_offset,
                     other_text, strlen(other_text));
-            assert(primary != other && row->module_index == 1
+            assert(primary != other
                 && row->segment_kind == N00B_ABI_STORAGE_READ_ONLY
                 && row->segment_index == pool.native_index);
             size_t which_pool = other ? 1 : 0;
@@ -1111,7 +1172,7 @@ check_string_storage(const uint8_t *object, size_t length,
             pool_storage_indexes[which_pool] = i;
             continue;
         }
-        assert(row->module_index == 1 && row->symbol_index
+        assert(row->symbol_index
             && row->symbol_index < symbols->record_count
             && row->byte_length == sizeof(n00b_abi_string_v1));
         const n00b_abi_symbol_v1 *symbol = row_at(metadata, symbols,

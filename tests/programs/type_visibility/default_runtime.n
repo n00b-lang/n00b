@@ -1,0 +1,11 @@
+import default_dep
+
+comptime {} else {
+    var item: default_dep.DefaultRecord
+    item.field = 7
+    require item.field == 7
+    require default_dep.identity(9) == 9
+    require default_dep.DefaultState.ready != default_dep.DefaultState.done
+    let aliased: default_dep.DefaultAlias = 11
+    require aliased == 11
+}

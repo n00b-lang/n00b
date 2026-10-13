@@ -1,3 +1,0 @@
-func compute_comptime_value() -> int { return 4 }
-const comptime_value: int = compute_comptime_value()
-var runtime_copy: int = comptime_value

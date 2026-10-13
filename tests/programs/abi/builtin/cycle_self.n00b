@@ -1,0 +1,2 @@
+import builtin.cycle_self
+public func self_value() -> int { return 1 }

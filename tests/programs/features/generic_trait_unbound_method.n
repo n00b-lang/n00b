@@ -1,0 +1,45 @@
+import builtin.containers.traits
+
+type Box { value: int }
+type OtherBox { value: int }
+
+func append(modify self: Box, value: int) {
+    self.value = value
+}
+
+func append(modify self: OtherBox, value: int) {
+    self.value = value + 1
+}
+
+func put_in(modify values: `L, value: `T)
+            where `L: builtin.containers.traits.Appendable {
+    values.append(value)
+}
+
+func put_in_typecase(modify values: `L, value: `T) {
+    typecase values {
+        case builtin.containers.traits.Appendable { values.append(value) }
+        else { require false }
+    }
+}
+
+func put_in_unconstrained(modify values: `L, value: `T) {
+    values.append(value)
+}
+
+comptime {} else {
+    var box: Box = (value = 0)
+    put_in(box, 9)
+    require box.value == 9
+    put_in_typecase(box, 11)
+    require box.value == 11
+    put_in_unconstrained(box, 13)
+    require box.value == 13
+    var other: OtherBox = (value = 0)
+    put_in(other, 9)
+    require other.value == 10
+    put_in_typecase(other, 11)
+    require other.value == 12
+    put_in_unconstrained(other, 13)
+    require other.value == 14
+}

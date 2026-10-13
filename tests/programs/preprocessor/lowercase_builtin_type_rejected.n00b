@@ -1,3 +1,0 @@
-func invalid_lowercase_type(value: list[int]) -> int {
-    return 0
-}

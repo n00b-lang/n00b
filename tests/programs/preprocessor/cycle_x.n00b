@@ -1,6 +1,0 @@
-import cycle_y
-when cycle_y.enabled {
-    var indirect_cycle_selected = true
-} else {
-    var indirect_cycle_removed = true
-}

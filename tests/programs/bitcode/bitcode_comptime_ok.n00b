@@ -1,6 +1,8 @@
 comptime {
     var answer: int = 2 + 3
     require answer == 5
-} else {
+}
+
+func run_test() {
     require 7 == 7
 }

@@ -8,5 +8,7 @@ func observe(value: string) {
 
 comptime {
     observe("hello"'raw)
-} else {
+}
+
+func run_test() {
 }

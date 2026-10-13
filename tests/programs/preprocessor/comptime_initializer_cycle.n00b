@@ -1,2 +1,0 @@
-const cycle_first: int = cycle_second
-const cycle_second: int = cycle_first

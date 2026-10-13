@@ -1,0 +1,271 @@
+import internal.abi
+import internal.gc.core
+import internal.gc.finalize
+import internal.gc.hash
+import internal.gc.los
+import internal.gc.mark
+import internal.gc.registry
+import internal.gc.roots
+import internal.gc.sync
+import internal.threads
+import internal.memory
+
+const initial_heap_bytes:           uint = 4 * 1024 * 1024
+const minimum_blocks:               uint = 4
+const initial_array_capacity:       uint = 256
+const default_handshake_timeout_us: u32  = 1000
+const default_world_timeout_ms:     u32  = 10000
+
+func grow_array(arrp: Ref[Ref[byte]?], cap: Ref[uint],
+                       element_bytes: uint, alignment: uint,
+                       used: uint, need: uint) -> bool {
+    let old_cap: uint = ref_read(cap)
+    if need <= old_cap {
+        return true
+    }
+    if used > old_cap or element_bytes == 0 or alignment == 0 or
+        (alignment & (alignment - 1)) != 0 {
+        return false
+    }
+    let old: Ref[byte]? = ref_read(arrp)
+    if used != 0 and old == nil {
+        return false
+    }
+
+    let maximum:  uint = ~cast[uint](0)
+    var next_cap: uint = initial_array_capacity
+    if old_cap != 0 {
+        if old_cap > maximum / 2 {
+            return false
+        }
+        next_cap = old_cap * 2
+    }
+    while next_cap < need {
+        if next_cap > maximum / 2 {
+            return false
+        }
+        next_cap *= 2
+    }
+    if next_cap > maximum / element_bytes {
+        return false
+    }
+    let mapped: Ref[byte]? = internal.memory.map_zeroed(
+        next_cap * element_bytes, alignment)
+    if mapped != nil {
+        let base: Ref[byte] = mapped.get()
+        if used != 0 {
+            if old != nil {
+                __gc_memcpy(base, old.get(), used * element_bytes)
+            } else {
+                require false
+            }
+        }
+        __gc_signal_fence()
+        ref_write(arrp, base)
+        ref_write(cap, next_cap)
+        __gc_signal_fence()
+        if old != nil {
+            internal.memory.unmap(old.get(), old_cap * element_bytes)
+        }
+        return true
+    }
+    return false
+}
+
+func heap_record() -> Ref[internal.abi.Type_Record] {
+    let probe: Ref[internal.gc.core.Heap]?         = nil
+    let row:   Ref[internal.abi.Type_Record]? = internal.abi.optional_reference_target(typeof(probe))
+    if row != nil {
+        return row.get()
+    }
+    require false
+}
+
+func config_default(config: Ref[internal.gc.core.Config]) {
+    config.initial_heap_bytes = initial_heap_bytes
+    config.growth_factor = 2.0
+    config.max_heap_bytes = 0
+    config.poison_free = false
+    config.handshake_timeout_us = default_handshake_timeout_us
+    config.scan_stacks = false
+    config.world_timeout_ms = default_world_timeout_ms
+    config.finalizer_backlog_limit = 0
+    config.finalizer_assist = false
+    config.on_pause = nil
+    config.on_cycle = nil
+    config.finalizers_ready = nil
+    config.telemetry_user = nil
+}
+
+func unlock(heap: Ref[internal.gc.core.Heap]) {
+    internal.gc.sync.ticket_unlock(ref heap.lock)
+    internal.gc.finalize.notify(heap)
+}
+
+func get_stats(heap: Ref[internal.gc.core.Heap]) -> internal.gc.core.Stats {
+    var stats: internal.gc.core.Stats
+    internal.gc.sync.ticket_lock(ref heap.lock)
+    stats.collections = heap.collections
+    stats.objects_allocated = heap.retired_objects
+    stats.bytes_allocated = heap.retired_bytes
+    stats.refills = heap.retired_refills
+    stats.locked_refills = heap.retired_locked_refills
+    var current: Ref[internal.gc.core.Mutator]? = heap.mutators
+    while current != nil {
+        let mutator: Ref[internal.gc.core.Mutator] = current.get()
+        stats.objects_allocated += mutator.objects_allocated
+        stats.bytes_allocated += mutator.bytes_allocated
+        stats.refills += mutator.refills
+        stats.locked_refills += mutator.locked_refills
+        current = mutator.next
+    }
+    stats.blocks_owned = __atomic_load(ref heap.nowned)
+    stats.blocks_unswept = __atomic_load(ref heap.nunswept)
+    stats.blocks_total = heap.nblocks
+    stats.blocks_free = heap.nfree
+    stats.blocks_recyclable = heap.nrecyclable
+    stats.blocks_full = heap.nfull
+    stats.los_objects = heap.los_count
+    stats.los_bytes = heap.los_bytes
+    stats.last_marked_objects = heap.last_marked_objects
+    stats.last_marked_bytes = heap.last_marked_bytes
+    stats.committed_bytes = internal.gc.core.committed_bytes(heap)
+    stats.live_bytes = heap.live_bytes
+    stats.target_bytes = heap.target_bytes
+    stats.alloc_budget = heap.alloc_budget
+    stats.alloc_since_gc = heap.alloc_since_gc
+    stats.last_stack_words = heap.last_stack_words
+    stats.last_frame_slots = heap.last_frame_slots
+    stats.last_conservative_hits = heap.last_conservative_hits
+    stats.last_worker_objects = heap.last_worker_objects
+    stats.workers = __atomic_load(ref heap.nworkers)
+    stats.pauses = heap.pauses
+    stats.last_pause_ns = heap.last_pause_ns
+    stats.max_pause_ns = heap.max_pause_ns
+    stats.total_pause_ns = heap.total_pause_ns
+    stats.hs_cycles = heap.hs_cycles
+    stats.hs_rounds = heap.hs_rounds
+    stats.hs_stragglers = heap.hs_stragglers
+    stats.hs_blocking = heap.hs_blocking
+    stats.hs_fallbacks = heap.hs_fallbacks
+    stats.hs_alloc_waits = __atomic_load(ref heap.hs_alloc_waits)
+    internal.gc.sync.ticket_lock(ref heap.fin)
+    stats.finalizers_pending = heap.finq_n + heap.running_n
+    stats.finalizers_run = heap.finalizers_run
+    internal.gc.sync.ticket_unlock(ref heap.fin)
+    stats.phase = cast[i32](__atomic_load(ref heap.phase))
+    unlock(heap)
+    return stats
+}
+
+func create(config: Ref[internal.gc.core.Config]?) -> Ref[internal.gc.core.Heap]? {
+    let row:    Ref[internal.abi.Type_Record] = heap_record()
+    let mapped: Ref[byte]?                   = internal.memory.map_zeroed(
+        internal.abi.size_bytes(row), internal.abi.alignment_bytes(row))
+    if mapped != nil {
+        let heap: Ref[internal.gc.core.Heap] = unsafe_cast[Ref[internal.gc.core.Heap]] mapped.get()
+
+        if config != nil {
+            heap.cfg = ref_read(config.get())
+        } else {
+            config_default(ref heap.cfg)
+        }
+        if !(heap.cfg.growth_factor >= 1.0) {
+            heap.cfg.growth_factor = 1.0
+        }
+        if heap.cfg.initial_heap_bytes < minimum_blocks * internal.gc.core.block_bytes {
+            heap.cfg.initial_heap_bytes = minimum_blocks * internal.gc.core.block_bytes
+        }
+        if heap.cfg.max_heap_bytes != 0 and
+            heap.cfg.initial_heap_bytes > heap.cfg.max_heap_bytes {
+            heap.cfg.initial_heap_bytes = heap.cfg.max_heap_bytes
+        }
+        if heap.cfg.handshake_timeout_us == 0 {
+            heap.cfg.handshake_timeout_us = default_handshake_timeout_us
+        }
+        if heap.cfg.world_timeout_ms == 0 {
+            heap.cfg.world_timeout_ms = default_world_timeout_ms
+        }
+
+        heap.target_bytes = heap.cfg.initial_heap_bytes
+        heap.alloc_budget = heap.cfg.initial_heap_bytes
+        heap.epoch = 1
+        heap.mark_epoch = 1
+        heap.los_cursor = ref heap.los
+        heap.sweep_ready = true
+        __atomic_store(ref heap.phase, cast[u32](internal.gc.core.Phase.idle))
+        return heap
+    }
+    return nil
+}
+
+func destroy(heap: Ref[internal.gc.core.Heap]) {
+    __atomic_store(ref heap.shutdown, true)
+    while __atomic_load(ref heap.nworkers) != 0 {
+        internal.gc.sync.event_signal(ref heap.work_progress)
+        internal.threads.thread_yield()
+    }
+    internal.gc.finalize.run(heap, 0)
+    let mutator_probe: Ref[internal.gc.core.Mutator]?      = nil
+    let mutator_row:   Ref[internal.abi.Type_Record]? = internal.abi.optional_reference_target(
+        typeof(mutator_probe))
+    if mutator_row != nil {
+        var attached: Ref[internal.gc.core.Mutator]? = heap.mutators
+        while attached != nil {
+            let mutator: Ref[internal.gc.core.Mutator] = attached.get()
+            attached = mutator.next
+            internal.gc.roots.free(mutator)
+            internal.gc.roots.free_tls(mutator)
+            internal.memory.unmap(mutator, internal.abi.size_bytes(mutator_row.get()))
+        }
+        heap.mutators = nil
+        heap.nmutators = 0
+    } else {
+        require false
+    }
+    var candidate: Ref[internal.gc.core.Block_Metadata]? = heap.all_blocks
+    while candidate != nil {
+        let block: Ref[internal.gc.core.Block_Metadata]  = candidate.get()
+        let next:  Ref[internal.gc.core.Block_Metadata]? = block.all_next
+        internal.memory.unmap(block, internal.gc.core.block_bytes)
+        candidate = next
+    }
+    internal.gc.los.free_all(heap)
+    internal.gc.mark.pool_free_all(heap)
+    internal.gc.registry.regions_free(heap)
+    let final_queue: Ref[byte]? = heap.finq
+    if final_queue != nil {
+        let probe: Ref[internal.gc.core.Final_Entry]?  = nil
+        let row:   Ref[internal.abi.Type_Record]? = internal.abi.optional_reference_target(typeof(probe))
+        if row != nil {
+            internal.memory.unmap(final_queue.get(), heap.finq_cap * internal.abi.size_bytes(row.get()))
+        } else {
+            require false
+        }
+    }
+    let queued: Ref[byte]? = heap.barrier_queue
+    if queued != nil {
+        let probe: Ref[byte]?                    = nil
+        let row:   Ref[internal.abi.Type_Record]? = internal.abi.type_for(typeof(probe))
+        if row != nil {
+            internal.memory.unmap(queued.get(), heap.barrier_queue_capacity
+                * internal.abi.size_bytes(row.get()))
+        } else {
+            require false
+        }
+    }
+    internal.gc.hash.tab_free(ref heap.threads)
+    let global_storage: Ref[byte]? = heap.globals
+    if global_storage != nil {
+        let probe:       Ref[Ref[byte]?]?              = nil
+        let pointer_row: Ref[internal.abi.Type_Record]? = internal.abi.type_for(typeof(probe))
+        if pointer_row != nil {
+            let stride: uint = internal.abi.size_bytes(pointer_row.get())
+            internal.memory.unmap(global_storage.get(), heap.cap_globals * stride)
+        } else {
+            require false
+        }
+    }
+    internal.gc.hash.index_tab_free(ref heap.global_index)
+    internal.memory.unmap(heap, internal.abi.size_bytes(heap_record()))
+}

@@ -39,7 +39,9 @@ func alias_float() -> string {
 }
 
 comptime {
-} else {
+}
+
+func run_test() {
     builtin.io.debug.raw_debug(alias_quote())
     builtin.io.debug.raw_debug("|")
     builtin.io.debug.raw_debug(primary_quote())

@@ -1,12 +1,12 @@
-import builtin.os
-import builtin.gc
+import sys.memory
+import sys.gc.core
 
 comptime {
 } else {
-    let mapped: Ref[byte]? = builtin.os.map_zeroed(32768, 32768)
+    let mapped: Ref[byte]? = sys.memory.map_zeroed(32768, 32768)
     if mapped != nil {
         let base: Ref[byte] = mapped.get()
-        let word: Ref[Atomic[u64]] = builtin.gc.start_word_at(base, 0)
+        let word: Ref[Atomic[u64]] = sys.gc.core.start_word_at(base, 0)
         assert __atomic_fetch_or(word, 1) == 0
         assert __atomic_fetch_or(word, 4) == 1
         assert __atomic_fetch_or(word, 0) == 5
@@ -27,7 +27,7 @@ comptime {
         assert __atomic_exchange_relaxed(word, 17) == 16
         assert __atomic_exchange_acquire(word, 18) == 17
         assert __atomic_load(word) == 18
-        builtin.os.unmap(base, 32768)
+        sys.memory.unmap(base, 32768)
         __fd_write(2, "ok")
     } else {
         assert false

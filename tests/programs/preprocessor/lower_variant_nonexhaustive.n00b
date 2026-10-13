@@ -1,9 +1,0 @@
-variant SwitchValue {
-    number: int
-    empty: nil
-}
-func lower_variant_nonexhaustive(item: SwitchValue) {
-    switch item {
-        case number {}
-    }
-}

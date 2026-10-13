@@ -1,0 +1,8 @@
+import aligned
+
+require aligned.child.answer == 21
+require aligned.doubled() == 42
+
+var values: List[int] = new[List[int]]()
+values.append(42)
+require values[0] == 42

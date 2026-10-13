@@ -1,7 +1,0 @@
-type Count = int
-
-func shadowed_value(source_value: Count) -> Count {
-    let Count: int = 1
-    let result: Count = source_value
-    return result
-}

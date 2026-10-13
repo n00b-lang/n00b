@@ -1,0 +1,115 @@
+import builtin.containers.tree
+import builtin.containers.traits
+
+variant Generic_Choice {
+    empty: nil
+    value: `T
+}
+
+func tree_width(handle: `T) -> uint
+                where ` T : builtin . containers . traits . TreeLike {
+    return handle.child_count()
+}
+
+comptime {
+} else {
+    var choice: Generic_Choice[int] = new[Generic_Choice[int]]()
+    choice.value = 17
+    switch choice {
+        case empty {
+            require false
+        }
+        case value {
+            require choice.value == 17
+        }
+    }
+    choice.empty = nil
+    switch choice {
+        case empty {
+        }
+        case value {
+            require false
+        }
+    }
+
+    var root:       builtin.containers.tree.Tree[int, string]      = new[builtin.containers.tree.Tree[int, string]]()
+    var first:      builtin.containers.tree.Tree[int, string]      = new[builtin.containers.tree.Tree[int, string]]()
+    var second:     builtin.containers.tree.Tree[int, string]      = new[builtin.containers.tree.Tree[int, string]]()
+    var third:      builtin.containers.tree.Tree[int, string]      = new[builtin.containers.tree.Tree[int, string]]()
+    let root_ref:   Ref[builtin.containers.tree.Tree[int, string]] = ref root
+    let first_ref:  Ref[builtin.containers.tree.Tree[int, string]] = ref first
+    let second_ref: Ref[builtin.containers.tree.Tree[int, string]] = ref second
+    let third_ref:  Ref[builtin.containers.tree.Tree[int, string]] = ref third
+
+    require !builtin.containers.tree.is_leaf(root_ref)
+    require builtin.containers.tree.node(root_ref) == nil
+    require builtin.containers.tree.leaf(root_ref) == nil
+    builtin.containers.tree.set_node(root_ref, 7)
+    let node_value: Ref[int]? = builtin.containers.tree.node(root_ref)
+    if node_value != nil {
+        ref_write(node_value.get(), 9)
+    } else {
+        require false
+    }
+    let changed: Ref[int]? = builtin.containers.tree.node(root_ref)
+    if changed != nil {
+        require ref_read(changed.get()) == 9
+    } else {
+        require false
+    }
+
+    builtin.containers.tree.set_leaf(first_ref, "first")
+    require builtin.containers.tree.is_leaf(first_ref)
+    require builtin.containers.tree.node(first_ref) == nil
+    let first_value: Ref[string]? = builtin.containers.tree.leaf(first_ref)
+    if first_value != nil {
+        require ref_read(first_value.get()) == "first"
+    } else {
+        require false
+    }
+    builtin.containers.tree.set_node(first_ref, 11)
+    require !builtin.containers.tree.is_leaf(first_ref)
+    require builtin.containers.tree.leaf(first_ref) == nil
+
+    require builtin.containers.tree.add_child(root_ref, first_ref)
+    require builtin.containers.tree.add_child(root_ref, second_ref)
+    require builtin.containers.tree.insert_child(root_ref, 1, third_ref)
+    require tree_width(root_ref) == 3
+    require builtin.containers.tree.child_count(root_ref) == 3
+    let middle: Ref[builtin.containers.tree.Tree[int, string]]? =
+        builtin.containers.tree.child(root_ref, 1)
+    if middle != nil {
+        require middle.get() == third_ref
+    } else {
+        require false
+    }
+    let last: Ref[builtin.containers.tree.Tree[int, string]]? =
+        builtin.containers.tree.child(root_ref, -1)
+    if last != nil {
+        require last.get() == second_ref
+    } else {
+        require false
+    }
+    require builtin.containers.tree.child(root_ref, 3) == nil
+    require builtin.containers.tree.child(root_ref, -4) == nil
+    require builtin.containers.tree.depth(third_ref) == 1
+    require builtin.containers.tree.root(third_ref) == root_ref
+    require !builtin.containers.tree.add_child(root_ref, first_ref)
+    require !builtin.containers.tree.add_child(first_ref, root_ref)
+    require !builtin.containers.tree.insert_child(root_ref, 4, root_ref)
+
+    let removed: Ref[builtin.containers.tree.Tree[int, string]]? =
+        builtin.containers.tree.remove_child(root_ref, 1)
+    if removed != nil {
+        require removed.get() == third_ref
+    } else {
+        require false
+    }
+    require builtin.containers.tree.parent(third_ref) == nil
+    require builtin.containers.tree.depth(third_ref) == 0
+    require builtin.containers.tree.child_count(root_ref) == 2
+    require builtin.containers.tree.remove_child(root_ref, 2) == nil
+    require builtin.containers.tree.add_child(first_ref, third_ref)
+    require builtin.containers.tree.depth(third_ref) == 2
+    require builtin.containers.tree.root(third_ref) == root_ref
+}

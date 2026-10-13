@@ -1,0 +1,5 @@
+import internal.memory
+
+package sys.memory {
+    export internal.memory
+}

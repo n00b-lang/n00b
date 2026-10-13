@@ -1,9 +1,0 @@
-public var forwarded_global: int = 2
-
-public func forward_reference(item_ref) {
-    return item_ref
-}
-
-public func reference_global() {
-    return ref forwarded_global
-}

@@ -1,3 +1,0 @@
-import array_shape_cycle_a
-
-var ragged_rows: Array[int][4][]

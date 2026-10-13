@@ -1,6 +1,0 @@
-func comptime_value_body() -> int {
-    return comptime {
-        let local_value = 42
-        = local_value
-    }
-}

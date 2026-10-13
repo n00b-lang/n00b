@@ -1,4 +1,0 @@
-import public_dep
-func accept(item: public_dep.PublicRecord) -> public_dep.PublicRecord {
-    return item
-}

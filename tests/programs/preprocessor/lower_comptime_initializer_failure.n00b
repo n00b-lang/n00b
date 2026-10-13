@@ -1,5 +1,0 @@
-func may_fail() -> int fail: int { fail 9 }
-
-comptime {
-    var result: int = may_fail()!
-}

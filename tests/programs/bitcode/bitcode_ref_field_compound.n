@@ -11,5 +11,5 @@ comptime {
     var counter: Counter
     counter.value = 1
     increment(ref counter)
-    assert counter.value == 2
+    require counter.value == 2
 }

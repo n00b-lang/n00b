@@ -1,5 +1,5 @@
-import gamma.impl
+import impl
 
 package gamma {
-    export gamma.impl.original as renamed
+    export impl.original as renamed
 }

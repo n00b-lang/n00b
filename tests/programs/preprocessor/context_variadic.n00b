@@ -1,7 +1,0 @@
-context Batch(*values: int) provides: Array[int] {
-    enter() { return values }
-    exit(result) {}
-}
-func use_batch() {
-    with batch = Batch(1, 2, 3) {}
-}

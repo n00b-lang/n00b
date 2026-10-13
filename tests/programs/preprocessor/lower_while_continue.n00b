@@ -1,4 +1,0 @@
-func loop_continue(flag: bool) -> int {
-    while flag { continue }
-    return 1
-}

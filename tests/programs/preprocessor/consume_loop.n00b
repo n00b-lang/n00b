@@ -1,7 +1,0 @@
-func take(consume item: int) {}
-
-func consume_in_loop(value: int, again: bool) {
-    while again {
-        take(value)
-    }
-}

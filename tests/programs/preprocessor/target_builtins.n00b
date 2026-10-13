@@ -1,5 +1,0 @@
-when (target_os() != "macos" or target_os_major() > 0) and target_alu() == 64 and target_arch() != "" {
-    var selected = target_os()
-} else {
-    var unsupported = true
-}

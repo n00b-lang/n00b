@@ -1,7 +1,7 @@
-import builtin.abi
+import sys.abi
 
 func rounded_bytes(index: u32) -> uint {
-    let found: Ref[builtin.abi.Type_Record]? = builtin.abi.type_at(index)
+    let found: Ref[sys.abi.Type_Record]? = sys.abi.type_at(index)
     if found != nil {
         return cast[uint]((found.get().size_bits + 7) / 8)
     }
@@ -9,8 +9,8 @@ func rounded_bytes(index: u32) -> uint {
 }
 
 func combined_bytes(first_index: u32, second_index: u32) -> uint {
-    let first: Ref[builtin.abi.Type_Record]? = builtin.abi.type_at(first_index)
-    let second: Ref[builtin.abi.Type_Record]? = builtin.abi.type_at(second_index)
+    let first: Ref[sys.abi.Type_Record]? = sys.abi.type_at(first_index)
+    let second: Ref[sys.abi.Type_Record]? = sys.abi.type_at(second_index)
     if first != nil and second != nil {
         return cast[uint]((first.get().size_bits + second.get().size_bits) / 8)
     }
@@ -18,8 +18,8 @@ func combined_bytes(first_index: u32, second_index: u32) -> uint {
 }
 
 func combined_bytes_else(first_index: u32, second_index: u32) -> uint {
-    let first: Ref[builtin.abi.Type_Record]? = builtin.abi.type_at(first_index)
-    let second: Ref[builtin.abi.Type_Record]? = builtin.abi.type_at(second_index)
+    let first: Ref[sys.abi.Type_Record]? = sys.abi.type_at(first_index)
+    let second: Ref[sys.abi.Type_Record]? = sys.abi.type_at(second_index)
     if first == nil or second == nil {
         return 0
     } else {
@@ -28,8 +28,8 @@ func combined_bytes_else(first_index: u32, second_index: u32) -> uint {
 }
 
 func first_bytes_after_elif(first_index: u32, second_index: u32) -> uint {
-    let first: Ref[builtin.abi.Type_Record]? = builtin.abi.type_at(first_index)
-    let second: Ref[builtin.abi.Type_Record]? = builtin.abi.type_at(second_index)
+    let first: Ref[sys.abi.Type_Record]? = sys.abi.type_at(first_index)
+    let second: Ref[sys.abi.Type_Record]? = sys.abi.type_at(second_index)
     if first == nil {
         return 0
     } elif second == nil {

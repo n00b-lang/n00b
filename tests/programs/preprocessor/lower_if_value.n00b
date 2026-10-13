@@ -1,5 +1,0 @@
-func choose_value(flag_a: bool, flag_b: bool) -> int {
-    return if flag_a { = 1 }
-    elif flag_b { = 2 }
-    else { = 3 }
-}

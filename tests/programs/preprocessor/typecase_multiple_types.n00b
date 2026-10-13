@@ -1,6 +1,0 @@
-func typecase_multiple_types(item: (int | string | bool)) -> int {
-    typecase(item) {
-        case int, string { return 1 }
-        case bool { return 2 }
-    }
-}

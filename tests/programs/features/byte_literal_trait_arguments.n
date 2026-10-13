@@ -1,0 +1,7 @@
+import builtin.containers.list
+
+var bytes: List[byte] = []
+bytes.append(65)
+require bytes[0] == 65
+bytes[0] = 72
+require bytes[0] == 72

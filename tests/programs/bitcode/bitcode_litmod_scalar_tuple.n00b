@@ -7,7 +7,7 @@ litmod<array> from_items, dynamic(items: Array[int]) -> Tuple[string, int] fail:
 }
 
 func value() -> Tuple[string, int] {
-    return bundle"static result with relocation"
+    return "static result with relocation"'bundle
 }
 
 func runtime_value(x: int) -> Tuple[string, int] {
@@ -23,9 +23,11 @@ func observe(item: Tuple[string, int]) {
 }
 
 comptime {
-    observe(bundle"comptime result")
+    observe("comptime result"'bundle)
     observe([3, 4]'dynamic)
-} else {
+}
+
+func run_test() {
     value()
     static_container()
     runtime_value(2)

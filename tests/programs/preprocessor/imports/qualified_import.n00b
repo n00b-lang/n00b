@@ -1,5 +1,0 @@
-import dep
-import dep2
-when dep.enabled {
-    var qualified_import = true
-}

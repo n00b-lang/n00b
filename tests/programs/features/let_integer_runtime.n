@@ -1,0 +1,35 @@
+func delayed(value: int) -> int {
+    let result: int
+    result = value
+    return result
+}
+
+func either(flag: bool) -> int {
+    let result: int
+    if flag {
+        result = 1
+    } else {
+        result = 2
+    }
+    return result
+}
+
+func count_up(limit: uint) -> int {
+    var at: int = 0
+    while at < limit {
+        at += 1
+    }
+    return at
+}
+
+func byte_zero(value: byte) -> byte { return value }
+func signed_alias(value: i64) -> int { return value }
+
+comptime {} else {
+    require delayed(7) == 7
+    require either(true) == 1
+    require either(false) == 2
+    require count_up(3) == 3
+    require byte_zero(0) == 0
+    require signed_alias(7) == 7
+}

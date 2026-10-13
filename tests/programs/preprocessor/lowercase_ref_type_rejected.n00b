@@ -1,3 +1,0 @@
-func invalid_lowercase_reference(value: ref[int]) -> int {
-    return 0
-}

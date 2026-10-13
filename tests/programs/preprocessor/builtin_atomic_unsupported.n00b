@@ -1,9 +1,0 @@
-type Blob {
-    a: int
-    b: int
-    c: int
-}
-
-func use_blob(blob_value: Atomic[Blob]) -> Atomic[Blob] {
-    return blob_value
-}

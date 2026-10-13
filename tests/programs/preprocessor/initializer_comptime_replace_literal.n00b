@@ -1,7 +1,0 @@
-var phase_value: int = 1
-
-comptime {
-    phase_value = 7
-}
-
-var runtime_copy: int = phase_value

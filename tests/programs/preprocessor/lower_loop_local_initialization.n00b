@@ -1,5 +1,0 @@
-func loop_local_initialization(flag: bool) {
-    while flag {
-        let chosen: int = 1
-    }
-}

@@ -1,8 +1,0 @@
-import return_alias_mismatch
-
-func use_mismatch() {
-    var first_target: int = 1
-    var second_target: int = 2
-    var result = return_alias_mismatch.from_a(
-        ref first_target, ref second_target, true)
-}

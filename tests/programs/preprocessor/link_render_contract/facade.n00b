@@ -1,6 +1,0 @@
-import link_render_contract.contract
-import link_render_contract.plugin
-
-package link_render_contract {
-    export link_render_contract.contract.Render
-}

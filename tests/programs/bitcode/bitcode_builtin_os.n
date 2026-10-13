@@ -1,37 +1,39 @@
-import builtin.abi
-import builtin.os
+import sys.abi
+import sys.memory
+import sys.threads
+import sys.clock
 
 const stderr_fd: i32 = 2
 
 comptime {
 } else {
-    let page: uint = builtin.os.page_size()
-    let current_thread: uint = builtin.os.thread_id()
+    let page: uint = sys.memory.page_size()
+    let current_thread: uint = sys.threads.thread_id()
     assert current_thread != 0
-    assert current_thread == builtin.os.thread_id()
-    assert builtin.os.thread_stack_high_self() != nil
-    let red_zone: uint = builtin.os.stack_red_zone_bytes()
+    assert current_thread == sys.threads.thread_id()
+    assert sys.threads.thread_stack_high_self() != nil
+    let red_zone: uint = sys.threads.stack_red_zone_bytes()
     assert red_zone == cast[uint](0) or red_zone == cast[uint](128)
-    assert builtin.os.thread_control_self() != 0
-    let context_probe: Ref[builtin.os.Thread_Context]? = nil
-    let context_row: Ref[builtin.abi.Type_Record]? = builtin.abi.optional_reference_target(typeof(context_probe))
+    assert sys.threads.thread_control_self() != 0
+    let context_probe: Ref[sys.threads.Thread_Context]? = nil
+    let context_row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(typeof(context_probe))
     if context_row != nil {
-        let row: Ref[builtin.abi.Type_Record] = context_row.get()
-        assert builtin.abi.size_bytes(row) != 0
-        let mapped: Ref[byte]? = builtin.os.map_zeroed(
-            builtin.abi.size_bytes(row), builtin.abi.alignment_bytes(row))
+        let row: Ref[sys.abi.Type_Record] = context_row.get()
+        assert sys.abi.size_bytes(row) != 0
+        let mapped: Ref[byte]? = sys.memory.map_zeroed(
+            sys.abi.size_bytes(row), sys.abi.alignment_bytes(row))
         if mapped != nil {
-            let snapshot: Ref[builtin.os.Thread_Context] = unsafe_cast[Ref[builtin.os.Thread_Context]] mapped.get()
-            builtin.os.thread_capture_self(snapshot)
+            let snapshot: Ref[sys.threads.Thread_Context] = unsafe_cast[Ref[sys.threads.Thread_Context]] mapped.get()
+            sys.threads.thread_capture_self(snapshot)
             assert snapshot.sp != nil
             assert snapshot.nregs != 0
-            builtin.os.unmap(snapshot, builtin.abi.size_bytes(row))
+            sys.memory.unmap(snapshot, sys.abi.size_bytes(row))
         } else { require false }
     } else { require false }
-    let before: u64 = builtin.os.now_ns()
-    let after: u64 = builtin.os.now_ns()
+    let before: u64 = sys.clock.now_ns()
+    let after: u64 = sys.clock.now_ns()
     assert before != 0 and after >= before
-    let mapped: Ref[byte]? = builtin.os.map_zeroed(page, page)
+    let mapped: Ref[byte]? = sys.memory.map_zeroed(page, page)
     if mapped != nil {
         let address: Ref[byte] = mapped.get()
         let word: Ref[u64] = unsafe_cast[Ref[u64]] address
@@ -39,11 +41,11 @@ comptime {
         assert __abi_ref_address(direct) == __abi_ref_address(word)
         let roundtrip: Ref[byte] = unsafe_cast[Ref[byte]] word
         assert roundtrip == address
-        builtin.os.protect(address, page, builtin.os.PROT_READ)
-        builtin.os.protect(address, page,
-                           builtin.os.PROT_READ | builtin.os.PROT_WRITE)
-        builtin.os.unmap(word, page)
-        let invalid: Ref[byte]? = builtin.os.map_zeroed(0, page)
+        sys.memory.protect(address, page, sys.memory.PROT_READ)
+        sys.memory.protect(address, page,
+                           sys.memory.PROT_READ | sys.memory.PROT_WRITE)
+        sys.memory.unmap(word, page)
+        let invalid: Ref[byte]? = sys.memory.map_zeroed(0, page)
         if invalid != nil {
             __fd_write(stderr_fd, "unexpected mapping\n")
         } else {

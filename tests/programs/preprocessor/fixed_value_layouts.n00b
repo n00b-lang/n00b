@@ -1,9 +1,0 @@
-func pass_through(
-    text: string,
-    array_value: Array[int],
-    view_value: View[int],
-    allocator: Allocator,
-    boxed: any,
-) -> string {
-    return text
-}

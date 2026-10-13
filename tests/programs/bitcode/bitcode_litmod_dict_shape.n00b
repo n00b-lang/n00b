@@ -15,7 +15,9 @@ func empty_dict() -> Array[Tuple[int, int]] {
 }
 
 comptime {
-} else {
+}
+
+func run_test() {
     static_dict()
     dynamic_dict(3)
     empty_dict()

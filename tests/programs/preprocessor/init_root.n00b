@@ -1,3 +1,0 @@
-import init_dependency
-func root_init() -> int { return 2 }
-var root_value: int = root_init()

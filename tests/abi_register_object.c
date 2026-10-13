@@ -46,6 +46,20 @@ main(int argc, char **argv)
     uint32_t section_count = 0;
     assert(core_object_section_count(object, object_bytes,
         target.object_format, &section_count));
+    const char *segment = nullptr;
+    const char *name;
+    switch (target.object_format) {
+    case CORE_TARGET_OBJECT_ELF: name = ".data.rel.ro.n00b_meta"; break;
+    case CORE_TARGET_OBJECT_MACH_O:
+        segment = "__DATA_CONST";
+        name = "__n00b_meta";
+        break;
+    case CORE_TARGET_OBJECT_COFF: name = ".n00b$M"; break;
+    default: assert(false);
+    }
+    core_object_section_t metadata;
+    assert(core_object_section_find(object, object_bytes,
+        target.object_format, segment, name, &metadata));
     core_object_section_t *sections = calloc((size_t)section_count + 1,
         sizeof(*sections));
     uint8_t **loaded = calloc((size_t)section_count + 1, sizeof(*loaded));
@@ -85,6 +99,9 @@ main(int argc, char **argv)
                 target_index = symbol.native_section_index;
                 offset = symbol.section_offset + relocation.addend_bits;
             }
+            /* Runtime relocations may name external symbols that are resolved
+               when the library is linked into an executable. */
+            if (!target_index && i != metadata.native_index) continue;
             assert(target_index && target_index <= section_count
                 && loaded[target_index]
                 && offset <= sections[target_index].size
@@ -97,20 +114,6 @@ main(int argc, char **argv)
         }
     }
 
-    const char *segment = nullptr;
-    const char *name;
-    switch (target.object_format) {
-    case CORE_TARGET_OBJECT_ELF: name = ".data.rel.ro.n00b_meta"; break;
-    case CORE_TARGET_OBJECT_MACH_O:
-        segment = "__DATA_CONST";
-        name = "__n00b_meta";
-        break;
-    case CORE_TARGET_OBJECT_COFF: name = ".n00b$M"; break;
-    default: assert(false);
-    }
-    core_object_section_t metadata;
-    assert(core_object_section_find(object, object_bytes,
-        target.object_format, segment, name, &metadata));
     n00b_abi_image_descriptor_v1 image = {
         .descriptor_version = 1,
         .metadata = (const n00b_abi_header_v1 *)loaded[metadata.native_index],
@@ -298,7 +301,11 @@ main(int argc, char **argv)
     assert(snapshot && n00b_abi_v1_generation(snapshot) == generation);
     uint32_t module_count = n00b_abi_v1_table_count(snapshot,
         N00B_ABI_TABLE_MODULE);
-    assert(module_count == (uint32_t)strtoul(argv[2], nullptr, 10) + 1);
+    bool minimum_modules = !strncmp(argv[2], ">=", 2);
+    uint32_t expected_modules = (uint32_t)strtoul(
+        argv[2] + (minimum_modules ? 2 : 0), nullptr, 10) + 1;
+    assert(minimum_modules ? module_count >= expected_modules
+                           : module_count == expected_modules);
     for (uint32_t i = 1; i < module_count; i++) {
         const n00b_abi_module_v1 *module = n00b_abi_v1_module(snapshot, i);
         const uint8_t *path = nullptr;

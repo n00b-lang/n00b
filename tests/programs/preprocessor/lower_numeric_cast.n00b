@@ -1,7 +1,0 @@
-func widen(value: i64) -> i128 {
-    return cast[i128] value
-}
-
-func narrow(value: i128) -> i64 {
-    return cast[i64] value
-}

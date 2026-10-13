@@ -1,13 +1,13 @@
-import builtin.abi
-import builtin.gc
-import builtin.gc.alloc
-import builtin.gc.finalize
-import builtin.gc.heap
-import builtin.gc.mark
-import builtin.gc.mutator
-import builtin.gc.registry
-import builtin.gc.sync
-import builtin.os
+import sys.abi
+import sys.gc.core
+import sys.gc.alloc
+import sys.gc.finalize
+import sys.gc.heap
+import sys.gc.mark
+import sys.gc.mutator
+import sys.gc.registry
+import sys.gc.sync
+import sys.memory
 
 type Sample {
     value: int
@@ -16,14 +16,14 @@ type Sample {
 var finalized: int = 0
 var ready_count: int = 0
 var drain_on_ready: bool = false
-var callback_heap: Ref[builtin.gc.Heap]? = nil
+var callback_heap: Ref[sys.gc.core.Heap]? = nil
 
 func finalizers_ready(user: Ref[byte]?) {
     require user == nil
     ready_count += 1
     if drain_on_ready {
-        let heap: Ref[builtin.gc.Heap]? = callback_heap
-        if heap != nil { builtin.gc.finalize.run(heap.get(), 0) }
+        let heap: Ref[sys.gc.core.Heap]? = callback_heap
+        if heap != nil { sys.gc.finalize.run(heap.get(), 0) }
     }
 }
 
@@ -33,126 +33,126 @@ func __finalize(consume self: Ref[Sample]) {
 }
 
 comptime {} else {
-    let created: Ref[builtin.gc.Heap]? = builtin.gc.heap.create(nil)
+    let created: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(nil)
     if created != nil {
-        let heap: Ref[builtin.gc.Heap] = created.get()
+        let heap: Ref[sys.gc.core.Heap] = created.get()
         heap.cfg.finalizers_ready = ref finalizers_ready
-        let mapped: Ref[byte]? = builtin.os.map_zeroed(
-            builtin.gc.block_bytes, builtin.gc.block_bytes)
+        let mapped: Ref[byte]? = sys.memory.map_zeroed(
+            sys.gc.core.block_bytes, sys.gc.core.block_bytes)
         if mapped != nil {
             let base: Ref[byte] = mapped.get()
-            let end: Ref[byte] = __gc_byte_offset(base, builtin.gc.block_bytes)
-            let registered: bool = builtin.gc.registry.region_add(heap, base, end)
+            let end: Ref[byte] = __gc_byte_offset(base, sys.gc.core.block_bytes)
+            let registered: bool = sys.gc.registry.region_add(heap, base, end)
             require registered
-            let block: Ref[builtin.gc.Block_Metadata] = builtin.gc.block_metadata_at(base)
-            builtin.gc.block_init(heap, block)
-            let attached: Ref[builtin.gc.Mutator]? = builtin.gc.mutator.create(heap)
+            let block: Ref[sys.gc.core.Block_Metadata] = sys.gc.core.block_metadata_at(base)
+            sys.gc.core.block_init(heap, block)
+            let attached: Ref[sys.gc.core.Mutator]? = sys.gc.mutator.create(heap)
             if attached != nil {
-                let mutator: Ref[builtin.gc.Mutator] = attached.get()
-                var owned: Ref[builtin.gc.Block_Metadata]? = nil
-                builtin.gc.own(heap, mutator, block, ref owned)
-                let assigned: Ref[builtin.gc.Block_Metadata]? = block
-                builtin.gc.bump_attach(mutator, ref mutator.small, assigned)
-                let found: bool = builtin.gc.bump_next_hole(ref mutator.small, 48)
+                let mutator: Ref[sys.gc.core.Mutator] = attached.get()
+                var owned: Ref[sys.gc.core.Block_Metadata]? = nil
+                sys.gc.core.own(heap, mutator, block, ref owned)
+                let assigned: Ref[sys.gc.core.Block_Metadata]? = block
+                sys.gc.core.bump_attach(mutator, ref mutator.small, assigned)
+                let found: bool = sys.gc.core.bump_next_hole(ref mutator.small, 48)
                 require found
                 let sample: Ref[Sample]? = nil
-                let option_row: Ref[builtin.abi.Type_Record]? = builtin.abi.type_for(typeof(sample))
+                let option_row: Ref[sys.abi.Type_Record]? = sys.abi.type_for(typeof(sample))
                 require option_row != nil
-                let reference_index: i64 = builtin.abi.range_index(option_row.get().components, 0)
+                let reference_index: i64 = sys.abi.range_index(option_row.get().components, 0)
                 require reference_index > 0
-                let reference_row: Ref[builtin.abi.Type_Record]? = builtin.abi.type_at(cast[u32] reference_index)
+                let reference_row: Ref[sys.abi.Type_Record]? = sys.abi.type_at(cast[u32] reference_index)
                 require reference_row != nil
-                let type_index: i64 = builtin.abi.range_index(reference_row.get().components, 0)
+                let type_index: i64 = sys.abi.range_index(reference_row.get().components, 0)
                 require type_index > 0
-                let allocated: Ref[byte]? = builtin.gc.alloc.allocate_reserved(
+                let allocated: Ref[byte]? = sys.gc.alloc.allocate_reserved(
                     mutator, ref mutator.small, cast[u32] type_index, 8,
-                    builtin.gc.granule_bytes, true)
+                    sys.gc.core.granule_bytes, true)
                 if allocated != nil {
                     let payload: Ref[byte] = allocated.get()
                     assert __atomic_load(ref block.nfinal) == 1
-                    let marker_probe: Ref[builtin.gc.Marker]? = nil
-                    let marker_row: Ref[builtin.abi.Type_Record]? = builtin.abi.optional_reference_target(
+                    let marker_probe: Ref[sys.gc.core.Marker]? = nil
+                    let marker_row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(
                         typeof(marker_probe))
                     if marker_row != nil {
-                        let marker_bytes: uint = builtin.abi.size_bytes(marker_row.get())
-                        let marker_map: Ref[byte]? = builtin.os.map_zeroed(
-                            marker_bytes, builtin.abi.alignment_bytes(marker_row.get()))
+                        let marker_bytes: uint = sys.abi.size_bytes(marker_row.get())
+                        let marker_map: Ref[byte]? = sys.memory.map_zeroed(
+                            marker_bytes, sys.abi.alignment_bytes(marker_row.get()))
                         if marker_map != nil {
-                            let marker: Ref[builtin.gc.Marker] = unsafe_cast[Ref[builtin.gc.Marker]] marker_map.get()
-                            builtin.gc.mark.marker_init(marker, heap, false)
-                            builtin.gc.sync.ticket_lock(ref heap.lock)
-                            builtin.gc.finalize.find_dead_locked(marker)
-                            builtin.gc.heap.unlock(heap)
+                            let marker: Ref[sys.gc.core.Marker] = unsafe_cast[Ref[sys.gc.core.Marker]] marker_map.get()
+                            sys.gc.mark.marker_init(marker, heap, false)
+                            sys.gc.sync.ticket_lock(ref heap.lock)
+                            sys.gc.finalize.find_dead_locked(marker)
+                            sys.gc.heap.unlock(heap)
                             assert ready_count == 1
                             assert heap.finq_n == 1
                             assert __atomic_load(ref block.nfinal) == 0
                             assert !__atomic_load(ref block.in_final)
-                            assert (builtin.gc.header_of(payload).meta & builtin.gc.obj_final) == 0
-                            assert builtin.gc.mark.is_marked(heap, payload)
+                            assert (sys.gc.core.header_of(payload).meta & sys.gc.core.obj_final) == 0
+                            assert sys.gc.mark.is_marked(heap, payload)
                             let queue: Ref[byte]? = heap.finq
                             if queue != nil {
-                                let entry: Ref[builtin.gc.Final_Entry] = unsafe_cast[Ref[builtin.gc.Final_Entry]] queue.get()
+                                let entry: Ref[sys.gc.core.Final_Entry] = unsafe_cast[Ref[sys.gc.core.Final_Entry]] queue.get()
                                 assert entry.payload == payload
                             } else { require false }
                             marker.bytes = 123
-                            builtin.gc.finalize.mark_locked(marker)
+                            sys.gc.finalize.mark_locked(marker)
                             assert marker.bytes == 123
-                            builtin.gc.finalize.find_dead_locked(marker)
+                            sys.gc.finalize.find_dead_locked(marker)
                             assert heap.finq_n == 1
-                            assert builtin.gc.finalize.run(heap, 0) == 1
+                            assert sys.gc.finalize.run(heap, 0) == 1
                             assert finalized == 1
                             assert heap.finq_n == 0
                             assert heap.running == nil
-                            assert builtin.gc.finalize.run(heap, 0) == 0
+                            assert sys.gc.finalize.run(heap, 0) == 0
                             assert finalized == 1
                             assert !__atomic_load(ref heap.fin_notify)
                             heap.cfg.finalizers_ready = nil
                             heap.cfg.finalizer_backlog_limit = 1
                             heap.cfg.finalizer_assist = true
-                            let second: Ref[byte]? = builtin.gc.alloc.allocate_reserved(
+                            let second: Ref[byte]? = sys.gc.alloc.allocate_reserved(
                                 mutator, ref mutator.small, cast[u32] type_index, 8,
-                                builtin.gc.granule_bytes, true)
+                                sys.gc.core.granule_bytes, true)
                             require second != nil
-                            let third: Ref[byte]? = builtin.gc.alloc.allocate_reserved(
+                            let third: Ref[byte]? = sys.gc.alloc.allocate_reserved(
                                 mutator, ref mutator.small, cast[u32] type_index, 8,
-                                builtin.gc.granule_bytes, true)
+                                sys.gc.core.granule_bytes, true)
                             require third != nil
-                            builtin.gc.finalize.find_dead_locked(marker)
+                            sys.gc.finalize.find_dead_locked(marker)
                             assert heap.finq_n == 2
                             assert !__atomic_load(ref heap.fin_notify)
-                            builtin.gc.finalize.backpressure(mutator)
+                            sys.gc.finalize.backpressure(mutator)
                             assert heap.finq_n == 0
                             assert finalized == 3
                             assert !mutator.in_finalizers
                             assert !__atomic_load(ref heap.fin_assisting)
                             heap.cfg.finalizers_ready = ref finalizers_ready
-                            let fourth: Ref[byte]? = builtin.gc.alloc.allocate_reserved(
+                            let fourth: Ref[byte]? = sys.gc.alloc.allocate_reserved(
                                 mutator, ref mutator.small, cast[u32] type_index, 8,
-                                builtin.gc.granule_bytes, true)
+                                sys.gc.core.granule_bytes, true)
                             require fourth != nil
-                            let fifth: Ref[byte]? = builtin.gc.alloc.allocate_reserved(
+                            let fifth: Ref[byte]? = sys.gc.alloc.allocate_reserved(
                                 mutator, ref mutator.small, cast[u32] type_index, 8,
-                                builtin.gc.granule_bytes, true)
+                                sys.gc.core.granule_bytes, true)
                             require fifth != nil
-                            builtin.gc.finalize.find_dead_locked(marker)
+                            sys.gc.finalize.find_dead_locked(marker)
                             assert heap.finq_n == 2
                             heap.cfg.finalizer_assist = false
                             callback_heap = heap
                             drain_on_ready = true
                             let before_ready: int = ready_count
-                            builtin.gc.finalize.backpressure(mutator)
+                            sys.gc.finalize.backpressure(mutator)
                             assert ready_count == before_ready + 1
                             assert heap.finq_n == 0
                             assert finalized == 5
                             drain_on_ready = false
                             callback_heap = nil
-                            builtin.os.unmap(marker, marker_bytes)
+                            sys.memory.unmap(marker, marker_bytes)
                         } else { require false }
                     } else { require false }
                 } else { require false }
-                builtin.gc.mutator.destroy(mutator)
+                sys.gc.mutator.destroy(mutator)
             } else { require false }
-            builtin.gc.heap.destroy(heap)
+            sys.gc.heap.destroy(heap)
             assert finalized == 5
             __fd_write(2, "ok")
         } else { require false }

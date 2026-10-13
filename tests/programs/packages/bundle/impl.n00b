@@ -1,0 +1,2 @@
+func first() -> int { return 19 }
+func second() -> int { return 23 }

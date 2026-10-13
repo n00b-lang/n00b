@@ -1,107 +1,107 @@
-import builtin.abi
-import builtin.gc
-import builtin.gc.mark
-import builtin.os
+import sys.abi
+import sys.gc.core
+import sys.gc.mark
+import sys.memory
 
-func mapped_heap() -> Ref[builtin.gc.Heap] {
-    let probe: Ref[builtin.gc.Heap]? = nil
-    let row: Ref[builtin.abi.Type_Record]? = builtin.abi.optional_reference_target(typeof(probe))
+func mapped_heap() -> Ref[sys.gc.core.Heap] {
+    let probe: Ref[sys.gc.core.Heap]? = nil
+    let row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(typeof(probe))
     if row != nil {
-        let mapped: Ref[byte]? = builtin.os.map_zeroed(
-            builtin.abi.size_bytes(row.get()), builtin.abi.alignment_bytes(row.get()))
-        if mapped != nil { return unsafe_cast[Ref[builtin.gc.Heap]] mapped.get() }
+        let mapped: Ref[byte]? = sys.memory.map_zeroed(
+            sys.abi.size_bytes(row.get()), sys.abi.alignment_bytes(row.get()))
+        if mapped != nil { return unsafe_cast[Ref[sys.gc.core.Heap]] mapped.get() }
     }
     require false
 }
 
-func mapped_marker() -> Ref[builtin.gc.Marker] {
-    let probe: Ref[builtin.gc.Marker]? = nil
-    let row: Ref[builtin.abi.Type_Record]? = builtin.abi.optional_reference_target(typeof(probe))
+func mapped_marker() -> Ref[sys.gc.core.Marker] {
+    let probe: Ref[sys.gc.core.Marker]? = nil
+    let row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(typeof(probe))
     if row != nil {
-        let mapped: Ref[byte]? = builtin.os.map_zeroed(
-            builtin.abi.size_bytes(row.get()), builtin.abi.alignment_bytes(row.get()))
-        if mapped != nil { return unsafe_cast[Ref[builtin.gc.Marker]] mapped.get() }
+        let mapped: Ref[byte]? = sys.memory.map_zeroed(
+            sys.abi.size_bytes(row.get()), sys.abi.alignment_bytes(row.get()))
+        if mapped != nil { return unsafe_cast[Ref[sys.gc.core.Marker]] mapped.get() }
     }
     require false
 }
 
-func mapped_header() -> Ref[builtin.gc.Object_Header] {
-    let probe: Ref[builtin.gc.Object_Header]? = nil
-    let row: Ref[builtin.abi.Type_Record]? = builtin.abi.optional_reference_target(typeof(probe))
+func mapped_header() -> Ref[sys.gc.core.Object_Header] {
+    let probe: Ref[sys.gc.core.Object_Header]? = nil
+    let row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(typeof(probe))
     if row != nil {
-        let mapped: Ref[byte]? = builtin.os.map_zeroed(
-            builtin.abi.size_bytes(row.get()), builtin.abi.alignment_bytes(row.get()))
-        if mapped != nil { return unsafe_cast[Ref[builtin.gc.Object_Header]] mapped.get() }
+        let mapped: Ref[byte]? = sys.memory.map_zeroed(
+            sys.abi.size_bytes(row.get()), sys.abi.alignment_bytes(row.get()))
+        if mapped != nil { return unsafe_cast[Ref[sys.gc.core.Object_Header]] mapped.get() }
     }
     require false
 }
 
 comptime {
 } else {
-    let heap: Ref[builtin.gc.Heap] = mapped_heap()
-    assert builtin.gc.mark.mark_quiescent(heap)
-    let marker: Ref[builtin.gc.Marker] = mapped_marker()
-    let header: Ref[builtin.gc.Object_Header] = mapped_header()
+    let heap: Ref[sys.gc.core.Heap] = mapped_heap()
+    assert sys.gc.mark.mark_quiescent(heap)
+    let marker: Ref[sys.gc.core.Marker] = mapped_marker()
+    let header: Ref[sys.gc.core.Object_Header] = mapped_header()
     __gc_prefetch(header)
-    builtin.gc.mark.marker_init(marker, heap, false)
-    builtin.gc.mark.drain_to_termination(marker)
-    assert builtin.gc.mark.mark_quiescent(heap)
+    sys.gc.mark.marker_init(marker, heap, false)
+    sys.gc.mark.drain_to_termination(marker)
+    assert sys.gc.mark.mark_quiescent(heap)
     var pushed: uint = 0
-    while pushed < builtin.gc.packet_cap + 1 {
-        builtin.gc.mark.push(marker, header)
+    while pushed < sys.gc.core.packet_cap + 1 {
+        sys.gc.mark.push(marker, header)
         pushed += 1
     }
     assert heap.pool_chunks != nil
     assert marker.holding
     assert heap.pool_active == 1
-    let published: Ref[builtin.gc.Packet]? = heap.pool_full
+    let published: Ref[sys.gc.core.Packet]? = heap.pool_full
     if published != nil {
-        assert published.get().n == builtin.gc.packet_cap
+        assert published.get().n == sys.gc.core.packet_cap
     } else {
         require false
     }
-    let output: Ref[builtin.gc.Packet]? = marker.output
+    let output: Ref[sys.gc.core.Packet]? = marker.output
     if output != nil {
-        let packet: Ref[builtin.gc.Packet] = output.get()
+        let packet: Ref[sys.gc.core.Packet] = output.get()
         assert packet.n == 1
-        let entry: Ref[builtin.gc.Packet_Entry] = ref packet.entries[0]
-        let saved: Ref[builtin.gc.Object_Header]? = entry.header
+        let entry: Ref[sys.gc.core.Packet_Entry] = ref packet.entries[0]
+        let saved: Ref[sys.gc.core.Object_Header]? = entry.header
         if saved != nil { assert saved.get() == header } else { require false }
     } else {
         require false
     }
     marker.objects = 1
     marker.bytes = 16
-    builtin.gc.mark.marker_flush(marker)
+    sys.gc.mark.marker_flush(marker)
     assert !marker.holding
     assert heap.pool_active == 0
     assert heap.pool_full != nil
     assert __atomic_load(ref heap.work_progress.seq) != 0
     assert __atomic_load(ref heap.cnt_objects) == 1
     assert __atomic_load(ref heap.cnt_bytes) == 16
-    assert !builtin.gc.mark.mark_quiescent(heap)
-    var pending: Ref[builtin.gc.Packet]? = heap.pool_full
+    assert !sys.gc.mark.mark_quiescent(heap)
+    var pending: Ref[sys.gc.core.Packet]? = heap.pool_full
     while pending != nil {
-        let packet: Ref[builtin.gc.Packet] = pending.get()
+        let packet: Ref[sys.gc.core.Packet] = pending.get()
         packet.n = 0
         pending = packet.next
     }
-    builtin.gc.mark.drain_to_termination(marker)
-    assert builtin.gc.mark.mark_quiescent(heap)
-    builtin.gc.mark.pool_free_all(heap)
+    sys.gc.mark.drain_to_termination(marker)
+    assert sys.gc.mark.mark_quiescent(heap)
+    sys.gc.mark.pool_free_all(heap)
     assert heap.pool_chunks == nil
     assert heap.pool_empty == nil
     assert heap.pool_full == nil
-    let probe: Ref[builtin.gc.Heap]? = nil
-    let row: Ref[builtin.abi.Type_Record]? = builtin.abi.optional_reference_target(typeof(probe))
+    let probe: Ref[sys.gc.core.Heap]? = nil
+    let row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(typeof(probe))
     if row != nil {
-        builtin.os.unmap(heap, builtin.abi.size_bytes(row.get()))
-        let marker_probe: Ref[builtin.gc.Marker]? = nil
-        let marker_row: Ref[builtin.abi.Type_Record]? = builtin.abi.optional_reference_target(typeof(marker_probe))
-        if marker_row != nil { builtin.os.unmap(marker, builtin.abi.size_bytes(marker_row.get())) }
-        let header_probe: Ref[builtin.gc.Object_Header]? = nil
-        let header_row: Ref[builtin.abi.Type_Record]? = builtin.abi.optional_reference_target(typeof(header_probe))
-        if header_row != nil { builtin.os.unmap(header, builtin.abi.size_bytes(header_row.get())) }
+        sys.memory.unmap(heap, sys.abi.size_bytes(row.get()))
+        let marker_probe: Ref[sys.gc.core.Marker]? = nil
+        let marker_row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(typeof(marker_probe))
+        if marker_row != nil { sys.memory.unmap(marker, sys.abi.size_bytes(marker_row.get())) }
+        let header_probe: Ref[sys.gc.core.Object_Header]? = nil
+        let header_row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(typeof(header_probe))
+        if header_row != nil { sys.memory.unmap(header, sys.abi.size_bytes(header_row.get())) }
         __fd_write(2, "ok")
     } else {
         require false

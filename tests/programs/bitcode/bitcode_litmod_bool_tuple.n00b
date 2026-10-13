@@ -8,6 +8,8 @@ func value() -> Tuple[bool, int] {
 
 comptime {
     value()
-} else {
+}
+
+func run_test() {
     value()
 }

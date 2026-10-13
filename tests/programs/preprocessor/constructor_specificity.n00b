@@ -1,6 +1,0 @@
-import constructor_general
-import constructor_specific
-
-func construct_option() -> Option[int] {
-    return new[Option[int]]()
-}

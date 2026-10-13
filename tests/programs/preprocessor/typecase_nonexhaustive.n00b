@@ -1,3 +1,0 @@
-func typecase_nonexhaustive(item: (int | string)) {
-    typecase(item) { case int {} }
-}

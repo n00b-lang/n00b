@@ -15,7 +15,9 @@ func empty_set() -> Array[int] {
 }
 
 comptime {
-} else {
+}
+
+func run_test() {
     static_set()
     dynamic_set(3)
     empty_set()

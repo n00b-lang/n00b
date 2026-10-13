@@ -1,7 +1,0 @@
-type Café {
-    value: int
-}
-
-func read_cafe(value: Café) -> int {
-    return value.value
-}

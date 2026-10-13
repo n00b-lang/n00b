@@ -1,7 +1,0 @@
-import initializer_comptime_alias_import_target
-
-comptime {
-    ref_write(ref initializer_comptime_alias_import_target.shared_value, 11)
-}
-
-var copied_value: int = initializer_comptime_alias_import_target.shared_value

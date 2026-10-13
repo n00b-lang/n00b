@@ -1,2 +1,0 @@
-func legacy_f32(x: f32) -> nil {
-}

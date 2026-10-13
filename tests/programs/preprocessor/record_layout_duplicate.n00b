@@ -1,3 +1,0 @@
-type Bad layout(c) layout(ordered) {
-    value: int
-}

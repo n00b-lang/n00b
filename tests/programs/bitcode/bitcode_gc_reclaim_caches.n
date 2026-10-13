@@ -1,98 +1,98 @@
-import builtin.abi
-import builtin.gc
-import builtin.gc.alloc
-import builtin.gc.collect
-import builtin.gc.heap
-import builtin.os
+import sys.abi
+import sys.gc.core
+import sys.gc.alloc
+import sys.gc.collect
+import sys.gc.heap
+import sys.memory
 
 comptime {
 } else {
-    let candidate: Ref[builtin.gc.Heap]? = builtin.gc.heap.create(nil)
+    let candidate: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(nil)
     if candidate != nil {
-        let heap: Ref[builtin.gc.Heap] = candidate.get()
-        let probe: Ref[builtin.gc.Mutator]? = nil
-        let row: Ref[builtin.abi.Type_Record]? = builtin.abi.optional_reference_target(
+        let heap: Ref[sys.gc.core.Heap] = candidate.get()
+        let probe: Ref[sys.gc.core.Mutator]? = nil
+        let row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(
             typeof(probe))
         if row != nil {
-            let mutator_bytes: uint = builtin.abi.size_bytes(row.get())
-            let mutator_storage: Ref[byte]? = builtin.os.map_zeroed(
-                mutator_bytes, builtin.abi.alignment_bytes(row.get()))
+            let mutator_bytes: uint = sys.abi.size_bytes(row.get())
+            let mutator_storage: Ref[byte]? = sys.memory.map_zeroed(
+                mutator_bytes, sys.abi.alignment_bytes(row.get()))
             if mutator_storage != nil {
-                let mutator: Ref[builtin.gc.Mutator] = unsafe_cast[Ref[builtin.gc.Mutator]] mutator_storage.get()
+                let mutator: Ref[sys.gc.core.Mutator] = unsafe_cast[Ref[sys.gc.core.Mutator]] mutator_storage.get()
                 mutator.heap = heap
                 heap.mutators = mutator
                 heap.nmutators = 1
 
-                let storage: Ref[byte]? = builtin.os.map_zeroed(
-                    2 * builtin.gc.block_bytes, builtin.gc.block_bytes)
+                let storage: Ref[byte]? = sys.memory.map_zeroed(
+                    2 * sys.gc.core.block_bytes, sys.gc.core.block_bytes)
                 if storage != nil {
-                    let first: Ref[builtin.gc.Block_Metadata] = builtin.gc.block_metadata_at(storage.get())
-                    let second: Ref[builtin.gc.Block_Metadata] = builtin.gc.block_metadata_at(__gc_byte_offset(
-                            storage.get(), builtin.gc.block_bytes))
-                    builtin.gc.block_init(heap, first)
-                    builtin.gc.block_init(heap, second)
-                    builtin.gc.set_block_state(heap, first, builtin.gc.Block_State.owned)
-                    builtin.gc.set_block_state(heap, second, builtin.gc.Block_State.owned)
+                    let first: Ref[sys.gc.core.Block_Metadata] = sys.gc.core.block_metadata_at(storage.get())
+                    let second: Ref[sys.gc.core.Block_Metadata] = sys.gc.core.block_metadata_at(__gc_byte_offset(
+                            storage.get(), sys.gc.core.block_bytes))
+                    sys.gc.core.block_init(heap, first)
+                    sys.gc.core.block_init(heap, second)
+                    sys.gc.core.set_block_state(heap, first, sys.gc.core.Block_State.owned)
+                    sys.gc.core.set_block_state(heap, second, sys.gc.core.Block_State.owned)
                     __atomic_store(ref mutator.small.cache, first)
                     __atomic_store(ref mutator.overflow.cache, second)
                     assert __atomic_load(ref heap.nowned) == 2
 
-                    builtin.gc.collect.reclaim_caches(heap)
+                    sys.gc.collect.reclaim_caches(heap)
                     assert __atomic_load(ref mutator.small.cache) == nil
                     assert __atomic_load(ref mutator.overflow.cache) == nil
-                    assert first.state == cast[u8](builtin.gc.Block_State.retired)
-                    assert second.state == cast[u8](builtin.gc.Block_State.retired)
+                    assert first.state == cast[u8](sys.gc.core.Block_State.retired)
+                    assert second.state == cast[u8](sys.gc.core.Block_State.retired)
                     assert __atomic_load(ref heap.nowned) == 0
 
-                    heap.keep_bytes = builtin.gc.committed_bytes(heap)
-                    heap.alloc_since_gc = builtin.gc.capacity(first)
+                    heap.keep_bytes = sys.gc.core.committed_bytes(heap)
+                    heap.alloc_since_gc = sys.gc.core.capacity(first)
                     first.sweep_epoch = heap.epoch - 1
                     __atomic_store(ref heap.nunswept, 1)
-                    builtin.gc.set_block_state(heap, first, builtin.gc.Block_State.owned)
+                    sys.gc.core.set_block_state(heap, first, sys.gc.core.Block_State.owned)
                     __atomic_store(ref mutator.small.cache, first)
-                    builtin.gc.alloc.bump_release(heap, ref mutator.small)
+                    sys.gc.alloc.bump_release(heap, ref mutator.small)
                     assert __atomic_load(ref mutator.small.cache) == nil
-                    assert first.state == cast[u8](builtin.gc.Block_State.free)
-                    let free_head: Ref[builtin.gc.Block_Metadata]? = heap.free_blocks
+                    assert first.state == cast[u8](sys.gc.core.Block_State.free)
+                    let free_head: Ref[sys.gc.core.Block_Metadata]? = heap.free_blocks
                     if free_head != nil { assert free_head.get() == first } else { require false }
                     assert heap.nfree == 1
                     assert heap.alloc_since_gc == 0
                     assert __atomic_load(ref heap.nunswept) == 0
 
-                    builtin.gc.set_block_state(heap, second, builtin.gc.Block_State.owned)
+                    sys.gc.core.set_block_state(heap, second, sys.gc.core.Block_State.owned)
                     mutator.small.blk = second
                     mutator.small.cursor = storage.get()
                     mutator.small.limit = storage.get()
-                    builtin.gc.alloc.bump_release(heap, ref mutator.small)
-                    assert second.state == cast[u8](builtin.gc.Block_State.retired)
+                    sys.gc.alloc.bump_release(heap, ref mutator.small)
+                    assert second.state == cast[u8](sys.gc.core.Block_State.retired)
                     assert mutator.small.blk == nil
                     assert mutator.small.cursor == nil
                     assert mutator.small.limit == nil
-                    assert mutator.small.line == builtin.gc.header_lines()
+                    assert mutator.small.line == sys.gc.core.header_lines()
 
                     heap.free_blocks = nil
                     heap.nfree = 0
-                    builtin.gc.set_block_state(heap, first, builtin.gc.Block_State.owned)
+                    sys.gc.core.set_block_state(heap, first, sys.gc.core.Block_State.owned)
                     first.on_owned = true
                     first.own_next = nil
                     heap.owned = first
                     first.sweep_epoch = heap.epoch - 1
                     __atomic_store(ref heap.nunswept, 1)
-                    builtin.gc.collect.prune_owned(heap, true)
+                    sys.gc.collect.prune_owned(heap, true)
                     assert first.sweep_epoch == heap.epoch
                     assert __atomic_load(ref heap.nunswept) == 0
-                    let owned: Ref[builtin.gc.Block_Metadata]? = heap.owned
+                    let owned: Ref[sys.gc.core.Block_Metadata]? = heap.owned
                     if owned != nil { assert owned.get() == first } else { require false }
-                    builtin.gc.set_block_state(heap, first, builtin.gc.Block_State.retired)
-                    builtin.gc.collect.prune_owned(heap, false)
+                    sys.gc.core.set_block_state(heap, first, sys.gc.core.Block_State.retired)
+                    sys.gc.collect.prune_owned(heap, false)
                     assert heap.owned == nil
                     assert first.own_next == nil
                     assert !first.on_owned
 
                     heap.mutators = nil
                     heap.nmutators = 0
-                    builtin.os.unmap(mutator, mutator_bytes)
-                    builtin.gc.heap.destroy(heap)
+                    sys.memory.unmap(mutator, mutator_bytes)
+                    sys.gc.heap.destroy(heap)
                     __fd_write(2, "ok")
                 } else { assert false }
             } else { assert false }

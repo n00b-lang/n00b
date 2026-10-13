@@ -1,4 +1,0 @@
-func immutable_assignment() {
-    let total = 1
-    total = 2
-}

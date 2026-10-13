@@ -1,0 +1,32 @@
+func short(value: int) -> int fail: string { return value }
+
+func a_very_long_function_name_that_should_wrap(first_parameter_with_a_long_name: int, second_parameter_with_a_long_name: int) -> int fail: string {
+    return first_parameter_with_a_long_name
+}
+
+func elaborate(a_parameter_with_a_very_long_name: int,
+               another_parameter_with_a_very_long_name: int)
+    -> Ref[AnExtraordinarilyLongNamedRecord] fail: string {
+    return nil
+}
+
+func fail_only(a_parameter_with_a_very_long_name: int,
+               another_parameter_with_a_very_long_name: int) fail: string {
+    fail "bad"
+}
+
+func wide_single_parameter(value_with_an_extremely_long_name: Ref[AnExtraordinarilyLongNamedRecord]) -> int {
+    return 0
+}
+
+func initialize_array_backing(payload: Ref[byte],
+                              payload_bytes: uint,
+                              type_index: u32,
+                              shape: Ref[sys.abi.Array_Descriptor_Header]
+                             ) -> bool {
+    return true
+}
+
+trait LongResult {
+    func select(self: `T, first_parameter_with_a_long_name: int, second_parameter_with_a_long_name: int) -> Ref[AnExtraordinarilyLongNamedRecord] fail: string
+}

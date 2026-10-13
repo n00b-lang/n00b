@@ -1,4 +1,0 @@
-func value_block() -> int {
-    let result = { = 42 }
-    return result
-}

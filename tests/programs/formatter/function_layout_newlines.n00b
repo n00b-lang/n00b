@@ -1,0 +1,13 @@
+public
+inline
+func
+answer()
+->
+int
+{
+    return 42
+}
+
+record Result {
+    value: int
+}

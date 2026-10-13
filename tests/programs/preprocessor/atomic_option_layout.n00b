@@ -1,7 +1,0 @@
-func hold(value: Atomic[Option[byte]]) -> Atomic[Option[byte]] {
-    return value
-}
-
-func outer(value: Option[Atomic[Option[byte]]]) -> Option[Atomic[Option[byte]]] {
-    return value
-}

@@ -1,0 +1,76 @@
+import bitcode_comptime_ok
+import bitcode_comptime_scalar_call
+import bitcode_failable_success
+import bitcode_builtin_u32
+import bitcode_value_handles
+import bitcode_comptime_state
+import bitcode_litmod_runtime
+import bitcode_litmod_runtime_failure
+import bitcode_litmod_nested
+import bitcode_litmod_set_shape
+import bitcode_litmod_generic_set
+import bitcode_litmod_dict_shape
+import bitcode_litmod_static_dict_strings
+import bitcode_litmod_nested_arrays
+import bitcode_litmod_nested_strings
+import bitcode_litmod_scalar_tuple
+import bitcode_litmod_float
+import bitcode_litmod_static_strings
+import bitcode_litmod_scalar
+import bitcode_litmod_bool
+import bitcode_litmod_parenthesized
+import bitcode_litmod_fence
+import bitcode_litmod_fence_nil
+import bitcode_litmod_comptime_value
+import bitcode_litmod_handler_dependency
+import bitcode_litmod_import_root
+import bitcode_litmod_forward_type
+import bitcode_litmod_forward_chain
+import bitcode_litmod_char_array
+import bitcode_litmod_string_to_chars
+import bitcode_litmod_binary_result
+import bitcode_litmod_bool_tuple
+import bitcode_litmod_bool_string_tuple
+import bitcode_litmod_bool_tuple_array
+import bitcode_litmod_bool_string_tuple_array
+import bitcode_litmod_declaration
+import litmod_array_site
+
+comptime {} else {
+    bitcode_comptime_ok.run_test()
+    bitcode_builtin_u32.run_test()
+    bitcode_comptime_state.run_test()
+    bitcode_litmod_runtime.run_test()
+    bitcode_litmod_runtime_failure.run_test()
+    bitcode_litmod_nested.run_test()
+    bitcode_litmod_set_shape.run_test()
+    bitcode_litmod_generic_set.run_test()
+    bitcode_litmod_dict_shape.run_test()
+    bitcode_litmod_static_dict_strings.run_test()
+    bitcode_litmod_nested_arrays.run_test()
+    bitcode_litmod_nested_strings.run_test()
+    bitcode_litmod_scalar_tuple.run_test()
+    bitcode_litmod_float.run_test()
+    bitcode_litmod_static_strings.run_test()
+    bitcode_litmod_scalar.run_test()
+    bitcode_litmod_bool.run_test()
+    bitcode_litmod_parenthesized.run_test()
+    bitcode_litmod_fence.run_test()
+    bitcode_litmod_fence_nil.run_test()
+    bitcode_litmod_comptime_value.run_test()
+    bitcode_litmod_handler_dependency.run_test()
+    bitcode_litmod_import_root.run_test()
+    bitcode_litmod_forward_type.run_test()
+    bitcode_litmod_forward_chain.run_test()
+    bitcode_litmod_char_array.run_test()
+    bitcode_litmod_string_to_chars.run_test()
+    bitcode_litmod_binary_result.run_test()
+    bitcode_litmod_bool_tuple.run_test()
+    bitcode_litmod_bool_string_tuple.run_test()
+    bitcode_litmod_bool_tuple_array.run_test()
+    bitcode_litmod_bool_string_tuple_array.run_test()
+    bitcode_litmod_declaration.run_test()
+    let values: Array[int] = litmod_array_site.value()
+    require values[0] == 1
+    require values[1] == 2
+}

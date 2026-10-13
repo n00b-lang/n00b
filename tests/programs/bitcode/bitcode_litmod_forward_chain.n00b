@@ -12,6 +12,8 @@ litmod<quotes> make_inner, inner(raw: string) -> int fail: string {
 
 comptime {
     require value() == 42
-} else {
+}
+
+func run_test() {
     require value() == 42
 }

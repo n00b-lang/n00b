@@ -1,2 +1,0 @@
-import functions_dep.impl
-func accept() { functions_dep.impl.package_function() }

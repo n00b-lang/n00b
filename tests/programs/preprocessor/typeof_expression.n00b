@@ -1,3 +1,0 @@
-var selected_type: typespec = typeof(1)
-
-func type_of_value(value: int) -> typespec { return typeof(value) }

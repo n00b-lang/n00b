@@ -1,3 +1,0 @@
-func typecase_nonvariable() {
-    typecase(1) { case int {} }
-}

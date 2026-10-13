@@ -1,4 +1,4 @@
-import builtin.abi
+import sys.abi
 
 thread var active: bool = false
 thread var current: Ref[byte]? = nil
@@ -8,11 +8,11 @@ comptime {} else {
     var found_active: bool = false
     var found_current: bool = false
     var index: u32 = 1
-    while index < builtin.abi.storage_count() {
-        let row: Ref[builtin.abi.Storage_Record]? = builtin.abi.storage_at(index)
+    while index < sys.abi.storage_count() {
+        let row: Ref[sys.abi.Storage_Record]? = sys.abi.storage_at(index)
         if row != nil {
             if row.get().segment_kind == 3 {
-                let address: Ref[byte]? = builtin.abi.storage_address(index)
+                let address: Ref[byte]? = sys.abi.storage_address(index)
                 if address != nil {
                     let actual: uint = __abi_ref_address(address.get())
                     if actual == __abi_ref_address(ref active) { found_active = true }

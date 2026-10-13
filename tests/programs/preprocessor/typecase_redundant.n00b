@@ -1,7 +1,0 @@
-func redundant_typecase(item: (int | string)) {
-    typecase item {
-        case int {}
-        case int {}
-        case string {}
-    }
-}

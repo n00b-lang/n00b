@@ -12,13 +12,17 @@ project(
 
 lantern = dependency('ir', method: 'pkg-config', required: true)
 llvm = dependency('llvm', method: 'config-tool',
-                  modules: ['core', 'bitwriter', 'bitreader', 'linker'], required: true)
+                  modules: ['core', 'bitwriter', 'bitreader', 'linker'],
+                  required: true)
 grammar_path = meson.current_source_dir() / 'grammar' / 'n00b.bnf'
 
 add_project_arguments(
     '-DN00BB_GRAMMAR_PATH="' + grammar_path + '"',
     '-DN00BB_STACK_OBJECT_LIMIT_BYTES='
         + get_option('stack_object_limit_bytes').to_string(),
+    '-I' + (meson.current_source_dir() / 'compiler'),
+    '-I' + (meson.current_source_dir() / 'abi'),
+    '-I' + (meson.current_source_dir() / 'runtime'),
     language: 'c',
 )
 
@@ -32,12 +36,12 @@ runtime_abi_headers = lantern.partial_dependency(
     compile_args: true, includes: true,
 )
 
-runtime_abi_sources = ['runtime_abi.c', 'runtime_allocate.c', 'runtime_abi_io.c',
-     'runtime_abi_box.c', 'runtime_abi_hash.c',
-     'runtime_literal_graph.c',
-     'runtime_abi_storage.c', 'native_frame_runtime.c', 'builtin_os.c',
-     'builtin_os_stw.c',
-     'builtin_abi.c', 'abi_directory.c', 'abi_string.c']
+runtime_abi_sources = ['runtime/runtime_abi.c', 'runtime/runtime_allocate.c', 'runtime/runtime_abi_io.c',
+     'runtime/runtime_abi_box.c', 'runtime/runtime_abi_hash.c',
+     'runtime/runtime_literal_graph.c',
+     'runtime/runtime_abi_storage.c', 'runtime/native_frame_runtime.c', 'runtime/builtin_os.c',
+     'runtime/builtin_os_stw.c',
+     'runtime/builtin_abi.c', 'abi/abi_directory.c', 'abi/abi_string.c']
 
 runtime_abi_support = static_library(
     'n00b-abi-runtime', runtime_abi_sources,
@@ -63,7 +67,7 @@ runtime_abi_bitcode = custom_target(
 )
 
 comptime_allocate_support = static_library(
-    'n00b-comptime-allocate', ['comptime_allocate.c', 'comptime_graph.c'],
+    'n00b-comptime-allocate', ['compiler/comptime_allocate.c', 'compiler/comptime_graph.c'],
     dependencies: runtime_abi_headers,
 )
 
@@ -76,7 +80,7 @@ test('comptime-allocate', comptime_allocate_test)
 
 abi_static_graph_test = executable(
     'abi-static-graph-test',
-    ['tests/abi_static_graph.c', 'abi_static_graph.c'],
+    ['tests/abi_static_graph.c', 'compiler/abi_static_graph.c'],
     dependencies: lantern,
 )
 
@@ -84,36 +88,47 @@ test('abi-static-graph', abi_static_graph_test)
 
 runtime_literal_graph_test = executable(
     'runtime-literal-graph-test',
-    ['tests/runtime_literal_graph.c', 'runtime_literal_graph.c'],
+    ['tests/runtime_literal_graph.c', 'runtime/runtime_literal_graph.c'],
     dependencies: runtime_abi_headers,
 )
 test('runtime-literal-graph', runtime_literal_graph_test)
 
 n00bb_exe = executable(
     'n00bb',
-    ['main.c', 'driver.c', 'preprocessor.c', 'rich_string.c', 'abi_string.c',
-     'specialize.c',
-     'runtime_native_roots.c',
-     'abi_layout.c', 'abi_record_layout.c', 'abi_static_graph.c',
-     'abi_directory.c',
-     'abi_container.c', 'abi_index_patch.c', 'abi_emit.c', 'abi_link.c',
-     'abi_link_finish.c', 'abi_link_strings.c', 'abi_semantics.c',
-     'abi_emit_strings.c',
-     'abi_type_index.c', 'abi_type_rows.c', 'abi_type_layout_rows.c',
-     'abi_enum_rows.c',
-     'abi_function_rows.c', 'abi_constraint_rows.c', 'abi_storage.c',
-     'abi_trait_method_rows.c',
-     'abi_type_signatures.c', 'abi_decl_index.c', 'abi_declarations.c',
-     'llvm_backend.c', 'llvm_native_cache.c', 'llvm_stack_maps.c',
-     'native_frame_maps.c',
-     'global_metadata.c',
-     'storage_selection.c'],
+    ['compiler/main.c', 'compiler/compiler_driver.c', 'compiler/compiler_lower.c', 'compiler/compiler_layout.c', 'compiler/compiler_phases.c', 'compiler/compiler_abi_driver.c', 'compiler/compiler_object_io.c', 'compiler/compiler_cli.c', 'compiler/compiler_tu.c',
+     'compiler/compiler_tu_range.c', 'compiler/compiler_tu_builtins.c',
+     'compiler/compiler_tu_alias.c', 'compiler/compiler_tu_walk.c',
+     'compiler/compiler_tu_interface.c',
+     'compiler/compiler_link.c', 'compiler/compiler_link_calls.c', 'compiler/compiler_link_effects.c',
+     'compiler/compiler_link_initializers.c',
+     'compiler/compiler_link_lifetime.c',
+     'compiler/compiler_link_traits.c',
+     'compiler/compiler_link_packages.c', 'compiler/compiler_link_environment.c',
+     'compiler/compiler_link_stages.c', 'compiler/driver.c',
+     'compiler/enum_value.c',
+     'compiler/preprocessor.c', 'compiler/rich_string.c', 'abi/abi_string.c',
+     'compiler/specialize.c',
+     'runtime/runtime_native_roots.c',
+     'compiler/abi_layout.c', 'compiler/abi_record_layout.c', 'compiler/abi_static_graph.c',
+     'abi/abi_directory.c',
+     'compiler/abi_container.c', 'compiler/abi_index_patch.c', 'compiler/abi_emit.c', 'compiler/abi_link.c',
+     'compiler/abi_link_finish.c', 'compiler/abi_link_strings.c', 'compiler/abi_semantics.c',
+     'compiler/abi_emit_strings.c',
+     'compiler/abi_type_index.c', 'compiler/abi_type_rows.c', 'compiler/abi_type_layout_rows.c',
+     'compiler/abi_enum_rows.c',
+     'compiler/abi_function_rows.c', 'compiler/abi_constraint_rows.c', 'compiler/abi_storage.c',
+     'compiler/abi_trait_method_rows.c',
+     'compiler/abi_type_signatures.c', 'compiler/abi_decl_index.c', 'compiler/abi_declarations.c',
+     'compiler/llvm_backend.c', 'compiler/llvm_native_cache.c', 'compiler/llvm_stack_maps.c',
+     'compiler/native_frame_maps.c',
+     'compiler/global_metadata.c',
+     'compiler/storage_selection.c'],
     dependencies: [lantern, llvm],
     link_with: runtime_abi_support,
     install: true,
 )
 
-install_headers('n00b-abi-v1.h', 'builtin_os.h', 'builtin_abi.h')
+install_headers('abi/n00b-abi-v1.h', 'runtime/builtin_os.h', 'runtime/builtin_abi.h')
 
 builtin_os_test = executable(
     'builtin-os-test',
@@ -191,15 +206,9 @@ runtime_abi_option_test = executable(
 
 test('runtime-abi-option', runtime_abi_option_test)
 
-storage_interface_writer = executable(
-    'storage-interface-writer',
-    ['tests/storage_interface_writer.c', 'global_metadata.c'],
-    dependencies: lantern,
-)
-
 storage_selection_test = executable(
     'storage-selection-test',
-    ['tests/storage_selection.c', 'storage_selection.c'],
+    ['tests/storage_selection.c', 'compiler/storage_selection.c'],
     dependencies: lantern,
 )
 
@@ -215,14 +224,14 @@ test('typehash-abi', typehash_abi_test)
 
 abi_string_value_test = executable(
     'abi-string-value-test',
-    ['tests/abi_string_value.c', 'abi_string.c'],
+    ['tests/abi_string_value.c', 'abi/abi_string.c'],
 )
 
 test('abi-string-value', abi_string_value_test)
 
 abi_layout_test = executable(
     'abi-layout-test',
-    ['tests/abi_layout.c', 'abi_layout.c', 'abi_record_layout.c'],
+    ['tests/abi_layout.c', 'compiler/abi_layout.c', 'compiler/abi_record_layout.c'],
     dependencies: lantern,
 )
 
@@ -244,7 +253,7 @@ test(
 
 abi_record_layout_test = executable(
     'abi-record-layout-test',
-    ['tests/abi_record_layout.c', 'abi_record_layout.c'],
+    ['tests/abi_record_layout.c', 'compiler/abi_record_layout.c'],
     dependencies: lantern,
 )
 
@@ -252,7 +261,7 @@ test('abi-record-layout', abi_record_layout_test)
 
 abi_directory_test = executable(
     'abi-directory-test',
-    ['tests/abi_directory.c', 'abi_directory.c'],
+    ['tests/abi_directory.c', 'abi/abi_directory.c'],
     dependencies: lantern,
 )
 
@@ -260,7 +269,7 @@ test('abi-directory', abi_directory_test)
 
 abi_container_test = executable(
     'abi-container-test',
-    ['tests/abi_container.c', 'abi_container.c', 'abi_directory.c'],
+    ['tests/abi_container.c', 'compiler/abi_container.c', 'abi/abi_directory.c'],
     dependencies: lantern,
 )
 
@@ -268,7 +277,7 @@ test('abi-container', abi_container_test)
 
 abi_index_patch_test = executable(
     'abi-index-patch-test',
-    ['tests/abi_index_patch.c', 'abi_index_patch.c'],
+    ['tests/abi_index_patch.c', 'compiler/abi_index_patch.c'],
     dependencies: lantern,
 )
 
@@ -276,16 +285,16 @@ test('abi-index-patch', abi_index_patch_test)
 
 abi_emit_test = executable(
     'abi-emit-test',
-    ['tests/abi_emit.c', 'abi_emit.c', 'abi_emit_strings.c', 'abi_string.c',
-     'abi_layout.c', 'abi_record_layout.c',
-     'abi_type_index.c', 'abi_type_rows.c', 'abi_type_layout_rows.c',
-     'abi_enum_rows.c',
-     'abi_function_rows.c', 'abi_constraint_rows.c', 'abi_storage.c',
-     'abi_trait_method_rows.c',
-     'abi_type_signatures.c', 'abi_decl_index.c',
-     'abi_declarations.c',
-     'abi_container.c',
-     'abi_directory.c'],
+    ['tests/abi_emit.c', 'compiler/abi_emit.c', 'compiler/abi_emit_strings.c', 'abi/abi_string.c',
+     'compiler/abi_layout.c', 'compiler/abi_record_layout.c',
+     'compiler/abi_type_index.c', 'compiler/abi_type_rows.c', 'compiler/abi_type_layout_rows.c',
+     'compiler/abi_enum_rows.c',
+     'compiler/abi_function_rows.c', 'compiler/abi_constraint_rows.c', 'compiler/abi_storage.c',
+     'compiler/abi_trait_method_rows.c',
+     'compiler/abi_type_signatures.c', 'compiler/abi_decl_index.c',
+     'compiler/abi_declarations.c',
+     'compiler/abi_container.c',
+     'abi/abi_directory.c'],
     dependencies: lantern,
 )
 
@@ -293,18 +302,18 @@ test('abi-emit', abi_emit_test)
 
 abi_emit_unit_test = executable(
     'abi-emit-unit-test',
-    ['tests/abi_emit_unit.c', 'abi_emit.c', 'abi_emit_strings.c', 'abi_string.c',
-     'abi_link.c', 'abi_link_finish.c', 'abi_link_strings.c',
-     'abi_index_patch.c',
-     'abi_layout.c', 'abi_record_layout.c',
-     'abi_type_index.c', 'abi_type_rows.c', 'abi_type_layout_rows.c',
-     'abi_enum_rows.c',
-     'abi_function_rows.c', 'abi_constraint_rows.c', 'abi_storage.c',
-     'abi_trait_method_rows.c',
-     'abi_type_signatures.c', 'abi_decl_index.c',
-     'abi_declarations.c',
-     'abi_container.c',
-     'abi_directory.c', 'abi_string.c'],
+    ['tests/abi_emit_unit.c', 'compiler/abi_emit.c', 'compiler/abi_emit_strings.c', 'abi/abi_string.c',
+     'compiler/abi_link.c', 'compiler/abi_link_finish.c', 'compiler/abi_link_strings.c',
+     'compiler/abi_index_patch.c',
+     'compiler/abi_layout.c', 'compiler/abi_record_layout.c',
+     'compiler/abi_type_index.c', 'compiler/abi_type_rows.c', 'compiler/abi_type_layout_rows.c',
+     'compiler/abi_enum_rows.c',
+     'compiler/abi_function_rows.c', 'compiler/abi_constraint_rows.c', 'compiler/abi_storage.c',
+     'compiler/abi_trait_method_rows.c',
+     'compiler/abi_type_signatures.c', 'compiler/abi_decl_index.c',
+     'compiler/abi_declarations.c',
+     'compiler/abi_container.c',
+     'abi/abi_directory.c', 'abi/abi_string.c'],
     dependencies: lantern,
 )
 
@@ -312,22 +321,22 @@ test('abi-emit-unit', abi_emit_unit_test)
 
 abi_record_object_test = executable(
     'abi-record-object-test',
-    ['tests/abi_record_object.c', 'abi_container.c', 'abi_directory.c'],
+    ['tests/abi_record_object.c', 'compiler/abi_container.c', 'abi/abi_directory.c'],
     dependencies: lantern,
 )
 
 abi_link_input_test = executable(
     'abi-link-input-test',
-    ['tests/abi_link_input.c', 'abi_link.c', 'abi_string.c',
-     'abi_index_patch.c',
-     'abi_link_finish.c', 'abi_link_strings.c', 'abi_emit.c',
-     'abi_emit_strings.c',
-     'abi_layout.c', 'abi_record_layout.c',
-     'abi_type_index.c', 'abi_type_rows.c', 'abi_type_layout_rows.c',
-     'abi_enum_rows.c', 'abi_function_rows.c', 'abi_constraint_rows.c',
-     'abi_storage.c', 'abi_trait_method_rows.c',
-     'abi_type_signatures.c', 'abi_decl_index.c', 'abi_declarations.c',
-     'abi_container.c', 'abi_directory.c'],
+    ['tests/abi_link_input.c', 'compiler/abi_link.c', 'abi/abi_string.c',
+     'compiler/abi_index_patch.c',
+     'compiler/abi_link_finish.c', 'compiler/abi_link_strings.c', 'compiler/abi_emit.c',
+     'compiler/abi_emit_strings.c',
+     'compiler/abi_layout.c', 'compiler/abi_record_layout.c',
+     'compiler/abi_type_index.c', 'compiler/abi_type_rows.c', 'compiler/abi_type_layout_rows.c',
+     'compiler/abi_enum_rows.c', 'compiler/abi_function_rows.c', 'compiler/abi_constraint_rows.c',
+     'compiler/abi_storage.c', 'compiler/abi_trait_method_rows.c',
+     'compiler/abi_type_signatures.c', 'compiler/abi_decl_index.c', 'compiler/abi_declarations.c',
+     'compiler/abi_container.c', 'abi/abi_directory.c'],
     dependencies: lantern,
 )
 
@@ -340,7 +349,7 @@ abi_register_object_test = executable(
 
 abi_emit_strings_test = executable(
     'abi-emit-strings-test',
-    ['tests/abi_emit_strings.c', 'abi_emit_strings.c', 'abi_string.c'],
+    ['tests/abi_emit_strings.c', 'compiler/abi_emit_strings.c', 'abi/abi_string.c'],
     dependencies: lantern,
 )
 
@@ -348,8 +357,8 @@ test('abi-emit-strings', abi_emit_strings_test)
 
 abi_type_rows_test = executable(
     'abi-type-rows-test',
-    ['tests/abi_type_rows.c', 'abi_type_rows.c', 'abi_type_index.c',
-     'abi_emit_strings.c', 'abi_string.c', 'abi_decl_index.c'],
+    ['tests/abi_type_rows.c', 'compiler/abi_type_rows.c', 'compiler/abi_type_index.c',
+     'compiler/abi_emit_strings.c', 'abi/abi_string.c', 'compiler/abi_decl_index.c'],
     dependencies: lantern,
 )
 
@@ -357,9 +366,9 @@ test('abi-type-rows', abi_type_rows_test)
 
 abi_type_layout_rows_test = executable(
     'abi-type-layout-rows-test',
-    ['tests/abi_type_layout_rows.c', 'abi_type_layout_rows.c',
-     'abi_type_rows.c', 'abi_type_index.c', 'abi_emit_strings.c',
-     'abi_decl_index.c'],
+    ['tests/abi_type_layout_rows.c', 'compiler/abi_type_layout_rows.c',
+     'compiler/abi_type_rows.c', 'compiler/abi_type_index.c', 'compiler/abi_emit_strings.c',
+     'compiler/abi_decl_index.c'],
     dependencies: lantern,
 )
 
@@ -367,9 +376,9 @@ test('abi-type-layout-rows', abi_type_layout_rows_test)
 
 abi_type_signatures_test = executable(
     'abi-type-signatures-test',
-    ['tests/abi_type_signatures.c', 'abi_type_signatures.c',
-     'abi_type_rows.c', 'abi_type_index.c', 'abi_emit_strings.c',
-     'abi_string.c', 'abi_decl_index.c'],
+    ['tests/abi_type_signatures.c', 'compiler/abi_type_signatures.c',
+     'compiler/abi_type_rows.c', 'compiler/abi_type_index.c', 'compiler/abi_emit_strings.c',
+     'abi/abi_string.c', 'compiler/abi_decl_index.c'],
     dependencies: lantern,
 )
 
@@ -377,7 +386,7 @@ test('abi-type-signatures', abi_type_signatures_test)
 
 abi_decl_index_test = executable(
     'abi-decl-index-test',
-    ['tests/abi_decl_index.c', 'abi_decl_index.c'],
+    ['tests/abi_decl_index.c', 'compiler/abi_decl_index.c'],
     dependencies: lantern,
 )
 
@@ -385,9 +394,9 @@ test('abi-decl-index', abi_decl_index_test)
 
 abi_declarations_test = executable(
     'abi-declarations-test',
-    ['tests/abi_declarations.c', 'abi_declarations.c',
-     'abi_decl_index.c', 'abi_type_rows.c', 'abi_type_index.c',
-     'abi_emit_strings.c'],
+    ['tests/abi_declarations.c', 'compiler/abi_declarations.c',
+     'compiler/abi_decl_index.c', 'compiler/abi_type_rows.c', 'compiler/abi_type_index.c',
+     'compiler/abi_emit_strings.c'],
     dependencies: lantern,
 )
 
@@ -395,7 +404,7 @@ test('abi-declarations', abi_declarations_test)
 
 abi_type_index_test = executable(
     'abi-type-index-test',
-    ['tests/abi_type_index.c', 'abi_type_index.c'],
+    ['tests/abi_type_index.c', 'compiler/abi_type_index.c'],
     dependencies: lantern,
 )
 
@@ -403,8 +412,8 @@ test('abi-type-index', abi_type_index_test)
 
 llvm_backend_test = executable(
     'llvm-backend-test',
-    ['tests/llvm_backend.c', 'llvm_backend.c', 'llvm_native_cache.c',
-     'runtime_native_roots.c'],
+    ['tests/llvm_backend.c', 'compiler/llvm_backend.c', 'compiler/llvm_native_cache.c',
+     'runtime/runtime_native_roots.c'],
     dependencies: [lantern, llvm],
 )
 
@@ -412,23 +421,23 @@ test('llvm-backend', llvm_backend_test)
 
 llvm_native_cache_test = executable(
     'llvm-native-cache-test',
-    ['tests/llvm_native_cache.c', 'llvm_native_cache.c'],
+    ['tests/llvm_native_cache.c', 'compiler/llvm_native_cache.c'],
     dependencies: [lantern, llvm],
 )
 test('llvm-native-cache', llvm_native_cache_test)
 
 llvm_stack_maps_test = executable(
     'llvm-stack-maps-test',
-    ['tests/llvm_stack_maps.c', 'llvm_stack_maps.c',
-     'native_frame_maps.c'],
+    ['tests/llvm_stack_maps.c', 'compiler/llvm_stack_maps.c',
+     'compiler/native_frame_maps.c'],
     dependencies: [lantern, llvm],
 )
 test('llvm-stack-maps', llvm_stack_maps_test)
 
 llvm_frame_roots_test = executable(
     'llvm-frame-roots-test',
-    ['tests/llvm_frame_roots.c', 'llvm_backend.c', 'llvm_native_cache.c',
-     'llvm_stack_maps.c', 'native_frame_maps.c', 'runtime_native_roots.c'],
+    ['tests/llvm_frame_roots.c', 'compiler/llvm_backend.c', 'compiler/llvm_native_cache.c',
+     'compiler/llvm_stack_maps.c', 'compiler/native_frame_maps.c', 'runtime/runtime_native_roots.c'],
     dependencies: [lantern, llvm],
 )
 test('llvm-frame-roots', llvm_frame_roots_test)
@@ -439,6 +448,124 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs'
                / 'containers' / 'readiness' / 'dict_basic.n'],
+    suite: 'regression',
+)
+
+test(
+    'compound-order-n00b', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'operator_compound_evaluation_order.n00b'],
+    env: ['N00B_PATH=' + (meson.current_source_dir() / 'tests' / 'programs')],
+    suite: 'regression',
+)
+
+test(
+    'tuple-pairs-n00b', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'containers' / 'readiness' / 'dict_tuple_pairs.n'],
+    suite: 'regression',
+)
+
+test(
+    'tree-n00b', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'containers' / 'readiness' / 'tree_basic.n'],
+    suite: 'regression',
+)
+
+test(
+    'trait-typecase-generic-pair', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'containers' / 'readiness'
+               / 'trait_typecase_generic_pair.n'],
+    suite: 'regression',
+)
+
+test(
+    'ref-field-compound-n00b', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'bitcode' / 'bitcode_ref_field_compound.n'],
+    suite: 'regression',
+)
+
+test(
+    'let-integer-n00b', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'features' / 'let_integer_runtime.n'],
+    suite: 'regression',
+)
+
+test(
+    'generic-trait-unbound-method', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'features' / 'generic_trait_unbound_method.n'],
+    suite: 'regression',
+)
+
+test(
+    'generic-union-parameter', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'features' / 'generic_union_parameter.n'],
+    suite: 'regression',
+)
+
+test(
+    'typecase-array-index', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'features' / 'typecase_array_index.n'],
+    suite: 'regression',
+)
+
+test(
+    'default-integer-keywords', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'features' / 'default_integer_keywords.n'],
+    suite: 'regression',
+)
+
+test(
+    'byte-literal-trait-arguments', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'features' / 'byte_literal_trait_arguments.n'],
+    suite: 'regression',
+)
+
+test(
+    'visibility-n00b', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'visibility_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'type_visibility'],
+    suite: 'regression',
+)
+
+test(
+    'package-imports', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'package_imports.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'packages'],
     suite: 'regression',
 )
 
@@ -891,7 +1018,7 @@ if host_machine.system() == 'darwin'
                meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                    / 'bitcode_gc_worker_live.n',
                gc_worker_thread_object.full_path(),
-               'builtin.gc.collect.worker'],
+               'sys.internal.gc.collect.worker'],
     )
 endif
 
@@ -938,6 +1065,24 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_array_value_index.n'],
+)
+
+test(
+    'variant-array-literal-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_variant_array_literal.n'],
+)
+
+test(
+    'index-read-variant-override-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_index_read_variant_override.n'],
 )
 
 test(
@@ -1220,6 +1365,7 @@ test(
     args: [meson.current_source_dir() / 'tests' / 'bitcode.sh',
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'],
+    timeout: 120,
 )
 
 test(
@@ -1232,17 +1378,22 @@ test(
 )
 
 test(
-    'preprocessor',
+    'abi-link-fixtures',
     find_program('sh'),
     suite: 'regression',
-    args: [meson.current_source_dir() / 'tests' / 'preprocessor.sh',
-           n00bb_exe.full_path(), storage_interface_writer.full_path(),
-           abi_record_object_test.full_path(),
+    args: [meson.current_source_dir() / 'tests' / 'abi_link_fixtures.sh',
+           n00bb_exe.full_path(), abi_record_object_test.full_path(),
            abi_link_input_test.full_path(),
            abi_register_object_test.full_path()],
-    env: ['N00BB_STACK_OBJECT_LIMIT_BYTES='
-        + get_option('stack_object_limit_bytes').to_string()],
     timeout: 120,
+)
+
+test(
+    'formatter',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'formatter.sh',
+           n00bb_exe.full_path()],
+    timeout: 30,
 )
 
 foreach fixture : [

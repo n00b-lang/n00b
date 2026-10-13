@@ -1,3 +1,0 @@
-when !preproc_env_defines("N00BB_UNSET_TEST") and preproc_env("N00BB_UNSET_TEST") == "" {
-    var undefined_environment_selected = true
-}

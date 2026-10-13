@@ -1,2 +1,0 @@
-func local_link_target() -> int { return 1 }
-func local_link_caller() -> int { return local_link_target() }

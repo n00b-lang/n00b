@@ -11,6 +11,8 @@ func value(x: string) -> Array[string] {
 }
 
 comptime {
-} else {
+}
+
+func run_test() {
     value("dynamic")
 }

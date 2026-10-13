@@ -1,0 +1,53 @@
+public const context_registers: uint = 48
+
+record Thread_Context layout(c) {
+    sp:        Ref[byte]?
+    fp:        Ref[byte]?
+    nregs:     uint
+    regs:      Array[uint][context_registers]
+    parked:    Atomic[u32]
+    handle:    uint
+    thread_id: u64
+    pc:        Ref[byte]?
+}
+
+func thread_yield() {
+    __os_thread_yield()
+}
+
+func thread_fence() {
+    __os_thread_fence()
+}
+
+func thread_id() -> uint {
+    return __os_thread_id()
+}
+
+func thread_stack_high_self() -> Ref[byte]? {
+    return __os_thread_stack_high_self()
+}
+
+func stack_red_zone_bytes() -> uint {
+    return __os_stack_red_zone_bytes()
+}
+
+func thread_control_self() -> uint {
+    return __os_thread_control_self()
+}
+
+func thread_capture_self(snapshot: Ref[Thread_Context]) {
+    __os_thread_capture_self(snapshot)
+}
+
+func thread_suspend(control: uint, snapshot: Ref[Thread_Context], timeout_ns: u64)
+                   -> i32 {
+    return __os_thread_suspend(control, snapshot, timeout_ns)
+}
+
+func thread_resume(control: uint, snapshot: Ref[Thread_Context]) -> i32 {
+    return __os_thread_resume(control, snapshot)
+}
+
+func cpu_relax() {
+    __os_cpu_relax()
+}

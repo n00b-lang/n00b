@@ -1,7 +1,0 @@
-trait Combine {
-    func combine(self: `T, other: `T) -> `T
-}
-func combine(self: int, other: int) -> int { return other }
-func wrong_argument(item: int, other: string) -> int {
-    return item.combine(other)
-}

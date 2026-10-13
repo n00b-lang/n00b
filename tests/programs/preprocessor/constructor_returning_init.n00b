@@ -1,7 +1,0 @@
-type ConstructorReturn {
-    payload: int
-}
-
-func __init(modify self: ConstructorReturn) -> int {
-    return 1
-}

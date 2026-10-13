@@ -1,3 +1,0 @@
-when preproc_value("FEATURE") == true {
-    var selected = preproc_env("N00BB_TEST_ENV")
-}

@@ -1,8 +1,8 @@
 package epsilon {
     when true {
         when true {
-            import epsilon.impl
-            export epsilon.impl.answer
+            import impl
+            export impl.answer
         }
     }
     when false {

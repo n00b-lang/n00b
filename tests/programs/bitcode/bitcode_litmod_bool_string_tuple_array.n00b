@@ -9,6 +9,8 @@ func values() -> Array[Tuple[bool, string]] {
 
 comptime {
     values()
-} else {
+}
+
+func run_test() {
     values()
 }

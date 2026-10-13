@@ -1,0 +1,28 @@
+variant Choice {
+    number: int
+    empty: nil
+}
+
+variant Other {
+    value: int
+    none: nil
+}
+
+trait Index_Read {
+    func __read(self: `T, index: int) -> Other
+}
+
+func __read(self: Array[Choice], index: int) -> Other {
+    let result: Other = (value = 9)
+    return result
+}
+
+comptime {} else {
+    let values: Array[Choice] = [(number = 7)]
+    let item = values[0]
+    switch item {
+        case value { require item.value == 9 }
+        case none { require false }
+    }
+    __fd_write(2, "ok")
+}

@@ -1,5 +1,0 @@
-func labeled_continue(flag: bool) {
-    outer: while flag {
-        while flag { continue outer }
-    }
-}

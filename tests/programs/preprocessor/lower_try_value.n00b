@@ -1,4 +1,0 @@
-func fail_with_int() -> int fail: int { fail 7 }
-func catch_error_value() -> int {
-    return try { = fail_with_int()! } else err { = 42 }
-}

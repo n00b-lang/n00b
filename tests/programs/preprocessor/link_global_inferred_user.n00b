@@ -1,3 +1,0 @@
-import link_global_inferred_dep
-
-func read_remote() -> int { return link_global_inferred_dep.remote_global }

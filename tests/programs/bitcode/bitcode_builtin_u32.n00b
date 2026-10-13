@@ -3,6 +3,8 @@ func letters() -> Array[char] {
 }
 
 comptime {
-} else {
+}
+
+func run_test() {
     letters()
 }

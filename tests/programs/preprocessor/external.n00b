@@ -1,5 +1,0 @@
-when preproc_value("FEATURE") == true {
-    var selected = preproc_value("COUNT")
-} else {
-    var removed = 2
-}

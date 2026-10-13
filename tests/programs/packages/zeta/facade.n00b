@@ -1,4 +1,4 @@
-import zeta.impl
+import impl
 
 func initialize_marker() -> int {
     return 4
@@ -7,14 +7,16 @@ func initialize_marker() -> int {
 public var marker: int = initialize_marker()
 
 package zeta {
-    export zeta.impl.root as value
+    export impl.root as value
     export marker
+    export package tools
 }
 
 package zeta.tools {
-    export zeta.impl.tool as value
+    export impl.tool as value
+    export package deep
 }
 
 package zeta.tools.deep {
-    export zeta.impl.deep as value
+    export impl.deep as value
 }

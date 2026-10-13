@@ -25,7 +25,9 @@ func observe(value: float) {
 comptime {
     observe("compile-time"'as_float)
     require "checked at comptime"'as_float == 3.5
-} else {
+}
+
+func run_test() {
     require scalar() == 3.5
     array_values()
     dynamic(3.5)

@@ -11,7 +11,9 @@ func dynamic_values(x: int) -> Array[int] {
 }
 
 comptime {
-} else {
+}
+
+func run_test() {
     static_values()
     dynamic_values(3)
 }

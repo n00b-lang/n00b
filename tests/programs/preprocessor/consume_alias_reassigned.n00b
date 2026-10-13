@@ -1,9 +1,0 @@
-func take(consume item: int) {}
-
-func alias_after_reassignment(value: int) -> int {
-    var local: int = value
-    var borrowed = ref local
-    take(local)
-    local = 8
-    return ref_read(borrowed)
-}

@@ -1,6 +1,0 @@
-import return_alias_mismatch.b
-
-public func from_a(first, second, again: bool) {
-    if again { return return_alias_mismatch.b.from_b(first, second, false) }
-    else { return first }
-}

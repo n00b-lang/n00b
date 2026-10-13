@@ -1,0 +1,5 @@
+import beta
+
+package foreign_export {
+    export beta.read
+}

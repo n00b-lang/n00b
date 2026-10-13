@@ -1,0 +1,5 @@
+import internal.abi
+
+package sys.abi {
+    export internal.abi
+}

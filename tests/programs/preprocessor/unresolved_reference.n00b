@@ -1,3 +1,0 @@
-func unresolved_reference() -> int {
-    return missing_value
-}

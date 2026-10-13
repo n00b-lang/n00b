@@ -1,5 +1,0 @@
-func local_assignment() -> int {
-    var total: int = 1
-    total = total + 2
-    return total
-}

@@ -1,4 +1,0 @@
-import package_dep
-func accept(item: package_dep.PackageRecord) -> package_dep.PackageRecord {
-    return item
-}

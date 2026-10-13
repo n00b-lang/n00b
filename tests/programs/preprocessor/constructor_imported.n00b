@@ -1,5 +1,0 @@
-import constructor_dep
-
-func construct_imported(payload: int) -> constructor_dep.ImportedRecord {
-    return new[constructor_dep.ImportedRecord](payload)
-}

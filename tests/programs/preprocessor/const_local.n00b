@@ -1,6 +1,0 @@
-when true {
-    const visible = true
-    when visible {
-        var selected = true
-    }
-}

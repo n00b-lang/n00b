@@ -1,9 +1,9 @@
-import delta.impl
+import impl
 
 package delta {
     when target_os() == "macos" {
-        export delta.impl.selected
+        export impl.selected
     } else {
-        export delta.impl.rejected
+        export impl.rejected
     }
 }

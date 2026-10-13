@@ -1,6 +1,0 @@
-func fail_with_int() -> int fail: int { fail 7 }
-func nested_try() -> int {
-    try {
-        try { return fail_with_int()! } else inner { return inner }
-    } else outer { return 99 }
-}

@@ -1,4 +1,4 @@
-import builtin.os
+import sys.memory
 
 const stderr_fd: i32 = 2
 
@@ -13,13 +13,13 @@ func offset_round_trip() -> bool {
 }
 
 func offset_backwards() -> bool {
-    let mapped: Ref[byte]? = builtin.os.map_zeroed(32, 16)
+    let mapped: Ref[byte]? = sys.memory.map_zeroed(32, 16)
     if mapped != nil {
         let base: Ref[byte] = mapped.get()
         let tail: Ref[byte] = __gc_byte_offset(base, 16)
         let head: Ref[byte] = __gc_byte_offset(tail, -16)
         let same: bool = head == base
-        builtin.os.unmap(base, 32)
+        sys.memory.unmap(base, 32)
         return same
     }
     require false

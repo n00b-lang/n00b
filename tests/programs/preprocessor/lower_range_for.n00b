@@ -1,5 +1,0 @@
-func range_for() -> int {
-    for index from 1 to 3 { return index }
-    for other from 1 until 3 { continue }
-    return 0
-}

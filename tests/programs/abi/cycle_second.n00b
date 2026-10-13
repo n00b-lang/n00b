@@ -1,2 +1,0 @@
-import cycle_first
-public func second() -> int { return 2 }

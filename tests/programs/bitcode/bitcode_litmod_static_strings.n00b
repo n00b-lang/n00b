@@ -16,7 +16,9 @@ func observe(items: Array[string]) {
 
 comptime {
     observe(["compile-time cached string"]'bundle)
-} else {
+}
+
+func run_test() {
     values()
     empty()
 }

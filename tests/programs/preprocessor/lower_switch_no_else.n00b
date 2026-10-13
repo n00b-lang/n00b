@@ -1,6 +1,0 @@
-func choose_optional(flag: bool) -> int {
-    switch flag {
-    case true { return 1 }
-    }
-    return 0
-}

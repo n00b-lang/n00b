@@ -1,0 +1,5 @@
+func aliases(unsigned_input: u64, signed_input: i64) -> u64 {
+    let unsigned_value = unsigned_input
+    let signed_value = signed_input
+    return unsigned_value + cast[u64](signed_value)
+}

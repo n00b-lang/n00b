@@ -1,4 +1,0 @@
-import cycle_d
-when true or cycle_d.enabled {
-    var short_circuit_selected = true
-}

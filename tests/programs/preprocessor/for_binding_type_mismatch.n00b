@@ -1,9 +1,0 @@
-var next_item: int?
-
-public func iter(self: int) -> string { return "cursor" }
-public func next(modify self: string) -> int? { return next_item }
-public func cleanup(consume self: string) { }
-
-func mismatch(items: int) {
-    for let item: string in items { item }
-}

@@ -22,7 +22,7 @@ main(void)
         const n00bb_runtime_native_root_t *root =
             &n00bb_runtime_native_roots[i];
         if (strcmp(root->qualified_name,
-            "builtin.gc.alloc.allocate_runtime_known_on_mutator")) continue;
+            "sys.internal.gc.alloc.allocate_runtime_known_on_mutator")) continue;
         assert(!root->c_alias && root->unmanaged_parameter_count == 1
             && root->unmanaged_parameters[0] == 0);
         allocator_root = true;
@@ -788,7 +788,7 @@ main(void)
             || (is_comptime && !lowered_barrier));
         if (lowered_barrier) {
             LLVMValueRef barrier = LLVMGetNamedFunction(parsed,
-                "builtin.gc.alloc.barrier_pointer_runtime");
+                "sys.internal.gc.alloc.barrier_pointer_runtime");
             bool found_barrier = false;
             bool found_store = false;
             for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(lowered_barrier);
@@ -809,7 +809,7 @@ main(void)
             || (is_comptime && !lowered_heap_store));
         if (lowered_heap_store) {
             LLVMValueRef barrier = LLVMGetNamedFunction(parsed,
-                "builtin.gc.alloc.barrier_pointer_runtime");
+                "sys.internal.gc.alloc.barrier_pointer_runtime");
             bool found_barrier = false;
             bool stored_after_barrier = false;
             for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(lowered_heap_store);
@@ -836,7 +836,7 @@ main(void)
                 || (is_comptime && !root_store));
             if (!root_store) continue;
             LLVMValueRef barrier = LLVMGetNamedFunction(parsed,
-                "builtin.gc.alloc.barrier_pointer_runtime");
+                "sys.internal.gc.alloc.barrier_pointer_runtime");
             for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(root_store);
                  bb; bb = LLVMGetNextBasicBlock(bb))
                 for (LLVMValueRef instruction = LLVMGetFirstInstruction(bb);
@@ -935,9 +935,9 @@ main(void)
                 == LLVMCountParams(lowered_allocation) + 1);
             lowered_allocation = private_entry;
             LLVMValueRef allocator = LLVMGetNamedFunction(parsed,
-                "builtin.gc.alloc.allocate_runtime_known_on_mutator$gc_mutator");
+                "sys.internal.gc.alloc.allocate_runtime_known_on_mutator$gc_mutator");
             LLVMValueRef getter = LLVMGetNamedFunction(parsed,
-                "builtin.gc.alloc.mutator_for_native");
+                "sys.internal.gc.alloc.mutator_for_native");
             bool found = false;
             bool found_getter = false;
             for (LLVMBasicBlockRef block = LLVMGetFirstBasicBlock(wrapper);
@@ -987,7 +987,7 @@ main(void)
                 if (LLVMGetInstructionOpcode(value) == LLVMCall)
                     assert(LLVMGetCalledValue(value) != LLVMGetNamedFunction(
                         parsed,
-                        "builtin.gc.alloc.allocate_runtime_known_on_mutator$gc_mutator"));
+                        "sys.internal.gc.alloc.allocate_runtime_known_on_mutator$gc_mutator"));
             }
             assert(found_stack_storage);
         }
@@ -1009,7 +1009,7 @@ main(void)
                 if (LLVMGetInstructionOpcode(value) == LLVMCall
                     && LLVMGetCalledValue(value) == LLVMGetNamedFunction(
                         parsed,
-                        "builtin.gc.alloc.allocate_runtime_known_on_mutator$gc_mutator"))
+                        "sys.internal.gc.alloc.allocate_runtime_known_on_mutator$gc_mutator"))
                     found_dynamic_storage = true;
             assert(found_dynamic_storage);
         }
@@ -1029,7 +1029,7 @@ main(void)
                 if (LLVMGetInstructionOpcode(value) == LLVMCall)
                     assert(LLVMGetCalledValue(value) != LLVMGetNamedFunction(
                         parsed,
-                        "builtin.gc.alloc.allocate_runtime_known_on_mutator$gc_mutator"));
+                        "sys.internal.gc.alloc.allocate_runtime_known_on_mutator$gc_mutator"));
                 if (LLVMGetInstructionOpcode(value) == LLVMGetElementPtr)
                     found_address = true;
                 if (LLVMGetInstructionOpcode(value) == LLVMExtractValue)
@@ -1189,9 +1189,9 @@ main(void)
     n00bb_llvm_backend_free(backend);
 
     ir_module_t *native_comptime = ir_module_new(context,
-        "builtin.gc.alloc$comptime", &profile, target);
+        "sys.internal.gc.alloc$comptime", &profile, target);
     ir_module_t *native_runtime = ir_module_new(context,
-        "builtin.gc.alloc", &profile, target);
+        "sys.internal.gc.alloc", &profile, target);
     ir_func_t *native_function = ir_func_add(native_runtime,
         "allocate_runtime", ir_type_parse(native_runtime, "() -> nil"),
         IR_LINK_INTERNAL);

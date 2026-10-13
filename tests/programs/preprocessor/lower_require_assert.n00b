@@ -1,7 +1,0 @@
-func unchanged(x: bool) -> bool { return x }
-
-func checks(x: bool) {
-    require x
-    assert x
-    assert unchanged(x)
-}

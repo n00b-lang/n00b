@@ -1,3 +1,0 @@
-when true or compile_warning("must not run") {
-    var impossible = true
-}

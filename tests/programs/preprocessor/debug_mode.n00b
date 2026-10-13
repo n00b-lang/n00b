@@ -1,5 +1,0 @@
-when debug_enabled() {
-    var debug_branch: bool = debug_enabled()
-} else {
-    var release_branch: bool = debug_enabled()
-}

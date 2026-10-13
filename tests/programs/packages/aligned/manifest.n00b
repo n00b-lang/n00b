@@ -1,0 +1,11 @@
+import child
+import use
+
+package aligned {
+    export package child
+    export use.doubled
+}
+
+package aligned.child {
+    export child.answer
+}

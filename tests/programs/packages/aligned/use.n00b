@@ -1,0 +1,5 @@
+import child
+
+func doubled() -> int {
+    return child.answer * 2
+}

@@ -1,0 +1,594 @@
+import internal.abi
+import internal.gc.core
+import internal.gc.collect
+import internal.gc.finalize
+import internal.gc.handshake
+import internal.gc.heap
+import internal.gc.los
+import internal.gc.mark
+import internal.gc.mutator
+import internal.gc.registry
+import internal.gc.roots
+import internal.gc.sync
+import internal.threads
+import internal.memory
+
+const grow_blocks:      uint                          = 32
+const grow_batch_count: uint                          = 4
+const sweep_batch:      uint                          = 16
+
+var runtime_heap:       Atomic[Ref[internal.gc.core.Heap]?] = nil
+var runtime_heap_lock:  Atomic[uint]                  = 0
+thread var runtime_mutator: Ref[internal.gc.core.Mutator]? = nil
+thread var runtime_barrier_active: bool = false
+
+inline func active_mutator() -> Ref[internal.gc.core.Mutator]? {
+    let existing: Ref[internal.gc.core.Mutator]? = runtime_mutator
+    if existing != nil {
+        return existing
+    }
+    let prior_barrier: bool = runtime_barrier_active
+    runtime_barrier_active = true
+    while !__atomic_compare_exchange(ref runtime_heap_lock, 0, 1) {
+        internal.threads.cpu_relax()
+    }
+    var heap: Ref[internal.gc.core.Heap]? = __atomic_load(ref runtime_heap)
+    if heap == nil {
+        var config: internal.gc.core.Config
+        internal.gc.heap.config_default(ref config)
+        config.scan_stacks = true
+        heap = internal.gc.heap.create(ref config)
+        __atomic_store(ref runtime_heap, heap)
+    }
+    __atomic_store(ref runtime_heap_lock, 0)
+    if heap != nil {
+        let created: Ref[internal.gc.core.Mutator]? = internal.gc.mutator.create(heap.get())
+        runtime_mutator = created
+        runtime_barrier_active = prior_barrier
+        return created
+    }
+    runtime_barrier_active = prior_barrier
+    return nil
+}
+
+func barrier_runtime(address: Ref[byte], type_index: u32) {
+    let heap: Ref[internal.gc.core.Heap]? = __atomic_load(ref runtime_heap)
+    if heap == nil {
+        return
+    }
+    let active: Ref[internal.gc.core.Heap] = heap.get()
+    if !__atomic_load(ref active.marking) {
+        return
+    }
+    if runtime_barrier_active {
+        return
+    }
+    runtime_barrier_active = true
+    let mutator: Ref[internal.gc.core.Mutator]? = active_mutator()
+    if mutator != nil {
+        internal.gc.mark.barrier_value(mutator.get(), address, type_index)
+        runtime_barrier_active = false
+        return
+    }
+    require false
+}
+
+func barrier_pointer_runtime(value: Ref[byte]?) {
+    if value == nil {
+        return
+    }
+    let heap: Ref[internal.gc.core.Heap]? = __atomic_load(ref runtime_heap)
+    if heap == nil {
+        return
+    }
+    let active: Ref[internal.gc.core.Heap] = heap.get()
+    if !__atomic_load(ref active.marking) {
+        return
+    }
+    if runtime_barrier_active {
+        return
+    }
+    runtime_barrier_active = true
+    let mutator: Ref[internal.gc.core.Mutator]? = active_mutator()
+    if mutator != nil {
+        internal.gc.mark.barrier_pointer(mutator.get(), value)
+        runtime_barrier_active = false
+        return
+    }
+    require false
+}
+
+func block_release(heap: Ref[internal.gc.core.Heap], blk: Ref[internal.gc.core.Block_Metadata]) {
+    let previous: Ref[internal.gc.core.Block_Metadata]? = blk.all_prev
+    if previous != nil {
+        previous.get().all_next = blk.all_next
+    } else {
+        heap.all_blocks = blk.all_next
+    }
+    let next: Ref[internal.gc.core.Block_Metadata]? = blk.all_next
+    if next != nil {
+        next.get().all_prev = blk.all_prev
+    }
+    let cursor: Ref[internal.gc.core.Block_Metadata]? = heap.sweep_cursor
+    if cursor != nil {
+        if cursor.get() == blk {
+            heap.sweep_cursor = blk.all_next
+        }
+    }
+    heap.nblocks -= 1
+    internal.gc.core.set_block_state(heap, blk, internal.gc.core.Block_State.retired)
+    if blk.sweep_epoch != heap.epoch {
+        __atomic_fetch_sub(ref heap.nunswept, 1)
+    }
+    internal.gc.registry.region_release_block(heap, blk)
+    blk.magic = 0
+    internal.memory.unmap(blk, internal.gc.core.block_bytes)
+}
+
+func list_block(heap: Ref[internal.gc.core.Heap], blk: Ref[internal.gc.core.Block_Metadata]) {
+    let usable_lines: uint = internal.gc.core.block_bytes / internal.gc.core.line_bytes - internal.gc.core.header_lines()
+    if cast[uint](blk.free_lines) == usable_lines {
+        if !blk.on_owned and !__atomic_load(ref blk.in_final) and
+            internal.gc.core.committed_bytes(heap) > heap.keep_bytes {
+            block_release(heap, blk)
+            return
+        }
+        internal.gc.core.push_free(heap, blk)
+    } elif blk.free_lines != 0 {
+        internal.gc.core.set_block_state(heap, blk, internal.gc.core.Block_State.recyclable)
+        blk.next = heap.recyclable_blocks
+        heap.recyclable_blocks = blk
+        heap.nrecyclable += 1
+    } else {
+        internal.gc.core.set_block_state(heap, blk, internal.gc.core.Block_State.full)
+        blk.next = nil
+        heap.nfull += 1
+    }
+}
+
+func return_to_lists(heap: Ref[internal.gc.core.Heap], blk: Ref[internal.gc.core.Block_Metadata]) {
+    let capacity: uint = internal.gc.core.capacity(blk)
+    if blk.sweep_epoch != heap.epoch {
+        internal.gc.collect.sweep_block(heap, blk, heap.epoch)
+    }
+    if heap.alloc_since_gc > capacity {
+        heap.alloc_since_gc -= capacity
+    } else {
+        heap.alloc_since_gc = 0
+    }
+    list_block(heap, blk)
+}
+
+func bump_release(heap: Ref[internal.gc.core.Heap], bump: Ref[internal.gc.core.Bump]) {
+    let empty:   Ref[internal.gc.core.Block_Metadata]? = nil
+    var current: Ref[internal.gc.core.Block_Metadata]? = __atomic_exchange(ref bump.cache, empty)
+    while current != nil {
+        let blk:  Ref[internal.gc.core.Block_Metadata]  = current.get()
+        let next: Ref[internal.gc.core.Block_Metadata]? = blk.next
+        return_to_lists(heap, blk)
+        current = next
+    }
+
+    let attached: Ref[internal.gc.core.Block_Metadata]? = bump.blk
+    if attached != nil {
+        internal.gc.core.set_block_state(heap, attached.get(), internal.gc.core.Block_State.retired)
+    }
+    bump.cursor = nil
+    bump.limit = nil
+    bump.line = internal.gc.core.header_lines()
+    bump.blk = nil
+}
+
+inline func allocate_reserved_validated(mutator: Ref[internal.gc.core.Mutator],
+                                 bump: Ref[internal.gc.core.Bump], type_index: u32,
+                                 payload_bytes: uint, finalizable: bool,
+                                 bytes: uint, header_bytes: uint,
+                                 instance_descriptor: Ref[internal.abi.Array_Descriptor_Header]?,
+                                 slot: Ref[Ref[byte]?]?) -> Ref[byte]? {
+    let granule:   uint       = internal.gc.core.granule_bytes
+    let candidate: Ref[byte]? = bump.cursor
+    if candidate != nil {
+        let memory:  Ref[byte]                      = candidate.get()
+        let block:   Ref[internal.gc.core.Block_Metadata] = internal.gc.core.block_of_bytes(memory)
+        let address: uint                           = __abi_ref_address(memory)
+        let base:    uint                           = __abi_ref_address(block)
+        bump.cursor = __gc_byte_offset(memory, bytes)
+
+        let header:  Ref[internal.gc.core.Object_Header] = unsafe_cast[Ref[internal.gc.core.Object_Header]] memory
+        let payload: Ref[byte]                     = __gc_byte_offset(memory,
+            header_bytes)
+        if instance_descriptor != nil {
+            require internal.gc.core.initialize_array_backing(payload,
+                payload_bytes, type_index, instance_descriptor.get())
+        }
+        header.type_index = type_index
+        var flags: u32 = 0
+        if finalizable {
+            flags = cast[u32](internal.gc.core.obj_final)
+        }
+        if instance_descriptor != nil {
+            flags = flags | cast[u32](internal.gc.core.obj_array_backing)
+        }
+        header.meta = internal.gc.core.meta_make(payload_bytes, flags)
+        let granule_index: uint = (address - base) / granule
+        let word:          uint = granule_index / internal.gc.core.word_bits
+        let mask:          u64  = cast[u64](1) << (granule_index % internal.gc.core.word_bits)
+        if finalizable {
+            __atomic_fetch_add(ref block.nfinal, 1)
+            internal.gc.finalize.note_block(mutator.heap, block)
+        }
+        __gc_signal_fence()
+        if mutator.black {
+            assert __atomic_load(ref block.mark_epoch) == mutator.heap.mark_epoch
+            __atomic_fetch_or_release(internal.gc.core.block_mark_word(block, word), mask)
+        }
+        __atomic_fetch_or_release(internal.gc.core.block_start_word(block, word), mask)
+        __gc_signal_fence()
+        if slot != nil {
+            internal.gc.mark.write_barrier(mutator, payload)
+            let published: Ref[byte]? = payload
+            ref_write(slot.get(), published)
+            mutator.last_alloc = nil
+        } else {
+            mutator.last_alloc = payload
+        }
+        mutator.objects_allocated += 1
+        mutator.bytes_allocated += cast[u64](bytes)
+        return payload
+    }
+    return nil
+}
+
+func allocate_reserved(mutator: Ref[internal.gc.core.Mutator],
+                              bump: Ref[internal.gc.core.Bump], type_index: u32,
+                              payload_bytes: uint, alignment: uint,
+                              finalizable: bool,
+                              instance_descriptor : Ref[internal.abi.Array_Descriptor_Header]? = nil,
+                              slot : Ref[Ref[byte]?]? = nil) -> Ref[byte]? {
+    if type_index == 0 or alignment == 0 or
+        alignment > internal.gc.core.granule_bytes or
+        (alignment & (alignment - 1)) != 0 or
+        payload_bytes > (~cast[uint](0) >> internal.gc.core.meta_flag_bits) or
+        internal.abi.type_at(type_index) == nil {
+        return nil
+    }
+    let header_bytes: uint = internal.gc.core.object_header_bytes()
+    let granule:      uint = internal.gc.core.granule_bytes
+    let maximum:      uint = ~cast[uint](0)
+    if header_bytes > maximum - granule + 1 or
+        payload_bytes > maximum - header_bytes - granule + 1 {
+        return nil
+    }
+    let bytes: uint = (header_bytes + payload_bytes + granule - 1) / granule * granule
+    if bytes > internal.gc.los.los_threshold or
+        internal.gc.core.bump_room(bump) < bytes {
+        return nil
+    }
+    return allocate_reserved_validated(mutator, bump, type_index,
+        payload_bytes, finalizable, bytes, header_bytes, instance_descriptor,
+        slot)
+}
+
+func grow_batch(heap: Ref[internal.gc.core.Heap], mutator: Ref[internal.gc.core.Mutator])
+               -> Ref[internal.gc.core.Block_Metadata]? {
+    var count: uint = grow_blocks
+    if internal.gc.core.over_max(heap, count * internal.gc.core.block_bytes) {
+        internal.gc.los.cache_drain(heap)
+    }
+    while count != 0 and internal.gc.core.over_max(heap, count * internal.gc.core.block_bytes) {
+        count -= 1
+    }
+    if count == 0 {
+        return nil
+    }
+
+    let bytes:   uint       = count * internal.gc.core.block_bytes
+    let mapping: Ref[byte]? = internal.memory.map_zeroed(bytes, internal.gc.core.block_bytes)
+    if mapping != nil {
+        let start: Ref[byte] = mapping.get()
+        let end:   Ref[byte] = __gc_byte_offset(start, bytes)
+        if !internal.gc.registry.region_add(heap, start, end) {
+            internal.memory.unmap(start, bytes)
+            return nil
+        }
+
+        var list:  Ref[internal.gc.core.Block_Metadata]? = nil
+        var index: uint                            = 0
+        while index < count {
+            let base: Ref[byte]                      = __gc_byte_offset(start, index * internal.gc.core.block_bytes)
+            let blk:  Ref[internal.gc.core.Block_Metadata] = internal.gc.core.block_metadata_at(base)
+            internal.gc.core.block_init(heap, blk)
+            if index < grow_batch_count {
+                internal.gc.core.own(heap, mutator, blk, ref list)
+            } else {
+                internal.gc.core.push_free(heap, blk)
+            }
+            index += 1
+        }
+        return list
+    }
+    return nil
+}
+
+func refill_locked(heap: Ref[internal.gc.core.Heap],
+                   mutator: Ref[internal.gc.core.Mutator],
+                   prefer_free: bool) -> Ref[internal.gc.core.Block_Metadata]? {
+    let before: u64 = heap.collections
+    mutator.pace_wait = internal.gc.collect.maybe_collect(heap, 0)
+    while __atomic_load(ref heap.phase) == cast[u32](internal.gc.core.Phase.sweeping) and
+        heap.nfree + heap.nrecyclable < 2 * internal.gc.core.cache_max * heap.nmutators {
+        if !internal.gc.collect.sweep_some(heap, sweep_batch) {
+            break
+        }
+    }
+    var blocks: Ref[internal.gc.core.Block_Metadata]? = internal.gc.core.take_batch(
+        heap, mutator, prefer_free)
+    if blocks == nil {
+        blocks = grow_batch(heap, mutator)
+    }
+    if blocks == nil and heap.collections == before and
+        __atomic_load(ref heap.nworkers) == 0 {
+        internal.gc.collect.collect_full_locked(heap)
+        internal.gc.collect.sweep_all(heap)
+        blocks = internal.gc.core.take_batch(heap, mutator, prefer_free)
+    }
+    return blocks
+}
+
+func refill(mutator: Ref[internal.gc.core.Mutator], bump: Ref[internal.gc.core.Bump],
+            prefer_free: bool) -> Ref[internal.gc.core.Block_Metadata]? {
+    let cached: Ref[internal.gc.core.Block_Metadata]? = internal.gc.core.cache_pop(bump)
+    if cached != nil {
+        return cached
+    }
+    let heap: Ref[internal.gc.core.Heap] = mutator.heap
+    internal.gc.sync.ticket_lock(ref heap.lock)
+    let blocks: Ref[internal.gc.core.Block_Metadata]? = refill_locked(
+        heap, mutator, prefer_free)
+    if blocks != nil {
+        __atomic_store(ref bump.cache, blocks.get().next)
+    }
+    internal.gc.heap.unlock(heap)
+    mutator.locked_refills += 1
+    return blocks
+}
+
+func allocate_in_blocks_slow(mutator: Ref[internal.gc.core.Mutator],
+                             bump: Ref[internal.gc.core.Bump], small: bool,
+                             type_index: u32, payload_bytes: uint,
+                             finalizable: bool, bytes: uint,
+                             header_bytes: uint,
+                             instance_descriptor: Ref[internal.abi.Array_Descriptor_Header]?,
+                             slot: Ref[Ref[byte]?]?) -> Ref[byte]? {
+    let heap:    Ref[internal.gc.core.Heap] = mutator.heap
+    var retried: bool                 = false
+    while true {
+        if internal.gc.core.bump_room(bump) >= bytes {
+            return allocate_reserved_validated(mutator, bump, type_index,
+                payload_bytes, finalizable, bytes, header_bytes,
+                instance_descriptor, slot)
+        }
+        internal.gc.handshake.safepoint(mutator)
+        internal.gc.finalize.backpressure(mutator)
+        if internal.gc.core.bump_next_hole(bump, bytes) {
+            continue
+        }
+        let previous: Ref[internal.gc.core.Block_Metadata]? = bump.blk
+        if previous != nil {
+            internal.gc.core.set_block_state(heap, previous.get(),
+                internal.gc.core.Block_State.retired)
+            bump.blk = nil
+        }
+        let next: Ref[internal.gc.core.Block_Metadata]? = refill(
+            mutator, bump, !small)
+        mutator.refills += 1
+        if next == nil and !retried and __atomic_load(ref heap.nworkers) != 0 {
+            retried = true
+            internal.gc.collect.request_cycle(heap)
+            internal.gc.handshake.wait_for_cycle(heap)
+            continue
+        }
+        if next != nil {
+            assert next.get().state == cast[u8](internal.gc.core.Block_State.owned)
+        }
+        internal.gc.core.bump_attach(mutator, bump, next)
+        if next == nil {
+            return nil
+        }
+        if mutator.pace_wait {
+            mutator.pace_wait = false
+            __atomic_fetch_add(ref heap.hs_alloc_waits, 1)
+            internal.gc.handshake.wait_for_cycle(heap)
+        }
+    }
+    return nil
+}
+
+inline func allocate_in_blocks(mutator: Ref[internal.gc.core.Mutator],
+                        type_index: u32, payload_bytes: uint,
+                        finalizable: bool, bytes: uint, header_bytes: uint,
+                        instance_descriptor: Ref[internal.abi.Array_Descriptor_Header]?,
+                        slot: Ref[Ref[byte]?]?) -> Ref[byte]? {
+    let small_bump: Ref[internal.gc.core.Bump] = ref mutator.small
+    if internal.gc.core.bump_room(small_bump) >= bytes {
+        return allocate_reserved_validated(mutator, small_bump, type_index,
+            payload_bytes, finalizable, bytes, header_bytes,
+            instance_descriptor, slot)
+    }
+    if bytes <= internal.gc.core.line_bytes {
+        return allocate_in_blocks_slow(mutator, small_bump, true, type_index,
+            payload_bytes, finalizable, bytes, header_bytes,
+            instance_descriptor, slot)
+    }
+    return allocate_in_blocks_slow(mutator, ref mutator.overflow, false, type_index,
+        payload_bytes, finalizable, bytes, header_bytes, instance_descriptor,
+        slot)
+}
+
+func allocate_large(mutator: Ref[internal.gc.core.Mutator],
+                           type_index: u32, payload_bytes: uint,
+                           alignment: uint, finalizable: bool,
+                           instance_descriptor : Ref[internal.abi.Array_Descriptor_Header]? = nil,
+                           slot : Ref[Ref[byte]?]? = nil) -> Ref[byte]? {
+    let heap: Ref[internal.gc.core.Heap] = mutator.heap
+    if type_index == 0 {
+        return nil
+    }
+    let request: uint = internal.gc.los.mapping_bytes(payload_bytes, alignment)
+    if request == 0 {
+        return nil
+    }
+    var retried: bool = false
+    var paced:   bool = false
+    while true {
+        internal.gc.handshake.safepoint(mutator)
+        internal.gc.finalize.backpressure(mutator)
+        internal.gc.sync.ticket_lock(ref heap.lock)
+        let before: u64 = heap.collections
+        if internal.gc.core.over_max(heap, request) {
+            internal.gc.los.cache_drain(heap)
+        }
+        if internal.gc.collect.maybe_collect(heap, request) and !paced {
+            paced = true
+            internal.gc.heap.unlock(heap)
+            __atomic_fetch_add(ref heap.hs_alloc_waits, 1)
+            internal.gc.handshake.wait_for_cycle(heap)
+            continue
+        }
+        if internal.gc.core.over_max(heap, request) and heap.collections == before {
+            if __atomic_load(ref heap.nworkers) != 0 {
+                if !retried {
+                    retried = true
+                    internal.gc.heap.unlock(heap)
+                    internal.gc.collect.request_cycle(heap)
+                    internal.gc.handshake.wait_for_cycle(heap)
+                    continue
+                }
+            } else {
+                internal.gc.collect.collect_full_locked(heap)
+                internal.gc.collect.sweep_all(heap)
+            }
+        }
+        let result: Ref[byte]? = internal.gc.los.allocate_locked(
+            heap, mutator, type_index, payload_bytes, alignment, finalizable,
+            instance_descriptor, slot)
+        internal.gc.heap.unlock(heap)
+        return result
+    }
+    return nil
+}
+
+inline func allocate_runtime_known_on_mutator_into(mutator: Ref[internal.gc.core.Mutator],
+                                      type_index: u32, byte_size: u64,
+                                      alignment: u32, finalizable: bool,
+                                      instance_descriptor: Ref[internal.abi.Array_Descriptor_Header]?,
+                                      slot: Ref[Ref[byte]?]?) -> Ref[byte]? {
+    if type_index == 0 or alignment == 0 or
+        (alignment & (alignment - 1)) != 0 {
+        return nil
+    }
+    let maximum: uint = ~cast[uint](0)
+    if byte_size > cast[u64](maximum) {
+        return nil
+    }
+    let payload_bytes: uint = cast[uint](byte_size)
+    let header_bytes:  uint = internal.gc.core.object_header_bytes()
+    let granule:       uint = internal.gc.core.granule_bytes
+    if header_bytes > maximum - granule + 1 or
+        payload_bytes > maximum - header_bytes - granule + 1 {
+        return nil
+    }
+    let bytes: uint = (header_bytes + payload_bytes + granule - 1) / granule * granule
+    if bytes > internal.gc.los.los_threshold or
+        cast[uint](alignment) > internal.gc.core.granule_bytes {
+        return allocate_large(mutator, type_index, payload_bytes,
+            alignment, finalizable, instance_descriptor, slot)
+    }
+    return allocate_in_blocks(mutator, type_index, payload_bytes,
+        finalizable, bytes, header_bytes, instance_descriptor, slot)
+}
+
+inline func allocate_runtime_known_on_mutator(mutator: Ref[internal.gc.core.Mutator],
+                                      type_index: u32, byte_size: u64,
+                                      alignment: u32, finalizable: bool,
+                                      instance_descriptor: Ref[internal.abi.Array_Descriptor_Header]?)
+                                             -> Ref[byte]? {
+    return allocate_runtime_known_on_mutator_into(mutator, type_index,
+        byte_size, alignment, finalizable, instance_descriptor, nil)
+}
+
+func allocation_type(type_index: u32,
+                     instance_descriptor: Ref[internal.abi.Array_Descriptor_Header]?)
+                    -> Ref[internal.abi.Type_Record]? {
+    if type_index == 0 {
+        return nil
+    }
+    let row: Ref[internal.abi.Type_Record]? = internal.abi.type_at(type_index)
+    if row == nil {
+        return nil
+    }
+    if instance_descriptor != nil {
+        if row.get().kind != cast[u32](internal.abi.Type_Kind.array_type) or
+            internal.gc.core.array_backing_offset(type_index,
+                instance_descriptor.get()) == 0 {
+            return nil
+        }
+    }
+    return row
+}
+
+func allocate_runtime_checked(type_index: u32, byte_size: u64,
+                              alignment: u32,
+                              instance_descriptor: Ref[internal.abi.Array_Descriptor_Header]?,
+                              slot: Ref[Ref[byte]?]?) -> Ref[byte]? {
+    let row: Ref[internal.abi.Type_Record]? = allocation_type(type_index,
+        instance_descriptor)
+    if row == nil {
+        return nil
+    }
+    let active: Ref[internal.gc.core.Mutator]? = active_mutator()
+    if active == nil {
+        return nil
+    }
+    return allocate_runtime_known_on_mutator_into(active.get(), type_index,
+        byte_size, alignment, row.get().finalizer_function_index != 0,
+        instance_descriptor, slot)
+}
+
+func allocate_runtime(type_index: u32, byte_size: u64,
+                             alignment: u32,
+                             instance_descriptor: Ref[internal.abi.Array_Descriptor_Header]?)
+                     -> Ref[byte]? {
+    return allocate_runtime_checked(type_index, byte_size, alignment,
+        instance_descriptor, nil)
+}
+
+func allocate_runtime_into(type_index: u32, byte_size: u64,
+                                  alignment: u32,
+                                  instance_descriptor: Ref[internal.abi.Array_Descriptor_Header]?,
+                                  slot: Ref[Ref[byte]?]) -> Ref[byte]? {
+    return allocate_runtime_checked(type_index, byte_size, alignment,
+        instance_descriptor, slot)
+}
+
+func mutator_for_native() -> Ref[internal.gc.core.Mutator]? {
+    return active_mutator()
+}
+
+func native_root_depth() -> uint {
+    let mutator: Ref[internal.gc.core.Mutator]? = active_mutator()
+    require mutator != nil
+    return internal.gc.roots.depth(mutator.get())
+}
+
+func native_root_push(slot: Ref[Ref[byte]?]) {
+    let mutator: Ref[internal.gc.core.Mutator]? = active_mutator()
+    require mutator != nil
+    require internal.gc.roots.push(mutator.get(), slot)
+}
+
+func native_root_pop(depth: uint) {
+    let mutator: Ref[internal.gc.core.Mutator]? = active_mutator()
+    require mutator != nil
+    internal.gc.roots.pop(mutator.get(), depth)
+}

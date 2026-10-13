@@ -1,4 +1,0 @@
-func fail_with_int() -> int fail: int { fail 7 }
-func propagate_error() -> int fail: int {
-    return fail_with_int()!
-}

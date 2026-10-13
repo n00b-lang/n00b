@@ -1,5 +1,0 @@
-trait Render {
-    func render(self: `T) -> string
-}
-func render(self: int) -> string { return "ok" }
-func use_it(item: string) -> string { return item.render() }

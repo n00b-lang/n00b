@@ -1,5 +1,0 @@
-func maybe_value() -> int fail: int { fail 9 }
-
-func runtime_value() -> int {
-    return comptime maybe_value()!
-}

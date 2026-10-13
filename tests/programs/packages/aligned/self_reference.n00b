@@ -1,0 +1,5 @@
+import child
+
+func bad() -> int {
+    return aligned.child.answer
+}

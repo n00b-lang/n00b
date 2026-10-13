@@ -1,3 +1,0 @@
-when compile_error("stop condition") {
-    var impossible = true
-}

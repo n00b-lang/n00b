@@ -1,0 +1,88 @@
+import internal.gc.core
+import internal.gc.alloc
+import internal.gc.collect
+import internal.gc.finalize
+import internal.gc.handshake
+import internal.gc.hash
+import internal.gc.heap
+import internal.gc.los
+import internal.gc.mark
+import internal.gc.mutator
+import internal.gc.registry
+import internal.gc.roots
+import internal.gc.sync
+import internal.gc.world
+
+package sys.gc {
+    export package core
+    export package alloc
+    export package collect
+    export package finalize
+    export package handshake
+    export package hash
+    export package heap
+    export package los
+    export package mark
+    export package mutator
+    export package registry
+    export package roots
+    export package sync
+    export package world
+}
+
+package sys.gc.core {
+    export internal.gc.core
+}
+
+package sys.gc.alloc {
+    export internal.gc.alloc
+}
+
+package sys.gc.collect {
+    export internal.gc.collect
+}
+
+package sys.gc.finalize {
+    export internal.gc.finalize
+}
+
+package sys.gc.handshake {
+    export internal.gc.handshake
+}
+
+package sys.gc.hash {
+    export internal.gc.hash
+}
+
+package sys.gc.heap {
+    export internal.gc.heap
+}
+
+package sys.gc.los {
+    export internal.gc.los
+}
+
+package sys.gc.mark {
+    export internal.gc.mark
+}
+
+package sys.gc.mutator {
+    export internal.gc.mutator
+}
+
+package sys.gc.registry {
+    export internal.gc.registry
+}
+
+package sys.gc.roots {
+    export internal.gc.roots
+}
+
+package sys.gc.sync {
+    export internal.gc.sync
+}
+
+package sys.gc.world {
+    export internal.gc.world
+}
+

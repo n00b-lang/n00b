@@ -4,6 +4,8 @@ litmod<quotes> read_number, number(raw: string) -> int fail: string {
 
 comptime {
     require "seven"'number == 7
-} else {
+}
+
+func run_test() {
     require "seven"'number == 7
 }

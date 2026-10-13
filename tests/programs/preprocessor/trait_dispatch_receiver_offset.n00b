@@ -1,7 +1,0 @@
-trait Describe {
-    func describe(self: `T, label: string) -> `T
-}
-func describe(self: int, label: string) -> int { return self }
-func valid_receiver_and_argument(item: int, label: string) -> int {
-    return item.describe(label)
-}

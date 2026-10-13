@@ -1,7 +1,0 @@
-public type ImportedRecord {
-    payload: int
-}
-
-public func __init(modify self: ImportedRecord, payload: int) {
-    self.payload = payload
-}
