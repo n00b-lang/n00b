@@ -463,6 +463,44 @@ test_phase_global_result_binding(void)
     ir_ctx_free(ctx);
 }
 
+static void
+test_external_function_region(void)
+{
+    ir_ctx_t *ctx = ir_ctx_new();
+    ir_module_t *module = ir_module_new(ctx, "external", &ir_profile_bce,
+                                        "test");
+    th_type *type = ir_type_parse(module, "() -> nil fail: nil");
+    ir_func_t *function = type
+        ? ir_func_add(module, "initialize", type, IR_LINK_EXTERN) : nullptr;
+    ir_exec_graph_t *graph = ir_exec_graph_new(ctx);
+    uint32_t phase, phase_entry, function_id, phase_exit;
+    ir_exec_graph_outcome_t success = IR_EXEC_GRAPH_OUTCOME_SUCCESS;
+    ir_exec_graph_function_view_t region;
+    bool built = function && graph
+        && ir_exec_graph_add_phase(graph, "runtime", &phase, &phase_entry)
+        && !ir_exec_graph_add_function(graph, phase, function,
+                                       nullptr, nullptr, nullptr)
+        && ir_exec_graph_add_external_function(graph, phase, function,
+                                               &success, 1, &function_id)
+        && ir_exec_graph_function_at(graph, function_id, &region)
+        && region.exit_count == 1
+        && ir_exec_graph_add_phase_exit(graph, phase, "done", success,
+                                        &phase_exit)
+        && ir_exec_graph_add_edge(graph, phase_entry, region.entry_node,
+                                  IR_EXEC_GRAPH_EDGE_SEQUENCE);
+    uint32_t function_exit;
+    built = built && ir_exec_graph_function_exit_at(graph, function_id, 0,
+                 &function_exit, nullptr)
+        && ir_exec_graph_add_edge(graph, function_exit, phase_exit,
+                                  IR_EXEC_GRAPH_EDGE_SEQUENCE)
+        && ir_exec_graph_validate(graph);
+    char *printed = built ? ir_exec_graph_print(graph) : nullptr;
+    check("opaque external functions retain explicit success exits",
+          built && printed && strstr(printed, "block=<external>"));
+    core_free(printed);
+    ir_ctx_free(ctx);
+}
+
 int main(void)
 {
     test_phase_dependency_and_exit_classification();
@@ -471,5 +509,6 @@ int main(void)
     test_context_ownership();
     test_phase_result_binding();
     test_phase_global_result_binding();
+    test_external_function_region();
     return fails != 0;
 }

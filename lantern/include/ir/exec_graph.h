@@ -98,6 +98,10 @@ bool ir_exec_graph_add_function(
     ir_exec_graph_t *graph, uint32_t phase_id, ir_func_t *function,
     ir_exec_graph_classify_exit_fn classify_exit, void *context,
     uint32_t *function_id);
+bool ir_exec_graph_add_external_function(
+    ir_exec_graph_t *graph, uint32_t phase_id, ir_func_t *function,
+    const ir_exec_graph_outcome_t *outcomes, size_t outcome_count,
+    uint32_t *function_id);
 bool ir_exec_graph_function_at(const ir_exec_graph_t *graph,
                               uint32_t function_id,
                               ir_exec_graph_function_view_t *out);

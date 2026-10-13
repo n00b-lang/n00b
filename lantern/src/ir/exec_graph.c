@@ -264,6 +264,50 @@ ir_exec_graph_add_function(
 }
 
 bool
+ir_exec_graph_add_external_function(
+    ir_exec_graph_t *graph, uint32_t phase_id, ir_func_t *function,
+    const ir_exec_graph_outcome_t *outcomes, size_t outcome_count,
+    uint32_t *function_id)
+{
+    if (function_id) *function_id = UINT32_MAX;
+    if (!graph || phase_id >= graph->phases.len || !function
+        || !function->owner || function->owner->ctx != graph->ctx
+        || function->linkage != IR_LINK_EXTERN || function->n_blocks
+        || !outcomes || !outcome_count
+        || graph->functions.len >= UINT32_MAX) return false;
+    for (size_t i = 0; i < outcome_count; i++) {
+        if (outcomes[i] <= IR_EXEC_GRAPH_OUTCOME_NONE
+            || outcomes[i] > IR_EXEC_GRAPH_OUTCOME_OTHER) return false;
+        for (size_t j = 0; j < i; j++)
+            if (outcomes[j] == outcomes[i]) return false;
+    }
+    uint32_t entry_node;
+    if (!node_add(graph, phase_id, IR_EXEC_GRAPH_NODE_FUNCTION_ENTRY,
+            IR_EXEC_GRAPH_OUTCOME_NONE, function->name, function, nullptr,
+            &entry_node)) return false;
+    exec_function_t region = {
+        .phase = phase_id,
+        .function = function,
+        .entry_node = entry_node,
+        .exits = core_list_new(exec_node_id_t),
+    };
+    for (size_t i = 0; i < outcome_count; i++) {
+        uint32_t exit_node;
+        if (!node_add(graph, phase_id, IR_EXEC_GRAPH_NODE_FUNCTION_EXIT,
+                outcomes[i], function->name, function, nullptr,
+                &exit_node)) {
+            core_list_free(region.exits);
+            return false;
+        }
+        core_list_push(region.exits, exit_node);
+    }
+    uint32_t id = (uint32_t)graph->functions.len;
+    core_list_push(graph->functions, region);
+    if (function_id) *function_id = id;
+    return true;
+}
+
+bool
 ir_exec_graph_function_at(const ir_exec_graph_t *graph, uint32_t function_id,
                           ir_exec_graph_function_view_t *out)
 {
@@ -579,6 +623,14 @@ node_valid(const ir_exec_graph_t *graph, const exec_node_t *node)
     if (node->kind == IR_EXEC_GRAPH_NODE_PHASE_EXIT)
         return node->outcome != IR_EXEC_GRAPH_OUTCOME_NONE
             && !node->function && !node->block;
+    if (node->function && node->function->linkage == IR_LINK_EXTERN
+        && !node->function->n_blocks && !node->block
+        && node->function->owner
+        && node->function->owner->ctx == graph->ctx)
+        return node->kind == IR_EXEC_GRAPH_NODE_FUNCTION_ENTRY
+            ? node->outcome == IR_EXEC_GRAPH_OUTCOME_NONE
+            : node->kind == IR_EXEC_GRAPH_NODE_FUNCTION_EXIT
+                && node->outcome != IR_EXEC_GRAPH_OUTCOME_NONE;
     if (!node->function || !node->block || !node->function->owner
         || node->function->owner->ctx != graph->ctx
         || node->block->owner != node->function)
@@ -913,7 +965,7 @@ ir_exec_graph_print(const ir_exec_graph_t *graph)
         if (node->function) {
             core_buffer_printf(buffer, " function=%s.%s block=%s",
                 ir_module_name(node->function->owner), node->function->name,
-                node->block->name);
+                node->block ? node->block->name : "<external>");
         }
         else if (node->label) {
             core_buffer_puts(buffer, " label=");
