@@ -1067,6 +1067,29 @@ bool th_env_register_metadata(th_env *env, th_env_metadata_owner_t owner_kind,
   return true;
 }
 
+bool th_env_replace_metadata(th_env *env, th_env_metadata_owner_t owner_kind,
+                             const char *owner_name, const char *key,
+                             uint32_t version, const void *data,
+                             size_t size) {
+  if (!env || env->frozen || owner_kind < TH_ENV_METADATA_TYPE ||
+      owner_kind > TH_ENV_METADATA_ENVIRONMENT || !owner_name ||
+      !*owner_name || !key || !*key || !version || (size && !data))
+    return false;
+  for (size_t i = 0; i < env->metadata.len; i++) {
+    th_env_metadata_record_t *current = &env->metadata.data[i];
+    if (current->owner_kind != owner_kind ||
+        strcmp(current->owner_name, owner_name) || strcmp(current->key, key))
+      continue;
+    uint8_t *owned_data = size ? th_alloc(env->types, size) : nullptr;
+    if (size) memcpy(owned_data, data, size);
+    current->version = version;
+    current->data = owned_data;
+    current->size = size;
+    return true;
+  }
+  return false;
+}
+
 size_t th_env_metadata_count(const th_env *env) {
   return env ? env->metadata.len : 0;
 }

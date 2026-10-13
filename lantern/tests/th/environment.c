@@ -2608,6 +2608,60 @@ int main(void) {
                      th_name(base_consumer, "FetchError")) &&
             !strcmp(linked_method.qualified_name, "plugin.int_box.fetch"));
 
+  th_env *replacement_env = th_env_new();
+  const uint8_t provisional_metadata[] = {1, 2};
+  const uint8_t resolved_metadata[] = {3, 4, 5};
+  check("register provisional environment metadata",
+        replacement_env && th_env_register_metadata(replacement_env,
+            TH_ENV_METADATA_ENVIRONMENT, "phase", "result", 1,
+            provisional_metadata, sizeof(provisional_metadata)));
+  check("replacement requires an existing metadata key",
+        replacement_env && !th_env_replace_metadata(replacement_env,
+            TH_ENV_METADATA_ENVIRONMENT, "phase", "missing", 1,
+            resolved_metadata, sizeof(resolved_metadata)));
+  check("replace provisional environment metadata",
+        replacement_env && th_env_replace_metadata(replacement_env,
+            TH_ENV_METADATA_ENVIRONMENT, "phase", "result", 2,
+            resolved_metadata, sizeof(resolved_metadata)));
+  th_env_metadata_view_t replacement_view = {0};
+  check("replacement retains one current metadata record",
+        replacement_env && th_env_metadata_count(replacement_env) == 1 &&
+            th_env_metadata_at(replacement_env, 0, &replacement_view) &&
+            replacement_view.version == 2 &&
+            replacement_view.size == sizeof(resolved_metadata) &&
+            !memcmp(replacement_view.data, resolved_metadata,
+                    sizeof(resolved_metadata)));
+  check("frozen metadata cannot be replaced",
+        replacement_env && th_env_freeze(replacement_env) &&
+            !th_env_replace_metadata(replacement_env,
+                TH_ENV_METADATA_ENVIRONMENT, "phase", "result", 1,
+                provisional_metadata, sizeof(provisional_metadata)));
+  char replacement_path[] = "/tmp/lantern-th-meta-XXXXXX";
+  int replacement_fd = mkstemp(replacement_path);
+  if (replacement_fd >= 0) {
+    close(replacement_fd);
+    unlink(replacement_path);
+  }
+  th_env *replacement_loaded = nullptr;
+  if (replacement_fd >= 0 && replacement_env) {
+    core_object_archive_error_t replacement_error = CORE_OBJECT_ARCHIVE_OK;
+    if (th_env_save(replacement_env, replacement_path, 0,
+                    &replacement_error))
+      replacement_loaded = th_env_load(replacement_path,
+                                       &replacement_error);
+  }
+  replacement_view = (th_env_metadata_view_t){0};
+  check("replaced metadata survives archive round trip",
+        replacement_loaded && th_env_metadata_count(replacement_loaded) == 1 &&
+            th_env_metadata_at(replacement_loaded, 0, &replacement_view) &&
+            replacement_view.version == 2 &&
+            replacement_view.size == sizeof(resolved_metadata) &&
+            !memcmp(replacement_view.data, resolved_metadata,
+                    sizeof(resolved_metadata)));
+  th_env_free(replacement_loaded);
+  th_env_free(replacement_env);
+  if (replacement_fd >= 0) unlink(replacement_path);
+
   th_ctx_free(outside);
   th_ctx_free(secret_context);
   th_ctx_free(inside);

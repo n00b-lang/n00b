@@ -248,6 +248,12 @@ bool th_env_register_metadata(th_env *environment,
                               th_env_metadata_owner_t owner_kind,
                               const char *owner_name, const char *key,
                               uint32_t version, const void *data, size_t size);
+/* Replace an existing metadata payload before freezing the environment.
+ * The original owner and key must already exist. */
+bool th_env_replace_metadata(th_env *environment,
+                             th_env_metadata_owner_t owner_kind,
+                             const char *owner_name, const char *key,
+                             uint32_t version, const void *data, size_t size);
 size_t th_env_metadata_count(const th_env *environment);
 bool th_env_metadata_at(const th_env *environment, size_t index,
                         th_env_metadata_view_t *out);
