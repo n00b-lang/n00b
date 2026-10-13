@@ -8545,19 +8545,8 @@ unit_for_symbol(parse_grammar_t *grammar,
                 && !nested_module_declaration_owner(grammar,
                                                     symbol->decl_node))))
         return nullptr;
-    for (size_t i = 0; units && i < units->len; i++) {
-        core_translation_unit_t *unit = units->data[i];
-        n00bb_tu_state_t *state = tu_state(unit);
-        parse_symtab_t *symtab = state && state->annotations
-            ? state->annotations->symtab : nullptr;
-        bool found = false;
-        for (parse_scope_t *scope = symtab ? symtab->all_scopes : nullptr;
-             !found && scope; scope = scope->all_next)
-            for (parse_sym_entry_t *candidate = scope->first_in_scope;
-                 candidate; candidate = candidate->next_in_scope)
-                if (candidate == symbol) { found = true; break; }
-        if (found) return unit;
-    }
+    for (size_t i = 0; units && i < units->len; i++)
+        if (units->data[i] == symbol->owner_unit) return symbol->owner_unit;
     return nullptr;
 }
 
@@ -44195,6 +44184,7 @@ prepare_initial_symbols(parse_grammar_t *grammar,
 
     state->types = types;
     state->annotations = parse_annot_result_new(nullptr);
+    parse_symtab_set_owner_unit(state->annotations->symtab, unit);
     if (!th_register_method_resolver(types, n00bb_callback_method_signature,
                                      state)) return false;
     parse_annot_result_set_type_node_resolver(state->annotations,
