@@ -8531,6 +8531,13 @@ unit_for_symbol(parse_grammar_t *grammar,
                 core_list_t(core_translation_unit_ptr_t) *units,
                 parse_sym_entry_t *symbol)
 {
+    if (symbol && symbol->owner_unit) {
+        n00bb_tu_state_t *owner_state = tu_state(symbol->owner_unit);
+        if (owner_state && owner_state->interface_module)
+            for (size_t i = 0; units && i < units->len; i++)
+                if (units->data[i] == symbol->owner_unit)
+                    return symbol->owner_unit;
+    }
     if (!linkable_module_symbol(symbol)
         || (!symbol->scope
             || (!core_string_eq(symbol->scope->scope_tag,
@@ -24693,10 +24700,11 @@ register_record_types(parse_grammar_t *grammar,
                 if (symbol->kind != PARSE_SYM_TYPEDEF || !members ||
                     !core_string_eq(members->scope_tag,
                                     CORE_STRING_STATIC("type"))) continue;
-                core_buffer_t qualified = {0};
-                append_module_type_name(unit, symbol->name, &qualified);
-                th_type *template = record_template_type(state->types,
-                    qualified.data, symbol);
+                n00bb_export_origin_t *origin = parse_sym_binding(symbol,
+                    CORE_STRING_STATIC("n00bb.export-origin"));
+                th_type *template = origin
+                    ? record_template_type(state->types,
+                        origin->declaration.data, symbol) : nullptr;
                 th_type *record = th_type_definition(state->types,
                                                      template);
                 valid = record && th_kind_of(record) == TH_RECORD &&
@@ -24709,7 +24717,6 @@ register_record_types(parse_grammar_t *grammar,
                     valid = ir_layout_pin_member(destination, template,
                         field->name.data, field->bit_offset, field->bit_width);
                 }
-                core_buffer_release(&qualified);
                 if (!valid) break;
             }
         }
@@ -24945,9 +24952,15 @@ register_imported_record_layouts(parse_grammar_t *grammar,
                 !members || !core_string_eq(members->scope_tag,
                     CORE_STRING_STATIC("type"))) continue;
             core_buffer_t qualified = {0};
-            append_module_type_name(unit, symbol->name, &qualified);
-            th_type *template = record_template_type(state->types,
-                qualified.data, symbol);
+            n00bb_export_origin_t *origin = state->interface_module
+                ? parse_sym_binding(symbol,
+                    CORE_STRING_STATIC("n00bb.export-origin")) : nullptr;
+            if (!state->interface_module)
+                append_module_type_name(unit, symbol->name, &qualified);
+            th_type *template = (origin || !state->interface_module)
+                ? record_template_type(state->types,
+                    origin ? origin->declaration.data : qualified.data,
+                    symbol) : nullptr;
             th_type *shape = template
                 ? th_type_definition(state->types, template) : nullptr;
             core_buffer_release(&qualified);
@@ -25290,11 +25303,16 @@ register_module_globals(parse_grammar_t *grammar,
                     core_link_declaration_t *declaration = canonical_owner
                         ? link_declaration_for_symbol(analysis, symbol)
                         : nullptr;
+                    bool already_bound = declaration
+                        && core_link_declaration_binding(declaration,
+                            CORE_STRING_STATIC("n00bb.ir.global"));
                     if (ok && canonical_owner && (!declaration
-                        || !core_link_declaration_set_binding(link,
-                            declaration,
-                            CORE_STRING_STATIC("n00bb.ir.global"),
-                            producer_stage, global))) {
+                        || ((!source_state->interface_module
+                                || !already_bound)
+                            && !core_link_declaration_set_binding(link,
+                                declaration,
+                                CORE_STRING_STATIC("n00bb.ir.global"),
+                                producer_stage, global)))) {
                         ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
                             IR_DIAG_VERIFY_PARSED,
                             lower_span_for_tree(
@@ -25797,7 +25815,13 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
                     && core_link_unit_overload_member_count(link,
                         unit->module.identifier, overload_group) > 1;
                 const char *semantic_name = symbol->name.data;
-                if (overloaded && declaration_key.data) {
+                if (state->interface_module) {
+                    n00bb_export_origin_t *origin = parse_sym_binding(symbol,
+                        CORE_STRING_STATIC("n00bb.export-origin"));
+                    if (origin) semantic_name = origin->declaration.data;
+                }
+                if (!state->interface_module && overloaded
+                    && declaration_key.data) {
                     const char *separator = memchr(declaration_key.data, ':',
                                                    declaration_key.u8_bytes);
                     if (separator) semantic_name = separator + 1;
@@ -27757,7 +27781,8 @@ lower_module_initializer(ir_lowerer_t *lowerer,
                              nullptr, 0, nullptr, nullptr, 0)
         : nullptr;
     ir_func_t *function = type
-        ? ir_func_add(module, name, type, IR_LINK_INTERNAL) : nullptr;
+        ? ir_func_add(module, name, type, state->interface_module
+            ? IR_LINK_EXTERN : IR_LINK_INTERNAL) : nullptr;
     if (!function) return false;
     bool annotated = ir_func_set_initializer(ir_context, function, true)
         && (!comptime || ir_func_set_execution_phase(ir_context, function,
@@ -27770,6 +27795,7 @@ lower_module_initializer(ir_lowerer_t *lowerer,
                          .kind = IR_ANNOT_INT,
                          .i = {.mag = order}});
     if (!annotated) return false;
+    if (state->interface_module) return true;
     parse_sym_entry_t symbol = {
         .name = core_string_from_cstr(name),
         .kind = PARSE_SYM_FUNCTION,
@@ -27823,8 +27849,18 @@ exec_graph_function_id(ir_exec_graph_t *graph, uint32_t phase,
         return true;
     }
     uint32_t id;
-    if (!ir_exec_graph_add_function(graph, phase, function,
-                                    nullptr, nullptr, &id)) return false;
+    bool external_initializer = !function->n_blocks
+        && function->linkage == IR_LINK_EXTERN
+        && ir_func_is_initializer(function)
+        && n00bb_nil_type(ir_module_types(function->owner),
+                          th_func_error(function->type));
+    ir_exec_graph_outcome_t success = IR_EXEC_GRAPH_OUTCOME_SUCCESS;
+    bool added = external_initializer
+        ? ir_exec_graph_add_external_function(graph, phase, function,
+            &success, 1, &id)
+        : ir_exec_graph_add_function(graph, phase, function,
+            nullptr, nullptr, &id);
+    if (!added) return false;
     core_list_push(*registered,
         ((n00bb_exec_graph_function_t){function, phase, id}));
     *id_out = id;
@@ -33992,7 +34028,7 @@ bind_link_declarations_to_ir(parse_grammar_t *grammar,
             }
             ir_global_t *global = core_link_declaration_binding(declaration,
                 CORE_STRING_STATIC("n00bb.ir.global"));
-            if (!global) {
+            if (!global && !state->interface_module) {
                 core_diagnostics_report(
                     core_translation_unit_diagnostics(owner), owner,
                     CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0006"),
@@ -35154,6 +35190,10 @@ global_has_explicit_initializer(parse_grammar_t *grammar,
                                 parse_sym_entry_t *symbol)
 {
     if (!symbol) return false;
+    if (parse_sym_binding(symbol,
+            CORE_STRING_STATIC("n00bb.global-explicit-initializer")))
+        return true;
+    if (symbol->has_comptime_value && symbol->comptime_value) return true;
     if (symbol->decl_node
         && child_nt(grammar, symbol->decl_node, "expression")) return true;
     for (size_t i = 0; i < symbol->definition_count; i++) {
@@ -35676,7 +35716,9 @@ validate_thread_function_reads(
                 bool runtime_succeeds = false;
                 ok = ok && thread_runtime_entry_state(&initializer_roots,
                     &summaries, global,
-                    global->has_static_initializer,
+                    global->has_static_initializer
+                        || (thread_global->has_comptime_value
+                            && thread_global->comptime_value),
                     &runtime_succeeds, &entry_state);
                 bool diagnosed = false;
                 for (size_t f = 0; ok && runtime_succeeds
@@ -39702,10 +39744,13 @@ materialize_interface_export_origin(locate_worker_context_t *loader,
     size_t size = 0;
     const uint8_t *data = interface_owned_metadata(loader, owner_kind,
         external_name, "n00b.export-origin", 1, &size);
-    bool local_declaration = declaration_module
-        && core_string_eq(core_string_from_cstr(declaration_module),
-                          state->unit->module.identifier);
-    if (!data && !local_declaration) {
+    size_t declaration_module_size = declaration_module
+        ? strlen(declaration_module) : 0;
+    bool own_declaration = declaration_module_size
+        && !strncmp(external_name, declaration_module,
+                    declaration_module_size)
+        && external_name[declaration_module_size] == '.';
+    if (!data && !own_declaration) {
         if (failure) *failure = "interface export has no valid canonical origin";
         return false;
     }
@@ -40727,6 +40772,8 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
                     metadata[3] = (uint8_t)symbol->initializer_phases;
                     metadata[4] = (uint8_t)symbol->storage_duration;
                     metadata[5] = symbol->is_thread_local ? 1 : 0;
+                    metadata[7] = global_has_explicit_initializer(grammar,
+                        symbol) ? 1 : 0;
                     const n00bb_static_value_t *static_value =
                         symbol->has_comptime_value && symbol->comptime_value
                         ? symbol->comptime_value : nullptr;
@@ -41906,7 +41953,11 @@ decode_static_value(const uint8_t *data, size_t size, size_t *offset,
         return true;
     }
     case N00BB_STATIC_VALUE_NIL:
-        return n00bb_nil_type(state->types, type);
+    {
+        th_type *element = nullptr;
+        return n00bb_nil_type(state->types, type)
+            || n00bb_option_type_element(type, &element);
+    }
     case N00BB_STATIC_VALUE_VARIANT: {
         bool variant = false;
         th_type *shape = interface_static_record_shape(loader, state, type,
@@ -42037,6 +42088,9 @@ restore_interface_value_semantics(locate_worker_context_t *loader,
     symbol->is_thread_local = data[5] != 0;
     parse_sym_set_storage_class(symbol, requested, storage_required,
                                 (core_string_t){0});
+    if (data[7] && !parse_sym_set_binding(symbol,
+            CORE_STRING_STATIC("n00bb.global-explicit-initializer"),
+            symbol)) return false;
     if (data[10] > 1 || data[11] > N00BB_STATIC_VALUE_VARIANT)
         return false;
     bool has_value = data[10] != 0;

@@ -9,11 +9,11 @@ n00bb_global_metadata_append_storage(core_buffer_t *payload,
     if (!payload || !metadata
         || requested_storage_class.u8_bytes > UINT16_MAX
         || (requested_storage_class.u8_bytes
-            && !requested_storage_class.data)) return false;
+            && !requested_storage_class.data)
+        || metadata[7] > 1) return false;
 
     uint16_t size = (uint16_t)requested_storage_class.u8_bytes;
     metadata[6] = required ? 1 : 0;
-    metadata[7] = 0;
     metadata[8] = (uint8_t)(size & 0xff);
     metadata[9] = (uint8_t)(size >> 8);
     core_buffer_append(payload, (const char *)metadata, 12);
@@ -27,7 +27,7 @@ n00bb_global_metadata_read_storage(const uint8_t *data, size_t size,
                                    core_string_t *requested_storage_class,
                                    bool *required, size_t *payload_offset)
 {
-    if (!data || size < 12 || data[6] > 1 || data[7] != 0)
+    if (!data || size < 12 || data[6] > 1 || data[7] > 1)
         return false;
     uint16_t name_size = (uint16_t)data[8] | (uint16_t)data[9] << 8;
     size_t offset = 12u + name_size;
