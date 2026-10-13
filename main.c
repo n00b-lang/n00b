@@ -4827,47 +4827,44 @@ module_path_matches_site(n00bb_tu_state_t *state,
                          n00bb_link_use_site_t *site,
                          core_string_t module, bool allow_suffix)
 {
-    core_list_t(core_string_t) path = core_list_new(core_string_t);
+    if (!state || !site || !module.data) return false;
+    size_t components = 1;
     n00bb_link_use_site_t *at = site;
     while (at && at->dotted_path) {
-        if (!at->member_name.data) {
-            core_list_free(path);
-            return false;
-        }
-        core_list_push(path, at->member_name);
+        if (!at->member_name.data) return false;
+        components++;
         at = link_use_site_for_node(state, at->receiver_node);
     }
-    if (!at) {
-        core_list_free(path);
-        return false;
-    }
-    if (at->symbol && at->symbol->kind == PARSE_SYM_MODULE)
-        core_list_push(path, at->symbol->name);
-    else if (at->member_name.data)
-        core_list_push(path, at->member_name);
-    else {
-        core_list_free(path);
-        return false;
-    }
+    if (!at) return false;
+    core_string_t root = at->symbol && at->symbol->kind == PARSE_SYM_MODULE
+        ? at->symbol->name : at->member_name;
+    if (!root.data) return false;
 
-    core_list_t(core_string_t) module_parts = core_list_new(core_string_t);
-    size_t start = 0;
-    for (size_t i = 0; i <= module.u8_bytes; i++) {
-        if (i != module.u8_bytes && module.data[i] != '.') continue;
-        core_list_push(module_parts,
-            core_string_borrow(module.data + start, i - start));
-        start = i + 1;
+    size_t prefix_end = module.u8_bytes;
+    size_t parts = 1;
+    for (size_t i = 0; i < module.u8_bytes; i++) {
+        if (module.data[i] != '.') continue;
+        if (parts == components) {
+            prefix_end = i;
+            break;
+        }
+        parts++;
     }
+    if (parts < components || (!allow_suffix
+        && prefix_end != module.u8_bytes)) return false;
 
-    bool matches = path.len <= module_parts.len
-        && (allow_suffix || path.len == module_parts.len);
-    for (size_t i = 0; matches && i < path.len; i++)
-        matches = core_string_eq(path.data[path.len - i - 1],
-                                 module_parts.data[i]);
-
-    core_list_free(module_parts);
-    core_list_free(path);
-    return matches;
+    size_t end = prefix_end;
+    for (at = site; at->dotted_path;
+         at = link_use_site_for_node(state, at->receiver_node)) {
+        size_t start = end;
+        while (start && module.data[start - 1] != '.') start--;
+        if (!start || at->member_name.u8_bytes != end - start
+            || memcmp(at->member_name.data, module.data + start,
+                      end - start)) return false;
+        end = start - 1;
+    }
+    return root.u8_bytes == end
+        && !memcmp(root.data, module.data, end);
 }
 
 static core_translation_unit_t *
