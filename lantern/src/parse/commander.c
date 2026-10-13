@@ -151,28 +151,6 @@ find_flag(parse_cmdr_command_t *cmd, core_string_t flag_name)
     return nullptr;
 }
 
-static core_hash_value_t
-flag_key_hash(void *k)
-{
-    return core_string_hash(*(core_string_t *)k);
-}
-
-static bool
-flag_key_eq(const void *a, const void *b)
-{
-    return core_string_eq(*(const core_string_t *)a, *(const core_string_t *)b);
-}
-
-static core_string_t *
-flag_key(core_string_t s)
-{
-    core_string_t *k = core_alloc(core_string_t);
-
-    *k = core_string_from_raw(s.data, (int64_t)s.u8_bytes);
-
-    return k;
-}
-
 static void parse_cmdr_set_name(parse_cmdr_t *c, core_string_t name);
 static void parse_cmdr_add_command(parse_cmdr_t *c, core_string_t name,
                                  core_string_t doc);
@@ -809,8 +787,10 @@ make_token(const char *value, int64_t tid, int32_t index)
 }
 
 static parse_cmdr_command_t *
-command_in_args(parse_cmdr_t *c, const char **argv, int argc)
+command_in_args(parse_cmdr_t *c, const char **argv, int argc,
+                int *command_index)
 {
+    *command_index = -1;
     for (int i = 0; i < argc; i++) {
         const char *arg = argv[i];
         if (!arg) continue;
@@ -818,7 +798,10 @@ command_in_args(parse_cmdr_t *c, const char **argv, int argc)
         if (arg[0] == '-') continue;
         for (int32_t si = 0; si < (int32_t)c->root.subcommands.len; si++) {
             parse_cmdr_command_t *cmd = &c->root.subcommands.data[si];
-            if (cmd->name.data && strcmp(arg, cmd->name.data) == 0) return cmd;
+            if (cmd->name.data && strcmp(arg, cmd->name.data) == 0) {
+                *command_index = i;
+                return cmd;
+            }
         }
     }
     return &c->root;
@@ -827,17 +810,10 @@ command_in_args(parse_cmdr_t *c, const char **argv, int argc)
 static const char **
 move_leading_flags_after_command(parse_cmdr_command_t *scope,
                                  parse_cmdr_t *c,
-                                 const char **argv, int argc)
+                                 const char **argv, int argc,
+                                 int command_index)
 {
     if (!scope || !scope->name.data || !argv || argc < 2) return nullptr;
-    int command_index = -1;
-    for (int i = 0; i < argc; i++) {
-        if (argv[i] && strcmp(argv[i], scope->name.data) == 0) {
-            command_index = i;
-            break;
-        }
-        if (argv[i] && strcmp(argv[i], "--") == 0) break;
-    }
     if (command_index <= 0) return nullptr;
     for (int i = 0; i < command_index; i++) {
         if (!argv[i] || argv[i][0] != '-') return nullptr;
@@ -973,14 +949,9 @@ cmdr_tokenize(const char **argv, int argc, parse_cmdr_t *c,
 
         int64_t tid = classify_word(c, arg);
 
-        for (int32_t si = 0; si < (int32_t)c->root.subcommands.len; si++) {
-            if (c->root.subcommands.data[si].name.data
-                && strcmp(arg, c->root.subcommands.data[si].name.data) == 0) {
-                tid = parse_register_terminal(c->grammar,
-                                              core_string_borrow(arg, strlen(arg)));
-                break;
-            }
-        }
+        parse_cmdr_command_t *word_command = find_command(c, argv_str(arg));
+        if (word_command && word_command != &c->root)
+            tid = parse_register_terminal(c->grammar, word_command->name);
 
         core_list_push(tl, make_token(arg, tid, (int32_t)tl.len));
     }
@@ -997,8 +968,8 @@ static parse_cmdr_result_t *
 make_error_result(const char *msg)
 {
     parse_cmdr_result_t *r = core_alloc(parse_cmdr_result_t);
-    core_dict_init(&r->flags, flag_key_hash, flag_key_eq);
-    core_dict_init(&r->repeated_flags, flag_key_hash, flag_key_eq);
+    core_dict_init_string(&r->flags);
+    core_dict_init_string(&r->repeated_flags);
     r->ok       = false;
     r->errors = core_list_new_cap(core_string_t, 1);
 
@@ -1026,7 +997,8 @@ append_repeat_value(parse_cmdr_result_t *result, core_string_t name,
     if (!found) {
         values = core_alloc(core_list_t(parse_cmdr_val_t));
         *values = core_list_new(parse_cmdr_val_t);
-        _core_dict_put(&result->repeated_flags, flag_key(name), values);
+        _core_dict_put(&result->repeated_flags,
+                       core_dict_string_key_copy(name), values);
     }
     core_list_push(*values, clone_flag_value(value));
 }
@@ -1035,11 +1007,10 @@ static void
 store_flag_value(parse_cmdr_result_t *result, core_string_t name,
                  parse_cmdr_val_t *value)
 {
-    core_string_t *key = flag_key(name);
+    core_string_t *key = core_dict_string_key_copy(name);
     parse_cmdr_val_t *old = _core_dict_put(&result->flags, key, value);
     if (old) {
-        core_free(key->data);
-        core_free(key);
+        core_dict_string_key_free(key);
         if (old->tag == PARSE_CMDR_VAL_STR) core_free(old->s.data);
         core_free(old);
     }
@@ -1078,7 +1049,8 @@ collect_terminal_text(parse_visit_t *v)
 
 static void
 extract_result_from_tree(parse_cmdr_t *c, parse_tree_t *tree,
-                          parse_cmdr_result_t *r)
+                          parse_cmdr_result_t *r,
+                          parse_cmdr_command_t *scope)
 {
     if (!tree || !r) {
         return;
@@ -1093,15 +1065,7 @@ extract_result_from_tree(parse_cmdr_t *c, parse_tree_t *tree,
     parse_tree_walk_free(w);
 
     int32_t n = (int32_t)texts.len;
-    for (int32_t i = 0; i < n; i++) {
-        if (!texts.data[i] || strcmp(texts.data[i], "--") == 0) break;
-        parse_cmdr_command_t *cmd = find_command(c, argv_str(texts.data[i]));
-        if (cmd && cmd != &c->root) {
-            r->command = cmdr_intern(argv_str(texts.data[i]));
-            break;
-        }
-    }
-
+    if (scope && scope != &c->root) r->command = cmdr_intern(scope->name);
     bool past_dd = false;
 
     for (int32_t i = 0; i < n; i++) {
@@ -1118,16 +1082,6 @@ extract_result_from_tree(parse_cmdr_t *c, parse_tree_t *tree,
 
         if (r->command.data && !past_dd
             && strcmp(text, r->command.data) == 0) goto next;
-
-        if (!r->command.data && !past_dd) {
-            for (int32_t si = 0; si < (int32_t)c->root.subcommands.len; si++) {
-                if (c->root.subcommands.data[si].name.data
-                    && strcmp(text, c->root.subcommands.data[si].name.data) == 0) {
-                    r->command = cmdr_intern(argv_str(text));
-                    goto next;
-                }
-            }
-        }
 
         if (past_dd) {
             goto add_arg;
@@ -1377,8 +1331,12 @@ parse_cmdr_parse(parse_cmdr_t *c, int nargs, const char **args)
     parse_token_info_t **tokens = nullptr;
     int32_t             n_tokens = 0;
 
-    parse_cmdr_command_t *scope = command_in_args(c, args, nargs);
-    const char **ordered = move_leading_flags_after_command(scope, c, args, nargs);
+    int command_index = -1;
+    parse_cmdr_command_t *scope = command_in_args(c, args, nargs,
+                                                   &command_index);
+    const char **ordered = move_leading_flags_after_command(scope, c, args,
+                                                             nargs,
+                                                             command_index);
     const char **input = ordered ? ordered : args;
     if (cmdr_tokenize(input, nargs, c, scope, &tokens, &n_tokens) < 0) {
         core_free(ordered);
@@ -1395,8 +1353,8 @@ parse_cmdr_parse(parse_cmdr_t *c, int nargs, const char **args)
     bool parse_ok = parse_pwz_parse(pp, ts);
 
     parse_cmdr_result_t *r = core_alloc(parse_cmdr_result_t);
-    core_dict_init(&r->flags, flag_key_hash, flag_key_eq);
-    core_dict_init(&r->repeated_flags, flag_key_hash, flag_key_eq);
+    core_dict_init_string(&r->flags);
+    core_dict_init_string(&r->repeated_flags);
 
     if (!parse_ok) {
         r->ok       = false;
@@ -1410,7 +1368,7 @@ parse_cmdr_parse(parse_cmdr_t *c, int nargs, const char **args)
         r->tree = parse_pwz_get_tree(pp);
 
         if (r->tree) {
-            extract_result_from_tree(c, r->tree, r);
+            extract_result_from_tree(c, r->tree, r, scope);
             validate_positional_count(c, r);
         }
     }
@@ -1565,8 +1523,7 @@ parse_cmdr_result_free(parse_cmdr_result_t *r)
     core_free(r->command.data);
 
     core_dict_foreach (&r->flags, e) {
-        core_free(((core_string_t *)e->key)->data);
-        core_free(e->key);
+        core_dict_string_key_free(e->key);
 
         parse_cmdr_val_t *v = (parse_cmdr_val_t *)e->value;
 
@@ -1581,8 +1538,7 @@ parse_cmdr_result_free(parse_cmdr_result_t *r)
     core_dict_free(&r->flags);
 
     core_dict_foreach (&r->repeated_flags, e) {
-        core_free(((core_string_t *)e->key)->data);
-        core_free(e->key);
+        core_dict_string_key_free(e->key);
         core_list_t(parse_cmdr_val_t) *values = e->value;
         for (size_t i = 0; i < values->len; i++)
             if (values->data[i].tag == PARSE_CMDR_VAL_STR)

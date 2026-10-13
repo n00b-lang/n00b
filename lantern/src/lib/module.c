@@ -2,6 +2,7 @@
 
 #include "lib/alloc.h"
 #include "lib/diagnostic.h"
+#include "lib/dict.h"
 #include "lib/list.h"
 
 typedef core_translation_unit_t *core_tu_ptr_t;
@@ -9,6 +10,7 @@ core_list_decl(core_tu_ptr_t);
 
 typedef struct {
     core_list_t(core_tu_ptr_t) *units;
+    core_dict_t *unit_index;
     int *indices;
     int *lowlinks;
     size_t *stack;
@@ -20,32 +22,25 @@ typedef struct {
     bool succeeded;
 } core_tu_scc_ctx_t;
 
-static bool
-core_tu_list_contains(core_list_t(core_tu_ptr_t) *units,
-                      core_translation_unit_t *unit)
-{
-    for (size_t i = 0; i < units->len; i++)
-        if (units->data[i] == unit) return true;
-    return false;
-}
-
 static void
 core_tu_collect_imports(core_list_t(core_tu_ptr_t) *units,
+                        core_dict_t *unit_index,
                         core_translation_unit_t *unit)
 {
-    if (!unit || core_tu_list_contains(units, unit)) return;
+    if (!unit || core_dict_get(unit_index, unit, nullptr)) return;
+    core_dict_add(unit_index, unit, units->len + 1);
     core_list_push(*units, unit);
     for (size_t i = 0; i < core_translation_unit_import_count(unit); i++)
-        core_tu_collect_imports(units,
+        core_tu_collect_imports(units, unit_index,
             core_translation_unit_import(unit, i));
 }
 
 static size_t
 core_tu_index(core_tu_scc_ctx_t *ctx, core_translation_unit_t *unit)
 {
-    for (size_t i = 0; i < ctx->units->len; i++)
-        if (ctx->units->data[i] == unit) return i;
-    return SIZE_MAX;
+    size_t index = (size_t)(uintptr_t)core_dict_get(ctx->unit_index, unit,
+                                                     nullptr);
+    return index ? index - 1 : SIZE_MAX;
 }
 
 static void
@@ -197,6 +192,9 @@ core_translation_unit_init(core_translation_unit_t *unit,
         .source = *source,
         .diagnostics = core_diagnostics_new(),
     };
+    core_dict_init(&unit->imports_by_unit, nullptr, nullptr);
+    core_dict_init_string(&unit->imports_by_module);
+    core_diagnostics_set_unit(unit->diagnostics, unit);
     *source = (core_source_file_t){0};
     return true;
 }
@@ -207,6 +205,8 @@ core_translation_unit_release(core_translation_unit_t *unit)
     if (!unit) return;
     if (unit->user_data_free) unit->user_data_free(unit->user_data);
     core_diagnostics_free(unit->diagnostics);
+    core_dict_free(&unit->imports_by_unit);
+    core_dict_free(&unit->imports_by_module);
     core_free(unit->imports);
     core_module_spec_release(&unit->module);
     core_source_file_release(&unit->source);
@@ -253,15 +253,14 @@ core_translation_unit_add_import(core_translation_unit_t *unit,
             CORE_STRING_STATIC("cannot add an import after translation unit imports are finalized"));
         return false;
     }
-    for (size_t i = 0; i < unit->import_count; i++)
-        if (unit->imports[i] == imported) return true;
-        else if (core_module_spec_eq(&unit->imports[i]->module,
-                                     &imported->module)) {
-            core_diagnostics_report(unit->diagnostics, unit, CORE_DIAG_FATAL,
-                CORE_STRING_STATIC("LANTERN-L0001"),
-                CORE_STRING_STATIC("translation unit imports distinct sources with the same module identity"));
-            return false;
-        }
+    if (core_dict_contains(&unit->imports_by_unit, imported)) return true;
+    if (core_dict_contains(&unit->imports_by_module,
+                           &imported->module.identifier)) {
+        core_diagnostics_report(unit->diagnostics, unit, CORE_DIAG_FATAL,
+            CORE_STRING_STATIC("LANTERN-L0001"),
+            CORE_STRING_STATIC("translation unit imports distinct sources with the same module identity"));
+        return false;
+    }
     if (unit->import_count == unit->import_capacity) {
         size_t capacity = unit->import_capacity ? unit->import_capacity * 2 : 4;
         unit->imports = core_realloc(unit->imports,
@@ -269,6 +268,9 @@ core_translation_unit_add_import(core_translation_unit_t *unit,
         unit->import_capacity = capacity;
     }
     unit->imports[unit->import_count++] = imported;
+    core_dict_add(&unit->imports_by_unit, imported, imported);
+    core_dict_add(&unit->imports_by_module,
+                  &imported->module.identifier, imported);
     unit->import_revision++;
     return true;
 }
@@ -284,6 +286,15 @@ core_translation_unit_import(const core_translation_unit_t *unit,
                              size_t index)
 {
     return unit && index < unit->import_count ? unit->imports[index] : nullptr;
+}
+
+core_translation_unit_t *
+core_translation_unit_find_import(const core_translation_unit_t *unit,
+                                  core_string_t module)
+{
+    return unit && module.data
+        ? core_dict_get((core_dict_t *)&unit->imports_by_module,
+                        &module, nullptr) : nullptr;
 }
 
 uint64_t
@@ -314,15 +325,19 @@ core_translation_units_visit_sccs(core_translation_unit_t *const *roots,
 {
     if ((!roots && root_count) || !root_count || !callback) return false;
     core_list_t(core_tu_ptr_t) units = core_list_new(core_tu_ptr_t);
+    core_dict_t unit_index;
+    core_dict_init(&unit_index, nullptr, nullptr);
     for (size_t i = 0; i < root_count; i++) {
         if (!roots[i]) {
+            core_dict_free(&unit_index);
             core_list_free(units);
             return false;
         }
-        core_tu_collect_imports(&units, roots[i]);
+        core_tu_collect_imports(&units, &unit_index, roots[i]);
     }
     core_tu_scc_ctx_t state = {
         .units = &units,
+        .unit_index = &unit_index,
         .indices = core_alloc_array(int, units.len),
         .lowlinks = core_alloc_array(int, units.len),
         .stack = core_alloc_array(size_t, units.len),
@@ -339,6 +354,7 @@ core_translation_units_visit_sccs(core_translation_unit_t *const *roots,
     core_free(state.lowlinks);
     core_free(state.stack);
     core_free(state.on_stack);
+    core_dict_free(&unit_index);
     core_list_free(units);
     return state.succeeded;
 }

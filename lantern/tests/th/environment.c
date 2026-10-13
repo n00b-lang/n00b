@@ -865,6 +865,31 @@ int main(void) {
                           TH_ENV_PACKAGE,
                           fn1(types, concrete_box, concrete_box)));
 
+  th_type *pick_generic_receiver = th_var(types);
+  th_type *pick_specific_receiver = th_var(types);
+  th_type *pick_incomplete_receiver = th_var(types);
+  th_member incomplete_pick_methods[] = {
+      {.name = "pick", .type = fn1(types, pick_incomplete_receiver, string)},
+      {.name = "missing", .type = fn1(types, pick_incomplete_receiver, string)},
+  };
+  th_arg pick_generic_arg = {.kind = TH_ARG_TYPE, .type = th_var(types)};
+  th_type *pick_generic_box = th_apply(types, "Box", &pick_generic_arg, 1);
+  check("register overlapping methods in distinct traits",
+        th_env_register_trait(env, "GenericPick", "traits", "base",
+            TH_ENV_PUBLIC, method_record(types, "pick",
+                fn1(types, pick_generic_receiver, integer))) &&
+        th_env_register_trait(env, "SpecificPick", "traits", "base",
+            TH_ENV_PUBLIC, method_record(types, "pick",
+                fn1(types, pick_specific_receiver, string))) &&
+        th_env_register_trait(env, "IncompletePick", "traits", "base",
+            TH_ENV_PUBLIC, th_record(types, incomplete_pick_methods, 2)) &&
+        register_function(env, "base.box.generic_pick", "pick", "box-generic",
+            "base", TH_ENV_PUBLIC,
+            fn1(types, pick_generic_box, integer)) &&
+        register_function(env, "base.box.specific_pick", "pick", "box-int",
+            "base", TH_ENV_PUBLIC,
+            fn1(types, concrete_box, string)));
+
   th_type *echo_receiver = th_var(types);
   check("register a self-returning method trait",
         th_env_register_trait(
@@ -1269,6 +1294,27 @@ int main(void) {
                 TH_ENV_METHOD_FOUND &&
             !strcmp(selected.qualified_name, "base.box.int_get") &&
             !strcmp(selected_trait, "BoxReadable"));
+  check("method-name lookup ranks receivers across complete traits",
+        th_implements(inside, box_int, "GenericPick") &&
+            th_implements(inside, box_int, "SpecificPick") &&
+            !th_implements(inside, box_int, "IncompletePick") &&
+            th_env_method_resolve_by_name(inside, box_int, "pick", &selected,
+                                          &selected_trait) ==
+                TH_ENV_METHOD_FOUND &&
+            !strcmp(selected.qualified_name, "base.box.specific_pick") &&
+            !strcmp(selected_trait, "SpecificPick"));
+  th_type *unspecialized_item = th_var(inside);
+  th_arg unspecialized_arg = {.kind = TH_ARG_TYPE,
+                              .type = unspecialized_item};
+  th_type *unspecialized_box =
+      th_apply(inside, "Box", &unspecialized_arg, 1);
+  check("exact method does not specialize a generic receiver",
+        th_env_method_resolve_by_name(inside, unspecialized_box, "pick",
+                                      &selected, &selected_trait) ==
+                TH_ENV_METHOD_FOUND &&
+            !strcmp(selected.qualified_name, "base.box.generic_pick") &&
+            !strcmp(selected_trait, "GenericPick") &&
+            th_resolve(unspecialized_item) == unspecialized_item);
   th_env_vtable_slot_t box_slots[1] = {0};
   size_t box_slot_count = 0;
   th_env_vtable_plan_t box_vtable = {0};

@@ -101,6 +101,25 @@ static void test_the_list_macros_all_expand_and_work(void)
     core_list_free(l);
 }
 
+static void test_fallible_list_growth(void)
+{
+    core_list_t(int) items = {0};
+    bool grew = true;
+    for (int i = 0; i < 40; i++) {
+        grew = grew && core_list_try_push(items, i);
+    }
+    check("fallible push grows and preserves elements",
+          grew && items.len == 40 && items.data[0] == 0 &&
+          items.data[39] == 39);
+
+    int *before = items.data;
+    size_t capacity = items.cap;
+    check("impossible reserve fails without mutating the list",
+          !core_list_try_reserve(items, SIZE_MAX) &&
+          items.data == before && items.cap == capacity && items.len == 40);
+    core_list_free(items);
+}
+
 static void test_the_array_macros_all_expand_and_work(void)
 {
     core_list_t(int) l = core_list_new(int);
@@ -264,6 +283,7 @@ static void test_the_remaining_macros_expand(void)
 int main(void)
 {
     test_the_list_macros_all_expand_and_work();
+    test_fallible_list_growth();
     test_the_array_macros_all_expand_and_work();
     test_the_option_macros_all_expand_and_work();
     test_the_tree_macros_all_expand_and_work();

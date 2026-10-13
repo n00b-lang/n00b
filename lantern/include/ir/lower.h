@@ -27,9 +27,7 @@ typedef struct {
     ir_block_t *block;
     ir_diags_t *diagnostics;
     int32_t file_id;
-    void *symbol_bindings;
-    void *tree_values;
-    void *tree_state;
+    void *lower_private;
     void *user;
     uint64_t next_value_id;
     bool reachable;
@@ -75,6 +73,9 @@ ir_instr_t *ir_lower_emit_instruction(ir_lower_context_t *context,
                                       ir_op_t op, ir_span_t span);
 ir_instr_t *ir_lower_emit_terminator(ir_lower_context_t *context,
                                      ir_op_t op, ir_span_t span);
+bool ir_lower_set_temp_dest(ir_lower_context_t *context,
+                            ir_instr_t *instruction, const char *prefix,
+                            th_type *type);
 bool ir_lower_bind_value(ir_lower_context_t *context,
                          parse_sym_entry_t *symbol, ir_value_t *value);
 bool ir_lower_bind_local(ir_lower_context_t *context,

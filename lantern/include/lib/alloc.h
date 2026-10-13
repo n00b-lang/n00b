@@ -40,6 +40,12 @@ core_realloc(void *ptr, size_t sz)
     return p;
 }
 
+static inline void *
+core_try_realloc(void *ptr, size_t sz)
+{
+    return realloc(ptr, sz);
+}
+
 static inline void
 core_free(void *ptr)
 {

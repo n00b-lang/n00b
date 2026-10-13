@@ -1368,9 +1368,11 @@ static bool function_matches(th_ctx *ctx, th_type *receiver,
   th_type *trait_receiver = first_parameter(required);
   th_type *function_receiver = first_parameter(provided);
   th_type *need[] = {trait_receiver, function_receiver, required_contract};
-  th_type *have[] = {receiver, receiver, function_contract};
+  th_type *receiver_copy = th_type_clone(ctx, receiver);
+  th_type *have[] = {receiver_copy, receiver_copy, function_contract};
   bool matches = required && provided && trait_receiver && function_receiver &&
-                 required_error && provided_error &&
+                 required_error && provided_error && receiver_copy &&
+                 receiver_subsumes(function_receiver, receiver) &&
                  th_unify(ctx, th_tuple(ctx, need, 3),
                           th_tuple(ctx, have, 3)) != nullptr;
   return matches;
@@ -1578,8 +1580,9 @@ static bool trait_methods_match(th_ctx *ctx, th_type *receiver,
       continue;
     for (size_t promotion = 0; !matched && promotion < 2; promotion++) {
       th_type *actual = promotion ? provided_receiver : receiver;
-      if (promotion && !th_type_promotes_to(ctx, receiver,
-                                            provided_receiver))
+      if ((!promotion && !receiver_subsumes(provided_receiver, receiver)) ||
+          (promotion && !th_type_promotes_to(ctx, receiver,
+                                             provided_receiver)))
         continue;
       th_type *branch = fresh_pattern(ctx, attempt);
       th_type *branch_required = contract_lookup(branch, method->name);
@@ -1758,33 +1761,111 @@ th_env_method_status_t th_env_method_resolve_by_name(
       !method_name)
     return TH_ENV_METHOD_NOT_FOUND;
 
-  th_env_method_t selected = {0};
-  const char *selected_trait = nullptr;
+  typedef struct {
+    const th_env_trait_t *trait;
+    const th_env_function_t *function;
+    th_type *receiver_pattern;
+  } name_match_t;
+  core_list_decl(name_match_t);
+  core_list_t(name_match_t) matches = core_list_new(name_match_t);
   for (size_t i = 0; i < ctx->environment->traits.len; i++) {
     const th_env_trait_t *trait = &ctx->environment->traits.data[i];
     if (!visible_to(ctx, trait->visibility, trait->module, trait->package) ||
-        !th_record_lookup(trait->scheme, method_name))
+        !th_record_lookup(trait->scheme, method_name) ||
+        !th_env_implements(ctx, receiver, trait->name))
       continue;
-    th_env_method_t candidate = {0};
-    th_env_method_status_t status = th_env_method_resolve(
-        ctx, receiver, trait->name, method_name, &candidate);
-    if (status == TH_ENV_METHOD_AMBIGUOUS)
-      return status;
-    if (status != TH_ENV_METHOD_FOUND)
-      continue;
-    if (selected.qualified_name &&
-        strcmp(selected.qualified_name, candidate.qualified_name))
-      return TH_ENV_METHOD_AMBIGUOUS;
-    if (!selected.qualified_name) {
-      selected = candidate;
-      selected_trait = trait->name;
+    core_list_t(th_env_function_ptr_t) candidates =
+        candidate_functions(ctx, trait, method_name);
+    for (size_t j = 0; j < candidates.len; j++) {
+      const th_env_function_t *function = candidates.data[j];
+      if (!function_matches_with_promotion(ctx, receiver, trait, function,
+                                           method_name))
+        continue;
+      th_type *signature = nullptr;
+      th_env_signature_channels(ctx, fresh_pattern(ctx, function->contract),
+                                &signature, nullptr);
+      th_type *pattern = first_parameter(signature);
+      if (pattern)
+        core_list_push(matches, ((name_match_t){trait, function, pattern}));
+    }
+    core_list_free(candidates);
+  }
+  if (!matches.len) {
+    core_list_free(matches);
+    return TH_ENV_METHOD_NOT_FOUND;
+  }
+
+  bool *maximal = core_alloc_array(bool, matches.len);
+  for (size_t i = 0; i < matches.len; i++) {
+    maximal[i] = true;
+    for (size_t j = 0; j < matches.len; j++) {
+      if (i == j) continue;
+      bool i_sub_j =
+          receiver_subsumes(matches.data[j].receiver_pattern,
+                            matches.data[i].receiver_pattern) ||
+          th_type_promotes_to(ctx, matches.data[i].receiver_pattern,
+                              matches.data[j].receiver_pattern);
+      bool j_sub_i =
+          receiver_subsumes(matches.data[i].receiver_pattern,
+                            matches.data[j].receiver_pattern) ||
+          th_type_promotes_to(ctx, matches.data[j].receiver_pattern,
+                              matches.data[i].receiver_pattern);
+      if (j_sub_i && !i_sub_j) {
+        maximal[i] = false;
+        break;
+      }
     }
   }
-  if (!selected.qualified_name)
-    return TH_ENV_METHOD_NOT_FOUND;
-  if (out) *out = selected;
-  if (trait_name) *trait_name = selected_trait;
-  return TH_ENV_METHOD_FOUND;
+
+  th_env_type_origin_t *origin = receiver_origin(ctx->environment, receiver);
+  const name_match_t *best = nullptr;
+  const name_match_t *first = nullptr;
+  int best_origin_rank = -1;
+  bool incomparable = false;
+  bool tied_functions = false;
+  for (size_t i = 0; i < matches.len; i++) {
+    if (!maximal[i]) continue;
+    const name_match_t *candidate = &matches.data[i];
+    if (!first) first = candidate;
+    else if (!receiver_subsumes(first->receiver_pattern,
+                                candidate->receiver_pattern) ||
+             !receiver_subsumes(candidate->receiver_pattern,
+                                first->receiver_pattern))
+      incomparable = true;
+    int rank = function_origin_rank(origin, candidate->function);
+    if (rank > best_origin_rank) {
+      best = candidate;
+      best_origin_rank = rank;
+      tied_functions = false;
+    } else if (rank == best_origin_rank && best &&
+               strcmp(candidate->function->module, best->function->module))
+      tied_functions = true;
+  }
+  th_env_method_status_t status = TH_ENV_METHOD_NOT_FOUND;
+  if (incomparable || tied_functions)
+    status = TH_ENV_METHOD_AMBIGUOUS;
+  else if (best) {
+    th_type *signature = nullptr;
+    th_type *error_type = nullptr;
+    if (th_env_signature_channels(ctx, best->function->contract, &signature,
+                                  &error_type)) {
+      if (out)
+        *out = (th_env_method_t){
+            .qualified_name = best->function->qualified_name,
+            .root_name = best->function->root_name,
+            .module = best->function->module,
+            .package = best->function->package,
+            .signature = signature,
+            .error_type = error_type,
+            .contract = best->function->contract,
+        };
+      if (trait_name) *trait_name = best->trait->name;
+      status = TH_ENV_METHOD_FOUND;
+    }
+  }
+  core_free(maximal);
+  core_list_free(matches);
+  return status;
 }
 
 size_t th_env_method_candidates(th_ctx *ctx, const char *trait_name,

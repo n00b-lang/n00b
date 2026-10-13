@@ -507,11 +507,9 @@ static void *r_tvar(parse_reduce_t *r)
     return node_type(c, t);
 }
 
-typedef struct {
-    char **names;
-    size_t count;
-    size_t capacity;
-} tvar_names_t;
+typedef char *tvar_name_t;
+core_list_decl(tvar_name_t);
+typedef core_list_t(tvar_name_t) tvar_names_t;
 
 static void collect_tvar_names(parse_grammar_t *g, parse_tree_t *n,
                                tvar_names_t *found)
@@ -528,12 +526,7 @@ static void collect_tvar_names(parse_grammar_t *g, parse_tree_t *n,
         core_string_t s = parse_tree_leaf_text(core_tree_child(n, 1));
 
         if (s.data) {
-            if (found->count == found->capacity) {
-                found->capacity = found->capacity ? found->capacity * 2 : 8;
-                found->names    = core_realloc(
-                    found->names, found->capacity * sizeof(*found->names));
-            }
-            found->names[found->count++] = core_strdup(s.data);
+            core_list_push(*found, core_strdup(s.data));
         }
 
         return;
@@ -554,7 +547,7 @@ static bool binder_open(parse_visit_t *v)
     collect_tvar_names(v->grammar, v->node, &found);
 
     core_list_push(c->binders,
-                   ((binding){.names = found.names, .n = found.count}));
+                   ((binding){.names = found.data, .n = found.len}));
 
     return true;
 }

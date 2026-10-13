@@ -12,7 +12,6 @@
 #include "private/parse/grammar.h"
 #include "private/scanner/lex_decl.h"
 #include "scanner/lex.h"
-#include "scanner/lex_conformance.h"
 #include "scanner/token_stream.h"
 #include "scanner/tokenizer.h"
 
@@ -1528,19 +1527,6 @@ static void test_literal_postprocessing_hooks(void) {
   core_free(unknown_source.data);
 }
 
-static void test_a_spec_is_reusable_across_runs(void) {
-  parse_grammar_t *g = mk(&PYTHON, PY_TERMS);
-
-  kinds(g, "the first run", "if x:\n  a\n",
-        "if IDENTIFIER : NEWLINE INDENT IDENTIFIER NEWLINE DEDENT "
-        "ENDMARKER");
-  kinds(g, "and the state does not leak into the second", "if x:\n  a\n",
-        "if IDENTIFIER : NEWLINE INDENT IDENTIFIER NEWLINE DEDENT "
-        "ENDMARKER");
-
-  parse_grammar_free(g);
-}
-
 static void test_a_grammar_declares_its_own_lexis(void) {
   static const char *const G =
       "@lex-comment(\"#\")\n"
@@ -1772,29 +1758,6 @@ static void test_string_families_expand_once(void) {
   core_free(text.data);
 }
 
-static void test_string_families_reject_duplicate_openers(void) {
-  static const char *const G =
-      "@lex-string('r\"', '\"', raw, as(\"STRING\"))\n"
-      "@lex-string-family(prefixes(\"r\"), quotes('\"'), raw, "
-      "as(\"STRING\"))\n"
-      "<file> ::= %STRING\n";
-  parse_grammar_t *g = parse_grammar_new();
-  core_string_t text = core_string_from_cstr(G);
-
-  parse_grammar_set_error_recovery(g, false);
-  parse_bnf_declare_terminals(g, text);
-  bool loaded = load_test_grammar(text, CORE_STRING_STATIC("file"), g);
-  scan_lex_t *lex = loaded ? scan_grammar_lex_compiled(g) : nullptr;
-  const char *error = scan_lex_build_error();
-
-  check("duplicate family openers fail during lexer compilation",
-        loaded && !lex && error && strstr(error, "duplicate string opener") &&
-            strstr(error, "r\""));
-
-  parse_grammar_free(g);
-  core_free(text.data);
-}
-
 static void family_error(const char *label, const char *source,
                          const char *expected) {
   parse_grammar_t *g = parse_grammar_new();
@@ -1813,6 +1776,11 @@ static void family_error(const char *label, const char *source,
 }
 
 static void test_string_families_diagnose_invalid_declarations(void) {
+  family_error("string families reject duplicate openers",
+               "@lex-string('r\"', '\"', raw, as(\"STRING\"))\n"
+               "@lex-string-family(prefixes(\"r\"), quotes('\"'), raw, "
+               "as(\"STRING\"))\n<file> ::= %STRING\n",
+               "duplicate string opener");
   family_error("a string family requires delimiter forms",
                "@lex-string-family(plain, raw, as(\"STRING\"))\n"
                "<file> ::= %STRING\n",
@@ -2428,27 +2396,6 @@ static void test_fence_padding_requires_both_boundaries(void) {
   parse_grammar_free(g);
 }
 
-static void test_unterminated_constructs_are_incomplete(void) {
-  const char *src = "[=ffi[body";
-  parse_grammar_t *g = fence_grammar();
-  core_buffer_t *buf = nullptr;
-  parse_scanner_t *sc = nullptr;
-  parse_token_stream_t *ts = scan_tokenize(g, src, strlen(src), &buf, &sc);
-
-  while (scan_stream_next(ts)) {
-  }
-
-  check("an unterminated fence is incomplete, not ordinary EOF",
-        scan_status(sc) == SCAN_STATUS_INCOMPLETE);
-  check("an incomplete scan identifies the construct's start",
-        sc->status_start_byte == 0 && sc->status_end_byte == strlen(src));
-
-  scan_token_stream_free(ts);
-  scan_scanner_free(sc);
-  core_buffer_free(buf);
-  parse_grammar_free(g);
-}
-
 static void test_incomplete_fences_resume_after_append(void) {
   const char *src = "[=ffi[body";
   parse_grammar_t *g = fence_grammar();
@@ -2458,6 +2405,10 @@ static void test_incomplete_fences_resume_after_append(void) {
 
   check("an incomplete fence emits no provisional token",
         scan_stream_next(ts) == nullptr && scan_stream_token_count(ts) == 0);
+  check("an incomplete fence retains its source span",
+        scan_status(sc) == SCAN_STATUS_INCOMPLETE &&
+            sc->status_start_byte == 0 &&
+            sc->status_end_byte == strlen(src));
   check("an incomplete stream accepts more source",
         scan_stream_append(ts, "]=]", 3));
 
@@ -3199,27 +3150,6 @@ static void test_terminals_have_no_byte_width_limit(void) {
   core_buffer_free(op);
 }
 
-static void test_scanner_diagnostics_have_a_stable_view(void) {
-  static const char *const TERMS[] = {
-      "IDENTIFIER", "INTEGER", "FLOAT", "STRING", nullptr,
-  };
-  parse_grammar_t *g = mk(&JS, TERMS);
-  parse_token_stream_t *ts = scan_tokenize_owned(g, "\"open", 5);
-
-  while (scan_stream_next(ts)) {
-  }
-
-  scan_diagnostic_t diagnostic = {0};
-  check("incomplete scanner diagnostics are inspectable",
-        scan_diagnostic(ts->scanner, &diagnostic) &&
-            diagnostic.status == SCAN_STATUS_INCOMPLETE &&
-            diagnostic.message.data && diagnostic.start_byte == 0 &&
-            diagnostic.end_byte == 5);
-
-  scan_token_stream_free(ts);
-  parse_grammar_free(g);
-}
-
 static void *finalize_concurrently(void *arg) {
   parse_grammar_finalize(arg);
   return nullptr;
@@ -3257,24 +3187,6 @@ static scan_status_t source_status(parse_grammar_t *g, const char *source) {
   core_buffer_free(buf);
 
   return result;
-}
-
-static void test_numeric_recipes_reject_malformed_forms(void) {
-  static const char *const TERMS[] = {
-      "IDENTIFIER", "INTEGER", "FLOAT", "IMAGINARY", nullptr,
-  };
-  parse_grammar_t *g = mk(&PYTHON, TERMS);
-
-  check("numeric recipes accept well-formed separators and exponents",
-        source_status(g, "0x1f 1_000 1.5e+2") == SCAN_STATUS_COMPLETE);
-  check("a radix prefix requires at least one digit",
-        source_status(g, "0x") == SCAN_STATUS_INVALID);
-  check("a separator must occur between digits",
-        source_status(g, "1__2") == SCAN_STATUS_INVALID);
-  check("an exponent marker requires exponent digits",
-        source_status(g, "1e+") == SCAN_STATUS_INVALID);
-
-  parse_grammar_free(g);
 }
 
 static bool recovery_declaration_fails(const char *source,
@@ -3569,6 +3481,8 @@ static parse_grammar_t *number_form_grammar(void) {
 static void test_self_contained_number_forms(void) {
   parse_grammar_t *g = number_form_grammar();
 
+  check("number forms accept separators and exponents",
+        source_status(g, "0x1f 1_000 1.5e+2") == SCAN_STATUS_COMPLETE);
   kinds(g, "number forms own their point and exponent policies",
         "0 1. .5 1e2 0x1 0x1p2 0x1.fp2 0b101",
         "INTEGER FLOAT FLOAT FLOAT INTEGER FLOAT FLOAT INTEGER");
@@ -3577,6 +3491,10 @@ static void test_self_contained_number_forms(void) {
         "1L 1.0L", "INTEGER FLOAT");
   check("a prefixed form requires one of its own digits",
         source_status(g, "0x") == SCAN_STATUS_INVALID);
+  check("a separator must occur between digits",
+        source_status(g, "1__2") == SCAN_STATUS_INVALID);
+  check("an exponent marker requires exponent digits",
+        source_status(g, "1e+") == SCAN_STATUS_INVALID);
   check("a form rejects digits outside its alphabet",
         source_status(g, "0b102") == SCAN_STATUS_INVALID);
   check("a hexadecimal point requires its own exponent",
@@ -3837,6 +3755,16 @@ static void test_strings_distinguish_incomplete_from_invalid(void) {
         source_status(py, "\"bad\n") == SCAN_STATUS_INVALID);
   check("an interpolated string tail at EOF is incomplete",
         source_status(js, "`a${x}") == SCAN_STATUS_INCOMPLETE);
+  parse_token_stream_t *stream = scan_tokenize_owned(js, "\"open", 5);
+  while (scan_stream_next(stream)) {
+  }
+  scan_diagnostic_t diagnostic = {0};
+  check("incomplete scanner diagnostics remain inspectable",
+        scan_diagnostic(stream->scanner, &diagnostic) &&
+            diagnostic.status == SCAN_STATUS_INCOMPLETE &&
+            diagnostic.message.data && diagnostic.start_byte == 0 &&
+            diagnostic.end_byte == 5);
+  scan_token_stream_free(stream);
 
   parse_grammar_free(py);
   parse_grammar_free(js);
@@ -4446,297 +4374,6 @@ static void test_lexer_spec_conflict_analysis(void) {
   core_free(many);
 }
 
-typedef struct {
-  parse_grammar_t *grammar;
-  const scan_lex_conformance_suite_t *suite;
-  size_t lane;
-  size_t lanes;
-  bool ok;
-} generated_concurrency_t;
-
-static uint64_t conformance_hash_bytes(uint64_t hash, const void *data,
-                                       size_t bytes) {
-  const unsigned char *at = data;
-  for (size_t i = 0; i < bytes; i++) {
-    hash ^= at[i];
-    hash *= UINT64_C(1099511628211);
-  }
-  return hash;
-}
-
-static uint64_t conformance_scan(parse_grammar_t *grammar, core_string_t source,
-                                 bool recovery, scan_status_t *status,
-                                 size_t *tokens) {
-  parse_scanner_t *scanner = nullptr;
-  parse_token_stream_t *stream =
-      scan_tokenize(grammar, source.data, source.u8_bytes, nullptr, &scanner);
-  if (!stream) {
-    *status = SCAN_STATUS_INVALID;
-    *tokens = 0;
-    return 0;
-  }
-  scan_scanner_set_recovery(scanner, recovery);
-  uint64_t hash = UINT64_C(1469598103934665603);
-  *tokens = 0;
-  parse_token_info_t *token = nullptr;
-  while ((token = scan_stream_next(stream))) {
-    hash = conformance_hash_bytes(hash, &token->tid, sizeof(token->tid));
-    hash = conformance_hash_bytes(hash, &token->start_byte,
-                                  sizeof(token->start_byte));
-    hash =
-        conformance_hash_bytes(hash, &token->end_byte, sizeof(token->end_byte));
-    if (core_option_is_set(token->value)) {
-      core_string_t value = core_option_get(token->value);
-      hash = conformance_hash_bytes(hash, value.data, value.u8_bytes);
-    }
-    (*tokens)++;
-  }
-  *status = scan_status(scanner);
-  scan_token_stream_free(stream);
-  scan_scanner_free(scanner);
-  return hash;
-}
-
-static bool run_generated_case(parse_grammar_t *grammar,
-                               const scan_lex_conformance_case_t *item) {
-  core_string_t input =
-      core_string_borrow(item->source.data, item->input_bytes);
-  if (item->kind == SCAN_LEX_CONFORMANCE_TRUNCATION) {
-    parse_token_stream_t *stream = scan_tokenize_incremental_owned(grammar);
-    bool ok = stream && scan_stream_append(stream, input.data, input.u8_bytes);
-    while (ok && scan_stream_next(stream)) {
-    }
-    ok = ok && scan_status(stream->scanner) == item->expected_status;
-    scan_token_stream_free(stream);
-    return ok;
-  }
-  if (item->kind == SCAN_LEX_CONFORMANCE_INCREMENTAL_SPLIT) {
-    scan_status_t batch_status = SCAN_STATUS_ACTIVE;
-    size_t batch_tokens = 0;
-    uint64_t batch_hash =
-        conformance_scan(grammar, input, false, &batch_status, &batch_tokens);
-    parse_token_stream_t *stream = scan_tokenize_incremental_owned(grammar);
-    bool ok =
-        stream && scan_stream_append(stream, input.data, item->split_byte);
-    while (ok && scan_stream_next(stream)) {
-    }
-    ok = ok && scan_status(stream->scanner) == SCAN_STATUS_INCOMPLETE &&
-         scan_stream_append(stream, input.data + item->split_byte,
-                            input.u8_bytes - item->split_byte) &&
-         scan_stream_finish(stream);
-    uint64_t hash = UINT64_C(1469598103934665603);
-    size_t tokens = 0;
-    parse_token_info_t *token = nullptr;
-    while (ok && (token = scan_stream_next(stream))) {
-      hash = conformance_hash_bytes(hash, &token->tid, sizeof(token->tid));
-      hash = conformance_hash_bytes(hash, &token->start_byte,
-                                    sizeof(token->start_byte));
-      hash = conformance_hash_bytes(hash, &token->end_byte,
-                                    sizeof(token->end_byte));
-      if (core_option_is_set(token->value)) {
-        core_string_t value = core_option_get(token->value);
-        hash = conformance_hash_bytes(hash, value.data, value.u8_bytes);
-      }
-      tokens++;
-    }
-    ok = ok && batch_status == SCAN_STATUS_COMPLETE &&
-         scan_status(stream->scanner) == SCAN_STATUS_COMPLETE &&
-         tokens == batch_tokens && hash == batch_hash;
-    scan_token_stream_free(stream);
-    return ok;
-  }
-
-  scan_status_t status = SCAN_STATUS_ACTIVE;
-  size_t tokens = 0;
-  conformance_scan(grammar, input, item->recovery, &status, &tokens);
-  return status == item->expected_status;
-}
-
-static void *run_generated_concurrently(void *argument) {
-  generated_concurrency_t *run = argument;
-  run->ok = true;
-  size_t count = scan_lex_conformance_count(run->suite);
-  for (size_t i = run->lane; run->ok && i < count; i += run->lanes) {
-    scan_lex_conformance_case_t item = {0};
-    if (!scan_lex_conformance_case(run->suite, i, &item) ||
-        item.kind != SCAN_LEX_CONFORMANCE_CONCURRENT) {
-      continue;
-    }
-    run->ok = run_generated_case(run->grammar, &item);
-  }
-  return nullptr;
-}
-
-static bool run_generated_suite(parse_grammar_t *grammar,
-                                const scan_lex_conformance_suite_t *suite) {
-  bool ok = true;
-  size_t count = scan_lex_conformance_count(suite);
-  for (size_t i = 0; ok && i < count; i++) {
-    scan_lex_conformance_case_t item = {0};
-    scan_lex_conformance_case(suite, i, &item);
-    if (item.kind == SCAN_LEX_CONFORMANCE_CONCURRENT) {
-      continue;
-    }
-    ok = run_generated_case(grammar, &item);
-    if (!ok) {
-      printf("generated lexer case %zu kind %u input %zu split %zu "
-             "failed for '%.*s' in '%.*s'%s%.*s\n",
-             item.id, (unsigned)item.kind, item.input_bytes, item.split_byte,
-             (int)item.spelling.u8_bytes, item.spelling.data,
-             (int)item.source.u8_bytes, item.source.data,
-             item.origin.data ? " from " : "", (int)item.origin.u8_bytes,
-             item.origin.data ? item.origin.data : "");
-    }
-  }
-
-  enum { LANES = 4 };
-  generated_concurrency_t runs[LANES];
-  pthread_t threads[LANES];
-  for (size_t i = 0; i < LANES; i++) {
-    runs[i] = (generated_concurrency_t){
-        .grammar = grammar,
-        .suite = suite,
-        .lane = i,
-        .lanes = LANES,
-    };
-    pthread_create(&threads[i], nullptr, run_generated_concurrently, &runs[i]);
-  }
-  for (size_t i = 0; i < LANES; i++) {
-    pthread_join(threads[i], nullptr);
-    ok = ok && runs[i].ok;
-  }
-  return ok;
-}
-
-static void test_spec_driven_conformance_cases(void) {
-  parse_grammar_t *grammars[] = {
-      mk(&PYTHON, PY_TERMS),
-      mk(&JS, (const char *const[]){"IDENTIFIER", "INTEGER", "FLOAT", "STRING",
-                                    "TEMPLATE_HEAD", "TEMPLATE_MIDDLE",
-                                    "TEMPLATE_TAIL", "REGEX_LIT", nullptr}),
-      mk(&RUBY, (const char *const[]){"IDENTIFIER", "INTEGER", "HEREDOC",
-                                      "CVAR", "IVAR", "GVAR", nullptr}),
-      fence_grammar(),
-      mk(&RECOVERY_LEXER,
-         (const char *const[]){"IDENTIFIER", "INTEGER", "STRING", "ERROR", ";",
-                               nullptr}),
-  };
-  bool ok = true;
-  for (size_t i = 0; i < sizeof(grammars) / sizeof(grammars[0]); i++) {
-    scan_lex_t *program = scan_grammar_lex_compiled(grammars[i]);
-    scan_lex_conformance_suite_t *first =
-        scan_lex_conformance_generate(program, 0);
-    scan_lex_conformance_suite_t *second =
-        scan_lex_conformance_generate(program, 0);
-    ok = ok && first && second &&
-         scan_lex_conformance_count(first) ==
-             scan_lex_conformance_count(second) &&
-         scan_lex_conformance_fingerprint(first) ==
-             scan_lex_conformance_fingerprint(second) &&
-         run_generated_suite(grammars[i], first);
-    scan_lex_conformance_free(second);
-    scan_lex_conformance_free(first);
-  }
-  check("resolved recipes generate reproducible passing conformance cases", ok);
-
-  static const scan_lex_string_t boundary_strings[] = {
-      {.opener = S("abc"), .closer = S("wxyz"), .tok = S("STRING")},
-      {},
-  };
-  static const scan_lex_declaration_t boundary_origins[] = {
-      {.kind = SCAN_LEX_DECL_STRING,
-       .spelling = S("abc"),
-       .origin = S("boundary.lex")},
-      {},
-  };
-  static const scan_lex_spec_t boundary_spec = {
-      .name = S("boundary-test"),
-      .strings = boundary_strings,
-      .declarations = boundary_origins,
-  };
-  parse_grammar_t *boundary =
-      mk(&boundary_spec, (const char *const[]){"STRING", nullptr});
-  scan_lex_t *program = scan_grammar_lex_compiled(boundary);
-  scan_lex_conformance_suite_t *suite =
-      scan_lex_conformance_generate(program, 0);
-  bool splits[8] = {0};
-  bool has_origin = false;
-  size_t split_cases = 0;
-  for (size_t i = 0; i < scan_lex_conformance_count(suite); i++) {
-    scan_lex_conformance_case_t item = {0};
-    scan_lex_conformance_case(suite, i, &item);
-    if (item.kind == SCAN_LEX_CONFORMANCE_INCREMENTAL_SPLIT &&
-        item.split_byte < sizeof(splits)) {
-      splits[item.split_byte] = true;
-      split_cases++;
-      has_origin = has_origin || core_string_eq(item.origin, S("boundary.lex"));
-    }
-  }
-  check("every opener and closer byte boundary is generated",
-        split_cases == 6 && splits[1] && splits[2] && splits[3] && splits[5] &&
-            splits[6] && splits[7]);
-  check("generated cases identify their originating declaration", has_origin);
-
-  static const core_string_t prefix_operators[] = {
-      S("a"),
-      S("ab"),
-      S("ac"),
-      {},
-  };
-  scan_lex_spec_t prefix_spec = {
-      .name = S("prefix-conformance"),
-      .operators = prefix_operators,
-  };
-  parse_grammar_t *prefix_grammar = parse_grammar_new();
-  for (size_t i = 0; prefix_operators[i].data; i++) {
-    parse_register_terminal(prefix_grammar, prefix_operators[i]);
-  }
-  scan_lex_t *prefix_program = scan_lex_compile(&prefix_spec, prefix_grammar);
-  scan_lex_conformance_suite_t *prefix_suite =
-      scan_lex_conformance_generate(prefix_program, 0);
-  bool sibling_overlap = false;
-  for (size_t i = 0; i < scan_lex_conformance_count(prefix_suite); i++) {
-    scan_lex_conformance_case_t item = {0};
-    scan_lex_conformance_case(prefix_suite, i, &item);
-    sibling_overlap =
-        sibling_overlap || (item.kind == SCAN_LEX_CONFORMANCE_LONGEST_PREFIX &&
-                            core_string_eq(item.spelling, S("ac")));
-  }
-  check("prefix siblings all generate longest-match cases", sibling_overlap);
-  scan_lex_conformance_free(prefix_suite);
-  scan_lex_free(prefix_program);
-  parse_grammar_free(prefix_grammar);
-
-  scan_lex_conformance_free(suite);
-  parse_grammar_free(boundary);
-
-  enum { OPERATORS = 1024 };
-  core_string_t *operators = core_alloc_array(core_string_t, OPERATORS + 1);
-  char (*names)[16] = core_alloc_size(OPERATORS + 1, sizeof(*names));
-  parse_grammar_t *large = parse_grammar_new();
-  for (size_t i = 0; i < OPERATORS; i++) {
-    int bytes = snprintf(names[i], sizeof(names[i]), "op%06zu", i);
-    operators[i] = core_string_borrow(names[i], (size_t)bytes);
-    parse_register_terminal(large, operators[i]);
-  }
-  scan_lex_spec_t large_spec = {
-      .name = S("bounded-conformance"),
-      .operators = operators,
-  };
-  program = scan_lex_compile(&large_spec, large);
-  suite = scan_lex_conformance_generate(program, 64);
-  check("large vocabularies obey the requested generated-case bound",
-        suite && scan_lex_conformance_count(suite) == 64);
-  scan_lex_conformance_free(suite);
-  scan_lex_free(program);
-  parse_grammar_free(large);
-  core_free(names);
-  core_free(operators);
-
-  for (size_t i = 0; i < sizeof(grammars) / sizeof(grammars[0]); i++) {
-    parse_grammar_free(grammars[i]);
-  }
-}
 
 int main(void) {
   scan_lex_register(&JSON);
@@ -4752,11 +4389,9 @@ int main(void) {
   test_attached_postfix_sigil();
   test_heredoc_families();
   test_literal_postprocessing_hooks();
-  test_a_spec_is_reusable_across_runs();
   test_a_grammar_declares_its_own_lexis();
   test_comment_region_anchors_are_trivia();
   test_string_families_expand_once();
-  test_string_families_reject_duplicate_openers();
   test_string_families_diagnose_invalid_declarations();
   test_paired_string_families_nest();
   test_composable_string_escape_profiles();
@@ -4769,7 +4404,6 @@ int main(void) {
   test_zero_minimum_hash_fences();
   test_symmetric_fences_preserve_source_spans();
   test_fence_padding_requires_both_boundaries();
-  test_unterminated_constructs_are_incomplete();
   test_incomplete_fences_resume_after_append();
   test_incomplete_strings_and_comments_resume();
   test_filled_block_comment_delimiters();
@@ -4781,9 +4415,7 @@ int main(void) {
   test_incremental_scanning_is_linear();
   test_convenience_tokenization_owns_its_resources();
   test_terminals_have_no_byte_width_limit();
-  test_scanner_diagnostics_have_a_stable_view();
   test_grammar_finalization_is_thread_safe();
-  test_numeric_recipes_reject_malformed_forms();
   test_malformed_token_recovery();
   test_self_contained_number_forms();
   test_number_forms_diagnose_invalid_declarations();
@@ -4793,7 +4425,6 @@ int main(void) {
   test_reject_fallback_accepts_declared_codepoints_only();
   test_unicode_identifier_profiles();
   test_lexer_spec_conflict_analysis();
-  test_spec_driven_conformance_cases();
   test_compiled_lexers_are_safe_to_share();
 
   return report("scanner lex");

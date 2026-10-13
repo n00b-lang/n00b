@@ -5,6 +5,7 @@
 
 #include "ir/layout.h"
 #include "lib/dict.h"
+#include "lib/list.h"
 
 typedef struct {
     const void *binding;
@@ -28,6 +29,17 @@ typedef struct {
     uintptr_t state;
 } storage_field_proof_t;
 
+typedef ir_instr_t *storage_call_t;
+typedef const ir_func_t *storage_indirect_function_t;
+typedef const char *storage_method_t;
+
+core_list_decl(storage_assignment_t);
+core_list_decl(storage_field_assignment_t);
+core_list_decl(storage_field_proof_t);
+core_list_decl(storage_call_t);
+core_list_decl(storage_indirect_function_t);
+core_list_decl(storage_method_t);
+
 struct ir_storage_origin_t {
     ir_func_t *const *functions;
     size_t function_count;
@@ -40,24 +52,12 @@ struct ir_storage_origin_t {
     core_dict_t locals[ORIGIN_MODE_COUNT];
     core_dict_t globals[ORIGIN_MODE_COUNT];
     core_dict_t returns[ORIGIN_MODE_COUNT];
-    storage_assignment_t *assignments;
-    size_t assignment_count;
-    size_t assignment_capacity;
-    storage_field_assignment_t *field_assignments;
-    size_t field_assignment_count;
-    size_t field_assignment_capacity;
-    storage_field_proof_t *field_proofs;
-    size_t field_proof_count;
-    size_t field_proof_capacity;
-    ir_instr_t **calls;
-    size_t call_count;
-    size_t call_capacity;
-    const ir_func_t **indirect_functions;
-    size_t indirect_count;
-    size_t indirect_capacity;
-    const char **dynamic_methods;
-    size_t method_count;
-    size_t method_capacity;
+    core_list_t(storage_assignment_t) assignments;
+    core_list_t(storage_field_assignment_t) field_assignments;
+    core_list_t(storage_field_proof_t) field_proofs;
+    core_list_t(storage_call_t) calls;
+    core_list_t(storage_indirect_function_t) indirect_functions;
+    core_list_t(storage_method_t) dynamic_methods;
     size_t pending_global_proofs;
     size_t pending_parameter_proofs;
 };
@@ -68,85 +68,35 @@ static bool
 append_assignment(ir_storage_origin_t *analysis, const void *binding,
                   const ir_value_t *source)
 {
-    if (analysis->assignment_count == analysis->assignment_capacity) {
-        size_t capacity = analysis->assignment_capacity
-            ? analysis->assignment_capacity * 2 : 32;
-        storage_assignment_t *items = realloc(analysis->assignments,
-            capacity * sizeof(*items));
-        if (!items) return false;
-        analysis->assignments = items;
-        analysis->assignment_capacity = capacity;
-    }
-    analysis->assignments[analysis->assignment_count++] =
-        (storage_assignment_t){binding, source};
-    return true;
+    return core_list_try_push(analysis->assignments,
+                              ((storage_assignment_t){binding, source}));
 }
 
 static bool
 append_field_assignment(ir_storage_origin_t *analysis,
                         const ir_instr_t *field, const ir_value_t *source)
 {
-    if (analysis->field_assignment_count == analysis->field_assignment_capacity) {
-        size_t capacity = analysis->field_assignment_capacity
-            ? analysis->field_assignment_capacity * 2 : 32;
-        storage_field_assignment_t *items = realloc(analysis->field_assignments,
-            capacity * sizeof(*items));
-        if (!items) return false;
-        analysis->field_assignments = items;
-        analysis->field_assignment_capacity = capacity;
-    }
-    analysis->field_assignments[analysis->field_assignment_count++] =
-        (storage_field_assignment_t){field, source};
-    return true;
+    return core_list_try_push(analysis->field_assignments,
+                              ((storage_field_assignment_t){field, source}));
 }
 
 static bool
 append_call(ir_storage_origin_t *analysis, ir_instr_t *call)
 {
-    if (analysis->call_count == analysis->call_capacity) {
-        size_t capacity = analysis->call_capacity
-            ? analysis->call_capacity * 2 : 32;
-        ir_instr_t **items = realloc(analysis->calls,
-            capacity * sizeof(*items));
-        if (!items) return false;
-        analysis->calls = items;
-        analysis->call_capacity = capacity;
-    }
-    analysis->calls[analysis->call_count++] = call;
-    return true;
+    return core_list_try_push(analysis->calls, call);
 }
 
 static bool
 append_indirect_function(ir_storage_origin_t *analysis,
                          const ir_func_t *function)
 {
-    if (analysis->indirect_count == analysis->indirect_capacity) {
-        size_t capacity = analysis->indirect_capacity
-            ? analysis->indirect_capacity * 2 : 16;
-        const ir_func_t **items = realloc(analysis->indirect_functions,
-            capacity * sizeof(*items));
-        if (!items) return false;
-        analysis->indirect_functions = items;
-        analysis->indirect_capacity = capacity;
-    }
-    analysis->indirect_functions[analysis->indirect_count++] = function;
-    return true;
+    return core_list_try_push(analysis->indirect_functions, function);
 }
 
 static bool
 append_dynamic_method(ir_storage_origin_t *analysis, const char *name)
 {
-    if (analysis->method_count == analysis->method_capacity) {
-        size_t capacity = analysis->method_capacity
-            ? analysis->method_capacity * 2 : 16;
-        const char **items = realloc(analysis->dynamic_methods,
-            capacity * sizeof(*items));
-        if (!items) return false;
-        analysis->dynamic_methods = items;
-        analysis->method_capacity = capacity;
-    }
-    analysis->dynamic_methods[analysis->method_count++] = name;
-    return true;
+    return core_list_try_push(analysis->dynamic_methods, name);
 }
 
 static const ir_global_t *
@@ -269,12 +219,12 @@ ir_storage_origin_free(ir_storage_origin_t *analysis)
         core_dict_free(&analysis->globals[mode]);
         core_dict_free(&analysis->returns[mode]);
     }
-    free(analysis->assignments);
-    free(analysis->field_assignments);
-    free(analysis->field_proofs);
-    free(analysis->calls);
-    free(analysis->indirect_functions);
-    free(analysis->dynamic_methods);
+    core_list_free(analysis->assignments);
+    core_list_free(analysis->field_assignments);
+    core_list_free(analysis->field_proofs);
+    core_list_free(analysis->calls);
+    core_list_free(analysis->indirect_functions);
+    core_list_free(analysis->dynamic_methods);
     free(analysis);
 }
 
@@ -301,8 +251,8 @@ prove_assignments(ir_storage_origin_t *analysis, const void *binding,
                   bool require_assignment, origin_mode_t mode)
 {
     bool found = false;
-    for (size_t i = 0; i < analysis->assignment_count; i++) {
-        const storage_assignment_t *assignment = &analysis->assignments[i];
+    for (size_t i = 0; i < analysis->assignments.len; i++) {
+        const storage_assignment_t *assignment = &analysis->assignments.data[i];
         if (assignment->binding != binding) continue;
         found = true;
         if (!assignment->source
@@ -407,30 +357,21 @@ prove_field_content(ir_storage_origin_t *analysis,
         || !prove_value(analysis, ir_operand_value(&field->operands[0]), mode))
         return false;
     size_t index = 0;
-    for (; index < analysis->field_proof_count; index++)
-        if (analysis->field_proofs[index].mode == mode
-            && same_field(analysis->field_proofs[index].field, field)) break;
-    if (index < analysis->field_proof_count) {
-        uintptr_t state = analysis->field_proofs[index].state;
+    for (; index < analysis->field_proofs.len; index++)
+        if (analysis->field_proofs.data[index].mode == mode
+            && same_field(analysis->field_proofs.data[index].field, field)) break;
+    if (index < analysis->field_proofs.len) {
+        uintptr_t state = analysis->field_proofs.data[index].state;
         if (state) return state == ORIGIN_UNMANAGED;
     } else {
-        if (analysis->field_proof_count == analysis->field_proof_capacity) {
-            size_t capacity = analysis->field_proof_capacity
-                ? analysis->field_proof_capacity * 2 : 16;
-            storage_field_proof_t *items = realloc(analysis->field_proofs,
-                capacity * sizeof(*items));
-            if (!items) return false;
-            analysis->field_proofs = items;
-            analysis->field_proof_capacity = capacity;
-        }
-        analysis->field_proofs[index] = (storage_field_proof_t){field, mode, 0};
-        analysis->field_proof_count++;
+        if (!core_list_try_push(analysis->field_proofs,
+                ((storage_field_proof_t){field, mode, 0}))) return false;
     }
-    analysis->field_proofs[index].state = ORIGIN_VISITING;
+    analysis->field_proofs.data[index].state = ORIGIN_VISITING;
     bool found = false, proven = true;
-    for (size_t i = 0; i < analysis->field_assignment_count; i++) {
+    for (size_t i = 0; i < analysis->field_assignments.len; i++) {
         const storage_field_assignment_t *assignment =
-            &analysis->field_assignments[i];
+            &analysis->field_assignments.data[i];
         if (!same_field(field, assignment->field)) continue;
         found = true;
         if (!assignment->source
@@ -440,7 +381,7 @@ prove_field_content(ir_storage_origin_t *analysis,
         }
     }
     bool result = found && proven;
-    analysis->field_proofs[index].state = result
+    analysis->field_proofs.data[index].state = result
         && (analysis->pending_global_proofs
             || analysis->pending_parameter_proofs) ? 0
         : result ? ORIGIN_UNMANAGED : ORIGIN_UNKNOWN;
@@ -480,11 +421,11 @@ prove_parameter(ir_storage_origin_t *analysis, const ir_value_t *parameter,
             ? !analysis->closed_callers(owner, analysis->context)
             : owner->linkage != IR_LINK_INTERNAL))
         return false;
-    for (size_t i = 0; i < analysis->indirect_count; i++)
-        if (definition(analysis, analysis->indirect_functions[i]) == owner)
+    for (size_t i = 0; i < analysis->indirect_functions.len; i++)
+        if (definition(analysis, analysis->indirect_functions.data[i]) == owner)
             return false;
-    for (size_t i = 0; i < analysis->method_count; i++) {
-        const char *method = analysis->dynamic_methods[i];
+    for (size_t i = 0; i < analysis->dynamic_methods.len; i++) {
+        const char *method = analysis->dynamic_methods.data[i];
         size_t length = strlen(method);
         if (!strncmp(owner->name, method, length)
             && (owner->name[length] == 0 || owner->name[length] == '#'))
@@ -492,8 +433,8 @@ prove_parameter(ir_storage_origin_t *analysis, const ir_value_t *parameter,
     }
     bool found = false;
     analysis->pending_parameter_proofs++;
-    for (size_t i = 0; i < analysis->call_count; i++) {
-        const ir_instr_t *call = analysis->calls[i];
+    for (size_t i = 0; i < analysis->calls.len; i++) {
+        const ir_instr_t *call = analysis->calls.data[i];
         const ir_value_t *callee = call->n_operands
             ? ir_operand_value(&call->operands[0]) : nullptr;
         if (!callee || callee->kind != IR_VAL_FUNC

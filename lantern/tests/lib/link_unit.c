@@ -87,6 +87,14 @@ test_link_unit_closure_and_linkage(void)
           core_link_unit_visit_sccs(link, trace_link_scc, &trace)
               && trace.components == 4 && trace.cycle_members == 2
               && trace.cycle_first && trace.shared_visits == 1);
+    size_t cycle_a_group = SIZE_MAX, cycle_b_group = SIZE_MAX;
+    check("cycle membership and order are indexed by translation unit",
+          core_link_unit_scc_of(link, &cycle_a, &cycle_a_group)
+              && core_link_unit_scc_of(link, &cycle_b, &cycle_b_group)
+              && cycle_a_group == cycle_b_group
+              && core_link_unit_scc_member_count(link, cycle_a_group) == 2
+              && core_link_unit_scc_member(link, cycle_a_group, 0) == &cycle_a
+              && core_link_unit_scc_member(link, cycle_a_group, 1) == &cycle_b);
 
     int shared_type = 17;
     core_link_declaration_t *definition = nullptr;
@@ -203,12 +211,12 @@ test_link_unit_closure_and_linkage(void)
           core_link_unit_add_artifact(link,
               CORE_STRING_STATIC("pkg.library"),
               CORE_STRING_STATIC("lantern.type-environment"), 4,
-              &semantic_environment, CORE_LINK_PAYLOAD_BORROWED, nullptr));
+              0, &semantic_environment, CORE_LINK_PAYLOAD_BORROWED, nullptr));
     int composed_environment = 37;
     check("a composed environment attaches once at link-unit scope",
           core_link_unit_add_unit_artifact(link,
               CORE_STRING_STATIC("n00bb.frozen-type-environment"), 1,
-              &composed_environment, CORE_LINK_PAYLOAD_BORROWED, nullptr));
+              0, &composed_environment, CORE_LINK_PAYLOAD_BORROWED, nullptr));
     core_link_artifact_view_t artifact = {0};
     check("artifact format and version are queryable",
           core_link_unit_artifact_count(link) == 2
@@ -580,15 +588,19 @@ test_link_unit_typed_declarations(void)
 typedef struct {
     core_link_stage_result_t result;
     size_t calls;
+    void *artifact;
 } stage_probe_t;
 
 static core_link_stage_result_t
 run_probe_stage(core_link_unit_t *link, uint32_t kind, void *context)
 {
-    (void)link;
-    (void)kind;
     stage_probe_t *probe = context;
     probe->calls++;
+    if (probe->artifact
+        && !core_link_unit_add_unit_artifact(link,
+            CORE_STRING_STATIC("test.stage-artifact"), 1, kind,
+            probe->artifact, CORE_LINK_PAYLOAD_BORROWED, nullptr))
+        return CORE_LINK_STAGE_RESULT_FAILED;
     return probe->result;
 }
 
@@ -831,17 +843,29 @@ static void
 test_link_unit_stage_refresh(void)
 {
     core_translation_unit_t root = {0};
+    core_translation_unit_t second_root = {0};
     core_translation_unit_t added = {0};
     core_translation_unit_t unrelated = {0};
     init_unit(&root, "pkg.refresh_stage");
+    init_unit(&second_root, "pkg.refresh_stage_second_root");
     init_unit(&added, "pkg.refresh_stage_dependency");
     init_unit(&unrelated, "pkg.unrelated_stage");
+    core_translation_unit_add_import(&added, &root);
     core_link_unit_t *changed = core_link_unit_new();
     core_link_unit_t *other = core_link_unit_new();
-    stage_probe_t changed_probe = {.result = CORE_LINK_STAGE_RESULT_COMPLETE};
+    int stage_artifact = 1;
+    stage_probe_t changed_probe = {
+        .result = CORE_LINK_STAGE_RESULT_COMPLETE,
+        .artifact = &stage_artifact,
+    };
     stage_probe_t other_probe = {.result = CORE_LINK_STAGE_RESULT_COMPLETE};
+    int external_artifact = 2;
     check("unfinalized link graphs can run independent stages",
           core_link_unit_add_root(changed, &root)
+              && core_link_unit_add_root(changed, &second_root)
+              && core_link_unit_add_unit_artifact(changed,
+                  CORE_STRING_STATIC("test.external-artifact"), 1, 0,
+                  &external_artifact, CORE_LINK_PAYLOAD_BORROWED, nullptr)
               && core_link_unit_add_root(other, &unrelated)
               && core_link_unit_register_stage(changed, 1, nullptr, 0,
                   CORE_STRING_STATIC("test.refresh"), false,
@@ -850,19 +874,29 @@ test_link_unit_stage_refresh(void)
                   CORE_STRING_STATIC("test.unrelated"), false,
                   run_probe_stage, &other_probe)
               && core_link_unit_run_stage(changed, 1)
-              && core_link_unit_run_stage(other, 1));
+              && core_link_unit_run_stage(other, 1)
+              && core_link_unit_artifact_count(changed) == 2);
     check("a changed import resets only its link unit stage",
           core_translation_unit_add_import(&root, &added)
-              && core_link_unit_collect(changed)
               && core_link_unit_stage_state(changed, 1)
                      == CORE_LINK_STAGE_PENDING
+              && core_link_unit_artifact_count(changed) == 1
               && core_link_unit_stage_state(other, 1)
                      == CORE_LINK_STAGE_COMPLETE
               && core_link_unit_run_stage(changed, 1)
+              && core_link_unit_artifact_count(changed) == 2
               && changed_probe.calls == 2 && other_probe.calls == 1);
+    check("explicit invalidation drops stage-owned artifacts",
+          core_link_unit_invalidate_stage(changed, 1)
+              && core_link_unit_artifact_count(changed) == 1);
+    changed_probe.result = CORE_LINK_STAGE_RESULT_FAILED;
+    check("failed stages do not retain published artifacts",
+          !core_link_unit_run_stage(changed, 1)
+              && core_link_unit_artifact_count(changed) == 1);
     core_link_unit_free(changed);
     core_link_unit_free(other);
     core_translation_unit_release(&root);
+    core_translation_unit_release(&second_root);
     core_translation_unit_release(&added);
     core_translation_unit_release(&unrelated);
 }

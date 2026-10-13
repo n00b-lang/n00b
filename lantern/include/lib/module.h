@@ -4,6 +4,7 @@
 
 #include "core.h"
 #include "lib/buffer.h"
+#include "lib/dict.h"
 #include "lib/string.h"
 
 typedef struct core_diagnostics_t core_diagnostics_t;
@@ -32,6 +33,8 @@ typedef struct core_translation_unit_t {
     struct core_translation_unit_t **imports;
     size_t import_count;
     size_t import_capacity;
+    core_dict_t imports_by_unit;
+    core_dict_t imports_by_module;
     uint64_t import_revision;
     bool imports_finalized;
     void *user_data;
@@ -106,6 +109,8 @@ size_t core_translation_unit_import_count(
     const core_translation_unit_t *unit);
 core_translation_unit_t *core_translation_unit_import(
     const core_translation_unit_t *unit, size_t index);
+core_translation_unit_t *core_translation_unit_find_import(
+    const core_translation_unit_t *unit, core_string_t module);
 uint64_t core_translation_unit_import_revision(
     const core_translation_unit_t *unit);
 /* Finalized imports are immutable; adding another import reports a fatal TU

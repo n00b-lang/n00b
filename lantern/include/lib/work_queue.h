@@ -29,6 +29,7 @@ void core_work_queue_close(core_work_queue_t *q);
 
 core_work_submit_result_t core_work_submit(
     core_work_queue_t *q, uint32_t kind, const core_module_spec_t *module,
+    uint64_t input_revision,
     core_work_job_t *const *dependencies, size_t dependency_count,
     core_work_job_t **out);
 

@@ -53,27 +53,6 @@ parse_forest_best(parse_forest_t *f)
     return parse_forest_tree(f, 0);
 }
 
-void *
-parse_forest_walk(parse_forest_t *f,
-                        int32_t              ix,
-                        void                *thunk)
-{
-    parse_tree_t *tree = parse_forest_tree(f, ix);
-
-    if (!tree || !f->grammar) {
-        return nullptr;
-    }
-
-    return parse_tree_walk(f->grammar, tree, thunk);
-}
-
-void *
-parse_forest_walk_best(parse_forest_t *f,
-                             void               *thunk)
-{
-    return parse_forest_walk(f, 0, thunk);
-}
-
 void
 parse_forest_free(parse_forest_t *f)
 {

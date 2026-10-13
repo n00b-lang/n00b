@@ -64,21 +64,6 @@ struct core_datalog_rule_builder {
   bool has_head;
 };
 
-static core_hash_value_t string_key_hash(void *key) {
-  return core_string_hash(*(const core_string_t *)key);
-}
-
-static bool string_key_eq(const void *left, const void *right) {
-  return core_string_eq(*(const core_string_t *)left,
-                        *(const core_string_t *)right);
-}
-
-static core_string_t *string_copy(core_string_t value) {
-  core_string_t *copy = core_alloc(core_string_t);
-  *copy = core_string_dup(value);
-  return copy;
-}
-
 core_datalog_rule_builder_t *core_datalog_rule_builder_new(void) {
   core_datalog_rule_builder_t *builder =
       core_alloc(core_datalog_rule_builder_t);
@@ -181,9 +166,9 @@ core_datalog_engine_t *core_datalog_engine_new(void) {
   engine->constants = core_list_new(datalog_string_ptr_t);
   engine->variables = core_list_new(datalog_string_ptr_t);
   engine->next_variable = CORE_DATALOG_VARIABLE_BASE;
-  core_dict_init(&engine->relation_names, string_key_hash, string_key_eq);
-  core_dict_init(&engine->constant_names, string_key_hash, string_key_eq);
-  core_dict_init(&engine->variable_names, string_key_hash, string_key_eq);
+  core_dict_init_string(&engine->relation_names);
+  core_dict_init_string(&engine->constant_names);
+  core_dict_init_string(&engine->variable_names);
   return engine;
 }
 
@@ -311,7 +296,7 @@ intern_name(core_list_t(datalog_string_ptr_t) * names, core_dict_t *index,
   void *value = core_dict_get(index, &name, &found);
   if (found)
     return (core_datalog_symbol_t)(uintptr_t)value;
-  core_string_t *owned = string_copy(name);
+  core_string_t *owned = core_dict_string_key_copy(name);
   core_datalog_symbol_t id = (core_datalog_symbol_t)names->len;
   core_list_push(*names, owned);
   core_dict_put(index, owned, (uintptr_t)id);
@@ -333,7 +318,7 @@ core_datalog_symbol_t core_datalog_variable(core_datalog_engine_t *engine,
   void *value = core_dict_get(&engine->variable_names, &name, &found);
   if (found)
     return (core_datalog_symbol_t)(uintptr_t)value;
-  core_string_t *owned = string_copy(name);
+  core_string_t *owned = core_dict_string_key_copy(name);
   core_datalog_symbol_t id = engine->next_variable--;
   core_list_push(engine->variables, owned);
   core_dict_put(&engine->variable_names, owned, (uintptr_t)id);

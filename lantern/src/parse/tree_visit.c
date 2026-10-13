@@ -179,6 +179,16 @@ parse_visit_suppress_annotation(parse_visit_t *v, parse_annot_kind_t kind)
     return true;
 }
 
+parse_tree_t *
+parse_visit_ancestor(const parse_visit_t *v, size_t distance)
+{
+    if (!v || !v->walk || !v->node) return nullptr;
+    parse_tree_walk_t *w = v->walk;
+    if (distance >= w->stack.len
+        || w->stack.data[w->stack.len - 1].node != v->node) return nullptr;
+    return w->stack.data[w->stack.len - 1 - distance].node;
+}
+
 bool
 parse_walk_set_annotation_order(parse_tree_walk_t *w,
                                 const parse_annot_kind_t *kinds,
@@ -230,13 +240,6 @@ parse_walk_on_annot_phase(parse_tree_walk_t *w, parse_annot_kind_t kind,
     }
 
     core_list_push(w->by_annot[kind], add_visitor(w, pre, post, thunk, phase));
-}
-
-void
-parse_walk_on_annot(parse_tree_walk_t *w, parse_annot_kind_t kind, parse_visit_fn pre,
-                  parse_visit_fn post, void *thunk)
-{
-    parse_walk_on_annot_phase(w, kind, 0, pre, post, thunk);
 }
 
 bool

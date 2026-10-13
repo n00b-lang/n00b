@@ -1,21 +1,21 @@
 #include "ir/range.h"
 
 #include "ir/doms.h"
+#include "lib/list.h"
 
 #include <stdlib.h>
 #include <string.h>
 
+typedef const ir_instr_t *proof_index_ptr_t;
+typedef const ir_value_t *bound_value_ptr_t;
+core_list_decl(proof_index_ptr_t);
+core_list_decl(bound_value_ptr_t);
+
 struct ir_index_proofs {
-    const ir_instr_t **indexes;
-    size_t count;
-    size_t capacity;
+    core_list_t(proof_index_ptr_t) indexes;
 };
 
-typedef struct {
-    const ir_value_t **values;
-    size_t count;
-    size_t capacity;
-} bound_set_t;
+typedef core_list_t(bound_value_ptr_t) bound_set_t;
 
 typedef struct {
     const ir_value_t *sequence;
@@ -343,25 +343,14 @@ sequence_stable_until(ir_func_t *function, const ir_value_t *index_base,
 static bool
 contains(const bound_set_t *set, const ir_value_t *value)
 {
-    for (size_t i = 0; i < set->count; i++)
-        if (set->values[i] == value) return true;
-    return false;
+    return core_option_is_set(core_list_find(*set, value));
 }
 
 static bool
 add_bound(bound_set_t *set, const ir_value_t *value)
 {
     if (contains(set, value)) return true;
-    if (set->count == set->capacity) {
-        size_t next = set->capacity ? set->capacity * 2 : 16;
-        const ir_value_t **values = realloc(set->values,
-                                           next * sizeof(*values));
-        if (!values) return false;
-        set->values = values;
-        set->capacity = next;
-    }
-    set->values[set->count++] = value;
-    return true;
+    return core_list_try_push(*set, value);
 }
 
 static bool
@@ -489,7 +478,7 @@ bound_return(const ir_func_t *function, const ir_value_t *limit,
             if (!contains(&set, value_operand(in, 0))) ok = false;
         }
     }
-    free(set.values);
+    core_list_free(set);
     return ok && returned;
 }
 
@@ -518,23 +507,14 @@ ir_unsigned_sub_proven_safe(const ir_instr_t *sub)
     bound_set_t set = {0};
     bool safe = compute_bounds(sub->block->owner, limit, &set, 8)
         && contains(&set, bounded);
-    free(set.values);
+    core_list_free(set);
     return safe;
 }
 
 static bool
 record_proof(ir_index_proofs_t *proofs, const ir_instr_t *index)
 {
-    if (proofs->count == proofs->capacity) {
-        size_t next = proofs->capacity ? proofs->capacity * 2 : 16;
-        const ir_instr_t **indexes = realloc(proofs->indexes,
-                                             next * sizeof(*indexes));
-        if (!indexes) return false;
-        proofs->indexes = indexes;
-        proofs->capacity = next;
-    }
-    proofs->indexes[proofs->count++] = index;
-    return true;
+    return core_list_try_push(proofs->indexes, index);
 }
 
 static bool
@@ -566,7 +546,7 @@ ir_index_proofs_new(ir_func_t *function)
                 continue;
             bound_set_t set = {0};
             if (!compute_bounds(function, length->dest, &set, 8)) {
-                free(set.values);
+                core_list_free(set);
                 ir_index_proofs_free(proofs);
                 return nullptr;
             }
@@ -604,18 +584,18 @@ ir_index_proofs_new(ir_func_t *function)
                                                   &guarded, 8)
                                 && contains(&guarded,
                                             value_operand(index, 1));
-                            free(guarded.values);
+                            core_list_free(guarded);
                         }
                     }
                     if (bounded && !ir_index_proven(proofs, index)
                         && !record_proof(proofs, index)) {
-                        free(set.values);
+                        core_list_free(set);
                         ir_index_proofs_free(proofs);
                         return nullptr;
                     }
                 }
             }
-            free(set.values);
+            core_list_free(set);
         }
     }
     return proofs;
@@ -625,15 +605,13 @@ bool
 ir_index_proven(const ir_index_proofs_t *proofs, const ir_instr_t *index)
 {
     if (!proofs || !index) return false;
-    for (size_t i = 0; i < proofs->count; i++)
-        if (proofs->indexes[i] == index) return true;
-    return false;
+    return core_option_is_set(core_list_find(proofs->indexes, index));
 }
 
 void
 ir_index_proofs_free(ir_index_proofs_t *proofs)
 {
     if (!proofs) return;
-    free(proofs->indexes);
+    core_list_free(proofs->indexes);
     free(proofs);
 }

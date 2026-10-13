@@ -52,17 +52,6 @@ static bool node_is(parse_grammar_t *grammar, parse_tree_t *node,
                        core_string_from_cstr(name));
 }
 
-static parse_tree_t *child_named(parse_grammar_t *grammar,
-                                 parse_tree_t *node, const char *name)
-{
-    if (!node || core_tree_is_leaf(node)) return nullptr;
-    for (size_t i = 0; i < core_tree_num_children(node); i++) {
-        parse_tree_t *child = core_tree_child(node, i);
-        if (node_is(grammar, child, name)) return child;
-    }
-    return nullptr;
-}
-
 static th_type *node_type(ictx *c, parse_tree_t *node)
 {
     if (!node || core_tree_is_leaf(node)) return nullptr;
@@ -110,15 +99,6 @@ static th_type *transparent_expression_type(ictx *c, parse_tree_t *node)
     return child_type ? child_type : type;
 }
 
-static bool tree_contains(parse_tree_t *root, const parse_tree_t *target)
-{
-    if (root == target) return true;
-    if (!root || core_tree_is_leaf(root)) return false;
-    for (size_t i = 0; i < core_tree_num_children(root); i++)
-        if (tree_contains(core_tree_child(root, i), target)) return true;
-    return false;
-}
-
 static parse_tree_t *method_call_parent(ictx *c)
 {
     parse_tree_t *parent = c->v->parent;
@@ -140,10 +120,10 @@ static th_type *call_shape(ictx *c, parse_tree_t *call, th_type *result)
                             CORE_STRING_STATIC("("))) return nullptr;
 
     parse_tree_t *call_args = core_tree_child(call, 2);
-    parse_tree_t *positional = child_named(c->v->grammar, call_args,
-                                            "positional-args");
-    parse_tree_t *keywords = child_named(c->v->grammar, call_args,
-                                          "keyword-args");
+    parse_tree_t *positional = parse_tree_find_direct_child_by_nt_name(
+        c->v->grammar, call_args, CORE_STRING_STATIC("positional-args"));
+    parse_tree_t *keywords = parse_tree_find_direct_child_by_nt_name(
+        c->v->grammar, call_args, CORE_STRING_STATIC("keyword-args"));
     core_list_t(th_param) params = core_list_new(th_param);
     core_list_t(th_kwparam) kwparams = core_list_new(th_kwparam);
     if (positional) {
@@ -162,7 +142,8 @@ static th_type *call_shape(ictx *c, parse_tree_t *call, th_type *result)
         for (size_t i = 0; i < core_tree_num_children(keywords); i++) {
             parse_tree_t *arg = core_tree_child(keywords, i);
             if (!node_is(c->v->grammar, arg, "call-kw-arg")) continue;
-            parse_tree_t *value = child_named(c->v->grammar, arg, "expression");
+            parse_tree_t *value = parse_tree_find_direct_child_by_nt_name(
+                c->v->grammar, arg, CORE_STRING_STATIC("expression"));
             parse_tree_t *name_node = core_tree_num_children(arg)
                 ? core_tree_child(arg, 0) : nullptr;
             core_string_t name = node_identifier_name(name_node);
@@ -283,23 +264,24 @@ static bool is_index_postfix(parse_grammar_t *grammar, parse_tree_t *node)
                            CORE_STRING_STATIC("["));
 }
 
-static th_type *index_store_call_shape(ictx *c, th_type *result)
+static parse_tree_t *assignment_target(parse_visit_t *visit)
+{
+    for (size_t distance = 1; ; distance++) {
+        parse_tree_t *parent = parse_visit_ancestor(visit, distance);
+        if (!parent) return nullptr;
+        parse_tree_t *child = parse_visit_ancestor(visit, distance - 1);
+        if (node_is(visit->grammar, parent, "assign-stmt"))
+            return core_tree_child(parent, 0) == child ? parent : nullptr;
+        if (is_index_postfix(visit->grammar, parent)) return nullptr;
+    }
+}
+
+static th_type *index_store_call_shape(ictx *c, th_type *result,
+                                       parse_tree_t *assignment)
 {
     parse_tree_t *node = c->v->node;
-    parse_tree_t *assignment = nullptr;
-    for (parse_tree_t *parent = c->v->parent; parent;
-         parent = core_tree_node_value(parent).parent) {
-        if (node_is(c->v->grammar, parent, "assign-stmt")) {
-            assignment = parent;
-            break;
-        }
-        if (is_index_postfix(c->v->grammar, parent) &&
-            tree_contains(core_tree_child(parent, 0), node))
-            return nullptr;
-    }
     if (!node_is(c->v->grammar, assignment, "assign-stmt") ||
         core_tree_num_children(assignment) < 3 ||
-        !tree_contains(core_tree_child(assignment, 0), node) ||
         core_tree_num_children(node) < 4 ||
         !core_tree_is_leaf(core_tree_child(node, 1)) ||
         !parse_tree_leaf_is(core_tree_child(node, 1),
@@ -336,22 +318,11 @@ static th_type *index_store_call_shape(ictx *c, th_type *result)
     return th_func(c->tc, result, parameters, 2, nullptr, nullptr, 0);
 }
 
-static th_type *slice_store_call_shape(ictx *c, th_type *result)
+static th_type *slice_store_call_shape(ictx *c, th_type *result,
+                                       parse_tree_t *assignment)
 {
     parse_tree_t *node = c->v->node;
-    parse_tree_t *assignment = nullptr;
-    for (parse_tree_t *parent = c->v->parent; parent;
-         parent = core_tree_node_value(parent).parent) {
-        if (node_is(c->v->grammar, parent, "assign-stmt")) {
-            assignment = parent;
-            break;
-        }
-        if (is_index_postfix(c->v->grammar, parent) &&
-            tree_contains(core_tree_child(parent, 0), node))
-            return nullptr;
-    }
     if (!node_is(c->v->grammar, assignment, "assign-stmt") ||
-        !tree_contains(core_tree_child(assignment, 0), node) ||
         !node_is(c->v->grammar, core_tree_child(node, 2), "slice-contents") ||
         !slice_call_shape(c, result))
         return nullptr;
@@ -367,20 +338,6 @@ static th_type *slice_store_call_shape(ictx *c, th_type *result)
         {.mode = TH_IN, .type = node_type(c, value)},
     };
     return th_func(c->tc, result, parameters, 4, nullptr, nullptr, 0);
-}
-
-static bool index_is_assignment_target(parse_visit_t *visit,
-                                       parse_tree_t *node)
-{
-    for (parse_tree_t *parent = core_tree_node_value(node).parent; parent;
-         node = parent, parent = core_tree_node_value(parent).parent) {
-        if (node_is(visit->grammar, parent, "assign-stmt"))
-            return core_tree_num_children(parent) > 0 &&
-                   tree_contains(core_tree_child(parent, 0), node);
-        if (is_index_postfix(visit->grammar, parent) &&
-            tree_contains(core_tree_child(parent, 0), node)) return false;
-    }
-    return false;
 }
 
 static th_type *infer_method_obligation(ictx *c, th_type *receiver,
@@ -796,8 +753,10 @@ project(ictx *c, parse_infer_proj_t op, th_type *t,
             }
             return element;
         }
-        if (index_is_assignment_target(c->v, result_node)) {
-            th_type *call_shape = index_store_call_shape(c, result);
+        parse_tree_t *assignment = assignment_target(c->v);
+        if (assignment) {
+            th_type *call_shape = index_store_call_shape(c, result,
+                                                         assignment);
             if (call_shape && other_name.data)
                 return infer_method_obligation(c, t, other_name.data, result,
                                                call_shape);
@@ -835,8 +794,10 @@ project(ictx *c, parse_infer_proj_t op, th_type *t,
     case PARSE_INFER_SLICE_OF: {
         parse_tree_t *slice_node = c->v->node;
         th_type *result = node_type(c, slice_node);
-        if (index_is_assignment_target(c->v, slice_node)) {
-            th_type *call_shape = slice_store_call_shape(c, result);
+        parse_tree_t *assignment = assignment_target(c->v);
+        if (assignment) {
+            th_type *call_shape = slice_store_call_shape(c, result,
+                                                         assignment);
             if (call_shape && other_name.data)
                 return infer_method_obligation(c, t, other_name.data,
                                                result, call_shape);

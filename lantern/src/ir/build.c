@@ -690,7 +690,7 @@ static void *r_target(parse_reduce_t *r)
 static parse_tree_t *nt_child(parse_grammar_t *g, parse_tree_t *n,
                               core_string_t name)
 {
-    return parse_tree_find_child_by_nt_name(g, n, name);
+    return parse_tree_find_flat_child_by_nt_name(g, n, name);
 }
 
 static core_string_t direct_name(parse_tree_t *node)

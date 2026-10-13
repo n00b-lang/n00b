@@ -2601,7 +2601,8 @@ test_field_visibility_in_non_type_tagged_scope(void)
         "<record> @namespace(\"type\") @scope(\"record\", $1) "
         "@type($1) @exposes ::= "
         "<public> <name> \"{\" <field> \"}\"\n"
-        "<field> @field($1) ::= <private> <name>\n"
+        "<field> @field($1) ::= <field-mod> <name>\n"
+        "<field-mod> ::= <private>\n"
         "<public> @visibility(\"public\") ::= \"P\"\n"
         "<private> @visibility(\"private\") ::= \"p\"\n"
         "<name> ::= __LOWER\n";

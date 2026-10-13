@@ -3,6 +3,7 @@
 #include "lib/alloc.h"
 #include "lib/buffer.h"
 #include "lib/dict.h"
+#include "lib/list.h"
 
 typedef struct {
     uint32_t kind;
@@ -42,11 +43,40 @@ typedef struct {
     core_string_t module;
     core_string_t format;
     uint32_t version;
+    uint32_t producer_stage;
     void *payload;
     core_link_payload_ownership_t ownership;
     core_link_payload_free_fn free_fn;
     bool unit_wide;
 } core_link_artifact_t;
+
+typedef struct {
+    core_string_t module;
+    core_string_t format;
+    bool unit_wide;
+} core_link_artifact_key_t;
+
+static core_hash_value_t
+artifact_key_hash(void *opaque)
+{
+    const core_link_artifact_key_t *key = opaque;
+    core_hash_value_t fields[] = {
+        core_string_hash(key->module),
+        core_string_hash(key->format),
+        key->unit_wide,
+    };
+    return core_hash_raw(fields, sizeof(fields));
+}
+
+static bool
+artifact_key_eq(const void *left, const void *right)
+{
+    const core_link_artifact_key_t *a = left;
+    const core_link_artifact_key_t *b = right;
+    return a->unit_wide == b->unit_wide
+        && core_string_eq(a->module, b->module)
+        && core_string_eq(a->format, b->format);
+}
 
 typedef struct {
     core_translation_unit_t *importer;
@@ -177,9 +207,13 @@ struct core_link_unit_t {
     core_translation_unit_t **roots;
     size_t root_count;
     size_t root_capacity;
+    core_dict_t root_index;
+    core_dict_t root_module_index;
     core_translation_unit_t **units;
     size_t unit_count;
     size_t unit_capacity;
+    core_dict_t unit_index;
+    core_dict_t module_index;
     uint64_t *unit_import_revisions;
     core_link_import_edge_t *import_edges;
     size_t import_edge_count;
@@ -187,6 +221,7 @@ struct core_link_unit_t {
     core_link_scc_t *sccs;
     size_t scc_count;
     size_t scc_capacity;
+    core_dict_t scc_index;
     core_link_declaration_t **declarations;
     size_t declaration_count;
     size_t declaration_capacity;
@@ -197,9 +232,11 @@ struct core_link_unit_t {
     core_link_artifact_t *artifacts;
     size_t artifact_count;
     size_t artifact_capacity;
+    core_dict_t artifact_index;
     core_link_stage_record_t *stages;
     size_t stage_count;
     size_t stage_capacity;
+    core_dict_t stage_index;
     core_link_contribution_t *contributions;
     size_t contribution_count;
     size_t contribution_capacity;
@@ -261,22 +298,32 @@ ensure_dependency_index(core_link_unit_t *link)
         index_dependency(link, i);
 }
 
-typedef struct {
-    core_link_unit_t *link;
-    size_t *indices;
-    size_t *lowlinks;
-    size_t *stack;
-    bool *on_stack;
-    size_t stack_len;
-    size_t next_index;
-} core_link_scc_build_t;
-
 static core_link_stage_record_t *
 find_stage(const core_link_unit_t *link, uint32_t kind)
 {
-    for (size_t i = 0; i < link->stage_count; i++)
-        if (link->stages[i].kind == kind) return &link->stages[i];
-    return nullptr;
+    size_t index = (size_t)(uintptr_t)core_dict_get(
+        (core_dict_t *)&link->stage_index,
+        (void *)(uintptr_t)kind, nullptr);
+    return index ? &link->stages[index - 1] : nullptr;
+}
+
+static void
+rebuild_artifact_index(core_link_unit_t *link)
+{
+    core_dict_foreach(&link->artifact_index, item)
+        core_free(item->key);
+    core_dict_free(&link->artifact_index);
+    core_dict_init(&link->artifact_index, artifact_key_hash, artifact_key_eq);
+    for (size_t i = 0; i < link->artifact_count; i++) {
+        core_link_artifact_t *artifact = &link->artifacts[i];
+        core_link_artifact_key_t *key = core_alloc(core_link_artifact_key_t);
+        *key = (core_link_artifact_key_t){
+            .module = artifact->module,
+            .format = artifact->format,
+            .unit_wide = artifact->unit_wide,
+        };
+        core_dict_add(&link->artifact_index, key, i + 1);
+    }
 }
 
 static void
@@ -361,6 +408,33 @@ reset_stage_bindings(core_link_unit_t *link, const bool *invalidated)
 }
 
 static void
+remove_stage_artifacts(core_link_unit_t *link, const bool *invalidated,
+                       uint32_t stage_kind)
+{
+    bool removed = false;
+    for (size_t i = 0; i < link->artifact_count;) {
+        core_link_artifact_t *artifact = &link->artifacts[i];
+        core_link_stage_record_t *producer = artifact->producer_stage
+            ? find_stage(link, artifact->producer_stage) : nullptr;
+        if (!producer || (invalidated
+                ? !invalidated[producer - link->stages]
+                : artifact->producer_stage != stage_kind)) {
+            i++;
+            continue;
+        }
+        if (artifact->ownership == CORE_LINK_PAYLOAD_OWNED)
+            artifact->free_fn(artifact->payload);
+        core_free(artifact->module.data);
+        core_free(artifact->format.data);
+        memmove(artifact, artifact + 1,
+            (link->artifact_count - i - 1) * sizeof(*artifact));
+        link->artifact_count--;
+        removed = true;
+    }
+    if (removed) rebuild_artifact_index(link);
+}
+
+static void
 finish_stage_bindings(core_link_unit_t *link, uint32_t stage_kind)
 {
     for (size_t i = 0; i < link->declaration_count; i++) {
@@ -390,6 +464,7 @@ invalidate_stages(core_link_unit_t *link)
     }
     if (invalidated) reset_stage_contributions(link, invalidated);
     if (invalidated) reset_stage_bindings(link, invalidated);
+    if (invalidated) remove_stage_artifacts(link, invalidated, 0);
     if (invalidated) remove_stage_dependencies(link, invalidated);
     core_free(invalidated);
     link->stages_started = false;
@@ -411,26 +486,6 @@ finish_stage_contributions(core_link_unit_t *link, uint32_t stage_kind,
         contribution->state = state;
     }
     finish_stage_bindings(link, stage_kind);
-}
-
-static bool
-grow_array(void **items, size_t *capacity, size_t needed, size_t item_size)
-{
-    if (*capacity >= needed) return true;
-    size_t next = *capacity ? *capacity * 2 : 4;
-    while (next < needed) next *= 2;
-    *items = core_realloc(*items, next * item_size);
-    *capacity = next;
-    return true;
-}
-
-static bool
-contains_tu(core_translation_unit_t *const *units, size_t count,
-            const core_translation_unit_t *unit)
-{
-    for (size_t i = 0; i < count; i++)
-        if (units[i] == unit) return true;
-    return false;
 }
 
 static bool
@@ -464,18 +519,21 @@ static bool
 collect_one(core_link_unit_t *link, core_translation_unit_t *unit,
             bool *valid)
 {
-    if (contains_tu(link->units, link->unit_count, unit)) return true;
+    if (core_dict_contains(&link->unit_index, unit)) return true;
+    core_dict_add(&link->unit_index, unit, unit);
 
-    for (size_t i = 0; i < link->unit_count; i++) {
-        if (core_module_spec_eq(&link->units[i]->module, &unit->module)) {
-            link_report(link, unit, "LANTERN-L0001",
-                "link unit contains distinct translation units with the same module identity");
-            *valid = false;
-        }
+    bool found = false;
+    core_dict_get(&link->module_index, &unit->module.identifier, &found);
+    if (found) {
+        link_report(link, unit, "LANTERN-L0001",
+            "link unit contains distinct translation units with the same module identity");
+        *valid = false;
     }
+    else core_dict_add(&link->module_index, &unit->module.identifier, unit);
 
-    grow_array((void **)&link->units, &link->unit_capacity,
-               link->unit_count + 1, sizeof(*link->units));
+    if (!core_list_reserve_raw((void **)&link->units, &link->unit_capacity,
+                               link->unit_count + 1, sizeof(*link->units)))
+        abort();
     link->units[link->unit_count++] = unit;
     for (size_t i = 0; i < core_translation_unit_import_count(unit); i++) {
         if (!collect_one(link, core_translation_unit_import(unit, i), valid))
@@ -490,6 +548,8 @@ clear_sccs(core_link_unit_t *link)
     for (size_t i = 0; i < link->scc_count; i++)
         core_free(link->sccs[i].members);
     link->scc_count = 0;
+    core_dict_free(&link->scc_index);
+    core_dict_init(&link->scc_index, nullptr, nullptr);
 }
 
 static bool
@@ -503,59 +563,74 @@ graph_snapshot_current(const core_link_unit_t *link)
     return true;
 }
 
-static size_t
-link_unit_index(const core_link_unit_t *link,
-                const core_translation_unit_t *unit)
+static bool
+module_name_less(core_string_t left, core_string_t right)
 {
-    for (size_t i = 0; i < link->unit_count; i++)
-        if (link->units[i] == unit) return i;
-    return SIZE_MAX;
+    size_t common = left.u8_bytes < right.u8_bytes
+        ? left.u8_bytes : right.u8_bytes;
+    int comparison = memcmp(left.data, right.data, common);
+    return comparison < 0 || (!comparison && left.u8_bytes < right.u8_bytes);
 }
 
+typedef struct {
+    core_translation_unit_t *const *members;
+    core_translation_unit_t **ordered;
+    core_dict_t positions;
+    bool *visited;
+    size_t count;
+} core_link_scc_order_t;
+
 static void
-link_scc_visit(core_link_scc_build_t *build, size_t at)
+order_scc_member(core_link_scc_order_t *order, size_t at)
 {
-    core_link_unit_t *link = build->link;
-    build->indices[at] = build->lowlinks[at] = build->next_index++;
-    build->stack[build->stack_len++] = at;
-    build->on_stack[at] = true;
-
-    core_translation_unit_t *unit = link->units[at];
-    for (size_t i = 0; i < link->import_edge_count; i++) {
-        core_link_import_edge_t *edge = &link->import_edges[i];
-        if (edge->importer != unit) continue;
-        size_t next = link_unit_index(link, edge->imported);
-        if (next == SIZE_MAX) continue;
-        if (build->indices[next] == SIZE_MAX) {
-            link_scc_visit(build, next);
-            if (build->lowlinks[next] < build->lowlinks[at])
-                build->lowlinks[at] = build->lowlinks[next];
-        }
-        else if (build->on_stack[next]
-                 && build->indices[next] < build->lowlinks[at]) {
-            build->lowlinks[at] = build->indices[next];
-        }
+    order->visited[at] = true;
+    core_translation_unit_t *unit = order->members[at];
+    order->ordered[order->count++] = unit;
+    for (size_t i = 0; i < core_translation_unit_import_count(unit); i++) {
+        core_translation_unit_t *imported = core_translation_unit_import(unit, i);
+        size_t position = (size_t)(uintptr_t)core_dict_get(
+            &order->positions, imported, nullptr);
+        if (position && !order->visited[position - 1])
+            order_scc_member(order, position - 1);
     }
+}
 
-    if (build->lowlinks[at] != build->indices[at]) return;
-    core_translation_unit_t **members = nullptr;
-    size_t member_count = 0;
-    size_t member_capacity = 0;
-    size_t member;
-    do {
-        member = build->stack[--build->stack_len];
-        build->on_stack[member] = false;
-        grow_array((void **)&members, &member_capacity, member_count + 1,
-                   sizeof(*members));
-        members[member_count++] = link->units[member];
-    } while (member != at);
-
-    grow_array((void **)&link->sccs, &link->scc_capacity,
-               link->scc_count + 1, sizeof(*link->sccs));
+static bool
+store_link_scc(void *context, core_translation_unit_t *const *members,
+               size_t member_count)
+{
+    core_link_unit_t *link = context;
+    core_translation_unit_t **copy = core_alloc_array(
+        core_translation_unit_t *, member_count);
+    bool *visited = core_alloc_array(bool, member_count);
+    memset(visited, 0, member_count * sizeof(*visited));
+    core_link_scc_order_t order = {
+        .members = members, .ordered = copy, .visited = visited,
+    };
+    core_dict_init(&order.positions, nullptr, nullptr);
+    size_t first = 0;
+    for (size_t i = 0; i < member_count; i++) {
+        core_dict_add(&order.positions, members[i], i + 1);
+        if (module_name_less(members[i]->module.identifier,
+                             members[first]->module.identifier)) first = i;
+    }
+    order_scc_member(&order, first);
+    core_dict_free(&order.positions);
+    core_free(visited);
+    if (order.count != member_count) {
+        core_free(copy);
+        return false;
+    }
+    if (!core_list_reserve_raw((void **)&link->sccs, &link->scc_capacity,
+                               link->scc_count + 1, sizeof(*link->sccs)))
+        abort();
     link->sccs[link->scc_count++] = (core_link_scc_t){
-        .members = members,
+        .members = copy,
         .member_count = member_count,
     };
+    for (size_t i = 0; i < member_count; i++)
+        core_dict_add(&link->scc_index, copy[i], link->scc_count);
+    return true;
 }
 
 static void
@@ -563,21 +638,8 @@ build_sccs(core_link_unit_t *link)
 {
     clear_sccs(link);
     if (!link->unit_count) return;
-    core_link_scc_build_t build = {
-        .link = link,
-        .indices = core_alloc_array(size_t, link->unit_count),
-        .lowlinks = core_alloc_array(size_t, link->unit_count),
-        .stack = core_alloc_array(size_t, link->unit_count),
-        .on_stack = core_alloc_array(bool, link->unit_count),
-    };
-    for (size_t i = 0; i < link->unit_count; i++)
-        build.indices[i] = SIZE_MAX;
-    for (size_t i = 0; i < link->unit_count; i++)
-        if (build.indices[i] == SIZE_MAX) link_scc_visit(&build, i);
-    core_free(build.indices);
-    core_free(build.lowlinks);
-    core_free(build.stack);
-    core_free(build.on_stack);
+    core_translation_units_visit_sccs(link->units, link->unit_count,
+                                      store_link_scc, link);
 }
 
 static void
@@ -587,10 +649,11 @@ capture_graph_snapshot(core_link_unit_t *link)
     for (size_t i = 0; i < link->unit_count; i++) {
         core_translation_unit_t *unit = link->units[i];
         for (size_t j = 0; j < core_translation_unit_import_count(unit); j++) {
-            grow_array((void **)&link->import_edges,
-                       &link->import_edge_capacity,
-                       link->import_edge_count + 1,
-                       sizeof(*link->import_edges));
+            if (!core_list_reserve_raw((void **)&link->import_edges,
+                                       &link->import_edge_capacity,
+                                       link->import_edge_count + 1,
+                                       sizeof(*link->import_edges)))
+                abort();
             link->import_edges[link->import_edge_count++] =
                 (core_link_import_edge_t){
                     .importer = unit,
@@ -610,6 +673,13 @@ core_link_unit_new(void)
     *link = (core_link_unit_t){.diagnostics = core_diagnostics_new()};
     core_dict_init(&link->reference_index, reference_site_hash,
                    reference_site_eq);
+    core_dict_init(&link->root_index, nullptr, nullptr);
+    core_dict_init_string(&link->root_module_index);
+    core_dict_init(&link->unit_index, nullptr, nullptr);
+    core_dict_init_string(&link->module_index);
+    core_dict_init(&link->scc_index, nullptr, nullptr);
+    core_dict_init(&link->artifact_index, artifact_key_hash, artifact_key_eq);
+    core_dict_init(&link->stage_index, nullptr, nullptr);
     return link;
 }
 
@@ -619,6 +689,14 @@ core_link_unit_free(core_link_unit_t *link)
     if (!link) return;
     clear_dependency_index(link);
     core_dict_free(&link->reference_index);
+    core_dict_free(&link->root_index);
+    core_dict_free(&link->root_module_index);
+    core_dict_free(&link->unit_index);
+    core_dict_free(&link->module_index);
+    core_dict_foreach(&link->artifact_index, item)
+        core_free(item->key);
+    core_dict_free(&link->artifact_index);
+    core_dict_free(&link->stage_index);
     for (size_t i = 0; i < link->declaration_count; i++) {
         core_link_declaration_t *decl = link->declarations[i];
         if (decl->ownership == CORE_LINK_PAYLOAD_OWNED)
@@ -667,6 +745,7 @@ core_link_unit_free(core_link_unit_t *link)
     core_free(link->unit_import_revisions);
     core_free(link->import_edges);
     clear_sccs(link);
+    core_dict_free(&link->scc_index);
     core_free(link->sccs);
     core_free(link->declarations);
     core_free(link->references);
@@ -699,23 +778,25 @@ bool
 core_link_unit_add_root(core_link_unit_t *link, core_translation_unit_t *root)
 {
     if (!link || !root) return false;
-    for (size_t i = 0; i < link->root_count; i++) {
-        core_translation_unit_t *prior = link->roots[i];
-        if (prior == root) return true;
-        if (core_module_spec_eq(&prior->module, &root->module)) {
-            link_report(link, root, "LANTERN-L0001",
-                "link unit contains distinct translation units with the same module identity");
-            return false;
-        }
+    if (core_dict_contains(&link->root_index, root)) return true;
+    if (core_dict_contains(&link->root_module_index,
+                           &root->module.identifier)) {
+        link_report(link, root, "LANTERN-L0001",
+            "link unit contains distinct translation units with the same module identity");
+        return false;
     }
     if (link->graph_finalized) {
         link_report(link, root, "LANTERN-L0005",
             "cannot add a root after the link-unit graph is finalized");
         return false;
     }
-    grow_array((void **)&link->roots, &link->root_capacity,
-               link->root_count + 1, sizeof(*link->roots));
+    if (!core_list_reserve_raw((void **)&link->roots, &link->root_capacity,
+                               link->root_count + 1, sizeof(*link->roots)))
+        abort();
     link->roots[link->root_count++] = root;
+    core_dict_add(&link->root_index, root, root);
+    core_dict_add(&link->root_module_index,
+                  &root->module.identifier, root);
     link->collected = false;
     link->validated = false;
     invalidate_stages(link);
@@ -738,6 +819,8 @@ bool
 core_link_unit_collect(core_link_unit_t *link)
 {
     if (!link) return false;
+    if (link->graph_finalized && link->collected)
+        return link->collection_valid;
     if (graph_snapshot_current(link)) return link->collection_valid;
     if (link->graph_finalized) {
         link_report(link, nullptr, "LANTERN-L0006",
@@ -748,6 +831,10 @@ core_link_unit_collect(core_link_unit_t *link)
     link->unit_count = 0;
     link->import_edge_count = 0;
     clear_sccs(link);
+    core_dict_free(&link->unit_index);
+    core_dict_free(&link->module_index);
+    core_dict_init(&link->unit_index, nullptr, nullptr);
+    core_dict_init_string(&link->module_index);
     for (size_t i = 0; i < link->reference_count; i++)
         link->references[i]->target = nullptr;
     link->validated = false;
@@ -812,8 +899,9 @@ core_link_unit_register_stage(core_link_unit_t *link, uint32_t stage_kind,
     if (prerequisite_count)
         memcpy(prereq_copy, prerequisites,
                prerequisite_count * sizeof(*prereq_copy));
-    grow_array((void **)&link->stages, &link->stage_capacity,
-               link->stage_count + 1, sizeof(*link->stages));
+    if (!core_list_reserve_raw((void **)&link->stages, &link->stage_capacity,
+                               link->stage_count + 1, sizeof(*link->stages)))
+        abort();
     link->stages[link->stage_count++] = (core_link_stage_record_t){
         .kind = stage_kind,
         .prerequisites = prereq_copy,
@@ -825,6 +913,8 @@ core_link_unit_register_stage(core_link_unit_t *link, uint32_t stage_kind,
         .context = context,
         .state = CORE_LINK_STAGE_PENDING,
     };
+    core_dict_add(&link->stage_index,
+        (void *)(uintptr_t)stage_kind, link->stage_count);
     return true;
 }
 
@@ -887,6 +977,7 @@ run_stage_at(core_link_unit_t *link, size_t index)
         stage->state = CORE_LINK_STAGE_FAILED;
         finish_stage_contributions(link, kind,
                                    CORE_LINK_STAGE_RESULT_FAILED);
+        remove_stage_artifacts(link, nullptr, kind);
         finish_stage_dependencies(link, kind);
         link_report(link, nullptr, "LANTERN-L0013",
                     "link-unit graph changed while an analysis stage was running");
@@ -896,6 +987,7 @@ run_stage_at(core_link_unit_t *link, size_t index)
         stage->state = CORE_LINK_STAGE_FAILED;
         finish_stage_contributions(link, kind,
                                    CORE_LINK_STAGE_RESULT_FAILED);
+        remove_stage_artifacts(link, nullptr, kind);
         finish_stage_dependencies(link, kind);
         return false;
     }
@@ -906,6 +998,7 @@ run_stage_at(core_link_unit_t *link, size_t index)
     case CORE_LINK_STAGE_RESULT_UNAVAILABLE:
         stage->state = CORE_LINK_STAGE_UNAVAILABLE;
         finish_stage_contributions(link, kind, result);
+        remove_stage_artifacts(link, nullptr, kind);
         finish_stage_dependencies(link, kind);
         return false;
     case CORE_LINK_STAGE_RESULT_FAILED:
@@ -913,6 +1006,7 @@ run_stage_at(core_link_unit_t *link, size_t index)
         stage->state = CORE_LINK_STAGE_FAILED;
         finish_stage_contributions(link, kind,
                                    CORE_LINK_STAGE_RESULT_FAILED);
+        remove_stage_artifacts(link, nullptr, kind);
         finish_stage_dependencies(link, kind);
         link_report(link, nullptr, "LANTERN-L0011",
                     "link-unit analysis stage failed without a fatal diagnostic");
@@ -936,7 +1030,8 @@ core_link_unit_run_stage(core_link_unit_t *link, uint32_t stage_kind)
 bool
 core_link_unit_invalidate_stage(core_link_unit_t *link, uint32_t stage_kind)
 {
-    if (!link) return false;
+    if (!link || (link->root_count && !core_link_unit_collect(link)))
+        return false;
     core_link_stage_record_t *target = find_stage(link, stage_kind);
     if (!target) return false;
     bool *invalidated = core_alloc_array(bool, link->stage_count);
@@ -968,6 +1063,7 @@ core_link_unit_invalidate_stage(core_link_unit_t *link, uint32_t stage_kind)
         if (invalidated[i]) link->stages[i].state = CORE_LINK_STAGE_PENDING;
     reset_stage_contributions(link, invalidated);
     reset_stage_bindings(link, invalidated);
+    remove_stage_artifacts(link, invalidated, 0);
     remove_stage_dependencies(link, invalidated);
     core_free(invalidated);
     link->validated = false;
@@ -975,10 +1071,11 @@ core_link_unit_invalidate_stage(core_link_unit_t *link, uint32_t stage_kind)
 }
 
 core_link_stage_state_t
-core_link_unit_stage_state(const core_link_unit_t *link, uint32_t stage_kind)
+core_link_unit_stage_state(core_link_unit_t *link, uint32_t stage_kind)
 {
-    core_link_stage_record_t *stage = link ? find_stage(link, stage_kind)
-                                           : nullptr;
+    core_link_stage_record_t *stage = link
+        && (!link->root_count || core_link_unit_collect(link))
+        ? find_stage(link, stage_kind) : nullptr;
     return stage ? stage->state : CORE_LINK_STAGE_FAILED;
 }
 
@@ -1070,6 +1167,18 @@ core_link_unit_scc_member(core_link_unit_t *link, size_t scc_index,
     return link->sccs[scc_index].members[member_index];
 }
 
+bool
+core_link_unit_scc_of(core_link_unit_t *link,
+                      core_translation_unit_t *unit, size_t *scc_index)
+{
+    if (!link || !unit || !core_link_unit_collect(link)) return false;
+    size_t index = (size_t)(uintptr_t)core_dict_get(&link->scc_index, unit,
+                                                    nullptr);
+    if (!index) return false;
+    if (scc_index) *scc_index = index - 1;
+    return true;
+}
+
 core_link_declaration_t *
 core_link_unit_find_declaration(const core_link_unit_t *link,
                                 core_string_t module, core_string_t key)
@@ -1117,8 +1226,9 @@ append_declaration_site(core_link_declaration_t *decl,
                                       metadata->provenance))))
             return;
     }
-    grow_array((void **)&decl->sites, &decl->site_capacity,
-               decl->site_count + 1, sizeof(*decl->sites));
+    if (!core_list_reserve_raw((void **)&decl->sites, &decl->site_capacity,
+                               decl->site_count + 1, sizeof(*decl->sites)))
+        abort();
     decl->sites[decl->site_count++] = (core_link_decl_site_t){
         .unit = owner,
         .source_site = metadata->source_site,
@@ -1169,8 +1279,11 @@ register_declaration(core_link_unit_t *link, core_string_t module,
             .is_defined = is_definition,
             .external_requirement = external_requirement,
         };
-        grow_array((void **)&link->declarations, &link->declaration_capacity,
-                   link->declaration_count + 1, sizeof(*link->declarations));
+        if (!core_list_reserve_raw((void **)&link->declarations,
+                                   &link->declaration_capacity,
+                                   link->declaration_count + 1,
+                                   sizeof(*link->declarations)))
+            abort();
         link->declarations[link->declaration_count++] = decl;
         append_declaration_site(decl, owner, metadata, external, is_definition,
                                 external_requirement);
@@ -1264,7 +1377,7 @@ core_link_unit_define(core_link_unit_t *link,
                       core_link_declaration_t **out)
 {
     if (!link || !owner || !core_link_unit_collect(link)) return false;
-    if (!contains_tu(link->units, link->unit_count, owner)) {
+    if (!core_dict_contains(&link->unit_index, owner)) {
         link_report(link, owner, "LANTERN-L0004",
                     "declaration owner is not part of this link unit");
         return false;
@@ -1285,7 +1398,7 @@ core_link_unit_register_declaration(
     core_link_payload_free_fn free_fn, core_link_declaration_t **out)
 {
     if (!link || !owner || !core_link_unit_collect(link)) return false;
-    if (!contains_tu(link->units, link->unit_count, owner)) {
+    if (!core_dict_contains(&link->unit_index, owner)) {
         link_report(link, owner, "LANTERN-L0004",
                     "declaration owner is not part of this link unit");
         return false;
@@ -1542,8 +1655,11 @@ reference_at_internal(core_link_unit_t *link,
         .has_expected_kind = has_expected_kind,
         .expected_kind = expected_kind,
     };
-    grow_array((void **)&link->references, &link->reference_capacity,
-               link->reference_count + 1, sizeof(*link->references));
+    if (!core_list_reserve_raw((void **)&link->references,
+                               &link->reference_capacity,
+                               link->reference_count + 1,
+                               sizeof(*link->references)))
+        abort();
     link->references[link->reference_count++] = ref;
     if (found) {
         first->last_at_site->next_at_site = ref;
@@ -1670,7 +1786,7 @@ core_link_unit_validate(core_link_unit_t *link)
     for (size_t i = 0; i < link->declaration_count; i++) {
         core_link_declaration_t *decl = link->declarations[i];
         if (decl->owner
-            && !contains_tu(link->units, link->unit_count, decl->owner)) {
+            && !core_dict_contains(&link->unit_index, decl->owner)) {
             link_report(link, decl->owner, "LANTERN-L0004",
                         "declaration owner is not part of this link unit");
             link->validation_valid = false;
@@ -1686,7 +1802,7 @@ core_link_unit_validate(core_link_unit_t *link)
     }
     for (size_t i = 0; i < link->reference_count; i++) {
         core_link_reference_t *ref = link->references[i];
-        if (!contains_tu(link->units, link->unit_count, ref->referrer)) {
+        if (!core_dict_contains(&link->unit_index, ref->referrer)) {
             link_report(link, ref->referrer, "LANTERN-L0004",
                         "reference source is not part of this link unit");
             link->validation_valid = false;
@@ -1792,10 +1908,11 @@ core_link_declaration_set_binding(
             "canonical declaration binding conflicts with an existing handle");
         return false;
     }
-    grow_array((void **)&declaration->bindings,
-               &declaration->binding_capacity,
-               declaration->binding_count + 1,
-               sizeof(*declaration->bindings));
+    if (!core_list_reserve_raw((void **)&declaration->bindings,
+                               &declaration->binding_capacity,
+                               declaration->binding_count + 1,
+                               sizeof(*declaration->bindings)))
+        abort();
     declaration->bindings[declaration->binding_count++] =
         (core_link_decl_binding_t){
             .role = core_string_dup(role),
@@ -1997,35 +2114,52 @@ core_link_reference_deferral_prerequisite(
 
 static bool
 add_artifact(core_link_unit_t *link, core_string_t module,
-             core_string_t format, uint32_t version, void *payload,
+             core_string_t format, uint32_t version,
+             uint32_t producer_stage, void *payload,
              core_link_payload_ownership_t ownership,
              core_link_payload_free_fn free_fn, bool unit_wide)
 {
-    if (!link || (!unit_wide && (!module.data || !module.u8_bytes))
+    if (!link || (link->root_count && !core_link_unit_collect(link))
+        || (!unit_wide && (!module.data || !module.u8_bytes))
         || (unit_wide && (module.data || module.u8_bytes))
         || !format.data || !format.u8_bytes || !version
         || !payload_args_valid(ownership, free_fn)) return false;
-    for (size_t i = 0; i < link->artifact_count; i++) {
-        core_link_artifact_t *artifact = &link->artifacts[i];
-        if (artifact->unit_wide == unit_wide
-            && core_string_eq(artifact->module, module)
-            && core_string_eq(artifact->format, format)) {
-            link_report(link, nullptr, "LANTERN-L0006",
-                "link unit contains duplicate artifacts for one module and format");
+    if (producer_stage) {
+        core_link_stage_record_t *producer = find_stage(link, producer_stage);
+        if (!producer || producer->state != CORE_LINK_STAGE_RUNNING)
             return false;
-        }
     }
-    grow_array((void **)&link->artifacts, &link->artifact_capacity,
-               link->artifact_count + 1, sizeof(*link->artifacts));
+    core_link_artifact_key_t probe = {
+        .module = module, .format = format, .unit_wide = unit_wide,
+    };
+    if (core_dict_contains(&link->artifact_index, &probe)) {
+        link_report(link, nullptr, "LANTERN-L0006",
+            "link unit contains duplicate artifacts for one module and format");
+        return false;
+    }
+    if (!core_list_reserve_raw((void **)&link->artifacts,
+                               &link->artifact_capacity,
+                               link->artifact_count + 1,
+                               sizeof(*link->artifacts)))
+        abort();
     link->artifacts[link->artifact_count++] = (core_link_artifact_t){
         .module = unit_wide ? (core_string_t){0} : core_string_dup(module),
         .format = core_string_dup(format),
         .version = version,
+        .producer_stage = producer_stage,
         .payload = payload,
         .ownership = ownership,
         .free_fn = free_fn,
         .unit_wide = unit_wide,
     };
+    core_link_artifact_t *artifact = &link->artifacts[link->artifact_count - 1];
+    core_link_artifact_key_t *key = core_alloc(core_link_artifact_key_t);
+    *key = (core_link_artifact_key_t){
+        .module = artifact->module,
+        .format = artifact->format,
+        .unit_wide = artifact->unit_wide,
+    };
+    core_dict_add(&link->artifact_index, key, link->artifact_count);
     link->validated = false;
     return true;
 }
@@ -2033,22 +2167,24 @@ add_artifact(core_link_unit_t *link, core_string_t module,
 bool
 core_link_unit_add_artifact(core_link_unit_t *link, core_string_t module,
                             core_string_t format, uint32_t version,
-                            void *payload,
+                            uint32_t producer_stage, void *payload,
                             core_link_payload_ownership_t ownership,
                             core_link_payload_free_fn free_fn)
 {
-    return add_artifact(link, module, format, version, payload, ownership,
+    return add_artifact(link, module, format, version, producer_stage,
+                        payload, ownership,
                         free_fn, false);
 }
 
 bool
 core_link_unit_add_unit_artifact(core_link_unit_t *link,
                                  core_string_t format, uint32_t version,
-                                 void *payload,
+                                 uint32_t producer_stage, void *payload,
                                  core_link_payload_ownership_t ownership,
                                  core_link_payload_free_fn free_fn)
 {
-    return add_artifact(link, (core_string_t){0}, format, version, payload,
+    return add_artifact(link, (core_string_t){0}, format, version,
+                        producer_stage, payload,
                         ownership, free_fn, true);
 }
 
@@ -2059,12 +2195,17 @@ core_link_unit_require_artifact(core_link_unit_t *link, core_string_t module,
                                 core_link_artifact_view_t *out)
 {
     if (out) *out = (core_link_artifact_view_t){0};
-    if (!link || !module.data || !format.data || !required_version)
+    if (!link || (link->root_count && !core_link_unit_collect(link))
+        || !module.data || !format.data
+        || !required_version)
         return false;
-    for (size_t i = 0; i < link->artifact_count; i++) {
-        core_link_artifact_t *artifact = &link->artifacts[i];
-        if (!core_string_eq(artifact->module, module)
-            || !core_string_eq(artifact->format, format)) continue;
+    core_link_artifact_key_t probe = {
+        .module = module, .format = format,
+    };
+    size_t index = (size_t)(uintptr_t)core_dict_get(
+        &link->artifact_index, &probe, nullptr);
+    if (index) {
+        core_link_artifact_t *artifact = &link->artifacts[index - 1];
         if (artifact->version != required_version) {
             link_report(link, nullptr, "LANTERN-L0007",
                         "linked semantic artifact has an incompatible version");
@@ -2089,16 +2230,18 @@ core_link_unit_require_artifact(core_link_unit_t *link, core_string_t module,
 }
 
 size_t
-core_link_unit_artifact_count(const core_link_unit_t *link)
+core_link_unit_artifact_count(core_link_unit_t *link)
 {
-    return link ? link->artifact_count : 0;
+    return link && (!link->root_count || core_link_unit_collect(link))
+        ? link->artifact_count : 0;
 }
 
 bool
-core_link_unit_artifact(const core_link_unit_t *link, size_t index,
+core_link_unit_artifact(core_link_unit_t *link, size_t index,
                         core_link_artifact_view_t *out)
 {
-    if (!link || !out || index >= link->artifact_count) return false;
+    if (!link || (link->root_count && !core_link_unit_collect(link)) || !out
+        || index >= link->artifact_count) return false;
     const core_link_artifact_t *artifact = &link->artifacts[index];
     *out = (core_link_artifact_view_t){
         .module = artifact->module,
@@ -2150,7 +2293,8 @@ core_link_unit_set_contribution(
     core_link_payload_ownership_t ownership,
     core_link_payload_free_fn free_fn)
 {
-    if (!link || !domain.data || !domain.u8_bytes || !version
+    if (!link || (link->root_count && !core_link_unit_collect(link))
+        || !domain.data || !domain.u8_bytes || !version
         || !provenance.data || !provenance.u8_bytes || !provenance_version
         || state < CORE_LINK_CONTRIBUTION_PENDING
         || state > CORE_LINK_CONTRIBUTION_FAILED
@@ -2168,10 +2312,11 @@ core_link_unit_set_contribution(
     core_link_contribution_t *contribution = find_contribution(
         link, module, domain, unit_wide);
     if (!contribution) {
-        grow_array((void **)&link->contributions,
-                   &link->contribution_capacity,
-                   link->contribution_count + 1,
-                   sizeof(*link->contributions));
+        if (!core_list_reserve_raw((void **)&link->contributions,
+                                   &link->contribution_capacity,
+                                   link->contribution_count + 1,
+                                   sizeof(*link->contributions)))
+            abort();
         contribution = &link->contributions[link->contribution_count++];
         *contribution = (core_link_contribution_t){
             .module = unit_wide ? (core_string_t){0}
@@ -2198,12 +2343,13 @@ core_link_unit_set_contribution(
 }
 
 bool
-core_link_unit_contribution(const core_link_unit_t *link,
+core_link_unit_contribution(core_link_unit_t *link,
                             core_string_t module, core_string_t domain,
                             core_link_contribution_view_t *out)
 {
     if (out) *out = (core_link_contribution_view_t){0};
-    if (!link || !domain.data || !domain.u8_bytes
+    if (!link || (link->root_count && !core_link_unit_collect(link))
+        || !domain.data || !domain.u8_bytes
         || ((!module.data) != (module.u8_bytes == 0))) return false;
     bool unit_wide = !module.data;
     for (size_t i = 0; i < link->contribution_count; i++) {
@@ -2262,16 +2408,18 @@ core_link_unit_require_contribution(
 }
 
 size_t
-core_link_unit_contribution_count(const core_link_unit_t *link)
+core_link_unit_contribution_count(core_link_unit_t *link)
 {
-    return link ? link->contribution_count : 0;
+    return link && (!link->root_count || core_link_unit_collect(link))
+        ? link->contribution_count : 0;
 }
 
 bool
-core_link_unit_contribution_at(const core_link_unit_t *link, size_t index,
+core_link_unit_contribution_at(core_link_unit_t *link, size_t index,
                                core_link_contribution_view_t *out)
 {
-    if (!link || !out || index >= link->contribution_count) return false;
+    if (!link || (link->root_count && !core_link_unit_collect(link)) || !out
+        || index >= link->contribution_count) return false;
     contribution_view(&link->contributions[index], out);
     return true;
 }
@@ -2299,7 +2447,7 @@ core_link_unit_add_dependency(
     core_link_stage_record_t *producer = producer_stage
         ? find_stage(link, producer_stage) : nullptr;
     bool source_is_member = !source_unit
-        || contains_tu(link->units, link->unit_count, source_unit);
+        || core_dict_contains(&link->unit_index, source_unit);
     if ((from && !has_from) || (to && !has_to) || !source_is_member
         || (producer_stage && (!producer
             || producer->state != CORE_LINK_STAGE_RUNNING))) {
@@ -2320,9 +2468,11 @@ core_link_unit_add_dependency(
         if (out) *out = &link->dependencies[existing - 1];
         return true;
     }
-    grow_array((void **)&link->dependencies,
-        &link->dependency_capacity, link->dependency_count + 1,
-        sizeof(*link->dependencies));
+    if (!core_list_reserve_raw((void **)&link->dependencies,
+                               &link->dependency_capacity,
+                               link->dependency_count + 1,
+                               sizeof(*link->dependencies)))
+        abort();
     core_link_dependency_t *dependency =
         &link->dependencies[link->dependency_count++];
     *dependency = (core_link_dependency_t){
@@ -2345,16 +2495,18 @@ core_link_unit_add_dependency(
 }
 
 size_t
-core_link_unit_dependency_count(const core_link_unit_t *link)
+core_link_unit_dependency_count(core_link_unit_t *link)
 {
-    return link ? link->dependency_count : 0;
+    return link && (!link->root_count || core_link_unit_collect(link))
+        ? link->dependency_count : 0;
 }
 
 bool
-core_link_unit_dependency_at(const core_link_unit_t *link, size_t index,
+core_link_unit_dependency_at(core_link_unit_t *link, size_t index,
                              core_link_dependency_view_t *out)
 {
-    if (!link || !out || index >= link->dependency_count) return false;
+    if (!link || (link->root_count && !core_link_unit_collect(link)) || !out
+        || index >= link->dependency_count) return false;
     const core_link_dependency_t *dependency = &link->dependencies[index];
     *out = (core_link_dependency_view_t){
         .kind = dependency->kind,

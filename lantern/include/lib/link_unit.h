@@ -150,6 +150,9 @@ size_t core_link_unit_scc_member_count(core_link_unit_t *link,
                                        size_t scc_index);
 core_translation_unit_t *core_link_unit_scc_member(
     core_link_unit_t *link, size_t scc_index, size_t member_index);
+bool core_link_unit_scc_of(core_link_unit_t *link,
+                           core_translation_unit_t *unit,
+                           size_t *scc_index);
 
 /* Stage kinds are opaque to Lantern. Register the complete stage set before
  * running any stage. A stage callback runs only after all prerequisites
@@ -166,7 +169,7 @@ bool core_link_unit_run_stage(core_link_unit_t *link, uint32_t stage_kind);
 bool core_link_unit_invalidate_stage(core_link_unit_t *link,
                                      uint32_t stage_kind);
 core_link_stage_state_t core_link_unit_stage_state(
-    const core_link_unit_t *link, uint32_t stage_kind);
+    core_link_unit_t *link, uint32_t stage_kind);
 size_t core_link_unit_stage_count(const core_link_unit_t *link);
 uint32_t core_link_unit_stage_kind(const core_link_unit_t *link,
                                    size_t index);
@@ -351,20 +354,21 @@ bool core_link_reference_deferral_prerequisite(
  * let front ends reject incompatible persisted semantic contributions. */
 bool core_link_unit_add_artifact(
     core_link_unit_t *link, core_string_t module, core_string_t format,
-    uint32_t version, void *payload,
+    uint32_t version, uint32_t producer_stage, void *payload,
     core_link_payload_ownership_t ownership,
     core_link_payload_free_fn free_fn);
 bool core_link_unit_add_unit_artifact(
     core_link_unit_t *link, core_string_t format, uint32_t version,
-    void *payload, core_link_payload_ownership_t ownership,
+    uint32_t producer_stage, void *payload,
+    core_link_payload_ownership_t ownership,
     core_link_payload_free_fn free_fn);
 bool core_link_unit_require_artifact(core_link_unit_t *link,
                                     core_string_t module,
                                     core_string_t format,
                                     uint32_t required_version,
                                     core_link_artifact_view_t *out);
-size_t core_link_unit_artifact_count(const core_link_unit_t *link);
-bool core_link_unit_artifact(const core_link_unit_t *link, size_t index,
+size_t core_link_unit_artifact_count(core_link_unit_t *link);
+bool core_link_unit_artifact(core_link_unit_t *link, size_t index,
                              core_link_artifact_view_t *out);
 
 /* Contributions are analysis facts, not necessarily serialized artifacts.
@@ -380,14 +384,14 @@ bool core_link_unit_set_contribution(
     uint32_t provenance_version, void *payload,
     core_link_payload_ownership_t ownership,
     core_link_payload_free_fn free_fn);
-bool core_link_unit_contribution(const core_link_unit_t *link,
+bool core_link_unit_contribution(core_link_unit_t *link,
                                  core_string_t module, core_string_t domain,
                                  core_link_contribution_view_t *out);
 bool core_link_unit_require_contribution(
     core_link_unit_t *link, core_string_t module, core_string_t domain,
     uint32_t required_version, core_link_contribution_view_t *out);
-size_t core_link_unit_contribution_count(const core_link_unit_t *link);
-bool core_link_unit_contribution_at(const core_link_unit_t *link,
+size_t core_link_unit_contribution_count(core_link_unit_t *link);
+bool core_link_unit_contribution_at(core_link_unit_t *link,
                                     size_t index,
                                     core_link_contribution_view_t *out);
 
@@ -404,6 +408,6 @@ bool core_link_unit_add_dependency(
     core_translation_unit_t *source_unit, const void *source_site,
     core_diag_location_t source_location, core_string_t provenance,
     uint32_t provenance_version, core_link_dependency_t **out);
-size_t core_link_unit_dependency_count(const core_link_unit_t *link);
-bool core_link_unit_dependency_at(const core_link_unit_t *link, size_t index,
+size_t core_link_unit_dependency_count(core_link_unit_t *link);
+bool core_link_unit_dependency_at(core_link_unit_t *link, size_t index,
                                   core_link_dependency_view_t *out);

@@ -28,24 +28,60 @@ core_list_decl(int32_t);
 core_list_decl(core_string_t);
 core_list_decl(core_const_charptr_t);
 
+static inline bool
+core_list_reserve_raw(void **data, size_t *capacity, size_t needed,
+                      size_t element_size)
+{
+    if (needed <= *capacity) return true;
+    if (!element_size || needed > SIZE_MAX / element_size) return false;
+
+    size_t next = *capacity ? *capacity : CORE_DEFAULT_LIST_SZ;
+    while (next < needed) {
+        if (next > SIZE_MAX / 2) {
+            next = needed;
+            break;
+        }
+        next *= 2;
+    }
+    if (next > SIZE_MAX / element_size) next = needed;
+
+    size_t old_bytes = *capacity * element_size;
+    size_t new_bytes = next * element_size;
+    void *grown = core_try_realloc(*data, new_bytes);
+    if (!grown) return false;
+    memset((char *)grown + old_bytes, 0, new_bytes - old_bytes);
+    *data = grown;
+    *capacity = next;
+    return true;
+}
+
+#define core_list_try_reserve(x, needed)                                       \
+    ({                                                                         \
+        auto _bl_reserve_lp = &(x);                                            \
+        void *_bl_data = _bl_reserve_lp->data;                                 \
+        size_t _bl_cap = _bl_reserve_lp->cap;                                  \
+        bool _bl_ok = core_list_reserve_raw(&_bl_data, &_bl_cap, (needed),     \
+                                            sizeof(*_bl_reserve_lp->data));    \
+        if (_bl_ok) {                                                          \
+            _bl_reserve_lp->data = _bl_data;                                   \
+            _bl_reserve_lp->cap = _bl_cap;                                     \
+        }                                                                      \
+        _bl_ok;                                                                \
+    })
+
 #define _core_list_ensure_cap(xptr, needed)                                    \
     do {                                                                       \
-        size_t _bl_need = (needed);                                            \
-        if (_bl_need > (xptr)->cap) {                                          \
-            size_t _bl_nc = core_align_closest_pow2_ceil(_bl_need);            \
-            typeof((xptr)->data) _bl_nd =                                      \
-                (typeof((xptr)->data))core_alloc_size(_bl_nc, sizeof(*(xptr)->data)); \
-            if ((xptr)->len > 0) {                                             \
-                memcpy(_bl_nd, (xptr)->data,                                   \
-                       (xptr)->len * sizeof(*(xptr)->data));                   \
-            }                                                                  \
-            if ((xptr)->data) {                                                \
-                core_free((xptr)->data);                                            \
-            }                                                                  \
-            (xptr)->data = _bl_nd;                                             \
-            (xptr)->cap  = _bl_nc;                                             \
-        }                                                                      \
+        if (!core_list_try_reserve(*(xptr), needed)) abort();                  \
     } while (0)
+
+#define core_list_try_push(x, val)                                             \
+    ({                                                                         \
+        auto _bl_lp = &(x);                                                    \
+        bool _bl_ok = _bl_lp->len < SIZE_MAX                                    \
+            && core_list_try_reserve(*_bl_lp, _bl_lp->len + 1);                \
+        if (_bl_ok) _bl_lp->data[_bl_lp->len++] = (val);                       \
+        _bl_ok;                                                                \
+    })
 
 #define core_list_new(T)                                                       \
     ({                                                                         \
@@ -112,6 +148,7 @@ core_list_decl(core_const_charptr_t);
 #define core_list_push(x, val)                                                 \
     ({                                                                         \
         auto _bl_lp = &(x);                                                    \
+        if (_bl_lp->len == SIZE_MAX) abort();                                  \
         _core_list_ensure_cap(_bl_lp, _bl_lp->len + 1);                        \
         _bl_lp->data[_bl_lp->len++] = (val);                                   \
     })

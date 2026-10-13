@@ -70,14 +70,12 @@ void parse_walk_on_annot_phase(parse_tree_walk_t *w, parse_annot_kind_t kind,
                              int32_t phase, parse_visit_fn pre,
                              parse_visit_fn post, void *thunk);
 
-void parse_walk_on_annot(parse_tree_walk_t *w, parse_annot_kind_t kind,
-                       parse_visit_fn pre, parse_visit_fn post, void *thunk);
-
 void parse_walk_on_leaf(parse_tree_walk_t *w, parse_visit_fn fn, void *thunk);
 
 void parse_walk_on_stage(parse_tree_walk_t *w, parse_walk_stage_t stage,
                          parse_walk_stage_fn fn, void *thunk);
 bool parse_visit_suppress_annotation(parse_visit_t *v, parse_annot_kind_t kind);
+parse_tree_t *parse_visit_ancestor(const parse_visit_t *v, size_t distance);
 bool parse_walk_set_annotation_order(parse_tree_walk_t *w,
                                      const parse_annot_kind_t *kinds,
                                      size_t kind_count);

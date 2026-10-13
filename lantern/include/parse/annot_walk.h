@@ -23,8 +23,6 @@ core_list_decl(parse_tree_ptr_t);
 typedef struct {
     parse_symtab_t *symtab;
     core_dict_t   *cf_labels;
-    core_list_t(parse_sym_entry_ptr_t) params;
-    core_list_t(parse_sym_entry_ptr_t) shadowed;
     core_list_t(parse_tree_ptr_t) undefined;
     void *impl;
     bool  borrowed_symtab;

@@ -40,6 +40,7 @@ suites = [
     ['lib-cache',           'lib/cache.c',           {}],
     ['lib-diagnostics',     'lib/diagnostic.c',      {}],
     ['lib-module',          'lib/module.c',          {}],
+    ['lib-snapshot-inventory', 'lib/snapshot_inventory.c', {}],
     ['lib-target',          'lib/target.c',          {}],
     ['lib-target-call',     'lib/target_call.c',     {}],
     ['lib-indexed-table',   'lib/indexed_table.c',   {}],

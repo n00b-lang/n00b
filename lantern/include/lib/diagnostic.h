@@ -40,6 +40,8 @@ typedef bool (*core_diag_policy_fn)(void *context,
 
 core_diagnostics_t *core_diagnostics_new(void);
 void core_diagnostics_free(core_diagnostics_t *diagnostics);
+void core_diagnostics_set_unit(core_diagnostics_t *diagnostics,
+                               const core_translation_unit_t *unit);
 void core_diagnostics_set_policy(core_diagnostics_t *diagnostics,
                                  core_diag_policy_fn policy, void *context);
 bool core_diagnostics_report(core_diagnostics_t *diagnostics,

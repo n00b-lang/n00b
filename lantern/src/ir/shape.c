@@ -140,7 +140,7 @@ ir_shape_set_extent(ir_shape_t *shape, uint32_t dimension,
                 != IR_PHASE_COMPTIME) return false;
         break;
     case IR_SHAPE_EXTENT_RUNTIME:
-        if ((!extent.value && !extent.expression) || extent.producer
+        if (extent.producer
             || extent.producer_identifier)
             return false;
         break;

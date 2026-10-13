@@ -294,14 +294,6 @@ annot_declares(parse_visit_t *v)
         a->pending_visibility = (core_string_t){0};
     }
 
-    if (sym->shadowed) {
-        core_list_push(a->out->shadowed, sym);
-    }
-
-    if (kind == PARSE_SYM_PARAM) {
-        core_list_push(a->out->params, sym);
-    }
-
     declared(a, v, sym);
 
     return true;
@@ -934,27 +926,6 @@ annot_implements(parse_visit_t *v)
 }
 
 static bool
-field_symbol_for_node(parse_tree_t *root, parse_tree_t *target,
-                      parse_sym_entry_t *field,
-                      parse_sym_entry_t **result)
-{
-    if (!root) return false;
-    if (!core_tree_is_leaf(root)) {
-        parse_sym_entry_t *symbol = core_tree_node_value(root).sym;
-        if (symbol && symbol->is_field) field = symbol;
-    }
-    if (root == target) {
-        *result = field;
-        return true;
-    }
-    if (core_tree_is_leaf(root)) return false;
-    for (size_t i = 0; i < core_tree_num_children(root); i++)
-        if (field_symbol_for_node(core_tree_child(root, i), target, field,
-                                  result)) return true;
-    return false;
-}
-
-static bool
 annot_visibility(parse_visit_t *v)
 {
     actx_t          *a   = (actx_t *)v->thunk;
@@ -967,9 +938,23 @@ annot_visibility(parse_visit_t *v)
         parse_namespace_t *ns = parse_symtab_ns(a->out->symtab, ns_default());
         parse_scope_t *scope = ns ? ns->current : nullptr;
         parse_sym_entry_t *field = nullptr;
-        bool type_member = scope && scope->node
-            && field_symbol_for_node(scope->node, v->node, nullptr, &field)
-            && field;
+        bool in_scope = false;
+        if (scope && scope->node) {
+            for (size_t distance = 0; ; distance++) {
+                parse_tree_t *ancestor = parse_visit_ancestor(v, distance);
+                if (!ancestor) break;
+                if (!field && !core_tree_is_leaf(ancestor)) {
+                    parse_sym_entry_t *candidate =
+                        core_tree_node_value(ancestor).sym;
+                    if (candidate && candidate->is_field) field = candidate;
+                }
+                if (ancestor == scope->node) {
+                    in_scope = true;
+                    break;
+                }
+            }
+        }
+        bool type_member = in_scope && field;
         if ((!parent_declaration ||
              parent_declaration->kind == PARSE_SYM_PARAM) && !type_member &&
             scope && scope->node)
@@ -1628,8 +1613,6 @@ parse_annot_result_free(parse_annot_result_t *r)
         parse_symtab_free(r->symtab);
     }
 
-    core_free(r->params.data);
-    core_free(r->shadowed.data);
     core_free(r->undefined.data);
     core_free(r->impl);
 

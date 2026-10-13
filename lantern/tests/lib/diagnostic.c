@@ -37,7 +37,7 @@ int main(void)
                                      .end_line = 3, .end_column = 8,
                                      .has_location = true}));
     check("TU warnings can be collected before build-level policy runs",
-          core_diagnostics_report(tu, &unit, CORE_DIAG_WARNING,
+          core_diagnostics_report(tu, nullptr, CORE_DIAG_WARNING,
               CORE_STRING_STATIC("TEST-W0001"),
               CORE_STRING_STATIC("warning")));
     check("TU diagnostics merge into build diagnostics",
@@ -55,6 +55,13 @@ int main(void)
               && diagnostic->location.has_location
               && diagnostic->location.line == 3
               && diagnostic->location.column == 4);
+    diagnostic = core_diagnostics_at(build, 1);
+    check("TU sink attributes reports without an explicit unit",
+          diagnostic
+              && core_string_eq(diagnostic->module,
+                                CORE_STRING_STATIC("pkg.mod"))
+              && core_string_eq(diagnostic->path,
+                                CORE_STRING_STATIC("pkg/mod.n00b")));
 
     core_diagnostics_free(build);
     core_translation_unit_release(&unit);

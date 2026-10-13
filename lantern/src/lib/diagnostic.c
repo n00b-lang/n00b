@@ -13,6 +13,7 @@ struct core_diagnostics_t {
     core_list_t(core_diagnostic_t) items;
     core_diag_policy_fn policy;
     void *policy_context;
+    const core_translation_unit_t *unit;
 };
 
 core_diagnostics_t *
@@ -36,6 +37,13 @@ core_diagnostics_free(core_diagnostics_t *d)
     }
     core_list_free(d->items);
     core_free(d);
+}
+
+void
+core_diagnostics_set_unit(core_diagnostics_t *d,
+                          const core_translation_unit_t *unit)
+{
+    if (d) d->unit = unit;
 }
 
 void
@@ -73,9 +81,10 @@ core_diagnostics_report_at(core_diagnostics_t *d,
         .message = core_string_dup(message),
         .location = location,
     };
-    if (unit) {
-        item.module = core_string_dup(unit->module.identifier);
-        item.path = core_string_dup(unit->source.path);
+    const core_translation_unit_t *owner = unit ? unit : d->unit;
+    if (owner) {
+        item.module = core_string_dup(owner->module.identifier);
+        item.path = core_string_dup(owner->source.path);
     }
     core_list_push(d->items, item);
     return true;

@@ -14,6 +14,7 @@
     X(SWITCH, "switch") \
     X(CAPTURE, "capture") \
     X(INDENT, "indent") \
+    X(TRIVIA_INDENT, "trivia_indent") \
     X(NEWLINE, "newline") \
     X(SPACE, "space") \
     X(NOSPACE, "nospace") \

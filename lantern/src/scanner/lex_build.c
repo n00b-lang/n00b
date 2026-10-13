@@ -116,19 +116,6 @@ enum {
     OPERATOR_REMOVED = 2,
 };
 
-static core_hash_value_t
-string_key_hash(void *key)
-{
-    return core_string_hash(*(core_string_t *)key);
-}
-
-static bool
-string_key_eq(const void *a, const void *b)
-{
-    return core_string_eq(*(const core_string_t *)a,
-                          *(const core_string_t *)b);
-}
-
 static void
 string_map_free(core_dict_t *map)
 {
@@ -829,7 +816,7 @@ build_string_escapes(lex_build_t *b, const scan_lex_decl_t *a)
     set.simple = prototype.simple_escapes;
 
     core_dict_t seen;
-    core_dict_init(&seen, string_key_hash, string_key_eq);
+    core_dict_init_string(&seen);
     for (size_t i = 0; i < core_list_len(set.rules); i++) {
         core_string_t prefix = set.rules.data[i].prefix;
 
@@ -911,7 +898,7 @@ own_escape_rules(lex_build_t *b,
     }
 
     core_dict_t seen;
-    core_dict_init(&seen, string_key_hash, string_key_eq);
+    core_dict_init_string(&seen);
     for (size_t i = 0; i < core_list_len(*escapes); i++) {
         core_string_t prefix = escapes->data[i].prefix;
 
@@ -1377,7 +1364,7 @@ build_number_form(lex_build_t *b, const scan_lex_decl_t *a)
     }
 
     core_dict_t seen_suffixes;
-    core_dict_init(&seen_suffixes, string_key_hash, string_key_eq);
+    core_dict_init_string(&seen_suffixes);
     for (size_t i = 0; i < core_list_len(suffixes); i++) {
         core_string_t suffix = suffixes.data[i].suffix;
 
@@ -2339,7 +2326,7 @@ build_operator_set(lex_build_t *b, const scan_lex_decl_t *a)
     };
     size_t             positional_ix = 0;
     core_dict_t        seen;
-    core_dict_init(&seen, string_key_hash, string_key_eq);
+    core_dict_init_string(&seen);
 
     for (size_t i = 0; i < core_list_len(a->lex_opts); i++) {
         const scan_lex_opt_t *o = &a->lex_opts.data[i];
@@ -2736,26 +2723,19 @@ scan_lex_spec_from_decls(parse_grammar_t *g,
 
     lex_build_t *b = core_alloc(lex_build_t);
 
-    core_dict_init(&b->operator_set_index, string_key_hash, string_key_eq);
-    core_dict_init(&b->operator_set_declarations,
-                   string_key_hash, string_key_eq);
-    core_dict_init(&b->operator_state, string_key_hash, string_key_eq);
-    core_dict_init(&b->operator_index, string_key_hash, string_key_eq);
-    core_dict_init(&b->soft_keyword_index, string_key_hash, string_key_eq);
-    core_dict_init(&b->string_openers, string_key_hash, string_key_eq);
-    core_dict_init(&b->number_prefixes, string_key_hash, string_key_eq);
-    core_dict_init(&b->number_suffix_set_index,
-                   string_key_hash, string_key_eq);
-    core_dict_init(&b->number_suffix_set_declarations,
-                   string_key_hash, string_key_eq);
-    core_dict_init(&b->string_escape_set_index,
-                   string_key_hash, string_key_eq);
-    core_dict_init(&b->string_escape_set_declarations,
-                   string_key_hash, string_key_eq);
-    core_dict_init(&b->heredoc_header_index,
-                   string_key_hash, string_key_eq);
-    core_dict_init(&b->identifier_profile_index,
-                   string_key_hash, string_key_eq);
+    core_dict_init_string(&b->operator_set_index);
+    core_dict_init_string(&b->operator_set_declarations);
+    core_dict_init_string(&b->operator_state);
+    core_dict_init_string(&b->operator_index);
+    core_dict_init_string(&b->soft_keyword_index);
+    core_dict_init_string(&b->string_openers);
+    core_dict_init_string(&b->number_prefixes);
+    core_dict_init_string(&b->number_suffix_set_index);
+    core_dict_init_string(&b->number_suffix_set_declarations);
+    core_dict_init_string(&b->string_escape_set_index);
+    core_dict_init_string(&b->string_escape_set_declarations);
+    core_dict_init_string(&b->heredoc_header_index);
+    core_dict_init_string(&b->identifier_profile_index);
 
     b->spec.name = scan_grammar_tokenizer(g);
 

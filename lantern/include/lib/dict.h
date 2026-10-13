@@ -139,6 +139,42 @@ core_dict_init(core_dict_t *dict,
     dict->values     = core_alloc_array(void *, CORE_DICT_MIN_SIZE);
 }
 
+static inline core_hash_value_t
+_core_dict_string_hash(void *key)
+{
+    return core_string_hash(*(const core_string_t *)key);
+}
+
+static inline bool
+_core_dict_string_eq(const void *a, const void *b)
+{
+    return core_string_eq(*(const core_string_t *)a,
+                          *(const core_string_t *)b);
+}
+
+static inline void
+core_dict_init_string(core_dict_t *dict)
+{
+    core_dict_init(dict, _core_dict_string_hash, _core_dict_string_eq);
+}
+
+static inline core_string_t *
+core_dict_string_key_copy(core_string_t value)
+{
+    core_string_t *key = core_alloc(core_string_t);
+    *key = core_string_dup(value);
+    return key;
+}
+
+static inline void
+core_dict_string_key_free(void *ptr)
+{
+    core_string_t *key = ptr;
+    if (!key) return;
+    core_free(key->data);
+    core_free(key);
+}
+
 static inline size_t
 _core_dict_find(core_dict_t *d, core_hash_value_t hv, void *key)
 {

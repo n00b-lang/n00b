@@ -6,6 +6,7 @@
 #include "parse/grammar.h"
 #include "parse/pwz.h"
 #include "parse/tree_visit.h"
+#include "parse/tree_util.h"
 #include "scanner/tokenizer.h"
 #include "scanner/token_stream.h"
 #include "private/parse/grammar.h"
@@ -97,6 +98,14 @@ static void test_the_parts_load_in_either_order(void)
 
         parse_grammar_free(g);
     }
+    parse_grammar_t *partial = parse_grammar_new();
+    parse_grammar_set_error_recovery(partial, false);
+    parse_bnf_load(core_string_from_cstr(LANG), CORE_STRING_STATIC("decls"),
+                   partial);
+    check("a missing grammar part remains undefined",
+          core_list_len(parse_get_nonterm(partial,
+              nt_id(partial, "type"))->rule_ids) == 0);
+    parse_grammar_free(partial);
 }
 
 static void test_one_grammar_parses_from_several_start_symbols(void)
@@ -136,18 +145,6 @@ static void test_one_grammar_parses_from_several_start_symbols(void)
     check("and going back to the smaller start still works",
           parses(g, "type", bare, 1));
 
-    parse_grammar_free(g);
-}
-
-static void test_a_missing_part_is_still_reported(void)
-{
-    parse_grammar_t *g = parse_grammar_new();
-
-    parse_grammar_set_error_recovery(g, false);
-    parse_bnf_load(core_string_from_cstr(LANG), CORE_STRING_STATIC("decls"), g);
-
-    check("a nonterminal no loaded part defines stays undefined",
-          core_list_len(parse_get_nonterm(g, nt_id(g, "type"))->rule_ids) == 0);
     parse_grammar_free(g);
 }
 
@@ -346,6 +343,8 @@ typedef struct {
     parse_tree_t *second;
     parse_tree_t *third;
     parse_tree_t *replacement;
+    parse_visit_t removed_visit;
+    bool ancestry_ok;
     char visits[8];
     size_t count;
 } edit_walk_t;
@@ -355,6 +354,10 @@ static parse_visit_outcome_t edit_children(parse_visit_t *v)
     edit_walk_t *edit = v->user;
     if (v->node == edit->first) {
         edit->visits[edit->count++] = 'a';
+        edit->removed_visit = *v;
+        edit->ancestry_ok &= parse_visit_ancestor(v, 0) == v->node
+            && parse_visit_ancestor(v, 1) == v->parent
+            && parse_visit_ancestor(v, 2) == nullptr;
         v->remove = true;
     }
     else if (v->node == edit->second) {
@@ -363,7 +366,11 @@ static parse_visit_outcome_t edit_children(parse_visit_t *v)
         v->revisit_replacement = true;
     }
     else if (v->node == edit->replacement)
+    {
         edit->visits[edit->count++] = 'r';
+        edit->ancestry_ok &= parse_visit_ancestor(v, 0) == v->node
+            && parse_visit_ancestor(v, 1) == v->parent;
+    }
     else if (v->node == edit->third)
         edit->visits[edit->count++] = 'c';
     edit->visits[edit->count] = '\0';
@@ -372,7 +379,7 @@ static parse_visit_outcome_t edit_children(parse_visit_t *v)
 
 static void test_tree_editing_keeps_shifted_siblings(void)
 {
-    edit_walk_t edit = {0};
+    edit_walk_t edit = {.ancestry_ok = true};
     parse_tree_t *root = core_tree_node(parse_nt_node_t,
         parse_token_info_ptr_t, ((parse_nt_node_t){.id = PARSE_EMPTY_STRING}));
     edit.first = core_tree_leaf(parse_nt_node_t, parse_token_info_ptr_t,
@@ -386,15 +393,24 @@ static void test_tree_editing_keeps_shifted_siblings(void)
     core_tree_add_child(root, edit.first);
     core_tree_add_child(root, edit.second);
     core_tree_add_child(root, edit.third);
+    check("leaf lookup starts at the first child",
+          core_tree_first_leaf_node(root) == edit.first);
     parse_tree_walk_t *walk = parse_tree_walk_new(nullptr, &edit);
     parse_walk_on_stage(walk, PARSE_WALK_PREPARE, edit_children, nullptr);
     parse_tree_walk_run(walk, root);
     check("removal revisits the shifted sibling and replacement is prepared",
           !strcmp(edit.visits, "abrc") && !parse_tree_walk_failed(walk));
+    check("active ancestry follows leaf replacement and not detached nodes",
+          edit.ancestry_ok
+              && parse_visit_ancestor(&edit.removed_visit, 0) == nullptr);
     check("only the retained children remain attached in order",
           core_tree_num_children(root) == 2
               && core_tree_child(root, 0) == edit.replacement
               && core_tree_child(root, 1) == edit.third);
+    check("leaf lookup follows edited source order",
+          core_tree_first_leaf_node(root) == edit.replacement
+              && parse_tree_scan_leaves(root, true, nullptr,
+                                        nullptr) == edit.third);
     parse_tree_t *second = parse_tree_walk_take_detached(walk);
     parse_tree_t *first = parse_tree_walk_take_detached(walk);
     check("removed and replaced nodes transfer back to the caller",
@@ -406,15 +422,109 @@ static void test_tree_editing_keeps_shifted_siblings(void)
     parse_tree_free(root);
 }
 
+typedef struct {
+    parse_tree_t *root;
+    parse_tree_t *left;
+    parse_tree_t *right;
+    parse_tree_t *shared;
+    size_t left_visits;
+    size_t right_visits;
+    bool ancestry_ok;
+} shared_walk_t;
+
+static parse_visit_outcome_t check_shared_ancestry(parse_visit_t *v)
+{
+    shared_walk_t *state = v->user;
+    if (v->node != state->shared) return PARSE_VISIT_CONTINUE;
+    state->ancestry_ok &= parse_visit_ancestor(v, 0) == state->shared
+        && parse_visit_ancestor(v, 1) == v->parent
+        && parse_visit_ancestor(v, 2) == state->root
+        && parse_visit_ancestor(v, 3) == nullptr;
+    if (v->parent == state->left) state->left_visits++;
+    if (v->parent == state->right) state->right_visits++;
+    return PARSE_VISIT_CONTINUE;
+}
+
+static void test_shared_node_ancestry_uses_active_path(void)
+{
+    shared_walk_t state = {.ancestry_ok = true};
+    state.root = core_tree_node(parse_nt_node_t, parse_token_info_ptr_t,
+        ((parse_nt_node_t){.id = PARSE_EMPTY_STRING}));
+    state.left = core_tree_node(parse_nt_node_t, parse_token_info_ptr_t,
+        ((parse_nt_node_t){.id = PARSE_EMPTY_STRING}));
+    state.right = core_tree_node(parse_nt_node_t, parse_token_info_ptr_t,
+        ((parse_nt_node_t){.id = PARSE_EMPTY_STRING}));
+    state.shared = core_tree_leaf(parse_nt_node_t, parse_token_info_ptr_t,
+                                  tk(PARSE_TOK_IDENTIFIER, "shared", 0));
+    core_tree_add_child(state.root, state.left);
+    core_tree_add_child(state.root, state.right);
+    core_tree_add_child(state.left, state.shared);
+    core_tree_add_child(state.right, state.shared);
+    parse_tree_walk_t *walk = parse_tree_walk_new(nullptr, &state);
+    parse_walk_on_stage(walk, PARSE_WALK_PREPARE,
+                        check_shared_ancestry, nullptr);
+    parse_tree_walk_run(walk, state.root);
+    check("shared nodes report their active parent",
+          state.ancestry_ok && state.left_visits == 1
+              && state.right_visits == 1 && !parse_tree_walk_failed(walk));
+    parse_tree_walk_free(walk);
+    core_tree_remove_child(state.right, 0);
+    parse_tree_free(state.root);
+}
+
+static void test_named_child_lookup_distinguishes_group_wrappers(void)
+{
+    parse_grammar_t *grammar = compose(TYPES, LANG, "decls");
+    parse_tree_t *root = core_tree_node(parse_nt_node_t,
+        parse_token_info_ptr_t, ((parse_nt_node_t){.id = nt_id(grammar,
+                                                               "decls")}));
+    parse_tree_t *outer = core_tree_node(parse_nt_node_t,
+        parse_token_info_ptr_t, ((parse_nt_node_t){.group_top = true}));
+    parse_tree_t *inner = core_tree_node(parse_nt_node_t,
+        parse_token_info_ptr_t, ((parse_nt_node_t){.group_top = true}));
+    parse_tree_t *type = core_tree_node(parse_nt_node_t,
+        parse_token_info_ptr_t, ((parse_nt_node_t){.id = nt_id(grammar,
+                                                               "type")}));
+    parse_tree_t *name = core_tree_node(parse_nt_node_t,
+        parse_token_info_ptr_t, ((parse_nt_node_t){.id = nt_id(grammar,
+                                                               "name")}));
+    parse_tree_t *decl = core_tree_node(parse_nt_node_t,
+        parse_token_info_ptr_t, ((parse_nt_node_t){.id = nt_id(grammar,
+                                                               "decl")}));
+    core_tree_add_child(root, outer);
+    core_tree_add_child(outer, type);
+    core_tree_add_child(outer, inner);
+    core_tree_add_child(inner, name);
+    core_tree_add_child(root, decl);
+    check("direct child search does not cross group wrappers",
+          parse_tree_find_direct_child_by_nt_name(grammar, root,
+              CORE_STRING_STATIC("name")) == nullptr
+              && parse_tree_find_direct_child_by_nt_name(grammar, root,
+                  CORE_STRING_STATIC("decl")) == decl);
+    check("flat child search crosses nested group wrappers only",
+          parse_tree_find_flat_child_by_nt_name(grammar, root,
+              CORE_STRING_STATIC("name")) == name
+              && parse_tree_find_flat_child_by_nt_name(grammar, root,
+                  CORE_STRING_STATIC("decl")) == decl);
+    check("nth child uses the same flattened order",
+          parse_tree_get_nth_nt_child(root, 0) == type
+              && parse_tree_get_nth_nt_child(root, 1) == name
+              && parse_tree_get_nth_nt_child(root, 2) == decl
+              && parse_tree_get_nth_nt_child(root, 3) == nullptr);
+    parse_tree_free(root);
+    parse_grammar_free(grammar);
+}
+
 int main(void)
 {
     test_the_parts_load_in_either_order();
     test_one_grammar_parses_from_several_start_symbols();
-    test_a_missing_part_is_still_reported();
     test_a_failed_load_changes_nothing();
     test_a_reduce_folds_children_into_a_value();
     test_a_visitor_can_stop_a_reduce();
     test_tree_editing_keeps_shifted_siblings();
+    test_shared_node_ancestry_uses_active_path();
+    test_named_child_lookup_distinguishes_group_wrappers();
 
     return report("fe compose");
 }

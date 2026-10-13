@@ -1,6 +1,7 @@
 #include "ir/range.h"
 
 #include "ir/doms.h"
+#include "lib/list.h"
 #include "logic/clpfd_store.h"
 
 #include <limits.h>
@@ -14,12 +15,12 @@ typedef struct {
     bool has_bounds;
 } value_var_t;
 
+core_list_decl(value_var_t);
+
 struct ir_range_analysis {
     ir_module_t *module;
     core_csp_store_t *store;
-    value_var_t *values;
-    size_t n_values;
-    size_t cap_values;
+    core_list_t(value_var_t) values;
     size_t unsupported;
     ir_range_status_t status;
     ir_instr_t *failure;
@@ -59,9 +60,9 @@ integer_bounds(ir_module_t *module, const ir_value_t *value,
 static const value_var_t *
 find_value(const ir_range_analysis_t *a, const ir_value_t *value)
 {
-    for (size_t i = 0; i < a->n_values; i++) {
-        if (a->values[i].value == value) {
-            return &a->values[i];
+    for (size_t i = 0; i < a->values.len; i++) {
+        if (a->values.data[i].value == value) {
+            return &a->values.data[i];
         }
     }
     return nullptr;
@@ -77,21 +78,13 @@ track_value(ir_range_analysis_t *a, const ir_value_t *value)
     if (!integer_bounds(a->module, value, &lo, &hi)) {
         return false;
     }
-    if (a->n_values == a->cap_values) {
-        size_t cap = a->cap_values ? a->cap_values * 2 : 16;
-        value_var_t *values = realloc(a->values, cap * sizeof(*values));
-        if (!values) {
-            return false;
-        }
-        a->values = values;
-        a->cap_values = cap;
-    }
+    if (!core_list_try_reserve(a->values, a->values.len + 1)) return false;
     core_csp_var_id_t var = core_csp_new_var(
         a->store, CORE_STRING_STATIC("ir-value"), core_csp_dom_range(lo, hi));
     if (var < 0) {
         return false;
     }
-    a->values[a->n_values++] = (value_var_t){
+    a->values.data[a->values.len++] = (value_var_t){
         .value = value,
         .var = var,
     };
@@ -237,8 +230,8 @@ typedef struct {
 static value_var_t *
 find_value_mut(ir_range_analysis_t *a, const ir_value_t *value)
 {
-    for (size_t i = 0; i < a->n_values; i++)
-        if (a->values[i].value == value) return &a->values[i];
+    for (size_t i = 0; i < a->values.len; i++)
+        if (a->values.data[i].value == value) return &a->values.data[i];
     return nullptr;
 }
 
@@ -246,8 +239,8 @@ static bool
 merge_path_bounds(ir_range_analysis_t *result,
                   const ir_range_analysis_t *path)
 {
-    for (size_t i = 0; i < path->n_values; i++) {
-        const value_var_t *entry = &path->values[i];
+    for (size_t i = 0; i < path->values.len; i++) {
+        const value_var_t *entry = &path->values.data[i];
         core_csp_domain_result_t domain_result = core_csp_var_domain(
             path->store, entry->var);
         const core_csp_domain_t *domain = core_result_get_ok(domain_result);
@@ -256,16 +249,10 @@ merge_path_bounds(ir_range_analysis_t *result,
         int64_t maximum = core_csp_dom_max(domain);
         value_var_t *merged = find_value_mut(result, entry->value);
         if (!merged) {
-            if (result->n_values == result->cap_values) {
-                size_t cap = result->cap_values ? result->cap_values * 2 : 16;
-                value_var_t *values = realloc(result->values,
-                                               cap * sizeof(*values));
-                if (!values) return false;
-                result->values = values;
-                result->cap_values = cap;
-            }
-            merged = &result->values[result->n_values++];
-            *merged = (value_var_t){.value = entry->value, .var = -1};
+            if (!core_list_try_push(result->values,
+                    ((value_var_t){.value = entry->value, .var = -1})))
+                return false;
+            merged = &result->values.data[result->values.len - 1];
         }
         if (!merged->has_bounds) {
             merged->minimum = minimum;
@@ -594,8 +581,8 @@ ir_range_analyze_function(ir_func_t *function, ir_diags_t *diagnostics)
     if (walk.unsupported) {
         result->status = IR_RANGE_UNSUPPORTED;
         result->unsupported++;
-        for (size_t i = 0; i < result->n_values; i++)
-            result->values[i].has_bounds = false;
+        for (size_t i = 0; i < result->values.len; i++)
+            result->values.data[i].has_bounds = false;
     }
     else if (!walk.path_count || !walk.satisfiable_path) {
         result->status = IR_RANGE_UNSATISFIABLE;
@@ -622,7 +609,7 @@ ir_range_analysis_free(ir_range_analysis_t *a)
         return;
     }
     core_csp_store_free(a->store);
-    free(a->values);
+    core_list_free(a->values);
     free(a);
 }
 

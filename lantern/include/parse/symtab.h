@@ -214,6 +214,7 @@ struct parse_sym_entry_t {
 
 struct parse_scope_t {
     parse_scope_t      *parent;
+    core_translation_unit_t *owner_unit;
     /* The matching scope in the default namespace. */
     parse_scope_t      *lexical_scope;
     parse_namespace_t  *ns;
@@ -240,11 +241,12 @@ struct parse_symtab_t {
     core_translation_unit_t  *owner_unit;
     parse_namespace_t **namespaces;
     int32_t           ns_count;
-    int32_t           ns_cap;
+    size_t            ns_cap;
     int32_t           next_scope_id;
     parse_scope_t      *all_scopes;
     core_dict_t       *scope_by_node;
     core_dict_t       *ns_map;
+    core_dict_t       *nominal_types;
 };
 
 /* Returning false stops the visit; otherwise every scope in the namespace is
@@ -415,6 +417,10 @@ parse_sym_entry_t *parse_symtab_lookup_scoped(parse_symtab_t *st, parse_scope_t 
                                           core_string_t name);
 
 parse_sym_entry_t *parse_symtab_lookup_in(parse_scope_t *scope, core_string_t name);
+bool parse_symtab_bind_nominal_type(parse_symtab_t *st, th_type *type,
+                                    parse_sym_entry_t *symbol);
+parse_sym_entry_t *parse_symtab_nominal_type(parse_symtab_t *st,
+                                            th_type *type);
 
 /* Resolve a single-name reference node using its cached name and scope. */
 parse_sym_entry_t *parse_symtab_resolve_node(parse_symtab_t *st,

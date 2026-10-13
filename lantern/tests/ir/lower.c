@@ -236,6 +236,18 @@ test_nonterminal_lowering_callbacks(void)
               && published.value->def
               && published.value->def->op == IR_OP_CONST
               && value_block->n_instrs == 1);
+    value_context.next_value_id = 0;
+    ir_instr_t *first_temp = ir_instr_add(value_block, IR_OP_CONST);
+    bool first_named = ir_lower_set_temp_dest(&value_context, first_temp,
+                                              "temporary_", i32);
+    value_context.next_value_id = 0;
+    ir_instr_t *second_temp = ir_instr_add(value_block, IR_OP_CONST);
+    bool second_named = ir_lower_set_temp_dest(&value_context, second_temp,
+                                               "temporary_", i32);
+    check("temporary destinations skip names already used by the function",
+          first_named && second_named
+              && !strcmp(first_temp->dest->name, "temporary_0")
+              && !strcmp(second_temp->dest->name, "temporary_1"));
     parse_pwz_free(parser);
     scan_token_stream_free(tokens);
 
@@ -272,6 +284,19 @@ test_nonterminal_lowering_callbacks(void)
               && suppressed.status == IR_LOWER_NO_VALUE
               && suppressed_state.child_value_seen
               && suppressed_block->n_instrs == 1);
+    uint32_t before_missing = ir_diags_count(diagnostics);
+    bool missing_registered = ir_lowerer_register_nt_visit(lowerer,
+        "absent_nt", publish_nonterminal_value, &suppressed_state);
+    ir_lower_result_t missing = missing_registered
+        ? ir_lower_tree(lowerer, &suppressed_context, grammar, tree)
+        : (ir_lower_result_t){.status = IR_LOWER_NO_VALUE};
+    const ir_diag_t *missing_diagnostic = ir_diags_at(
+        diagnostics, before_missing);
+    check("an absent nonterminal callback reports a lowering error",
+          missing_registered && missing.status == IR_LOWER_FAILED
+              && ir_diags_count(diagnostics) == before_missing + 1
+              && missing_diagnostic && missing_diagnostic->message
+              && strstr(missing_diagnostic->message, "absent_nt"));
     parse_pwz_free(parser);
     scan_token_stream_free(tokens);
     parse_grammar_free(grammar);
@@ -693,6 +718,19 @@ main(void)
                   && diagnostic->code == IR_DIAG_UNDEFINED_SYMBOL);
         produced[IR_DIAG_UNDEFINED_SYMBOL] = diagnostic
             && diagnostic->code == IR_DIAG_UNDEFINED_SYMBOL;
+        parse_scope_t imported_scope = {0};
+        uint32_t before_scope = ir_diags_count(unbound_diags);
+        size_t before_instructions = block->n_instrs;
+        bool scoped = parse_tree_set_resolution_scope(right_node,
+                                                       &imported_scope);
+        ir_lower_result_t scope_reference = scoped
+            ? ir_lower_tree(lowerer, &unbound_context, grammar, right_node)
+            : (ir_lower_result_t){.status = IR_LOWER_FAILED};
+        check("a module scope reference needs no runtime binding",
+              scoped && scope_reference.status == IR_LOWER_NO_VALUE
+                  && !scope_reference.value
+                  && ir_diags_count(unbound_diags) == before_scope
+                  && block->n_instrs == before_instructions);
     }
     check("emitted instructions retain the source tree span",
           tree_sum.value && ir_span_known(tree_sum.value->def->span)
@@ -969,8 +1007,12 @@ main(void)
                     == storage_input
               && ir_lower_bound_address(&storage_lower, &storage_symbol)
                     == allocation->dest
+              && ir_lower_local_address(&storage_lower, storage_local)
+                    == allocation->dest
               && ir_lower_bindings_restore(&storage_lower,
-                                           storage_checkpoint));
+                                           storage_checkpoint)
+              && ir_lower_local_address(&storage_lower, storage_local)
+                    == allocation->dest);
 
     parser = parse_pwz_new_for_start(grammar, parse_nonterm_id(
         parse_find_nonterm(grammar, CORE_STRING_STATIC("target"))));
@@ -1028,6 +1070,9 @@ main(void)
     ir_pdg_t *pdg = ir_pdg_of(function);
     check("Lantern builds a dependence graph from the lowered instructions",
           pdg && ir_pdg_node_count(pdg) == 9);
+
+    lower.block = ir_block_add(function, "compound_rejection");
+    lower.reachable = lower.block != nullptr;
 
     parser = parse_pwz_new_for_start(grammar, parse_nonterm_id(
         parse_find_nonterm(grammar, CORE_STRING_STATIC("indexed_set"))));

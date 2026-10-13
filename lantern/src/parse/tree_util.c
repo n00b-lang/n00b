@@ -210,8 +210,10 @@ parse_tree_find_first_terminal(parse_tree_t *node)
 }
 
 static parse_tree_t *
-find_child_by_nt_id(parse_tree_t *parent, int64_t want)
+find_child_by_nt_id(parse_tree_t *parent, int64_t want, size_t *remaining,
+                    bool flatten)
 {
+    if (!parent || core_tree_is_leaf(parent)) return nullptr;
     size_t nc = core_tree_num_children(parent);
 
     for (size_t i = 0; i < nc; i++) {
@@ -224,81 +226,52 @@ find_child_by_nt_id(parse_tree_t *parent, int64_t want)
         parse_nt_node_t *cpn = &core_tree_node_value(child);
 
         if (cpn->group_top) {
-            parse_tree_t *found = find_child_by_nt_id(child, want);
-
-            if (found) {
-                return found;
+            if (flatten) {
+                parse_tree_t *found = find_child_by_nt_id(child, want,
+                                                          remaining, flatten);
+                if (found) return found;
             }
-
             continue;
         }
 
-        if (cpn->id == want) {
-            return child;
-        }
+        if (want >= 0 && cpn->id != want) continue;
+        if (!*remaining) return child;
+        (*remaining)--;
     }
 
     return nullptr;
 }
 
 parse_tree_t *
-parse_tree_find_child_by_nt_name(parse_grammar_t *g, parse_tree_t *parent,
-                               core_string_t name)
+parse_tree_find_direct_child_by_nt_name(parse_grammar_t *g,
+                                        parse_tree_t *parent,
+                                        core_string_t name)
 {
-    if (!parent) {
-        return nullptr;
-    }
-
+    if (!g || !parent) return nullptr;
     parse_nonterm_t *want = parse_find_nonterm(g, name);
+    size_t remaining = 0;
+    return want ? find_child_by_nt_id(parent, want->id, &remaining, false)
+                : nullptr;
+}
 
-    return want ? find_child_by_nt_id(parent, want->id) : nullptr;
+parse_tree_t *
+parse_tree_find_flat_child_by_nt_name(parse_grammar_t *g,
+                                      parse_tree_t *parent,
+                                      core_string_t name)
+{
+    if (!g || !parent) return nullptr;
+    parse_nonterm_t *want = parse_find_nonterm(g, name);
+    size_t remaining = 0;
+    return want ? find_child_by_nt_id(parent, want->id, &remaining, true)
+                : nullptr;
 }
 
 parse_tree_t *
 parse_tree_get_nth_nt_child(parse_tree_t *node, int32_t n)
 {
-    if (!node) {
-        return nullptr;
-    }
-
-    size_t  nc   = core_tree_num_children(node);
-    int32_t seen = 0;
-
-    for (size_t i = 0; i < nc; i++) {
-        parse_tree_t *child = core_tree_child(node, i);
-
-        if (core_tree_is_leaf(child)) {
-            continue;
-        }
-
-        parse_nt_node_t *cpn = &core_tree_node_value(child);
-
-        if (cpn->group_top) {
-            size_t gnc = core_tree_num_children(child);
-
-            for (size_t j = 0; j < gnc; j++) {
-                parse_tree_t *gchild = core_tree_child(child, j);
-
-                if (!core_tree_is_leaf(gchild)) {
-                    if (seen == n) {
-                        return gchild;
-                    }
-
-                    seen++;
-                }
-            }
-
-            continue;
-        }
-
-        if (seen == n) {
-            return child;
-        }
-
-        seen++;
-    }
-
-    return nullptr;
+    if (n < 0) return nullptr;
+    size_t remaining = (size_t)n;
+    return find_child_by_nt_id(node, -1, &remaining, true);
 }
 
 parse_tree_t *
@@ -319,7 +292,7 @@ parse_tree_resolve_child_ref(parse_grammar_t *g, parse_tree_t *parent,
         return core_tree_child(parent, ref.index);
 
     case PARSE_ROLE_BY_NAME:
-        return parse_tree_find_child_by_nt_name(g, parent, ref.name);
+        return parse_tree_find_flat_child_by_nt_name(g, parent, ref.name);
     }
 
     return nullptr;

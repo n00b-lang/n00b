@@ -5,13 +5,12 @@
 
 #include "ir/ir.h"
 #include "ir/doms.h"
+#include "lib/list.h"
 #include "th/typehash.h"
 
-typedef struct {
-    const ir_value_t **items;
-    size_t count;
-    size_t capacity;
-} value_set_t;
+typedef const ir_value_t *ir_value_ptr_t;
+core_list_decl(ir_value_ptr_t);
+typedef core_list_t(ir_value_ptr_t) value_set_t;
 
 struct ir_liveness_query {
     const ir_value_t *value;
@@ -44,23 +43,12 @@ static bool annot_uint(const ir_value_t *value, const char *key, uint64_t *out)
 static bool value_set_add(value_set_t *set, const ir_value_t *value,
                           bool *already_present)
 {
-    for (size_t i = 0; i < set->count; i++) {
-        if (set->items[i] == value) {
-            *already_present = true;
-            return true;
-        }
+    if (core_option_is_set(core_list_find(*set, value))) {
+        *already_present = true;
+        return true;
     }
     *already_present = false;
-    if (set->count == set->capacity) {
-        size_t capacity = set->capacity ? set->capacity * 2 : 8;
-        const ir_value_t **grown = realloc(
-            set->items, capacity * sizeof(*grown));
-        if (!grown) return false;
-        set->items = grown;
-        set->capacity = capacity;
-    }
-    set->items[set->count++] = value;
-    return true;
+    return core_list_try_push(*set, value);
 }
 
 static bool check_alias_edges(const ir_value_t *value, const char *prefix,
@@ -603,8 +591,8 @@ collect_alias_closure(const ir_value_t *value, value_set_t *work)
     if (!value || !value_set_add(work, value, &already_present)) return false;
 
     bool complete = true;
-    for (size_t i = 0; complete && i < work->count; i++) {
-        const ir_value_t *current = work->items[i];
+    for (size_t i = 0; complete && i < work->len; i++) {
+        const ir_value_t *current = work->data[i];
         bool analysis_complete = false;
         bool escapes = false;
         bool unresolved = false;
@@ -632,8 +620,8 @@ alias_liveness_after_closure(const value_set_t *work,
                              const ir_instr_t *point)
 {
     bool unknown = false;
-    for (size_t i = 0; i < work->count; i++) {
-        ir_liveness_t state = ir_value_liveness_after(work->items[i], point);
+    for (size_t i = 0; i < work->len; i++) {
+        ir_liveness_t state = ir_value_liveness_after(work->data[i], point);
         if (state == IR_LIVENESS_LIVE) return IR_LIVENESS_LIVE;
         unknown |= state == IR_LIVENESS_UNKNOWN;
     }
@@ -646,8 +634,8 @@ alias_liveness_on_edge_closure(const value_set_t *work,
                                const ir_block_t *to)
 {
     bool unknown = false;
-    for (size_t i = 0; i < work->count; i++) {
-        ir_liveness_t state = ir_value_liveness_on_edge(work->items[i], from,
+    for (size_t i = 0; i < work->len; i++) {
+        ir_liveness_t state = ir_value_liveness_on_edge(work->data[i], from,
                                                         to);
         if (state == IR_LIVENESS_LIVE) return IR_LIVENESS_LIVE;
         unknown |= state == IR_LIVENESS_UNKNOWN;
@@ -670,7 +658,7 @@ void
 ir_liveness_query_free(ir_liveness_query_t *query)
 {
     if (!query) return;
-    free(query->aliases.items);
+    core_list_free(query->aliases);
     free(query);
 }
 
@@ -701,7 +689,7 @@ ir_value_alias_liveness_after(const ir_value_t *value,
     bool complete = collect_alias_closure(value, &work);
     ir_liveness_t result = complete
         ? alias_liveness_after_closure(&work, point) : IR_LIVENESS_UNKNOWN;
-    free(work.items);
+    core_list_free(work);
     return result;
 }
 
@@ -715,7 +703,7 @@ ir_value_alias_liveness_on_edge(const ir_value_t *value,
     ir_liveness_t result = complete
         ? alias_liveness_on_edge_closure(&work, from, to)
         : IR_LIVENESS_UNKNOWN;
-    free(work.items);
+    core_list_free(work);
     return result;
 }
 
@@ -900,13 +888,13 @@ bool ir_value_can_finalize_at(const ir_value_t *value, uint64_t point)
     value_set_t work = {0};
     bool already_present = false;
     if (!value || !value_set_add(&work, value, &already_present)) {
-        free(work.items);
+        core_list_free(work);
         return false;
     }
 
     bool safe = true;
-    for (size_t i = 0; safe && i < work.count; i++) {
-        const ir_value_t *current = work.items[i];
+    for (size_t i = 0; safe && i < work.len; i++) {
+        const ir_value_t *current = work.data[i];
         bool complete = false;
         bool escapes = false;
         bool unresolved = false;
@@ -940,7 +928,7 @@ bool ir_value_can_finalize_at(const ir_value_t *value, uint64_t point)
             safe = false;
         }
     }
-    free(work.items);
+    core_list_free(work);
     return safe;
 }
 
@@ -1005,13 +993,10 @@ address_has_only_local_uses(const ir_func_t *function,
     const local_use_probe_t probe = {
         .function = function, .address = address, .previous = previous,
     };
-    size_t count = 1;
-    size_t capacity = 4;
-    const ir_value_t **addresses = malloc(capacity * sizeof(*addresses));
-    if (!addresses) return false;
-    addresses[0] = address;
+    value_set_t addresses = {0};
+    if (!core_list_try_push(addresses, address)) return false;
     bool local = true;
-    for (size_t cursor = 0; local && cursor < count; cursor++) {
+    for (size_t cursor = 0; local && cursor < addresses.len; cursor++) {
         for (uint32_t i = 0; local && i < function->n_blocks; i++) {
             const ir_block_t *block = function->blocks[i];
             for (uint32_t j = 0; local && j < block->n_instrs; j++) {
@@ -1036,7 +1021,7 @@ address_has_only_local_uses(const ir_func_t *function,
                     default:
                         break;
                     }
-                    if (referenced != addresses[cursor]) continue;
+                    if (referenced != addresses.data[cursor]) continue;
                     if (operand->kind == IR_OPD_FRESH
                         && use->op == IR_OP_CALL) continue;
                     if (operand->kind == IR_OPD_VALUE
@@ -1061,23 +1046,15 @@ address_has_only_local_uses(const ir_func_t *function,
                         break;
                     }
                     bool seen = false;
-                    for (size_t n = 0; n < count; n++)
-                        if (addresses[n] == use->dest) seen = true;
-                    if (seen) continue;
-                    if (count == capacity) {
-                        size_t next = capacity * 2;
-                        const ir_value_t **grown = realloc(addresses,
-                            next * sizeof(*addresses));
-                        if (!grown) { local = false; break; }
-                        addresses = grown;
-                        capacity = next;
+                    if (!value_set_add(&addresses, use->dest, &seen)) {
+                        local = false;
+                        break;
                     }
-                    addresses[count++] = use->dest;
                 }
             }
         }
     }
-    free(addresses);
+    core_list_free(addresses);
     return local;
 }
 

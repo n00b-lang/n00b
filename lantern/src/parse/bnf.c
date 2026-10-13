@@ -1236,31 +1236,15 @@ static void bnf_restore(const bnf_load_t *saved) {
   memcpy(bnf_empty_lit, saved->empty_lit, sizeof(bnf_empty_lit));
 }
 
-static int resolve_term_to_matches(parse_grammar_t *user_g, const char *tagged,
-                                   parse_match_t **items_p, int *cap_p, int n) {
+static void resolve_term_to_matches(parse_grammar_t *user_g, const char *tagged,
+                                    core_list_t(parse_match_t) *items) {
   if (!tagged || strlen(tagged) < 2) {
-    return n;
+    return;
   }
 
-  parse_match_t *items = *items_p;
-  int cap = *cap_p;
   char type = tagged[0];
   const char *val = tagged + 2;
   core_string_t val_s = core_string_borrow(val, strlen(val));
-
-#define ENSURE_CAP()                                                           \
-  do {                                                                         \
-    if (n >= cap) {                                                            \
-      int old_cap = cap;                                                       \
-      cap = cap ? cap * 2 : 8;                                                 \
-      parse_match_t *ni = core_alloc_array(parse_match_t, (size_t)cap);        \
-      if (items && old_cap > 0)                                                \
-        memcpy(ni, items, (size_t)old_cap * sizeof(parse_match_t));            \
-      if (items)                                                               \
-        core_free(items);                                                      \
-      items = ni;                                                              \
-    }                                                                          \
-  } while (0)
 
   switch (type) {
   case 'L': {
@@ -1269,31 +1253,28 @@ static int resolve_term_to_matches(parse_grammar_t *user_g, const char *tagged,
       int32_t cp = utf8_decode(&p);
       if (cp < 0)
         break;
-      ENSURE_CAP();
-      items[n++] = (parse_match_t){
+      core_list_push(*items, ((parse_match_t){
           .kind = PARSE_MATCH_TERMINAL,
           .terminal_id = cp,
-      };
+      }));
     }
     break;
   }
   case 'N': {
     int64_t ref_id = parse_nonterm(user_g, val_s)->id;
-    ENSURE_CAP();
-    items[n++] = (parse_match_t){
+    core_list_push(*items, ((parse_match_t){
         .kind = PARSE_MATCH_NT,
         .nt_id = ref_id,
-    };
+    }));
     break;
   }
   case 'C': {
     parse_char_class_t cc;
     if (reserved_to_class(val_s, &cc)) {
-      ENSURE_CAP();
-      items[n++] = (parse_match_t){
+      core_list_push(*items, ((parse_match_t){
           .kind = PARSE_MATCH_CLASS,
           .char_class = cc,
-      };
+      }));
     }
     break;
   }
@@ -1318,44 +1299,35 @@ static int resolve_term_to_matches(parse_grammar_t *user_g, const char *tagged,
       break;
     }
 
-    ENSURE_CAP();
-    items[n++] = (parse_match_t){
+    core_list_push(*items, ((parse_match_t){
         .kind = PARSE_MATCH_TERMINAL,
         .terminal_id = tok_id,
-    };
+    }));
     break;
   }
   case 'K': {
     int64_t term_id = parse_register_terminal(user_g, val_s);
-    ENSURE_CAP();
-    items[n++] = (parse_match_t){
+    core_list_push(*items, ((parse_match_t){
         .kind = PARSE_MATCH_TERMINAL,
         .terminal_id = term_id,
-    };
+    }));
     break;
   }
   case 'E': {
-    ENSURE_CAP();
-    items[n++] = (parse_match_t){
+    core_list_push(*items, ((parse_match_t){
         .kind = PARSE_MATCH_EMPTY,
-    };
+    }));
     break;
   }
   }
 
-#undef ENSURE_CAP
-
-  *items_p = items;
-  *cap_p = cap;
-
-  return n;
 }
 
-static int resolve_terms_to_matches(parse_grammar_t *user_g, bnf_list_t *terms,
-                                    parse_match_t **items_p, int *cap_p, int n);
+static void resolve_terms_to_matches(parse_grammar_t *user_g, bnf_list_t *terms,
+                                     core_list_t(parse_match_t) *items);
 
-static int resolve_group_to_match(parse_grammar_t *user_g, bnf_group_info_t *gi,
-                                  parse_match_t **items_p, int *cap_p, int n) {
+static void resolve_group_to_match(parse_grammar_t *user_g, bnf_group_info_t *gi,
+                                   core_list_t(parse_match_t) *items) {
   int min = 0, max = 0;
 
   switch (gi->quantifier) {
@@ -1382,21 +1354,18 @@ static int resolve_group_to_match(parse_grammar_t *user_g, bnf_group_info_t *gi,
   if (gi->alternatives->len == 1) {
     bnf_result_t *alt_r = slist_get(gi->alternatives, 0);
     bnf_list_t *inner = (bnf_list_t *)alt_r->data;
-    parse_match_t *inner_items = nullptr;
-    int inner_cap = 0;
-    int inner_n = 0;
+    core_list_t(parse_match_t) inner_items = {0};
+    resolve_terms_to_matches(user_g, inner, &inner_items);
 
-    inner_n = resolve_terms_to_matches(user_g, inner, &inner_items, &inner_cap,
-                                       inner_n);
-
-    if (inner_n > 0) {
-      group_match = parse_group_match_v(user_g, min, max, inner_n, inner_items);
+    if (inner_items.len > 0) {
+      group_match = parse_group_match_v(user_g, min, max,
+                                       (int)inner_items.len, inner_items.data);
     } else {
-      core_free(inner_items);
-      return n;
+      core_list_free(inner_items);
+      return;
     }
 
-    core_free(inner_items);
+    core_list_free(inner_items);
   } else {
     char namebuf[64];
     int n = snprintf(namebuf, sizeof(namebuf), "$$bnf_anon_%d",
@@ -1408,21 +1377,17 @@ static int resolve_group_to_match(parse_grammar_t *user_g, bnf_group_info_t *gi,
     for (size_t ai = 0; ai < gi->alternatives->len; ai++) {
       bnf_result_t *alt_r = slist_get(gi->alternatives, ai);
       bnf_list_t *inner = (bnf_list_t *)alt_r->data;
-      parse_match_t *alt_items = nullptr;
-      int alt_cap = 0;
-      int alt_n = 0;
+      core_list_t(parse_match_t) alt_items = {0};
+      resolve_terms_to_matches(user_g, inner, &alt_items);
 
-      alt_n =
-          resolve_terms_to_matches(user_g, inner, &alt_items, &alt_cap, alt_n);
-
-      if (alt_n > 0) {
-        parse_add_rule_v(user_g, anon_id, alt_n, alt_items);
+      if (alt_items.len > 0) {
+        parse_add_rule_v(user_g, anon_id, (int)alt_items.len, alt_items.data);
       } else {
         parse_match_t empty = {.kind = PARSE_MATCH_EMPTY};
         parse_add_rule_v(user_g, anon_id, 1, &empty);
       }
 
-      core_free(alt_items);
+      core_list_free(alt_items);
     }
 
     parse_match_t nt_match = {
@@ -1433,43 +1398,21 @@ static int resolve_group_to_match(parse_grammar_t *user_g, bnf_group_info_t *gi,
     group_match = parse_group_match_v(user_g, min, max, 1, &nt_match);
   }
 
-  parse_match_t *items = *items_p;
-  int cap = *cap_p;
-
-  if (n >= cap) {
-    int old_cap = cap;
-    cap = cap ? cap * 2 : 8;
-    parse_match_t *new_items = core_alloc_array(parse_match_t, (size_t)cap);
-    if (items && old_cap > 0)
-      memcpy(new_items, items, (size_t)old_cap * sizeof(parse_match_t));
-    if (items)
-      core_free(items);
-    items = new_items;
-  }
-
-  items[n++] = group_match;
-  *items_p = items;
-  *cap_p = cap;
-
-  return n;
+  core_list_push(*items, group_match);
 }
 
-static int resolve_terms_to_matches(parse_grammar_t *user_g, bnf_list_t *terms,
-                                    parse_match_t **items_p, int *cap_p,
-                                    int n) {
+static void resolve_terms_to_matches(parse_grammar_t *user_g, bnf_list_t *terms,
+                                     core_list_t(parse_match_t) *items) {
   for (size_t ti = 0; ti < terms->len; ti++) {
     bnf_result_t *term_r = slist_get(terms, ti);
 
     if (term_r->tag == BNF_GROUP) {
-      n = resolve_group_to_match(user_g, (bnf_group_info_t *)term_r->data,
-                                 items_p, cap_p, n);
+      resolve_group_to_match(user_g, (bnf_group_info_t *)term_r->data, items);
     } else {
-      n = resolve_term_to_matches(user_g, (char *)term_r->data, items_p, cap_p,
-                                  n);
+      resolve_term_to_matches(user_g, (char *)term_r->data, items);
     }
   }
 
-  return n;
 }
 
 static void preflight_term(parse_grammar_t *user_g, const char *tagged) {
@@ -1723,18 +1666,16 @@ static bool populate_grammar(parse_grammar_t *user_g, bnf_result_t *result,
     for (size_t ai = 0; ai < alternatives->len; ai++) {
       bnf_result_t *alt_r = slist_get(alternatives, ai);
       bnf_list_t *terms = (bnf_list_t *)alt_r->data;
-      parse_match_t *items = nullptr;
-      int n = 0;
-      int cap = 0;
-
-      n = resolve_terms_to_matches(user_g, terms, &items, &cap, n);
+      core_list_t(parse_match_t) items = {0};
+      resolve_terms_to_matches(user_g, terms, &items);
 
       parse_rule_t *rule_p = nullptr;
 
       if (penalty_cost > 0) {
-        if (n > 0) {
+        if (items.len > 0) {
           rule_p =
-              parse_add_rule_with_cost_v(user_g, nt_id, penalty_cost, n, items);
+              parse_add_rule_with_cost_v(user_g, nt_id, penalty_cost,
+                                         (int)items.len, items.data);
         } else {
           parse_match_t empty = {.kind = PARSE_MATCH_EMPTY};
           rule_p = parse_add_rule_with_cost_v(user_g, nt_id, penalty_cost, 1,
@@ -1745,8 +1686,8 @@ static bool populate_grammar(parse_grammar_t *user_g, bnf_result_t *result,
           rule_p->penalty_rule = true;
         }
       } else {
-        if (n > 0) {
-          rule_p = parse_add_rule_v(user_g, nt_id, n, items);
+        if (items.len > 0) {
+          rule_p = parse_add_rule_v(user_g, nt_id, (int)items.len, items.data);
         } else {
           parse_match_t empty = {.kind = PARSE_MATCH_EMPTY};
           rule_p = parse_add_rule_v(user_g, nt_id, 1, &empty);
@@ -1767,7 +1708,7 @@ static bool populate_grammar(parse_grammar_t *user_g, bnf_result_t *result,
                                         : parse_annot_clone(info));
       }
 
-      core_free(items);
+      core_list_free(items);
     }
 
     slist_free(line_annots);
@@ -1944,8 +1885,8 @@ static bool parse_bnf_load_impl(core_string_t bnf_text,
     return false;
   }
 
-  bnf_result_t *result =
-      (bnf_result_t *)parse_forest_walk_best(&forest, nullptr);
+  bnf_result_t *result = (bnf_result_t *)parse_tree_walk(
+      forest.grammar, parse_forest_best(&forest), nullptr);
 
   bool success = true;
 

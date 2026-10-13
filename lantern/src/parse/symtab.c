@@ -3,6 +3,8 @@
 #include "lib/alloc.h"
 #include "lib/dict.h"
 #include "lib/hash.h"
+#include "lib/list.h"
+#include "th/typehash.h"
 
 #include <string.h>
 
@@ -10,6 +12,9 @@ typedef struct {
     int32_t      scope_id;
     core_string_t name;
 } symkey_t;
+
+typedef parse_sym_entry_t *sym_entry_ptr_t;
+core_list_decl(sym_entry_ptr_t);
 
 static core_hash_value_t
 symkey_hash(void *k)
@@ -27,41 +32,6 @@ symkey_eq(const void *a, const void *b)
     const symkey_t *kb = (const symkey_t *)b;
 
     return ka->scope_id == kb->scope_id && core_string_eq(ka->name, kb->name);
-}
-
-static core_hash_value_t
-name_key_hash(void *k)
-{
-    return core_string_hash(*(core_string_t *)k);
-}
-
-static bool
-name_key_eq(const void *a, const void *b)
-{
-    return core_string_eq(*(const core_string_t *)a, *(const core_string_t *)b);
-}
-
-static core_hash_value_t
-binding_key_hash(void *key)
-{
-    return core_string_hash(*(const core_string_t *)key);
-}
-
-static bool
-binding_key_eq(const void *a, const void *b)
-{
-    return core_string_eq(*(const core_string_t *)a,
-                          *(const core_string_t *)b);
-}
-
-static core_dict_t *
-ht_new(core_hash_fn hash, core_dict_key_eq_fn eq)
-{
-    core_dict_t *d = core_alloc(core_dict_t);
-
-    core_dict_init(d, hash, eq);
-
-    return d;
 }
 
 static parse_namespace_t *
@@ -85,6 +55,7 @@ push_scope_in(parse_symtab_t *st, parse_namespace_t *ns, core_string_t scope_nam
     memset(scope, 0, sizeof(*scope));
 
     scope->parent = ns->current;
+    scope->owner_unit = st->owner_unit;
     scope->ns     = ns;
     scope->name   = core_string_dup(scope_name);
     scope->depth  = ns->depth;
@@ -150,8 +121,12 @@ parse_symtab_new(void)
     parse_symtab_t *st = core_alloc(parse_symtab_t);
 
     memset(st, 0, sizeof(*st));
-    st->scope_by_node = ht_new(core_hash_word, nullptr);
-    st->ns_map        = ht_new(name_key_hash, name_key_eq);
+    st->scope_by_node = core_alloc(core_dict_t);
+    core_dict_init(st->scope_by_node, core_hash_word, nullptr);
+    st->ns_map = core_alloc(core_dict_t);
+    core_dict_init_string(st->ns_map);
+    st->nominal_types = core_alloc(core_dict_t);
+    core_dict_init_string(st->nominal_types);
 
     return st;
 }
@@ -159,7 +134,10 @@ parse_symtab_new(void)
 void
 parse_symtab_set_owner_unit(parse_symtab_t *st, core_translation_unit_t *unit)
 {
-    if (st) st->owner_unit = unit;
+    if (!st) return;
+    st->owner_unit = unit;
+    for (parse_scope_t *scope = st->all_scopes; scope;
+         scope = scope->all_next) scope->owner_unit = unit;
 }
 
 void
@@ -194,8 +172,7 @@ parse_symtab_free(parse_symtab_t *st)
                 core_dict_t *bindings = entry->namespaced_bindings;
                 core_dict_foreach(bindings, item) {
                     core_string_t *key = item->key;
-                    core_free(key->data);
-                    core_free(key);
+                    core_dict_string_key_free(key);
                 }
                 core_dict_free(bindings);
                 core_free(bindings);
@@ -234,6 +211,10 @@ parse_symtab_free(parse_symtab_t *st)
     core_free(st->scope_by_node);
     core_dict_free(st->ns_map);
     core_free(st->ns_map);
+    core_dict_foreach(st->nominal_types, item)
+        core_dict_string_key_free(item->key);
+    core_dict_free(st->nominal_types);
+    core_free(st->nominal_types);
     core_free(st);
 }
 
@@ -250,26 +231,21 @@ parse_symtab_ns(parse_symtab_t *st, core_string_t ns_name)
         return existing;
     }
 
-    if (st->ns_count >= st->ns_cap) {
-        int32_t           cap = st->ns_cap ? st->ns_cap * 2 : 4;
-        parse_namespace_t **arr = core_alloc_array(parse_namespace_t *, cap);
-
-        if (st->ns_count > 0) {
-            memcpy(arr, st->namespaces,
-                   (size_t)st->ns_count * sizeof(parse_namespace_t *));
-        }
-
-        core_free(st->namespaces);
-        st->namespaces = arr;
-        st->ns_cap     = cap;
-    }
+    if (st->ns_count == INT32_MAX) return nullptr;
+    void *namespaces = st->namespaces;
+    if (!core_list_reserve_raw(&namespaces, &st->ns_cap,
+                               (size_t)st->ns_count + 1,
+                               sizeof(*st->namespaces))) return nullptr;
+    st->namespaces = namespaces;
 
     parse_namespace_t *ns = core_alloc(parse_namespace_t);
 
     memset(ns, 0, sizeof(*ns));
     ns->ns_name = core_string_dup(ns_name);
-    ns->symbols = ht_new(symkey_hash, symkey_eq);
-    ns->scopes_by_lexical_id = ht_new(core_hash_word, nullptr);
+    ns->symbols = core_alloc(core_dict_t);
+    core_dict_init(ns->symbols, symkey_hash, symkey_eq);
+    ns->scopes_by_lexical_id = core_alloc(core_dict_t);
+    core_dict_init(ns->scopes_by_lexical_id, core_hash_word, nullptr);
 
     _core_dict_put(st->ns_map, &ns->ns_name, ns);
 
@@ -466,6 +442,37 @@ parse_symtab_lookup_in(parse_scope_t *scope, core_string_t name)
     return found ? (parse_sym_entry_t *)val : nullptr;
 }
 
+bool
+parse_symtab_bind_nominal_type(parse_symtab_t *st, th_type *type,
+                               parse_sym_entry_t *symbol)
+{
+    const char *name = nullptr;
+    size_t length = 0;
+    if (!st || !type || !symbol || symbol->kind != PARSE_SYM_TYPEDEF
+        || !th_named_info(th_resolve(type), &name, &length, nullptr, nullptr))
+        return false;
+    core_string_t key = core_string_borrow(name, length);
+    parse_sym_entry_t *existing = core_dict_get(st->nominal_types, &key,
+                                                nullptr);
+    if (existing) return existing == symbol;
+    core_string_t *owned = core_dict_string_key_copy(key);
+    if (!owned) return false;
+    if (core_dict_add(st->nominal_types, owned, symbol)) return true;
+    core_dict_string_key_free(owned);
+    return false;
+}
+
+parse_sym_entry_t *
+parse_symtab_nominal_type(parse_symtab_t *st, th_type *type)
+{
+    const char *name = nullptr;
+    size_t length = 0;
+    if (!st || !type || !th_named_info(th_resolve(type), &name, &length, nullptr,
+                              nullptr)) return nullptr;
+    core_string_t key = core_string_borrow(name, length);
+    return core_dict_get(st->nominal_types, &key, nullptr);
+}
+
 static parse_sym_entry_t *
 lookup_chain(parse_scope_t *scope, core_string_t name)
 {
@@ -531,7 +538,7 @@ parse_sym_set_binding(parse_sym_entry_t *symbol, core_string_t key,
     if (!bindings) {
         bindings = core_alloc(core_dict_t);
         if (!bindings) return false;
-        core_dict_init(bindings, binding_key_hash, binding_key_eq);
+        core_dict_init_string(bindings);
         symbol->namespaced_bindings = bindings;
     }
     bool found = false;
@@ -540,14 +547,7 @@ parse_sym_set_binding(parse_sym_entry_t *symbol, core_string_t key,
         core_dict_put(bindings, &key, value);
         return true;
     }
-    core_string_t *stored_key = core_alloc(core_string_t);
-    if (!stored_key) return false;
-    *stored_key = core_string_dup(key);
-    if (!stored_key->data) {
-        core_free(stored_key);
-        return false;
-    }
-    core_dict_put(bindings, stored_key, value);
+    core_dict_put(bindings, core_dict_string_key_copy(key), value);
     return true;
 }
 
@@ -584,13 +584,10 @@ symbol_add_node(parse_tree_t ***nodes, size_t *count, size_t *capacity,
     if (!node) return false;
     for (size_t i = 0; i < *count; i++)
         if ((*nodes)[i] == node) return true;
-    if (*count == *capacity) {
-        size_t next = *capacity ? *capacity * 2 : 8;
-        parse_tree_t **grown = core_realloc(*nodes, next * sizeof(**nodes));
-        if (!grown) return false;
-        *nodes = grown;
-        *capacity = next;
-    }
+    void *data = *nodes;
+    if (!core_list_reserve_raw(&data, capacity, *count + 1,
+                               sizeof(**nodes))) return false;
+    *nodes = data;
     (*nodes)[(*count)++] = node;
     return true;
 }
@@ -768,15 +765,11 @@ parse_sym_set_function_binding(parse_sym_entry_t *symbol,
             return true;
         }
     }
-    if (symbol->function_binding_count == symbol->function_binding_capacity) {
-        size_t capacity = symbol->function_binding_capacity
-            ? symbol->function_binding_capacity * 2 : 2;
-        parse_sym_function_binding_t *grown = core_realloc(
-            symbol->function_bindings, capacity * sizeof(*grown));
-        if (!grown) return false;
-        symbol->function_bindings = grown;
-        symbol->function_binding_capacity = capacity;
-    }
+    void *bindings = symbol->function_bindings;
+    if (!core_list_reserve_raw(&bindings, &symbol->function_binding_capacity,
+                               symbol->function_binding_count + 1,
+                               sizeof(*symbol->function_bindings))) return false;
+    symbol->function_bindings = bindings;
     symbol->function_bindings[symbol->function_binding_count++] =
         (parse_sym_function_binding_t){
             .phase = phase,
@@ -888,15 +881,11 @@ ensure_lifetime_range(parse_sym_entry_t *symbol, parse_sym_phase_t phase,
         if (range->phase == phase && range->function == function
             && range->binding == binding) return range;
     }
-    if (lifetime->range_count == lifetime->range_capacity) {
-        size_t capacity = lifetime->range_capacity
-            ? lifetime->range_capacity * 2 : 2;
-        parse_sym_lifetime_range_t *grown = core_realloc(
-            lifetime->ranges, capacity * sizeof(*grown));
-        if (!grown) return nullptr;
-        lifetime->ranges = grown;
-        lifetime->range_capacity = capacity;
-    }
+    void *ranges = lifetime->ranges;
+    if (!core_list_reserve_raw(&ranges, &lifetime->range_capacity,
+                               lifetime->range_count + 1,
+                               sizeof(*lifetime->ranges))) return nullptr;
+    lifetime->ranges = ranges;
     parse_sym_lifetime_range_t *range =
         &lifetime->ranges[lifetime->range_count++];
     *range = (parse_sym_lifetime_range_t){
@@ -1003,15 +992,11 @@ parse_sym_set_lifetime_end(parse_sym_entry_t *symbol,
             && old->point == end.point && old->from == end.from
             && old->to == end.to) return true;
     }
-    if (lifetime->end_count == lifetime->end_capacity) {
-        size_t capacity = lifetime->end_capacity
-            ? lifetime->end_capacity * 2 : 4;
-        parse_sym_lifetime_end_t *grown = core_realloc(
-            lifetime->ends, capacity * sizeof(*grown));
-        if (!grown) return false;
-        lifetime->ends = grown;
-        lifetime->end_capacity = capacity;
-    }
+    void *ends = lifetime->ends;
+    if (!core_list_reserve_raw(&ends, &lifetime->end_capacity,
+                               lifetime->end_count + 1,
+                               sizeof(*lifetime->ends))) return false;
+    lifetime->ends = ends;
     lifetime->ends[lifetime->end_count++] = end;
     range->end_count++;
     return true;
@@ -1047,15 +1032,11 @@ parse_sym_set_lifetime_start(parse_sym_entry_t *symbol,
             && old->binding == start.binding && old->point == start.point
             && old->at_entry == start.at_entry) return true;
     }
-    if (lifetime->start_count == lifetime->start_capacity) {
-        size_t capacity = lifetime->start_capacity
-            ? lifetime->start_capacity * 2 : 2;
-        parse_sym_lifetime_start_t *grown = core_realloc(
-            lifetime->starts, capacity * sizeof(*grown));
-        if (!grown) return false;
-        lifetime->starts = grown;
-        lifetime->start_capacity = capacity;
-    }
+    void *starts = lifetime->starts;
+    if (!core_list_reserve_raw(&starts, &lifetime->start_capacity,
+                               lifetime->start_count + 1,
+                               sizeof(*lifetime->starts))) return false;
+    lifetime->starts = starts;
     lifetime->starts[lifetime->start_count++] = start;
     range->start_count++;
     return true;
@@ -1098,15 +1079,11 @@ parse_sym_set_lifetime_edge(parse_sym_entry_t *symbol,
             return true;
         }
     }
-    if (lifetime->cfg_edge_count == lifetime->cfg_edge_capacity) {
-        size_t capacity = lifetime->cfg_edge_capacity
-            ? lifetime->cfg_edge_capacity * 2 : 4;
-        parse_sym_lifetime_edge_t *grown = core_realloc(
-            lifetime->cfg_edges, capacity * sizeof(*grown));
-        if (!grown) return false;
-        lifetime->cfg_edges = grown;
-        lifetime->cfg_edge_capacity = capacity;
-    }
+    void *edges = lifetime->cfg_edges;
+    if (!core_list_reserve_raw(&edges, &lifetime->cfg_edge_capacity,
+                               lifetime->cfg_edge_count + 1,
+                               sizeof(*lifetime->cfg_edges))) return false;
+    lifetime->cfg_edges = edges;
     lifetime->cfg_edges[lifetime->cfg_edge_count++] = edge;
     range->edge_count++;
     return true;
@@ -1125,36 +1102,36 @@ parse_sym_lifetime_edge_at(const parse_sym_entry_t *symbol, size_t index)
         ? &symbol->lifetime.cfg_edges[index] : nullptr;
 }
 
+static parse_sym_alias_t *
+find_alias(parse_sym_alias_t *items, size_t count, parse_sym_alias_t link)
+{
+    for (size_t i = 0; i < count; i++) {
+        parse_sym_alias_t *old = &items[i];
+        if (old->other == link.other && old->kind == link.kind
+            && old->derived_at == link.derived_at) return old;
+    }
+    return nullptr;
+}
+
 static bool
 append_alias(parse_sym_alias_t **items, size_t *count, size_t *capacity,
              parse_sym_alias_t link)
 {
-    for (size_t i = 0; i < *count; i++) {
-        parse_sym_alias_t *old = &(*items)[i];
-
-        if (old->other == link.other && old->kind == link.kind
-            && old->derived_at == link.derived_at) {
-            old->escapes |= link.escapes;
-            if (link.has_last_use
-                && (!old->has_last_use || link.last_use > old->last_use)) {
-                old->last_use = link.last_use;
-                old->has_last_use = true;
-            }
-            return true;
+    parse_sym_alias_t *old = find_alias(*items, *count, link);
+    if (old) {
+        old->escapes |= link.escapes;
+        if (link.has_last_use
+            && (!old->has_last_use || link.last_use > old->last_use)) {
+            old->last_use = link.last_use;
+            old->has_last_use = true;
         }
+        return true;
     }
 
-    if (*count == *capacity) {
-        size_t cap = *capacity ? *capacity * 2 : 4;
-        parse_sym_alias_t *grown = core_alloc_array(parse_sym_alias_t, cap);
-
-        if (*count) {
-            memcpy(grown, *items, *count * sizeof(*grown));
-        }
-        core_free(*items);
-        *items = grown;
-        *capacity = cap;
-    }
+    void *data = *items;
+    if (!core_list_reserve_raw(&data, capacity, *count + 1,
+                               sizeof(**items))) return false;
+    *items = data;
 
     (*items)[(*count)++] = link;
     return true;
@@ -1182,6 +1159,21 @@ parse_symtab_add_alias(parse_sym_entry_t *alias, parse_sym_entry_t *target,
         .derived_at = derived_at,
         .escapes = escapes,
     };
+
+    if (!find_alias(alias->aliases, alias->alias_count, forward)) {
+        void *data = alias->aliases;
+        if (!core_list_reserve_raw(&data, &alias->alias_capacity,
+                                   alias->alias_count + 1,
+                                   sizeof(*alias->aliases))) return false;
+        alias->aliases = data;
+    }
+    if (!find_alias(target->aliased_by, target->aliased_by_count, reverse)) {
+        void *data = target->aliased_by;
+        if (!core_list_reserve_raw(&data, &target->aliased_by_capacity,
+                                   target->aliased_by_count + 1,
+                                   sizeof(*target->aliased_by))) return false;
+        target->aliased_by = data;
+    }
 
     alias->alias_analysis_complete = false;
     target->alias_analysis_complete = false;
@@ -1213,11 +1205,10 @@ parse_symtab_update_alias_use(parse_sym_entry_t *alias,
     };
     parse_sym_alias_t reverse = use;
     reverse.other = alias;
-    append_alias(&alias->aliases, &alias->alias_count,
-                 &alias->alias_capacity, use);
-    append_alias(&target->aliased_by, &target->aliased_by_count,
-                 &target->aliased_by_capacity, reverse);
-    return true;
+    return append_alias(&alias->aliases, &alias->alias_count,
+                        &alias->alias_capacity, use)
+        && append_alias(&target->aliased_by, &target->aliased_by_count,
+                        &target->aliased_by_capacity, reverse);
 }
 
 void
@@ -1228,42 +1219,22 @@ parse_sym_set_alias_analysis_complete(parse_sym_entry_t *symbol,
 }
 
 static bool
-alias_set_contains(parse_sym_entry_t *const *symbols, size_t count,
-                   const parse_sym_entry_t *symbol)
+alias_set_add(core_list_t(sym_entry_ptr_t) *symbols, parse_sym_entry_t *symbol)
 {
-    for (size_t i = 0; i < count; i++)
-        if (symbols[i] == symbol) return true;
-    return false;
-}
-
-static bool
-alias_set_add(parse_sym_entry_t ***symbols, size_t *count, size_t *capacity,
-              parse_sym_entry_t *symbol)
-{
-    if (alias_set_contains(*symbols, *count, symbol)) return true;
-    if (*count == *capacity) {
-        size_t next = *capacity ? *capacity * 2 : 8;
-        parse_sym_entry_t **grown = core_realloc(
-            *symbols, next * sizeof(**symbols));
-        if (!grown) return false;
-        *symbols = grown;
-        *capacity = next;
-    }
-    (*symbols)[(*count)++] = symbol;
-    return true;
+    return core_option_is_set(core_list_find(*symbols, symbol))
+        || core_list_try_push(*symbols, symbol);
 }
 
 static bool
 aliases_expire_before(const parse_sym_alias_t *aliases, size_t count,
                       uint64_t point,
-                      parse_sym_entry_t ***work, size_t *work_count,
-                      size_t *work_capacity)
+                      core_list_t(sym_entry_ptr_t) *work)
 {
     for (size_t i = 0; i < count; i++) {
         const parse_sym_alias_t *alias = &aliases[i];
         if (!alias->other || alias->escapes || !alias->has_last_use
             || alias->last_use >= point
-            || !alias_set_add(work, work_count, work_capacity, alias->other)) {
+            || !alias_set_add(work, alias->other)) {
             return false;
         }
     }
@@ -1275,15 +1246,12 @@ parse_sym_can_finalize_at(const parse_sym_entry_t *symbol, uint64_t point)
 {
     if (!symbol) return false;
 
-    parse_sym_entry_t **work = nullptr;
-    size_t work_count = 0;
-    size_t work_capacity = 0;
+    core_list_t(sym_entry_ptr_t) work = {0};
     size_t next = 0;
-    bool safe = alias_set_add(&work, &work_count, &work_capacity,
-                              (parse_sym_entry_t *)symbol);
+    bool safe = alias_set_add(&work, (parse_sym_entry_t *)symbol);
 
-    while (safe && next < work_count) {
-        parse_sym_entry_t *at = work[next++];
+    while (safe && next < work.len) {
+        parse_sym_entry_t *at = work.data[next++];
         if (!at->alias_analysis_complete || at->lifetime.escapes
             || !at->lifetime.has_end
             || (at->lifetime.has_start && point < at->lifetime.start_point)
@@ -1291,14 +1259,12 @@ parse_sym_can_finalize_at(const parse_sym_entry_t *symbol, uint64_t point)
             safe = false;
             break;
         }
-        safe = aliases_expire_before(at->aliases, at->alias_count, point,
-                                     &work, &work_count, &work_capacity)
+        safe = aliases_expire_before(at->aliases, at->alias_count, point, &work)
             && aliases_expire_before(at->aliased_by, at->aliased_by_count,
-                                     point, &work, &work_count,
-                                     &work_capacity);
+                                     point, &work);
     }
 
-    core_free(work);
+    core_list_free(work);
     return safe;
 }
 

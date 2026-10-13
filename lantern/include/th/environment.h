@@ -290,9 +290,9 @@ th_env_method_status_t th_env_method_resolve(th_ctx *context, th_type *receiver,
                                              const char *trait_name,
                                              const char *method_name,
                                              th_env_method_t *method);
-/* Resolve receiver.method_name across all visible trait contracts declaring
- * that method. A function satisfying several contracts is one target; distinct
- * applicable functions or an ambiguous per-trait match return AMBIGUOUS. */
+/* Resolve receiver.method_name across visible traits implemented by receiver.
+ * The candidate with the most specific first-parameter type wins. Equivalent
+ * candidates use type-origin priority; incomparable winners are ambiguous. */
 th_env_method_status_t th_env_method_resolve_by_name(
     th_ctx *context, th_type *receiver, const char *method_name,
     th_env_method_t *method, const char **trait_name);

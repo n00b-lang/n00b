@@ -20,19 +20,6 @@ static core_list_t(literal_hook_t) hooks;
 static pthread_once_t hooks_once = PTHREAD_ONCE_INIT;
 static pthread_mutex_t hooks_lock = PTHREAD_MUTEX_INITIALIZER;
 
-static core_hash_value_t
-literal_key_hash(void *key)
-{
-    return core_string_hash(*(core_string_t *)key);
-}
-
-static bool
-literal_key_eq(const void *a, const void *b)
-{
-    return core_string_eq(*(const core_string_t *)a,
-                          *(const core_string_t *)b);
-}
-
 static void
 literal_hooks_init(void)
 {
@@ -90,7 +77,7 @@ literal_cache_clear(literal_hook_t *hook)
         core_free(value);
     }
     core_dict_free(&hook->cache);
-    core_dict_init(&hook->cache, literal_key_hash, literal_key_eq);
+    core_dict_init_string(&hook->cache);
 }
 
 static literal_hook_t *
@@ -129,7 +116,7 @@ scan_lex_literal_hook_register_pure(core_string_t name,
         .fn = fn,
         .generation = 1,
     };
-    core_dict_init(&item.cache, literal_key_hash, literal_key_eq);
+    core_dict_init_string(&item.cache);
     core_list_push(hooks, item);
     pthread_mutex_unlock(&hooks_lock);
     return true;

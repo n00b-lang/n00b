@@ -293,28 +293,6 @@ create_one_error_rule_set(parse_grammar_t *g, int32_t rule_ix)
     }
 }
 
-static core_hash_value_t
-name_key_hash(void *k)
-{
-    return core_string_hash(*(core_string_t *)k);
-}
-
-static bool
-name_key_eq(const void *a, const void *b)
-{
-    return core_string_eq(*(const core_string_t *)a, *(const core_string_t *)b);
-}
-
-static core_string_t *
-name_key(core_string_t s)
-{
-    core_string_t *k = core_alloc(core_string_t);
-
-    *k = core_string_dup(s);
-
-    return k;
-}
-
 parse_grammar_t *
 parse_grammar_new(void)
 {
@@ -326,10 +304,10 @@ parse_grammar_new(void)
     g->hide_groups           = true;
 
     g->nt_map = core_alloc(core_dict_t);
-    core_dict_init(g->nt_map, name_key_hash, name_key_eq);
+    core_dict_init_string(g->nt_map);
 
     g->terminal_map = core_alloc(core_dict_t);
-    core_dict_init(g->terminal_map, name_key_hash, name_key_eq);
+    core_dict_init_string(g->terminal_map);
 
     core_cache_init(&g->annot_cache);
     core_cache_set_enabled(&g->annot_cache, false);
@@ -417,8 +395,7 @@ parse_grammar_free(parse_grammar_t *g)
 
     if (g->nt_map) {
         core_dict_foreach (g->nt_map, e) {
-            core_free(((core_string_t *)e->key)->data);
-            core_free(e->key);
+            core_dict_string_key_free(e->key);
         }
 
         core_dict_free(g->nt_map);
@@ -426,8 +403,7 @@ parse_grammar_free(parse_grammar_t *g)
     }
     if (g->terminal_map) {
         core_dict_foreach (g->terminal_map, e) {
-            core_free(((core_string_t *)e->key)->data);
-            core_free(e->key);
+            core_dict_string_key_free(e->key);
         }
 
         core_dict_free(g->terminal_map);
@@ -485,7 +461,7 @@ parse_nonterm(parse_grammar_t *g, core_string_t name)
     core_list_push(g->nt_list, nt);
 
     if (name.data) {
-        core_string_t *key = name_key(name);
+        core_string_t *key = core_dict_string_key_copy(name);
 
         nt->name = *key;
         _core_dict_put(g->nt_map, key, (void *)(intptr_t)nt->id);
@@ -553,7 +529,7 @@ parse_register_named_terminal(parse_grammar_t *g, core_string_t name)
     core_list_push(g->named_terms, term);
 
     parse_terminal_t *stored = parse_get_terminal(g, term.id);
-    _core_dict_put(g->terminal_map, name_key(stored->value),
+    _core_dict_put(g->terminal_map, core_dict_string_key_copy(stored->value),
                   (void *)(intptr_t)stored->id);
 
     return term.id;
@@ -575,7 +551,7 @@ parse_register_terminal(parse_grammar_t *g, core_string_t name)
     if (name.u8_bytes == 1) {
         int64_t id = (int64_t)(unsigned char)name.data[0];
 
-        _core_dict_put(g->terminal_map, name_key(name),
+        _core_dict_put(g->terminal_map, core_dict_string_key_copy(name),
                       (void *)(intptr_t)id);
 
         return id;

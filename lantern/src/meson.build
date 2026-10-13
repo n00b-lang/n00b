@@ -70,6 +70,7 @@ lib_sources = files(
     'lib/indexed_table.c',
     'lib/link_unit.c',
     'lib/module.c',
+    'lib/snapshot_inventory.c',
     'lib/native_archive.c',
     'lib/object_archive.c',
     'lib/object_emit.c',
@@ -112,7 +113,6 @@ parse_sources = files(
 scanner_sources = files(
     'scanner/lex.c',
     'scanner/lex_analysis.c',
-    'scanner/lex_conformance.c',
     'scanner/lex_build.c',
     'scanner/lex_parse.c',
     'scanner/literal_hook.c',

@@ -12,6 +12,7 @@
 #include "ir/region_walk.h"
 
 #include "lib/dict.h"
+#include "lib/list.h"
 
 typedef struct {
     ir_module_t *m;
@@ -500,38 +501,29 @@ static bool typed_allocation_storage(ir_visit_t *vi)
     return false;
 }
 
+typedef ir_value_t *verify_value_ptr_t;
+typedef ir_instr_t *verify_instr_ptr_t;
+core_list_decl(verify_value_ptr_t);
+core_list_decl(verify_instr_ptr_t);
+
 typedef struct {
-    ir_value_t **pending;
-    size_t pending_count;
-    size_t pending_capacity;
-    ir_value_t **targets;
-    size_t target_count;
-    size_t target_capacity;
+    core_list_t(verify_value_ptr_t) pending;
+    core_list_t(verify_value_ptr_t) targets;
     bool external_writable;
     bool writable_projection;
     bool complete;
 } store_target_set_t;
 
-static bool store_target_add(ir_value_t ***items, size_t *count,
-                             size_t *capacity, ir_value_t *value)
+static bool store_target_add(core_list_t(verify_value_ptr_t) *items,
+                             ir_value_t *value)
 {
-    for (size_t i = 0; i < *count; i++)
-        if ((*items)[i] == value) return true;
-    if (*count == *capacity) {
-        size_t next = *capacity ? *capacity * 2 : 8;
-        ir_value_t **grown = realloc(*items, next * sizeof(*grown));
-        if (!grown) return false;
-        *items = grown;
-        *capacity = next;
-    }
-    (*items)[(*count)++] = value;
-    return true;
+    return core_option_is_set(core_list_find(*items, value))
+        || core_list_try_push(*items, value);
 }
 
 static bool store_target_enqueue(store_target_set_t *set, ir_value_t *value)
 {
-    return value && store_target_add(&set->pending, &set->pending_count,
-                                     &set->pending_capacity, value);
+    return value && store_target_add(&set->pending, value);
 }
 
 static bool store_target_carries_reference(th_type *type)
@@ -559,8 +551,7 @@ static bool store_target_enqueue_indirect(store_target_set_t *set,
 
 static bool store_target_finish(store_target_set_t *set, ir_value_t *value)
 {
-    return value && store_target_add(&set->targets, &set->target_count,
-                            &set->target_capacity, value);
+    return value && store_target_add(&set->targets, value);
 }
 
 static bool store_target_reference_is_writable(const ir_value_t *value);
@@ -623,9 +614,9 @@ static bool store_target_collect(store_target_set_t *set,
 {
     memset(set, 0, sizeof(*set));
     set->complete = store_target_enqueue(set, address);
-    for (size_t cursor = 0; set->complete && cursor < set->pending_count;
+    for (size_t cursor = 0; set->complete && cursor < set->pending.len;
          cursor++) {
-        ir_value_t *value = set->pending[cursor];
+        ir_value_t *value = set->pending.data[cursor];
         if (ir_value_has_external_writable_storage(value)) {
             set->external_writable = true;
             continue;
@@ -729,8 +720,8 @@ static bool store_target_collect(store_target_set_t *set,
 
 static void store_target_set_free(store_target_set_t *set)
 {
-    free(set->pending);
-    free(set->targets);
+    core_list_free(set->pending);
+    core_list_free(set->targets);
 }
 
 bool ir_value_visit_store_targets(const ir_value_t *address,
@@ -743,8 +734,8 @@ bool ir_value_visit_store_targets(const ir_value_t *address,
         return false;
     store_target_set_t set;
     bool complete = store_target_collect(&set, (ir_value_t *)address, false);
-    for (size_t i = 0; complete && i < set.target_count; i++)
-        complete = visitor(context, set.targets[i]);
+    for (size_t i = 0; complete && i < set.targets.len; i++)
+        complete = visitor(context, set.targets.data[i]);
     store_target_set_free(&set);
     return complete;
 }
@@ -761,8 +752,8 @@ bool ir_value_visit_store_origins(const ir_value_t *address,
         return false;
     store_target_set_t set;
     bool complete = store_target_collect(&set, (ir_value_t *)address, true);
-    for (size_t i = 0; complete && i < set.target_count; i++)
-        complete = visitor(context, set.targets[i]);
+    for (size_t i = 0; complete && i < set.targets.len; i++)
+        complete = visitor(context, set.targets.data[i]);
     store_target_set_free(&set);
     return complete;
 }
@@ -773,8 +764,8 @@ static bool store_targets_include(const ir_value_t *address,
     store_target_set_t set;
     bool complete = store_target_collect(&set, (ir_value_t *)address, false);
     bool found = false;
-    for (size_t i = 0; complete && i < set.target_count; i++)
-        found |= set.targets[i] == target;
+    for (size_t i = 0; complete && i < set.targets.len; i++)
+        found |= set.targets.data[i] == target;
     store_target_set_free(&set);
     return complete && found;
 }
@@ -873,9 +864,7 @@ static void verify_binding_initialization_events(
     if (!binding_reentry_header(v, function, graph, entry, binding,
                                 &reentry_header)) return;
 
-    ir_instr_t **events = nullptr;
-    size_t event_count = 0;
-    size_t event_capacity = 0;
+    core_list_t(verify_instr_ptr_t) events = {0};
     for (uint32_t b = 0; b < block_count; b++) {
         ir_block_t *block = function->blocks[b];
         for (uint32_t i = 0; ir_block_reachable(graph, block)
@@ -883,26 +872,17 @@ static void verify_binding_initialization_events(
             ir_instr_t *instruction = block->instrs[i];
             if (!initialization_event(instruction, binding, function, phase))
                 continue;
-            if (event_count == event_capacity) {
-                size_t capacity = event_capacity ? event_capacity * 2 : 4;
-                ir_instr_t **grown = realloc(events,
-                                              capacity * sizeof(*grown));
-                if (!grown) {
-                    broke(v, IR_DIAG_VERIFY_PHASE, instruction, block,
-                          "phase.binding-initialization-analysis",
-                          "could not analyze binding initialization paths");
-                    event_count = 0;
-                    goto done;
-                }
-                events = grown;
-                event_capacity = capacity;
+            if (!core_list_try_push(events, instruction)) {
+                broke(v, IR_DIAG_VERIFY_PHASE, instruction, block,
+                      "phase.binding-initialization-analysis",
+                      "could not analyze binding initialization paths");
+                goto done;
             }
-            events[event_count++] = instruction;
         }
     }
-    if (event_count < 2) goto done;
+    if (events.len < 2) goto done;
 
-    size_t words = (event_count + 63) / 64;
+    size_t words = (events.len + 63) / 64;
     if (block_count > SIZE_MAX / words / sizeof(uint64_t)) {
         broke(v, IR_DIAG_VERIFY_PHASE, nullptr, entry,
               "phase.binding-initialization-analysis",
@@ -954,7 +934,7 @@ static void verify_binding_initialization_events(
             }
             for (uint32_t i = 0; i < block->n_instrs; i++) {
                 ptrdiff_t event = init_event_index(block->instrs[i],
-                                                   events, event_count);
+                                                   events.data, events.len);
                 if (event < 0) continue;
                 size_t word = (size_t)event / 64;
                 uint64_t bit = UINT64_C(1) << ((size_t)event % 64);
@@ -973,8 +953,8 @@ static void verify_binding_initialization_events(
         memcpy(state, in + (size_t)b * words, words * sizeof(*state));
         for (uint32_t i = 0; i < block->n_instrs; i++) {
             ir_instr_t *instruction = block->instrs[i];
-            ptrdiff_t event = init_event_index(instruction, events,
-                                               event_count);
+            ptrdiff_t event = init_event_index(instruction, events.data,
+                                               events.len);
             if (event < 0) continue;
             size_t event_word = (size_t)event / 64;
             uint64_t event_bit = UINT64_C(1) << ((size_t)event % 64);
@@ -999,7 +979,7 @@ static void verify_binding_initialization_events(
     free(out);
     free(state);
 done:
-    free(events);
+    core_list_free(events);
 }
 
 static void verify_single_binding_initialization(V *v, ir_func_t *function)
@@ -1149,7 +1129,7 @@ static void check_store_target_write(V *v, ir_instr_t *in,
     bool complete = store_target_collect(&targets, address, false);
     bool pointer_address = address && address->type
         && th_kind_of(address->type) == TH_INDIRECTION;
-    if (!complete || (pointer_address && !targets.target_count
+    if (!complete || (pointer_address && !targets.targets.len
                       && !targets.external_writable)) {
         broke(v, IR_DIAG_VERIFY_PHASE, in, block,
               "phase.store-alias-incomplete",
@@ -1157,15 +1137,15 @@ static void check_store_target_write(V *v, ir_instr_t *in,
         store_target_set_free(&targets);
         return;
     }
-    if (!targets.target_count) {
+    if (!targets.targets.len) {
         if (!targets.external_writable)
             check_binding_write(v, in, block, address);
         store_target_set_free(&targets);
         return;
     }
 
-    for (size_t i = 0; i < targets.target_count; i++) {
-        ir_value_t *target = targets.targets[i];
+    for (size_t i = 0; i < targets.targets.len; i++) {
+        ir_value_t *target = targets.targets.data[i];
         if (target->kind == IR_VAL_GLOBAL) {
             ir_global_t *global = target->global
                 ? target->global : ir_global_find(v->m, target->name);

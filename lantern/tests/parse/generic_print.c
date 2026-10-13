@@ -244,6 +244,30 @@ test_a_comment_the_caller_marks_as_leading_is_kept(void)
     run_free(&r);
 }
 
+static void
+test_trivia_indent_places_standalone_comment_inside_delimiters(void)
+{
+    const char *grammar =
+        "<prog> @trivia_indent($1) ::= %\"{\" %\"}\"\n";
+    const char *source = "{\n# inside\n}";
+    run_t r;
+
+    if (!run(&r, grammar, "prog", source)) return;
+
+    parse_print_opts_t options = {
+        .source = core_string_borrow(source, strlen(source)),
+        .width = 80,
+        .indent = 4,
+    };
+    char *printed = parse_tree_print(r.g, r.tree, &options);
+
+    same("trivia indentation moves the comment without moving the closer",
+         printed, "{\n    # inside\n}");
+
+    core_free(printed);
+    run_free(&r);
+}
+
 static parse_tree_t *
 last_leaf(parse_tree_t *tree)
 {
@@ -507,6 +531,7 @@ main(void)
     test_a_tree_dumps_without_any_annotations();
     test_formatting_falls_back_to_one_space();
     test_annotations_win_where_they_exist();
+    test_trivia_indent_places_standalone_comment_inside_delimiters();
     test_a_comment_the_caller_marks_as_leading_is_kept();
     test_a_comment_attached_to_the_previous_token_is_kept();
     test_a_final_comment_is_printed();

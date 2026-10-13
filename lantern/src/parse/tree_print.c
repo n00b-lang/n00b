@@ -19,10 +19,12 @@ typedef enum {
 
 typedef enum {
     D_TEXT,
+    D_COMMENT,
     D_GAP,
     D_SEQ,
     D_ITEMS,
     D_NEST,
+    D_TRIVIA_NEST,
     D_ALIGN,
     D_GROUP,
 } dkind_t;
@@ -36,8 +38,10 @@ struct doc_t {
     size_t   len;
     doc_t  **kids;
     size_t   n;
+    size_t   source_indent;
     bool     empty;
     bool     rigid;
+    bool     standalone;
 };
 
 typedef doc_t *doc_ptr_t;
@@ -71,6 +75,7 @@ typedef struct {
     gap_t gap;
     bool  set;
     bool  nest;
+    bool  trivia_indent;
     bool  align;
     bool  group;
 } slot_t;
@@ -80,6 +85,7 @@ typedef struct {
     size_t  n;
     gap_t   dflt;
     bool    nest_all;
+    bool    trivia_indent_all;
     bool    align_all;
     bool    group_all;
 } layout_t;
@@ -246,6 +252,14 @@ static void layout_of(pr_t *p, parse_tree_t *node, parse_nonterm_t *nt,
             }
             else if (named) {
                 out->slot[ix].nest = true;
+            }
+            break;
+        case PARSE_ANNOT_TRIVIA_INDENT:
+            if (all) {
+                out->trivia_indent_all = true;
+            }
+            else if (named) {
+                out->slot[ix].trivia_indent = true;
             }
             break;
         case PARSE_ANNOT_ALIGN:
@@ -467,6 +481,41 @@ has_comment(parse_trivia_t *trivia)
     return false;
 }
 
+static doc_t *
+doc_comment(pr_t *p, parse_trivia_t *item)
+{
+    doc_t *d = doc_text(p, item->text.data, item->text.u8_bytes);
+    d->kind = D_COMMENT;
+    if (!p->source.data || item->end_byte > p->source.u8_bytes
+        || item->start_byte >= item->end_byte
+        || item->text.u8_bytes > item->end_byte - item->start_byte)
+        return d;
+
+    size_t comment_start = item->start_byte;
+    while (comment_start <= item->end_byte - item->text.u8_bytes
+           && memcmp(p->source.data + comment_start, item->text.data,
+                     item->text.u8_bytes)) comment_start++;
+    if (comment_start > item->end_byte - item->text.u8_bytes) return d;
+    size_t comment_end = comment_start + item->text.u8_bytes;
+    size_t line_start = comment_start;
+    while (line_start && p->source.data[line_start - 1] != '\n')
+        line_start--;
+    size_t line_end = comment_end;
+    while (line_end < p->source.u8_bytes
+           && p->source.data[line_end] != '\n') line_end++;
+    bool standalone = true;
+    for (size_t at = line_start; at < comment_start; at++)
+        if (p->source.data[at] != ' ' && p->source.data[at] != '\t')
+            standalone = false;
+    for (size_t at = comment_end; at < line_end; at++)
+        if (p->source.data[at] != ' ' && p->source.data[at] != '\t'
+            && p->source.data[at] != '\r') standalone = false;
+    d->standalone = standalone;
+    d->source_indent = comment_start - line_start;
+    d->rigid = standalone;
+    return d;
+}
+
 static void
 put_leading_trivia(pr_t *p, core_list_t(doc_ptr_t) *parts,
                    parse_trivia_t *trivia)
@@ -484,12 +533,11 @@ put_leading_trivia(pr_t *p, core_list_t(doc_ptr_t) *parts,
             continue;
         }
 
-        if (before != GAP_NONE) {
-            core_list_push(*parts, doc_gap(p, before));
-        }
-
-        core_list_push(*parts,
-                       doc_text(p, item->text.data, item->text.u8_bytes));
+        doc_t *comment = doc_comment(p, item);
+        if (before != GAP_NONE || comment->standalone)
+            core_list_push(*parts, doc_gap(p,
+                comment->standalone ? gap_max(before, GAP_HARD) : before));
+        core_list_push(*parts, comment);
         before = GAP_HARD;
     }
 
@@ -515,9 +563,10 @@ put_trailing_trivia(pr_t *p, core_list_t(doc_ptr_t) *parts,
             continue;
         }
 
-        core_list_push(*parts, doc_gap(p, before));
-        core_list_push(*parts,
-                       doc_text(p, item->text.data, item->text.u8_bytes));
+        doc_t *comment = doc_comment(p, item);
+        core_list_push(*parts, doc_gap(p,
+            comment->standalone ? gap_max(before, GAP_HARD) : before));
+        core_list_push(*parts, comment);
         before = GAP_HARD;
     }
 
@@ -644,6 +693,10 @@ static void *reduce_node(parse_reduce_t *r)
             from = wrap_child(p, &items, (int32_t)i, D_NEST, from);
         }
 
+        if (lay.slot[i].trivia_indent) {
+            from = wrap_child(p, &items, (int32_t)i, D_TRIVIA_NEST, from);
+        }
+
         if (lay.slot[i].align) {
             from = wrap_child(p, &items, (int32_t)i, D_ALIGN, from);
         }
@@ -655,6 +708,10 @@ static void *reduce_node(parse_reduce_t *r)
 
     if (lay.nest_all) {
         wrap_child(p, &items, INT32_MAX, D_NEST, 0);
+    }
+
+    if (lay.trivia_indent_all) {
+        wrap_child(p, &items, INT32_MAX, D_TRIVIA_NEST, 0);
     }
 
     if (lay.align_all) {
@@ -675,6 +732,7 @@ static void *reduce_node(parse_reduce_t *r)
 typedef struct {
     doc_t  *doc;
     int32_t ind;
+    int32_t trivia_indent;
     bool    flat;
 } rframe_t;
 
@@ -696,7 +754,7 @@ static bool fits(pr_t *p, doc_t *d, int32_t avail)
         fitframe_t *f = &p->fit.data[p->fit.len - 1];
 
         if (f->next == 0) {
-            if (f->doc->kind == D_TEXT) {
+            if (f->doc->kind == D_TEXT || f->doc->kind == D_COMMENT) {
                 avail -= (int32_t)f->doc->len;
                 ok = avail >= 0;
                 p->fit.len--;
@@ -753,6 +811,7 @@ static char *render(pr_t *p, doc_t *root)
 
         switch (f.doc->kind) {
         case D_TEXT:
+        case D_COMMENT:
             if (!f.doc->len) {
                 break;
             }
@@ -762,11 +821,14 @@ static char *render(pr_t *p, doc_t *root)
                     core_buffer_putc(out, '\n');
                 }
 
-                for (int32_t i = 0; i < nl_ind; i++) {
+                int32_t indent = f.doc->kind == D_COMMENT
+                    && f.doc->standalone
+                    ? f.ind + f.trivia_indent : nl_ind;
+                for (int32_t i = 0; i < indent; i++) {
                     core_buffer_putc(out, ' ');
                 }
 
-                col = nl_ind;
+                col = indent;
                 nl  = 0;
             }
             else {
@@ -779,9 +841,37 @@ static char *render(pr_t *p, doc_t *root)
 
             spaces = 0;
 
-            core_buffer_append(out, f.doc->text, f.doc->len);
-
-            col += (int32_t)f.doc->len;
+            if (f.doc->kind == D_COMMENT && f.doc->standalone) {
+                int32_t base = f.ind + f.trivia_indent;
+                size_t at = 0;
+                while (at < f.doc->len) {
+                    size_t end = at;
+                    while (end < f.doc->len && f.doc->text[end] != '\n')
+                        end++;
+                    core_buffer_append(out, f.doc->text + at, end - at);
+                    col += (int32_t)(end - at);
+                    if (end == f.doc->len) break;
+                    core_buffer_putc(out, '\n');
+                    col = 0;
+                    at = end + 1;
+                    size_t original = 0;
+                    while (at < f.doc->len && f.doc->text[at] == ' ') {
+                        original++;
+                        at++;
+                    }
+                    if (at < f.doc->len && f.doc->text[at] != '\n') {
+                        size_t relative = original > f.doc->source_indent
+                            ? original - f.doc->source_indent : 0;
+                        for (size_t i = 0; i < (size_t)base + relative; i++)
+                            core_buffer_putc(out, ' ');
+                        col = base + (int32_t)relative;
+                    }
+                }
+            }
+            else {
+                core_buffer_append(out, f.doc->text, f.doc->len);
+                col += (int32_t)f.doc->len;
+            }
             started = true;
             break;
 
@@ -824,6 +914,7 @@ static char *render(pr_t *p, doc_t *root)
             for (size_t i = f.doc->n; i-- > 0;) {
                 core_list_push(stack, ((rframe_t){.doc  = f.doc->kids[i],
                                                  .ind  = f.ind,
+                                                 .trivia_indent = f.trivia_indent,
                                                  .flat = f.flat}));
             }
             break;
@@ -831,7 +922,16 @@ static char *render(pr_t *p, doc_t *root)
         case D_NEST:
             core_list_push(stack, ((rframe_t){.doc  = f.doc->kids[0],
                                              .ind  = f.ind + p->indent,
+                                             .trivia_indent = f.trivia_indent,
                                              .flat = f.flat}));
+            break;
+
+        case D_TRIVIA_NEST:
+            /* Keep delimiters in place while indenting their comments. */
+            core_list_push(stack, ((rframe_t){
+                .doc = f.doc->kids[0], .ind = f.ind,
+                .trivia_indent = f.trivia_indent + p->indent,
+                .flat = f.flat}));
             break;
 
         case D_ALIGN: {
@@ -839,6 +939,7 @@ static char *render(pr_t *p, doc_t *root)
 
             core_list_push(stack, ((rframe_t){.doc  = f.doc->kids[0],
                                              .ind  = at,
+                                             .trivia_indent = f.trivia_indent,
                                              .flat = f.flat}));
             break;
         }
@@ -854,6 +955,7 @@ static char *render(pr_t *p, doc_t *root)
 
             core_list_push(stack, ((rframe_t){.doc  = f.doc->kids[0],
                                              .ind  = f.ind,
+                                             .trivia_indent = f.trivia_indent,
                                              .flat = flat}));
             break;
         }
