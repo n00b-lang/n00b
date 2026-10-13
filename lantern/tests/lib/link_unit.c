@@ -140,6 +140,24 @@ test_link_unit_closure_and_linkage(void)
                   link, &root_a, &call_site_one, 1) == nullptr
               && core_link_unit_reference_count_at(
                   link, &root_a, &call_site_two) == 1);
+    core_link_reference_t *site_one_second = nullptr;
+    core_link_declaration_t *other_definition = nullptr;
+    check("source references keep insertion order when a site gains a target",
+          core_link_unit_define(link, &shared,
+              CORE_STRING_STATIC("type.Other"), &shared_type,
+              CORE_LINK_PAYLOAD_BORROWED, nullptr, &other_definition)
+              && core_link_unit_reference_at(link, &root_a, &call_site_one,
+              CORE_STRING_STATIC("pkg.shared"),
+              CORE_STRING_STATIC("type.Other"), &site_one_second)
+              && site_one_second != site_one
+              && core_link_unit_reference_count_at(link, &root_a,
+                  &call_site_one) == 2
+              && core_link_unit_reference_at_use_site(link, &root_a,
+                  &call_site_one, 0) == site_one
+              && core_link_unit_reference_at_use_site(link, &root_a,
+                  &call_site_one, 1) == site_one_second
+              && core_link_unit_reference_at_use_site(link, &root_a,
+                  &call_site_one, 2) == nullptr);
     check("frontend lexical scope is retained opaquely on a reference",
           core_link_unit_reference_at_scoped_kind(link, &root_a,
               &scoped_call_site, &lexical_scope,
@@ -217,12 +235,14 @@ test_link_unit_closure_and_linkage(void)
               && core_link_reference_target(to_library) == external
               && !core_link_unit_has_fatal_diagnostics(link));
     check("validated use-site references are enumerable by stable handle",
-          core_link_unit_reference_count(link) == 6
+          core_link_unit_reference_count(link) == 7
               && core_link_unit_reference_at_index(link, 2) == site_one
               && core_link_unit_reference_at_index(link, 3) == site_two
-              && core_link_unit_reference_at_index(link, 4) == scoped_site
-              && core_link_unit_reference_at_index(link, 6) == nullptr
+              && core_link_unit_reference_at_index(link, 4) == site_one_second
+              && core_link_unit_reference_at_index(link, 5) == scoped_site
+              && core_link_unit_reference_at_index(link, 7) == nullptr
               && core_link_reference_target(site_one) == definition
+              && core_link_reference_target(site_one_second) == other_definition
               && core_link_reference_target(site_two) == definition);
     check("incompatible artifact versions become link diagnostics",
           !core_link_unit_require_artifact(link,

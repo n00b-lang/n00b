@@ -150,7 +150,28 @@ struct core_link_reference_t {
     core_diag_location_t source_location;
     core_string_t provenance;
     core_link_declaration_t *target;
+    core_link_reference_t *next_at_site;
+    core_link_reference_t *last_at_site;
+    size_t count_at_site;
 };
+
+static core_hash_value_t
+reference_site_hash(void *opaque)
+{
+    const core_link_reference_t *reference = opaque;
+    uintptr_t fields[] = {
+        (uintptr_t)reference->referrer, (uintptr_t)reference->use_site,
+    };
+    return core_hash_raw(fields, sizeof fields);
+}
+
+static bool
+reference_site_eq(const void *left, const void *right)
+{
+    const core_link_reference_t *a = left;
+    const core_link_reference_t *b = right;
+    return a->referrer == b->referrer && a->use_site == b->use_site;
+}
 
 struct core_link_unit_t {
     core_translation_unit_t **roots;
@@ -172,6 +193,7 @@ struct core_link_unit_t {
     core_link_reference_t **references;
     size_t reference_count;
     size_t reference_capacity;
+    core_dict_t reference_index;
     core_link_artifact_t *artifacts;
     size_t artifact_count;
     size_t artifact_capacity;
@@ -586,6 +608,8 @@ core_link_unit_new(void)
 {
     core_link_unit_t *link = core_alloc(core_link_unit_t);
     *link = (core_link_unit_t){.diagnostics = core_diagnostics_new()};
+    core_dict_init(&link->reference_index, reference_site_hash,
+                   reference_site_eq);
     return link;
 }
 
@@ -594,6 +618,7 @@ core_link_unit_free(core_link_unit_t *link)
 {
     if (!link) return;
     clear_dependency_index(link);
+    core_dict_free(&link->reference_index);
     for (size_t i = 0; i < link->declaration_count; i++) {
         core_link_declaration_t *decl = link->declarations[i];
         if (decl->ownership == CORE_LINK_PAYLOAD_OWNED)
@@ -1483,11 +1508,15 @@ reference_at_internal(core_link_unit_t *link,
             && (!target_module.data || !target_module.u8_bytes
                 || !declaration_key.data || !declaration_key.u8_bytes)))
         return false;
-    for (size_t i = 0; !add_distinct && i < link->reference_count; i++) {
-        core_link_reference_t *prior = link->references[i];
-        if (prior->referrer == referrer
-            && prior->use_site == use_site
-            && core_string_eq(prior->target_module, target_module)
+    core_link_reference_t site_key = {
+        .referrer = referrer, .use_site = use_site,
+    };
+    bool found = false;
+    core_link_reference_t *first = core_dict_get(&link->reference_index,
+                                                 &site_key, &found);
+    for (core_link_reference_t *prior = add_distinct || !found
+             ? nullptr : first; prior; prior = prior->next_at_site) {
+        if (core_string_eq(prior->target_module, target_module)
             && core_string_eq(prior->declaration_key, declaration_key)) {
             if (prior->source_scope != source_scope
                 || prior->has_expected_kind != has_expected_kind
@@ -1516,6 +1545,15 @@ reference_at_internal(core_link_unit_t *link,
     grow_array((void **)&link->references, &link->reference_capacity,
                link->reference_count + 1, sizeof(*link->references));
     link->references[link->reference_count++] = ref;
+    if (found) {
+        first->last_at_site->next_at_site = ref;
+        first->last_at_site = ref;
+        first->count_at_site++;
+    } else {
+        ref->last_at_site = ref;
+        ref->count_at_site = 1;
+        core_dict_add(&link->reference_index, ref, ref);
+    }
     link->validated = false;
     if (out) *out = ref;
     return true;
@@ -1591,13 +1629,14 @@ core_link_unit_reference_count_at(const core_link_unit_t *link,
                                   const void *use_site)
 {
     if (!link || !referrer || !use_site) return 0;
-    size_t count = 0;
-    for (size_t i = 0; i < link->reference_count; i++) {
-        core_link_reference_t *reference = link->references[i];
-        if (reference->referrer == referrer
-            && reference->use_site == use_site) count++;
-    }
-    return count;
+    core_link_reference_t site_key = {
+        .referrer = (core_translation_unit_t *)referrer,
+        .use_site = use_site,
+    };
+    bool found = false;
+    core_link_reference_t *first = core_dict_get(
+        (core_dict_t *)&link->reference_index, &site_key, &found);
+    return found ? first->count_at_site : 0;
 }
 
 core_link_reference_t *
@@ -1606,10 +1645,15 @@ core_link_unit_reference_at_use_site(const core_link_unit_t *link,
                                      const void *use_site, size_t index)
 {
     if (!link || !referrer || !use_site) return nullptr;
-    for (size_t i = 0; i < link->reference_count; i++) {
-        core_link_reference_t *reference = link->references[i];
-        if (reference->referrer != referrer
-            || reference->use_site != use_site) continue;
+    core_link_reference_t site_key = {
+        .referrer = (core_translation_unit_t *)referrer,
+        .use_site = use_site,
+    };
+    bool found = false;
+    core_link_reference_t *first = core_dict_get(
+        (core_dict_t *)&link->reference_index, &site_key, &found);
+    for (core_link_reference_t *reference = found ? first : nullptr;
+         reference; reference = reference->next_at_site) {
         if (!index--) return reference;
     }
     return nullptr;
