@@ -1,0 +1,2 @@
+error[E0101]: duplicate declaration: `A`
+  --> tests/check/duplicate.writ:4:1

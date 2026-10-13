@@ -1,0 +1,2 @@
+error[E0203]: expressions may only call functions declared pure: `size_of`
+  --> tests/check/not_pure.writ:6:16

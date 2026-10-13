@@ -1,0 +1,4 @@
+WRIT_CHECK(out_arrays_bounded, "6.1")
+WRIT_CHECK(bounded_extent_cell, "6.1")
+WRIT_CHECK(extents_integer, "6.1")
+WRIT_CHECK(sizing_has_output, "6.1")

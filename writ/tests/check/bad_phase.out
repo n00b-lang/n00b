@@ -1,0 +1,4 @@
+error[E0201]: `.in` and `.out` apply only to inout parameters
+  --> tests/check/bad_phase.writ:3:25
+error[E0201]: `.in` and `.out` apply only to inout parameters
+  --> tests/check/bad_phase.writ:3:35

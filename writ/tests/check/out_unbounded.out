@@ -1,0 +1,2 @@
+error[E0205]: an out array needs `cap ..., len ...`
+  --> tests/check/out_unbounded.writ:3:6

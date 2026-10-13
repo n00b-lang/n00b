@@ -1,0 +1,3 @@
+library broken
+
+fn f(x: c_nope) -> c_int

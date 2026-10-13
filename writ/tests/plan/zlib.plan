@@ -1,0 +1,62 @@
+plan compressBound
+item 0 sourceLen input scalar none
+item 1 result result scalar none
+slot 0 value whole sourceLen
+slot 1 value whole result
+prepare   pass           sourceLen -> s0
+attempt   call           fixed
+classify  ok: success
+ok        lift_value     ret -> result
+
+plan compress2
+item 0 dest result bytes caller_owns
+item 1 source input bytes borrowed
+item 2 level input scalar none
+item 3 status error_detail scalar none
+slot 0 out_pointer pointer dest
+slot 1 inout_pointer capacity_and_length dest
+slot 2 in_pointer pointer source
+slot 3 value length source
+slot 4 value whole level
+slot 5 value whole -
+local 0 buffer u8 dest
+local 1 cell c_ulong dest
+prepare   check          source fits s3
+          split          source -> s2, s3
+          pass           level -> s4
+attempt   alloc_out      dest -> L0, cap compressBound(s3)
+          pass           cap(L0) -> L1
+          bind_out       L0 -> s0
+          bind_out       L1 -> s1
+          call           fixed
+classify  error: failure when (ret != 0)
+          ok: success
+error     fetch_detail   ret -> status
+ok        lift_buffer    L0 -> dest, len L1
+finally   release_local  L0 unless handed over
+
+plan uncompress
+item 0 dest result bytes caller_owns
+item 1 dest_capacity input scalar none
+item 2 source input bytes borrowed
+item 3 status error_detail scalar none
+slot 0 out_pointer pointer dest
+slot 1 inout_pointer capacity_and_length dest
+slot 2 in_pointer pointer source
+slot 3 value length source
+slot 4 value whole -
+local 0 buffer u8 dest
+local 1 cell c_ulong dest
+prepare   check          source fits s3
+          split          source -> s2, s3
+attempt   alloc_out      dest -> L0, cap dest_capacity
+          pass           cap(L0) -> L1
+          bind_out       L0 -> s0
+          bind_out       L1 -> s1
+          call           fixed
+classify  error: failure when (ret != 0)
+          ok: success
+error     fetch_detail   ret -> status
+ok        lift_buffer    L0 -> dest, len L1
+finally   release_local  L0 unless handed over
+

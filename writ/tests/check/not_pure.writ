@@ -1,0 +1,6 @@
+library broken
+
+fn size_of(n: c_ulong) -> c_ulong
+
+fn fill(buf: out *[u8; cap len.in, len len.out], len: inout *c_ulong) -> c_int
+  sizing needs size_of(8)
