@@ -938,6 +938,7 @@ typedef struct {
     core_list_t(n00bb_package_declaration_t) package_declarations;
     core_list_t(n00bb_import_alias_t) import_aliases;
     core_list_t(n00bb_link_use_site_t) link_use_sites;
+    core_dict_t first_link_use_site_by_node;
     core_dict_t ordered_child_nodes;
     core_dict_t static_literal_nodes;
     core_dict_t literal_sites;
@@ -1456,6 +1457,7 @@ free_tu_state(void *data)
         for (size_t i = 0; i < state->link_use_sites.len; i++)
             core_free(state->link_use_sites.data[i].trait_path_parts);
         core_list_free(state->link_use_sites);
+        core_dict_free(&state->first_link_use_site_by_node);
         core_list_free(state->module_top_level_statements);
         core_list_free(state->array_type_nodes);
         core_list_free(state->selected_when_bodies);
@@ -8742,10 +8744,20 @@ static n00bb_link_use_site_t *
 link_use_site_for_node(n00bb_tu_state_t *state, parse_tree_t *node)
 {
     if (!state || !node) return nullptr;
-    for (size_t i = 0; i < state->link_use_sites.len; i++)
-        if (state->link_use_sites.data[i].node == node)
-            return &state->link_use_sites.data[i];
-    return nullptr;
+    uintptr_t slot = (uintptr_t)core_dict_get(
+        &state->first_link_use_site_by_node, node, nullptr);
+    return slot ? &state->link_use_sites.data[slot - 1] : nullptr;
+}
+
+static void
+append_link_use_site(n00bb_tu_state_t *state, n00bb_link_use_site_t site)
+{
+    size_t index = state->link_use_sites.len;
+    core_list_push(state->link_use_sites, site);
+    if (!core_dict_get(&state->first_link_use_site_by_node, site.node,
+                       nullptr))
+        core_dict_put(&state->first_link_use_site_by_node, site.node,
+                      index + 1);
 }
 
 static n00bb_link_use_site_t *
@@ -30306,8 +30318,7 @@ remember_link_use_site(parse_grammar_t *grammar,
         && !constructor_call
         && !dotted_path && !type_reference && !index_dispatch
         && !operator_dispatch) return;
-    for (size_t i = 0; i < state->link_use_sites.len; i++)
-        if (state->link_use_sites.data[i].node == node) return;
+    if (link_use_site_for_node(state, node)) return;
     core_string_t member_name = dotted_path
         ? first_token_text(core_tree_child(node, 2))
         : type_reference ? bare_type_reference_name(grammar, node)
@@ -30369,7 +30380,7 @@ remember_link_use_site(parse_grammar_t *grammar,
                                  .in_module_initializer =
                                      is_module_initializer_use(grammar, node,
                                                                initializer_owner)};
-    core_list_push(state->link_use_sites, use_site);
+    append_link_use_site(state, use_site);
     if (index_dispatch
         && (index_is_compound_target(grammar, node)
             || index_is_copyout_argument(grammar, unit, node))
@@ -30381,7 +30392,7 @@ remember_link_use_site(parse_grammar_t *grammar,
         use_site.dispatch_method = CORE_STRING_STATIC("__write");
         use_site.resolved_trait_name = nullptr;
         use_site.secondary_dispatch = true;
-        core_list_push(state->link_use_sites, use_site);
+        append_link_use_site(state, use_site);
     }
 }
 
@@ -48312,15 +48323,15 @@ cache_iteration_plan(parse_grammar_t *grammar,
         .semantic_dispatch = true,
     };
     plan->iter_site = state->link_use_sites.len;
-    core_list_push(state->link_use_sites, site);
+    append_link_use_site(state, site);
     site.dispatch_trait = CORE_STRING_STATIC("Iterator");
     site.dispatch_method = CORE_STRING_STATIC("next");
     site.dispatch_receiver_type = cursor_type;
     plan->next_site = state->link_use_sites.len;
-    core_list_push(state->link_use_sites, site);
+    append_link_use_site(state, site);
     site.dispatch_method = CORE_STRING_STATIC("cleanup");
     plan->cleanup_site = state->link_use_sites.len;
-    core_list_push(state->link_use_sites, site);
+    append_link_use_site(state, site);
     plan->cursor_type = cursor_type;
     plan->item_type = item_type;
     core_dict_put(&state->iteration_plans, loop, plan);
@@ -48616,7 +48627,7 @@ infer_callback_expression_type(parse_grammar_t *grammar,
                     grammar, node, module_variable_initializer_owner(
                         grammar, state->annotations->symtab, node)),
             };
-            if (valid) core_list_push(state->link_use_sites, site);
+            if (valid) append_link_use_site(state, site);
         }
     }
     core_list_free(positional);
@@ -52434,6 +52445,8 @@ process_locate_job(locate_worker_context_t *context, core_work_job_t *job)
             memset(state, 0, sizeof(*state));
             core_arena_init(&state->semantic_values, 1024);
             state->link_use_sites = core_list_new(n00bb_link_use_site_t);
+            core_dict_init(&state->first_link_use_site_by_node, nullptr,
+                           nullptr);
             state->module_top_level_statements =
                 core_list_new(parse_tree_ptr_t);
             state->array_type_nodes = core_list_new(parse_tree_ptr_t);
