@@ -973,6 +973,11 @@ uint64_t ir_type_id(ir_module_t *m, th_type *t)
         return 0;
     }
 
+    core_dict_t *ix = (core_dict_t *)m->id_index;
+    bool found = false;
+    size_t at = ix ? (size_t)(uintptr_t)core_dict_get(ix, t, &found) : 0;
+    if (found) return m->ids[at - 1];
+
     // Open types retain their free-variable identities, not just their
     // alpha-equivalent shape. Recompute after variables are unified.
     if (!th_is_closed(m->ctx->types, t)) {
@@ -986,17 +991,10 @@ uint64_t ir_type_id(ir_module_t *m, th_type *t)
         return h;
     }
 
-    core_dict_t *ix = index_of(m->ctx, &m->id_index, core_hash_word, nullptr);
+    ix = index_of(m->ctx, &m->id_index, core_hash_word, nullptr);
 
     if (!ix) {
         return th_hash(m->ctx->types, t);
-    }
-
-    bool   found = false;
-    size_t at    = (size_t)(uintptr_t)core_dict_get(ix, t, &found);
-
-    if (found) {
-        return m->ids[at - 1];
     }
 
     m->ids = ir_grow(m->ctx, m->ids, &m->cap_ids, m->n_ids + 1,

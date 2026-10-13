@@ -94,6 +94,17 @@ int main(void)
     check("the type target is reachable from the umbrella header",
           ir_type_parse(m, "(i32, *u8) -> bool") != nullptr);
 
+    th_ctx *types = ir_module_types(m);
+    th_type *open_type = th_var(types);
+    th_type *closed_type = ir_type_parse(m, "i32");
+    uint64_t open_id = ir_type_id(m, open_type);
+    uint64_t closed_id = ir_type_id(m, closed_type);
+    check("closed type IDs remain cached", closed_id
+          && ir_type_id(m, closed_type) == closed_id);
+    check("open type IDs refine after unification", open_id
+          && th_unify_in_place(types, open_type, closed_type)
+          && ir_type_id(m, open_type) == closed_id);
+
     size_t np    = ir_tree_pass_count();
     bool   named = np > 0;
     bool   saw_symcheck = false, saw_type_diags = false;
