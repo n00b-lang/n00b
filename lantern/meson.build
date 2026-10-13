@@ -5,6 +5,7 @@ project(
     license: 'MIT',
     meson_version: '>=1.1.0',
     default_options: [
+        'buildtype=debugoptimized',
         'c_std=c2x',
         'warning_level=2',
         'default_library=static',
