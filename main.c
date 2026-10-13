@@ -54571,13 +54571,18 @@ record_symbol_cfg_liveness(parse_sym_entry_t *symbol,
         symbol, value, function, phase, &start_count);
     facts->cfg_liveness_start_points += start_count;
     if (!complete) facts->cfg_liveness_missing_starts++;
+    ir_liveness_query_t *query = ir_liveness_query_new(value);
+    if (!query) {
+        facts->cfg_liveness_complete = false;
+        return false;
+    }
     n00bb_lifetime_endpoint_context_t endpoint_context = {
         .symbol = symbol,
         .phase = phase,
         .facts = facts,
     };
-    if (!ir_value_visit_lifetime_endpoints(
-            value, record_symbol_lifetime_endpoint, &endpoint_context))
+    if (!ir_liveness_query_visit_endpoints(
+            query, record_symbol_lifetime_endpoint, &endpoint_context))
         complete = false;
     size_t edge_count = 0;
     for (uint32_t b = 0; b < function->n_blocks; b++) {
@@ -54590,7 +54595,7 @@ record_symbol_cfg_liveness(parse_sym_entry_t *symbol,
         }
         uint32_t successors = ir_succ_count(terminator);
         ir_liveness_t after_terminator =
-            ir_value_alias_liveness_after(value, terminator);
+            ir_liveness_query_alias_after(query, terminator);
         for (uint32_t s = 0; s < successors; s++) {
             ir_block_t *target = ir_succ_at(terminator, s);
             if (!target) {
@@ -54606,7 +54611,7 @@ record_symbol_cfg_liveness(parse_sym_entry_t *symbol,
                 .direct = parse_liveness_state(
                     ir_value_liveness_on_edge(value, block, target)),
                 .aliases = parse_liveness_state(
-                    ir_value_alias_liveness_on_edge(value, block, target)),
+                    ir_liveness_query_alias_on_edge(query, block, target)),
             };
             edge.ends_live_range = after_terminator == IR_LIVENESS_LIVE
                 && edge.aliases == PARSE_SYM_LIVENESS_DEAD;
@@ -54638,7 +54643,7 @@ record_symbol_cfg_liveness(parse_sym_entry_t *symbol,
                 .direct = parse_liveness_state(
                     ir_value_liveness_after(value, terminator)),
                 .aliases = parse_liveness_state(
-                    ir_value_alias_liveness_after(value, terminator)),
+                    ir_liveness_query_alias_after(query, terminator)),
                 .is_exit = true,
             };
             edge.ends_live_range =
@@ -54665,6 +54670,7 @@ record_symbol_cfg_liveness(parse_sym_entry_t *symbol,
     }
     facts->cfg_liveness_edges += edge_count;
     facts->cfg_liveness_complete &= complete;
+    ir_liveness_query_free(query);
     bool range_complete = complete && edge_count != 0;
     bool range_recorded = parse_sym_finish_lifetime_range(
         symbol, phase, function, value, range_complete);
