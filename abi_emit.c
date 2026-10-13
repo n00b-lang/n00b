@@ -1137,6 +1137,8 @@ append_imported_type_requirements(
         th_type *graph_type = n00bb_abi_type_index_at(index, i);
         parse_sym_entry_t *owner = graph_type
             ? type_owner(type_owner_context, graph_type) : nullptr;
+        if (owner && parse_sym_binding(owner,
+                CORE_STRING_STATIC("n00bb.builtin-type"))) continue;
         if (!owner || (!owner->decl_node && !owner->owner_unit)) continue;
         uint32_t declaration_index;
         if (!owner->type || !n00bb_abi_type_index_find(index, owner->type,
@@ -1159,15 +1161,29 @@ append_imported_type_requirements(
                 && (!node_source(source_context, owner->decl_node,
                         &declaring_unit, &declaring_tokens)
                     || !declaring_tokens))
-            || !declaring_unit || declaring_unit == unit || !owner->name.data
+            || !declaring_unit || !owner->name.data
             || !owner->name.u8_bytes || !owner->phases) {
+            core_buffer_t message = {0};
+            core_buffer_printf(&message,
+                "imported type '%.*s' has no source owner (owner=%.*s, current=%.*s, declaration=%s, phases=%u)",
+                (int)owner->name.u8_bytes,
+                owner->name.data ? owner->name.data : "",
+                declaring_unit
+                    ? (int)declaring_unit->module.identifier.u8_bytes : 0,
+                declaring_unit
+                    ? declaring_unit->module.identifier.data : "",
+                (int)unit->module.identifier.u8_bytes,
+                unit->module.identifier.data,
+                owner->decl_node ? "present" : "missing",
+                (unsigned)owner->phases);
             core_diagnostics_report(core_translation_unit_diagnostics(
                 (core_translation_unit_t *)unit), (core_translation_unit_t *)unit,
                 CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-B0007"),
-                CORE_STRING_STATIC(
-                    "imported type declaration has no source owner"));
+                core_string_borrow(message.data, message.byte_len));
+            core_buffer_release(&message);
             return false;
         }
+        if (declaring_unit == unit) continue;
         core_buffer_t path = {0};
         core_buffer_append(&path, declaring_unit->module.identifier.data,
             declaring_unit->module.identifier.u8_bytes);
@@ -1904,8 +1920,27 @@ n00bb_abi_emit_unit(
         && ABI_STAGE("trait methods",
             n00bb_abi_trait_method_rows_build(type_index, &type_rows,
                 declarations, th_ctx_environment(ir_module_types(
-                    (ir_module_t *)runtime_ir)), &trait_method_rows))
-        && ABI_STAGE("type constraints",
+                    (ir_module_t *)runtime_ir)), &trait_method_rows));
+    if (valid) {
+        failed_stage = "imported type requirements";
+        valid = type_rows.count <= UINT32_MAX - import_count - 1
+            && reference_count <= UINT32_MAX - import_count - type_rows.count - 1
+            && type_rows.count <= (SIZE_MAX / sizeof(*requirements))
+                - import_count - 1
+            && reference_count <= (SIZE_MAX / sizeof(*requirements))
+                - import_count - type_rows.count - 1;
+        if (valid) {
+            requirements = core_realloc(requirements,
+                (import_count + type_rows.count + reference_count + 1)
+                    * sizeof(*requirements));
+            valid = append_imported_type_requirements(type_index,
+                ir_module_types((ir_module_t *)runtime_ir), &type_rows,
+                unit, node_source, source_context,
+                type_owner, type_owner_context, pool, requirements,
+                &requirement_count);
+        }
+    }
+    valid = valid && ABI_STAGE("type constraints",
             n00bb_abi_constraint_rows_build(type_index, &type_rows,
                 declarations, &function_rows, pool,
                 prefix_stream_count + (uint32_t)components.count
@@ -1948,27 +1983,11 @@ n00bb_abi_emit_unit(
                 &trait_method_rows, (uint32_t)method_stream_base);
     }
     if (valid) {
-        failed_stage = "imported type and variable requirements";
-        valid = type_rows.count <= UINT32_MAX - import_count - 1
-            && reference_count <= UINT32_MAX - import_count - type_rows.count - 1
-            && type_rows.count <= (SIZE_MAX / sizeof(*requirements))
-                - import_count - 1
-            && reference_count <= (SIZE_MAX / sizeof(*requirements))
-                - import_count - type_rows.count - 1;
-        if (valid) {
-            requirements = core_realloc(requirements,
-                (import_count + type_rows.count + reference_count + 1)
-                    * sizeof(*requirements));
-            valid = append_imported_type_requirements(type_index,
-                ir_module_types((ir_module_t *)runtime_ir), &type_rows,
-                unit, node_source, source_context,
-                type_owner, type_owner_context, pool, requirements,
-                &requirement_count)
-                && append_imported_symbol_requirements(link, unit,
-                    type_index, ir_module_types((ir_module_t *)runtime_ir),
-                    &type_rows, pool, requirements, &requirement_count,
-                    N00B_ABI_SYMBOL_VARIABLE);
-        }
+        failed_stage = "imported variable requirements";
+        valid = append_imported_symbol_requirements(link, unit,
+            type_index, ir_module_types((ir_module_t *)runtime_ir),
+            &type_rows, pool, requirements, &requirement_count,
+            N00B_ABI_SYMBOL_VARIABLE);
     }
     if (valid && !n00bb_abi_type_variables_validate(&type_rows,
                                                     &typevar_failure)) {

@@ -51174,6 +51174,8 @@ semantic_annotate_import_closure(annotation_context_t *context,
     parse_tree_t *tree = lex && lex->parser
         ? parse_pwz_get_tree(lex->parser) : nullptr;
     if (!tree) return false;
+    double annotation_start = getenv("N00BB_PROFILE_COMPILE")
+        ? n00bb_profile_seconds() : 0;
     semantic_annotate_tree(context, unit, tree, nullptr, 0, -1, false,
                            nullptr);
     if (!resolve_forward_literal_sites(unit, state)) return false;
@@ -51194,6 +51196,11 @@ semantic_annotate_import_closure(annotation_context_t *context,
     if (!initialize_unit_package_interfaces(unit)
         || !populate_unit_package_interfaces(unit))
         return false;
+    if (annotation_start)
+        fprintf(stderr, "PROFILE annotate-module %.*s %.3f\n",
+            (int)unit->module.identifier.u8_bytes,
+            unit->module.identifier.data,
+            n00bb_profile_seconds() - annotation_start);
     state->semantic_annotation_complete = true;
     return true;
 }
@@ -53898,6 +53905,9 @@ n00bb_link_stage_semantics(core_link_unit_t *link, uint32_t stage_kind,
                 CORE_STRING_STATIC("could not populate canonical symbol shapes"));
             return CORE_LINK_STAGE_RESULT_FAILED;
         }
+    if (getenv("N00BB_PROFILE_COMPILE"))
+        fprintf(stderr, "PROFILE semantics-shapes-initial %.3f\n",
+            n00bb_profile_seconds() - profile_start);
 
     th_env *environment = build_import_environment(analysis->grammar,
                                                    link, analysis);
@@ -53910,6 +53920,9 @@ n00bb_link_stage_semantics(core_link_unit_t *link, uint32_t stage_kind,
                 CORE_STRING_STATIC("could not build the link-unit type environment"));
         return CORE_LINK_STAGE_RESULT_FAILED;
     }
+    if (getenv("N00BB_PROFILE_COMPILE"))
+        fprintf(stderr, "PROFILE semantics-environment %.3f\n",
+            n00bb_profile_seconds() - profile_start);
     if (!generalize_link_unit(analysis->grammar, link, units)) {
         if (!call_units_failed(units->data, units->len))
             core_diagnostics_report(core_translation_unit_diagnostics(
@@ -53939,6 +53952,9 @@ n00bb_link_stage_semantics(core_link_unit_t *link, uint32_t stage_kind,
         th_env_free(environment);
         return CORE_LINK_STAGE_RESULT_FAILED;
     }
+    if (getenv("N00BB_PROFILE_COMPILE"))
+        fprintf(stderr, "PROFILE semantics-first-unify %.3f\n",
+            n00bb_profile_seconds() - profile_start);
     for (size_t i = 0; i < units->len; i++)
         if (!resolve_for_binding_types(analysis->grammar, analysis,
                                        units->data[i])) {
@@ -53953,6 +53969,9 @@ n00bb_link_stage_semantics(core_link_unit_t *link, uint32_t stage_kind,
         th_env_free(environment);
         return CORE_LINK_STAGE_RESULT_FAILED;
     }
+    if (getenv("N00BB_PROFILE_COMPILE"))
+        fprintf(stderr, "PROFILE semantics-for-binding %.3f\n",
+            n00bb_profile_seconds() - profile_start);
     if (!diagnose_known_missing_record_fields(analysis)) {
         th_env_free(environment);
         return CORE_LINK_STAGE_RESULT_FAILED;
@@ -53965,6 +53984,9 @@ n00bb_link_stage_semantics(core_link_unit_t *link, uint32_t stage_kind,
         th_env_free(environment);
         return CORE_LINK_STAGE_RESULT_FAILED;
     }
+    if (getenv("N00BB_PROFILE_COMPILE"))
+        fprintf(stderr, "PROFILE semantics-fields %.3f\n",
+            n00bb_profile_seconds() - profile_start);
     if (!resolve_inferred_trait_references(analysis->grammar, link,
                                            analysis, environment)) {
         core_diagnostics_report(core_translation_unit_diagnostics(
@@ -53974,6 +53996,9 @@ n00bb_link_stage_semantics(core_link_unit_t *link, uint32_t stage_kind,
         th_env_free(environment);
         return CORE_LINK_STAGE_RESULT_FAILED;
     }
+    if (getenv("N00BB_PROFILE_COMPILE"))
+        fprintf(stderr, "PROFILE semantics-traits %.3f\n",
+            n00bb_profile_seconds() - profile_start);
     if (!resolve_generic_trait_specializations(link, analysis,
                                                 stage_kind)) {
         core_diagnostics_report(core_translation_unit_diagnostics(
@@ -53983,11 +54008,17 @@ n00bb_link_stage_semantics(core_link_unit_t *link, uint32_t stage_kind,
         th_env_free(environment);
         return CORE_LINK_STAGE_RESULT_FAILED;
     }
+    if (getenv("N00BB_PROFILE_COMPILE"))
+        fprintf(stderr, "PROFILE semantics-specializations %.3f\n",
+            n00bb_profile_seconds() - profile_start);
     if (!unify_calls_until_stable(analysis->grammar, link, units->data,
             units->len, true, true, false)) {
         th_env_free(environment);
         return CORE_LINK_STAGE_RESULT_FAILED;
     }
+    if (getenv("N00BB_PROFILE_COMPILE"))
+        fprintf(stderr, "PROFILE semantics-second-unify %.3f\n",
+            n00bb_profile_seconds() - profile_start);
     for (size_t i = 0; i < units->len; i++) {
         n00bb_tu_state_t *state = tu_state(units->data[i]);
         if (!state || !state->annotation_root) {
