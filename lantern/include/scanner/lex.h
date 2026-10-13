@@ -91,12 +91,6 @@ typedef struct {
 } scan_lex_string_t;
 
 typedef struct {
-    core_string_t prefix;
-    core_string_t digits;
-    core_string_t tok;
-} scan_lex_radix_t;
-
-typedef struct {
     core_string_t suffix;
     core_string_t tok;
     uint8_t       forms;
@@ -106,16 +100,6 @@ typedef enum : uint8_t {
     SCAN_LEX_SUFFIX_INTEGER = 1 << 0,
     SCAN_LEX_SUFFIX_FLOAT   = 1 << 1,
 } scan_lex_suffix_form_t;
-
-typedef struct {
-    const scan_lex_radix_t  *radixes;
-    const scan_lex_suffix_t *suffixes;
-    core_string_t            sep;
-    core_string_t            sign;
-    core_string_t            exponent;
-    core_string_t            tok_int;
-    core_string_t            tok_float;
-} scan_lex_number_t;
 
 typedef enum : uint8_t {
     SCAN_LEX_NUM_POINT                    = 1 << 0,
@@ -323,7 +307,6 @@ typedef struct {
     const core_string_t      *operators;
     const core_string_t      *soft_keywords;
 
-    scan_lex_number_t number;
     const scan_lex_number_form_t *number_forms;
 
     uint8_t      layout;
@@ -368,8 +351,6 @@ typedef struct {
     size_t heredocs;
     size_t embeds;
     size_t fences;
-    size_t radixes;
-    size_t suffixes;
     size_t recoveries;
     size_t number_forms;
     size_t number_prefix_nodes;

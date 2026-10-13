@@ -82,8 +82,6 @@ struct scan_lex_t {
     lex_bucket_t embed_buckets[256];
     lex_bucket_t embed_close_buckets[256];
     lex_bucket_t fence_buckets[256];
-    lex_bucket_t radix_buckets[256];
-    lex_bucket_t suffix_buckets[256];
     const void **comment_dispatch;
     const void **sigil_dispatch;
     const void **regex_dispatch;
@@ -91,8 +89,6 @@ struct scan_lex_t {
     const void **embed_dispatch;
     const void **embed_close_dispatch;
     const void **fence_dispatch;
-    const void **radix_dispatch;
-    const void **suffix_dispatch;
     size_t       fence_count;
     size_t       string_count;
     size_t       regex_count;

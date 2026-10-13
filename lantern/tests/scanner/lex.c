@@ -26,11 +26,17 @@ static const scan_lex_string_t JSON_STRINGS[] = {
     {},
 };
 
+static const scan_lex_number_form_t JSON_NUMBERS[] = {
+    {.digits = S("0123456789"), .sign = S("-"), .exponent = S("eE"),
+     .tok_int = S("INT_LIT"), .tok_float = S("FLOAT_LIT"),
+     .flags = SCAN_LEX_NUM_POINT},
+    {},
+};
+
 static const scan_lex_spec_t JSON = {
     .name = S("json"),
     .strings = JSON_STRINGS,
-    .number = {.sign = S("-"), .exponent = S("eE"),
-               .tok_int = S("INT_LIT"), .tok_float = S("FLOAT_LIT")},
+    .number_forms = JSON_NUMBERS,
     .tok_ident = S("IDENTIFIER"),
 };
 
@@ -159,10 +165,16 @@ static const scan_lex_string_t RECOVERY_STRINGS[] = {
     {},
 };
 
+static const scan_lex_number_form_t RECOVERY_NUMBERS[] = {
+    {.digits = S("0123456789"), .separator = S("_"),
+     .tok_int = S("INTEGER")},
+    {},
+};
+
 static const scan_lex_spec_t RECOVERY_LEXER = {
     .name = S("recovery-test"),
     .strings = RECOVERY_STRINGS,
-    .number = {.sep = S("_"), .tok_int = S("INTEGER")},
+    .number_forms = RECOVERY_NUMBERS,
     .recoveries = RECOVERIES,
     .tok_ident = S("IDENTIFIER"),
 };
@@ -187,7 +199,7 @@ static const scan_lex_recovery_t MULTI_RECOVERIES[] = {
 
 static const scan_lex_spec_t MULTI_RECOVERY_LEXER = {
     .name = S("multi-recovery-test"),
-    .number = {.sep = S("_"), .tok_int = S("INTEGER")},
+    .number_forms = RECOVERY_NUMBERS,
     .recoveries = MULTI_RECOVERIES,
     .tok_ident = S("IDENTIFIER"),
 };
@@ -202,7 +214,7 @@ static const scan_lex_recovery_t CONSUMING_RECOVERIES[] = {
 
 static const scan_lex_spec_t CONSUMING_RECOVERY_LEXER = {
     .name = S("consuming-recovery-test"),
-    .number = {.sep = S("_"), .tok_int = S("INTEGER")},
+    .number_forms = RECOVERY_NUMBERS,
     .recoveries = CONSUMING_RECOVERIES,
     .tok_ident = S("IDENTIFIER"),
 };
@@ -228,14 +240,18 @@ static const scan_lex_string_t PY_STRINGS[] = {
     {},
 };
 
-static const scan_lex_radix_t PY_RADIXES[] = {
-    {.prefix = S("0x"), .digits = S(HEX)},
-    {.prefix = S("0b"), .digits = S("01")},
+static const scan_lex_suffix_t PY_SUFFIXES[] = {
+    {.suffix = S("j"), .tok = S("IMAGINARY")},
     {},
 };
 
-static const scan_lex_suffix_t PY_SUFFIXES[] = {
-    {.suffix = S("j"), .tok = S("IMAGINARY")},
+static const scan_lex_number_form_t PY_NUMBERS[] = {
+    {.prefix = S("0x"), .digits = S(HEX), .tok_int = S("INTEGER")},
+    {.prefix = S("0b"), .digits = S("01"), .tok_int = S("INTEGER")},
+    {.digits = S("0123456789"), .separator = S("_"),
+     .exponent = S("eE"), .tok_int = S("INTEGER"),
+     .tok_float = S("FLOAT"), .suffixes = PY_SUFFIXES,
+     .flags = SCAN_LEX_NUM_POINT | SCAN_LEX_NUM_LEADING_POINT},
     {},
 };
 
@@ -243,12 +259,7 @@ static const scan_lex_spec_t PYTHON = {
     .name = S("lex-test-python"),
     .comments = PY_COMMENTS,
     .strings = PY_STRINGS,
-    .number = {.radixes = PY_RADIXES,
-               .suffixes = PY_SUFFIXES,
-               .sep = S("_"),
-               .exponent = S("eE"),
-               .tok_int = S("INTEGER"),
-               .tok_float = S("FLOAT")},
+    .number_forms = PY_NUMBERS,
     .layout = SCAN_LEX_LAYOUT_INDENT | SCAN_LEX_LAYOUT_NEWLINE,
     .tok_newline = S("NEWLINE"),
     .tok_indent = S("INDENT"),
@@ -298,15 +309,21 @@ static const scan_lex_regex_t JS_REGEXES[] = {
     {},
 };
 
+static const scan_lex_number_form_t JS_NUMBERS[] = {
+    {.prefix = S("0x"), .digits = S(HEX), .tok_int = S("INTEGER")},
+    {.prefix = S("0b"), .digits = S("01"), .tok_int = S("INTEGER")},
+    {.digits = S("0123456789"), .exponent = S("eE"),
+     .tok_int = S("INTEGER"), .tok_float = S("FLOAT"),
+     .flags = SCAN_LEX_NUM_POINT | SCAN_LEX_NUM_LEADING_POINT},
+    {},
+};
+
 static const scan_lex_spec_t JS = {
     .name = S("lex-test-js"),
     .comments = JS_COMMENTS,
     .strings = JS_STRINGS,
     .regexes = JS_REGEXES,
-    .number = {.radixes = PY_RADIXES,
-               .exponent = S("eE"),
-               .tok_int = S("INTEGER"),
-               .tok_float = S("FLOAT")},
+    .number_forms = JS_NUMBERS,
     .tok_ident = S("IDENTIFIER"),
     .brackets = S("()[]{}"),
 };
@@ -330,11 +347,16 @@ static const scan_lex_sigil_t RB_SIGILS[] = {
     {},
 };
 
+static const scan_lex_number_form_t INTEGER_NUMBERS[] = {
+    {.digits = S("0123456789"), .tok_int = S("INTEGER")},
+    {},
+};
+
 static const scan_lex_spec_t RUBY = {
     .name = S("lex-test-ruby"),
     .heredocs = RB_HEREDOCS,
     .sigils = RB_SIGILS,
-    .number = {.tok_int = S("INTEGER")},
+    .number_forms = INTEGER_NUMBERS,
     .tok_ident = S("IDENTIFIER"),
 };
 
@@ -399,8 +421,6 @@ static void register_spec_outputs(parse_grammar_t *g,
   register_output(g, spec->tok_eof);
   register_output(g, spec->tok_ident);
   register_output(g, spec->tok_ident_upper);
-  register_output(g, spec->number.tok_int);
-  register_output(g, spec->number.tok_float);
 
   for (const scan_lex_comment_t *item = spec->comments;
        item && item->opener.data; item++) {
@@ -420,14 +440,6 @@ static void register_spec_outputs(parse_grammar_t *g,
          suffix && suffix->suffix.data; suffix++) {
       register_output(g, suffix->tok);
     }
-  }
-  for (const scan_lex_radix_t *item = spec->number.radixes;
-       item && item->prefix.data; item++) {
-    register_output(g, item->tok);
-  }
-  for (const scan_lex_suffix_t *item = spec->number.suffixes;
-       item && item->suffix.data; item++) {
-    register_output(g, item->tok);
   }
   for (const scan_lex_sigil_t *item = spec->sigils; item && item->prefix.data;
        item++) {
@@ -1119,36 +1131,6 @@ static void test_embedded_lexer_switching(void) {
   embed_error("token-sequence embeds require explicit delimiter tokens",
               "@lex-embed(\"{{\", \"}}\", lexer(\"json\"), tokens)", "open_as");
 
-  static const char *const LEGACY =
-      "@lex-embed(\"{{\", \"}}\", as(\"OUTSIDE\"), "
-      "open_as(\"OPEN\"), close_as(\"CLOSE\"))\n"
-      "@lex-ident(as(\"IDENTIFIER\"))\n"
-      "<file> ::= %OUTSIDE | %OPEN | %CLOSE | %IDENTIFIER\n";
-  core_string_t legacy_source = core_string_from_cstr(LEGACY);
-  parse_grammar_t *legacy = parse_grammar_new();
-
-  parse_grammar_set_error_recovery(legacy, false);
-  parse_bnf_declare_terminals(legacy, legacy_source);
-  check("legacy embedded regions load alongside delegated embeds",
-        load_test_grammar(legacy_source, S("file"), legacy));
-
-  ts = scan_tokenize_incremental_owned(legacy);
-  check("a legacy opener prefix waits at an incremental boundary",
-        scan_stream_append(ts, "a {", 3) && scan_stream_next(ts) != nullptr &&
-            scan_stream_next(ts) == nullptr &&
-            scan_status(ts->scanner) == SCAN_STATUS_INCOMPLETE);
-  check("a legacy opener resumes without losing prefix bytes",
-        scan_stream_append(ts, "{x}}", 4));
-  scan_stream_finish(ts);
-  count = 1;
-  while (scan_stream_next(ts)) {
-    count++;
-  }
-  check("the resumed legacy region emits its delimiters and body",
-        count == 4 && scan_status(ts->scanner) == SCAN_STATUS_COMPLETE);
-  scan_token_stream_free(ts);
-  parse_grammar_free(legacy);
-  core_free(legacy_source.data);
 }
 
 static void test_interpolation_pushes_a_mode(void) {
@@ -1257,7 +1239,7 @@ static void test_attached_postfix_sigil(void) {
       .strings = strings,
       .sigils = sigils,
       .tok_ident = S("IDENTIFIER"),
-      .number = {.tok_int = S("INTEGER")},
+      .number_forms = INTEGER_NUMBERS,
   };
   static const char *const terms[] = {
       "[", "]", "INTEGER", "CHAR", "STRING", "IDENTIFIER", nullptr,
@@ -1567,7 +1549,9 @@ static void test_a_grammar_declares_its_own_lexis(void) {
       "@lex-string('f\"', '\"', escape('\\\\'), interp(\"{\", \"}\"), "
       "hole_tokens, "
       "as(\"FSTRING_START\", \"FSTRING_MIDDLE\", \"FSTRING_END\"))\n"
-      "@lex-number(radix(\"0x\", \"0123456789abcdef\"), sep(\"_\"), "
+      "@lex-number(prefix(\"0x\"), digits(\"0123456789abcdef\"), "
+      "int(\"INTEGER\"))\n"
+      "@lex-number(digits(\"0123456789\"), sep(\"_\"), "
       "exp(\"eE\"), int(\"INTEGER\"), float(\"FLOAT\"), "
       "suffix(\"j\", \"IMAGINARY\"))\n"
       "@lex-layout(indent(\"INDENT\", \"DEDENT\"), newline(\"NEWLINE\"), "
@@ -2239,8 +2223,8 @@ static void test_lex_declarations_have_no_fixed_limit(void) {
     core_buffer_printf(source, "@lex-comment(\"#%zu\")\n", i);
     core_buffer_printf(source, "@lex-string(\"s%zu\")\n", i);
     core_buffer_printf(source,
-                       "@lex-number(radix(\"r%zu\", \"01\"), "
-                       "suffix(\"z%zu\"))\n",
+                       "@lex-number(prefix(\"r%zu\"), digits(\"01\"), "
+                       "int(\"INTEGER\"), suffix(\"z%zu\"))\n",
                        i, i);
     core_buffer_printf(source, "@lex-sigil(\"$%zu\")\n", i);
     core_buffer_printf(source,
@@ -2273,10 +2257,10 @@ static void test_lex_declarations_have_no_fixed_limit(void) {
     check("all comments are retained",
           spec->comments[79].opener.data != nullptr);
     check("all strings are retained", spec->strings[79].opener.data != nullptr);
-    check("all number radixes are retained",
-          spec->number.radixes[79].prefix.data != nullptr);
+    check("all number forms are retained",
+          spec->number_forms[79].prefix.data != nullptr);
     check("all number suffixes are retained",
-          spec->number.suffixes[79].suffix.data != nullptr);
+          spec->number_forms[79].suffixes[0].suffix.data != nullptr);
     check("all sigils are retained", spec->sigils[79].prefix.data != nullptr);
     check("all regexes are retained", spec->regexes[79].opener.data != nullptr);
     check("regex predecessor policies are retained",
@@ -2293,7 +2277,7 @@ static void test_lex_declarations_have_no_fixed_limit(void) {
     check("the dynamic comment list is terminated",
           spec->comments[80].opener.data == nullptr);
     check("the dynamic suffix list is terminated",
-          spec->number.suffixes[80].suffix.data == nullptr);
+          spec->number_forms[79].suffixes[1].suffix.data == nullptr);
   }
 
   scan_lex_spec_free(spec);

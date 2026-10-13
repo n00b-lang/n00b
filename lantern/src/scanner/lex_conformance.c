@@ -506,15 +506,6 @@ scan_lex_conformance_generate(const scan_lex_t *program, size_t max_cases)
                     item->open, source, item->open.u8_bytes, close_start, 1,
                     true);
     }
-    for (const scan_lex_radix_t *item = spec->number.radixes;
-         item && item->prefix.data; item++) {
-        char digit = item->digits.u8_bytes ? item->digits.data[0] : '0';
-        core_string_t body = core_string_borrow(&digit, 1);
-        core_string_t source = make_source(item->prefix, body,
-                                            (core_string_t){0}, &close_start);
-        push_vector(&vectors, &count, &capacity, SCAN_LEX_DECL_NUMBER,
-                    item->prefix, source, item->prefix.u8_bytes, 0, 0, true);
-    }
     for (const scan_lex_number_form_t *item = spec->number_forms;
          item && item->digits.data; item++) {
         if (!item->prefix.data || !item->prefix.u8_bytes) {
@@ -590,30 +581,21 @@ scan_lex_conformance_generate(const scan_lex_t *program, size_t max_cases)
             }
         }
     }
-    if ((!suite->limit || suite->count < suite->limit)
-        && spec->number.exponent.data && spec->number.exponent.u8_bytes) {
-        core_buffer_t *buffer = core_buffer_from_cstr("1");
-        core_buffer_putc(buffer, spec->number.exponent.data[0]);
-        if (spec->number.sign.data
-            && memchr(spec->number.sign.data, '+', spec->number.sign.u8_bytes)) {
-            core_buffer_putc(buffer, '+');
-        }
-        size_t bytes = buffer->byte_len;
-        add_malformed_case(suite, origins, origin_count,
-                           SCAN_LEX_DECL_NUMBER, (core_string_t){0},
-                           core_string_borrow(core_buffer_take(buffer), bytes),
-                           false);
-    }
-    for (const scan_lex_radix_t *item = spec->number.radixes;
-         (!suite->limit || suite->count < suite->limit)
-             && item && item->prefix.data; item++) {
-        add_malformed_case(suite, origins, origin_count,
-                           SCAN_LEX_DECL_NUMBER, item->prefix,
-                           owned_copy(item->prefix), false);
-    }
     for (const scan_lex_number_form_t *item = spec->number_forms;
          (!suite->limit || suite->count < suite->limit)
              && item && item->digits.data; item++) {
+        if (item->exponent.data && item->exponent.u8_bytes) {
+            char digit = item->digits.u8_bytes ? item->digits.data[0] : '0';
+            core_buffer_t *buffer = core_buffer_empty();
+            core_buffer_append(buffer, item->prefix.data, item->prefix.u8_bytes);
+            core_buffer_putc(buffer, digit);
+            core_buffer_putc(buffer, item->exponent.data[0]);
+            size_t bytes = buffer->byte_len;
+            add_malformed_case(suite, origins, origin_count,
+                               SCAN_LEX_DECL_NUMBER, item->prefix,
+                               core_string_borrow(core_buffer_take(buffer), bytes),
+                               false);
+        }
         if (item->prefix.data && item->prefix.u8_bytes) {
             add_malformed_case(suite, origins, origin_count,
                                SCAN_LEX_DECL_NUMBER, item->prefix,
@@ -634,12 +616,14 @@ scan_lex_conformance_generate(const scan_lex_t *program, size_t max_cases)
                 declaration = SCAN_LEX_DECL_STRING;
             }
         }
-        if (!malformed.data
-            && (core_string_eq(spec->number.tok_int, recovery->token)
-                || core_string_eq(spec->number.tok_float, recovery->token))) {
-            malformed = core_string_from_cstr("1__x");
-            spelling = recovery->token;
-            declaration = SCAN_LEX_DECL_RECOVERY;
+        for (const scan_lex_number_form_t *item = spec->number_forms;
+             !malformed.data && item && item->digits.data; item++) {
+            if (core_string_eq(item->tok_int, recovery->token)
+                || core_string_eq(item->tok_float, recovery->token)) {
+                malformed = core_string_from_cstr("1__x");
+                spelling = recovery->token;
+                declaration = SCAN_LEX_DECL_RECOVERY;
+            }
         }
         core_string_t recovered = append_sync(malformed, recovery);
         core_free(malformed.data);

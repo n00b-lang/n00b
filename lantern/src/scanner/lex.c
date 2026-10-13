@@ -292,7 +292,6 @@ typedef struct {
 typedef enum : uint8_t {
   NUMBER_NONE,
   NUMBER_PREFIX,
-  NUMBER_RADIX_DIGITS,
   NUMBER_INTEGER_DIGITS,
   NUMBER_POINT,
   NUMBER_FRACTION_DIGITS,
@@ -384,32 +383,37 @@ static bool tid_set_contains(const lex_tid_set_t *set, int32_t tid) {
 
 static bool id_cont_here(const scan_lex_t *lex, core_codepoint_t c);
 
-static uint32_t term_trie_child(scan_lex_t *lex, uint32_t node, uint8_t byte,
-                                bool create) {
-  for (int32_t edge = lex->term_nodes.data[node].edge; edge >= 0;
-       edge = lex->term_edges.data[edge].next_edge) {
-    if (lex->term_edges.data[edge].byte == byte) {
-      return lex->term_edges.data[edge].child;
+static uint32_t trie_child(core_list_t(lex_term_node_t) *nodes,
+                           core_list_t(lex_term_edge_t) *edges,
+                           uint32_t node, uint8_t byte, bool create) {
+  for (int32_t edge = nodes->data[node].edge; edge >= 0;
+       edge = edges->data[edge].next_edge) {
+    if (edges->data[edge].byte == byte) {
+      return edges->data[edge].child;
     }
   }
-
   if (!create) {
     return UINT32_MAX;
   }
 
-  uint32_t child = (uint32_t)lex->term_nodes.len;
-  int32_t edge = (int32_t)lex->term_edges.len;
-
-  core_list_push(lex->term_nodes, ((lex_term_node_t){.edge = -1, .tid = 0}));
-  core_list_push(lex->term_edges,
-                 ((lex_term_edge_t){
-                     .next_edge = lex->term_nodes.data[node].edge,
-                     .child = child,
-                     .byte = byte,
-                 }));
-  lex->term_nodes.data[node].edge = edge;
-
+  uint32_t child = (uint32_t)nodes->len;
+  int32_t edge = (int32_t)edges->len;
+  core_list_push(*nodes, ((lex_term_node_t){.edge = -1}));
+  core_list_push(*edges, ((lex_term_edge_t){
+      .next_edge = nodes->data[node].edge, .child = child, .byte = byte}));
+  nodes->data[node].edge = edge;
   return child;
+}
+
+static uint32_t trie_add(core_list_t(lex_term_node_t) *nodes,
+                         core_list_t(lex_term_edge_t) *edges, uint32_t root,
+                         core_string_t spelling, int32_t value) {
+  uint32_t node = root;
+  for (size_t i = 0; i < spelling.u8_bytes; i++) {
+    node = trie_child(nodes, edges, node, (uint8_t)spelling.data[i], true);
+  }
+  nodes->data[node].tid = value;
+  return node;
 }
 
 static void term_trie_add(scan_lex_t *lex, core_string_t spelling,
@@ -417,163 +421,22 @@ static void term_trie_add(scan_lex_t *lex, core_string_t spelling,
   if (!spelling.data || !spelling.u8_bytes || !tid) {
     return;
   }
-
-  uint32_t node = 0;
-
-  for (size_t i = 0; i < spelling.u8_bytes; i++) {
-    node = term_trie_child(lex, node, (uint8_t)spelling.data[i], true);
-  }
-
+  uint32_t node = trie_add(&lex->term_nodes, &lex->term_edges, 0,
+                           spelling, tid);
   uint32_t pos = 0;
   core_codepoint_t last = 0;
-
   while (pos < spelling.u8_bytes) {
     int32_t cp =
         unicode_utf8_decode(spelling.data, (uint32_t)spelling.u8_bytes, &pos);
-
     last = cp < 0 ? (core_codepoint_t)(uint8_t)spelling.data[pos - 1]
                   : (core_codepoint_t)cp;
   }
-
-  lex->term_nodes.data[node].tid = tid;
   lex->term_nodes.data[node].word_boundary = id_cont_here(lex, last);
 }
 
-static uint32_t opener_trie_child(scan_lex_t *lex, uint32_t node, uint8_t byte,
-                                  bool create) {
-  for (int32_t edge = lex->opener_nodes.data[node].edge; edge >= 0;
-       edge = lex->opener_edges.data[edge].next_edge) {
-    if (lex->opener_edges.data[edge].byte == byte) {
-      return lex->opener_edges.data[edge].child;
-    }
-  }
-  if (!create) {
-    return UINT32_MAX;
-  }
-
-  uint32_t child = (uint32_t)lex->opener_nodes.len;
-  int32_t edge = (int32_t)lex->opener_edges.len;
-  core_list_push(lex->opener_nodes, ((lex_term_node_t){.edge = -1, .tid = 0}));
-  core_list_push(
-      lex->opener_edges,
-      ((lex_term_edge_t){.next_edge = lex->opener_nodes.data[node].edge,
-                         .child = child,
-                         .byte = byte}));
-  lex->opener_nodes.data[node].edge = edge;
-  return child;
-}
-
-static uint32_t string_trie_child(scan_lex_t *lex, uint32_t node, uint8_t byte,
-                                  bool create) {
-  for (int32_t edge = lex->string_nodes.data[node].edge; edge >= 0;
-       edge = lex->string_edges.data[edge].next_edge) {
-    if (lex->string_edges.data[edge].byte == byte) {
-      return lex->string_edges.data[edge].child;
-    }
-  }
-  if (!create) {
-    return UINT32_MAX;
-  }
-
-  uint32_t child = (uint32_t)lex->string_nodes.len;
-  int32_t edge = (int32_t)lex->string_edges.len;
-  core_list_push(lex->string_nodes, ((lex_term_node_t){.edge = -1, .tid = 0}));
-  core_list_push(
-      lex->string_edges,
-      ((lex_term_edge_t){.next_edge = lex->string_nodes.data[node].edge,
-                         .child = child,
-                         .byte = byte}));
-  lex->string_nodes.data[node].edge = edge;
-  return child;
-}
-
-static void string_trie_add(scan_lex_t *lex, core_string_t spelling,
-                            int32_t recipe) {
-  uint32_t node = 0;
-
-  for (size_t i = 0; i < spelling.u8_bytes; i++) {
-    node = string_trie_child(lex, node, (uint8_t)spelling.data[i], true);
-  }
-
-  lex->string_nodes.data[node].tid = recipe;
-}
-
-static uint32_t number_trie_child(scan_lex_t *lex, uint32_t node, uint8_t byte,
-                                  bool create) {
-  for (int32_t edge = lex->number_nodes.data[node].edge; edge >= 0;
-       edge = lex->number_edges.data[edge].next_edge) {
-    if (lex->number_edges.data[edge].byte == byte) {
-      return lex->number_edges.data[edge].child;
-    }
-  }
-  if (!create) {
-    return UINT32_MAX;
-  }
-
-  uint32_t child = (uint32_t)lex->number_nodes.len;
-  int32_t edge = (int32_t)lex->number_edges.len;
-  core_list_push(lex->number_nodes, ((lex_term_node_t){.edge = -1, .tid = 0}));
-  core_list_push(
-      lex->number_edges,
-      ((lex_term_edge_t){.next_edge = lex->number_nodes.data[node].edge,
-                         .child = child,
-                         .byte = byte}));
-  lex->number_nodes.data[node].edge = edge;
-  return child;
-}
-
-static void number_trie_add(scan_lex_t *lex, core_string_t spelling,
-                            int32_t recipe) {
-  uint32_t node = 0;
-
-  for (size_t i = 0; i < spelling.u8_bytes; i++) {
-    node = number_trie_child(lex, node, (uint8_t)spelling.data[i], true);
-  }
-  lex->number_nodes.data[node].tid = recipe;
-}
-
-static uint32_t number_suffix_trie_child(scan_lex_t *lex, uint32_t node,
-                                         uint8_t byte, bool create) {
-  for (int32_t edge = lex->number_suffix_nodes.data[node].edge; edge >= 0;
-       edge = lex->number_suffix_edges.data[edge].next_edge) {
-    if (lex->number_suffix_edges.data[edge].byte == byte) {
-      return lex->number_suffix_edges.data[edge].child;
-    }
-  }
-  if (!create) {
-    return UINT32_MAX;
-  }
-
-  uint32_t child = (uint32_t)lex->number_suffix_nodes.len;
-  int32_t edge = (int32_t)lex->number_suffix_edges.len;
-  core_list_push(lex->number_suffix_nodes,
-                 ((lex_term_node_t){.edge = -1, .tid = 0}));
-  core_list_push(
-      lex->number_suffix_edges,
-      ((lex_term_edge_t){.next_edge = lex->number_suffix_nodes.data[node].edge,
-                         .child = child,
-                         .byte = byte}));
-  lex->number_suffix_nodes.data[node].edge = edge;
-  return child;
-}
-
-static void number_suffix_trie_add(scan_lex_t *lex, uint32_t root,
-                                   core_string_t spelling, int32_t recipe) {
-  uint32_t node = root;
-
-  for (size_t i = 0; i < spelling.u8_bytes; i++) {
-    node = number_suffix_trie_child(lex, node, (uint8_t)spelling.data[i], true);
-  }
-  lex->number_suffix_nodes.data[node].tid = recipe;
-}
-
 static void opener_trie_add(scan_lex_t *lex, core_string_t spelling) {
-  uint32_t node = 0;
-  for (size_t i = 0; spelling.data && i < spelling.u8_bytes; i++) {
-    node = opener_trie_child(lex, node, (uint8_t)spelling.data[i], true);
-  }
   if (spelling.data && spelling.u8_bytes) {
-    lex->opener_nodes.data[node].tid = 1;
+    trie_add(&lex->opener_nodes, &lex->opener_edges, 0, spelling, 1);
   }
 }
 
@@ -753,14 +616,6 @@ static void compile_ascii_sets(scan_lex_t *lex) {
 
   compile_ascii_set(lex, spec->ident_start_extra);
   compile_ascii_set(lex, spec->ident_extra);
-  compile_ascii_set(lex, spec->number.sign);
-  compile_ascii_set(lex, spec->number.sep);
-  compile_ascii_set(lex, spec->number.exponent);
-
-  for (const scan_lex_radix_t *r = spec->number.radixes; r && r->prefix.data;
-       r++) {
-    compile_ascii_set(lex, r->digits);
-  }
   for (const scan_lex_number_form_t *f = spec->number_forms;
        f && f->digits.data; f++) {
     compile_ascii_set(lex, f->digits);
@@ -861,7 +716,6 @@ struct scan_lex_session_t {
   int32_t pending_terminal_best_tid;
   size_t pending_terminal_min_len;
   lex_number_phase_t pending_number_phase;
-  const scan_lex_radix_t *pending_number_radix;
   const scan_lex_number_form_t *pending_number_form;
   size_t pending_number_prefix_at;
   uint32_t pending_number_prefix_node;
@@ -1037,16 +891,15 @@ static scan_lex_t *scan_lex_compile_base(const scan_lex_spec_t *spec,
       return nullptr;
     }
   }
-  lex->number_enabled = spec->number.tok_int.data ||
-                        spec->number.tok_float.data || spec->number.radixes ||
-                        spec->number.suffixes || spec->number_forms;
+  lex->number_enabled = spec->number_forms != nullptr;
 
   compile_recipe_dispatch(spec->comments, sizeof(scan_lex_comment_t),
                           offsetof(scan_lex_comment_t, opener),
                           lex->comment_buckets, &lex->comment_dispatch);
   for (const scan_lex_string_t *s = spec->strings; s && s->opener.data; s++) {
     lex->string_count++;
-    string_trie_add(lex, s->opener, (int32_t)lex->string_count);
+    trie_add(&lex->string_nodes, &lex->string_edges, 0, s->opener,
+             (int32_t)lex->string_count);
   }
   if (lex->string_count) {
     lex->string_escape_dispatch =
@@ -1074,7 +927,8 @@ static scan_lex_t *scan_lex_compile_base(const scan_lex_spec_t *spec,
   for (const scan_lex_number_form_t *f = spec->number_forms;
        f && f->digits.data; f++) {
     lex->number_form_count++;
-    number_trie_add(lex, f->prefix, (int32_t)lex->number_form_count);
+    trie_add(&lex->number_nodes, &lex->number_edges, 0, f->prefix,
+             (int32_t)lex->number_form_count);
 
     uint32_t root = (uint32_t)lex->number_suffix_nodes.len;
     core_list_push(lex->number_suffix_nodes,
@@ -1084,7 +938,8 @@ static scan_lex_t *scan_lex_compile_base(const scan_lex_spec_t *spec,
     for (const scan_lex_suffix_t *suffix = f->suffixes;
          suffix && suffix->suffix.data; suffix++) {
       suffix_index++;
-      number_suffix_trie_add(lex, root, suffix->suffix, suffix_index);
+      trie_add(&lex->number_suffix_nodes, &lex->number_suffix_edges,
+               root, suffix->suffix, suffix_index);
     }
   }
   compile_recipe_dispatch(spec->sigils, sizeof(scan_lex_sigil_t),
@@ -1137,12 +992,6 @@ static scan_lex_t *scan_lex_compile_base(const scan_lex_spec_t *spec,
   for (const scan_lex_fence_t *f = spec->fences; f && f->outer_open.data; f++) {
     lex->fence_count++;
   }
-  compile_recipe_dispatch(spec->number.radixes, sizeof(scan_lex_radix_t),
-                          offsetof(scan_lex_radix_t, prefix),
-                          lex->radix_buckets, &lex->radix_dispatch);
-  compile_recipe_dispatch(spec->number.suffixes, sizeof(scan_lex_suffix_t),
-                          offsetof(scan_lex_suffix_t, suffix),
-                          lex->suffix_buckets, &lex->suffix_dispatch);
 
   for (size_t i = 0; i < core_list_len(g->rules); i++) {
     const parse_rule_t *rule = &g->rules.data[i];
@@ -1217,20 +1066,6 @@ static scan_lex_t *scan_lex_compile_base(const scan_lex_spec_t *spec,
 
   for (const scan_lex_fence_t *f = spec->fences; f && f->outer_open.data; f++) {
     mark_literal(lex, tid_for(g, f->tok, PARSE_TOK_IGNORED));
-  }
-
-  for (const scan_lex_suffix_t *sf = spec->number.suffixes;
-       sf && sf->suffix.data; sf++) {
-    mark_literal(lex, tid_for(g, sf->tok, PARSE_TOK_IGNORED));
-  }
-
-  int32_t more[] = {
-      tid_for(g, spec->number.tok_int, PARSE_TOK_IGNORED),
-      tid_for(g, spec->number.tok_float, PARSE_TOK_IGNORED),
-  };
-
-  for (size_t i = 0; i < 2; i++) {
-    mark_literal(lex, more[i]);
   }
 
   for (const scan_lex_number_form_t *f = spec->number_forms;
@@ -1563,8 +1398,6 @@ void scan_lex_free(scan_lex_t *lex) {
   core_free(lex->embed_dispatch);
   core_free(lex->embed_close_dispatch);
   core_free(lex->fence_dispatch);
-  core_free(lex->radix_dispatch);
-  core_free(lex->suffix_dispatch);
   core_free(lex->string_escape_dispatch);
   core_free(lex->string_escape_complex);
   core_free(lex);
@@ -2046,8 +1879,6 @@ static size_t program_resident_bytes(const scan_lex_t *lex) {
   bytes += bucket_count(lex->embed_buckets) * sizeof(void *);
   bytes += bucket_count(lex->embed_close_buckets) * sizeof(void *);
   bytes += bucket_count(lex->fence_buckets) * sizeof(void *);
-  bytes += bucket_count(lex->radix_buckets) * sizeof(void *);
-  bytes += bucket_count(lex->suffix_buckets) * sizeof(void *);
   bytes += lex->embed_count * sizeof(*lex->embed_programs);
   bytes += lex->regex_count * sizeof(*lex->regex_not_after);
   for (size_t i = 0; i < lex->regex_count; i++) {
@@ -2086,8 +1917,6 @@ bool scan_lex_inspect(const scan_lex_t *lex, scan_lex_info_t *out) {
       .heredocs = bucket_count(lex->heredoc_buckets),
       .embeds = bucket_count(lex->embed_buckets),
       .fences = bucket_count(lex->fence_buckets),
-      .radixes = bucket_count(lex->radix_buckets),
-      .suffixes = bucket_count(lex->suffix_buckets),
       .recoveries = lex->recovery_count,
       .number_forms = lex->number_form_count,
       .number_prefix_nodes = core_list_len(lex->number_nodes),
@@ -2386,7 +2215,9 @@ static bool recipe_opener_may_continue(parse_scanner_t *s, bool resume) {
 
   while (s->mark + consumed < s->input_len) {
     uint8_t byte = (uint8_t)s->input[s->mark + consumed];
-    uint32_t child = opener_trie_child((scan_lex_t *)lex, node, byte, false);
+    uint32_t child = trie_child(&((scan_lex_t *)lex)->opener_nodes,
+                                &((scan_lex_t *)lex)->opener_edges,
+                                node, byte, false);
     if (child == UINT32_MAX) {
       run->pending_opener = false;
       s->work_bytes += consumed - before;
@@ -3624,8 +3455,9 @@ static bool try_string(parse_scanner_t *s) {
   size_t at = s->cursor;
 
   while (at < s->input_len) {
-    uint32_t child = string_trie_child((scan_lex_t *)lex, node,
-                                       (uint8_t)s->input[at], false);
+    uint32_t child = trie_child(&((scan_lex_t *)lex)->string_nodes,
+                                &((scan_lex_t *)lex)->string_edges,
+                                node, (uint8_t)s->input[at], false);
 
     if (child == UINT32_MAX) {
       break;
@@ -4031,25 +3863,6 @@ static bool number_digit(const scan_lex_t *lex, core_codepoint_t c,
   return digits.data ? in_set(lex, digits, c) : unicode_cp_is_ascii_digit(c);
 }
 
-static const scan_lex_suffix_t *number_suffix(parse_scanner_t *s,
-                                              const scan_lex_number_t *number) {
-  const scan_lex_t *lex = ((scan_lex_session_t *)s->user_state)->program;
-  lex_bucket_t bucket = lex->suffix_buckets[scan_peek_byte(s, 0)];
-  const scan_lex_suffix_t *best = nullptr;
-
-  (void)number;
-
-  for (uint32_t i = bucket.start; i < bucket.start + bucket.count; i++) {
-    const scan_lex_suffix_t *suffix = lex->suffix_dispatch[i];
-    if (at_str(s, suffix->suffix) &&
-        (!best || suffix->suffix.u8_bytes > best->suffix.u8_bytes)) {
-      best = suffix;
-    }
-  }
-
-  return best;
-}
-
 static void number_wait(parse_scanner_t *s) {
   scan_set_incomplete(s, CORE_STRING_STATIC("numeric literal may continue"),
                       s->mark);
@@ -4097,8 +3910,9 @@ static const scan_lex_number_form_t *number_form_at(parse_scanner_t *s,
 
   *partial = false;
   while (cursor < s->input_len) {
-    uint32_t child = number_trie_child((scan_lex_t *)(uintptr_t)lex, node,
-                                       (uint8_t)s->input[cursor], false);
+    uint32_t child = trie_child(&((scan_lex_t *)lex)->number_nodes,
+                                &((scan_lex_t *)lex)->number_edges,
+                                node, (uint8_t)s->input[cursor], false);
     if (child == UINT32_MAX) {
       break;
     }
@@ -4139,8 +3953,9 @@ number_form_suffix(parse_scanner_t *s, const scan_lex_number_form_t *form,
 
   *partial = false;
   while (at < s->input_len) {
-    uint32_t child = number_suffix_trie_child(
-        (scan_lex_t *)(uintptr_t)lex, node, (uint8_t)s->input[at], false);
+    uint32_t child = trie_child(&((scan_lex_t *)lex)->number_suffix_nodes,
+                                &((scan_lex_t *)lex)->number_suffix_edges,
+                                node, (uint8_t)s->input[at], false);
     if (child == UINT32_MAX) {
       break;
     }
@@ -4166,37 +3981,11 @@ number_form_suffix(parse_scanner_t *s, const scan_lex_number_form_t *form,
   return best ? &form->suffixes[best - 1] : nullptr;
 }
 
-static const scan_lex_radix_t *number_radix_at(parse_scanner_t *s, size_t at,
-                                               bool *partial) {
-  const scan_lex_t *lex = ((scan_lex_session_t *)s->user_state)->program;
-  const scan_lex_radix_t *best = nullptr;
-  size_t remaining = s->input_len - at;
-  lex_bucket_t bucket = lex->radix_buckets[(uint8_t)s->input[at]];
-
-  *partial = false;
-  for (uint32_t i = bucket.start; i < bucket.start + bucket.count; i++) {
-    const scan_lex_radix_t *r = lex->radix_dispatch[i];
-    size_t n = remaining < r->prefix.u8_bytes ? remaining : r->prefix.u8_bytes;
-
-    if (memcmp(s->input + at, r->prefix.data, n)) {
-      continue;
-    }
-    if (remaining < r->prefix.u8_bytes) {
-      *partial = true;
-    } else if (!best || r->prefix.u8_bytes > best->prefix.u8_bytes) {
-      best = r;
-    }
-  }
-
-  return best;
-}
-
 static bool continue_number(parse_scanner_t *s) {
   scan_lex_session_t *run = s->user_state;
   const scan_lex_t *lex = run->program;
-  const scan_lex_number_t *n = &lex->spec->number;
   const scan_lex_number_form_t *form = run->pending_number_form;
-  core_string_t separator = form ? form->separator : n->sep;
+  core_string_t separator = form ? form->separator : (core_string_t){0};
 
   for (;;) {
     switch (run->pending_number_phase) {
@@ -4224,74 +4013,33 @@ static bool continue_number(parse_scanner_t *s) {
         run->pending_number_signed_only = false;
       }
 
-      if (scan_at_eof(s)) {
-        if (!s->source_final) {
-          number_wait(s);
-          return false;
-        }
-        run->pending_number_phase = NUMBER_INTEGER_DIGITS;
-        continue;
-      }
-
       bool partial = false;
-      if (lex->spec->number_forms) {
-        form = number_form_at(s, run->pending_number_prefix_at, &partial);
-        if (partial && !s->source_final) {
-          number_wait(s);
-          return false;
-        }
-        if (!form) {
-          run->pending_number_phase = NUMBER_NONE;
-          s->cursor = s->mark;
-          s->line = s->mark_line;
-          s->column = s->mark_col;
-          return false;
-        }
-        run->pending_number_form = form;
-        separator = form->separator;
-        scan_advance_bytes(s, form->prefix.u8_bytes);
-        if (form->prefix.u8_bytes &&
-            (form->flags & SCAN_LEX_NUM_SEPARATOR_AFTER_PREFIX)) {
-          run->pending_number_after_digit = true;
-        }
-        run->pending_number_phase = NUMBER_INTEGER_DIGITS;
-        continue;
-      }
-      const scan_lex_radix_t *radix =
-          number_radix_at(s, run->pending_number_prefix_at, &partial);
-
+      form = number_form_at(s, run->pending_number_prefix_at, &partial);
       if (partial && !s->source_final) {
         number_wait(s);
         return false;
       }
-      if (radix) {
-        run->pending_number_radix = radix;
-        scan_advance_bytes(s, radix->prefix.u8_bytes);
-        run->pending_number_phase = NUMBER_RADIX_DIGITS;
-      } else {
-        run->pending_number_phase = NUMBER_INTEGER_DIGITS;
+      if (!form) {
+        run->pending_number_phase = NUMBER_NONE;
+        s->cursor = s->mark;
+        s->line = s->mark_line;
+        s->column = s->mark_col;
+        return false;
       }
+      run->pending_number_form = form;
+      separator = form->separator;
+      scan_advance_bytes(s, form->prefix.u8_bytes);
+      if (form->prefix.u8_bytes &&
+          (form->flags & SCAN_LEX_NUM_SEPARATOR_AFTER_PREFIX)) {
+        run->pending_number_after_digit = true;
+      }
+      run->pending_number_phase = NUMBER_INTEGER_DIGITS;
       continue;
     }
 
-    case NUMBER_RADIX_DIGITS:
-      number_scan_digits(
-          s, run->pending_number_radix->digits, separator,
-          &run->pending_number_digits, &run->pending_number_after_digit,
-          &run->pending_number_need_digit, &run->pending_number_malformed);
-      if (scan_at_eof(s) && !s->source_final) {
-        number_wait(s);
-        return false;
-      }
-      if (!run->pending_number_digits || run->pending_number_need_digit) {
-        run->pending_number_malformed = true;
-      }
-      run->pending_number_phase = NUMBER_SUFFIX;
-      continue;
-
     case NUMBER_INTEGER_DIGITS:
       number_scan_digits(
-          s, form ? form->digits : (core_string_t){0}, separator,
+          s, form->digits, separator,
           &run->pending_number_digits, &run->pending_number_after_digit,
           &run->pending_number_need_digit, &run->pending_number_malformed);
       if (scan_at_eof(s) && !s->source_final) {
@@ -4305,15 +4053,14 @@ static bool continue_number(parse_scanner_t *s) {
       continue;
 
     case NUMBER_POINT:
-      if ((!form || (form->flags & SCAN_LEX_NUM_POINT)) &&
-          scan_peek(s, 0) == '.') {
+      if ((form->flags & SCAN_LEX_NUM_POINT) && scan_peek(s, 0) == '.') {
         if (scan_remaining(s) == 1 && !s->source_final) {
           number_wait(s);
           return false;
         }
         bool next_digit = number_digit(
-            lex, scan_peek(s, 1), form ? form->digits : (core_string_t){0});
-        bool trailing = form && (form->flags & SCAN_LEX_NUM_TRAILING_POINT) &&
+            lex, scan_peek(s, 1), form->digits);
+        bool trailing = (form->flags & SCAN_LEX_NUM_TRAILING_POINT) &&
                         scan_peek(s, 1) != '.';
         if (next_digit || trailing) {
           run->pending_number_float = true;
@@ -4330,7 +4077,7 @@ static bool continue_number(parse_scanner_t *s) {
 
     case NUMBER_FRACTION_DIGITS:
       number_scan_digits(
-          s, form ? form->digits : (core_string_t){0}, separator,
+          s, form->digits, separator,
           &run->pending_number_digits, &run->pending_number_after_digit,
           &run->pending_number_need_digit, &run->pending_number_malformed);
       if (scan_at_eof(s) && !s->source_final) {
@@ -4344,13 +4091,13 @@ static bool continue_number(parse_scanner_t *s) {
       continue;
 
     case NUMBER_EXP_START:
-      if (in_set(lex, form ? form->exponent : n->exponent, scan_peek(s, 0))) {
+      if (in_set(lex, form->exponent, scan_peek(s, 0))) {
         run->pending_number_float = true;
         scan_advance(s);
         run->pending_number_phase = NUMBER_EXP_SIGN;
         continue;
       }
-      if (form && run->pending_number_point &&
+      if (run->pending_number_point &&
           (form->flags & SCAN_LEX_NUM_EXPONENT_REQUIRED_FOR_POINT)) {
         run->pending_number_malformed = true;
       }
@@ -4379,7 +4126,7 @@ static bool continue_number(parse_scanner_t *s) {
     case NUMBER_EXP_DIGITS:
       number_scan_digits(
           s,
-          form && form->exponent_digits.data ? form->exponent_digits
+          form->exponent_digits.data ? form->exponent_digits
                                              : (core_string_t){0},
           separator, &run->pending_number_exp_digits,
           &run->pending_number_after_digit, &run->pending_number_need_digit,
@@ -4400,8 +4147,7 @@ static bool continue_number(parse_scanner_t *s) {
         return false;
       }
       bool partial = false;
-      const scan_lex_suffix_t *suffix =
-          form ? number_form_suffix(s, form, &partial) : number_suffix(s, n);
+      const scan_lex_suffix_t *suffix = number_form_suffix(s, form, &partial);
       if (partial && !s->source_final) {
         number_wait(s);
         return false;
@@ -4409,18 +4155,13 @@ static bool continue_number(parse_scanner_t *s) {
       if (suffix) {
         scan_advance_bytes(s, suffix->suffix.u8_bytes);
       }
-      core_string_t tok =
-          suffix ? suffix->tok
-          : form ? (run->pending_number_float ? form->tok_float : form->tok_int)
-          : run->pending_number_radix && run->pending_number_radix->tok.data
-              ? run->pending_number_radix->tok
-          : run->pending_number_float ? n->tok_float
-                                      : n->tok_int;
+      core_string_t tok = suffix ? suffix->tok
+          : run->pending_number_float ? form->tok_float : form->tok_int;
       int32_t fallback =
           run->pending_number_float ? PARSE_TOK_FLOAT : PARSE_TOK_INTEGER;
       bool malformed = run->pending_number_malformed;
 
-      if (form && !run->pending_number_digits) {
+      if (!run->pending_number_digits) {
         malformed = true;
       }
       if (suffix && suffix->forms &&
@@ -4429,7 +4170,7 @@ static bool continue_number(parse_scanner_t *s) {
                                        : SCAN_LEX_SUFFIX_INTEGER))) {
         malformed = true;
       }
-      if (form && id_cont_here(lex, scan_peek(s, 0))) {
+      if (id_cont_here(lex, scan_peek(s, 0))) {
         malformed = true;
       }
 
@@ -4455,7 +4196,6 @@ static bool try_number(parse_scanner_t *s) {
     return false;
   }
 
-  const scan_lex_number_t *n = &lex->spec->number;
   const scan_lex_number_form_t *plain = nullptr;
 
   if (lex->spec->number_forms && lex->number_nodes.data[0].tid) {
@@ -4463,7 +4203,7 @@ static bool try_number(parse_scanner_t *s) {
   }
 
   core_codepoint_t c = scan_peek(s, 0);
-  bool signed_start = in_set(lex, plain ? plain->sign : n->sign, c);
+  bool signed_start = plain && in_set(lex, plain->sign, c);
 
   if (signed_start && scan_remaining(s) == 1 && !s->source_final) {
     scan_mark(s);
@@ -4474,9 +4214,9 @@ static bool try_number(parse_scanner_t *s) {
 
     bool leading_point =
         first == '.' &&
-        (!plain || (plain->flags & SCAN_LEX_NUM_LEADING_POINT)) &&
+        plain && (plain->flags & SCAN_LEX_NUM_LEADING_POINT) &&
         number_digit(lex, scan_peek(s, lead + 1),
-                     plain ? plain->digits : (core_string_t){0});
+                     plain->digits);
 
     if (!unicode_cp_is_ascii_digit(first) && !leading_point) {
       return false;
@@ -4491,7 +4231,6 @@ static bool try_number(parse_scanner_t *s) {
   scan_lex_session_t *run = s->user_state;
 
   run->pending_number_phase = NUMBER_PREFIX;
-  run->pending_number_radix = nullptr;
   run->pending_number_form = nullptr;
   run->pending_number_prefix_at = s->cursor;
   run->pending_number_prefix_node = 0;
@@ -5168,7 +4907,9 @@ static bool scan_terminal_trie(parse_scanner_t *s, size_t min_len,
 
   while (s->mark + consumed < s->input_len) {
     uint8_t byte = (uint8_t)s->input[s->mark + consumed];
-    uint32_t child = term_trie_child((scan_lex_t *)lex, node, byte, false);
+    uint32_t child = trie_child(&((scan_lex_t *)lex)->term_nodes,
+                                &((scan_lex_t *)lex)->term_edges,
+                                node, byte, false);
 
     if (child == UINT32_MAX) {
       break;

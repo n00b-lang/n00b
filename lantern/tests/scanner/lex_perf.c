@@ -23,11 +23,17 @@ static const scan_lex_string_t STRINGS[] = {
     {},
 };
 
+static const scan_lex_number_form_t NUMBERS[] = {
+    {.digits = S("0123456789"), .tok_int = S("INTEGER"),
+     .tok_float = S("FLOAT"), .flags = SCAN_LEX_NUM_POINT},
+    {},
+};
+
 static const scan_lex_spec_t COMPILED = {
     .name = S("perf-compiled"),
     .comments = COMMENTS,
     .strings = STRINGS,
-    .number = {.tok_int = S("INTEGER"), .tok_float = S("FLOAT")},
+    .number_forms = NUMBERS,
     .tok_ident = S("IDENTIFIER"),
     .brackets = S("()[]{}"),
 };

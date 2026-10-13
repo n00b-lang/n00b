@@ -25,7 +25,6 @@ core_list_decl(scan_lex_literal_hook_t);
 core_list_decl(scan_lex_recovery_t);
 core_list_decl(scan_lex_declaration_t);
 core_list_decl(scan_lex_identifier_profile_t);
-core_list_decl(scan_lex_radix_t);
 core_list_decl(scan_lex_suffix_t);
 core_list_decl(scan_lex_number_form_t);
 
@@ -79,8 +78,6 @@ typedef struct {
     core_list_t(scan_lex_recovery_t)     recoveries;
     core_list_t(scan_lex_declaration_t)  declarations;
     core_list_t(scan_lex_identifier_profile_t) identifier_profiles;
-    core_list_t(scan_lex_radix_t)      radixes;
-    core_list_t(scan_lex_suffix_t)     suffixes;
     core_list_t(scan_lex_number_form_t) number_forms;
     core_list_t(lex_operator_set_t)    operator_sets;
     core_list_t(lex_number_suffix_set_t) number_suffix_sets;
@@ -212,8 +209,6 @@ lex_build_free(lex_build_t *b)
     core_list_free(b->recoveries);
     core_list_free(b->declarations);
     core_list_free(b->identifier_profiles);
-    core_list_free(b->radixes);
-    core_list_free(b->suffixes);
     core_list_free(b->number_forms);
 
     for (size_t i = 0; i < core_list_len(b->operator_sets); i++) {
@@ -1102,65 +1097,6 @@ build_string_family(lex_build_t *b, const scan_lex_decl_t *a)
     core_list_free(escapes);
 }
 
-static void
-build_legacy_number(lex_build_t *b, const scan_lex_decl_t *a)
-{
-    scan_lex_number_t *n = &b->spec.number;
-
-    for (size_t i = 0; i < core_list_len(a->lex_opts); i++) {
-        const scan_lex_opt_t *o = &a->lex_opts.data[i];
-
-        if (!o->name.data) {
-            continue;
-        }
-
-        if (named(o, "radix")) {
-            core_list_push(b->radixes,
-                           ((scan_lex_radix_t){.prefix = arg(o, 0),
-                                               .digits = arg(o, 1),
-                                               .tok    = arg(o, 2)}));
-        }
-        else if (named(o, "suffix")) {
-            core_list_push(b->suffixes,
-                           ((scan_lex_suffix_t){.suffix = arg(o, 0),
-                                                .tok    = arg(o, 1)}));
-        }
-        else if (named(o, "sep")) {
-            n->sep = arg(o, 0);
-        }
-        else if (named(o, "sign")) {
-            n->sign = arg(o, 0);
-        }
-        else if (named(o, "exp")) {
-            n->exponent = arg(o, 0);
-        }
-        else if (named(o, "int")) {
-            n->tok_int = arg(o, 0);
-        }
-        else if (named(o, "float")) {
-            n->tok_float = arg(o, 0);
-        }
-        else {
-            oops(b, "number", o->name);
-        }
-    }
-}
-
-static bool
-number_form_syntax(const scan_lex_decl_t *a)
-{
-    for (size_t i = 0; i < core_list_len(a->lex_opts); i++) {
-        const scan_lex_opt_t *o = &a->lex_opts.data[i];
-
-        if (named(o, "prefix") || named(o, "digits")
-            || named(o, "point") || named(o, "exponent_digits")) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
 static const scan_lex_suffix_t *
 own_suffix_rules(lex_build_t *b,
                  const core_list_t(scan_lex_suffix_t) *suffixes)
@@ -1425,13 +1361,6 @@ build_number_form(lex_build_t *b, const scan_lex_decl_t *a)
                 }
             }
         }
-        else if (named(o, "radix")) {
-            if (!b->err[0]) {
-                snprintf(b->err, sizeof(b->err),
-                         "@lex-number: radix() cannot be mixed with a "
-                         "self-contained number form");
-            }
-        }
         else {
             oops(b, "number", o->name);
         }
@@ -1484,17 +1413,6 @@ build_number_form(lex_build_t *b, const scan_lex_decl_t *a)
         core_list_push(b->number_forms, form);
     }
     core_list_free(suffixes);
-}
-
-static void
-build_number(lex_build_t *b, const scan_lex_decl_t *a)
-{
-    if (number_form_syntax(a)) {
-        build_number_form(b, a);
-    }
-    else {
-        build_legacy_number(b, a);
-    }
 }
 
 static void
@@ -2871,7 +2789,6 @@ scan_lex_spec_from_decls(parse_grammar_t *g,
         size_t directives_before = b->directives.len;
         size_t hooks_before = b->literal_hooks.len;
         size_t recoveries_before = b->recoveries.len;
-        size_t radixes_before = b->radixes.len;
         size_t numbers_before = b->number_forms.len;
         size_t soft_before = b->soft_keywords.len;
 
@@ -2883,7 +2800,7 @@ scan_lex_spec_from_decls(parse_grammar_t *g,
             build_string_family(b, a);
             break;
         case SCAN_LEX_STRING_ESCAPES: break;
-        case SCAN_LEX_NUMBER:  build_number(b, a);  break;
+        case SCAN_LEX_NUMBER:  build_number_form(b, a);  break;
         case SCAN_LEX_NUMBER_SUFFIXES: break;
         case SCAN_LEX_LAYOUT:  build_layout(b, a);  break;
         case SCAN_LEX_SIGIL:   build_sigil(b, a);   break;
@@ -2949,10 +2866,6 @@ scan_lex_spec_from_decls(parse_grammar_t *g,
             record_declaration(b, SCAN_LEX_DECL_RECOVERY,
                                b->recoveries.data[j].token,
                                a->source_origin);
-        }
-        for (size_t j = radixes_before; j < b->radixes.len; j++) {
-            record_declaration(b, SCAN_LEX_DECL_NUMBER,
-                               b->radixes.data[j].prefix, a->source_origin);
         }
         for (size_t j = numbers_before; j < b->number_forms.len; j++) {
             record_declaration(b, SCAN_LEX_DECL_NUMBER,
@@ -3066,14 +2979,6 @@ scan_lex_spec_from_decls(parse_grammar_t *g,
     if (core_list_len(b->recoveries)) {
         core_list_push(b->recoveries, ((scan_lex_recovery_t){0}));
         b->spec.recoveries = b->recoveries.data;
-    }
-    if (core_list_len(b->radixes)) {
-        core_list_push(b->radixes, ((scan_lex_radix_t){0}));
-        b->spec.number.radixes = b->radixes.data;
-    }
-    if (core_list_len(b->suffixes)) {
-        core_list_push(b->suffixes, ((scan_lex_suffix_t){0}));
-        b->spec.number.suffixes = b->suffixes.data;
     }
     if (core_list_len(b->number_forms)) {
         core_list_push(b->number_forms, ((scan_lex_number_form_t){0}));

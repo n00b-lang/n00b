@@ -293,8 +293,6 @@ analyze_openings(const scan_lex_spec_t *spec, parse_grammar_t *grammar,
     COUNT(fences, scan_lex_fence_t, outer_open);
     COUNT(directives, scan_lex_directive_t, open);
     COUNT(number_forms, scan_lex_number_form_t, digits);
-    capacity += recipe_count(spec->number.radixes, sizeof(scan_lex_radix_t),
-                             offsetof(scan_lex_radix_t, prefix));
     capacity += recipe_count(spec->operators, sizeof(core_string_t), 0);
 #undef COUNT
 
@@ -363,12 +361,6 @@ analyze_openings(const scan_lex_spec_t *spec, parse_grammar_t *grammar,
     ADD_RECIPES(regexes, scan_lex_regex_t, opener,
                 SCAN_LEX_DECL_REGEX, PRIORITY_REGEX, false);
 #undef ADD_RECIPES
-    for (const scan_lex_radix_t *item = spec->number.radixes;
-         item && item->prefix.data; item++) {
-        add_opening(items, &count, origins, origin_count,
-                    SCAN_LEX_DECL_NUMBER,
-                    PRIORITY_NUMBER, true, item->prefix);
-    }
     for (const core_string_t *item = spec->operators;
          item && item->data; item++) {
         add_opening(items, &count, origins, origin_count,
@@ -515,8 +507,6 @@ scan_lex_register_output_terminals(const scan_lex_spec_t *spec,
     REGISTER(tok_eof);
     REGISTER(tok_ident);
     REGISTER(tok_ident_upper);
-    register_output(grammar, spec->number.tok_int);
-    register_output(grammar, spec->number.tok_float);
 #undef REGISTER
     for (const scan_lex_comment_t *item = spec->comments;
          item && item->opener.data; item++) {
@@ -536,14 +526,6 @@ scan_lex_register_output_terminals(const scan_lex_spec_t *spec,
              suffix && suffix->suffix.data; suffix++) {
             register_output(grammar, suffix->tok);
         }
-    }
-    for (const scan_lex_radix_t *item = spec->number.radixes;
-         item && item->prefix.data; item++) {
-        register_output(grammar, item->tok);
-    }
-    for (const scan_lex_suffix_t *item = spec->number.suffixes;
-         item && item->suffix.data; item++) {
-        register_output(grammar, item->tok);
     }
     for (const scan_lex_sigil_t *item = spec->sigils;
          item && item->prefix.data; item++) {
@@ -652,8 +634,6 @@ analyze_outputs(const scan_lex_spec_t *spec, parse_grammar_t *grammar,
     REQUIRE(spec->tok_eof, "@lex-layout");
     REQUIRE(spec->tok_ident, "@lex-ident");
     REQUIRE(spec->tok_ident_upper, "@lex-ident");
-    REQUIRE(spec->number.tok_int, "@lex-number");
-    REQUIRE(spec->number.tok_float, "@lex-number");
 
     for (const scan_lex_comment_t *item = spec->comments;
          item && item->opener.data; item++) {
@@ -673,14 +653,6 @@ analyze_outputs(const scan_lex_spec_t *spec, parse_grammar_t *grammar,
              suffix && suffix->suffix.data; suffix++) {
             REQUIRE(suffix->tok, "@lex-number");
         }
-    }
-    for (const scan_lex_radix_t *item = spec->number.radixes;
-         item && item->prefix.data; item++) {
-        REQUIRE(item->tok, "@lex-number");
-    }
-    for (const scan_lex_suffix_t *item = spec->number.suffixes;
-         item && item->suffix.data; item++) {
-        REQUIRE(item->tok, "@lex-number");
     }
     for (const scan_lex_sigil_t *item = spec->sigils;
          item && item->prefix.data; item++) {
@@ -838,10 +810,6 @@ collect_unused_outputs(const scan_lex_spec_t *spec, parse_grammar_t *grammar,
     ADD_BASE(tok_eof);
     ADD_BASE(tok_ident);
     ADD_BASE(tok_ident_upper);
-    add_output(&outputs, &count, &capacity, spec->number.tok_int,
-               (core_string_t){0});
-    add_output(&outputs, &count, &capacity, spec->number.tok_float,
-               (core_string_t){0});
 #undef ADD_BASE
 
 #define RECIPE_ORIGIN(kind_value, spelling_value)                              \
@@ -869,15 +837,6 @@ collect_unused_outputs(const scan_lex_spec_t *spec, parse_grammar_t *grammar,
              suffix && suffix->suffix.data; suffix++) {
             add_output(&outputs, &count, &capacity, suffix->tok, origin);
         }
-    }
-    for (const scan_lex_radix_t *item = spec->number.radixes;
-         item && item->prefix.data; item++) {
-        add_output(&outputs, &count, &capacity, item->tok,
-                   RECIPE_ORIGIN(SCAN_LEX_DECL_NUMBER, item->prefix));
-    }
-    for (const scan_lex_suffix_t *item = spec->number.suffixes;
-         item && item->suffix.data; item++) {
-        add_output(&outputs, &count, &capacity, item->tok, (core_string_t){0});
     }
     for (const scan_lex_sigil_t *item = spec->sigils;
          item && item->prefix.data; item++) {
