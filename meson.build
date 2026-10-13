@@ -104,7 +104,8 @@ n00bb_exe = executable(
      'abi_function_rows.c', 'abi_constraint_rows.c', 'abi_storage.c',
      'abi_trait_method_rows.c',
      'abi_type_signatures.c', 'abi_decl_index.c', 'abi_declarations.c',
-     'llvm_backend.c', 'llvm_stack_maps.c', 'native_frame_maps.c',
+     'llvm_backend.c', 'llvm_native_cache.c', 'llvm_stack_maps.c',
+     'native_frame_maps.c',
      'global_metadata.c',
      'storage_selection.c'],
     dependencies: [lantern, llvm],
@@ -402,11 +403,19 @@ test('abi-type-index', abi_type_index_test)
 
 llvm_backend_test = executable(
     'llvm-backend-test',
-    ['tests/llvm_backend.c', 'llvm_backend.c', 'runtime_native_roots.c'],
+    ['tests/llvm_backend.c', 'llvm_backend.c', 'llvm_native_cache.c',
+     'runtime_native_roots.c'],
     dependencies: [lantern, llvm],
 )
 
 test('llvm-backend', llvm_backend_test)
+
+llvm_native_cache_test = executable(
+    'llvm-native-cache-test',
+    ['tests/llvm_native_cache.c', 'llvm_native_cache.c'],
+    dependencies: [lantern, llvm],
+)
+test('llvm-native-cache', llvm_native_cache_test)
 
 llvm_stack_maps_test = executable(
     'llvm-stack-maps-test',
@@ -418,7 +427,7 @@ test('llvm-stack-maps', llvm_stack_maps_test)
 
 llvm_frame_roots_test = executable(
     'llvm-frame-roots-test',
-    ['tests/llvm_frame_roots.c', 'llvm_backend.c',
+    ['tests/llvm_frame_roots.c', 'llvm_backend.c', 'llvm_native_cache.c',
      'llvm_stack_maps.c', 'native_frame_maps.c', 'runtime_native_roots.c'],
     dependencies: [lantern, llvm],
 )

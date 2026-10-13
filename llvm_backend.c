@@ -8,6 +8,7 @@
 #include "abi_string.h"
 #include "frame_roots.h"
 #include "llvm_stack_maps.h"
+#include "llvm_native_cache.h"
 #include "n00b-abi-v1.h"
 #include "runtime_native_roots.h"
 #include <llvm-c/Analysis.h>
@@ -94,6 +95,7 @@ struct n00bb_llvm_backend_t {
     bool runtime_reachable_bound;
     ir_storage_origin_t *storage_origin;
     bool emit_frame_maps;
+    n00bb_native_cache_t *native_cache;
     core_list_t(callback_binding_t) callback_bindings;
 };
 
@@ -11054,6 +11056,13 @@ n00bb_llvm_backend_enable_frame_maps(n00bb_llvm_backend_t *backend)
     return true;
 }
 
+void
+n00bb_llvm_backend_bind_native_cache(n00bb_llvm_backend_t *backend,
+    n00bb_native_cache_t *cache)
+{
+    if (backend) backend->native_cache = cache;
+}
+
 static bool
 lower_phase(n00bb_llvm_backend_t *backend, bool comptime,
             core_diagnostics_t *diagnostics)
@@ -12540,6 +12549,25 @@ emit_native_module(n00bb_llvm_backend_t *backend, LLVMModuleRef module,
         || LLVMInitializeNativeAsmParser())
         return backend_error(diagnostics, "LLVM native target is unavailable");
     char *triple = LLVMGetDefaultTargetTriple();
+    core_uint128_t cache_key = 0;
+    if (!comptime && backend->native_cache && triple) {
+        LLVMMemoryBufferRef preopt = LLVMWriteBitcodeToMemoryBuffer(module);
+        if (preopt) {
+            cache_key = n00bb_native_cache_key(backend->native_cache,
+                LLVMGetBufferStart(preopt), LLVMGetBufferSize(preopt),
+                triple, backend->cpu_name, backend->cpu_features,
+                backend->debug_enabled, backend->emit_frame_maps);
+            LLVMDisposeMemoryBuffer(preopt);
+            if (n00bb_native_cache_read(backend->native_cache, cache_key,
+                    out)) {
+                if (getenv("N00BB_PROFILE_COMPILE"))
+                    fprintf(stderr, "PROFILE llvm-cache-hit %s\n",
+                        ir_module_name(backend->runtime_source));
+                LLVMDisposeMessage(triple);
+                return true;
+            }
+        }
+    }
     LLVMTargetRef target = nullptr;
     bool ok = triple && !LLVMGetTargetFromTriple(triple, &target, &message);
     if (!ok) {
@@ -12599,8 +12627,14 @@ emit_native_module(n00bb_llvm_backend_t *backend, LLVMModuleRef module,
     LLVMMemoryBufferRef object = nullptr;
     ok = !LLVMTargetMachineEmitToMemoryBuffer(machine, module,
         LLVMObjectFile, &message, &object);
-    if (ok) core_buffer_append(out, LLVMGetBufferStart(object),
-                               LLVMGetBufferSize(object));
+    if (ok) {
+        const char *bytes = LLVMGetBufferStart(object);
+        size_t length = LLVMGetBufferSize(object);
+        core_buffer_append(out, bytes, length);
+        if (cache_key)
+            n00bb_native_cache_write(backend->native_cache, cache_key,
+                bytes, length);
+    }
     else backend_error(diagnostics, message ? message : "LLVM object emission failed");
     if (object) LLVMDisposeMemoryBuffer(object);
     if (message) LLVMDisposeMessage(message);

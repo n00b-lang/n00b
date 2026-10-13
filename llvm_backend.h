@@ -10,6 +10,7 @@
 #include "abi_static_graph.h"
 
 typedef struct n00bb_llvm_backend_t n00bb_llvm_backend_t;
+typedef struct n00bb_native_cache_t n00bb_native_cache_t;
 
 enum { N00BB_COMPTIME_RESULT_FD = 3 };
 
@@ -120,6 +121,8 @@ bool n00bb_llvm_backend_bind_reachable_functions(
 bool n00bb_llvm_backend_bind_storage_origin(
     n00bb_llvm_backend_t *backend, ir_storage_origin_t *origin);
 bool n00bb_llvm_backend_enable_frame_maps(n00bb_llvm_backend_t *backend);
+void n00bb_llvm_backend_bind_native_cache(n00bb_llvm_backend_t *backend,
+    n00bb_native_cache_t *cache);
 
 /* Produces verified LLVM bitcode for a phase module. */
 bool n00bb_llvm_backend_write_bitcode(

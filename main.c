@@ -27,6 +27,7 @@ static double n00bb_profile_seconds(void);
 #include "frame_roots.h"
 #include "global_metadata.h"
 #include "llvm_backend.h"
+#include "llvm_native_cache.h"
 #include "native_frame_maps.h"
 #include "n00b-abi-v1.h"
 #include "runtime_native_roots.h"
@@ -57571,6 +57572,11 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     n00bb_native_frames_t *native_frames = ok
         ? n00bb_native_frames_new(analysis->target.object_format) : nullptr;
     if (ok && !native_frames) ok = false;
+    char *executable_path = ok && !lto
+        ? n00bb_executable_path(compiler_path) : nullptr;
+    n00bb_native_cache_t *native_cache = executable_path
+        ? n00bb_native_cache_open(executable_path) : nullptr;
+    core_free(executable_path);
     for (size_t i = 0; ok && i < count; i++) {
         n00bb_tu_state_t *state = tu_state(order.data[i]);
         n00bb_llvm_backend_t *backend = n00bb_llvm_backend_prepare(
@@ -57580,6 +57586,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             ok = false;
             break;
         }
+        n00bb_llvm_backend_bind_native_cache(backend, native_cache);
         ok = n00bb_llvm_backend_bind_reachable_functions(backend, false,
             analysis->runtime_reachable_functions.data,
             analysis->runtime_reachable_functions.len)
@@ -57774,6 +57781,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     free(global_bindings);
     free(finalizers);
     free(function_indices);
+    n00bb_native_cache_close(native_cache);
     n00bb_native_frames_free(native_frames);
     ir_storage_origin_free(storage_origin);
     core_list_free(order);
