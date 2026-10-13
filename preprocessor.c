@@ -218,7 +218,8 @@ node_name(parse_grammar_t *g, parse_tree_t *node)
 static bool
 is_name(parse_grammar_t *g, parse_tree_t *node, const char *name)
 {
-    return core_string_eq(node_name(g, node), core_string_from_cstr(name));
+    return core_string_eq(node_name(g, node),
+                          core_string_borrow(name, strlen(name)));
 }
 
 static parse_tree_t *
@@ -571,7 +572,8 @@ postfix_has_token(parse_tree_t *node, const char *token)
     for (size_t i = 0; i < core_tree_num_children(node); i++) {
         parse_tree_t *part = core_tree_child(node, i);
         if (core_tree_is_leaf(part)
-            && parse_tree_leaf_is(part, core_string_from_cstr(token)))
+            && parse_tree_leaf_is(part,
+                                  core_string_borrow(token, strlen(token))))
             return true;
     }
     return false;
@@ -1644,7 +1646,9 @@ n00bb_preprocessor_builtin_name(core_string_t name)
         "preproc_value", "compile_warning", "compile_error", nullptr,
     };
     for (size_t i = 0; names[i]; i++)
-        if (core_string_eq(name, core_string_from_cstr(names[i]))) return true;
+        if (core_string_eq(name,
+                           core_string_borrow(names[i], strlen(names[i]))))
+            return true;
     return false;
 }
 
@@ -1697,7 +1701,8 @@ validate_expr_forms(pp_context_t *ctx, parse_tree_t *node)
     }
     bool permitted = false;
     for (size_t i = 0; allowed[i]; i++) {
-        if (core_string_eq(name, core_string_from_cstr(allowed[i]))) {
+        if (core_string_eq(name,
+                           core_string_borrow(allowed[i], strlen(allowed[i])))) {
             permitted = true;
             break;
         }
