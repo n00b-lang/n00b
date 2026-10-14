@@ -290,8 +290,9 @@ gather_directive(resolver_t *r, uint32_t id)
         unsupported(model, id, "`import` inside a contract; run `writ import` and `use` the draft");
         return;
     case WRIT_N_CRATE:
+        unsupported(model, id, "`crate` outside a Rust contract");
+        return;
     case WRIT_N_FEATURE:
-        unsupported(model, id, "Rust crates and build features");
         return;
     case WRIT_N_VERSION_QUERY:
         unsupported(model, id, "library version queries");
@@ -589,16 +590,17 @@ resolve_type_in(resolver_t *r, uint32_t id, writ_slot_rec_t *slot, bool handle_b
                                                                   .count = count})
                       : 0;
     }
-    case WRIT_N_TYPE_BYTES:
-        if (writ_is_text(model, node->payload, "utf8")) {
-            unsupported(model, id, "`utf8[...]` counted text");
-            return 0;
-        }
+    case WRIT_N_TYPE_BYTES: {
         if (slot) {
             take_extent(r, slot, child(model, id, 0));
         }
-        return writ_type_intern(model, (writ_type_key_t){.kind = WRIT_TYPE_ARRAY,
-                                                         .target = writ_type_builtin(model, "u8")});
+        writ_type_id bytes = writ_type_intern(model, (writ_type_key_t){.kind = WRIT_TYPE_ARRAY,
+                                                                        .target = writ_type_builtin(model, "u8")});
+        return writ_is_text(model, node->payload, "utf8")
+                 ? writ_type_intern(model, (writ_type_key_t){.kind = WRIT_TYPE_VIEW, .target = bytes,
+                                                             .name = node->payload})
+                 : bytes;
+    }
     case WRIT_N_TYPE_VIEW: {
         writ_type_id base = resolve_type_in(r, child(model, id, 0), slot, handle_base);
         uint32_t target = child(model, id, 1);
@@ -1251,9 +1253,6 @@ resolve_channel(resolver_t *r, uint32_t id)
     channel.kind = writ_is_text(model, node_at(model, source)->payload, "text") ? WRIT_CHANNEL_TEXT : WRIT_CHANNEL_VALUE;
     channel.source_expr = child(model, source, 0);
     channel.valid_until = first_of(model, id, WRIT_N_VALID_UNTIL);
-    if (channel.kind == WRIT_CHANNEL_TEXT) {
-        unsupported(model, source, "text error channels");
-    }
     if (declare(model, channel.name, WRIT_SCOPE_CHANNEL, (uint32_t)model->channels.len, channel.loc)) {
         core_list_push(model->channels, channel);
     }
@@ -1496,11 +1495,67 @@ resolve_handle_nones(writ_model_t *model, resolver_t *r)
     }
 }
 
+static writ_status_t
+derive(writ_unit_t *unit, const writ_rust_t **rust, writ_str_t *text)
+{
+    size_t first_diag = unit->session->diags.len;
+    *rust = writ_rust_read(unit, nullptr);
+    writ_diag_flush(unit->session, first_diag);
+    if (!*rust) {
+        return WRIT_HAS_ERRORS;
+    }
+    *text = writ_rust_derive(*rust);
+    return WRIT_OK;
+}
+
+writ_status_t
+writ_derive_transport(writ_unit_t *unit, const writ_output_t *output)
+{
+    if (!unit || !output || !writ_unit_is_rust(unit)) {
+        return WRIT_INVALID_ARGUMENT;
+    }
+    const writ_rust_t *rust = nullptr;
+    writ_str_t text = {0};
+    writ_status_t status = derive(unit, &rust, &text);
+    if (status != WRIT_OK) {
+        return status;
+    }
+    writ_str_t library = writ_sym_str(unit->session, rust->library);
+    writ_str_t path = writ_str_format(unit->session, "%.*s.derived.writ", (int)library.length, library.data);
+    return output->write_file(output->context, path, text);
+}
+
+static writ_status_t
+resolve_rust(writ_unit_t *unit, const writ_platform_t *platform, const writ_model_t **out)
+{
+    const writ_rust_t *rust = nullptr;
+    writ_str_t text = {0};
+    writ_status_t status = derive(unit, &rust, &text);
+    if (status != WRIT_OK) {
+        return status;
+    }
+    writ_unit_t *derived = writ_unit_new(unit->session);
+    writ_str_t library = writ_sym_str(unit->session, rust->library);
+    writ_origin_t origin = {.host_path = writ_str_format(unit->session, "%.*s.derived.writ", (int)library.length,
+                                                         library.data)};
+    status = writ_unit_add_source(derived, WRIT_SOURCE_CONTRACT_FILE, origin, text, nullptr);
+    if (status == WRIT_OK) {
+        status = writ_resolve(derived, platform, out);
+    }
+    if (status == WRIT_OK) {
+        ((writ_model_t *)*out)->rust = rust;
+    }
+    return status;
+}
+
 writ_status_t
 writ_resolve(writ_unit_t *unit, const writ_platform_t *platform, const writ_model_t **out)
 {
     if (!unit || !platform || !out) {
         return WRIT_INVALID_ARGUMENT;
+    }
+    if (writ_unit_is_rust(unit)) {
+        return resolve_rust(unit, platform, out);
     }
     size_t first_diag = unit->session->diags.len;
     resolver_t r = {.model = model_new(unit, platform), .decls = core_list_new(uint32_t)};

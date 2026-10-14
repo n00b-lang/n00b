@@ -1,0 +1,55 @@
+library resharp
+lang rust
+crate resharp "0.7.6"
+feature experimental_capture_groups = cargo "experimental_capture_groups"
+
+error resharp::Error display
+enum UnicodeMode {
+    Ascii,
+    Default,
+    Full,
+    Javascript
+}
+opaque RegexOptions shared
+struct Match {
+    start: usize,
+    end: usize
+}
+opaque Regex shared
+enum FindAll {
+    EmptyLang,
+    Anchored,
+    EndAnchored,
+    Hardened,
+    FwdPrefix,
+    FwdLbPrefix,
+    Bounded,
+    Dfa,
+    ClassPlus
+}
+
+impl RegexOptions {
+    fn default() -> RegexOptions
+    fn unicode(self, mode: UnicodeMode) -> RegexOptions
+    fn case_insensitive(self, yes: bool) -> RegexOptions
+    fn dot_matches_new_line(self, yes: bool) -> RegexOptions
+    fn multiline(self, yes: bool) -> RegexOptions
+    fn ignore_whitespace(self, yes: bool) -> RegexOptions
+    fn hardened(self, yes: bool) -> RegexOptions
+    fn unbounded_size(self, yes: bool) -> RegexOptions
+    when feature experimental_capture_groups {
+        fn implicit_captures(self, yes: bool) -> RegexOptions
+    }
+}
+
+impl Regex {
+    fn is_match(&self, input: &[u8]) -> Result<bool, Error>
+    fn new(pattern: &str) -> Result<Regex, Error>
+    fn with_options(pattern: &str, opts: RegexOptions) -> Result<Regex, Error>
+    fn find_all(&self, input: &[u8]) -> Result<Vec<Match>, Error>
+    fn find_anchored(&self, input: &[u8]) -> Result<Option<Match>, Error>
+    fn is_full_match(&self, input: &[u8]) -> Result<bool, Error>
+    when feature experimental_capture_groups {
+        fn capture_index_for_name(&self, name: &str) -> Option<usize>
+    }
+}

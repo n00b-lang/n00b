@@ -19,6 +19,8 @@ arg(const char *text)
 }
 
 static writ_str_t platform_triple;
+static writ_str_t features[MAX_LIST];
+static size_t     feature_count;
 
 static writ_status_t
 write_stdout(void *context, writ_str_t path, writ_str_t contents)
@@ -81,6 +83,10 @@ platform_for(writ_session_t *session)
     writ_platform_t *platform = nullptr;
     if (writ_platform_from_triple(session, platform_triple, &platform) != WRIT_OK) {
         fprintf(stderr, "writ: unknown platform %.*s\n", (int)platform_triple.length, platform_triple.data);
+        return nullptr;
+    }
+    for (size_t i = 0; i < feature_count; i++) {
+        writ_platform_set_feature(platform, features[i], true);
     }
     return platform;
 }
@@ -121,22 +127,37 @@ cmd_fmt(writ_session_t *session, int argc, char **argv)
     return writ_format_unit(unit, &output) == WRIT_OK ? 0 : 1;
 }
 
+static bool
+file_then_output(writ_session_t *session, int argc, char **argv, writ_output_t *output)
+{
+    if (argc == 3 && !strcmp(argv[1], "-o")) {
+        output_for(session, argv[2], output);
+        return true;
+    }
+    output_for(session, "-", output);
+    return argc == 1;
+}
+
+static int
+cmd_derive(writ_session_t *session, int argc, char **argv)
+{
+    writ_output_t output;
+    if (!file_then_output(session, argc, argv, &output)) {
+        return 2;
+    }
+    writ_unit_t *unit = load(session, argv[0]);
+    return unit && writ_derive_transport(unit, &output) == WRIT_OK ? 0 : 1;
+}
+
 static int
 cmd_lower(writ_session_t *session, int argc, char **argv)
 {
-    const char *directory = "-";
-    if (argc == 3 && !strcmp(argv[1], "-o")) {
-        directory = argv[2];
-    } else if (argc != 1) {
+    writ_output_t output;
+    if (!file_then_output(session, argc, argv, &output)) {
         return 2;
     }
     const writ_model_t *model = resolve(session, argv[0]);
-    if (!model) {
-        return 1;
-    }
-    writ_output_t output;
-    output_for(session, directory, &output);
-    return writ_lower_json(model, &output) == WRIT_OK ? 0 : 1;
+    return model && writ_lower_json(model, &output) == WRIT_OK ? 0 : 1;
 }
 
 static int
@@ -168,20 +189,33 @@ cmd_plan(writ_session_t *session, int argc, char **argv)
     return status;
 }
 
+static bool
+take_list(char **argv, int *i, int argc, const char *flag, writ_str_t *list, size_t *count)
+{
+    if (strcmp(argv[*i], flag) || *i + 1 >= argc || *count >= MAX_LIST) {
+        return false;
+    }
+    list[(*count)++] = arg(argv[++*i]);
+    return true;
+}
+
 static int
 cmd_gen(writ_session_t *session, int argc, char **argv)
 {
-    if (argc < 2 || strcmp(argv[0], "c")) {
+    bool rust = argc >= 2 && !strcmp(argv[0], "rust");
+    if (argc < 2 || (strcmp(argv[0], "c") && !rust)) {
         return 2;
     }
     writ_gen_c_request_t request = {.struct_size = sizeof(request)};
+    writ_gen_rust_request_t transport = {.struct_size = sizeof(transport)};
     const char *directory = ".";
     for (int i = 2; i < argc; i++) {
+        size_t taken = 0;
         if (!strcmp(argv[i], "-o") && i + 1 < argc) {
             directory = argv[++i];
-        } else if (!strcmp(argv[i], "--prefix") && i + 1 < argc) {
-            request.prefix = (writ_str_t){argv[i + 1], strlen(argv[i + 1])};
-            i++;
+        } else if (take_list(argv, &i, argc, "--prefix", &request.prefix, &taken)
+                   || take_list(argv, &i, argc, "--crate-path", &transport.crate_path, &taken)) {
+            continue;
         } else if (!strcmp(argv[i], "--conformance")) {
             request.conformance = true;
         } else {
@@ -194,21 +228,11 @@ cmd_gen(writ_session_t *session, int argc, char **argv)
     }
     writ_output_t output;
     output_for(session, directory, &output);
-    writ_status_t status = writ_gen_c(model, &request, &output);
+    writ_status_t status = rust ? writ_gen_rust(model, &transport, &output) : writ_gen_c(model, &request, &output);
     if (status == WRIT_IO_FAILED) {
         fprintf(stderr, "writ: cannot write into %s\n", directory);
     }
     return status == WRIT_OK ? 0 : 1;
-}
-
-static bool
-take_list(char **argv, int *i, int argc, const char *flag, writ_str_t *list, size_t *count)
-{
-    if (strcmp(argv[*i], flag) || *i + 1 >= argc || *count >= MAX_LIST) {
-        return false;
-    }
-    list[(*count)++] = arg(argv[++*i]);
-    return true;
 }
 
 static int
@@ -217,12 +241,20 @@ cmd_import(writ_session_t *session, int argc, char **argv)
     writ_str_t headers[MAX_LIST], links[MAX_LIST], defines[MAX_LIST], includes[MAX_LIST], only[MAX_LIST];
     writ_import_request_t request = {.struct_size = sizeof(request), .headers = headers, .links = links,
                                      .defines = defines, .include_paths = includes, .only = only};
+    writ_rust_import_request_t rust = {.struct_size = sizeof(rust), .features = features,
+                                       .features_count = feature_count};
     const char *directory = ".";
     for (int i = 0; i < argc; i++) {
+        size_t taken = 0;
         if (!strcmp(argv[i], "--library") && i + 1 < argc) {
             request.library = arg(argv[++i]);
         } else if (!strcmp(argv[i], "-o") && i + 1 < argc) {
             directory = argv[++i];
+        } else if (take_list(argv, &i, argc, "--rust", &rust.manifest, &taken)
+                   || take_list(argv, &i, argc, "--rustdoc", &rust.rustdoc_json, &taken)
+                   || take_list(argv, &i, argc, "--crate", &rust.crate, &taken)
+                   || take_list(argv, &i, argc, "--package", &rust.package, &taken)) {
+            continue;
         } else if (!take_list(argv, &i, argc, "--header", headers, &request.headers_count)
                    && !take_list(argv, &i, argc, "--link", links, &request.links_count)
                    && !take_list(argv, &i, argc, "--define", defines, &request.defines_count)
@@ -231,12 +263,17 @@ cmd_import(writ_session_t *session, int argc, char **argv)
             return 2;
         }
     }
+    writ_output_t output;
+    output_for(session, directory, &output);
+    if (rust.crate.length) {
+        rust.library = request.library;
+        rust.package = rust.package.length ? rust.package : rust.crate;
+        return request.library.length ? writ_toolchain_import_rust(session, &rust, &output) != WRIT_OK : 2;
+    }
     writ_platform_t *platform = platform_for(session);
     if (!platform || !request.library.length || !request.headers_count) {
         return platform ? 2 : 1;
     }
-    writ_output_t output;
-    output_for(session, directory, &output);
     return writ_clang_import(session, platform, &request, &output) == WRIT_OK ? 0 : 1;
 }
 
@@ -283,11 +320,12 @@ static const struct {
 } commands[] = {
     {"import", cmd_import, "import --library NAME --header H... [--link L] [--define D] [-I DIR] [--only GLOB] [-o DIR]"},
     {"verify", cmd_verify, "verify FILE [--binary PATH]"},
-    {"gen", cmd_gen, "gen c FILE [-o DIR] [--prefix NAME] [--conformance]"},
+    {"gen", cmd_gen, "gen c FILE [-o DIR] [--prefix NAME] [--conformance] | gen rust FILE --crate-path DIR [-o DIR]"},
     {"parse", cmd_parse, "parse FILE"},
     {"check", cmd_check, "check FILE"},
     {"plan", cmd_plan, "plan FILE [FUNCTION]"},
     {"lower", cmd_lower, "lower FILE [-o DIR]"},
+    {"derive", cmd_derive, "derive FILE [-o DIR]"},
     {"fmt", cmd_fmt, "fmt FILE"},
 };
 
@@ -304,6 +342,8 @@ main(int argc, char **argv)
         if (!strcmp(argv[i], "--platform") && i + 1 < argc) {
             platform_triple = (writ_str_t){argv[i + 1], strlen(argv[i + 1])};
             i++;
+        } else if (!strcmp(argv[i], "--feature") && i + 1 < argc && feature_count < MAX_LIST) {
+            features[feature_count++] = arg(argv[++i]);
         } else {
             argv[kept++] = argv[i];
         }

@@ -108,6 +108,10 @@ render_operands(render_env_t *env, const writ_plan_step_view_t *step, core_buffe
             put_expr(env, step->expr, out);
         }
         return;
+    case WRIT_STEP_SIZE_RETRY:
+        core_buffer_printf(out, "L%u needs ", step->local);
+        put_expr(env, step->expr, out);
+        return;
     case WRIT_STEP_SIZE_QUERY:
         core_buffer_puts(out, "(");
         for (size_t i = 0; i < plan->query_count; i++) {

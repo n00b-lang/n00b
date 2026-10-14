@@ -67,6 +67,10 @@ writ_clang_verify_layout(const writ_model_t *model, writ_str_t sysroot, writ_str
     if (!model || !report) {
         return WRIT_INVALID_ARGUMENT;
     }
+    if (!writ_model_library(model)->headers_count) {
+        *report = writ_cstr("skipped: the contract names no headers\n");
+        return WRIT_OK;
+    }
     writ_session_t *session = model->session;
     const writ_library_view_t *library = writ_model_library(model);
     writ_import_request_t request = {

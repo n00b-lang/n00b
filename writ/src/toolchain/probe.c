@@ -105,17 +105,39 @@ report_failures(const writ_model_t *model, writ_str_t output)
     }
 }
 
+static bool
+prepare_probe(const writ_model_t *model, writ_str_t sysroot, writ_str_t *report, const char *const *flags,
+              writ_command_t *command, writ_status_t *status)
+{
+    *status = !model || !report ? WRIT_INVALID_ARGUMENT : WRIT_OK;
+    bool headers = *status == WRIT_OK && writ_model_library(model)->headers_count;
+    if (*status == WRIT_OK && !headers) {
+        *report = writ_cstr("skipped: the contract names no headers\n");
+    }
+    uint32_t count = 0;
+    while (headers && flags[count]) {
+        count++;
+    }
+    if (headers) {
+        *command = writ_compile_command(model, sysroot, count);
+    }
+    for (uint32_t i = 0; i < count; i++) {
+        writ_command_add(command, flags[i]);
+    }
+    return headers;
+}
+
 writ_status_t
 writ_toolchain_verify_probes(const writ_model_t *model, writ_str_t sysroot, writ_str_t *report)
 {
-    if (!model || !report) {
-        return WRIT_INVALID_ARGUMENT;
+    static const char *const flags[] = {"-fsyntax-only", "-", nullptr};
+    writ_command_t command;
+    writ_status_t ready;
+    if (!prepare_probe(model, sysroot, report, flags, &command, &ready)) {
+        return ready;
     }
     writ_session_t *session = model->session;
     size_t first_diag = session->diags.len;
-    writ_command_t command = writ_compile_command(model, sysroot, 2);
-    writ_command_add(&command, "-fsyntax-only");
-    writ_command_add(&command, "-");
     writ_str_t probe = layout_probe(model);
     writ_run_result_t result;
     writ_status_t status = writ_run(session, command.argv, probe, &result);
@@ -191,19 +213,15 @@ declaration_of(const writ_model_t *model, writ_str_t ir, writ_str_t symbol)
 writ_status_t
 writ_toolchain_abi_classes(const writ_model_t *model, writ_str_t sysroot, writ_str_t *report)
 {
-    if (!model || !report) {
-        return WRIT_INVALID_ARGUMENT;
+    static const char *const flags[] = {"-S", "-emit-llvm", "-O0", "-o", "-", "-", nullptr};
+    writ_command_t command;
+    writ_status_t ready;
+    if (!prepare_probe(model, sysroot, report, flags, &command, &ready)) {
+        return ready;
     }
+    writ_run_result_t result;
     writ_session_t *session = model->session;
     size_t first_diag = session->diags.len;
-    writ_command_t command = writ_compile_command(model, sysroot, 6);
-    writ_command_add(&command, "-S");
-    writ_command_add(&command, "-emit-llvm");
-    writ_command_add(&command, "-O0");
-    writ_command_add(&command, "-o");
-    writ_command_add(&command, "-");
-    writ_command_add(&command, "-");
-    writ_run_result_t result;
     writ_emit_t emit;
     writ_emit_init(&emit);
     if (writ_run(session, command.argv, abi_probe(model), &result) != WRIT_OK || result.exit_code) {

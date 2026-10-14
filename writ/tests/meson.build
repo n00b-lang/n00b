@@ -113,6 +113,7 @@ fuzz_writ = static_library(
     'writ_fuzz',
     core_sources,
     grammar_h,
+    json_grammar_h,
     keywords_h,
     model_names_h,
     model_json_h,
@@ -263,6 +264,41 @@ foreach binding : [
             dependencies: binding[3],
             override_options: ['c_std=c11'],
         ),
+    )
+endforeach
+
+resharp_root = get_option('resharp_root')
+resharp_features = ['--feature', 'experimental_capture_groups']
+test(
+    'resharp-import',
+    python,
+    args: [golden, source_root / 'contracts' / 'resharp.writ', '--stdout', '--', writ_exe] + resharp_features
+          + ['import', '--library', 'resharp', '--crate', 'resharp', '--rust', resharp_root / 'Cargo.toml', '-o', '-'],
+    env: {'CARGO_TARGET_DIR': meson.current_build_dir() / 'resharp-target'},
+    is_parallel: false,
+    timeout: 600,
+)
+test(
+    'resharp-derive',
+    python,
+    args: [golden, source_root / 'tests' / 'resharp' / 'resharp.derived.writ', '--', writ_exe, 'derive',
+           'contracts/resharp.writ'],
+)
+test(
+    'resharp-plans',
+    python,
+    args: [golden, source_root / 'tests' / 'plan' / 'resharp.full.plan', '--', writ_exe, '--platform',
+           'aarch64-apple-darwin'] + resharp_features + ['plan', 'contracts/resharp.writ'],
+)
+foreach variant : ['plain', 'features', 'miri']
+    test(
+        'resharp-transport-' + variant,
+        python,
+        args: [source_root / 'tests' / 'resharp' / 'transport.py', writ_exe.full_path(), source_root, resharp_root,
+               meson.current_build_dir() / 'resharp-' + variant, compiler, variant],
+        depends: writ_exe,
+        is_parallel: false,
+        timeout: 1800,
     )
 endforeach
 

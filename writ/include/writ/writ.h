@@ -139,6 +139,7 @@ writ_status_t writ_platform_set_feature(writ_platform_t *platform, writ_str_t fe
 
 writ_status_t writ_resolve(writ_unit_t *unit, const writ_platform_t *platform,
                            const writ_model_t **model);
+writ_status_t writ_derive_transport(writ_unit_t *unit, const writ_output_t *output);
 
 writ_status_t writ_output_directory(writ_session_t *session, writ_str_t directory,
                                     writ_output_t *output);

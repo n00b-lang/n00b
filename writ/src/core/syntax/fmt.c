@@ -209,7 +209,7 @@ style_node(formatter_t *f, uint32_t id, int32_t indent, bool line_item)
     case WRIT_N_PLATFORM:
     case WRIT_N_PATTERN:
     case WRIT_N_EXPR_VERSION:
-    case WRIT_N_QNAME:
+    case WRIT_N_TARGET:
     case WRIT_N_SELF_PARAM:
         glue_range(f, first, end);
         break;

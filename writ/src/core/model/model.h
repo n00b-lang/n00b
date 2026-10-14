@@ -261,9 +261,90 @@ core_list_decl(writ_allocator_rec_t);
 core_list_decl(writ_var_rec_t);
 core_list_decl(writ_convention_rec_t);
 
+typedef enum : uint8_t {
+    WRIT_RUST_UNIT,
+    WRIT_RUST_PRIM,
+    WRIT_RUST_ENUM,
+    WRIT_RUST_STRUCT,
+    WRIT_RUST_OPAQUE,
+    WRIT_RUST_STR,
+    WRIT_RUST_SLICE,
+    WRIT_RUST_STRING,
+    WRIT_RUST_VEC,
+} writ_rust_kind_t;
+
+typedef enum : uint8_t {
+    WRIT_RUST_FREE,
+    WRIT_RUST_BY_REF,
+    WRIT_RUST_BY_MUT,
+    WRIT_RUST_BY_VALUE,
+} writ_rust_receiver_t;
+
+typedef struct {
+    writ_rust_kind_t kind;
+    writ_rust_kind_t element;
+    writ_sym_t       name;
+    bool             borrowed;
+    bool             optional;
+    bool             fallible;
+} writ_rust_value_t;
+
+typedef struct {
+    writ_sym_t        name;
+    writ_rust_value_t value;
+} writ_rust_member_t;
+
+typedef struct {
+    writ_rust_kind_t   kind;
+    writ_sym_t         name;
+    writ_thread_rule_t rule;
+    uint32_t           first;
+    uint32_t           count;
+} writ_rust_type_t;
+
+typedef struct {
+    writ_sym_t           owner;
+    writ_sym_t           name;
+    writ_sym_t           symbol;
+    writ_sym_t           feature;
+    writ_rust_receiver_t receiver;
+    uint32_t             first;
+    uint32_t             count;
+    writ_rust_value_t    result;
+} writ_rust_fn_t;
+
+typedef struct {
+    writ_sym_t name;
+    writ_sym_t cargo;
+} writ_rust_feature_t;
+
+core_list_decl(writ_rust_member_t);
+core_list_decl(writ_rust_type_t);
+core_list_decl(writ_rust_fn_t);
+core_list_decl(writ_rust_feature_t);
+
+typedef struct {
+    writ_session_t                  *session;
+    writ_sym_t                       library;
+    writ_sym_t                       crate;
+    writ_sym_t                       version;
+    writ_sym_t                       error;
+    writ_str_t                       prefix;
+    core_list_t(writ_rust_feature_t) features;
+    core_list_t(writ_rust_type_t)    types;
+    core_list_t(writ_rust_member_t)  members;
+    core_list_t(writ_rust_fn_t)      fns;
+} writ_rust_t;
+
+bool        writ_unit_is_rust(const writ_unit_t *unit);
+writ_rust_t *writ_rust_read(writ_unit_t *unit, core_list_t(uint32_t) *skipped);
+writ_str_t  writ_rust_derive(const writ_rust_t *rust);
+const writ_rust_type_t *writ_rust_type(const writ_rust_t *rust, writ_sym_t name);
+
 struct writ_model {
     writ_session_t                    *session;
     writ_unit_t                       *unit;
+    const writ_rust_t                 *rust;
     const writ_platform_t             *platform;
     writ_sym_t                         library;
     writ_sym_t                         encoding;

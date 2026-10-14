@@ -161,10 +161,12 @@ writ_diag_render(const writ_session_t *session, const writ_diag_t *diag, writ_st
         return WRIT_INVALID_ARGUMENT;
     }
     core_buffer_t *buffer = core_buffer_empty();
-    core_buffer_printf(buffer, "%s[%.*s]: %.*s\n  --> %.*s:%u:%u\n", severity_name(diag->severity),
-                       (int)diag->code.length, diag->code.data, (int)diag->message.length, diag->message.data,
-                       (int)diag->path.length, diag->path.data, diag->primary.span.line,
-                       diag->primary.span.column);
+    core_buffer_printf(buffer, "%s[%.*s]: %.*s\n", severity_name(diag->severity), (int)diag->code.length,
+                       diag->code.data, (int)diag->message.length, diag->message.data);
+    if (diag->path.length) {
+        core_buffer_printf(buffer, "  --> %.*s:%u:%u\n", (int)diag->path.length, diag->path.data,
+                           diag->primary.span.line, diag->primary.span.column);
+    }
     for (size_t i = 0; i < diag->secondary_count; i++) {
         core_buffer_printf(buffer, "  = %u:%u: %.*s\n", diag->secondary[i].span.line, diag->secondary[i].span.column,
                            (int)diag->secondary[i].label.length, diag->secondary[i].label.data);

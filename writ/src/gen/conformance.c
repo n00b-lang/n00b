@@ -4,6 +4,7 @@ enum {
     INPUT_LENGTH   = 16,
     FILL_LONG      = 8,
     FILL_SHORT     = 3,
+    FILL_RETRY     = 100,
     CAPACITY_INPUT = 24,
     SCALAR_INPUT   = 3,
     OUT_VALUE      = 5,
@@ -124,6 +125,9 @@ static bool
 is_channel_source(const writ_model_t *model, const writ_fn_view_t *fn)
 {
     for (size_t i = 0; i < model->channels.len; i++) {
+        if (model->channels.data[i].kind == WRIT_CHANNEL_TEXT) {
+            continue;
+        }
         uint32_t source = model->channels.data[i].source_expr;
         writ_ref_t callee = writ_expr_ref(model, writ_node_child(model->unit, source, 0));
         if (callee.kind == WRIT_REF_FN && &model->fn_views[callee.index] == fn) {
@@ -166,8 +170,13 @@ mock_record(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_view_t
         if (slot->type->kind == WRIT_TYPE_VA_LIST) {
             continue;
         }
-        bool text = physical->item != WRIT_PLAN_NONE && plan->items[physical->item].shape == WRIT_SHAPE_TEXT
-                 && plan->items[physical->item].role == WRIT_ROLE_INPUT && writ_c_is_text(slot->type);
+        bool text_input = physical->item != WRIT_PLAN_NONE && plan->items[physical->item].shape == WRIT_SHAPE_TEXT
+                       && plan->items[physical->item].role == WRIT_ROLE_INPUT;
+        bool text = text_input && writ_c_is_text(slot->type);
+        uint32_t length = physical->part == WRIT_PART_POINTER && physical->item != WRIT_PLAN_NONE
+                               && plan->items[physical->item].role == WRIT_ROLE_INPUT
+                              ? slot_with(plan, physical->item, WRIT_PART_LENGTH)
+                              : WRIT_PLAN_NONE;
         if (is_value_type(slot->type)) {
             writ_emit_line(emit, "%.*s = (long long)%.*s;", S(seen), S(slot->name));
         } else if (physical->part == WRIT_PART_CAPACITY_AND_LENGTH) {
@@ -175,12 +184,13 @@ mock_record(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_view_t
         } else if (text) {
             writ_emit_line(emit, "%.*s = (%.*s != NULL) | ((%.*s && !strcmp(%.*s, \"text\")) << 1);", S(seen),
                            S(slot->name), S(slot->name), S(slot->name));
+        } else if (text_input && length != WRIT_PLAN_NONE) {
+            writ_emit_line(emit, "%.*s = (%.*s != NULL) | ((%.*s && %.*s == 4 && !memcmp(%.*s, \"text\", 4)) << 1);",
+                           S(seen), S(slot->name), S(slot->name), S(fn->slots[length].name), S(slot->name));
+            continue;
         } else {
             writ_emit_line(emit, "%.*s = %.*s != NULL;", S(seen), S(slot->name));
         }
-        uint32_t length = physical->part == WRIT_PART_POINTER && physical->item != WRIT_PLAN_NONE
-                              ? slot_with(plan, physical->item, WRIT_PART_LENGTH)
-                              : WRIT_PLAN_NONE;
         if (length != WRIT_PLAN_NONE) {
             writ_emit_open(emit, "for (size_t i = 0; %.*s && i < (size_t)%.*s * sizeof *%.*s; i++)", S(slot->name),
                            S(fn->slots[length].name), S(slot->name));
@@ -279,11 +289,11 @@ mock_buffer(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_view_t
     writ_emit_open(emit, "if (%.*s)", S(name));
     writ_emit_line(emit, "size_t written = %.*s_mock_fill < %.*s ? %.*s_mock_fill : %.*s;", S(c->prefix), S(cap),
                    S(c->prefix), S(cap));
-    writ_emit_open(emit, "for (size_t i = 0; i < written; i++)");
+    writ_emit_open(emit, "for (size_t i = 0; i < written * sizeof *%.*s; i++)", S(name));
     writ_emit_line(emit, "((uint8_t *)%.*s)[i] = (uint8_t)(i * 7 + 3);", S(name));
     writ_emit_close(emit, nullptr);
     writ_emit_open(emit, "if (written < %.*s)", S(cap));
-    writ_emit_line(emit, "((uint8_t *)%.*s)[written] = 0;", S(name));
+    writ_emit_line(emit, "((uint8_t *)%.*s)[written * sizeof *%.*s] = 0;", S(name), S(name));
     writ_emit_close(emit, nullptr);
     if (cell != WRIT_PLAN_NONE) {
         writ_str_t cell_type = writ_c_type(c, fn->slots[cell].type->target, false);
@@ -306,12 +316,19 @@ mock_outputs(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_view_
         if (physical->part == WRIT_PART_POINTER) {
             mock_buffer(c, emit, plan, k);
         }
+        writ_str_t target = writ_c_type(c, slot->type->target, false);
+        if (physical->part == WRIT_PART_LENGTH && slot->mode == WRIT_MODE_OUT) {
+            writ_emit_open(emit, "if (%.*s)", S(slot->name));
+            writ_emit_line(emit, "*%.*s = (%.*s)%.*s_mock_fill;", S(slot->name), S(target), S(c->prefix));
+            writ_emit_close(emit, nullptr);
+        }
         if (physical->part != WRIT_PART_WHOLE) {
             continue;
         }
-        writ_str_t target = writ_c_type(c, slot->type->target, false);
         writ_emit_open(emit, "if (%.*s)", S(slot->name));
-        if (item->with_item != WRIT_PLAN_NONE) {
+        if (underlying(slot->type->target)->kind == WRIT_TYPE_RECORD) {
+            writ_emit_line(emit, "memset(%.*s, %d, sizeof *%.*s);", S(slot->name), OUT_VALUE, S(slot->name));
+        } else if (item->with_item != WRIT_PLAN_NONE) {
             writ_str_t with = fn->slots[plan->items[item->with_item].contract_slot].name;
             writ_emit_line(emit, "*%.*s = (%.*s)(%.*s + %d);", S(slot->name), S(target), S(with), TEXT_OFFSET);
         } else if (is_pointer_type(slot->type->target)) {
@@ -357,7 +374,9 @@ mock_return(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_view_t
     writ_str_t spelled = writ_c_type(c, type, writ_c_is_text(type) && !fn->result->own);
     if (fn->is_pure && fn->slots_count) {
         writ_emit_line(emit, "return (%.*s)(%.*s + %d);", S(spelled), S(fn->slots[0].name), PURE_OFFSET);
-    } else if (fn->sizing == WRIT_SIZING_QUERY) {
+    } else if (fn->sizing == WRIT_SIZING_QUERY
+               || (fn->sizing == WRIT_SIZING_RETRY
+                   && writ_expr_mentions(c->model, fn->sizing_expr, WRIT_REF_RESULT, writ_model_fn_index(c->model, fn)))) {
         writ_emit_line(emit, "return (%.*s)%.*s_mock_fill;", S(spelled), S(c->prefix));
     } else if (writ_c_is_text(type)) {
         writ_emit_line(emit, "return %.*s_mock_ret ? (%.*s)\"mock text\" : NULL;", S(c->prefix), S(spelled));
@@ -520,14 +539,17 @@ emit_call(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_view_t *
         if (item->role != WRIT_ROLE_RESULT && item->role != WRIT_ROLE_ERROR_DETAIL) {
             continue;
         }
-        writ_c_param_t param;
-        writ_c_item_params(c, plan, i, &param);
-        size_t pointee = param.type.length - 1;
-        while (pointee && param.type.data[pointee - 1] == ' ') {
+        writ_c_param_t params[2];
+        size_t count = writ_c_item_params(c, plan, i, params);
+        size_t pointee = params[0].type.length - 1;
+        while (pointee && params[0].type.data[pointee - 1] == ' ') {
             pointee--;
         }
-        writ_emit_line(emit, "%.*s out_%.*s;", (int)pointee, param.type.data, S(item->name));
+        writ_emit_line(emit, "%.*s out_%.*s;", (int)pointee, params[0].type.data, S(item->name));
         writ_emit_line(emit, "memset(&out_%.*s, 0, sizeof out_%.*s);", S(item->name), S(item->name));
+        if (count == 2) {
+            writ_emit_line(emit, "size_t out_%.*s_length = 0;", S(item->name));
+        }
     }
     writ_str_t ret = writ_c_return_type(c, plan);
     writ_emit_text(emit, "%.*s got = %.*s_%.*s(", S(ret), S(c->prefix), S(plan->fn->contract_name));
@@ -540,7 +562,7 @@ emit_call(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_view_t *
         size_t count = writ_c_item_params(c, plan, order[o], params);
         writ_emit_text(emit, "%s%s%s_%.*s", o ? ", " : "", input ? "" : "&", input ? "in" : "out", S(item->name));
         if (count == 2) {
-            writ_emit_text(emit, ", len_%.*s", S(item->name));
+            writ_emit_text(emit, input ? ", len_%.*s" : ", &out_%.*s_length", S(item->name));
         }
     }
     writ_emit_line(emit, ");");
@@ -556,13 +578,17 @@ check_slot(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_view_t 
     if (item->role == WRIT_ROLE_RESULT || item->role == WRIT_ROLE_ERROR_DETAIL) {
         return;
     }
-    if (item->shape == WRIT_SHAPE_TEXT && slot->part == WRIT_PART_WHOLE) {
+    bool null_if_empty = item->contract_slot != WRIT_PLAN_NONE && plan->fn->slots[item->contract_slot].null_if_empty;
+    if (item->shape == WRIT_SHAPE_TEXT && (slot->part == WRIT_PART_WHOLE || slot->part == WRIT_PART_POINTER)) {
         expect(emit, plan, s->name, "%.*s == 3", S(seen));
     } else if (slot->part == WRIT_PART_POINTER) {
-        expect(emit, plan, s->name, "%.*s == %d", S(seen), s->empty && item->nullable ? 0 : 1);
+        expect(emit, plan, s->name, "%.*s == %d", S(seen), s->empty && (item->nullable || null_if_empty) ? 0 : 1);
     } else if (slot->part == WRIT_PART_LENGTH) {
         expect(emit, plan, s->name, "%.*s == %d", S(seen),
-               item->role == WRIT_ROLE_PACK ? s->arity : s->empty ? 0 : INPUT_LENGTH);
+               item->role == WRIT_ROLE_PACK  ? s->arity
+               : item->shape == WRIT_SHAPE_TEXT ? 4
+               : s->empty                      ? 0
+                                               : INPUT_LENGTH);
     } else if (slot->part == WRIT_PART_WHOLE && is_value_type(item->type)) {
         expect(emit, plan, s->name, "%.*s == (long long)in_%.*s", S(seen), S(item->name));
     } else if (slot->part == WRIT_PART_WHOLE) {
@@ -607,6 +633,9 @@ expected_capacity(const writ_plan_view_t *plan, uint32_t item, int fill)
     for (size_t l = 0; l < plan->locals_count; l++) {
         const writ_plan_local_view_t *local = &plan->locals[l];
         if (local->item == item && local->kind == WRIT_LOCAL_BUFFER) {
+            if (plan->fn->sizing == WRIT_SIZING_RETRY) {
+                return fill;
+            }
             if (local->capacity_item != WRIT_PLAN_NONE) {
                 return CAPACITY_INPUT;
             }
@@ -631,6 +660,10 @@ check_detail(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_view_
     writ_ref_t via = writ_expr_ref(c->model, plan->outcomes[s->outcome].via_expr);
     if (via.kind == WRIT_REF_FIELD) {
         expect(emit, plan, s->name, "out_%.*s && !strcmp(out_%.*s, \"mock detail\")", S(item->name), S(item->name));
+    } else if (via.kind == WRIT_REF_CHANNEL && item->shape == WRIT_SHAPE_TEXT) {
+        expect(emit, plan, s->name, "out_%.*s.length == %d", S(item->name), s->fill);
+        expect(emit, plan, s->name, "matches_pattern(out_%.*s.data, out_%.*s.length)", S(item->name), S(item->name));
+        writ_emit_line(emit, "%.*s_bytes_free(&out_%.*s);", S(c->prefix), S(item->name));
     } else if (via.kind == WRIT_REF_CHANNEL) {
         expect(emit, plan, s->name, "out_%.*s == %lld", S(item->name), (long long)s->channel);
     } else if (via.kind == WRIT_REF_RESULT) {
@@ -644,7 +677,22 @@ check_result(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_view_
 {
     const writ_plan_item_view_t *item = &plan->items[i];
     writ_step_kind_t lift = writ_c_lift_kind(plan, i);
-    if (lift == WRIT_STEP_LIFT_BUFFER) {
+    bool lifted = false;
+    for (size_t k = 0; k < plan->steps_count; k++) {
+        lifted = lifted || (plan->steps[k].item == i && plan->steps[k].outcome == s->outcome);
+    }
+    if (!lifted) {
+        return;
+    }
+    if (lift == WRIT_STEP_LIFT_BUFFER && item->shape == WRIT_SHAPE_ARRAY) {
+        int capacity = expected_capacity(plan, i, s->fill);
+        expect(emit, plan, s->name, "out_%.*s_length == %d", S(item->name), s->fill < capacity ? s->fill : capacity);
+        expect(emit, plan, s->name, "matches_pattern((const uint8_t *)out_%.*s, out_%.*s_length * sizeof *out_%.*s)",
+               S(item->name), S(item->name), S(item->name));
+        writ_emit_line(emit, "%.*s_free(out_%.*s);", S(c->prefix), S(item->name));
+    } else if (underlying(item->type)->kind == WRIT_TYPE_RECORD) {
+        expect(emit, plan, s->name, "((const uint8_t *)&out_%.*s)[0] == %d", S(item->name), OUT_VALUE);
+    } else if (lift == WRIT_STEP_LIFT_BUFFER) {
         int capacity = expected_capacity(plan, i, s->fill);
         expect(emit, plan, s->name, "out_%.*s.length == %d", S(item->name), s->fill < capacity ? s->fill : capacity);
         expect(emit, plan, s->name, "matches_pattern(out_%.*s.data, out_%.*s.length)", S(item->name), S(item->name));
@@ -664,7 +712,8 @@ check_result(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_view_
         expect(emit, plan, s->name, "out_%.*s == (%.*s)%lld", S(item->name), S(writ_c_type(c, item->type, false)),
                expected);
     } else {
-        expect(emit, plan, s->name, "out_%.*s == %d", S(item->name), OUT_VALUE);
+        expect(emit, plan, s->name, "out_%.*s == (%.*s)%d", S(item->name), S(writ_c_type(c, item->type, false)),
+               OUT_VALUE);
     }
 }
 
@@ -745,10 +794,17 @@ emit_driver_fn(const writ_c_context_t *c, writ_emit_t *emit, uint32_t index)
         if (plan->outcomes[o].kind != WRIT_OUTCOME_SUCCESS) {
             continue;
         }
-        if (has_shape(plan, WRIT_SHAPE_BYTES, WRIT_ROLE_RESULT) || has_shape(plan, WRIT_SHAPE_TEXT, WRIT_ROLE_RESULT)) {
+        bool buffered = has_shape(plan, WRIT_SHAPE_BYTES, WRIT_ROLE_RESULT)
+                     || has_shape(plan, WRIT_SHAPE_TEXT, WRIT_ROLE_RESULT)
+                     || has_shape(plan, WRIT_SHAPE_ARRAY, WRIT_ROLE_RESULT);
+        if (buffered) {
             scenario_t shorter = {"short", o, fn->sizing == WRIT_SIZING_QUERY ? FILL_SHORT : ret, channel, FILL_SHORT,
                                   false, full.arity};
             emit_scenario(c, emit, plan, index, &shorter);
+        }
+        if (buffered && fn->sizing == WRIT_SIZING_RETRY) {
+            scenario_t longer = {"retry", o, ret, channel, FILL_RETRY, false, full.arity};
+            emit_scenario(c, emit, plan, index, &longer);
         }
         if (has_shape(plan, WRIT_SHAPE_BYTES, WRIT_ROLE_INPUT) || has_shape(plan, WRIT_SHAPE_ARRAY, WRIT_ROLE_INPUT)) {
             scenario_t empty = {"empty", o, ret, channel, FILL_LONG, true, full.arity};

@@ -50,10 +50,6 @@ error[E0102]: unknown type: `Db`
 error[E0901]: not supported yet: `since` and `removed` (they need a version query)
   --> dsl.md-13.writ:5:43
 == dsl.md example 14
-error[E0901]: not supported yet: Rust crates and build features
-  --> dsl.md-14.writ:1:1
-error[E0901]: not supported yet: Rust crates and build features
-  --> dsl.md-14.writ:2:1
 == dsl.md example 15
 error[E0102]: unknown type: `File`
   --> dsl.md-15.writ:2:13
@@ -117,12 +113,8 @@ error[E0102]: unknown type: `SubId`
 error[E0901]: not supported yet: interfaces (dsl.md §9.1)
   --> dsl.md-24.writ:1:1
 == dsl.md example 25
-error[E0901]: not supported yet: text error channels
-  --> dsl.md-25.writ:6:5
 error[E0102]: unknown type: not a handle
   --> dsl.md-25.writ:10:26
-error[E0901]: not supported yet: text error channels
-  --> dsl.md-25.writ:11:5
 error[E0103]: unknown name: `errno_location` is not a function
   --> dsl.md-25.writ:2:11
 error[E0103]: unknown name: `resharp_last_error` is not a function
@@ -177,48 +169,50 @@ error[E0102]: unknown type: `sizeof` takes one type name
 error[E0102]: unknown type: `File`
   --> dsl.md-32.writ:1:13
 == dsl.md example 33
-error[E0901]: not supported yet: contracts for languages other than C
-  --> dsl.md-33.writ:2:1
-error[E0901]: not supported yet: Rust crates and build features
-  --> dsl.md-33.writ:3:1
-error[E0901]: not supported yet: Rust crates and build features
-  --> dsl.md-33.writ:4:1
-error[E0901]: not supported yet: Rust declarations (dsl.md §8.9)
-  --> dsl.md-33.writ:10:1
-error[E0901]: not supported yet: Rust declarations (dsl.md §8.9)
-  --> dsl.md-33.writ:12:1
-error[E0901]: not supported yet: Rust declarations (dsl.md §8.9)
-  --> dsl.md-33.writ:18:1
+error[E0901]: not supported yet: a result type no transport rule covers (dsl.md §8.9)
+  --> dsl.md-33.writ:19:27
+error[E0901]: not supported yet: a result type no transport rule covers (dsl.md §8.9)
+  --> dsl.md-33.writ:20:59
+error[E0901]: not supported yet: a result type no transport rule covers (dsl.md §8.9)
+  --> dsl.md-33.writ:21:41
+error[E0901]: not supported yet: a result type no transport rule covers (dsl.md §8.9)
+  --> dsl.md-33.writ:22:41
+error[E0901]: not supported yet: a result type no transport rule covers (dsl.md §8.9)
+  --> dsl.md-33.writ:23:46
 == dsl.md example 34
-error[E0901]: not supported yet: interfaces (dsl.md §9.1)
-  --> dsl.md-34.writ:2:1
-error[E0901]: not supported yet: interfaces (dsl.md §9.1)
-  --> dsl.md-34.writ:6:1
 == dsl.md example 35
-error[E0901]: not supported yet: language profiles and bindings (dsl.md §9.2, §9.3)
-  --> dsl.md-35.writ:1:1
-error[E0901]: not supported yet: language profiles and bindings (dsl.md §9.2, §9.3)
-  --> dsl.md-35.writ:7:1
-error[E0901]: not supported yet: language profiles and bindings (dsl.md §9.2, §9.3)
-  --> dsl.md-35.writ:12:1
-error[E0901]: not supported yet: language profiles and bindings (dsl.md §9.2, §9.3)
-  --> dsl.md-35.writ:16:1
+error[E0901]: not supported yet: interfaces (dsl.md §9.1)
+  --> dsl.md-35.writ:2:1
+error[E0901]: not supported yet: interfaces (dsl.md §9.1)
+  --> dsl.md-35.writ:6:1
 == dsl.md example 36
-error[E0901]: not supported yet: `import` inside a contract; run `writ import` and `use` the draft
+error[E0901]: not supported yet: language profiles and bindings (dsl.md §9.2, §9.3)
   --> dsl.md-36.writ:1:1
-error[E0102]: unknown type: `sqlite3`
-  --> dsl.md-36.writ:3:16
-error[E0102]: unknown type: `sqlite3_stmt`
-  --> dsl.md-36.writ:4:16
-error[E0106]: `refine` names no function: `sqlite3_prepare_v2`
-  --> dsl.md-36.writ:6:1
-error[E0106]: `refine` names no function: `sqlite3_column_blob`
-  --> dsl.md-36.writ:13:1
+error[E0901]: not supported yet: language profiles and bindings (dsl.md §9.2, §9.3)
+  --> dsl.md-36.writ:7:1
+error[E0901]: not supported yet: language profiles and bindings (dsl.md §9.2, §9.3)
+  --> dsl.md-36.writ:12:1
+error[E0901]: not supported yet: language profiles and bindings (dsl.md §9.2, §9.3)
+  --> dsl.md-36.writ:16:1
 == dsl.md example 37
-error[E0106]: `refine` names no function: `some_api`
+error[E0901]: not supported yet: language profiles and bindings (dsl.md §9.2, §9.3)
   --> dsl.md-37.writ:1:1
 == dsl.md example 38
+error[E0901]: not supported yet: `import` inside a contract; run `writ import` and `use` the draft
+  --> dsl.md-38.writ:1:1
+error[E0102]: unknown type: `sqlite3`
+  --> dsl.md-38.writ:3:16
+error[E0102]: unknown type: `sqlite3_stmt`
+  --> dsl.md-38.writ:4:16
+error[E0106]: `refine` names no function: `sqlite3_prepare_v2`
+  --> dsl.md-38.writ:6:1
+error[E0106]: `refine` names no function: `sqlite3_column_blob`
+  --> dsl.md-38.writ:13:1
 == dsl.md example 39
+error[E0106]: `refine` names no function: `some_api`
+  --> dsl.md-39.writ:1:1
+== dsl.md example 40
+== dsl.md example 41
 == call-plan.md example 1
 error[E0102]: unknown type: `z_stream`
   --> call-plan.md-1.writ:1:25

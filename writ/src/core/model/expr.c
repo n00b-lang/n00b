@@ -668,8 +668,20 @@ writ_expr_type(const writ_model_t *model, uint32_t expr)
     case WRIT_REF_CHANNEL: {
         uint32_t source = model->channels.data[ref.index].source_expr;
         writ_ref_t callee = writ_expr_ref(model, writ_node_child(model->unit, source, 0));
-        writ_type_id result = callee.kind == WRIT_REF_FN ? model->fns.data[callee.index].result : 0;
-        return result ? writ_type(model, writ_type_physical(model, result))->key.target : 0;
+        if (callee.kind != WRIT_REF_FN) {
+            return 0;
+        }
+        const writ_fn_rec_t *fn = &model->fns.data[callee.index];
+        if (model->channels.data[ref.index].kind == WRIT_CHANNEL_TEXT) {
+            for (uint32_t i = 0; i < fn->slot_count; i++) {
+                const writ_slot_rec_t *slot = writ_fn_slot(model, fn, i);
+                if (slot->mode == WRIT_MODE_OUT && slot->extent_kind == WRIT_EXTENT_BOUNDED) {
+                    return slot->type;
+                }
+            }
+            return 0;
+        }
+        return fn->result ? writ_type(model, writ_type_physical(model, fn->result))->key.target : 0;
     }
     default:
         return 0;

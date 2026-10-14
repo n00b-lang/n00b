@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "syntax.h"
 
@@ -12,6 +13,7 @@
 #include "scanner/scanner.h"
 #include "scanner/token_stream.h"
 #include "scanner/tokenizer.h"
+#include "json_grammar.h"
 #include "writ_grammar.h"
 #include "writ_keywords.h"
 
@@ -83,6 +85,15 @@ static const scan_lex_spec_t writ_lexer = {
     .fallback      = SCAN_LEX_FALLBACK_REJECT,
 };
 
+static const scan_lex_spec_t json_lexer = {
+    .name         = CORE_STRING_STATIC("json"),
+    .strings      = lexer_strings,
+    .number_forms = lexer_numbers,
+    .tok_ident    = CORE_STRING_STATIC("IDENTIFIER"),
+    .brackets     = CORE_STRING_STATIC("[]{}"),
+    .fallback     = SCAN_LEX_FALLBACK_REJECT,
+};
+
 typedef struct {
     parse_grammar_t *grammar;
     core_dict_t      rule_by_id;
@@ -105,30 +116,44 @@ nonterminal_id(parse_grammar_t *grammar, const char *name)
     return nonterminal ? parse_nonterm_id(nonterminal) : -1;
 }
 
+typedef struct {
+    core_string_t           text;
+    const scan_lex_spec_t  *lexer;
+    const char             *file;
+    const char             *declarations;
+} grammar_spec_t;
+
+static const grammar_spec_t grammar_specs[] = {
+    [WRIT_GRAMMAR_WRIT] = {CORE_STRING_STATIC(writ_grammar_text), &writ_lexer, "file", "declarations"},
+    [WRIT_GRAMMAR_JSON] = {CORE_STRING_STATIC(json_grammar_text), &json_lexer, "json-file", "json-file"},
+};
+
 static writ_grammar_t *
-grammar_for(writ_session_t *session)
+grammar_for(writ_session_t *session, writ_grammar_id_t which)
 {
-    if (session->grammar) {
-        return session->grammar;
+    if (session->grammars[which]) {
+        return session->grammars[which];
     }
+    const grammar_spec_t *spec = &grammar_specs[which];
     writ_grammar_t *grammar = writ_alloc(session, sizeof(writ_grammar_t));
     grammar->grammar = parse_grammar_new();
     parse_grammar_set_error_recovery(grammar->grammar, false);
-    core_string_t text = core_string_borrow(writ_grammar_text, sizeof(writ_grammar_text) - 1);
-    parse_bnf_declare_terminals(grammar->grammar, text);
-    if (!parse_bnf_load(text, CORE_STRING_STATIC("file"), grammar->grammar)
-        || !scan_grammar_set_lex(grammar->grammar, &writ_lexer)) {
+    parse_bnf_declare_terminals(grammar->grammar, spec->text);
+    if (!parse_bnf_load(spec->text, core_string_borrow(spec->file, strlen(spec->file)), grammar->grammar)
+        || !scan_grammar_set_lex(grammar->grammar, spec->lexer)) {
         parse_grammar_free(grammar->grammar);
         return nullptr;
     }
     core_dict_init(&grammar->rule_by_id, nullptr, nullptr);
     for (size_t i = 0; i < sizeof(syntax_rules) / sizeof(syntax_rules[0]); i++) {
         parse_nt_id_t id = nonterminal_id(grammar->grammar, syntax_rules[i].nonterminal);
-        core_dict_put(&grammar->rule_by_id, id + 1, i + 1);
+        if (id >= 0) {
+            core_dict_put(&grammar->rule_by_id, id + 1, i + 1);
+        }
     }
-    grammar->file_start         = nonterminal_id(grammar->grammar, "file");
-    grammar->declarations_start = nonterminal_id(grammar->grammar, "declarations");
-    session->grammar            = grammar;
+    grammar->file_start         = nonterminal_id(grammar->grammar, spec->file);
+    grammar->declarations_start = nonterminal_id(grammar->grammar, spec->declarations);
+    session->grammars[which]    = grammar;
     writ_on_session_free(session, grammar_release, grammar);
     return grammar;
 }
@@ -162,7 +187,21 @@ unescaped_sym(converter_t *converter, writ_loc_t loc)
         char c = quoted.data[i];
         if (c == '\\' && i + 2 < quoted.length) {
             c = quoted.data[++i];
-            c = c == 'n' ? '\n' : c == 't' ? '\t' : c == '0' ? '\0' : c;
+            if (c == 'u' && i + 5 < quoted.length) {
+                uint32_t point = (uint32_t)strtoul((char[5]){quoted.data[i + 1], quoted.data[i + 2],
+                                                            quoted.data[i + 3], quoted.data[i + 4], 0},
+                                                   nullptr, 16);
+                i += 4;
+                if (point >= 0x800) {
+                    core_buffer_putc(buffer, (char)(0xe0 | point >> 12));
+                    core_buffer_putc(buffer, (char)(0x80 | (point >> 6 & 0x3f)));
+                } else if (point >= 0x80) {
+                    core_buffer_putc(buffer, (char)(0xc0 | point >> 6));
+                }
+                core_buffer_putc(buffer, (char)(point >= 0x80 ? 0x80 | (point & 0x3f) : point));
+                continue;
+            }
+            c = c == 'n' ? '\n' : c == 't' ? '\t' : c == 'r' ? '\r' : c == '0' ? '\0' : c;
         }
         core_buffer_putc(buffer, c);
     }
@@ -302,10 +341,10 @@ report_syntax_error(writ_session_t *session, uint32_t source, parse_token_stream
 }
 
 static writ_status_t
-parse_source(writ_unit_t *unit, uint32_t source, writ_source_kind_t kind)
+parse_source(writ_unit_t *unit, uint32_t source, writ_source_kind_t kind, writ_grammar_id_t which)
 {
     writ_session_t *session = unit->session;
-    writ_grammar_t *grammar = grammar_for(session);
+    writ_grammar_t *grammar = grammar_for(session, which);
     if (!grammar) {
         return WRIT_TOOL_FAILED;
     }
@@ -356,13 +395,13 @@ writ_unit_add_source(writ_unit_t *unit, writ_source_kind_t kind, writ_origin_t o
     if (source_id) {
         *source_id = source;
     }
-    writ_status_t status = parse_source(unit, source, kind);
+    writ_status_t status = parse_source(unit, source, kind, WRIT_GRAMMAR_WRIT);
     writ_diag_flush(unit->session, first_diag);
     return status;
 }
 
-writ_status_t
-writ_unit_read_file(writ_unit_t *unit, writ_str_t path, uint32_t *source_id)
+static writ_status_t
+read_source(writ_unit_t *unit, writ_str_t path, uint32_t *source_id)
 {
     writ_str_t terminated = writ_str_copy(unit->session, path.data, path.length);
     FILE *file = fopen(terminated.data, "rb");
@@ -379,12 +418,34 @@ writ_unit_read_file(writ_unit_t *unit, writ_str_t path, uint32_t *source_id)
         return WRIT_IO_FAILED;
     }
     writ_origin_t origin = {.host_path = terminated};
-    uint32_t source = writ_source_add(unit->session, WRIT_SOURCE_CONTRACT_FILE, origin, terminated,
-                                      (writ_str_t){data, read});
+    *source_id = writ_source_add(unit->session, WRIT_SOURCE_CONTRACT_FILE, origin, terminated,
+                                 (writ_str_t){data, read});
+    return WRIT_OK;
+}
+
+writ_status_t
+writ_unit_read_file(writ_unit_t *unit, writ_str_t path, uint32_t *source_id)
+{
+    uint32_t source = 0;
+    writ_status_t status = read_source(unit, path, &source);
     if (source_id) {
         *source_id = source;
     }
-    return parse_source(unit, source, WRIT_SOURCE_CONTRACT_FILE);
+    return status == WRIT_OK ? parse_source(unit, source, WRIT_SOURCE_CONTRACT_FILE, WRIT_GRAMMAR_WRIT) : status;
+}
+
+writ_status_t
+writ_unit_read_json(writ_unit_t *unit, writ_str_t path, uint32_t *root)
+{
+    uint32_t source = 0;
+    writ_status_t status = read_source(unit, path, &source);
+    if (status == WRIT_OK) {
+        status = parse_source(unit, source, WRIT_SOURCE_CONTRACT_FILE, WRIT_GRAMMAR_JSON);
+    }
+    if (status == WRIT_OK && unit->roots.len) {
+        *root = writ_node_child(unit, unit->roots.data[unit->roots.len - 1].root, 0);
+    }
+    return status;
 }
 
 writ_status_t
@@ -402,7 +463,7 @@ writ_unit_add_file(writ_unit_t *unit, writ_str_t path, uint32_t *source_id)
 writ_str_t
 writ_syntax_audit(writ_session_t *session, bool candidates)
 {
-    writ_grammar_t *grammar = grammar_for(session);
+    writ_grammar_t *grammar = grammar_for(session, WRIT_GRAMMAR_WRIT);
     if (!grammar) {
         return writ_cstr("the grammar does not load\n");
     }

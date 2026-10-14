@@ -31,6 +31,13 @@ grammar_h = custom_target(
     command: [python, embed, '@INPUT@', '@OUTPUT@', 'writ_grammar_text'],
 )
 
+json_grammar_h = custom_target(
+    'json_grammar.h',
+    input: 'grammar/json.bnf',
+    output: 'json_grammar.h',
+    command: [python, embed, '@INPUT@', '@OUTPUT@', 'json_grammar_text'],
+)
+
 keywords_h = custom_target(
     'writ_keywords.h',
     input: 'grammar/writ.bnf',
@@ -70,6 +77,7 @@ core_sources = files(
     'src/core/model/types.c',
     'src/core/model/expr.c',
     'src/core/model/resolve.c',
+    'src/core/model/rust.c',
     'src/core/model/checks.c',
     'src/core/model/views.c',
     'src/core/plan/plan.c',
@@ -77,14 +85,17 @@ core_sources = files(
     'src/core/lower/json.c',
     'src/gen/c.c',
     'src/gen/conformance.c',
+    'src/gen/rust.c',
     'src/toolchain/probe.c',
     'src/toolchain/exports.c',
+    'src/toolchain/rustdoc.c',
 )
 
 writ_raw = static_library(
     'writ_raw',
     core_sources,
     grammar_h,
+    json_grammar_h,
     keywords_h,
     model_names_h,
     model_json_h,

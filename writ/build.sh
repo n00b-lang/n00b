@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LANTERN_ROOT="${LANTERN_ROOT:-$HOME/lantern-writ}"
+RESHARP_ROOT="${RESHARP_ROOT:-$HOME/resharp-writ}"
 PLATFORM_TAG="${PLATFORM_TAG:-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m)}"
 LANTERN_BUILD="$ROOT/deps/lantern-build-$PLATFORM_TAG"
 LANTERN_PREFIX="$ROOT/deps/prefix-$PLATFORM_TAG"
@@ -21,20 +22,25 @@ fail() {
     exit 1
 }
 
-verify_pin() {
-    local want have
-    want="$(tr -d '[:space:]' < "$ROOT/deps/LANTERN_REVISION")"
-    [ -d "$LANTERN_ROOT" ] || fail "no lantern workspace at $LANTERN_ROOT"
-    if [ "${LANTERN_VERIFIED:-}" = "$want" ]; then
+verify_workspace() {
+    local name="$1" root="$2" verified="$3" want have
+    want="$(tr -d '[:space:]' < "$ROOT/deps/$(echo "$name" | tr '[:lower:]' '[:upper:]')_REVISION")"
+    [ -d "$root" ] || fail "no $name workspace at $root"
+    if [ "$verified" = "$want" ]; then
         return 0
-    elif command -v jj >/dev/null 2>&1 && [ -d "$LANTERN_ROOT/.jj" ]; then
-        have="$(jj -R "$LANTERN_ROOT" log --no-graph -r '@-' -T 'commit_id')"
-        [ "$have" = "$want" ] || fail "lantern workspace is on $have, pinned revision is $want"
-        [ -z "$(jj -R "$LANTERN_ROOT" diff --summary)" ] || fail "lantern workspace has local changes"
+    elif command -v jj >/dev/null 2>&1 && [ -d "$root/.jj" ]; then
+        have="$(jj -R "$root" log --no-graph -r '@-' -T 'commit_id')"
+        [ "$have" = "$want" ] || fail "$name workspace is on $have, pinned revision is $want"
+        [ -z "$(jj -R "$root" diff --summary)" ] || fail "$name workspace has local changes"
     else
-        [ -f "$LANTERN_ROOT/.writ-pin" ] && [ "$(cat "$LANTERN_ROOT/.writ-pin")" = "$want" ] \
-            || fail "lantern copy at $LANTERN_ROOT is not marked with the pinned revision"
+        [ -f "$root/.writ-pin" ] && [ "$(cat "$root/.writ-pin")" = "$want" ] \
+            || fail "$name copy at $root is not marked with the pinned revision"
     fi
+}
+
+verify_pin() {
+    verify_workspace lantern "$LANTERN_ROOT" "${LANTERN_VERIFIED:-}"
+    verify_workspace resharp "$RESHARP_ROOT" "${RESHARP_VERIFIED:-}"
 }
 
 build_lantern() {
@@ -63,13 +69,16 @@ build_lantern() {
 
 configure_writ() {
     local sanitize="$1"
-    local opts=(-Dllvm_prefix="$LLVM_PREFIX" -Dlantern_prefix="$LANTERN_PREFIX" -Dlantern_root="$LANTERN_ROOT")
+    local opts=(-Dllvm_prefix="$LLVM_PREFIX" -Dlantern_prefix="$LANTERN_PREFIX" -Dlantern_root="$LANTERN_ROOT"
+                -Dresharp_root="$RESHARP_ROOT")
     if [ "$sanitize" = yes ]; then
         opts+=(-Db_sanitize=address,undefined -Db_lundef=false)
     fi
     if [ ! -f "$BUILD_DIR/build.ninja" ]; then
         PKG_CONFIG_PATH="$LANTERN_PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}" \
             meson setup "$BUILD_DIR" "$ROOT" "${opts[@]}" | grep -E "ERROR|WARNING" >&2 || true
+    else
+        meson configure "$BUILD_DIR" -Dresharp_root="$RESHARP_ROOT" >/dev/null
     fi
 }
 
@@ -81,8 +90,12 @@ run_linux() {
     "$engine" run --rm \
         -v "$ROOT:/work/writ" \
         -v "$LANTERN_ROOT:/work/lantern:ro" \
+        -v "$RESHARP_ROOT:/work/resharp:ro" \
+        -v writ-cargo:/root/.cargo/registry \
         -e LANTERN_ROOT=/work/lantern \
+        -e RESHARP_ROOT=/work/resharp \
         -e LANTERN_VERIFIED="$(tr -d '[:space:]' < "$ROOT/deps/LANTERN_REVISION")" \
+        -e RESHARP_VERIFIED="$(tr -d '[:space:]' < "$ROOT/deps/RESHARP_REVISION")" \
         -w /work/writ writ-linux ./build.sh "$@"
 }
 

@@ -2086,7 +2086,9 @@ when listed as `instance`s.
 
 writ generates a crate, `<crate>-writ`, compiled together with the library
 by Cargo. It contains one `extern "C"` function per contract function,
-named `writ_<crate>_<item>`:
+named `writ_<crate>_<item>`, where `<item>` is a free function's name or
+`<type>_<method>` for an impl item, in snake case
+(`writ_resharp_regex_find_all`):
 
 - `&str` and `&[T]` arrive as pointer and length (non-null even when
   empty, §6.1);
@@ -2099,7 +2101,66 @@ named `writ_<crate>_<item>`:
 The transport has its own C contract, which writ derives from the Rust
 contract. Every consumer binds to that derived contract, so an n00b
 binding, a C header and a Python binding all treat a Rust library the
-same way they treat a C one.
+same way they treat a C one. `writ derive` prints it.
+
+| Rust | Derived C contract |
+|---|---|
+| Every function | Returns `c_int as writ_<crate>_status`: `OK`, `NONE`, `ERROR`, `PANIC`. Results move to `out` parameters. |
+| `&str` | `p: utf8[p_len] null if empty, p_len: usize`. The transport checks the UTF-8 and reports `ERROR` if it is invalid. |
+| `&[T]` | `p: *[T; p_len] null if empty, p_len: usize` |
+| `opaque T` | `opaque writ_<crate>_<t>` and `handle T = *writ_<crate>_<t> release writ_<crate>_<t>_free`, with the thread rule from `Send`/`Sync` |
+| `self` by value | `consume` of the handle |
+| `T` returned (handle) | `out: out *T own` |
+| `Vec<T>` / `String` returned | A caller buffer under `sizing retry`: `out: out *[T; cap out_cap, len min(out_total, out_cap)], out_cap: usize, out_total: out *usize`. The transport writes what fits and reports the total. |
+| `Option<T>` returned | Outcome `none success` when the status is `NONE`, with the output `unset` |
+| `Result<T, E>` | Outcome `failed failure when ret == ERROR via last_error` |
+| Panics | Outcome `panicked failure when ret == PANIC via last_error` |
+| `error E display` | The `last_error` channel: `text writ_<crate>_last_error(buf, cap)`, valid until the thread's next failure |
+
+The derived contract for the resharp contract above starts:
+
+```writ
+library resharp_writ
+link "resharp_writ"
+
+enum writ_resharp_status : c_int { OK = 0, NONE = 1, ERROR = 2, PANIC = 3 }
+
+error_channel last_error per thread {
+    text writ_resharp_last_error(buf, cap)
+    valid until next failure on thread
+}
+
+fn writ_resharp_last_error(buf: out *[u8; cap cap, len min(ret, cap)], cap: usize) -> usize
+  sizing retry needs ret
+
+struct Match { start: usize, end: usize }
+opaque writ_resharp_regex
+handle Regex = *writ_resharp_regex release writ_resharp_regex_free shared
+
+fn writ_resharp_regex_new(
+    pattern: utf8[pattern_len] null if empty,
+    pattern_len: usize,
+    out: out *Regex own,
+) -> c_int as writ_resharp_status
+  outcome ok       success when ret == OK
+  outcome failed   failure when ret == ERROR via last_error
+  outcome panicked failure via last_error
+  on error out: unset
+
+fn writ_resharp_regex_find_all(
+    self: Regex,
+    haystack: bytes[haystack_len] null if empty,
+    haystack_len: usize,
+    out: out *[Match; cap out_cap, len min(out_total, out_cap)],
+    out_cap: usize,
+    out_total: out *usize,
+) -> c_int as writ_resharp_status
+  outcome ok       success when ret == OK
+  outcome failed   failure when ret == ERROR via last_error
+  outcome panicked failure via last_error
+  sizing retry for out needs out_total
+  on error out: unset
+```
 
 #### Direct linking (optimization)
 
@@ -2235,6 +2296,59 @@ storage, and releases the pin exactly when the span ends:
 If §5.9 allows a copy and the profile marks pinning as expensive or
 unavailable for that span (`via copy`), the binding copies instead.
 
+#### The profile format
+
+A profile file holds one or more `profile` blocks. Each names one
+language, and each item states one fact about it. Text in quotes is the
+language's own spelling, passed to its generator unchanged; writ never
+parses it.
+
+```writ
+profile c {
+    memory none
+    prim c_int -> "int"
+    prim usize -> "size_t"
+    string cstr  to cstr      via "const char *"     zero_copy
+    string slice to utf8[n]   via "const char *, size_t" zero_copy
+    pack rest     array native "T *, size_t"
+    pack keywords struct native "struct"
+    variadic call yes
+    variadic define yes
+    error style status
+    callback style userdata
+    lifetimes no
+    naming fn    snake
+    naming type  snake
+    naming const upper
+    reserved "auto", "break", "case", "char", "default", "int", "register", "restrict"
+}
+```
+
+| Item | Says |
+|---|---|
+| `memory K { + K }` | The memory model: `none`, `rc`, `gc moving`, `gc nonmoving` |
+| `pin SPAN via TEXT [ release TEXT ]` | How to hold memory still for a span (`for call`, `longer`, `any`, `buffer`). `via copy` means the language can't, and the binding copies. |
+| `keep_alive via TEXT` | How to keep an object alive past its last use |
+| `prim TYPE -> TEXT` | The native spelling of a primitive. `c_*` types resolve to fixed-width types per platform first, so a profile may list only those. |
+| `string ID to TYPE via TEXT [ copies \| zero_copy ]` | A native string representation named `ID`, and the contract form it converts to. The first `string` item for a contract form is the default. |
+| `buffer ID to TYPE via TEXT [ copies \| zero_copy ]` | The same, for byte buffers (`*[u8; n]`, `bytes[n]`) |
+| `pack ( rest \| keywords ) ID native TEXT` | A native form of a pack, named `ID`. The first is the default. |
+| `variadic ( call \| define ) ( yes \| no )` | Whether the language can call, or define, a C variadic function |
+| `error style S` | `exceptions`, `result`, `multi_return` or `status` (C-style codes) |
+| `error type TEXT` | The default native error type, when the style has one |
+| `callback style S` | `closure` (native closures, through `userdata`), `userdata` (a function plus explicit data), or `static` (named functions only) |
+| `handle close TEXT` | The native name of a handle's release operation (`close`, `drop`, `free`) |
+| `lifetimes ( yes \| no )` | Whether the language can tie a borrowed result to its owner (`borrow ... as lifetime`) |
+| `naming KIND CASE` | The case for `fn`, `type`, `const`, `field` or `module` names: `snake`, `pascal`, `camel`, `upper`, or `keep` |
+| `reserved TEXT { , TEXT }` | Words a generated name may not be. A clash gets a trailing `_`. |
+| `label ID -> TEXT` | The default native type for a label (`path`, `secret`) |
+
+A profile item may appear once, except `pin`, `prim`, `string`,
+`buffer`, `pack`, `naming`, `reserved` and `label`, which repeat with
+different subjects. A project overrides a shipped profile by declaring a
+profile of the same name in its own profile file: its items replace the
+shipped items with the same subject, and the rest are kept.
+
 ### 9.3 Bindings: import and export
 
 A **binding** is one language's choices for one contract, in one
@@ -2308,6 +2422,77 @@ Rules:
   one).
 - Choices that are the same for every binding of a language belong in the
   profile. Choices for one library belong in its binding.
+
+#### The binding format
+
+A binding file holds one or more `binding` blocks:
+
+```text
+binding CONTRACT for LANGUAGE ( import | export ) { ITEM* }
+```
+
+`CONTRACT` is the contract's `library` name and `LANGUAGE` is a profile
+name. Items refer to the contract through **targets**:
+
+| Target | Names |
+|---|---|
+| `f` | A declaration: a function, type, constant, callback or keyword pack |
+| `f.p` | Parameter `p` of function `f`, or field `p` of record `f` |
+| `f.return` | The return value of `f` |
+| `i.f` | Declaration `f` of interface `i` (§9.1) |
+| `T::m` | Item `m` of `impl T`, in a `lang rust` contract (§8.9) |
+| `p*` | Every declaration whose name matches the pattern (`*`, `?`, `[...]`, as in §10.4). `hide` and `raw` take the pattern as a string. |
+
+Every item:
+
+| Item | Direction | Chooses |
+|---|---|---|
+| `module TEXT` | both | The module or namespace the bound API lives in |
+| `strip_prefix TEXT` | both | A prefix removed from every generated name before the profile's case rules. Repeatable; the longest match wins. |
+| `name TARGET TEXT` | both | The native name of one declaration or parameter |
+| `hide "glob"` | import | Declarations left out of the bound API |
+| `raw "glob"` | import | Declarations bound without safety, despite `unknown` facts (§10.3) |
+| `type T as TEXT` | both | The native name of a type |
+| `method T.m = f` | import | `f` becomes method `m` on `T`. Its receiver is the first parameter of type `T`, or `self` in a `lang rust` contract. |
+| `static T.m = f` | import | `f` becomes an associated function `m` of `T`, with no receiver |
+| `string TARGET as ID` | both | A string representation from the profile's `string` items |
+| `buffer TARGET as ID` | both | A buffer representation from the profile's `buffer` items |
+| `pack TARGET as ID` | both | A pack form from the profile's `pack` items |
+| `keywords T as ID` | both | A keyword-pack form; `*` as `T` sets it for every pack |
+| `error PATTERN -> TEXT` | both | The native error type for the matching functions |
+| `borrow TARGET as ( lifetime \| copy )` | import | Ties a borrowed result to its owner, or copies it. `lifetime` needs `lifetimes yes`. |
+| `policy TARGET use ARM` | both | One arm of a policy parameter (§5.6); the parameter disappears from the native signature |
+| `label ID -> TEXT` | both | The native type for a label, overriding the profile |
+| `callback C as TEXT` | both | The native type for callback type `C` |
+| `load ( static \| dynamic )` | import | Whether symbols are linked, or resolved when the program opens the library (default `static`) |
+| `library TEXT [ when COND ]` | import | The file to link or open in place of the contract's `link`, per platform |
+| `search_path TEXT` | import | A directory searched for the library. Repeatable. |
+| `provide TARGET = TEXT` | export | The native function or value implementing a declaration |
+| `on_panic ( abort \| error EXPR )` | export | What an entry point does when the implementation fails without a contract error |
+| `allocator own -> ID` | export | The contract allocator that `own` results come from |
+| `header TEXT` | export | The name of the generated C header |
+
+Resolution reads the contract's model, the profile and the binding, and
+produces one decision per contract declaration. Each decision records
+whether the item was **chosen** by the binding or **defaulted** from the
+profile, so generators and `writ lower` can show where a choice came
+from. Undecided targets take the profile's defaults; an import binding
+with no items binds the whole contract with defaults.
+
+A binding is checked against both. Each check reports at the binding
+item, and names the contract or profile line it conflicts with:
+
+| Code | Rejects |
+|---|---|
+| E0501 | A target that names nothing in the contract |
+| E0502 | A representation ID the profile doesn't declare, or one whose contract form doesn't match the target's type |
+| E0503 | A choice the contract doesn't leave open: `borrow ... as lifetime` for an `own` result, `copy` where the contract says `identity` (§5.8), `policy` naming no arm |
+| E0504 | A choice the profile can't express: `borrow ... as lifetime` with `lifetimes no`, a C variadic with `variadic call no` |
+| E0505 | Two native names for one declaration, or one native name for two declarations in the same scope |
+| E0506 | `method` whose function has no parameter of the receiver type |
+| E0507 | An item that belongs to the other direction |
+| E0508 | An `unknown` fact reached by a declaration that is neither hidden nor `raw` |
+| E0509 | An export binding that leaves a provided declaration without `provide` |
 
 ### 9.4 Other ABI families
 
@@ -2803,23 +2988,32 @@ profile_item= "memory" mem_kind { "+" mem_kind }
             | "pin" ( "for" "call" | "longer" | "any" | "buffer" )
               "via" ( STRING | "copy" ) [ "release" STRING ]
             | "keep_alive" "via" STRING
-            | "string" ID "to" type "via" STRING [ "copies" | "zero_copy" ]
-            | "pack" ( "rest" | "keywords" ) "native" STRING
+            | "prim" type "->" STRING
+            | ( "string" | "buffer" ) ID "to" type "via" STRING [ "copies" | "zero_copy" ]
+            | "pack" ( "rest" | "keywords" ) ID "native" STRING
             | "variadic" ( "call" | "define" ) ( "yes" | "no" )
-            | "error" "style" ( "exceptions" | "result" | "multi_return" )
-            | "bits" "native" STRING
+            | "error" "style" ( "exceptions" | "result" | "multi_return" | "status" )
+            | "error" "type" STRING
+            | "callback" "style" ( "closure" | "userdata" | "static" )
+            | "handle" "close" STRING | "lifetimes" ( "yes" | "no" )
+            | "bits" "native" STRING | "reserved" STRING { "," STRING }
             | "label" ID "->" STRING | "naming" ID ID ;
 mem_kind    = "none" | "rc" | "gc" ( "moving" | "nonmoving" ) ;
 
 (* ---------- bindings ---------- *)
 binding     = "binding" ID "for" ID ( "import" | "export" ) "{" { binding_item } "}" ;
-binding_item= "module" STRING | "strip_prefix" STRING | "name" ID STRING
-            | "type" ID "as" STRING | "method" QNAME "=" ID
-            | "error" PATTERN "->" STRING | "borrow" ID "as" ( "lifetime" | "copy" )
-            | "policy" ID "use" ID | "keywords" ( ID | "*" ) "as" ( "builder" | "struct" | "kwargs" )
+binding_item= "module" STRING | "strip_prefix" STRING | "name" target STRING
+            | "type" ID "as" STRING | ( "method" | "static" ) ID "." ID "=" ID
+            | ( "string" | "buffer" | "pack" ) target "as" ID
+            | "keywords" ( ID | "*" ) "as" ID
+            | "error" PATTERN "->" STRING | "borrow" target "as" ( "lifetime" | "copy" )
+            | "policy" target "use" ID | "callback" ID "as" STRING
             | "label" ID "->" STRING | "hide" STRING | "raw" STRING
-            | "provide" QNAME "=" STRING | "on_panic" ( "abort" | "error" expr )
+            | "load" ( "static" | "dynamic" ) | "library" STRING [ "when" cond ]
+            | "search_path" STRING | "header" STRING
+            | "provide" target "=" STRING | "on_panic" ( "abort" | "error" expr )
             | "allocator" "own" "->" ID ;
+target      = ID [ "::" ID ] [ "." ( ID | "return" ) ] ;
 ```
 
 (Approximate. Precedence will tighten as the implementation grows. `?` appears

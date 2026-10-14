@@ -33,7 +33,7 @@
 <decl> ::= <const-decl> | <alias-decl> | <opaque-decl> | <handle-decl> | <struct-decl> | <enum-decl> | <flags-decl> | <callback-decl> | <fn-decl> | <refine-decl> | <allocator-decl> | <when-decl> | <var-decl> | <interface-decl> | <symbol-decl> | <conventions-decl> | <channel-decl> | <impl-decl> | <rust-error-decl>
 <const-decl> ::= %"const" %IDENTIFIER %":" <type> %"=" <expr>
 <alias-decl> ::= %"type" %IDENTIFIER %"=" <type>
-<opaque-decl> ::= %"opaque" %IDENTIFIER <source-clause>?
+<opaque-decl> ::= %"opaque" %IDENTIFIER <source-clause>? <thread-rule>?
 <handle-decl> ::= %"handle" %IDENTIFIER %"=" <type> <none-value>? <release-attr> <thread-rule>?
 <none-value> ::= %"none" <expr>
 <thread-rule> ::= %"shared" | %"thread_affine"
@@ -221,7 +221,7 @@
 <paren-expr> ::= %"(" <expr> %")"
 
 <profile-decl> ::= %"profile" %IDENTIFIER %"{" <profile-item>* %"}"
-<profile-item> ::= <memory-item> | <pin-item> | <keep-alive-item> | <string-item> | <pack-native-item> | <variadic-item> | <error-style-item> | <naming-item>
+<profile-item> ::= <memory-item> | <pin-item> | <keep-alive-item> | <prim-item> | <string-item> | <buffer-item> | <pack-native-item> | <variadic-item> | <error-style-item> | <error-type-item> | <callback-style-item> | <handle-close-item> | <lifetimes-item> | <naming-item> | <reserved-item> | <label-map-item>
 <memory-item> ::= %"memory" <memory-kind> (%"+" <memory-kind>)*
 <memory-kind> ::= %"none" | %"rc" | %"gc" <gc-kind>
 <gc-kind> ::= %"moving" | %"nonmoving"
@@ -231,31 +231,52 @@
 <pin-copy> ::= %"copy"
 <pin-release> ::= %"release" %STRING
 <keep-alive-item> ::= %"keep_alive" %"via" %STRING
-<string-item> ::= %"string" %IDENTIFIER %"to" <type> %"via" <text> <copy-mode>?
+<prim-item> ::= %"prim" <type> %"->" <text>
+<string-item> ::= %"string" %IDENTIFIER %"to" <type> %"via" <pin-via> <copy-mode>?
+<buffer-item> ::= %"buffer" %IDENTIFIER %"to" <type> %"via" <pin-via> <copy-mode>?
 <copy-mode> ::= %"copies" | %"zero_copy"
-<pack-native-item> ::= %"pack" <pack-kind> %"native" %STRING
+<pack-native-item> ::= %"pack" <pack-kind> %IDENTIFIER %"native" <text>
 <pack-kind> ::= %"rest" | %"keywords"
 <variadic-item> ::= %"variadic" <variadic-kind> <yes-no>
 <variadic-kind> ::= %"call" | %"define"
 <error-style-item> ::= %"error" %"style" <error-style>
-<error-style> ::= %"exceptions" | %"result" | %"multi_return"
+<error-style> ::= %"exceptions" | %"result" | %"multi_return" | %"status"
+<error-type-item> ::= %"error" %"type" <text>
+<callback-style-item> ::= %"callback" %"style" <callback-style>
+<callback-style> ::= %"closure" | %"userdata" | %"static"
+<handle-close-item> ::= %"handle" %"close" <text>
+<lifetimes-item> ::= %"lifetimes" <yes-no>
 <naming-item> ::= %"naming" %IDENTIFIER <ref>
+<reserved-item> ::= %"reserved" <text> (%"," <text>)*
+<label-map-item> ::= %"label" %IDENTIFIER %"->" <text>
 
 <binding-decl> ::= %"binding" %IDENTIFIER %"for" <ref> <direction> %"{" <binding-item>* %"}"
 <direction> ::= %"import" | %"export"
-<binding-item> ::= <module-item> | <strip-prefix-item> | <name-item> | <type-as-item> | <method-item> | <error-map-item> | <borrow-item> | <hide-item> | <raw-item> | <provide-item> | <on-panic-item> | <allocator-own-item>
+<binding-item> ::= <module-item> | <strip-prefix-item> | <name-item> | <type-as-item> | <method-item> | <repr-item> | <keywords-item> | <error-map-item> | <borrow-item> | <policy-item> | <callback-as-item> | <label-map-item> | <hide-item> | <raw-item> | <load-item> | <library-item> | <search-path-item> | <header-item> | <provide-item> | <on-panic-item> | <allocator-own-item>
+<target> ::= %IDENTIFIER (%"::" %IDENTIFIER)? (%"." %IDENTIFIER)?
 <module-item> ::= %"module" %STRING
 <strip-prefix-item> ::= %"strip_prefix" %STRING
-<name-item> ::= %"name" %IDENTIFIER <text>
+<name-item> ::= %"name" <target> <text>
 <type-as-item> ::= %"type" %IDENTIFIER %"as" <text>
-<method-item> ::= %"method" <qualified-name> %"=" <ref>
-<qualified-name> ::= %IDENTIFIER (%"." %IDENTIFIER)*
+<method-item> ::= <method-kind> <target> %"=" <target>
+<method-kind> ::= %"method" | %"static"
+<repr-item> ::= <repr-kind> <target> %"as" %IDENTIFIER
+<repr-kind> ::= %"string" | %"buffer" | %"pack"
+<keywords-item> ::= %"keywords" <keywords-target> %"as" %IDENTIFIER
+<keywords-target> ::= %IDENTIFIER | %"*"
 <error-map-item> ::= %"error" <pattern> %"->" <text>
-<borrow-item> ::= %"borrow" %IDENTIFIER %"as" <borrow-mode>
+<borrow-item> ::= %"borrow" <target> %"as" <borrow-mode>
 <borrow-mode> ::= %"lifetime" | %"copy"
+<policy-item> ::= %"policy" <target> %"use" %IDENTIFIER
+<callback-as-item> ::= %"callback" %IDENTIFIER %"as" <text>
 <hide-item> ::= %"hide" %STRING
 <raw-item> ::= %"raw" %STRING
-<provide-item> ::= %"provide" <qualified-name> %"=" <text>
+<load-item> ::= %"load" <load-mode>
+<load-mode> ::= %"static" | %"dynamic"
+<library-item> ::= %"library" <text> <when-part>?
+<search-path-item> ::= %"search_path" <text>
+<header-item> ::= %"header" <text>
+<provide-item> ::= %"provide" <target> %"=" <text>
 <on-panic-item> ::= %"on_panic" <panic-action>
 <panic-action> ::= <panic-abort> | <panic-error>
 <panic-abort> ::= %"abort"

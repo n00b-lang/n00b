@@ -7,10 +7,11 @@ separator = sys.argv.index("--")
 command = sys.argv[separator + 1 :]
 command[0] = os.path.abspath(command[0])
 expect_failure = "--fails" in sys.argv[2:separator]
+stdout_only = "--stdout" in sys.argv[2:separator]
 
 source_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 result = subprocess.run(command, cwd=source_root, capture_output=True, text=True)
-actual = result.stdout + result.stderr
+actual = result.stdout if stdout_only else result.stdout + result.stderr
 
 if expect_failure != (result.returncode != 0):
     sys.exit(f"exit status {result.returncode} was not expected\n{actual}")

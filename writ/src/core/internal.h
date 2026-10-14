@@ -64,6 +64,12 @@ typedef enum {
     WRIT_D_COUNT,
 } writ_diag_code_t;
 
+typedef enum {
+    WRIT_GRAMMAR_WRIT,
+    WRIT_GRAMMAR_JSON,
+    WRIT_GRAMMAR_COUNT,
+} writ_grammar_id_t;
+
 struct writ_session {
     core_arena_t                    arena;
     core_indexed_table_t           *strings;
@@ -75,7 +81,7 @@ struct writ_session {
     writ_process_runner_t           runner;
     writ_str_t                      llvm_prefix;
     core_list_t(writ_cleanup_t)     cleanups;
-    void                           *grammar;
+    void                           *grammars[WRIT_GRAMMAR_COUNT];
 };
 
 void      *writ_alloc(writ_session_t *session, size_t size);
@@ -89,6 +95,16 @@ writ_str_t writ_cstr(const char *text);
 writ_sym_t writ_intern(writ_session_t *session, const char *data, size_t length);
 writ_sym_t writ_intern_str(writ_session_t *session, writ_str_t text);
 writ_str_t writ_sym_str(const writ_session_t *session, writ_sym_t sym);
+
+typedef enum {
+    WRIT_CASE_KEEP,
+    WRIT_CASE_SNAKE,
+    WRIT_CASE_UPPER,
+    WRIT_CASE_PASCAL,
+    WRIT_CASE_CAMEL,
+} writ_case_t;
+
+writ_str_t writ_name_case(writ_session_t *session, writ_str_t name, writ_case_t style);
 
 uint32_t             writ_source_add(writ_session_t *session, writ_source_kind_t kind,
                                      writ_origin_t origin, writ_str_t path, writ_str_t text);

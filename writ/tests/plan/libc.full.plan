@@ -8,11 +8,10 @@ ok        lift_value     ret -> result
 plan snprintf
 item 0 buf result text caller_owns
 item 1 text input text borrowed
-item 2 result result scalar none
 slot 0 out_pointer pointer buf
 slot 1 value capacity buf
 slot 2 in_pointer whole -
-slot 3 value whole result
+slot 3 value whole -
 slot 4 variadic_tail elements text
 local 0 buffer c_char buf
 local 1 text c_char text
@@ -26,19 +25,17 @@ attempt   size_query     (s0 = NULL, s1 = 0) -> cap(L0) = (ret + 1)
           call           variadic
 classify  ok: success
 ok        lift_buffer    L0 -> buf, len ((ret) < ((s1 - 1)) ? (ret) : ((s1 - 1)))
-          lift_value     ret -> result
 finally   release_local  L0 unless handed over
           release_local  L1 unless handed over
 
 plan vsnprintf
 item 0 buf result text caller_owns
 item 1 text input text borrowed
-item 2 result result scalar none
 slot 0 out_pointer pointer buf
 slot 1 value capacity buf
 slot 2 in_pointer whole -
 slot 3 variadic_tail elements text
-slot 4 value whole result
+slot 4 value whole -
 local 0 buffer c_char buf
 local 1 text c_char text
 prepare   pass           "%s" -> s2
@@ -51,7 +48,6 @@ attempt   size_query     (s0 = NULL, s1 = 0) -> cap(L0) = (ret + 1)
           call           variadic
 classify  ok: success
 ok        lift_buffer    L0 -> buf, len ((ret) < ((s1 - 1)) ? (ret) : ((s1 - 1)))
-          lift_value     ret -> result
 finally   release_local  L0 unless handed over
           release_local  L1 unless handed over
 

@@ -42,6 +42,7 @@ struct writ_unit {
     core_list_t(writ_loc_t)        tokens;
 };
 
+writ_status_t      writ_unit_read_json(writ_unit_t *unit, writ_str_t path, uint32_t *root);
 const writ_node_t *writ_node(const writ_unit_t *unit, uint32_t id);
 uint32_t           writ_node_child(const writ_unit_t *unit, uint32_t id, uint32_t index);
 uint32_t           writ_node_first_of(const writ_unit_t *unit, uint32_t id, writ_node_kind_t kind);

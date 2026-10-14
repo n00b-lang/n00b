@@ -112,9 +112,9 @@ writ_c_item_params(const writ_c_context_t *c, const writ_plan_view_t *plan, uint
         case WRIT_SHAPE_BYTES:
         case WRIT_SHAPE_ARRAY:
         case WRIT_SHAPE_TEXT: {
-            const writ_type_view_t *element = item->shape == WRIT_SHAPE_TEXT ? item->type->target : item->type->target;
-            params[0] = (writ_c_param_t){
-                writ_str_format(session, "const %.*s *", S(writ_c_type(c, element, false))), item->name};
+            writ_str_t element = item->shape == WRIT_SHAPE_TEXT ? writ_cstr("char")
+                                                                : writ_c_type(c, item->type->target, false);
+            params[0] = (writ_c_param_t){writ_str_format(session, "const %.*s *", S(element)), item->name};
             params[1] = (writ_c_param_t){writ_cstr("size_t"), suffixed(c, item->name, "_length")};
             return 2;
         }
@@ -133,7 +133,14 @@ writ_c_item_params(const writ_c_context_t *c, const writ_plan_view_t *plan, uint
     }
     writ_step_kind_t lift = writ_c_lift_kind(plan, index);
     writ_str_t type;
-    if (lift == WRIT_STEP_LIFT_BUFFER || lift == WRIT_STEP_COPY_BORROWED) {
+    if (lift == WRIT_STEP_LIFT_BUFFER && item->shape == WRIT_SHAPE_ARRAY) {
+        params[0] = (writ_c_param_t){writ_str_format(session, "%.*s **", S(writ_c_type(c, item->type->target, false))),
+                                     item->name};
+        params[1] = (writ_c_param_t){writ_cstr("size_t *"), suffixed(c, item->name, "_length")};
+        return 2;
+    }
+    if (lift == WRIT_STEP_LIFT_BUFFER || lift == WRIT_STEP_COPY_BORROWED
+        || (item->role == WRIT_ROLE_ERROR_DETAIL && item->shape == WRIT_SHAPE_TEXT)) {
         type = writ_str_format(session, "%.*s_bytes_t", S(c->prefix));
     } else if (writ_c_offset_result(plan, index)) {
         type = writ_cstr("size_t");
@@ -262,6 +269,15 @@ typedef struct {
 
 static void print_shim_ref(shim_env_t *env, writ_ref_t ref, core_buffer_t *out);
 
+static bool
+empty_is_null(const writ_plan_view_t *plan, uint32_t index)
+{
+    const writ_plan_item_view_t *item = &plan->items[index];
+    return item->nullable
+        || (item->contract_slot != WRIT_PLAN_NONE && plan->fn->slots[item->contract_slot].null_if_empty);
+}
+static bool plans_use(const writ_plan_view_t *const *plans, size_t count, writ_step_kind_t kind);
+
 static void
 shim_ref(writ_expr_env_t *base, writ_ref_t ref, uint32_t expr, core_buffer_t *out)
 {
@@ -374,7 +390,8 @@ emit_declarations(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_
         writ_str_t type = writ_c_type(c, local->type, false);
         bool pointer = type.data[type.length - 1] == '*';
         if (local->kind == WRIT_LOCAL_CELL) {
-            writ_emit_line(emit, "%.*s%sl%zu = 0;", S(type), pointer ? "" : " ", i);
+            writ_emit_line(emit, "%.*s%sl%zu = %s;", S(type), pointer ? "" : " ", i,
+                           local->type->kind == WRIT_TYPE_RECORD ? "{0}" : "0");
         } else {
             writ_emit_line(emit, "%.*s *l%zu = NULL;", S(type), i);
             if (local->kind == WRIT_LOCAL_BUFFER) {
@@ -616,9 +633,11 @@ emit_step(shim_env_t *env, writ_emit_t *emit, const writ_plan_step_view_t *step)
     }
     case WRIT_STEP_SPLIT: {
         writ_str_t pointer = slot_type(c, plan, step->slot);
-        writ_str_t empty = item->nullable ? writ_cstr("NULL")
-                                          : writ_str_format(c->model->session, "(%.*s)%.*s_empty", S(pointer), S(c->prefix));
-        writ_emit_line(emit, "s%u = %.*s_length ? %.*s : %.*s;", step->slot, S(item->name), S(item->name), S(empty));
+        writ_str_t empty = empty_is_null(plan, step->item)
+                             ? writ_cstr("NULL")
+                             : writ_str_format(c->model->session, "(%.*s)%.*s_empty", S(pointer), S(c->prefix));
+        writ_emit_line(emit, "s%u = %.*s_length ? (%.*s)%.*s : %.*s;", step->slot, S(item->name), S(pointer),
+                       S(item->name), S(empty));
         writ_emit_line(emit, "s%u = (%.*s)%.*s_length;", step->second_slot, S(slot_type(c, plan, step->second_slot)),
                        S(item->name));
         return;
@@ -647,6 +666,19 @@ emit_step(shim_env_t *env, writ_emit_t *emit, const writ_plan_step_view_t *step)
     case WRIT_STEP_SIZE_QUERY:
         emit_query(env, emit, step);
         return;
+    case WRIT_STEP_SIZE_RETRY: {
+        writ_str_t needs = expr_text(env, step->expr);
+        const writ_plan_local_view_t *local = &plan->locals[step->local];
+        writ_emit_open(emit, "if ((size_t)(%.*s) > l%u_capacity)", S(needs), step->local);
+        writ_emit_line(emit, "%.*s = (size_t)(%.*s);", S(plan->items[local->capacity_item].name), S(needs));
+        writ_emit_line(emit, "free(l%u);", step->local);
+        writ_emit_line(emit, "l%u = NULL;", step->local);
+        writ_emit_line(emit, "continue;");
+        writ_emit_close(emit, nullptr);
+        writ_emit_line(emit, "break;");
+        writ_emit_close(emit, nullptr);
+        return;
+    }
     case WRIT_STEP_ALLOC_OUT: {
         const writ_plan_local_view_t *local = &plan->locals[step->local];
         writ_str_t element = writ_c_type(c, local->type, false);
@@ -670,6 +702,22 @@ emit_step(shim_env_t *env, writ_emit_t *emit, const writ_plan_step_view_t *step)
         emit_call(env, emit, plan->fn->result ? "ret" : nullptr);
         return;
     case WRIT_STEP_FETCH_DETAIL: {
+        if (item->shape == WRIT_SHAPE_TEXT && item->after_call == WRIT_AFTER_CALLER_OWNS) {
+            writ_ref_t channel = writ_expr_ref(c->model, step->expr);
+            uint32_t source = c->model->channels.data[channel.index].source_expr;
+            writ_ref_t callee = writ_expr_ref(c->model, writ_node_child(c->model->unit, source, 0));
+            const writ_fn_rec_t *source_fn = &c->model->fns.data[callee.index];
+            writ_str_t name = writ_sym_str(c->model->session, source_fn->name);
+            writ_emit_line(emit, "%.*s->data = NULL;", S(item->name));
+            writ_emit_line(emit, "%.*s->length = 0;", S(item->name));
+            if (source_fn->sizing == WRIT_SIZING_RETRY) {
+                writ_emit_line(emit, "(void)%.*s_%.*s(%u, %.*s);", S(c->prefix), S(name),
+                               writ_default(WRIT_DEFAULT_RETRY_CAPACITY), S(item->name));
+            } else {
+                writ_emit_line(emit, "(void)%.*s_%.*s(%.*s);", S(c->prefix), S(name), S(item->name));
+            }
+            return;
+        }
         writ_str_t value = expr_text(env, step->expr);
         writ_str_t type = writ_c_type(c, item->type, writ_c_is_text(item->type));
         writ_emit_line(emit, "*%.*s = (%.*s)(%.*s);", S(item->name), S(type), S(value));
@@ -680,8 +728,13 @@ emit_step(shim_env_t *env, writ_emit_t *emit, const writ_plan_step_view_t *step)
         writ_emit_open(emit, "if ((%.*s) < 0 || (size_t)(%.*s) > l%u_capacity)", S(length), S(length), step->local);
         fail(c, emit, "CONTRACT_VIOLATION");
         writ_emit_close(emit, nullptr);
-        writ_emit_line(emit, "%.*s->data = (uint8_t *)l%u;", S(item->name), step->local);
-        writ_emit_line(emit, "%.*s->length = (size_t)(%.*s);", S(item->name), S(length));
+        if (item->shape == WRIT_SHAPE_ARRAY) {
+            writ_emit_line(emit, "*%.*s = l%u;", S(item->name), step->local);
+            writ_emit_line(emit, "*%.*s_length = (size_t)(%.*s);", S(item->name), S(length));
+        } else {
+            writ_emit_line(emit, "%.*s->data = (uint8_t *)l%u;", S(item->name), step->local);
+            writ_emit_line(emit, "%.*s->length = (size_t)(%.*s);", S(item->name), S(length));
+        }
         writ_emit_line(emit, "l%u = NULL;", step->local);
         return;
     }
@@ -772,6 +825,7 @@ emit_shim(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_view_t *
     emit_reset(&env, emit);
     uint32_t current = WRIT_PLAN_NONE;
     bool finished = false;
+    bool retrying = false;
     for (size_t i = 0; i < plan->steps_count; i++) {
         const writ_plan_step_view_t *step = &plan->steps[i];
         if (step->kind == WRIT_STEP_CLASSIFY) {
@@ -795,6 +849,10 @@ emit_shim(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_view_t *
             writ_emit_line(emit, "finish:");
             writ_emit_indent(emit, 1);
             finished = true;
+        }
+        if (step->phase == WRIT_PHASE_ATTEMPT && !retrying && plans_use(&plan, 1, WRIT_STEP_SIZE_RETRY)) {
+            writ_emit_open(emit, "for (;;)");
+            retrying = true;
         }
         emit_step(&env, emit, step);
     }
@@ -859,6 +917,41 @@ emit_includes(const writ_c_context_t *c, writ_emit_t *emit)
     }
 }
 
+static void
+emit_declared_types(const writ_c_context_t *c, writ_emit_t *emit)
+{
+    const writ_model_t *model = c->model;
+    if (writ_model_library(model)->headers_count) {
+        return;
+    }
+    for (size_t i = 0; i < writ_model_handle_count(model); i++) {
+        const writ_type_view_t *opaque = writ_model_handle_at(model, i)->base->target;
+        if (opaque && opaque->kind == WRIT_TYPE_OPAQUE && opaque->c_spelling.length) {
+            writ_emit_line(emit, "typedef struct %.*s %.*s;", S(opaque->c_spelling), S(opaque->c_spelling));
+        }
+    }
+    for (size_t i = 0; i < writ_model_enum_count(model); i++) {
+        const writ_enum_view_t *view = writ_model_enum_at(model, i);
+        writ_emit_open(emit, "enum");
+        for (size_t k = 0; k < view->items_count; k++) {
+            writ_str_t item = writ_name_case(model->session, view->items[k].name, WRIT_CASE_UPPER);
+            writ_emit_line(emit, "%.*s_%.*s = %lld,", S(c->upper), S(item), (long long)view->items[k].value);
+        }
+        writ_emit_close(emit, ";");
+    }
+    for (size_t i = 0; i < writ_model_record_count(model); i++) {
+        const writ_record_view_t *record = writ_model_record_at(model, i);
+        writ_emit_open(emit, "typedef struct %.*s", S(record->name));
+        for (size_t f = 0; f < record->fields_count; f++) {
+            writ_str_t type = writ_c_type(c, record->fields[f].type, false);
+            bool pointer = type.length && type.data[type.length - 1] == '*';
+            writ_emit_line(emit, "%.*s%s%.*s;", S(type), pointer ? "" : " ", S(record->fields[f].name));
+        }
+        writ_emit_close(emit, writ_str_format(model->session, " %.*s;", S(record->name)).data);
+    }
+    writ_emit_line(emit, "");
+}
+
 static writ_str_t
 header_text(const writ_c_context_t *c, const writ_plan_view_t *const *plans, size_t count)
 {
@@ -892,6 +985,9 @@ header_text(const writ_c_context_t *c, const writ_plan_view_t *const *plans, siz
     writ_emit_close(&emit, writ_str_format(c->model->session, " %.*s_str_t;", S(c->prefix)).data);
     writ_emit_line(&emit, "");
     writ_emit_line(&emit, "void %.*s_bytes_free(%.*s_bytes_t *bytes);", S(c->prefix), S(c->prefix));
+    writ_emit_line(&emit, "void %.*s_free(void *data);", S(c->prefix));
+    writ_emit_line(&emit, "");
+    emit_declared_types(c, &emit);
     for (size_t i = 0; i < count; i++) {
         const writ_plan_view_t *plan = plans[i];
         writ_emit_line(&emit, "");
@@ -925,7 +1021,7 @@ plans_use(const writ_plan_view_t *const *plans, size_t count, writ_step_kind_t k
         for (size_t s = 0; s < plans[i]->steps_count; s++) {
             const writ_plan_step_view_t *step = &plans[i]->steps[s];
             bool text_pack = kind == WRIT_STEP_ENCODE_CSTR && step->kind == WRIT_STEP_EXPAND && has_text_pack(plans[i]);
-            bool empty = kind == WRIT_STEP_SPLIT && step->kind == kind && !plans[i]->items[step->item].nullable;
+            bool empty = kind == WRIT_STEP_SPLIT && step->kind == kind && !empty_is_null(plans[i], step->item);
             if ((step->kind == kind && kind != WRIT_STEP_SPLIT) || text_pack || empty) {
                 return true;
             }
@@ -945,6 +1041,10 @@ emit_helpers(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_view_
     writ_emit_line(emit, "free(bytes->data);");
     writ_emit_line(emit, "bytes->data = NULL;");
     writ_emit_line(emit, "bytes->length = 0;");
+    writ_emit_close(emit, nullptr);
+    writ_emit_line(emit, "");
+    writ_emit_open(emit, "void %.*s_free(void *data)", S(c->prefix));
+    writ_emit_line(emit, "free(data);");
     writ_emit_close(emit, nullptr);
     if (plans_use(plans, count, WRIT_STEP_ENCODE_CSTR)) {
         writ_emit_line(emit, "");

@@ -30,4 +30,5 @@ WRIT_DIAG(ON_UNKNOWN_OUTCOME, "E0215", WRIT_ERROR, "`on` names no outcome of thi
 WRIT_DIAG(TOOLCHAIN, "E0301", WRIT_ERROR, "toolchain failure")
 WRIT_DIAG(LAYOUT_TOOLCHAIN, "E0302", WRIT_ERROR, "the contract's layout disagrees with the compiler")
 WRIT_DIAG(SYMBOL_MISSING, "E0303", WRIT_ERROR, "symbol not exported by the library")
+WRIT_DIAG(NOT_TRANSPORTED, "N0304", WRIT_NOTE, "left out: no transport rule covers its signature")
 WRIT_DIAG(UNSUPPORTED, "E0901", WRIT_ERROR, "not supported yet")

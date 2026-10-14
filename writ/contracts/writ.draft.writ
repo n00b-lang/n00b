@@ -293,6 +293,20 @@ struct writ_gen_c_request_t @size(32) @align(8) {
     prefix: writ_str_t @8
     conformance: bool @24
 }
+struct writ_gen_rust_request_t @size(24) @align(8) {
+    struct_size: usize @0
+    crate_path: writ_str_t @8
+}
+struct writ_rust_import_request_t @size(104) @align(8) {
+    struct_size: usize @0
+    library: writ_str_t @8
+    crate: writ_str_t @24
+    manifest: writ_str_t @40
+    package: writ_str_t @56
+    rustdoc_json: writ_str_t @72
+    features_count: usize @88
+    features: ?writ_str_t @96
+}
 
 const WRIT_API_VERSION: c_uint = 1
 const WRIT_OK: c_int = 0
@@ -453,6 +467,7 @@ fn writ_platform_triple(platform: ?writ_platform_t) -> writ_str_t
 fn writ_platform_set_version(platform: unknown ?writ_platform_t, library: writ_str_t, version: writ_str_t) -> writ_status_t
 fn writ_platform_set_feature(platform: unknown ?writ_platform_t, feature: writ_str_t, enabled: bool) -> writ_status_t
 fn writ_resolve(unit: unknown ?writ_unit_t, platform: ?writ_platform_t, model: unknown ??writ_model_t) -> writ_status_t
+fn writ_derive_transport(unit: unknown ?writ_unit_t, output: ?writ_output_t) -> writ_status_t
 fn writ_output_directory(session: unknown ?writ_session_t, directory: writ_str_t, output: unknown ?writ_output_t) -> writ_status_t
 fn writ_model_library(model: ?writ_model_t) -> ?writ_library_view_t unknown
 fn writ_model_fn_count(model: ?writ_model_t) -> usize
@@ -477,6 +492,8 @@ fn writ_model_fn_plan(model: ?writ_model_t, fn: ?writ_fn_view_t) -> ?writ_plan_v
 fn writ_model_plan_render(model: ?writ_model_t, plan: ?writ_plan_view_t, rendered: unknown ?writ_str_t) -> writ_status_t
 fn writ_lower_json(model: ?writ_model_t, output: ?writ_output_t) -> writ_status_t
 fn writ_gen_c(model: ?writ_model_t, request: ?writ_gen_c_request_t, output: ?writ_output_t) -> writ_status_t
+fn writ_gen_rust(model: ?writ_model_t, request: ?writ_gen_rust_request_t, output: ?writ_output_t) -> writ_status_t
+fn writ_toolchain_import_rust(session: unknown ?writ_session_t, request: ?writ_rust_import_request_t, output: ?writ_output_t) -> writ_status_t
 fn writ_toolchain_verify_probes(model: ?writ_model_t, sysroot: writ_str_t, report: unknown ?writ_str_t) -> writ_status_t
 fn writ_toolchain_abi_classes(model: ?writ_model_t, sysroot: writ_str_t, report: unknown ?writ_str_t) -> writ_status_t
 fn writ_toolchain_verify_symbols(model: ?writ_model_t, binary: writ_str_t, sysroot: writ_str_t, report: unknown ?writ_str_t) -> writ_status_t

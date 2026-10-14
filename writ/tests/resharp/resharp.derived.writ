@@ -1,0 +1,240 @@
+library resharp
+link "resharp_writ"
+feature experimental_capture_groups = cargo "experimental_capture_groups"
+
+enum Status : c_int {
+    Status_Ok = 0,
+    Status_None = 1,
+    Status_Error = 2,
+    Status_Panic = 3,
+} closed
+
+fn error_message(buf: out *[u8; cap cap, len min(ret, cap)], cap: usize) -> usize
+    sizing retry needs ret
+    symbol "writ_resharp_last_error"
+
+error_channel last_error per thread {
+    text error_message(buf, cap)
+    valid until next failure on thread
+}
+
+enum UnicodeMode : c_int {
+    UnicodeMode_Ascii = 0,
+    UnicodeMode_Default = 1,
+    UnicodeMode_Full = 2,
+    UnicodeMode_Javascript = 3,
+} closed
+
+opaque writ_resharp_regex_options
+handle RegexOptions = *writ_resharp_regex_options release regex_options_free shared
+fn regex_options_free(value: consume ?writ_resharp_regex_options) symbol "writ_resharp_regex_options_free"
+
+struct Match {
+    start: usize,
+    end: usize,
+}
+
+opaque writ_resharp_regex
+handle Regex = *writ_resharp_regex release regex_free shared
+fn regex_free(value: consume ?writ_resharp_regex) symbol "writ_resharp_regex_free"
+
+enum FindAll : c_int {
+    FindAll_EmptyLang = 0,
+    FindAll_Anchored = 1,
+    FindAll_EndAnchored = 2,
+    FindAll_Hardened = 3,
+    FindAll_FwdPrefix = 4,
+    FindAll_FwdLbPrefix = 5,
+    FindAll_Bounded = 6,
+    FindAll_Dfa = 7,
+    FindAll_ClassPlus = 8,
+} closed
+
+fn regex_options_default(
+    out: out *RegexOptions own,
+) -> c_int as Status
+    outcome ok success when ret == Status_Ok
+    outcome failed failure when ret == Status_Error via last_error
+    outcome panicked failure via last_error
+    on error out: unset
+    symbol "writ_resharp_regex_options_default"
+
+fn regex_options_unicode(
+    self: consume RegexOptions,
+    mode: UnicodeMode,
+    out: out *RegexOptions own,
+) -> c_int as Status
+    outcome ok success when ret == Status_Ok
+    outcome failed failure when ret == Status_Error via last_error
+    outcome panicked failure via last_error
+    on error out: unset
+    symbol "writ_resharp_regex_options_unicode"
+
+fn regex_options_case_insensitive(
+    self: consume RegexOptions,
+    yes: bool,
+    out: out *RegexOptions own,
+) -> c_int as Status
+    outcome ok success when ret == Status_Ok
+    outcome failed failure when ret == Status_Error via last_error
+    outcome panicked failure via last_error
+    on error out: unset
+    symbol "writ_resharp_regex_options_case_insensitive"
+
+fn regex_options_dot_matches_new_line(
+    self: consume RegexOptions,
+    yes: bool,
+    out: out *RegexOptions own,
+) -> c_int as Status
+    outcome ok success when ret == Status_Ok
+    outcome failed failure when ret == Status_Error via last_error
+    outcome panicked failure via last_error
+    on error out: unset
+    symbol "writ_resharp_regex_options_dot_matches_new_line"
+
+fn regex_options_multiline(
+    self: consume RegexOptions,
+    yes: bool,
+    out: out *RegexOptions own,
+) -> c_int as Status
+    outcome ok success when ret == Status_Ok
+    outcome failed failure when ret == Status_Error via last_error
+    outcome panicked failure via last_error
+    on error out: unset
+    symbol "writ_resharp_regex_options_multiline"
+
+fn regex_options_ignore_whitespace(
+    self: consume RegexOptions,
+    yes: bool,
+    out: out *RegexOptions own,
+) -> c_int as Status
+    outcome ok success when ret == Status_Ok
+    outcome failed failure when ret == Status_Error via last_error
+    outcome panicked failure via last_error
+    on error out: unset
+    symbol "writ_resharp_regex_options_ignore_whitespace"
+
+fn regex_options_hardened(
+    self: consume RegexOptions,
+    yes: bool,
+    out: out *RegexOptions own,
+) -> c_int as Status
+    outcome ok success when ret == Status_Ok
+    outcome failed failure when ret == Status_Error via last_error
+    outcome panicked failure via last_error
+    on error out: unset
+    symbol "writ_resharp_regex_options_hardened"
+
+fn regex_options_unbounded_size(
+    self: consume RegexOptions,
+    yes: bool,
+    out: out *RegexOptions own,
+) -> c_int as Status
+    outcome ok success when ret == Status_Ok
+    outcome failed failure when ret == Status_Error via last_error
+    outcome panicked failure via last_error
+    on error out: unset
+    symbol "writ_resharp_regex_options_unbounded_size"
+when feature experimental_capture_groups {
+    fn regex_options_implicit_captures(
+        self: consume RegexOptions,
+        yes: bool,
+        out: out *RegexOptions own,
+    ) -> c_int as Status
+        outcome ok success when ret == Status_Ok
+        outcome failed failure when ret == Status_Error via last_error
+        outcome panicked failure via last_error
+        on error out: unset
+        symbol "writ_resharp_regex_options_implicit_captures"
+}
+
+fn regex_is_match(
+    self: Regex,
+    input: bytes[input_len] null if empty,
+    input_len: usize,
+    out: out *bool,
+) -> c_int as Status
+    outcome ok success when ret == Status_Ok
+    outcome failed failure when ret == Status_Error via last_error
+    outcome panicked failure via last_error
+    on error out: unset
+    symbol "writ_resharp_regex_is_match"
+
+fn regex_new(
+    pattern: utf8[pattern_len] null if empty,
+    pattern_len: usize,
+    out: out *Regex own,
+) -> c_int as Status
+    outcome ok success when ret == Status_Ok
+    outcome failed failure when ret == Status_Error via last_error
+    outcome panicked failure via last_error
+    on error out: unset
+    symbol "writ_resharp_regex_new"
+
+fn regex_with_options(
+    pattern: utf8[pattern_len] null if empty,
+    pattern_len: usize,
+    opts: consume RegexOptions,
+    out: out *Regex own,
+) -> c_int as Status
+    outcome ok success when ret == Status_Ok
+    outcome failed failure when ret == Status_Error via last_error
+    outcome panicked failure via last_error
+    on error out: unset
+    symbol "writ_resharp_regex_with_options"
+
+fn regex_find_all(
+    self: Regex,
+    input: bytes[input_len] null if empty,
+    input_len: usize,
+    out: out *[Match; cap out_cap, len min(*out_total, out_cap)],
+    out_cap: usize,
+    out_total: out *usize,
+) -> c_int as Status
+    outcome ok success when ret == Status_Ok
+    outcome failed failure when ret == Status_Error via last_error
+    outcome panicked failure via last_error
+    on error out: unset
+    sizing retry for out needs *out_total
+    symbol "writ_resharp_regex_find_all"
+
+fn regex_find_anchored(
+    self: Regex,
+    input: bytes[input_len] null if empty,
+    input_len: usize,
+    out: out *Match,
+) -> c_int as Status
+    outcome ok success when ret == Status_Ok
+    outcome none success when ret == Status_None
+    outcome failed failure when ret == Status_Error via last_error
+    outcome panicked failure via last_error
+    on error out: unset
+    on none out: unset
+    symbol "writ_resharp_regex_find_anchored"
+
+fn regex_is_full_match(
+    self: Regex,
+    input: bytes[input_len] null if empty,
+    input_len: usize,
+    out: out *bool,
+) -> c_int as Status
+    outcome ok success when ret == Status_Ok
+    outcome failed failure when ret == Status_Error via last_error
+    outcome panicked failure via last_error
+    on error out: unset
+    symbol "writ_resharp_regex_is_full_match"
+when feature experimental_capture_groups {
+    fn regex_capture_index_for_name(
+        self: Regex,
+        name: utf8[name_len] null if empty,
+        name_len: usize,
+        out: out *usize,
+    ) -> c_int as Status
+        outcome ok success when ret == Status_Ok
+        outcome none success when ret == Status_None
+        outcome failed failure when ret == Status_Error via last_error
+        outcome panicked failure via last_error
+        on error out: unset
+        on none out: unset
+        symbol "writ_resharp_regex_capture_index_for_name"
+}

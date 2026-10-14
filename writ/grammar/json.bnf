@@ -1,0 +1,10 @@
+<json-file> ::= <json-value>
+<json-value> ::= <json-object> | <json-array> | <json-string> | <json-number> | <json-word>
+<json-object> ::= %"{" <json-members>? %"}"
+<json-members> ::= <json-member> (%"," <json-member>)*
+<json-member> ::= %STRING %":" <json-value>
+<json-array> ::= %"[" <json-elements>? %"]"
+<json-elements> ::= <json-value> (%"," <json-value>)*
+<json-string> ::= %STRING
+<json-number> ::= %"-"? %INTEGER
+<json-word> ::= %IDENTIFIER

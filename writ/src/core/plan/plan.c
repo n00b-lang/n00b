@@ -26,6 +26,7 @@ typedef struct {
     uint32_t                             *slot_item;
     bool                                 *hidden;
     uint32_t                              serialize_item;
+    uint32_t                              retry_local;
     bool                                  variadic;
     bool                                  supported;
 } builder_t;
@@ -75,12 +76,27 @@ emit_to(step_list_t *list, writ_plan_step_view_t value)
     core_list_push(*list, value);
 }
 
+static bool
+unset_in(const builder_t *b, uint32_t item, writ_str_t outcome)
+{
+    uint32_t slot = item == WRIT_PLAN_NONE ? WRIT_PLAN_NONE : b->items.data[item].contract_slot;
+    for (uint32_t i = 0; slot != WRIT_PLAN_NONE && i < b->record->on_count; i++) {
+        const writ_on_rec_t *on = &b->model->ons.data[b->record->first_on + i];
+        if (on->slot == slot && on->state == WRIT_ON_UNSET
+            && writ_str_eq(writ_sym_str(b->model->session, on->outcome), outcome)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void
 emit_outcomes(builder_t *b, bool success, bool failure, writ_plan_step_view_t value)
 {
     for (uint32_t i = 0; i < b->outcomes.len; i++) {
         bool is_success = b->outcomes.data[i].kind == WRIT_OUTCOME_SUCCESS;
-        if ((is_success && success) || (!is_success && failure)) {
+        if (((is_success && success) || (!is_success && failure))
+            && !unset_in(b, value.item, b->outcomes.data[i].name)) {
             core_list_push(b->blocks[i], value);
         }
     }
@@ -143,9 +159,12 @@ is_text(const builder_t *b, writ_type_id type)
 static writ_plan_shape_t
 array_shape(const builder_t *b, writ_type_id array)
 {
+    const writ_type_rec_t *declared = writ_type(b->model, array);
     const writ_type_rec_t *element = physical(b, physical(b, array)->key.target);
     if (element->key.kind == WRIT_TYPE_INT && element->size == 1) {
-        return element->is_signed ? WRIT_SHAPE_TEXT : WRIT_SHAPE_BYTES;
+        bool text = element->is_signed
+                 || (declared->key.kind == WRIT_TYPE_VIEW && writ_is_text(b->model, declared->key.name, "utf8"));
+        return text ? WRIT_SHAPE_TEXT : WRIT_SHAPE_BYTES;
     }
     return WRIT_SHAPE_ARRAY;
 }
@@ -224,6 +243,9 @@ plan_capacity(builder_t *b, uint32_t index, uint32_t item, uint32_t buffer, writ
     *cell_type = cell ? physical(b, capacity->type)->key.target : capacity->type;
     b->hidden[cap_slot] = true;
     bind_slot(b, cap_slot, item, cell ? WRIT_PART_CAPACITY_AND_LENGTH : WRIT_PART_CAPACITY);
+    if (b->record->sizing == WRIT_SIZING_RETRY) {
+        b->retry_local = buffer;
+    }
     if (b->record->sizing == WRIT_SIZING_NEEDS || b->record->sizing == WRIT_SIZING_QUERY) {
         b->locals.data[buffer].capacity_expr = b->record->sizing_expr;
     } else {
@@ -264,6 +286,8 @@ plan_capacity(builder_t *b, uint32_t index, uint32_t item, uint32_t buffer, writ
     return bind;
 }
 
+static bool is_total(const builder_t *b, uint32_t index);
+
 static void
 plan_bounded_output(builder_t *b, uint32_t index)
 {
@@ -280,6 +304,16 @@ plan_bounded_output(builder_t *b, uint32_t index)
     emit_to(&b->attempt, bind);
     if (bind_cell.local != WRIT_PLAN_NONE) {
         emit_to(&b->attempt, bind_cell);
+    }
+    for (uint32_t i = 0; i < b->record->slot_count; i++) {
+        if (i != index && is_total(b, i)
+            && writ_expr_mentions(b->model, slot->len_expr, WRIT_REF_SLOT, b->record->first_slot + i)) {
+            bind_slot(b, i, item, WRIT_PART_LENGTH);
+            writ_plan_step_view_t total = step(WRIT_STEP_BIND_OUT);
+            total.local = add_local(b, WRIT_LOCAL_CELL, physical(b, contract_slot(b, i)->type)->key.target, item);
+            total.slot = i;
+            emit_to(&b->attempt, total);
+        }
     }
     writ_plan_step_view_t lift = step(WRIT_STEP_LIFT_BUFFER);
     lift.local = buffer;
@@ -415,10 +449,26 @@ plan_value_input(builder_t *b, uint32_t index)
     }
 }
 
+static bool
+is_total(const builder_t *b, uint32_t index)
+{
+    const writ_slot_rec_t *slot = contract_slot(b, index);
+    if (slot->mode != WRIT_MODE_OUT || physical(b, slot->type)->key.kind != WRIT_TYPE_POINTER) {
+        return false;
+    }
+    for (uint32_t i = 0; i < b->record->slot_count; i++) {
+        if (writ_expr_mentions(b->model, contract_slot(b, i)->len_expr, WRIT_REF_SLOT, b->record->first_slot + index)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void
 hide_dependent_slots(builder_t *b)
 {
     for (uint32_t i = 0; i < b->record->slot_count; i++) {
+        b->hidden[i] = b->hidden[i] || is_total(b, i);
         const writ_slot_rec_t *slot = contract_slot(b, i);
         uint32_t expr = slot->extent_kind == WRIT_EXTENT_COUNT ? slot->count_expr
                       : slot->extent_kind == WRIT_EXTENT_BOUNDED ? slot->cap_expr
@@ -472,7 +522,7 @@ plan_inputs(builder_t *b)
 }
 
 static bool
-outcomes_mention_result(const builder_t *b)
+result_consumed(const builder_t *b)
 {
     for (uint32_t i = 0; i < b->record->outcome_count; i++) {
         const writ_outcome_rec_t *outcome = &b->model->outcomes.data[b->record->first_outcome + i];
@@ -480,7 +530,12 @@ outcomes_mention_result(const builder_t *b)
             return true;
         }
     }
-    return false;
+    for (uint32_t i = 0; i < b->record->slot_count; i++) {
+        if (writ_expr_mentions(b->model, contract_slot(b, i)->len_expr, WRIT_REF_RESULT, b->fn)) {
+            return true;
+        }
+    }
+    return writ_expr_mentions(b->model, b->record->sizing_expr, WRIT_REF_RESULT, b->fn);
 }
 
 static void
@@ -492,7 +547,7 @@ plan_result(builder_t *b)
     uint32_t ret_slot = b->record->slot_count;
     const writ_slot_rec_t *slot = contract_slot(b, ret_slot);
     bool pointer = writ_type_is_pointer(b->model, slot->type) || writ_type(b->model, slot->type)->key.kind == WRIT_TYPE_HANDLE;
-    if (!pointer && outcomes_mention_result(b)) {
+    if (!pointer && result_consumed(b)) {
         return;
     }
     uint32_t item = add_item(b, sym(b, "result"), WRIT_ROLE_RESULT, value_shape(b, slot->type), WRIT_AFTER_NONE,
@@ -550,8 +605,9 @@ plan_details(builder_t *b)
                                                          writ_str_format(b->model->session, "%.*s_%s",
                                                                          (int)outcome_name.length, outcome_name.data, base))
                                        : sym(b, base);
-        uint32_t item = add_item(b, name, WRIT_ROLE_ERROR_DETAIL, value_shape(b, type), WRIT_AFTER_NONE, type,
-                                 WRIT_PLAN_NONE);
+        bool text = via.kind == WRIT_REF_CHANNEL && b->model->channels.data[via.index].kind == WRIT_CHANNEL_TEXT;
+        uint32_t item = add_item(b, name, WRIT_ROLE_ERROR_DETAIL, text ? WRIT_SHAPE_TEXT : value_shape(b, type),
+                                 text ? WRIT_AFTER_CALLER_OWNS : WRIT_AFTER_NONE, type, WRIT_PLAN_NONE);
         writ_plan_step_view_t fetch = step(WRIT_STEP_FETCH_DETAIL);
         fetch.item = item;
         fetch.expr = outcome->via_expr;
@@ -747,6 +803,7 @@ writ_plan_build(writ_model_t *model, uint32_t fn)
         .attempt        = core_list_new(writ_plan_step_view_t),
         .finally        = core_list_new(writ_plan_step_view_t),
         .serialize_item = WRIT_PLAN_NONE,
+        .retry_local    = WRIT_PLAN_NONE,
         .supported      = true,
     };
     uint32_t slots = b.record->slot_count + 2;
@@ -767,6 +824,13 @@ writ_plan_build(writ_model_t *model, uint32_t fn)
     writ_plan_step_view_t call = step(WRIT_STEP_CALL);
     call.phase = WRIT_PHASE_ATTEMPT;
     core_list_push(steps, call);
+    if (b.retry_local != WRIT_PLAN_NONE) {
+        writ_plan_step_view_t retry = step(WRIT_STEP_SIZE_RETRY);
+        retry.phase = WRIT_PHASE_ATTEMPT;
+        retry.local = b.retry_local;
+        retry.expr = b.record->sizing_expr;
+        core_list_push(steps, retry);
+    }
     writ_plan_step_view_t classify = step(WRIT_STEP_CLASSIFY);
     classify.phase = WRIT_PHASE_CLASSIFY;
     core_list_push(steps, classify);

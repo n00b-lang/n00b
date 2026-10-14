@@ -20,15 +20,13 @@ static void
 formats(void)
 {
     libc_bytes_t buf = {0};
-    int written = 0;
-    expect(libc_snprintf("hello, 100%", 11, &buf, &written) == libc_snprintf_ok, "snprintf succeeds");
+    expect(libc_snprintf("hello, 100%", 11, &buf) == libc_snprintf_ok, "snprintf succeeds");
     expect(buf.length == 11 && !memcmp(buf.data, "hello, 100%", 11), "snprintf sizes by query and copies the text");
-    expect(written == 11, "snprintf reports the full length");
     libc_bytes_free(&buf);
-    expect(libc_vsnprintf("through va_list", 15, &buf, &written) == libc_vsnprintf_ok, "vsnprintf succeeds");
+    expect(libc_vsnprintf("through va_list", 15, &buf) == libc_vsnprintf_ok, "vsnprintf succeeds");
     expect(buf.length == 15 && !memcmp(buf.data, "through va_list", 15), "vsnprintf goes through the forwarder");
     libc_bytes_free(&buf);
-    expect(libc_snprintf("a\0b", 3, &buf, &written) == LIBC_ARGUMENT_ERROR, "interior NUL is rejected");
+    expect(libc_snprintf("a\0b", 3, &buf) == LIBC_ARGUMENT_ERROR, "interior NUL is rejected");
 }
 
 static void
