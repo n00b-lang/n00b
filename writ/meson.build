@@ -60,6 +60,7 @@ core_sources = files(
     'src/core/emit.c',
     'src/core/syntax/ast.c',
     'src/core/syntax/parse.c',
+    'src/core/syntax/fmt.c',
     'src/core/model/defaults.c',
     'src/core/model/platform.c',
     'src/core/model/types.c',

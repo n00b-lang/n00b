@@ -52,6 +52,7 @@ writ_unit_new(writ_session_t *session)
         .nodes    = core_list_new(writ_node_t),
         .children = core_list_new(uint32_t),
         .roots    = core_list_new(writ_unit_root_t),
+        .tokens   = core_list_new(writ_loc_t),
     };
     core_list_push(unit->nodes, ((writ_node_t){0}));
     writ_on_session_free(session, writ_unit_release, unit);
@@ -65,6 +66,7 @@ writ_unit_release(void *object)
     core_list_free(unit->nodes);
     core_list_free(unit->children);
     core_list_free(unit->roots);
+    core_list_free(unit->tokens);
 }
 
 static void

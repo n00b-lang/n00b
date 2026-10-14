@@ -27,15 +27,19 @@ typedef struct {
     writ_source_kind_t kind;
     uint32_t           source;
     uint32_t           root;
+    uint32_t           first_token;
+    uint32_t           last_token;
 } writ_unit_root_t;
 
 core_list_decl(writ_unit_root_t);
+core_list_decl(writ_loc_t);
 
 struct writ_unit {
     writ_session_t                *session;
     core_list_t(writ_node_t)       nodes;
     core_list_t(uint32_t)          children;
     core_list_t(writ_unit_root_t)  roots;
+    core_list_t(writ_loc_t)        tokens;
 };
 
 const writ_node_t *writ_node(const writ_unit_t *unit, uint32_t id);

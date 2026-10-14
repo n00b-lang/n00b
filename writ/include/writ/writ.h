@@ -126,6 +126,7 @@ writ_status_t writ_unit_add_source(writ_unit_t *unit, writ_source_kind_t kind,
                                    uint32_t *source_id);
 writ_status_t writ_unit_add_file(writ_unit_t *unit, writ_str_t path, uint32_t *source_id);
 writ_status_t writ_unit_dump(const writ_unit_t *unit, writ_str_t *rendered);
+writ_status_t writ_format_unit(const writ_unit_t *unit, const writ_output_t *output);
 
 writ_str_t    writ_platform_host_triple(void);
 writ_status_t writ_platform_from_triple(writ_session_t *session, writ_str_t triple,

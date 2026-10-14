@@ -3,6 +3,7 @@ golden = files('run_golden.py')
 sanitize = ['-fsanitize=address,undefined', '-fno-omit-frame-pointer']
 compiler = meson.get_compiler('c').cmd_array()[0]
 zlib = dependency('zlib')
+host_triple = host_machine.system() == 'darwin' ? host_machine.cpu_family() + '-apple-darwin' : host_machine.cpu_family() + '-linux-gnu'
 
 test(
     'api-session',
@@ -97,6 +98,22 @@ test(
 )
 
 test(
+    'fmt-roundtrip',
+    python,
+    args: [
+        source_root / 'tests' / 'fmt_roundtrip.py',
+        writ_exe.full_path(),
+        source_root / 'dsl.md',
+        source_root / 'call-plan.md',
+        source_root / 'tests' / 'libc' / 'libc.writ',
+        source_root / 'tests' / 'zlib' / 'zlib.writ',
+        source_root / 'tests' / 'zlib' / 'draft' / host_triple + '.writ',
+        source_root / 'tests' / 'skeleton' / 'zlib.writ',
+    ],
+    depends: writ_exe,
+)
+
+test(
     'grammar-audit',
     executable(
         'grammar-audit',
@@ -134,7 +151,6 @@ foreach name : ['unknown_type', 'not_pure', 'bad_phase', 'out_unbounded', 'synta
     )
 endforeach
 
-host_triple = host_machine.system() == 'darwin' ? host_machine.cpu_family() + '-apple-darwin' : host_machine.cpu_family() + '-linux-gnu'
 
 zlib_only = []
 foreach name : ['zlibVersion', 'crc32', 'adler32', 'compressBound', 'compress2', 'uncompress', 'deflate', 'deflateEnd',

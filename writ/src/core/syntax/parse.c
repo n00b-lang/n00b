@@ -224,6 +224,7 @@ convert(converter_t *converter, parse_tree_t *tree, writ_loc_t *loc, writ_sym_t 
 {
     if (parse_node_is_token(tree)) {
         *loc = token_loc(converter, parse_node_token(tree));
+        core_list_push(converter->unit->tokens, *loc);
         return true;
     }
     const syntax_rule_t *rule = rule_of(converter, tree);
@@ -327,9 +328,11 @@ parse_source(writ_unit_t *unit, uint32_t source, writ_source_kind_t kind)
         converter_t converter = {unit, session, grammar, source, core_list_new(uint32_t)};
         writ_loc_t loc;
         writ_sym_t lexeme = 0;
+        uint32_t first_token = (uint32_t)unit->tokens.len;
         convert(&converter, parse_forest_tree(&forest, 0), &loc, &lexeme);
         if (converter.scratch.len) {
-            core_list_push(unit->roots, ((writ_unit_root_t){kind, source, converter.scratch.data[0]}));
+            core_list_push(unit->roots, ((writ_unit_root_t){kind, source, converter.scratch.data[0], first_token,
+                                                            (uint32_t)unit->tokens.len}));
         }
         core_list_free(converter.scratch);
         parse_forest_free(&forest);

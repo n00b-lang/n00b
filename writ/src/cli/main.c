@@ -107,6 +107,21 @@ cmd_check(writ_session_t *session, int argc, char **argv)
 }
 
 static int
+cmd_fmt(writ_session_t *session, int argc, char **argv)
+{
+    if (argc != 1) {
+        return 2;
+    }
+    writ_unit_t *unit = load(session, argv[0]);
+    if (!unit) {
+        return 1;
+    }
+    writ_output_t output;
+    output_for(session, "-", &output);
+    return writ_format_unit(unit, &output) == WRIT_OK ? 0 : 1;
+}
+
+static int
 cmd_lower(writ_session_t *session, int argc, char **argv)
 {
     const char *directory = "-";
@@ -273,6 +288,7 @@ static const struct {
     {"check", cmd_check, "check FILE"},
     {"plan", cmd_plan, "plan FILE [FUNCTION]"},
     {"lower", cmd_lower, "lower FILE [-o DIR]"},
+    {"fmt", cmd_fmt, "fmt FILE"},
 };
 
 int

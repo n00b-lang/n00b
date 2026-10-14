@@ -396,8 +396,8 @@ gather_decl(resolver_t *r, uint32_t id)
 static void
 gather_items(resolver_t *r, uint32_t parent, uint32_t from)
 {
-    const writ_node_t *node = node_at(r->model, parent);
-    for (uint32_t i = from; i < node->child_count; i++) {
+    uint32_t count = node_at(r->model, parent)->child_count;
+    for (uint32_t i = from; i < count; i++) {
         uint32_t item = child(r->model, parent, i);
         writ_node_kind_t kind = node_at(r->model, item)->kind;
         if (kind == WRIT_N_ELSE) {

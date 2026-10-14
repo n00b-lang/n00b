@@ -3,9 +3,6 @@ import subprocess
 import sys
 import tempfile
 
-writ = os.path.abspath(sys.argv[1])
-documents = sys.argv[2:]
-
 
 def blocks(path):
     with open(path, encoding="utf-8") as source:
@@ -22,25 +19,29 @@ def blocks(path):
             current[2].append(line)
 
 
-failed = False
-with tempfile.TemporaryDirectory() as scratch:
-    for document in documents:
-        name = os.path.basename(document)
-        ordinal = 0
-        for _, tag, body in blocks(document):
-            if tag != "writ":
-                continue
-            ordinal += 1
-            number = ordinal
-            path = os.path.join(scratch, f"{name}-{number}.writ")
-            with open(path, "w", encoding="utf-8") as out:
-                out.write("\n".join(body) + "\n")
-            parsed = subprocess.run([writ, "parse", path], capture_output=True, text=True)
-            checked = subprocess.run([writ, "check", path], capture_output=True, text=True)
-            print(f"== {name} example {number}")
-            if parsed.returncode != 0:
-                failed = True
-                print("parse failed")
-            print((checked.stdout + checked.stderr).replace(scratch + os.sep, ""), end="")
+def main():
+    writ = os.path.abspath(sys.argv[1])
+    failed = False
+    with tempfile.TemporaryDirectory() as scratch:
+        for document in sys.argv[2:]:
+            name = os.path.basename(document)
+            ordinal = 0
+            for _, tag, body in blocks(document):
+                if tag != "writ":
+                    continue
+                ordinal += 1
+                path = os.path.join(scratch, f"{name}-{ordinal}.writ")
+                with open(path, "w", encoding="utf-8") as out:
+                    out.write("\n".join(body) + "\n")
+                parsed = subprocess.run([writ, "parse", path], capture_output=True, text=True)
+                checked = subprocess.run([writ, "check", path], capture_output=True, text=True)
+                print(f"== {name} example {ordinal}")
+                if parsed.returncode != 0:
+                    failed = True
+                    print("parse failed")
+                print((checked.stdout + checked.stderr).replace(scratch + os.sep, ""), end="")
+    sys.exit(1 if failed else 0)
 
-sys.exit(1 if failed else 0)
+
+if __name__ == "__main__":
+    main()
