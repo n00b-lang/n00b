@@ -128,42 +128,50 @@ foreach name : ['unknown_type', 'not_pure', 'bad_phase', 'out_unbounded', 'synta
     )
 endforeach
 
-skeleton = custom_target(
-    'skeleton-binding',
-    input: source_root / 'tests' / 'skeleton' / 'zlib.writ',
-    output: ['zlib_writ.h', 'zlib_writ.c', 'zlib_writ_mock.c', 'zlib_writ_conformance.c'],
-    command: [writ_exe, 'gen', 'c', '@INPUT@', '-o', '@OUTDIR@', '--conformance'],
-)
+generated_c = ['-std=c11', '-Wall', '-Wextra', '-Werror', '-U_FORTIFY_SOURCE', '-D_FORTIFY_SOURCE=0']
 
-generated_c = ['-std=c11', '-Wall', '-Wextra', '-Werror']
-
-test(
-    'skeleton-conformance',
-    executable(
-        'skeleton-conformance',
-        skeleton[1],
-        skeleton[2],
-        skeleton[3],
-        c_args: generated_c + sanitize,
-        link_args: sanitize,
-        override_options: ['c_std=c11'],
-    ),
-)
-
-test(
-    'skeleton-roundtrip',
-    executable(
-        'skeleton-roundtrip',
-        'skeleton/roundtrip.c',
-        skeleton[0],
-        skeleton[1],
-        include_directories: include_directories('.'),
-        c_args: generated_c + sanitize,
-        link_args: sanitize,
-        dependencies: zlib,
-        override_options: ['c_std=c11'],
-    ),
-)
+foreach binding : [
+    ['skeleton', 'skeleton/zlib.writ', 'zlib', [zlib]],
+    ['libc', 'libc/libc.writ', 'libc', []],
+]
+    generated = custom_target(
+        binding[0] + '-binding',
+        input: source_root / 'tests' / binding[1],
+        output: [
+            binding[2] + '_writ.h',
+            binding[2] + '_writ.c',
+            binding[2] + '_writ_mock.c',
+            binding[2] + '_writ_conformance.c',
+        ],
+        command: [writ_exe, 'gen', 'c', '@INPUT@', '-o', '@OUTDIR@', '--conformance'],
+    )
+    test(
+        binding[0] + '-conformance',
+        executable(
+            binding[0] + '-conformance',
+            generated[1],
+            generated[2],
+            generated[3],
+            c_args: generated_c + sanitize,
+            link_args: sanitize,
+            override_options: ['c_std=c11'],
+        ),
+    )
+    test(
+        binding[0] + '-roundtrip',
+        executable(
+            binding[0] + '-roundtrip',
+            binding[0] / 'roundtrip.c',
+            generated[0],
+            generated[1],
+            include_directories: include_directories('.'),
+            c_args: generated_c + sanitize,
+            link_args: sanitize,
+            dependencies: binding[3],
+            override_options: ['c_std=c11'],
+        ),
+    )
+endforeach
 
 tools = source_root / 'tools'
 foreach check : [

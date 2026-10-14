@@ -199,7 +199,8 @@ void
 writ_c_emit_signature(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_view_t *plan)
 {
     writ_str_t ret = writ_c_return_type(c, plan);
-    writ_emit_text(emit, "%.*s %.*s_%.*s(", S(ret), S(c->prefix), S(plan->fn->contract_name));
+    writ_emit_text(emit, "%.*s%s%.*s_%.*s(", S(ret), ret.data[ret.length - 1] == '*' ? "" : " ", S(c->prefix),
+                   S(plan->fn->contract_name));
     bool first = true;
     uint32_t *order = writ_alloc(c->model->session, sizeof(uint32_t) * (plan->items_count + 1));
     size_t ordered = writ_c_param_order(plan, order);
@@ -258,11 +259,24 @@ typedef struct {
     const char             *result;
 } shim_env_t;
 
+static void print_shim_ref(shim_env_t *env, writ_ref_t ref, core_buffer_t *out);
+
 static void
 shim_ref(writ_expr_env_t *base, writ_ref_t ref, uint32_t expr, core_buffer_t *out)
 {
     (void)expr;
     shim_env_t *env = (shim_env_t *)base;
+    const writ_model_t *model = env->c->model;
+    writ_type_id type = expr ? writ_expr_type(model, expr) : 0;
+    bool integer = type && writ_type_is_integer(model, type);
+    core_buffer_puts(out, integer ? "((long long)" : "");
+    print_shim_ref(env, ref, out);
+    core_buffer_puts(out, integer ? ")" : "");
+}
+
+static void
+print_shim_ref(shim_env_t *env, writ_ref_t ref, core_buffer_t *out)
+{
     const writ_model_t *model = env->c->model;
     if (ref.kind == WRIT_REF_RESULT) {
         core_buffer_puts(out, env->result);
@@ -292,6 +306,29 @@ expr_text(shim_env_t *env, uint32_t expr)
     core_buffer_t *buffer = core_buffer_empty();
     writ_expr_print(env->c->model, expr, WRIT_LANGUAGE_C, &env->base, buffer);
     return writ_str_from_buffer(env->c->model->session, buffer);
+}
+
+static bool
+fully_wrapped(writ_str_t text)
+{
+    if (text.length < 2 || text.data[0] != '(' || text.data[text.length - 1] != ')') {
+        return false;
+    }
+    int depth = 0;
+    for (size_t i = 0; i < text.length; i++) {
+        depth += text.data[i] == '(' ? 1 : text.data[i] == ')' ? -1 : 0;
+        if (!depth && i + 1 < text.length) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static writ_str_t
+condition_text(shim_env_t *env, uint32_t expr)
+{
+    writ_str_t text = expr_text(env, expr);
+    return fully_wrapped(text) ? text : writ_str_format(env->c->model->session, "(%.*s)", S(text));
 }
 
 static void
@@ -339,7 +376,9 @@ emit_declarations(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_
             writ_emit_line(emit, "%.*s%sl%zu = 0;", S(type), pointer ? "" : " ", i);
         } else {
             writ_emit_line(emit, "%.*s *l%zu = NULL;", S(type), i);
-            writ_emit_line(emit, "size_t l%zu_capacity = 0;", i);
+            if (local->kind == WRIT_LOCAL_BUFFER) {
+                writ_emit_line(emit, "size_t l%zu_capacity = 0;", i);
+            }
         }
     }
 }
@@ -666,7 +705,7 @@ emit_classify(shim_env_t *env, writ_emit_t *emit)
     for (size_t i = 0; i < plan->outcomes_count; i++) {
         const writ_plan_outcome_view_t *outcome = &plan->outcomes[i];
         if (outcome->when_expr) {
-            writ_emit_open(emit, "%sif (%.*s)", i ? "else " : "", S(expr_text(env, outcome->when_expr)));
+            writ_emit_open(emit, "%sif %.*s", i ? "else " : "", S(condition_text(env, outcome->when_expr)));
         } else {
             writ_emit_open(emit, i ? "else" : "");
         }

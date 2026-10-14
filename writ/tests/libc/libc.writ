@@ -1,0 +1,36 @@
+library libc
+header <errno.h>
+header <fcntl.h>
+header <stdio.h>
+header <stdlib.h>
+header <unistd.h>
+
+const O_RDONLY: c_int = 0
+
+handle Fd = c_int none -1 release close
+
+fn errno_location() -> *c_int static per thread
+  source "errno" macro
+  symbol "__error" when os == macos
+  symbol "__errno_location" when libc == glibc
+
+error_channel errno per thread reset before call {
+    value errno_location()
+}
+
+fn snprintf(buf: out ?[c_char; cap n, len min(ret, n - 1)], n: usize, fmt: *cstr, ...) -> c_int
+  sizing query(buf = null, n = 0) needs ret + 1
+  format printf(fmt)
+
+fn vsnprintf(buf: out ?[c_char; cap n, len min(ret, n - 1)], n: usize, fmt: *cstr, ap: va_list) -> c_int
+  sizing query(buf = null, n = 0) needs ret + 1
+  format printf(fmt)
+
+fn execl(path: *cstr, arg0: *cstr, ... of *cstr until null) -> c_int
+  error ret == -1 via errno
+
+fn open(path: *cstr, flags: c_int, ... of c_uint) -> own ?Fd
+  error ret == none via errno
+
+fn strtol(s: *cstr, end: out *?c_char with s, base: c_int) -> c_long
+  error errno != 0 via errno

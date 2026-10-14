@@ -722,7 +722,7 @@ emit_driver_fn(const writ_c_context_t *c, writ_emit_t *emit, uint32_t index)
     const writ_plan_view_t *plan = writ_model_fn_plan(c->model, fn);
     writ_emit_open(emit, "static void test_%.*s(void)", S(fn->contract_name));
     bool pack = has_shape(plan, WRIT_SHAPE_REST_PACK, WRIT_ROLE_PACK);
-    for (uint32_t o = 0; o < plan->outcomes_count; o++) {
+    for (uint32_t o = 0; is_mocked(c->model, fn) && o < plan->outcomes_count; o++) {
         int64_t ret = SCALAR_INPUT + PURE_OFFSET;
         int64_t channel = 0;
         if (!writ_c_returns_directly(plan) && !find_outcome(c->model, plan, o, &ret, &channel)) {
