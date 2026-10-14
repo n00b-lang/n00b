@@ -149,6 +149,15 @@ test(
     ),
 )
 
+foreach contract : ['zlib', 'libc']
+    test(
+        contract + '-plans',
+        python,
+        args: [golden, source_root / 'tests' / 'plan' / contract + '.full.plan', '--', writ_exe, '--platform',
+               'aarch64-apple-darwin', 'plan', 'tests' / contract / contract + '.writ'],
+    )
+endforeach
+
 test(
     'lower-golden',
     python,
@@ -190,6 +199,22 @@ test(
     python,
     args: [golden, source_root / 'tests' / 'zlib' / 'draft' / host_triple + '.writ', '--', writ_exe, 'import',
            '--library', 'zlib', '--header', 'zlib.h', '--link', 'z', '-o', '-'] + zlib_only,
+)
+
+test(
+    'writ-contract',
+    writ_exe,
+    args: ['verify', 'contracts/writ.writ', '--binary', libwrit_shared.full_path()],
+    depends: libwrit_shared,
+    workdir: source_root,
+)
+
+test(
+    'writ-contract-draft',
+    python,
+    args: [golden, source_root / 'contracts' / 'writ.draft.writ', '--', writ_exe, 'import', '--library', 'writ',
+           '--header', 'writ/writ.h', '--header', 'writ/model.h', '--header', 'writ/gen.h', '--header',
+           'writ/toolchain.h', '--link', 'writ', '-I', 'include', '-o', '-'],
 )
 
 foreach contract : ['zlib', 'libc']

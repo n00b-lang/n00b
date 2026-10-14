@@ -1,0 +1,125 @@
+plan errno_location
+item 0 result result scalar static
+slot 0 value whole result
+attempt   call           fixed
+classify  ok: success
+ok        lift_value     ret -> result
+
+plan snprintf
+item 0 buf result text caller_owns
+item 1 text input text borrowed
+item 2 result result scalar none
+slot 0 out_pointer pointer buf
+slot 1 value capacity buf
+slot 2 in_pointer whole -
+slot 3 value whole result
+slot 4 variadic_tail elements text
+local 0 buffer c_char buf
+local 1 text c_char text
+prepare   pass           "%s" -> s2
+          encode_cstr    text -> L1
+attempt   size_query     (s0 = NULL, s1 = 0) -> cap(L0) = (ret + 1)
+          alloc_out      buf -> L0, cap from query
+          pass           cap(L0) -> s1
+          bind_out       L0 -> s0
+          expand         text -> s4
+          call           variadic
+classify  ok: success
+ok        lift_buffer    L0 -> buf, len ((ret) < ((s1 - 1)) ? (ret) : ((s1 - 1)))
+          lift_value     ret -> result
+finally   release_local  L0 unless handed over
+          release_local  L1 unless handed over
+
+plan vsnprintf
+item 0 buf result text caller_owns
+item 1 text input text borrowed
+item 2 result result scalar none
+slot 0 out_pointer pointer buf
+slot 1 value capacity buf
+slot 2 in_pointer whole -
+slot 3 variadic_tail elements text
+slot 4 value whole result
+local 0 buffer c_char buf
+local 1 text c_char text
+prepare   pass           "%s" -> s2
+          encode_cstr    text -> L1
+attempt   size_query     (s0 = NULL, s1 = 0) -> cap(L0) = (ret + 1)
+          alloc_out      buf -> L0, cap from query
+          pass           cap(L0) -> s1
+          bind_out       L0 -> s0
+          expand         text -> s3
+          call           variadic
+classify  ok: success
+ok        lift_buffer    L0 -> buf, len ((ret) < ((s1 - 1)) ? (ret) : ((s1 - 1)))
+          lift_value     ret -> result
+finally   release_local  L0 unless handed over
+          release_local  L1 unless handed over
+
+plan execl
+reset errno
+item 0 path input text borrowed
+item 1 arg0 input text borrowed
+item 2 args pack rest_pack borrowed
+item 3 detail error_detail scalar none
+slot 0 in_pointer whole path
+slot 1 in_pointer whole arg0
+slot 2 value whole -
+slot 3 variadic_tail elements args
+local 0 text c_char path
+local 1 text c_char arg0
+prepare   encode_cstr    path -> L0
+          encode_cstr    arg0 -> L1
+attempt   expand         args -> s3, until NULL
+          call           variadic
+classify  error: failure when (ret == (-1))
+          ok: success
+error     fetch_detail   errno -> detail
+finally   release_local  L0 unless handed over
+          release_local  L1 unless handed over
+
+plan open
+reset errno
+item 0 path input text borrowed
+item 1 flags input scalar none
+item 2 args pack rest_pack borrowed
+item 3 result result handle caller_owns release close
+item 4 detail error_detail scalar none
+slot 0 in_pointer whole path
+slot 1 value whole flags
+slot 2 value whole result
+slot 3 variadic_tail elements args
+local 0 text c_char path
+prepare   encode_cstr    path -> L0
+          pass           flags -> s1
+attempt   expand         args -> s3
+          call           variadic
+classify  error: failure when (ret == (-1))
+          ok: success
+error     fetch_detail   errno -> detail
+ok        wrap_handle    ret -> result
+finally   release_local  L0 unless handed over
+
+plan strtol
+reset errno
+item 0 s input text borrowed
+item 1 end result scalar borrowed_with
+item 2 base input scalar none
+item 3 result result scalar none
+item 4 detail error_detail scalar none
+slot 0 in_pointer whole s
+slot 1 out_pointer whole end
+slot 2 value whole base
+slot 3 value whole result
+local 0 text c_char s
+local 1 cell  end
+prepare   encode_cstr    s -> L0
+          pass           base -> s2
+attempt   bind_out       L1 -> s1
+          call           fixed
+classify  error: failure when (errno != 0)
+          ok: success
+error     fetch_detail   errno -> detail
+ok        lift_value     L1 -> end
+          lift_value     ret -> result
+finally   release_local  L0 unless handed over
+

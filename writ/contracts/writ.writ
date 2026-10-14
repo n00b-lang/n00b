@@ -1,0 +1,84 @@
+use "writ.draft.writ"
+include_path "include"
+
+handle Session = *writ_session_t release writ_session_free thread_affine
+
+conventions for fn writ_* {
+    thread same
+}
+
+refine writ_session_new {
+    config: ?writ_session_config_t
+    -> own ?Session
+}
+
+refine writ_session_free {
+    session: consume ?writ_session_t
+}
+
+refine writ_session_set_diag_sink {
+    session: Session
+    context: keep ?void until writ_session_free(session)
+}
+
+refine writ_diag_count {
+    session: Session
+}
+
+refine writ_diag_at {
+    session: Session
+    -> ?writ_diag_t with session
+}
+
+refine writ_diag_render {
+    session: Session
+    diag: *writ_diag_t
+    rendered: out *writ_str_t with session
+    error ret != WRIT_OK via ret
+}
+
+refine writ_unit_new {
+    session: Session
+    -> ?writ_unit_t with session
+}
+
+refine writ_unit_add_source {
+    unit: inout *writ_unit_t
+    source_id: out ?u32
+    error ret != WRIT_OK via ret
+}
+
+refine writ_unit_add_file {
+    unit: inout *writ_unit_t
+    source_id: out ?u32
+    error ret != WRIT_OK via ret
+}
+
+refine writ_platform_from_triple {
+    session: Session
+    platform: out *?writ_platform_t with session
+    error ret != WRIT_OK via ret
+}
+
+refine writ_resolve {
+    unit: inout *writ_unit_t
+    platform: *writ_platform_t
+    model: out *?writ_model_t with unit
+    error ret != WRIT_OK via ret
+}
+
+refine writ_model_library {
+    model: *writ_model_t
+    -> ?writ_library_view_t with model
+}
+
+refine writ_model_fn_at {
+    model: *writ_model_t
+    -> ?writ_fn_view_t with model
+}
+
+refine writ_model_fn_plan {
+    model: *writ_model_t
+    fn: *writ_fn_view_t
+    -> ?writ_plan_view_t with model
+}

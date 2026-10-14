@@ -1,0 +1,482 @@
+library writ
+link "writ"
+header <writ/writ.h>
+header <writ/model.h>
+header <writ/gen.h>
+header <writ/toolchain.h>
+
+opaque writ_session_t source "struct writ_session"
+opaque writ_unit_t source "struct writ_unit"
+opaque writ_model_t source "struct writ_model"
+opaque writ_platform_t source "struct writ_platform"
+type writ_status_t = u32
+struct writ_str_t @size(16) @align(8) {
+    data: ?c_char @0
+    length: usize @8
+}
+type writ_source_kind_t = u32
+struct writ_origin_t @size(32) @align(8) {
+    host_path: writ_str_t @0
+    first_line: u32 @16
+    first_column: u32 @20
+    first_byte: u64 @24
+}
+struct writ_span_t @size(32) @align(8) {
+    source_id: u32 @0
+    start_byte: u64 @8
+    end_byte: u64 @16
+    line: u32 @24
+    column: u32 @28
+}
+type writ_severity_t = u32
+struct writ_diag_label_t @size(48) @align(8) {
+    span: writ_span_t @0
+    label: writ_str_t @32
+}
+struct writ_diag_suggestion_t @size(64) @align(8) {
+    span: writ_span_t @0
+    replacement: writ_str_t @32
+    description: writ_str_t @48
+}
+struct writ_diag_t @size(160) @align(8) {
+    struct_size: usize @0
+    code: writ_str_t @8
+    severity: writ_severity_t @24
+    message: writ_str_t @32
+    path: writ_str_t @48
+    primary: writ_diag_label_t @64
+    secondary_count: usize @112
+    secondary: ?writ_diag_label_t @120
+    note_count: usize @128
+    notes: ?writ_diag_label_t @136
+    suggestion_count: usize @144
+    suggestions: ?writ_diag_suggestion_t @152
+}
+callback writ_diag_sink_fn = fn(p0: ?void, p1: ?writ_diag_t)
+struct writ_process_runner_t @size(16) @align(8) {
+    run: ?void @0
+    context: ?void @8
+}
+struct writ_session_config_t @size(40) @align(8) {
+    struct_size: usize @0
+    process_runner: writ_process_runner_t @8
+    llvm_prefix: writ_str_t @24
+}
+struct writ_output_t @size(16) @align(8) {
+    write_file: ?void @0
+    context: ?void @8
+}
+type writ_type_kind_t = u32
+type writ_mode_t = u32
+type writ_extent_kind_t = u32
+type writ_span_kind_t = u32
+type writ_on_state_t = u32
+type writ_fn_kind_t = u32
+type writ_sizing_kind_t = u32
+type writ_varargs_kind_t = u32
+type writ_thread_kind_t = u32
+type writ_thread_rule_t = u32
+type writ_channel_kind_t = u32
+type writ_plan_role_t = u32
+type writ_plan_shape_t = u32
+type writ_after_call_t = u32
+type writ_pass_t = u32
+type writ_part_t = u32
+type writ_local_kind_t = u32
+type writ_step_kind_t = u32
+type writ_phase_t = u32
+type writ_outcome_kind_t = u32
+type writ_language_t = u32
+struct writ_type_view_t @size(80) @align(8) {
+    struct_size: usize @0
+    kind: writ_type_kind_t @8
+    name: writ_str_t @16
+    c_spelling: writ_str_t @32
+    size: u32 @48
+    align: u32 @52
+    is_signed: bool @56
+    nullable: bool @57
+    target: ?writ_type_view_t @64
+    count: u32 @72
+    decl: u32 @76
+}
+struct writ_const_view_t @size(88) @align(8) {
+    struct_size: usize @0
+    name: writ_str_t @8
+    type: ?writ_type_view_t @24
+    value: i64 @32
+    text: writ_str_t @40
+    declared_at: writ_span_t @56
+}
+struct writ_slot_view_t @size(152) @align(8) {
+    struct_size: usize @0
+    name: writ_str_t @8
+    type: ?writ_type_view_t @24
+    mode: writ_mode_t @32
+    extent_kind: writ_extent_kind_t @36
+    count_expr: u32 @40
+    cap_expr: u32 @44
+    len_expr: u32 @48
+    span: writ_span_kind_t @52
+    span_with: writ_str_t @56
+    own: bool @72
+    release: writ_str_t @80
+    alloc: writ_str_t @96
+    null_if_empty: bool @112
+    is_private: bool @113
+    offset: u32 @116
+    declared_at: writ_span_t @120
+}
+struct writ_outcome_view_t @size(40) @align(8) {
+    struct_size: usize @0
+    name: writ_str_t @8
+    kind: writ_outcome_kind_t @24
+    when_expr: u32 @28
+    via_expr: u32 @32
+    retry: bool @36
+}
+struct writ_fn_view_t @size(208) @align(8) {
+    struct_size: usize @0
+    contract_name: writ_str_t @8
+    source_name: writ_str_t @24
+    link_symbol: writ_str_t @40
+    kind: writ_fn_kind_t @56
+    slots_count: usize @64
+    slots: ?writ_slot_view_t @72
+    result: ?writ_slot_view_t @80
+    is_pure: bool @88
+    sizing: writ_sizing_kind_t @92
+    sizing_expr: u32 @96
+    sizing_slot: u32 @100
+    outcomes_count: usize @104
+    outcomes: ?writ_outcome_view_t @112
+    varargs: writ_varargs_kind_t @120
+    varargs_type: ?writ_type_view_t @128
+    varargs_end_expr: u32 @136
+    varargs_count_slot: u32 @140
+    format_slot: u32 @144
+    expands_symbol: writ_str_t @152
+    expands_node: u32 @168
+    thread: writ_thread_kind_t @172
+    declared_at: writ_span_t @176
+}
+struct writ_record_view_t @size(80) @align(8) {
+    struct_size: usize @0
+    name: writ_str_t @8
+    type: ?writ_type_view_t @24
+    fields_count: usize @32
+    fields: ?writ_slot_view_t @40
+    declared_at: writ_span_t @48
+}
+struct writ_handle_view_t @size(112) @align(8) {
+    struct_size: usize @0
+    name: writ_str_t @8
+    type: ?writ_type_view_t @24
+    base: ?writ_type_view_t @32
+    has_none: bool @40
+    none_value: i64 @48
+    release: writ_str_t @56
+    thread_rule: writ_thread_rule_t @72
+    declared_at: writ_span_t @80
+}
+struct writ_enum_view_t @size(96) @align(8) {
+    struct_size: usize @0
+    name: writ_str_t @8
+    type: ?writ_type_view_t @24
+    base: ?writ_type_view_t @32
+    items_count: usize @40
+    items: ?writ_const_view_t @48
+    closed: bool @56
+    is_flags: bool @57
+    declared_at: writ_span_t @64
+}
+struct writ_channel_view_t @size(88) @align(8) {
+    struct_size: usize @0
+    name: writ_str_t @8
+    per_handle: bool @24
+    handle: ?writ_type_view_t @32
+    reset_before_call: bool @40
+    kind: writ_channel_kind_t @44
+    source_expr: u32 @48
+    declared_at: writ_span_t @56
+}
+struct writ_library_view_t @size(120) @align(8) {
+    struct_size: usize @0
+    name: writ_str_t @8
+    platform: writ_str_t @24
+    encoding: writ_str_t @40
+    links_count: usize @56
+    links: ?writ_str_t @64
+    headers_count: usize @72
+    headers: ?writ_str_t @80
+    defines_count: usize @88
+    defines: ?writ_str_t @96
+    include_paths_count: usize @104
+    include_paths: ?writ_str_t @112
+}
+struct writ_plan_item_view_t @size(80) @align(8) {
+    struct_size: usize @0
+    name: writ_str_t @8
+    role: writ_plan_role_t @24
+    shape: writ_plan_shape_t @28
+    after_call: writ_after_call_t @32
+    type: ?writ_type_view_t @40
+    contract_slot: u32 @48
+    release: writ_str_t @56
+    with_item: u32 @72
+    nullable: bool @76
+}
+struct writ_plan_slot_view_t @size(32) @align(8) {
+    struct_size: usize @0
+    c_type: ?writ_type_view_t @8
+    pass: writ_pass_t @16
+    part: writ_part_t @20
+    item: u32 @24
+    contract_slot: u32 @28
+}
+struct writ_plan_local_view_t @size(40) @align(8) {
+    struct_size: usize @0
+    kind: writ_local_kind_t @8
+    type: ?writ_type_view_t @16
+    item: u32 @24
+    capacity_expr: u32 @28
+    capacity_item: u32 @32
+}
+struct writ_plan_step_view_t @size(64) @align(8) {
+    struct_size: usize @0
+    kind: writ_step_kind_t @8
+    phase: writ_phase_t @12
+    outcome: u32 @16
+    item: u32 @20
+    slot: u32 @24
+    second_slot: u32 @28
+    local: u32 @32
+    source_local: u32 @36
+    expr: u32 @40
+    literal: writ_str_t @48
+}
+struct writ_plan_outcome_view_t @size(40) @align(8) {
+    struct_size: usize @0
+    name: writ_str_t @8
+    kind: writ_outcome_kind_t @24
+    when_expr: u32 @28
+    via_expr: u32 @32
+    retry: bool @36
+}
+struct writ_plan_assign_view_t @size(16) @align(8) {
+    struct_size: usize @0
+    slot: u32 @8
+    expr: u32 @12
+}
+struct writ_plan_view_t @size(144) @align(8) {
+    struct_size: usize @0
+    fn: ?writ_fn_view_t @8
+    query_count: usize @16
+    query: ?writ_plan_assign_view_t @24
+    items_count: usize @32
+    items: ?writ_plan_item_view_t @40
+    slots_count: usize @48
+    slots: ?writ_plan_slot_view_t @56
+    locals_count: usize @64
+    locals: ?writ_plan_local_view_t @72
+    steps_count: usize @80
+    steps: ?writ_plan_step_view_t @88
+    outcomes_count: usize @96
+    outcomes: ?writ_plan_outcome_view_t @104
+    serialize_item: u32 @112
+    reset_channels_count: usize @120
+    reset_channels: ?u32 @128
+    variadic: bool @136
+}
+struct writ_gen_c_request_t @size(32) @align(8) {
+    struct_size: usize @0
+    prefix: writ_str_t @8
+    conformance: bool @24
+}
+
+const WRIT_API_VERSION: c_uint = 1
+const WRIT_OK: c_int = 0
+const WRIT_HAS_ERRORS: c_int = 1
+const WRIT_INVALID_ARGUMENT: c_int = 2
+const WRIT_TOOL_FAILED: c_int = 3
+const WRIT_IO_FAILED: c_int = 4
+const WRIT_OUT_OF_MEMORY: c_int = 5
+const WRIT_SOURCE_CONTRACT_FILE: c_int = 0
+const WRIT_SOURCE_CONTRACT_DECLARATIONS: c_int = 1
+const WRIT_SOURCE_PROFILE: c_int = 2
+const WRIT_SOURCE_BINDING: c_int = 3
+const WRIT_ERROR: c_int = 0
+const WRIT_WARNING: c_int = 1
+const WRIT_NOTE: c_int = 2
+const WRIT_TYPE_VOID: c_int = 0
+const WRIT_TYPE_INT: c_int = 1
+const WRIT_TYPE_FLOAT: c_int = 2
+const WRIT_TYPE_BOOL: c_int = 3
+const WRIT_TYPE_POINTER: c_int = 4
+const WRIT_TYPE_ARRAY: c_int = 5
+const WRIT_TYPE_OPAQUE: c_int = 6
+const WRIT_TYPE_RECORD: c_int = 7
+const WRIT_TYPE_ENUM: c_int = 8
+const WRIT_TYPE_HANDLE: c_int = 9
+const WRIT_TYPE_CSTR: c_int = 10
+const WRIT_TYPE_VA_LIST: c_int = 11
+const WRIT_TYPE_CALLBACK: c_int = 12
+const WRIT_TYPE_VIEW: c_int = 13
+const WRIT_TYPE_INLINE: c_int = 14
+const WRIT_MODE_IN: c_int = 0
+const WRIT_MODE_OUT: c_int = 1
+const WRIT_MODE_INOUT: c_int = 2
+const WRIT_MODE_CONSUME: c_int = 3
+const WRIT_MODE_KEEP: c_int = 4
+const WRIT_MODE_MOVED: c_int = 5
+const WRIT_MODE_UNKNOWN: c_int = 6
+const WRIT_EXTENT_NONE: c_int = 0
+const WRIT_EXTENT_COUNT: c_int = 1
+const WRIT_EXTENT_BOUNDED: c_int = 2
+const WRIT_EXTENT_UNTIL: c_int = 3
+const WRIT_EXTENT_UNKNOWN: c_int = 4
+const WRIT_SPAN_NONE: c_int = 0
+const WRIT_SPAN_CALL: c_int = 1
+const WRIT_SPAN_STATIC: c_int = 2
+const WRIT_SPAN_STATIC_PER_THREAD: c_int = 3
+const WRIT_SPAN_WITH: c_int = 4
+const WRIT_SPAN_UNTIL: c_int = 5
+const WRIT_SPAN_ONCE: c_int = 6
+const WRIT_SPAN_UNKNOWN: c_int = 7
+const WRIT_ON_OWN: c_int = 0
+const WRIT_ON_UNSET: c_int = 1
+const WRIT_ON_PARTIAL: c_int = 2
+const WRIT_ON_NOT_CONSUMED: c_int = 3
+const WRIT_ON_SPAN: c_int = 4
+const WRIT_FN_FUNCTION: c_int = 0
+const WRIT_FN_CALLBACK: c_int = 1
+const WRIT_SIZING_NONE: c_int = 0
+const WRIT_SIZING_NEEDS: c_int = 1
+const WRIT_SIZING_QUERY: c_int = 2
+const WRIT_SIZING_RETRY: c_int = 3
+const WRIT_VARARGS_NONE: c_int = 0
+const WRIT_VARARGS_OPAQUE: c_int = 1
+const WRIT_VARARGS_OF: c_int = 2
+const WRIT_VARARGS_UNTIL: c_int = 3
+const WRIT_VARARGS_COUNT: c_int = 4
+const WRIT_VARARGS_FORMAT: c_int = 5
+const WRIT_VARARGS_VA_LIST: c_int = 6
+const WRIT_THREAD_UNSTATED: c_int = 0
+const WRIT_THREAD_ANY: c_int = 1
+const WRIT_THREAD_MAIN: c_int = 2
+const WRIT_THREAD_SAME: c_int = 3
+const WRIT_THREAD_SAME_AS: c_int = 4
+const WRIT_THREAD_RULE_SERIALIZED: c_int = 0
+const WRIT_THREAD_RULE_SHARED: c_int = 1
+const WRIT_THREAD_RULE_AFFINE: c_int = 2
+const WRIT_CHANNEL_VALUE: c_int = 0
+const WRIT_CHANNEL_TEXT: c_int = 1
+const WRIT_ROLE_INPUT: c_int = 0
+const WRIT_ROLE_OUTPUT: c_int = 1
+const WRIT_ROLE_INPUT_OUTPUT: c_int = 2
+const WRIT_ROLE_RESULT: c_int = 3
+const WRIT_ROLE_ERROR_DETAIL: c_int = 4
+const WRIT_ROLE_PACK: c_int = 5
+const WRIT_SHAPE_SCALAR: c_int = 0
+const WRIT_SHAPE_VIEW: c_int = 1
+const WRIT_SHAPE_HANDLE: c_int = 2
+const WRIT_SHAPE_OPTIONAL: c_int = 3
+const WRIT_SHAPE_BYTES: c_int = 4
+const WRIT_SHAPE_TEXT: c_int = 5
+const WRIT_SHAPE_ARRAY: c_int = 6
+const WRIT_SHAPE_RECORD: c_int = 7
+const WRIT_SHAPE_REST_PACK: c_int = 8
+const WRIT_SHAPE_KEYWORD_PACK: c_int = 9
+const WRIT_AFTER_NONE: c_int = 0
+const WRIT_AFTER_BORROWED: c_int = 1
+const WRIT_AFTER_CALLER_OWNS: c_int = 2
+const WRIT_AFTER_CALLEE_OWNS: c_int = 3
+const WRIT_AFTER_BORROWED_UNTIL: c_int = 4
+const WRIT_AFTER_BORROWED_WITH: c_int = 5
+const WRIT_AFTER_STATIC: c_int = 6
+const WRIT_PASS_VALUE: c_int = 0
+const WRIT_PASS_IN_POINTER: c_int = 1
+const WRIT_PASS_OUT_POINTER: c_int = 2
+const WRIT_PASS_INOUT_POINTER: c_int = 3
+const WRIT_PASS_VARIADIC_TAIL: c_int = 4
+const WRIT_PART_WHOLE: c_int = 0
+const WRIT_PART_POINTER: c_int = 1
+const WRIT_PART_LENGTH: c_int = 2
+const WRIT_PART_CAPACITY: c_int = 3
+const WRIT_PART_CAPACITY_AND_LENGTH: c_int = 4
+const WRIT_PART_ELEMENTS: c_int = 5
+const WRIT_LOCAL_BUFFER: c_int = 0
+const WRIT_LOCAL_CELL: c_int = 1
+const WRIT_LOCAL_TEXT: c_int = 2
+const WRIT_STEP_CHECK: c_int = 0
+const WRIT_STEP_PASS: c_int = 1
+const WRIT_STEP_SPLIT: c_int = 2
+const WRIT_STEP_ENCODE_CSTR: c_int = 3
+const WRIT_STEP_EXPAND: c_int = 4
+const WRIT_STEP_ALLOC_OUT: c_int = 5
+const WRIT_STEP_BIND_OUT: c_int = 6
+const WRIT_STEP_CALL: c_int = 7
+const WRIT_STEP_SIZE_QUERY: c_int = 8
+const WRIT_STEP_SIZE_RETRY: c_int = 9
+const WRIT_STEP_CLASSIFY: c_int = 10
+const WRIT_STEP_FETCH_DETAIL: c_int = 11
+const WRIT_STEP_LIFT_VALUE: c_int = 12
+const WRIT_STEP_LIFT_BUFFER: c_int = 13
+const WRIT_STEP_WRAP_HANDLE: c_int = 14
+const WRIT_STEP_COPY_BORROWED: c_int = 15
+const WRIT_STEP_MARK_CONSUMED: c_int = 16
+const WRIT_STEP_RELEASE_LOCAL: c_int = 17
+const WRIT_PHASE_PREPARE: c_int = 0
+const WRIT_PHASE_ATTEMPT: c_int = 1
+const WRIT_PHASE_CLASSIFY: c_int = 2
+const WRIT_PHASE_OUTCOME: c_int = 3
+const WRIT_PHASE_FINALLY: c_int = 4
+const WRIT_OUTCOME_SUCCESS: c_int = 0
+const WRIT_OUTCOME_FAILURE: c_int = 1
+const WRIT_LANGUAGE_C: c_int = 0
+
+fn writ_api_version() -> u32
+fn writ_session_new(config: ?writ_session_config_t) -> ?writ_session_t unknown
+fn writ_session_free(session: unknown ?writ_session_t)
+fn writ_session_set_diag_sink(session: unknown ?writ_session_t, sink: writ_diag_sink_fn, context: unknown ?void)
+fn writ_diag_count(session: ?writ_session_t) -> usize
+fn writ_diag_at(session: ?writ_session_t, index: usize) -> ?writ_diag_t unknown
+fn writ_diag_render(session: ?writ_session_t, diag: ?writ_diag_t, rendered: unknown ?writ_str_t) -> writ_status_t
+fn writ_unit_new(session: unknown ?writ_session_t) -> ?writ_unit_t unknown
+fn writ_unit_add_source(unit: unknown ?writ_unit_t, kind: writ_source_kind_t, origin: writ_origin_t, text: writ_str_t, source_id: unknown ?u32) -> writ_status_t
+fn writ_unit_add_file(unit: unknown ?writ_unit_t, path: writ_str_t, source_id: unknown ?u32) -> writ_status_t
+fn writ_unit_dump(unit: ?writ_unit_t, rendered: unknown ?writ_str_t) -> writ_status_t
+fn writ_format_unit(unit: ?writ_unit_t, output: ?writ_output_t) -> writ_status_t
+fn writ_platform_host_triple() -> writ_str_t
+fn writ_platform_from_triple(session: unknown ?writ_session_t, triple: writ_str_t, platform: unknown ??writ_platform_t) -> writ_status_t
+fn writ_platform_triple(platform: ?writ_platform_t) -> writ_str_t
+fn writ_platform_set_version(platform: unknown ?writ_platform_t, library: writ_str_t, version: writ_str_t) -> writ_status_t
+fn writ_platform_set_feature(platform: unknown ?writ_platform_t, feature: writ_str_t, enabled: bool) -> writ_status_t
+fn writ_resolve(unit: unknown ?writ_unit_t, platform: ?writ_platform_t, model: unknown ??writ_model_t) -> writ_status_t
+fn writ_output_directory(session: unknown ?writ_session_t, directory: writ_str_t, output: unknown ?writ_output_t) -> writ_status_t
+fn writ_model_library(model: ?writ_model_t) -> ?writ_library_view_t unknown
+fn writ_model_fn_count(model: ?writ_model_t) -> usize
+fn writ_model_fn_at(model: ?writ_model_t, index: usize) -> ?writ_fn_view_t unknown
+fn writ_model_fn_named(model: ?writ_model_t, name: writ_str_t) -> ?writ_fn_view_t unknown
+fn writ_model_const_count(model: ?writ_model_t) -> usize
+fn writ_model_const_at(model: ?writ_model_t, index: usize) -> ?writ_const_view_t unknown
+fn writ_model_const_named(model: ?writ_model_t, name: writ_str_t) -> ?writ_const_view_t unknown
+fn writ_model_record_count(model: ?writ_model_t) -> usize
+fn writ_model_record_at(model: ?writ_model_t, index: usize) -> ?writ_record_view_t unknown
+fn writ_model_record_named(model: ?writ_model_t, name: writ_str_t) -> ?writ_record_view_t unknown
+fn writ_model_handle_count(model: ?writ_model_t) -> usize
+fn writ_model_handle_at(model: ?writ_model_t, index: usize) -> ?writ_handle_view_t unknown
+fn writ_model_handle_named(model: ?writ_model_t, name: writ_str_t) -> ?writ_handle_view_t unknown
+fn writ_model_enum_count(model: ?writ_model_t) -> usize
+fn writ_model_enum_at(model: ?writ_model_t, index: usize) -> ?writ_enum_view_t unknown
+fn writ_model_enum_named(model: ?writ_model_t, name: writ_str_t) -> ?writ_enum_view_t unknown
+fn writ_model_channel_count(model: ?writ_model_t) -> usize
+fn writ_model_channel_at(model: ?writ_model_t, index: usize) -> ?writ_channel_view_t unknown
+fn writ_model_channel_named(model: ?writ_model_t, name: writ_str_t) -> ?writ_channel_view_t unknown
+fn writ_model_fn_plan(model: ?writ_model_t, fn: ?writ_fn_view_t) -> ?writ_plan_view_t unknown
+fn writ_model_plan_render(model: ?writ_model_t, plan: ?writ_plan_view_t, rendered: unknown ?writ_str_t) -> writ_status_t
+fn writ_lower_json(model: ?writ_model_t, output: ?writ_output_t) -> writ_status_t
+fn writ_gen_c(model: ?writ_model_t, request: ?writ_gen_c_request_t, output: ?writ_output_t) -> writ_status_t
+fn writ_toolchain_verify_probes(model: ?writ_model_t, sysroot: writ_str_t, report: unknown ?writ_str_t) -> writ_status_t
+fn writ_toolchain_abi_classes(model: ?writ_model_t, sysroot: writ_str_t, report: unknown ?writ_str_t) -> writ_status_t
+fn writ_toolchain_verify_symbols(model: ?writ_model_t, binary: writ_str_t, sysroot: writ_str_t, report: unknown ?writ_str_t) -> writ_status_t
