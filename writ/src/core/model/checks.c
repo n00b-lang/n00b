@@ -131,7 +131,10 @@ returns_have_spans(writ_model_t *model)
         const writ_slot_rec_t *result = writ_fn_slot(model, fn, fn->slot_count);
         writ_type_kind_t kind = writ_type(model, result->type)->key.kind;
         if ((kind == WRIT_TYPE_POINTER || kind == WRIT_TYPE_ARRAY) && !result->own && !result->span) {
-            writ_report(model->session, WRIT_D_RETURN_NEEDS_SPAN, result->loc, nullptr);
+            uint32_t diag = writ_report(model->session, WRIT_D_RETURN_NEEDS_SPAN, result->loc, nullptr);
+            writ_loc_t end = {result->loc.source, result->loc.end, result->loc.end};
+            writ_report_suggest(model->session, diag, end, writ_cstr(" unknown"),
+                                writ_cstr("mark the lifetime unknown until it is known"));
         }
     }
 }
@@ -210,6 +213,114 @@ layout_assertions(writ_model_t *model)
                 writ_report(model->session, WRIT_D_LAYOUT_MISMATCH, field->loc, "offset %u asserted, %u computed",
                             field->offset_assert, field->offset);
             }
+        }
+    }
+}
+
+static void
+reinterpreted_elements(writ_model_t *model)
+{
+    for (uint32_t i = 0; i < model->slots.len; i++) {
+        const writ_slot_rec_t *slot = &model->slots.data[i];
+        if (!slot->physical) {
+            continue;
+        }
+        const writ_type_rec_t *array = writ_type(model, writ_type_physical(model, slot->type));
+        const writ_type_rec_t *pointer = writ_type(model, slot->physical);
+        const writ_type_rec_t *unit = pointer->key.kind == WRIT_TYPE_POINTER ? writ_type(model, pointer->key.target)
+                                                                             : nullptr;
+        const writ_type_rec_t *element = array->key.kind == WRIT_TYPE_ARRAY ? writ_type(model, array->key.target)
+                                                                            : nullptr;
+        uint32_t packed = 0;
+        if (element && element->key.kind == WRIT_TYPE_RECORD) {
+            const writ_record_rec_t *record = &model->records.data[element->decl];
+            for (uint32_t f = 0; f < record->field_count; f++) {
+                packed += writ_type(model, model->slots.data[record->first_field + f].type)->size;
+            }
+        }
+        if (!unit || !element || !unit->size || element->size % unit->size || packed != element->size) {
+            writ_report(model->session, WRIT_D_REINTERPRET, slot->loc, nullptr);
+        }
+    }
+}
+
+typedef struct {
+    writ_expr_env_t base;
+    int64_t         ret;
+} domain_env_t;
+
+static bool
+domain_value(writ_expr_env_t *base, writ_ref_t ref, uint32_t expr, int64_t *out)
+{
+    (void)expr;
+    *out = ((domain_env_t *)base)->ret;
+    return ref.kind == WRIT_REF_RESULT;
+}
+
+static bool
+succeeds(writ_model_t *model, const writ_fn_rec_t *fn, int64_t value)
+{
+    for (uint32_t o = 0; o < fn->outcome_count; o++) {
+        const writ_outcome_rec_t *outcome = &model->outcomes.data[fn->first_outcome + o];
+        domain_env_t env = {{.value = domain_value}, value};
+        int64_t holds = 1;
+        if (!outcome->when_expr || (writ_expr_eval(model, outcome->when_expr, &env.base, &holds) && holds)) {
+            return outcome->kind == WRIT_OUTCOME_SUCCESS;
+        }
+    }
+    return true;
+}
+
+static void
+views_fit_success_domain(writ_model_t *model)
+{
+    EACH_FN(model, f, fn) {
+        const writ_slot_rec_t *result = fn->has_result ? writ_fn_slot(model, fn, fn->slot_count) : nullptr;
+        const writ_type_rec_t *view = result ? writ_type(model, result->type) : nullptr;
+        writ_type_id named = view && view->key.kind == WRIT_TYPE_VIEW ? writ_type_named(model, view->key.name) : 0;
+        const writ_type_rec_t *target = named ? writ_type(model, named) : nullptr;
+        if (!target || target->key.kind != WRIT_TYPE_ENUM || !model->enums.data[target->decl].closed) {
+            continue;
+        }
+        const writ_enum_rec_t *e = &model->enums.data[target->decl];
+        int64_t low = INT64_MAX, high = INT64_MIN;
+        for (uint32_t k = 0; k < e->item_count; k++) {
+            int64_t value = model->consts.data[e->first_item + k].value;
+            low = value < low ? value : low;
+            high = value > high ? value : high;
+        }
+        int64_t outside[] = {-1, low - 1, high + 1};
+        for (size_t i = 0; e->item_count && i < sizeof(outside) / sizeof(outside[0]); i++) {
+            bool member = false;
+            for (uint32_t k = 0; k < e->item_count; k++) {
+                member = member || model->consts.data[e->first_item + k].value == outside[i];
+            }
+            if (!member && succeeds(model, fn, outside[i])) {
+                writ_str_t name = writ_sym_str(model->session, e->name);
+                writ_report(model->session, WRIT_D_VIEW_DOMAIN, result->loc, "%lld succeeds but is not a `%.*s`",
+                            (long long)outside[i], S(name));
+                break;
+            }
+        }
+    }
+}
+
+static void
+text_channels_have_buffers(writ_model_t *model)
+{
+    for (uint32_t c = 0; c < model->channels.len; c++) {
+        const writ_channel_rec_t *channel = &model->channels.data[c];
+        writ_ref_t callee = writ_expr_ref(model, writ_node_child(model->unit, channel->source_expr, 0));
+        if (channel->kind != WRIT_CHANNEL_TEXT || callee.kind != WRIT_REF_FN) {
+            continue;
+        }
+        const writ_fn_rec_t *fn = &model->fns.data[callee.index];
+        uint32_t buffers = 0;
+        EACH_PARAM(model, fn, s, slot) {
+            buffers += is_out_array(model, slot) && slot->extent_kind == WRIT_EXTENT_BOUNDED;
+        }
+        if (buffers != 1 || (fn->sizing != WRIT_SIZING_RETRY && fn->sizing != WRIT_SIZING_QUERY)) {
+            writ_report(model->session, WRIT_D_TEXT_CHANNEL, channel->loc, nullptr);
         }
     }
 }

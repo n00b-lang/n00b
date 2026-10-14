@@ -172,7 +172,21 @@ test(
     args: [golden, source_root / 'tests' / 'plan' / 'zlib.plan', '--', writ_exe, 'plan', 'tests/skeleton/zlib.writ'],
 )
 
-foreach name : ['unknown_type', 'not_pure', 'bad_phase', 'out_unbounded', 'syntax', 'duplicate']
+test(
+    'fix-return-span',
+    python,
+    args: [golden, source_root / 'tests' / 'check' / 'return_span.fixed', '--fails', '--', writ_exe, '--fix', 'check',
+           'tests/check/return_span.writ'],
+)
+test(
+    'fix-binding-raw',
+    python,
+    args: [golden, source_root / 'tests' / 'bind' / 'e0508.fixed', '--fails', '--', writ_exe, '--fix', 'bind',
+           'tests/bind/unknown.writ', 'tests/bind/e0508.writ', '--profile', 'profiles/n00b.writ'],
+)
+
+foreach name : ['unknown_type', 'not_pure', 'bad_phase', 'out_unbounded', 'syntax', 'duplicate', 'reinterpret',
+                'view_domain', 'return_span']
     test(
         'check-' + name,
         python,
@@ -330,6 +344,25 @@ foreach variant : ['plain', 'features', 'miri']
         timeout: 1800,
     )
 endforeach
+
+spans = custom_target(
+    'spans-binding',
+    input: source_root / 'tests' / 'spans' / 'spans.writ',
+    output: ['spans_writ.h', 'spans_writ.c', 'spans_writ_mock.c', 'spans_writ_conformance.c'],
+    command: [writ_exe, 'gen', 'c', '@INPUT@', '-o', '@OUTDIR@', '--conformance'],
+)
+test(
+    'spans-conformance',
+    executable(
+        'spans-conformance',
+        spans[1],
+        spans[2],
+        spans[3],
+        c_args: generated_c + sanitize,
+        link_args: sanitize,
+        override_options: ['c_std=c11'],
+    ),
+)
 
 tools = source_root / 'tools'
 foreach check : [

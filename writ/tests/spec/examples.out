@@ -96,8 +96,6 @@ error[E0102]: unknown type: `Regex`
   --> dsl.md-22.writ:1:24
 error[E0102]: unknown type: `Span`
   --> dsl.md-22.writ:2:32
-error[E0901]: not supported yet: reinterpreted element types (`as *T`)
-  --> dsl.md-22.writ:2:77
 == dsl.md example 23
 error[E0901]: not supported yet: callback user data (dsl.md §6.3)
   --> dsl.md-23.writ:12:33

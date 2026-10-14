@@ -696,7 +696,7 @@ plan_slots(builder_t *b)
                                                                    : WRIT_PASS_IN_POINTER;
         core_list_push(b->slots, ((writ_plan_slot_view_t){
                                      .struct_size   = sizeof(writ_plan_slot_view_t),
-                                     .c_type        = type_view(b->model, slot->type),
+                                     .c_type        = type_view(b->model, slot->physical ? slot->physical : slot->type),
                                      .pass          = pass,
                                      .part          = WRIT_PART_WHOLE,
                                      .item          = WRIT_PLAN_NONE,

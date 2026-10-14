@@ -548,7 +548,12 @@ check_fns(writ_binding_t *b)
             continue;
         }
         if (!d->raw && unknown_facts(fn)) {
-            writ_report(b->session, WRIT_D_BIND_UNKNOWN, at(b, b->block)->loc, "`%.*s`", S(fn->contract_name));
+            writ_loc_t block = at(b, b->block)->loc;
+            uint32_t diag = writ_report(b->session, WRIT_D_BIND_UNKNOWN, block, "`%.*s`", S(fn->contract_name));
+            writ_loc_t brace = {block.source, block.end - 1, block.end - 1};
+            writ_report_suggest(b->session, diag, brace,
+                                writ_str_format(b->session, "    raw \"%.*s\"\n", S(fn->contract_name)),
+                                writ_cstr("bind it without safety"));
         }
         bool c_variadic = fn->varargs != WRIT_VARARGS_NONE && fn->varargs != WRIT_VARARGS_VA_LIST;
         if (c_variadic && !b->profile->variadic_call && !b->export_side) {

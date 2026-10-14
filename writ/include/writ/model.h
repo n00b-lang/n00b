@@ -276,6 +276,7 @@ struct writ_slot_view {
     bool is_private;
     uint32_t offset;
     writ_span_t declared_at;
+    const writ_type_view_t *physical;
 };
 
 struct writ_outcome_view {

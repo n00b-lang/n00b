@@ -225,9 +225,10 @@ writ_c_emit_signature(const writ_c_context_t *c, writ_emit_t *emit, const writ_p
 static writ_str_t
 real_param_type(const writ_c_context_t *c, const writ_slot_view_t *slot)
 {
-    bool constant = slot->mode == WRIT_MODE_IN && slot->type->kind != WRIT_TYPE_HANDLE
-                 && (slot->type->kind == WRIT_TYPE_POINTER || slot->type->kind == WRIT_TYPE_ARRAY);
-    return writ_c_type(c, slot->type, constant);
+    const writ_type_view_t *type = slot->physical ? slot->physical : slot->type;
+    bool constant = slot->mode == WRIT_MODE_IN && type->kind != WRIT_TYPE_HANDLE
+                 && (type->kind == WRIT_TYPE_POINTER || type->kind == WRIT_TYPE_ARRAY);
+    return writ_c_type(c, type, constant);
 }
 
 void
@@ -695,8 +696,8 @@ emit_step(shim_env_t *env, writ_emit_t *emit, const writ_plan_step_view_t *step)
         return;
     }
     case WRIT_STEP_BIND_OUT:
-        writ_emit_line(emit, "s%u = %sl%u;", step->slot, plan->locals[step->local].kind == WRIT_LOCAL_CELL ? "&" : "",
-                       step->local);
+        writ_emit_line(emit, "s%u = (%.*s)%sl%u;", step->slot, S(slot_type(c, plan, step->slot)),
+                       plan->locals[step->local].kind == WRIT_LOCAL_CELL ? "&" : "", step->local);
         return;
     case WRIT_STEP_CALL:
         emit_call(env, emit, plan->fn->result ? "ret" : nullptr);

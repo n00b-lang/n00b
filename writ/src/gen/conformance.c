@@ -286,14 +286,15 @@ mock_buffer(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_view_t
     writ_str_t name = fn->slots[k].name;
     writ_str_t cap = cell != WRIT_PLAN_NONE ? writ_str_format(c->model->session, "(size_t)*%.*s", S(fn->slots[cell].name))
                                             : writ_str_format(c->model->session, "(size_t)%.*s", S(fn->slots[capacity].name));
+    writ_str_t element = writ_c_type(c, plan->items[item].type->target, false);
     writ_emit_open(emit, "if (%.*s)", S(name));
     writ_emit_line(emit, "size_t written = %.*s_mock_fill < %.*s ? %.*s_mock_fill : %.*s;", S(c->prefix), S(cap),
                    S(c->prefix), S(cap));
-    writ_emit_open(emit, "for (size_t i = 0; i < written * sizeof *%.*s; i++)", S(name));
+    writ_emit_open(emit, "for (size_t i = 0; i < written * sizeof(%.*s); i++)", S(element));
     writ_emit_line(emit, "((uint8_t *)%.*s)[i] = (uint8_t)(i * 7 + 3);", S(name));
     writ_emit_close(emit, nullptr);
     writ_emit_open(emit, "if (written < %.*s)", S(cap));
-    writ_emit_line(emit, "((uint8_t *)%.*s)[written * sizeof *%.*s] = 0;", S(name), S(name));
+    writ_emit_line(emit, "((uint8_t *)%.*s)[written * sizeof(%.*s)] = 0;", S(name), S(element));
     writ_emit_close(emit, nullptr);
     if (cell != WRIT_PLAN_NONE) {
         writ_str_t cell_type = writ_c_type(c, fn->slots[cell].type->target, false);

@@ -62,6 +62,7 @@ build_slots(writ_model_t *model)
             .count_expr    = record->count_expr,
             .cap_expr      = record->cap_expr,
             .len_expr      = record->len_expr,
+            .physical      = type_view(model, record->physical),
             .span          = record->span,
             .span_with     = sym(model, record->span_with),
             .own           = record->own,

@@ -1,0 +1,7 @@
+library leaky
+
+fn name_of(code: c_int) -> *cstr unknown
+fn other() -> c_int
+error[E0212]: a returned pointer needs `own`, a span, or `unknown`
+  --> tests/check/return_span.writ:3:25
+  help: mark the lifetime unknown until it is known: ` unknown`

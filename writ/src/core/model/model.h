@@ -106,6 +106,7 @@ typedef struct {
     uint32_t           count_expr;
     uint32_t           cap_expr;
     uint32_t           len_expr;
+    writ_type_id       physical;
     writ_span_kind_t   span;
     uint32_t           span_node;
     writ_sym_t         span_with;

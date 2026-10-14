@@ -1,0 +1,4 @@
+library leaky
+
+fn name_of(code: c_int) -> *cstr
+fn other() -> c_int

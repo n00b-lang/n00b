@@ -1,0 +1,7 @@
+library spans
+
+struct Span { start: usize, end: usize }
+
+fn find_spans(text: *[u8; text_len], text_len: usize, out: out *[Span; cap count.in, len count.out] as *usize,
+              count: inout *usize) -> c_int
+  error ret != 0

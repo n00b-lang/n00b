@@ -603,8 +603,12 @@ resolve_type_in(resolver_t *r, uint32_t id, writ_slot_rec_t *slot, bool handle_b
     case WRIT_N_TYPE_VIEW: {
         writ_type_id base = resolve_type_in(r, child(model, id, 0), slot, handle_base);
         uint32_t target = child(model, id, 1);
+        if (node_at(model, target)->kind == WRIT_N_TYPE_POINTER && slot) {
+            slot->physical = resolve_type(r, target, nullptr);
+            return base;
+        }
         if (node_at(model, target)->kind != WRIT_N_TYPE_NAMED) {
-            unsupported(model, target, "reinterpreted element types (`as *T`)");
+            unsupported(model, target, "reinterpreted elements outside a parameter or field");
             return 0;
         }
         return base ? writ_type_intern(model, (writ_type_key_t){.kind = WRIT_TYPE_VIEW, .target = base,

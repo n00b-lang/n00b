@@ -108,7 +108,7 @@ struct writ_const_view_t @size(88) @align(8) {
     text: writ_str_t @40
     declared_at: writ_span_t @56
 }
-struct writ_slot_view_t @size(152) @align(8) {
+struct writ_slot_view_t @size(160) @align(8) {
     struct_size: usize @0
     name: writ_str_t @8
     type: ?writ_type_view_t @24
@@ -126,6 +126,7 @@ struct writ_slot_view_t @size(152) @align(8) {
     is_private: bool @113
     offset: u32 @116
     declared_at: writ_span_t @120
+    physical: ?writ_type_view_t @152
 }
 struct writ_outcome_view_t @size(40) @align(8) {
     struct_size: usize @0

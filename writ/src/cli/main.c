@@ -21,6 +21,7 @@ arg(const char *text)
 static writ_str_t platform_triple;
 static writ_str_t features[MAX_LIST];
 static size_t     feature_count;
+static bool       fixing;
 
 static writ_status_t
 write_stdout(void *context, writ_str_t path, writ_str_t contents)
@@ -48,6 +49,46 @@ print_diags(const writ_session_t *session)
         writ_diag_render(session, writ_diag_at(session, i), &text);
         fwrite(text.data, 1, text.length, stderr);
     }
+}
+
+static void
+print_fixed(const writ_session_t *session)
+{
+    const writ_diag_suggestion_t *edits[MAX_LIST];
+    size_t count = 0;
+    writ_str_t path = {0};
+    for (size_t i = 0; i < writ_diag_count(session); i++) {
+        const writ_diag_t *diag = writ_diag_at(session, i);
+        for (size_t s = 0; s < diag->suggestion_count && count < MAX_LIST; s++) {
+            if (!path.length || (path.length == diag->path.length && !memcmp(path.data, diag->path.data, path.length))) {
+                path = diag->path;
+                edits[count++] = &diag->suggestions[s];
+            }
+        }
+    }
+    char name[4096];
+    FILE *file = path.length < sizeof(name) ? fopen((snprintf(name, sizeof(name), "%.*s", (int)path.length, path.data), name), "rb")
+                                            : nullptr;
+    if (!file) {
+        return;
+    }
+    char text[1 << 16];
+    size_t length = fread(text, 1, sizeof(text), file);
+    fclose(file);
+    for (size_t i = 1; i < count; i++) {
+        for (size_t k = i; k > 0 && edits[k]->span.start_byte < edits[k - 1]->span.start_byte; k--) {
+            const writ_diag_suggestion_t *swap = edits[k];
+            edits[k] = edits[k - 1];
+            edits[k - 1] = swap;
+        }
+    }
+    size_t at = 0;
+    for (size_t i = 0; i < count && edits[i]->span.end_byte <= length && edits[i]->span.start_byte >= at; i++) {
+        fwrite(text + at, 1, edits[i]->span.start_byte - at, stdout);
+        fwrite(edits[i]->replacement.data, 1, edits[i]->replacement.length, stdout);
+        at = edits[i]->span.end_byte;
+    }
+    fwrite(text + at, 1, length - at, stdout);
 }
 
 static writ_unit_t *
@@ -368,6 +409,8 @@ main(int argc, char **argv)
             i++;
         } else if (!strcmp(argv[i], "--feature") && i + 1 < argc && feature_count < MAX_LIST) {
             features[feature_count++] = arg(argv[++i]);
+        } else if (!strcmp(argv[i], "--fix")) {
+            fixing = true;
         } else {
             argv[kept++] = argv[i];
         }
@@ -383,6 +426,9 @@ main(int argc, char **argv)
         writ_session_t *session = writ_session_new(&config);
         int status = commands[i].run(session, argc - 2, argv + 2);
         print_diags(session);
+        if (fixing) {
+            print_fixed(session);
+        }
         writ_session_free(session);
         if (status == 2) {
             fprintf(stderr, "usage: writ %s\n", commands[i].usage);

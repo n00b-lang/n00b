@@ -1,0 +1,9 @@
+library views
+
+enum Level : c_int { LOW = 0, HIGH = 1 } closed
+
+fn is_ready() -> c_int as bool
+  error ret == -1
+
+fn level() -> c_int as Level
+  error ret < 1
