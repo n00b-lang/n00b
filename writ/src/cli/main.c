@@ -1,9 +1,41 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
+#include "writ/clang.h"
 #include "writ/gen.h"
 
 typedef int (*command_fn)(writ_session_t *session, int argc, char **argv);
+
+enum {
+    MAX_LIST = 64,
+};
+
+static writ_str_t
+arg(const char *text)
+{
+    return (writ_str_t){text, strlen(text)};
+}
+
+static writ_str_t platform_triple;
+
+static writ_status_t
+write_stdout(void *context, writ_str_t path, writ_str_t contents)
+{
+    (void)context;
+    (void)path;
+    return fwrite(contents.data, 1, contents.length, stdout) == contents.length ? WRIT_OK : WRIT_IO_FAILED;
+}
+
+static void
+output_for(writ_session_t *session, const char *directory, writ_output_t *output)
+{
+    if (!strcmp(directory, "-")) {
+        *output = (writ_output_t){write_stdout, nullptr};
+    } else {
+        writ_output_directory(session, arg(directory), output);
+    }
+}
 
 static void
 print_diags(const writ_session_t *session)
@@ -42,14 +74,21 @@ cmd_parse(writ_session_t *session, int argc, char **argv)
     return 0;
 }
 
-static writ_str_t platform_triple;
-
-static const writ_model_t *
-resolve(writ_session_t *session, const char *path)
+static writ_platform_t *
+platform_for(writ_session_t *session)
 {
     writ_platform_t *platform = nullptr;
     if (writ_platform_from_triple(session, platform_triple, &platform) != WRIT_OK) {
         fprintf(stderr, "writ: unknown platform %.*s\n", (int)platform_triple.length, platform_triple.data);
+    }
+    return platform;
+}
+
+static const writ_model_t *
+resolve(writ_session_t *session, const char *path)
+{
+    writ_platform_t *platform = platform_for(session);
+    if (!platform) {
         return nullptr;
     }
     writ_unit_t *unit = load(session, path);
@@ -120,11 +159,66 @@ cmd_gen(writ_session_t *session, int argc, char **argv)
         return 1;
     }
     writ_output_t output;
-    writ_output_directory(session, (writ_str_t){directory, strlen(directory)}, &output);
+    output_for(session, directory, &output);
     writ_status_t status = writ_gen_c(model, &request, &output);
     if (status == WRIT_IO_FAILED) {
         fprintf(stderr, "writ: cannot write into %s\n", directory);
     }
+    return status == WRIT_OK ? 0 : 1;
+}
+
+static bool
+take_list(char **argv, int *i, int argc, const char *flag, writ_str_t *list, size_t *count)
+{
+    if (strcmp(argv[*i], flag) || *i + 1 >= argc || *count >= MAX_LIST) {
+        return false;
+    }
+    list[(*count)++] = arg(argv[++*i]);
+    return true;
+}
+
+static int
+cmd_import(writ_session_t *session, int argc, char **argv)
+{
+    writ_str_t headers[MAX_LIST], links[MAX_LIST], defines[MAX_LIST], includes[MAX_LIST], only[MAX_LIST];
+    writ_import_request_t request = {.struct_size = sizeof(request), .headers = headers, .links = links,
+                                     .defines = defines, .include_paths = includes, .only = only};
+    const char *directory = ".";
+    for (int i = 0; i < argc; i++) {
+        if (!strcmp(argv[i], "--library") && i + 1 < argc) {
+            request.library = arg(argv[++i]);
+        } else if (!strcmp(argv[i], "-o") && i + 1 < argc) {
+            directory = argv[++i];
+        } else if (!take_list(argv, &i, argc, "--header", headers, &request.headers_count)
+                   && !take_list(argv, &i, argc, "--link", links, &request.links_count)
+                   && !take_list(argv, &i, argc, "--define", defines, &request.defines_count)
+                   && !take_list(argv, &i, argc, "-I", includes, &request.include_paths_count)
+                   && !take_list(argv, &i, argc, "--only", only, &request.only_count)) {
+            return 2;
+        }
+    }
+    writ_platform_t *platform = platform_for(session);
+    if (!platform || !request.library.length || !request.headers_count) {
+        return platform ? 2 : 1;
+    }
+    writ_output_t output;
+    output_for(session, directory, &output);
+    return writ_clang_import(session, platform, &request, &output) == WRIT_OK ? 0 : 1;
+}
+
+static int
+cmd_verify(writ_session_t *session, int argc, char **argv)
+{
+    if (argc < 1) {
+        return 2;
+    }
+    const writ_model_t *model = resolve(session, argv[0]);
+    if (!model) {
+        return 1;
+    }
+    writ_str_t report;
+    writ_status_t status = writ_clang_verify_layout(model, (writ_str_t){0}, &report);
+    fwrite(report.data, 1, report.length, stdout);
     return status == WRIT_OK ? 0 : 1;
 }
 
@@ -133,6 +227,8 @@ static const struct {
     command_fn  run;
     const char *usage;
 } commands[] = {
+    {"import", cmd_import, "import --library NAME --header H... [--link L] [--define D] [-I DIR] [--only GLOB] [-o DIR]"},
+    {"verify", cmd_verify, "verify FILE"},
     {"gen", cmd_gen, "gen c FILE [-o DIR] [--prefix NAME] [--conformance]"},
     {"parse", cmd_parse, "parse FILE"},
     {"check", cmd_check, "check FILE"},
@@ -161,7 +257,10 @@ main(int argc, char **argv)
         if (strcmp(argv[1], commands[i].name)) {
             continue;
         }
-        writ_session_t *session = writ_session_new(nullptr);
+        const char *llvm = getenv("WRIT_LLVM_PREFIX");
+        writ_session_config_t config = {.struct_size = sizeof(config),
+                                        .llvm_prefix = arg(llvm && *llvm ? llvm : WRIT_DEFAULT_LLVM_PREFIX)};
+        writ_session_t *session = writ_session_new(&config);
         int status = commands[i].run(session, argc - 2, argv + 2);
         print_diags(session);
         writ_session_free(session);

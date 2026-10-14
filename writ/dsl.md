@@ -197,6 +197,7 @@ type uLong = c_ulong                 # pure alias; same type
 
 opaque sqlite3                       # incomplete type; only ever behind a pointer
 opaque sqlite3_stmt
+opaque stat_buf source "struct stat" # a type C names only by its tag
 
 handle Db   = *sqlite3       release sqlite3_close_v2
 handle Stmt = *sqlite3_stmt  release sqlite3_finalize
@@ -2719,7 +2720,7 @@ class_item  = "fields" "opaque" | field
 
 const       = "const" ID ":" type "=" expr ;
 alias       = "type" ID "=" type ;
-opaque      = "opaque" ID ;
+opaque      = "opaque" ID [ "source" STRING ] ;
 handle      = "handle" ID "=" ( type | "*" "opaque" ) [ "none" expr ]
               [ "refcounted" "retain" ID ] "release" ID [ "floating" "sink" ID ]
               [ "shared" | "thread_affine" ] ;
@@ -2727,7 +2728,7 @@ allocator   = "allocator" ID "alloc" ID "release" ID ;
 record      = "struct" ID { rec_attr } "{" { field } "}" [ "none" "{" field_values "}" ] ;
 rec_attr    = "layout" ( "c" | "explicit" [ "bits" bit_storage ] )
             | "@size" "(" size_list ")" | "@align" "(" INT ")" | "@pack" "(" INT ")"
-            | "access" ( type | "atomic" ) | "live" ;
+            | "access" ( type | "atomic" ) | "live" | "source" STRING ;
 bit_storage = "in" type ( "lsb0" | "msb0" ) ;
 union       = "union" ID "{" field { "," field } "}" ;
 enum        = "enum" ID ":" type "{" { ID "=" expr "," } "}" [ "closed" ] ;

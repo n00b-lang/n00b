@@ -128,11 +128,28 @@ foreach name : ['unknown_type', 'not_pure', 'bad_phase', 'out_unbounded', 'synta
     )
 endforeach
 
+host_triple = host_machine.system() == 'darwin' ? host_machine.cpu_family() + '-apple-darwin' : host_machine.cpu_family() + '-linux-gnu'
+
+zlib_only = []
+foreach name : ['zlibVersion', 'crc32', 'adler32', 'compressBound', 'compress2', 'uncompress', 'deflate', 'deflateEnd',
+                'deflateInit', 'deflateInit_', 'inflate', 'inflateEnd', 'inflateInit', 'inflateInit_']
+    zlib_only += ['--only', name]
+endforeach
+
+test(
+    'zlib-import',
+    python,
+    args: [golden, source_root / 'tests' / 'zlib' / 'draft' / host_triple + '.writ', '--', writ_exe, 'import',
+           '--library', 'zlib', '--header', 'zlib.h', '--link', 'z', '-o', '-'] + zlib_only,
+)
+
+test('zlib-layout', writ_exe, args: ['verify', source_root / 'tests' / 'zlib' / 'zlib.writ'])
+
 generated_c = ['-std=c11', '-Wall', '-Wextra', '-Werror', '-U_FORTIFY_SOURCE', '-D_FORTIFY_SOURCE=0']
 
 foreach binding : [
-    ['skeleton', 'skeleton/zlib.writ', 'zlib', [zlib]],
     ['libc', 'libc/libc.writ', 'libc', []],
+    ['zlib', 'zlib/zlib.writ', 'zlib', [zlib]],
 ]
     generated = custom_target(
         binding[0] + '-binding',

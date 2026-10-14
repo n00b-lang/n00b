@@ -26,15 +26,18 @@ failed = False
 with tempfile.TemporaryDirectory() as scratch:
     for document in documents:
         name = os.path.basename(document)
-        for number, tag, body in blocks(document):
+        ordinal = 0
+        for _, tag, body in blocks(document):
             if tag != "writ":
                 continue
+            ordinal += 1
+            number = ordinal
             path = os.path.join(scratch, f"{name}-{number}.writ")
             with open(path, "w", encoding="utf-8") as out:
                 out.write("\n".join(body) + "\n")
             parsed = subprocess.run([writ, "parse", path], capture_output=True, text=True)
             checked = subprocess.run([writ, "check", path], capture_output=True, text=True)
-            print(f"== {name}:{number}")
+            print(f"== {name} example {number}")
             if parsed.returncode != 0:
                 failed = True
                 print("parse failed")

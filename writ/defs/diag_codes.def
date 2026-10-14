@@ -27,4 +27,7 @@ WRIT_DIAG(RETURN_NEEDS_SPAN, "E0212", WRIT_ERROR, "a returned pointer needs `own
 WRIT_DIAG(BAD_NONE_VALUE, "E0213", WRIT_ERROR, "a `none` value must be a constant of the handle's type")
 WRIT_DIAG(FORMAT_NOT_TEXT, "E0214", WRIT_ERROR, "`format printf` names a `*cstr` parameter of a variadic function")
 WRIT_DIAG(ON_UNKNOWN_OUTCOME, "E0215", WRIT_ERROR, "`on` names no outcome of this function")
+WRIT_DIAG(TOOLCHAIN, "E0301", WRIT_ERROR, "toolchain failure")
+WRIT_DIAG(LAYOUT_TOOLCHAIN, "E0302", WRIT_ERROR, "the contract's layout disagrees with the compiler")
+WRIT_DIAG(SYMBOL_MISSING, "E0303", WRIT_ERROR, "symbol not exported by the library")
 WRIT_DIAG(UNSUPPORTED, "E0901", WRIT_ERROR, "not supported yet")

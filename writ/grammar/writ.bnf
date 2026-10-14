@@ -33,12 +33,12 @@
 <decl> ::= <const-decl> | <alias-decl> | <opaque-decl> | <handle-decl> | <struct-decl> | <enum-decl> | <flags-decl> | <callback-decl> | <fn-decl> | <refine-decl> | <allocator-decl> | <when-decl> | <var-decl> | <interface-decl> | <symbol-decl> | <conventions-decl> | <channel-decl> | <impl-decl> | <rust-error-decl>
 <const-decl> ::= %"const" %IDENTIFIER %":" <type> %"=" <expr>
 <alias-decl> ::= %"type" %IDENTIFIER %"=" <type>
-<opaque-decl> ::= %"opaque" %IDENTIFIER
+<opaque-decl> ::= %"opaque" %IDENTIFIER <source-clause>?
 <handle-decl> ::= %"handle" %IDENTIFIER %"=" <type> <none-value>? <release-attr> <thread-rule>?
 <none-value> ::= %"none" <expr>
 <thread-rule> ::= %"shared" | %"thread_affine"
 <struct-decl> ::= %"struct" %IDENTIFIER <record-attr>* %"{" (<field> %","?)* %"}" <struct-none>?
-<record-attr> ::= <layout-attr> | <size-attr> | <align-attr> | <pack-attr>
+<record-attr> ::= <layout-attr> | <size-attr> | <align-attr> | <pack-attr> | <source-clause>
 <layout-attr> ::= %"layout" <layout-mode>
 <layout-mode> ::= %"c" | %"explicit"
 <size-attr> ::= %"@" %"size" %"(" <platform-int> (%"," <platform-int>)* %")"

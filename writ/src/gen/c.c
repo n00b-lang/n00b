@@ -28,7 +28,7 @@ writ_c_type(const writ_c_context_t *c, const writ_type_view_t *type, bool consta
     case WRIT_TYPE_CSTR:
         return writ_cstr("char");
     case WRIT_TYPE_OPAQUE:
-        return type->name.length ? type->name : writ_cstr("void");
+        return type->c_spelling.length ? type->c_spelling : writ_cstr("void");
     default:
         return type->c_spelling.length ? type->c_spelling : type->name;
     }
@@ -140,7 +140,8 @@ writ_c_item_params(const writ_c_context_t *c, const writ_plan_view_t *plan, uint
     } else {
         type = writ_c_type(c, item->type, writ_c_is_text(item->type) && item->after_call != WRIT_AFTER_CALLER_OWNS);
     }
-    params[0] = (writ_c_param_t){writ_str_format(session, "%.*s *", S(type)), item->name};
+    bool pointer = type.length && type.data[type.length - 1] == '*';
+    params[0] = (writ_c_param_t){writ_str_format(session, "%.*s%s*", S(type), pointer ? "" : " "), item->name};
     return 1;
 }
 

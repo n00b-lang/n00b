@@ -20,6 +20,8 @@ typedef struct {
 
 core_list_decl(uint32_t);
 
+#define WRIT_NO_LOC ((writ_loc_t){UINT32_MAX, 0, 0})
+
 typedef struct {
     writ_source_kind_t    kind;
     writ_origin_t         origin;
@@ -70,6 +72,7 @@ struct writ_session {
     writ_diag_sink_fn               sink;
     void                           *sink_context;
     writ_process_runner_t           runner;
+    writ_str_t                      llvm_prefix;
     core_list_t(writ_cleanup_t)     cleanups;
     void                           *grammar;
 };
@@ -101,6 +104,21 @@ void     writ_report_suggest(writ_session_t *session, uint32_t diag, writ_loc_t 
                              writ_str_t replacement, writ_str_t description);
 bool     writ_session_failed(const writ_session_t *session);
 void     writ_diag_flush(writ_session_t *session, size_t from);
+
+typedef struct writ_map writ_map_t;
+
+writ_map_t *writ_map_new(writ_session_t *session);
+void        writ_map_put(writ_map_t *map, uint64_t key, uint64_t value);
+bool        writ_map_get(const writ_map_t *map, uint64_t key, uint64_t *value);
+
+typedef struct {
+    writ_str_t out;
+    writ_str_t err;
+    int        exit_code;
+} writ_run_result_t;
+
+writ_status_t writ_run(writ_session_t *session, const char *const *argv, writ_str_t input, writ_run_result_t *result);
+writ_str_t    writ_tool_path(writ_session_t *session, const char *tool);
 
 typedef struct {
     core_buffer_t *buffer;

@@ -34,6 +34,9 @@ writ_session_new(const writ_session_config_t *config)
     if (config && config->struct_size >= offsetof(writ_session_config_t, llvm_prefix)) {
         session->runner = config->process_runner;
     }
+    if (config && config->struct_size >= sizeof(writ_session_config_t) && config->llvm_prefix.length) {
+        session->llvm_prefix = writ_str_copy(session, config->llvm_prefix.data, config->llvm_prefix.length);
+    }
     return session;
 }
 
@@ -113,4 +116,40 @@ writ_str_t
 writ_cstr(const char *text)
 {
     return (writ_str_t){text, text ? strlen(text) : 0};
+}
+
+struct writ_map {
+    core_dict_t dict;
+};
+
+static void
+map_release(void *object)
+{
+    core_dict_free(&((writ_map_t *)object)->dict);
+}
+
+writ_map_t *
+writ_map_new(writ_session_t *session)
+{
+    writ_map_t *map = writ_alloc(session, sizeof(writ_map_t));
+    core_dict_init(&map->dict, nullptr, nullptr);
+    writ_on_session_free(session, map_release, map);
+    return map;
+}
+
+void
+writ_map_put(writ_map_t *map, uint64_t key, uint64_t value)
+{
+    core_dict_put(&map->dict, key, (void *)(uintptr_t)value);
+}
+
+bool
+writ_map_get(const writ_map_t *map, uint64_t key, uint64_t *value)
+{
+    bool found = false;
+    void *stored = core_dict_get((core_dict_t *)&map->dict, key, &found);
+    if (found && value) {
+        *value = (uint64_t)(uintptr_t)stored;
+    }
+    return found;
 }

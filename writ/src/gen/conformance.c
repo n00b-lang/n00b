@@ -519,7 +519,11 @@ emit_call(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_view_t *
         }
         writ_c_param_t param;
         writ_c_item_params(c, plan, i, &param);
-        writ_emit_line(emit, "%.*s out_%.*s;", (int)param.type.length - 2, param.type.data, S(item->name));
+        size_t pointee = param.type.length - 1;
+        while (pointee && param.type.data[pointee - 1] == ' ') {
+            pointee--;
+        }
+        writ_emit_line(emit, "%.*s out_%.*s;", (int)pointee, param.type.data, S(item->name));
         writ_emit_line(emit, "memset(&out_%.*s, 0, sizeof out_%.*s);", S(item->name), S(item->name));
     }
     writ_str_t ret = writ_c_return_type(c, plan);
@@ -653,8 +657,9 @@ check_result(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_view_
     } else if (is_pointer_type(item->type)) {
         expect(emit, plan, s->name, "(void *)out_%.*s == (void *)%.*s_mock_object", S(item->name), S(c->prefix));
     } else if (item->contract_slot == WRIT_PLAN_NONE) {
+        long long expected = plan->fn->is_pure ? SCALAR_INPUT + PURE_OFFSET : (long long)s->ret;
         expect(emit, plan, s->name, "out_%.*s == (%.*s)%lld", S(item->name), S(writ_c_type(c, item->type, false)),
-               (long long)s->ret);
+               expected);
     } else {
         expect(emit, plan, s->name, "out_%.*s == %d", S(item->name), OUT_VALUE);
     }

@@ -304,6 +304,15 @@ gather_directive(resolver_t *r, uint32_t id)
 static void gather_items(resolver_t *r, uint32_t parent, uint32_t from);
 
 static void
+take_c_spelling(writ_model_t *model, uint32_t id, writ_type_id type)
+{
+    uint32_t source = first_of(model, id, WRIT_N_SOURCE);
+    if (source) {
+        model->types.data[type].c_spelling = node_at(model, source)->name;
+    }
+}
+
+static void
 gather_decl(resolver_t *r, uint32_t id)
 {
     writ_model_t *model = r->model;
@@ -325,9 +334,10 @@ gather_decl(resolver_t *r, uint32_t id)
         core_list_push(model->records, ((writ_record_rec_t){.name = node->name, .loc = node->loc}));
         model->records.data[model->records.len - 1].type =
             declare_named_type(model, WRIT_TYPE_RECORD, node->name, (uint32_t)model->records.len - 1, node->loc);
+        take_c_spelling(model, id, model->records.data[model->records.len - 1].type);
         break;
     case WRIT_N_OPAQUE:
-        declare_named_type(model, WRIT_TYPE_OPAQUE, node->name, WRIT_NONE, node->loc);
+        take_c_spelling(model, id, declare_named_type(model, WRIT_TYPE_OPAQUE, node->name, WRIT_NONE, node->loc));
         break;
     case WRIT_N_HANDLE:
         core_list_push(model->handles, ((writ_handle_rec_t){.name = node->name, .loc = node->loc}));
@@ -1342,12 +1352,19 @@ apply_refine(resolver_t *r, uint32_t id)
 {
     writ_model_t *model = r->model;
     const writ_node_t *node = node_at(model, id);
-    uint32_t index;
+    uint32_t index = WRIT_NONE;
     if (!writ_scope_lookup(model, node->name, WRIT_SCOPE_FN, &index)) {
+        writ_type_id callback = writ_type_named(model, node->name);
+        if (writ_type(model, callback)->key.kind == WRIT_TYPE_CALLBACK) {
+            index = writ_type(model, callback)->decl;
+        }
+    }
+    if (index == WRIT_NONE) {
         writ_str_t text = writ_sym_str(model->session, node->name);
         writ_report(model->session, WRIT_D_REFINE_TARGET, node->loc, "`%.*s`", (int)text.length, text.data);
         return;
     }
+    fn_facts_t stated = {0};
     for (uint32_t i = 0; i < node->child_count; i++) {
         uint32_t part = child(model, id, i);
         const writ_node_t *piece = node_at(model, part);
@@ -1381,7 +1398,6 @@ apply_refine(resolver_t *r, uint32_t id)
             }
             *slot = refined;
         } else if (is_clause(piece->kind)) {
-            fn_facts_t stated = {0};
             apply_clause(r, fn, part, &stated);
         }
     }

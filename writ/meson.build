@@ -49,6 +49,7 @@ core_sources = files(
     'src/core/loc.c',
     'src/core/diag.c',
     'src/core/output.c',
+    'src/core/runner.c',
     'src/core/emit.c',
     'src/core/syntax/ast.c',
     'src/core/syntax/parse.c',
@@ -95,6 +96,27 @@ writ_dep = declare_dependency(
     dependencies: lantern_links,
 )
 
-writ_exe = executable('writ', 'src/cli/main.c', dependencies: writ_dep)
+llvm_prefix = get_option('llvm_prefix')
+libclang = declare_dependency(
+    compile_args: ['-I' + llvm_prefix / 'include'],
+    link_args: ['-L' + llvm_prefix / 'lib', '-lclang', '-Wl,-rpath,' + llvm_prefix / 'lib'],
+)
+
+libwrit_clang = static_library(
+    'writ_clang',
+    files('src/clang/tu.c', 'src/clang/importer.c', 'src/clang/layout.c'),
+    model_names_h,
+    include_directories: writ_inc,
+    dependencies: [lantern_headers, libclang],
+)
+
+writ_clang_dep = declare_dependency(link_with: libwrit_clang, dependencies: [writ_dep])
+
+writ_exe = executable(
+    'writ',
+    'src/cli/main.c',
+    dependencies: writ_clang_dep,
+    c_args: ['-DWRIT_DEFAULT_LLVM_PREFIX="' + llvm_prefix + '"'],
+)
 
 subdir('tests')
