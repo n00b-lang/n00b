@@ -1,0 +1,3 @@
+binding kv for n00b import {
+    borrow kv_iter_next.return as lifetime
+}

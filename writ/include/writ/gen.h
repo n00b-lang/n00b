@@ -24,6 +24,19 @@ typedef struct {
 writ_status_t writ_gen_rust(const writ_model_t *model, const writ_gen_rust_request_t *request,
                             const writ_output_t *output);
 
+typedef struct writ_binding writ_binding_t;
+
+typedef struct {
+    size_t       struct_size;
+    writ_unit_t *profiles;
+    writ_unit_t *binding;
+    writ_str_t   language;
+} writ_bind_request_t;
+
+writ_status_t writ_bind(const writ_model_t *model, const writ_bind_request_t *request,
+                        const writ_binding_t **binding);
+writ_status_t writ_binding_render(const writ_binding_t *binding, writ_str_t *rendered);
+
 #ifdef __cplusplus
 }
 #endif

@@ -297,6 +297,13 @@ struct writ_gen_rust_request_t @size(24) @align(8) {
     struct_size: usize @0
     crate_path: writ_str_t @8
 }
+opaque writ_binding_t source "struct writ_binding"
+struct writ_bind_request_t @size(40) @align(8) {
+    struct_size: usize @0
+    profiles: ?writ_unit_t @8
+    binding: ?writ_unit_t @16
+    language: writ_str_t @24
+}
 struct writ_rust_import_request_t @size(104) @align(8) {
     struct_size: usize @0
     library: writ_str_t @8
@@ -493,6 +500,8 @@ fn writ_model_plan_render(model: ?writ_model_t, plan: ?writ_plan_view_t, rendere
 fn writ_lower_json(model: ?writ_model_t, output: ?writ_output_t) -> writ_status_t
 fn writ_gen_c(model: ?writ_model_t, request: ?writ_gen_c_request_t, output: ?writ_output_t) -> writ_status_t
 fn writ_gen_rust(model: ?writ_model_t, request: ?writ_gen_rust_request_t, output: ?writ_output_t) -> writ_status_t
+fn writ_bind(model: ?writ_model_t, request: ?writ_bind_request_t, binding: unknown ??writ_binding_t) -> writ_status_t
+fn writ_binding_render(binding: ?writ_binding_t, rendered: unknown ?writ_str_t) -> writ_status_t
 fn writ_toolchain_import_rust(session: unknown ?writ_session_t, request: ?writ_rust_import_request_t, output: ?writ_output_t) -> writ_status_t
 fn writ_toolchain_verify_probes(model: ?writ_model_t, sysroot: writ_str_t, report: unknown ?writ_str_t) -> writ_status_t
 fn writ_toolchain_abi_classes(model: ?writ_model_t, sysroot: writ_str_t, report: unknown ?writ_str_t) -> writ_status_t

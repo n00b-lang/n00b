@@ -1,0 +1,26 @@
+profile rust {
+    memory none
+    prim c_int -> "std::ffi::c_int"
+    prim usize -> "usize"
+    string str  to utf8[n]  via "&str" zero_copy
+    string cstr to cstr     via "&std::ffi::CStr" zero_copy
+    string owned to cstr    via "std::ffi::CString" copies
+    buffer slice to bytes[n] via "&[u8]" zero_copy
+    buffer vec   to bytes[n] via "Vec<u8>" copies
+    pack rest     slice native "&[T]"
+    pack keywords builder native "builder"
+    pack keywords struct native "struct"
+    variadic call yes
+    variadic define no
+    error style result
+    callback style closure
+    handle close "drop"
+    lifetimes yes
+    naming fn     snake
+    naming type   pascal
+    naming const  upper
+    naming field  snake
+    naming module snake
+    reserved "as", "fn", "impl", "loop", "match", "mod", "move", "ref", "self", "type", "use", "where"
+    label path -> "&std::path::Path"
+}

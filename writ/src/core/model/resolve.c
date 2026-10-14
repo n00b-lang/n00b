@@ -386,7 +386,6 @@ gather_decl(resolver_t *r, uint32_t id)
         return;
     case WRIT_N_PROFILE:
     case WRIT_N_BINDING:
-        unsupported(model, id, "language profiles and bindings (dsl.md §9.2, §9.3)");
         return;
     default:
         break;

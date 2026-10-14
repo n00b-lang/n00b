@@ -113,6 +113,29 @@ cmd_check(writ_session_t *session, int argc, char **argv)
 }
 
 static int
+cmd_bind(writ_session_t *session, int argc, char **argv)
+{
+    if (argc != 4 && !(argc == 6 && !strcmp(argv[4], "--language"))) {
+        return 2;
+    }
+    if (strcmp(argv[2], "--profile")) {
+        return 2;
+    }
+    const writ_model_t *model = resolve(session, argv[0]);
+    writ_bind_request_t request = {.struct_size = sizeof(request), .binding = load(session, argv[1]),
+                                   .profiles = load(session, argv[3]),
+                                   .language = argc == 6 ? arg(argv[5]) : (writ_str_t){0}};
+    const writ_binding_t *binding = nullptr;
+    writ_str_t text;
+    if (!model || !request.binding || !request.profiles || writ_bind(model, &request, &binding) != WRIT_OK
+        || writ_binding_render(binding, &text) != WRIT_OK) {
+        return 1;
+    }
+    fwrite(text.data, 1, text.length, stdout);
+    return 0;
+}
+
+static int
 cmd_fmt(writ_session_t *session, int argc, char **argv)
 {
     if (argc != 1) {
@@ -326,6 +349,7 @@ static const struct {
     {"plan", cmd_plan, "plan FILE [FUNCTION]"},
     {"lower", cmd_lower, "lower FILE [-o DIR]"},
     {"derive", cmd_derive, "derive FILE [-o DIR]"},
+    {"bind", cmd_bind, "bind CONTRACT BINDING --profile FILE [--language NAME]"},
     {"fmt", cmd_fmt, "fmt FILE"},
 };
 

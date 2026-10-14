@@ -253,8 +253,6 @@ binding kv for n00b export {
     provide kv_iter_new    = "kvstore.iter_new"
     provide kv_iter_next   = "kvstore.iter_next"
     provide kv_errstr      = "kvstore.errstr"
-    provide kv_close       = "kvstore.close"
-    provide kv_iter_free   = "kvstore.iter_free"
     on_panic error KV_ERR
     allocator own -> kvheap
     header "kv.h"
@@ -320,8 +318,8 @@ binding resharp for n00b import {
     module "resharp"
     load dynamic
     search_path "target/release"
-    buffer Regex::is_match.haystack as borrow
-    buffer Regex::find_all.haystack as borrow
+    buffer Regex::is_match.input as borrow
+    buffer Regex::find_all.input as borrow
     error * -> "resharp.Error"
 }
 ```

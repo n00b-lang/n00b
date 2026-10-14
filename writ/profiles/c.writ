@@ -1,0 +1,20 @@
+profile c {
+    memory none
+    prim c_int -> "int"
+    prim usize -> "size_t"
+    string cstr  to cstr      via "const char *"     zero_copy
+    string slice to utf8[n]   via "const char *, size_t" zero_copy
+    buffer bytes to bytes[n]  via "const uint8_t *, size_t" zero_copy
+    pack rest     array native "T *, size_t"
+    pack keywords struct native "struct"
+    variadic call yes
+    variadic define yes
+    error style status
+    callback style userdata
+    handle close "free"
+    lifetimes no
+    naming fn    snake
+    naming type  snake
+    naming const upper
+    reserved "auto", "break", "case", "char", "default", "int", "register", "restrict"
+}

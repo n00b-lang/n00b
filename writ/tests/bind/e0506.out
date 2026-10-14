@@ -1,0 +1,2 @@
+error[E0506]: the function takes no parameter of the receiver type: `compress2` takes no `z_stream`
+  --> tests/bind/e0506.writ:3:5

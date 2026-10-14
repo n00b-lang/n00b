@@ -1,0 +1,2 @@
+error[E0501]: the binding names nothing in the contract: `nothing`
+  --> tests/bind/e0501.writ:3:5

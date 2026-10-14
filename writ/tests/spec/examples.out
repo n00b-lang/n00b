@@ -147,8 +147,6 @@ error[E0102]: unknown type: `Mutex`
 error[E0102]: unknown type: `Db`
   --> dsl.md-28.writ:1:38
 == dsl.md example 29
-error[E0901]: not supported yet: language profiles and bindings (dsl.md §9.2, §9.3)
-  --> dsl.md-29.writ:1:1
 == dsl.md example 30
 error[E0102]: unknown type: `Stat`
   --> dsl.md-30.writ:9:32
@@ -186,17 +184,7 @@ error[E0901]: not supported yet: interfaces (dsl.md §9.1)
 error[E0901]: not supported yet: interfaces (dsl.md §9.1)
   --> dsl.md-35.writ:6:1
 == dsl.md example 36
-error[E0901]: not supported yet: language profiles and bindings (dsl.md §9.2, §9.3)
-  --> dsl.md-36.writ:1:1
-error[E0901]: not supported yet: language profiles and bindings (dsl.md §9.2, §9.3)
-  --> dsl.md-36.writ:7:1
-error[E0901]: not supported yet: language profiles and bindings (dsl.md §9.2, §9.3)
-  --> dsl.md-36.writ:12:1
-error[E0901]: not supported yet: language profiles and bindings (dsl.md §9.2, §9.3)
-  --> dsl.md-36.writ:16:1
 == dsl.md example 37
-error[E0901]: not supported yet: language profiles and bindings (dsl.md §9.2, §9.3)
-  --> dsl.md-37.writ:1:1
 == dsl.md example 38
 error[E0901]: not supported yet: `import` inside a contract; run `writ import` and `use` the draft
   --> dsl.md-38.writ:1:1

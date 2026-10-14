@@ -1,0 +1,35 @@
+profile n00b {
+    memory gc nonmoving
+    pin for call via "n00b_ffi_borrow" release "n00b_ffi_release"
+    pin longer   via "n00b_ffi_borrow" release "n00b_ffi_release"
+    prim i8 -> "i8"
+    prim i16 -> "i16"
+    prim i32 -> "i32"
+    prim i64 -> "i64"
+    prim u8 -> "u8"
+    prim u16 -> "u16"
+    prim u32 -> "u32"
+    prim u64 -> "u64"
+    prim f32 -> "f32"
+    prim f64 -> "f64"
+    prim bool -> "bool"
+    string string to cstr    via copy copies
+    string string to utf8[n] via copy copies
+    buffer buffer to bytes[n] via "Array[u8]" copies
+    buffer borrow to bytes[n] via "n00b_ffi_borrow" zero_copy
+    pack rest list native "List[T]"
+    pack rest array native "Array[T]"
+    pack keywords record native "options record"
+    variadic call yes
+    variadic define no
+    error style result
+    callback style closure
+    handle close "close"
+    lifetimes no
+    naming fn snake
+    naming type pascal
+    naming const upper
+    naming field snake
+    naming module snake
+    reserved "func", "type", "const", "return", "fail", "callback", "trait", "enum"
+}

@@ -69,6 +69,23 @@ writ_unit_release(void *object)
     core_list_free(unit->tokens);
 }
 
+uint32_t
+writ_unit_next_item(const writ_unit_t *unit, writ_node_kind_t kind, uint32_t after)
+{
+    bool passed = !after;
+    for (size_t i = 0; i < unit->roots.len; i++) {
+        uint32_t root = unit->roots.data[i].root;
+        for (uint32_t c = 0; c < writ_node(unit, root)->child_count; c++) {
+            uint32_t item = writ_node_child(unit, root, c);
+            if (passed && writ_node(unit, item)->kind == kind) {
+                return item;
+            }
+            passed = passed || item == after;
+        }
+    }
+    return 0;
+}
+
 static void
 dump_node(const writ_unit_t *unit, writ_emit_t *emit, uint32_t id)
 {

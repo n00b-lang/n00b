@@ -1,0 +1,3 @@
+binding kv for n00b export {
+    provide kv_open = "kvstore.open"
+}

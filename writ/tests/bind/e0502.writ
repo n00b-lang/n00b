@@ -1,0 +1,4 @@
+binding zlib for n00b import {
+    hide "*Init_"
+    string compress2.source as string
+}

@@ -1,0 +1,30 @@
+binding kv for n00b export
+module kv (default)
+header kv.h (chosen)
+type Db: Db (default)
+type Iter: Iter (default)
+type kv_entry: KvEntry (default)
+type kv_status: KvStatus (default)
+fn kv_open: kv_open (default)
+    provided by kvstore.open
+    error Error (default)
+    path: cstr as string (default)
+fn kv_put: kv_put (default)
+    provided by kvstore.put
+    error Error (default)
+    key: bytes as buffer (default)
+    val: bytes as buffer (default)
+fn kv_get: kv_get (default)
+    provided by kvstore.get
+    error Error (default)
+    key: bytes as buffer (default)
+fn kv_iter_new: kv_iter_new (default)
+    provided by kvstore.iter_new
+    error Error (default)
+    prefix: bytes as buffer (default)
+fn kv_iter_next: kv_iter_next (default)
+    provided by kvstore.iter_next
+    result: borrowed, copy (default)
+fn kv_errstr: kv_errstr (default)
+    provided by kvstore.errstr
+    result: utf8 as string (default)

@@ -86,6 +86,8 @@ core_sources = files(
     'src/gen/c.c',
     'src/gen/conformance.c',
     'src/gen/rust.c',
+    'src/gen/profile.c',
+    'src/gen/binding.c',
     'src/toolchain/probe.c',
     'src/toolchain/exports.c',
     'src/toolchain/rustdoc.c',

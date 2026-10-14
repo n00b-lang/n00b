@@ -36,17 +36,9 @@ reject(reader_t *r, uint32_t id, const char *what)
 bool
 writ_unit_is_rust(const writ_unit_t *unit)
 {
-    for (size_t i = 0; i < unit->roots.len; i++) {
-        uint32_t root = unit->roots.data[i].root;
-        for (uint32_t c = 0; c < writ_node(unit, root)->child_count; c++) {
-            const writ_node_t *item = writ_node(unit, writ_node_child(unit, root, c));
-            writ_str_t lang = writ_sym_str(unit->session, item->payload);
-            if (item->kind == WRIT_N_LANG && lang.length == 4 && memcmp(lang.data, "rust", 4) == 0) {
-                return true;
-            }
-        }
-    }
-    return false;
+    uint32_t lang = writ_unit_next_item(unit, WRIT_N_LANG, 0);
+    writ_str_t name = lang ? writ_sym_str(unit->session, writ_node(unit, lang)->payload) : (writ_str_t){"", 0};
+    return name.length == 4 && memcmp(name.data, "rust", 4) == 0;
 }
 
 const writ_rust_type_t *

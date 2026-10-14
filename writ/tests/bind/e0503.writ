@@ -1,0 +1,4 @@
+binding zlib for n00b import {
+    hide "*Init_"
+    borrow compress2.dest as copy
+}

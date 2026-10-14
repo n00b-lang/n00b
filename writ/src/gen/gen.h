@@ -1,7 +1,51 @@
 #pragma once
 
 #include "../core/model/model.h"
+#include "../core/syntax/syntax.h"
 #include "writ/gen.h"
+
+typedef enum {
+    WRIT_REPR_CSTR,
+    WRIT_REPR_UTF8,
+    WRIT_REPR_BYTES,
+    WRIT_REPR_REST,
+    WRIT_REPR_KEYWORDS,
+} writ_repr_form_t;
+
+typedef enum {
+    WRIT_NAMING_FN,
+    WRIT_NAMING_TYPE,
+    WRIT_NAMING_CONST,
+    WRIT_NAMING_FIELD,
+    WRIT_NAMING_MODULE,
+    WRIT_NAMING_COUNT,
+} writ_naming_kind_t;
+
+typedef struct {
+    writ_sym_t       id;
+    writ_repr_form_t form;
+    bool             zero_copy;
+    uint32_t         node;
+} writ_repr_t;
+
+core_list_decl(writ_repr_t);
+core_list_decl(writ_sym_t);
+
+typedef struct {
+    writ_session_t           *session;
+    writ_sym_t                name;
+    core_list_t(writ_repr_t)  reprs;
+    core_list_t(writ_sym_t)   reserved;
+    writ_case_t               naming[WRIT_NAMING_COUNT];
+    writ_str_t                handle_close;
+    bool                      lifetimes;
+    bool                      variadic_call;
+} writ_profile_t;
+
+const writ_profile_t *writ_profile_read(writ_unit_t *unit, writ_sym_t language);
+const writ_repr_t    *writ_profile_repr(const writ_profile_t *profile, writ_sym_t id);
+const writ_repr_t    *writ_profile_default(const writ_profile_t *profile, writ_repr_form_t form);
+writ_str_t            writ_profile_name(const writ_profile_t *profile, writ_naming_kind_t kind, writ_str_t name);
 
 enum {
     WRIT_C_MAX_ARITY = 8,

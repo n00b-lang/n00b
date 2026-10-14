@@ -267,6 +267,35 @@ foreach binding : [
     )
 endforeach
 
+n00b_profile = ['--profile', 'profiles/n00b.writ']
+foreach case : [
+    ['zlib.n00b', 'tests/zlib/zlib.writ', 'zlib.n00b', n00b_profile + ['--language', 'n00b'], false],
+    ['resharp.n00b', 'contracts/resharp.writ', 'resharp.n00b', n00b_profile, false],
+    ['kv.n00b', 'tests/bind/kv.writ', 'kv.n00b', n00b_profile, false],
+    ['kv.export', 'tests/bind/kv.writ', 'kv.export', n00b_profile, false],
+    ['e0501', 'tests/zlib/zlib.writ', 'e0501', n00b_profile, true],
+    ['e0502', 'tests/zlib/zlib.writ', 'e0502', n00b_profile, true],
+    ['e0503', 'tests/zlib/zlib.writ', 'e0503', n00b_profile, true],
+    ['e0504', 'tests/bind/kv.writ', 'e0504', n00b_profile, true],
+    ['e0505', 'tests/zlib/zlib.writ', 'e0505', n00b_profile, true],
+    ['e0506', 'tests/zlib/zlib.writ', 'e0506', n00b_profile, true],
+    ['e0507', 'tests/zlib/zlib.writ', 'e0507', n00b_profile, true],
+    ['e0508', 'tests/bind/unknown.writ', 'e0508', n00b_profile, true],
+    ['e0509', 'tests/bind/kv.writ', 'e0509', n00b_profile, true],
+    ['e0510', 'tests/zlib/zlib.writ', 'e0510', n00b_profile + ['--language', 'n00b'], true],
+    ['e0511', 'tests/zlib/zlib.writ', 'e0511', n00b_profile, true],
+    ['e0512', 'tests/zlib/zlib.writ', 'zlib.n00b', ['--profile', 'tests/bind/e0512.profile.writ'], true],
+    ['e0513', 'tests/zlib/zlib.writ', 'e0513', n00b_profile, true],
+]
+    test(
+        'bind-' + case[0],
+        python,
+        args: [golden, source_root / 'tests' / 'bind' / case[0] + '.out'] + (case[4] ? ['--fails'] : []) + ['--',
+               writ_exe, '--platform', 'aarch64-apple-darwin', '--feature', 'experimental_capture_groups', 'bind',
+               case[1], 'tests/bind' / case[2] + '.writ'] + case[3],
+    )
+endforeach
+
 resharp_root = get_option('resharp_root')
 resharp_features = ['--feature', 'experimental_capture_groups']
 test(
