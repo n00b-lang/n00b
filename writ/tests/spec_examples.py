@@ -34,7 +34,8 @@ def main():
                 with open(path, "w", encoding="utf-8") as out:
                     out.write("\n".join(body) + "\n")
                 parsed = subprocess.run([writ, "parse", path], capture_output=True, text=True)
-                checked = subprocess.run([writ, "check", path], capture_output=True, text=True)
+                checked = subprocess.run([writ, "--platform", "aarch64-apple-darwin", "check", path],
+                                         capture_output=True, text=True)
                 print(f"== {name} example {ordinal}")
                 if parsed.returncode != 0:
                     failed = True

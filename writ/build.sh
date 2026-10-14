@@ -25,7 +25,9 @@ verify_pin() {
     local want have
     want="$(tr -d '[:space:]' < "$ROOT/deps/LANTERN_REVISION")"
     [ -d "$LANTERN_ROOT" ] || fail "no lantern workspace at $LANTERN_ROOT"
-    if command -v jj >/dev/null 2>&1 && [ -d "$LANTERN_ROOT/.jj" ]; then
+    if [ "${LANTERN_VERIFIED:-}" = "$want" ]; then
+        return 0
+    elif command -v jj >/dev/null 2>&1 && [ -d "$LANTERN_ROOT/.jj" ]; then
         have="$(jj -R "$LANTERN_ROOT" log --no-graph -r '@-' -T 'commit_id')"
         [ "$have" = "$want" ] || fail "lantern workspace is on $have, pinned revision is $want"
         [ -z "$(jj -R "$LANTERN_ROOT" diff --summary)" ] || fail "lantern workspace has local changes"
@@ -43,10 +45,19 @@ build_lantern() {
         return 0
     fi
     rm -rf "$LANTERN_BUILD" "$LANTERN_PREFIX"
-    (cd "$LANTERN_ROOT" && BUILD_DIR="$LANTERN_BUILD" ./build.sh configure \
-        --prefix="$LANTERN_PREFIX" --libdir=lib --buildtype=debugoptimized >/dev/null)
-    (cd "$LANTERN_ROOT" && BUILD_DIR="$LANTERN_BUILD" ./build.sh compile >/dev/null)
-    meson install -C "$LANTERN_BUILD" --quiet >/dev/null
+    mkdir -p "$ROOT/deps"
+    local log="$ROOT/deps/lantern-build-$PLATFORM_TAG.log"
+    local flags=""
+    if [ "$(uname -s)" = Linux ]; then
+        flags="-D_GNU_SOURCE"
+    fi
+    if ! { (cd "$LANTERN_ROOT" && CFLAGS="$flags" BUILD_DIR="$LANTERN_BUILD" ./build.sh configure \
+                --prefix="$LANTERN_PREFIX" --libdir=lib --buildtype=debugoptimized) \
+           && (cd "$LANTERN_ROOT" && BUILD_DIR="$LANTERN_BUILD" ./build.sh compile) \
+           && meson install -C "$LANTERN_BUILD" --quiet; } >"$log" 2>&1; then
+        tail -40 "$log" >&2
+        fail "lantern did not build; the full log is $log"
+    fi
     echo "$want" > "$stamp"
 }
 
@@ -58,33 +69,41 @@ configure_writ() {
     fi
     if [ ! -f "$BUILD_DIR/build.ninja" ]; then
         PKG_CONFIG_PATH="$LANTERN_PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}" \
-            meson setup "$BUILD_DIR" "$ROOT" "${opts[@]}" >/dev/null
+            meson setup "$BUILD_DIR" "$ROOT" "${opts[@]}" | grep -E "ERROR|WARNING" >&2 || true
     fi
 }
 
 run_linux() {
     local engine
     engine="$(command -v podman || command -v docker)" || fail "no container engine"
+    verify_pin
     "$engine" build -q -t writ-linux -f "$ROOT/tools/linux.Containerfile" "$ROOT/tools" >/dev/null
     "$engine" run --rm \
         -v "$ROOT:/work/writ" \
         -v "$LANTERN_ROOT:/work/lantern:ro" \
         -e LANTERN_ROOT=/work/lantern \
+        -e LANTERN_VERIFIED="$(tr -d '[:space:]' < "$ROOT/deps/LANTERN_REVISION")" \
         -w /work/writ writ-linux ./build.sh "$@"
 }
 
 main() {
     local cmd="${1:-compile}"
     local sanitize=no
+    local linux=no
     local args=()
+    local forwarded=()
     shift || true
     for a in "$@"; do
         case "$a" in
-            --sanitize) sanitize=yes ;;
-            --linux) run_linux "$cmd" "${args[@]+"${args[@]}"}"; return ;;
-            *) args+=("$a") ;;
+            --sanitize) sanitize=yes; forwarded+=("$a") ;;
+            --linux) linux=yes ;;
+            *) args+=("$a"); forwarded+=("$a") ;;
         esac
     done
+    if [ "$linux" = yes ]; then
+        run_linux "$cmd" "${forwarded[@]+"${forwarded[@]}"}"
+        return
+    fi
     if [ "$sanitize" = yes ]; then
         BUILD_DIR="$BUILD_DIR-sanitize"
     fi

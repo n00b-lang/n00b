@@ -11,6 +11,10 @@ project(
     ],
 )
 
+if host_machine.system() == 'linux'
+    add_project_arguments('-D_GNU_SOURCE', language: 'c')
+endif
+
 lantern_prefix = get_option('lantern_prefix')
 lantern_root = get_option('lantern_root')
 lantern = dependency('ir', method: 'pkg-config')

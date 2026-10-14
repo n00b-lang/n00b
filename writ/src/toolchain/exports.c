@@ -43,8 +43,12 @@ collect_symbols(writ_session_t *session, writ_str_t listing, writ_map_t *symbols
         while (word > start && listing.data[word - 1] != ' ') {
             word--;
         }
+        size_t end = word;
+        while (end < at && listing.data[end] != '@') {
+            end++;
+        }
         if (word > start) {
-            writ_sym_t name = writ_intern(session, listing.data + word, at - word);
+            writ_sym_t name = writ_intern(session, listing.data + word, end - word);
             writ_map_put(symbols, name, 1);
         }
         start = at + 1;

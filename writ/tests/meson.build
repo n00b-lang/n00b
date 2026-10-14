@@ -3,6 +3,11 @@ golden = files('run_golden.py')
 sanitize = ['-fsanitize=address,undefined', '-fno-omit-frame-pointer']
 compiler = meson.get_compiler('c').cmd_array()[0]
 zlib = dependency('zlib')
+add_test_setup(
+    'lanternleaks',
+    env: {'LSAN_OPTIONS': 'suppressions=' + source_root / 'tests' / 'lsan.supp' + ':print_suppressions=0'},
+    is_default: true,
+)
 host_triple = host_machine.system() == 'darwin' ? host_machine.cpu_family() + '-apple-darwin' : host_machine.cpu_family() + '-linux-gnu'
 
 test(
@@ -88,7 +93,7 @@ test(
         golden,
         source_root / 'tests' / 'spec' / 'examples.out',
         '--',
-        python,
+        python.full_path(),
         source_root / 'tests' / 'spec_examples.py',
         writ_exe.full_path(),
         'dsl.md',
@@ -157,7 +162,8 @@ test(
 test(
     'lower-golden',
     python,
-    args: [golden, source_root / 'tests' / 'lower' / 'zlib.json', '--', writ_exe, 'lower', 'tests/skeleton/zlib.writ'],
+    args: [golden, source_root / 'tests' / 'lower' / 'zlib.json', '--', writ_exe, '--platform', 'aarch64-apple-darwin',
+           'lower', 'tests/skeleton/zlib.writ'],
 )
 
 test(

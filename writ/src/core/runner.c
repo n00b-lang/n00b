@@ -137,6 +137,7 @@ writ_sysroot(writ_session_t *session, writ_str_t requested)
     const char *argv[] = {"xcrun", "--show-sdk-path", nullptr};
     return writ_tool_line(session, argv);
 #else
+    (void)session;
     return writ_cstr("");
 #endif
 }

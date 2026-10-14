@@ -405,6 +405,9 @@ mock_text(const writ_c_context_t *c)
     writ_emit_line(&emit, "");
     writ_emit_line(&emit, "#include <string.h>");
     writ_emit_line(&emit, "");
+    writ_emit_line(&emit, "#pragma clang diagnostic ignored \"-Wtautological-pointer-compare\"");
+    writ_emit_line(&emit, "#pragma clang diagnostic ignored \"-Wpointer-bool-conversion\"");
+    writ_emit_line(&emit, "");
     emit_mock_globals(c, &emit, "");
     for (uint32_t i = 0; i < writ_model_fn_count(c->model); i++) {
         if (is_mocked(c->model, writ_model_fn_at(c->model, i))) {
