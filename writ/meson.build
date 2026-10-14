@@ -64,6 +64,8 @@ core_sources = files(
     'src/core/plan/render.c',
     'src/gen/c.c',
     'src/gen/conformance.c',
+    'src/toolchain/probe.c',
+    'src/toolchain/exports.c',
 )
 
 writ_raw = static_library(

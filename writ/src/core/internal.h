@@ -21,6 +21,7 @@ typedef struct {
 core_list_decl(uint32_t);
 
 #define WRIT_NO_LOC ((writ_loc_t){UINT32_MAX, 0, 0})
+#define S(text) (int)(text).length, (text).data
 
 typedef struct {
     writ_source_kind_t    kind;
@@ -119,6 +120,8 @@ typedef struct {
 
 writ_status_t writ_run(writ_session_t *session, const char *const *argv, writ_str_t input, writ_run_result_t *result);
 writ_str_t    writ_tool_path(writ_session_t *session, const char *tool);
+writ_str_t    writ_tool_line(writ_session_t *session, const char *const *argv);
+writ_str_t    writ_sysroot(writ_session_t *session, writ_str_t requested);
 
 typedef struct {
     core_buffer_t *buffer;

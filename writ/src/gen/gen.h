@@ -3,8 +3,6 @@
 #include "../core/model/model.h"
 #include "writ/gen.h"
 
-#define S(text) (int)(text).length, (text).data
-
 enum {
     WRIT_C_MAX_ARITY = 8,
 };

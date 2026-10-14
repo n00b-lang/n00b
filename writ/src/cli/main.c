@@ -4,6 +4,7 @@
 
 #include "writ/clang.h"
 #include "writ/gen.h"
+#include "writ/toolchain.h"
 
 typedef int (*command_fn)(writ_session_t *session, int argc, char **argv);
 
@@ -209,17 +210,37 @@ cmd_import(writ_session_t *session, int argc, char **argv)
 static int
 cmd_verify(writ_session_t *session, int argc, char **argv)
 {
-    if (argc < 1) {
+    writ_str_t binary = {0};
+    const char *path = nullptr;
+    for (int i = 0; i < argc; i++) {
+        if (!strcmp(argv[i], "--binary") && i + 1 < argc) {
+            binary = arg(argv[++i]);
+        } else if (!path) {
+            path = argv[i];
+        } else {
+            return 2;
+        }
+    }
+    if (!path) {
         return 2;
     }
-    const writ_model_t *model = resolve(session, argv[0]);
+    const writ_model_t *model = resolve(session, path);
     if (!model) {
         return 1;
     }
     writ_str_t report;
-    writ_status_t status = writ_clang_verify_layout(model, (writ_str_t){0}, &report);
-    fwrite(report.data, 1, report.length, stdout);
-    return status == WRIT_OK ? 0 : 1;
+    int failed = 0;
+    failed |= writ_clang_verify_layout(model, (writ_str_t){0}, &report) != WRIT_OK;
+    printf("layout\n%.*s", (int)report.length, report.data);
+    failed |= writ_toolchain_verify_probes(model, (writ_str_t){0}, &report) != WRIT_OK;
+    printf("probe ok\n");
+    failed |= writ_toolchain_abi_classes(model, (writ_str_t){0}, &report) != WRIT_OK;
+    printf("abi\n%.*s", (int)report.length, report.data);
+    if (binary.length || writ_model_library(model)->links_count) {
+        failed |= writ_toolchain_verify_symbols(model, binary, (writ_str_t){0}, &report) != WRIT_OK;
+        printf("symbols\n%.*s", (int)report.length, report.data);
+    }
+    return failed;
 }
 
 static const struct {
@@ -228,7 +249,7 @@ static const struct {
     const char *usage;
 } commands[] = {
     {"import", cmd_import, "import --library NAME --header H... [--link L] [--define D] [-I DIR] [--only GLOB] [-o DIR]"},
-    {"verify", cmd_verify, "verify FILE"},
+    {"verify", cmd_verify, "verify FILE [--binary PATH]"},
     {"gen", cmd_gen, "gen c FILE [-o DIR] [--prefix NAME] [--conformance]"},
     {"parse", cmd_parse, "parse FILE"},
     {"check", cmd_check, "check FILE"},

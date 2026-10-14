@@ -1,7 +1,6 @@
 #include "../core/model/model.h"
 #include "tu.h"
 
-#define S(text) (int)(text).length, (text).data
 
 typedef struct {
     writ_tu_t  *tu;

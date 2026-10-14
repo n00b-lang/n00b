@@ -143,7 +143,9 @@ test(
            '--library', 'zlib', '--header', 'zlib.h', '--link', 'z', '-o', '-'] + zlib_only,
 )
 
-test('zlib-layout', writ_exe, args: ['verify', source_root / 'tests' / 'zlib' / 'zlib.writ'])
+foreach contract : ['zlib', 'libc']
+    test(contract + '-verify', writ_exe, args: ['verify', source_root / 'tests' / contract / contract + '.writ'])
+endforeach
 
 generated_c = ['-std=c11', '-Wall', '-Wextra', '-Werror', '-U_FORTIFY_SOURCE', '-D_FORTIFY_SOURCE=0']
 

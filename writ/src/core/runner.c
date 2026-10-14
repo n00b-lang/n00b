@@ -2,6 +2,7 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <spawn.h>
+#include <stdlib.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -106,6 +107,38 @@ writ_run(writ_session_t *session, const char *const *argv, writ_str_t input, wri
                                                        : (writ_process_runner_t){default_runner, session};
     writ_status_t status = runner.run(runner.context, argv, input, &result->out, &result->err, &result->exit_code);
     return status;
+}
+
+writ_str_t
+writ_tool_line(writ_session_t *session, const char *const *argv)
+{
+    writ_run_result_t result;
+    if (writ_run(session, argv, writ_cstr(""), &result) != WRIT_OK || result.exit_code) {
+        return writ_cstr("");
+    }
+    writ_str_t line = result.out;
+    while (line.length && (line.data[line.length - 1] == '\n' || line.data[line.length - 1] == '\r')) {
+        line.length--;
+    }
+    return line;
+}
+
+writ_str_t
+writ_sysroot(writ_session_t *session, writ_str_t requested)
+{
+    if (requested.length) {
+        return requested;
+    }
+    const char *environment = getenv("SDKROOT");
+    if (environment && *environment) {
+        return writ_cstr(environment);
+    }
+#ifdef __APPLE__
+    const char *argv[] = {"xcrun", "--show-sdk-path", nullptr};
+    return writ_tool_line(session, argv);
+#else
+    return writ_cstr("");
+#endif
 }
 
 writ_str_t

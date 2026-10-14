@@ -2,8 +2,6 @@
 
 #include "tu.h"
 
-static writ_str_t trimmed(writ_str_t text);
-
 writ_str_t
 writ_tu_text(writ_session_t *session, CXString text)
 {
@@ -13,26 +11,6 @@ writ_tu_text(writ_session_t *session, CXString text)
     return copy;
 }
 
-static writ_str_t
-sysroot_for(writ_session_t *session, writ_str_t requested)
-{
-    if (requested.length) {
-        return requested;
-    }
-    const char *environment = getenv("SDKROOT");
-    if (environment && *environment) {
-        return writ_cstr(environment);
-    }
-#ifdef __APPLE__
-    const char *argv[] = {"xcrun", "--show-sdk-path", nullptr};
-    writ_run_result_t result;
-    if (writ_run(session, argv, writ_cstr(""), &result) == WRIT_OK && !result.exit_code && result.out.length) {
-        return trimmed(result.out);
-    }
-#endif
-    return writ_cstr("");
-}
-
 static const char *
 terminated(writ_session_t *session, writ_str_t text)
 {
@@ -40,23 +18,10 @@ terminated(writ_session_t *session, writ_str_t text)
 }
 
 static writ_str_t
-trimmed(writ_str_t text)
-{
-    while (text.length && (text.data[text.length - 1] == '\n' || text.data[text.length - 1] == '\r')) {
-        text.length--;
-    }
-    return text;
-}
-
-static writ_str_t
 resource_dir(writ_session_t *session)
 {
     const char *argv[] = {writ_tool_path(session, "clang").data, "-print-resource-dir", nullptr};
-    writ_run_result_t result;
-    if (writ_run(session, argv, writ_cstr(""), &result) != WRIT_OK || result.exit_code) {
-        return writ_cstr("");
-    }
-    return trimmed(result.out);
+    return writ_tool_line(session, argv);
 }
 
 writ_status_t
@@ -77,7 +42,7 @@ writ_tu_open(writ_session_t *session, writ_tu_t *tu, writ_str_t triple, const wr
         args[count++] = "-resource-dir";
         args[count++] = terminated(session, resources);
     }
-    writ_str_t sysroot = sysroot_for(session, request->sysroot);
+    writ_str_t sysroot = writ_sysroot(session, request->sysroot);
     if (sysroot.length) {
         args[count++] = "-isysroot";
         args[count++] = terminated(session, sysroot);
