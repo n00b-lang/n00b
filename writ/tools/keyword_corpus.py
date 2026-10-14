@@ -11,6 +11,7 @@ for word in words:
     lines.append(f"fn f_{word}({word}: {word}, len: *[{word}; cap {word}, len {word}.out], flags: c_int) -> {word}")
     lines.append(f"  error {word} != {word} via {word}({word})")
     lines.append(f"const {word}: {word} = {word}")
+    lines.append(f"struct s_{word} {{ {word}: {word}, n_{word}: *[{word}; {word}] }}")
 
 with open(output_path, "w", encoding="utf-8") as out:
     out.write("\n".join(lines) + "\n")

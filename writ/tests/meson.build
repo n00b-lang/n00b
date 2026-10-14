@@ -113,6 +113,37 @@ test(
     depends: writ_exe,
 )
 
+fuzz_flags = ['-fsanitize=fuzzer-no-link,address,undefined', '-fno-omit-frame-pointer']
+fuzz_writ = static_library(
+    'writ_fuzz',
+    core_sources,
+    grammar_h,
+    keywords_h,
+    model_names_h,
+    model_json_h,
+    include_directories: writ_inc,
+    dependencies: lantern_headers,
+    c_args: fuzz_flags,
+)
+fuzz_seeds = []
+foreach seed : ['libc/libc.writ', 'zlib/zlib.writ', 'skeleton/zlib.writ', 'zlib/draft' / host_triple + '.writ']
+    fuzz_seeds += source_root / 'tests' / seed
+endforeach
+test(
+    'fuzz-parse',
+    executable(
+        'fuzz-parse',
+        'fuzz/parse.c',
+        link_with: fuzz_writ,
+        include_directories: include_directories('../include'),
+        dependencies: lantern_links,
+        c_args: ['-fsanitize=fuzzer,address,undefined'],
+        link_args: ['-fsanitize=fuzzer,address,undefined'],
+    ),
+    args: ['-runs=3000', '-max_len=2048', '-seed_inputs=' + ','.join(fuzz_seeds)],
+    timeout: 600,
+)
+
 test(
     'grammar-audit',
     executable(
