@@ -14,7 +14,7 @@ result = subprocess.run(command, cwd=source_root, capture_output=True, text=True
 actual = result.stdout if stdout_only else result.stdout + result.stderr
 
 if expect_failure != (result.returncode != 0):
-    sys.exit(f"exit status {result.returncode} was not expected\n{actual}")
+    sys.exit(f"exit status {result.returncode} was not expected\n{result.stdout}{result.stderr}")
 
 if os.environ.get("WRIT_UPDATE_GOLDEN"):
     with open(expected_path, "w", encoding="utf-8") as out:

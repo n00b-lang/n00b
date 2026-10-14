@@ -130,7 +130,7 @@ profile n00b {
 | Contract construct | n00b choices (profile ID) | Default |
 |---|---|---|
 | `in *cstr`, `in utf8[n]` | `string` (copied to a NUL-terminated or counted buffer), `buffer` | `string` |
-| `in *[u8; n]`, `bytes[n]` | `buffer` (copied), `borrow` (the n00b array's storage, for the span) | `borrow` for `for call` spans, `buffer` otherwise |
+| `in *[u8; n]`, `bytes[n]` | `buffer` (copied), `borrow` (the n00b array's storage, for the span) | `buffer` |
 | `out` arrays and returned owned buffers | `buffer` (a new `Array[u8]`), `string` (decoded as UTF-8; invalid text is an error) | `buffer`; `string` when the contract says `utf8` or `cstr` |
 | Rest packs | `list` (`List[T]`), `array` (`Array[T]`) | `list` |
 | Keyword packs | `record`: a generated `type F_Options` with one optional field per key | `record` |

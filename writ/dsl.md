@@ -138,7 +138,11 @@ into modules or for sharing common types between libraries.
 **No headers.** For a binary with no headers (a plugin ABI, a stripped
 vendor library, a library written in another language that exports a C
 ABI), leave out `header`. Then nothing can be probed, so every record must
-have explicit layout (§4.4), and `verify` checks only symbols.
+have explicit layout (§4.4), and `verify` checks only symbols. The one
+exception is a contract whose other side writ generates (the Rust
+transport, §8.9): both sides then use the platform's C rules by
+construction. Generated C headers for a contract without headers declare
+its types themselves.
 
 **Platform scope.** `platforms` names the set of platforms the contract
 claims to support, and applies to the whole file. Every fact holds on every
@@ -2086,12 +2090,12 @@ when listed as `instance`s.
 
 writ generates a crate, `<crate>-writ`, compiled together with the library
 by Cargo. It contains one `extern "C"` function per contract function,
-named `writ_<crate>_<item>`, where `<item>` is a free function's name or
-`<type>_<method>` for an impl item, in snake case
+named `writ_<crate>_<type>_<method>` in snake case
 (`writ_resharp_regex_find_all`):
 
-- `&str` and `&[T]` arrive as pointer and length (non-null even when
-  empty, §6.1);
+- `&str` and `&[T]` arrive as pointer and length. An empty one may be
+  null (`null if empty`, §6.1); the transport never builds a slice from
+  it;
 - owned results become handles with generated release functions;
 - `Result` becomes a status plus a generated per-thread error channel
   carrying the `Display` text (§6.4);
@@ -2105,62 +2109,81 @@ same way they treat a C one. `writ derive` prints it.
 
 | Rust | Derived C contract |
 |---|---|
-| Every function | Returns `c_int as writ_<crate>_status`: `OK`, `NONE`, `ERROR`, `PANIC`. Results move to `out` parameters. |
-| `&str` | `p: utf8[p_len] null if empty, p_len: usize`. The transport checks the UTF-8 and reports `ERROR` if it is invalid. |
+| Every function | `fn <type>_<method>` with `symbol "writ_<crate>_<type>_<method>"`, returning `c_int as Status` (`Status_Ok`, `Status_None`, `Status_Error`, `Status_Panic`). Results move to `out` parameters. |
+| `&str` | `p: utf8[p_len] null if empty, p_len: usize`. The transport checks the UTF-8 and reports `Status_Error` if it is invalid. |
 | `&[T]` | `p: *[T; p_len] null if empty, p_len: usize` |
-| `opaque T` | `opaque writ_<crate>_<t>` and `handle T = *writ_<crate>_<t> release writ_<crate>_<t>_free`, with the thread rule from `Send`/`Sync` |
+| Fieldless `enum E` | `enum E : c_int { E_A = 0, ... } closed`, in declaration order |
+| `opaque T` | `opaque writ_<crate>_<t>` and `handle T = *writ_<crate>_<t> release <t>_free`, with the thread rule from `Send`/`Sync` |
 | `self` by value | `consume` of the handle |
 | `T` returned (handle) | `out: out *T own` |
-| `Vec<T>` / `String` returned | A caller buffer under `sizing retry`: `out: out *[T; cap out_cap, len min(out_total, out_cap)], out_cap: usize, out_total: out *usize`. The transport writes what fits and reports the total. |
-| `Option<T>` returned | Outcome `none success` when the status is `NONE`, with the output `unset` |
-| `Result<T, E>` | Outcome `failed failure when ret == ERROR via last_error` |
-| Panics | Outcome `panicked failure when ret == PANIC via last_error` |
-| `error E display` | The `last_error` channel: `text writ_<crate>_last_error(buf, cap)`, valid until the thread's next failure |
+| `Vec<T>` / `String` returned | A caller buffer under `sizing retry`: `out: out *[T; cap out_cap, len min(*out_total, out_cap)], out_cap: usize, out_total: out *usize`. The transport writes what fits and reports the total. |
+| `Option<T>` returned | Outcome `none success when ret == Status_None`, with `on none out: unset` |
+| `Result<T, E>` | Outcome `failed failure when ret == Status_Error via last_error` |
+| Panics | Outcome `panicked failure via last_error` |
+| `error E display` | The `last_error` channel over `fn error_message(buf, cap)` (`writ_<crate>_last_error`), valid until the thread's next failure |
 
-The derived contract for the resharp contract above starts:
+The derived contract for the resharp contract above includes:
 
 ```writ
-library resharp_writ
+library resharp
 link "resharp_writ"
 
-enum writ_resharp_status : c_int { OK = 0, NONE = 1, ERROR = 2, PANIC = 3 }
+enum Status : c_int {
+    Status_Ok = 0,
+    Status_None = 1,
+    Status_Error = 2,
+    Status_Panic = 3,
+} closed
+
+fn error_message(buf: out *[u8; cap cap, len min(ret, cap)], cap: usize) -> usize
+    sizing retry needs ret
+    symbol "writ_resharp_last_error"
 
 error_channel last_error per thread {
-    text writ_resharp_last_error(buf, cap)
+    text error_message(buf, cap)
     valid until next failure on thread
 }
 
-fn writ_resharp_last_error(buf: out *[u8; cap cap, len min(ret, cap)], cap: usize) -> usize
-  sizing retry needs ret
+struct Match {
+    start: usize,
+    end: usize,
+}
 
-struct Match { start: usize, end: usize }
 opaque writ_resharp_regex
-handle Regex = *writ_resharp_regex release writ_resharp_regex_free shared
+handle Regex = *writ_resharp_regex release regex_free shared
+fn regex_free(value: consume ?writ_resharp_regex) symbol "writ_resharp_regex_free"
 
-fn writ_resharp_regex_new(
+fn regex_new(
     pattern: utf8[pattern_len] null if empty,
     pattern_len: usize,
     out: out *Regex own,
-) -> c_int as writ_resharp_status
-  outcome ok       success when ret == OK
-  outcome failed   failure when ret == ERROR via last_error
-  outcome panicked failure via last_error
-  on error out: unset
+) -> c_int as Status
+    outcome ok success when ret == Status_Ok
+    outcome failed failure when ret == Status_Error via last_error
+    outcome panicked failure via last_error
+    on error out: unset
+    symbol "writ_resharp_regex_new"
 
-fn writ_resharp_regex_find_all(
+fn regex_find_all(
     self: Regex,
-    haystack: bytes[haystack_len] null if empty,
-    haystack_len: usize,
-    out: out *[Match; cap out_cap, len min(out_total, out_cap)],
+    input: bytes[input_len] null if empty,
+    input_len: usize,
+    out: out *[Match; cap out_cap, len min(*out_total, out_cap)],
     out_cap: usize,
     out_total: out *usize,
-) -> c_int as writ_resharp_status
-  outcome ok       success when ret == OK
-  outcome failed   failure when ret == ERROR via last_error
-  outcome panicked failure via last_error
-  sizing retry for out needs out_total
-  on error out: unset
+) -> c_int as Status
+    outcome ok success when ret == Status_Ok
+    outcome failed failure when ret == Status_Error via last_error
+    outcome panicked failure via last_error
+    on error out: unset
+    sizing retry for out needs *out_total
+    symbol "writ_resharp_regex_find_all"
 ```
+
+Function and parameter shapes outside the table (references to anything
+but an opaque type, generic types, `Vec` of anything but records and
+primitives) are not transported. `writ import` leaves such functions out
+of the contract and reports each one (N0304).
 
 #### Direct linking (optimization)
 
@@ -2542,10 +2565,12 @@ The tools are one CLI, `writ`, with these subcommands:
 
 | Subcommand | Does |
 |---|---|
-| `import` | Reads headers and produces a contract draft |
+| `import` | Reads headers or rustdoc output and produces a contract draft |
 | `lint` | Checks a contract for unknowns, conflicts and dead declarations |
 | `verify` | Checks layout, symbols and bindings against the real toolchain and binary |
 | `lower` | Produces the canonical JSON form |
+| `derive` | Prints the transport's C contract for a `lang rust` contract (§8.9) |
+| `bind` | Resolves a binding against its contract and profile, and prints every decision |
 | `gen` | Generates a binding's code |
 | `check` | Fails if checked-in generated code is stale |
 
@@ -2651,8 +2676,9 @@ can appear anywhere a fact is expected: a span, an extent
 
 **Fix-its.** Every `unknown`, every lint finding and every heuristic
 inference comes with **suggested replacements**: a span plus the text to
-put there, carried in the diagnostic. `writ fix` applies the suggestions
-the author accepts. In practice, writing a contract means importing it,
+put there, carried in the diagnostic. `writ --fix <command>` runs a
+command and prints the file with its suggestions applied, for the author
+to accept or edit. In practice, writing a contract means importing it,
 reading the suggestions, and accepting or editing them. Facts are rarely
 written from scratch.
 
@@ -2793,10 +2819,11 @@ The DSL keeps GIR's callback scopes and Swift's +1/+0 meanings where they
 overlap with ours, so people who know those systems find familiar ground.
 Sharing vocabulary doesn't require an importer.
 
-**Rust crates** are imported from rustdoc's JSON output:
+**Rust crates** are imported from rustdoc's JSON output. `writ import
+--rust Cargo.toml --crate <crate>` runs:
 
 ```sh
-cargo +nightly rustdoc -p <crate> -- -Z unstable-options --output-format json
+RUSTC_BOOTSTRAP=1 cargo rustdoc -p <crate> -- -Z unstable-options --output-format json
 ```
 
 The importer reads:
@@ -2809,8 +2836,9 @@ The importer reads:
 
 It writes the `lang rust` contract of §8.9. Facts come with provenance
 `import:rustdoc`. The JSON format is versioned (`format_version`), and the
-importer refuses versions it doesn't know. A nightly toolchain is needed
-only for importing, never for building a binding.
+importer refuses versions it doesn't know. The JSON output is unstable
+rustdoc output, so the importer enables it with `RUSTC_BOOTSTRAP=1` and a
+stable toolchain imports as well. Building a binding never needs it.
 
 ### 12.3 Inference heuristics (suggestions, never facts)
 

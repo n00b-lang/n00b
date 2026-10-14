@@ -306,6 +306,33 @@ views_fit_success_domain(writ_model_t *model)
 }
 
 static void
+record_nones_fit(writ_model_t *model)
+{
+    for (uint32_t r = 0; r < model->records.len; r++) {
+        const writ_record_rec_t *record = &model->records.data[r];
+        for (uint32_t i = 0; record->none_node && i < writ_node(model->unit, record->none_node)->child_count; i++) {
+            uint32_t value = writ_node_child(model->unit, record->none_node, i);
+            const writ_node_t *node = writ_node(model->unit, value);
+            const writ_slot_rec_t *field = nullptr;
+            for (uint32_t f = 0; f < record->field_count; f++) {
+                const writ_slot_rec_t *candidate = &model->slots.data[record->first_field + f];
+                field = candidate->name == node->name ? candidate : field;
+            }
+            uint32_t expr = writ_node_child(model->unit, value, 0);
+            int64_t evaluated = 0;
+            if (!field) {
+                writ_str_t name = writ_sym_str(model->session, node->name);
+                writ_report(model->session, WRIT_D_UNKNOWN_NAME, node->loc, "no field `%.*s`", S(name));
+            } else if (!writ_type_is_integer(model, field->type)
+                       || !writ_expr_check_in(model, WRIT_EXPR_SCOPE_CONSTANT, WRIT_NONE, expr)
+                       || !writ_expr_eval(model, expr, nullptr, &evaluated)) {
+                writ_report(model->session, WRIT_D_BAD_NONE_VALUE, node->loc, nullptr);
+            }
+        }
+    }
+}
+
+static void
 text_channels_have_buffers(writ_model_t *model)
 {
     for (uint32_t c = 0; c < model->channels.len; c++) {

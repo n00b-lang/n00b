@@ -68,6 +68,7 @@ typedef enum : uint8_t {
     WRIT_REF_ATOM,
     WRIT_REF_VERSION,
     WRIT_REF_NONE_OF,
+    WRIT_REF_LIMIT,
 } writ_ref_kind_t;
 
 typedef enum : uint8_t {

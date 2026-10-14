@@ -74,12 +74,13 @@ configure_writ() {
     if [ "$sanitize" = yes ]; then
         opts+=(-Db_sanitize=address,undefined -Db_lundef=false)
     fi
-    if [ ! -f "$BUILD_DIR/build.ninja" ]; then
-        PKG_CONFIG_PATH="$LANTERN_PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}" \
-            meson setup "$BUILD_DIR" "$ROOT" "${opts[@]}" | grep -E "ERROR|WARNING" >&2 || true
-    else
-        meson configure "$BUILD_DIR" -Dresharp_root="$RESHARP_ROOT" >/dev/null
+    local reconfigure=()
+    if [ -f "$BUILD_DIR/build.ninja" ]; then
+        reconfigure=(--reconfigure)
     fi
+    PKG_CONFIG_PATH="$LANTERN_PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}" \
+        meson setup "${reconfigure[@]+"${reconfigure[@]}"}" "$BUILD_DIR" "$ROOT" "${opts[@]}" \
+        | grep -E "ERROR|WARNING" >&2 || true
 }
 
 run_linux() {
@@ -91,7 +92,7 @@ run_linux() {
         -v "$ROOT:/work/writ" \
         -v "$LANTERN_ROOT:/work/lantern:ro" \
         -v "$RESHARP_ROOT:/work/resharp:ro" \
-        -v writ-cargo:/root/.cargo/registry \
+        -v writ-cargo:/opt/cargo/registry \
         -e LANTERN_ROOT=/work/lantern \
         -e RESHARP_ROOT=/work/resharp \
         -e LANTERN_VERIFIED="$(tr -d '[:space:]' < "$ROOT/deps/LANTERN_REVISION")" \

@@ -34,6 +34,8 @@ if variant == "miri":
     if subprocess.run(["cargo", "+nightly", "miri", "--version"], capture_output=True).returncode:
         print("cargo miri is not installed")
         sys.exit(77)
+    environment["MIRI_SYSROOT"] = os.path.join(os.path.dirname(work), "resharp-miri-sysroot")
+    run(["cargo", "+nightly", "miri", "setup"])
     print(run(["cargo", "+nightly", "miri", "test", "-q", *manifest, "--test", "differential"]), end="")
     sys.exit(0)
 run(["cargo", "test", "-q", *manifest, *cargo_features])

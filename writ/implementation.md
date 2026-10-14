@@ -151,8 +151,8 @@ which runs by default on Linux.
 |---|---|---|
 | ICU | `libwrit` (through lantern) | Lantern's lexer |
 | LLVM 22 libclang (C API) | `libwrit_clang` only | Import, layout, mangling |
-| Rust stable (Cargo) | `libwrit`, at run time, through the process runner | Building generated transports and probe crates |
-| Rust nightly | Importing Rust crates only | `rustdoc --output-format json` |
+| Rust stable (Cargo) | `libwrit`, at run time, through the process runner | Building generated transports and probe crates; `rustdoc --output-format json` for imports, enabled with `RUSTC_BOOTSTRAP=1` |
+| Rust nightly with Miri | tests only, in the Linux container | Running the transport's `extern "C"` functions under Miri |
 | LLVM 22 `clang`, `llvm-nm`, `llvm-readobj`, `llvm-cxxfilt` | `libwrit`, at run time, through the process runner | Probes, export tables for Mach-O, ELF and PE/COFF, demangling |
 | Meson, Ninja | build | |
 | Python 3 | build and tests only | Grammar embedding, spec-example extraction, golden-test runner, bundle runner |
@@ -161,6 +161,27 @@ which runs by default on Linux.
 
 The LLVM prefix is set by `-Dllvm_prefix=`. libclang and the LLVM tools
 always come from that one prefix.
+
+### 3.3 resharp, pinned
+
+Slice 2's library under test is resharp (`https://github.com/ieviev/resharp`),
+in a jj repository colocated with a git clone at `~/resharp-writ`:
+
+```
+git clone https://github.com/ieviev/resharp ~/resharp-writ
+jj -R ~/resharp-writ git init --colocate
+jj -R ~/resharp-writ new <revision>
+```
+
+- The pinned commit id is in `deps/RESHARP_REVISION`. `build.sh` checks
+  it the same way as lantern's (§3.1), and `RESHARP_ROOT` overrides the
+  location.
+- Meson gets the workspace through `-Dresharp_root=`.
+- Cargo never writes into the workspace: imports and transport builds
+  set `CARGO_TARGET_DIR` inside the build directory, and each generated
+  transport starts from a copy of resharp's `Cargo.lock`.
+- The Linux container mounts the workspace read-only and keeps the
+  crates.io registry in a named volume, `writ-cargo`.
 
 ---
 
@@ -513,14 +534,14 @@ Dogfooding starts in slice 1:
 
 ```
 ~/writ/
-  dsl.md  implementation.md  call-plan.md  n00b-integration.md
+  dsl.md  implementation.md  call-plan.md  n00b-integration.md  ffi-spec.md
   build.sh
   meson.build  meson.options
   deps/
     LANTERN_REVISION  RESHARP_REVISION
     prefix-<platform>/  lantern-build-<platform>/
   grammar/
-    writ.bnf
+    writ.bnf  json.bnf
   include/writ/
     writ.h  model.h  clang.h  toolchain.h  gen.h
   contracts/
@@ -550,6 +571,8 @@ Dogfooding starts in slice 1:
     run_golden.py  spec_examples.py  fmt_roundtrip.py  lsan.supp
     api/  host/  core/  enforce/  fuzz/  skeleton/  check/  lower/  plan/  spec/
     libc/  zlib/ (zlib.writ, draft/<platform>.writ, roundtrip.c)
+    resharp/ (transport.py, differential.rs, roundtrip.c, resharp.derived.writ)
+    bind/  spans/
 ```
 
 Each `src/` directory is one module, and each file is one responsibility.
@@ -737,7 +760,7 @@ hash map, string builder, arena or string type.
 | Physical lowering of a call | `src/core/plan/plan.c` (below) |
 | External processes | The session's process runner |
 | JSON output | `src/core/lower/json.c` |
-| JSON input (rustdoc, bundle results) | Lantern's JSON grammar (`grammars/json.bnf`), if Slice 2's benchmark on resharp's rustdoc output is fast enough. Otherwise a single reader in `toolchain/rustdoc.c`. |
+| JSON input (rustdoc, bundle results) | writ's token-level JSON grammar (`grammar/json.bnf`), parsed by the same lantern adapter as contracts (`writ_unit_read_json`) into ordinary AST nodes. It reads resharp's 369 KB rustdoc output in 60 ms. Lantern's own `grammars/json.bnf` lexes per code point and rejects escaped quotes, so writ does not use it. |
 
 Two checks enforce this, and both run in `./build.sh test`:
 
@@ -1103,59 +1126,75 @@ resolves to on its own, without the context other examples supply.
 
 ### Slice 2 — resharp, through its Rust API
 
-**Spec pause.** The slice starts by defining the profile and binding
-formats (`dsl.md` §9.2–§9.3) and the `'ffi_spec` form
-(`n00b-integration.md` §5.1), with sign-off before any generator code.
+**Specs.** The profile and binding formats are `dsl.md` §9.2–§9.3, and
+the `'ffi_spec` form is `ffi-spec.md` (`n00b-integration.md` §5.1). The
+derived transport contract is `dsl.md` §8.9.
 
 **Target**: resharp's public Rust API (`Regex`, `RegexOptions`, `Match`,
-`UnicodeMode`, and the feature-gated capture API), described as a
-`lang rust` contract (`dsl.md` §8.9). The resharp revision under test is
-pinned in `deps/RESHARP_REVISION`, and fetched with `jj git clone` into
-`~/resharp-writ`, outside the writ tree.
+`UnicodeMode`, and the functions behind the `experimental_capture_groups`
+feature), described as a `lang rust` contract (`dsl.md` §8.9), at the
+revision pinned in §3.3.
+
+`contracts/resharp.writ` is the import of that revision, unedited.
+Functions no transport rule covers (`Regex::captures_all`,
+`Regex::capture_names`, and the generic `Captures`) are left out, and the
+import reports each one (N0304).
 
 **Constructs introduced:**
 
-- `lang rust`, `crate`, `impl` blocks and Rust types (`dsl.md` §8.9);
-- error channels (§6.4);
-- the empty-array rules and `bytes`/`utf8` shorthand (§6.1);
-- `none` values and success-domain views (§4.6);
-- build features (§4.7);
-- handle thread rules (§4.3);
-- fix-its (§10.3).
+| Area | Constructs |
+|---|---|
+| Rust | `lang rust`, `crate`, `impl`, Rust types, `error ... display`, `feature ... = cargo`, `when feature` |
+| Types | `bytes[n]`, `utf8[n]` (a `utf8` view of a byte array), `as *U` element reinterpretation |
+| Arrays | `null if empty` |
+| Errors | text error channels; `on <outcome> x: unset` for success outcomes |
+| Sizing | `sizing retry`, with totals read through an `out` parameter or `ret` |
+| Values | struct `none { ... }` values; `<integer type>_max` / `_min` in constant expressions; closed-enum result views over the success domain |
+| Handles | `shared` / `thread_affine` on `opaque` in Rust contracts |
+| Authoring | fix-its on E0212 and E0508; `writ --fix <command>` |
+| Bindings | profiles and bindings (`dsl.md` §9.2–§9.3), E0501–E0513 |
 
-**Work, module by module.** Every item extends a Slice 1 module, and the
-slice adds no new infrastructure.
+**Work, module by module.**
 
 | Module | Adds |
 |---|---|
-| `grammar/writ.bnf` | `lang rust`, `crate`, `impl`, Rust types, `error ... display`, `error_channel`, `feature`, `null if empty`, `as *U`, `sizing retry`, `none`, `shared` / `thread_affine`, `bytes` / `utf8` |
-| `core/model/types.c` | Rust types as interned types; `bytes` and `utf8` as spellings of existing types (no new type kinds) |
-| `core/model/resolve.c` | `impl` scopes, error channels, features, handle thread rules |
-| `core/model/checks.c` | Element reinterpretation sizes, success-domain views, `none` value types, channel use |
-| `core/model/rust.c` | **Derivation of the transport's C contract from the Rust contract**, as an ordinary model built through the existing tables. This is the only Rust-specific model code. |
-| `core/plan/plan.c` | `null if empty`, reinterpreted elements, `sizing retry`, channel fetches, `none` checks |
-| `toolchain/rustdoc.c` | `writ_toolchain_import_rust`: rustdoc JSON to a `lang rust` contract, written out through `fmt.c` |
-| `gen/profile.c`, `gen/binding.c` | Profile and binding resolution |
-| `gen/rust.c` | **The Rust transport**: the `resharp-writ` crate, printed from the plans of the derived C contract. It has `extern "C"` functions with pointer-and-length strings and slices (non-null when empty), handles with generated release functions, a per-thread error channel carrying `Display` text, and `catch_unwind` at every entry point. |
-| `gen/c.c` | `resharp.h`, from the derived contract's plans, unchanged from Slice 1 |
-| `gen/conformance.c` | The new shapes; the existing scenarios rerun against the transport |
+| `grammar/writ.bnf` | Profile and binding items, binding targets (`f.p`, `T::m`), thread rules on `opaque` |
+| `grammar/json.bnf`, `core/syntax/parse.c` | A token-level JSON grammar on the same lantern adapter (`writ_unit_read_json`), and `\uXXXX` in strings |
+| `core/syntax/ast.c` | `writ_unit_next_item`, the one walk over a unit's top-level items |
+| `core/model/rust.c` | Reads a `lang rust` contract into a transport description, and prints **the transport's C contract** from it. `writ_resolve` resolves that text as an ordinary contract, so every consumer sees a C model; the description stays on the model for `gen/rust.c`. This is the only Rust-specific model code. |
+| `core/model/resolve.c`, `expr.c` | `utf8[n]`, `as *U` (the slot's `physical` type), text channels, `feature` directives, integer limits |
+| `core/model/checks.c` | E0216 element reinterpretation, E0217 success-domain views, E0218 text-channel functions, struct `none` values |
+| `core/plan/plan.c`, `render.c` | `size_retry`, totals bound to an array's length, text error details, success outcomes that leave outputs unset, physical slot types |
+| `toolchain/rustdoc.c` | `writ_toolchain_import_rust`: runs `cargo rustdoc` with `RUSTC_BOOTSTRAP=1`, reads JSON format 57, writes the contract through `fmt.c` |
+| `toolchain/probe.c`, `clang/layout.c` | Contracts without headers verify symbols only |
+| `gen/profile.c`, `gen/binding.c` | `writ_bind`: a binding resolved against its contract and profile, every decision marked chosen or defaulted; `writ_binding_render` |
+| `gen/rust.c` | `writ_gen_rust`: the `<crate>-writ` crate (`staticlib`, `cdylib`, `rlib`), with `extern "C"` entry points behind `catch_unwind`, UTF-8 checks, handles with release functions, a per-thread error channel carrying `Display` text, and features forwarded to the library |
+| `gen/c.c` | Declared types in headers of contracts without headers, typed array results, retry loops, text error details, physical casts |
+| `gen/conformance.c` | Mocks and scenarios for text channels, retries, record and array results, unset outputs, counted text |
+| `profiles/` | `c.writ`, `rust.writ`, `n00b.writ` |
+| `cli/main.c` | `derive`, `bind`, `gen rust`, `import --rust`, `--feature`, `--fix` |
 
-**Types introduced:** none outside generated model fields. Rust
-declarations are model records like any other.
+**Types introduced:** `writ_rust_import_request_t`,
+`writ_gen_rust_request_t`, `writ_bind_request_t`, `writ_binding_t`.
 
 **Tests:**
 
-- the import of the pinned revision matches its golden contract;
-- the transport crate builds against the pinned revision with stable
-  Rust;
+- the import of the pinned revision matches `contracts/resharp.writ`;
+- the derived contract and its plans match their goldens;
+- the transport crate builds with stable Rust, with the feature off and
+  on;
 - a differential corpus of patterns and inputs gives identical results
-  through the transport and through `resharp::Regex` directly;
-- Miri runs the transport's `extern "C"` functions from Rust tests,
-  including empty inputs and zero-capacity outputs;
-- the conformance tests drive the transport's C ABI from C under ASan and
-  UBSan;
-- symbols in the built library match the derived C contract, with the
-  feature-gated functions present exactly when the feature is on.
+  through the transport and through `resharp::Regex` directly, including
+  empty inputs and zero-capacity outputs;
+- Miri runs the same tests in the Linux container;
+- mock conformance and a C roundtrip drive the transport's C ABI under
+  ASan and UBSan;
+- the built library exports exactly the derived contract's symbols, with
+  the feature-gated functions present only when the feature is on;
+- the `ffi-spec.md` bindings for zlib, resharp and kv resolve to golden
+  decisions, and each binding diagnostic has a failing case;
+- check goldens for E0212 (with its fix applied), E0213, E0216 and E0217;
+- a header-less contract with reinterpreted elements passes conformance.
 
 ### Slice 3 — n00b imports zlib and resharp
 

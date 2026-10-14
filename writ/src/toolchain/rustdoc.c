@@ -1,6 +1,10 @@
 #include "../core/syntax/syntax.h"
 #include "toolchain.h"
 
+enum {
+    RUSTDOC_FORMAT = 57,
+};
+
 typedef struct {
     writ_session_t                    *session;
     const writ_rust_import_request_t  *request;
@@ -529,6 +533,12 @@ writ_toolchain_import_rust(writ_session_t *session, const writ_rust_import_reque
     writ_status_t status = writ_unit_read_json(im.json, path, &im.index);
     if (status != WRIT_OK) {
         return status;
+    }
+    uint64_t format = number(&im, get(&im, im.index, "format_version"));
+    if (format != RUSTDOC_FORMAT) {
+        writ_report(session, WRIT_D_TOOLCHAIN, WRIT_NO_LOC, "rustdoc JSON format %llu; writ reads format %d",
+                    (unsigned long long)format, RUSTDOC_FORMAT);
+        return WRIT_TOOL_FAILED;
     }
     uint32_t index = get(&im, im.index, "index");
     for (uint32_t i = 0; i < at(&im, index)->child_count; i++) {

@@ -24,7 +24,7 @@ WRIT_DIAG(ERROR_AND_OUTCOMES, "E0209", WRIT_ERROR, "a function states either `er
 WRIT_DIAG(LAYOUT_MISMATCH, "E0210", WRIT_ERROR, "the asserted layout does not match the platform's C layout")
 WRIT_DIAG(PROMOTED_VARARG, "E0211", WRIT_ERROR, "variadic arguments undergo default promotions; use `c_int` or `f64`")
 WRIT_DIAG(RETURN_NEEDS_SPAN, "E0212", WRIT_ERROR, "a returned pointer needs `own`, a span, or `unknown`")
-WRIT_DIAG(BAD_NONE_VALUE, "E0213", WRIT_ERROR, "a `none` value must be a constant of the handle's type")
+WRIT_DIAG(BAD_NONE_VALUE, "E0213", WRIT_ERROR, "a `none` value must be an integer constant of its field's or handle's type")
 WRIT_DIAG(FORMAT_NOT_TEXT, "E0214", WRIT_ERROR, "`format printf` names a `*cstr` parameter of a variadic function")
 WRIT_DIAG(ON_UNKNOWN_OUTCOME, "E0215", WRIT_ERROR, "`on` names no outcome of this function")
 WRIT_DIAG(REINTERPRET, "E0216", WRIT_ERROR, "reinterpreted elements must be records that pack exactly into the physical element")

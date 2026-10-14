@@ -104,6 +104,14 @@ test(
         source_root / 'tests' / 'zlib' / 'zlib.writ',
         source_root / 'tests' / 'zlib' / 'draft' / host_triple + '.writ',
         source_root / 'tests' / 'skeleton' / 'zlib.writ',
+        source_root / 'ffi-spec.md',
+        source_root / 'contracts' / 'resharp.writ',
+        source_root / 'tests' / 'resharp' / 'resharp.derived.writ',
+        source_root / 'tests' / 'spans' / 'spans.writ',
+        source_root / 'profiles' / 'c.writ',
+        source_root / 'profiles' / 'rust.writ',
+        source_root / 'profiles' / 'n00b.writ',
+        source_root / 'tests' / 'bind' / 'kv.export.writ',
     ],
     depends: writ_exe,
 )
@@ -122,7 +130,8 @@ fuzz_writ = static_library(
     c_args: fuzz_flags,
 )
 fuzz_seeds = []
-foreach seed : ['libc/libc.writ', 'zlib/zlib.writ', 'skeleton/zlib.writ', 'zlib/draft' / host_triple + '.writ']
+foreach seed : ['libc/libc.writ', 'zlib/zlib.writ', 'skeleton/zlib.writ', 'zlib/draft' / host_triple + '.writ',
+                'resharp/resharp.derived.writ', 'bind/kv.n00b.writ']
     fuzz_seeds += source_root / 'tests' / seed
 endforeach
 test(
@@ -186,7 +195,7 @@ test(
 )
 
 foreach name : ['unknown_type', 'not_pure', 'bad_phase', 'out_unbounded', 'syntax', 'duplicate', 'reinterpret',
-                'view_domain', 'return_span']
+                'view_domain', 'return_span', 'record_none']
     test(
         'check-' + name,
         python,

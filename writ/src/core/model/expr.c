@@ -98,8 +98,30 @@ check_name(checker_t *c, uint32_t expr, const writ_node_t *node)
         *ref = (writ_ref_t){WRIT_REF_NULL, WRIT_REF_VALUE, 0};
         return true;
     }
+    writ_str_t text = writ_sym_str(model->session, node->name);
+    bool is_max = text.length > 4 && !memcmp(text.data + text.length - 4, "_max", 4);
+    bool is_min = text.length > 4 && !memcmp(text.data + text.length - 4, "_min", 4);
+    writ_type_id limited = is_max || is_min ? writ_type_named(model, writ_intern(model->session, text.data,
+                                                                                    text.length - 4))
+                                            : 0;
+    if (limited && writ_type_is_integer(model, limited)) {
+        *ref = (writ_ref_t){WRIT_REF_LIMIT, WRIT_REF_VALUE, limited * 2 + is_max};
+        return true;
+    }
     report_unknown(model, node);
     return false;
+}
+
+static int64_t
+limit_value(const writ_model_t *model, uint32_t index)
+{
+    const writ_type_rec_t *type = writ_type(model, writ_type_physical(model, index / 2));
+    uint32_t bits = type->size * 8;
+    if (index % 2 == 0) {
+        return type->is_signed ? (int64_t)(UINT64_C(1) << (bits - 1)) * (bits < 64 ? -1 : 1) : 0;
+    }
+    uint64_t magnitude = type->is_signed ? bits - 1 : bits;
+    return (int64_t)(magnitude >= 64 ? UINT64_MAX : (UINT64_C(1) << magnitude) - 1);
 }
 
 static bool
@@ -376,6 +398,9 @@ eval_ref(const writ_model_t *model, uint32_t expr, writ_ref_t ref, writ_expr_env
     case WRIT_REF_NONE_OF:
         *out = model->handles.data[ref.index].none_value;
         return true;
+    case WRIT_REF_LIMIT:
+        *out = limit_value(model, ref.index);
+        return true;
     case WRIT_REF_SIZEOF:
         *out = writ_type(model, ref.index)->size;
         return true;
@@ -522,6 +547,12 @@ print_ref(const writ_model_t *model, uint32_t expr, writ_ref_t ref, writ_languag
     case WRIT_REF_NONE_OF:
         core_buffer_printf(out, "(%lld)", (long long)model->handles.data[ref.index].none_value);
         return;
+    case WRIT_REF_LIMIT: {
+        writ_str_t spelling = writ_sym_str(model->session, writ_type(model, ref.index / 2)->c_spelling);
+        core_buffer_printf(out, "((%.*s)%lldLL)", (int)spelling.length, spelling.data,
+                           (long long)limit_value(model, ref.index));
+        return;
+    }
     case WRIT_REF_SIZEOF: {
         writ_str_t spelling = writ_sym_str(model->session, writ_type(model, ref.index)->c_spelling);
         core_buffer_printf(out, "sizeof(%.*s)", (int)spelling.length, spelling.data);
