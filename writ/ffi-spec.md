@@ -44,11 +44,11 @@ binding zlib for n00b import {
 |---|---|---|
 | The contract | One module | `module` defaults to the `library` name |
 | `fn f` | `func f` in the module | Name after `strip_prefix`, in `snake` case |
-| `handle H`, `opaque` crossing as a handle | `type H` holding the C value | `pascal` case |
-| `struct S` | `type S layout(c) { ... }` | `pascal` case |
-| `enum E`, `flags F` | n00b `enum` / flag set with the same values | `pascal` case; members `upper` |
+| `handle H`, `opaque` crossing as a handle | `type H` holding the C value | `Snake_Case` |
+| `struct S` | `type S layout(c) { ... }` | `Snake_Case` |
+| `enum E`, `flags F` | n00b `enum` / flag set with the same values | `Snake_Case`; members `upper` |
 | `const C` | `const C` | `upper` case |
-| `callback C` | n00b `callback` type | `pascal` case |
+| `callback C` | n00b `callback` type | `Snake_Case` |
 
 - Names that collide with n00b's reserved words get a trailing `_`.
 - Two contract declarations that end up with one n00b name in one module
@@ -107,8 +107,10 @@ profile n00b {
     string string to utf8[n] via copy copies
     buffer buffer to bytes[n] via "Array[u8]" copies
     buffer borrow to bytes[n] via "n00b_ffi_borrow" zero_copy
+    string string to bytes[n] via copy copies
     pack rest list native "List[T]"
     pack rest array native "Array[T]"
+    pack keywords kwargs native "keyword arguments"
     pack keywords record native "options record"
     variadic call yes
     variadic define no
@@ -117,7 +119,7 @@ profile n00b {
     handle close "close"
     lifetimes no
     naming fn snake
-    naming type pascal
+    naming type Snake_Case
     naming const upper
     naming field snake
     naming module snake
@@ -129,20 +131,25 @@ profile n00b {
 
 | Contract construct | n00b choices (profile ID) | Default |
 |---|---|---|
-| `in *cstr`, `in utf8[n]` | `string` (copied to a NUL-terminated or counted buffer), `buffer` | `string` |
-| `in *[u8; n]`, `bytes[n]` | `buffer` (copied), `borrow` (the n00b array's storage, for the span) | `buffer` |
-| `out` arrays and returned owned buffers | `buffer` (a new `Array[u8]`), `string` (decoded as UTF-8; invalid text is an error) | `buffer`; `string` when the contract says `utf8` or `cstr` |
+| `in *cstr`, `in utf8[n]` | `string` (copied to a NUL-terminated or counted buffer) | `string` |
+| `in *[u8; n]`, `bytes[n]` | `buffer` (copied), `borrow` (the n00b array's storage, for the span), `string` (the shim takes an n00b `string` and passes its UTF-8 bytes) | `buffer` |
+| `out` arrays and returned owned buffers | `buffer` (a new `Array[u8]`), `string` (the shim decodes the bytes as UTF-8 into an n00b `string`; invalid text is an error) | `buffer`; `string` when the contract says `utf8` or `cstr` |
 | Rest packs | `list` (`List[T]`), `array` (`Array[T]`) | `list` |
-| Keyword packs | `record`: a generated `type F_Options` with one optional field per key | `record` |
+| Keyword packs | `kwargs`: n00b keyword arguments, one per key, optional unless the key's presence rule requires it; `record`: a generated `type F_Options` with one optional field per key | `kwargs` |
 | `out` / `inout` scalars | Extra results | Promoted (§3.2) |
 | Labels | `label path -> "string"`, `label secret -> "string"` | The profile's |
 | `?T` | `T?` | — |
 | `bool`, fixed-width integers, `c_*` | The n00b scalar of the platform's width | — |
 
 The choices are made with `string`, `buffer`, `pack` and `keywords`
-items. A choice whose contract form doesn't match the slot is E0502:
-`string compress2.source as string` is rejected because `source` is a
-`*[u8; n]`, not text.
+items. A choice the profile doesn't declare for the slot's form is E0502:
+`string compress2.source as list` is rejected because `list` is a pack
+form, and `source` is a `*[u8; n]`.
+
+A `string` choice on a byte slot puts the conversion in the generated
+shim. The n00b side sees a `string`, and the C side still receives (or
+fills) bytes: `string Regex::is_match.input as string` lets n00b code
+call `regex.is_match("text")`.
 
 ### 3.2 Results
 
@@ -216,8 +223,8 @@ func compress(source: Array[u8], level: i32) -> Array[u8] fail: zlib.Error
 ## 6. Callbacks
 
 - A `callback` type becomes an n00b `callback` type named by
-  `callback C as "Name"`, defaulting to the contract name in `pascal`
-  case. Its signature is the callback's, mapped as in §3.
+  `callback C as "Name"`, defaulting to the contract name in
+  `Snake_Case`. Its signature is the callback's, mapped as in §3.
 - **With `userdata`**, the n00b callback value is stored in the runtime's
   handle table, and its index is passed as the `userdata`. The table entry
   lives exactly as long as the contract's span for the callback slot, and
@@ -318,7 +325,7 @@ binding resharp for n00b import {
     module "resharp"
     load dynamic
     search_path "target/release"
-    buffer Regex::is_match.input as borrow
+    string Regex::is_match.input as string
     buffer Regex::find_all.input as borrow
     error * -> "resharp.Error"
 }
@@ -329,9 +336,9 @@ Bound API:
 ```
 type Regex {}
 func Regex.new(pattern: string) -> Regex fail: Error
-func Regex.with_options(pattern: string, options: RegexOptions) -> Regex fail: Error
-func (self: Regex) is_match(haystack: Array[u8]) -> bool fail: Error
-func (self: Regex) find_all(haystack: Array[u8]) -> Array[Match] fail: Error
+func Regex.with_options(pattern: string, options: Regex_Options) -> Regex fail: Error
+func (self: Regex) is_match(input: string) -> bool fail: Error
+func (self: Regex) find_all(input: Array[u8]) -> Array[Match] fail: Error
 func (self: Regex) close() -> nil
 ```
 
@@ -367,7 +374,8 @@ These settle `n00b-integration.md` §6.
    pins or copies, and generated code is the same in every case.
 3. **Finalizers.** Explicit `close()`. Leaked handles are reported in
    debug builds (§5).
-4. **Keyword arguments.** Generated options records (§3.1), since n00b
-   has no keyword arguments.
+4. **Keyword arguments.** Keyword packs become n00b keyword arguments by
+   default; a binding can choose a generated options record instead
+   (§3.1).
 5. **Dynamic calls.** writ's own thunks from `abi_class` facts, checked by
    the same conformance tests as the static path.

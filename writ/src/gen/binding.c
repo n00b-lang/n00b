@@ -352,15 +352,13 @@ apply_repr(writ_binding_t *b, uint32_t id)
     }
     target_t target = split(text);
     slot_decision_t *slot = slot_named(b, fn, target.member);
-    const writ_repr_t *repr = writ_profile_repr(b->profile, item->name);
+    const writ_repr_t *repr = slot ? writ_profile_repr(b->profile, item->name, slot->form) : nullptr;
     writ_str_t chosen = text_of(b, item->name);
     writ_str_t kind = text_of(b, item->payload);
-    bool text_kind = writ_str_eq(kind, writ_cstr("string"));
-    bool pack_kind = writ_str_eq(kind, writ_cstr("pack"));
-    bool fits = slot && repr && repr->form == slot->form
-             && (pack_kind ? slot->form >= WRIT_REPR_REST
-                 : text_kind ? slot->form == WRIT_REPR_CSTR || slot->form == WRIT_REPR_UTF8
-                             : slot->form == WRIT_REPR_BYTES);
+    writ_node_kind_t wanted = writ_str_eq(kind, writ_cstr("string")) ? WRIT_N_STRING_ITEM
+                            : writ_str_eq(kind, writ_cstr("buffer")) ? WRIT_N_BUFFER_ITEM
+                                                                     : WRIT_N_PACK_NATIVE;
+    bool fits = repr && repr->item == wanted;
     if (!fits) {
         writ_report(b->session, WRIT_D_BIND_REPR, item->loc, "`%.*s %.*s` for a %s slot", S(kind), S(chosen),
                     slot ? form_names[slot->form] : "plain");

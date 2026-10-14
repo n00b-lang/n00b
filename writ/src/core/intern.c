@@ -59,8 +59,10 @@ writ_name_case(writ_session_t *session, writ_str_t name, writ_case_t style)
         bool lower = c >= 'a' && c <= 'z';
         bool upper = c >= 'A' && c <= 'Z';
         bool capital = style == WRIT_CASE_UPPER
-                    || (word_start && (style == WRIT_CASE_PASCAL || (style == WRIT_CASE_CAMEL && buffer->byte_len)));
-        if (word_start && buffer->byte_len && (style == WRIT_CASE_SNAKE || style == WRIT_CASE_UPPER)) {
+                    || (word_start && (style == WRIT_CASE_PASCAL || style == WRIT_CASE_TITLE_SNAKE
+                                       || (style == WRIT_CASE_CAMEL && buffer->byte_len)));
+        bool separated = style == WRIT_CASE_SNAKE || style == WRIT_CASE_UPPER || style == WRIT_CASE_TITLE_SNAKE;
+        if (word_start && buffer->byte_len && separated) {
             core_buffer_putc(buffer, '_');
         }
         core_buffer_putc(buffer, capital && lower ? (char)(c - 32) : !capital && upper ? (char)(c + 32) : c);

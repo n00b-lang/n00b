@@ -75,7 +75,9 @@ configure_writ() {
         opts+=(-Db_sanitize=address,undefined -Db_lundef=false)
     fi
     local reconfigure=()
-    if [ -f "$BUILD_DIR/build.ninja" ]; then
+    if [ -f "$BUILD_DIR/build.ninja" ] && [ ! "$ROOT/meson.options" -nt "$BUILD_DIR/build.ninja" ]; then
+        return 0
+    elif [ -f "$BUILD_DIR/build.ninja" ]; then
         reconfigure=(--reconfigure)
     fi
     PKG_CONFIG_PATH="$LANTERN_PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}" \

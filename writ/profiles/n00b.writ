@@ -17,8 +17,10 @@ profile n00b {
     string string to utf8[n] via copy copies
     buffer buffer to bytes[n] via "Array[u8]" copies
     buffer borrow to bytes[n] via "n00b_ffi_borrow" zero_copy
+    string string to bytes[n] via copy copies
     pack rest list native "List[T]"
     pack rest array native "Array[T]"
+    pack keywords kwargs native "keyword arguments"
     pack keywords record native "options record"
     variadic call yes
     variadic define no
@@ -27,7 +29,7 @@ profile n00b {
     handle close "close"
     lifetimes no
     naming fn snake
-    naming type pascal
+    naming type Snake_Case
     naming const upper
     naming field snake
     naming module snake

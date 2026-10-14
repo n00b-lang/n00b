@@ -2353,16 +2353,19 @@ profile c {
 | `pin SPAN via TEXT [ release TEXT ]` | How to hold memory still for a span (`for call`, `longer`, `any`, `buffer`). `via copy` means the language can't, and the binding copies. |
 | `keep_alive via TEXT` | How to keep an object alive past its last use |
 | `prim TYPE -> TEXT` | The native spelling of a primitive. `c_*` types resolve to fixed-width types per platform first, so a profile may list only those. |
-| `string ID to TYPE via TEXT [ copies \| zero_copy ]` | A native string representation named `ID`, and the contract form it converts to. The first `string` item for a contract form is the default. |
+| `string ID to TYPE via TEXT [ copies \| zero_copy ]` | A native string representation named `ID`, and the contract form it converts to: `cstr`, `utf8[n]`, or `bytes[n]`. For `bytes[n]`, the generated shim converts the native string to and from UTF-8 bytes, so a byte slot can be presented as text. |
 | `buffer ID to TYPE via TEXT [ copies \| zero_copy ]` | The same, for byte buffers (`*[u8; n]`, `bytes[n]`) |
-| `pack ( rest \| keywords ) ID native TEXT` | A native form of a pack, named `ID`. The first is the default. |
+| `pack ( rest \| keywords ) ID native TEXT` | A native form of a pack, named `ID` |
+
+The first `string`, `buffer` or `pack` item for a contract form is that
+form's default.
 | `variadic ( call \| define ) ( yes \| no )` | Whether the language can call, or define, a C variadic function |
 | `error style S` | `exceptions`, `result`, `multi_return` or `status` (C-style codes) |
 | `error type TEXT` | The default native error type, when the style has one |
 | `callback style S` | `closure` (native closures, through `userdata`), `userdata` (a function plus explicit data), or `static` (named functions only) |
 | `handle close TEXT` | The native name of a handle's release operation (`close`, `drop`, `free`) |
 | `lifetimes ( yes \| no )` | Whether the language can tie a borrowed result to its owner (`borrow ... as lifetime`) |
-| `naming KIND CASE` | The case for `fn`, `type`, `const`, `field` or `module` names: `snake`, `pascal`, `camel`, `upper`, or `keep` |
+| `naming KIND CASE` | The case for `fn`, `type`, `const`, `field` or `module` names: `snake` (`snake_case`), `Snake_Case`, `pascal`, `camel`, `upper`, or `keep` |
 | `reserved TEXT { , TEXT }` | Words a generated name may not be. A clash gets a trailing `_`. |
 | `label ID -> TEXT` | The default native type for a label (`path`, `secret`) |
 

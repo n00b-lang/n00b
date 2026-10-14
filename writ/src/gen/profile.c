@@ -7,7 +7,7 @@ typedef struct {
 } reader_t;
 
 static const char *const naming_kinds[WRIT_NAMING_COUNT] = {"fn", "type", "const", "field", "module"};
-static const char *const cases[] = {"keep", "snake", "upper", "pascal", "camel"};
+static const char *const cases[] = {"keep", "snake", "upper", "pascal", "camel", "Snake_Case"};
 
 static bool
 is(const writ_profile_t *profile, writ_sym_t sym, const char *text)
@@ -39,7 +39,7 @@ read_repr(reader_t *r, uint32_t id, const writ_node_t *item)
 {
     writ_profile_t *profile = r->profile;
     const writ_node_t *type = node(r, writ_node_child(r->unit, id, 0));
-    writ_repr_t repr = {.id = item->name, .node = id};
+    writ_repr_t repr = {.id = item->name, .item = item->kind, .node = id};
     uint32_t mode = writ_node_first_of(r->unit, id, WRIT_N_COPY_MODE);
     repr.zero_copy = mode && is(profile, node(r, mode)->name, "zero_copy");
     if (item->kind == WRIT_N_PACK_NATIVE) {
@@ -90,7 +90,7 @@ read_item(reader_t *r, uint32_t id)
     case WRIT_N_NAMING: {
         writ_sym_t style = node(r, writ_node_first_of(r->unit, id, WRIT_N_REF))->name;
         for (uint32_t k = 0; k < WRIT_NAMING_COUNT; k++) {
-            for (uint32_t c = 0; is(profile, item->name, naming_kinds[k]) && c < 5; c++) {
+            for (uint32_t c = 0; is(profile, item->name, naming_kinds[k]) && c < sizeof(cases) / sizeof(cases[0]); c++) {
                 if (is(profile, style, cases[c])) {
                     profile->naming[k] = (writ_case_t)c;
                     return;
@@ -98,7 +98,7 @@ read_item(reader_t *r, uint32_t id)
             }
         }
         writ_report(profile->session, WRIT_D_UNKNOWN_NAME, item->loc, "naming takes fn, type, const, field or module, "
-                                                                      "and snake, pascal, camel, upper or keep");
+                                                                      "and snake, Snake_Case, pascal, camel, upper or keep");
         return;
     }
     case WRIT_N_RESERVED:
@@ -169,10 +169,10 @@ writ_profile_read(writ_unit_t *unit, writ_sym_t language)
 }
 
 const writ_repr_t *
-writ_profile_repr(const writ_profile_t *profile, writ_sym_t id)
+writ_profile_repr(const writ_profile_t *profile, writ_sym_t id, writ_repr_form_t form)
 {
     for (size_t i = 0; i < profile->reprs.len; i++) {
-        if (profile->reprs.data[i].id == id) {
+        if (profile->reprs.data[i].id == id && profile->reprs.data[i].form == form) {
             return &profile->reprs.data[i];
         }
     }

@@ -102,6 +102,7 @@ typedef enum {
     WRIT_CASE_UPPER,
     WRIT_CASE_PASCAL,
     WRIT_CASE_CAMEL,
+    WRIT_CASE_TITLE_SNAKE,
 } writ_case_t;
 
 writ_str_t writ_name_case(writ_session_t *session, writ_str_t name, writ_case_t style);

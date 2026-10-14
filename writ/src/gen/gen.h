@@ -24,6 +24,7 @@ typedef enum {
 typedef struct {
     writ_sym_t       id;
     writ_repr_form_t form;
+    writ_node_kind_t item;
     bool             zero_copy;
     uint32_t         node;
 } writ_repr_t;
@@ -43,7 +44,7 @@ typedef struct {
 } writ_profile_t;
 
 const writ_profile_t *writ_profile_read(writ_unit_t *unit, writ_sym_t language);
-const writ_repr_t    *writ_profile_repr(const writ_profile_t *profile, writ_sym_t id);
+const writ_repr_t    *writ_profile_repr(const writ_profile_t *profile, writ_sym_t id, writ_repr_form_t form);
 const writ_repr_t    *writ_profile_default(const writ_profile_t *profile, writ_repr_form_t form);
 writ_str_t            writ_profile_name(const writ_profile_t *profile, writ_naming_kind_t kind, writ_str_t name);
 

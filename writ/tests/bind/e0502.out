@@ -1,2 +1,2 @@
-error[E0502]: the profile has no such representation for this slot: `string string` for a bytes slot
+error[E0502]: the profile has no such representation for this slot: `string list` for a bytes slot
   --> tests/bind/e0502.writ:3:5

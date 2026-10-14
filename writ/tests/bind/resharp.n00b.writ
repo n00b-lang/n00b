@@ -2,7 +2,7 @@ binding resharp for n00b import {
     module "resharp"
     load dynamic
     search_path "target/release"
-    buffer Regex::is_match.input as borrow
+    string Regex::is_match.input as string
     buffer Regex::find_all.input as borrow
     error * -> "resharp.Error"
 }
