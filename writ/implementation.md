@@ -132,12 +132,18 @@ Lantern builds one static library, `ir`, with its own `build.sh`. It needs
 ICU (`icu-uc`, `icu-i18n`) and C23 with GNU extensions. Our `build.sh`
 runs lantern's `build.sh` in `~/lantern-writ`, with `BUILD_DIR` pointing
 outside the workspace, so build output never shows up as a jj change. It
-then installs into a private prefix:
+then installs into a private prefix, `deps/prefix-<os>-<arch>`
+(`deps/prefix-darwin-arm64` on the Mac, `deps/prefix-linux-aarch64` in
+the container), stamped with the revision it was built from. On Linux,
+lantern builds with `-D_GNU_SOURCE`, because the pinned revision uses
+POSIX functions that glibc hides under strict C. A failed lantern build
+prints the tail of `deps/lantern-build-<platform>.log`.
 
-- `deps/prefix` on the Mac;
-- `deps/prefix-linux` in the container.
+Meson consumes the prefix through `ir.pc`.
 
-Meson consumes it from there through `ir.pc`.
+Lantern's grammar loader leaks its group matches when a grammar is
+freed. `tests/lsan.supp` suppresses that one leak for LeakSanitizer,
+which runs by default on Linux.
 
 ### 3.2 Other dependencies
 
@@ -150,7 +156,7 @@ Meson consumes it from there through `ir.pc`.
 | LLVM 22 `clang`, `llvm-nm`, `llvm-readobj`, `llvm-cxxfilt` | `libwrit`, at run time, through the process runner | Probes, export tables for Mach-O, ELF and PE/COFF, demangling |
 | Meson, Ninja | build | |
 | Python 3 | build and tests only | Grammar embedding, spec-example extraction, golden-test runner, bundle runner |
-| Podman (or Docker) | tests | The Linux platform |
+| Podman (or Docker) | tests | The Linux platform: `tools/linux.Containerfile` is Ubuntu 24.04 with LLVM 22 from apt.llvm.org |
 | On the Windows machine: Visual Studio Build Tools, LLVM 22, Python 3, Rust (MSVC toolchain) | tests | Executing verification bundles |
 
 The LLVM prefix is set by `-Dllvm_prefix=`. libclang and the LLVM tools
@@ -172,9 +178,12 @@ always come from that one prefix.
 Core, toolchain and gen share session internals, so they are one
 partially linked object (§4.2): splitting them would leave those internals
 global. None of them pulls in a heavy dependency. libclang is the one
-heavy dependency, so it lives alone in `libwrit_clang`, which uses only
-the public API. A compiler that needs the model links `libwrit` and never
-pulls in libclang. The CLI links both.
+heavy dependency, so it lives alone in `libwrit_clang`. It calls only
+`writ_*` functions, including libwrit's internal helpers (the arena,
+interning, the emitter, `writ_map`, the process runner), which are global
+because of their prefix. It never touches lantern, whose symbols are
+local to libwrit. A compiler that needs the model links `libwrit` and
+never pulls in libclang. The CLI links both.
 
 The components remain separate directories under `src/`, with separate
 size budgets (§4.13), and core never calls into toolchain or gen.
@@ -515,7 +524,7 @@ Dogfooding starts in slice 1:
   include/writ/
     writ.h  model.h  clang.h  toolchain.h  gen.h
   contracts/
-    writ.writ  resharp.writ
+    writ.writ  writ.draft.writ  resharp.writ
   defs/
     ast_nodes.def  model_fields.def  diag_codes.def  defaults.def  checks.def
   src/
@@ -524,8 +533,8 @@ Dogfooding starts in slice 1:
       syntax/   parse.c  ast.c  fmt.c
       model/    resolve.c  platform.c  types.c  expr.c  defaults.c  checks.c  views.c  rust.c
       plan/     plan.c  render.c
-      lower/    json.c  lower.c
-    clang/      tu.c  layout.c  importer.c  attrs.c
+      lower/    json.c
+    clang/      tu.c  layout.c  importer.c
     toolchain/  probe.c  exports.c  rustdoc.c  bundle.c
     gen/        profile.c  binding.c  conformance.c  c.c  rust.c  n00b.c
     cli/        main.c
@@ -538,8 +547,9 @@ Dogfooding starts in slice 1:
     soft_keywords.py  gen_model.py  keyword_corpus.py  source_text.py
     check_alloc.py  check_containers.py  loc_budget.py  dupes.py
   tests/
-    api/  host/  core/  enforce/  run_golden.py  extract_spec.py
-    skeleton/ parse/ check/ lower/ plan/ layout/ import/ symbols/ gen/ spec/ corpus/
+    run_golden.py  spec_examples.py  fmt_roundtrip.py  lsan.supp
+    api/  host/  core/  enforce/  fuzz/  skeleton/  check/  lower/  plan/  spec/
+    libc/  zlib/ (zlib.writ, draft/<platform>.writ, roundtrip.c)
 ```
 
 Each `src/` directory is one module, and each file is one responsibility.
@@ -563,21 +573,32 @@ internal header.
     keyword lexes as `IDENTIFIER`, so `len`, `cap`, `type`, `flags`,
     `error` and the rest remain usable as identifiers. The
     `keywords-are-identifiers` test parses a generated file that uses
-    every keyword as a parameter name, a type name, a constant name and an
-    expression operand.
+    every keyword as a parameter name, a field name, a type name, a
+    constant name and an expression operand.
+  - The grammar covers the whole core tier of `dsl.md`, including Rust
+    types, profiles and bindings. Resolution rejects with "not supported
+    yet" (`E0901`) the core constructs no slice has implemented yet, and
+    the parser reports extended-tier constructs as syntax errors.
 - **Parser.** `parse_pwz_new_for_start`, `parse_pwz_parse`,
   `parse_pwz_get_tree`, with `parse_grammar_set_error_recovery(g, false)`.
-- **Ambiguity.** PWZ resolves ambiguity silently, by picking the last
-  alternative. The grammar is unambiguous by construction: every
-  declaration starts with a keyword, and there are no optional-everything
-  sequences. `@penalty` and `@disambig` are never used. In addition:
-  - `parse_grammar_audit_ambiguity` runs as a test and must report
-    nothing;
-  - debug builds check `parse_forest_is_ambiguous` on every parse.
+- **Ambiguity.** PWZ resolves ambiguity silently, by picking one
+  alternative, and its forest reports more than one tree only for
+  ambiguity at the top level. The grammar is unambiguous by construction:
+  every declaration starts with a keyword, there are no
+  optional-everything sequences, and a pointer's target is never an
+  inline array (so `*[T; n]` is only an array view). `@penalty` and
+  `@disambig` are never used. Three tests guard it:
+  - `grammar-audit` runs `parse_grammar_audit_ambiguity`, which must
+    confirm no ambiguity;
+  - `spec-examples` and the other goldens record what every core example
+    parses and resolves to, so a misparse changes a golden;
+  - `fmt-roundtrip` formats every core example and test contract, and
+    requires the same syntax tree back.
 - **Tree to AST.**
   - `src/core/syntax/parse.c` flattens `PARSE_GROUP_ID` nodes, drops
     punctuation leaves, and copies strings and spans into the session's
     arena, adding the source's origin offsets.
+  - It records every token's location in the unit, for the formatter.
   - It then frees the parser and the token stream.
   - No lantern type appears outside that file.
 - **Syntax errors** are reported through lantern's diagnostics (§4.11),
@@ -603,7 +624,7 @@ internal header.
 | C++ mangling, including ctor/dtor variants | `clang_Cursor_getMangling`, `clang_Cursor_getCXXManglings` |
 | Integer constant macros | Detailed preprocessing record; tokenize the body and evaluate simple expressions; anything else becomes `unknown` |
 | Deleted, defaulted, virtual, abstract | `clang_CXXMethod_isDeleted`, `isDefaulted`, `isVirtual`, `isPureVirtual`, `clang_CXXRecord_isAbstract` |
-| `counted_by`, `lifetimebound`, `ownership_*`, `swift_attr` | Surfaced as `CXCursor_UnexposedAttr`. `attrs.c` tokenizes the attribute extent. |
+| `counted_by`, `lifetimebound`, `ownership_*`, `swift_attr` | Surfaced as `CXCursor_UnexposedAttr`; the importer tokenizes the attribute extent |
 | Trivially copyable, trivially relocatable | Compiled probe: `static_assert(std::is_trivially_copyable_v<T>)` per class, per platform |
 | Layout as the platform's real compiler does it | Compiled probe (§4.9) |
 | How each argument and result is passed (`abi_class`: registers, memory, `sret`, `byval`, coerced types) | A probe function per signature, compiled with `clang -S -emit-llvm -target <triple>`. The lowered LLVM signature is read back. |
@@ -767,11 +788,13 @@ typedef struct {
 
 - Children are a range in the unit's `core_list_t(uint32_t)` child-index
   list. Nothing points to anything, and there are no parent pointers.
-- There is **one** traversal, `writ_ast_walk`, which passes the path from
-  the root to the visitor.
-- The typed per-kind accessors (`writ_fn_params(unit, node)`) are generated
-  from `defs/ast_nodes.def`. They are the only way code reads node
-  structure.
+- Code reads node structure through three accessors: `writ_node`,
+  `writ_node_child` (by position) and `writ_node_first_of` (the first
+  child of a kind). Each node kind has a fixed child shape, recorded by
+  the `WRIT_SYNTAX` rows of `defs/ast_nodes.def` that produce it.
+- Node pointers are not held across a call that can add sources (a `use`
+  loads a file mid-resolution, which grows the node list); code keeps
+  node ids instead.
 
 **Interned types.** Types are hash-consed: each distinct type (`*[u8; n]`,
 `?Regex`, `utf8[len]`) is built once per session in a
@@ -835,8 +858,8 @@ code is listed once in a `.def` table and expanded where needed:
 
 | Table | Expanded into |
 |---|---|
-| `defs/ast_nodes.def` | Node kinds, typed accessors, formatter dispatch, tree dump |
-| `defs/model_fields.def` | Model records, the public view structs, the JSON writer, the JSON schema, the view-compatibility test |
+| `defs/ast_nodes.def` | Node kinds, the grammar-to-AST mapping, tree dump |
+| `defs/model_fields.def` | The public view structs, the enum name tables, the JSON writer |
 | `defs/diag_codes.def` | Codes, severities, default messages, `diag-codes.md` |
 | `defs/defaults.def` | The defaults table, each entry citing its `dsl.md` section |
 | `defs/checks.def` | Every check, with its tier and `dsl.md` section |
@@ -936,7 +959,7 @@ need. Later slices extend the same files.
 | `core/session.c`, `intern.c`, `loc.c`, `diag.c`, `output.c` | The session and its arena, interning, locations with line tables, diagnostics on lantern's machinery, the output sink |
 | `core/emit.c` | `writ_emit_t`, with the C row of the operator table |
 | `grammar/writ.bnf`, `core/syntax/parse.c` | The grammar for the constructs above, with every keyword soft; `writ_unit_add_source` / `writ_unit_add_file` |
-| `defs/ast_nodes.def`, `core/syntax/ast.c` | The node kinds, generated accessors, `writ_ast_walk` |
+| `defs/ast_nodes.def`, `core/syntax/ast.c` | The node kinds, the grammar-to-AST mapping, child accessors, the tree dump |
 | `core/model/types.c`, `expr.c`, `resolve.c`, `defaults.c`, `checks.c`, `views.c`, `defs/*.def` | The type table, expressions, resolution, defaults, checks and views for the constructs above; `writ_resolve` and the generated `model.h` |
 | `core/plan/plan.c` | `writ_plan_build` and `writ_model_fn_plan`, as specified in `call-plan.md` |
 | `gen/c.c`, `gen/conformance.c` | A C header, pointer-normalized shims and conformance tests, printed from plans |
@@ -989,15 +1012,26 @@ types in `call-plan.md`.
   `inflateInit`/`inflate`/`inflateEnd` on `z_stream`), whose `inflate`
   is the first function with several outcomes.
 
-The zlib contract is now imported from `zlib.h` rather than written by
-hand, and it is verified.
+The zlib contract is imported from `zlib.h` rather than written by hand,
+and it is verified:
 
-A small **libc variadic set**, since zlib has none:
+- `writ import --only` selects the functions above (and `deflateInit_`,
+  `inflateInit_`, which their macros expand to), and pulls in only the
+  types they reach. The draft is checked in per platform, as
+  `tests/zlib/draft/<platform>.writ`, because the headers' version
+  macros differ.
+- `tests/zlib/zlib.writ` `use`s the draft for its platform inside a
+  `when` block, and refines it until no `unknown` remains.
+
+A small **libc variadic set**, since zlib has none
+(`tests/libc/libc.writ`):
 
 - `snprintf` (`format printf`, `sizing query`);
 - `vsnprintf` (`va_list`);
-- `execl` (`... of cstr until null`);
-- `open` (an optional trailing mode argument);
+- `execl(path, arg0, ... of *cstr until null)`;
+- `open(path, flags, ... of c_uint)`: `... of T` with no end means the
+  caller chooses how many arguments, which is how C's optional trailing
+  mode argument is written;
 - `strtol` (an error channel with `reset before call`).
 
 **Core-tier constructs added:**
@@ -1024,21 +1058,27 @@ one of the modules reserved for it in §4.5.
 | `core/model/platform.c` | `writ_platform_from_triple` for the Mach-O and Linux triples; `when` evaluation |
 | `core/plan/plan.c` | Handles, `cstr`, spans and ownership actions, `sizing query`, outcomes with `classify`, `expand` for every element rule, plan-wide `reset` |
 | `core/runner.c` | The default process runner and the replaceable interface |
-| `core/lower/json.c`, `lower.c` | `writ_lower_json`, generated from `model_fields.def` |
+| `core/lower/json.c` | `writ_lower_json`; the per-view writers are generated from `model_fields.def` |
 | `clang/tu.c`, `layout.c` | Translation units per platform; `writ_clang_verify_layout` |
-| `clang/importer.c`, `attrs.c` | `writ_clang_import`, written out through `fmt.c` |
+| `clang/importer.c` | `writ_clang_import`: records with asserted layout, callbacks, enums, constant macros, and `expands` for macros that forward to a function |
 | `toolchain/probe.c` | Layout probes and `abi_class` probes (LLVM IR), compiled through the runner |
-| `toolchain/exports.c` | `writ_toolchain_verify_symbols` for Mach-O and ELF |
-| `gen/c.c`, `gen/conformance.c` | Probe sources; one shim per argument count used for variadic calls; `va_list` wrappers; conformance scenarios for the new shapes (released handles, streaming state, every `inflate` outcome, each variadic element rule) |
+| `toolchain/exports.c` | `writ_toolchain_verify_symbols` for Mach-O (text stubs included) and ELF |
+| `gen/c.c`, `gen/conformance.c` | One shim per function; a rest pack is expanded through a switch over its arity (up to eight arguments); `va_list` functions are called through generated forwarders; conformance scenarios for the new shapes (every reachable outcome, short and empty buffers, each variadic element rule) |
 | `cli/main.c` | `fmt`, `lower`, `import`, `verify` |
 | Build | `libwrit_clang`, shared libraries with export lists, pkg-config files, `build.sh --linux`, `tools/linux.Containerfile` |
 
 **Types introduced:** `writ_platform_t`, `writ_process_runner_t`, plus
 generated model fields.
 
-`contracts/writ.writ` starts here, covering the API as it exists. It grows
-with every slice, and its layout and symbols are verified against the
-built libwrit.
+`contracts/writ.writ` starts here, covering the API as it exists. It
+`use`s `contracts/writ.draft.writ`, which writ imports from its own
+public headers, and refines the facts the headers can't state. It grows
+with every slice, and its layout, ABI lowering and symbols are verified
+against the built libwrit.
+
+Spec examples are tagged by tier (`writ`, `writ-extended`,
+`writ-fragment`). `tests/spec/examples.out` records what each core example
+resolves to on its own, without the context other examples supply.
 
 **Tests:**
 
