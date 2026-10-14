@@ -7,7 +7,8 @@ headers="$3"
 work="$4"
 shift 4
 
-leaked="$(nm -g "$library" | awk '$2 != "U" && NF == 3 && $3 !~ /^_?writ_/ && $3 !~ /^_*(asan|ubsan|sanitizer)_/')"
+leaked="$(nm -g "$library" | awk '$2 != "U" && $2 != "w" && NF == 3 && $3 !~ /^_?writ_/ \
+    && $3 !~ /^_*(asan|ubsan|sanitizer)_/ && $3 !~ /^_*(init|fini|edata|end|bss_start)$/')"
 if [ -n "$leaked" ]; then
     echo "non-writ symbols are global in $library:" >&2
     echo "$leaked" >&2
@@ -27,5 +28,6 @@ int main(void) {
     return !ok;
 }
 EOF
-"$compiler" -std=c11 -I"$headers" "$work/host.c" "$library" "$@" -o "$work/host"
+"$compiler" -std=c11 -I"$headers" "$work/host.c" "$library" "$@" -Wl,-rpath,"$(cd "$(dirname "$library")" && pwd)" \
+    -o "$work/host"
 "$work/host"

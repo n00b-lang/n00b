@@ -1,0 +1,6 @@
+{
+    global:
+        writ_*;
+    local:
+        *;
+};

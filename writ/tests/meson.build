@@ -31,29 +31,19 @@ test(
     ),
 )
 
-external_libs = []
+external_libs = lantern_external
 if get_option('b_sanitize') != 'none'
     external_libs += '-fsanitize=' + get_option('b_sanitize')
 endif
-lantern_pc = run_command(
-    find_program('pkg-config'),
-    '--libs',
-    'ir',
-    env: {'PKG_CONFIG_PATH': lantern_prefix / 'lib' / 'pkgconfig'},
-    check: true,
-)
-foreach arg : lantern_pc.stdout().strip().split()
-    if arg != '-lir'
-        external_libs += arg
-    endif
-endforeach
 
-test(
-    'host-isolation',
-    find_program('host/isolation.sh'),
-    args: [compiler, libwrit, source_root / 'include', meson.current_build_dir() / 'isolation'] + external_libs,
-    depends: libwrit,
-)
+foreach library : [['host-isolation', libwrit], ['host-isolation-shared', libwrit_shared]]
+    test(
+        library[0],
+        find_program('host/isolation.sh'),
+        args: [compiler, library[1], source_root / 'include', meson.current_build_dir() / library[0]] + external_libs,
+        depends: library[1],
+    )
+endforeach
 
 foreach standard : [['c11', 'c'], ['c++17', 'c++']]
     test(
