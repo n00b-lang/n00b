@@ -2,6 +2,7 @@
 
 #include "syntax.h"
 
+#include "parse/ambiguity.h"
 #include "parse/bnf.h"
 #include "parse/forest.h"
 #include "parse/grammar.h"
@@ -17,6 +18,7 @@
 typedef enum {
     WRIT_FORM_NODE,
     WRIT_FORM_CHAIN,
+    WRIT_FORM_WRAP,
     WRIT_FORM_LEXICAL,
 } writ_form_t;
 
@@ -25,6 +27,7 @@ typedef enum {
     WRIT_NAME_TOKEN,
     WRIT_NAME_STRING,
     WRIT_NAME_INNER,
+    WRIT_NAME_TEXT,
 } writ_name_form_t;
 
 typedef struct {
@@ -63,10 +66,16 @@ static const scan_lex_number_form_t lexer_numbers[] = {
     {0},
 };
 
+static const scan_lex_sigil_t lexer_sigils[] = {
+    {.prefix = CORE_STRING_STATIC("'"), .tok = CORE_STRING_STATIC("LIFETIME")},
+    {0},
+};
+
 static const scan_lex_spec_t writ_lexer = {
     .name          = CORE_STRING_STATIC("writ"),
     .comments      = lexer_comments,
     .strings       = lexer_strings,
+    .sigils        = lexer_sigils,
     .number_forms  = lexer_numbers,
     .soft_keywords = writ_soft_keywords,
     .tok_ident     = CORE_STRING_STATIC("IDENTIFIER"),
@@ -172,9 +181,27 @@ rule_of(const converter_t *converter, parse_tree_t *tree)
 }
 
 static writ_sym_t
-node_name(converter_t *converter, parse_tree_t *tree, const syntax_rule_t *rule)
+compact_sym(converter_t *converter, writ_loc_t loc)
+{
+    writ_str_t text = writ_loc_text(converter->session, loc);
+    core_buffer_t *buffer = core_buffer_empty();
+    for (size_t i = 0; i < text.length; i++) {
+        if (text.data[i] != ' ' && text.data[i] != '\t' && text.data[i] != '\n' && text.data[i] != '\r') {
+            core_buffer_putc(buffer, text.data[i]);
+        }
+    }
+    writ_sym_t sym = writ_intern(converter->session, buffer->data ? buffer->data : "", buffer->byte_len);
+    core_buffer_free(buffer);
+    return sym;
+}
+
+static writ_sym_t
+node_name(converter_t *converter, parse_tree_t *tree, const syntax_rule_t *rule, writ_loc_t span)
 {
     size_t count = core_tree_num_children(tree);
+    if (rule->name_form == WRIT_NAME_TEXT) {
+        return compact_sym(converter, span);
+    }
     if (rule->name_form == WRIT_NAME_NONE || rule->name_child >= count) {
         return 0;
     }
@@ -225,7 +252,8 @@ convert(converter_t *converter, parse_tree_t *tree, writ_loc_t *loc, writ_sym_t 
         *loc = span;
         return has_span;
     }
-    if (!rule || (rule->form == WRIT_FORM_CHAIN && count == 1)) {
+    if (!rule || (rule->form == WRIT_FORM_CHAIN && count == 1)
+        || (rule->form == WRIT_FORM_WRAP && converter->scratch.len - mark <= 1)) {
         *lexeme_out = lexeme;
         *loc = span;
         return has_span;
@@ -236,7 +264,7 @@ convert(converter_t *converter, parse_tree_t *tree, writ_loc_t *loc, writ_sym_t 
         .loc         = span,
         .first_child = (uint32_t)unit->children.len,
         .child_count = (uint32_t)(converter->scratch.len - mark),
-        .name        = node_name(converter, tree, rule),
+        .name        = node_name(converter, tree, rule, span),
         .payload     = lexeme,
     };
     for (size_t i = mark; i < converter->scratch.len; i++) {
@@ -331,11 +359,8 @@ writ_unit_add_source(writ_unit_t *unit, writ_source_kind_t kind, writ_origin_t o
 }
 
 writ_status_t
-writ_unit_add_file(writ_unit_t *unit, writ_str_t path, uint32_t *source_id)
+writ_unit_read_file(writ_unit_t *unit, writ_str_t path, uint32_t *source_id)
 {
-    if (!unit || !path.data) {
-        return WRIT_INVALID_ARGUMENT;
-    }
     writ_str_t terminated = writ_str_copy(unit->session, path.data, path.length);
     FILE *file = fopen(terminated.data, "rb");
     if (!file) {
@@ -351,5 +376,43 @@ writ_unit_add_file(writ_unit_t *unit, writ_str_t path, uint32_t *source_id)
         return WRIT_IO_FAILED;
     }
     writ_origin_t origin = {.host_path = terminated};
-    return writ_unit_add_source(unit, WRIT_SOURCE_CONTRACT_FILE, origin, (writ_str_t){data, read}, source_id);
+    uint32_t source = writ_source_add(unit->session, WRIT_SOURCE_CONTRACT_FILE, origin, terminated,
+                                      (writ_str_t){data, read});
+    if (source_id) {
+        *source_id = source;
+    }
+    return parse_source(unit, source, WRIT_SOURCE_CONTRACT_FILE);
+}
+
+writ_status_t
+writ_unit_add_file(writ_unit_t *unit, writ_str_t path, uint32_t *source_id)
+{
+    if (!unit || !path.data) {
+        return WRIT_INVALID_ARGUMENT;
+    }
+    size_t first_diag = unit->session->diags.len;
+    writ_status_t status = writ_unit_read_file(unit, path, source_id);
+    writ_diag_flush(unit->session, first_diag);
+    return status;
+}
+
+writ_str_t
+writ_syntax_audit(writ_session_t *session, bool candidates)
+{
+    writ_grammar_t *grammar = grammar_for(session);
+    if (!grammar) {
+        return writ_cstr("the grammar does not load\n");
+    }
+    parse_ambiguity_options_t options = {.max_witness_tokens = 12, .max_findings = 512,
+                                         .include_candidates = candidates};
+    parse_ambiguity_list_t findings = parse_grammar_audit_ambiguity(grammar->grammar, &options);
+    core_buffer_t *buffer = core_buffer_empty();
+    for (size_t i = 0; i < findings.len; i++) {
+        const parse_ambiguity_finding_t *finding = &findings.data[i];
+        core_buffer_printf(buffer, "%s %s in <%.*s>: %.*s\n", parse_ambiguity_severity_name(finding->severity),
+                           parse_ambiguity_kind_name(finding->kind), (int)finding->nonterminal_name.u8_bytes,
+                           finding->nonterminal_name.data, (int)finding->witness.u8_bytes, finding->witness.data);
+    }
+    parse_ambiguity_list_free(&findings);
+    return writ_str_from_buffer(session, buffer);
 }

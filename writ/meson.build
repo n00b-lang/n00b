@@ -53,6 +53,7 @@ core_sources = files(
     'src/core/syntax/ast.c',
     'src/core/syntax/parse.c',
     'src/core/model/defaults.c',
+    'src/core/model/platform.c',
     'src/core/model/types.c',
     'src/core/model/expr.c',
     'src/core/model/resolve.c',

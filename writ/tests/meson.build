@@ -81,6 +81,32 @@ keyword_corpus = custom_target(
 test('keywords-are-identifiers', writ_exe, args: ['parse', keyword_corpus], depends: keyword_corpus)
 
 test(
+    'spec-examples',
+    python,
+    args: [
+        golden,
+        source_root / 'tests' / 'spec' / 'examples.out',
+        '--',
+        python,
+        source_root / 'tests' / 'spec_examples.py',
+        writ_exe.full_path(),
+        'dsl.md',
+        'call-plan.md',
+    ],
+    depends: writ_exe,
+)
+
+test(
+    'grammar-audit',
+    executable(
+        'grammar-audit',
+        'core/grammar_audit.c',
+        include_directories: writ_inc,
+        dependencies: [writ_dep, lantern_headers],
+    ),
+)
+
+test(
     'plan-golden',
     python,
     args: [golden, source_root / 'tests' / 'plan' / 'zlib.plan', '--', writ_exe, 'plan', 'tests/skeleton/zlib.writ'],

@@ -50,7 +50,7 @@ construct moves to the core tier when a library being bound needs it.
 
 ## 2. A quick taste
 
-```
+```writ
 library zlib
 link    "z"
 header  <zlib.h>
@@ -106,7 +106,7 @@ Terminology used throughout:
 
 ### 3.2 Contract header
 
-```
+```writ
 library sqlite3                  # logical name; namespace for generated code
 link    "sqlite3"                # library to link / dlopen; repeatable
 header  <sqlite3.h>              # repeatable; parsed together, in order
@@ -171,7 +171,7 @@ header uses the C name. Generators resolve it per platform.
 
 ### 4.2 Pointers
 
-```
+```writ-fragment
 *T          non-null pointer to one T
 ?T          nullable pointer to one T
 *[T; n]     non-null pointer to n contiguous Ts         (an array view; see §6)
@@ -192,7 +192,7 @@ default mode.
 
 ### 4.3 Aliases, opaque types, handles
 
-```
+```writ
 type uLong = c_ulong                 # pure alias; same type
 
 opaque sqlite3                       # incomplete type; only ever behind a pointer
@@ -219,7 +219,7 @@ context managers, and similar constructs.
 integers, GL object names and the like are handles too. For these, give the
 value that means "none" instead of relying on null:
 
-```
+```writ
 handle Fd     = c_int   none -1  release close
 handle Socket = uptr    none ~0  release closesocket    # Windows SOCKET
 
@@ -244,7 +244,7 @@ never change the type.
 **Thread rules on handles.** Whether a handle may be used from several
 threads is a fact about the handle type, so it is stated there:
 
-```
+```writ
 handle Regex = *opaque release resharp_free  shared
 handle Window = *GtkWindow release gtk_window_destroy  thread_affine
 ```
@@ -265,7 +265,7 @@ references instead of having a single owner. Examples are COM
 (`g_object_ref`/`g_object_unref`), and Swift's `SWIFT_SHARED_REFERENCE`.
 Declare these with `refcounted` and a retain function:
 
-```
+```writ-extended
 handle CFString = *__CFString  refcounted retain CFRetain release CFRelease
 handle Widget   = *GtkWidget   refcounted retain g_object_ref release g_object_unref
                                floating sink g_object_ref_sink
@@ -289,14 +289,14 @@ wrapper when the target language needs one.
 handle type with its own release function. Upgrading it to a strong
 reference is an ordinary function that may fail:
 
-```
+```writ
 handle WeakRef = *GWeakRef release g_weak_ref_clear
 fn g_weak_ref_get(w: WeakRef) -> own ?GObj     # null if the object is gone
 ```
 
 ### 4.4 Records
 
-```
+```writ
 struct z_stream @size(112) @align(8) {
     next_in:   ?[u8; avail_in]       @0
     avail_in:  c_uint                 @8
@@ -343,7 +343,7 @@ it actually produces, either by C rules or explicitly.
 
 Layout modifiers, which do change layout and must match the header:
 
-```
+```writ-fragment
 struct Packed @pack(1) { ... }           # #pragma pack(1)
 struct Wide   @align(64) { ... }         # alignas on the record
 field:  u32 @align(16)                   # alignas on a field
@@ -358,7 +358,7 @@ Inline fixed arrays use brackets with no pointer: `name: [c_char; 16]`.
 A **flexible array member** is an inline array in the last position whose
 count names another field:
 
-```
+```writ
 struct Packet {
     count: u32
     items: [Item; count]                 # FAM; sizeof(Packet) excludes it
@@ -367,7 +367,7 @@ struct Packet {
 
 ### 4.5 Unions
 
-```
+```writ-extended
 union Raw { i: i64, d: f64, p: *void }   # plain C union
 
 struct Value {
@@ -386,7 +386,7 @@ only tells generators which arm they may read.
 
 ### 4.6 Enums, flags, logical views
 
-```
+```writ
 enum ValueKind : c_int {
     VK_INT = 1, VK_REAL = 2, VK_TEXT = 3, VK_NULL = 5,
 }
@@ -404,7 +404,7 @@ them. `closed` says any other value is a contract violation.
 The `as` keyword attaches a **logical view** to a physical type without
 changing its layout:
 
-```
+```writ-fragment
 ok:    c_int as bool          # 0 = false, non-zero = true
 kind:  c_int as ValueKind
 when:  i64   as unix_seconds  # a named view generators can map (e.g. to datetime)
@@ -414,7 +414,7 @@ when:  i64   as unix_seconds  # a named view generators can map (e.g. to datetim
 clause removes its error values first, and the view applies to what is
 left:
 
-```
+```writ
 fn resharp_is_match(r: Regex, input: bytes[len] null if empty, len: usize) -> i32 as bool
   error ret == -1 via last_error
 ```
@@ -424,7 +424,7 @@ rejects a view whose success domain doesn't fit the view type.
 
 **`none` values.** Any type can name the value that means "absent":
 
-```
+```writ
 struct Span { start: usize, end: usize } none { start: usize_max, end: usize_max }
 handle Fd = c_int none -1 release close
 ```
@@ -435,14 +435,16 @@ null and needs no declaration.
 
 ### 4.7 Target and version conditionals
 
-```
+```writ
 when os == windows {
     type wchar = u16
 } else {
     type wchar = u32
 }
 
-when platform in [x86_64-*, aarch64-*] { ... }
+when platform in [x86_64-*, aarch64-*] {
+    type reg = u64
+}
 ```
 
 Conditions can test `os`, `arch`, `abi`, `platform` (a triple glob),
@@ -451,15 +453,17 @@ Conditions can test `os`, `arch`, `abi`, `platform` (a triple glob),
 **Library versions.** A library declares how to find out its version at
 runtime. Then declarations can say when they appeared or disappeared:
 
-```
+```writ
 version query sqlite3_libversion_number() -> c_int   # 3038000 for 3.38.0
         format "MAJOR*1000000 + MINOR*1000 + PATCH"
 
 fn sqlite3_error_offset(db: Db) -> c_int  since 3.38
-fn sqlite3_old_api(...)                   removed 3.40
+fn sqlite3_old_api(db: Db) -> c_int       removed 3.40
 
 when version >= 3.45 {
-    refine sqlite3_prepare_v3 { ... }     # a contract that changed between versions
+    refine sqlite3_prepare_v3 {           # a contract that changed between versions
+        pzTail: out ??c_char with zSql
+    }
 }
 ```
 
@@ -474,7 +478,7 @@ given.
 built with an option: a Cargo feature, a `configure` flag, a compile-time
 define. Declare the feature, then condition on it:
 
-```
+```writ
 feature capture_groups = cargo "experimental_capture_groups"
 feature column_metadata = define "SQLITE_ENABLE_COLUMN_METADATA"
 
@@ -494,7 +498,7 @@ functions like `weak` ones: present or not, decided at load time.
 is also valid DSL with every assertion filled in, so you can paste it back in
 to pin the layout:
 
-```
+```writ-fragment
 struct z_stream @size(112) @align(8)   # x86_64-linux-gnu
   @0    next_in    ?[u8; avail_in]    size 8  align 8
   @8    avail_in   c_uint              size 4  align 4
@@ -506,7 +510,7 @@ struct z_stream @size(112) @align(8)   # x86_64-linux-gnu
 For records that use bit addressing (§4.9), the report prints bit offsets
 and shows which storage unit each field falls in:
 
-```
+```writ-fragment
   @bit 48   flags      u3     unit byte 6       bits 48..50
   @bit 51   frag_off   u13    units bytes 6–7   bits 51..63   (straddles)
 ```
@@ -555,7 +559,7 @@ MSVC: allocation unit, order, and whether fields may straddle a unit. Write
 `bits N`, and optionally assert the bit offset within the record with
 `@bit(N)`. `verify` checks it with a probe on each platform:
 
-```
+```writ-extended
 struct Mode {
     readonly: u32 bits 1   @bit(0)
     kind:     u32 bits 3   @bit(1)
@@ -569,7 +573,7 @@ The library uses shifts and masks itself. This is not a C bitfield, so it
 doesn't depend on the compiler. It is a logical view over one integer's
 *value*: bit 0 is the least significant, whatever the byte order.
 
-```
+```writ-extended
 struct Header {
     word: u32 as packed {
         present:  bool  @0
@@ -588,7 +592,7 @@ the record, using the record's storage unit and bit order. Fields can have
 any width from 1 to 64 bits. They can start at any bit and straddle unit
 boundaries:
 
-```
+```writ-extended
 struct IPv4Header layout explicit bits in u8 msb0 @size(20) {
     version:   u4                 @bit(0)
     ihl:       u4                 @bit(4)
@@ -623,7 +627,7 @@ have side effects. `access u32` on a record or field makes generators use
 aligned loads and stores of exactly that width. Writing a sub-unit field
 becomes read-modify-write of its unit, preserving the other bits:
 
-```
+```writ-extended
 struct UartCtrl layout explicit bits in u32le lsb0 @size(4) access u32 live {
     enable:   bool  @bit(0)
     parity:   u2 as Parity  @bit(1)
@@ -645,7 +649,7 @@ at the ABI a bit-slice is a **shape** (§6) of up to three slots: a base
 pointer, a starting bit offset, and a length in elements. Like other
 shapes, a binding hides the derived slots and passes one bit-slice value.
 
-```
+```writ-fragment
 *[bit in U order; n]             # n bits starting at bit 0 of the pointee
 *[bit in U order; n from s]      # n bits starting at bit offset s
 *[uW in U order; n]              # n packed W-bit elements (W from 1 to 64)
@@ -653,7 +657,7 @@ shapes, a binding hides the derived slots and passes one bit-slice value.
 
 Examples:
 
-```
+```writ-extended
 # Linux-style bitmaps: unsigned long words, LSB-first in each word
 fn bitmap_set(map: inout *[bit in c_ulong lsb0; nbits from start],
               start: c_uint, nbits: c_uint)
@@ -744,7 +748,7 @@ takes an rvalue or calls `release()`.
 If the value is consumed only when the call succeeds, say so with
 `on error x: not consumed`:
 
-```
+```writ
 fn setvbuf(
     stream: File,
     buf:    keep ?[c_char; size] until fclose(stream),
@@ -770,7 +774,7 @@ fn fclose(f: consume File) -> c_int error ret != 0
 A span says how long a pointer stays valid **for the side that did not
 allocate it**.
 
-```
+```writ-fragment
 for call                       # only during this call (default for params)
 static                         # forever; nobody frees it
 static per thread              # forever, but only on the thread that obtained it
@@ -781,7 +785,7 @@ unknown                        # not yet determined: generators refuse to emit s
 
 An event is a call involving a specific object:
 
-```
+```writ-fragment
 until sqlite3_finalize(stmt)
 until step(stmt), reset(stmt), finalize(stmt)   # any of these
 until release(stmt)                             # whatever stmt's handle release is
@@ -800,7 +804,7 @@ to copy the data out right after the call (§12.4).
 
 Three forms:
 
-```
+```writ-fragment
 -> own T release F         # caller owns it; must call F exactly once
 -> T with x                # borrowed from x; dies with x
 -> T until EVENT...        # borrowed; dies at the event
@@ -809,7 +813,7 @@ Three forms:
 
 The same suffixes apply to `out` params that receive a pointer:
 
-```
+```writ
 fn sqlite3_open_v2(
     filename: *cstr,
     ppDb:     out *Db,                  # Db is a handle, so caller owns it by default
@@ -840,7 +844,7 @@ written.
 `release F` names a release function. `alloc A` names the allocator a
 consumed pointer must come from. Allocator domains are declared once:
 
-```
+```writ
 allocator malloc       alloc malloc        release free
 allocator sqlite       alloc sqlite3_malloc release sqlite3_free
 ```
@@ -853,7 +857,7 @@ allocator domains to copy data into the right heap before a `consume`.
 Some APIs take an argument that decides the lifetime of another argument.
 `sqlite3_bind_text` is the classic example:
 
-```
+```writ-extended
 fn sqlite3_bind_text(
     stmt: Stmt,
     i:    c_int,
@@ -874,7 +878,7 @@ simplest and safe, or expose all of them.
 
 Records use the same vocabulary, relative to whoever owns the record:
 
-```
+```writ
 struct Config {
     name:   own *cstr release free        # freeing Config means freeing name
     parent: ?Config with self            # back-pointer, borrowed
@@ -888,7 +892,7 @@ fn config_free(c: consume *Config)        # deep release semantics come from fie
 the container and its contents can have different owners. GIR calls these
 cases `transfer full`, `transfer container` and `transfer none`:
 
-```
+```writ
 # transfer full: caller owns the array AND each string; g_strfreev frees both
 fn g_strsplit(s: *cstr, delim: *cstr, max: c_int)
     -> own *[own *cstr; until null] release g_strfreev
@@ -911,7 +915,7 @@ are all freed together is owned by one handle (the arena, the document, the
 graph). Every interior pointer is `with` that owner, however the parts point
 at each other, cycles included:
 
-```
+```writ
 handle Doc = *xmlDoc release xmlFreeDoc
 
 struct xmlNode {
@@ -939,7 +943,7 @@ Some pass by value, some by reference, some copy in and copy out (Ada
 collector that moves objects. Three facts about the C side decide what is
 legal:
 
-```
+```writ-fragment
 identity              # C cares about the address itself
 live                  # the memory's contents matter while the call is running
 may overlap x[, y]    # this argument is allowed to share memory with x (and y)
@@ -951,7 +955,7 @@ return it. The target must pass its real storage, and that storage must not
 move for the stated span. `keep` and `consume` (without `alloc`) imply
 `identity`. Write it explicitly for the other cases:
 
-```
+```writ-extended
 fn hashmap_insert(m: Map, key: *void identity, val: *void) -> c_int   # keyed by address
 fn list_contains(l: List, node: *Node identity) -> bool              # compares pointers
 ```
@@ -961,7 +965,7 @@ still running. Usually that's a callback, sometimes another thread or a
 signal handler. A copy would be stale on one side or the other. For example,
 C writes progress into a buffer, and a progress callback reads it:
 
-```
+```writ-extended
 fn transfer(
     status: inout *Status live,              # C updates it; on_progress reads it
     on_progress: Progress for call,
@@ -978,7 +982,7 @@ share any memory with another pointer argument of the same call. Read-only
 arguments may share memory with each other freely. `may overlap` grants
 permission to share:
 
-```
+```writ-extended
 fn memcpy(dest: out *[u8; n], src: *[u8; n], n: usize) -> *void with dest
 fn memmove(dest: out *[u8; n] may overlap src, src: *[u8; n], n: usize) -> *void with dest
 
@@ -1046,7 +1050,7 @@ high-level API and fills it in automatically.
 
 ### 6.1 Array views
 
-```
+```writ-fragment
 *[T; n]                  # exactly n elements; n is a sibling param/field or expression
 *[T; cap c, len l]       # capacity c on input, l elements valid on output
 *[T; until 0]            # sentinel-terminated (any value; `null` for pointer arrays)
@@ -1073,7 +1077,7 @@ Rules:
 
 Common idioms:
 
-```
+```writ
 # (ptr, len) input slice
 fn write(fd: c_int, buf: *[u8; count], count: usize) -> isize error ret < 0 via errno
 
@@ -1104,7 +1108,7 @@ output buffer must be. There are three protocols:
 
 Generators that return complete results emit the matching loop. When a
 function has more than one capacity-bounded output, the clause names the
-one it applies to: `sizing retry out needs ret`.
+one it applies to: `sizing retry for out needs ret`.
 
 **Empty arrays and null.** `*[T; n]` is non-null **even when `n` is 0**.
 Callees that build slices from (pointer, length) pairs require it; Rust's
@@ -1121,7 +1125,7 @@ non-null pointer for an empty array. Two forms relax the rule:
 scalar array, count the array in records and give the physical pointer
 type with `as`:
 
-```
+```writ-fragment
 struct Span { start: usize, end: usize }
 
 out: out *[Span; cap / 2] as *usize
@@ -1132,9 +1136,9 @@ with no padding.
 
 A truncating output under `sizing retry` looks like this:
 
-```
+```writ
 fn resharp_find_all(r: Regex, input: bytes[len] null if empty, len: usize,
-                    out: out *[Span; cap / 2, len min(ret, cap / 2)] as *usize,
+                    out: out *[Span; cap cap / 2, len min(ret, cap / 2)] as *usize,
                     cap: usize) -> isize
   sizing retry needs ret
 ```
@@ -1150,7 +1154,7 @@ the lowered form, and `fmt` keeps the spelling the author used:
 
 ### 6.2 Strings
 
-```
+```writ-fragment
 cstr          = [c_char; until 0] with library encoding     (use as *cstr)
 cstr(bytes)   NUL-terminated, no encoding (opaque bytes)
 utf8[n]       counted UTF-8, not terminated                 (§6.1)
@@ -1164,7 +1168,7 @@ reject interior NULs (or say what it does with them).
 
 ### 6.3 Callbacks and user data
 
-```
+```writ
 callback Cmp = fn(a: *void, b: *void) -> c_int
   thread same                  # invoked on the calling thread
   unwind no                    # must not throw/panic across
@@ -1182,7 +1186,7 @@ callback Handler = fn(ud: *void userdata, ev: *Event) -> void
 
 fn bus_subscribe(
     bus: Bus,
-    cb:  Handler keep until bus_unsubscribe(bus, ret), release(bus),
+    cb:  keep Handler until bus_unsubscribe(bus, ret), release(bus),
     ud:  ?void userdata cb,
 ) -> SubId
 ```
@@ -1202,7 +1206,7 @@ implements and hands over by pointer. Some functions are instead provided
 by the consumer *by symbol*: plugin entry points, hooks a library looks up
 by name. Those go in an `interface` provided by the client (§9.1):
 
-```
+```writ
 interface plugin provided by client {
     fn plugin_init(host: *HostApi, argv: *[cstr; argc], argc: c_int) -> c_int
       pack rest argv
@@ -1219,7 +1223,7 @@ whoever *calls* it.
 The `error` clause on a function gives the failure condition, and `via`
 says where the detail comes from:
 
-```
+```writ-fragment
 error ret != SQLITE_OK                     via sqlite3_extended_errcode(db)
 error ret == null                          via errno
 error ret < 0                              via -ret as Errno
@@ -1234,7 +1238,7 @@ exceptions, `Result`, or multiple returns.
 channel, separate from the return value: a thread-local message, `errno`,
 `GetLastError`, a message tied to a handle. Declare the channel once:
 
-```
+```writ
 error_channel errno per thread {
     value errno_location()
 }
@@ -1277,7 +1281,7 @@ kinds of success, or several kinds of failure with different rules about
 their outputs. `outcome` declares them, in order. The first whose `when`
 predicate holds is the call's outcome:
 
-```
+```writ
 fn inflate(strm: inout *z_stream, flush: c_int) -> c_int
   outcome done     success when ret == Z_STREAM_END
   outcome progress success when ret == Z_OK
@@ -1309,7 +1313,7 @@ Functions carry two kinds of extra facts:
 **Effects** are an open set. A few are built in and have defined meaning to
 generators. Anyone can declare more:
 
-```
+```writ-extended
 # built in: these have meaning to generators
 #   blocking   may block the calling thread (release the GIL, keep off event loops)
 #   noreturn   never returns
@@ -1350,7 +1354,7 @@ fn strlen(s: *cstr) -> usize
 
 **Constraints** have fixed meanings:
 
-```
+```writ
 fn gtk_widget_show(w: Widget)       thread main
 fn sqlite3_close_v2(db: consume Db) thread any
 fn pthread_mutex_unlock(m: *Mutex)  thread same_as lock(m)    # same thread that locked it
@@ -1395,7 +1399,7 @@ through a pack without either of them knowing the other's conventions.
 
 #### Rest packs (positional varargs)
 
-```
+```writ-extended
 # homogeneous array: the most common lowering, and what most languages use internally
 fn sum(xs: *[f64; n], n: usize) -> f64
   pack rest xs
@@ -1443,7 +1447,7 @@ both directions.
 C has no keyword arguments, so libraries lower them in a handful of
 recurring ways. A `keywords` record states which one:
 
-```
+```writ-extended
 # options struct with a presence bitmask (bit i = field i was supplied)
 keywords OpenOpts presence mask(present) {
     present:    u32
@@ -1537,7 +1541,7 @@ A **label** is metadata on a value. It names what the value *is*, apart
 from its type. Labels never change layout, type, or generated calls.
 Bindings and tools decide what each label means to them.
 
-```
+```writ-extended
 label path            # a filesystem path
 label secret          # must not be logged, persisted, or left in memory
 label fd_number       # an integer that is a file descriptor (but not owned here)
@@ -1613,7 +1617,7 @@ expect.
 In the contract, the source name and the symbol can each be overridden,
 per platform where it matters:
 
-```
+```writ
 fn kv_open(path: *cstr, out_db: out *Db) -> c_int
   source "kv_open"                # default; shown for completeness
   symbol "kv_open"                # default
@@ -1621,7 +1625,7 @@ fn kv_open(path: *cstr, out_db: out *Db) -> c_int
 
 Target-language names are set in a binding:
 
-```
+```writ
 binding kv for rust import {
     strip_prefix "kv_"
     name kv_open "Db::open"       # becomes an associated fn on Db
@@ -1633,7 +1637,7 @@ binding kv for rust import {
 Even in plain C, the name in the header is often not the symbol you link
 against:
 
-```
+```writ
 # a macro that expands to a per-target function call
 fn errno_location() -> *c_int static per thread
   source "errno" macro
@@ -1664,7 +1668,7 @@ really `deflateInit_(strm, level, ZLIB_VERSION, sizeof(z_stream))`.
 `expands` declares the function callers see, and how it reaches the
 symbol:
 
-```
+```writ
 fn deflateInit(strm: inout *z_stream, level: c_int) -> c_int
   expands deflateInit_(strm, level, ZLIB_VERSION, sizeof(z_stream))
 ```
@@ -1675,7 +1679,7 @@ to a real symbol.
 
 Global variables use `var` (§7.4). Their symbols vary just as much:
 
-```
+```writ
 var stdout: File
   symbol "__stdoutp" when os == macos
   symbol "stdout"    when libc == glibc
@@ -1686,7 +1690,7 @@ var stdout: File
 Global data is part of the boundary too, and it has its own lifetime and
 access questions. `var` declares a data symbol:
 
-```
+```writ-extended
 var zlib_version: [c_char; until 0] const                 # read-only data
 var optind: c_int  mut                                    # getopt state; no synchronization
 var environ: *[cstr; until null] mut  live
@@ -1802,7 +1806,7 @@ None of this changes the contract format.
 
 ### 8.2 Classes
 
-```
+```writ-extended
 lang c++
 header <kv/db.hpp>
 
@@ -1846,7 +1850,7 @@ Class properties are imported from clang and asserted like layout:
 
 At the ABI level these are ordinary functions:
 
-```
+```writ-extended
 ctor open(path: *cstr)
   # lowers to: fn(this: out *Db identity, path: *cstr)
   # Itanium C1 "complete object" symbol: _ZN2kv2DbC1EPKc
@@ -1908,7 +1912,7 @@ can't *catch* it. Normally the generator routes `throws` through a shim that
 catches and converts to an error, using the same `error` clause machinery
 as §6.4:
 
-```
+```writ-extended
 method put(this: inout, key: *cstr, val: *[u8; n], n: usize)
   throws {
     std::bad_alloc     => error ENOMEM
@@ -1940,7 +1944,7 @@ class `implementable`. The generator then emits a C++ shim subclass. Each
 virtual method in it forwards to a target-language callback (§6.3) through a
 userdata pointer:
 
-```
+```writ-extended
 class Listener = kv::Listener implementable {
     virtual on_event(this: inout, ev: *Event) -> void  slot 2
     dtor virtual
@@ -1964,7 +1968,7 @@ stdlib and verified like any other layout.
 View types fit the array-descriptor idiom from §6.1 directly. Note that the
 field order differs between implementations:
 
-```
+```writ-extended
 struct StrView = std::string_view trivial {
     when stdlib == libstdcxx { len: usize,  data: *[c_char; len] }
     else                     { data: *[c_char; len], len: usize }   # libc++, MSVC
@@ -2027,7 +2031,7 @@ and is mostly imported (§12.2).
 
 #### Describing a Rust API
 
-```
+```writ
 library resharp
 lang rust
 crate resharp "0.7.6"
@@ -2132,7 +2136,7 @@ either side.
 - A callback type is a one-function interface, provided by whoever supplies
   the pointer.
 
-```
+```writ
 library audio_host
 interface host provided by library {          # the default, written out
     fn host_log(level: c_int, msg: *cstr)
@@ -2140,7 +2144,7 @@ interface host provided by library {          # the default, written out
 }
 interface plugin provided by client {
     fn plugin_init(host_version: u32) -> c_int
-    fn plugin_process(buf: inout *[f32; n], n: usize)  effects none  thread any
+    fn plugin_process(buf: inout *[f32; n], n: usize)  thread any
     var plugin_name: [c_char; until 0] const
 }
 ```
@@ -2195,7 +2199,7 @@ non-C language can produce them more cheaply.
 language, the contract's span says how long C may hold memory. The profile
 supplies the operations to pin and unpin it:
 
-```
+```writ
 profile java {
     memory gc moving
     pin    for call  via "Linker.Option.critical(true)"   # heap access during a downcall
@@ -2244,7 +2248,7 @@ different choices:
 **Import binding**: the target language calls something another side
 provides.
 
-```
+```writ-extended
 binding sqlite3 for rust import {
     module  "sqlite"
     strip_prefix "sqlite3_"
@@ -2264,14 +2268,14 @@ binding sqlite3 for rust import {
     label   path                 -> "&std::path::Path"
 
     # surface control
-    hide    sqlite3_*16*                                   # UTF-16 variants not exposed
-    raw     sqlite3_some_unknown_api                       # expose unsafe raw binding despite `unknown`
+    hide    "sqlite3_*16*"                                 # UTF-16 variants not exposed
+    raw     "sqlite3_some_unknown_api"                     # expose unsafe raw binding despite `unknown`
 }
 ```
 
 **Export binding**: the target language implements something others call.
 
-```
+```writ-extended
 binding audio_host for rust export {
     provide plugin.plugin_init    = "crate::init"
     provide plugin.plugin_process = "crate::process"
@@ -2332,7 +2336,7 @@ A contract states its family with `abi`. `abi c` is the default and covers
 - Candidates: Wasm component model, Swift's stable ABI, Objective-C
   messaging.
 
-```
+```writ-extended
 abi jvm
 class CRC32 = java.util.zip.CRC32 {
     ctor new()
@@ -2423,7 +2427,7 @@ only where they matter:
 You don't have to rewrite headers. Import the raw declarations, then refine
 only the slots that need contracts:
 
-```
+```writ
 import <sqlite3.h> raw
 
 handle Db   = *sqlite3       release sqlite3_close_v2
@@ -2447,7 +2451,7 @@ change physical types, and the tool rejects one that tries.
 
 ### 10.3 Unknowns and notes
 
-```
+```writ
 refine some_api {
     -> *cstr unknown                 # lifetime not determined yet
     note "docs say 'valid until next call' but unclear if per-thread"
@@ -2471,7 +2475,7 @@ written from scratch.
 Libraries repeat their rules across many functions. A `conventions` block
 states a rule once, for every declaration whose name matches a pattern:
 
-```
+```writ
 conventions for fn resharp_* {
     error ret == -1 or ret == null via last_error
 }
@@ -2549,7 +2553,7 @@ Properties:
 
 ### 12.1 Pipeline
 
-```
+```text
 header ──import──▶ raw decls ──infer──▶ draft (unknown + @inferred)
                                           │
                                    human refines
@@ -2605,7 +2609,7 @@ Sharing vocabulary doesn't require an importer.
 
 **Rust crates** are imported from rustdoc's JSON output:
 
-```
+```sh
 cargo +nightly rustdoc -p <crate> -- -Z unstable-options --output-format json
 ```
 
@@ -2663,7 +2667,7 @@ only for importing, never for building a binding.
 ## 13. Grammar sketch
 
 ```ebnf
-file        = { directive | decl } | profile | binding ;
+file        = { directive | decl } | profile { profile } | binding { binding } ;
 (* ---------- contract files ---------- *)
 directive   = "library" ID | "link" STRING | "header" HEADER | "encoding" ID
             | "define" ID [ "=" expr ] | "include_path" STRING
@@ -2740,7 +2744,7 @@ varargs     = "..." [ "of" type ( "until" expr | "count" ID )
 param       = ID ":" [ mode ] type { slot_attr } [ "=" expr ] ;   (* "= expr": source-level default *)
 ret         = [ "own" ] type { slot_attr } ;
 mode        = "in" | "out" | "inout" | "consume" | "keep" | "moved" | "unknown" ;
-field       = ( ID | "_" ) ":" type { slot_attr } [ "@" INT ] [ "@bit" "(" INT ")" ]
+field       = ( ID | "_" ) ":" [ "own" ] type { slot_attr } [ "@" INT ] [ "@bit" "(" INT ")" ]
               [ "access" ( type | "atomic" ) ] ;
 
 type        = prim | ID | "va_list" | ( "*" | "?" ) type
@@ -2776,7 +2780,7 @@ fn_clause   = "error" expr [ "via" expr ] [ "retry" ]
             | "outcome" ID ( "success" | "failure" ) [ "when" expr ] [ "via" expr ] [ "retry" ]
             | "expands" ID "(" [ expr { "," expr } ] ")"
             | "on" ID ID ":" ( "own" | "unset" | "partial" | "not" "consumed" | span )
-            | "sizing" [ "query" "(" assigns ")" | "retry" ] [ ID ] "needs" expr
+            | "sizing" [ "query" "(" assigns ")" | "retry" ] [ "for" ID ] "needs" expr
             | effects
             | "thread" ( "any" | "main" | "same" | "same_as" event )
             | "reentrant" ( "yes" | "no" ) | "signal_safe" | "unwind" ( "yes" | "no" )
@@ -2812,7 +2816,7 @@ binding_item= "module" STRING | "strip_prefix" STRING | "name" ID STRING
             | "type" ID "as" STRING | "method" QNAME "=" ID
             | "error" PATTERN "->" STRING | "borrow" ID "as" ( "lifetime" | "copy" )
             | "policy" ID "use" ID | "keywords" ( ID | "*" ) "as" ( "builder" | "struct" | "kwargs" )
-            | "label" ID "->" STRING | "hide" PATTERN | "raw" PATTERN
+            | "label" ID "->" STRING | "hide" STRING | "raw" STRING
             | "provide" QNAME "=" STRING | "on_panic" ( "abort" | "error" expr )
             | "allocator" "own" "->" ID ;
 ```
@@ -2838,7 +2842,7 @@ valid.
 
 ## 14. Worked example: a small library, end to end
 
-```
+```writ
 library kv
 link    "kv"
 header  <kv.h>

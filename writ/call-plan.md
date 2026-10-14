@@ -154,7 +154,7 @@ Outcomes are a contract fact, added to `dsl.md` §6.4:
 fn inflate(strm: inout *z_stream, flush: c_int) -> c_int
   outcome done     success when ret == Z_STREAM_END
   outcome progress success when ret == Z_OK
-  outcome stalled  failure when ret == Z_BUF_ERROR  on strm: partial
+  outcome stalled  failure when ret == Z_BUF_ERROR  on stalled strm: partial
   outcome corrupt  failure when ret == Z_DATA_ERROR via strm.msg
   outcome failed   failure via ret as ZStatus
 ```

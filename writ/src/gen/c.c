@@ -2,6 +2,12 @@
 
 #include "gen.h"
 
+bool
+writ_c_is_text(const writ_type_view_t *type)
+{
+    return type && type->kind == WRIT_TYPE_POINTER && type->target && type->target->kind == WRIT_TYPE_CSTR;
+}
+
 writ_str_t
 writ_c_type(const writ_c_context_t *c, const writ_type_view_t *type, bool constant)
 {
@@ -9,39 +15,133 @@ writ_c_type(const writ_c_context_t *c, const writ_type_view_t *type, bool consta
     if (!type) {
         return writ_cstr("void");
     }
-    if (type->kind == WRIT_TYPE_POINTER || type->kind == WRIT_TYPE_ARRAY) {
+    switch (type->kind) {
+    case WRIT_TYPE_POINTER:
+    case WRIT_TYPE_ARRAY: {
         writ_str_t target = writ_c_type(c, type->target, false);
-        return writ_str_format(session, "%s%.*s *", constant ? "const " : "", (int)target.length, target.data);
+        return writ_str_format(session, "%s%.*s *", constant ? "const " : "", S(target));
     }
-    return type->c_spelling;
+    case WRIT_TYPE_HANDLE:
+    case WRIT_TYPE_ENUM:
+    case WRIT_TYPE_VIEW:
+        return writ_c_type(c, type->target, constant);
+    case WRIT_TYPE_CSTR:
+        return writ_cstr("char");
+    case WRIT_TYPE_OPAQUE:
+        return type->name.length ? type->name : writ_cstr("void");
+    default:
+        return type->c_spelling.length ? type->c_spelling : type->name;
+    }
 }
 
-writ_str_t
-writ_c_element(const writ_c_context_t *c, const writ_type_view_t *array)
+writ_step_kind_t
+writ_c_lift_kind(const writ_plan_view_t *plan, uint32_t item)
 {
-    return writ_c_type(c, array->target, false);
+    for (size_t i = 0; i < plan->steps_count; i++) {
+        writ_step_kind_t kind = plan->steps[i].kind;
+        if (plan->steps[i].item == item
+            && (kind == WRIT_STEP_LIFT_VALUE || kind == WRIT_STEP_LIFT_BUFFER || kind == WRIT_STEP_WRAP_HANDLE
+                || kind == WRIT_STEP_COPY_BORROWED)) {
+            return kind;
+        }
+    }
+    return WRIT_STEP_LIFT_VALUE;
 }
 
-static size_t
-count_role(const writ_plan_view_t *plan, writ_plan_role_t role)
+bool
+writ_c_offset_result(const writ_plan_view_t *plan, uint32_t item)
 {
-    size_t count = 0;
-    for (size_t i = 0; i < plan->items_count; i++) {
-        count += plan->items[i].role == role;
-    }
-    return count;
+    uint32_t with = plan->items[item].with_item;
+    return plan->items[item].after_call == WRIT_AFTER_BORROWED_WITH && with != WRIT_PLAN_NONE
+        && plan->items[with].shape == WRIT_SHAPE_TEXT;
+}
+
+static bool
+is_lift(writ_step_kind_t kind)
+{
+    return kind == WRIT_STEP_LIFT_VALUE || kind == WRIT_STEP_WRAP_HANDLE;
 }
 
 bool
 writ_c_returns_directly(const writ_plan_view_t *plan)
 {
-    for (size_t i = 0; i < plan->steps_count; i++) {
-        if (plan->steps[i].kind == WRIT_STEP_CHECK || plan->steps[i].kind == WRIT_STEP_ALLOC_OUT) {
+    size_t results = 0;
+    for (size_t i = 0; i < plan->items_count; i++) {
+        const writ_plan_item_view_t *item = &plan->items[i];
+        if (item->role == WRIT_ROLE_ERROR_DETAIL || item->role == WRIT_ROLE_PACK) {
+            return false;
+        }
+        if (item->role == WRIT_ROLE_RESULT) {
+            if (item->contract_slot != WRIT_PLAN_NONE || !is_lift(writ_c_lift_kind(plan, (uint32_t)i))) {
+                return false;
+            }
+            results++;
+        }
+        if (item->shape == WRIT_SHAPE_BYTES || item->shape == WRIT_SHAPE_TEXT || item->shape == WRIT_SHAPE_ARRAY) {
             return false;
         }
     }
-    return plan->outcomes_count == 1 && count_role(plan, WRIT_ROLE_RESULT) == 1
-        && count_role(plan, WRIT_ROLE_ERROR_DETAIL) == 0;
+    for (size_t i = 0; i < plan->steps_count; i++) {
+        writ_step_kind_t kind = plan->steps[i].kind;
+        if (kind != WRIT_STEP_PASS && kind != WRIT_STEP_CALL && kind != WRIT_STEP_CLASSIFY && !is_lift(kind)) {
+            return false;
+        }
+    }
+    return plan->outcomes_count == 1 && results == 1 && !plan->reset_channels_count;
+}
+
+static writ_str_t
+suffixed(const writ_c_context_t *c, writ_str_t name, const char *suffix)
+{
+    return writ_str_format(c->model->session, "%.*s%s", S(name), suffix);
+}
+
+static writ_str_t
+text_list_type(const writ_c_context_t *c)
+{
+    return writ_str_format(c->model->session, "const %.*s_str_t *", S(c->prefix));
+}
+
+size_t
+writ_c_item_params(const writ_c_context_t *c, const writ_plan_view_t *plan, uint32_t index, writ_c_param_t params[2])
+{
+    const writ_plan_item_view_t *item = &plan->items[index];
+    writ_session_t *session = c->model->session;
+    if (item->role == WRIT_ROLE_INPUT || item->role == WRIT_ROLE_INPUT_OUTPUT) {
+        switch (item->shape) {
+        case WRIT_SHAPE_BYTES:
+        case WRIT_SHAPE_ARRAY:
+        case WRIT_SHAPE_TEXT: {
+            const writ_type_view_t *element = item->shape == WRIT_SHAPE_TEXT ? item->type->target : item->type->target;
+            params[0] = (writ_c_param_t){
+                writ_str_format(session, "const %.*s *", S(writ_c_type(c, element, false))), item->name};
+            params[1] = (writ_c_param_t){writ_cstr("size_t"), suffixed(c, item->name, "_length")};
+            return 2;
+        }
+        default:
+            params[0] = (writ_c_param_t){writ_c_type(c, item->type, false), item->name};
+            return 1;
+        }
+    }
+    if (item->role == WRIT_ROLE_PACK) {
+        params[0] = (writ_c_param_t){writ_c_is_text(item->type)
+                                         ? text_list_type(c)
+                                         : writ_str_format(session, "const %.*s *", S(writ_c_type(c, item->type, false))),
+                                     item->name};
+        params[1] = (writ_c_param_t){writ_cstr("size_t"), suffixed(c, item->name, "_count")};
+        return 2;
+    }
+    writ_step_kind_t lift = writ_c_lift_kind(plan, index);
+    writ_str_t type;
+    if (lift == WRIT_STEP_LIFT_BUFFER || lift == WRIT_STEP_COPY_BORROWED) {
+        type = writ_str_format(session, "%.*s_bytes_t", S(c->prefix));
+    } else if (writ_c_offset_result(plan, index)) {
+        type = writ_cstr("size_t");
+    } else {
+        type = writ_c_type(c, item->type, writ_c_is_text(item->type) && item->after_call != WRIT_AFTER_CALLER_OWNS);
+    }
+    params[0] = (writ_c_param_t){writ_str_format(session, "%.*s *", S(type)), item->name};
+    return 1;
 }
 
 static const writ_plan_item_view_t *
@@ -55,81 +155,127 @@ direct_result(const writ_plan_view_t *plan)
     return nullptr;
 }
 
-static void
-emit_param(writ_emit_t *emit, bool *first, writ_str_t type, writ_str_t name, const char *suffix)
+writ_str_t
+writ_c_return_type(const writ_c_context_t *c, const writ_plan_view_t *plan)
 {
-    writ_emit_text(emit, "%s%.*s%s%.*s%s", *first ? "" : ", ", (int)type.length, type.data,
-                   type.length && type.data[type.length - 1] == '*' ? "" : " ", (int)name.length, name.data, suffix);
+    if (!writ_c_returns_directly(plan)) {
+        return writ_cstr("int32_t");
+    }
+    const writ_plan_item_view_t *result = direct_result(plan);
+    return writ_c_type(c, result->type, writ_c_is_text(result->type) && result->after_call != WRIT_AFTER_CALLER_OWNS);
+}
+
+static void
+emit_param(writ_emit_t *emit, bool *first, writ_str_t type, writ_str_t name)
+{
+    bool pointer = type.length && type.data[type.length - 1] == '*';
+    writ_emit_text(emit, "%s%.*s%s%.*s", *first ? "" : ", ", S(type), pointer ? "" : " ", S(name));
     *first = false;
+}
+
+bool
+writ_c_is_input(const writ_plan_item_view_t *item)
+{
+    return item->role == WRIT_ROLE_INPUT || item->role == WRIT_ROLE_INPUT_OUTPUT || item->role == WRIT_ROLE_PACK;
+}
+
+size_t
+writ_c_param_order(const writ_plan_view_t *plan, uint32_t *order)
+{
+    bool direct = writ_c_returns_directly(plan);
+    size_t count = 0;
+    for (int pass = 0; pass < 2; pass++) {
+        for (uint32_t i = 0; i < plan->items_count; i++) {
+            bool input = writ_c_is_input(&plan->items[i]);
+            if (input == (pass == 0) && (input || !direct)) {
+                order[count++] = i;
+            }
+        }
+    }
+    return count;
 }
 
 void
 writ_c_emit_signature(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_view_t *plan)
 {
-    bool direct = writ_c_returns_directly(plan);
-    writ_str_t ret = direct ? writ_c_type(c, direct_result(plan)->type, false) : writ_cstr("int32_t");
-    writ_emit_text(emit, "%.*s %.*s_%.*s(", (int)ret.length, ret.data, (int)c->prefix.length, c->prefix.data,
-                   (int)plan->fn->contract_name.length, plan->fn->contract_name.data);
+    writ_str_t ret = writ_c_return_type(c, plan);
+    writ_emit_text(emit, "%.*s %.*s_%.*s(", S(ret), S(c->prefix), S(plan->fn->contract_name));
     bool first = true;
-    for (size_t i = 0; i < plan->items_count; i++) {
-        const writ_plan_item_view_t *item = &plan->items[i];
-        if (item->role != WRIT_ROLE_INPUT) {
-            continue;
-        }
-        if (item->shape == WRIT_SHAPE_BYTES || item->shape == WRIT_SHAPE_ARRAY) {
-            emit_param(emit, &first, writ_c_type(c, item->type, true), item->name, "");
-            emit_param(emit, &first, writ_cstr("size_t"), item->name, "_length");
-        } else {
-            emit_param(emit, &first, writ_c_type(c, item->type, false), item->name, "");
-        }
-    }
-    for (size_t i = 0; !direct && i < plan->items_count; i++) {
-        const writ_plan_item_view_t *item = &plan->items[i];
-        if (item->role == WRIT_ROLE_RESULT && item->shape == WRIT_SHAPE_BYTES) {
-            emit_param(emit, &first,
-                       writ_str_format(c->model->session, "%.*s_bytes_t *", (int)c->prefix.length, c->prefix.data),
-                       item->name, "");
-        } else if (item->role == WRIT_ROLE_RESULT || item->role == WRIT_ROLE_ERROR_DETAIL) {
-            writ_str_t type = writ_c_type(c, item->type, false);
-            emit_param(emit, &first, writ_str_format(c->model->session, "%.*s *", (int)type.length, type.data),
-                       item->name, "");
+    uint32_t *order = writ_alloc(c->model->session, sizeof(uint32_t) * (plan->items_count + 1));
+    size_t ordered = writ_c_param_order(plan, order);
+    for (size_t o = 0; o < ordered; o++) {
+        writ_c_param_t params[2];
+        size_t count = writ_c_item_params(c, plan, order[o], params);
+        for (size_t p = 0; p < count; p++) {
+            emit_param(emit, &first, params[p].type, params[p].name);
         }
     }
     writ_emit_text(emit, "%s)", first ? "void" : "");
 }
 
-void
-writ_c_emit_real_prototype(const writ_c_context_t *c, writ_emit_t *emit, const writ_fn_view_t *fn,
-                           const char *terminator)
+static writ_str_t
+real_param_type(const writ_c_context_t *c, const writ_slot_view_t *slot)
 {
-    writ_str_t ret = writ_c_type(c, fn->result, false);
-    writ_emit_text(emit, "%.*s %.*s(", (int)ret.length, ret.data, (int)fn->contract_name.length,
-                   fn->contract_name.data);
+    bool constant = slot->mode == WRIT_MODE_IN && slot->type->kind != WRIT_TYPE_HANDLE
+                 && (slot->type->kind == WRIT_TYPE_POINTER || slot->type->kind == WRIT_TYPE_ARRAY);
+    return writ_c_type(c, slot->type, constant);
+}
+
+void
+writ_c_emit_real_prototype(const writ_c_context_t *c, writ_emit_t *emit, const writ_fn_view_t *fn, writ_str_t name,
+                           bool variadic_tail, const char *terminator)
+{
+    const writ_type_view_t *result = fn->result ? fn->result->type : nullptr;
+    writ_str_t ret = writ_c_type(c, result, writ_c_is_text(result) && fn->result && !fn->result->own);
+    writ_emit_text(emit, "%.*s %.*s(", S(ret), S(name));
     bool first = true;
     for (size_t i = 0; i < fn->slots_count; i++) {
-        const writ_slot_view_t *slot = &fn->slots[i];
-        bool constant = slot->mode == WRIT_MODE_IN && slot->type->kind != WRIT_TYPE_INT
-                     && slot->type->kind != WRIT_TYPE_BOOL && slot->type->kind != WRIT_TYPE_FLOAT;
-        emit_param(emit, &first, writ_c_type(c, slot->type, constant), slot->name, "");
+        if (variadic_tail && fn->slots[i].type->kind == WRIT_TYPE_VA_LIST) {
+            continue;
+        }
+        emit_param(emit, &first, real_param_type(c, &fn->slots[i]), fn->slots[i].name);
+    }
+    if (variadic_tail || (fn->varargs != WRIT_VARARGS_NONE && fn->varargs != WRIT_VARARGS_VA_LIST)) {
+        writ_emit_text(emit, "%s...", first ? "" : ", ");
+        first = false;
     }
     writ_emit_line(emit, "%s)%s", first ? "void" : "", terminator);
+}
+
+writ_str_t
+writ_c_callee(const writ_c_context_t *c, const writ_fn_view_t *fn)
+{
+    if (fn->varargs == WRIT_VARARGS_VA_LIST) {
+        return writ_str_format(c->model->session, "%.*s_%.*s_forward", S(c->prefix), S(fn->contract_name));
+    }
+    return fn->expands_symbol.length ? fn->expands_symbol : fn->link_symbol;
 }
 
 typedef struct {
     writ_expr_env_t         base;
     const writ_c_context_t *c;
     const writ_plan_view_t *plan;
+    const char             *result;
 } shim_env_t;
 
 static void
-shim_ref(writ_expr_env_t *base, writ_ref_t ref, core_buffer_t *out)
+shim_ref(writ_expr_env_t *base, writ_ref_t ref, uint32_t expr, core_buffer_t *out)
 {
+    (void)expr;
     shim_env_t *env = (shim_env_t *)base;
+    const writ_model_t *model = env->c->model;
     if (ref.kind == WRIT_REF_RESULT) {
-        core_buffer_puts(out, "ret");
+        core_buffer_puts(out, env->result);
         return;
     }
-    uint32_t slot = writ_plan_contract_slot(env->c->model, env->plan, ref);
+    if (ref.kind == WRIT_REF_CHANNEL) {
+        uint32_t source = model->channels.data[ref.index].source_expr;
+        writ_ref_t callee = writ_expr_ref(model, writ_node_child(model->unit, source, 0));
+        writ_str_t symbol = writ_sym_str(model->session, model->fns.data[callee.index].link_symbol);
+        core_buffer_printf(out, "(*%.*s())", S(symbol));
+        return;
+    }
+    uint32_t slot = writ_plan_contract_slot(model, env->plan, ref);
     uint32_t cell = ref.phase == WRIT_REF_VALUE ? WRIT_PLAN_NONE : writ_plan_cell_for_slot(env->plan, slot);
     if (cell != WRIT_PLAN_NONE) {
         core_buffer_printf(out, "l%u", cell);
@@ -148,93 +294,331 @@ expr_text(shim_env_t *env, uint32_t expr)
     return writ_str_from_buffer(env->c->model->session, buffer);
 }
 
-static writ_str_t
-upper(writ_session_t *session, writ_str_t text)
+static void
+fail(const writ_c_context_t *c, writ_emit_t *emit, const char *code)
 {
-    writ_str_t copy = writ_str_copy(session, text.data, text.length);
-    for (size_t i = 0; i < copy.length; i++) {
-        ((char *)copy.data)[i] = (char)toupper((unsigned char)copy.data[i]);
-    }
-    return copy;
+    writ_emit_line(emit, "outcome = %.*s_%s;", S(c->upper), code);
+    writ_emit_line(emit, "goto finish;");
 }
 
-#define S(text) (int)(text).length, (text).data
+static writ_str_t
+slot_type(const writ_c_context_t *c, const writ_plan_view_t *plan, uint32_t slot)
+{
+    const writ_plan_slot_view_t *physical = &plan->slots[slot];
+    if (physical->contract_slot == WRIT_PLAN_NONE) {
+        const writ_slot_view_t *result = plan->fn->result;
+        return writ_c_type(c, result->type, writ_c_is_text(result->type) && !result->own);
+    }
+    return real_param_type(c, &plan->fn->slots[physical->contract_slot]);
+}
 
 static void
 emit_declarations(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_view_t *plan)
 {
-    for (size_t i = 0; i < plan->slots_count; i++) {
+    for (uint32_t i = 0; i < plan->slots_count; i++) {
         const writ_plan_slot_view_t *slot = &plan->slots[i];
-        writ_str_t type = writ_c_type(c, slot->c_type, slot->pass == WRIT_PASS_IN_POINTER);
+        if (slot->pass == WRIT_PASS_VARIADIC_TAIL) {
+            continue;
+        }
+        writ_str_t type = slot_type(c, plan, i);
+        bool pointer = type.data[type.length - 1] == '*';
         if (slot->contract_slot == WRIT_PLAN_NONE) {
-            writ_emit_line(emit, "%.*s ret = 0;", S(type));
+            writ_emit_line(emit, "%.*s%sret = 0;", S(type), pointer ? "" : " ");
+            if (plan->query_count) {
+                writ_emit_line(emit, "%.*s%squery_ret = 0;", S(type), pointer ? "" : " ");
+            }
         } else {
-            writ_emit_line(emit, "%.*s%ss%zu = 0;", S(type), type.data[type.length - 1] == '*' ? "" : " ", i);
+            writ_emit_line(emit, "%.*s%ss%u = 0;", S(type), pointer ? "" : " ", i);
         }
     }
     for (size_t i = 0; i < plan->locals_count; i++) {
         const writ_plan_local_view_t *local = &plan->locals[i];
         writ_str_t type = writ_c_type(c, local->type, false);
-        if (local->kind == WRIT_LOCAL_BUFFER) {
+        bool pointer = type.data[type.length - 1] == '*';
+        if (local->kind == WRIT_LOCAL_CELL) {
+            writ_emit_line(emit, "%.*s%sl%zu = 0;", S(type), pointer ? "" : " ", i);
+        } else {
             writ_emit_line(emit, "%.*s *l%zu = NULL;", S(type), i);
             writ_emit_line(emit, "size_t l%zu_capacity = 0;", i);
-        } else {
-            writ_emit_line(emit, "%.*s l%zu = 0;", S(type), i);
         }
     }
 }
 
-static void
-emit_step(const writ_c_context_t *c, shim_env_t *env, writ_emit_t *emit, const writ_plan_step_view_t *step,
-          writ_str_t upper_prefix)
+static const writ_plan_item_view_t *
+pack_item(const writ_plan_view_t *plan)
 {
+    for (size_t i = 0; i < plan->items_count; i++) {
+        if (plan->items[i].role == WRIT_ROLE_PACK) {
+            return &plan->items[i];
+        }
+    }
+    return nullptr;
+}
+
+static void
+emit_fixed_args(shim_env_t *env, writ_emit_t *emit, const writ_fn_view_t *fn, bool *first)
+{
+    if (fn->expands_node) {
+        const writ_model_t *model = env->c->model;
+        const writ_node_t *expands = writ_node(model->unit, fn->expands_node);
+        for (uint32_t i = 0; i < expands->child_count; i++) {
+            writ_str_t arg = expr_text(env, writ_node_child(model->unit, fn->expands_node, i));
+            writ_emit_text(emit, "%s%.*s", *first ? "" : ", ", S(arg));
+            *first = false;
+        }
+        return;
+    }
+    for (size_t i = 0; i < fn->slots_count; i++) {
+        if (env->plan->slots[i].pass == WRIT_PASS_VARIADIC_TAIL) {
+            continue;
+        }
+        writ_emit_text(emit, "%ss%zu", *first ? "" : ", ", i);
+        *first = false;
+    }
+}
+
+static void
+emit_call_with(shim_env_t *env, writ_emit_t *emit, const char *target, const char *tail)
+{
+    const writ_fn_view_t *fn = env->plan->fn;
+    writ_str_t callee = writ_c_callee(env->c, fn);
+    writ_emit_text(emit, "%s%s%.*s(", target ? target : "", target ? " = " : "", S(callee));
+    bool first = true;
+    emit_fixed_args(env, emit, fn, &first);
+    if (tail) {
+        writ_emit_text(emit, "%s%s", first ? "" : ", ", tail);
+    }
+    writ_emit_line(emit, ");");
+}
+
+static void
+emit_pack_call(shim_env_t *env, writ_emit_t *emit, const char *target)
+{
+    const writ_c_context_t *c = env->c;
+    const writ_plan_item_view_t *pack = pack_item(env->plan);
+    const writ_fn_view_t *fn = env->plan->fn;
+    bool text = writ_c_is_text(pack->type);
+    writ_str_t end = fn->varargs == WRIT_VARARGS_UNTIL ? expr_text(env, fn->varargs_end) : writ_cstr("");
+    writ_str_t element = writ_c_type(c, pack->type, false);
+    writ_emit_open(emit, "switch (%.*s_count)", S(pack->name));
+    for (int arity = 0; arity <= WRIT_C_MAX_ARITY; arity++) {
+        core_buffer_t *tail = core_buffer_empty();
+        for (int k = 0; k < arity; k++) {
+            if (text) {
+                core_buffer_printf(tail, "%spack[%d]", k ? ", " : "", k);
+            } else {
+                core_buffer_printf(tail, "%s(%.*s)%.*s[%d]", k ? ", " : "", S(element), S(pack->name), k);
+            }
+        }
+        if (end.length) {
+            core_buffer_printf(tail, "%s(%.*s)%.*s", arity ? ", " : "", S(element), S(end));
+        }
+        writ_str_t tail_text = writ_str_from_buffer(c->model->session, tail);
+        writ_emit_line(emit, "case %d:", arity);
+        writ_emit_indent(emit, 1);
+        emit_call_with(env, emit, target, tail_text.length ? tail_text.data : nullptr);
+        writ_emit_line(emit, "break;");
+        writ_emit_indent(emit, -1);
+    }
+    writ_emit_line(emit, "default:");
+    writ_emit_indent(emit, 1);
+    fail(c, emit, "ARGUMENT_ERROR");
+    writ_emit_indent(emit, -1);
+    writ_emit_close(emit, nullptr);
+}
+
+static void
+emit_call(shim_env_t *env, writ_emit_t *emit, const char *target)
+{
+    const writ_plan_view_t *plan = env->plan;
+    if (pack_item(plan)) {
+        emit_pack_call(env, emit, target);
+        return;
+    }
+    for (size_t i = 0; i < plan->steps_count; i++) {
+        if (plan->steps[i].kind == WRIT_STEP_EXPAND) {
+            writ_str_t tail = writ_str_format(env->c->model->session, "l%u", plan->steps[i].local);
+            emit_call_with(env, emit, target, tail.data);
+            return;
+        }
+    }
+    emit_call_with(env, emit, target, nullptr);
+}
+
+static void
+emit_query(shim_env_t *env, writ_emit_t *emit, const writ_plan_step_view_t *step)
+{
+    const writ_plan_view_t *plan = env->plan;
+    writ_emit_open(emit, "");
+    for (size_t i = 0; i < plan->query_count; i++) {
+        writ_str_t value = expr_text(env, plan->query[i].expr);
+        writ_str_t type = slot_type(env->c, plan, plan->query[i].slot);
+        writ_emit_line(emit, "%.*s saved%zu = s%u;", S(type), i, plan->query[i].slot);
+        writ_emit_line(emit, "s%u = (%.*s)(%.*s);", plan->query[i].slot, S(type), S(value));
+    }
+    emit_call(env, emit, "query_ret");
+    for (size_t i = 0; i < plan->query_count; i++) {
+        writ_emit_line(emit, "s%u = saved%zu;", plan->query[i].slot, i);
+    }
+    env->result = "query_ret";
+    writ_str_t needs = expr_text(env, step->expr);
+    env->result = "ret";
+    writ_emit_open(emit, "if ((%.*s) < 0)", S(needs));
+    fail(env->c, emit, "CONTRACT_VIOLATION");
+    writ_emit_close(emit, nullptr);
+    writ_emit_line(emit, "l%u_capacity = (size_t)(%.*s);", step->local, S(needs));
+    writ_emit_close(emit, nullptr);
+}
+
+static void
+emit_encode(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_step_view_t *step,
+            const writ_plan_item_view_t *item)
+{
+    writ_emit_open(emit, "if (%.*s)", S(item->name));
+    writ_emit_line(emit, "int32_t status = %.*s_encode(%.*s, %.*s_length, &l%u);", S(c->prefix), S(item->name),
+                   S(item->name), step->local);
+    writ_emit_open(emit, "if (status)");
+    writ_emit_line(emit, "outcome = status;");
+    writ_emit_line(emit, "goto finish;");
+    writ_emit_close(emit, nullptr);
+    writ_emit_close(emit, nullptr);
+    if (!item->nullable) {
+        writ_emit_open(emit, "else");
+        fail(c, emit, "ARGUMENT_ERROR");
+        writ_emit_close(emit, nullptr);
+    }
+    if (step->slot != WRIT_PLAN_NONE) {
+        writ_emit_line(emit, "s%u = l%u;", step->slot, step->local);
+    }
+}
+
+static void
+emit_expand(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_step_view_t *step,
+            const writ_plan_item_view_t *item)
+{
+    if (!item || item->role != WRIT_ROLE_PACK || !writ_c_is_text(item->type)) {
+        return;
+    }
+    writ_emit_open(emit, "if (%.*s_count > %d)", S(item->name), WRIT_C_MAX_ARITY);
+    fail(c, emit, "ARGUMENT_ERROR");
+    writ_emit_close(emit, nullptr);
+    writ_emit_open(emit, "for (size_t i = 0; i < %.*s_count; i++)", S(item->name));
+    writ_emit_line(emit, "int32_t status = %.*s_encode(%.*s[i].data, %.*s[i].length, &pack[i]);", S(c->prefix),
+                   S(item->name), S(item->name));
+    writ_emit_open(emit, "if (status)");
+    writ_emit_line(emit, "outcome = status;");
+    writ_emit_line(emit, "goto finish;");
+    writ_emit_close(emit, nullptr);
+    writ_emit_close(emit, nullptr);
+    (void)step;
+}
+
+static void
+emit_lift(shim_env_t *env, writ_emit_t *emit, const writ_plan_step_view_t *step, const writ_plan_item_view_t *item)
+{
+    const writ_c_context_t *c = env->c;
+    const writ_plan_view_t *plan = env->plan;
+    writ_str_t source = step->local != WRIT_PLAN_NONE ? writ_str_format(c->model->session, "l%u", step->local)
+                                                       : writ_cstr("ret");
+    uint32_t index = (uint32_t)(item - plan->items);
+    if (writ_c_returns_directly(plan)) {
+        writ_emit_line(emit, "return %.*s;", S(source));
+        return;
+    }
+    if (step->kind == WRIT_STEP_COPY_BORROWED) {
+        if (!writ_c_is_text(item->type)) {
+            writ_emit_line(emit, "#error \"copying borrowed non-text results is not generated for C\"");
+            return;
+        }
+        writ_emit_open(emit, "if (%.*s_copy_text(%.*s, %.*s))", S(c->prefix), S(source), S(item->name));
+        fail(c, emit, "OUT_OF_MEMORY");
+        writ_emit_close(emit, nullptr);
+        return;
+    }
+    if (writ_c_offset_result(plan, index)) {
+        uint32_t with = item->with_item;
+        uint32_t text_local = WRIT_PLAN_NONE;
+        for (uint32_t l = 0; l < plan->locals_count; l++) {
+            if (plan->locals[l].item == with && plan->locals[l].kind == WRIT_LOCAL_TEXT) {
+                text_local = l;
+            }
+        }
+        writ_emit_line(emit, "*%.*s = %.*s ? (size_t)(%.*s - l%u) : SIZE_MAX;", S(item->name), S(source), S(source),
+                       text_local);
+        return;
+    }
+    writ_emit_line(emit, "*%.*s = %.*s;", S(item->name), S(source));
+}
+
+static void
+emit_step(shim_env_t *env, writ_emit_t *emit, const writ_plan_step_view_t *step)
+{
+    const writ_c_context_t *c = env->c;
     const writ_plan_view_t *plan = env->plan;
     const writ_plan_item_view_t *item = step->item != WRIT_PLAN_NONE ? &plan->items[step->item] : nullptr;
     switch (step->kind) {
     case WRIT_STEP_CHECK: {
         const writ_type_view_t *length = plan->slots[step->slot].c_type;
-        writ_emit_open(emit, "if (!%.*s && %.*s_length)", S(item->name), S(item->name));
-        writ_emit_line(emit, "outcome = %.*s_ARGUMENT_ERROR;", S(upper_prefix));
-        writ_emit_line(emit, "goto finish;");
-        writ_emit_close(emit, nullptr);
+        if (!item->nullable) {
+            writ_emit_open(emit, "if (!%.*s && %.*s_length)", S(item->name), S(item->name));
+            fail(c, emit, "ARGUMENT_ERROR");
+            writ_emit_close(emit, nullptr);
+        }
         if (length->size < 8 || length->is_signed) {
             uint64_t limit = length->is_signed ? (UINT64_C(1) << (8 * length->size - 1)) - 1
                                                : UINT64_MAX >> (64 - 8 * length->size);
             writ_emit_open(emit, "if ((uint64_t)%.*s_length > UINT64_C(%llu))", S(item->name),
                            (unsigned long long)limit);
-            writ_emit_line(emit, "outcome = %.*s_ARGUMENT_ERROR;", S(upper_prefix));
-            writ_emit_line(emit, "goto finish;");
+            fail(c, emit, "ARGUMENT_ERROR");
             writ_emit_close(emit, nullptr);
         }
         return;
     }
     case WRIT_STEP_SPLIT: {
-        writ_str_t pointer = writ_c_type(c, plan->slots[step->slot].c_type, true);
-        writ_emit_line(emit, "s%u = %.*s_length ? %.*s : (%.*s)%.*s_empty;", step->slot, S(item->name), S(item->name),
-                       S(pointer), S(c->prefix));
-        writ_str_t length = writ_c_type(c, plan->slots[step->second_slot].c_type, false);
-        writ_emit_line(emit, "s%u = (%.*s)%.*s_length;", step->second_slot, S(length), S(item->name));
+        writ_str_t pointer = slot_type(c, plan, step->slot);
+        writ_str_t empty = item->nullable ? writ_cstr("NULL")
+                                          : writ_str_format(c->model->session, "(%.*s)%.*s_empty", S(pointer), S(c->prefix));
+        writ_emit_line(emit, "s%u = %.*s_length ? %.*s : %.*s;", step->slot, S(item->name), S(item->name), S(empty));
+        writ_emit_line(emit, "s%u = (%.*s)%.*s_length;", step->second_slot, S(slot_type(c, plan, step->second_slot)),
+                       S(item->name));
         return;
     }
     case WRIT_STEP_PASS:
-        if (step->source_local != WRIT_PLAN_NONE) {
+        if (step->literal.length) {
+            writ_emit_line(emit, "s%u = \"%.*s\";", step->slot, S(step->literal));
+        } else if (step->source_local != WRIT_PLAN_NONE && step->local != WRIT_PLAN_NONE) {
             writ_str_t type = writ_c_type(c, plan->locals[step->local].type, false);
             writ_emit_line(emit, "l%u = (%.*s)l%u_capacity;", step->local, S(type), step->source_local);
+        } else if (step->source_local != WRIT_PLAN_NONE) {
+            writ_emit_line(emit, "s%u = (%.*s)l%u_capacity;", step->slot, S(slot_type(c, plan, step->slot)),
+                           step->source_local);
+        } else if (plan->slots[step->slot].part == WRIT_PART_LENGTH) {
+            writ_emit_line(emit, "s%u = (%.*s)%.*s_count;", step->slot, S(slot_type(c, plan, step->slot)), S(item->name));
         } else {
             writ_emit_line(emit, "s%u = %.*s;", step->slot, S(item->name));
         }
         return;
+    case WRIT_STEP_ENCODE_CSTR:
+        emit_encode(c, emit, step, item);
+        return;
+    case WRIT_STEP_EXPAND:
+        emit_expand(c, emit, step, item);
+        return;
+    case WRIT_STEP_SIZE_QUERY:
+        emit_query(env, emit, step);
+        return;
     case WRIT_STEP_ALLOC_OUT: {
         const writ_plan_local_view_t *local = &plan->locals[step->local];
-        writ_str_t capacity = local->capacity_item != WRIT_PLAN_NONE ? plan->items[local->capacity_item].name
-                                                                      : expr_text(env, local->capacity_expr);
         writ_str_t element = writ_c_type(c, local->type, false);
-        writ_emit_line(emit, "l%u_capacity = (size_t)(%.*s);", step->local, S(capacity));
-        writ_emit_line(emit, "l%u = malloc(l%u_capacity ? l%u_capacity * sizeof(%.*s) : 1);", step->local,
-                       step->local, step->local, S(element));
+        if (local->capacity_item != WRIT_PLAN_NONE) {
+            writ_emit_line(emit, "l%u_capacity = (size_t)%.*s;", step->local, S(plan->items[local->capacity_item].name));
+        } else if (step->expr) {
+            writ_emit_line(emit, "l%u_capacity = (size_t)(%.*s);", step->local, S(expr_text(env, step->expr)));
+        }
+        writ_emit_line(emit, "l%u = malloc(l%u_capacity ? l%u_capacity * sizeof(%.*s) : 1);", step->local, step->local,
+                       step->local, S(element));
         writ_emit_open(emit, "if (!l%u)", step->local);
-        writ_emit_line(emit, "outcome = %.*s_OUT_OF_MEMORY;", S(upper_prefix));
-        writ_emit_line(emit, "goto finish;");
+        fail(c, emit, "OUT_OF_MEMORY");
         writ_emit_close(emit, nullptr);
         return;
     }
@@ -242,43 +626,30 @@ emit_step(const writ_c_context_t *c, shim_env_t *env, writ_emit_t *emit, const w
         writ_emit_line(emit, "s%u = %sl%u;", step->slot, plan->locals[step->local].kind == WRIT_LOCAL_CELL ? "&" : "",
                        step->local);
         return;
-    case WRIT_STEP_CALL: {
-        const writ_fn_view_t *fn = plan->fn;
-        writ_emit_text(emit, "%s%.*s(", fn->result && fn->result->kind != WRIT_TYPE_VOID ? "ret = " : "",
-                       S(fn->contract_name));
-        for (size_t i = 0; i < fn->slots_count; i++) {
-            writ_emit_text(emit, "%ss%zu", i ? ", " : "", i);
-        }
-        writ_emit_line(emit, ");");
+    case WRIT_STEP_CALL:
+        emit_call(env, emit, plan->fn->result ? "ret" : nullptr);
         return;
-    }
     case WRIT_STEP_FETCH_DETAIL: {
         writ_str_t value = expr_text(env, step->expr);
-        writ_str_t type = writ_c_type(c, item->type, false);
+        writ_str_t type = writ_c_type(c, item->type, writ_c_is_text(item->type));
         writ_emit_line(emit, "*%.*s = (%.*s)(%.*s);", S(item->name), S(type), S(value));
         return;
     }
     case WRIT_STEP_LIFT_BUFFER: {
         writ_str_t length = expr_text(env, step->expr);
-        writ_emit_open(emit, "if ((size_t)(%.*s) > l%u_capacity)", S(length), step->local);
-        writ_emit_line(emit, "outcome = %.*s_CONTRACT_VIOLATION;", S(upper_prefix));
-        writ_emit_line(emit, "goto finish;");
+        writ_emit_open(emit, "if ((%.*s) < 0 || (size_t)(%.*s) > l%u_capacity)", S(length), S(length), step->local);
+        fail(c, emit, "CONTRACT_VIOLATION");
         writ_emit_close(emit, nullptr);
         writ_emit_line(emit, "%.*s->data = (uint8_t *)l%u;", S(item->name), step->local);
         writ_emit_line(emit, "%.*s->length = (size_t)(%.*s);", S(item->name), S(length));
         writ_emit_line(emit, "l%u = NULL;", step->local);
         return;
     }
-    case WRIT_STEP_LIFT_VALUE: {
-        writ_str_t source = step->local != WRIT_PLAN_NONE ? writ_str_format(c->model->session, "l%u", step->local)
-                                                           : writ_cstr("ret");
-        if (writ_c_returns_directly(plan)) {
-            writ_emit_line(emit, "return %.*s;", S(source));
-        } else {
-            writ_emit_line(emit, "*%.*s = %.*s;", S(item->name), S(source));
-        }
+    case WRIT_STEP_LIFT_VALUE:
+    case WRIT_STEP_WRAP_HANDLE:
+    case WRIT_STEP_COPY_BORROWED:
+        emit_lift(env, emit, step, item);
         return;
-    }
     case WRIT_STEP_RELEASE_LOCAL:
         writ_emit_line(emit, "free(l%u);", step->local);
         return;
@@ -294,13 +665,10 @@ emit_classify(shim_env_t *env, writ_emit_t *emit)
     const writ_c_context_t *c = env->c;
     for (size_t i = 0; i < plan->outcomes_count; i++) {
         const writ_plan_outcome_view_t *outcome = &plan->outcomes[i];
-        writ_str_t when = outcome->when_expr ? expr_text(env, outcome->when_expr) : writ_cstr("");
         if (outcome->when_expr) {
-            writ_emit_open(emit, "%sif (%.*s)", i ? "else " : "", S(when));
-        } else if (i) {
-            writ_emit_open(emit, "else");
+            writ_emit_open(emit, "%sif (%.*s)", i ? "else " : "", S(expr_text(env, outcome->when_expr)));
         } else {
-            writ_emit_open(emit, "");
+            writ_emit_open(emit, i ? "else" : "");
         }
         writ_emit_line(emit, "outcome = %.*s_%.*s_%.*s;", S(c->prefix), S(plan->fn->contract_name), S(outcome->name));
         writ_emit_close(emit, nullptr);
@@ -308,43 +676,62 @@ emit_classify(shim_env_t *env, writ_emit_t *emit)
 }
 
 static bool
-can_jump_to_finish(const writ_plan_view_t *plan)
+can_fail(const writ_plan_view_t *plan)
 {
     for (size_t i = 0; i < plan->steps_count; i++) {
-        writ_step_kind_t kind = plan->steps[i].kind;
-        if (kind == WRIT_STEP_CHECK || kind == WRIT_STEP_ALLOC_OUT || kind == WRIT_STEP_LIFT_BUFFER) {
+        switch (plan->steps[i].kind) {
+        case WRIT_STEP_CHECK:
+        case WRIT_STEP_ENCODE_CSTR:
+        case WRIT_STEP_SIZE_QUERY:
+        case WRIT_STEP_ALLOC_OUT:
+        case WRIT_STEP_LIFT_BUFFER:
+        case WRIT_STEP_COPY_BORROWED:
             return true;
+        default:
+            break;
         }
     }
-    return false;
+    return pack_item(plan) != nullptr;
+}
+
+static bool
+has_text_pack(const writ_plan_view_t *plan)
+{
+    const writ_plan_item_view_t *pack = pack_item(plan);
+    return pack && writ_c_is_text(pack->type);
 }
 
 static void
-emit_finish_label(writ_emit_t *emit, bool *emitted, bool wanted)
+emit_reset(shim_env_t *env, writ_emit_t *emit)
 {
-    if (*emitted || !wanted) {
-        return;
+    const writ_model_t *model = env->c->model;
+    for (size_t i = 0; i < env->plan->reset_channels_count; i++) {
+        writ_ref_t ref = {WRIT_REF_CHANNEL, WRIT_REF_VALUE, env->plan->reset_channels[i]};
+        core_buffer_t *buffer = core_buffer_empty();
+        shim_ref(&env->base, ref, 0, buffer);
+        writ_emit_line(emit, "%.*s = 0;", (int)buffer->byte_len, buffer->data);
+        core_buffer_free(buffer);
     }
-    writ_emit_indent(emit, -1);
-    writ_emit_line(emit, "finish:");
-    writ_emit_indent(emit, 1);
-    *emitted = true;
+    (void)model;
 }
 
 static void
-emit_shim(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_view_t *plan, writ_str_t upper_prefix)
+emit_shim(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_view_t *plan)
 {
-    shim_env_t env = {{.print_ref = shim_ref}, c, plan};
+    shim_env_t env = {{.print_ref = shim_ref}, c, plan, "ret"};
     bool direct = writ_c_returns_directly(plan);
-    bool wants_label = !direct && can_jump_to_finish(plan);
-    bool label_emitted = false;
     writ_c_emit_signature(c, emit, plan);
     writ_emit_open(emit, "");
     emit_declarations(c, emit, plan);
+    if (has_text_pack(plan)) {
+        writ_emit_line(emit, "char *pack[%d] = {0};", WRIT_C_MAX_ARITY);
+    }
     if (!direct) {
         writ_emit_line(emit, "int32_t outcome = 0;");
     }
+    emit_reset(&env, emit);
     uint32_t current = WRIT_PLAN_NONE;
+    bool finished = false;
     for (size_t i = 0; i < plan->steps_count; i++) {
         const writ_plan_step_view_t *step = &plan->steps[i];
         if (step->kind == WRIT_STEP_CLASSIFY) {
@@ -363,45 +750,106 @@ emit_shim(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_view_t *
             }
             current = step->outcome;
         }
-        if (step->phase == WRIT_PHASE_FINALLY) {
-            emit_finish_label(emit, &label_emitted, wants_label);
+        if (step->phase == WRIT_PHASE_FINALLY && !finished && !direct && can_fail(plan)) {
+            writ_emit_indent(emit, -1);
+            writ_emit_line(emit, "finish:");
+            writ_emit_indent(emit, 1);
+            finished = true;
         }
-        emit_step(c, &env, emit, step, upper_prefix);
+        emit_step(&env, emit, step);
     }
     if (current != WRIT_PLAN_NONE && !direct) {
         writ_emit_close(emit, nullptr);
     }
-    emit_finish_label(emit, &label_emitted, wants_label);
     if (!direct) {
+        if (!finished && can_fail(plan)) {
+            writ_emit_indent(emit, -1);
+            writ_emit_line(emit, "finish:");
+            writ_emit_indent(emit, 1);
+        }
+        if (has_text_pack(plan)) {
+            writ_emit_open(emit, "for (size_t i = 0; i < %d; i++)", WRIT_C_MAX_ARITY);
+            writ_emit_line(emit, "free(pack[i]);");
+            writ_emit_close(emit, nullptr);
+        }
         writ_emit_line(emit, "return outcome;");
     }
     writ_emit_close(emit, nullptr);
 }
 
+static void
+emit_forwarder(const writ_c_context_t *c, writ_emit_t *emit, const writ_fn_view_t *fn)
+{
+    writ_str_t name = writ_c_callee(c, fn);
+    writ_emit_text(emit, "static ");
+    writ_c_emit_real_prototype(c, emit, fn, name, true, "");
+    writ_emit_open(emit, "");
+    writ_str_t last = writ_cstr("");
+    for (size_t i = 0; i < fn->slots_count; i++) {
+        if (fn->slots[i].type->kind != WRIT_TYPE_VA_LIST) {
+            last = fn->slots[i].name;
+        }
+    }
+    writ_emit_line(emit, "va_list ap;");
+    writ_emit_line(emit, "va_start(ap, %.*s);", S(last));
+    bool has_result = fn->result != nullptr;
+    if (has_result) {
+        writ_str_t type = writ_c_type(c, fn->result->type, writ_c_is_text(fn->result->type) && !fn->result->own);
+        writ_emit_text(emit, "%.*s result = ", S(type));
+    }
+    writ_emit_text(emit, "%.*s(", S(fn->link_symbol));
+    for (size_t i = 0; i < fn->slots_count; i++) {
+        bool is_list = fn->slots[i].type->kind == WRIT_TYPE_VA_LIST;
+        writ_emit_text(emit, "%s%.*s", i ? ", " : "", S(is_list ? writ_cstr("ap") : fn->slots[i].name));
+    }
+    writ_emit_line(emit, ");");
+    writ_emit_line(emit, "va_end(ap);");
+    if (has_result) {
+        writ_emit_line(emit, "return result;");
+    }
+    writ_emit_close(emit, nullptr);
+}
+
+static void
+emit_includes(const writ_c_context_t *c, writ_emit_t *emit)
+{
+    const writ_library_view_t *library = writ_model_library(c->model);
+    for (size_t i = 0; i < library->headers_count; i++) {
+        writ_emit_line(emit, "#include <%.*s>", S(library->headers[i]));
+    }
+}
+
 static writ_str_t
-header_text(const writ_c_context_t *c, writ_str_t upper_prefix, const writ_plan_view_t *const *plans, size_t count)
+header_text(const writ_c_context_t *c, const writ_plan_view_t *const *plans, size_t count)
 {
     writ_emit_t emit;
     writ_emit_init(&emit);
-    writ_emit_line(&emit, "#ifndef %.*s_WRIT_H", S(upper_prefix));
-    writ_emit_line(&emit, "#define %.*s_WRIT_H", S(upper_prefix));
+    writ_emit_line(&emit, "#ifndef %.*s_WRIT_H", S(c->upper));
+    writ_emit_line(&emit, "#define %.*s_WRIT_H", S(c->upper));
     writ_emit_line(&emit, "");
+    writ_emit_line(&emit, "#include <stdarg.h>");
     writ_emit_line(&emit, "#include <stdbool.h>");
     writ_emit_line(&emit, "#include <stddef.h>");
     writ_emit_line(&emit, "#include <stdint.h>");
+    emit_includes(c, &emit);
     writ_emit_line(&emit, "");
     writ_emit_line(&emit, "#ifdef __cplusplus");
     writ_emit_line(&emit, "extern \"C\" {");
     writ_emit_line(&emit, "#endif");
     writ_emit_line(&emit, "");
-    writ_emit_line(&emit, "#define %.*s_ARGUMENT_ERROR (-1)", S(upper_prefix));
-    writ_emit_line(&emit, "#define %.*s_OUT_OF_MEMORY (-2)", S(upper_prefix));
-    writ_emit_line(&emit, "#define %.*s_CONTRACT_VIOLATION (-3)", S(upper_prefix));
+    writ_emit_line(&emit, "#define %.*s_ARGUMENT_ERROR (-1)", S(c->upper));
+    writ_emit_line(&emit, "#define %.*s_OUT_OF_MEMORY (-2)", S(c->upper));
+    writ_emit_line(&emit, "#define %.*s_CONTRACT_VIOLATION (-3)", S(c->upper));
     writ_emit_line(&emit, "");
     writ_emit_open(&emit, "typedef struct");
     writ_emit_line(&emit, "uint8_t *data;");
     writ_emit_line(&emit, "size_t length;");
     writ_emit_close(&emit, writ_str_format(c->model->session, " %.*s_bytes_t;", S(c->prefix)).data);
+    writ_emit_line(&emit, "");
+    writ_emit_open(&emit, "typedef struct");
+    writ_emit_line(&emit, "const char *data;");
+    writ_emit_line(&emit, "size_t length;");
+    writ_emit_close(&emit, writ_str_format(c->model->session, " %.*s_str_t;", S(c->prefix)).data);
     writ_emit_line(&emit, "");
     writ_emit_line(&emit, "void %.*s_bytes_free(%.*s_bytes_t *bytes);", S(c->prefix), S(c->prefix));
     for (size_t i = 0; i < count; i++) {
@@ -427,31 +875,118 @@ header_text(const writ_c_context_t *c, writ_str_t upper_prefix, const writ_plan_
     return writ_emit_finish(&emit, c->model->session);
 }
 
+static void emit_encode_helper(const writ_c_context_t *c, writ_emit_t *emit);
+static void emit_copy_helper(const writ_c_context_t *c, writ_emit_t *emit);
+
+static bool
+plans_use(const writ_plan_view_t *const *plans, size_t count, writ_step_kind_t kind)
+{
+    for (size_t i = 0; i < count; i++) {
+        for (size_t s = 0; s < plans[i]->steps_count; s++) {
+            const writ_plan_step_view_t *step = &plans[i]->steps[s];
+            bool text_pack = kind == WRIT_STEP_ENCODE_CSTR && step->kind == WRIT_STEP_EXPAND && has_text_pack(plans[i]);
+            bool empty = kind == WRIT_STEP_SPLIT && step->kind == kind && !plans[i]->items[step->item].nullable;
+            if ((step->kind == kind && kind != WRIT_STEP_SPLIT) || text_pack || empty) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static void
+emit_helpers(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_view_t *const *plans, size_t count)
+{
+    if (plans_use(plans, count, WRIT_STEP_SPLIT)) {
+        writ_emit_line(emit, "static const uint8_t %.*s_empty[1];", S(c->prefix));
+        writ_emit_line(emit, "");
+    }
+    writ_emit_open(emit, "void %.*s_bytes_free(%.*s_bytes_t *bytes)", S(c->prefix), S(c->prefix));
+    writ_emit_line(emit, "free(bytes->data);");
+    writ_emit_line(emit, "bytes->data = NULL;");
+    writ_emit_line(emit, "bytes->length = 0;");
+    writ_emit_close(emit, nullptr);
+    if (plans_use(plans, count, WRIT_STEP_ENCODE_CSTR)) {
+        writ_emit_line(emit, "");
+        emit_encode_helper(c, emit);
+    }
+    if (plans_use(plans, count, WRIT_STEP_COPY_BORROWED)) {
+        writ_emit_line(emit, "");
+        emit_copy_helper(c, emit);
+    }
+}
+
+static void
+emit_encode_helper(const writ_c_context_t *c, writ_emit_t *emit)
+{
+    writ_emit_open(emit, "static int32_t %.*s_encode(const char *text, size_t length, char **out)", S(c->prefix));
+    writ_emit_open(emit, "if (memchr(text, 0, length))");
+    writ_emit_line(emit, "return %.*s_ARGUMENT_ERROR;", S(c->upper));
+    writ_emit_close(emit, nullptr);
+    writ_emit_line(emit, "*out = malloc(length + 1);");
+    writ_emit_open(emit, "if (!*out)");
+    writ_emit_line(emit, "return %.*s_OUT_OF_MEMORY;", S(c->upper));
+    writ_emit_close(emit, nullptr);
+    writ_emit_line(emit, "memcpy(*out, text, length);");
+    writ_emit_line(emit, "(*out)[length] = 0;");
+    writ_emit_line(emit, "return 0;");
+    writ_emit_close(emit, nullptr);
+}
+
+static void
+emit_copy_helper(const writ_c_context_t *c, writ_emit_t *emit)
+{
+    writ_emit_open(emit, "static int %.*s_copy_text(const char *text, %.*s_bytes_t *out)", S(c->prefix), S(c->prefix));
+    writ_emit_line(emit, "size_t length = text ? strlen(text) : 0;");
+    writ_emit_line(emit, "out->data = malloc(length + 1);");
+    writ_emit_open(emit, "if (!out->data)");
+    writ_emit_line(emit, "return -1;");
+    writ_emit_close(emit, nullptr);
+    writ_emit_line(emit, "memcpy(out->data, text ? text : \"\", length + 1);");
+    writ_emit_line(emit, "out->length = length;");
+    writ_emit_line(emit, "return 0;");
+    writ_emit_close(emit, nullptr);
+}
+
 static writ_str_t
-shim_text(const writ_c_context_t *c, writ_str_t upper_prefix, const writ_plan_view_t *const *plans, size_t count)
+shim_text(const writ_c_context_t *c, const writ_plan_view_t *const *plans, size_t count)
 {
     writ_emit_t emit;
     writ_emit_init(&emit);
     writ_emit_line(&emit, "#include \"%.*s_writ.h\"", S(c->prefix));
     writ_emit_line(&emit, "");
     writ_emit_line(&emit, "#include <stdlib.h>");
+    writ_emit_line(&emit, "#include <string.h>");
     writ_emit_line(&emit, "");
-    for (size_t i = 0; i < writ_model_fn_count(c->model); i++) {
-        writ_c_emit_real_prototype(c, &emit, writ_model_fn_at(c->model, i), ";");
+    if (!writ_model_library(c->model)->headers_count) {
+        for (size_t i = 0; i < writ_model_fn_count(c->model); i++) {
+            const writ_fn_view_t *fn = writ_model_fn_at(c->model, i);
+            writ_c_emit_real_prototype(c, &emit, fn, fn->link_symbol, false, ";");
+        }
+        writ_emit_line(&emit, "");
     }
-    writ_emit_line(&emit, "");
-    writ_emit_line(&emit, "static const uint8_t %.*s_empty[1];", S(c->prefix));
-    writ_emit_line(&emit, "");
-    writ_emit_open(&emit, "void %.*s_bytes_free(%.*s_bytes_t *bytes)", S(c->prefix), S(c->prefix));
-    writ_emit_line(&emit, "free(bytes->data);");
-    writ_emit_line(&emit, "bytes->data = NULL;");
-    writ_emit_line(&emit, "bytes->length = 0;");
-    writ_emit_close(&emit, nullptr);
+    emit_helpers(c, &emit, plans, count);
+    for (size_t i = 0; i < count; i++) {
+        if (plans[i]->fn->varargs == WRIT_VARARGS_VA_LIST) {
+            writ_emit_line(&emit, "");
+            emit_forwarder(c, &emit, plans[i]->fn);
+        }
+    }
     for (size_t i = 0; i < count; i++) {
         writ_emit_line(&emit, "");
-        emit_shim(c, &emit, plans[i], upper_prefix);
+        emit_shim(c, &emit, plans[i]);
     }
     return writ_emit_finish(&emit, c->model->session);
+}
+
+static writ_str_t
+upper(writ_session_t *session, writ_str_t text)
+{
+    writ_str_t copy = writ_str_copy(session, text.data, text.length);
+    for (size_t i = 0; i < copy.length; i++) {
+        ((char *)copy.data)[i] = (char)toupper((unsigned char)copy.data[i]);
+    }
+    return copy;
 }
 
 writ_status_t
@@ -462,21 +997,22 @@ writ_gen_c(const writ_model_t *model, const writ_gen_c_request_t *request, const
     }
     writ_session_t *session = model->session;
     writ_str_t prefix = request->prefix.length ? request->prefix : writ_model_library(model)->name;
-    writ_c_context_t c = {model, writ_str_copy(session, prefix.data, prefix.length)};
-    writ_str_t upper_prefix = upper(session, c.prefix);
+    writ_c_context_t c = {model, writ_str_copy(session, prefix.data, prefix.length), upper(session, prefix)};
     size_t count = writ_model_fn_count(model);
     const writ_plan_view_t **plans = writ_alloc(session, sizeof(writ_plan_view_t *) * (count ? count : 1));
+    bool complete = true;
     for (size_t i = 0; i < count; i++) {
         plans[i] = writ_model_fn_plan(model, writ_model_fn_at(model, i));
-        if (!plans[i]) {
-            return WRIT_HAS_ERRORS;
-        }
+        complete = complete && plans[i];
+    }
+    if (!complete) {
+        return WRIT_HAS_ERRORS;
     }
     writ_status_t status = output->write_file(output->context, writ_str_format(session, "%.*s_writ.h", S(c.prefix)),
-                                              header_text(&c, upper_prefix, plans, count));
+                                              header_text(&c, plans, count));
     if (status == WRIT_OK) {
         status = output->write_file(output->context, writ_str_format(session, "%.*s_writ.c", S(c.prefix)),
-                                    shim_text(&c, upper_prefix, plans, count));
+                                    shim_text(&c, plans, count));
     }
     if (status == WRIT_OK && request->conformance) {
         status = writ_gen_conformance(&c, output);

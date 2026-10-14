@@ -68,8 +68,14 @@ lines += [
     "size_t writ_model_fn_count(const writ_model_t *model);",
     "const writ_fn_view_t *writ_model_fn_at(const writ_model_t *model, size_t index);",
     "const writ_fn_view_t *writ_model_fn_named(const writ_model_t *model, writ_str_t name);",
-    "size_t writ_model_const_count(const writ_model_t *model);",
-    "const writ_const_view_t *writ_model_const_at(const writ_model_t *model, size_t index);",
+]
+for kind in ("const", "record", "handle", "enum", "channel"):
+    lines += [
+        f"size_t writ_model_{kind}_count(const writ_model_t *model);",
+        f"const writ_{kind}_view_t *writ_model_{kind}_at(const writ_model_t *model, size_t index);",
+        f"const writ_{kind}_view_t *writ_model_{kind}_named(const writ_model_t *model, writ_str_t name);",
+    ]
+lines += [
     "const writ_plan_view_t *writ_model_fn_plan(const writ_model_t *model, const writ_fn_view_t *fn);",
     "writ_status_t writ_model_plan_render(const writ_model_t *model, const writ_plan_view_t *plan, writ_str_t *rendered);",
     "",

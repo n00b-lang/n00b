@@ -29,7 +29,7 @@ attempt   alloc_out      dest -> L0, cap compressBound(s3)
           bind_out       L0 -> s0
           bind_out       L1 -> s1
           call           fixed
-classify  error: failure when (ret != 0)
+classify  error: failure when (ret != Z_OK)
           ok: success
 error     fetch_detail   ret -> status
 ok        lift_buffer    L0 -> dest, len L1
@@ -54,7 +54,7 @@ attempt   alloc_out      dest -> L0, cap dest_capacity
           bind_out       L0 -> s0
           bind_out       L1 -> s1
           call           fixed
-classify  error: failure when (ret != 0)
+classify  error: failure when (ret != Z_OK)
           ok: success
 error     fetch_detail   ret -> status
 ok        lift_buffer    L0 -> dest, len L1

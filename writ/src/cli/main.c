@@ -42,12 +42,19 @@ cmd_parse(writ_session_t *session, int argc, char **argv)
     return 0;
 }
 
+static writ_str_t platform_triple;
+
 static const writ_model_t *
 resolve(writ_session_t *session, const char *path)
 {
+    writ_platform_t *platform = nullptr;
+    if (writ_platform_from_triple(session, platform_triple, &platform) != WRIT_OK) {
+        fprintf(stderr, "writ: unknown platform %.*s\n", (int)platform_triple.length, platform_triple.data);
+        return nullptr;
+    }
     writ_unit_t *unit = load(session, path);
     const writ_model_t *model = nullptr;
-    return unit && writ_resolve(unit, &model) == WRIT_OK ? model : nullptr;
+    return unit && writ_resolve(unit, platform, &model) == WRIT_OK ? model : nullptr;
 }
 
 static int
@@ -139,6 +146,17 @@ main(int argc, char **argv)
         printf("writ api %u\n", writ_api_version());
         return 0;
     }
+    platform_triple = writ_platform_host_triple();
+    int kept = 1;
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "--platform") && i + 1 < argc) {
+            platform_triple = (writ_str_t){argv[i + 1], strlen(argv[i + 1])};
+            i++;
+        } else {
+            argv[kept++] = argv[i];
+        }
+    }
+    argc = kept;
     for (size_t i = 0; argc >= 2 && i < sizeof(commands) / sizeof(commands[0]); i++) {
         if (strcmp(argv[1], commands[i].name)) {
             continue;

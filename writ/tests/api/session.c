@@ -49,7 +49,9 @@ main(void)
                                 text("library t\n\nfn f(x: c_bogus) -> c_int\n"), nullptr) == WRIT_OK,
            "parse succeeds");
     const writ_model_t *model = nullptr;
-    expect(writ_resolve(unit, &model) == WRIT_HAS_ERRORS && !model, "resolve reports errors");
+    writ_platform_t *platform = nullptr;
+    expect(writ_platform_from_triple(session, writ_platform_host_triple(), &platform) == WRIT_OK, "host platform");
+    expect(writ_resolve(unit, platform, &model) == WRIT_HAS_ERRORS && !model, "resolve reports errors");
     expect(state.calls == 1 && !strcmp(state.code, "E0102"), "sink receives the unknown-type diagnostic");
     expect(state.span.line == 3 && state.span.column == 9, "diagnostic location");
     expect(writ_diag_count(session) == 1, "diagnostic count");
@@ -62,7 +64,8 @@ main(void)
     session = writ_session_new(nullptr);
     unit = writ_unit_new(session);
     expect(writ_unit_add_file(unit, text("tests/skeleton/zlib.writ"), nullptr) == WRIT_OK, "skeleton parses");
-    expect(writ_resolve(unit, &model) == WRIT_OK && model, "skeleton resolves");
+    writ_platform_from_triple(session, writ_platform_host_triple(), &platform);
+    expect(writ_resolve(unit, platform, &model) == WRIT_OK && model, "skeleton resolves");
     expect(writ_model_fn_count(model) == 3, "three functions");
     const writ_fn_view_t *compress2 = writ_model_fn_named(model, text("compress2"));
     expect(compress2 && compress2->slots_count == 5, "compress2 has five slots");

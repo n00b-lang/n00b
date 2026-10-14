@@ -43,3 +43,5 @@ uint32_t           writ_node_child(const writ_unit_t *unit, uint32_t id, uint32_
 uint32_t           writ_node_first_of(const writ_unit_t *unit, uint32_t id, writ_node_kind_t kind);
 const char        *writ_node_kind_name(writ_node_kind_t kind);
 void               writ_unit_release(void *unit);
+writ_str_t         writ_syntax_audit(writ_session_t *session, bool candidates);
+writ_status_t      writ_unit_read_file(writ_unit_t *unit, writ_str_t path, uint32_t *source_id);

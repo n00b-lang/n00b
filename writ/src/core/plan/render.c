@@ -8,11 +8,17 @@ typedef struct {
 } render_env_t;
 
 static void
-render_ref(writ_expr_env_t *base, writ_ref_t ref, core_buffer_t *out)
+render_ref(writ_expr_env_t *base, writ_ref_t ref, uint32_t expr, core_buffer_t *out)
 {
+    (void)expr;
     render_env_t *env = (render_env_t *)base;
     if (ref.kind == WRIT_REF_RESULT) {
         core_buffer_puts(out, "ret");
+        return;
+    }
+    if (ref.kind == WRIT_REF_CHANNEL) {
+        writ_str_t name = writ_sym_str(env->model->session, env->model->channels.data[ref.index].name);
+        core_buffer_printf(out, "%.*s", (int)name.length, name.data);
         return;
     }
     uint32_t slot = writ_plan_contract_slot(env->model, env->plan, ref);
@@ -20,7 +26,7 @@ render_ref(writ_expr_env_t *base, writ_ref_t ref, core_buffer_t *out)
     if (cell != WRIT_PLAN_NONE) {
         core_buffer_printf(out, "L%u", cell);
     } else {
-        core_buffer_printf(out, "s%u", slot);
+        core_buffer_printf(out, "%ss%u", ref.phase == WRIT_REF_VALUE ? "" : "*", slot);
     }
 }
 
@@ -30,48 +36,97 @@ put_expr(render_env_t *env, uint32_t expr, core_buffer_t *out)
     writ_expr_print(env->model, expr, WRIT_LANGUAGE_C, &env->base, out);
 }
 
-static const char *
-item_name(const writ_plan_view_t *plan, uint32_t item, char *scratch, size_t size)
+static void
+put_item(const writ_plan_view_t *plan, uint32_t item, core_buffer_t *out)
 {
     if (item == WRIT_PLAN_NONE) {
-        return "-";
+        core_buffer_putc(out, '-');
+    } else {
+        core_buffer_printf(out, "%.*s", (int)plan->items[item].name.length, plan->items[item].name.data);
     }
-    snprintf(scratch, size, "%.*s", (int)plan->items[item].name.length, plan->items[item].name.data);
-    return scratch;
+}
+
+static void
+put_target(const writ_plan_step_view_t *step, core_buffer_t *out)
+{
+    if (step->local != WRIT_PLAN_NONE) {
+        core_buffer_printf(out, " -> L%u", step->local);
+    } else if (step->slot != WRIT_PLAN_NONE) {
+        core_buffer_printf(out, " -> s%u", step->slot);
+    }
 }
 
 static void
 render_operands(render_env_t *env, const writ_plan_step_view_t *step, core_buffer_t *out)
 {
     const writ_plan_view_t *plan = env->plan;
-    char name[128];
     switch (step->kind) {
     case WRIT_STEP_CHECK:
-        core_buffer_printf(out, "%s fits s%u", item_name(plan, step->item, name, sizeof(name)), step->slot);
+        put_item(plan, step->item, out);
+        core_buffer_printf(out, " fits s%u", step->slot);
         return;
     case WRIT_STEP_SPLIT:
-        core_buffer_printf(out, "%s -> s%u, s%u", item_name(plan, step->item, name, sizeof(name)), step->slot,
-                           step->second_slot);
+        put_item(plan, step->item, out);
+        core_buffer_printf(out, " -> s%u, s%u", step->slot, step->second_slot);
         return;
     case WRIT_STEP_PASS:
-        if (step->source_local != WRIT_PLAN_NONE) {
+        if (step->literal.length) {
+            core_buffer_printf(out, "\"%.*s\"", (int)step->literal.length, step->literal.data);
+        } else if (step->source_local != WRIT_PLAN_NONE) {
             core_buffer_printf(out, "cap(L%u)", step->source_local);
+        } else if (plan->slots[step->slot].part == WRIT_PART_LENGTH) {
+            core_buffer_puts(out, "count(");
+            put_item(plan, step->item, out);
+            core_buffer_putc(out, ')');
         } else {
-            core_buffer_puts(out, item_name(plan, step->item, name, sizeof(name)));
+            put_item(plan, step->item, out);
+        }
+        put_target(step, out);
+        return;
+    case WRIT_STEP_ENCODE_CSTR:
+    case WRIT_STEP_COPY_BORROWED:
+    case WRIT_STEP_WRAP_HANDLE:
+    case WRIT_STEP_LIFT_VALUE:
+        if (step->kind == WRIT_STEP_ENCODE_CSTR) {
+            put_item(plan, step->item, out);
+            put_target(step, out);
+            return;
         }
         if (step->local != WRIT_PLAN_NONE) {
-            core_buffer_printf(out, " -> L%u", step->local);
+            core_buffer_printf(out, "L%u", step->local);
         } else {
-            core_buffer_printf(out, " -> s%u", step->slot);
+            core_buffer_puts(out, plan->slots[step->slot].contract_slot == WRIT_PLAN_NONE ? "ret" : "s");
         }
+        core_buffer_puts(out, " -> ");
+        put_item(plan, step->item, out);
+        return;
+    case WRIT_STEP_EXPAND:
+        put_item(plan, step->item, out);
+        core_buffer_printf(out, " -> s%u", step->slot);
+        if (step->expr) {
+            core_buffer_puts(out, ", until ");
+            put_expr(env, step->expr, out);
+        }
+        return;
+    case WRIT_STEP_SIZE_QUERY:
+        core_buffer_puts(out, "(");
+        for (size_t i = 0; i < plan->query_count; i++) {
+            core_buffer_printf(out, "%ss%u = ", i ? ", " : "", plan->query[i].slot);
+            put_expr(env, plan->query[i].expr, out);
+        }
+        core_buffer_printf(out, ") -> cap(L%u) = ", step->local);
+        put_expr(env, step->expr, out);
         return;
     case WRIT_STEP_ALLOC_OUT: {
         const writ_plan_local_view_t *local = &plan->locals[step->local];
-        core_buffer_printf(out, "%s -> L%u, cap ", item_name(plan, step->item, name, sizeof(name)), step->local);
+        put_item(plan, step->item, out);
+        core_buffer_printf(out, " -> L%u, cap ", step->local);
         if (local->capacity_item != WRIT_PLAN_NONE) {
-            core_buffer_puts(out, item_name(plan, local->capacity_item, name, sizeof(name)));
+            put_item(plan, local->capacity_item, out);
+        } else if (step->expr) {
+            put_expr(env, step->expr, out);
         } else {
-            put_expr(env, local->capacity_expr, out);
+            core_buffer_puts(out, "from query");
         }
         return;
     }
@@ -79,25 +134,21 @@ render_operands(render_env_t *env, const writ_plan_step_view_t *step, core_buffe
         core_buffer_printf(out, "L%u -> s%u", step->local, step->slot);
         return;
     case WRIT_STEP_CALL:
-        core_buffer_puts(out, "fixed");
+        core_buffer_puts(out, plan->variadic ? "variadic" : "fixed");
         return;
     case WRIT_STEP_FETCH_DETAIL:
         put_expr(env, step->expr, out);
-        core_buffer_printf(out, " -> %s", item_name(plan, step->item, name, sizeof(name)));
-        return;
-    case WRIT_STEP_LIFT_VALUE:
-        if (step->local != WRIT_PLAN_NONE) {
-            core_buffer_printf(out, "L%u", step->local);
-        } else if (plan->slots[step->slot].contract_slot == WRIT_PLAN_NONE) {
-            core_buffer_puts(out, "ret");
-        } else {
-            core_buffer_printf(out, "s%u", step->slot);
-        }
-        core_buffer_printf(out, " -> %s", item_name(plan, step->item, name, sizeof(name)));
+        core_buffer_puts(out, " -> ");
+        put_item(plan, step->item, out);
         return;
     case WRIT_STEP_LIFT_BUFFER:
-        core_buffer_printf(out, "L%u -> %s, len ", step->local, item_name(plan, step->item, name, sizeof(name)));
+        core_buffer_printf(out, "L%u -> ", step->local);
+        put_item(plan, step->item, out);
+        core_buffer_puts(out, ", len ");
         put_expr(env, step->expr, out);
+        return;
+    case WRIT_STEP_MARK_CONSUMED:
+        put_item(plan, step->item, out);
         return;
     case WRIT_STEP_RELEASE_LOCAL:
         core_buffer_printf(out, "L%u unless handed over", step->local);
@@ -163,24 +214,38 @@ writ_model_plan_render(const writ_model_t *model, const writ_plan_view_t *plan, 
     writ_emit_t emit;
     writ_emit_init(&emit);
     writ_emit_line(&emit, "plan %.*s", (int)plan->fn->contract_name.length, plan->fn->contract_name.data);
+    if (plan->serialize_item != WRIT_PLAN_NONE) {
+        core_buffer_t *line = core_buffer_empty();
+        put_item(plan, plan->serialize_item, line);
+        writ_emit_line(&emit, "serialize on %.*s", (int)line->byte_len, line->data);
+        core_buffer_free(line);
+    }
+    for (size_t i = 0; i < plan->reset_channels_count; i++) {
+        writ_str_t name = writ_sym_str(model->session, model->channels.data[plan->reset_channels[i]].name);
+        writ_emit_line(&emit, "reset %.*s", (int)name.length, name.data);
+    }
     for (size_t i = 0; i < plan->items_count; i++) {
         const writ_plan_item_view_t *item = &plan->items[i];
-        writ_emit_line(&emit, "item %zu %.*s %s %s %s", i, (int)item->name.length, item->name.data,
+        writ_emit_line(&emit, "item %zu %.*s %s %s %s%s%.*s", i, (int)item->name.length, item->name.data,
                        writ_plan_role_names[item->role], writ_plan_shape_names[item->shape],
-                       writ_after_call_names[item->after_call]);
+                       writ_after_call_names[item->after_call], item->release.length ? " release " : "",
+                       (int)item->release.length, item->release.data);
     }
     for (size_t i = 0; i < plan->slots_count; i++) {
         const writ_plan_slot_view_t *slot = &plan->slots[i];
-        char name[128];
-        writ_emit_line(&emit, "slot %zu %s %s %s", i, writ_pass_names[slot->pass], writ_part_names[slot->part],
-                       item_name(plan, slot->item, name, sizeof(name)));
+        core_buffer_t *line = core_buffer_empty();
+        put_item(plan, slot->item, line);
+        writ_emit_line(&emit, "slot %zu %s %s %.*s", i, writ_pass_names[slot->pass], writ_part_names[slot->part],
+                       (int)line->byte_len, line->data);
+        core_buffer_free(line);
     }
     for (size_t i = 0; i < plan->locals_count; i++) {
         const writ_plan_local_view_t *local = &plan->locals[i];
-        char name[128];
-        writ_emit_line(&emit, "local %zu %s %.*s %s", i, writ_local_kind_names[local->kind],
-                       (int)local->type->name.length, local->type->name.data,
-                       item_name(plan, local->item, name, sizeof(name)));
+        core_buffer_t *line = core_buffer_empty();
+        put_item(plan, local->item, line);
+        writ_emit_line(&emit, "local %zu %s %.*s %.*s", i, writ_local_kind_names[local->kind],
+                       (int)local->type->name.length, local->type->name.data, (int)line->byte_len, line->data);
+        core_buffer_free(line);
     }
     render_steps(&env, &emit);
     *rendered = writ_emit_finish(&emit, model->session);

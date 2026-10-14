@@ -14,6 +14,7 @@ extern "C" {
 typedef struct writ_session writ_session_t;
 typedef struct writ_unit writ_unit_t;
 typedef struct writ_model writ_model_t;
+typedef struct writ_platform writ_platform_t;
 
 typedef uint32_t writ_status_t;
 enum {
@@ -126,7 +127,17 @@ writ_status_t writ_unit_add_source(writ_unit_t *unit, writ_source_kind_t kind,
 writ_status_t writ_unit_add_file(writ_unit_t *unit, writ_str_t path, uint32_t *source_id);
 writ_status_t writ_unit_dump(const writ_unit_t *unit, writ_str_t *rendered);
 
-writ_status_t writ_resolve(writ_unit_t *unit, const writ_model_t **model);
+writ_str_t    writ_platform_host_triple(void);
+writ_status_t writ_platform_from_triple(writ_session_t *session, writ_str_t triple,
+                                        writ_platform_t **platform);
+writ_str_t    writ_platform_triple(const writ_platform_t *platform);
+writ_status_t writ_platform_set_version(writ_platform_t *platform, writ_str_t library,
+                                        writ_str_t version);
+writ_status_t writ_platform_set_feature(writ_platform_t *platform, writ_str_t feature,
+                                        bool enabled);
+
+writ_status_t writ_resolve(writ_unit_t *unit, const writ_platform_t *platform,
+                           const writ_model_t **model);
 
 writ_status_t writ_output_directory(writ_session_t *session, writ_str_t directory,
                                     writ_output_t *output);
