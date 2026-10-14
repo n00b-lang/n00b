@@ -237,7 +237,7 @@ typedef struct writ_plan_view writ_plan_view_t;
 
 struct writ_type_view {
     size_t struct_size;
-    uint32_t kind;
+    writ_type_kind_t kind;
     writ_str_t name;
     writ_str_t c_spelling;
     uint32_t size;
@@ -262,12 +262,12 @@ struct writ_slot_view {
     size_t struct_size;
     writ_str_t name;
     const writ_type_view_t *type;
-    uint32_t mode;
-    uint32_t extent_kind;
+    writ_mode_t mode;
+    writ_extent_kind_t extent_kind;
     uint32_t count_expr;
     uint32_t cap_expr;
     uint32_t len_expr;
-    uint32_t span;
+    writ_span_kind_t span;
     writ_str_t span_with;
     bool own;
     writ_str_t release;
@@ -281,7 +281,7 @@ struct writ_slot_view {
 struct writ_outcome_view {
     size_t struct_size;
     writ_str_t name;
-    uint32_t kind;
+    writ_outcome_kind_t kind;
     uint32_t when_expr;
     uint32_t via_expr;
     bool retry;
@@ -292,24 +292,24 @@ struct writ_fn_view {
     writ_str_t contract_name;
     writ_str_t source_name;
     writ_str_t link_symbol;
-    uint32_t kind;
+    writ_fn_kind_t kind;
     size_t slots_count;
     const writ_slot_view_t *slots;
     const writ_slot_view_t *result;
     bool is_pure;
-    uint32_t sizing;
+    writ_sizing_kind_t sizing;
     uint32_t sizing_expr;
     uint32_t sizing_slot;
     size_t outcomes_count;
     const writ_outcome_view_t *outcomes;
-    uint32_t varargs;
+    writ_varargs_kind_t varargs;
     const writ_type_view_t *varargs_type;
-    uint32_t varargs_end;
+    uint32_t varargs_end_expr;
     uint32_t varargs_count_slot;
     uint32_t format_slot;
     writ_str_t expands_symbol;
     uint32_t expands_node;
-    uint32_t thread;
+    writ_thread_kind_t thread;
     writ_span_t declared_at;
 };
 
@@ -330,7 +330,7 @@ struct writ_handle_view {
     bool has_none;
     int64_t none_value;
     writ_str_t release;
-    uint32_t thread_rule;
+    writ_thread_rule_t thread_rule;
     writ_span_t declared_at;
 };
 
@@ -352,7 +352,7 @@ struct writ_channel_view {
     bool per_handle;
     const writ_type_view_t *handle;
     bool reset_before_call;
-    uint32_t kind;
+    writ_channel_kind_t kind;
     uint32_t source_expr;
     writ_span_t declared_at;
 };
@@ -375,9 +375,9 @@ struct writ_library_view {
 struct writ_plan_item_view {
     size_t struct_size;
     writ_str_t name;
-    uint32_t role;
-    uint32_t shape;
-    uint32_t after_call;
+    writ_plan_role_t role;
+    writ_plan_shape_t shape;
+    writ_after_call_t after_call;
     const writ_type_view_t *type;
     uint32_t contract_slot;
     writ_str_t release;
@@ -388,15 +388,15 @@ struct writ_plan_item_view {
 struct writ_plan_slot_view {
     size_t struct_size;
     const writ_type_view_t *c_type;
-    uint32_t pass;
-    uint32_t part;
+    writ_pass_t pass;
+    writ_part_t part;
     uint32_t item;
     uint32_t contract_slot;
 };
 
 struct writ_plan_local_view {
     size_t struct_size;
-    uint32_t kind;
+    writ_local_kind_t kind;
     const writ_type_view_t *type;
     uint32_t item;
     uint32_t capacity_expr;
@@ -405,8 +405,8 @@ struct writ_plan_local_view {
 
 struct writ_plan_step_view {
     size_t struct_size;
-    uint32_t kind;
-    uint32_t phase;
+    writ_step_kind_t kind;
+    writ_phase_t phase;
     uint32_t outcome;
     uint32_t item;
     uint32_t slot;
@@ -420,7 +420,7 @@ struct writ_plan_step_view {
 struct writ_plan_outcome_view {
     size_t struct_size;
     writ_str_t name;
-    uint32_t kind;
+    writ_outcome_kind_t kind;
     uint32_t when_expr;
     uint32_t via_expr;
     bool retry;
@@ -476,6 +476,7 @@ const writ_channel_view_t *writ_model_channel_at(const writ_model_t *model, size
 const writ_channel_view_t *writ_model_channel_named(const writ_model_t *model, writ_str_t name);
 const writ_plan_view_t *writ_model_fn_plan(const writ_model_t *model, const writ_fn_view_t *fn);
 writ_status_t writ_model_plan_render(const writ_model_t *model, const writ_plan_view_t *plan, writ_str_t *rendered);
+writ_status_t writ_lower_json(const writ_model_t *model, const writ_output_t *output);
 
 #ifdef __cplusplus
 }

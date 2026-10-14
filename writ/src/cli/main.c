@@ -107,6 +107,24 @@ cmd_check(writ_session_t *session, int argc, char **argv)
 }
 
 static int
+cmd_lower(writ_session_t *session, int argc, char **argv)
+{
+    const char *directory = "-";
+    if (argc == 3 && !strcmp(argv[1], "-o")) {
+        directory = argv[2];
+    } else if (argc != 1) {
+        return 2;
+    }
+    const writ_model_t *model = resolve(session, argv[0]);
+    if (!model) {
+        return 1;
+    }
+    writ_output_t output;
+    output_for(session, directory, &output);
+    return writ_lower_json(model, &output) == WRIT_OK ? 0 : 1;
+}
+
+static int
 cmd_plan(writ_session_t *session, int argc, char **argv)
 {
     if (argc < 1) {
@@ -254,6 +272,7 @@ static const struct {
     {"parse", cmd_parse, "parse FILE"},
     {"check", cmd_check, "check FILE"},
     {"plan", cmd_plan, "plan FILE [FUNCTION]"},
+    {"lower", cmd_lower, "lower FILE [-o DIR]"},
 };
 
 int

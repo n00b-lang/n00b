@@ -107,6 +107,12 @@ test(
 )
 
 test(
+    'lower-golden',
+    python,
+    args: [golden, source_root / 'tests' / 'lower' / 'zlib.json', '--', writ_exe, 'lower', 'tests/skeleton/zlib.writ'],
+)
+
+test(
     'plan-golden',
     python,
     args: [golden, source_root / 'tests' / 'plan' / 'zlib.plan', '--', writ_exe, 'plan', 'tests/skeleton/zlib.writ'],

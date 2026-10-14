@@ -112,7 +112,7 @@ build_fns(writ_model_t *model)
             .outcomes           = &outcomes[record->first_outcome],
             .varargs            = record->varargs,
             .varargs_type       = type_view(model, record->varargs_type),
-            .varargs_end        = record->varargs_end,
+            .varargs_end_expr   = record->varargs_end,
             .varargs_count_slot = record->varargs_count_slot,
             .format_slot        = record->format_slot,
             .expands_symbol     = sym(model, record->expands_symbol),

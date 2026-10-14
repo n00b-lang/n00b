@@ -438,7 +438,7 @@ emit_pack_call(shim_env_t *env, writ_emit_t *emit, const char *target)
     const writ_plan_item_view_t *pack = pack_item(env->plan);
     const writ_fn_view_t *fn = env->plan->fn;
     bool text = writ_c_is_text(pack->type);
-    writ_str_t end = fn->varargs == WRIT_VARARGS_UNTIL ? expr_text(env, fn->varargs_end) : writ_cstr("");
+    writ_str_t end = fn->varargs == WRIT_VARARGS_UNTIL ? expr_text(env, fn->varargs_end_expr) : writ_cstr("");
     writ_str_t element = writ_c_type(c, pack->type, false);
     writ_emit_open(emit, "switch (%.*s_count)", S(pack->name));
     for (int arity = 0; arity <= WRIT_C_MAX_ARITY; arity++) {

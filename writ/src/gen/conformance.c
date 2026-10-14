@@ -217,7 +217,7 @@ mock_pack(const writ_c_context_t *c, writ_emit_t *emit, const writ_fn_view_t *fn
     writ_emit_line(emit, "%.*s value = va_arg(ap, %.*s);", S(element), S(element));
     if (fn->varargs == WRIT_VARARGS_UNTIL) {
         core_buffer_t *end = core_buffer_empty();
-        writ_expr_print(c->model, fn->varargs_end, WRIT_LANGUAGE_C, nullptr, end);
+        writ_expr_print(c->model, fn->varargs_end_expr, WRIT_LANGUAGE_C, nullptr, end);
         writ_emit_open(emit, "if (value == (%.*s)%.*s)", S(element), (int)end->byte_len, end->data);
         writ_emit_line(emit, "break;");
         writ_emit_close(emit, nullptr);

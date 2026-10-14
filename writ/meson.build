@@ -38,7 +38,14 @@ model_names_h = custom_target(
     'model_names.h',
     input: 'defs/model_fields.def',
     output: 'model_names.h',
-    command: [python, files('tools/gen_model.py'), '@INPUT@', '/dev/null', '@OUTPUT@'],
+    command: [python, files('tools/gen_model.py'), '@INPUT@', '/dev/null', '--names', '@OUTPUT@'],
+)
+
+model_json_h = custom_target(
+    'model_json.h',
+    input: 'defs/model_fields.def',
+    output: 'model_json.h',
+    command: [python, files('tools/gen_model.py'), '@INPUT@', '/dev/null', '--json', '@OUTPUT@'],
 )
 
 writ_inc = include_directories('include', 'defs', 'src/core')
@@ -62,6 +69,7 @@ core_sources = files(
     'src/core/model/views.c',
     'src/core/plan/plan.c',
     'src/core/plan/render.c',
+    'src/core/lower/json.c',
     'src/gen/c.c',
     'src/gen/conformance.c',
     'src/toolchain/probe.c',
@@ -74,6 +82,7 @@ writ_raw = static_library(
     grammar_h,
     keywords_h,
     model_names_h,
+    model_json_h,
     include_directories: writ_inc,
     dependencies: lantern_headers,
 )
