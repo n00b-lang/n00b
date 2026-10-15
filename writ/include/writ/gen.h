@@ -53,8 +53,15 @@ typedef struct {
 } writ_n00b_extern_t;
 
 typedef struct {
+    writ_str_t function;
+    writ_str_t symbol;
+} writ_n00b_export_t;
+
+typedef struct {
     size_t                    count;
     const writ_n00b_extern_t *items;
+    size_t                    exports_count;
+    const writ_n00b_export_t *exports;
 } writ_n00b_externs_t;
 
 typedef struct {

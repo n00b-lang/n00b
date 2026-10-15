@@ -39,6 +39,13 @@ typedef struct {
 core_list_decl(slot_decision_t);
 core_list_decl(type_decision_t);
 
+typedef struct {
+    uint32_t   fn;
+    writ_str_t slot;
+    writ_str_t target;
+} slot_provide_t;
+core_list_decl(slot_provide_t);
+
 struct writ_binding {
     const writ_model_t           *model;
     const writ_profile_t         *profile;
@@ -59,6 +66,7 @@ struct writ_binding {
     fn_decision_t                *fns;
     core_list_t(slot_decision_t)  slots;
     core_list_t(type_decision_t)  types;
+    core_list_t(slot_provide_t)   provides;
 };
 
 static const char *const form_names[] = {"cstr", "utf8", "bytes", "rest pack", "keyword pack"};
@@ -582,14 +590,24 @@ apply_item(writ_binding_t *b, uint32_t id)
             b->header = (choice_t){child_text(b, id, WRIT_N_TEXT), true};
         }
         return;
-    case WRIT_N_PROVIDE:
-        if (for_side(b, id, true)) {
-            size_t fn = resolve_fn(b, id, text_of(b, at(b, writ_node_child(b->unit, id, 0))->name), false);
-            if (fn != writ_model_fn_count(b->model)) {
-                b->fns[fn].provide = child_text(b, id, WRIT_N_TEXT);
-            }
+    case WRIT_N_PROVIDE: {
+        writ_str_t name = text_of(b, at(b, writ_node_child(b->unit, id, 0))->name);
+        target_t target = split(name);
+        if (!for_side(b, id, !target.member.length)) {
+            return;
+        }
+        size_t fn = resolve_fn(b, id, name, target.member.length != 0);
+        if (fn == writ_model_fn_count(b->model)) {
+            return;
+        }
+        if (target.member.length) {
+            core_list_push(b->provides, ((slot_provide_t){(uint32_t)fn, target.member,
+                                                          child_text(b, id, WRIT_N_TEXT)}));
+        } else {
+            b->fns[fn].provide = child_text(b, id, WRIT_N_TEXT);
         }
         return;
+    }
     case WRIT_N_ON_PANIC:
         if (for_side(b, id, true)) {
             uint32_t error = writ_node_first_of(b->unit, id, WRIT_N_PANIC_ERROR);
@@ -629,6 +647,18 @@ check_clashes(writ_binding_t *b)
     }
 }
 
+static bool
+callback_has_userdata(const writ_binding_t *b, const writ_type_view_t *type)
+{
+    const writ_fn_view_t *callback = writ_model_callback_named(b->model, type->name);
+    for (size_t s = 0; callback && s < callback->slots_count; s++) {
+        if (callback->slots[s].userdata) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void
 check_fns(writ_binding_t *b)
 {
@@ -656,6 +686,15 @@ check_fns(writ_binding_t *b)
         }
         if (b->export_side && !d->provide.length) {
             writ_report(b->session, WRIT_D_BIND_PROVIDE, b->anchor, "`%.*s`", S(fn->contract_name));
+        }
+        for (size_t s = 0; !b->export_side && !d->raw && s < fn->slots_count; s++) {
+            const writ_slot_view_t *slot = &fn->slots[s];
+            if (!slot->type || slot->type->kind != WRIT_TYPE_CALLBACK || slot->policy_arms_count
+                || callback_has_userdata(b, slot->type) || writ_binding_slot_provide(b, i, slot->name).length) {
+                continue;
+            }
+            writ_report(b->session, WRIT_D_BIND_PROVIDE, b->anchor, "`%.*s.%.*s` has no `userdata`",
+                        S(fn->contract_name), S(slot->name));
         }
     }
 }
@@ -727,6 +766,7 @@ binding_release(void *object)
     core_list_free(b->search_paths);
     core_list_free(b->slots);
     core_list_free(b->types);
+    core_list_free(b->provides);
 }
 
 writ_status_t
@@ -741,7 +781,7 @@ writ_bind(const writ_model_t *model, const writ_bind_request_t *request, const w
     *b = (writ_binding_t){.model = model, .session = session, .unit = request->binding,
                           .prefixes = core_list_new(writ_sym_t), .libraries = core_list_new(writ_sym_t),
                           .search_paths = core_list_new(writ_sym_t), .slots = core_list_new(slot_decision_t),
-                          .types = core_list_new(type_decision_t)};
+                          .types = core_list_new(type_decision_t), .provides = core_list_new(slot_provide_t)};
     writ_on_session_free(session, binding_release, b);
     writ_str_t library = writ_model_library(model)->name;
     if (find_block(b, request, library)) {
@@ -906,6 +946,17 @@ writ_binding_fn(const writ_binding_t *b, size_t fn)
     return (writ_bound_fn_t){.bound = bound(d), .raw = d->raw, .is_static = d->is_static, .name = d->name.text,
                              .owner = d->owner, .error = d->error.text, .provide = d->provide,
                              .policy_arm = d->policy_arm};
+}
+
+writ_str_t
+writ_binding_slot_provide(const writ_binding_t *b, size_t fn, writ_str_t slot)
+{
+    for (size_t i = 0; i < b->provides.len; i++) {
+        if (b->provides.data[i].fn == fn && writ_str_eq(b->provides.data[i].slot, slot)) {
+            return b->provides.data[i].target;
+        }
+    }
+    return (writ_str_t){0};
 }
 
 writ_str_t

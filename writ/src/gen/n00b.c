@@ -121,6 +121,7 @@ typedef enum {
     PARAM_OUT,
     PARAM_CALLBACK,
     PARAM_OWNED,
+    PARAM_PROVIDED,
 } param_kind_t;
 
 typedef struct {
@@ -255,6 +256,50 @@ is_result(const writ_plan_item_view_t *item)
         || (item->role == WRIT_ROLE_INPUT_OUTPUT && !record_target(item));
 }
 
+static writ_str_t
+provided_callback(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, uint32_t item)
+{
+    const writ_plan_item_view_t *view = &plan->items[item];
+    if (view->shape != WRIT_SHAPE_CALLBACK || !view->type) {
+        return (writ_str_t){0};
+    }
+    const writ_fn_view_t *callback = writ_model_callback_named(g->model, view->type->name);
+    for (size_t s = 0; callback && s < callback->slots_count; s++) {
+        if (callback->slots[s].userdata) {
+            return (writ_str_t){0};
+        }
+    }
+    return writ_binding_slot_provide(g->b, fn, view->name);
+}
+
+static writ_str_t provider(const n00b_t *g, writ_str_t provide);
+
+static writ_str_t
+provided_trampoline(const n00b_t *g, const writ_plan_view_t *plan, uint32_t item)
+{
+    return writ_str_format(g->session, "%.*s_%.*s_%.*s_provided", S(g->shim), S(plan->fn->contract_name),
+                           S(plan->items[item].name));
+}
+
+static void
+emit_provided_trampoline(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view_t *plan,
+                         uint32_t item)
+{
+    const writ_fn_view_t *callback = writ_model_callback_named(g->model, plan->items[item].type->name);
+    writ_str_t symbol = provider(g, provided_callback(g, fn, plan, item));
+    writ_c_emit_real_prototype(&g->c, emit, callback, symbol, false, ";");
+    writ_c_emit_real_prototype(&g->c, emit, callback, provided_trampoline(g, plan, item), false, "");
+    writ_emit_open(emit, "");
+    bool returns = callback->result && callback->result->type && callback->result->type->kind != WRIT_TYPE_VOID;
+    writ_emit_text(emit, "%s%.*s(", returns ? "return " : "", S(symbol));
+    for (size_t s = 0; s < callback->slots_count; s++) {
+        writ_emit_text(emit, "%s%.*s", s ? ", " : "", S(callback->slots[s].name));
+    }
+    writ_emit_line(emit, ");");
+    writ_emit_close(emit, nullptr);
+    writ_emit_line(emit, "");
+}
+
 static void
 shim_params(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, core_list_t(shim_param_t) *params)
 {
@@ -269,7 +314,9 @@ shim_params(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, core_list_
         if (item->shape == WRIT_SHAPE_CALLBACK) {
             bool owned = plan->policy_slot != WRIT_PLAN_NONE && item->contract_slot == plan->policy_slot
                       && plan->fn->slots[plan->policy_slot].policy_arms[plan->policy_arm].is_else;
-            param.kind = owned ? PARAM_OWNED : PARAM_CALLBACK;
+            param.kind = owned ? PARAM_OWNED
+                       : provided_callback(g, fn, plan, index).length ? PARAM_PROVIDED
+                                                                      : PARAM_CALLBACK;
             param.c_type = writ_cstr("uint64_t");
             param.n00b_type = writ_cstr("u64");
             core_list_push(*params, param);
@@ -508,11 +555,16 @@ emit_c_shim(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view_
     if (owned_arm(plan)) {
         emit_owned_free(g, emit, plan);
     }
+    for (size_t i = 0; i < params.len; i++) {
+        if (params.data[i].kind == PARAM_PROVIDED) {
+            emit_provided_trampoline(g, emit, fn, plan, params.data[i].item);
+        }
+    }
     writ_emit_text(emit, "%.*s %.*s(", S(ret_type), S(shim_symbol(g, plan)));
     bool any = false;
     for (size_t i = 0; i < params.len; i++) {
         const shim_param_t *p = &params.data[i];
-        if (p->kind == PARAM_OWNED) {
+        if (p->kind == PARAM_OWNED || p->kind == PARAM_PROVIDED) {
             continue;
         }
         writ_str_t type = p->kind == PARAM_SCALAR || p->kind == PARAM_CALLBACK ? p->c_type
@@ -603,6 +655,9 @@ emit_c_shim(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view_
             if (p->parts == 2) {
                 writ_emit_text(emit, ", (void *)(uintptr_t)%.*s", S(p->name));
             }
+            break;
+        case PARAM_PROVIDED:
+            writ_emit_text(emit, "%.*s", S(provided_trampoline(g, plan, p->item)));
             break;
         case PARAM_OWNED:
             writ_emit_text(emit, "%.*s_free", S(shim_symbol(g, plan)));
@@ -1305,7 +1360,7 @@ emit_extern(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view_
     writ_str_t *types = writ_alloc(g->session, sizeof(writ_str_t) * (2 * params.len + 1));
     size_t typed = 0;
     for (size_t i = 0; i < params.len; i++) {
-        if (params.data[i].kind != PARAM_OWNED) {
+        if (params.data[i].kind != PARAM_OWNED && params.data[i].kind != PARAM_PROVIDED) {
             types[typed++] = params.data[i].n00b_type;
         }
     }
@@ -1744,9 +1799,11 @@ retry_capacity(const writ_plan_view_t *plan, uint32_t item)
 }
 
 static bool
-exposed_input(const writ_plan_view_t *plan, uint32_t item)
+exposed_input(const wrapper_t *w, uint32_t item)
 {
-    return writ_c_is_input(&plan->items[item]) && !policy_item(plan, item) && !retry_capacity(plan, item);
+    const writ_plan_view_t *plan = w->plan;
+    return writ_c_is_input(&plan->items[item]) && !policy_item(plan, item) && !retry_capacity(plan, item)
+        && !provided_callback(w->g, w->fn, plan, item).length;
 }
 
 static void
@@ -1754,7 +1811,7 @@ emit_wrapper_params(const wrapper_t *w, writ_emit_t *emit, uint32_t keywords, bo
 {
     const writ_plan_view_t *plan = w->plan;
     for (uint32_t i = 0; i < plan->items_count; i++) {
-        if (!exposed_input(plan, i) || (i == keywords && !options_record)) {
+        if (!exposed_input(w, i) || (i == keywords && !options_record)) {
             continue;
         }
         bool modify = (i == w->receiver && consumes(w, i))
@@ -1775,7 +1832,7 @@ emit_wrapper_arguments(const wrapper_t *w, writ_emit_t *emit, uint32_t keywords,
     const writ_plan_view_t *plan = w->plan;
     bool first = true;
     for (uint32_t i = 0; i < plan->items_count; i++) {
-        if (exposed_input(plan, i) && (i != keywords || options_record)) {
+        if (exposed_input(w, i) && (i != keywords || options_record)) {
             writ_emit_text(emit, "%s%.*s", first ? "" : ", ", S(local_name(w, i)));
             first = false;
         }
@@ -1877,7 +1934,8 @@ item_is_local(const wrapper_t *w, const core_list_t(shim_param_t) *params, uint3
         return true;
     }
     for (size_t i = 0; i < params->len; i++) {
-        if (params->data[i].item == index && params->data[i].kind != PARAM_OWNED) {
+        if (params->data[i].item == index && params->data[i].kind != PARAM_OWNED
+            && params->data[i].kind != PARAM_PROVIDED) {
             return true;
         }
     }
@@ -2244,7 +2302,7 @@ emit_wrapper(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view
     for (size_t i = 0; i < params.len; i++) {
         const shim_param_t *p = &params.data[i];
         writ_str_t name = local_name(&w, p->item);
-        if (p->kind == PARAM_OWNED) {
+        if (p->kind == PARAM_OWNED || p->kind == PARAM_PROVIDED) {
             continue;
         }
         writ_emit_text(emit, "%s", passed ? ", " : "");
@@ -2708,6 +2766,31 @@ links_for(const n00b_t *g, writ_link_requirements_t *links)
     };
 }
 
+static writ_n00b_export_t *
+provided_exports(const n00b_t *g, size_t *count)
+{
+    size_t capacity = 1;
+    for (size_t i = 0; i < writ_model_fn_count(g->model); i++) {
+        capacity += writ_model_fn_at(g->model, i)->slots_count;
+    }
+    writ_n00b_export_t *exports = writ_alloc(g->session, sizeof(*exports) * capacity);
+    *count = 0;
+    for (size_t i = 0; i < writ_model_fn_count(g->model); i++) {
+        const writ_fn_view_t *fn = writ_model_fn_at(g->model, i);
+        for (size_t s = 0; writ_binding_fn(g->b, i).bound && s < fn->slots_count; s++) {
+            writ_str_t target = writ_binding_slot_provide(g->b, i, fn->slots[s].name);
+            bool seen = !target.length;
+            for (size_t e = 0; e < *count && !seen; e++) {
+                seen = writ_str_eq(exports[e].function, target);
+            }
+            if (!seen) {
+                exports[(*count)++] = (writ_n00b_export_t){.function = target, .symbol = provider(g, target)};
+            }
+        }
+    }
+    return exports;
+}
+
 writ_status_t
 writ_gen_n00b(const writ_gen_n00b_request_t *request, const writ_output_t *output, writ_link_requirements_t *links,
               writ_n00b_externs_t *externs)
@@ -2762,7 +2845,10 @@ writ_gen_n00b(const writ_gen_n00b_request_t *request, const writ_output_t *outpu
     for (size_t i = 0; i < extern_list.len; i++) {
         items[i] = extern_list.data[i];
     }
-    *externs = (writ_n00b_externs_t){.count = extern_list.len, .items = items};
+    size_t export_count = 0;
+    writ_n00b_export_t *exports = provided_exports(&g, &export_count);
+    *externs = (writ_n00b_externs_t){.count = extern_list.len, .items = items, .exports_count = export_count,
+                                     .exports = exports};
     core_list_free(extern_list);
     return status;
 }

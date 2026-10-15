@@ -84,6 +84,7 @@ writ_str_t            writ_binding_panic_value(const writ_binding_t *b);
 writ_str_t            writ_binding_allocator(const writ_binding_t *b);
 writ_bound_fn_t       writ_binding_fn(const writ_binding_t *b, size_t fn);
 writ_str_t            writ_binding_slot_repr(const writ_binding_t *b, size_t fn, writ_str_t slot);
+writ_str_t            writ_binding_slot_provide(const writ_binding_t *b, size_t fn, writ_str_t slot);
 writ_str_t            writ_binding_type(const writ_binding_t *b, writ_str_t contract);
 size_t                writ_binding_library_count(const writ_binding_t *b);
 writ_str_t            writ_binding_library_at(const writ_binding_t *b, size_t index);
