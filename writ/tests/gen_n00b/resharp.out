@@ -1096,21 +1096,9 @@ int32_t resharp_n00b_regex_with_options(const void *pattern, uint64_t opts, void
 
 int32_t resharp_n00b_regex_find_all(uint64_t self, const void *input, size_t out_capacity, void *out, void *out_length, void *failed_detail, void *panicked_detail) {
     size_t input_length = 0;
-    const void *input_borrowed = n00b_ffi_borrow((void *)input, &input_length, 0);
-    uint8_t *input_data = malloc(input_length + 1);
-    if (input_data && input_length) {
-        memcpy(input_data, input_borrowed, input_length);
-    }
-    if (input_data) {
-        input_data[input_length] = 0;
-    }
-    n00b_ffi_release((void *)input);
-    if (!input_data) {
-        free(input_data);
-        return RESHARP_OUT_OF_MEMORY;
-    }
+    const void *input_data = n00b_ffi_borrow((void *)input, &input_length, 0);
     int32_t writ_n00b_value = resharp_regex_find_all((writ_resharp_regex *)(uintptr_t)self, (const uint8_t *)input_data, input_length, out_capacity, (Match **)out, (size_t *)out_length, (resharp_bytes_t *)failed_detail, (resharp_bytes_t *)panicked_detail);
-    free(input_data);
+    n00b_ffi_release((void *)input);
     return writ_n00b_value;
 }
 

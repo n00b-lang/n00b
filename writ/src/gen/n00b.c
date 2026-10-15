@@ -131,6 +131,7 @@ typedef struct {
     writ_str_t   n00b_type;
     size_t       parts;
     bool         storage;
+    bool         borrow;
 } shim_param_t;
 
 core_list_decl(shim_param_t);
@@ -278,6 +279,8 @@ shim_params(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, core_list_
             if (count == 2) {
                 param.kind = PARAM_VALUE;
                 param.n00b_type = writ_str_format(g->session, "Ref[%.*s]", S(item_type(g, fn, plan, index)));
+                param.borrow = item->after_call == WRIT_AFTER_BORROWED
+                            && writ_str_eq(writ_binding_slot_repr(g->b, fn, item->name), writ_cstr("borrow"));
             } else if (writ_c_by_pointer(&g->c, item) || record_target(item)) {
                 const writ_type_view_t *record = record_target(item) ? record_target(item) : item->type;
                 bool opaque = opaque_record(g, record);
@@ -580,10 +583,11 @@ emit_c_shim(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view_
     size_t copies = 0;
     for (size_t i = 0; i < params.len; i++) {
         const shim_param_t *p = &params.data[i];
-        if (p->kind == PARAM_STORAGE) {
+        if (p->kind == PARAM_STORAGE || (p->kind == PARAM_VALUE && p->borrow)) {
             writ_emit_line(emit, "size_t %.*s_length = 0;", S(p->name));
-            writ_emit_line(emit, "const void *%.*s_data = n00b_ffi_borrow((void *)%.*s, &%.*s_length, 0);",
-                           S(p->name), S(p->name), S(p->name));
+            writ_emit_line(emit, "const void *%.*s_data = n00b_ffi_borrow((void *)%.*s, &%.*s_length, %d);",
+                           S(p->name), S(p->name), S(p->name),
+                           writ_str_eq(p->n00b_type, writ_cstr("Ref[string]")) ? N00B_FFI_STRING : 0);
         } else if (p->kind == PARAM_VALUE) {
             writ_emit_line(emit, "size_t %.*s_length = 0;", S(p->name));
             writ_emit_line(emit, "const void *%.*s_borrowed = n00b_ffi_borrow((void *)%.*s, &%.*s_length, %d);",
@@ -605,15 +609,17 @@ emit_c_shim(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view_
         writ_emit_text(emit, "if (");
         size_t emitted = 0;
         for (size_t i = 0; i < params.len; i++) {
-            if (params.data[i].kind == PARAM_VALUE) {
+            if (params.data[i].kind == PARAM_VALUE && !params.data[i].borrow) {
                 writ_emit_text(emit, "%s!%.*s_data", emitted++ ? " || " : "", S(params.data[i].name));
             }
         }
         writ_emit_text(emit, ")");
         writ_emit_open(emit, "");
         for (size_t i = 0; i < params.len; i++) {
-            if (params.data[i].kind == PARAM_VALUE) {
+            if (params.data[i].kind == PARAM_VALUE && !params.data[i].borrow) {
                 writ_emit_line(emit, "free(%.*s_data);", S(params.data[i].name));
+            } else if (params.data[i].kind == PARAM_STORAGE || params.data[i].kind == PARAM_VALUE) {
+                writ_emit_line(emit, "n00b_ffi_release((void *)%.*s);", S(params.data[i].name));
             }
         }
         if (direct) {
@@ -664,9 +670,9 @@ emit_c_shim(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view_
         bool handed_over = (owned_arm(plan) && after == WRIT_AFTER_CALLEE_OWNS) || after == WRIT_AFTER_BORROWED_UNTIL;
         if (keeps_until(plan, &params.data[i]) && owner) {
             writ_emit_line(emit, "%.*s_keep(%.*s, %.*s_data);", S(g->shim), S(owner->name), S(params.data[i].name));
-        } else if (params.data[i].kind == PARAM_VALUE && !handed_over) {
+        } else if (params.data[i].kind == PARAM_VALUE && !params.data[i].borrow && !handed_over) {
             writ_emit_line(emit, "free(%.*s_data);", S(params.data[i].name));
-        } else if (params.data[i].kind == PARAM_STORAGE) {
+        } else if (params.data[i].kind == PARAM_STORAGE || params.data[i].borrow) {
             writ_emit_line(emit, "n00b_ffi_release((void *)%.*s);", S(params.data[i].name));
         }
         if (keeps && releases_handle(plan, &params.data[i])) {
