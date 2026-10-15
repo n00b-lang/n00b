@@ -27,6 +27,14 @@ func shut(self: Other) {
     self.raw = 1
 }
 
+func reset(modify self: Other) {
+    self.raw = 2
+}
+
+func clear(modify self: Ref[Cell]) {
+    self.raw = 3
+}
+
 comptime {
 } else {
     let first = make(7)
@@ -37,6 +45,13 @@ comptime {
     let second = other(9)
     shut(second)
     assert second.raw == 1
+    var modified = other(5)
+    reset(modified)
+    assert modified.raw == 2
+    var cell: Cell = (raw = 0)
+    var direct: Ref[Cell] = ref cell
+    clear(direct)
+    assert cell.raw == 3
     var i = 0
     while i < 5000 {
         let made = make(cast[uint] i)

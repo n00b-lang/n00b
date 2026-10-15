@@ -16368,6 +16368,8 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
         ir_span_t parameter_span = lower_span_for_tree(
             &context, parameter->decl_node);
         if (!mode_matches || (mode == TH_INOUT && !input) || !local
+            || (input && !n00bb_set_reference_access(ir_context, input,
+                                                     parameter_type))
             || !n00bb_set_reference_access(ir_context, local_value,
                                            parameter_type)
             || !n00bb_attach_symbol_array_shape(&context, grammar,
