@@ -1,0 +1,44 @@
+const cursor = [-
+library cursor
+
+opaque db_state
+opaque iter_state
+handle Db = *db_state release db_close
+handle Iter = *iter_state release iter_close
+
+fn db_open(seed: c_int) -> own ?Db release db_close
+fn db_close(db: consume ?Db)
+fn iter_new(db: Db) -> own ?Iter with db
+fn iter_next(iter: Iter) -> c_int
+fn iter_close(iter: consume ?Iter)
+-]'ffi
+
+func start(seed: i32) -> cursor.Iter {
+    let db = cursor.db_open(seed)
+    return cursor.iter_new(db)
+}
+
+func churn() {
+    var junk: string = ""
+    var j = 0
+    while j < 100000 {
+        junk = "x" + "a piece of text long enough to need the heap"
+        j = j + 1
+    }
+}
+
+comptime {} else {
+    var k: i32 = 0
+    while k < 100 {
+        var iter = start(k)
+        churn()
+        require cursor.iter_next(iter) == k
+        require cursor.iter_next(iter) == k + 1
+        try {
+            cursor.close(iter)!
+        } else failure {
+            require false
+        }
+        k = k + 1
+    }
+}
