@@ -56,6 +56,8 @@ bool core_diagnostics_report_at(core_diagnostics_t *diagnostics,
 bool core_diagnostic_set_message(core_diagnostics_t *diagnostics,
                                  size_t index,
                                  core_string_t message);
+bool core_diagnostic_set_path(core_diagnostics_t *diagnostics, size_t index,
+                              core_string_t path);
 bool core_diagnostics_merge(core_diagnostics_t *destination,
                             const core_diagnostics_t *source);
 size_t core_diagnostics_count(const core_diagnostics_t *diagnostics);

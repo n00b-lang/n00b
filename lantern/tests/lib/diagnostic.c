@@ -62,6 +62,19 @@ int main(void)
                                 CORE_STRING_STATIC("pkg.mod"))
               && core_string_eq(diagnostic->path,
                                 CORE_STRING_STATIC("pkg/mod.n00b")));
+    check("a diagnostic can name a file other than its unit's source",
+          core_diagnostic_set_path(build, 1,
+              CORE_STRING_STATIC("contracts/zlib.writ")));
+    diagnostic = core_diagnostics_at(build, 1);
+    check("a moved diagnostic keeps its unit and reports the new path",
+          diagnostic
+              && core_string_eq(diagnostic->module,
+                                CORE_STRING_STATIC("pkg.mod"))
+              && core_string_eq(diagnostic->path,
+                                CORE_STRING_STATIC("contracts/zlib.writ")));
+    check("setting the path of a missing diagnostic fails",
+          !core_diagnostic_set_path(build, 2,
+              CORE_STRING_STATIC("contracts/zlib.writ")));
 
     core_diagnostics_free(build);
     core_translation_unit_release(&unit);

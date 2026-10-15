@@ -103,6 +103,18 @@ core_diagnostic_set_message(core_diagnostics_t *d, size_t index,
 }
 
 bool
+core_diagnostic_set_path(core_diagnostics_t *d, size_t index,
+                         core_string_t path)
+{
+    if (!d || index >= d->items.len || !path.data) return false;
+    core_diagnostic_t *item = &d->items.data[index];
+    core_string_t copy = core_string_dup(path);
+    core_free(item->path.data);
+    item->path = copy;
+    return true;
+}
+
+bool
 core_diagnostics_merge(core_diagnostics_t *dst, const core_diagnostics_t *src)
 {
     if (!dst || !src) return false;
