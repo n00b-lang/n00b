@@ -11,6 +11,7 @@ project(
 )
 
 lantern = dependency('ir', method: 'pkg-config', required: true)
+writ = dependency('writ', method: 'pkg-config', required: true)
 llvm = dependency('llvm', method: 'config-tool',
                   modules: ['core', 'bitwriter', 'bitreader', 'linker'],
                   required: true)
@@ -123,9 +124,14 @@ n00bb_exe = executable(
      'compiler/native_frame_maps.c',
      'compiler/global_metadata.c',
      'compiler/storage_selection.c'],
-    dependencies: [lantern, llvm],
+    dependencies: [lantern, writ, llvm],
     link_with: runtime_abi_support,
     install: true,
+)
+
+test(
+    'writ-coexistence',
+    executable('writ-coexistence', 'tests/writ_coexistence.c', dependencies: [lantern, writ]),
 )
 
 install_headers('abi/n00b-abi-v1.h', 'runtime/builtin_os.h', 'runtime/builtin_abi.h')
