@@ -50,16 +50,10 @@ typedef struct {
     bool unit_wide;
 } core_link_artifact_t;
 
-typedef struct {
-    core_string_t module;
-    core_string_t format;
-    bool unit_wide;
-} core_link_artifact_key_t;
-
 static core_hash_value_t
 artifact_key_hash(void *opaque)
 {
-    const core_link_artifact_key_t *key = opaque;
+    const core_link_artifact_t *key = opaque;
     core_hash_value_t fields[] = {
         core_string_hash(key->module),
         core_string_hash(key->format),
@@ -71,8 +65,8 @@ artifact_key_hash(void *opaque)
 static bool
 artifact_key_eq(const void *left, const void *right)
 {
-    const core_link_artifact_key_t *a = left;
-    const core_link_artifact_key_t *b = right;
+    const core_link_artifact_t *a = left;
+    const core_link_artifact_t *b = right;
     return a->unit_wide == b->unit_wide
         && core_string_eq(a->module, b->module)
         && core_string_eq(a->format, b->format);
@@ -249,7 +243,7 @@ struct core_link_unit_t {
     size_t reference_count;
     size_t reference_capacity;
     core_dict_t reference_index;
-    core_link_artifact_t *artifacts;
+    core_link_artifact_t **artifacts;
     size_t artifact_count;
     size_t artifact_capacity;
     core_dict_t artifact_index;
@@ -328,22 +322,13 @@ find_stage(const core_link_unit_t *link, uint32_t kind)
 }
 
 static void
-rebuild_artifact_index(core_link_unit_t *link)
+release_artifact(core_link_artifact_t *artifact)
 {
-    core_dict_foreach(&link->artifact_index, item)
-        core_free(item->key);
-    core_dict_free(&link->artifact_index);
-    core_dict_init(&link->artifact_index, artifact_key_hash, artifact_key_eq);
-    for (size_t i = 0; i < link->artifact_count; i++) {
-        core_link_artifact_t *artifact = &link->artifacts[i];
-        core_link_artifact_key_t *key = core_alloc(core_link_artifact_key_t);
-        *key = (core_link_artifact_key_t){
-            .module = artifact->module,
-            .format = artifact->format,
-            .unit_wide = artifact->unit_wide,
-        };
-        core_dict_add(&link->artifact_index, key, i + 1);
-    }
+    if (artifact->ownership == CORE_LINK_PAYLOAD_OWNED)
+        artifact->free_fn(artifact->payload);
+    core_free(artifact->module.data);
+    core_free(artifact->format.data);
+    core_free(artifact);
 }
 
 static void
@@ -431,9 +416,8 @@ static void
 remove_stage_artifacts(core_link_unit_t *link, const bool *invalidated,
                        uint32_t stage_kind)
 {
-    bool removed = false;
     for (size_t i = 0; i < link->artifact_count;) {
-        core_link_artifact_t *artifact = &link->artifacts[i];
+        core_link_artifact_t *artifact = link->artifacts[i];
         core_link_stage_record_t *producer = artifact->producer_stage
             ? find_stage(link, artifact->producer_stage) : nullptr;
         if (!producer || (invalidated
@@ -442,16 +426,12 @@ remove_stage_artifacts(core_link_unit_t *link, const bool *invalidated,
             i++;
             continue;
         }
-        if (artifact->ownership == CORE_LINK_PAYLOAD_OWNED)
-            artifact->free_fn(artifact->payload);
-        core_free(artifact->module.data);
-        core_free(artifact->format.data);
-        memmove(artifact, artifact + 1,
-            (link->artifact_count - i - 1) * sizeof(*artifact));
+        core_dict_remove(&link->artifact_index, artifact);
+        release_artifact(artifact);
+        memmove(link->artifacts + i, link->artifacts + i + 1,
+            (link->artifact_count - i - 1) * sizeof(*link->artifacts));
         link->artifact_count--;
-        removed = true;
     }
-    if (removed) rebuild_artifact_index(link);
 }
 
 static void
@@ -716,8 +696,6 @@ core_link_unit_free(core_link_unit_t *link)
     core_dict_free(&link->root_module_index);
     core_dict_free(&link->unit_index);
     core_dict_free(&link->module_index);
-    core_dict_foreach(&link->artifact_index, item)
-        core_free(item->key);
     core_dict_free(&link->artifact_index);
     core_dict_free(&link->stage_index);
     for (size_t i = 0; i < link->declaration_count; i++) {
@@ -744,11 +722,7 @@ core_link_unit_free(core_link_unit_t *link)
         core_free(ref);
     }
     for (size_t i = 0; i < link->artifact_count; i++) {
-        core_link_artifact_t *artifact = &link->artifacts[i];
-        if (artifact->ownership == CORE_LINK_PAYLOAD_OWNED)
-            artifact->free_fn(artifact->payload);
-        core_free(artifact->module.data);
-        core_free(artifact->format.data);
+        release_artifact(link->artifacts[i]);
     }
     for (size_t i = 0; i < link->stage_count; i++) {
         core_free(link->stages[i].prerequisites);
@@ -2102,7 +2076,7 @@ add_artifact(core_link_unit_t *link, core_string_t module,
         if (!producer || producer->state != CORE_LINK_STAGE_RUNNING)
             return false;
     }
-    core_link_artifact_key_t probe = {
+    core_link_artifact_t probe = {
         .module = module, .format = format, .unit_wide = unit_wide,
     };
     if (core_dict_contains(&link->artifact_index, &probe)) {
@@ -2115,7 +2089,8 @@ add_artifact(core_link_unit_t *link, core_string_t module,
                                link->artifact_count + 1,
                                sizeof(*link->artifacts)))
         abort();
-    link->artifacts[link->artifact_count++] = (core_link_artifact_t){
+    core_link_artifact_t *artifact = core_alloc(core_link_artifact_t);
+    *artifact = (core_link_artifact_t){
         .module = unit_wide ? (core_string_t){0} : core_string_dup(module),
         .format = core_string_dup(format),
         .version = version,
@@ -2125,14 +2100,8 @@ add_artifact(core_link_unit_t *link, core_string_t module,
         .free_fn = free_fn,
         .unit_wide = unit_wide,
     };
-    core_link_artifact_t *artifact = &link->artifacts[link->artifact_count - 1];
-    core_link_artifact_key_t *key = core_alloc(core_link_artifact_key_t);
-    *key = (core_link_artifact_key_t){
-        .module = artifact->module,
-        .format = artifact->format,
-        .unit_wide = artifact->unit_wide,
-    };
-    core_dict_add(&link->artifact_index, key, link->artifact_count);
+    link->artifacts[link->artifact_count++] = artifact;
+    core_dict_add(&link->artifact_index, artifact, artifact);
     link->validated = false;
     return true;
 }
@@ -2172,13 +2141,12 @@ core_link_unit_require_artifact(core_link_unit_t *link, core_string_t module,
         || !module.data || !format.data
         || !required_version)
         return false;
-    core_link_artifact_key_t probe = {
+    core_link_artifact_t probe = {
         .module = module, .format = format,
     };
-    size_t index = (size_t)(uintptr_t)core_dict_get(
+    core_link_artifact_t *artifact = core_dict_get(
         &link->artifact_index, &probe, nullptr);
-    if (index) {
-        core_link_artifact_t *artifact = &link->artifacts[index - 1];
+    if (artifact) {
         if (artifact->version != required_version) {
             link_report(link, nullptr, "LANTERN-L0007",
                         "linked semantic artifact has an incompatible version");
@@ -2215,7 +2183,7 @@ core_link_unit_artifact(core_link_unit_t *link, size_t index,
 {
     if (!link || (link->root_count && !core_link_unit_collect(link)) || !out
         || index >= link->artifact_count) return false;
-    const core_link_artifact_t *artifact = &link->artifacts[index];
+    const core_link_artifact_t *artifact = link->artifacts[index];
     *out = (core_link_artifact_view_t){
         .module = artifact->module,
         .format = artifact->format,
