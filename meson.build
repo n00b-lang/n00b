@@ -621,6 +621,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'packages'],
     timeout: 120,
+    suite: 'slow',
 )
 
 test(
@@ -630,6 +631,7 @@ test(
            meson.current_source_dir() / 'tests' / 'programs'
                / 'litmod_duplicates'],
     timeout: 300,
+    suite: 'slow',
 )
 
 test(
@@ -638,6 +640,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'root_modules'],
     timeout: 120,
+    suite: 'slow',
 )
 
 test(
@@ -646,6 +649,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'ffi'],
     timeout: 300,
+    suite: 'slow',
 )
 
 test(
@@ -656,6 +660,7 @@ test(
            writ.get_variable(pkgconfig: 'contractdir'),
            abi_register_object_test.full_path()],
     timeout: 300,
+    suite: 'slow',
 )
 
 if cargo.found() and not get_option('rust-transports').disabled()
@@ -666,6 +671,7 @@ if cargo.found() and not get_option('rust-transports').disabled()
                meson.current_source_dir() / 'tests' / 'programs' / 'ffi',
                writ.get_variable(pkgconfig: 'contractdir')],
         timeout: 600,
+        suite: 'slow',
     )
 endif
 
@@ -1575,6 +1581,7 @@ test(
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_raw_repr_nested_override.n00b'],
     timeout: 120,
+    suite: 'slow',
 )
 
 test(
@@ -1584,6 +1591,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'],
     timeout: 120,
+    suite: 'slow',
 )
 
 test(
@@ -1603,6 +1611,7 @@ test(
            abi_link_input_test.full_path(),
            abi_register_object_test.full_path()],
     timeout: 120,
+    suite: 'slow',
 )
 
 test(

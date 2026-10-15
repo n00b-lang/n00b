@@ -33,7 +33,9 @@ Usage: ./build.sh [command] [args]
   (no command)        configure if needed, compile only
   configure [opts]    reconfigure from scratch; opts go to meson setup
   compile [opts]      compile only; opts go to meson compile
-  test [names/opts]   compile, then run every test (or the selected tests)
+  test [names/opts]   compile, then run every test outside the slow suite
+                      (or the selected tests)
+  test-all [opts]     compile, then run every test, slow suite included
   bench [opts]        compile, then run the benchmarks and gates
   tu <file.c>         recompile exactly one lantern source file
   linux <command>     run any of these commands in the Linux container
@@ -142,6 +144,16 @@ refuse_stale() {
 do_test() {
     do_compile || refuse_stale tests
 
+    if [ "$#" -eq 0 ]; then
+        meson test -C "$BUILD_DIR" --no-suite slow
+    else
+        meson test -C "$BUILD_DIR" "$@"
+    fi
+}
+
+do_test_all() {
+    do_compile || refuse_stale tests
+
     meson test -C "$BUILD_DIR" "$@"
 }
 
@@ -194,6 +206,10 @@ case "${1:-}" in
     test)
         shift
         do_test "$@"
+        ;;
+    test-all)
+        shift
+        do_test_all "$@"
         ;;
     bench)
         shift
