@@ -40,7 +40,7 @@ runtime_abi_headers = lantern.partial_dependency(
 )
 
 runtime_abi_sources = ['runtime/runtime_abi.c', 'runtime/runtime_allocate.c', 'runtime/runtime_abi_io.c',
-     'runtime/runtime_panic.c',
+     'runtime/runtime_panic.c', 'runtime/runtime_dwarf.c',
      'runtime/runtime_abi_box.c', 'runtime/runtime_abi_hash.c',
      'runtime/runtime_literal_graph.c',
      'runtime/runtime_abi_storage.c', 'runtime/native_frame_runtime.c', 'runtime/builtin_os.c',

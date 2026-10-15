@@ -2,6 +2,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "runtime_dwarf.h"
+
 int32_t n00bb_runtime_write_bytes(int32_t fd, const uint8_t *bytes,
                                   uint32_t count);
 
@@ -65,6 +67,18 @@ write_hex(uintptr_t value)
     write_all(digits, sizeof digits);
 }
 
+static void
+write_decimal(uint32_t value)
+{
+    char digits[10];
+    size_t at = sizeof digits;
+    do {
+        digits[--at] = (char)('0' + value % 10);
+        value /= 10;
+    } while (value);
+    write_all(digits + at, sizeof digits - at);
+}
+
 static const code_entry_t *
 function_at(uintptr_t address)
 {
@@ -97,6 +111,18 @@ write_trace(const uintptr_t *frame)
         write_text("  at ");
         if (entry) write_all(entry->name, entry->length);
         else write_hex(return_address);
+        n00bb_source_line_t source = {0};
+        if (n00bb_runtime_source_line(return_address - 1, &source)) {
+            write_text(" (");
+            if (source.directory) {
+                write_all(source.directory, source.directory_length);
+                write_text("/");
+            }
+            write_all(source.file, source.file_length);
+            write_text(":");
+            write_decimal(source.line);
+            write_text(")");
+        }
         write_text("\n");
         if (entry && is_main(entry)) break;
         const uintptr_t *caller = (const uintptr_t *)frame[0];

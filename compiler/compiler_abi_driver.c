@@ -941,6 +941,21 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
                 output_rename_error = errno;
                 ok = false;
             }
+#ifdef __APPLE__
+            if (ok && debug_enabled) {
+                core_buffer_t bundle = {0};
+                core_buffer_printf(&bundle, "%s.dSYM", output);
+                char *dsymutil[] = {"/usr/bin/dsymutil", (char *)output, "-o",
+                                    bundle.data, nullptr};
+                pid_t child = 0;
+                if (!posix_spawn(&child, dsymutil[0], nullptr, nullptr,
+                                 dsymutil, environ)) {
+                    int status = 0;
+                    (void)waitpid(child, &status, 0);
+                }
+                core_buffer_release(&bundle);
+            }
+#endif
             for (int32_t i = 0; i < extra_count; i++)
                 core_free(arguments[next + (size_t)i]);
         }

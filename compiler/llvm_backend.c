@@ -16,6 +16,7 @@
 #include <llvm-c/BitReader.h>
 #include <llvm-c/BitWriter.h>
 #include <llvm-c/Core.h>
+#include <llvm-c/DebugInfo.h>
 #include <llvm-c/Error.h>
 #include <llvm-c/Linker.h>
 #include <llvm-c/Target.h>
@@ -64,6 +65,119 @@ native_type_key_eq(const void *left, const void *right)
 }
 
 static _Thread_local core_dict_t *active_native_types;
+
+typedef struct {
+    char *path;
+    LLVMMetadataRef file;
+} debug_file_t;
+core_list_decl(debug_file_t);
+
+typedef struct {
+    LLVMDIBuilderRef builder;
+    LLVMMetadataRef unit;
+    core_list_t(debug_file_t) files;
+} debug_info_t;
+
+static _Thread_local debug_info_t *active_debug;
+
+static LLVMMetadataRef
+debug_file(debug_info_t *debug, const char *path)
+{
+    if (!path || !*path) path = "<unknown>";
+    for (size_t i = 0; i < debug->files.len; i++)
+        if (!strcmp(debug->files.data[i].path, path))
+            return debug->files.data[i].file;
+    LLVMMetadataRef file = LLVMDIBuilderCreateFile(debug->builder, path,
+        strlen(path), "", 0);
+    core_list_push(debug->files, ((debug_file_t){core_strdup(path), file}));
+    return file;
+}
+
+static bool
+debug_info_begin(debug_info_t *debug, LLVMModuleRef module,
+                 const ir_module_t *source)
+{
+    *debug = (debug_info_t){
+        .builder = LLVMCreateDIBuilder(module),
+        .files = core_list_new(debug_file_t),
+    };
+    if (!debug->builder) return false;
+    const char *path = ir_file_path(source, 0);
+    LLVMMetadataRef file = debug_file(debug, path ? path
+                                                  : ir_module_name(source));
+    debug->unit = LLVMDIBuilderCreateCompileUnit(debug->builder,
+        LLVMDWARFSourceLanguageC11, file, "n00bb", 5, true, "", 0, 0, "", 0,
+        LLVMDWARFEmissionFull, 0, false, false, "", 0, "", 0);
+    LLVMContextRef context = LLVMGetModuleContext(module);
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
+    LLVMAddModuleFlag(module, LLVMModuleFlagBehaviorWarning,
+        "Debug Info Version", 18, LLVMValueAsMetadata(
+            LLVMConstInt(i32, LLVMDebugMetadataVersion(), false)));
+    LLVMAddModuleFlag(module, LLVMModuleFlagBehaviorWarning, "Dwarf Version",
+        13,
+        LLVMValueAsMetadata(LLVMConstInt(i32, 4, false)));
+    return debug->unit != nullptr;
+}
+
+static void
+debug_info_end(debug_info_t *debug)
+{
+    if (debug->builder) {
+        LLVMDIBuilderFinalize(debug->builder);
+        LLVMDisposeDIBuilder(debug->builder);
+    }
+    for (size_t i = 0; i < debug->files.len; i++)
+        core_free(debug->files.data[i].path);
+    core_list_free(debug->files);
+    *debug = (debug_info_t){0};
+}
+
+static int32_t
+function_file(const ir_func_t *function)
+{
+    if (function->span.file >= 0) return function->span.file;
+    for (uint32_t i = 0; i < function->n_blocks; i++)
+        for (uint32_t j = 0; j < function->blocks[i]->n_instrs; j++)
+            if (function->blocks[i]->instrs[j]->span.file >= 0)
+                return function->blocks[i]->instrs[j]->span.file;
+    return -1;
+}
+
+static LLVMMetadataRef
+debug_subprogram(debug_info_t *debug, LLVMValueRef function,
+                 const ir_func_t *source)
+{
+    int32_t file_id = function_file(source);
+    const char *path = file_id >= 0
+        ? ir_file_path(source->owner, file_id) : nullptr;
+    LLVMMetadataRef file = debug_file(debug, path);
+    size_t name_length = 0;
+    const char *name = LLVMGetValueName2(function, &name_length);
+    unsigned line = source->span.start_line > 0
+        ? (unsigned)source->span.start_line : 0;
+    LLVMMetadataRef type = LLVMDIBuilderCreateSubroutineType(debug->builder,
+        file, nullptr, 0, LLVMDIFlagZero);
+    LLVMMetadataRef subprogram = LLVMDIBuilderCreateFunction(debug->builder,
+        file, source->name, strlen(source->name), name, name_length, file,
+        line, type, false, true, line, LLVMDIFlagZero, true);
+    if (subprogram) LLVMSetSubprogram(function, subprogram);
+    return subprogram;
+}
+
+static void
+debug_location(LLVMBuilderRef builder, LLVMMetadataRef subprogram,
+               const ir_func_t *function, int32_t file, ir_span_t span)
+{
+    if (!subprogram) return;
+    bool known = span.file >= 0 && span.file == file && span.start_line > 0;
+    unsigned line = known ? (unsigned)span.start_line
+        : function->span.start_line > 0 ? (unsigned)function->span.start_line
+        : 0;
+    unsigned column = known && span.start_col > 0 ? (unsigned)span.start_col
+                                                   : 0;
+    LLVMSetCurrentDebugLocation2(builder, LLVMDIBuilderCreateDebugLocation(
+        LLVMGetBuilderContext(builder), line, column, subprogram, nullptr));
+}
 
 struct n00bb_llvm_backend_t {
     LLVMContextRef context;
@@ -10512,6 +10626,11 @@ lower_function(LLVMModuleRef target, const ir_module_t *source,
     state.values = calloc(state.value_capacity ? state.value_capacity : 1,
         sizeof(*state.values));
     state.builder = LLVMCreateBuilderInContext(context);
+    LLVMMetadataRef subprogram = active_debug && state.builder
+        ? debug_subprogram(active_debug, target_function, function) : nullptr;
+    int32_t debug_file_id = subprogram ? function_file(function) : -1;
+    debug_location(state.builder, subprogram, function, debug_file_id,
+                   function->span);
     uint32_t *block_order = calloc(function->n_blocks,
                                    sizeof(*block_order));
     bool *feasible_blocks = calloc(function->n_blocks,
@@ -10553,6 +10672,8 @@ lower_function(LLVMModuleRef target, const ir_module_t *source,
         ir_block_t *block = function->blocks[i];
         for (uint32_t j = 0; ok && j < block->n_instrs; j++) {
             ir_instr_t *instruction = block->instrs[j];
+            debug_location(state.builder, subprogram, function,
+                           debug_file_id, instruction->span);
             ok = lower_instruction(&state, instruction);
             if (ok && state.frame_roots && instruction->op == IR_OP_PHI
                 && (j + 1 == block->n_instrs
@@ -11355,6 +11476,17 @@ lower_phase(n00bb_llvm_backend_t *backend, bool comptime,
     if (*lowered) return true;
     core_dict_t *previous_native_types = active_native_types;
     active_native_types = &backend->native_types;
+    debug_info_t debug = {0};
+    bool with_debug = !comptime && backend->debug_enabled;
+    if (with_debug && !debug_info_begin(&debug, backend->runtime,
+                                        backend->runtime_source)) {
+        debug_info_end(&debug);
+        active_native_types = previous_native_types;
+        return backend_error(diagnostics,
+            "LLVM backend could not create debug information");
+    }
+    debug_info_t *previous_debug = active_debug;
+    active_debug = with_debug ? &debug : nullptr;
     bool module_lowered = lower_module(
                       comptime ? backend->comptime : backend->runtime,
                       comptime ? backend->comptime_source
@@ -11377,6 +11509,8 @@ lower_phase(n00bb_llvm_backend_t *backend, bool comptime,
                                : backend->runtime_reachable_bound,
                       comptime ? nullptr : &backend->callback_bindings,
                       diagnostics);
+    active_debug = previous_debug;
+    if (with_debug) debug_info_end(&debug);
     active_native_types = previous_native_types;
     if (!module_lowered) return false;
     if (!comptime) {
