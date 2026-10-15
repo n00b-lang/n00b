@@ -74,8 +74,9 @@ build_import_environment(parse_grammar_t *grammar,
                     if (ok) core_list_push(*seen, result);
                 }
             }
-            core_dict_foreach(&state->literal_sites, entry) {
-                n00bb_litmod_site_t *site = entry->value;
+            for (size_t i = 0; i < state->literal_site_nodes.len; i++) {
+                n00bb_litmod_site_t *site = n00bb_node_literal_site(
+                    state->literal_site_nodes.data[i]);
                 if (!site || site->registration != registration)
                     continue;
                 result = site->signature

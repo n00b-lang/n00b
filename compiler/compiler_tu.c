@@ -1132,7 +1132,9 @@ cache_iteration_plan(parse_grammar_t *grammar,
     n00bb_tu_state_t *state = tu_state(unit);
     if (!state || !state->annotations || !loop || !source_type
         || !cursor_type || !item_type) return false;
-    if (core_dict_get(&state->iteration_plans, loop, nullptr)) return true;
+    n00bb_node_facts_t *facts = n00bb_ensure_node_facts(state, loop);
+    if (!facts) return false;
+    if (facts->iteration_plan) return true;
     n00bb_iteration_plan_t *plan = core_arena_alloc(
         &state->semantic_values, sizeof(*plan));
     if (!plan) return false;
@@ -1162,7 +1164,7 @@ cache_iteration_plan(parse_grammar_t *grammar,
     if (!append_link_use_site(state, site)) return false;
     plan->cursor_type = cursor_type;
     plan->item_type = item_type;
-    core_dict_put(&state->iteration_plans, loop, plan);
+    facts->iteration_plan = plan;
     return true;
 }
 
@@ -1416,28 +1418,14 @@ semantic_static_scalar_value(parse_grammar_t *grammar, parse_tree_t *literal,
 }
 
 bool
-collect_static_expressions(n00bb_tu_state_t *state, parse_tree_t *node,
-                           core_list_t(parse_tree_ptr_t) *expressions)
+collect_ordered_children(parse_tree_t *node,
+                         core_list_t(parse_tree_ptr_t) *children)
 {
     if (!node) return true;
-    n00bb_ordered_nodes_t *cached = state && node
-        ? core_dict_get(&state->ordered_child_nodes, node, nullptr) : nullptr;
+    n00bb_ordered_nodes_t *cached = n00bb_node_ordered_nodes(node);
     if (!cached) return false;
     for (size_t i = 0; i < cached->count; i++)
-        core_list_push(*expressions, cached->nodes[i]);
-    return true;
-}
-
-bool
-collect_static_named_fields(n00bb_tu_state_t *state, parse_tree_t *node,
-                            core_list_t(parse_tree_ptr_t) *fields)
-{
-    if (!node) return true;
-    n00bb_ordered_nodes_t *cached = state && node
-        ? core_dict_get(&state->ordered_child_nodes, node, nullptr) : nullptr;
-    if (!cached) return false;
-    for (size_t i = 0; i < cached->count; i++)
-        core_list_push(*fields, cached->nodes[i]);
+        core_list_push(*children, cached->nodes[i]);
     return true;
 }
 
@@ -1482,7 +1470,7 @@ semantic_static_value_from_expression(parse_grammar_t *grammar,
         parse_tree_t *elements = child_nt(grammar, sequence, "list-elems");
         core_list_t(parse_tree_ptr_t) expressions =
             core_list_new(parse_tree_ptr_t);
-        if (!collect_static_expressions(state, elements, &expressions)) {
+        if (!collect_ordered_children(elements, &expressions)) {
             core_list_free(expressions);
             return false;
         }
@@ -1514,8 +1502,7 @@ semantic_static_value_from_expression(parse_grammar_t *grammar,
         bool ok = (is_set && (set_entries || (empty
             && !dict_only_empty_literal(grammar, braces))))
             || (is_dict && (dict_entries || empty));
-        if (ok) ok = collect_static_expressions(state, entries,
-                                                 &expressions);
+        if (ok) ok = collect_ordered_children(entries, &expressions);
         ok = ok && (!is_dict || !(expressions.len & 1u));
         const th_arg *first = is_dict ? th_named_arg(type, 0)
                                       : th_named_arg(type, 0);
@@ -1549,8 +1536,7 @@ semantic_static_value_from_expression(parse_grammar_t *grammar,
             if (!shape || th_kind_of(shape) != TH_RECORD) return false;
             core_list_t(parse_tree_ptr_t) source_fields =
                 core_list_new(parse_tree_ptr_t);
-            bool ok = collect_static_named_fields(state, fields,
-                                                   &source_fields);
+            bool ok = collect_ordered_children(fields, &source_fields);
             bool variant = false;
             (void)th_named_info(type, nullptr, nullptr, &variant, nullptr);
             if (variant) {
@@ -1619,8 +1605,7 @@ semantic_static_value_from_expression(parse_grammar_t *grammar,
             return false;
         core_list_t(parse_tree_ptr_t) expressions =
             core_list_new(parse_tree_ptr_t);
-        bool ok = collect_static_expressions(state, tuple_or_record,
-                                              &expressions)
+        bool ok = collect_ordered_children(tuple_or_record, &expressions)
             && expressions.len == tuple_count;
         n00bb_static_value_t *items = ok && tuple_count
             ? core_arena_alloc(&state->semantic_values,
@@ -1680,7 +1665,7 @@ infer_tuple_literal_type(parse_grammar_t *grammar, parse_tree_t *node,
     if (!has_comma) return true;
     core_list_t(parse_tree_ptr_t) expressions =
         core_list_new(parse_tree_ptr_t);
-    bool ok = collect_static_expressions(state, node, &expressions)
+    bool ok = collect_ordered_children(node, &expressions)
         && expressions.len > 0;
     core_list_t(th_type_ptr_t) elements = core_list_new(th_type_ptr_t);
     for (size_t i = 0; ok && i < expressions.len; i++) {
@@ -1729,7 +1714,7 @@ infer_sequence_modifier_type(parse_grammar_t *grammar,
     core_list_t(th_type_ptr_t) element_types =
         core_list_new(th_type_ptr_t);
     bool collected = !elements
-        || collect_static_expressions(state, elements, &expressions);
+        || collect_ordered_children(elements, &expressions);
     th_type *context_element = context_type
         && th_kind_of(th_resolve(context_type)) == TH_SEQUENCE
         ? th_seq_elem(th_resolve(context_type)) : nullptr;
@@ -1947,8 +1932,8 @@ infer_user_literal_type(parse_grammar_t *grammar, parse_tree_t *node,
             core_list_new(parse_tree_ptr_t);
         core_list_t(th_type_ptr_t) element_types =
             core_list_new(th_type_ptr_t);
-        bool ok = !entries || collect_static_expressions(state, entries,
-                                                          &expressions);
+        bool ok = !entries || collect_ordered_children(entries,
+                                                       &expressions);
         for (size_t i = 0; ok && i < expressions.len; i++) {
             th_type *type = core_tree_node_value(expressions.data[i]).type;
             if (!type) ok = false;
@@ -1969,8 +1954,8 @@ infer_user_literal_type(parse_grammar_t *grammar, parse_tree_t *node,
             core_list_new(th_type_ptr_t);
         core_list_t(th_type_ptr_t) second_types =
             core_list_new(th_type_ptr_t);
-        bool ok = !entries || collect_static_expressions(state, entries,
-                                                          &expressions);
+        bool ok = !entries || collect_ordered_children(entries,
+                                                       &expressions);
         ok = ok && (!dictionary || !(expressions.len & 1u));
         for (size_t i = 0; ok && i < expressions.len; i++) {
             th_type *type = core_tree_node_value(expressions.data[i]).type;
@@ -1997,9 +1982,8 @@ infer_user_literal_type(parse_grammar_t *grammar, parse_tree_t *node,
             core_list_new(parse_tree_ptr_t);
         core_list_t(th_type_ptr_t) types =
             core_list_new(th_type_ptr_t);
-        bool ok = record_fields
-            ? collect_static_named_fields(state, record_fields, &items)
-            : collect_static_expressions(state, parenthesized, &items);
+        bool ok = collect_ordered_children(
+            record_fields ? record_fields : parenthesized, &items);
         for (size_t i = 0; ok && i < items.len; i++) {
             th_type *item_type = core_tree_node_value(items.data[i]).type;
             if (!item_type) ok = false;
@@ -2066,7 +2050,11 @@ infer_user_literal_type(parse_grammar_t *grammar, parse_tree_t *node,
         .signature = specialized,
         .deferred = deferred,
     };
-    core_dict_put(&state->literal_sites, node, site);
+    n00bb_node_facts_t *facts = n00bb_ensure_node_facts(state, node);
+    if (!facts) return false;
+    if (!facts->literal_site
+        && !core_list_try_push(state->literal_site_nodes, node)) return false;
+    facts->literal_site = site;
     return true;
 }
 
@@ -2075,10 +2063,10 @@ resolve_forward_literal_sites(core_translation_unit_t *unit,
                               n00bb_tu_state_t *state)
 {
     bool valid = true;
-    core_dict_foreach(&state->literal_sites, item) {
-        n00bb_litmod_site_t *site = item->value;
+    for (size_t i = 0; i < state->literal_site_nodes.len; i++) {
+        parse_tree_t *node = state->literal_site_nodes.data[i];
+        n00bb_litmod_site_t *site = n00bb_node_literal_site(node);
         if (!site || !site->deferred) continue;
-        parse_tree_t *node = item->key;
         parse_sym_entry_t *function = site->registration->declaration
             ? core_tree_node_value(site->registration->declaration).sym
             : nullptr;
@@ -2335,8 +2323,7 @@ infer_anonymous_record(parse_grammar_t *grammar, parse_tree_t *node,
 {
     parse_tree_t *fields = child_nt(grammar, node, "named-field-list");
     if (!fields || !state || !state->types) return true;
-    n00bb_ordered_nodes_t *cached = core_dict_get(
-        &state->ordered_child_nodes, fields, nullptr);
+    n00bb_ordered_nodes_t *cached = n00bb_node_ordered_nodes(fields);
     if (!cached) return false;
     core_list_t(th_member) members = core_list_new(th_member);
     for (size_t i = 0; i < cached->count; i++) {
@@ -2368,7 +2355,9 @@ infer_anonymous_record(parse_grammar_t *grammar, parse_tree_t *node,
     else {
         parsed->type = record;
     }
-    parsed->record_literal_origin = node;
+    n00bb_node_facts_t *facts = n00bb_ensure_node_facts(state, node);
+    if (!facts) return false;
+    facts->record_literal_origin = node;
     return true;
 }
 
@@ -2380,8 +2369,7 @@ contextualize_record_literal(parse_grammar_t *grammar,
                              parse_tree_t *expression, th_type *expected)
 {
     if (!expression || !expected) return true;
-    parse_tree_t *literal =
-        core_tree_node_value(expression).record_literal_origin;
+    parse_tree_t *literal = n00bb_node_record_literal_origin(expression);
     parse_tree_t *fields = literal
         ? child_nt(grammar, literal, "named-field-list") : nullptr;
     th_type *definition = static_record_shape(state, expected);
@@ -2390,8 +2378,7 @@ contextualize_record_literal(parse_grammar_t *grammar,
     bool variant = false;
     (void)th_named_info(th_resolve(expected), nullptr, nullptr, &variant,
                         nullptr);
-    n00bb_ordered_nodes_t *ordered = core_dict_get(
-        &state->ordered_child_nodes, fields, nullptr);
+    n00bb_ordered_nodes_t *ordered = n00bb_node_ordered_nodes(fields);
     if (!ordered || ordered->count != (variant ? 1 : th_record_len(definition)))
         return false;
     core_list_t(th_member) members = core_list_new(th_member);
@@ -2508,8 +2495,7 @@ contextualize_record_fields_before_inference(parse_grammar_t *grammar,
     th_type *definition = expected
         ? th_type_definition(state->types, expected) : nullptr;
     parse_tree_t *fields = child_nt(grammar, literal, "named-field-list");
-    n00bb_ordered_nodes_t *ordered = fields
-        ? core_dict_get(&state->ordered_child_nodes, fields, nullptr) : nullptr;
+    n00bb_ordered_nodes_t *ordered = n00bb_node_ordered_nodes(fields);
     if (!definition || th_kind_of(th_resolve(definition)) != TH_RECORD
         || !ordered) return true;
     for (size_t i = 0; i < ordered->count; i++) {
@@ -2518,7 +2504,7 @@ contextualize_record_fields_before_inference(parse_grammar_t *grammar,
         parse_tree_t *value = core_tree_child(field,
             core_tree_num_children(field) - 1);
         if (!value || core_tree_is_leaf(value)
-            || !core_tree_node_value(value).record_literal_origin) continue;
+            || !n00bb_node_record_literal_origin(value)) continue;
         core_string_t name = parse_tree_leaf_text(core_tree_child(field, 0));
         th_type *field_type = th_record_lookup(definition, name.data);
         if (!field_type || !contextualize_record_literal(grammar, unit, state,
@@ -4881,8 +4867,7 @@ collect_array_dimension_nodes(parse_grammar_t *grammar,
 {
     if (!grammar || !state || !node || !dimensions) return false;
     if (nt_is(grammar, node, "base-tspec")) {
-        n00bb_ordered_nodes_t *cached = core_dict_get(
-            &state->ordered_child_nodes, node, nullptr);
+        n00bb_ordered_nodes_t *cached = n00bb_node_ordered_nodes(node);
         if (!cached) return false;
         for (size_t i = 0; i < cached->count; i++)
             core_list_push(*dimensions, cached->nodes[i]);
@@ -7687,8 +7672,7 @@ array_dimensions_have_valid_order(parse_grammar_t *grammar,
 {
     n00bb_tu_state_t *state = tu_state(unit);
     n00bb_ordered_nodes_t *dimensions = state
-        ? core_dict_get(&state->ordered_child_nodes, base_type, nullptr)
-        : nullptr;
+        ? n00bb_node_ordered_nodes(base_type) : nullptr;
     if (!dimensions) return false;
     bool saw_unsized = false;
     for (size_t j = 0; j < dimensions->count; j++) {
@@ -7737,6 +7721,27 @@ n00bb_node_facts(parse_tree_t *node)
 {
     return node && !core_tree_is_leaf(node)
         ? core_tree_node_value(node).frontend_data : nullptr;
+}
+
+n00bb_ordered_nodes_t *
+n00bb_node_ordered_nodes(parse_tree_t *node)
+{
+    n00bb_node_facts_t *facts = n00bb_node_facts(node);
+    return facts ? facts->ordered_nodes : nullptr;
+}
+
+n00bb_litmod_site_t *
+n00bb_node_literal_site(parse_tree_t *node)
+{
+    n00bb_node_facts_t *facts = n00bb_node_facts(node);
+    return facts ? facts->literal_site : nullptr;
+}
+
+parse_tree_t *
+n00bb_node_record_literal_origin(parse_tree_t *node)
+{
+    n00bb_node_facts_t *facts = n00bb_node_facts(node);
+    return facts ? facts->record_literal_origin : nullptr;
 }
 
 parse_sym_entry_t *
@@ -8895,11 +8900,7 @@ free_tu_state(void *data)
     core_list_free(state->package_declarations);
     core_list_free(state->import_aliases);
     core_dict_free(&state->import_alias_index);
-    core_dict_free(&state->ordered_child_nodes);
-    core_dict_free(&state->static_literal_nodes);
-    core_dict_free(&state->literal_sites);
-    core_dict_free(&state->typecase_arm_types);
-    core_dict_free(&state->iteration_plans);
+    core_list_free(state->literal_site_nodes);
     core_dict_free(&state->flagset_values);
     core_list_free(state->integer_symbol_ranges);
     core_list_free(state->integer_range_invalidated_symbols);
@@ -8936,11 +8937,7 @@ n00bb_tu_state_new(core_translation_unit_t *unit, n00bb_lex_result_t *lex,
     state->package_declarations = core_list_new(n00bb_package_declaration_t);
     state->import_aliases = core_list_new(n00bb_import_alias_t);
     core_dict_init_string(&state->import_alias_index);
-    core_dict_init(&state->ordered_child_nodes, nullptr, nullptr);
-    core_dict_init(&state->static_literal_nodes, nullptr, nullptr);
-    core_dict_init(&state->literal_sites, nullptr, nullptr);
-    core_dict_init(&state->typecase_arm_types, nullptr, nullptr);
-    core_dict_init(&state->iteration_plans, nullptr, nullptr);
+    state->literal_site_nodes = core_list_new(parse_tree_ptr_t);
     core_dict_init(&state->flagset_values, nullptr, nullptr);
     core_dict_init(&state->integer_proven_above_int64_nodes,
                    nullptr, nullptr);
@@ -10873,12 +10870,14 @@ cache_static_literal_node(parse_grammar_t *grammar,
     if (!is_static && nt_is(grammar, node, "named-field")) {
         parse_tree_t *value = child_nt(grammar, node, "expression");
         is_static = value
-            && core_dict_contains(&state->static_literal_nodes, value);
+            && n00bb_node_facts(value)
+            && n00bb_node_facts(value)->static_literal;
     }
     if (!is_static && core_tree_num_children(node) == 1) {
         parse_tree_t *child = core_tree_child(node, 0);
         is_static = !core_tree_is_leaf(child)
-            && core_dict_contains(&state->static_literal_nodes, child);
+            && n00bb_node_facts(child)
+            && n00bb_node_facts(child)->static_literal;
     }
     else if (!is_static && (nt_is(grammar, node, "list-elems")
              || nt_is(grammar, node, "list-lit")
@@ -10893,14 +10892,33 @@ cache_static_literal_node(parse_grammar_t *grammar,
         for (size_t i = 0; i < core_tree_num_children(node); i++) {
             parse_tree_t *child = core_tree_child(node, i);
             if (!core_tree_is_leaf(child)
-                && !core_dict_contains(&state->static_literal_nodes, child)) {
+                && (!n00bb_node_facts(child)
+                    || !n00bb_node_facts(child)->static_literal)) {
                 is_static = false;
                 break;
             }
         }
     }
-    if (is_static)
-        core_dict_put(&state->static_literal_nodes, node, (void *)1);
+    if (!is_static) return true;
+    n00bb_node_facts_t *facts = n00bb_ensure_node_facts(state, node);
+    if (!facts) return false;
+    facts->static_literal = true;
+    return true;
+}
+
+static bool
+store_ordered_children(n00bb_tu_state_t *state, parse_tree_t *node,
+                       core_list_t(parse_tree_ptr_t) *items)
+{
+    n00bb_ordered_nodes_t *cached = core_arena_alloc(&state->semantic_values,
+                                                      sizeof(*cached));
+    parse_tree_t **nodes = items->len ? core_arena_alloc(
+        &state->semantic_values, items->len * sizeof(*nodes)) : nullptr;
+    n00bb_node_facts_t *facts = n00bb_ensure_node_facts(state, node);
+    if (!facts || !cached || (items->len && !nodes)) return false;
+    if (items->len) memcpy(nodes, items->data, items->len * sizeof(*nodes));
+    *cached = (n00bb_ordered_nodes_t){.nodes = nodes, .count = items->len};
+    facts->ordered_nodes = cached;
     return true;
 }
 
@@ -10935,8 +10953,7 @@ cache_ordered_literal_children(parse_grammar_t *grammar,
             || nt_is(grammar, child, "expr-comma-list")
             || nt_is(grammar, child, "named-field-list");
         if (list_child) {
-            n00bb_ordered_nodes_t *cached = core_dict_get(
-                &state->ordered_child_nodes, child, nullptr);
+            n00bb_ordered_nodes_t *cached = n00bb_node_ordered_nodes(child);
             if (!cached) {
                 core_list_free(items);
                 return false;
@@ -10946,23 +10963,9 @@ cache_ordered_literal_children(parse_grammar_t *grammar,
         }
     }
 
-    n00bb_ordered_nodes_t *cached = core_arena_alloc(&state->semantic_values,
-                                                      sizeof(*cached));
-    parse_tree_t **nodes = items.len ? core_arena_alloc(
-        &state->semantic_values, items.len * sizeof(*nodes)) : nullptr;
-    if (!cached || (items.len && !nodes)) {
-        core_list_free(items);
-        return false;
-    }
-    if (items.len) memcpy(nodes, items.data, items.len * sizeof(*nodes));
-    *cached = (n00bb_ordered_nodes_t){
-        .nodes = nodes,
-        .count = items.len,
-        .extent = (uint64_t)items.len,
-    };
-    core_dict_put(&state->ordered_child_nodes, node, cached);
+    bool ok = store_ordered_children(state, node, &items);
     core_list_free(items);
-    return true;
+    return ok;
 }
 
 bool
@@ -10981,8 +10984,7 @@ cache_ordered_array_dimensions(parse_grammar_t *grammar,
             continue;
         }
         if (base_node && nt_is(grammar, child, "array-dimensions")) {
-            n00bb_ordered_nodes_t *cached = core_dict_get(
-                &state->ordered_child_nodes, child, nullptr);
+            n00bb_ordered_nodes_t *cached = n00bb_node_ordered_nodes(child);
             if (!cached) {
                 core_list_free(items);
                 return false;
@@ -11000,8 +11002,7 @@ cache_ordered_array_dimensions(parse_grammar_t *grammar,
             }
             else if (base_node
                      && nt_is(grammar, item, "array-dimensions")) {
-                n00bb_ordered_nodes_t *cached = core_dict_get(
-                    &state->ordered_child_nodes, item, nullptr);
+                n00bb_ordered_nodes_t *cached = n00bb_node_ordered_nodes(item);
                 if (!cached) {
                     core_list_free(items);
                     return false;
@@ -11012,24 +11013,10 @@ cache_ordered_array_dimensions(parse_grammar_t *grammar,
         }
     }
 
-    n00bb_ordered_nodes_t *cached = core_arena_alloc(
-        &state->semantic_values, sizeof(*cached));
-    parse_tree_t **nodes = items.len ? core_arena_alloc(
-        &state->semantic_values, items.len * sizeof(*nodes)) : nullptr;
-    if (!cached || (items.len && !nodes)) {
-        core_list_free(items);
-        return false;
-    }
-    if (items.len) memcpy(nodes, items.data, items.len * sizeof(*nodes));
-    *cached = (n00bb_ordered_nodes_t){
-        .nodes = nodes,
-        .count = items.len,
-        .extent = (uint64_t)items.len,
-    };
-    core_dict_put(&state->ordered_child_nodes, node, cached);
-    if (base_node) core_list_push(state->array_type_nodes, node);
+    bool ok = store_ordered_children(state, node, &items);
+    if (ok && base_node) core_list_push(state->array_type_nodes, node);
     core_list_free(items);
-    return true;
+    return ok;
 }
 static parse_sym_entry_t *
 typecase_subject_symbol(parse_grammar_t *grammar,
@@ -11082,7 +11069,8 @@ cache_typecase_arm_types(parse_grammar_t *grammar,
         &state->semantic_values, sizeof(*cached));
     th_type **values = types.len ? core_arena_alloc(
         &state->semantic_values, types.len * sizeof(*values)) : nullptr;
-    if (!cached || (types.len && !values)) {
+    n00bb_node_facts_t *facts = n00bb_ensure_node_facts(state, arm);
+    if (!facts || !cached || (types.len && !values)) {
         core_list_free(types);
         return false;
     }
@@ -11090,7 +11078,7 @@ cache_typecase_arm_types(parse_grammar_t *grammar,
     *cached = (n00bb_typecase_arm_types_t){
         .types = values, .count = types.len,
     };
-    core_dict_put(&state->typecase_arm_types, arm, cached);
+    facts->typecase_arm_types = cached;
     core_list_free(types);
     return true;
 invalid:
@@ -11106,9 +11094,9 @@ prepare_typecase_arm(parse_grammar_t *grammar, core_translation_unit_t *unit,
     parse_sym_entry_t *subject = state
         ? typecase_subject_symbol(grammar, unit, case_block)
         : nullptr;
-    n00bb_typecase_arm_types_t *types = state
-        ? core_dict_get(&state->typecase_arm_types, case_block, nullptr)
-        : nullptr;
+    n00bb_node_facts_t *facts = n00bb_node_facts(case_block);
+    n00bb_typecase_arm_types_t *types = state && facts
+        ? facts->typecase_arm_types : nullptr;
     th_type *narrowed = types && types->count
         ? types->count == 1 ? types->types[0]
             : th_sum(state->types, TH_UNION, types->types, types->count)
@@ -11460,8 +11448,7 @@ compose_type_syntax_node(parse_grammar_t *grammar,
     if (nt_is(grammar, node, "base-tspec")) {
         parse_tree_t *core = child_nt(grammar, node, "base-tspec-core");
         th_type *type = core ? core_tree_node_value(core).type : nullptr;
-        n00bb_ordered_nodes_t *dimensions = core_dict_get(
-            &state->ordered_child_nodes, node, nullptr);
+        n00bb_ordered_nodes_t *dimensions = n00bb_node_ordered_nodes(node);
         if (dimensions && dimensions->count) {
             parse_tree_t *name = child_nt(grammar, core, "member-chain");
             if (!member_chain_is_name(grammar, name, "Array")

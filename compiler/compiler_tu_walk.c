@@ -356,9 +356,20 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         }
         if (core_tree_num_children(node) == 1) {
             parse_tree_t *child = core_tree_child(node, 0);
-            if (!core_tree_is_leaf(child))
-                core_tree_node_value(node).record_literal_origin =
-                    core_tree_node_value(child).record_literal_origin;
+            parse_tree_t *origin = n00bb_node_record_literal_origin(child);
+            if (origin) {
+                n00bb_node_facts_t *facts = n00bb_ensure_node_facts(state,
+                                                                     node);
+                if (!facts) {
+                    core_diagnostics_report_at(
+                        core_translation_unit_diagnostics(unit), unit,
+                        CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0004"),
+                        CORE_STRING_STATIC("could not retain record literal origin"),
+                        link_source_location(node));
+                    return;
+                }
+                facts->record_literal_origin = origin;
+            }
         }
         if (nt_is(grammar, node, "assign-stmt")
             && core_tree_num_children(node) == 3) {

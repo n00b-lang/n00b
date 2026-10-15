@@ -2684,9 +2684,9 @@ n00bb_typecase_collect(parse_grammar_t *grammar, parse_tree_t *node,
         || nt_is(grammar, node, "typecase-value-case-block")) {
         n00bb_lower_context_t *lower = context->user;
         n00bb_tu_state_t *state = lower ? tu_state(lower->unit) : nullptr;
-        n00bb_typecase_arm_types_t *types = state
-            ? core_dict_get(&state->typecase_arm_types, node, nullptr)
-            : nullptr;
+        n00bb_node_facts_t *facts = n00bb_node_facts(node);
+        n00bb_typecase_arm_types_t *types = state && facts
+            ? facts->typecase_arm_types : nullptr;
         th_type *type = types && types->count
             ? types->count == 1 ? types->types[0]
                 : th_sum(state->types, TH_UNION, types->types, types->count)
@@ -3494,8 +3494,8 @@ n00bb_lower_loop_annotation(ir_lower_context_t *context, parse_visit_t *visit,
         parse_tree_t *target = child_nt(visit->grammar, visit->node,
                                          "for-in-target-list");
         iteration_source = child_nt(visit->grammar, target, "expression");
-        iteration_plan = core_dict_get(&tu->iteration_plans, visit->node,
-                                       nullptr);
+        n00bb_node_facts_t *facts = n00bb_node_facts(visit->node);
+        iteration_plan = facts ? facts->iteration_plan : nullptr;
         parse_tree_t *vars = child_nt(visit->grammar, visit->node,
                                       "for-var-list");
         core_list_t(parse_tree_ptr_t) binding_nodes =
@@ -4507,7 +4507,7 @@ n00bb_lower_nil_literal(ir_lower_context_t *context, parse_visit_t *visit,
     (void)state;
     n00bb_lower_context_t *lower = context ? context->user : nullptr;
     n00bb_tu_state_t *tu = lower ? tu_state(lower->unit) : nullptr;
-    if (tu && visit && core_dict_contains(&tu->literal_sites, visit->node))
+    if (tu && visit && n00bb_node_literal_site(visit->node))
         return (ir_lower_result_t){IR_LOWER_NO_VALUE, nullptr};
     th_type *flagset_type = nullptr;
     for (parse_tree_t *parent = visit && visit->node
@@ -4993,7 +4993,7 @@ collect_sequence_literal_values(ir_lower_context_t *context,
     n00bb_lower_context_t *lower = context ? context->user : nullptr;
     n00bb_tu_state_t *tu = lower ? tu_state(lower->unit) : nullptr;
     n00bb_ordered_nodes_t *cached = tu
-        ? core_dict_get(&tu->ordered_child_nodes, entries, nullptr) : nullptr;
+        ? n00bb_node_ordered_nodes(entries) : nullptr;
     if (!cached) return false;
     for (size_t i = 0; i < cached->count; i++) {
         ir_value_t *value = ir_lower_node_value(context, cached->nodes[i]);
@@ -5113,7 +5113,7 @@ n00bb_lower_tuple_literal(ir_lower_context_t *context, parse_visit_t *visit,
     n00bb_lower_context_t *lower = context->user;
     n00bb_tu_state_t *tu = lower ? tu_state(lower->unit) : nullptr;
     n00bb_litmod_site_t *site = tu
-        ? core_dict_get(&tu->literal_sites, visit->node, nullptr) : nullptr;
+        ? n00bb_node_literal_site(visit->node) : nullptr;
     if (site) {
         if ((lower->has_active_literal
                 && lower->active_literal.node == visit->node)
@@ -5145,8 +5145,7 @@ n00bb_lower_tuple_literal(ir_lower_context_t *context, parse_visit_t *visit,
                             nullptr);
         if (variant) {
             n00bb_ordered_nodes_t *ordered = tu
-                ? core_dict_get(&tu->ordered_child_nodes, named_fields,
-                                nullptr) : nullptr;
+                ? n00bb_node_ordered_nodes(named_fields) : nullptr;
             bool valid = parts->values.len == 1 && ordered
                 && ordered->count == 1;
             core_string_t arm = valid
@@ -5279,7 +5278,7 @@ n00bb_lower_string_literal(ir_lower_context_t *context,
     n00bb_lower_context_t *lower = context->user;
     n00bb_tu_state_t *tu = lower ? tu_state(lower->unit) : nullptr;
     n00bb_litmod_site_t *user_site = tu
-        ? core_dict_get(&tu->literal_sites, visit->node, nullptr) : nullptr;
+        ? n00bb_node_literal_site(visit->node) : nullptr;
     if (user_site)
         return n00bb_lower_user_literal(context, visit, user_site,
                                         result_type, span);
@@ -5742,7 +5741,7 @@ n00bb_lower_sequence_literal(ir_lower_context_t *context,
     n00bb_lower_context_t *lower = context->user;
     n00bb_tu_state_t *tu = lower ? tu_state(lower->unit) : nullptr;
     n00bb_litmod_site_t *site = tu
-        ? core_dict_get(&tu->literal_sites, visit->node, nullptr) : nullptr;
+        ? n00bb_node_literal_site(visit->node) : nullptr;
     return site
         ? n00bb_lower_user_literal(context, visit, site, result_type, span)
         : n00bb_lower_sequence_aggregate(context, visit, operands,
@@ -5767,7 +5766,7 @@ n00bb_lower_brace_literal(ir_lower_context_t *context,
     n00bb_lower_context_t *lower = context->user;
     n00bb_tu_state_t *tu = lower ? tu_state(lower->unit) : nullptr;
     n00bb_litmod_site_t *site = tu
-        ? core_dict_get(&tu->literal_sites, visit->node, nullptr) : nullptr;
+        ? n00bb_node_literal_site(visit->node) : nullptr;
     if (site)
         return n00bb_lower_user_literal(context, visit, site,
                                         result_type, span);
@@ -5909,9 +5908,7 @@ n00bb_lower_user_parenthesized_payload(ir_lower_context_t *context,
         core_list_new(parse_tree_ptr_t);
     core_list_t(n00bb_ir_value_ptr_t) values =
         core_list_new(n00bb_ir_value_ptr_t);
-    bool ok = record
-        ? collect_static_named_fields(tu, fields, &expressions)
-        : collect_static_expressions(tu, fields, &expressions);
+    bool ok = collect_ordered_children(fields, &expressions);
     th_type *element_type = site->payload_type
         ? th_seq_elem(th_resolve(site->payload_type)) : nullptr;
     th_type *string_type = record && tu
@@ -6141,7 +6138,7 @@ n00bb_lower_literal_handler(ir_lower_context_t *context,
     n00bb_lower_context_t *lower = context->user;
     n00bb_tu_state_t *tu = lower ? tu_state(lower->unit) : nullptr;
     n00bb_litmod_site_t *user_site = tu
-        ? core_dict_get(&tu->literal_sites, visit->node, nullptr) : nullptr;
+        ? n00bb_node_literal_site(visit->node) : nullptr;
     return user_site
         ? n00bb_lower_user_literal(context, visit, user_site,
                                     result_type, span)
@@ -6236,7 +6233,7 @@ n00bb_lower_static_litmod(ir_lower_context_t *context,
     n00bb_lower_context_t *lower = context ? context->user : nullptr;
     n00bb_tu_state_t *tu = lower ? tu_state(lower->unit) : nullptr;
     n00bb_litmod_site_t *site = tu
-        ? core_dict_get(&tu->literal_sites, visit->node, nullptr) : nullptr;
+        ? n00bb_node_literal_site(visit->node) : nullptr;
     bool default_container = !site && n00bb_default_container_literal(
         visit->grammar, visit->node,
         core_tree_node_value(visit->node).type);
@@ -6267,7 +6264,8 @@ n00bb_lower_static_litmod(ir_lower_context_t *context,
                                      CORE_STRING_STATIC("fence")))) return true;
     if (entering) {
         if (lower->has_active_literal) return true;
-        if (!core_dict_contains(&tu->static_literal_nodes, visit->node))
+        n00bb_node_facts_t *facts = n00bb_node_facts(visit->node);
+        if (!facts || !facts->static_literal)
             return true;
         th_type *result_type = core_tree_node_value(visit->node).type;
         if (!result_type || !th_is_closed(tu->types, result_type))
@@ -10482,7 +10480,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
             && th_mode_is_input_only(formal->mode) && actual
             && !th_is_closed(ir_module_types(context->module), actual)
             && !core_tree_node_value(argument).integer_literal_origin
-            && !core_tree_node_value(argument).record_literal_origin
+            && !n00bb_node_record_literal_origin(argument)
                 ? actual : nullptr;
     }
     bool collected = true;
@@ -13461,6 +13459,11 @@ n00bb_addressable_expression_address(ir_lower_context_t *context,
         th_type *container = base
             ? th_ind_referent(th_resolve(base->type)) : nullptr;
         container = container ? th_resolve(container) : nullptr;
+        uint8_t address_attrs = 0;
+        if (!container || (th_kind_of(container) != TH_SEQUENCE
+                && (!th_ind_attrs(base->type, &address_attrs)
+                    || !(address_attrs & TH_INDEXABLE))))
+            return nullptr;
         th_type *element = container && th_kind_of(container) == TH_SEQUENCE
             ? th_seq_elem(container) : core_tree_node_value(index).type;
         th_type *address_type = element
@@ -16818,13 +16821,11 @@ collect_array_initializer_extents(parse_grammar_t *grammar,
                                                               expression);
     if (!literal) return true;
     parse_tree_t *elements = child_nt(grammar, literal, "list-elems");
-    n00bb_ordered_nodes_t *items = elements
-        ? core_dict_get(&state->ordered_child_nodes, elements, nullptr)
-        : nullptr;
+    n00bb_ordered_nodes_t *items = n00bb_node_ordered_nodes(elements);
     if (elements && !items) return false;
     core_list_push(*extents, ((n00bb_array_initializer_extent_t){
         .dimension = dimension,
-        .extent = items ? items->extent : 0,
+        .extent = items ? items->count : 0,
         .literal = literal,
     }));
     for (size_t i = 0; items && i < items->count; i++)

@@ -279,11 +279,24 @@ typedef struct {
     size_t count;
 } n00bb_alias_edges_t;
 typedef struct {
+    th_type **types;
+    size_t count;
+} n00bb_typecase_arm_types_t;
+typedef struct n00bb_ordered_nodes_t n00bb_ordered_nodes_t;
+typedef struct n00bb_iteration_plan_t n00bb_iteration_plan_t;
+typedef struct n00bb_litmod_site_t n00bb_litmod_site_t;
+typedef struct {
     n00bb_return_source_t *return_source;
     n00bb_alias_edges_t *alias_edges;
     n00bb_alias_edges_t *escape_edges;
+    n00bb_typecase_arm_types_t *typecase_arm_types;
+    n00bb_ordered_nodes_t *ordered_nodes;
+    n00bb_iteration_plan_t *iteration_plan;
+    n00bb_litmod_site_t *literal_site;
+    parse_tree_t *record_literal_origin;
     size_t first_link_use_site;
     size_t last_link_use_site;
+    bool static_literal;
 } n00bb_node_facts_t;
 typedef core_translation_unit_t *core_translation_unit_ptr_t;
 core_list_decl(core_translation_unit_ptr_t);
@@ -317,12 +330,12 @@ typedef struct {
     core_diag_location_t location;
 } n00bb_user_litmod_t;
 core_list_decl(n00bb_user_litmod_t);
-typedef struct {
+struct n00bb_litmod_site_t {
     n00bb_user_litmod_t *registration;
     th_type *payload_type;
     th_type *signature;
     bool deferred;
-} n00bb_litmod_site_t;
+};
 
 typedef struct {
     parse_tree_t *node;
@@ -359,13 +372,13 @@ typedef struct {
     bool direct;
 } n00bb_trait_dispatch_plan_t;
 
-typedef struct {
+struct n00bb_iteration_plan_t {
     size_t iter_site;
     size_t next_site;
     size_t cleanup_site;
     th_type *cursor_type;
     th_type *item_type;
-} n00bb_iteration_plan_t;
+};
 
 typedef struct {
     parse_tree_t *node;
@@ -404,16 +417,10 @@ typedef struct {
     parse_pwz_parser_t *parser;
 } n00bb_lex_result_t;
 
-typedef struct {
+struct n00bb_ordered_nodes_t {
     parse_tree_t **nodes;
     size_t count;
-    uint64_t extent;
-} n00bb_ordered_nodes_t;
-
-typedef struct {
-    th_type **types;
-    size_t count;
-} n00bb_typecase_arm_types_t;
+};
 
 typedef struct {
     core_string_t source_name;
@@ -454,11 +461,7 @@ typedef struct {
     core_list_t(n00bb_import_alias_t) import_aliases;
     core_dict_t import_alias_index;
     core_list_t(n00bb_link_use_site_t) link_use_sites;
-    core_dict_t ordered_child_nodes;
-    core_dict_t static_literal_nodes;
-    core_dict_t literal_sites;
-    core_dict_t typecase_arm_types;
-    core_dict_t iteration_plans;
+    core_list_t(parse_tree_ptr_t) literal_site_nodes;
     core_dict_t flagset_values;
     core_link_unit_t *link;
     n00bb_link_analysis_t *link_analysis;
@@ -534,10 +537,8 @@ bool infer_user_literal_type(parse_grammar_t *grammar, parse_tree_t *node,
                              n00bb_tu_state_t *state);
 bool resolve_forward_literal_sites(core_translation_unit_t *unit,
                                    n00bb_tu_state_t *state);
-bool collect_static_expressions(n00bb_tu_state_t *state, parse_tree_t *node,
-    core_list_t(parse_tree_ptr_t) *expressions);
-bool collect_static_named_fields(n00bb_tu_state_t *state, parse_tree_t *node,
-    core_list_t(parse_tree_ptr_t) *fields);
+bool collect_ordered_children(parse_tree_t *node,
+    core_list_t(parse_tree_ptr_t) *children);
 core_string_t named_field_identifier(parse_grammar_t *grammar,
                                      parse_tree_t *field);
 bool n00bb_switch_case_integer(parse_grammar_t *grammar,
@@ -849,6 +850,9 @@ bool context_default_name(parse_sym_entry_t *symbol, size_t index,
 bool callback_protocol_name(const char *type_name, const char *marker,
     core_buffer_t *out);
 n00bb_node_facts_t *n00bb_node_facts(parse_tree_t *node);
+n00bb_ordered_nodes_t *n00bb_node_ordered_nodes(parse_tree_t *node);
+n00bb_litmod_site_t *n00bb_node_literal_site(parse_tree_t *node);
+parse_tree_t *n00bb_node_record_literal_origin(parse_tree_t *node);
 parse_sym_entry_t *bound_function_symbol(parse_tree_t *node);
 n00bb_node_facts_t *n00bb_ensure_node_facts(n00bb_tu_state_t *state,
     parse_tree_t *node);

@@ -81,7 +81,7 @@ unify_call_node_type(core_translation_unit_t *unit,
     }
     if (!unified && into_option_context) unified = unification_expected;
     if (!unified && typed_node && !core_tree_is_leaf(typed_node)
-        && core_tree_node_value(typed_node).record_literal_origin
+        && n00bb_node_record_literal_origin(typed_node)
         && th_kind_of(th_resolve(unification_actual)) == TH_RECORD
         && th_kind_of(th_resolve(unification_expected)) == TH_NAMED) {
         th_type *definition = th_type_definition(state->types,
@@ -540,7 +540,7 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
                 : core_tree_node_value(argument).type;
             bool open = actual && !th_is_closed(state->types, actual)
                 && !core_tree_node_value(argument).integer_literal_origin
-                && !core_tree_node_value(argument).record_literal_origin;
+                && !n00bb_node_record_literal_origin(argument);
             argument_sources[argument_source_count++] = open ? actual : nullptr;
         }
         bool arguments_copied = th_type_clone_many(state->types,
