@@ -9346,6 +9346,92 @@ n00bb_closed_builtin_operator(ir_lower_context_t *context,
         ? function : nullptr;
 }
 
+typedef struct {
+    ir_instr_t *call;
+    ir_instr_t *result;
+    th_type *signature;
+} n00bb_closed_trait_call_t;
+
+static n00bb_closed_trait_call_t
+n00bb_emit_closed_trait_arm(ir_lower_context_t *context,
+                            n00bb_lower_context_t *lower,
+                            n00bb_trait_dispatch_entry_t *entry,
+                            parse_grammar_t *grammar,
+                            parse_sym_entry_t *requirement,
+                            parse_tree_t *formal_params,
+                            size_t parameter_count,
+                            th_type *signature, th_type *result_type,
+                            core_list_t(n00bb_ir_value_ptr_t) *values,
+                            ir_value_t *receiver, ir_span_t span)
+{
+    n00bb_closed_trait_call_t result = {0};
+    n00bb_link_analysis_t *analysis = tu_state(lower->unit)->link_analysis;
+    core_translation_unit_t *owner = unit_for_symbol(grammar, lower->units,
+                                                      entry->implementation);
+    n00bb_tu_state_t *owner_state = owner ? tu_state(owner) : nullptr;
+    ir_func_t *function = analysis
+        ? link_ir_function_for_phase(analysis, entry->implementation,
+                                     lower->comptime_phase)
+        : nullptr;
+    ir_module_t *module = owner_state
+        ? module_for_phase(owner_state, lower->comptime_phase) : nullptr;
+    if (function)
+        queue_comptime_function(analysis, entry->implementation, function,
+                                grammar, lower->comptime_phase);
+    if (!function) {
+        function = n00bb_closed_builtin_operator(context,
+            entry->implementation, requirement, entry->receiver_type);
+        module = context->module;
+    }
+    ir_value_t *callee = module && function
+        ? ir_func_address(module, function) : nullptr;
+    th_type *call_signature = function
+        ? th_unify(ir_module_types(context->module), function->type, signature)
+        : nullptr;
+    th_type *call_result = call_signature
+        ? th_func_ret(call_signature) : nullptr;
+    th_type *call_failure = call_signature
+        ? th_func_error(call_signature) : nullptr;
+    if (call_failure && !n00bb_nil_type(ir_module_types(context->module),
+                                         call_failure))
+        call_result = ir_call_outcome_type(context->module, call_signature);
+    ir_instr_t *call = callee && call_signature && call_result
+        ? ir_lower_emit_instruction(context, IR_OP_CALL, span) : nullptr;
+    bool emitted = call
+        && ir_lower_set_temp_dest(context, call, "__n00bb_", call_result)
+        && ir_instr_operand_value(call, callee);
+    for (size_t p = 0; emitted && p < values->len; p++) {
+        ir_value_t *argument = p == 0 ? receiver : values->data[p];
+        if (argument) {
+            emitted = ir_instr_operand_value(call, argument);
+            continue;
+        }
+        uint8_t flags = 0;
+        th_mode mode = TH_IN;
+        bool known = p < parameter_count
+            && function_parameter_info(grammar, requirement,
+                formal_params, p, nullptr, nullptr, nullptr, &flags, &mode);
+        emitted = known && (flags & 1u) && th_mode_is_input_only(mode)
+            ? ir_instr_operand_missing(call)
+            : known && mode == TH_OUT
+                ? ir_instr_operand_out(call) : false;
+    }
+    emitted = emitted && ir_instr_set_call_signature(call, call_signature);
+    if (!emitted) return result;
+    ir_instr_t *last = call;
+    if (!ir_type_eq(context->module, call_result, result_type)) {
+        ir_instr_t *boxed = ir_lower_emit_instruction(context, IR_OP_BOX, span);
+        if (!boxed || !ir_lower_set_temp_dest(context, boxed, "__n00bb_",
+                                               result_type)
+            || !ir_instr_operand_value(boxed, call->dest)) return result;
+        last = boxed;
+    }
+    result.call = call;
+    result.result = last;
+    result.signature = call_signature;
+    return result;
+}
+
 static ir_instr_t *
 n00bb_emit_closed_trait_call(ir_lower_context_t *context,
                              n00bb_lower_context_t *lower,
@@ -9364,72 +9450,11 @@ n00bb_emit_closed_trait_call(ir_lower_context_t *context,
         || !signature || !result_type || !values || !values->len
         || !values->data[0]) return nullptr;
     if (plan->direct) {
-        n00bb_trait_dispatch_entry_t *entry = &plan->entries[0];
-        n00bb_link_analysis_t *analysis = tu_state(lower->unit)->link_analysis;
-        core_translation_unit_t *owner = unit_for_symbol(grammar,
-            lower->units, entry->implementation);
-        n00bb_tu_state_t *owner_state = owner ? tu_state(owner) : nullptr;
-        ir_func_t *function = analysis
-            ? link_ir_function_for_phase(analysis, entry->implementation,
-                                         lower->comptime_phase)
-            : nullptr;
-        ir_module_t *module = owner_state
-            ? module_for_phase(owner_state, lower->comptime_phase) : nullptr;
-        if (function)
-            queue_comptime_function(analysis, entry->implementation,
-                                    function, grammar,
-                                    lower->comptime_phase);
-        if (!function) {
-            function = n00bb_closed_builtin_operator(context,
-                entry->implementation, requirement, entry->receiver_type);
-            module = context->module;
-        }
-        ir_value_t *callee = module && function
-            ? ir_func_address(module, function) : nullptr;
-        th_type *call_signature = function
-            ? th_unify(ir_module_types(context->module), function->type,
-                       signature)
-            : nullptr;
-        th_type *call_result = call_signature
-            ? th_func_ret(call_signature) : nullptr;
-        th_type *call_failure = call_signature
-            ? th_func_error(call_signature) : nullptr;
-        if (call_failure && !n00bb_nil_type(
-                ir_module_types(context->module), call_failure))
-            call_result = ir_call_outcome_type(context->module,
-                                                call_signature);
-        ir_instr_t *call = callee && call_signature && call_result
-            ? ir_lower_emit_instruction(context, IR_OP_CALL, span) : nullptr;
-        bool emitted = call
-            && ir_lower_set_temp_dest(context, call, "__n00bb_", call_result)
-            && ir_instr_operand_value(call, callee);
-        for (size_t p = 0; emitted && p < values->len; p++) {
-            if (values->data[p]) {
-                emitted = ir_instr_operand_value(call, values->data[p]);
-                continue;
-            }
-            uint8_t flags = 0;
-            th_mode mode = TH_IN;
-            bool known = p < parameter_count
-                && function_parameter_info(grammar, requirement,
-                    formal_params, p, nullptr, nullptr, nullptr, &flags,
-                    &mode);
-            emitted = known && (flags & 1u) && th_mode_is_input_only(mode)
-                ? ir_instr_operand_missing(call)
-                : known && mode == TH_OUT
-                    ? ir_instr_operand_out(call) : false;
-        }
-        emitted = emitted && ir_instr_set_call_signature(call,
-                                                          call_signature);
-        if (!emitted) return nullptr;
-        if (ir_type_eq(context->module, call_result, result_type))
-            return call;
-        ir_instr_t *boxed = ir_lower_emit_instruction(context, IR_OP_BOX,
-                                                       span);
-        if (!boxed || !ir_lower_set_temp_dest(context, boxed, "__n00bb_",
-                                              result_type)
-            || !ir_instr_operand_value(boxed, call->dest)) return nullptr;
-        return boxed;
+        n00bb_closed_trait_call_t emitted = n00bb_emit_closed_trait_arm(
+            context, lower, &plan->entries[0], grammar, requirement,
+            formal_params, parameter_count, signature, result_type,
+            values, values->data[0], span);
+        return emitted.result;
     }
     char local_name[48];
     snprintf(local_name, sizeof(local_name), "__n00bb_dispatch_%llu",
@@ -9486,83 +9511,22 @@ n00bb_emit_closed_trait_call(ir_lower_context_t *context,
                 && ir_instr_operand_value(narrow, values->data[0])
                 && ir_instr_operand_type(narrow, entry->receiver_type);
         }
-        n00bb_link_analysis_t *analysis = tu_state(lower->unit)->link_analysis;
-        core_translation_unit_t *owner = unit_for_symbol(grammar,
-            lower->units, entry->implementation);
-        n00bb_tu_state_t *owner_state = owner ? tu_state(owner) : nullptr;
-        ir_func_t *function = analysis
-            ? link_ir_function_for_phase(analysis, entry->implementation,
-                                         lower->comptime_phase)
-            : nullptr;
-        ir_module_t *module = owner_state
-            ? module_for_phase(owner_state, lower->comptime_phase) : nullptr;
-        if (function)
-            queue_comptime_function(analysis, entry->implementation,
-                                    function, grammar,
-                                    lower->comptime_phase);
-        if (!function) {
-            function = n00bb_closed_builtin_operator(context,
-                entry->implementation, requirement, entry->receiver_type);
-            module = context->module;
-        }
-        ir_value_t *callee = module && function
-            ? ir_func_address(module, function) : nullptr;
-        th_type *call_signature = function
-            ? th_unify(ir_module_types(context->module), function->type,
-                       signature)
-            : nullptr;
-        th_type *concrete_result = call_signature
-            ? th_func_ret(call_signature) : nullptr;
-        th_type *concrete_failure = call_signature
-            ? th_func_error(call_signature) : nullptr;
-        if (concrete_failure && !n00bb_nil_type(
-                ir_module_types(context->module), concrete_failure))
-            concrete_result = ir_call_outcome_type(context->module,
-                                                   call_signature);
-        ir_instr_t *call = emitted && callee && call_signature
-            && concrete_result
-            ? ir_instr_add(arm, IR_OP_CALL) : nullptr;
-        emitted = call && ir_lower_set_temp_dest(context, call, "__n00bb_",
-                                                 concrete_result)
-            && ir_instr_operand_value(call, callee)
-            && ir_instr_operand_value(call, narrow
-                ? narrow->dest : values->data[0]);
-        for (size_t p = 1; emitted && p < values->len; p++) {
-            if (values->data[p]) {
-                emitted = ir_instr_operand_value(call, values->data[p]);
-                continue;
-            }
-            uint8_t flags = 0;
-            th_mode mode = TH_IN;
-            bool known = p < parameter_count
-                && function_parameter_info(grammar, requirement,
-                    formal_params, p, nullptr, nullptr, nullptr, &flags,
-                    &mode);
-            emitted = known && (flags & 1u) && th_mode_is_input_only(mode)
-                ? ir_instr_operand_missing(call)
-                : known && mode == TH_OUT
-                    ? ir_instr_operand_out(call) : false;
-        }
-        emitted = emitted && ir_instr_set_call_signature(call,
-                                                          call_signature);
-        ir_value_t *arm_result = call ? call->dest : nullptr;
-        if (emitted && !ir_type_eq(context->module, concrete_result,
-                                   result_type)) {
-            ir_instr_t *boxed = ir_instr_add(arm, IR_OP_BOX);
-            emitted = boxed && ir_lower_set_temp_dest(context, boxed,
-                "__n00bb_", result_type)
-                && ir_instr_operand_value(boxed, arm_result);
-            if (emitted) {
-                boxed->span = span;
-                arm_result = boxed->dest;
-            }
-        }
+        context->block = arm;
+        n00bb_closed_trait_call_t arm_call = emitted
+            ? n00bb_emit_closed_trait_arm(context, lower, entry, grammar,
+                requirement, formal_params, parameter_count, signature,
+                result_type, values,
+                narrow ? narrow->dest : values->data[0], span)
+            : (n00bb_closed_trait_call_t){0};
+        ir_instr_t *call = arm_call.call;
+        th_type *call_signature = arm_call.signature;
+        emitted = arm_call.result != nullptr;
+        ir_value_t *arm_result = emitted ? arm_call.result->dest : nullptr;
         ir_instr_t *store = emitted && !void_result
             ? ir_instr_add(arm, IR_OP_COPY) : nullptr;
         emitted = emitted && (void_result
             || (store && ir_instr_set_dest_local(store, result)
                 && ir_instr_operand_value(store, arm_result)));
-        context->block = arm;
         for (size_t p = 0; emitted && copyouts && p < copyouts->len; p++) {
             n00bb_copyout_t *copyout = &copyouts->data[p];
             const th_param *formal = n00bb_output_formal(call_signature,
