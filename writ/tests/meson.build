@@ -339,6 +339,7 @@ foreach case : [
     ['e0514_two', 'bind', contract_dir, true],
     ['e0003_path', 'bind', [], true],
     ['e0003_search', 'bind', contract_dir, true],
+    ['use_broken', 'bind', [], true],
 ]
     test(
         'embedded-' + case[0],

@@ -230,9 +230,8 @@ use_path(writ_unit_t *unit, uint32_t id)
 static bool
 use_loaded(const writ_unit_t *unit, writ_str_t path)
 {
-    for (size_t i = 0; i < unit->roots.len; i++) {
-        if (unit->roots.data[i].used && writ_str_eq(writ_source_at(unit->session, unit->roots.data[i].source)->path,
-                                                    path)) {
+    for (size_t i = 0; i < unit->files.len; i++) {
+        if (writ_str_eq(writ_sym_str(unit->session, unit->files.data[i]), path)) {
             return true;
         }
     }
