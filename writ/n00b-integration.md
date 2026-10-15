@@ -393,6 +393,46 @@ Package export resolution reaches a `const` of type `Module` through the
 same path as an imported module. The bound names are ordinary
 declarations by then, so nothing else in package linking changes.
 
+### 4.11 Baking C objects built at comptime
+
+`'ffi` functions can be called from comptime code. A C object graph they
+return can be the value of a `const`, and is then **baked**: copied into
+the program's data and used at run time without being rebuilt.
+
+```
+const config = settings.load("app.conf")
+```
+
+- **Description.** Every struct reachable from the value must be fully
+  described by its contract. writ's layout facts become n00b record
+  types with descriptors: counted pointers carry their count field,
+  zero-terminated arrays their sentinel, unions their discriminant, and
+  function pointers are marked as such. A pointer the contract doesn't
+  describe is a compile error at the `const`, naming the field path.
+- **Copy.** The comptime copier follows foreign pointers using those
+  descriptors. Shared targets are copied once, and pointers into the
+  middle of a block stay pointers into the copy. Function pointers are
+  recorded by symbol and relocated.
+- **Placement.** A baked foreign graph is emitted once into a writable
+  section and used in place. It is not cloned per evaluation.
+- **Ownership.** Baked objects are never released. A release or `close()`
+  on one fails with `Error`.
+- **Hashing.** A table keyed by object address stays valid when its keys
+  cache their hash; the key type implements `Hash` by returning the
+  cached value.
+- **Fixups.** State that can't survive baking (file descriptors, sockets,
+  caches, locks) is restored by the builtin trait
+
+  ```
+  trait Fixup {
+      func fixup(modify self: `T) -> nil fail: string
+  }
+  ```
+
+  A baked object whose type implements `Fixup` runs `fixup` once, before
+  its first use. If it fails, that use fails with the fixup's error and
+  the object stays unfixed, so a later use tries again.
+
 ---
 
 ## 5. Phases
@@ -410,6 +450,12 @@ declarations by then, so nothing else in package linking changes.
 | N6 | `binding export`: entry shims, symbol naming, generated header | A C program includes the generated header and calls an n00b implementation of the `kv` contract |
 | N7 | Late loading (`load dynamic`) | The resharp test passes with the library loaded through `open()`; a missing feature-gated symbol fails only when called |
 | N8 | Run-time `ffi` module: `load_spec`, `bind` returning a `Module` with a reflection entry built at run time, generic calls | A program loads `plugin.writ` at run time and calls into a plugin library, including a variadic call |
+
+The work runs in two phases. Phase 1 is S1, W0, W1 and N1–N6: binding at
+compile time and linking statically. It also makes `'ffi` modules
+callable from comptime code, and lets a C object graph built at comptime
+be baked into the program and used at run time (§4.11). Phase 2 is N7
+and N8: dynamic loading. Until Phase 2, `load dynamic` is rejected as not yet supported.
 
 N1 can run before S1, since it only links libwrit and has no binding
 content. Everything else waits for S1. W0 comes first after S1, and W1
