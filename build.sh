@@ -4,6 +4,9 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="${BUILD_DIR:-$ROOT/build}"
 LANTERN_BUILD_DIR="${LANTERN_BUILD_DIR:-$ROOT/../lantern/build}"
+WRIT_ROOT="${WRIT_ROOT:-$ROOT/../writ}"
+WRIT_PLATFORM="$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m)"
+WRIT_BUILD_DIR="${WRIT_BUILD_DIR:-$WRIT_ROOT/build-$WRIT_PLATFORM}"
 MESON_PKG_CONFIG_PATH=""
 
 if [ -z "${LLVM_CONFIG:-}" ] && [ "$(uname -s)" = Darwin ] \
@@ -34,6 +37,7 @@ Usage: ./build.sh [command] [args]
   test-full [opts]    compile, then run the full regression suite
   bench [opts]        compile, then run the benchmarks and gates
   tu <file.c>         recompile exactly one lantern source file
+  linux <command>     run any of these commands in the Linux container
   clean               remove the build directory
 
 This is the only supported path. It exists so nothing has to reach for
@@ -50,12 +54,13 @@ ensure_configured() {
     meson setup "$BUILD_DIR" "$ROOT"
 }
 
-prepare_lantern() {
+prepare_dependencies() {
     BUILD_DIR="$LANTERN_BUILD_DIR" \
         "$ROOT/../lantern/build.sh" compile || return 1
-    local lantern_pkg_path="$LANTERN_BUILD_DIR/meson-uninstalled"
+    BUILD_DIR="$WRIT_BUILD_DIR" "$WRIT_ROOT/build.sh" compile || return 1
     local -a pkg_paths
-    local -a unique_paths=("$lantern_pkg_path")
+    local -a unique_paths=("$LANTERN_BUILD_DIR/meson-uninstalled"
+                           "$WRIT_BUILD_DIR/meson-uninstalled")
     local pkg_path
     local existing
     local seen
@@ -85,14 +90,14 @@ prepare_lantern() {
 }
 
 do_configure() {
-    prepare_lantern || return 1
+    prepare_dependencies || return 1
     rm -rf "$BUILD_DIR"
     meson setup "$BUILD_DIR" "$ROOT" \
         -Dpkg_config_path="$MESON_PKG_CONFIG_PATH" "$@"
 }
 
 do_compile() {
-    prepare_lantern || return 1
+    prepare_dependencies || return 1
     ensure_configured || return 1
     meson compile -C "$BUILD_DIR" "$@"
 }
@@ -153,6 +158,34 @@ do_bench() {
     meson test -C "$BUILD_DIR" --benchmark "$@"
 }
 
+do_linux() {
+    local engine
+    engine="$(command -v podman || command -v docker)" || {
+        echo "no container engine" >&2
+        exit 1
+    }
+    local workspace
+    workspace="$(cd "$ROOT/.." && pwd)"
+    local writ_lantern="${LANTERN_ROOT:-$HOME/lantern-writ}"
+    local writ_resharp="${RESHARP_ROOT:-$HOME/resharp-writ}"
+    "$engine" build -q --platform linux/amd64 -t n00bb-linux \
+        -f "$ROOT/tools/linux.Dockerfile" "$ROOT/tools" >/dev/null || exit 1
+    "$engine" run --rm --platform linux/amd64 \
+        -v "$ROOT:/work/n00bb" \
+        -v "$workspace/lantern:/work/lantern" \
+        -v "$WRIT_ROOT:/work/writ" \
+        -v "$writ_lantern:/work/lantern-writ:ro" \
+        -v "$writ_resharp:/work/resharp-writ:ro" \
+        -e BUILD_DIR=/work/n00bb/build-linux-x86_64 \
+        -e LANTERN_BUILD_DIR=/work/lantern/build-linux-x86_64 \
+        -e WRIT_ROOT=/work/writ \
+        -e LANTERN_ROOT=/work/lantern-writ \
+        -e RESHARP_ROOT=/work/resharp-writ \
+        -e LANTERN_VERIFIED="$(tr -d '[:space:]' < "$WRIT_ROOT/deps/LANTERN_REVISION")" \
+        -e RESHARP_VERIFIED="$(tr -d '[:space:]' < "$WRIT_ROOT/deps/RESHARP_REVISION")" \
+        -w /work/n00bb n00bb-linux ./build.sh "$@"
+}
+
 case "${1:-}" in
     "")
         do_compile
@@ -176,6 +209,11 @@ case "${1:-}" in
     bench)
         shift
         do_bench "$@"
+        ;;
+    linux)
+        shift
+        [ $# -ge 1 ] || { usage; exit 1; }
+        do_linux "$@"
         ;;
     tu)
         shift
