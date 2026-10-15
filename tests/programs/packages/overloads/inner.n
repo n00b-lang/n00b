@@ -38,3 +38,8 @@ public type Opts {
     public a: i64?
     public b: i64?
 }
+
+public func find_first(raw: uint) -> Ref[First]? {
+    var found: First = (raw = raw)
+    return ref found
+}

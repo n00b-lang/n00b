@@ -19,3 +19,10 @@ comptime {} else {
     require opts.a != nil
     require opts.b == nil
 }
+
+comptime {} else {
+    let found = overloads.find_first(5)
+    if found != nil {
+        require found.get().raw == 5
+    }
+}

@@ -1145,6 +1145,20 @@ n00bb_select_call_overload(parse_grammar_t *grammar, n00bb_tu_state_t *state,
     return symbol;
 }
 
+static bool
+function_has_overloads(parse_sym_entry_t *symbol)
+{
+    parse_sym_entry_t *head = symbol->scope
+        ? parse_symtab_lookup_in(symbol->scope, symbol->name) : nullptr;
+    size_t count = 0;
+    for (parse_sym_entry_t *candidate = head ? head : symbol; candidate
+         && candidate->scope == symbol->scope
+         && core_string_eq(candidate->name, symbol->name);
+         candidate = candidate->shadowed)
+        count += candidate->kind == PARSE_SYM_FUNCTION;
+    return count > 1;
+}
+
 static parse_sym_entry_t *
 module_call_exact_arity(parse_grammar_t *grammar, n00bb_tu_state_t *state,
                         parse_tree_t *member, parse_sym_entry_t *symbol)
@@ -1294,6 +1308,24 @@ resolve_module_member_site(parse_grammar_t *grammar,
         n00bb_tu_state_t *state = tu_state(unit);
         th_type *use_type = core_tree_node_value(node).type;
         bool direct_call = module_member_is_call(grammar, node);
+        if (direct_call && symbol->kind == PARSE_SYM_FUNCTION && use_type
+            && symbol->type && state && state->types
+            && !state->semantic_annotation_complete
+            && th_is_closed(state->types, symbol->type)
+            && !function_has_overloads(symbol)) {
+            th_type *instance = th_resolve(th_type_clone(state->types,
+                                                         symbol->type));
+            th_type *use = th_resolve(use_type);
+            bool shapes = instance && use
+                && th_kind_of(instance) == TH_FUNCTION
+                && th_kind_of(use) == TH_FUNCTION
+                && th_func_nparams(instance) == th_func_nparams(use)
+                && th_unify_probe(state->types, th_func_ret(use),
+                                  th_func_ret(instance));
+            if (shapes)
+                th_unify_in_place(state->types, th_func_ret(use),
+                                  th_func_ret(instance));
+        }
         if (!direct_call && symbol->type && use_type
             && state && state->types) {
             bool context_constructor = context_symbol(grammar, symbol);
