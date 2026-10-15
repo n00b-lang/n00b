@@ -1,8 +1,11 @@
 var static_value: int = 0
+var second_value: int = 0
 comptime {
     static_value = 9
+    second_value = 13
 }
 
 func run_test() {
     require static_value == 9
+    require second_value == 13
 }
