@@ -202,7 +202,7 @@ test(
 
 foreach name : ['unknown_type', 'not_pure', 'bad_phase', 'out_unbounded', 'syntax', 'duplicate', 'reinterpret',
                 'view_domain', 'return_span', 'record_none', 'userdata', 'keywords',
-                'policy']
+                'policy', 'events']
     test(
         'check-' + name,
         python,

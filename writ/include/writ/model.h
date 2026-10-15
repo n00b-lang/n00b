@@ -58,6 +58,20 @@ enum {
     WRIT_SPAN_UNKNOWN,
 };
 
+typedef uint32_t writ_event_kind_t;
+enum {
+    WRIT_EVENT_CALL,
+    WRIT_EVENT_RELEASE,
+    WRIT_EVENT_ANY,
+};
+
+typedef uint32_t writ_event_arg_kind_t;
+enum {
+    WRIT_EVENT_ARG_SLOT,
+    WRIT_EVENT_ARG_RESULT,
+    WRIT_EVENT_ARG_EXPR,
+};
+
 typedef uint32_t writ_on_state_t;
 enum {
     WRIT_ON_OWN,
@@ -233,6 +247,8 @@ enum {
 typedef struct writ_type_view writ_type_view_t;
 typedef struct writ_const_view writ_const_view_t;
 typedef struct writ_slot_view writ_slot_view_t;
+typedef struct writ_event_arg_view writ_event_arg_view_t;
+typedef struct writ_event_view writ_event_view_t;
 typedef struct writ_policy_arm_view writ_policy_arm_view_t;
 typedef struct writ_outcome_view writ_outcome_view_t;
 typedef struct writ_fn_view writ_fn_view_t;
@@ -300,6 +316,26 @@ struct writ_slot_view {
     size_t policy_arms_count;
     const writ_policy_arm_view_t *policy_arms;
     writ_str_t span_by;
+    size_t span_events_count;
+    const writ_event_view_t *span_events;
+};
+
+struct writ_event_arg_view {
+    size_t struct_size;
+    writ_event_arg_kind_t kind;
+    writ_str_t name;
+    uint32_t expr;
+};
+
+struct writ_event_view {
+    size_t struct_size;
+    writ_event_kind_t kind;
+    writ_str_t function;
+    bool next;
+    bool on_thread;
+    size_t args_count;
+    const writ_event_arg_view_t *args;
+    writ_span_t declared_at;
 };
 
 struct writ_policy_arm_view {
@@ -315,6 +351,8 @@ struct writ_policy_arm_view {
     writ_str_t release;
     bool own;
     writ_span_t declared_at;
+    size_t span_events_count;
+    const writ_event_view_t *span_events;
 };
 
 struct writ_outcome_view {

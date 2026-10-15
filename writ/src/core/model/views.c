@@ -58,9 +58,46 @@ constant_value(const writ_model_t *model, writ_sym_t name)
 }
 
 static void
+build_events(writ_model_t *model)
+{
+    writ_session_t *session = model->session;
+    model->event_arg_views = ALLOC_VIEWS(model, writ_event_arg_view_t, model->event_args.len);
+    for (size_t i = 0; i < model->event_args.len; i++) {
+        const writ_event_arg_rec_t *record = &model->event_args.data[i];
+        model->event_arg_views[i] = (writ_event_arg_view_t){
+            .struct_size = sizeof(writ_event_arg_view_t),
+            .kind        = record->kind,
+            .name        = sym(model, record->name),
+            .expr        = record->expr,
+        };
+    }
+    model->event_views = ALLOC_VIEWS(model, writ_event_view_t, model->events.len);
+    for (size_t i = 0; i < model->events.len; i++) {
+        const writ_event_rec_t *record = &model->events.data[i];
+        model->event_views[i] = (writ_event_view_t){
+            .struct_size = sizeof(writ_event_view_t),
+            .kind        = record->kind,
+            .function    = sym(model, record->function),
+            .next        = record->next,
+            .on_thread   = record->on_thread,
+            .args_count  = record->arg_count,
+            .args        = record->arg_count ? &model->event_arg_views[record->first_arg] : nullptr,
+            .declared_at = writ_loc_span(session, record->loc),
+        };
+    }
+}
+
+static const writ_event_view_t *
+event_views_at(const writ_model_t *model, uint32_t first, uint32_t count)
+{
+    return count ? &model->event_views[first] : nullptr;
+}
+
+static void
 build_arms(writ_model_t *model)
 {
     writ_session_t *session = model->session;
+    build_events(model);
     model->arm_views = ALLOC_VIEWS(model, writ_policy_arm_view_t, model->policy_arms.len);
     for (size_t i = 0; i < model->policy_arms.len; i++) {
         const writ_policy_arm_rec_t *record = &model->policy_arms.data[i];
@@ -77,6 +114,8 @@ build_arms(writ_model_t *model)
             .release     = sym(model, record->release),
             .own         = record->own,
             .declared_at = writ_loc_span(session, record->loc),
+            .span_events_count = record->event_count,
+            .span_events       = event_views_at(model, record->first_event, record->event_count),
         };
     }
 }
@@ -117,6 +156,8 @@ build_slots(writ_model_t *model)
             .policy_arms_count = record->arm_count,
             .policy_arms       = record->arm_count ? &model->arm_views[record->first_arm] : nullptr,
             .span_by           = sym(model, record->span_by),
+            .span_events_count = record->event_count,
+            .span_events       = event_views_at(model, record->first_event, record->event_count),
         };
     }
 }

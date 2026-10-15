@@ -70,6 +70,8 @@ type writ_type_kind_t = u32
 type writ_mode_t = u32
 type writ_extent_kind_t = u32
 type writ_span_kind_t = u32
+type writ_event_kind_t = u32
+type writ_event_arg_kind_t = u32
 type writ_on_state_t = u32
 type writ_fn_kind_t = u32
 type writ_sizing_kind_t = u32
@@ -109,7 +111,23 @@ struct writ_const_view_t @size(88) @align(8) {
     text: writ_str_t @40
     declared_at: writ_span_t @56
 }
-struct writ_policy_arm_view_t @size(144) @align(8) {
+struct writ_event_arg_view_t @size(40) @align(8) {
+    struct_size: usize @0
+    kind: writ_event_arg_kind_t @8
+    name: writ_str_t @16
+    expr: u32 @32
+}
+struct writ_event_view_t @size(88) @align(8) {
+    struct_size: usize @0
+    kind: writ_event_kind_t @8
+    function: writ_str_t @16
+    next: bool @32
+    on_thread: bool @33
+    args_count: usize @40
+    args: ?writ_event_arg_view_t @48
+    declared_at: writ_span_t @56
+}
+struct writ_policy_arm_view_t @size(160) @align(8) {
     struct_size: usize @0
     constant: writ_str_t @8
     is_else: bool @24
@@ -122,8 +140,10 @@ struct writ_policy_arm_view_t @size(144) @align(8) {
     release: writ_str_t @88
     own: bool @104
     declared_at: writ_span_t @112
+    span_events_count: usize @144
+    span_events: ?writ_event_view_t @152
 }
-struct writ_slot_view_t @size(248) @align(8) {
+struct writ_slot_view_t @size(264) @align(8) {
     struct_size: usize @0
     name: writ_str_t @8
     type: ?writ_type_view_t @24
@@ -151,6 +171,8 @@ struct writ_slot_view_t @size(248) @align(8) {
     policy_arms_count: usize @216
     policy_arms: ?writ_policy_arm_view_t @224
     span_by: writ_str_t @232
+    span_events_count: usize @248
+    span_events: ?writ_event_view_t @256
 }
 struct writ_outcome_view_t @size(40) @align(8) {
     struct_size: usize @0
@@ -421,6 +443,12 @@ const WRIT_SPAN_WITH: c_int = 4
 const WRIT_SPAN_UNTIL: c_int = 5
 const WRIT_SPAN_ONCE: c_int = 6
 const WRIT_SPAN_UNKNOWN: c_int = 7
+const WRIT_EVENT_CALL: c_int = 0
+const WRIT_EVENT_RELEASE: c_int = 1
+const WRIT_EVENT_ANY: c_int = 2
+const WRIT_EVENT_ARG_SLOT: c_int = 0
+const WRIT_EVENT_ARG_RESULT: c_int = 1
+const WRIT_EVENT_ARG_EXPR: c_int = 2
 const WRIT_ON_OWN: c_int = 0
 const WRIT_ON_UNSET: c_int = 1
 const WRIT_ON_PARTIAL: c_int = 2

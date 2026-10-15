@@ -1,0 +1,8 @@
+error[E0223]: an event calls a function of the contract with this function's parameters or `ret`, or is `release` or `any` of one handle
+  --> tests/check/events.writ:14:45
+error[E0223]: an event calls a function of the contract with this function's parameters or `ret`, or is `release` or `any` of one handle
+  --> tests/check/events.writ:16:46
+error[E0223]: an event calls a function of the contract with this function's parameters or `ret`, or is `release` or `any` of one handle
+  --> tests/check/events.writ:18:51
+error[E0223]: an event calls a function of the contract with this function's parameters or `ret`, or is `release` or `any` of one handle
+  --> tests/check/events.writ:20:43

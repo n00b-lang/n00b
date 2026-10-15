@@ -128,8 +128,26 @@ typedef struct {
     uint32_t           first_arm;
     uint32_t           arm_count;
     writ_sym_t         span_by;
+    uint32_t           first_event;
+    uint32_t           event_count;
     writ_loc_t         loc;
 } writ_slot_rec_t;
+
+typedef struct {
+    writ_event_kind_t kind;
+    writ_sym_t        function;
+    bool              next;
+    bool              on_thread;
+    uint32_t          first_arg;
+    uint32_t          arg_count;
+    writ_loc_t        loc;
+} writ_event_rec_t;
+
+typedef struct {
+    writ_event_arg_kind_t kind;
+    writ_sym_t            name;
+    uint32_t              expr;
+} writ_event_arg_rec_t;
 
 typedef struct {
     writ_sym_t       constant;
@@ -143,6 +161,8 @@ typedef struct {
     writ_sym_t       span_with;
     writ_sym_t       release;
     bool             own;
+    uint32_t         first_event;
+    uint32_t         event_count;
     writ_loc_t       loc;
 } writ_policy_arm_rec_t;
 
@@ -281,6 +301,8 @@ core_list_decl(writ_ref_t);
 core_list_decl(writ_const_rec_t);
 core_list_decl(writ_slot_rec_t);
 core_list_decl(writ_policy_arm_rec_t);
+core_list_decl(writ_event_rec_t);
+core_list_decl(writ_event_arg_rec_t);
 core_list_decl(writ_outcome_rec_t);
 core_list_decl(writ_on_rec_t);
 core_list_decl(writ_assign_rec_t);
@@ -391,6 +413,8 @@ struct writ_model {
     core_list_t(writ_const_rec_t)      consts;
     core_list_t(writ_slot_rec_t)       slots;
     core_list_t(writ_policy_arm_rec_t) policy_arms;
+    core_list_t(writ_event_rec_t)      events;
+    core_list_t(writ_event_arg_rec_t)  event_args;
     core_list_t(writ_outcome_rec_t)    outcomes;
     core_list_t(writ_on_rec_t)         ons;
     core_list_t(writ_assign_rec_t)     assigns;
@@ -411,6 +435,8 @@ struct writ_model {
     writ_const_view_t                 *const_views;
     writ_slot_view_t                  *slot_views;
     writ_policy_arm_view_t            *arm_views;
+    writ_event_view_t                 *event_views;
+    writ_event_arg_view_t             *event_arg_views;
     writ_fn_view_t                    *fn_views;
     writ_record_view_t                *record_views;
     writ_handle_view_t                *handle_views;

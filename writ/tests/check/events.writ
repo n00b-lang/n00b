@@ -1,0 +1,20 @@
+library ev
+
+opaque db_state
+handle Db = *db_state release db_close
+
+callback Hook = fn(context: *void userdata, value: c_int) -> c_int
+
+fn db_close(db: consume ?Db)
+
+fn hook_unsubscribe(db: Db, id: u64)
+
+fn subscribe(db: Db, hook: keep Hook until hook_unsubscribe(db, ret), release(db), next any(db) on thread, context: ?void userdata hook) -> u64
+
+fn unknown_fn(db: Db, hook: keep Hook until hook_gone(db, ret), context: ?void userdata hook) -> u64
+
+fn unknown_arg(db: Db, hook: keep Hook until hook_unsubscribe(dbx, ret), context: ?void userdata hook) -> u64
+
+fn release_scalar(n: c_int, hook: keep Hook until release(n), context: ?void userdata hook) -> u64
+
+fn too_many(db: Db, hook: keep Hook until hook_unsubscribe(db, ret, db), context: ?void userdata hook) -> u64

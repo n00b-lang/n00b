@@ -507,6 +507,75 @@ policy_arms(writ_model_t *model)
     }
 }
 
+static const writ_slot_rec_t *
+event_arg_slot(const writ_model_t *model, const writ_fn_rec_t *fn, const writ_event_arg_rec_t *arg)
+{
+    if (arg->kind == WRIT_EVENT_ARG_RESULT) {
+        return fn->has_result ? writ_fn_slot(model, fn, fn->slot_count) : nullptr;
+    }
+    for (uint32_t s = 0; arg->kind == WRIT_EVENT_ARG_SLOT && s < fn->slot_count; s++) {
+        if (writ_fn_slot(model, fn, s)->name == arg->name) {
+            return writ_fn_slot(model, fn, s);
+        }
+    }
+    return nullptr;
+}
+
+static const writ_fn_rec_t *
+event_target(const writ_model_t *model, writ_sym_t name)
+{
+    EACH_FN(model, f, fn) {
+        if (fn->kind == WRIT_FN_FUNCTION && fn->name == name) {
+            return fn;
+        }
+    }
+    return nullptr;
+}
+
+static bool
+event_holds(const writ_model_t *model, const writ_fn_rec_t *fn, const writ_event_rec_t *event)
+{
+    for (uint32_t a = 0; a < event->arg_count; a++) {
+        const writ_event_arg_rec_t *arg = &model->event_args.data[event->first_arg + a];
+        if (arg->kind != WRIT_EVENT_ARG_EXPR && !event_arg_slot(model, fn, arg)) {
+            return false;
+        }
+    }
+    if (event->kind != WRIT_EVENT_CALL) {
+        const writ_slot_rec_t *subject = event->arg_count == 1
+            ? event_arg_slot(model, fn, &model->event_args.data[event->first_arg]) : nullptr;
+        return subject && writ_type(model, subject->type)->key.kind == WRIT_TYPE_HANDLE;
+    }
+    const writ_fn_rec_t *target = event_target(model, event->function);
+    return target && event->arg_count <= target->slot_count;
+}
+
+static void
+check_events(writ_model_t *model, const writ_fn_rec_t *fn, uint32_t first, uint32_t count)
+{
+    for (uint32_t e = 0; e < count; e++) {
+        const writ_event_rec_t *event = &model->events.data[first + e];
+        if (!event_holds(model, fn, event)) {
+            writ_report(model->session, WRIT_D_EVENT, event->loc, nullptr);
+        }
+    }
+}
+
+static void
+events_resolve(writ_model_t *model)
+{
+    EACH_FN(model, f, fn) {
+        for (uint32_t s = 0; s < fn->slot_count + fn->has_result; s++) {
+            const writ_slot_rec_t *slot = writ_fn_slot(model, fn, s);
+            check_events(model, fn, slot->first_event, slot->event_count);
+            for (uint32_t a = 0; a < slot->arm_count; a++) {
+                const writ_policy_arm_rec_t *arm = &model->policy_arms.data[slot->first_arm + a];
+                check_events(model, fn, arm->first_event, arm->event_count);
+            }
+        }
+    }
+}
+
 static void (*const checks[])(writ_model_t *model) = {
 #define WRIT_CHECK(name, section) name,
 #include "checks.def"

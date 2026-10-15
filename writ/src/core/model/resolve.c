@@ -22,6 +22,8 @@ model_release(void *object)
     core_list_free(model->consts);
     core_list_free(model->slots);
     core_list_free(model->policy_arms);
+    core_list_free(model->events);
+    core_list_free(model->event_args);
     core_list_free(model->outcomes);
     core_list_free(model->ons);
     core_list_free(model->assigns);
@@ -57,6 +59,8 @@ model_new(writ_unit_t *unit, const writ_platform_t *platform)
         .consts        = core_list_new(writ_const_rec_t),
         .slots         = core_list_new(writ_slot_rec_t),
         .policy_arms   = core_list_new(writ_policy_arm_rec_t),
+        .events        = core_list_new(writ_event_rec_t),
+        .event_args    = core_list_new(writ_event_arg_rec_t),
         .outcomes      = core_list_new(writ_outcome_rec_t),
         .ons           = core_list_new(writ_on_rec_t),
         .assigns       = core_list_new(writ_assign_rec_t),
@@ -741,6 +745,63 @@ take_span(writ_model_t *model, uint32_t id, writ_span_kind_t *span, uint32_t *sp
     }
 }
 
+static writ_event_arg_rec_t
+resolve_event_arg(writ_model_t *model, uint32_t id)
+{
+    const writ_node_t *node = node_at(model, id);
+    if (node->kind != WRIT_N_EXPR_NAME) {
+        return (writ_event_arg_rec_t){.kind = WRIT_EVENT_ARG_EXPR, .expr = id};
+    }
+    bool result = writ_str_eq(writ_sym_str(model->session, node->name), writ_cstr("ret"));
+    return (writ_event_arg_rec_t){
+        .kind = result ? WRIT_EVENT_ARG_RESULT : WRIT_EVENT_ARG_SLOT,
+        .name = node->name,
+        .expr = id,
+    };
+}
+
+static writ_event_rec_t
+resolve_event(writ_model_t *model, uint32_t id)
+{
+    const writ_node_t *node = node_at(model, id);
+    writ_event_rec_t event = {.kind = WRIT_EVENT_CALL, .first_arg = (uint32_t)model->event_args.len,
+                              .loc = node->loc};
+    for (uint32_t i = 0; i < node->child_count; i++) {
+        uint32_t part = child(model, id, i);
+        const writ_node_t *piece = node_at(model, part);
+        if (piece->kind == WRIT_N_NEXT) {
+            event.next = true;
+        } else if (piece->kind == WRIT_N_ON_THREAD) {
+            event.on_thread = true;
+        } else if (piece->kind == WRIT_N_REF && !event.function) {
+            writ_str_t name = writ_sym_str(model->session, piece->name);
+            event.kind = writ_str_eq(name, writ_cstr("release")) ? WRIT_EVENT_RELEASE
+                       : writ_str_eq(name, writ_cstr("any"))     ? WRIT_EVENT_ANY
+                                                                  : WRIT_EVENT_CALL;
+            event.function = piece->name;
+        } else {
+            core_list_push(model->event_args, resolve_event_arg(model, part));
+            event.arg_count++;
+        }
+    }
+    return event;
+}
+
+static void
+resolve_events(writ_model_t *model, uint32_t span_node, uint32_t *first_event, uint32_t *event_count)
+{
+    const writ_node_t *node = node_at(model, span_node);
+    *first_event = (uint32_t)model->events.len;
+    *event_count = 0;
+    for (uint32_t i = 0; i < node->child_count; i++) {
+        uint32_t part = child(model, span_node, i);
+        if (node_at(model, part)->kind == WRIT_N_EVENT) {
+            core_list_push(model->events, resolve_event(model, part));
+            (*event_count)++;
+        }
+    }
+}
+
 static writ_mode_t
 mode_of(const writ_model_t *model, writ_sym_t lexeme)
 {
@@ -785,6 +846,9 @@ resolve_policy_arm(writ_model_t *model, uint32_t id)
         case WRIT_N_SPAN_ONCE:
         case WRIT_N_SPAN_UNKNOWN:
             take_span(model, part, &arm.span, &arm.span_node, &arm.span_with);
+            if (arm.span == WRIT_SPAN_UNTIL) {
+                resolve_events(model, part, &arm.first_event, &arm.event_count);
+            }
             break;
         default:
             unsupported(model, part, "this policy arm effect");
@@ -849,6 +913,9 @@ resolve_slot(resolver_t *r, uint32_t id, uint32_t owner)
         case WRIT_N_SPAN_ONCE:
         case WRIT_N_SPAN_UNKNOWN:
             take_span(model, attr, &slot.span, &slot.span_node, &slot.span_with);
+            if (slot.span == WRIT_SPAN_UNTIL) {
+                resolve_events(model, attr, &slot.first_event, &slot.event_count);
+            }
             break;
         case WRIT_N_SPAN_BY:
             slot.span_by = node_at(model, child(model, attr, 0))->name;
