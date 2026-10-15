@@ -553,6 +553,19 @@ void zlib_take_bytes(zlib_bytes_t *bytes, void *out) {
     zlib_bytes_free(bytes);
 }
 
+uint64_t zlib_cstr_length(uint64_t address) {
+    return address ? strlen((const char *)(uintptr_t)address) : 0;
+}
+
+void zlib_cstr_copy(uint64_t address, void *out) {
+    size_t length = 0;
+    uint8_t *data = n00b_ffi_borrow(out, &length, 1);
+    if (data && address && length) {
+        memcpy(data, (const void *)(uintptr_t)address, length);
+    }
+    n00b_ffi_release(out);
+}
+
 int32_t zlib_n00b_zlibVersion(void *result) {
     int32_t writ_n00b_value = zlib_zlibVersion((const char **)result);
     return writ_n00b_value;
@@ -740,6 +753,12 @@ func __ffi_take_bytes(bytes: Ref[Ffi_Bytes]) -> Array[u8] {
     return copied
 }
 
+func __ffi_copy_cstr(address: uint, text: Ref[string]) -> bool {
+    var bytes: Array[u8] = new[Array[u8]](cast[int]__ffi_cstr_length(address))
+    __ffi_cstr_copy(address, ref bytes)
+    return __string_from_utf8(bytes, text)
+}
+
 func version() -> string fail: Error {
     var result: uint = 0
     let outcome = __zlibVersion(ref result)
@@ -747,7 +766,12 @@ func version() -> string fail: Error {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "zlibVersion")
         fail failure
     }
-    return __ffi_copy_cstr(result)
+    var result_text: string = ""
+    if !__ffi_copy_cstr(result, ref result_text) {
+        let failure: Error = (code = -3, text = "invalid UTF-8 text", fn = "zlibVersion")
+        fail failure
+    }
+    return result_text
 }
 
 enum Deflate_Outcome {
@@ -960,18 +984,18 @@ func inflate_init(modify strm: Stream) fail: Error {
 57	contracts/zlib/aarch64-apple-darwin.writ:59:1	Z_UNKNOWN
 58	contracts/zlib/aarch64-apple-darwin.writ:60:1	Z_DEFLATED
 59	contracts/zlib/aarch64-apple-darwin.writ:61:1	Z_NULL
-68	contracts/zlib/aarch64-apple-darwin.writ:63:1	zlibVersion
-83	contracts/zlib/aarch64-apple-darwin.writ:64:1	deflate
-105	contracts/zlib/aarch64-apple-darwin.writ:65:1	deflateEnd
-123	contracts/zlib/aarch64-apple-darwin.writ:66:1	inflate
-154	contracts/zlib/aarch64-apple-darwin.writ:67:1	inflateEnd
-167	contracts/zlib/aarch64-apple-darwin.writ:68:1	compress2
-183	contracts/zlib/aarch64-apple-darwin.writ:69:1	compressBound
-188	contracts/zlib/aarch64-apple-darwin.writ:70:1	uncompress
-204	contracts/zlib/aarch64-apple-darwin.writ:71:1	adler32
-215	contracts/zlib/aarch64-apple-darwin.writ:72:1	crc32
-226	contracts/zlib/aarch64-apple-darwin.writ:75:1	deflateInit
-239	contracts/zlib/aarch64-apple-darwin.writ:77:1	inflateInit
+74	contracts/zlib/aarch64-apple-darwin.writ:63:1	zlibVersion
+94	contracts/zlib/aarch64-apple-darwin.writ:64:1	deflate
+116	contracts/zlib/aarch64-apple-darwin.writ:65:1	deflateEnd
+134	contracts/zlib/aarch64-apple-darwin.writ:66:1	inflate
+165	contracts/zlib/aarch64-apple-darwin.writ:67:1	inflateEnd
+178	contracts/zlib/aarch64-apple-darwin.writ:68:1	compress2
+194	contracts/zlib/aarch64-apple-darwin.writ:69:1	compressBound
+199	contracts/zlib/aarch64-apple-darwin.writ:70:1	uncompress
+215	contracts/zlib/aarch64-apple-darwin.writ:71:1	adler32
+226	contracts/zlib/aarch64-apple-darwin.writ:72:1	crc32
+237	contracts/zlib/aarch64-apple-darwin.writ:75:1	deflateInit
+250	contracts/zlib/aarch64-apple-darwin.writ:77:1	inflateInit
 library z
 load static
 extern __zlibVersion zlib_n00b_zlibVersion (ref[uint]) -> i32 fail: nil
@@ -987,3 +1011,5 @@ extern __crc32 zlib_n00b_crc32 (uint, ref[array[u8]], ref[uint]) -> i32 fail: ni
 extern __deflateInit zlib_n00b_deflateInit (ref[Stream], i32, ref[i32]) -> i32 fail: nil
 extern __inflateInit zlib_n00b_inflateInit (ref[Stream], ref[i32]) -> i32 fail: nil
 extern __ffi_bytes_take zlib_take_bytes (ref[builtin.ffi.Ffi_Bytes], ref[array[u8]]) -> nil fail: nil
+extern __ffi_cstr_length zlib_cstr_length (uint) -> uint fail: nil
+extern __ffi_cstr_copy zlib_cstr_copy (uint, ref[array[u8]]) -> nil fail: nil
