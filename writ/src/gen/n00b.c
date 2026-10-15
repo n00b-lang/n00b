@@ -1101,22 +1101,96 @@ release_plan(const n00b_t *g, const writ_handle_view_t *handle)
     return nullptr;
 }
 
+static const writ_slot_view_t *
+with_source_slot(const writ_fn_view_t *fn)
+{
+    if (!fn->result || fn->result->span != WRIT_SPAN_WITH || !fn->result->span_with.length || !fn->result->type
+        || fn->result->type->kind != WRIT_TYPE_HANDLE) {
+        return nullptr;
+    }
+    for (size_t s = 0; s < fn->slots_count; s++) {
+        const writ_slot_view_t *slot = &fn->slots[s];
+        if (writ_str_eq(slot->name, fn->result->span_with) && slot->type && slot->type->kind == WRIT_TYPE_HANDLE) {
+            return slot;
+        }
+    }
+    return nullptr;
+}
+
+static writ_str_t
+keep_field(const n00b_t *g, writ_str_t source_type)
+{
+    return writ_str_format(g->session, "keep_%.*s", S(writ_name_case(g->session, source_type, WRIT_CASE_SNAKE)));
+}
+
+static writ_str_t
+with_constructor(const n00b_t *g, writ_str_t type, writ_str_t source_type)
+{
+    return writ_str_format(g->session, "%.*s_with_%.*s", S(cell_constructor(g, type)),
+                           S(writ_name_case(g->session, source_type, WRIT_CASE_SNAKE)));
+}
+
+static size_t
+handle_sources(const n00b_t *g, const writ_handle_view_t *handle, writ_str_t *out)
+{
+    size_t count = 0;
+    for (size_t i = 0; i < writ_model_fn_count(g->model); i++) {
+        const writ_fn_view_t *fn = writ_model_fn_at(g->model, i);
+        const writ_slot_view_t *source = with_source_slot(fn);
+        if (!writ_binding_fn(g->b, i).bound || !source || !writ_str_eq(fn->result->type->name, handle->name)) {
+            continue;
+        }
+        writ_str_t type = writ_binding_type(g->b, source->type->name);
+        bool seen = false;
+        for (size_t s = 0; s < count && !seen; s++) {
+            seen = writ_str_eq(out[s], type);
+        }
+        if (!seen) {
+            out[count++] = type;
+        }
+    }
+    return count;
+}
+
+static void
+emit_cell_constructor(writ_emit_t *emit, writ_str_t type, writ_str_t name, writ_str_t keep_param,
+                      const writ_str_t *fields, size_t count, size_t kept)
+{
+    writ_emit_open(emit, "func %.*s(raw: uint%.*s) -> %.*s", S(name), S(keep_param), S(type));
+    writ_emit_text(emit, "var cell: %.*s_Cell = (raw = raw", S(type));
+    for (size_t f = 0; f < count; f++) {
+        writ_emit_text(emit, ", %.*s = %s", S(fields[f]), f == kept ? "keep" : "nil");
+    }
+    writ_emit_line(emit, ")");
+    writ_emit_line(emit, "return ref cell");
+    writ_emit_close(emit, nullptr);
+}
+
 static void
 emit_handle_type(const n00b_t *g, writ_emit_t *emit, const writ_handle_view_t *handle)
 {
     writ_str_t type = writ_binding_type(g->b, handle->name);
+    writ_str_t *sources = writ_alloc(g->session, sizeof(writ_str_t) * (writ_model_fn_count(g->model) + 1));
+    size_t source_count = handle_sources(g, handle, sources);
+    writ_str_t *fields = writ_alloc(g->session, sizeof(writ_str_t) * (source_count + 1));
     writ_emit_line(emit, "");
     mark(g, emit, handle->declared_at, handle->name);
     writ_emit_open(emit, "type %.*s_Cell", S(type));
     writ_emit_line(emit, "public raw: uint");
+    for (size_t s = 0; s < source_count; s++) {
+        fields[s] = keep_field(g, sources[s]);
+        writ_emit_line(emit, "public %.*s: %.*s?", S(fields[s]), S(sources[s]));
+    }
     writ_emit_close(emit, nullptr);
     writ_emit_line(emit, "");
     writ_emit_line(emit, "alias %.*s = Ref[%.*s_Cell]", S(type), S(type));
     writ_emit_line(emit, "");
-    writ_emit_open(emit, "func %.*s(raw: uint) -> %.*s", S(cell_constructor(g, type)), S(type));
-    writ_emit_line(emit, "var cell: %.*s_Cell = (raw = raw)", S(type));
-    writ_emit_line(emit, "return ref cell");
-    writ_emit_close(emit, nullptr);
+    emit_cell_constructor(emit, type, cell_constructor(g, type), writ_cstr(""), fields, source_count, source_count);
+    for (size_t s = 0; s < source_count; s++) {
+        writ_emit_line(emit, "");
+        emit_cell_constructor(emit, type, with_constructor(g, type, sources[s]),
+                              writ_str_format(g->session, ", keep: %.*s", S(sources[s])), fields, source_count, s);
+    }
     const writ_plan_view_t *release = release_plan(g, handle);
     if (!release) {
         return;
@@ -1429,6 +1503,24 @@ detail_text(const wrapper_t *w, uint32_t outcome, bool text)
 }
 
 static writ_str_t
+construct_handle(const wrapper_t *w, uint32_t index, writ_str_t raw)
+{
+    const writ_plan_item_view_t *item = &w->plan->items[index];
+    writ_str_t type = item_type(w->g, w->fn, w->plan, index);
+    const writ_slot_view_t *source = with_source_slot(w->plan->fn);
+    if (source && item->role == WRIT_ROLE_RESULT) {
+        for (uint32_t i = 0; i < w->plan->items_count; i++) {
+            if (writ_str_eq(w->plan->items[i].name, source->name) && w->plan->items[i].role == WRIT_ROLE_INPUT) {
+                writ_str_t source_type = writ_binding_type(w->g->b, source->type->name);
+                return writ_str_format(w->g->session, "%.*s(%.*s, %.*s)", S(with_constructor(w->g, type, source_type)),
+                                       S(raw), S(local_name(w, i)));
+            }
+        }
+    }
+    return writ_str_format(w->g->session, "%.*s(%.*s)", S(cell_constructor(w->g, type)), S(raw));
+}
+
+static writ_str_t
 lifted(const wrapper_t *w, const shim_param_t *param)
 {
     const writ_plan_item_view_t *item = &w->plan->items[param->item];
@@ -1440,8 +1532,7 @@ lifted(const wrapper_t *w, const shim_param_t *param)
                                S(name));
     }
     if (item->shape == WRIT_SHAPE_HANDLE || (item->type && item->type->kind == WRIT_TYPE_HANDLE)) {
-        return writ_str_format(session, "%.*s(%.*s)",
-                               S(cell_constructor(w->g, item_type(w->g, w->fn, w->plan, param->item))), S(name));
+        return construct_handle(w, param->item, name);
     }
     if (item->shape == WRIT_SHAPE_TEXT) {
         return writ_str_format(session, "%.*s_text", S(name));
@@ -1896,7 +1987,7 @@ emit_wrapper(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view
         emit_text_check(&w, emit, writ_cstr("result"), false);
         writ_emit_line(emit, "return result_text");
     } else if (!can_fail(&w) && out_count == 1 && is_handle(&plan->items[outs[0]])) {
-        writ_emit_line(emit, "return %.*s(result)", S(cell_constructor(g, item_type(g, fn, plan, outs[0]))));
+        writ_emit_line(emit, "return %.*s", S(construct_handle(&w, outs[0], writ_cstr("result"))));
     } else if (!can_fail(&w) && out_count) {
         writ_emit_line(emit, "return result");
     } else if (out_count == 1) {
