@@ -33,7 +33,8 @@ if (ulimit -c 0; "$tmp/overflow" >"$tmp/run.out" 2>"$tmp/run.err") \
     echo 'out-of-range dynamic shift count did not trap' >&2
     exit 1
 fi
-if test -s "$tmp/run.out" || test "$(cat "$tmp/run.err")" != ok; then
+if test -s "$tmp/run.out" \
+    || test "$(sed -n 1p "$tmp/run.err")" != 'okpanic: runtime check failed'; then
     cat "$tmp/run.out" "$tmp/run.err" >&2
     exit 1
 fi

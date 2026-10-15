@@ -183,6 +183,9 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
             "__os_cpu_relax", "n00b_os_cpu_relax", nil_type,
             nullptr, 0)
         && register_builtin_native_function(symtab, types, nil_type,
+            "__panic_trace", "n00bb_runtime_panic_trace", nil_type,
+            nullptr, 0)
+        && register_builtin_native_function(symtab, types, nil_type,
             "__os_map_zeroed", "n00b_os_map_zeroed",
             optional_reference, map_args, 2)
         && register_builtin_native_function(symtab, types, nil_type,

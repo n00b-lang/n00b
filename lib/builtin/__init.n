@@ -9,10 +9,12 @@ import containers.traits
 import io.debug
 import io.raw
 import ffi
+import panic
 
 package builtin {
     export ffi.Ffi_Bytes
     export ffi.ffi
+    export panic.panic
     export containers.list.List
     export containers.list.list
     export containers.dict.Dict

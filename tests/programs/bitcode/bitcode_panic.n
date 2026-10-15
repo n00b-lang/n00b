@@ -1,0 +1,18 @@
+type Account {
+    balance: int
+}
+
+func __init(modify self: Account, balance: int) {
+    if balance < 0 {
+        panic("negative balance")
+    }
+    self.balance = balance
+}
+
+comptime {} else {
+    let opened = new[Account](5)
+    require opened.balance == 5
+    __fd_write(2, "opened\n")
+    let rejected = new[Account](-1)
+    require rejected.balance == 0
+}

@@ -125,6 +125,13 @@ int32_t n00b_abi_v1_raw_fd_write(int32_t fd, n00b_abi_string_v1 text)
     return write_bytes(fd, bytes, count);
 }
 
+int32_t n00bb_runtime_write_bytes(int32_t fd, const uint8_t *bytes,
+                                  uint32_t count)
+{
+    if (fd < 0 || !bytes) return -1;
+    return count ? write_bytes(fd, bytes, count) : 0;
+}
+
 int32_t n00bb_bootstrap_fd_write(int32_t fd, uint64_t low, uint64_t high)
 {
     n00b_abi_string_v1 text = {.words = {low, high}};

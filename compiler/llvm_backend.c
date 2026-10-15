@@ -1318,12 +1318,47 @@ trap_function(lower_state_t *state)
 }
 
 static void
+emit_trap_reason(lower_state_t *state, const char *reason)
+{
+    if (!reason || ir_func_execution_phase(state->function)
+            == IR_PHASE_COMPTIME) {
+        LLVMValueRef function = trap_function(state);
+        LLVMBuildCall2(state->builder, LLVMGlobalGetValueType(function),
+                       function, nullptr, 0, "");
+        LLVMBuildUnreachable(state->builder);
+        return;
+    }
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
+    LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
+    LLVMTypeRef parameters[] = {pointer, i64};
+    LLVMTypeRef trap_type = LLVMFunctionType(
+        LLVMVoidTypeInContext(context), parameters, 2, false);
+    LLVMValueRef trap = LLVMGetNamedFunction(state->module,
+                                             "n00bb_runtime_trap");
+    if (!trap) {
+        trap = LLVMAddFunction(state->module, "n00bb_runtime_trap",
+                               trap_type);
+        unsigned kinds[] = {
+            LLVMGetEnumAttributeKindForName("noreturn", 8),
+            LLVMGetEnumAttributeKindForName("cold", 4),
+        };
+        for (size_t i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++)
+            LLVMAddAttributeAtIndex(trap, LLVMAttributeFunctionIndex,
+                LLVMCreateEnumAttribute(context, kinds[i], 0));
+    }
+    size_t length = strlen(reason);
+    LLVMValueRef text = LLVMBuildGlobalString(state->builder, reason,
+                                              "trap.reason");
+    LLVMValueRef arguments[] = {text, LLVMConstInt(i64, length, false)};
+    LLVMBuildCall2(state->builder, trap_type, trap, arguments, 2, "");
+    LLVMBuildUnreachable(state->builder);
+}
+
+static void
 emit_trap(lower_state_t *state)
 {
-    LLVMValueRef function = trap_function(state);
-    LLVMBuildCall2(state->builder, LLVMGlobalGetValueType(function), function,
-                   nullptr, 0, "");
-    LLVMBuildUnreachable(state->builder);
+    emit_trap_reason(state, "runtime check failed");
 }
 
 static void
@@ -9964,7 +9999,18 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             LLVMBuildCall2(state->builder, writer_type, writer, arguments,
                 3, "failure.write");
         } else if (count != 0) break;
-        emit_trap(state);
+        {
+            const char *path = instruction->span.file >= 0
+                ? ir_file_path(state->function->owner, instruction->span.file)
+                : nullptr;
+            core_buffer_t reason = {0};
+            if (path)
+                core_buffer_printf(&reason, "check failed at %s:%d:%d", path,
+                    instruction->span.start_line, instruction->span.start_col);
+            else core_buffer_printf(&reason, "check failed");
+            emit_trap_reason(state, reason.data);
+            core_buffer_release(&reason);
+        }
         return true;
     default:
         break;
@@ -12867,6 +12913,68 @@ emit_phase_image(n00bb_llvm_backend_t *backend,
 }
 
 static bool
+emit_code_map(LLVMModuleRef module, core_diagnostics_t *diagnostics)
+{
+    const char *triple = LLVMGetTarget(module);
+    bool mach_o = triple && (strstr(triple, "apple") || strstr(triple, "darwin"));
+    bool elf = triple && (strstr(triple, "linux") || strstr(triple, "elf")
+        || strstr(triple, "bsd"));
+    if (!mach_o && !elf) return true;
+    LLVMContextRef context = LLVMGetModuleContext(module);
+    LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
+    LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
+    LLVMTypeRef row_fields[] = {pointer, pointer, i64};
+    LLVMTypeRef row_type = LLVMStructTypeInContext(context, row_fields, 3,
+                                                   false);
+    core_list_t(LLVMValueRef) rows = core_list_new(LLVMValueRef);
+    for (LLVMValueRef function = LLVMGetFirstFunction(module); function;
+         function = LLVMGetNextFunction(function)) {
+        if (!LLVMCountBasicBlocks(function)
+            || LLVMGetLinkage(function) == LLVMAvailableExternallyLinkage)
+            continue;
+        size_t length = 0;
+        const char *name = LLVMGetValueName2(function, &length);
+        if (!name || !length) continue;
+        LLVMValueRef text = LLVMConstStringInContext2(context, name, length,
+                                                      true);
+        LLVMValueRef label = LLVMAddGlobal(module, LLVMTypeOf(text),
+                                           "__n00bb_code_name");
+        LLVMSetInitializer(label, text);
+        LLVMSetLinkage(label, LLVMPrivateLinkage);
+        LLVMSetGlobalConstant(label, true);
+        LLVMSetUnnamedAddress(label, LLVMGlobalUnnamedAddr);
+        LLVMValueRef fields[] = {function, label,
+                                 LLVMConstInt(i64, length, false)};
+        core_list_push(rows, LLVMConstNamedStruct(row_type, fields, 3));
+    }
+    bool ok = true;
+    if (rows.len) {
+        LLVMValueRef table_value = LLVMConstArray2(row_type, rows.data,
+                                                   rows.len);
+        LLVMValueRef table = LLVMAddGlobal(module, LLVMTypeOf(table_value),
+                                           "__n00bb_code_map");
+        LLVMSetInitializer(table, table_value);
+        LLVMSetLinkage(table, LLVMPrivateLinkage);
+        LLVMSetGlobalConstant(table, true);
+        LLVMSetAlignment(table, 8);
+        LLVMSetSection(table, mach_o ? "__DATA,__n00b_code" : "n00b_code");
+        LLVMValueRef used_value = LLVMConstArray2(pointer, &table, 1);
+        LLVMValueRef used = LLVMAddGlobal(module, LLVMTypeOf(used_value),
+                                          "llvm.used");
+        LLVMSetInitializer(used, used_value);
+        LLVMSetLinkage(used, LLVMAppendingLinkage);
+        LLVMSetSection(used, "llvm.metadata");
+        char *message = nullptr;
+        ok = !LLVMVerifyModule(module, LLVMReturnStatusAction, &message);
+        if (!ok) backend_error(diagnostics, message ? message
+            : "invalid LLVM code map");
+        if (message) LLVMDisposeMessage(message);
+    }
+    core_list_free(rows);
+    return ok;
+}
+
+static bool
 emit_native_module(n00bb_llvm_backend_t *backend, LLVMModuleRef module,
                    bool comptime, core_buffer_t *out,
                    core_diagnostics_t *diagnostics)
@@ -12936,6 +13044,10 @@ emit_native_module(n00bb_llvm_backend_t *backend, LLVMModuleRef module,
     }
     if (!comptime && backend->emit_frame_maps
         && !emit_frame_sentinels(module, diagnostics)) {
+        LLVMDisposeTargetMachine(machine);
+        return false;
+    }
+    if (!comptime && !emit_code_map(module, diagnostics)) {
         LLVMDisposeTargetMachine(machine);
         return false;
     }

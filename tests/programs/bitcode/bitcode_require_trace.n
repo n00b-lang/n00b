@@ -1,0 +1,7 @@
+func check(value: int) {
+    require value == 1
+}
+
+comptime {} else {
+    check(2)
+}
