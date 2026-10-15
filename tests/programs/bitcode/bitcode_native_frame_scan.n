@@ -1,0 +1,22 @@
+import sys.gc.alloc
+
+func fresh(seed: string) -> string {
+    return seed + " made long enough to need heap storage"
+}
+
+comptime {
+} else {
+    var i = 0
+    var joined: string = ""
+    while i < 300000 {
+        joined = fresh("left") + fresh("right")
+        assert joined == "left made long enough to need heap storageright made long enough to need heap storage"
+        i = i + 1
+    }
+    let mutator = sys.gc.alloc.mutator_for_native()
+    assert mutator != nil
+    if mutator != nil {
+        assert mutator.get().heap.last_stack_words > 0
+    }
+    __fd_write(2, "ok")
+}

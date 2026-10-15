@@ -3,9 +3,6 @@
 
 #include <stdint.h>
 
-extern void n00b_gc_root_push(void **slot);
-extern void n00b_gc_root_pop(uint64_t depth);
-
 typedef void *(*n00bb_string_allocator_t)(uint32_t, uint32_t, uint64_t,
                                           uint32_t, void *);
 
@@ -74,16 +71,9 @@ void n00bb_bootstrap_string_add(uint64_t left_low, uint64_t left_high,
                                               &right_encoding);
     if (!result || __builtin_add_overflow(left_length, right_length, &length))
         __builtin_trap();
-    void *roots[2] = {left.words[1] >> N00B_ABI_STRING_TAG_SHIFT
-                          ? left.long_value.data : NULL,
-                      right.words[1] >> N00B_ABI_STRING_TAG_SHIFT
-                          ? right.long_value.data : NULL};
-    n00b_gc_root_push(&roots[0]);
-    n00b_gc_root_push(&roots[1]);
     n00b_abi_string_v1 joined;
     uint8_t *data = string_storage(&joined, length,
         joined_encoding(left_encoding, right_encoding), byte_type, allocate);
-    n00b_gc_root_pop(2);
     for (uint64_t i = 0; i < left_length; i++) data[i] = left_bytes[i];
     for (uint64_t i = 0; i < right_length; i++)
         data[left_length + i] = right_bytes[i];
@@ -125,13 +115,10 @@ int32_t n00bb_bootstrap_string_from_utf8(const n00b_abi_array_value_v1 *array,
         ascii = ascii && step == 1;
         at += step;
     }
-    void *root = array ? array->data : NULL;
-    n00b_gc_root_push(&root);
     n00b_abi_string_v1 text;
     uint8_t *data = string_storage(&text, length,
         ascii ? N00BB_ABI_STRING_ASCII : N00BB_ABI_STRING_UTF8, byte_type,
         allocate);
-    n00b_gc_root_pop(1);
     for (uint64_t i = 0; i < length; i++) data[i] = bytes[i];
     *result = text;
     return 1;
