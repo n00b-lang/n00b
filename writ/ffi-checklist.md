@@ -155,7 +155,7 @@ enough to check off one at a time. The specs are `ffi-spec.md`,
 - [x] `string`, `buffer`, `borrow` representations per slot
 - [x] Rest packs as `List[T]` or `Array[T]`
 - [x] Keyword packs as keyword arguments or `F_Options`
-- [ ] Policy parameters: fixed arm, or an enum parameter
+- [x] Policy parameters: fixed arm, or an enum parameter
 - [x] Reserved words get a trailing `_`
 - [x] `raw` declarations with `ptr` slots and a `_raw` suffix
 - [x] Each generated declaration carries a span to its writ declaration

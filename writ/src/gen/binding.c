@@ -14,6 +14,7 @@ typedef struct {
     bool       hidden;
     bool       raw;
     bool       internal;
+    uint32_t   policy_arm;
 } fn_decision_t;
 
 typedef struct {
@@ -348,6 +349,35 @@ apply_method(writ_binding_t *b, uint32_t id)
     d->is_static = is_static;
 }
 
+static void
+apply_policy(writ_binding_t *b, uint32_t id)
+{
+    const writ_node_t *item = at(b, id);
+    writ_str_t text = text_of(b, at(b, writ_node_child(b->unit, id, 0))->name);
+    target_t target = split(text);
+    size_t fn = resolve_fn(b, id, text, target.member.length != 0);
+    if (fn == writ_model_fn_count(b->model)) {
+        return;
+    }
+    const writ_fn_view_t *view = writ_model_fn_at(b->model, fn);
+    for (size_t s = 0; s < view->slots_count; s++) {
+        const writ_slot_view_t *slot = &view->slots[s];
+        if (!slot->policy_arms_count || (target.member.length && !writ_str_eq(target.member, slot->name))) {
+            continue;
+        }
+        for (size_t a = 0; a < slot->policy_arms_count; a++) {
+            if (!slot->policy_arms[a].is_else && writ_str_eq(slot->policy_arms[a].constant, text_of(b, item->name))) {
+                b->fns[fn].policy_arm = (uint32_t)a;
+                return;
+            }
+        }
+        writ_report(b->session, WRIT_D_BIND_NOT_OPEN, item->loc, "`%.*s` names no arm of `%.*s`",
+                    S(text_of(b, item->name)), S(slot->name));
+        return;
+    }
+    writ_report(b->session, WRIT_D_BIND_NOT_OPEN, item->loc, "the contract has no policy parameter here");
+}
+
 static writ_str_t
 keyword_record_name(const writ_binding_t *b, size_t fn, writ_str_t slot)
 {
@@ -515,7 +545,7 @@ apply_item(writ_binding_t *b, uint32_t id)
         }
         return;
     case WRIT_N_POLICY_USE:
-        writ_report(b->session, WRIT_D_BIND_NOT_OPEN, item->loc, "the contract has no policy parameter here");
+        apply_policy(b, id);
         return;
     case WRIT_N_HIDE:
     case WRIT_N_RAW_ITEM:
@@ -724,6 +754,9 @@ writ_bind(const writ_model_t *model, const writ_bind_request_t *request, const w
         b->header = (choice_t){writ_str_format(session, "%.*s.h", S(library)), false};
         b->fns = writ_alloc(session, sizeof(fn_decision_t) * (writ_model_fn_count(model) + 1));
         memset(b->fns, 0, sizeof(fn_decision_t) * (writ_model_fn_count(model) + 1));
+        for (size_t i = 0; i <= writ_model_fn_count(model); i++) {
+            b->fns[i].policy_arm = WRIT_PLAN_NONE;
+        }
         for (uint32_t i = 0; i < at(b, b->block)->child_count; i++) {
             uint32_t item = writ_node_child(b->unit, b->block, i);
             if (at(b, item)->kind == WRIT_N_STRIP_PREFIX) {
@@ -792,6 +825,19 @@ writ_binding_render(const writ_binding_t *b, writ_str_t *rendered)
         if (writ_model_fn_at(b->model, i)->outcomes_count > 1) {
             writ_emit_line(&e, "error %.*s (%s)", S(d->error.text), how(&d->error));
         }
+        const writ_fn_view_t *view = writ_model_fn_at(b->model, i);
+        for (size_t s = 0; s < view->slots_count; s++) {
+            const writ_slot_view_t *policy = &view->slots[s];
+            if (!policy->policy_arms_count) {
+                continue;
+            }
+            if (d->policy_arm == WRIT_PLAN_NONE) {
+                writ_emit_line(&e, "%.*s: policy, every arm (default)", S(policy->name));
+            } else {
+                writ_emit_line(&e, "%.*s: policy %.*s (chosen)", S(policy->name),
+                               S(policy->policy_arms[d->policy_arm].constant));
+            }
+        }
         for (size_t s = 0; s < b->slots.len; s++) {
             const slot_decision_t *slot = &b->slots.data[s];
             if (slot->fn != i) {
@@ -858,7 +904,8 @@ writ_binding_fn(const writ_binding_t *b, size_t fn)
 {
     const fn_decision_t *d = &b->fns[fn];
     return (writ_bound_fn_t){.bound = bound(d), .raw = d->raw, .is_static = d->is_static, .name = d->name.text,
-                             .owner = d->owner, .error = d->error.text, .provide = d->provide};
+                             .owner = d->owner, .error = d->error.text, .provide = d->provide,
+                             .policy_arm = d->policy_arm};
 }
 
 writ_str_t

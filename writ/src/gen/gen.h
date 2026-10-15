@@ -66,6 +66,7 @@ typedef struct {
     writ_str_t owner;
     writ_str_t error;
     writ_str_t provide;
+    uint32_t   policy_arm;
 } writ_bound_fn_t;
 
 const writ_model_t   *writ_binding_model(const writ_binding_t *b);

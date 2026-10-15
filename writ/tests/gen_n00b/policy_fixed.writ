@@ -1,0 +1,5 @@
+use "../policy/policy.writ"
+
+binding {
+    policy bind_text.dtor use TEXT_TRANSIENT
+}

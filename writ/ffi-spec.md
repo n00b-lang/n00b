@@ -260,7 +260,7 @@ func compress(source: Array[u8], level: i32) -> Array[u8] fail: zlib.Error
 | `with x` (returned) | The result keeps a reference to `x`'s wrapper, so `x` stays alive while it is |
 | `until next f(...)` / `until release(...)` borrowed results | Copied before the next call (`borrow ... as copy`, the default and the only choice, since `lifetimes no`) |
 | `own ... release g` | Wrapped in a handle type whose `close()` calls `g` |
-| Policy parameters | `policy f.p use ARM` fixes the arm and removes `p`. Without one, `p` becomes an enum parameter of the n00b function, limited to the arms the contract declares. |
+| Policy parameters | `policy f.p use ARM` fixes the arm and removes `p`. Without one, `p` becomes an enum parameter of the n00b function with a member per arm, and each arm is also bound as `f_arm`. The `else` arm is the member `OWNED`: the shim hands C its own copy of the slot the arm consumes, with a destructor it provides. |
 | `consume` | The n00b wrapper is marked closed after the call; using it again fails with `Error` |
 
 - **Handles close explicitly.** `close()` is the release. A handle that

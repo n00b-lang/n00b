@@ -881,21 +881,33 @@ Some APIs take an argument that decides the lifetime of another argument.
 `sqlite3_bind_text` is the classic example:
 
 ```writ-extended
+callback sqlite3_destructor_type = fn(p: *void)
+const SQLITE_STATIC:    sqlite3_destructor_type = 0
+const SQLITE_TRANSIENT: sqlite3_destructor_type = -1
+
 fn sqlite3_bind_text(
     stmt: Stmt,
     i:    c_int,
     text: *[c_char; n >= 0 ? n : until 0]  span by dtor,
     n:    c_int,
-    dtor: policy {
+    dtor: sqlite3_destructor_type policy {
         SQLITE_STATIC    => text: keep until release(stmt), reset(stmt), next bind(stmt, i)
         SQLITE_TRANSIENT => text: for call            # sqlite copies it
-        fn(*void)        => text: consume release dtor  # sqlite calls dtor(text) later
+        else             => text: consume release dtor  # sqlite calls dtor(text) later
     },
 ) -> c_int error ret != SQLITE_OK
 ```
 
-A generator may pick one arm, usually `SQLITE_TRANSIENT` because it is
-simplest and safe, or expose all of them.
+A policy is a union read off the parameter's own value. The type before
+`policy` is the parameter's storage and C type. Each named arm is a
+constant of that type, compared by value. `else` covers every other
+value. An arm's effect replaces the named slot's mode, span and
+`release` while that arm is passed, and `span by` marks the slot it
+sets.
+
+writ plans the function once per arm. A generator may pick one arm,
+usually `SQLITE_TRANSIENT` because it is simplest and safe, or expose
+all of them.
 
 ### 5.7 Fields
 
@@ -3009,7 +3021,9 @@ cond        = expr | "feature" ID | cond ( "and" | "or" ) cond | "not" cond ;
 fn_sig      = "(" [ param { "," param } [ "," varargs ] ] [ "," ] ")" [ "->" ret ] ;
 varargs     = "..." [ "of" type ( "until" expr | "count" ID )
                     | "pairs" "(" type "," ( type | "by_name" ) ")" "until" expr ] ;
-param       = ID ":" [ mode ] type { slot_attr } [ "=" expr ] ;   (* "= expr": source-level default *)
+param       = ID ":" [ mode ] type [ policy ] { slot_attr } [ "=" expr ] ;   (* "= expr": source-level default *)
+policy      = "policy" "{" { policy_arm [ "," ] } "}" ;
+policy_arm  = ( ID | "else" ) "=>" ID ":" [ mode ] { slot_attr } ;
 ret         = [ "own" ] type { slot_attr } ;
 mode        = "in" | "out" | "inout" | "consume" | "keep" | "moved" | "unknown" ;
 field       = ( ID | "_" ) ":" [ "own" ] type { slot_attr } [ "@" INT ] [ "@bit" "(" INT ")" ]
@@ -3024,7 +3038,6 @@ type        = prim | ID | "va_list" | ( "*" | "?" ) type
             | type "as" ID | type "as" "*" type
             | type "bits" INT | "union" "by" ID "{" arms "}"
             | rust_type                   (* lang rust only *)
-            | "policy" "{" arms "}"
             | type "as" "packed" "{" { ( ID | "_" ) ":" [ type ] "@" INT [ ".." INT ] } "}" ;
 extent      = expr | "until" expr | "cap" expr "," "len" expr | "unknown" ;
 
