@@ -1,0 +1,19 @@
+type Entry {
+    value: int?
+}
+
+var entries: List[Entry] = new[List[Entry]]()
+
+func present(index: int) -> bool {
+    let entry = entries[index]
+    if !entry.value {
+        return false
+    }
+    return true
+}
+
+comptime {} else {
+    let e: Entry = (value = 3)
+    entries.append(e)
+    require present(0)
+}

@@ -184,6 +184,7 @@ build_import_environment(parse_grammar_t *grammar,
             bool has_detail = error_count &&
                 th_error_at(state->types, error_count - 1, &detail);
             parse_tree_t *failure_site = nullptr;
+            parse_tree_t *open_site = nullptr;
             if (has_detail && detail.constraint && detail.got)
                 for (size_t s = 0; s < state->link_use_sites.len; s++) {
                     n00bb_link_use_site_t *site =
@@ -193,9 +194,8 @@ build_import_environment(parse_grammar_t *grammar,
                         continue;
                     parse_tree_t *receiver = site->receiver_node;
                     if (!receiver && site->dispatch_trait.data
-                        && site->node && !core_tree_is_leaf(site->node)
-                        && core_tree_num_children(site->node))
-                        receiver = core_tree_child(site->node, 0);
+                        && site->node && !core_tree_is_leaf(site->node))
+                        receiver = operator_receiver_node(site);
                     th_type *receiver_type = receiver
                         && !core_tree_is_leaf(receiver)
                         ? core_tree_node_value(receiver).type : nullptr;
@@ -204,7 +204,11 @@ build_import_environment(parse_grammar_t *grammar,
                         failure_site = site->node;
                         break;
                     }
+                    if (!open_site && receiver_type
+                        && th_kind_of(th_resolve(receiver_type)) == TH_VAR)
+                        open_site = site->node;
                 }
+            if (!failure_site) failure_site = open_site;
             core_buffer_t message = {0};
             if (has_detail && detail.constraint) {
                 core_buffer_printf(&message,

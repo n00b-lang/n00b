@@ -1214,6 +1214,16 @@ test(
 )
 
 test(
+    'field-constraint-diagnostic',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests'
+               / 'field_constraint_diagnostic.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'option_not_through_index.n'],
+)
+
+test(
     'gc-los-registry-n00b',
     find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
