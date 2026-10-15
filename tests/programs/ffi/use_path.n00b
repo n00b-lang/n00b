@@ -1,0 +1,7 @@
+const limits = [-
+use "contracts/limits.writ"
+-]'ffi
+
+comptime {} else {
+    require limits.LIMIT == 40
+}

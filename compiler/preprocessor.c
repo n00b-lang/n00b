@@ -621,6 +621,32 @@ builtin_argument_count(pp_context_t *ctx, parse_tree_t *call)
 }
 
 static bool
+in_builtin_package(const core_translation_unit_t *unit)
+{
+    core_string_t name = unit->module.identifier;
+    return name.u8_bytes >= sizeof("builtin.") - 1
+        && !memcmp(name.data, "builtin.", sizeof("builtin.") - 1);
+}
+
+static bool
+register_litmod_name(pp_context_t *ctx, parse_tree_t *function,
+                     parse_tree_t *node, core_string_t name,
+                     core_string_t kind)
+{
+    for (size_t i = 0; !in_builtin_package(ctx->unit)
+         && i < ctx->options->module_modifier_count; i++) {
+        if (core_string_eq(name, ctx->options->module_modifiers[i])) {
+            pp_error(ctx, node, "a literal modifier cannot shadow a builtin module literal");
+            return false;
+        }
+    }
+    if (ctx->options->register_litmod(ctx->options->litmod_context,
+            ctx->unit, function, name, kind)) return true;
+    pp_error(ctx, node, "duplicate literal modifier name and kind");
+    return false;
+}
+
+static bool
 register_litmod_aliases(pp_context_t *ctx, parse_tree_t *function,
                         parse_tree_t *node, core_string_t kind)
 {
@@ -629,11 +655,8 @@ register_litmod_aliases(pp_context_t *ctx, parse_tree_t *function,
         parse_token_info_t *token = parse_node_token(node);
         if (!token || !core_string_eq(parse_terminal_name(ctx->grammar,
                 token->tid), CORE_STRING_STATIC("IDENTIFIER"))) return true;
-        core_string_t alias = leaf_text(ctx, node);
-        if (ctx->options->register_litmod(ctx->options->litmod_context,
-                ctx->unit, function, alias, kind)) return true;
-        pp_error(ctx, node, "duplicate literal modifier name and kind");
-        return false;
+        return register_litmod_name(ctx, function, node, leaf_text(ctx, node),
+                                    kind);
     }
     for (size_t i = 0; i < core_tree_num_children(node); i++)
         if (!register_litmod_aliases(ctx, function,
@@ -672,11 +695,8 @@ register_litmod_declaration(pp_context_t *ctx, parse_tree_t *function)
         pp_error(ctx, function, "invalid literal modifier declaration");
         return false;
     }
-    if (!ctx->options->register_litmod(ctx->options->litmod_context,
-            ctx->unit, function, function_name, kind)) {
-        pp_error(ctx, primary, "duplicate literal modifier name and kind");
+    if (!register_litmod_name(ctx, function, primary, function_name, kind))
         return false;
-    }
     parse_tree_t *aliases = parse_tree_find_flat_child_by_nt_name(ctx->grammar,
         function, CORE_STRING_STATIC("litmod-aliases"));
     return register_litmod_aliases(ctx, function, aliases, kind);
@@ -1994,6 +2014,120 @@ mark_cycle_backedge(pp_context_t *ctx, size_t target)
     }
 }
 
+static parse_tree_t *
+module_literal_leaf(pp_context_t *ctx, parse_tree_t *node, core_string_t *modifier)
+{
+    while (node && !core_tree_is_leaf(node)) {
+        if (core_tree_num_children(node) != 1) return nullptr;
+        node = core_tree_child(node, 0);
+    }
+    parse_token_info_t *token = node ? parse_node_token(node) : nullptr;
+    if (!token || !token->has_content_span
+        || !core_option_is_set(token->postfix_modifier)) return nullptr;
+    core_string_t name = core_option_get(token->postfix_modifier);
+    for (size_t i = 0; ctx->options && i < ctx->options->module_modifier_count; i++) {
+        if (core_string_eq(name, ctx->options->module_modifiers[i])) {
+            *modifier = name;
+            return node;
+        }
+    }
+    return nullptr;
+}
+
+static parse_tree_t *
+import_node(pp_context_t *ctx, core_string_t name)
+{
+    parse_tree_t *keyword = parse_tree_make_synthetic_token(
+        parse_terminal_id(ctx->grammar, CORE_STRING_STATIC("import")),
+        CORE_STRING_STATIC("import"));
+    parse_tree_t *identifier = parse_tree_make_synthetic_token(
+        parse_terminal_id(ctx->grammar, CORE_STRING_STATIC("IDENTIFIER")), name);
+    parse_tree_t *chain = parse_tree_make_nt(ctx->grammar,
+        CORE_STRING_STATIC("member-chain"), 1);
+    parse_tree_t *import = parse_tree_make_nt(ctx->grammar,
+        CORE_STRING_STATIC("import-stmt"), 0);
+    if (keyword && identifier && chain && import
+        && core_tree_add_child(chain, identifier)) {
+        identifier = nullptr;
+        if (core_tree_add_child(import, keyword)) {
+            keyword = nullptr;
+            if (core_tree_add_child(import, chain)) return import;
+        }
+    }
+    parse_tree_free(keyword);
+    parse_tree_free(identifier);
+    parse_tree_free(chain);
+    parse_tree_free(import);
+    return nullptr;
+}
+
+static bool
+module_literal_const(pp_context_t *ctx, parse_visit_t *visit, bool module_level)
+{
+    parse_tree_t *decl = visit->node;
+    parse_tree_t *prefix = parse_tree_find_direct_child_by_nt_name(
+        ctx->grammar, decl, CORE_STRING_STATIC("declaration-prefix"));
+    core_string_t binding_kind = first_leaf_text(ctx,
+        parse_tree_find_direct_child_by_nt_name(ctx->grammar, prefix,
+            CORE_STRING_STATIC("binding-kind")));
+    parse_tree_t *list = parse_tree_find_direct_child_by_nt_name(
+        ctx->grammar, decl, CORE_STRING_STATIC("sym-decl-list"));
+    size_t symbols = 0;
+    parse_tree_t *literal = nullptr;
+    core_string_t modifier = {0};
+    core_string_t name = {0};
+    for (size_t i = 0; list && i < core_tree_num_children(list); i++) {
+        parse_tree_t *sym = core_tree_child(list, i);
+        if (!is_name(ctx->grammar, sym, "sym-decl") || !core_tree_num_children(sym)) continue;
+        symbols++;
+        for (size_t k = 1; k < core_tree_num_children(sym); k++) {
+            parse_tree_t *child = core_tree_child(sym, k);
+            parse_tree_t *leaf = is_name(ctx->grammar, child, "expression")
+                ? module_literal_leaf(ctx, child, &modifier) : nullptr;
+            if (leaf) {
+                literal = leaf;
+                name = leaf_text(ctx, core_tree_child(sym, 0));
+            }
+        }
+    }
+    if (!literal) return false;
+    if (!core_string_eq(binding_kind, CORE_STRING_STATIC("const")) || symbols != 1) {
+        pp_error(ctx, literal, "a module literal initializes exactly one const");
+        return true;
+    }
+    if (!module_level) {
+        pp_error(ctx, literal, "a module literal const must be declared at module level");
+        return true;
+    }
+    if (!ctx->options->load_module_literal) {
+        pp_error(ctx, literal, "no generator is configured for module literals");
+        return true;
+    }
+    core_translation_unit_t *module = nullptr;
+    parse_tree_t *tree = nullptr;
+    core_diagnostics_t *diags = core_translation_unit_diagnostics(ctx->unit);
+    size_t diagnostic_count = core_diagnostics_count(diags);
+    if (!ctx->options->load_module_literal(ctx->options->import_context,
+            ctx->grammar, ctx->unit, literal, modifier, name, &module, &tree)
+        || !module || !tree) {
+        if (core_diagnostics_count(diags) == diagnostic_count)
+            pp_error(ctx, literal, "cannot generate the module for this literal");
+        else ctx->failed = true;
+        return true;
+    }
+    if (!process_module(ctx, module, tree)) {
+        ctx->failed = true;
+        return true;
+    }
+    parse_tree_t *replacement = import_node(ctx, name);
+    if (!replacement) {
+        pp_error(ctx, literal, "cannot bind the generated module");
+        return true;
+    }
+    visit->replace = replacement;
+    return true;
+}
+
 static bool
 process_import(pp_context_t *ctx, parse_tree_t *statement)
 {
@@ -2117,8 +2251,16 @@ preprocess_prepare(parse_visit_t *visit)
         }
     }
     if (is_name(ctx->grammar, node, "variable-decl")) {
+        if (module_literal_const(ctx, visit, !frame->current_body))
+            return ctx->failed ? PARSE_VISIT_ERROR : PARSE_VISIT_PRUNE;
         remember_const(ctx, node);
         if (ctx->failed) return PARSE_VISIT_ERROR;
+    }
+    core_string_t misplaced = {0};
+    if (is_name(ctx->grammar, node, "embed-lit")
+        && module_literal_leaf(ctx, node, &misplaced)) {
+        pp_error(ctx, node, "a module literal only initializes a module-level const");
+        return PARSE_VISIT_ERROR;
     }
     if (is_name(ctx->grammar, node, "when-stmt")) {
         parse_tree_t *body = selected_when_body(ctx, node);

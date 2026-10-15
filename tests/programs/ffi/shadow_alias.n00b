@@ -1,0 +1,3 @@
+litmod<fence> mine, ffi(contents: string) -> int fail: string {
+    return 1
+}

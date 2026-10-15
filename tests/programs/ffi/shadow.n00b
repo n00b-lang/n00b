@@ -1,0 +1,3 @@
+litmod<fence> ffi(contents: string) -> int fail: string {
+    return 1
+}

@@ -41,6 +41,8 @@ static const parse_cmdr_flag_t FLAGS[] = {
      CORE_STRING_STATIC("dump target layouts for named types")},
     {CORE_STRING_STATIC("--define"), CORE_STRING_STATIC("-D"),
      PARSE_CMDR_TYPE_WORD, true, CORE_STRING_STATIC("preprocessor definition")},
+    {CORE_STRING_STATIC("--contract-dir"), {0}, PARSE_CMDR_TYPE_WORD, true,
+     CORE_STRING_STATIC("directory searched for writ contracts")},
     {CORE_STRING_STATIC("--release"), {0}, PARSE_CMDR_TYPE_BOOL, false,
      CORE_STRING_STATIC("disable debug assertions and optimize at LLVM O3")},
     {CORE_STRING_STATIC("--lto"), {0}, PARSE_CMDR_TYPE_BOOL, false,
@@ -107,6 +109,9 @@ n00bb_make_cli(void)
                                    CORE_STRING_STATIC("--define"), true);
     parse_cmdr_flag_set_repeatable(cli, (core_string_t){0},
                                    CORE_STRING_STATIC("--link-interface"),
+                                   true);
+    parse_cmdr_flag_set_repeatable(cli, (core_string_t){0},
+                                   CORE_STRING_STATIC("--contract-dir"),
                                    true);
     return cli;
 }

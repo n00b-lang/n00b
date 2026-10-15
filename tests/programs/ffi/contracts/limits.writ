@@ -1,0 +1,3 @@
+# marker-contract-5be1
+library limits
+const LIMIT: c_int = 40

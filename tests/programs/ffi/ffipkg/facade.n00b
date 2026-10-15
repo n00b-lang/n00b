@@ -1,0 +1,5 @@
+import impl
+
+package ffipkg {
+    export impl.limit
+}

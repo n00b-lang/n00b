@@ -17,6 +17,10 @@ typedef bool (*n00bb_preprocessor_prepare_import_fn)(
     core_translation_unit_t *importer);
 typedef bool (*n00bb_preprocessor_selected_body_fn)(
     void *context, core_translation_unit_t *unit, parse_tree_t *body);
+typedef bool (*n00bb_preprocessor_module_literal_fn)(
+    void *context, parse_grammar_t *grammar, core_translation_unit_t *importer,
+    parse_tree_t *literal, core_string_t modifier, core_string_t name,
+    core_translation_unit_t **module, parse_tree_t **module_tree);
 typedef bool (*n00bb_preprocessor_litmod_fn)(
     void *context, core_translation_unit_t *unit,
     parse_tree_t *declaration, core_string_t modifier, core_string_t kind);
@@ -50,6 +54,10 @@ typedef struct {
     void *selected_body_context;
     n00bb_preprocessor_litmod_fn register_litmod;
     void *litmod_context;
+    const core_string_t *module_modifiers;
+    size_t module_modifier_count;
+    n00bb_preprocessor_module_literal_fn load_module_literal;
+    const void *module_literal_context;
 } n00bb_preprocessor_options_t;
 
 typedef struct n00bb_preprocessor_t n00bb_preprocessor_t;

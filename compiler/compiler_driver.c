@@ -43,6 +43,7 @@ double n00bb_profile_seconds(void);
 #include "runtime_native_roots.h"
 #include "storage_selection.h"
 #include "specialize.h"
+#include "compiler_ffi.h"
 #include "lib/alloc.h"
 #include "lib/arena.h"
 #include "lib/buffer.h"
@@ -123,6 +124,7 @@ typedef struct {
     parse_grammar_t *grammar;
     n00bb_preprocessor_t *preprocessor;
     th_ctx *types;
+    const n00bb_module_generators_t *generators;
 } import_driver_t;
 
 typedef core_module_spec_t n00bb_module_candidate_t;
@@ -1837,6 +1839,73 @@ load_interface_imports(import_driver_t *driver, parse_grammar_t *grammar,
     return false;
 }
 
+static n00bb_literal_origin_t
+literal_origin(core_translation_unit_t *unit, parse_token_info_t *token)
+{
+    const char *contents = core_source_file_contents(&unit->source);
+    uint32_t line = token->line;
+    uint32_t column = token->column;
+    for (size_t at = token->start_byte; at < token->content_start_byte; at++) {
+        if (contents[at] == '\n') {
+            line++;
+            column = 1;
+        }
+        else column++;
+    }
+    return (n00bb_literal_origin_t){
+        .host_path = core_source_file_path(&unit->source),
+        .line = line,
+        .column = column,
+        .byte = token->content_start_byte,
+    };
+}
+
+static bool
+load_module_literal(void *opaque, parse_grammar_t *grammar,
+                    core_translation_unit_t *importer, parse_tree_t *literal,
+                    core_string_t modifier, core_string_t name,
+                    core_translation_unit_t **module_out,
+                    parse_tree_t **tree_out)
+{
+    import_driver_t *driver = opaque;
+    const n00bb_module_generator_t *generator = nullptr;
+    for (size_t i = 0; driver->generators && i < driver->generators->count; i++)
+        if (core_string_eq(driver->generators->items[i].modifier, modifier))
+            generator = &driver->generators->items[i];
+    parse_token_info_t *token = parse_node_token(literal);
+    if (!generator || !token) return false;
+    const char *contents = core_source_file_contents(&importer->source);
+    core_string_t text = core_string_borrow(contents + token->content_start_byte,
+        token->content_end_byte - token->content_start_byte);
+    core_buffer_t source = {0};
+    if (!generator->generate(generator->context, importer, name,
+            literal_origin(importer, token), text, &source)) {
+        core_buffer_release(&source);
+        return false;
+    }
+    core_string_t importer_id = importer->module.identifier;
+    size_t leaf = importer_id.u8_bytes;
+    while (leaf && importer_id.data[leaf - 1] != '.') leaf--;
+    core_buffer_t identifier = {0};
+    core_buffer_printf(&identifier, "%.*s__%.*s_%.*s_%.*s",
+        (int)leaf, importer_id.data, (int)modifier.u8_bytes, modifier.data,
+        (int)(importer_id.u8_bytes - leaf), importer_id.data + leaf,
+        (int)name.u8_bytes, name.data);
+    core_string_t id = core_string_borrow(identifier.data, identifier.byte_len);
+    core_module_spec_t module = {0};
+    bool ok = n00bb_resolver_add_generated(driver->resolver, id,
+                  core_string_borrow(source.data ? source.data : "", source.byte_len),
+                  n00bb_package_id(importer))
+        && core_module_spec_init(&module, id)
+        && load_import_module(driver, grammar, literal, importer, &module,
+               identifier.data, nullptr, module_out, tree_out)
+        && record_import_alias(importer, name, *module_out);
+    core_module_spec_release(&module);
+    core_buffer_release(&identifier);
+    core_buffer_release(&source);
+    return ok;
+}
+
 static bool
 load_import(void *opaque, parse_grammar_t *grammar, parse_tree_t *statement,
             core_translation_unit_t *importer,
@@ -1953,6 +2022,8 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
     active_options.selected_body_context = nullptr;
     active_options.register_litmod = register_user_litmod;
     active_options.litmod_context = nullptr;
+    active_options.load_module_literal = load_module_literal;
+    import_driver.generators = preprocessor_options->module_literal_context;
     n00bb_preprocessor_t *preprocessor =
         n00bb_preprocessor_new(&active_options);
     import_driver.preprocessor = preprocessor;
@@ -3388,11 +3459,27 @@ n00bb_compiler_main(int argc, char **argv)
     for (int32_t i = 0; i < define_count; i++)
         definitions[i] = parse_cmdr_flag_str_at(
             args, CORE_STRING_STATIC("--define"), i).data;
+    n00bb_ffi_t *ffi = n00bb_ffi_new();
+    int32_t contract_dir_count = parse_cmdr_flag_value_count(
+        args, CORE_STRING_STATIC("--contract-dir"));
+    for (int32_t i = 0; i < contract_dir_count; i++)
+        n00bb_ffi_add_contract_dir(ffi, parse_cmdr_flag_str_at(
+            args, CORE_STRING_STATIC("--contract-dir"), i));
+    const n00bb_module_generator_t generator_items[] = {
+        {CORE_STRING_STATIC("ffi"), n00bb_ffi_generate, ffi},
+    };
+    const n00bb_module_generators_t generators = {
+        generator_items, sizeof(generator_items) / sizeof(generator_items[0]),
+    };
+    const core_string_t module_modifiers[] = {CORE_STRING_STATIC("ffi")};
     n00bb_preprocessor_options_t preprocessor_options = {
         .definitions = definitions,
         .definition_count = (size_t)define_count,
         .release_mode = parse_cmdr_flag_present(
             args, CORE_STRING_STATIC("--release")),
+        .module_modifiers = module_modifiers,
+        .module_modifier_count = 1,
+        .module_literal_context = &generators,
     };
     parse_grammar_t *grammar = nullptr;
     th_env *environment = nullptr;
@@ -3634,6 +3721,7 @@ n00bb_compiler_main(int argc, char **argv)
     parse_grammar_free(grammar);
     n00bb_resolver_free(resolver);
     core_work_queue_free(queue);
+    n00bb_ffi_free(ffi);
     core_free(definitions);
     parse_cmdr_result_free(args);
     parse_cmdr_free(cli);

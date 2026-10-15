@@ -1,0 +1,7 @@
+const limits = [-
+use <limits.writ>
+-]'ffi
+
+func limit() -> i32 {
+    return limits.LIMIT
+}

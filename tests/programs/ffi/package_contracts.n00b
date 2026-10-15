@@ -1,0 +1,5 @@
+import ffipkg
+
+comptime {} else {
+    require ffipkg.limit() == 7
+}

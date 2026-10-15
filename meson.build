@@ -12,6 +12,8 @@ project(
 
 lantern = dependency('ir', method: 'pkg-config', required: true)
 writ = dependency('writ', method: 'pkg-config', required: true)
+writ_paths = [
+    '-DN00BB_WRIT_PROFILE_DIR="' + writ.get_variable(pkgconfig: 'profiledir') + '"',]
 llvm = dependency('llvm', method: 'config-tool',
                   modules: ['core', 'bitwriter', 'bitreader', 'linker'],
                   required: true)
@@ -123,8 +125,10 @@ n00bb_exe = executable(
      'compiler/llvm_backend.c', 'compiler/llvm_native_cache.c', 'compiler/llvm_stack_maps.c',
      'compiler/native_frame_maps.c',
      'compiler/global_metadata.c',
-     'compiler/storage_selection.c'],
+     'compiler/storage_selection.c',
+     'compiler/compiler_ffi.c'],
     dependencies: [lantern, writ, llvm],
+    c_args: writ_paths,
     link_with: runtime_abi_support,
     install: true,
 )
@@ -582,6 +586,14 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'packages'],
     suite: 'regression',
+)
+
+test(
+    'ffi', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'ffi.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'ffi'],
+    timeout: 300,
 )
 
 test(

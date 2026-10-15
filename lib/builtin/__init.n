@@ -8,8 +8,12 @@ import hash
 import containers.traits
 import io.debug
 import io.raw
+import ffi
 
 package builtin {
+    export ffi.Module
+    export ffi.Ffi_Bytes
+    export ffi.ffi
     export containers.list.List
     export containers.list.list
     export containers.dict.Dict

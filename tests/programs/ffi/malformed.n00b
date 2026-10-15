@@ -1,0 +1,6 @@
+func helper() {}
+
+const c = [-
+library c
+enum color : c_int { RED = 1,, GREEN = 2 }
+-]'ffi

@@ -4,6 +4,7 @@
 #include "driver.h"
 
 #include <errno.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -51,6 +52,13 @@ typedef struct {
 } n00bb_manifest_candidate_t;
 core_list_decl(n00bb_manifest_candidate_t);
 
+typedef struct {
+    core_string_t identifier;
+    core_string_t text;
+    core_string_t package;
+} n00bb_generated_module_t;
+core_list_decl(n00bb_generated_module_t);
+
 struct n00bb_resolver_t {
     core_list_t(n00bb_root_t) roots;
     core_snapshot_inventory_t *inventory;
@@ -58,6 +66,8 @@ struct n00bb_resolver_t {
     bool manifests_indexed;
     uint64_t manifests_generation;
     uint64_t package_syntax_profile;
+    core_list_t(n00bb_generated_module_t) generated;
+    pthread_mutex_t generated_lock;
 };
 
 static char *join_path(const char *a, const char *b);
@@ -362,6 +372,8 @@ n00bb_resolver_new(const char *argv0)
     resolver->roots = core_list_new(n00bb_root_t);
     resolver->manifests = core_list_new(n00bb_manifest_candidate_t);
     resolver->manifests_indexed = false;
+    resolver->generated = core_list_new(n00bb_generated_module_t);
+    pthread_mutex_init(&resolver->generated_lock, nullptr);
     add_bundled_library_root(resolver, argv0);
     add_root(resolver, cwd, true);
     add_environment_roots(resolver, cwd);
@@ -399,7 +411,51 @@ n00bb_resolver_free(n00bb_resolver_t *resolver)
         core_module_spec_release(&resolver->manifests.data[i].module);
     }
     core_list_free(resolver->manifests);
+    for (size_t i = 0; i < resolver->generated.len; i++) {
+        core_free(resolver->generated.data[i].identifier.data);
+        core_free(resolver->generated.data[i].text.data);
+        core_free(resolver->generated.data[i].package.data);
+    }
+    core_list_free(resolver->generated);
+    pthread_mutex_destroy(&resolver->generated_lock);
     core_free(resolver);
+}
+
+bool
+n00bb_resolver_add_generated(n00bb_resolver_t *resolver, core_string_t identifier, core_string_t text,
+                             core_string_t package)
+{
+    if (!resolver || !identifier.u8_bytes) return false;
+    pthread_mutex_lock(&resolver->generated_lock);
+    core_list_push(resolver->generated, ((n00bb_generated_module_t){
+        .identifier = core_string_dup(identifier),
+        .text = core_string_dup(text),
+        .package = core_string_dup(package),
+    }));
+    pthread_mutex_unlock(&resolver->generated_lock);
+    return true;
+}
+
+static core_module_resolve_status_t
+read_generated_source(n00bb_resolver_t *resolver, const char *operand, core_source_file_t *source_out)
+{
+    core_module_resolve_status_t status = CORE_MODULE_NOT_FOUND;
+    pthread_mutex_lock(&resolver->generated_lock);
+    for (size_t i = 0; i < resolver->generated.len; i++) {
+        n00bb_generated_module_t *module = &resolver->generated.data[i];
+        if (strlen(operand) != module->identifier.u8_bytes
+            || memcmp(operand, module->identifier.data, module->identifier.u8_bytes)) continue;
+        core_buffer_t path = {0};
+        core_buffer_printf(&path, "<generated:%s>", operand);
+        bool ok = core_source_file_init(source_out, core_string_borrow(path.data, path.byte_len),
+                                        module->text.data, module->text.u8_bytes);
+        core_buffer_release(&path);
+        if (ok) n00bb_source_file_set_package(source_out, module->package.data);
+        status = ok ? CORE_MODULE_RESOLVED : CORE_MODULE_RESOLVE_ERROR;
+        break;
+    }
+    pthread_mutex_unlock(&resolver->generated_lock);
+    return status;
 }
 
 static char *
@@ -886,6 +942,8 @@ n00bb_locate_operand(n00bb_resolver_t *resolver, const char *operand,
         || !n00bb_operand_module_spec(operand, module_out))
         return CORE_MODULE_RESOLVE_ERROR;
     *source_out = (core_source_file_t){0};
+    core_module_resolve_status_t generated = read_generated_source(resolver, operand, source_out);
+    if (generated != CORE_MODULE_NOT_FOUND) return generated;
     if (is_file_operand(operand)) {
         core_module_resolve_status_t status =
             read_source_path(operand, source_out);

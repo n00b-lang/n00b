@@ -1,0 +1,4 @@
+func f() -> int {
+    print([- library c -]'ffi)
+    return 1
+}

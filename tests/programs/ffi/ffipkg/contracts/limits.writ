@@ -1,0 +1,2 @@
+library limits
+const LIMIT: c_int = 7
