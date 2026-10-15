@@ -1,0 +1,24 @@
+type E {
+    public code: i64
+    public count: i64?
+    public text: string?
+}
+
+comptime {
+} else {
+    let e: E = (code = -3, count = 4, text = "a longer piece of option text")
+    let count = e.count
+    let text = e.text
+    assert count != nil
+    assert text != nil
+    if count != nil {
+        assert count.get() == 4
+    }
+    if text != nil {
+        assert text.get() == "a longer piece of option text"
+    }
+    let n: E = (code = 1, count = nil, text = nil)
+    assert n.count == nil
+    assert n.text == nil
+    __fd_write(2, "ok")
+}

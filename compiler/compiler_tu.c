@@ -2531,10 +2531,20 @@ contextualize_record_fields_before_inference(parse_grammar_t *grammar,
         if (!field || core_tree_num_children(field) < 3) continue;
         parse_tree_t *value = core_tree_child(field,
             core_tree_num_children(field) - 1);
-        if (!value || core_tree_is_leaf(value)
-            || !n00bb_node_record_literal_origin(value)) continue;
+        if (!value || core_tree_is_leaf(value)) continue;
         core_string_t name = parse_tree_leaf_text(core_tree_child(field, 0));
         th_type *field_type = th_record_lookup(definition, name.data);
+        th_type *option_element = nullptr;
+        th_type *value_type = core_tree_node_value(value).type;
+        if (field_type && value_type
+            && n00bb_option_type_element(field_type, &option_element)
+            && !n00bb_option_type_element(value_type, nullptr)
+            && (n00bb_contextual_integer_literal(state, value, option_element)
+                || th_unify_probe(state->types, value_type, option_element))) {
+            core_tree_node_value(field).type = field_type;
+            continue;
+        }
+        if (!n00bb_node_record_literal_origin(value)) continue;
         if (!field_type || !contextualize_record_literal(grammar, unit, state,
                                                           value, field_type))
             return false;
