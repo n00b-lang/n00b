@@ -302,13 +302,15 @@ type Db_Limit_Options {
 
 func db_limit(db: Db, limits: Db_Limit_Options) -> i64 {
     var limits_record: Limits = (max_rows = 0, min_rows = 0)
-    if limits.max_rows != nil {
-        limits_record.max_rows = limits.max_rows.get()
+    let limits_max_rows = limits.max_rows
+    if limits_max_rows != nil {
+        limits_record.max_rows = limits_max_rows.get()
     } else {
         limits_record.max_rows = -1
     }
-    if limits.min_rows != nil {
-        limits_record.min_rows = limits.min_rows.get()
+    let limits_min_rows = limits.min_rows
+    if limits_min_rows != nil {
+        limits_record.min_rows = limits_min_rows.get()
     } else {
         limits_record.min_rows = -1
     }
@@ -355,9 +357,9 @@ func close(modify self: Db) fail: Error {
 28	tests/gen_n00b/../keywords/keywords.writ:23:1	Plain
 32	tests/gen_n00b/../keywords/keywords.writ:27:1	db_open
 65	tests/gen_n00b/../keywords/keywords.writ:30:1	db_limit
-84	tests/gen_n00b/../keywords/keywords.writ:33:1	db_flags
-95	tests/gen_n00b/../keywords/keywords.writ:36:1	db_depth
-105	tests/gen_n00b/../keywords/keywords.writ:39:1	db_close
+86	tests/gen_n00b/../keywords/keywords.writ:33:1	db_flags
+97	tests/gen_n00b/../keywords/keywords.writ:36:1	db_depth
+107	tests/gen_n00b/../keywords/keywords.writ:39:1	db_close
 load static
 extern __db_open keywords_n00b_db_open (ref[string], ref[Open_Opts], ref[uint]) -> i32 fail: nil
 extern __db_limit keywords_n00b_db_limit (uint, ref[Limits]) -> int fail: nil

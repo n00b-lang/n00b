@@ -1671,7 +1671,11 @@ emit_keyword_record(const wrapper_t *w, writ_emit_t *emit, uint32_t item, const 
             continue;
         }
         writ_str_t key = keyword_name(g, field);
-        writ_str_t source = as_record ? writ_str_format(g->session, "%.*s.%.*s", S(local_name(w, item)), S(key)) : key;
+        writ_str_t source = key;
+        if (as_record) {
+            source = writ_str_format(g->session, "%.*s_%.*s", S(local_name(w, item)), S(key));
+            writ_emit_line(emit, "let %.*s = %.*s.%.*s", S(source), S(local_name(w, item)), S(key));
+        }
         bool has_fallback = record->presence == WRIT_PRESENCE_SENTINEL ? field->has_none : field->has_default;
         int64_t fallback = record->presence == WRIT_PRESENCE_SENTINEL ? field->none_value : field->default_value;
         if (!optional) {
