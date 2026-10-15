@@ -35,10 +35,75 @@ read_object(const char *path, size_t *length_out)
     return bytes;
 }
 
+static bool
+string_is(const n00b_abi_snapshot_v1 *snapshot,
+          const n00b_abi_string_v1 *value, const char *text, size_t length)
+{
+    const uint8_t *bytes = nullptr;
+    uint64_t size = 0;
+    return n00b_abi_v1_string_bytes(snapshot, value, &bytes, &size) == 1
+        && size == length && (!length || !memcmp(bytes, text, length));
+}
+
+static void
+check_ffi_module(const n00b_abi_snapshot_v1 *snapshot, const char *path,
+                 char **names, int name_count)
+{
+    uint32_t module_index = 0;
+    uint32_t module_count = n00b_abi_v1_table_count(snapshot,
+        N00B_ABI_TABLE_MODULE);
+    for (uint32_t i = 1; i < module_count; i++)
+        if (string_is(snapshot, &n00b_abi_v1_module(snapshot, i)->full_path,
+                      path, strlen(path))) module_index = i;
+    assert(module_index);
+    bool has_module_scope = false;
+    uint32_t scope_count = n00b_abi_v1_table_count(snapshot,
+        N00B_ABI_TABLE_SCOPE);
+    for (uint32_t i = 1; i < scope_count; i++) {
+        const n00b_abi_scope_v1 *scope = n00b_abi_v1_scope(snapshot, i);
+        has_module_scope = has_module_scope
+            || (scope->module_index == module_index
+                && string_is(snapshot, &scope->kind_name, "module", 6));
+    }
+    assert(has_module_scope);
+    uint32_t symbol_count = n00b_abi_v1_table_count(snapshot,
+        N00B_ABI_TABLE_SYMBOL);
+    for (int n = 0; n < name_count; n++) {
+        const char *equals = strchr(names[n], '=');
+        size_t length = equals ? (size_t)(equals - names[n])
+                               : strlen(names[n]);
+        const n00b_abi_symbol_v1 *found = nullptr;
+        for (uint32_t i = 1; i < symbol_count; i++) {
+            const n00b_abi_symbol_v1 *symbol = n00b_abi_v1_symbol(snapshot, i);
+            const n00b_abi_scope_v1 *scope = n00b_abi_v1_scope(snapshot,
+                symbol->scope_index);
+            if (symbol->module_index == module_index && scope
+                && string_is(snapshot, &scope->kind_name, "module", 6)
+                && string_is(snapshot, &symbol->name, names[n], length))
+                found = symbol;
+        }
+        if (!found) fprintf(stderr, "no symbol row for %.*s\n",
+                            (int)length, names[n]);
+        assert(found);
+        if (!equals) continue;
+        const n00b_abi_native_binding_v1 *binding = n00b_abi_v1_record(
+            snapshot, N00B_ABI_TABLE_NATIVE_BINDING,
+            found->native_binding_index, nullptr);
+        char expected[256];
+        snprintf(expected, sizeof(expected), "%s%s",
+                 strcmp(host_triple(), "arm64-macos") ? "" : "_", equals + 1);
+        assert(found->native_binding_index && binding
+            && binding->kind == N00B_ABI_NATIVE_EXTERNAL_NAME
+            && string_is(snapshot, &binding->native_name, expected,
+                         strlen(expected)));
+    }
+}
+
 int
 main(int argc, char **argv)
 {
-    assert(argc == 3 || argc == 4 || argc == 5);
+    bool ffi_module = argc >= 5 && !strcmp(argv[3], "--ffi-module");
+    assert(argc == 3 || argc == 4 || argc == 5 || ffi_module);
     size_t object_bytes = 0;
     uint8_t *object = read_object(argv[1], &object_bytes);
     core_target_desc_t target;
@@ -119,6 +184,16 @@ main(int argc, char **argv)
         .metadata = (const n00b_abi_header_v1 *)loaded[metadata.native_index],
         .metadata_bytes = metadata.size,
     };
+    if (ffi_module) {
+        n00b_abi_error_v1 error = {0};
+        uint64_t generation = 0;
+        assert(n00b_abi_v1_register_image(&image, &generation, &error)
+            == N00B_ABI_OK);
+        check_ffi_module(n00b_abi_v1_current_snapshot(), argv[4],
+                         argv + 5, argc - 5);
+        free(object);
+        return 0;
+    }
     bool bad_argument = argc == 4
         && !strcmp(argv[3], "--bad-named-argument");
     bool missing_constructor = argc == 4

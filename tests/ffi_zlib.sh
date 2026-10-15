@@ -4,6 +4,7 @@ set -eu
 compiler=$1
 program_dir=$2
 contract_dir=$3
+register_object=$4
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
@@ -47,3 +48,23 @@ if "$compiler" build --contract-dir "$contract_dir" \
     exit 1
 fi
 grep -q 'N00BB-M0007' "$tmp/renamed.log"
+
+N00B_PATH="$program_dir" "$compiler" library --contract-dir "$contract_dir" \
+    --output "$tmp/zlib.n00bm" zlib.__init >"$tmp/library.log" 2>&1 || {
+    cat "$tmp/library.log" >&2
+    exit 1
+}
+shim=n00b_ffi_0
+"$register_object" "$tmp/zlib.n00bm" '>=2' \
+    --ffi-module zlib.__ffi___init_zlib \
+    Error Stream Deflate_Outcome Inflate_Outcome Z_OK Z_BUF_ERROR ZLIB_VERSION \
+    deflate deflate_end inflate inflate_end compress compress_bound \
+    uncompress adler32 crc32 deflate_init inflate_init __ffi_take_bytes \
+    "__deflate=${shim}_n00b_deflate" "__deflateEnd=${shim}_n00b_deflateEnd" \
+    "__inflate=${shim}_n00b_inflate" "__inflateEnd=${shim}_n00b_inflateEnd" \
+    "__compress2=${shim}_n00b_compress2" \
+    "__compressBound=${shim}_n00b_compressBound" \
+    "__uncompress=${shim}_n00b_uncompress" "__adler32=${shim}_n00b_adler32" \
+    "__crc32=${shim}_n00b_crc32" "__deflateInit=${shim}_n00b_deflateInit" \
+    "__inflateInit=${shim}_n00b_inflateInit" \
+    "__ffi_bytes_take=${shim}_take_bytes"

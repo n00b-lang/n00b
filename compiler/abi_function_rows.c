@@ -116,7 +116,9 @@ n00bb_abi_function_rows_build(
          i++) {
         parse_sym_entry_t *symbol = n00bb_abi_decl_symbol_at(declarations,
                                                               (uint32_t)i);
-        if (!symbol || symbol->kind != PARSE_SYM_FUNCTION) continue;
+        if (!symbol || symbol->kind != PARSE_SYM_FUNCTION
+            || parse_sym_binding(symbol,
+                CORE_STRING_STATIC("n00bb.generated-extern"))) continue;
         if (symbol->owner_type
             && (core_string_eq(symbol->owner_type->adt_kind,
                                CORE_STRING_STATIC("trait"))

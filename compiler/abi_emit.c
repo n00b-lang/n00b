@@ -831,6 +831,7 @@ abi_unit_error(core_translation_unit_t *unit, const char *message)
 typedef struct {
     n00b_abi_native_binding_v1 *rows;
     char **names;
+    size_t storage_count;
     size_t count;
 } abi_native_bindings_t;
 
@@ -889,16 +890,24 @@ build_native_bindings(const n00bb_abi_storage_rows_t *storage,
 {
     if (!storage || !storage->rows || !declarations || !rows
         || !rows->symbols || !pool || !out) return false;
+    size_t externs = 0;
+    for (size_t i = 1; i < rows->symbol_count; i++) {
+        parse_sym_entry_t *symbol = n00bb_abi_decl_symbol_at(declarations,
+            (uint32_t)i);
+        externs += symbol && parse_sym_binding(symbol,
+            CORE_STRING_STATIC("n00bb.generated-extern"));
+    }
     abi_native_bindings_t built = {
         .rows = core_alloc_array(n00b_abi_native_binding_v1,
-                                 storage->row_count),
-        .names = core_alloc_array(char *, storage->row_count),
-        .count = storage->row_count,
+                                 storage->row_count + externs),
+        .names = core_alloc_array(char *, storage->row_count + externs),
+        .storage_count = storage->row_count,
+        .count = storage->row_count + externs,
     };
     memset(built.rows, 0, built.count * sizeof(*built.rows));
     memset(built.names, 0, built.count * sizeof(*built.names));
     bool valid = true;
-    for (size_t i = 1; valid && i < built.count; i++) {
+    for (size_t i = 1; valid && i < built.storage_count; i++) {
         const n00b_abi_storage_v1 *value = &storage->rows[i];
         if (!value->symbol_index || value->symbol_index >= rows->symbol_count
             || value->byte_offset > INT64_MAX) {
@@ -924,6 +933,30 @@ build_native_bindings(const n00bb_abi_storage_rows_t *storage,
             offsetof(n00b_abi_native_binding_v1, native_name),
             &built.rows[i].native_name);
         if (valid) symbol_row->native_binding_index = (uint32_t)i;
+    }
+    size_t next = built.storage_count;
+    for (size_t i = 1; valid && i < rows->symbol_count; i++) {
+        parse_sym_entry_t *symbol = n00bb_abi_decl_symbol_at(declarations,
+            (uint32_t)i);
+        const char *native = symbol && parse_sym_binding(symbol,
+                CORE_STRING_STATIC("n00bb.generated-extern"))
+            ? parse_sym_binding(symbol, CORE_STRING_STATIC("n00bb.abi.native"))
+            : nullptr;
+        if (!native) continue;
+        bool underscore = format == CORE_TARGET_OBJECT_MACH_O;
+        size_t length = strlen(native);
+        built.names[next] = core_alloc_array(char, length + underscore + 1);
+        if (underscore) built.names[next][0] = '_';
+        memcpy(built.names[next] + underscore, native, length + 1);
+        built.rows[next].kind = N00B_ABI_NATIVE_EXTERNAL_NAME;
+        valid = !rows->symbols[i].native_binding_index
+            && n00bb_abi_name_pool_encode(pool,
+                core_string_from_cstr(built.names[next]),
+                N00B_ABI_TABLE_NATIVE_BINDING, (uint32_t)next,
+                offsetof(n00b_abi_native_binding_v1, native_name),
+                &built.rows[next].native_name);
+        if (valid) rows->symbols[i].native_binding_index = (uint32_t)next;
+        next++;
     }
     if (!valid) {
         native_bindings_release(&built);
@@ -1557,8 +1590,7 @@ symbol_in_unit(void *opaque, const parse_sym_entry_t *symbol,
     parse_tree_t *node = symbol->decl_node;
     if (!node && symbol->definition_count)
         node = symbol->definition_nodes[0];
-    if (!node && parse_sym_binding((parse_sym_entry_t *)symbol,
-            CORE_STRING_STATIC("n00bb.generated-value-method"))) {
+    if (!node && n00bb_abi_decl_generated_symbol(symbol)) {
         *include = true;
         return true;
     }
@@ -2129,7 +2161,7 @@ n00bb_abi_emit_unit(
             &storage_rows.tls, storage_rows.tls_alignment,
             &extra_sections, storage_input_indexes);
     if (valid && target->object_format == CORE_TARGET_OBJECT_MACH_O) {
-        for (size_t i = 1; i < native_bindings.count; i++)
+        for (size_t i = 1; i < native_bindings.storage_count; i++)
             tls_descriptor_count += storage_rows.rows[i].segment_kind
                 == N00B_ABI_STORAGE_TLS;
         valid = tls_descriptor_count <= SIZE_MAX / 24
@@ -2149,7 +2181,7 @@ n00bb_abi_emit_unit(
         }
     }
     size_t tls_descriptor_ordinal = 0;
-    for (size_t i = 1; valid && i < native_bindings.count; i++) {
+    for (size_t i = 1; valid && i < native_bindings.storage_count; i++) {
         n00b_abi_storage_v1 *row = &storage_rows.rows[i];
         uint32_t input = row->segment_kind <= N00B_ABI_STORAGE_TLS
             ? storage_input_indexes[row->segment_kind] : 0;
@@ -2375,10 +2407,11 @@ n00bb_abi_emit_unit(
             size_t ordinal = 0;
             size_t template_symbols = (has_pool ? 1 : 0)
                 + (has_aggregates ? 1 : 0) + storage_base_symbols
-                + native_bindings.count - 1;
+                + native_bindings.storage_count - 1;
             size_t bootstrap_symbol = template_symbols
                 + tls_descriptor_count;
-            for (size_t i = 1; valid && i < native_bindings.count; i++) {
+            for (size_t i = 1; valid && i < native_bindings.storage_count;
+                 i++) {
                 const n00b_abi_storage_v1 *row = &storage_rows.rows[i];
                 if (row->segment_kind != N00B_ABI_STORAGE_TLS) continue;
                 size_t at = relocation_count + storage_rows.relocation_count
@@ -2404,7 +2437,7 @@ n00bb_abi_emit_unit(
     size_t symbol_count = (has_pool ? 1 : 0)
         + (has_aggregates ? 1 : 0)
         + storage_base_symbols
-        + native_bindings.count - 1
+        + native_bindings.storage_count - 1
         + (tls_descriptor_count ? tls_descriptor_count + 1 : 0);
     object_symbols = symbol_count
         ? core_alloc_array(core_object_emit_symbol_t, symbol_count)
@@ -2429,7 +2462,7 @@ n00bb_abi_emit_unit(
                 .section_index =
                     storage_input_indexes[N00B_ABI_STORAGE_WRITABLE],
             };
-    for (size_t i = 1; i < native_bindings.count; i++) {
+    for (size_t i = 1; i < native_bindings.storage_count; i++) {
         const n00b_abi_storage_v1 *row = &storage_rows.rows[i];
         object_symbols[storage_base_first + storage_base_symbols + i - 1] =
             (core_object_emit_symbol_t){
@@ -2444,7 +2477,7 @@ n00bb_abi_emit_unit(
     }
     if (tls_descriptor_count) {
         size_t ordinal = 0;
-        for (size_t i = 1; i < native_bindings.count; i++) {
+        for (size_t i = 1; i < native_bindings.storage_count; i++) {
             const n00b_abi_storage_v1 *row = &storage_rows.rows[i];
             if (row->segment_kind != N00B_ABI_STORAGE_TLS) continue;
             const char *native_name = native_bindings.names[i];

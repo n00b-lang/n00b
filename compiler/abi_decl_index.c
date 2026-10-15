@@ -13,6 +13,7 @@ struct n00bb_abi_decl_index_t {
     core_indexed_table_t *scopes;
     core_indexed_table_t *symbols;
     uint32_t module_scope_index;
+    const parse_scope_t *extern_scope;
 };
 
 static core_hash_value_t
@@ -51,6 +52,24 @@ add_scope_chain(n00bb_abi_decl_index_t *index, parse_scope_t *scope)
     return module_found;
 }
 
+bool
+n00bb_abi_decl_generated_symbol(const parse_sym_entry_t *symbol)
+{
+    return parse_sym_binding(symbol,
+            CORE_STRING_STATIC("n00bb.generated-value-method"))
+        || parse_sym_binding(symbol,
+            CORE_STRING_STATIC("n00bb.generated-extern"));
+}
+
+bool
+n00bb_abi_decl_owned_symbol(const parse_sym_entry_t *symbol)
+{
+    bool generated = n00bb_abi_decl_generated_symbol(symbol);
+    return !(symbol->is_synthetic && !generated) && !symbol->binding_origin
+        && symbol->kind != PARSE_SYM_MODULE
+        && (symbol->decl_node || symbol->definition_count || generated);
+}
+
 n00bb_abi_decl_index_t *
 n00bb_abi_decl_index_new(const parse_symtab_t *symbols)
 {
@@ -83,13 +102,16 @@ n00bb_abi_decl_index_new(const parse_symtab_t *symbols)
          scope = scope->all_next) {
         for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
              symbol = symbol->next_in_scope) {
-            bool generated = parse_sym_binding(symbol,
-                CORE_STRING_STATIC("n00bb.generated-value-method")) != nullptr;
-            if ((symbol->is_synthetic && !generated) || symbol->binding_origin
-                || symbol->kind == PARSE_SYM_MODULE
-                || (!symbol->decl_node && !symbol->definition_count
-                    && !generated))
-                continue;
+            if (!n00bb_abi_decl_owned_symbol(symbol)) continue;
+            bool external = parse_sym_binding(symbol,
+                CORE_STRING_STATIC("n00bb.generated-extern")) != nullptr;
+            if (external && index->module_scope_index
+                && symbol->scope == scope && !scope->parent
+                && (!index->extern_scope || index->extern_scope == scope)) {
+                index->extern_scope = scope;
+                if (core_indexed_table_intern(index->symbols, symbol,
+                                              symbol, nullptr)) continue;
+            }
             if (symbol->scope != scope || !add_scope_chain(index, scope)
                 || !core_indexed_table_intern(index->symbols, symbol,
                                                symbol, nullptr)) {
@@ -151,6 +173,10 @@ n00bb_abi_decl_find_scope(const n00bb_abi_decl_index_t *index,
                            const parse_scope_t *scope, uint32_t *out)
 {
     if (!index || !scope || !out) return false;
+    if (scope == index->extern_scope) {
+        *out = index->module_scope_index;
+        return true;
+    }
     const core_indexed_entry_t *entry = core_indexed_table_find(
         index->scopes, scope);
     if (!entry) return false;

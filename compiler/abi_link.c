@@ -3625,6 +3625,9 @@ n00bb_abi_rebase_native_references(
                 + (size_t)row_index * table->record_bytes;
             const n00bb_abi_row_origin_t *origin =
                 &table->origins[row_index];
+            if (table->kind == N00B_ABI_TABLE_NATIVE_BINDING
+                && ((n00b_abi_native_binding_v1 *)row)->kind
+                    == N00B_ABI_NATIVE_EXTERNAL_NAME) continue;
             uint32_t local_section = table->kind == N00B_ABI_TABLE_STORAGE
                 ? ((n00b_abi_storage_v1 *)row)->segment_index
                 : ((n00b_abi_native_binding_v1 *)row)->section_index;
@@ -3786,6 +3789,7 @@ n00bb_abi_add_native_bindings(
         const n00bb_abi_row_origin_t *origin = &table->origins[i];
         const n00b_abi_native_binding_v1 *binding =
             (const void *)(table->records + (size_t)i * table->record_bytes);
+        if (binding->kind == N00B_ABI_NATIVE_EXTERNAL_NAME) continue;
         if (!origin->present || origin->input >= selected->count
             || !origin->local
             || binding->kind != N00B_ABI_NATIVE_SECTION_OFFSET

@@ -8,6 +8,7 @@
 #include "lib/indexed_table.h"
 #include "lib/list.h"
 #include "signature_typevars.h"
+#include "abi_decl_index.h"
 
 typedef struct {
     uint64_t id;
@@ -631,13 +632,7 @@ n00bb_abi_type_index_collect_symbols(n00bb_abi_type_index_t *index,
          scope; scope = scope->all_next) {
         for (const parse_sym_entry_t *symbol = scope->first_in_scope;
              symbol; symbol = symbol->next_in_scope) {
-            bool generated = parse_sym_binding(symbol,
-                CORE_STRING_STATIC("n00bb.generated-value-method")) != nullptr;
-            if ((symbol->is_synthetic && !generated) || symbol->binding_origin
-                || symbol->kind == PARSE_SYM_MODULE)
-                continue;
-            if (!symbol->decl_node && !symbol->definition_count
-                && !generated) continue;
+            if (!n00bb_abi_decl_owned_symbol(symbol)) continue;
             bool include = true;
             if (select && !select(context, symbol, &include)) return false;
             if (!include) continue;

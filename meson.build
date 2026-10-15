@@ -417,7 +417,8 @@ test('abi-declarations', abi_declarations_test)
 
 abi_type_index_test = executable(
     'abi-type-index-test',
-    ['tests/abi_type_index.c', 'compiler/abi_type_index.c'],
+    ['tests/abi_type_index.c', 'compiler/abi_type_index.c',
+     'compiler/abi_decl_index.c'],
     dependencies: lantern,
 )
 
@@ -629,7 +630,8 @@ test(
     args: [meson.current_source_dir() / 'tests' / 'ffi_zlib.sh',
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'ffi',
-           writ.get_variable(pkgconfig: 'contractdir')],
+           writ.get_variable(pkgconfig: 'contractdir'),
+           abi_register_object_test.full_path()],
     timeout: 300,
 )
 

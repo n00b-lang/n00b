@@ -91,7 +91,7 @@ register_builtin_comparison_symbols(parse_symtab_t *symtab,
     return ok;
 }
 
-static bool
+static parse_sym_entry_t *
 register_native_signature(parse_symtab_t *symtab, th_ctx *types,
                           th_type *nil_type, core_string_t name,
                           const char *native_name, th_type *signature)
@@ -103,11 +103,11 @@ register_native_signature(parse_symtab_t *symtab, th_ctx *types,
         : nullptr;
     if (!symbol || !parse_sym_set_binding(symbol,
             CORE_STRING_STATIC("n00bb.abi.native"),
-            (void *)native_name)) return false;
+            (void *)native_name)) return nullptr;
     symbol->type = signature;
     symbol->error_type = nil_type;
     symbol->callable_contract = contract;
-    return true;
+    return symbol;
 }
 
 static bool
@@ -131,7 +131,7 @@ register_builtin_native_function(parse_symtab_t *symtab, th_ctx *types,
                              count, nullptr, nullptr, 0) : nullptr;
     core_free(parameters);
     return register_native_signature(symtab, types, nil_type,
-        core_string_from_cstr(name), native_name, signature);
+        core_string_from_cstr(name), native_name, signature) != nullptr;
 }
 
 bool
@@ -147,9 +147,12 @@ register_native_declarations(parse_annot_result_t *annotations, th_ctx *types,
         th_type *signature = ir_typelang_parse_function(types,
             natives.items[i].signature.data, &failure, &error);
         free(error);
-        if (!register_native_signature(symtab, types, nil_type,
-                natives.items[i].name, natives.items[i].symbol.data,
-                signature)) return false;
+        parse_sym_entry_t *symbol = register_native_signature(symtab, types,
+            nil_type, natives.items[i].name, natives.items[i].symbol.data,
+            signature);
+        if (!symbol || !parse_sym_set_binding(symbol,
+                CORE_STRING_STATIC("n00bb.generated-extern"), symbol))
+            return false;
     }
     return true;
 }
