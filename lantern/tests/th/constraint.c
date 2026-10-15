@@ -230,6 +230,26 @@ static void test_has_field_auto_deref(th_ctx *ctx)
           !binds(ctx, field, th_ind(ctx, 0, i)));
 }
 
+static void test_has_field_reports_field_constraint(th_ctx *ctx)
+{
+    th_member value = {.name = "value", .type = th_name(ctx, "string")};
+    th_type *record = th_record(ctx, &value, 1);
+    th_type *field = th_var(ctx);
+    th_var_constrain(ctx, field,
+                     (th_constraint){.kind = TH_CON_KIND,
+                                     .type_kind = TH_BITINT});
+    th_constraint c = {.kind = TH_CON_HAS_FIELD,
+                       .field = {.name = "value", .type = field}};
+    th_errors_clear(ctx);
+    bool bound = binds(ctx, c, record);
+    th_error_t last = {0};
+    bool recorded = th_error_count(ctx)
+        && th_error_at(ctx, th_error_count(ctx) - 1, &last);
+    check("has_field reports the field's own failing constraint",
+          !bound && recorded && last.constraint
+              && !strcmp(last.constraint, "kind"));
+}
+
 static void test_has_param(th_ctx *ctx)
 {
     th_type *i = th_name(ctx, "int");
@@ -1095,6 +1115,7 @@ int main(void)
     test_promotes(ctx);
     test_has_field(ctx);
     test_has_field_auto_deref(ctx);
+    test_has_field_reports_field_constraint(ctx);
     test_has_param(ctx);
     test_constraints_move_between_vars(ctx);
     test_implements(ctx);

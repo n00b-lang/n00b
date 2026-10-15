@@ -1125,7 +1125,9 @@ static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to,
                 return false;
             }
 
+            size_t field_errors = ctx->errors.len;
             if (c->field.type && !uni(ctx, m, c->field.type, seen)) {
+                if (ctx->errors.len > field_errors) return false;
                 th_err(ctx, TH_ERR_CONSTRAINT, "has_field", c->field.type,
                        m, "constraint has_field: field type does not unify");
 
@@ -1155,7 +1157,9 @@ static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to,
                 return false;
             }
 
+            size_t param_errors = ctx->errors.len;
             if (c->param.type && !uni(ctx, a->type, c->param.type, seen)) {
+                if (ctx->errors.len > param_errors) return false;
                 th_err(ctx, TH_ERR_CONSTRAINT, "has_param", c->param.type,
                        a->type,
                        "constraint has_param: parameter does not unify");
@@ -1218,8 +1222,12 @@ static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to,
             th_type *method_result = signature ? th_func_ret(signature)
                                                : nullptr;
             bool matches = receiver && method_result;
+            size_t receiver_errors = ctx->errors.len;
+            bool receiver_matches = false;
             if (matches) {
                 matches = uni(ctx, receiver->type, bound_to, seen);
+                receiver_matches = matches;
+                receiver_errors = ctx->errors.len;
                 bool self_result = c->method.result == var
                     && method_result == receiver->type;
                 if (matches && !self_result)
@@ -1256,6 +1264,9 @@ static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to,
             }
             ctx->active_environment_constraints.len--;
             leave_constraint_scope(ctx, previous);
+            if (!matches && receiver_matches
+                && ctx->errors.len > receiver_errors)
+                return false;
             if (!matches) {
                 th_err(ctx, TH_ERR_CONSTRAINT, c->method.name,
                        c->method.result, bound_to,
