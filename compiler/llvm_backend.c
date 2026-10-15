@@ -4634,6 +4634,17 @@ store_gc_barrier_if_changed(lower_state_t *state, LLVMValueRef address,
 }
 
 static LLVMValueRef
+assemble_box(lower_state_t *state, uint32_t index, LLVMValueRef bits)
+{
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMValueRef box = LLVMConstNull(box_llvm_type(context));
+    box = LLVMBuildInsertValue(state->builder, box,
+        LLVMConstInt(LLVMInt32TypeInContext(context), index, false),
+        2, "box.type");
+    return LLVMBuildInsertValue(state->builder, box, bits, 3, "box.value");
+}
+
+static LLVMValueRef
 box_value(lower_state_t *state, LLVMValueRef value, th_type *type)
 {
     LLVMContextRef context = LLVMGetModuleContext(state->module);
@@ -4686,15 +4697,7 @@ box_value(lower_state_t *state, LLVMValueRef value, th_type *type)
         bits = LLVMBuildPtrToInt(state->builder, slot, word_type,
                                  "box.pointer");
     }
-    LLVMValueRef box = LLVMGetUndef(box_type);
-    box = LLVMBuildInsertValue(state->builder, box,
-        LLVMConstNull(LLVMInt16TypeInContext(context)), 0, "box.extent");
-    box = LLVMBuildInsertValue(state->builder, box,
-        LLVMConstNull(LLVMInt16TypeInContext(context)), 1, "box.stride");
-    box = LLVMBuildInsertValue(state->builder, box,
-        LLVMConstInt(LLVMInt32TypeInContext(context), index, false),
-        2, "box.type");
-    return LLVMBuildInsertValue(state->builder, box, bits, 3, "box.value");
+    return assemble_box(state, index, bits);
 }
 
 static LLVMValueRef
@@ -4711,12 +4714,7 @@ box_fresh_storage(lower_state_t *state, LLVMValueRef storage, th_type *type)
         ? LLVMConstNull(word)
         : LLVMBuildPtrToInt(state->builder, storage, word,
                             "fresh.box.pointer");
-    LLVMValueRef box = LLVMConstNull(box_llvm_type(context));
-    box = LLVMBuildInsertValue(state->builder, box,
-        LLVMConstInt(LLVMInt32TypeInContext(context), index, false),
-        2, "fresh.box.type");
-    return LLVMBuildInsertValue(state->builder, box, bits,
-                                3, "fresh.box.payload");
+    return assemble_box(state, index, bits);
 }
 
 static LLVMValueRef
