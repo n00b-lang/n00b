@@ -339,12 +339,6 @@ packed_array_width(ir_module_t *module, th_type *type)
 }
 
 static bool
-is_pointer_option(th_type *type)
-{
-    return n00bb_frame_pointer_option(type);
-}
-
-static bool
 is_atomic_bool(ir_module_t *module, th_type *type)
 {
     const char *name = nullptr;
@@ -517,7 +511,7 @@ aggregate_option_type(ir_module_t *module, th_type *type,
         LLVMTypeRef fields[] = {element, LLVMInt8TypeInContext(context)};
         return LLVMStructTypeInContext(context, fields, 2, false);
     }
-    if (is_pointer_option(type)) return nullptr;
+    if (n00bb_frame_pointer_option(type)) return nullptr;
     LLVMTypeRef packed = packed_option_type(module, type, context, nullptr);
     if (packed) return packed;
     const char *target = ir_module_target(module);
@@ -657,7 +651,7 @@ value_type_uncached(ir_module_t *module, th_type *type,
         return argument && argument->kind == TH_ARG_TYPE
             ? value_type(module, argument->type, context) : nullptr;
     }
-    if (is_pointer_option(type)
+    if (n00bb_frame_pointer_option(type)
         && th_is_closed(ir_module_types(module), type))
         return LLVMPointerTypeInContext(context, 0);
     if (!strcmp(name, "option") && arguments == 1)
@@ -1922,7 +1916,7 @@ literal_element_layout_matches(ir_module_t *module, th_type *type,
                 || literal_element_layout_matches(module, argument->type,
                                                   native, target));
     }
-    if (is_pointer_option(type))
+    if (n00bb_frame_pointer_option(type))
         return LLVMGetTypeKind(native) == LLVMPointerTypeKind
             && layout->intrinsic_bits == sizeof(void *) * 8
             && layout->has_discriminant
@@ -4456,7 +4450,7 @@ store_gc_barrier(lower_state_t *state, LLVMValueRef value, th_type *type)
     LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
     if (LLVMTypeOf(value) == pointer
         && (th_kind_of(th_resolve(type)) == TH_INDIRECTION
-            || is_pointer_option(type))) {
+            || n00bb_frame_pointer_option(type))) {
         LLVMTypeRef params[] = {pointer};
         LLVMTypeRef signature = LLVMFunctionType(
             LLVMVoidTypeInContext(context), params, 1, false);
@@ -4551,7 +4545,7 @@ gc_references_equal(lower_state_t *state, LLVMValueRef old_value,
     if (native != LLVMTypeOf(old_value)) return nullptr;
     if (LLVMGetTypeKind(native) == LLVMPointerTypeKind
         && (th_kind_of(th_resolve(type)) == TH_INDIRECTION
-            || is_pointer_option(type)))
+            || n00bb_frame_pointer_option(type)))
         return LLVMBuildICmp(state->builder, LLVMIntEQ, old_value,
                              new_value, "gc.same.pointer");
     if (th_kind_of(th_resolve(type)) == TH_SEQUENCE
