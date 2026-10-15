@@ -1353,7 +1353,8 @@ semantic_walk_child_complete(parse_visit_t *visit)
                 CORE_STRING_STATIC(""));
             bool bound = new_scope
                 && n00bb_bind_option_condition_shadows(context->grammar,
-                    unit, symtab, new_scope, condition, condition_truth);
+                    unit, symtab, new_scope, condition, condition_truth,
+                    node, child);
             parse_symtab_enter_scope_all(symtab, saved);
             if (!bound) {
                 core_diagnostics_report_at(

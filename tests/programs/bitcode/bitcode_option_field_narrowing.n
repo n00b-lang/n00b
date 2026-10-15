@@ -1,0 +1,66 @@
+type Inner {
+    value: int?
+}
+
+type Entry {
+    value: int?
+    inner: Inner
+}
+
+var entries: List[Entry] = new[List[Entry]]()
+
+func peek(entry: Entry) -> int {
+    return 0
+}
+
+func guarded(entry: Entry) -> int {
+    if entry.value != nil {
+        return entry.value.get()
+    }
+    return 0
+}
+
+func early(entry: Entry) -> int {
+    if entry.value == nil or entry.inner.value == nil {
+        return 0
+    }
+    return entry.value.get() + entry.inner.value.get()
+}
+
+func local_copy(entry: Entry) -> int {
+    var copy: Entry = entry
+    if copy.value == nil {
+        return 0
+    }
+    let unused = peek(copy)
+    return copy.value.get()
+}
+
+func modified(modify entry: Entry) -> int {
+    if entry.value != nil {
+        return entry.value.get()
+    }
+    return 0
+}
+
+func indexed(index: int) -> int {
+    let entry = entries[index]
+    let value = entry.value
+    let inner = entry.inner.value
+    if value == nil or inner == nil {
+        return 0
+    }
+    return value.get() + inner.get()
+}
+
+comptime {} else {
+    let inner: Inner = (value = 5)
+    var entry: Entry = (value = 4, inner = inner)
+    entries.append(entry)
+    require guarded(entry) == 4
+    require early(entry) == 9
+    require local_copy(entry) == 4
+    require modified(entry) == 4
+    require indexed(0) == 9
+    __fd_write(2, "ok")
+}

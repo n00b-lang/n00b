@@ -1,0 +1,21 @@
+type Entry {
+    value: int?
+}
+
+func clear(modify entry: Entry) {
+    entry.value = nil
+}
+
+func run(entry: Entry, other: Ref[Entry]) -> int {
+    var copy: Entry = entry
+    if copy.value == nil {
+        return 0
+    }
+    clear(copy)
+    return copy.value.get()
+}
+
+comptime {} else {
+    var entry: Entry = (value = 4)
+    require run(entry, ref entry) > 0
+}

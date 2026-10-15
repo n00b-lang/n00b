@@ -1345,6 +1345,24 @@ test(
 )
 
 test(
+    'option-field-narrowing-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_option_field_narrowing.n'],
+)
+
+test(
+    'option-narrowing-rejections',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'option_narrowing.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'option_narrowing'],
+)
+
+test(
     'named-reference-n00b',
     find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',

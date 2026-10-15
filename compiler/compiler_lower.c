@@ -9986,6 +9986,9 @@ static bool n00bb_nominal_value_as(ir_lower_context_t *context,
                                    parse_visit_t *visit,
                                    th_type *target_type,
                                    parse_tree_t *source);
+static bool n00bb_option_path_proven(n00bb_lower_context_t *lower,
+                                     parse_grammar_t *grammar,
+                                     parse_tree_t *receiver);
 
 static ir_lower_result_t
 n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
@@ -10176,7 +10179,8 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     if (option_builtin
         && core_string_eq(symbol->name, CORE_STRING_STATIC("__option_get"))
         && !parse_sym_binding(receiver_symbol,
-            CORE_STRING_STATIC("n00bb.option-set-element")))
+            CORE_STRING_STATIC("n00bb.option-set-element"))
+        && !n00bb_option_path_proven(lower, visit->grammar, receiver_node))
         return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
             "option.get requires a value proven non-nil by the active branch");
     bool no_function_body = fd_write_builtin || repr_default_builtin
@@ -17219,6 +17223,148 @@ n00bb_lower_comptime_statement(ir_lower_context_t *context,
 }
 
 static bool
+n00bb_next_call_within(n00bb_lower_context_t *lower, parse_tree_t *node,
+                       size_t *cursor, core_link_dependency_view_t *call,
+                       th_type **signature)
+{
+    n00bb_tu_state_t *state = tu_state(lower->unit);
+    core_link_unit_t *link = state ? state->link : nullptr;
+    size_t count = link ? core_link_unit_dependency_count(link) : 0;
+    while (*cursor < count) {
+        size_t i = (*cursor)++;
+        if (!core_link_unit_dependency_at(link, i, call)
+            || (call->kind != N00BB_LINK_DEPENDENCY_CALL
+                && call->kind != N00BB_LINK_DEPENDENCY_TRAIT_DISPATCH
+                && call->kind != N00BB_LINK_DEPENDENCY_CONTEXT_CALL)
+            || call->source_unit != lower->unit || !call->to
+            || !node_is_within((parse_tree_t *)call->source_site, node))
+            continue;
+        ir_func_t *callee = core_link_declaration_binding(call->to,
+            CORE_STRING_STATIC("n00bb.ir.function"));
+        *signature = callee ? th_resolve(callee->type) : nullptr;
+        return true;
+    }
+    return false;
+}
+
+static bool
+n00bb_signature_writes_arguments(th_type *signature)
+{
+    for (size_t p = 0; signature && p < th_func_nparams(signature); p++) {
+        const th_param *parameter = th_func_param(signature, p);
+        if (parameter && th_mode_produces_output(parameter->mode))
+            return true;
+    }
+    const th_param *rest = signature ? th_func_rest(signature) : nullptr;
+    return rest && th_mode_produces_output(rest->mode);
+}
+
+static parse_tree_t *
+n00bb_region_child(parse_tree_t *node, parse_tree_t *region)
+{
+    while (node && core_tree_node_value(node).parent != region)
+        node = core_tree_node_value(node).parent;
+    return node;
+}
+
+static bool
+n00bb_region_includes(parse_tree_t *node, parse_tree_t *region,
+                      parse_tree_t *after)
+{
+    if (!node_is_within(node, region) || node == region) return false;
+    if (!after) return true;
+    parse_tree_t *child = n00bb_region_child(node, region);
+    parse_tree_t *guard = n00bb_region_child(after, region);
+    for (size_t i = 0; i < core_tree_num_children(region); i++) {
+        parse_tree_t *at = core_tree_child(region, i);
+        if (at == guard) return child != guard;
+        if (at == child) return false;
+    }
+    return false;
+}
+
+static bool
+n00bb_use_writes_root(n00bb_lower_context_t *lower, parse_grammar_t *grammar,
+                      parse_tree_t *use, parse_tree_t *region)
+{
+    for (parse_tree_t *at = core_tree_node_value(use).parent;
+         at && at != region; at = core_tree_node_value(at).parent) {
+        if ((nt_is(grammar, at, "assign-stmt")
+             || nt_is(grammar, at, "binop-assign-stmt"))
+            && node_is_within(use, core_tree_child(at, 0))) return true;
+        if (nt_is(grammar, at, "unary-expr")
+            && core_string_eq(first_token_text(at), CORE_STRING_STATIC("ref")))
+            return true;
+        if (!nt_is(grammar, at, "postfix-expr")
+            || core_tree_num_children(at) < 3
+            || !parse_tree_leaf_is(core_tree_child(at, 1),
+                                   CORE_STRING_STATIC("("))) continue;
+        size_t cursor = 0;
+        core_link_dependency_view_t call;
+        th_type *signature = nullptr;
+        while (n00bb_next_call_within(lower, at, &cursor, &call, &signature))
+            if (!signature || n00bb_signature_writes_arguments(signature))
+                return true;
+    }
+    return false;
+}
+
+static bool
+n00bb_option_path_stable(n00bb_lower_context_t *lower,
+                         parse_grammar_t *grammar, parse_tree_t *receiver,
+                         const n00bb_option_path_t *path)
+{
+    n00bb_tu_state_t *state = tu_state(lower->unit);
+    for (parse_tree_t *access = member_access_node(grammar, receiver);
+         access; access = member_access_node(grammar,
+                              core_tree_child(access, 0))) {
+        th_type *base = th_resolve(core_tree_node_value(
+            core_tree_child(access, 0)).type);
+        if (!base || n00bb_dereferenced_type(state->types, base) != base)
+            return false;
+    }
+    parse_sym_entry_t *root = path->root;
+    bool writable_param = root->kind == PARSE_SYM_PARAM && root->has_mode
+        && th_mode_produces_output(root->mode);
+    if ((root->kind == PARSE_SYM_PARAM && !writable_param)
+        || (root->kind == PARSE_SYM_VARIABLE
+            && root->mutability == PARSE_SYM_IMMUTABLE)) return true;
+    if (root->kind == PARSE_SYM_VARIABLE
+        && root->storage_duration != PARSE_SYM_STORAGE_AUTOMATIC) return false;
+    for (size_t i = 0; i < root->use_count; i++) {
+        parse_tree_t *use = root->use_nodes[i];
+        if (n00bb_region_includes(use, path->region, path->after)
+            && n00bb_use_writes_root(lower, grammar, use, path->region))
+            return false;
+    }
+    return true;
+}
+
+static bool
+n00bb_option_path_proven(n00bb_lower_context_t *lower,
+                         parse_grammar_t *grammar, parse_tree_t *receiver)
+{
+    n00bb_tu_state_t *state = lower ? tu_state(lower->unit) : nullptr;
+    parse_sym_entry_t *root = nullptr;
+    core_buffer_t name = {0};
+    if (!state || !receiver
+        || !n00bb_member_path(grammar, lower->unit, receiver, &root, &name)) {
+        core_buffer_release(&name);
+        return false;
+    }
+    core_string_t spelling = core_string_borrow(name.data, name.byte_len);
+    bool proven = false;
+    for (size_t i = 0; !proven && i < state->option_paths.len; i++) {
+        const n00bb_option_path_t *path = &state->option_paths.data[i];
+        proven = path->root == root && core_string_eq(path->path, spelling)
+            && n00bb_region_includes(receiver, path->region, path->after)
+            && n00bb_option_path_stable(lower, grammar, receiver, path);
+    }
+    core_buffer_release(&name);
+    return proven;
+}
+
+static bool
 n00bb_assert_has_known_side_effect(n00bb_lower_context_t *lower,
                                    parse_tree_t *node)
 {
@@ -17226,26 +17372,11 @@ n00bb_assert_has_known_side_effect(n00bb_lower_context_t *lower,
     core_link_unit_t *link = state ? state->link : nullptr;
     if (!link) return false;
     size_t count = core_link_unit_dependency_count(link);
-    for (size_t i = 0; i < count; i++) {
-        core_link_dependency_view_t call;
-        if (!core_link_unit_dependency_at(link, i, &call)
-            || (call.kind != N00BB_LINK_DEPENDENCY_CALL
-                && call.kind != N00BB_LINK_DEPENDENCY_TRAIT_DISPATCH
-                && call.kind != N00BB_LINK_DEPENDENCY_CONTEXT_CALL)
-            || call.source_unit != lower->unit || !call.to
-            || !node_is_within((parse_tree_t *)call.source_site, node))
-            continue;
-        ir_func_t *callee = core_link_declaration_binding(call.to,
-            CORE_STRING_STATIC("n00bb.ir.function"));
-        th_type *signature = callee ? th_resolve(callee->type) : nullptr;
-        for (size_t p = 0; signature && p < th_func_nparams(signature); p++) {
-            const th_param *parameter = th_func_param(signature, p);
-            if (parameter && (parameter->mode == TH_OUT
-                              || parameter->mode == TH_INOUT)) return true;
-        }
-        const th_param *rest = signature ? th_func_rest(signature) : nullptr;
-        if (rest && (rest->mode == TH_OUT || rest->mode == TH_INOUT))
-            return true;
+    size_t cursor = 0;
+    core_link_dependency_view_t call;
+    th_type *signature = nullptr;
+    while (n00bb_next_call_within(lower, node, &cursor, &call, &signature)) {
+        if (n00bb_signature_writes_arguments(signature)) return true;
         for (size_t j = 0; j < count; j++) {
             core_link_dependency_view_t effect;
             if (!core_link_unit_dependency_at(link, j, &effect)

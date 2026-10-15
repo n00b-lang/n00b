@@ -4395,33 +4395,39 @@ n00bb_is_nil_literal(parse_grammar_t *grammar, parse_tree_t *node)
         && core_string_eq(first_token_text(node), CORE_STRING_STATIC("nil"));
 }
 
+static parse_tree_t *
+n00bb_non_nil_operand(parse_grammar_t *grammar, parse_tree_t *condition,
+                      bool truth)
+{
+    while (condition && !core_tree_is_leaf(condition)
+        && !nt_is(grammar, condition, "equality-expr")) {
+        if (core_tree_num_children(condition) != 1) return nullptr;
+        condition = core_tree_child(condition, 0);
+    }
+    if (!nt_is(grammar, condition, "equality-expr")
+        || core_tree_num_children(condition) != 3) return nullptr;
+    core_string_t op = first_token_text(
+        core_tree_child(condition, 1));
+    bool non_nil = core_string_eq(op, CORE_STRING_STATIC("!="));
+    if ((!non_nil && !core_string_eq(op, CORE_STRING_STATIC("==")))
+        || truth != non_nil) return nullptr;
+    parse_tree_t *left = core_tree_child(condition, 0);
+    parse_tree_t *right = core_tree_child(condition, 2);
+    bool left_is_nil = n00bb_is_nil_literal(grammar, left);
+    bool right_is_nil = n00bb_is_nil_literal(grammar, right);
+    if (left_is_nil == right_is_nil) return nullptr;
+    return left_is_nil ? right : left;
+}
+
 static bool
 n00bb_option_condition_refinement(parse_grammar_t *grammar,
                                   core_translation_unit_t *unit,
-                                  parse_tree_t *condition, bool truth,
+                                  parse_tree_t *value,
                                   parse_sym_entry_t **subject_out,
                                   th_type **element_out)
 {
     if (subject_out) *subject_out = nullptr;
     if (element_out) *element_out = nullptr;
-    while (condition && !core_tree_is_leaf(condition)
-        && !nt_is(grammar, condition, "equality-expr")) {
-        if (core_tree_num_children(condition) != 1) return false;
-        condition = core_tree_child(condition, 0);
-    }
-    if (!nt_is(grammar, condition, "equality-expr")
-        || core_tree_num_children(condition) != 3) return false;
-    core_string_t op = first_token_text(
-        core_tree_child(condition, 1));
-    bool non_nil = core_string_eq(op, CORE_STRING_STATIC("!="));
-    if (!non_nil && !core_string_eq(op, CORE_STRING_STATIC("==")))
-        return false;
-    parse_tree_t *left = core_tree_child(condition, 0);
-    parse_tree_t *right = core_tree_child(condition, 2);
-    bool left_is_nil = n00bb_is_nil_literal(grammar, left);
-    bool right_is_nil = n00bb_is_nil_literal(grammar, right);
-    if (left_is_nil == right_is_nil) return false;
-    parse_tree_t *value = left_is_nil ? right : left;
     parse_tree_t *lvalue = n00bb_simple_lvalue(value);
     parse_sym_entry_t *subject = lvalue
         ? attached_symbol(grammar, unit, lvalue) : nullptr;
@@ -4430,13 +4436,20 @@ n00bb_option_condition_refinement(parse_grammar_t *grammar,
     size_t nargs = 0;
     th_type *type = subject ? th_resolve(subject->type) : nullptr;
     const th_arg *argument = nullptr;
+    if (subject && (subject->kind == PARSE_SYM_VARIABLE
+                    || subject->kind == PARSE_SYM_PARAM)
+        && type && th_kind_of(type) == TH_VAR) {
+        if (subject_out) *subject_out = subject;
+        if (element_out) *element_out = type;
+        return true;
+    }
     if (!subject || (subject->kind != PARSE_SYM_VARIABLE
                      && subject->kind != PARSE_SYM_PARAM)
         || !th_named_info(type, &type_name, nullptr, &is_variant, &nargs)
         || is_variant || nargs != 1 || !type_name
         || strcmp(canonical_builtin_type_name(type_name), "option")
         || !(argument = th_named_arg(type, 0))
-        || argument->kind != TH_ARG_TYPE || truth != non_nil)
+        || argument->kind != TH_ARG_TYPE)
         return false;
     if (subject_out) *subject_out = subject;
     if (element_out) *element_out = argument->type;
@@ -4509,12 +4522,49 @@ n00bb_bind_option_shadow(parse_symtab_t *symtab, parse_scope_t *scope,
         CORE_STRING_STATIC("n00bb.option-set-element"), element);
 }
 
+static bool
+n00bb_record_option_path(parse_grammar_t *grammar,
+                         core_translation_unit_t *unit, parse_tree_t *value,
+                         parse_tree_t *region, parse_tree_t *after)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    parse_sym_entry_t *root = nullptr;
+    core_buffer_t path = {0};
+    if (!state || !region
+        || !n00bb_member_path(grammar, unit, value, &root, &path)) {
+        core_buffer_release(&path);
+        return true;
+    }
+    for (size_t i = 0; i < state->option_paths.len; i++) {
+        n00bb_option_path_t *known = &state->option_paths.data[i];
+        if (known->root == root && known->region == region
+            && known->after == after
+            && core_string_eq(known->path,
+                   core_string_borrow(path.data, path.byte_len))) {
+            core_buffer_release(&path);
+            return true;
+        }
+    }
+    char *name = core_strndup(path.data, path.byte_len);
+    size_t length = path.byte_len;
+    core_buffer_release(&path);
+    if (!name) return false;
+    core_list_push(state->option_paths, ((n00bb_option_path_t){
+        .root = root,
+        .path = core_string_borrow(name, length),
+        .region = region,
+        .after = after,
+    }));
+    return true;
+}
+
 bool
 n00bb_bind_option_condition_shadows(parse_grammar_t *grammar,
                                     core_translation_unit_t *unit,
                                     parse_symtab_t *symtab,
                                     parse_scope_t *scope,
-                                    parse_tree_t *condition, bool truth)
+                                    parse_tree_t *condition, bool truth,
+                                    parse_tree_t *region, parse_tree_t *after)
 {
     while (condition && !core_tree_is_leaf(condition)) {
         size_t count = core_tree_num_children(condition);
@@ -4537,14 +4587,17 @@ n00bb_bind_option_condition_shadows(parse_grammar_t *grammar,
         && ((truth && nt_is(grammar, condition, "and-expr"))
             || (!truth && nt_is(grammar, condition, "or-expr"))))
         return n00bb_bind_option_condition_shadows(grammar, unit, symtab,
-                   scope, core_tree_child(condition, 0), truth)
+                   scope, core_tree_child(condition, 0), truth, region, after)
             && n00bb_bind_option_condition_shadows(grammar, unit, symtab,
-                   scope, core_tree_child(condition, 2), truth);
+                   scope, core_tree_child(condition, 2), truth, region, after);
+    parse_tree_t *value = n00bb_non_nil_operand(grammar, condition, truth);
+    if (!value) return true;
     parse_sym_entry_t *source = nullptr;
     th_type *element = nullptr;
-    if (!n00bb_option_condition_refinement(grammar, unit, condition,
-                                           truth, &source, &element)) return true;
-    return n00bb_bind_option_shadow(symtab, scope, source, element);
+    if (n00bb_option_condition_refinement(grammar, unit, value,
+                                          &source, &element))
+        return n00bb_bind_option_shadow(symtab, scope, source, element);
+    return n00bb_record_option_path(grammar, unit, value, region, after);
 }
 
 bool
@@ -4564,7 +4617,7 @@ n00bb_bind_option_branch_shadow(parse_grammar_t *grammar,
     parse_scope_t *scope = parse_symtab_scope_in_namespace(
         symtab, lexical_scope, CORE_STRING_STATIC(""));
     return scope && n00bb_bind_option_condition_shadows(grammar, unit,
-        symtab, scope, condition, truth);
+        symtab, scope, condition, truth, body, nullptr);
 }
 
 parse_tree_t *
@@ -7222,16 +7275,51 @@ n00bb_atomic_member_lvalue_root(parse_grammar_t *grammar,
                                 core_translation_unit_t *unit,
                                 parse_tree_t *target)
 {
-    parse_tree_t *access = member_access_node(grammar, target);
+    parse_sym_entry_t *symbol = n00bb_member_chain_root(grammar, unit, target);
+    return symbol && n00bb_atomic_element_type(symbol->type) ? symbol : nullptr;
+}
+
+parse_sym_entry_t *
+n00bb_member_chain_root(parse_grammar_t *grammar,
+                        core_translation_unit_t *unit, parse_tree_t *node)
+{
+    parse_tree_t *access = member_access_node(grammar, node);
     if (!access) return nullptr;
     while (access) {
-        target = core_tree_child(access, 0);
-        access = member_access_node(grammar, target);
+        node = core_tree_child(access, 0);
+        access = member_access_node(grammar, node);
     }
-    parse_tree_t *root = n00bb_simple_lvalue(target);
-    parse_sym_entry_t *symbol = root
-        ? attached_symbol(grammar, unit, root) : nullptr;
-    return symbol && n00bb_atomic_element_type(symbol->type) ? symbol : nullptr;
+    parse_tree_t *root = n00bb_simple_lvalue(node);
+    return root ? attached_symbol(grammar, unit, root) : nullptr;
+}
+
+bool
+n00bb_member_path(parse_grammar_t *grammar, core_translation_unit_t *unit,
+                  parse_tree_t *node, parse_sym_entry_t **root_out,
+                  core_buffer_t *path)
+{
+    parse_tree_t *access = member_access_node(grammar, node);
+    parse_sym_entry_t *root = n00bb_member_chain_root(grammar, unit, node);
+    if (!access || !root || (root->kind != PARSE_SYM_VARIABLE
+                             && root->kind != PARSE_SYM_PARAM)) return false;
+    core_list_t(parse_tree_ptr_t) steps = core_list_new(parse_tree_ptr_t);
+    for (; access; access = member_access_node(grammar,
+                                core_tree_child(access, 0)))
+        core_list_push(steps, access);
+    core_buffer_printf(path, "%.*s", (int)root->name.u8_bytes,
+                       root->name.data);
+    bool valid = true;
+    for (size_t i = steps.len; valid && i > 0; i--) {
+        parse_tree_t *field = core_tree_child(steps.data[i - 1], 2);
+        valid = field && core_tree_is_leaf(field);
+        if (valid) {
+            core_string_t name = parse_tree_leaf_text(field);
+            core_buffer_printf(path, ".%.*s", (int)name.u8_bytes, name.data);
+        }
+    }
+    core_list_free(steps);
+    if (valid) *root_out = root;
+    return valid;
 }
 
 static bool
@@ -8993,6 +9081,9 @@ free_tu_state(void *data)
     for (size_t i = 0; i < state->link_use_sites.len; i++)
         core_free(state->link_use_sites.data[i].trait_path_parts);
     core_list_free(state->link_use_sites);
+    for (size_t i = 0; i < state->option_paths.len; i++)
+        core_free(state->option_paths.data[i].path.data);
+    core_list_free(state->option_paths);
     core_list_free(state->module_top_level_statements);
     core_list_free(state->array_type_nodes);
     for (size_t i = 0; i < state->literal_modifiers.len; i++) {
@@ -9028,6 +9119,7 @@ n00bb_tu_state_new(core_translation_unit_t *unit, n00bb_lex_result_t *lex,
     memset(state, 0, sizeof(*state));
     core_arena_init(&state->semantic_values, 1024);
     state->link_use_sites = core_list_new(n00bb_link_use_site_t);
+    state->option_paths = core_list_new(n00bb_option_path_t);
     state->module_top_level_statements = core_list_new(parse_tree_ptr_t);
     state->array_type_nodes = core_list_new(parse_tree_ptr_t);
     state->literal_modifiers = core_list_new(n00bb_user_litmod_t);

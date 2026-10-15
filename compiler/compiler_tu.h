@@ -183,7 +183,9 @@ bool n00bb_bind_option_condition_shadows(parse_grammar_t *grammar,
                                          core_translation_unit_t *unit,
                                          parse_symtab_t *symtab,
                                          parse_scope_t *scope,
-                                         parse_tree_t *condition, bool truth);
+                                         parse_tree_t *condition, bool truth,
+                                         parse_tree_t *region,
+                                         parse_tree_t *after);
 bool n00bb_bind_option_branch_shadow(parse_grammar_t *grammar,
                                      core_translation_unit_t *unit,
                                      parse_tree_t *body, parse_tree_t *branch);
@@ -243,6 +245,12 @@ bool n00bb_builtin_reference_function(parse_sym_entry_t *symbol);
 parse_sym_entry_t *n00bb_atomic_member_lvalue_root(
     parse_grammar_t *grammar, core_translation_unit_t *unit,
     parse_tree_t *target);
+parse_sym_entry_t *n00bb_member_chain_root(parse_grammar_t *grammar,
+                                           core_translation_unit_t *unit,
+                                           parse_tree_t *node);
+bool n00bb_member_path(parse_grammar_t *grammar, core_translation_unit_t *unit,
+                       parse_tree_t *node, parse_sym_entry_t **root_out,
+                       core_buffer_t *path);
 bool n00bb_integer_range_wrapper(parse_grammar_t *grammar, parse_tree_t *node);
 bool n00bb_range_simple_integer_literal(parse_grammar_t *grammar,
                                         parse_tree_t *node, int64_t *value);
@@ -454,6 +462,14 @@ typedef struct {
 core_list_decl(n00bb_import_alias_t);
 
 typedef struct {
+    parse_sym_entry_t *root;
+    core_string_t path;
+    parse_tree_t *region;
+    parse_tree_t *after;
+} n00bb_option_path_t;
+core_list_decl(n00bb_option_path_t);
+
+typedef struct {
     core_translation_unit_t *unit;
     n00bb_lex_result_t *lex;
     parse_annot_result_t *annotations;
@@ -464,6 +480,7 @@ typedef struct {
     core_list_t(n00bb_import_alias_t) import_aliases;
     core_dict_t import_alias_index;
     core_list_t(n00bb_link_use_site_t) link_use_sites;
+    core_list_t(n00bb_option_path_t) option_paths;
     core_list_t(parse_tree_ptr_t) literal_site_nodes;
     core_dict_t flagset_values;
     core_link_unit_t *link;
