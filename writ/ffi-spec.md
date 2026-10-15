@@ -100,14 +100,20 @@ let packed = zlib.compress(data, 6)
 
 ### 2.2 Methods on handle types
 
-- `method H.m = f` makes `f` a method of `H`. The receiver is `f`'s first
-  parameter of type `H`. `static H.m = f` makes `f` an associated function
-  `H.m(...)`.
+- n00b calls with `.` go through traits, so bindings add no method
+  syntax. A program that wants `h.m(...)` declares a trait for it.
+- `method H.m = f` binds `f` as the function `m` whose first parameter,
+  `self: H`, is `f`'s first parameter of type `H`. It is called as
+  `m(h, ...)`.
+- `static H.m = f` binds `f` as the function `h_m(...)`. When `f` returns
+  an `H`, the binding also defines `__init(modify self: H, ...)` with the
+  same parameters, so `new[H](...)` builds an `H` and panics if `f` fails.
+  `h_m` stays available as the fallible form.
 - In a `lang rust` contract, every impl item is grouped by default: items
-  taking `self`, `&self` or `&mut self` become methods, and the rest
-  become associated functions.
-- A handle's `release` function becomes the method `close()`, and is not
-  also bound as a function of the namespace.
+  taking `self`, `&self` or `&mut self` are bound as `method`, and the
+  rest as `static`.
+- A handle's `release` function becomes the function
+  `close(modify self: H)`, and is not also bound under its own name.
 - C contracts are not grouped by default. Grouping is always written out.
 
 ### 2.3 Hiding and renaming
@@ -163,7 +169,12 @@ profile n00b {
     naming const upper
     naming field snake
     naming module snake
-    reserved "func", "type", "const", "return", "fail", "callback", "trait", "enum"
+    reserved "alias", "and", "as", "assert", "break", "callback", "case", "cast", "comptime", "const", "consume",
+             "context", "continue", "elif", "else", "ensure", "enter", "enum", "error", "exit", "export", "fail",
+             "false", "flagset", "for", "from", "func", "if", "import", "in", "inline", "let", "litmod", "modify",
+             "new", "nil", "or", "out", "package", "private", "provides", "public", "record", "ref", "require",
+             "return", "step", "switch", "thread", "to", "trait", "true", "try", "type", "typecase", "typeof",
+             "unsafe_cast", "until", "var", "variant", "when", "where", "while", "with"
 }
 ```
 
@@ -231,9 +242,9 @@ func compress(source: Array[u8], level: i32) -> Array[u8] fail: zlib.Error
   - a `text` error channel (`dsl.md` §6.4) fills `text`;
   - `errno`-style channels fill `code`.
 - `error PATTERN -> "Type"` may name an n00b type with a constructor
-  `Type.from_ffi(code: i64, text: string?, fn: string) -> Type`.
-  The generator calls it, and checks it exists when the generated source
-  is typed.
+  `__init(modify self: Type, code: i64, text: string?, fn: string)`.
+  The generator builds failures with `new[Type](code, text, fn)`, and the
+  constructor's existence is checked when the generated source is typed.
 - Outcomes that are not failures (`outcome not_found success`) are not
   errors. A function with more than one success outcome returns an n00b
   enum of outcomes as an extra first result.
@@ -459,11 +470,12 @@ Bound API:
 
 ```
 type Regex {}
-func Regex.new(pattern: string) -> Regex fail: Error
-func Regex.with_options(pattern: string, options: Regex_Options) -> Regex fail: Error
-func (self: Regex) is_match(input: string) -> bool fail: Error
-func (self: Regex) find_all(input: Array[u8]) -> Array[Match] fail: Error
-func (self: Regex) close() -> nil
+func regex_new(pattern: string) -> Regex fail: Error
+func __init(modify self: Regex, pattern: string)
+func regex_with_options(pattern: string, options: Regex_Options) -> Regex fail: Error
+func is_match(self: Regex, input: string) -> bool fail: Error
+func find_all(self: Regex, input: Array[u8]) -> Array[Match] fail: Error
+func close(modify self: Regex)
 ```
 
 ### 11.3 kv
