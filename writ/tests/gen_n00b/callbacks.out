@@ -166,6 +166,10 @@ void callbacks_Handler_trampoline(const void *context, const Event *event) {
     n00b_ffi_dispatch((uint64_t)(uintptr_t)context, &arguments, NULL);
 }
 
+void callbacks_Handler_arguments_copy(const void *arguments, void *out) {
+    memcpy(out, arguments, sizeof(callbacks_Handler_arguments));
+}
+
 uint64_t callbacks_n00b_bus_subscribe(uint64_t handler) {
     uint64_t writ_n00b_value = callbacks_bus_subscribe(callbacks_Handler_trampoline, (void *)(uintptr_t)handler);
     return writ_n00b_value;
@@ -200,8 +204,21 @@ type Event_Handler_Arguments layout(c) {
     public event: uint
 }
 
+func __event_handler_invoke(value: Any, arguments: uint, result: uint) -> nil {
+    typecase value {
+        case Event_Handler {
+            var packed: Event_Handler_Arguments
+            __event_handler_arguments_copy(arguments, ref packed)
+            value.call(packed.event)
+        }
+        else {
+            panic("Event_Handler dispatched to a different callback type")
+        }
+    }
+}
+
 func bus_subscribe(handler: Event_Handler) -> u64 {
-    let result = __bus_subscribe(__ffi_callback_register(handler))
+    let result = __bus_subscribe(__ffi_callback_register(cast[Any]handler, ref __event_handler_invoke))
     return result
 }
 
@@ -222,10 +239,11 @@ func bus_unsubscribe(id: u64) fail: Error {
 }
 7	tests/gen_n00b/../callbacks/callbacks.writ:7:1	Event
 11	tests/gen_n00b/../callbacks/callbacks.writ:9:1	Handler
-20	tests/gen_n00b/../callbacks/callbacks.writ:14:1	bus_subscribe
-25	tests/gen_n00b/../callbacks/callbacks.writ:16:1	bus_publish
-33	tests/gen_n00b/../callbacks/callbacks.writ:18:1	bus_unsubscribe
+33	tests/gen_n00b/../callbacks/callbacks.writ:14:1	bus_subscribe
+38	tests/gen_n00b/../callbacks/callbacks.writ:16:1	bus_publish
+46	tests/gen_n00b/../callbacks/callbacks.writ:18:1	bus_unsubscribe
 load static
+extern __event_handler_arguments_copy callbacks_Handler_arguments_copy (uint, ref[Event_Handler_Arguments]) -> nil fail: nil
 extern __bus_subscribe callbacks_n00b_bus_subscribe (uint) -> uint fail: nil
 extern __bus_publish callbacks_n00b_bus_publish (i32) -> i32 fail: nil
 extern __bus_unsubscribe callbacks_n00b_bus_unsubscribe (uint) -> i32 fail: nil

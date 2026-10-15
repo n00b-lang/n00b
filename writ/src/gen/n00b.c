@@ -703,6 +703,12 @@ callback_result_c_type(const n00b_t *g, const writ_fn_view_t *callback)
     return writ_c_type(&g->c, result, writ_c_is_text(result) && callback->result && !callback->result->own);
 }
 
+static writ_str_t
+callback_helper_symbol(const n00b_t *g, const writ_fn_view_t *callback, const char *role)
+{
+    return writ_str_format(g->session, "%.*s_%.*s_%s", S(g->shim), S(callback->contract_name), role);
+}
+
 static void
 emit_trampoline(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *callback)
 {
@@ -755,6 +761,20 @@ emit_trampoline(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *callba
     }
     writ_emit_close(emit, nullptr);
     writ_emit_line(emit, "");
+    if (packed) {
+        writ_emit_open(emit, "void %.*s(const void *arguments, void *out)",
+                       S(callback_helper_symbol(g, callback, "arguments_copy")));
+        writ_emit_line(emit, "memcpy(out, arguments, sizeof(%.*s));", S(arguments));
+        writ_emit_close(emit, nullptr);
+        writ_emit_line(emit, "");
+    }
+    if (returns) {
+        writ_emit_open(emit, "void %.*s(void *result, %.*s value)", S(callback_helper_symbol(g, callback, "result_store")),
+                       S(ret));
+        writ_emit_line(emit, "*(%.*s *)result = value;", S(ret));
+        writ_emit_close(emit, nullptr);
+        writ_emit_line(emit, "");
+    }
 }
 
 static bool
@@ -1054,6 +1074,56 @@ emit_callback_role(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *cal
     writ_emit_line(emit, ") -> %.*s", S(scalar_type(g, callback->result ? callback->result->type : nullptr)));
 }
 
+static writ_str_t
+callback_invoker(const n00b_t *g, writ_str_t type)
+{
+    return writ_str_format(g->session, "__%.*s_invoke", S(writ_name_case(g->session, type, WRIT_CASE_SNAKE)));
+}
+
+static void
+emit_callback_invoker(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *callback, writ_str_t name,
+                      uint32_t receiver, bool packed)
+{
+    writ_str_t snake = writ_name_case(g->session, name, WRIT_CASE_SNAKE);
+    writ_str_t result = scalar_type(g, callback->result ? callback->result->type : nullptr);
+    bool returns = !writ_str_eq(result, writ_cstr("nil"));
+    writ_str_t copy = writ_str_format(g->session, "__%.*s_arguments_copy", S(snake));
+    writ_str_t store = writ_str_format(g->session, "__%.*s_result_store", S(snake));
+    if (packed) {
+        writ_str_t params[] = {writ_cstr("uint"), writ_str_format(g->session, "Ref[%.*s_Arguments]", S(name))};
+        add_extern(g, copy, callback_helper_symbol(g, callback, "arguments_copy"), params, 2, writ_cstr("nil"));
+    }
+    if (returns) {
+        writ_str_t params[] = {writ_cstr("uint"), result};
+        add_extern(g, store, callback_helper_symbol(g, callback, "result_store"), params, 2, writ_cstr("nil"));
+    }
+    writ_emit_line(emit, "");
+    writ_emit_open(emit, "func %.*s(value: Any, arguments: uint, result: uint) -> nil",
+                   S(callback_invoker(g, name)));
+    writ_emit_open(emit, "typecase value");
+    writ_emit_open(emit, "case %.*s", S(name));
+    if (packed) {
+        writ_emit_line(emit, "var packed: %.*s_Arguments", S(name));
+        writ_emit_line(emit, "%.*s(arguments, ref packed)", S(copy));
+    }
+    writ_emit_text(emit, returns ? "%.*s(result, value.call(" : "value.call(", S(store));
+    bool first = true;
+    for (size_t i = 0; i < callback->slots_count; i++) {
+        if (i != receiver) {
+            writ_emit_text(emit, "%spacked.%.*s", first ? "" : ", ",
+                           S(writ_profile_name(g->profile, WRIT_NAMING_FIELD, callback->slots[i].name)));
+            first = false;
+        }
+    }
+    writ_emit_line(emit, returns ? "))" : ")");
+    writ_emit_close(emit, nullptr);
+    writ_emit_open(emit, "else");
+    writ_emit_line(emit, "panic(\"%.*s dispatched to a different callback type\")", S(name));
+    writ_emit_close(emit, nullptr);
+    writ_emit_close(emit, nullptr);
+    writ_emit_close(emit, nullptr);
+}
+
 static void
 emit_callback_type(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *callback)
 {
@@ -1068,19 +1138,20 @@ emit_callback_type(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *cal
     emit_callback_role(g, emit, callback, "call", receiver);
     emit_callback_role(g, emit, callback, "handler", receiver);
     writ_emit_close(emit, nullptr);
-    if (callback->slots_count < 2) {
-        return;
-    }
-    writ_emit_line(emit, "");
-    writ_emit_open(emit, "type %.*s_Arguments layout(c)", S(name));
-    for (size_t i = 0; i < callback->slots_count; i++) {
-        if (i != receiver) {
-            writ_emit_line(emit, "public %.*s: %.*s",
-                           S(writ_profile_name(g->profile, WRIT_NAMING_FIELD, callback->slots[i].name)),
-                           S(scalar_type(g, callback->slots[i].type)));
+    bool packed = callback->slots_count > 1;
+    if (packed) {
+        writ_emit_line(emit, "");
+        writ_emit_open(emit, "type %.*s_Arguments layout(c)", S(name));
+        for (size_t i = 0; i < callback->slots_count; i++) {
+            if (i != receiver) {
+                writ_emit_line(emit, "public %.*s: %.*s",
+                               S(writ_profile_name(g->profile, WRIT_NAMING_FIELD, callback->slots[i].name)),
+                               S(scalar_type(g, callback->slots[i].type)));
+            }
         }
+        writ_emit_close(emit, nullptr);
     }
-    writ_emit_close(emit, nullptr);
+    emit_callback_invoker(g, emit, callback, name, receiver, packed);
 }
 
 static writ_str_t
@@ -1937,7 +2008,8 @@ emit_wrapper(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view
             bool length = !writ_str_eq(p->name, plan->items[p->item].name);
             writ_emit_text(emit, length ? "ref %.*s_length" : "ref %.*s", S(name));
         } else if (p->kind == PARAM_CALLBACK) {
-            writ_emit_text(emit, "__ffi_callback_register(%.*s)", S(name));
+            writ_emit_text(emit, "__ffi_callback_register(cast[Any]%.*s, ref %.*s)", S(name),
+                           S(callback_invoker(g, writ_binding_type(g->b, plan->items[p->item].type->name))));
         } else if (retry_capacity(plan, p->item)) {
             writ_emit_text(emit, "%u", writ_default(WRIT_DEFAULT_RETRY_CAPACITY));
         } else {
