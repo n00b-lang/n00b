@@ -57,9 +57,9 @@ N00B_PATH="$program_dir" "$compiler" library --contract-dir "$contract_dir" \
 shim=n00b_ffi_0
 "$register_object" "$tmp/zlib.n00bm" '>=2' \
     --ffi-module zlib.__ffi___init_zlib \
-    Error@1 Stream@7 Deflate_Outcome Inflate_Outcome@107 Z_OK@37 Z_BUF_ERROR \
-    ZLIB_VERSION deflate deflate_end inflate inflate_end compress@155 \
-    compress_bound uncompress@176 adler32 crc32 deflate_init inflate_init \
+    Error@1 Stream@7 Deflate_Outcome Inflate_Outcome@108 Z_OK@37 Z_BUF_ERROR \
+    ZLIB_VERSION deflate deflate_end inflate inflate_end compress@157 \
+    compress_bound uncompress@178 adler32 crc32 deflate_init inflate_init \
     __ffi_take_bytes \
     "__deflate=${shim}_n00b_deflate" "__deflateEnd=${shim}_n00b_deflateEnd" \
     "__inflate=${shim}_n00b_inflate" "__inflateEnd=${shim}_n00b_inflateEnd" \

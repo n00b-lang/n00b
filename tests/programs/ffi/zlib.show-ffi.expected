@@ -85,10 +85,11 @@ func deflate(modify self: Stream, flush: i32) -> Deflate_Outcome fail: Error {
         let failure: Error = (code = cast[i64]failed_status, text = nil, fn = "deflate")
         fail failure
     }
+    var which: Deflate_Outcome = Deflate_Outcome.done
     if outcome == 0 {
-        return Deflate_Outcome.progress
+        which = Deflate_Outcome.progress
     }
-    return Deflate_Outcome.done
+    return which
 }
 
 func deflate_end(modify strm: Stream) fail: Error {
@@ -133,10 +134,11 @@ func inflate(modify self: Stream, flush: i32) -> Inflate_Outcome fail: Error {
         let failure: Error = (code = cast[i64]failed_status, text = nil, fn = "inflate")
         fail failure
     }
+    var which: Inflate_Outcome = Inflate_Outcome.progress
     if outcome == 0 {
-        return Inflate_Outcome.done
+        which = Inflate_Outcome.done
     }
-    return Inflate_Outcome.progress
+    return which
 }
 
 func inflate_end(modify strm: Stream) fail: Error {
