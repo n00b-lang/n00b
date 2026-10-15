@@ -1,6 +1,7 @@
 IR_OP(CONST,           "const",           0, 1,  ANNOTATED,   "c",   0,                              HASRESULT)
 IR_OP(ENUM_CONST,      "enum.const",      2, 2,  ANNOTATED,   "nc",  0,                              HASRESULT)
 IR_OP(ENUM_VALUE,      "enum.value",      1, 1,  ANNOTATED,   "v",   IR_MOD_FIT,                     HASRESULT)
+IR_OP(ENUM_FROM_VALUE, "enum.from_value", 1, 1,  ANNOTATED,   "v",   0,                              HASRESULT)
 IR_OP(BITSET_CONST,    "bitset.const",    2, 2,  ANNOTATED,   "nc",  0,                              HASRESULT)
 IR_OP(BITSET_UNION,    "bitset.union",    2, 2,  OPERAND0,    "vv",  0,                              HASRESULT)
 IR_OP(BITSET_DIFFERENCE,"bitset.difference",2,2,  OPERAND0,    "vv",  0,                              HASRESULT)

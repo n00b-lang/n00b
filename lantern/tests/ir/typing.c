@@ -1758,6 +1758,13 @@ static void test_conversion(void)
     check("enum.value accepts an explicit fit policy",
           accepts_as(e, checked_enum_value, "u8"));
 
+    ir_instr_t *enum_from_value = op(e, IR_OP_ENUM_FROM_VALUE);
+    ir_instr_set_dest(enum_from_value, "enum_from_value",
+                      ir_type_parse(e->m, "Color"));
+    ir_instr_operand_value(enum_from_value, val(e, "i32"));
+    check("enum.from_value converts an integer to a named enum",
+          accepts_as(e, enum_from_value, "Color"));
+
     for (size_t i = 0; i < sizeof(CONVERSIONS) / sizeof(CONVERSIONS[0]); i++) {
         const conv_t *c   = &CONVERSIONS[i];
         const char   *fit = c->fit ? "sat" : nullptr;

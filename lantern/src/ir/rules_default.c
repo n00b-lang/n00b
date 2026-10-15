@@ -2275,6 +2275,21 @@ static ir_rule_result_t rule_enum_value(ir_module_t *m, ir_instr_t *in,
     return mods_exact(m, in, d, axes, 1) ? ACCEPT(to) : REJECT;
 }
 
+static ir_rule_result_t rule_enum_from_value(ir_module_t *m, ir_instr_t *in,
+                                             ir_diags_t *d, void *state)
+{
+    (void)state;
+    th_type *from = opd_type(in, 0);
+    th_type *to = declared(in);
+    if (!from || !is_int(ir_machine_of(m, from).class)
+        || !to || th_kind_of(th_resolve(to)) != TH_NAMED) {
+        complain(m, d, IR_DIAG_TYPE_CLASS, in, "this enum conversion",
+                 "enum.from_value requires an integer source and named result");
+        return REJECT;
+    }
+    return ACCEPT(to);
+}
+
 static ir_rule_result_t rule_bitset(ir_module_t *m, ir_instr_t *in,
                                     ir_diags_t *d, void *state)
 {
@@ -3141,6 +3156,7 @@ static const entry DEFAULTS[] = {
     {IR_OP_CONST, "ir.const", rule_annotated},
     {IR_OP_ENUM_CONST, "ir.enum.const", rule_annotated},
     {IR_OP_ENUM_VALUE, "ir.enum.value", rule_enum_value},
+    {IR_OP_ENUM_FROM_VALUE, "ir.enum.from-value", rule_enum_from_value},
     {IR_OP_BITSET_CONST, "ir.bitset.const", rule_annotated},
     {IR_OP_BITSET_UNION, "ir.bitset.union", rule_bitset},
     {IR_OP_BITSET_DIFFERENCE, "ir.bitset.difference", rule_bitset},
