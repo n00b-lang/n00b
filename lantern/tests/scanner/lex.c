@@ -3132,8 +3132,6 @@ static void test_terminals_have_no_byte_width_limit(void) {
 
   scan_lex_t *lex = scan_grammar_lex_compiled(g);
   scan_lex_info_t info = {0};
-  check("terminal width is not capped by an eight-bit field",
-        scan_lex_operator_width(lex, '<') == 1024);
   check("compiled lexer structure is available for inspection",
         scan_lex_inspect(lex, &info) && info.max_terminal_bytes == 1024 &&
             info.terminal_nodes >= 1025 && info.terminal_edges >= 1024);

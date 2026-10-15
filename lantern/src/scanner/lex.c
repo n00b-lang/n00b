@@ -1844,10 +1844,6 @@ void scan_lex_session_free(void *state) {
   scan_lex_session_free_frame(session);
 }
 
-size_t scan_lex_operator_width(const scan_lex_t *lex, char first) {
-  return lex ? lex->opwidth[(unsigned char)first] : 0;
-}
-
 static size_t bucket_count(const lex_bucket_t buckets[256]) {
   size_t count = 0;
   for (size_t i = 0; i < 256; i++) {

@@ -383,7 +383,6 @@ extern bool scan_lex_finalize_regions(parse_scanner_t *s);
 extern void scan_lex_reset_state(parse_scanner_t *s);
 extern void scan_lex_compact_state(parse_scanner_t *s, size_t removed_bytes);
 
-extern size_t scan_lex_operator_width(const scan_lex_t *lex, char first);
 extern bool scan_lex_inspect(const scan_lex_t *lex, scan_lex_info_t *out);
 extern size_t scan_lex_issue_count(const scan_lex_t *lex);
 extern bool scan_lex_issue(const scan_lex_t *lex, size_t index,
