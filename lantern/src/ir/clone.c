@@ -289,7 +289,7 @@ ir_func_t *ir_func_clone_replacing(ir_func_t *source, const char *name,
                 return nullptr;
             if (old->dest && !clone_value_details(&c, old->dest, new->dest))
                 return nullptr;
-            if (old->const_byte_len && !ir_instr_set_const_bytes(new,
+            if (old->const_bytes && !ir_instr_set_const_bytes(new,
                 old->const_bytes, old->const_byte_len)) return nullptr;
             for (uint32_t j = 0; j < old->n_mods; j++)
                 if (!ir_instr_add_mod(new, old->mods[j])) return nullptr;
