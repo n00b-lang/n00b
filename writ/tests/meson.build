@@ -301,6 +301,25 @@ foreach binding : [
     )
 endforeach
 
+keywords_generated = custom_target(
+    'keywords-binding',
+    input: source_root / 'tests' / 'keywords' / 'keywords.writ',
+    output: ['keywords_writ.h', 'keywords_writ.c', 'keywords_writ_mock.c', 'keywords_writ_conformance.c'],
+    command: [writ_exe, 'gen', 'c', '@INPUT@', '-o', '@OUTDIR@', '--conformance'],
+)
+test(
+    'keywords-conformance',
+    executable(
+        'keywords-conformance',
+        keywords_generated[1],
+        keywords_generated[2],
+        keywords_generated[3],
+        c_args: generated_c + sanitize,
+        link_args: sanitize,
+        override_options: ['c_std=c11'],
+    ),
+)
+
 n00b_profile = ['--profile', 'profiles/n00b.writ']
 foreach case : [
     ['zlib.n00b', 'tests/zlib/zlib.writ', 'zlib.n00b', n00b_profile + ['--language', 'n00b'], false],
@@ -363,7 +382,7 @@ test(
     env: {'WRIT_CONTRACT_PATH': source_root / 'tests' / 'missing:' + source_root / 'contracts'},
 )
 
-foreach case : ['zlib', 'resharp', 'kv', 'kv_export', 'float_record', 'callbacks']
+foreach case : ['zlib', 'resharp', 'kv', 'kv_export', 'float_record', 'callbacks', 'keywords']
     test(
         'gen-n00b-' + case,
         python,
@@ -376,7 +395,7 @@ test(
     'gen-n00b-compile',
     python,
     args: [source_root / 'tests' / 'gen_n00b' / 'compile.py', writ_exe, compiler, host_triple, source_root,
-           'zlib', 'resharp', 'kv_export', 'float_record', 'callbacks'],
+           'zlib', 'resharp', 'kv_export', 'float_record', 'callbacks', 'keywords'],
 )
 
 resharp_root = get_option('resharp_root')

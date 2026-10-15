@@ -436,6 +436,9 @@ plan_value_input(builder_t *b, uint32_t index)
         const writ_type_rec_t *target = physical(b, physical(b, slot->type)->key.target);
         shape = target->key.kind == WRIT_TYPE_RECORD ? WRIT_SHAPE_RECORD : WRIT_SHAPE_SCALAR;
     }
+    if (index == b->record->keywords_slot) {
+        shape = WRIT_SHAPE_KEYWORD_PACK;
+    }
     writ_plan_role_t role = slot->mode == WRIT_MODE_INOUT ? WRIT_ROLE_INPUT_OUTPUT : WRIT_ROLE_INPUT;
     writ_after_call_t after = slot->mode == WRIT_MODE_CONSUME ? WRIT_AFTER_CALLEE_OWNS
                             : pointer                         ? writ_default(WRIT_DEFAULT_INPUT_AFTER_CALL)

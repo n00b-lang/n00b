@@ -348,6 +348,45 @@ apply_method(writ_binding_t *b, uint32_t id)
     d->is_static = is_static;
 }
 
+static writ_str_t
+keyword_record_name(const writ_binding_t *b, size_t fn, writ_str_t slot)
+{
+    const writ_plan_view_t *plan = writ_model_fn_plan(b->model, writ_model_fn_at(b->model, fn));
+    for (size_t i = 0; plan && i < plan->items_count; i++) {
+        const writ_plan_item_view_t *item = &plan->items[i];
+        if (item->shape == WRIT_SHAPE_KEYWORD_PACK && writ_str_eq(item->name, slot) && item->type->target) {
+            return item->type->target->name;
+        }
+    }
+    return writ_cstr("");
+}
+
+static void
+apply_keywords(writ_binding_t *b, uint32_t id)
+{
+    const writ_node_t *item = at(b, id);
+    writ_str_t target = text_of(b, item->payload);
+    const writ_repr_t *repr = writ_profile_repr(b->profile, item->name, WRIT_REPR_KEYWORDS);
+    bool matched = false;
+    core_list_foreach(b->slots, slot) {
+        if (slot->form != WRIT_REPR_KEYWORDS
+            || (!writ_str_eq(target, writ_cstr("*"))
+                && !writ_str_eq(keyword_record_name(b, slot->fn, slot->slot), target))) {
+            continue;
+        }
+        matched = true;
+        if (repr) {
+            slot->repr = (choice_t){text_of(b, item->name), true};
+        }
+    }
+    if (!matched) {
+        writ_report(b->session, WRIT_D_BIND_TARGET, item->loc, "no keyword pack of `%.*s`", S(target));
+    } else if (!repr) {
+        writ_report(b->session, WRIT_D_BIND_REPR, item->loc, "`keywords %.*s` for a keywords slot",
+                    S(text_of(b, item->name)));
+    }
+}
+
 static void
 apply_repr(writ_binding_t *b, uint32_t id)
 {
@@ -466,6 +505,9 @@ apply_item(writ_binding_t *b, uint32_t id)
         return;
     case WRIT_N_REPR:
         apply_repr(b, id);
+        return;
+    case WRIT_N_KEYWORDS_AS:
+        apply_keywords(b, id);
         return;
     case WRIT_N_BORROW:
         if (for_side(b, id, false)) {

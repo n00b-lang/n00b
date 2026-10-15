@@ -1023,6 +1023,123 @@ emit_zero_record(const n00b_t *g, writ_emit_t *emit, writ_str_t local, const wri
     writ_emit_line(emit, ")");
 }
 
+static const writ_record_view_t *
+keyword_record(const n00b_t *g, const writ_plan_item_view_t *item)
+{
+    return item->shape == WRIT_SHAPE_KEYWORD_PACK && item->type && item->type->target
+             ? writ_model_record_named(g->model, item->type->target->name)
+             : nullptr;
+}
+
+static bool
+keywords_as_record(const wrapper_t *w, uint32_t item)
+{
+    return writ_str_eq(writ_binding_slot_repr(w->g->b, w->fn, w->plan->items[item].name), writ_cstr("record"));
+}
+
+static writ_str_t
+options_type_name(const wrapper_t *w)
+{
+    return writ_str_format(w->g->session, "%.*s_Options",
+                           S(writ_name_case(w->g->session, wrapper_name(w), WRIT_CASE_TITLE_SNAKE)));
+}
+
+static writ_str_t
+keyword_name(const n00b_t *g, const writ_slot_view_t *field)
+{
+    return writ_profile_name(g->profile, WRIT_NAMING_FIELD, field->name);
+}
+
+static writ_str_t
+keyword_literal(const n00b_t *g, const writ_slot_view_t *field, int64_t value)
+{
+    if (field->type && field->type->kind == WRIT_TYPE_BOOL) {
+        return writ_cstr(value ? "true" : "false");
+    }
+    return writ_str_format(g->session, "%lld", (long long)value);
+}
+
+static void
+emit_options_type(const wrapper_t *w, writ_emit_t *emit, const writ_record_view_t *record)
+{
+    writ_emit_line(emit, "");
+    writ_emit_open(emit, "type %.*s", S(options_type_name(w)));
+    for (size_t f = 0; f < record->fields_count; f++) {
+        if (f != record->presence_field) {
+            writ_emit_line(emit, "public %.*s: %.*s?", S(keyword_name(w->g, &record->fields[f])),
+                           S(scalar_type(w->g, record->fields[f].type)));
+        }
+    }
+    writ_emit_close(emit, nullptr);
+}
+
+static void
+emit_keyword_params(const wrapper_t *w, writ_emit_t *emit, const writ_record_view_t *record, bool *first)
+{
+    bool optional = record->presence == WRIT_PRESENCE_MASK || record->presence == WRIT_PRESENCE_SENTINEL;
+    for (int defaulted = 0; defaulted < 2; defaulted++) {
+        for (size_t f = 0; f < record->fields_count; f++) {
+            const writ_slot_view_t *field = &record->fields[f];
+            bool has_value = optional || field->has_default;
+            if (f == record->presence_field || has_value != (defaulted == 1)) {
+                continue;
+            }
+            writ_emit_text(emit, "%s%.*s: %.*s%s", *first ? "" : ", ", S(keyword_name(w->g, field)),
+                           S(scalar_type(w->g, field->type)), optional ? "?" : "");
+            if (optional) {
+                writ_emit_text(emit, " = nil");
+            } else if (field->has_default) {
+                writ_emit_text(emit, " = %.*s", S(keyword_literal(w->g, field, field->default_value)));
+            }
+            *first = false;
+        }
+    }
+}
+
+static void
+emit_keyword_record(const wrapper_t *w, writ_emit_t *emit, uint32_t item, const writ_record_view_t *record)
+{
+    const n00b_t *g = w->g;
+    bool as_record = keywords_as_record(w, item);
+    bool optional = as_record || record->presence == WRIT_PRESENCE_MASK || record->presence == WRIT_PRESENCE_SENTINEL;
+    writ_str_t local = writ_str_format(g->session, "%.*s_record", S(local_name(w, item)));
+    emit_zero_record(g, emit, local, w->plan->items[item].type->target);
+    writ_str_t presence = record->presence_field != WRIT_PLAN_NONE
+                            ? keyword_name(g, &record->fields[record->presence_field])
+                            : writ_cstr("");
+    uint32_t bit = 0;
+    for (size_t f = 0; f < record->fields_count; f++) {
+        const writ_slot_view_t *field = &record->fields[f];
+        if (f == record->presence_field) {
+            continue;
+        }
+        writ_str_t key = keyword_name(g, field);
+        writ_str_t source = as_record ? writ_str_format(g->session, "%.*s.%.*s", S(local_name(w, item)), S(key)) : key;
+        bool has_fallback = record->presence == WRIT_PRESENCE_SENTINEL ? field->has_none : field->has_default;
+        int64_t fallback = record->presence == WRIT_PRESENCE_SENTINEL ? field->none_value : field->default_value;
+        if (!optional) {
+            writ_emit_line(emit, "%.*s.%.*s = %.*s", S(local), S(key), S(source));
+        } else {
+            writ_emit_open(emit, "if %.*s != nil", S(source));
+            writ_emit_line(emit, "%.*s.%.*s = %.*s.get()", S(local), S(key), S(source));
+            if (record->presence == WRIT_PRESENCE_MASK) {
+                writ_emit_line(emit, "%.*s.%.*s = %.*s.%.*s | %llu", S(local), S(presence), S(local), S(presence),
+                               (unsigned long long)1 << bit);
+            }
+            if (has_fallback) {
+                writ_emit_close(emit, " else {");
+                writ_emit_indent(emit, 1);
+                writ_emit_line(emit, "%.*s.%.*s = %.*s", S(local), S(key), S(keyword_literal(g, field, fallback)));
+            }
+            writ_emit_close(emit, nullptr);
+        }
+        bit++;
+    }
+    if (record->presence == WRIT_PRESENCE_SIZE) {
+        writ_emit_line(emit, "%.*s.%.*s = %u", S(local), S(presence), w->plan->items[item].type->target->size);
+    }
+}
+
 static void
 emit_wrapper(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view_t *plan)
 {
@@ -1031,19 +1148,35 @@ emit_wrapper(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view
     uint32_t *outs = writ_alloc(g->session, sizeof(uint32_t) * (plan->items_count + 1));
     size_t out_count = results(&w, outs);
     emit_result_types(&w, emit, outs, out_count);
+    uint32_t keywords = WRIT_PLAN_NONE;
+    for (uint32_t i = 0; i < plan->items_count; i++) {
+        if (keyword_record(g, &plan->items[i])) {
+            keywords = i;
+        }
+    }
+    const writ_record_view_t *keyword_view = keywords != WRIT_PLAN_NONE ? keyword_record(g, &plan->items[keywords])
+                                                                        : nullptr;
+    bool options_record = keyword_view && keywords_as_record(&w, keywords);
+    if (options_record) {
+        emit_options_type(&w, emit, keyword_view);
+    }
     writ_emit_line(emit, "");
     mark(g, emit, plan->fn->declared_at, plan->fn->contract_name);
     writ_emit_text(emit, "func %.*s(", S(wrapper_name(&w)));
     bool first = true;
     for (uint32_t i = 0; i < plan->items_count; i++) {
-        if (!writ_c_is_input(&plan->items[i])) {
+        if (!writ_c_is_input(&plan->items[i]) || (i == keywords && !options_record)) {
             continue;
         }
         bool modify = (i == w.receiver && consumes(&w, i))
                    || (plan->items[i].role == WRIT_ROLE_INPUT_OUTPUT && record_target(&plan->items[i]));
+        writ_str_t type = i == keywords ? options_type_name(&w) : receiver_type(&w, i);
         writ_emit_text(emit, "%s%s%.*s: %.*s", first ? "" : ", ", modify ? "modify " : "", S(local_name(&w, i)),
-                       S(receiver_type(&w, i)));
+                       S(type));
         first = false;
+    }
+    if (keyword_view && !options_record) {
+        emit_keyword_params(&w, emit, keyword_view, &first);
     }
     writ_emit_text(emit, ")");
     bool multiple_success = success_count(plan) > 1;
@@ -1060,6 +1193,9 @@ emit_wrapper(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view
     writ_emit_open(emit, "");
     core_list_t(shim_param_t) params = core_list_new(shim_param_t);
     shim_params(g, fn, plan, &params);
+    if (keyword_view) {
+        emit_keyword_record(&w, emit, keywords, keyword_view);
+    }
     for (size_t i = 0; i < params.len; i++) {
         const shim_param_t *p = &params.data[i];
         if (p->kind == PARAM_VALUE && p->item != w.receiver) {
@@ -1099,7 +1235,7 @@ emit_wrapper(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view
         } else if (p->kind == PARAM_ADDRESS && (is_handle(&plan->items[p->item]) || p->item == w.receiver)) {
             writ_emit_text(emit, "%.*s.raw", S(name));
         } else if (p->kind == PARAM_RECORD) {
-            writ_emit_text(emit, "ref %.*s", S(name));
+            writ_emit_text(emit, p->item == keywords ? "ref %.*s_record" : "ref %.*s", S(name));
         } else if (p->kind == PARAM_STORAGE) {
             writ_emit_text(emit, "ref %.*s.storage", S(name));
         } else if (p->kind == PARAM_OUT && p->storage) {
