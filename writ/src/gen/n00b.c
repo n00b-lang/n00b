@@ -2043,7 +2043,7 @@ emit_raw(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *fn, writ_boun
         writ_emit_text(emit, "%s%.*s: %.*s", s ? ", " : "", S(name), S(types[s]));
     }
     writ_emit_line(emit, ") -> %.*s {", S(result));
-    writ_emit_text(emit, "    return __%.*s_raw(", S(bound.name));
+    writ_emit_text(emit, "    %s__%.*s_raw(", writ_str_eq(result, writ_cstr("nil")) ? "" : "return ", S(bound.name));
     for (size_t s = 0; s < fn->slots_count; s++) {
         writ_str_t name = writ_profile_name(g->profile, WRIT_NAMING_FIELD, fn->slots[s].name);
         writ_emit_text(emit, "%s%.*s", s ? ", " : "", S(name));
