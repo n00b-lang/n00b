@@ -16018,6 +16018,44 @@ n00bb_initialize_default_reference(ir_lower_context_t *context,
 }
 
 static bool
+bind_missing_external(ir_lower_context_t *context,
+                      parse_sym_entry_t *symbol)
+{
+    n00bb_lower_context_t *lower = context->user;
+    n00bb_tu_state_t *state = lower ? tu_state(lower->unit) : nullptr;
+    if (!state || !symbol || !symbol->type) return false;
+    if (symbol->kind == PARSE_SYM_FUNCTION) {
+        ir_func_t *target = link_ir_function_for_phase(
+            state->link_analysis, symbol, lower->comptime_phase);
+        core_translation_unit_t *target_unit = target
+            ? unit_for_symbol(lower->grammar, lower->units, symbol) : nullptr;
+        ir_module_t *target_module = module_for_phase(
+            target_unit ? tu_state(target_unit) : nullptr,
+            lower->comptime_phase);
+        ir_value_t *address = target && target_module
+            ? ir_func_address(target_module, target) : nullptr;
+        return address && ir_lower_bind_value(context, symbol, address);
+    }
+    if (symbol->kind != PARSE_SYM_VARIABLE
+        || context_symbol(lower->grammar, symbol)) return false;
+    core_translation_unit_t *owner = unit_for_symbol(lower->grammar,
+                                                    lower->units, symbol);
+    n00bb_tu_state_t *owner_state = owner ? tu_state(owner) : nullptr;
+    parse_tree_t *binding = symbol_binding_node(symbol);
+    if (!owner_state || (!owner_state->interface_module && (!binding
+        || (!nt_is(lower->grammar, binding, "sym-decl")
+            && !nt_is(lower->grammar, binding, "assign-stmt")))))
+        return false;
+    ir_global_t *global = link_ir_global_for_symbol(
+        state->link_analysis, symbol);
+    ir_global_t *phase_global = global
+        ? ir_global_find(context->module, global->name) : nullptr;
+    ir_value_t *value = phase_global
+        ? ir_global_address(context->module, phase_global) : nullptr;
+    return value && ir_lower_bind_value(context, symbol, value);
+}
+
+static bool
 lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
               core_translation_unit_t *unit, parse_sym_entry_t *symbol,
               parse_tree_t *body, ir_func_t *function,
@@ -16084,6 +16122,7 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
         .diagnostics = diagnostics,
         .file_id = file_id,
         .user = &lower_data,
+        .bind_missing = bind_missing_external,
         .reachable = true,
     };
     bool ok = false;
@@ -16289,65 +16328,6 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
                 "variadic parameter does not have its collected array type");
             goto cleanup;
         }
-    }
-
-    core_list_t(parse_scope_ptr_t) function_scopes = link_declaration_scopes(
-        state, CORE_STRING_STATIC(""));
-    for (size_t s = 0; s < function_scopes.len; s++) {
-        for (parse_sym_entry_t *candidate = function_scopes.data[s]->first_in_scope;
-             candidate; candidate = candidate->next_in_scope) {
-            if (candidate->kind != PARSE_SYM_FUNCTION || !candidate->type)
-                continue;
-            ir_func_t *target = link_ir_function_for_phase(
-                state->link_analysis, candidate, comptime_phase);
-            core_translation_unit_t *target_unit = target
-                ? unit_for_symbol(grammar, units, candidate) : nullptr;
-            ir_module_t *target_module = module_for_phase(
-                target_unit ? tu_state(target_unit) : nullptr,
-                comptime_phase);
-            ir_value_t *address = target && target_module
-                ? ir_func_address(target_module, target) : nullptr;
-            if (!address || !ir_lower_bind_value(&context, candidate, address)) {
-                core_list_free(function_scopes);
-                goto cleanup;
-            }
-        }
-    }
-    core_list_free(function_scopes);
-
-    for (size_t u = 0; u < units->len; u++) {
-        n00bb_tu_state_t *global_state = tu_state(units->data[u]);
-        core_list_t(parse_scope_ptr_t) global_scopes =
-            link_declaration_scopes(global_state, CORE_STRING_STATIC(""));
-        for (size_t s = 0; s < global_scopes.len; s++) {
-            for (parse_sym_entry_t *global_symbol =
-                    global_scopes.data[s]->first_in_scope;
-                 global_symbol; global_symbol = global_symbol->next_in_scope) {
-                parse_tree_t *binding = symbol_binding_node(global_symbol);
-                bool interface_value = global_state
-                    && global_state->interface_module;
-                if (global_symbol->kind != PARSE_SYM_VARIABLE
-                    || context_symbol(grammar, global_symbol)
-                    || !global_symbol->type
-                    || (!interface_value && (!binding
-                        || (!nt_is(grammar, binding, "sym-decl")
-                            && !nt_is(grammar, binding, "assign-stmt")))))
-                    continue;
-                ir_global_t *global = link_ir_global_for_symbol(
-                    state->link_analysis, global_symbol);
-                ir_global_t *phase_global = global
-                    ? ir_global_find(module, global->name) : nullptr;
-                if (!phase_global && global_state != state) continue;
-                ir_value_t *value = phase_global
-                    ? ir_global_address(module, phase_global) : nullptr;
-                if (!value || !ir_lower_bind_value(&context, global_symbol,
-                                                    value)) {
-                    core_list_free(global_scopes);
-                    goto cleanup;
-                }
-            }
-        }
-        core_list_free(global_scopes);
     }
 
     if (!n00bb_initialize_default_params(lowerer, &context,
