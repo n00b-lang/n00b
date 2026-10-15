@@ -8899,13 +8899,7 @@ free_tu_state(void *data)
     core_dict_free(&state->import_alias_index);
     core_list_free(state->literal_site_nodes);
     core_dict_free(&state->flagset_values);
-    core_list_free(state->integer_symbol_ranges);
-    core_list_free(state->integer_range_invalidated_symbols);
-    for (size_t i = 0; i < state->integer_range_branches.len; i++) {
-        core_list_free(state->integer_range_branches.data[i].incoming);
-        core_list_free(state->integer_range_branches.data[i].merged);
-    }
-    core_list_free(state->integer_range_branches);
+    n00bb_range_state_release(state);
     core_dict_free(&state->integer_range_variables);
     core_csp_store_free(state->integer_range_store);
     core_arena_free(&state->semantic_values);
@@ -8934,6 +8928,8 @@ n00bb_tu_state_new(core_translation_unit_t *unit, n00bb_lex_result_t *lex,
     core_dict_init_string(&state->import_alias_index);
     state->literal_site_nodes = core_list_new(parse_tree_ptr_t);
     core_dict_init(&state->flagset_values, nullptr, nullptr);
+    core_dict_init(&state->integer_symbol_ranges, nullptr, nullptr);
+    core_dict_init(&state->integer_range_invalidated_symbols, nullptr, nullptr);
     state->lex = lex;
     state->unit = unit;
     state->types = types;

@@ -312,12 +312,11 @@ typedef struct {
     int64_t maximum;
     bool proven_above_int64;
 } n00bb_symbol_range_t;
-core_list_decl(n00bb_symbol_range_t);
 
 typedef struct {
     parse_tree_t *node;
-    core_list_t(n00bb_symbol_range_t) incoming;
-    core_list_t(n00bb_symbol_range_t) merged;
+    core_dict_t incoming;
+    core_dict_t merged;
     bool has_branch;
     bool has_else;
     bool branch_active;
@@ -472,8 +471,8 @@ typedef struct {
     core_csp_store_t *integer_range_store;
     parse_tree_t *integer_range_root;
     core_dict_t integer_range_variables;
-    core_list_t(n00bb_symbol_range_t) integer_symbol_ranges;
-    core_list_t(parse_sym_entry_ptr_t) integer_range_invalidated_symbols;
+    core_dict_t integer_symbol_ranges;
+    core_dict_t integer_range_invalidated_symbols;
     core_list_t(n00bb_range_branch_frame_t) integer_range_branches;
     bool integer_range_use_symbol_facts;
     bool inference_finalized;
@@ -753,6 +752,7 @@ void n00bb_range_after_children(parse_grammar_t *grammar,
 void n00bb_range_after_annotation(parse_grammar_t *grammar,
                                   n00bb_tu_state_t *state, parse_tree_t *node,
                                   parse_tree_t *parent);
+void n00bb_range_state_release(n00bb_tu_state_t *state);
 
 n00bb_tu_state_t *n00bb_tu_state_new(core_translation_unit_t *unit,
                                     n00bb_lex_result_t *lex, th_ctx *types);

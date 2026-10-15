@@ -60,24 +60,18 @@ static const n00bb_symbol_range_t *
 n00bb_range_for_symbol(const n00bb_tu_state_t *state,
                       const parse_sym_entry_t *symbol)
 {
-    for (size_t i = state ? state->integer_symbol_ranges.len : 0; i > 0;
-         i--) {
-        const n00bb_symbol_range_t *range =
-            &state->integer_symbol_ranges.data[i - 1];
-        if (range->symbol == symbol) return range;
-    }
-    return nullptr;
+    return state && symbol ? core_dict_get(
+        (core_dict_t *)&state->integer_symbol_ranges, symbol, nullptr)
+        : nullptr;
 }
 
 static bool
 n00bb_range_symbol_invalidated(const n00bb_tu_state_t *state,
                                const parse_sym_entry_t *symbol)
 {
-    for (size_t i = 0; state && symbol
-            && i < state->integer_range_invalidated_symbols.len; i++)
-        if (state->integer_range_invalidated_symbols.data[i] == symbol)
-            return true;
-    return false;
+    return state && symbol && core_dict_contains(
+        (core_dict_t *)&state->integer_range_invalidated_symbols,
+        (void *)symbol);
 }
 
 static void
@@ -86,7 +80,7 @@ n00bb_range_invalidate_symbol(n00bb_tu_state_t *state,
 {
     if (!state || !symbol
         || n00bb_range_symbol_invalidated(state, symbol)) return;
-    core_list_push(state->integer_range_invalidated_symbols, symbol);
+    core_dict_put(&state->integer_range_invalidated_symbols, symbol, symbol);
 }
 
 static void
@@ -94,15 +88,11 @@ n00bb_range_forget_symbol(n00bb_tu_state_t *state,
                           const parse_sym_entry_t *symbol)
 {
     if (!state || !symbol) return;
-    for (size_t i = 0; i < state->integer_symbol_ranges.len; i++) {
-        if (state->integer_symbol_ranges.data[i].symbol != symbol) continue;
-        memmove(&state->integer_symbol_ranges.data[i],
-                &state->integer_symbol_ranges.data[i + 1],
-                (state->integer_symbol_ranges.len - i - 1)
-                    * sizeof(state->integer_symbol_ranges.data[0]));
-        state->integer_symbol_ranges.len--;
-        return;
-    }
+    n00bb_symbol_range_t *range = core_dict_get(
+        &state->integer_symbol_ranges, symbol, nullptr);
+    if (!range) return;
+    core_dict_remove(&state->integer_symbol_ranges, symbol);
+    core_free(range);
 }
 
 static void
@@ -111,45 +101,51 @@ n00bb_range_set_symbol(n00bb_tu_state_t *state, parse_sym_entry_t *symbol,
                        bool proven_above_int64)
 {
     if (!state || !symbol) return;
-    for (size_t i = 0; i < state->integer_symbol_ranges.len; i++) {
-        n00bb_symbol_range_t *range =
-            &state->integer_symbol_ranges.data[i];
-        if (range->symbol != symbol) continue;
-        range->minimum = minimum;
-        range->maximum = maximum;
-        range->proven_above_int64 = proven_above_int64;
-        return;
+    n00bb_symbol_range_t *range = core_dict_get(
+        &state->integer_symbol_ranges, symbol, nullptr);
+    if (!range) {
+        range = core_alloc(n00bb_symbol_range_t);
+        core_dict_put(&state->integer_symbol_ranges, symbol, range);
     }
-    core_list_push(state->integer_symbol_ranges,
-        ((n00bb_symbol_range_t){.symbol = symbol,
-                                .minimum = minimum,
-                                .maximum = maximum,
-                                .proven_above_int64 = proven_above_int64}));
+    *range = (n00bb_symbol_range_t){
+        .symbol = symbol, .minimum = minimum, .maximum = maximum,
+        .proven_above_int64 = proven_above_int64,
+    };
 }
 
-static core_list_t(n00bb_symbol_range_t)
-n00bb_range_copy(const core_list_t(n00bb_symbol_range_t) *source)
+static void
+n00bb_range_release(core_dict_t *ranges)
 {
-    core_list_t(n00bb_symbol_range_t) copy = core_list_new_cap(
-        n00bb_symbol_range_t, source ? source->len : 0);
-    for (size_t i = 0; source && i < source->len; i++)
-        core_list_push(copy, source->data[i]);
+    core_dict_foreach(ranges, entry)
+        core_free(entry->value);
+    core_dict_free(ranges);
+}
+
+static void
+n00bb_range_clear(core_dict_t *ranges)
+{
+    n00bb_range_release(ranges);
+    core_dict_init(ranges, nullptr, nullptr);
+}
+
+static core_dict_t
+n00bb_range_copy(const core_dict_t *source)
+{
+    core_dict_t copy = {0};
+    core_dict_init(&copy, nullptr, nullptr);
+    if (source) {
+        core_dict_foreach(source, entry) {
+            n00bb_symbol_range_t *range = core_alloc(n00bb_symbol_range_t);
+            *range = *(const n00bb_symbol_range_t *)entry->value;
+            core_dict_put(&copy, entry->key, range);
+        }
+    }
     return copy;
-}
-
-static const n00bb_symbol_range_t *
-n00bb_range_find_in(const core_list_t(n00bb_symbol_range_t) *ranges,
-                    const parse_sym_entry_t *symbol)
-{
-    for (size_t i = ranges ? ranges->len : 0; i > 0; i--)
-        if (ranges->data[i - 1].symbol == symbol)
-            return &ranges->data[i - 1];
-    return nullptr;
 }
 
 static void
 n00bb_range_merge_branch(n00bb_range_branch_frame_t *frame,
-                         const core_list_t(n00bb_symbol_range_t) *branch)
+                         const core_dict_t *branch)
 {
     if (!frame || !branch) return;
     if (!frame->has_branch) {
@@ -157,21 +153,14 @@ n00bb_range_merge_branch(n00bb_range_branch_frame_t *frame,
         frame->has_branch = true;
         return;
     }
-    for (size_t i = frame->merged.len; i > 0; i--) {
-        n00bb_symbol_range_t *merged = &frame->merged.data[i - 1];
-        const n00bb_symbol_range_t *other = n00bb_range_find_in(
-            branch, merged->symbol);
-        if (!other) {
-            memmove(merged, merged + 1,
-                (frame->merged.len - i) * sizeof(*merged));
-            frame->merged.len--;
-            continue;
-        }
-        if (other->proven_above_int64
+    core_dict_foreach(&frame->merged, entry) {
+        n00bb_symbol_range_t *merged = entry->value;
+        const n00bb_symbol_range_t *other = core_dict_get(
+            (core_dict_t *)branch, merged->symbol, nullptr);
+        if (!other || other->proven_above_int64
             != merged->proven_above_int64) {
-            memmove(merged, merged + 1,
-                (frame->merged.len - i) * sizeof(*merged));
-            frame->merged.len--;
+            core_dict_remove(&frame->merged, merged->symbol);
+            core_free(merged);
             continue;
         }
         if (merged->proven_above_int64) continue;
@@ -184,10 +173,10 @@ n00bb_range_merge_branch(n00bb_range_branch_frame_t *frame,
 
 static void
 n00bb_range_restore(n00bb_tu_state_t *state,
-                    const core_list_t(n00bb_symbol_range_t) *ranges)
+                    const core_dict_t *ranges)
 {
     if (!state || !ranges) return;
-    core_list_free(state->integer_symbol_ranges);
+    n00bb_range_release(&state->integer_symbol_ranges);
     state->integer_symbol_ranges = n00bb_range_copy(ranges);
 }
 
@@ -397,10 +386,12 @@ n00bb_range_end_if(n00bb_tu_state_t *state, parse_tree_t *node)
     if (!frame) return;
     if (!frame->has_else)
         n00bb_range_merge_branch(frame, &frame->incoming);
-    core_list_free(frame->incoming);
-    core_list_free(state->integer_symbol_ranges);
+    if (!frame->has_branch)
+        core_dict_init(&frame->merged, nullptr, nullptr);
+    n00bb_range_release(&frame->incoming);
+    n00bb_range_release(&state->integer_symbol_ranges);
     state->integer_symbol_ranges = frame->merged;
-    frame->merged = (core_list_t(n00bb_symbol_range_t)){0};
+    frame->merged = (core_dict_t){0};
     state->integer_range_branches.len--;
 }
 
@@ -575,9 +566,8 @@ static void
 n00bb_range_invalidate_static_symbols(n00bb_tu_state_t *state)
 {
     if (!state) return;
-    for (size_t i = 0; i < state->integer_symbol_ranges.len; i++)
-        n00bb_range_invalidate_symbol(state,
-            state->integer_symbol_ranges.data[i].symbol);
+    core_dict_foreach(&state->integer_symbol_ranges, entry)
+        n00bb_range_invalidate_symbol(state, entry->key);
     n00bb_range_invalidate_symtab(state, state->annotations
         ? state->annotations->symtab : nullptr);
     const core_list_t(core_translation_unit_ptr_t) *units =
@@ -601,9 +591,8 @@ n00bb_range_invalidate_call_mutations(parse_grammar_t *grammar,
             && symbol->mutability != PARSE_SYM_CONST)
             n00bb_range_invalidate_symbol(state, symbol);
     }
-    for (size_t i = state->integer_symbol_ranges.len; i > 0; i--) {
-        parse_sym_entry_t *symbol =
-            state->integer_symbol_ranges.data[i - 1].symbol;
+    core_dict_foreach(&state->integer_symbol_ranges, entry) {
+        parse_sym_entry_t *symbol = entry->key;
         if (symbol && symbol->mutability != PARSE_SYM_IMMUTABLE
             && symbol->mutability != PARSE_SYM_CONST)
             n00bb_range_forget_symbol(state, symbol);
@@ -938,8 +927,9 @@ n00bb_range_enter_node(parse_grammar_t *grammar, n00bb_tu_state_t *state,
                        parse_tree_t *node, parse_tree_t *parent)
 {
     if (nt_is(grammar, node, "func-def")
-        || nt_is(grammar, node, "context-def"))
-        state->integer_symbol_ranges.len = 0;
+        || nt_is(grammar, node, "context-def")) {
+        n00bb_range_clear(&state->integer_symbol_ranges);
+    }
     if (nt_is(grammar, node, "if-stmt"))
         n00bb_range_enter_if(grammar, state, node);
     if (nt_is(grammar, node, "body"))
@@ -996,7 +986,21 @@ n00bb_range_after_annotation(parse_grammar_t *grammar,
             && !nt_is(grammar, node, "elif-clause")
             && !nt_is(grammar, node, "else-clause"))
         || nt_is(grammar, node, "func-def")
-        || nt_is(grammar, node, "context-def"))
-        state->integer_symbol_ranges.len = 0;
+        || nt_is(grammar, node, "context-def")) {
+        n00bb_range_clear(&state->integer_symbol_ranges);
+    }
+}
+
+void
+n00bb_range_state_release(n00bb_tu_state_t *state)
+{
+    if (!state) return;
+    n00bb_range_release(&state->integer_symbol_ranges);
+    core_dict_free(&state->integer_range_invalidated_symbols);
+    for (size_t i = 0; i < state->integer_range_branches.len; i++) {
+        n00bb_range_release(&state->integer_range_branches.data[i].incoming);
+        n00bb_range_release(&state->integer_range_branches.data[i].merged);
+    }
+    core_list_free(state->integer_range_branches);
 }
 
