@@ -4736,22 +4736,26 @@ n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
     bool target_float = destination.class == IR_CLASS_FLOAT;
     if (ir_type_eq(context->module, from, th_name(types, "byte")))
         target_integer = is_integer_type(target);
+    bool float_to_float = source_float && target_float;
     if (!(source_integer && target_integer)
         && !(source_integer && target_float)
-        && !(source_float && target_integer))
+        && !(source_float && target_integer)
+        && !float_to_float)
         return lower_error(context, IR_DIAG_TYPE_CLASS, span,
                            "this cast has no defined conversion");
     bool signedness_change = source.class != destination.class;
-    bool needs_check = source_float || (source_integer && target_integer
-        && (destination.width < source.width || signedness_change));
+    bool needs_check = (source_float && !float_to_float)
+        || (source_integer && target_integer
+            && (destination.width < source.width || signedness_change));
+    const char *rounding = float_to_float
+        ? destination.width < source.width ? "nearest" : nullptr
+        : source_float ? "to_zero" : target_float ? "nearest" : nullptr;
     ir_instr_t *cast = ir_lower_emit_instruction(context, IR_OP_CAST, span);
     if (!cast || !ir_lower_set_temp_dest(context, cast,
                                          "__n00bb_", target)
         || !ir_instr_operand_value(cast, operands[0])
         || (needs_check && !ir_instr_add_mod(cast, "trap"))
-        || ((source_float || target_float)
-            && !ir_instr_add_mod(cast,
-                source_float ? "to_zero" : "nearest")))
+        || (rounding && !ir_instr_add_mod(cast, rounding)))
         return lower_error(context, IR_DIAG_INTERNAL, span,
                            "could not emit a checked cast");
     return (ir_lower_result_t){IR_LOWER_VALUE, cast->dest};

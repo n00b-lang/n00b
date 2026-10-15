@@ -263,7 +263,8 @@ record_field_has_c_scalar_representation(ir_module_t *module, th_type *type)
         if (!builtin_type_name(name)) break;
         ir_machine_t machine = ir_machine_of(module, type);
         compatible = (machine.class == IR_CLASS_BOOL && machine.width == 1)
-            || (machine.class == IR_CLASS_FLOAT && machine.width == 64)
+            || (machine.class == IR_CLASS_FLOAT
+                && (machine.width == 64 || machine.width == 32))
             || ((machine.class == IR_CLASS_SINT
                  || machine.class == IR_CLASS_UINT)
                 && machine.width && machine.width <= 64);

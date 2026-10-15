@@ -57,6 +57,12 @@ static void hash_scalar_bytes(const uint8_t *source, uint32_t bits,
         if (!(floating_bits & UINT64_C(0x7fffffffffffffff)))
             __builtin_memset(canonical, 0, sizeof floating_bits);
     }
+    if (floating && bits == 32) {
+        uint32_t floating_bits = 0;
+        __builtin_memcpy(&floating_bits, canonical, sizeof floating_bits);
+        if (!(floating_bits & UINT32_C(0x7fffffff)))
+            __builtin_memset(canonical, 0, sizeof floating_bits);
+    }
     XXH128_hash_t hash = XXH3_128bits(canonical, (size_t)bytes);
     result[0] = hash.low64;
     result[1] = hash.high64;
@@ -130,9 +136,11 @@ void n00bb_bootstrap_hash_scalar(uint32_t type_field, uint64_t payload,
             hash_integer_value(source, bits, signed_integer, result);
             return;
         }
-        floating = bits == 64
-            && ((length == 3 && !__builtin_memcmp(name, "f64", 3))
-                || (length == 5 && !__builtin_memcmp(name, "float", 5)));
+        floating = (bits == 64
+                && ((length == 3 && !__builtin_memcmp(name, "f64", 3))
+                    || (length == 5 && !__builtin_memcmp(name, "float", 5))))
+            || (bits == 32 && length == 3
+                && !__builtin_memcmp(name, "f32", 3));
     }
     hash_scalar_bytes(source, bits, floating, result);
 }

@@ -263,9 +263,23 @@ scalar_type(ir_module_t *module, th_type *type, LLVMContextRef context)
         return LLVMIntTypeInContext(context, machine.width);
     if (machine.class == IR_CLASS_FLOAT && machine.width == 64)
         return LLVMDoubleTypeInContext(context);
+    if (machine.class == IR_CLASS_FLOAT && machine.width == 32)
+        return LLVMFloatTypeInContext(context);
     if (machine.class == IR_CLASS_PTR)
         return LLVMPointerTypeInContext(context, 0);
     return nullptr;
+}
+
+static bool
+floating_kind(LLVMTypeKind kind)
+{
+    return kind == LLVMFloatTypeKind || kind == LLVMDoubleTypeKind;
+}
+
+static bool
+floating_type(LLVMTypeRef type)
+{
+    return type && floating_kind(LLVMGetTypeKind(type));
 }
 
 static LLVMTypeRef
@@ -1839,6 +1853,9 @@ literal_element_layout_matches(ir_module_t *module, th_type *type,
     if (machine.class == IR_CLASS_FLOAT && machine.width == 64)
         return LLVMGetTypeKind(native) == LLVMDoubleTypeKind
             && layout->intrinsic_bits == 64;
+    if (machine.class == IR_CLASS_FLOAT && machine.width == 32)
+        return LLVMGetTypeKind(native) == LLVMFloatTypeKind
+            && layout->intrinsic_bits == 32;
     if (machine.class == IR_CLASS_PTR)
         return LLVMGetTypeKind(native) == LLVMPointerTypeKind
             && layout->intrinsic_bits == sizeof(void *) * 8;
@@ -3693,6 +3710,12 @@ cached_record_fields_array_value(lower_state_t *state, ir_module_t *source,
             memcpy(&bits, cached->bytes + offset, 8);
             fields[i] = LLVMConstBitCast(LLVMConstInt(
                 LLVMInt64TypeInContext(context), bits, false), field_type);
+        } else if (LLVMGetTypeKind(field_type) == LLVMFloatTypeKind
+                   && field_bytes == 4) {
+            uint32_t bits = 0;
+            memcpy(&bits, cached->bytes + offset, 4);
+            fields[i] = LLVMConstBitCast(LLVMConstInt(
+                LLVMInt32TypeInContext(context), bits, false), field_type);
         } else valid = false;
     }
     LLVMValueRef record = valid && arrays == 1
@@ -5790,10 +5813,12 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         ir_machine_t machine = ir_machine_of(state->function->owner,
             instruction->dest->type);
         if (operands[0].lit.is_float) {
-            if (machine.class != IR_CLASS_FLOAT || machine.width != 64)
-                break;
-            result = LLVMConstReal(LLVMDoubleTypeInContext(
-                LLVMGetModuleContext(state->module)), operands[0].lit.f);
+            LLVMTypeRef float_type = machine.class == IR_CLASS_FLOAT
+                ? scalar_type(state->function->owner, instruction->dest->type,
+                              LLVMGetModuleContext(state->module))
+                : nullptr;
+            if (!float_type) break;
+            result = LLVMConstReal(float_type, operands[0].lit.f);
             return save_result(state, instruction, result);
         }
         LLVMTypeRef type = scalar_type(state->function->owner,
@@ -6818,17 +6843,31 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             if (instruction->n_mods != 1
                 || !ir_instr_has_mod(instruction, "nearest")
                 || LLVMGetTypeKind(LLVMTypeOf(source)) != LLVMIntegerTypeKind
-                || LLVMGetTypeKind(target) != LLVMDoubleTypeKind) break;
+                || !floating_type(target)) break;
             result = from.class == IR_CLASS_SINT
                 ? LLVMBuildSIToFP(state->builder, source, target, "cast.sitofp")
                 : LLVMBuildUIToFP(state->builder, source, target, "cast.uitofp");
+            return result && save_result(state, instruction, result);
+        }
+        if (from.class == IR_CLASS_FLOAT && to.class == IR_CLASS_FLOAT) {
+            if (!floating_type(LLVMTypeOf(source)) || !floating_type(target))
+                break;
+            if (to.width > from.width && instruction->n_mods == 0)
+                result = LLVMBuildFPExt(state->builder, source, target,
+                                        "cast.fpext");
+            else if (to.width < from.width && instruction->n_mods == 1
+                     && ir_instr_has_mod(instruction, "nearest"))
+                result = LLVMBuildFPTrunc(state->builder, source, target,
+                                          "cast.fptrunc");
+            else if (to.width == from.width) result = source;
+            else break;
             return result && save_result(state, instruction, result);
         }
         if (from.class == IR_CLASS_FLOAT && to_integer) {
             if (instruction->n_mods != 2
                 || !ir_instr_has_mod(instruction, "trap")
                 || !ir_instr_has_mod(instruction, "to_zero")
-                || LLVMGetTypeKind(LLVMTypeOf(source)) != LLVMDoubleTypeKind
+                || !floating_type(LLVMTypeOf(source))
                 || LLVMGetTypeKind(target) != LLVMIntegerTypeKind) break;
             unsigned id = LLVMLookupIntrinsicID("llvm.trunc",
                                                sizeof("llvm.trunc") - 1);
@@ -8070,7 +8109,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         LLVMValueRef value = lowered_value(state, operands[0].value);
         if (!value) break;
         LLVMTypeRef type = LLVMTypeOf(value);
-        if (LLVMGetTypeKind(type) == LLVMDoubleTypeKind) {
+        if (floating_type(type)) {
             if (instruction->n_mods) break;
             result = LLVMBuildFNeg(state->builder, value, "negated");
         } else if (LLVMGetTypeKind(type) == LLVMIntegerTypeKind) {
@@ -8124,7 +8163,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             || (instruction->n_mods
                 && !ir_instr_has_mod(instruction, "trap")
                 && !ir_instr_has_mod(instruction, "wrap"))) break;
-        if (LLVMGetTypeKind(LLVMTypeOf(left)) == LLVMDoubleTypeKind) {
+        if (floating_type(LLVMTypeOf(left))) {
             if (instruction->n_mods) break;
             result = instruction->op == IR_OP_ADD
                 ? LLVMBuildFAdd(state->builder, left, right, "arithmetic")
@@ -8187,7 +8226,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         LLVMValueRef right = lowered_value(state, operands[1].value);
         if (!left || !right || LLVMTypeOf(left) != LLVMTypeOf(right)) break;
         LLVMTypeRef type = LLVMTypeOf(left);
-        if (LLVMGetTypeKind(type) == LLVMDoubleTypeKind) {
+        if (floating_type(type)) {
             if (instruction->n_mods) break;
             result = instruction->op == IR_OP_DIV
                 ? LLVMBuildFDiv(state->builder, left, right, "quotient")
@@ -8430,7 +8469,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                 : LLVMConstInt(LLVMTypeOf(comparison), 0, false);
             result = LLVMBuildICmp(state->builder, predicate, comparison,
                                    zero, "string.compare.bool");
-        } else if (kind == LLVMDoubleTypeKind) {
+        } else if (floating_kind(kind)) {
             LLVMRealPredicate predicate = instruction->op == IR_OP_EQ
                 ? LLVMRealOEQ : instruction->op == IR_OP_NE
                     ? LLVMRealUNE : instruction->op == IR_OP_LT
@@ -10880,7 +10919,7 @@ lower_module(LLVMModuleRef target, const ir_module_t *source,
                 value = integer_constant(machine, type,
                     (ir_lit_t){.mag = init->boolean});
             else if (init->kind == IR_GLOBAL_INIT_FLOAT
-                     && machine.class == IR_CLASS_FLOAT && machine.width == 64)
+                     && machine.class == IR_CLASS_FLOAT && floating_type(type))
                 value = LLVMConstReal(type, init->floating);
             else if (init->kind == IR_GLOBAL_INIT_STRING
                      && is_string_type(global->type))

@@ -587,6 +587,7 @@ parse_tree_t *n00bb_init_target(parse_grammar_t *grammar,
 bool primitive_operator_site(n00bb_tu_state_t *state,
                              n00bb_link_use_site_t *site);
 bool named_type_is(th_type *type, const char *wanted);
+bool is_float_type(th_type *type);
 bool n00bb_flagset_type(core_translation_unit_t *unit,
                         n00bb_tu_state_t *state, th_type *type,
                         parse_sym_entry_t **symbol_out);
@@ -703,6 +704,8 @@ bool n00bb_range_proven_above_int64(parse_grammar_t *grammar,
                                     parse_tree_t *node);
 bool n00bb_contextual_integer_literal(n00bb_tu_state_t *state,
                                       parse_tree_t *node, th_type *target);
+bool n00bb_contextual_float_literal(parse_tree_t *node, th_type *target);
+bool n00bb_float_literal_adopts(parse_tree_t *node, th_type *operand);
 void cache_type_syntax_node(parse_grammar_t *grammar, parse_tree_t *node);
 bool append_type_argument_pack(th_type *pack,
                                core_list_t(th_arg) *arguments);

@@ -300,7 +300,7 @@ publish_direct_or_alias(ir_module_t *module, th_type *type,
     }
     else if (machine.class == IR_CLASS_FLOAT) {
         *handled = true;
-        if (semantic_bits != 64) return false;
+        if (semantic_bits != 64 && semantic_bits != 32) return false;
         const core_target_scalar_t *storage =
             core_target_float_storage(target, semantic_bits);
         if (!storage) return false;

@@ -587,6 +587,19 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
             }
             argument_index++;
         }
+        core_list_t(n00bb_tree_ptr_t) arguments =
+            core_list_new(n00bb_tree_ptr_t);
+        collect_positional_nodes(grammar, positional, &arguments);
+        for (size_t i = 0; i < arguments.len; i++) {
+            const th_param *parameter = th_func_param(signature,
+                i + parameter_offset);
+            if (!parameter && i + parameter_offset >= parameter_count)
+                parameter = th_func_rest(signature);
+            if (parameter)
+                (void)n00bb_contextual_float_literal(arguments.data[i],
+                                                     parameter->type);
+        }
+        core_list_free(arguments);
         core_free(argument_sources);
         core_free(argument_copies);
         th_type *return_type = th_func_ret(signature);

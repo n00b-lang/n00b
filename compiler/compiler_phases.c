@@ -89,8 +89,9 @@ n00bb_literal_raw_element(ir_module_t *module, th_type *type)
         if (machine.class == IR_CLASS_UINT && named_type_is(type, "char")
             && layout->intrinsic_bits >= machine.width) return true;
     }
-    if (machine.class == IR_CLASS_FLOAT && machine.width == 64)
-        return layout->intrinsic_bits == 64;
+    if (machine.class == IR_CLASS_FLOAT
+        && (machine.width == 64 || machine.width == 32))
+        return layout->intrinsic_bits == machine.width;
 
     const char *name = nullptr;
     size_t count = 0;
@@ -859,6 +860,14 @@ n00bb_decode_comptime_value(n00bb_link_analysis_t *analysis,
             .kind = IR_GLOBAL_INIT_FLOAT, .floating = floating};
         return true;
     }
+    if (machine.class == IR_CLASS_FLOAT && machine.width == 32
+        && raw_len >= sizeof(float)) {
+        float floating;
+        memcpy(&floating, raw, sizeof(floating));
+        *out = (ir_global_init_value_t){
+            .kind = IR_GLOBAL_INIT_FLOAT, .floating = floating};
+        return true;
+    }
     if ((machine.class == IR_CLASS_SINT || machine.class == IR_CLASS_UINT)
         && machine.width && machine.width <= 128
         && (machine.width + 7) / 8 <= raw_len) {
@@ -1024,6 +1033,13 @@ n00bb_fold_comptime_global_results(n00bb_link_analysis_t *analysis)
             value.kind = IR_GLOBAL_INIT_FLOAT;
             memcpy(&value.floating, result->materialized_bytes,
                    sizeof(value.floating));
+        }
+        else if (machine.class == IR_CLASS_FLOAT && machine.width == 32
+                 && bytes == sizeof(float)) {
+            float floating;
+            memcpy(&floating, result->materialized_bytes, sizeof(floating));
+            value.kind = IR_GLOBAL_INIT_FLOAT;
+            value.floating = floating;
         }
         else if ((machine.class == IR_CLASS_SINT
                   || machine.class == IR_CLASS_UINT)

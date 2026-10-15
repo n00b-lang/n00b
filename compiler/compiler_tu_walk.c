@@ -316,17 +316,28 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             if (expected && is_integer_type(expected))
                 n00bb_contextual_integer_literal(state, node, expected);
         }
-        if (nt_is(grammar, node, "compare-expr")
-            && core_tree_num_children(node) == 3
-            && nt_is(grammar, core_tree_child(node, 1), "compare-op")) {
+        if (nt_is(grammar, node, "simple-lit")) {
+            th_type *expected = n00bb_integer_literal_context(grammar,
+                state, node);
+            if (expected && is_float_type(expected))
+                n00bb_contextual_float_literal(node, expected);
+        }
+        if (core_tree_num_children(node) == 3
+            && ((nt_is(grammar, node, "compare-expr")
+                 && nt_is(grammar, core_tree_child(node, 1), "compare-op"))
+                || (nt_is(grammar, node, "equality-expr")
+                    && nt_is(grammar, core_tree_child(node, 1),
+                             "equality-op")))) {
             parse_tree_t *left = core_tree_child(node, 0);
             parse_tree_t *right = core_tree_child(node, 2);
             th_type *left_type = core_tree_node_value(left).type;
             th_type *right_type = core_tree_node_value(right).type;
             if (left_type && right_type && left_type != right_type
                 && !n00bb_contextual_integer_literal(state, right,
-                                                     left_type))
-                n00bb_contextual_integer_literal(state, left, right_type);
+                                                     left_type)
+                && !n00bb_float_literal_adopts(right, left_type)
+                && !n00bb_contextual_integer_literal(state, left, right_type))
+                n00bb_float_literal_adopts(left, right_type);
         }
         if (nt_is(grammar, node, "sym-decl")) {
             parse_tree_t *type_spec = child_nt(grammar, node, "type-spec");

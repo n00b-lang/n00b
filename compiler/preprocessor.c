@@ -241,7 +241,8 @@ primitive_annotation_kind(pp_context_t *ctx, parse_tree_t *type)
     if (core_string_eq(name, CORE_STRING_STATIC("bool"))) kind = PP_BOOL;
     else if (core_string_eq(name, CORE_STRING_STATIC("string"))) kind = PP_STRING;
     else if (core_string_eq(name, CORE_STRING_STATIC("float"))
-             || core_string_eq(name, CORE_STRING_STATIC("f64"))) kind = PP_FLOAT;
+             || core_string_eq(name, CORE_STRING_STATIC("f64"))
+             || core_string_eq(name, CORE_STRING_STATIC("f32"))) kind = PP_FLOAT;
     else if (core_string_eq(name, CORE_STRING_STATIC("int"))
              || core_string_eq(name, CORE_STRING_STATIC("uint")))
         kind = PP_INT;

@@ -1330,6 +1330,7 @@ static_value_matches_type(const n00bb_static_value_t *value, th_type *type,
                 || N00BB_TYPE_NAME("u128")
         : value->kind == N00BB_STATIC_VALUE_FLOAT
             ? N00BB_TYPE_NAME("float") || N00BB_TYPE_NAME("f64")
+                || N00BB_TYPE_NAME("f32")
         : value->kind == N00BB_STATIC_VALUE_STRING
             ? N00BB_TYPE_NAME("string") : false;
 #undef N00BB_TYPE_NAME
@@ -6958,6 +6959,7 @@ static const ir_scalar_t n00bb_scalars[] = {
     {"bool", IR_CLASS_BOOL, 1, IR_ROLE_NONE},
     {"byte", IR_CLASS_UINT, 8, IR_ROLE_NONE},
     {"f64", IR_CLASS_FLOAT, 64, IR_ROLE_NONE},
+    {"f32", IR_CLASS_FLOAT, 32, IR_ROLE_NONE},
     {"float", IR_CLASS_FLOAT, 64, IR_ROLE_NONE},
     {"nil", IR_CLASS_VOID, 0, IR_ROLE_NONE},
     {"i8", IR_CLASS_SINT, 8, IR_ROLE_NONE},
@@ -7360,6 +7362,61 @@ n00bb_current_integer_range(n00bb_tu_state_t *state, parse_tree_t *node,
     return parse_tree_integer_range(node, minimum, maximum);
 }
 
+static parse_tree_t *
+float_literal_leaf(parse_tree_t *node, th_type *retype)
+{
+    while (node && !core_tree_is_leaf(node)) {
+        if (retype) core_tree_node_value(node).type = retype;
+        size_t children = core_tree_num_children(node);
+        if (children == 1) node = core_tree_child(node, 0);
+        else if (children == 2
+                 && (parse_tree_leaf_is(core_tree_child(node, 0),
+                                        CORE_STRING_STATIC("-"))
+                     || parse_tree_leaf_is(core_tree_child(node, 0),
+                                           CORE_STRING_STATIC("+"))))
+            node = core_tree_child(node, 1);
+        else if (children == 3
+                 && parse_tree_leaf_is(core_tree_child(node, 0),
+                                       CORE_STRING_STATIC("("))
+                 && parse_tree_leaf_is(core_tree_child(node, 2),
+                                       CORE_STRING_STATIC(")")))
+            node = core_tree_child(node, 1);
+        else return nullptr;
+    }
+    parse_token_info_t *token = node ? parse_node_token(node) : nullptr;
+    if (!token || core_option_is_set(token->postfix_modifier)) return nullptr;
+    core_string_t text = parse_tree_leaf_text(node);
+    if (!text.u8_bytes || text.data[0] < '0' || text.data[0] > '9'
+        || memchr(text.data, 'x', text.u8_bytes)
+        || memchr(text.data, 'X', text.u8_bytes)) return nullptr;
+    return memchr(text.data, '.', text.u8_bytes)
+            || memchr(text.data, 'e', text.u8_bytes)
+            || memchr(text.data, 'E', text.u8_bytes)
+        ? node : nullptr;
+}
+
+bool
+n00bb_contextual_float_literal(parse_tree_t *node, th_type *target)
+{
+    th_type *current_type = node ? core_tree_node_value(node).type : nullptr;
+    if (!float_literal_leaf(node, nullptr) || !is_float_type(target)
+        || (current_type && !is_float_type(current_type))) return false;
+    float_literal_leaf(node, target);
+    return true;
+}
+
+bool
+n00bb_float_literal_adopts(parse_tree_t *node, th_type *operand)
+{
+    if (n00bb_contextual_float_literal(node, operand)) return true;
+    th_type *current_type = node ? core_tree_node_value(node).type : nullptr;
+    if (!operand || th_kind_of(th_resolve(operand)) != TH_VAR
+        || !float_literal_leaf(node, nullptr)
+        || (current_type && !is_float_type(current_type))) return false;
+    float_literal_leaf(node, operand);
+    return true;
+}
+
 bool
 n00bb_contextual_integer_literal(n00bb_tu_state_t *state,
                                  parse_tree_t *node, th_type *target)
@@ -7367,7 +7424,7 @@ n00bb_contextual_integer_literal(n00bb_tu_state_t *state,
     parse_tree_t *origin = node
         ? core_tree_node_value(node).integer_literal_origin : nullptr;
     int64_t minimum = 0, maximum = 0;
-    if (!origin) return false;
+    if (!origin) return n00bb_contextual_float_literal(node, target);
     if (!n00bb_current_integer_range(state, node, &minimum, &maximum)) {
         if (!n00bb_current_integer_range(state, origin,
                                          &minimum, &maximum)) return false;
@@ -9834,8 +9891,7 @@ primitive_ordering_type(th_type *type)
     if (!type || !th_named_info(type, &name, &length, nullptr, &arguments)
         || arguments) return false;
     core_string_t type_name = core_string_borrow(name, length);
-    return core_string_eq(type_name, CORE_STRING_STATIC("float"))
-        || core_string_eq(type_name, CORE_STRING_STATIC("f64"))
+    return is_float_type(type)
         || core_string_eq(type_name, CORE_STRING_STATIC("string"));
 }
 
@@ -9851,6 +9907,13 @@ named_type_is(th_type *type, const char *wanted)
 }
 
 bool
+is_float_type(th_type *type)
+{
+    return named_type_is(type, "float") || named_type_is(type, "f64")
+        || named_type_is(type, "f32");
+}
+
+bool
 primitive_operator_site(n00bb_tu_state_t *state, n00bb_link_use_site_t *site)
 {
     if (!site || !site->operator_dispatch
@@ -9863,9 +9926,7 @@ primitive_operator_site(n00bb_tu_state_t *state, n00bb_link_use_site_t *site)
         return named_type_is(receiver_type, "bool");
     if (core_string_eq(site->dispatch_trait,
                        CORE_STRING_STATIC("Negate")))
-        return is_integer_type(receiver_type)
-            || named_type_is(receiver_type, "float")
-            || named_type_is(receiver_type, "f64");
+        return is_integer_type(receiver_type) || is_float_type(receiver_type);
     bool equality = core_string_eq(site->dispatch_trait,
                                    CORE_STRING_STATIC("Equal"));
     bool ordering = core_string_eq(site->dispatch_trait,
@@ -9907,9 +9968,7 @@ primitive_operator_site(n00bb_tu_state_t *state, n00bb_link_use_site_t *site)
                           CORE_STRING_STATIC("Divide"))
         || core_string_eq(site->dispatch_trait,
                           CORE_STRING_STATIC("Remainder")))
-        return is_integer_type(receiver_type)
-            || named_type_is(receiver_type, "float")
-            || named_type_is(receiver_type, "f64");
+        return is_integer_type(receiver_type) || is_float_type(receiver_type);
     return false;
 }
 
@@ -10095,12 +10154,14 @@ refine_intrinsic_binary_result(parse_grammar_t *grammar,
     }
     if (!shift && left_type && right_type
         && left_type != right_type) {
-        if (n00bb_contextual_integer_literal(state, right, left_type)) {
+        if (n00bb_contextual_integer_literal(state, right, left_type)
+            || n00bb_float_literal_adopts(right, left_type)) {
             right_type = core_tree_node_value(right).type;
         }
         else {
             th_type *previous_left = left_type;
-            if (n00bb_contextual_integer_literal(state, left, right_type)) {
+            if (n00bb_contextual_integer_literal(state, left, right_type)
+                || n00bb_float_literal_adopts(left, right_type)) {
                 left_type = core_tree_node_value(left).type;
                 if (result == previous_left) {
                     result = left_type;
@@ -10195,8 +10256,7 @@ constrain_primitive_numeric(n00bb_tu_state_t *state, th_type *type)
     type = type ? th_resolve(type) : nullptr;
     if (!type) return false;
     if (th_kind_of(type) != TH_VAR)
-        return is_integer_type(type) || named_type_is(type, "float")
-            || named_type_is(type, "f64");
+        return is_integer_type(type) || is_float_type(type);
     size_t capacity = profile->n_scalars + 1;
     th_type **alternatives = core_arena_alloc(&state->semantic_values,
         capacity * sizeof(*alternatives));

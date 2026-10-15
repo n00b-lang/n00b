@@ -1017,7 +1017,7 @@ register_builtin_binary_operators(th_env *environment, th_ctx *types)
     };
     static const char *const numeric_types[] = {
         "int", "uint", "i8", "i16", "i32", "i128",
-        "u8", "u16", "u32", "u128", "float", "f64",
+        "u8", "u16", "u32", "u128", "float", "f64", "f32",
     };
     for (size_t o = 0; o < sizeof(operators) / sizeof(operators[0]); o++) {
         th_type *receiver = th_var(types);
@@ -1079,7 +1079,7 @@ register_builtin_unary_operators(th_env *environment, th_ctx *types)
 {
     static const char *const numeric_types[] = {
         "int", "uint", "i8", "i16", "i32", "i128",
-        "u8", "u16", "u32", "u128", "float", "f64",
+        "u8", "u16", "u32", "u128", "float", "f64", "f32",
     };
     static const struct {
         const char *trait;
@@ -1133,7 +1133,7 @@ register_builtin_comparison_operators(th_env *environment, th_ctx *types)
 {
     static const char *const ordered_types[] = {
         "int", "uint", "i8", "i16", "i32", "i128",
-        "u8", "u16", "u32", "u128", "float", "f64",
+        "u8", "u16", "u32", "u128", "float", "f64", "f32",
         "string",
     };
     static const char *const equality_types[] = {
