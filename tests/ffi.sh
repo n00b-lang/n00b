@@ -46,6 +46,8 @@ builds_and_runs shim_call --lto
 builds_and_runs text_cstr --link-object "$tmp/text.o"
 "${CC:-cc}" -c kept/kept.c -o "$tmp/kept.o"
 builds_and_runs kept_text --link-object "$tmp/kept.o"
+"${CC:-cc}" -c keywords/keywords.c -o "$tmp/keywords.o"
+builds_and_runs keyword_args --link-object "$tmp/keywords.o"
 
 for marker in marker-literal-5be1 marker-contract-5be1; do
     for binary in constants use_path use_search; do
