@@ -958,11 +958,8 @@ project(ictx *c, parse_infer_proj_t op, th_type *t,
             return project(c, PARSE_INFER_METHOD_RETURN, t,
                 explicit_name.data ? explicit_name : last_text(c->v->node),
                 (core_string_t){0});
-        if (op == PARSE_INFER_FIELD_RETURN_AUTO_DEREF) {
-            t = th_resolve(t);
-            while (t && th_kind_of(t) == TH_INDIRECTION)
-                t = th_resolve(th_ind_referent(t));
-        }
+        if (op == PARSE_INFER_FIELD_RETURN_AUTO_DEREF)
+            t = th_auto_deref(c->tc, t);
         return field_projection(c, t,
             explicit_name.data ? explicit_name : last_text(c->v->node),
             op == PARSE_INFER_FIELD_RETURN_AUTO_DEREF);

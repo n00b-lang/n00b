@@ -6,6 +6,7 @@
 #include "ir/layout.h"
 #include "ir/pass.h"
 #include "ir/text.h"
+#include "ir/typelang.h"
 #include "ir/doms.h"
 #include "ir/verify.h"
 #include "ir/walk.h"
@@ -509,6 +510,7 @@ core_list_decl(verify_instr_ptr_t);
 typedef struct {
     core_list_t(verify_value_ptr_t) pending;
     core_list_t(verify_value_ptr_t) targets;
+    th_ctx *types;
     bool external_writable;
     bool writable_projection;
     bool complete;
@@ -526,10 +528,16 @@ static bool store_target_enqueue(store_target_set_t *set, ir_value_t *value)
     return value && store_target_add(&set->pending, value);
 }
 
-static bool store_target_carries_reference(th_type *type)
+static bool store_target_carries_reference(const store_target_set_t *set,
+                                           th_type *type)
 {
     if (!type) return false;
+    type = th_resolve(type);
     if (th_kind_of(type) == TH_INDIRECTION) return true;
+    th_type *definition = set->types && th_kind_of(type) == TH_NAMED
+        ? th_type_definition(set->types, type) : nullptr;
+    if (definition && th_kind_of(th_resolve(definition)) == TH_INDIRECTION)
+        return true;
     const char *name = nullptr;
     size_t count = 0;
     bool variant = true;
@@ -538,14 +546,14 @@ static bool store_target_carries_reference(th_type *type)
         return false;
     const th_arg *item = th_named_arg(type, 0);
     return item && item->kind == TH_ARG_TYPE
-        && store_target_carries_reference(item->type);
+        && store_target_carries_reference(set, item->type);
 }
 
 static bool store_target_enqueue_indirect(store_target_set_t *set,
                                           ir_value_t *value)
 {
     return value && value->type
-        && store_target_carries_reference(value->type)
+        && store_target_carries_reference(set, value->type)
         && store_target_enqueue(set, value);
 }
 
@@ -613,6 +621,8 @@ static bool store_target_collect(store_target_set_t *set,
                                  bool preserve_parameters)
 {
     memset(set, 0, sizeof(*set));
+    set->types = address && address->owner && address->owner->owner
+        ? ir_module_types(address->owner->owner) : nullptr;
     set->complete = store_target_enqueue(set, address);
     for (size_t cursor = 0; set->complete && cursor < set->pending.len;
          cursor++) {
@@ -622,7 +632,7 @@ static bool store_target_collect(store_target_set_t *set,
             continue;
         }
         if (value->kind != IR_VAL_INSTR || !value->def) {
-            if (store_target_carries_reference(value->type)) {
+            if (store_target_carries_reference(set, value->type)) {
                 if (preserve_parameters && value->kind == IR_VAL_PARAM) {
                     set->complete = store_target_finish(set, value);
                     continue;
@@ -699,7 +709,7 @@ static bool store_target_collect(store_target_set_t *set,
                     ir_operand_value(&definition->operands[i]));
             break;
         default:
-            if (store_target_carries_reference(value->type)) {
+            if (store_target_carries_reference(set, value->type)) {
                 ir_annot_t *aliases = ir_annot_get(ir_value_annots(value),
                                                     "ir.alias_count");
                 if (aliases)

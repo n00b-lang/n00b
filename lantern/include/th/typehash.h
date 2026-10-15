@@ -270,6 +270,7 @@ void     th_record_fill(th_ctx *ctx, th_type *stub, const th_member *members,
  * Definitions are semantic metadata and do not change the named type's identity. */
 bool     th_type_define(th_ctx *ctx, th_type *type, th_type *definition);
 th_type *th_type_definition(th_ctx *ctx, const th_type *type);
+th_type *th_auto_deref(th_ctx *ctx, th_type *type);
 th_type *th_record_lookup_in(th_ctx *ctx, const th_type *type,
                              const char *name);
 th_type *th_func(th_ctx *ctx, th_type *ret, const th_param *params, size_t np,

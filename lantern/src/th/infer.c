@@ -1112,10 +1112,8 @@ static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to,
         }
 
         case TH_CON_HAS_FIELD: {
-            th_type *field_owner = th_resolve(bound_to);
-            if (c->field.auto_deref)
-                while (field_owner && th_kind_of(field_owner) == TH_INDIRECTION)
-                    field_owner = th_resolve(th_ind_referent(field_owner));
+            th_type *field_owner = c->field.auto_deref
+                ? th_auto_deref(ctx, bound_to) : th_resolve(bound_to);
             th_type *m = th_record_lookup_in(ctx, field_owner,
                                             c->field.name);
 

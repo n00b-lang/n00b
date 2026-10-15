@@ -215,6 +215,20 @@ bool th_type_define(th_ctx *ctx, th_type *type, th_type *definition)
     return true;
 }
 
+th_type *th_auto_deref(th_ctx *ctx, th_type *type)
+{
+    type = type ? th_resolve(type) : nullptr;
+    while (type) {
+        th_type *definition = th_kind_of(type) == TH_NAMED
+            ? th_type_definition(ctx, type) : nullptr;
+        if (definition && th_kind_of(th_resolve(definition)) == TH_INDIRECTION)
+            type = th_resolve(definition);
+        if (th_kind_of(type) != TH_INDIRECTION) break;
+        type = th_resolve(th_ind_referent(type));
+    }
+    return type;
+}
+
 th_type *th_type_definition(th_ctx *ctx, const th_type *type)
 {
     if (!ctx || !type) return nullptr;

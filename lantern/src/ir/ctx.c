@@ -499,8 +499,12 @@ bool ir_value_has_external_writable_storage(const ir_value_t *value)
 bool ir_value_set_indirect_access(ir_ctx_t *ctx, ir_value_t *value,
                                   ir_indirect_access_t access)
 {
-    if (!ctx || !value || !value->type
-        || th_kind_of(value->type) != TH_INDIRECTION
+    th_type *type = value && value->type ? th_resolve(value->type) : nullptr;
+    th_type *definition = ctx && type && th_kind_of(type) == TH_NAMED
+        ? th_type_definition(ir_ctx_types(ctx), type) : nullptr;
+    bool reference = type && (th_kind_of(type) == TH_INDIRECTION
+        || (definition && th_kind_of(th_resolve(definition)) == TH_INDIRECTION));
+    if (!ctx || !reference
         || access < IR_INDIRECT_ACCESS_READ
         || access > IR_INDIRECT_ACCESS_READ_WRITE) return false;
     return ir_annot_set(ctx, ir_value_annots(value), (ir_annot_t){
@@ -512,9 +516,7 @@ bool ir_value_set_indirect_access(ir_ctx_t *ctx, ir_value_t *value,
 
 ir_indirect_access_t ir_value_indirect_access(const ir_value_t *value)
 {
-    if (!value || !value->type
-        || th_kind_of(value->type) != TH_INDIRECTION) return
-        IR_INDIRECT_ACCESS_UNSPECIFIED;
+    if (!value || !value->type) return IR_INDIRECT_ACCESS_UNSPECIFIED;
     ir_annot_t *access = ir_annot_get(
         ir_value_annots((ir_value_t *)value), "ir.indirect_access");
     if (!access || access->kind != IR_ANNOT_INT || access->i.neg
