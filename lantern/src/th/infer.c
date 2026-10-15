@@ -862,22 +862,6 @@ void th_coercions_clear(th_ctx *ctx)
     }
 }
 
-static th_type *option_of(th_type *t)
-{
-    t = th_resolve(t);
-
-    if (!t || t->kind != TH_NAMED || t->named.nargs != 1
-        || !t->named.name || strcmp(t->named.name, "option") != 0) {
-        return nullptr;
-    }
-
-    if (t->named.args[0].kind != TH_ARG_TYPE) {
-        return nullptr;
-    }
-
-    return t->named.args[0].type;
-}
-
 void th_ctx_set_method_argument_coercions(th_ctx *ctx, uint8_t allowed)
 {
     if (ctx) ctx->method_argument_coercions = allowed;
@@ -905,12 +889,11 @@ static bool method_argument_unifies(th_ctx *ctx, th_type *actual,
             && th_unify_probe(ctx, resolved_actual, definition))
             return uni(ctx, resolved_actual, definition, seen);
     }
-    th_type *inner = mode == TH_IN ? option_of(formal) : nullptr;
+    th_type *inner = mode == TH_IN ? th_option_item(formal) : nullptr;
     if (!inner) return false;
     actual = th_resolve(actual);
     if ((ctx->method_argument_coercions & TH_COERCE_NIL_OPTION)
-        && actual->kind == TH_NAMED && actual->named.nargs == 0
-        && actual->named.name && !strcmp(actual->named.name, "nil"))
+        && th_is_nil(actual))
         return true;
     return (ctx->method_argument_coercions & TH_COERCE_OPTION_WRAP)
         && th_unify_probe(ctx, actual, inner)
@@ -954,7 +937,7 @@ th_type *th_coerce(th_ctx *ctx, th_type *from, th_coerce_policy policy)
     }
 
     if (policy.allow & TH_COERCE_OPTION_WRAP) {
-        th_type *inner = option_of(policy.target);
+        th_type *inner = th_option_item(policy.target);
 
         if (inner && th_unify(ctx, from, inner)) {
             record_coercion(ctx, TH_COERCE_OPTION_WRAP, from, policy.target);
@@ -1237,7 +1220,7 @@ static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to,
             th_type *call_error = call ? th_func_error(call) : nullptr;
             if (matches && call_error) {
                 th_type *target_error = th_func_error(signature);
-                if (!target_error) target_error = th_name(ctx, "nil");
+                if (!target_error) target_error = th_nil(ctx);
                 matches = uni(ctx, call_error, target_error, seen);
             }
             size_t call_nparams = call ? th_func_nparams(call) : 0;

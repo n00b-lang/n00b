@@ -656,7 +656,7 @@ static void test_array_option_method(void) {
   th_ctx *use = th_ctx_new();
   th_type *reference = th_ind(use, 0, th_name(use, "byte"));
   th_arg item = {.kind = TH_ARG_TYPE, .type = reference};
-  th_type *optional = th_apply(use, "option", &item, 1);
+  th_type *optional = th_apply(use, TH_OPTION, &item, 1);
   th_type *array = th_array(use, optional);
   check("generic read resolves for array of optional references",
       th_ctx_set_environment(use, environment, "client", "base") &&
@@ -668,7 +668,7 @@ static void test_array_option_method(void) {
   th_type *late_result = th_var(late);
   th_type *late_reference = th_ind(late, 0, th_name(late, "byte"));
   th_arg late_item = {.kind = TH_ARG_TYPE, .type = late_reference};
-  th_type *late_optional = th_apply(late, "option", &late_item, 1);
+  th_type *late_optional = th_apply(late, TH_OPTION, &late_item, 1);
   th_param index = {.mode = TH_IN, .type = th_name(late, "int")};
   th_type *call = th_func_with_error(late, late_result,
       th_name(late, "nil"), &index, 1, nullptr, nullptr, 0);
@@ -1068,7 +1068,7 @@ int main(void) {
   };
   th_type *iter_contracts = th_record(types, &iter_method, 1);
   th_arg optional_int_arg = {.kind = TH_ARG_TYPE, .type = integer};
-  th_type *optional_int = th_apply(types, "option", &optional_int_arg, 1);
+  th_type *optional_int = th_apply(types, TH_OPTION, &optional_int_arg, 1);
   th_param iter_impl_receiver = {.mode = TH_IN, .type = optional_int};
   th_type *iter_impl_signature = th_func_with_error(
       types, optional_int, th_name(types, "nil"), &iter_impl_receiver, 1,
@@ -1163,7 +1163,7 @@ int main(void) {
       .type = consumer_int,
   };
   th_type *optional_consumer_int =
-      th_apply(inside, "option", &optional_consumer_int_arg, 1);
+      th_apply(inside, TH_OPTION, &optional_consumer_int_arg, 1);
   th_env_method_t iterator_method = {0};
   check("independent trait result and generic failure channels resolve",
         th_env_method_candidates(inside, "IterableTest", "iter", nullptr,

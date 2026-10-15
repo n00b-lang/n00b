@@ -328,9 +328,7 @@ static th_type *slice_store_call_shape(ictx *c, th_type *result,
         return nullptr;
     parse_tree_t *value = core_tree_child(assignment, 2);
     if (!node_is(c->v->grammar, value, "expression")) return nullptr;
-    th_type *integer = th_name(c->tc, "int");
-    th_arg option_arg = {.kind = TH_ARG_TYPE, .type = integer};
-    th_type *bound = th_apply(c->tc, "option", &option_arg, 1);
+    th_type *bound = th_option(c->tc, th_name(c->tc, "int"));
     th_param parameters[] = {
         {.mode = TH_IN, .type = bound},
         {.mode = TH_IN, .type = bound},
@@ -815,10 +813,12 @@ project(ictx *c, parse_infer_proj_t op, th_type *t,
             return e;
         }
 
-        if (named_is(t, "dict")) {
+        th_builtin_kind_t builtin = th_builtin_kind(c->tc, t);
+
+        if (builtin == TH_BUILTIN_DICT) {
             e = named_arg_last(t);
         }
-        else if (named_is(t, "string")) {
+        else if (builtin == TH_BUILTIN_STRING) {
             e = t;
         }
         else {
@@ -863,7 +863,9 @@ project(ictx *c, parse_infer_proj_t op, th_type *t,
             return fresh(c);
         }
 
-        if (named_is(t, "option") || named_is(t, "result")) {
+        th_type *option_item = th_option_item(t);
+
+        if (option_item || named_is(t, "result")) {
             if (text_is(name, "is_set?") || text_is(name, "ok?")
                 || text_is(name, "is_ok?")) {
                 return th_name(c->tc, "bool");
@@ -880,8 +882,6 @@ project(ictx *c, parse_infer_proj_t op, th_type *t,
         memcpy(method_name, name.data, name.u8_bytes);
         method_name[name.u8_bytes] = 0;
 
-        th_type *option_item = named_is(t, "option")
-            ? named_arg_first(t) : nullptr;
         th_type *call_result = option_item
             && (text_is(name, "get") || text_is(name, "get_or_else"))
                 ? option_item : fresh(c);

@@ -124,6 +124,7 @@ ir_module_t *ir_module_new(ir_ctx_t *ctx, const char *name,
     m->profile = profile;
     m->span    = IR_SPAN_UNKNOWN;
     m->symtab  = parse_symtab_new();
+    ir_profile_install_builtins(ctx, profile);
 
     ir_ctx_on_free(ctx, free_symtab, m);
 
@@ -289,6 +290,7 @@ void ir_module_set_profile(ir_module_t *m, const ir_profile_t *p)
     m->rules         = nullptr;
     m->scalar_hashes = nullptr;
     m->scalars_ready = false;
+    ir_profile_install_builtins(m->ctx, p);
 }
 
 ir_span_t ir_module_span(const ir_module_t *m)
@@ -788,27 +790,6 @@ th_type *ir_type_at(ir_module_t *m, size_t i)
     return m && i < m->n_types ? m->types[i].type : nullptr;
 }
 
-static ir_context_type_definition_t *
-type_definition_find(ir_module_t *m, th_type *named, uint64_t hash)
-{
-    const char *name = nullptr;
-    size_t name_len = 0;
-    if (!th_named_info(named, &name, &name_len, nullptr, nullptr))
-        return nullptr;
-    for (size_t i = 0; i < m->ctx->type_definition_count; i++) {
-        ir_context_type_definition_t *entry = &m->ctx->type_definitions[i];
-        if (entry->type == named || entry->hash == hash) return entry;
-        const char *candidate = nullptr;
-        size_t candidate_len = 0;
-        if (!th_named_info(entry->type, &candidate, &candidate_len,
-                           nullptr, nullptr)
-            || candidate_len != name_len
-            || memcmp(candidate, name, name_len)) continue;
-        if (ir_type_id(m, entry->type) == hash) return entry;
-    }
-    return nullptr;
-}
-
 bool ir_type_define(ir_module_t *m, th_type *named, th_type *def)
 {
     named = th_resolve(named);
@@ -816,41 +797,20 @@ bool ir_type_define(ir_module_t *m, th_type *named, th_type *def)
     if (!m || !named || !def || th_kind_of(named) != TH_NAMED) {
         return false;
     }
-    if (!th_type_define(m->ctx->types, named, def)) return false;
+    if (!th_type_define_owned(m->ctx->types, named, def, m)) return false;
 
     ir_type_intern(m, named);
     ir_type_intern(m, def);
 
-    uint64_t hash = ir_type_id(m, named);
-    ir_typeslot_t *slot = type_find(m, hash);
+    ir_typeslot_t *slot = type_find(m, ir_type_id(m, named));
+    th_type *canonical = th_type_definition(m->ctx->types, named);
 
-    if (!slot) {
+    if (!slot || !canonical) {
         return false;
     }
-    ir_context_type_definition_t *entry = type_definition_find(m, named,
-                                                                hash);
-    if (entry) {
-        if (th_hash(m->ctx->types, entry->definition)
-            != th_hash(m->ctx->types, def))
-            return false;
-        bool changed = slot->def == nullptr;
-        slot->def = entry->definition;
-        if (changed) ir_layout_invalidate_type(m, named);
-        return true;
-    }
-    m->ctx->type_definitions = ir_grow(m->ctx,
-        m->ctx->type_definitions, &m->ctx->type_definition_capacity,
-        m->ctx->type_definition_count + 1,
-        sizeof(*m->ctx->type_definitions));
-    m->ctx->type_definitions[m->ctx->type_definition_count++] =
-        (ir_context_type_definition_t){
-            .hash = hash,
-            .type = named,
-            .definition = def,
-            .owner = m,
-        };
-    slot->def = def;
-    ir_layout_invalidate_type(m, named);
+    bool changed = slot->def != canonical;
+    slot->def = canonical;
+    if (changed) ir_layout_invalidate_type(m, named);
 
     return true;
 }
@@ -862,29 +822,21 @@ th_type *ir_type_definition(ir_module_t *m, th_type *named)
         return nullptr;
     }
 
-    uint64_t hash = ir_type_id(m, named);
-    ir_context_type_definition_t *entry = type_definition_find(m, named,
-                                                                hash);
-    if (entry) return entry->definition;
-    th_type *specialized = th_type_definition(m->ctx->types, named);
-    if (specialized) {
-        if (!th_is_closed(m->ctx->types, named)) return specialized;
-        if (!ir_type_define(m, named, specialized)) return nullptr;
-        entry = type_definition_find(m, named, hash);
-        return entry ? entry->definition : nullptr;
+    th_type *definition = th_type_definition(m->ctx->types, named);
+    if (definition) {
+        if (th_is_closed(m->ctx->types, named)
+            && !th_type_definition_owner(m->ctx->types, named)
+            && !ir_type_define(m, named, definition)) return nullptr;
+        return definition;
     }
-    ir_typeslot_t *slot = type_find(m, hash);
+    ir_typeslot_t *slot = type_find(m, ir_type_id(m, named));
     return slot ? slot->def : nullptr;
 }
 
 ir_module_t *ir_type_definition_owner(ir_module_t *m, th_type *named)
 {
     if (!m || !named || th_kind_of(named) != TH_NAMED) return nullptr;
-    uint64_t hash = ir_type_id(m, named);
-    ir_context_type_definition_t *entry = type_definition_find(m, named,
-                                                                hash);
-    if (entry) return entry->owner;
-    return nullptr;
+    return th_type_definition_owner(m->ctx->types, named);
 }
 
 size_t ir_call_output_count(th_type *callable)

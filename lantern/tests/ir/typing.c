@@ -967,7 +967,7 @@ static void test_aggregates_and_variants(void)
           apply(e, vtbad) == IR_RULE_REJECT);
 
     ir_instr_t *option_is_nil = op(e, IR_OP_OPTION_IS_NIL);
-    ir_instr_operand_value(option_is_nil, val(e, "option[i32]"));
+    ir_instr_operand_value(option_is_nil, val(e, "Option[i32]"));
     check("option.is_nil accepts an option and returns bool",
           accepts_as(e, option_is_nil, "bool"));
 
@@ -988,45 +988,45 @@ static void test_aggregates_and_variants(void)
 
     ir_instr_t *option_none = op(e, IR_OP_OPTION_NONE);
     ir_instr_set_dest(option_none, "option_none",
-                      ir_type_parse(e->m, "option[i32]"));
+                      ir_type_parse(e->m, "Option[i32]"));
     check("option.none produces a contextual option value",
-          accepts_as(e, option_none, "option[i32]"));
+          accepts_as(e, option_none, "Option[i32]"));
 
     ir_instr_t *option_some = op(e, IR_OP_OPTION_SOME);
     ir_instr_set_dest(option_some, "option_some",
-                      ir_type_parse(e->m, "option[i32]"));
+                      ir_type_parse(e->m, "Option[i32]"));
     ir_instr_operand_value(option_some, val(e, "i32"));
     check("option.some wraps a value of the element type",
-          accepts_as(e, option_some, "option[i32]"));
+          accepts_as(e, option_some, "Option[i32]"));
 
     ir_instr_t *option_some_bad = op(e, IR_OP_OPTION_SOME);
     ir_instr_set_dest(option_some_bad, "option_some_bad",
-                      ir_type_parse(e->m, "option[i32]"));
+                      ir_type_parse(e->m, "Option[i32]"));
     ir_instr_operand_value(option_some_bad, val(e, "string"));
     check("option.some rejects a mismatched payload",
           apply(e, option_some_bad) == IR_RULE_REJECT);
 
     ir_instr_t *option_get = op(e, IR_OP_OPTION_GET);
     ir_instr_set_dest(option_get, "option_value", ir_type_parse(e->m, "i32"));
-    ir_instr_operand_value(option_get, val(e, "option[i32]"));
+    ir_instr_operand_value(option_get, val(e, "Option[i32]"));
     check("option.get yields the option element type",
           accepts_as(e, option_get, "i32"));
 
     ir_instr_t *option_get_bad = op(e, IR_OP_OPTION_GET);
     ir_instr_set_dest(option_get_bad, "option_value_bad",
                       ir_type_parse(e->m, "string"));
-    ir_instr_operand_value(option_get_bad, val(e, "option[i32]"));
+    ir_instr_operand_value(option_get_bad, val(e, "Option[i32]"));
     check("option.get rejects a mismatched destination type",
           apply(e, option_get_bad) == IR_RULE_REJECT);
 
     ir_instr_t *option_get_or_else = op(e, IR_OP_OPTION_GET_OR_ELSE);
-    ir_instr_operand_value(option_get_or_else, val(e, "option[i32]"));
+    ir_instr_operand_value(option_get_or_else, val(e, "Option[i32]"));
     ir_instr_operand_value(option_get_or_else, val(e, "i32"));
     check("option.get_or_else accepts a matching fallback",
           accepts_as(e, option_get_or_else, "i32"));
 
     ir_instr_t *option_get_or_else_bad = op(e, IR_OP_OPTION_GET_OR_ELSE);
-    ir_instr_operand_value(option_get_or_else_bad, val(e, "option[i32]"));
+    ir_instr_operand_value(option_get_or_else_bad, val(e, "Option[i32]"));
     ir_instr_operand_value(option_get_or_else_bad, val(e, "string"));
     check("option.get_or_else rejects a mismatched fallback",
           apply(e, option_get_or_else_bad) == IR_RULE_REJECT);
@@ -1120,9 +1120,9 @@ static void test_aggregates_and_variants(void)
 
     ir_instr_t *atomic_cas_ref = op(e, IR_OP_ATOMIC_CAS);
     ir_instr_operand_value(atomic_cas_ref,
-        val(e, "ref[atomic[option[ref[i32]]]]"));
-    ir_instr_operand_value(atomic_cas_ref, val(e, "option[ref[i32]]"));
-    ir_instr_operand_value(atomic_cas_ref, val(e, "option[ref[i32]]"));
+        val(e, "ref[atomic[Option[ref[i32]]]]"));
+    ir_instr_operand_value(atomic_cas_ref, val(e, "Option[ref[i32]]"));
+    ir_instr_operand_value(atomic_cas_ref, val(e, "Option[ref[i32]]"));
     check("atomic compare-exchange accepts nullable references",
           accepts_as(e, atomic_cas_ref, "bool"));
 

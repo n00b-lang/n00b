@@ -34,9 +34,18 @@ th_ctx *th_ctx_new(void)
 
     memset(ctx, 0, sizeof(*ctx));
     core_arena_init(&ctx->arena, 0);
-    ctx->type_definitions = core_list_new(th_type_definition_t);
+    ctx->type_records = core_list_new(th_type_record_t);
+    th_builtin_defaults_apply(ctx);
 
     return ctx;
+}
+
+static void free_index(core_dict_t *index)
+{
+    if (index) {
+        core_dict_free(index);
+        core_free(index);
+    }
 }
 
 void th_ctx_free(th_ctx *ctx)
@@ -64,7 +73,11 @@ void th_ctx_free(th_ctx *ctx)
 
     core_list_free(ctx->promos);
     core_list_free(ctx->ifaces);
-    core_list_free(ctx->type_definitions);
+    core_list_free(ctx->type_records);
+    free_index(ctx->builtin_heads);
+    free_index(ctx->closed_type_records);
+    free_index(ctx->open_type_records);
+    free_index(ctx->generic_type_heads);
     core_list_free(ctx->methods);
     core_list_free(ctx->method_resolvers);
     core_list_free(ctx->errors);
@@ -171,6 +184,8 @@ clone_type_graph(th_ctx *destination, const th_type *source,
     case TH_NAMED:
         copy->named = source->named;
         copy->named.name = clone_string(destination, source->named.name);
+        if (!copy->named.builtin_known)
+            (void)th_builtin_type(destination, copy);
         copy->named.args = source->named.nargs
             ? core_alloc_array(th_arg, source->named.nargs) : nullptr;
         for (size_t i = 0; i < source->named.nargs; i++) {
@@ -1381,6 +1396,8 @@ static th_type *make_named(th_ctx *ctx, const char *n, const th_arg *a,
         }
     }
 
+    (void)th_builtin_type(ctx, t);
+
     return t;
 }
 
@@ -1756,9 +1773,29 @@ th_type *th_sum(th_ctx *ctx, th_comb comb, th_type *const *arms, size_t n)
     }
     core_dict_free(&seen);
 
+    size_t present = 0;
+
+    if (comb == TH_UNION && un > 1) {
+        for (size_t i = 0; i < un; i++) {
+            if (!th_is_nil(uniq[i])) {
+                uniq[present]  = uniq[i];
+                enc[present++] = enc[i];
+            }
+            else {
+                core_buffer_release(&enc[i]);
+            }
+        }
+    }
+
     th_type *r;
 
-    if (un == 1) {
+    if (present && present < un) {
+        th_type *item = th_sum(ctx, comb, uniq, present);
+
+        r  = th_option_item(item) ? item : th_option(ctx, item);
+        un = present;
+    }
+    else if (un == 1) {
         r = uniq[0];
     }
     else {

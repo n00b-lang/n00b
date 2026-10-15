@@ -661,7 +661,7 @@ static bool restore_environment(core_object_reader_t *reader, void *object,
         const th_member *method = th_record_member(trait.scheme, j);
         core_list_push(errors, ((th_member){
             .name = method->name,
-            .type = th_name(env->types, "nil"),
+            .type = th_nil(env->types),
         }));
       }
       trait.errors = th_record(env->types, errors.data, errors.len);
@@ -704,7 +704,7 @@ static bool restore_environment(core_object_reader_t *reader, void *object,
              ? !read_type_ref(reader, &function.contract)
              : false)) return false;
     if (env->archive_schema_version < 3)
-      function.error_type = th_name(env->types, "nil");
+      function.error_type = th_nil(env->types);
     if (env->archive_schema_version < 4)
       function.contract = th_env_signature_contract(env->types,
           function.scheme, function.error_type);

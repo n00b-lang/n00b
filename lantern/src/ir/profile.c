@@ -51,6 +51,49 @@ static const ir_scalar_t *find_scalar(ir_module_t *m, th_type *t)
     return nullptr;
 }
 
+static const th_builtin_type_t IR_CONSTRUCTORS[] = {
+    {"string", TH_BUILTIN_STRING, 0, nullptr},
+    {"atomic", TH_BUILTIN_ATOMIC, 1, nullptr},
+    {"any", TH_BUILTIN_ANY, 0, nullptr},
+    {"array", TH_BUILTIN_ARRAY, 1, nullptr},
+    {"list", TH_BUILTIN_LIST, 1, nullptr},
+    {"set", TH_BUILTIN_SET, 1, nullptr},
+    {"dict", TH_BUILTIN_DICT, 2, nullptr},
+};
+
+void ir_profile_install_builtins(ir_ctx_t *ctx, const ir_profile_t *p)
+{
+    if (!ctx || !p || th_ctx_has_builtin_types(ctx->types)) return;
+
+    size_t constructors = sizeof(IR_CONSTRUCTORS) / sizeof(IR_CONSTRUCTORS[0]);
+    size_t count = p->n_scalars + constructors;
+    th_builtin_type_t *table = ir_alloc(ctx, count * sizeof(*table));
+    for (size_t i = 0; i < p->n_scalars; i++)
+        table[i] = (th_builtin_type_t){
+            .name   = p->scalars[i].type_text,
+            .kind   = TH_BUILTIN_SCALAR,
+            .arity  = 0,
+            .scalar = &p->scalars[i],
+        };
+    for (size_t i = 0; i < constructors; i++)
+        table[p->n_scalars + i] = IR_CONSTRUCTORS[i];
+    th_ctx_set_builtin_types(ctx->types, table, count);
+}
+
+static bool scalar_in_profile(const ir_profile_t *p, const ir_scalar_t *s)
+{
+    return p && s >= p->scalars && s < p->scalars + p->n_scalars;
+}
+
+static const ir_scalar_t *profile_scalar_of(ir_module_t *m, th_type *t)
+{
+    const th_builtin_type_t *builtin = th_builtin_type(m->ctx->types, t);
+    const ir_scalar_t *scalar = builtin ? builtin->scalar : nullptr;
+
+    return scalar_in_profile(m->profile, scalar) ? scalar
+                                                 : find_scalar(m, t);
+}
+
 const ir_opinfo_t *ir_module_op_info(ir_module_t *m, ir_op_t op)
 {
     if (!ir_op_is_extension(op)) {
@@ -147,13 +190,17 @@ ir_machine_t ir_machine_of(ir_module_t *m, th_type *t)
         return opaque();
 
     case TH_NAMED: {
-        const ir_scalar_t *s = find_scalar(m, t);
+        const ir_scalar_t *s = profile_scalar_of(m, t);
 
         if (!s) {
             return opaque();
         }
 
-        return (ir_machine_t){.class = s->class, .width = s->width};
+        return (ir_machine_t){
+            .class = s->class,
+            .width = s->width,
+            .role  = s->role,
+        };
     }
 
     default:

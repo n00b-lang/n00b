@@ -241,18 +241,6 @@ static bool global_init_integer_fits(ir_lit_t value, ir_machine_t machine)
     return value.neg ? value.mag <= sign : value.mag < sign;
 }
 
-static bool global_init_named_type(const th_type *type, const char *name,
-                                   size_t n_args)
-{
-    const char *actual = nullptr;
-    size_t actual_len = 0, actual_args = 0;
-    size_t wanted_len = strlen(name);
-    return type && th_kind_of(type) == TH_NAMED
-        && th_named_info(type, &actual, &actual_len, nullptr, &actual_args)
-        && actual_len == wanted_len && !memcmp(actual, name, wanted_len)
-        && actual_args == n_args;
-}
-
 static const th_type *global_init_named_arg(const th_type *type, size_t index)
 {
     const th_arg *argument = th_named_arg(type, index);
@@ -274,13 +262,11 @@ static bool global_init_value_matches(ir_module_t *module,
     if (!module || !value || !type || depth > 64) return false;
     type = th_resolve((th_type *)type);
     if (!type) return false;
-    if (global_init_named_type(type, "atomic", 1)
-        && value->kind != IR_GLOBAL_INIT_PHASE_RESULT) {
-        const th_arg *item = th_named_arg(type, 0);
-        return item && item->kind == TH_ARG_TYPE
-            && global_init_value_matches(module, value, item->type,
+    th_ctx *types = ir_ctx_types(module->ctx);
+    th_type *atomic_item = th_builtin_item(types, type, TH_BUILTIN_ATOMIC, 0);
+    if (atomic_item && value->kind != IR_GLOBAL_INIT_PHASE_RESULT)
+        return global_init_value_matches(module, value, atomic_item,
                                          depth + 1);
-    }
     ir_machine_t machine = ir_machine_of(module, (th_type *)type);
 
     switch (value->kind) {
@@ -293,7 +279,7 @@ static bool global_init_value_matches(ir_module_t *module,
     case IR_GLOBAL_INIT_FLOAT:
         return machine.class == IR_CLASS_FLOAT;
     case IR_GLOBAL_INIT_STRING:
-        return global_init_named_type(type, "string", 0)
+        return th_builtin_kind(types, type) == TH_BUILTIN_STRING
             && (!value->string.length || value->string.bytes);
     case IR_GLOBAL_INIT_SYMBOL: {
         ir_value_t *symbol = value->symbol;
@@ -309,8 +295,7 @@ static bool global_init_value_matches(ir_module_t *module,
     case IR_GLOBAL_INIT_TYPE:
         return value->descriptor_type != nullptr;
     case IR_GLOBAL_INIT_NIL:
-        return global_init_named_type(type, "nil", 0)
-            || global_init_named_type(type, "option", 1);
+        return th_is_nil(type) || th_option_item(type);
     case IR_GLOBAL_INIT_SEQUENCE: {
         const th_type *element = nullptr;
         uint64_t extent = 0;
@@ -319,9 +304,9 @@ static bool global_init_value_matches(ir_module_t *module,
             element = th_seq_elem(type);
             has_extent = th_seq_extent(type, &extent);
         }
-        else if (global_init_named_type(type, "list", 1)
-                 || global_init_named_type(type, "array", 1))
-            element = global_init_named_arg(type, 0);
+        else if (!(element = th_builtin_item(types, type,
+                                             TH_BUILTIN_LIST, 0)))
+            element = th_builtin_item(types, type, TH_BUILTIN_ARRAY, 0);
         if (!element || (value->aggregate.count && !value->aggregate.items)
             || (has_extent && extent != value->aggregate.count))
             return false;
@@ -331,8 +316,7 @@ static bool global_init_value_matches(ir_module_t *module,
         return true;
     }
     case IR_GLOBAL_INIT_TUPLE:
-        if (!global_init_named_type(type, TH_TUPLE,
-                                    th_named_nargs(type))
+        if (th_builtin_kind(types, type) != TH_BUILTIN_TUPLE
             || value->aggregate.count != th_named_nargs(type)
             || (value->aggregate.count && !value->aggregate.items))
             return false;
@@ -378,8 +362,8 @@ static bool global_init_value_matches(ir_module_t *module,
                                                  depth + 1);
     }
     case IR_GLOBAL_INIT_SET: {
-        const th_type *element = global_init_named_type(type, "set", 1)
-            ? global_init_named_arg(type, 0) : nullptr;
+        const th_type *element = th_builtin_item(types, type,
+                                                 TH_BUILTIN_SET, 0);
         if (!element || (value->aggregate.count && !value->aggregate.items))
             return false;
         for (size_t i = 0; i < value->aggregate.count; i++)
@@ -390,9 +374,9 @@ static bool global_init_value_matches(ir_module_t *module,
         return true;
     }
     case IR_GLOBAL_INIT_DICTIONARY: {
-        const th_type *key = global_init_named_type(type, "dict", 2)
-            ? global_init_named_arg(type, 0) : nullptr;
-        const th_type *element = key ? global_init_named_arg(type, 1) : nullptr;
+        const th_type *key = th_builtin_item(types, type, TH_BUILTIN_DICT, 0);
+        const th_type *element = key
+            ? th_builtin_item(types, type, TH_BUILTIN_DICT, 1) : nullptr;
         size_t count = value->aggregate.count;
         if (!key || !element || (count & 1u)
             || (count && !value->aggregate.items)) return false;

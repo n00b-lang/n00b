@@ -8,6 +8,8 @@
 #define TH_VERSION       0
 #define TH_RESERVED      "__ty."
 #define TH_TUPLE         "__ty.tuple"
+#define TH_OPTION        "Option"
+#define TH_NIL           "nil"
 #define TH_UNTYPED       "__ty.untyped"
 #define TH_ERASED        "__ty.erased"
 #define TH_BOTTOM        "__ty.bottom"
@@ -268,8 +270,56 @@ void     th_record_fill(th_ctx *ctx, th_type *stub, const th_member *members,
                         size_t n);
 /* Associate a named type with its structural definition in this type context.
  * Definitions are semantic metadata and do not change the named type's identity. */
+typedef enum : uint8_t {
+    TH_BUILTIN_NONE,
+    TH_BUILTIN_SCALAR,
+    TH_BUILTIN_STRING,
+    TH_BUILTIN_OPTION,
+    TH_BUILTIN_ATOMIC,
+    TH_BUILTIN_ARRAY,
+    TH_BUILTIN_LIST,
+    TH_BUILTIN_SET,
+    TH_BUILTIN_DICT,
+    TH_BUILTIN_CONTAINER_LIST,
+    TH_BUILTIN_CONTAINER_SET,
+    TH_BUILTIN_CONTAINER_DICT,
+    TH_BUILTIN_VIEW,
+    TH_BUILTIN_TUPLE,
+    TH_BUILTIN_ANY,
+    TH_BUILTIN_NIL,
+    TH_BUILTIN_TYPESPEC,
+    TH_BUILTIN_ALLOCATOR,
+} th_builtin_kind_t;
+
+typedef struct {
+    const char       *name;
+    th_builtin_kind_t kind;
+    int8_t            arity;
+    const void       *scalar;
+} th_builtin_type_t;
+
+#define TH_BUILTIN_VARIADIC (-1)
+
+void th_ctx_set_builtin_types(th_ctx *ctx, const th_builtin_type_t *types,
+                              size_t count);
+bool th_ctx_has_builtin_types(const th_ctx *ctx);
+void th_set_default_builtin_types(const th_builtin_type_t *types,
+                                  size_t count);
+void th_builtin_defaults_apply(th_ctx *ctx);
+const th_builtin_type_t *th_builtin_type(th_ctx *ctx, const th_type *type);
+const th_builtin_type_t *th_builtin_of(const th_type *type);
+th_builtin_kind_t th_builtin_kind_of(const th_type *type);
+th_type *th_builtin_applied(th_type *type, th_builtin_kind_t kind,
+                            size_t count);
+th_builtin_kind_t th_builtin_kind(th_ctx *ctx, const th_type *type);
+th_type *th_builtin_item(th_ctx *ctx, const th_type *type,
+                         th_builtin_kind_t kind, size_t index);
+
 bool     th_type_define(th_ctx *ctx, th_type *type, th_type *definition);
+bool     th_type_define_owned(th_ctx *ctx, th_type *type, th_type *definition,
+                              void *owner);
 th_type *th_type_definition(th_ctx *ctx, const th_type *type);
+void    *th_type_definition_owner(th_ctx *ctx, const th_type *type);
 th_type *th_auto_deref(th_ctx *ctx, th_type *type);
 th_type *th_record_lookup_in(th_ctx *ctx, const th_type *type,
                              const char *name);
@@ -287,6 +337,10 @@ th_type *th_sum(th_ctx *ctx, th_comb comb, th_type *const *arms, size_t n);
 th_type *th_var(th_ctx *ctx);
 th_type *th_var_named(th_ctx *ctx, const char *name);
 th_type *th_tuple(th_ctx *ctx, th_type *const *elems, size_t n);
+th_type *th_option(th_ctx *ctx, th_type *item);
+th_type *th_option_item(const th_type *type);
+th_type *th_nil(th_ctx *ctx);
+bool     th_is_nil(const th_type *type);
 
 void     th_normalize(th_type *type);
 bool     th_encode(th_ctx *ctx, th_type *type, const uint8_t **out,

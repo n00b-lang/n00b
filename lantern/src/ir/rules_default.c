@@ -118,6 +118,12 @@ static bool same(ir_module_t *m, th_type *a, th_type *b)
     return a && b && ir_type_eq(m, a, b);
 }
 
+static th_type *atomic_item(ir_module_t *m, th_type *type)
+{
+    return type ? th_builtin_item(ir_ctx_types(m->ctx), th_resolve(type),
+                                  TH_BUILTIN_ATOMIC, 0) : nullptr;
+}
+
 static bool is_int(ir_class_t c)
 {
     return c == IR_CLASS_SINT || c == IR_CLASS_UINT;
@@ -625,13 +631,9 @@ static ir_rule_result_t rule_aggregate(ir_module_t *m, ir_instr_t *in,
 
     if (!rc) {
         th_type *aggregate = th_resolve(t);
-        const char *aggregate_name = nullptr;
-        size_t aggregate_name_len = 0;
-        size_t aggregate_args = 0;
-        if (th_named_info(aggregate, &aggregate_name,
-                          &aggregate_name_len, nullptr, &aggregate_args)
-            && aggregate_name_len == strlen(TH_TUPLE)
-            && !memcmp(aggregate_name, TH_TUPLE, aggregate_name_len)) {
+        size_t aggregate_args = th_named_nargs(aggregate);
+        if (th_builtin_kind(ir_ctx_types(m->ctx), aggregate)
+            == TH_BUILTIN_TUPLE) {
             if (in->n_operands != aggregate_args) {
                 complain(m, d, IR_DIAG_TYPE_ARGS, in, "these operands",
                          "%s has %zu elements and %u values were given",
@@ -1135,21 +1137,13 @@ static ir_rule_result_t rule_atomic_rmw(ir_module_t *m, ir_instr_t *in,
     th_type *pointer = opd_type(in, 0);
     th_type *value = opd_type(in, 2);
     if (!pointer || !value) return DECLINE;
-    th_type *storage = th_ind_referent(pointer);
-    const char *name = nullptr;
-    size_t nargs = 0;
-    bool is_variant = true;
-    if (!storage || !th_named_info(storage, &name, nullptr, &is_variant,
-                                    &nargs)
-        || is_variant || nargs != 1 || !name || strcmp(name, "atomic")) {
+    th_type *element = atomic_item(m, th_ind_referent(pointer));
+    if (!element) {
         complain(m, d, IR_DIAG_TYPE_POINTER, in, "this operand",
                  "atomic.rmw needs a pointer to atomic storage");
         return REJECT;
     }
-    const th_arg *argument = th_named_arg(storage, 0);
-    th_type *element = argument && argument->kind == TH_ARG_TYPE
-        ? argument->type : nullptr;
-    if (!element || !same(m, ir_type_intern(m, element), value)) {
+    if (!same(m, ir_type_intern(m, element), value)) {
         complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this value",
                  "atomic.rmw needs a value matching its storage");
         return REJECT;
@@ -1177,37 +1171,21 @@ static ir_rule_result_t rule_atomic_cas(ir_module_t *m, ir_instr_t *in,
     th_type *expected = opd_type(in, 1);
     th_type *desired = opd_type(in, 2);
     if (!pointer || !expected || !desired) return DECLINE;
-    th_type *storage = th_ind_referent(pointer);
-    const char *name = nullptr;
-    size_t nargs = 0;
-    bool is_variant = true;
-    if (!storage || !th_named_info(storage, &name, nullptr, &is_variant,
-                                    &nargs)
-        || is_variant || nargs != 1 || !name || strcmp(name, "atomic")) {
+    th_type *element = atomic_item(m, th_ind_referent(pointer));
+    if (!element) {
         complain(m, d, IR_DIAG_TYPE_POINTER, in, "this operand",
                  "atomic.cas needs a pointer to atomic storage");
         return REJECT;
     }
-    const th_arg *argument = th_named_arg(storage, 0);
-    th_type *element = argument && argument->kind == TH_ARG_TYPE
-        ? argument->type : nullptr;
     ir_class_t scalar = element ? ir_machine_of(m, element).class
                                 : IR_CLASS_OPAQUE;
     bool supported = is_int(scalar) || scalar == IR_CLASS_BOOL
         || scalar == IR_CLASS_PTR
         || (element && th_kind_of(th_resolve(element)) == TH_INDIRECTION);
     if (!supported && element) {
-        const char *option_name = nullptr;
-        size_t option_args = 0;
-        bool option_variant = true;
-        if (th_named_info(th_resolve(element), &option_name, nullptr,
-                          &option_variant, &option_args)
-            && !option_variant && option_name
-            && !strcmp(option_name, "option") && option_args == 1) {
-            const th_arg *payload = th_named_arg(th_resolve(element), 0);
-            supported = payload && payload->kind == TH_ARG_TYPE
-                && th_kind_of(th_resolve(payload->type)) == TH_INDIRECTION;
-        }
+        th_type *payload = th_option_item(element);
+        supported = payload
+            && th_kind_of(th_resolve(payload)) == TH_INDIRECTION;
     }
     if (!element || !same(m, ir_type_intern(m, element), expected)
         || !same(m, expected, desired)
@@ -1248,18 +1226,9 @@ static ir_rule_result_t rule_load(ir_module_t *m, ir_instr_t *in,
         return REJECT;
     }
 
-    if (ir_instr_has_mod(in, "atomic")) {
-        const char *name = nullptr;
-        size_t nargs = 0;
-        bool is_variant = true;
-        if (th_named_info(to, &name, nullptr, &is_variant, &nargs)
-            && !is_variant && nargs == 1 && name
-            && !strcmp(name, "atomic")) {
-            const th_arg *argument = th_named_arg(to, 0);
-            if (argument && argument->kind == TH_ARG_TYPE)
-                to = argument->type;
-        }
-    }
+    th_type *atomic_value = ir_instr_has_mod(in, "atomic")
+        ? atomic_item(m, to) : nullptr;
+    if (atomic_value) to = atomic_value;
 
     return ACCEPT(ir_type_intern(m, to));
 }
@@ -1295,18 +1264,9 @@ static ir_rule_result_t rule_store(ir_module_t *m, ir_instr_t *in,
     }
 
     bool matches = same(m, ir_type_intern(m, to), v);
-    if (!matches && ir_instr_has_mod(in, "atomic")) {
-        const char *name = nullptr;
-        size_t nargs = 0;
-        bool is_variant = true;
-        if (th_named_info(to, &name, nullptr, &is_variant, &nargs)
-            && !is_variant && nargs == 1 && name
-            && !strcmp(name, "atomic")) {
-            const th_arg *argument = th_named_arg(to, 0);
-            matches = argument && argument->kind == TH_ARG_TYPE
-                && same(m, ir_type_intern(m, argument->type), v);
-        }
-    }
+    th_type *atomic_value = !matches && ir_instr_has_mod(in, "atomic")
+        ? atomic_item(m, to) : nullptr;
+    if (atomic_value) matches = same(m, ir_type_intern(m, atomic_value), v);
     if (!matches) {
         blame(d, complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this value",
                            "storing %s through a pointer to %s", typed(m, v),
@@ -1445,13 +1405,10 @@ static ir_rule_result_t rule_extract_index(ir_module_t *m, ir_instr_t *in,
         || in->operands[1].kind != IR_OPD_CONST
         || in->operands[1].lit.is_float) return DECLINE;
     ir_lit_t literal = in->operands[1].lit.i;
-    const char *name = nullptr;
-    size_t count = 0;
-    bool variant = true;
+    size_t count = th_named_nargs(th_resolve(source));
     if (literal.neg || literal.mag > SIZE_MAX
-        || !th_named_info(th_resolve(source), &name, nullptr, &variant,
-                          &count)
-        || variant || !name || strcmp(name, TH_TUPLE)) {
+        || th_builtin_kind(ir_ctx_types(m->ctx), source)
+            != TH_BUILTIN_TUPLE) {
         complain(m, d, IR_DIAG_TYPE_CLASS, in, "this operand",
                  "extract.index needs an ordered tuple value, and this one is %s",
                  typed(m, source));
@@ -1954,25 +1911,11 @@ static ir_rule_result_t rule_variant_payload(ir_module_t *m, ir_instr_t *in,
     return ACCEPT(t);
 }
 
-static bool is_option_type(th_type *type, th_type **element)
-{
-    const char *name = nullptr;
-    size_t nargs = 0;
-    bool is_variant = true;
-    if (!type || !th_named_info(type, &name, nullptr, &is_variant, &nargs)
-        || is_variant || nargs != 1 || !name || strcmp(name, "option"))
-        return false;
-    const th_arg *arg = th_named_arg(type, 0);
-    if (!arg || arg->kind != TH_ARG_TYPE || !arg->type) return false;
-    if (element) *element = arg->type;
-    return true;
-}
-
 static ir_rule_result_t rule_option_is_nil(ir_module_t *m, ir_instr_t *in,
                                            ir_diags_t *d, void *state)
 {
     (void)state;
-    if (!is_option_type(opd_type(in, 0), nullptr)) {
+    if (!th_option_item(opd_type(in, 0))) {
         complain(m, d, IR_DIAG_TYPE_CLASS, in, "this operand",
                  "option.is_nil requires an option value, and this one is %s",
                  typed(m, opd_type(in, 0)));
@@ -1986,7 +1929,7 @@ static ir_rule_result_t rule_nil(ir_module_t *m, ir_instr_t *in,
 {
     (void)state;
     th_type *nil = declared(in);
-    if (nil && ir_type_eq(m, nil, th_name(ir_ctx_types(m->ctx), "nil")))
+    if (nil && th_is_nil(nil))
         return ACCEPT(nil);
     complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this result",
              "nil produces the nil sentinel type, not %s", typed(m, nil));
@@ -1998,7 +1941,7 @@ static ir_rule_result_t rule_option_none(ir_module_t *m, ir_instr_t *in,
 {
     (void)state;
     th_type *option = declared(in);
-    if (option && is_option_type(option, nullptr)) return ACCEPT(option);
+    if (th_option_item(option)) return ACCEPT(option);
     complain(m, d, IR_DIAG_TYPE_CLASS, in, "this result",
              "option.none must produce an option type, not %s",
              typed(m, option));
@@ -2009,9 +1952,9 @@ static ir_rule_result_t rule_option_some(ir_module_t *m, ir_instr_t *in,
                                          ir_diags_t *d, void *state)
 {
     (void)state;
-    th_type *element = nullptr;
     th_type *option = declared(in);
-    if (!option || !is_option_type(option, &element)) {
+    th_type *element = th_option_item(option);
+    if (!element) {
         complain(m, d, IR_DIAG_TYPE_CLASS, in, "this result",
                  "option.some must produce an option type, not %s",
                  typed(m, option));
@@ -2030,8 +1973,8 @@ static ir_rule_result_t rule_option_get(ir_module_t *m, ir_instr_t *in,
                                         ir_diags_t *d, void *state)
 {
     (void)state;
-    th_type *element = nullptr;
-    if (!is_option_type(opd_type(in, 0), &element)) {
+    th_type *element = th_option_item(opd_type(in, 0));
+    if (!element) {
         complain(m, d, IR_DIAG_TYPE_CLASS, in, "this operand",
                  "option.get requires an option value, and this one is %s",
                  typed(m, opd_type(in, 0)));
@@ -2045,8 +1988,8 @@ static ir_rule_result_t rule_option_get_or_else(ir_module_t *m,
                                                 ir_diags_t *d, void *state)
 {
     (void)state;
-    th_type *element = nullptr;
-    if (!is_option_type(opd_type(in, 0), &element)) {
+    th_type *element = th_option_item(opd_type(in, 0));
+    if (!element) {
         complain(m, d, IR_DIAG_TYPE_CLASS, in, "this operand",
                  "option.get_or_else requires an option value, and this one is %s",
                  typed(m, opd_type(in, 0)));
@@ -2065,24 +2008,17 @@ static ir_rule_result_t rule_atomic_wrap(ir_module_t *m, ir_instr_t *in,
 {
     (void)state;
     th_type *atomic = declared(in);
-    const char *name = nullptr;
-    size_t nargs = 0;
-    bool is_variant = true;
-    const th_arg *argument = nullptr;
-    if (!atomic || !th_named_info(atomic, &name, nullptr, &is_variant,
-                                  &nargs)
-        || is_variant || nargs != 1 || !name || strcmp(name, "atomic")
-        || !(argument = th_named_arg(atomic, 0))
-        || argument->kind != TH_ARG_TYPE) {
+    th_type *element = atomic_item(m, atomic);
+    if (!element) {
         complain(m, d, IR_DIAG_TYPE_CLASS, in, "this result",
-                 "atomic.wrap must produce atomic[T], not %s",
+                 "atomic.wrap must produce atomic storage, not %s",
                  typed(m, atomic));
         return REJECT;
     }
-    if (!same(m, argument->type, opd_type(in, 0))) {
+    if (!same(m, element, opd_type(in, 0))) {
         complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this value",
                  "atomic.wrap needs %s, not %s",
-                 typed(m, argument->type), typed(m, opd_type(in, 0)));
+                 typed(m, element), typed(m, opd_type(in, 0)));
         return REJECT;
     }
     return ACCEPT(atomic);
@@ -2110,10 +2046,7 @@ static bool type_test_source(ir_module_t *m, th_type *source,
     }
     if (th_env_type_pattern_accepts(ir_ctx_types(m->ctx), target, source))
         return true;
-    const char *name = nullptr;
-    size_t length = 0;
-    return th_named_info(source, &name, &length, nullptr, nullptr)
-        && length == 3 && !memcmp(name, "any", 3);
+    return th_builtin_kind(ir_ctx_types(m->ctx), source) == TH_BUILTIN_ANY;
 }
 
 static ir_rule_result_t rule_type_test(ir_module_t *m, ir_instr_t *in,

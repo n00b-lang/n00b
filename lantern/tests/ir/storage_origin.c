@@ -53,7 +53,7 @@ int main(void)
     };
     bool inline_layout_ready = ir_layout_publish_final(module,
         inline_record, ir_module_target(module), &inline_layout);
-    th_type *optional = ir_type_parse(module, "option[ref[byte]]");
+    th_type *optional = ir_type_parse(module, "Option[ref[byte]]");
     ir_func_t *map = ir_func_add(module, "map",
         ir_type_parse(module, "() -> ref[byte]"), IR_LINK_EXTERN);
     ir_func_t *make = ir_func_add(module, "make",
@@ -239,9 +239,9 @@ int main(void)
     ir_storage_origin_free(origin);
 
     th_type *optional_object = ir_type_parse(module,
-        "option[ref[(next: ref[byte])]]");
+        "Option[ref[(next: ref[byte])]]");
     th_type *global_address_type = ir_type_parse(module,
-        "ref[option[ref[(next: ref[byte])]]]");
+        "ref[Option[ref[(next: ref[byte])]]]");
     ir_global_t *global = ir_global_add(module, "mapped_holder",
                                        optional_object);
     ir_global_init_value_t nil_init = {.kind = IR_GLOBAL_INIT_NIL};

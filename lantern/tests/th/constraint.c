@@ -524,8 +524,14 @@ static void test_a_coercion_is_recorded_with_what_it_did(th_ctx *ctx)
 static void test_option_wrapping(th_ctx *ctx)
 {
     th_type *i32 = th_name(ctx, "i32");
-    th_arg   arg = {.kind = TH_ARG_TYPE, .type = i32};
-    th_type *opt = th_apply(ctx, "option", &arg, 1);
+    th_type *opt = th_option(ctx, i32);
+    th_type *arms[] = {th_nil(ctx), i32};
+    th_type *doubled[] = {opt, th_nil(ctx)};
+
+    check("a union with nil is the option of its other arms",
+          th_hash(ctx, th_sum(ctx, TH_UNION, arms, 2)) == th_hash(ctx, opt)
+              && th_hash(ctx, th_sum(ctx, TH_UNION, doubled, 2))
+                     == th_hash(ctx, opt));
 
     th_coercions_clear(ctx);
 

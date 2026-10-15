@@ -783,7 +783,7 @@ static bool signature_channels_raw(th_ctx *ctx, th_type *contract,
   if (signature) *signature = contract;
   if (error_type)
     *error_type = contract->fn.error ? contract->fn.error
-                                     : th_name(ctx, "nil");
+                                     : th_nil(ctx);
   return true;
 }
 
@@ -810,7 +810,7 @@ bool th_env_register_trait_channels(th_env *env, const char *name,
       const th_member *member = th_record_member(methods, i);
       core_list_push(default_errors, ((th_member){
           .name = member->name,
-          .type = th_name(env->types, "nil"),
+          .type = th_nil(env->types),
       }));
     }
     errors = th_record(env->types, default_errors.data, default_errors.len);
@@ -931,7 +931,7 @@ bool th_env_register_function(th_env *env, const char *qualified_name,
                               th_type *signature) {
   return th_env_register_function_channels(
       env, qualified_name, root_name, module, package, visibility, signature,
-      env ? th_name(env->types, "nil") : nullptr);
+      env ? th_nil(env->types) : nullptr);
 }
 
 bool th_env_register_function_channels(
@@ -1261,6 +1261,9 @@ bool th_ctx_set_environment(th_ctx *ctx, const th_env *env, const char *module,
     return ctx->environment == env && ctx->module && ctx->package &&
            !strcmp(ctx->module, module) && !strcmp(ctx->package, package);
   ctx->environment = env;
+  if (!ctx->builtin_types && env->types && env->types->builtin_types)
+    th_ctx_set_builtin_types(ctx, env->types->builtin_types,
+                             env->types->builtin_count);
   if (!th_ctx_set_scope(ctx, module, package)) return false;
   return th_ctx_validate_constraints(ctx);
 }

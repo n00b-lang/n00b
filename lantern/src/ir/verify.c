@@ -538,15 +538,8 @@ static bool store_target_carries_reference(const store_target_set_t *set,
         ? th_type_definition(set->types, type) : nullptr;
     if (definition && th_kind_of(th_resolve(definition)) == TH_INDIRECTION)
         return true;
-    const char *name = nullptr;
-    size_t count = 0;
-    bool variant = true;
-    if (!th_named_info(type, &name, nullptr, &variant, &count)
-        || variant || !name || strcmp(name, "option") || count != 1)
-        return false;
-    const th_arg *item = th_named_arg(type, 0);
-    return item && item->kind == TH_ARG_TYPE
-        && store_target_carries_reference(set, item->type);
+    th_type *item = th_option_item(type);
+    return item && store_target_carries_reference(set, item);
 }
 
 static bool store_target_enqueue_indirect(store_target_set_t *set,

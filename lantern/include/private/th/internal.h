@@ -29,9 +29,11 @@ typedef struct {
 } th_iface;
 
 typedef struct {
+  uint64_t hash;
   th_type *type;
   th_type *definition;
-} th_type_definition_t;
+  void *owner;
+} th_type_record_t;
 
 typedef struct {
   th_type *receiver;
@@ -110,7 +112,7 @@ typedef struct {
 core_list_decl(th_constraint);
 core_list_decl(th_promo);
 core_list_decl(th_iface);
-core_list_decl(th_type_definition_t);
+core_list_decl(th_type_record_t);
 core_list_decl(th_method);
 core_list_decl(th_method_resolver);
 core_list_decl(th_env_trait_t);
@@ -129,8 +131,10 @@ struct th_type {
       const char *name;
       size_t nlen;
       bool is_variant;
+      bool builtin_known;
       th_arg *args;
       size_t nargs;
+      const th_builtin_type_t *builtin;
     } named;
     struct {
       uint64_t width;
@@ -214,7 +218,13 @@ struct th_ctx {
   uint64_t next_var;
   core_list_t(th_promo) promos;
   core_list_t(th_iface) ifaces;
-  core_list_t(th_type_definition_t) type_definitions;
+  const th_builtin_type_t *builtin_types;
+  size_t builtin_count;
+  core_dict_t *builtin_heads;
+  core_list_t(th_type_record_t) type_records;
+  core_dict_t *closed_type_records;
+  core_dict_t *open_type_records;
+  core_dict_t *generic_type_heads;
   core_list_t(th_method) methods;
   core_list_t(th_method_resolver) method_resolvers;
   core_dict_t *promo_index;

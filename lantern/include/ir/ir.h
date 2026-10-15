@@ -134,9 +134,17 @@ typedef enum : uint8_t {
     IR_CLASS_AGGREGATE,
 } ir_class_t;
 
+typedef enum : uint8_t {
+    IR_ROLE_NONE,
+    IR_ROLE_CHAR,
+    IR_ROLE_BYTE,
+    IR_ROLE_TYPESPEC,
+} ir_role_t;
+
 typedef struct {
     ir_class_t class;
     uint32_t   width;
+    ir_role_t  role;
 } ir_machine_t;
 
 typedef struct ir_ctx_t     ir_ctx_t;
@@ -830,11 +838,6 @@ struct ir_profile_t {
     size_t      n_ext_ops;
     const ir_opinfo_t *ext_ops;
 };
-
-typedef enum : uint8_t {
-    IR_ROLE_NONE,
-    IR_ROLE_CHAR,
-} ir_role_t;
 
 typedef struct ir_scalar_t {
     const char  *type_text;

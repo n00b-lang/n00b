@@ -17,20 +17,10 @@ typedef struct ir_cleanup_t {
     struct ir_cleanup_t *next;
 } ir_cleanup_t;
 
-typedef struct {
-    uint64_t hash;
-    th_type *type;
-    th_type *definition;
-    struct ir_module_t *owner;
-} ir_context_type_definition_t;
-
 struct ir_ctx_t {
-    core_arena_t   arena;
+    core_arena_t  arena;
     th_ctx       *types;
     ir_cleanup_t *cleanups;
-    ir_context_type_definition_t *type_definitions;
-    size_t type_definition_count;
-    size_t type_definition_capacity;
 };
 
 void ir_ctx_on_free(ir_ctx_t *ctx, void (*fn)(void *), void *arg);
@@ -97,6 +87,7 @@ struct ir_descentry_t {
 };
 
 ir_typeslot_t *ir_type_slot(ir_module_t *m, th_type *t);
+void ir_profile_install_builtins(ir_ctx_t *ctx, const ir_profile_t *p);
 ir_typeslot_t *ir_type_slot_at(ir_module_t *m, size_t i);
 
 void *ir_grow(ir_ctx_t *ctx, void *p, size_t *cap, size_t need, size_t elem);

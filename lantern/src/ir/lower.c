@@ -1303,15 +1303,8 @@ lower_type_is_reference_carrier(th_type *type)
 {
     if (!type) return false;
     if (th_kind_of(type) == TH_INDIRECTION) return true;
-    const char *name = nullptr;
-    size_t count = 0;
-    bool variant = true;
-    if (!th_named_info(type, &name, nullptr, &variant, &count)
-        || variant || !name || strcmp(name, "option") || count != 1)
-        return false;
-    const th_arg *item = th_named_arg(type, 0);
-    return item && item->kind == TH_ARG_TYPE
-        && lower_type_is_reference_carrier(item->type);
+    th_type *item = th_option_item(type);
+    return item && lower_type_is_reference_carrier(item);
 }
 
 static ir_lower_result_t

@@ -1390,7 +1390,7 @@ static void test_store_through_address_phase_access(void)
 static void test_store_through_forwarded_addresses(void)
 {
     run_t *option = verify(MOD(
-        "  func @f(%maybe: option[ref[i32]], %input: i32) -> void {\n"
+        "  func @f(%maybe: Option[ref[i32]], %input: i32) -> void {\n"
         "    block entry:\n"
         "      %address: ref[i32] = option.get %maybe\n"
         "      store %address, %input\n"

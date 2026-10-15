@@ -1,6 +1,7 @@
 #include <string.h>
 
 #include "private/th/internal.h"
+#include "lib/hash.h"
 
 static const th_type *as(const th_type *t, th_kind k)
 {
@@ -182,37 +183,310 @@ bool th_trait_requirement_at(const th_type *t, size_t i,
     return true;
 }
 
-static bool same_named_type(th_ctx *ctx, const th_type *left,
-                            const th_type *right)
+static core_dict_t *record_index(core_dict_t **slot)
 {
-    const char *left_name = nullptr, *right_name = nullptr;
-    size_t left_len = 0, right_len = 0;
-    if (!th_named_info(left, &left_name, &left_len, nullptr, nullptr)
-        || !th_named_info(right, &right_name, &right_len, nullptr, nullptr)
-        || left_len != right_len
-        || memcmp(left_name, right_name, left_len)) return false;
-    if (left != right
-        && (!th_is_closed(ctx, (th_type *)left)
-            || !th_is_closed(ctx, (th_type *)right))) return false;
-    return th_hash(ctx, (th_type *)left)
-        == th_hash(ctx, (th_type *)right);
+    if (!*slot) {
+        *slot = core_alloc(core_dict_t);
+        core_dict_init(*slot, core_hash_word, nullptr);
+    }
+    return *slot;
+}
+
+static uint64_t head_hash(const char *name, size_t length, uint64_t arity)
+{
+    uint64_t key[] = {core_xxh3_64bits_raw(name, length), arity};
+    return core_xxh3_64bits_raw(key, sizeof(key));
+}
+
+static uint64_t generic_head_hash(const th_type *type, size_t *nargs)
+{
+    const char *name = nullptr;
+    size_t length = 0;
+    if (!th_named_info(type, &name, &length, nullptr, nargs)) return 0;
+    return head_hash(name, length, (uint64_t)*nargs);
+}
+
+static uint64_t builtin_head_key(const char *name, size_t length,
+                                 int8_t arity)
+{
+    return head_hash(name, length,
+                     arity == TH_BUILTIN_VARIADIC ? UINT64_MAX
+                                                  : (uint64_t)arity);
+}
+
+static void index_builtin_heads(core_dict_t **slot,
+                                const th_builtin_type_t *types, size_t count)
+{
+    if (*slot) {
+        core_dict_free(*slot);
+        core_free(*slot);
+        *slot = nullptr;
+    }
+    core_dict_t *heads = record_index(slot);
+    for (size_t i = 0; i < count; i++) {
+        uint64_t key = builtin_head_key(types[i].name,
+                                        strlen(types[i].name),
+                                        types[i].arity);
+        core_dict_put(heads, (const void *)(uintptr_t)key,
+                      (void *)(uintptr_t)(i + 1));
+    }
+}
+
+void th_ctx_set_builtin_types(th_ctx *ctx, const th_builtin_type_t *types,
+                              size_t count)
+{
+    if (!ctx) return;
+    ctx->builtin_types = types;
+    ctx->builtin_count = count;
+    index_builtin_heads(&ctx->builtin_heads, types, count);
+}
+
+static const th_builtin_type_t *default_builtin_types;
+static size_t default_builtin_count;
+static core_dict_t *default_builtin_heads;
+
+void th_set_default_builtin_types(const th_builtin_type_t *types,
+                                  size_t count)
+{
+    default_builtin_types = types;
+    default_builtin_count = count;
+    index_builtin_heads(&default_builtin_heads, types, count);
+}
+
+void th_builtin_defaults_apply(th_ctx *ctx)
+{
+    if (ctx && default_builtin_types && !ctx->builtin_types)
+        th_ctx_set_builtin_types(ctx, default_builtin_types,
+                                 default_builtin_count);
+}
+
+bool th_ctx_has_builtin_types(const th_ctx *ctx)
+{
+    return ctx && ctx->builtin_types;
+}
+
+static const th_builtin_type_t *builtin_for_head(
+    core_dict_t *heads, const th_builtin_type_t *types, uint64_t key)
+{
+    bool found = false;
+    size_t at = heads
+        ? (size_t)(uintptr_t)core_dict_get(heads,
+                                           (const void *)(uintptr_t)key,
+                                           &found)
+        : 0;
+    return found ? &types[at - 1] : nullptr;
+}
+
+static const th_builtin_type_t TH_INTRINSIC_TUPLE = {
+    .name = TH_TUPLE,
+    .kind = TH_BUILTIN_TUPLE,
+    .arity = TH_BUILTIN_VARIADIC,
+};
+
+static const th_builtin_type_t TH_INTRINSIC_OPTION = {
+    .name = TH_OPTION,
+    .kind = TH_BUILTIN_OPTION,
+    .arity = 1,
+};
+
+static const th_builtin_type_t TH_INTRINSIC_NIL = {
+    .name = TH_NIL,
+    .kind = TH_BUILTIN_NIL,
+    .arity = 0,
+};
+
+static bool named_head_is(const th_type *named, const char *name)
+{
+    size_t len = strlen(name);
+    return named->named.nlen == len && !memcmp(named->named.name, name, len);
+}
+
+static const th_builtin_type_t *intrinsic_builtin(const th_type *named)
+{
+    if (named_head_is(named, TH_TUPLE)) return &TH_INTRINSIC_TUPLE;
+    if (named_head_is(named, TH_OPTION) && !named->named.is_variant
+        && named->named.nargs == 1
+        && named->named.args[0].kind == TH_ARG_TYPE)
+        return &TH_INTRINSIC_OPTION;
+    if (named_head_is(named, TH_NIL) && !named->named.is_variant
+        && named->named.nargs == 0)
+        return &TH_INTRINSIC_NIL;
+    return nullptr;
+}
+
+th_type *th_nil(th_ctx *ctx)
+{
+    return th_name(ctx, TH_NIL);
+}
+
+bool th_is_nil(const th_type *type)
+{
+    th_type *named = type ? (th_type *)th_resolve_c(type) : nullptr;
+    return named && named->kind == TH_NAMED
+        && intrinsic_builtin(named) == &TH_INTRINSIC_NIL;
+}
+
+th_type *th_option(th_ctx *ctx, th_type *item)
+{
+    th_arg argument = {.kind = TH_ARG_TYPE, .type = item};
+    return th_apply(ctx, TH_OPTION, &argument, 1);
+}
+
+th_type *th_option_item(const th_type *type)
+{
+    th_type *option = type ? (th_type *)th_resolve_c(type) : nullptr;
+    if (!option || option->kind != TH_NAMED
+        || intrinsic_builtin(option) != &TH_INTRINSIC_OPTION)
+        return nullptr;
+    return option->named.args[0].type;
+}
+
+static const th_builtin_type_t *classify_named(th_type *named,
+                                               core_dict_t *heads,
+                                               const th_builtin_type_t *types)
+{
+    if (named->named.builtin_known) return named->named.builtin;
+    const th_builtin_type_t *builtin = builtin_for_head(heads, types,
+        head_hash(named->named.name, named->named.nlen,
+                  (uint64_t)named->named.nargs));
+    if (!builtin)
+        builtin = builtin_for_head(heads, types,
+            head_hash(named->named.name, named->named.nlen, UINT64_MAX));
+    if (!builtin) builtin = intrinsic_builtin(named);
+    if (builtin || types) {
+        named->named.builtin = builtin;
+        named->named.builtin_known = true;
+    }
+    return builtin;
+}
+
+const th_builtin_type_t *th_builtin_type(th_ctx *ctx, const th_type *type)
+{
+    if (!ctx || !type) return nullptr;
+    th_type *named = (th_type *)th_resolve_c(type);
+    if (!named || named->kind != TH_NAMED) return nullptr;
+    return classify_named(named, ctx->builtin_heads, ctx->builtin_types);
+}
+
+const th_builtin_type_t *th_builtin_of(const th_type *type)
+{
+    th_type *named = type ? (th_type *)th_resolve_c(type) : nullptr;
+    if (!named || named->kind != TH_NAMED) return nullptr;
+    return classify_named(named, default_builtin_heads,
+                          default_builtin_types);
+}
+
+th_builtin_kind_t th_builtin_kind_of(const th_type *type)
+{
+    const th_builtin_type_t *builtin = th_builtin_of(type);
+    return builtin ? builtin->kind : TH_BUILTIN_NONE;
+}
+
+th_type *th_builtin_applied(th_type *type, th_builtin_kind_t kind,
+                            size_t count)
+{
+    type = type ? th_resolve(type) : nullptr;
+    return type && th_builtin_kind_of(type) == kind
+        && th_named_nargs(type) == count ? type : nullptr;
+}
+
+th_builtin_kind_t th_builtin_kind(th_ctx *ctx, const th_type *type)
+{
+    const th_builtin_type_t *builtin = th_builtin_type(ctx, type);
+    return builtin ? builtin->kind : TH_BUILTIN_NONE;
+}
+
+th_type *th_builtin_item(th_ctx *ctx, const th_type *type,
+                         th_builtin_kind_t kind, size_t index)
+{
+    if (th_builtin_kind(ctx, type) != kind) return nullptr;
+    const th_arg *argument = th_named_arg(th_resolve_c(type), index);
+    return argument && argument->kind == TH_ARG_TYPE ? argument->type
+                                                     : nullptr;
+}
+
+static bool generic_parameters(const th_type *type, size_t nargs)
+{
+    for (size_t i = 0; i < nargs; i++) {
+        const th_arg *argument = th_named_arg(type, i);
+        if (!argument || argument->kind != TH_ARG_TYPE
+            || th_kind_of(th_resolve(argument->type)) != TH_VAR)
+            return false;
+    }
+    return nargs > 0;
+}
+
+static th_type_record_t *record_at(th_ctx *ctx, core_dict_t *index,
+                                   const void *key)
+{
+    bool found = false;
+    size_t at = index
+        ? (size_t)(uintptr_t)core_dict_get(index, key, &found) : 0;
+    return found ? &ctx->type_records.data[at - 1] : nullptr;
+}
+
+static th_type_record_t *record_lookup(th_ctx *ctx, const th_type *type)
+{
+    th_type_record_t *same_node = record_at(ctx, ctx->open_type_records,
+                                            type);
+    if (same_node || !th_is_closed(ctx, (th_type *)type)) return same_node;
+    uint64_t hash = th_hash(ctx, (th_type *)type);
+    return record_at(ctx, ctx->closed_type_records,
+                     (const void *)(uintptr_t)hash);
+}
+
+static th_type_record_t *record_insert(th_ctx *ctx, th_type *type,
+                                       th_type *definition, void *owner)
+{
+    bool closed = th_is_closed(ctx, type);
+    uint64_t hash = closed ? th_hash(ctx, type) : 0;
+    core_list_push(ctx->type_records, ((th_type_record_t){
+        .hash = hash,
+        .type = type,
+        .definition = definition,
+        .owner = owner,
+    }));
+    void *slot = (void *)(uintptr_t)ctx->type_records.len;
+    if (closed)
+        core_dict_put(record_index(&ctx->closed_type_records),
+                      (const void *)(uintptr_t)hash, slot);
+    else
+        core_dict_put(record_index(&ctx->open_type_records), type, slot);
+    size_t nargs = 0;
+    uint64_t head = generic_head_hash(type, &nargs);
+    if (!closed && generic_parameters(type, nargs)
+        && !record_at(ctx, ctx->generic_type_heads,
+                      (const void *)(uintptr_t)head))
+        core_dict_put(record_index(&ctx->generic_type_heads),
+                      (const void *)(uintptr_t)head, slot);
+    return &ctx->type_records.data[ctx->type_records.len - 1];
+}
+
+bool th_type_define_owned(th_ctx *ctx, th_type *type, th_type *definition,
+                          void *owner)
+{
+    type = type ? th_resolve(type) : nullptr;
+    if (!ctx || !type || !definition || th_kind_of(type) != TH_NAMED)
+        return false;
+    th_type_record_t *record = record_lookup(ctx, type);
+    if (!record) return record_insert(ctx, type, definition, owner) != nullptr;
+    if (record->definition != definition
+        && th_hash(ctx, record->definition) != th_hash(ctx, definition))
+        return false;
+    if (!record->owner) record->owner = owner;
+    return true;
 }
 
 bool th_type_define(th_ctx *ctx, th_type *type, th_type *definition)
 {
-    if (!ctx || !type || !definition || th_kind_of(th_resolve(type)) != TH_NAMED)
-        return false;
-    for (size_t i = 0; i < ctx->type_definitions.len; i++) {
-        th_type_definition_t *entry = &ctx->type_definitions.data[i];
-        if (!same_named_type(ctx, entry->type, type)) continue;
-        if (entry->definition == definition
-            || th_hash(ctx, entry->definition) == th_hash(ctx, definition))
-            return true;
-        return false;
-    }
-    core_list_push(ctx->type_definitions,
-                   ((th_type_definition_t){type, definition}));
-    return true;
+    return th_type_define_owned(ctx, type, definition, nullptr);
+}
+
+void *th_type_definition_owner(th_ctx *ctx, const th_type *type)
+{
+    if (!ctx || !type) return nullptr;
+    th_type_record_t *record = record_lookup(ctx, th_resolve_c(type));
+    return record ? record->owner : nullptr;
 }
 
 th_type *th_auto_deref(th_ctx *ctx, th_type *type)
@@ -233,50 +507,35 @@ th_type *th_type_definition(th_ctx *ctx, const th_type *type)
 {
     if (!ctx || !type) return nullptr;
     type = th_resolve_c(type);
-    for (size_t i = 0; i < ctx->type_definitions.len; i++) {
-        const th_type_definition_t *entry = &ctx->type_definitions.data[i];
-        if (same_named_type(ctx, entry->type, type)) return entry->definition;
-    }
-    const char *name = nullptr;
-    size_t name_len = 0, nargs = 0;
-    if (!th_named_info(type, &name, &name_len, nullptr, &nargs) || !nargs)
-        return nullptr;
-    for (size_t i = 0; i < ctx->type_definitions.len; i++) {
-        const th_type_definition_t *entry = &ctx->type_definitions.data[i];
-        const char *candidate = nullptr;
-        size_t candidate_len = 0, candidate_args = 0;
-        if (!th_named_info(entry->type, &candidate, &candidate_len,
-                           nullptr, &candidate_args)
-            || candidate_len != name_len || candidate_args != nargs
-            || memcmp(candidate, name, name_len)) continue;
-        const th_type **from = core_alloc_array(const th_type *, nargs);
-        th_type **to = core_alloc_array(th_type *, nargs);
-        bool valid = from && to;
-        for (size_t j = 0; valid && j < nargs; j++) {
-            const th_arg *parameter = th_named_arg(entry->type, j);
-            const th_arg *argument = th_named_arg(type, j);
-            valid = parameter && argument
-                && parameter->kind == TH_ARG_TYPE
-                && argument->kind == TH_ARG_TYPE
-                && th_kind_of(th_resolve(parameter->type)) == TH_VAR;
-            if (valid) {
-                from[j] = parameter->type;
-                to[j] = argument->type;
-            }
+    if (th_kind_of((th_type *)type) != TH_NAMED) return nullptr;
+    th_type_record_t *record = record_lookup(ctx, type);
+    if (record) return record->definition;
+    size_t nargs = 0;
+    uint64_t head = generic_head_hash(type, &nargs);
+    if (!nargs) return nullptr;
+    th_type_record_t *generic = record_at(ctx, ctx->generic_type_heads,
+                                          (const void *)(uintptr_t)head);
+    if (!generic) return nullptr;
+    const th_type **from = core_alloc_array(const th_type *, nargs);
+    th_type **to = core_alloc_array(th_type *, nargs);
+    bool valid = from && to;
+    for (size_t j = 0; valid && j < nargs; j++) {
+        const th_arg *argument = th_named_arg(type, j);
+        valid = argument && argument->kind == TH_ARG_TYPE;
+        if (valid) {
+            from[j] = th_named_arg(generic->type, j)->type;
+            to[j] = argument->type;
         }
-        th_type *definition = valid
-            ? th_type_clone_replacing(ctx, entry->definition, from, to, nargs)
-            : nullptr;
-        core_free(to);
-        core_free(from);
-        if (!definition) continue;
-        if (th_is_closed(ctx, (th_type *)type))
-            core_list_push(ctx->type_definitions,
-                           ((th_type_definition_t){(th_type *)type,
-                                                   definition}));
-        return definition;
     }
-    return nullptr;
+    th_type *generic_definition = generic->definition;
+    th_type *definition = valid
+        ? th_type_clone_replacing(ctx, generic_definition, from, to, nargs)
+        : nullptr;
+    core_free(to);
+    core_free(from);
+    if (definition && th_is_closed(ctx, (th_type *)type))
+        record_insert(ctx, (th_type *)type, definition, nullptr);
+    return definition;
 }
 
 th_type *th_record_lookup_in(th_ctx *ctx, const th_type *type,
