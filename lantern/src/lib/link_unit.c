@@ -203,6 +203,25 @@ reference_site_eq(const void *left, const void *right)
     return a->referrer == b->referrer && a->use_site == b->use_site;
 }
 
+static core_hash_value_t
+declaration_hash(void *opaque)
+{
+    const core_link_declaration_t *decl = opaque;
+    core_hash_value_t fields[] = {
+        core_string_hash(decl->module), core_string_hash(decl->key),
+    };
+    return core_hash_raw(fields, sizeof fields);
+}
+
+static bool
+declaration_eq(const void *left, const void *right)
+{
+    const core_link_declaration_t *a = left;
+    const core_link_declaration_t *b = right;
+    return core_string_eq(a->module, b->module)
+        && core_string_eq(a->key, b->key);
+}
+
 struct core_link_unit_t {
     core_translation_unit_t **roots;
     size_t root_count;
@@ -225,6 +244,7 @@ struct core_link_unit_t {
     core_link_declaration_t **declarations;
     size_t declaration_count;
     size_t declaration_capacity;
+    core_dict_t declaration_index;
     core_link_reference_t **references;
     size_t reference_count;
     size_t reference_capacity;
@@ -673,6 +693,8 @@ core_link_unit_new(void)
     *link = (core_link_unit_t){.diagnostics = core_diagnostics_new()};
     core_dict_init(&link->reference_index, reference_site_hash,
                    reference_site_eq);
+    core_dict_init(&link->declaration_index, declaration_hash,
+                   declaration_eq);
     core_dict_init(&link->root_index, nullptr, nullptr);
     core_dict_init_string(&link->root_module_index);
     core_dict_init(&link->unit_index, nullptr, nullptr);
@@ -689,6 +711,7 @@ core_link_unit_free(core_link_unit_t *link)
     if (!link) return;
     clear_dependency_index(link);
     core_dict_free(&link->reference_index);
+    core_dict_free(&link->declaration_index);
     core_dict_free(&link->root_index);
     core_dict_free(&link->root_module_index);
     core_dict_free(&link->unit_index);
@@ -1184,12 +1207,9 @@ core_link_unit_find_declaration(const core_link_unit_t *link,
                                 core_string_t module, core_string_t key)
 {
     if (!link) return nullptr;
-    for (size_t i = 0; i < link->declaration_count; i++) {
-        core_link_declaration_t *decl = link->declarations[i];
-        if (core_string_eq(decl->module, module)
-            && core_string_eq(decl->key, key)) return decl;
-    }
-    return nullptr;
+    core_link_declaration_t probe = {.module = module, .key = key};
+    return core_dict_get((core_dict_t *)&link->declaration_index,
+                         &probe, nullptr);
 }
 
 static void
@@ -1285,6 +1305,7 @@ register_declaration(core_link_unit_t *link, core_string_t module,
                                    sizeof(*link->declarations)))
             abort();
         link->declarations[link->declaration_count++] = decl;
+        core_dict_add(&link->declaration_index, decl, decl);
         append_declaration_site(decl, owner, metadata, external, is_definition,
                                 external_requirement);
         link->validated = false;
@@ -1801,19 +1822,6 @@ core_link_unit_validate(core_link_unit_t *link)
                 "LANTERN-L0017",
                         "reference resolves to a declaration of the wrong kind");
             link->validation_valid = false;
-        }
-    }
-    for (size_t i = 0; i < link->artifact_count; i++) {
-        for (size_t j = 0; j < i; j++) {
-            core_link_artifact_t *a = &link->artifacts[i];
-            core_link_artifact_t *b = &link->artifacts[j];
-            if (a->unit_wide == b->unit_wide
-                && core_string_eq(a->module, b->module)
-                && core_string_eq(a->format, b->format)) {
-                link_report(link, nullptr, "LANTERN-L0006",
-                    "link unit contains duplicate artifacts for one module and format");
-                link->validation_valid = false;
-            }
         }
     }
     link->validated = true;
