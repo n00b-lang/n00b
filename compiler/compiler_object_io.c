@@ -10,6 +10,12 @@
 #include "driver.h"
 #include "lib/alloc.h"
 
+#ifdef __APPLE__
+const char *const n00bb_system_libraries[N00BB_SYSTEM_LIBRARY_COUNT + 1] = {nullptr};
+#else
+const char *const n00bb_system_libraries[N00BB_SYSTEM_LIBRARY_COUNT + 1] = {"-lm", nullptr};
+#endif
+
 char *
 n00bb_write_temporary_object(const void *bytes, size_t length)
 {

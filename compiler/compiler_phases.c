@@ -1397,7 +1397,7 @@ n00bb_execute_comptime(core_link_unit_t *link,
             "libn00b-abi-runtime.a");
         char *comptime_archive = n00bb_archive_path(compiler_path,
             "libn00b-comptime-allocate.a");
-        char **arguments = calloc(count + 7,
+        char **arguments = calloc(count + N00BB_SYSTEM_LIBRARY_COUNT + 7,
                                   sizeof(*arguments));
         ok = arguments && archive && comptime_archive;
         if (ok) {
@@ -1408,6 +1408,8 @@ n00bb_execute_comptime(core_link_unit_t *link,
             arguments[next++] = objects[count];
             arguments[next++] = comptime_archive;
             arguments[next++] = archive;
+            for (size_t s = 0; s < N00BB_SYSTEM_LIBRARY_COUNT; s++)
+                arguments[next++] = (char *)n00bb_system_libraries[s];
             arguments[next++] = "-o";
             arguments[next] = executable_path;
             pid_t child = 0;

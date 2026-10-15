@@ -899,7 +899,8 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         size_t object_count = 0;
         for (size_t i = 0; i < count + 3; i++)
             if (objects[i]) object_count++;
-        char **arguments = calloc(object_count + (size_t)extra_count + 5,
+        char **arguments = calloc(object_count + (size_t)extra_count
+                                      + N00BB_SYSTEM_LIBRARY_COUNT + 5,
                                   sizeof(*arguments));
         ok = arguments != nullptr;
         if (ok) {
@@ -915,9 +916,12 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
                 if (!arguments[next + (size_t)i]) ok = false;
             }
             if (ok) {
-                arguments[next + (size_t)extra_count] = archive;
-                arguments[next + 1 + (size_t)extra_count] = "-o";
-                arguments[next + 2 + (size_t)extra_count] = staging;
+                size_t tail = next + (size_t)extra_count;
+                arguments[tail++] = archive;
+                for (size_t s = 0; s < N00BB_SYSTEM_LIBRARY_COUNT; s++)
+                    arguments[tail++] = (char *)n00bb_system_libraries[s];
+                arguments[tail++] = "-o";
+                arguments[tail] = staging;
                 pid_t child = 0;
                 int launched = posix_spawnp(&child, arguments[0], nullptr,
                     nullptr, arguments, environ);
