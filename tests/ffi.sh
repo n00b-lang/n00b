@@ -50,6 +50,8 @@ builds_and_runs kept_text --link-object "$tmp/kept.o"
 builds_and_runs keyword_args --link-object "$tmp/keywords.o"
 "${CC:-cc}" -c cursor/cursor.c -o "$tmp/cursor.o"
 builds_and_runs with_source --link-object "$tmp/cursor.o"
+"${CC:-cc}" -c dispatch/dispatch.c -o "$tmp/dispatch.o"
+builds_and_runs callback_table --link-object "$tmp/dispatch.o"
 
 for marker in marker-literal-5be1 marker-contract-5be1; do
     for binary in constants use_path use_search; do

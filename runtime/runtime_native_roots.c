@@ -15,6 +15,7 @@ const n00bb_runtime_native_root_t n00bb_runtime_native_roots[] = {
     {"sys.internal.gc.alloc.barrier_runtime", "n00b_gc_barrier_value", nullptr, 0},
     {"sys.internal.gc.alloc.barrier_pointer_runtime", nullptr, nullptr, 0},
     {"builtin.io.raw.__raw_repr_dispatch", nullptr, nullptr, 0},
+    {"builtin.ffi.__ffi_dispatch", "n00b_ffi_dispatch", nullptr, 0},
 };
 
 const size_t n00bb_runtime_native_root_count =

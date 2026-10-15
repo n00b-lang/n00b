@@ -1,8 +1,58 @@
+import containers.list
+
 type Ffi_Bytes layout(c) {
     public data: uint
     public length: uint
 }
 
+type Ffi_Callback_Entry {
+    value: Any?
+    invoke: Ref[(Any, uint, uint) -> nil]?
+}
+
+var ffi_callbacks: List[Ffi_Callback_Entry] = new[List[Ffi_Callback_Entry]]()
+var ffi_free_callbacks: List[int] = new[List[int]]()
+
 litmod<fence> ffi(source: string) -> nil fail: string {
     fail "an 'ffi literal is bound by the compiler"
+}
+
+func __ffi_callback_register(value: Any, invoke: Ref[(Any, uint, uint) -> nil]) -> u64 {
+    let entry: Ffi_Callback_Entry = (value = value, invoke = invoke)
+    let reused = ffi_free_callbacks.pop()
+    if reused != nil {
+        let index = reused.get()
+        ffi_callbacks[index] = entry
+        return cast[u64](index + 1)
+    }
+    ffi_callbacks.append(entry)
+    return cast[u64]ffi_callbacks.len()
+}
+
+func __ffi_callback_free(handle: u64) {
+    let index = cast[int]handle - 1
+    if handle == 0 or index >= cast[int]ffi_callbacks.len() {
+        return
+    }
+    let entry = ffi_callbacks[index]
+    if entry.value == nil {
+        return
+    }
+    let empty: Ffi_Callback_Entry = (value = nil, invoke = nil)
+    ffi_callbacks[index] = empty
+    ffi_free_callbacks.append(index)
+}
+
+func __ffi_dispatch(handle: u64, arguments: uint, result: uint) -> i32 {
+    let index = cast[int]handle - 1
+    if handle == 0 or index >= cast[int]ffi_callbacks.len() {
+        return -1
+    }
+    let entry = ffi_callbacks[index]
+    if entry.value == nil or entry.invoke == nil {
+        return -1
+    }
+    let invoke: Ref[(Any, uint, uint) -> nil] = entry.invoke.get()
+    invoke.call(entry.value.get(), arguments, result)
+    return 0
 }
