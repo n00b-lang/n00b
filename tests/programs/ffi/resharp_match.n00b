@@ -1,0 +1,26 @@
+import resharp
+
+comptime {} else {
+    try {
+        var pattern = resharp.regex_new("h.llo")!
+        require resharp.is_match(pattern, "say hello")!
+        require !resharp.is_match(pattern, "goodbye")!
+        let text: Array[u8] = [104, 101, 108, 108, 111, 32, 104, 97, 108, 108, 111]
+        let spans = resharp.find_all(pattern, text)!
+        require __array_length(spans) == 2
+        require spans[0].start == 0
+        require spans[0].end == 5
+        require spans[1].start == 6
+        require spans[1].end == 11
+        resharp.close(pattern)!
+    } else failure {
+        require false
+    }
+    try {
+        resharp.regex_new("(unclosed")!
+        require false
+    } else failure {
+        require failure.fn == "regex_new"
+        require failure.text != nil
+    }
+}

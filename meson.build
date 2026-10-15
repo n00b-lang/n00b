@@ -655,6 +655,17 @@ test(
     timeout: 300,
 )
 
+if cargo.found() and not get_option('rust-transports').disabled()
+    test(
+        'ffi-resharp', find_program('sh'),
+        args: [meson.current_source_dir() / 'tests' / 'ffi_resharp.sh',
+               n00bb_exe.full_path(),
+               meson.current_source_dir() / 'tests' / 'programs' / 'ffi',
+               writ.get_variable(pkgconfig: 'contractdir')],
+        timeout: 600,
+    )
+endif
+
 test(
     'builtin-os-n00b',
     find_program('sh'),
@@ -1339,6 +1350,16 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_builtin_operand.n'],
+)
+
+test(
+    'native-frame-scan-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_native_frame_scan.n'],
+    timeout: 120,
 )
 
 test(

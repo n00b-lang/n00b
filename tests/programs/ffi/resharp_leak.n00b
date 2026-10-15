@@ -1,0 +1,24 @@
+import resharp
+
+func leak(text: string) fail: resharp.Error {
+    let pattern = resharp.regex_new(text)!
+    require resharp.is_match(pattern, "abc")!
+}
+
+comptime {} else {
+    try {
+        var i = 0
+        while i < 100 {
+            leak("a.c")!
+            i = i + 1
+        }
+    } else failure {
+        require false
+    }
+    var junk: string = ""
+    var j = 0
+    while j < 2000000 {
+        junk = "x" + "a piece of text long enough to need the heap"
+        j = j + 1
+    }
+}
