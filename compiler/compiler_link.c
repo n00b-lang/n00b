@@ -223,6 +223,22 @@ bind_resolved_field_type(core_translation_unit_t *unit,
     return true;
 }
 
+static th_type *
+field_receiver_type(parse_grammar_t *grammar, core_translation_unit_t *unit,
+                    parse_tree_t *receiver)
+{
+    th_type *type = receiver && !core_tree_is_leaf(receiver)
+        ? core_tree_node_value(receiver).type : nullptr;
+    if (!type || th_kind_of(th_resolve(type)) == TH_VAR) {
+        parse_sym_entry_t *symbol = attached_symbol(grammar, unit, receiver);
+        if (symbol && symbol->type) type = symbol->type;
+    }
+    type = type ? th_resolve(type) : nullptr;
+    while (type && th_kind_of(type) == TH_INDIRECTION)
+        type = th_resolve(th_ind_referent(type));
+    return type;
+}
+
 bool
 resolve_inferred_field_references(core_link_unit_t *link,
                                   n00bb_link_analysis_t *analysis)
@@ -248,21 +264,8 @@ resolve_inferred_field_references(core_link_unit_t *link,
                 parse_sym_entry_t *field = existing.target.symbol;
                 if (field && field->is_field && field->type) {
                     parse_tree_t *receiver = core_tree_child(node, 0);
-                    th_type *receiver_type = receiver
-                        && !core_tree_is_leaf(receiver)
-                        ? core_tree_node_value(receiver).type : nullptr;
-                    if (!receiver_type
-                        || th_kind_of(th_resolve(receiver_type)) == TH_VAR) {
-                        parse_sym_entry_t *symbol = attached_symbol(
-                            analysis->grammar, unit, receiver);
-                        if (symbol) receiver_type = symbol->type;
-                    }
-                    receiver_type = receiver_type
-                        ? th_resolve(receiver_type) : nullptr;
-                    while (receiver_type
-                           && th_kind_of(receiver_type) == TH_INDIRECTION)
-                        receiver_type = th_resolve(
-                            th_ind_referent(receiver_type));
+                    th_type *receiver_type = field_receiver_type(
+                        analysis->grammar, unit, receiver);
                     th_type *member_type = receiver_type
                         ? th_record_lookup_in(state->types, receiver_type,
                                               field->name.data) : nullptr;
@@ -301,21 +304,8 @@ resolve_inferred_field_references(core_link_unit_t *link,
             }
             if (variant_payload_arm(analysis->grammar, unit, node)) continue;
             parse_tree_t *receiver_node = core_tree_child(node, 0);
-            th_type *receiver_type = receiver_node
-                && !core_tree_is_leaf(receiver_node)
-                ? core_tree_node_value(receiver_node).type : nullptr;
-            th_type *resolved_receiver = receiver_type
-                ? th_resolve(receiver_type) : nullptr;
-            if (!resolved_receiver
-                || th_kind_of(resolved_receiver) == TH_VAR) {
-                parse_sym_entry_t *receiver = attached_symbol(
-                    analysis->grammar, unit, receiver_node);
-                if (receiver && receiver->type) receiver_type = receiver->type;
-            }
-            receiver_type = receiver_type ? th_resolve(receiver_type) : nullptr;
-            while (receiver_type
-                   && th_kind_of(receiver_type) == TH_INDIRECTION)
-                receiver_type = th_resolve(th_ind_referent(receiver_type));
+            th_type *receiver_type = field_receiver_type(
+                analysis->grammar, unit, receiver_node);
             if (!receiver_type || th_kind_of(receiver_type) == TH_VAR) {
                 core_diagnostics_report_at(
                     core_translation_unit_diagnostics(unit), unit,
