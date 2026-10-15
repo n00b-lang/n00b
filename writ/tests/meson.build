@@ -302,24 +302,27 @@ foreach binding : [
     )
 endforeach
 
-keywords_generated = custom_target(
-    'keywords-binding',
-    input: source_root / 'tests' / 'keywords' / 'keywords.writ',
-    output: ['keywords_writ.h', 'keywords_writ.c', 'keywords_writ_mock.c', 'keywords_writ_conformance.c'],
-    command: [writ_exe, 'gen', 'c', '@INPUT@', '-o', '@OUTDIR@', '--conformance'],
-)
-test(
-    'keywords-conformance',
-    executable(
-        'keywords-conformance',
-        keywords_generated[1],
-        keywords_generated[2],
-        keywords_generated[3],
-        c_args: generated_c + sanitize,
-        link_args: sanitize,
-        override_options: ['c_std=c11'],
-    ),
-)
+foreach contract : ['keywords', 'policy']
+    generated = custom_target(
+        contract + '-binding',
+        input: source_root / 'tests' / contract / contract + '.writ',
+        output: [contract + '_writ.h', contract + '_writ.c', contract + '_writ_mock.c',
+                 contract + '_writ_conformance.c'],
+        command: [writ_exe, 'gen', 'c', '@INPUT@', '-o', '@OUTDIR@', '--conformance'],
+    )
+    test(
+        contract + '-conformance',
+        executable(
+            contract + '-conformance',
+            generated[1],
+            generated[2],
+            generated[3],
+            c_args: generated_c + sanitize,
+            link_args: sanitize,
+            override_options: ['c_std=c11'],
+        ),
+    )
+endforeach
 
 n00b_profile = ['--profile', 'profiles/n00b.writ']
 foreach case : [

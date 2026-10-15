@@ -562,7 +562,7 @@ emit_call(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_view_t *
         }
     }
     writ_str_t ret = writ_c_return_type(c, plan);
-    writ_emit_text(emit, "%.*s got = %.*s_%.*s(", S(ret), S(c->prefix), S(plan->fn->contract_name));
+    writ_emit_text(emit, "%.*s got = %.*s_%.*s(", S(ret), S(c->prefix), S(writ_c_plan_name(c, plan)));
     uint32_t *order = writ_alloc(c->model->session, sizeof(uint32_t) * (plan->items_count + 1));
     size_t ordered = writ_c_param_order(c, plan, order);
     for (size_t o = 0; o < ordered; o++) {
@@ -623,6 +623,9 @@ emit_seen_checks(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_v
     for (uint32_t k = 0; k < fn->slots_count; k++) {
         if (plan->slots[k].item != WRIT_PLAN_NONE && plan->slots[k].pass != WRIT_PASS_VARIADIC_TAIL) {
             check_slot(c, emit, plan, index, k, s);
+        } else if (k == plan->policy_slot) {
+            int64_t value = fn->slots[k].policy_arms[plan->policy_arm].value;
+            expect(emit, plan, s->name, "%.*s == %d", S(seen_at(c, index, k)), value != 0);
         }
     }
     if (fn->format_slot != WRIT_PLAN_NONE) {
@@ -788,12 +791,26 @@ has_shape(const writ_plan_view_t *plan, writ_plan_shape_t shape, writ_plan_role_
     return false;
 }
 
+static void emit_driver_plan(const writ_c_context_t *c, writ_emit_t *emit, uint32_t index, const writ_fn_view_t *fn,
+                             const writ_plan_view_t *plan);
+
 static void
 emit_driver_fn(const writ_c_context_t *c, writ_emit_t *emit, uint32_t index)
 {
     const writ_fn_view_t *fn = writ_model_fn_at(c->model, index);
-    const writ_plan_view_t *plan = writ_model_fn_plan(c->model, fn);
     writ_emit_open(emit, "static void test_%.*s(void)", S(fn->contract_name));
+    size_t arm = 0;
+    for (const writ_plan_view_t *plan = writ_model_fn_plan(c->model, fn); plan;
+         plan = writ_model_fn_arm_plan(c->model, fn, ++arm)) {
+        emit_driver_plan(c, emit, index, fn, plan);
+    }
+    writ_emit_close(emit, nullptr);
+}
+
+static void
+emit_driver_plan(const writ_c_context_t *c, writ_emit_t *emit, uint32_t index, const writ_fn_view_t *fn,
+                 const writ_plan_view_t *plan)
+{
     bool pack = has_shape(plan, WRIT_SHAPE_REST_PACK, WRIT_ROLE_PACK);
     for (uint32_t o = 0; is_mocked(c->model, fn) && o < plan->outcomes_count; o++) {
         int64_t ret = SCALAR_INPUT + PURE_OFFSET;
@@ -831,7 +848,6 @@ emit_driver_fn(const writ_c_context_t *c, writ_emit_t *emit, uint32_t index)
             emit_scenario(c, emit, plan, index, &none);
         }
     }
-    writ_emit_close(emit, nullptr);
 }
 
 static writ_str_t

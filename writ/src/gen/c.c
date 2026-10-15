@@ -235,12 +235,27 @@ writ_c_param_order(const writ_c_context_t *c, const writ_plan_view_t *plan, uint
     return count;
 }
 
+writ_str_t
+writ_c_plan_name(const writ_c_context_t *c, const writ_plan_view_t *plan)
+{
+    if (plan->policy_slot == WRIT_PLAN_NONE) {
+        return plan->fn->contract_name;
+    }
+    const writ_slot_view_t *slot = &plan->fn->slots[plan->policy_slot];
+    const writ_policy_arm_view_t *arm = &slot->policy_arms[plan->policy_arm];
+    if (arm->is_else) {
+        return writ_str_format(c->model->session, "%.*s_with_%.*s", S(plan->fn->contract_name), S(slot->name));
+    }
+    return writ_str_format(c->model->session, "%.*s_%.*s", S(plan->fn->contract_name),
+                           S(writ_name_case(c->model->session, arm->constant, WRIT_CASE_SNAKE)));
+}
+
 void
 writ_c_emit_signature(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_view_t *plan)
 {
     writ_str_t ret = writ_c_return_type(c, plan);
     writ_emit_text(emit, "%.*s%s%.*s_%.*s(", S(ret), ret.data[ret.length - 1] == '*' ? "" : " ", S(c->prefix),
-                   S(plan->fn->contract_name));
+                   S(writ_c_plan_name(c, plan)));
     bool first = true;
     uint32_t *order = writ_alloc(c->model->session, sizeof(uint32_t) * (plan->items_count + 1));
     size_t ordered = writ_c_param_order(c, plan, order);
@@ -756,6 +771,12 @@ emit_step(shim_env_t *env, writ_emit_t *emit, const writ_plan_step_view_t *step)
     case WRIT_STEP_ENCODE_CSTR:
         emit_encode(c, emit, step, item);
         return;
+    case WRIT_STEP_PASS_CONST: {
+        const writ_policy_arm_view_t *arm = &plan->fn->slots[plan->policy_slot].policy_arms[plan->policy_arm];
+        writ_emit_line(emit, "s%u = (%.*s)(intptr_t)%lld;", step->slot, S(slot_type(c, plan, step->slot)),
+                       (long long)arm->value);
+        return;
+    }
     case WRIT_STEP_EXPAND:
         emit_expand(c, emit, step, item);
         return;
@@ -859,7 +880,7 @@ emit_classify(shim_env_t *env, writ_emit_t *emit)
         } else {
             writ_emit_open(emit, i ? "else" : "");
         }
-        writ_emit_line(emit, "outcome = %.*s_%.*s_%.*s;", S(c->prefix), S(plan->fn->contract_name), S(outcome->name));
+        writ_emit_line(emit, "outcome = %.*s_%.*s_%.*s;", S(c->prefix), S(writ_c_plan_name(c, plan)), S(outcome->name));
         writ_emit_close(emit, nullptr);
     }
 }
@@ -935,7 +956,7 @@ emit_shim(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_view_t *
                 writ_emit_close(emit, nullptr);
             }
             if (step->outcome != WRIT_PLAN_NONE) {
-                writ_emit_open(emit, "if (outcome == %.*s_%.*s_%.*s)", S(c->prefix), S(plan->fn->contract_name),
+                writ_emit_open(emit, "if (outcome == %.*s_%.*s_%.*s)", S(c->prefix), S(writ_c_plan_name(c, plan)),
                                S(plan->outcomes[step->outcome].name));
             }
             current = step->outcome;
@@ -1108,7 +1129,7 @@ header_text(const writ_c_context_t *c, const writ_plan_view_t *const *plans, siz
         if (!writ_c_returns_directly(c, plan)) {
             writ_emit_open(&emit, "enum");
             for (size_t o = 0; o < plan->outcomes_count; o++) {
-                writ_emit_line(&emit, "%.*s_%.*s_%.*s = %zu,", S(c->prefix), S(plan->fn->contract_name),
+                writ_emit_line(&emit, "%.*s_%.*s_%.*s = %zu,", S(c->prefix), S(writ_c_plan_name(c, plan)),
                                S(plan->outcomes[o].name), o);
             }
             writ_emit_close(&emit, ";");
@@ -1254,7 +1275,16 @@ writ_gen_c(const writ_model_t *model, const writ_gen_c_request_t *request, const
     writ_c_context_t c = {model, writ_str_copy(session, prefix.data, prefix.length), upper(session, prefix),
                           request->struct_size >= sizeof(writ_gen_c_request_t) && request->pointer_normalized};
     size_t total = writ_model_fn_count(model);
-    const writ_plan_view_t **plans = writ_alloc(session, sizeof(writ_plan_view_t *) * (total ? total : 1));
+    size_t capacity = 0;
+    for (size_t i = 0; i < total; i++) {
+        const writ_fn_view_t *fn = writ_model_fn_at(model, i);
+        size_t arms = 1;
+        for (size_t s = 0; s < fn->slots_count; s++) {
+            arms = fn->slots[s].policy_arms_count ? fn->slots[s].policy_arms_count : arms;
+        }
+        capacity += arms;
+    }
+    const writ_plan_view_t **plans = writ_alloc(session, sizeof(writ_plan_view_t *) * (capacity ? capacity : 1));
     size_t count = 0;
     for (size_t i = 0; i < total; i++) {
         const writ_fn_view_t *fn = writ_model_fn_at(model, i);
@@ -1265,7 +1295,7 @@ writ_gen_c(const writ_model_t *model, const writ_gen_c_request_t *request, const
         if (!plan && !c.normalized) {
             return WRIT_HAS_ERRORS;
         }
-        if (plan) {
+        for (size_t arm = 0; plan; plan = writ_model_fn_arm_plan(model, fn, ++arm)) {
             plans[count++] = plan;
         }
     }

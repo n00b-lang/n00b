@@ -107,6 +107,7 @@ bool       writ_c_returns_directly(const writ_c_context_t *c, const writ_plan_vi
 writ_step_kind_t writ_c_lift_kind(const writ_plan_view_t *plan, uint32_t item);
 bool       writ_c_offset_result(const writ_plan_view_t *plan, uint32_t item);
 uint32_t   writ_c_userdata_slot(const writ_plan_view_t *plan, uint32_t item);
+writ_str_t writ_c_plan_name(const writ_c_context_t *c, const writ_plan_view_t *plan);
 writ_str_t writ_c_real_param_type(const writ_c_context_t *c, const writ_slot_view_t *slot);
 size_t     writ_c_item_params(const writ_c_context_t *c, const writ_plan_view_t *plan, uint32_t item,
                               writ_c_param_t params[2]);
