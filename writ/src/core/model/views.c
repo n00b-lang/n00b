@@ -236,36 +236,72 @@ writ_model_library(const writ_model_t *model)
     return model ? model->library_view : nullptr;
 }
 
-size_t
-writ_model_fn_count(const writ_model_t *model)
+static size_t
+fn_count_of(const writ_model_t *model, writ_fn_kind_t kind)
 {
     size_t count = 0;
     for (size_t i = 0; model && i < model->fns.len; i++) {
-        count += model->fns.data[i].kind == WRIT_FN_FUNCTION;
+        count += model->fns.data[i].kind == kind;
     }
     return count;
+}
+
+static const writ_fn_view_t *
+fn_at_of(const writ_model_t *model, writ_fn_kind_t kind, size_t index)
+{
+    for (size_t i = 0; model && i < model->fns.len; i++) {
+        if (model->fns.data[i].kind == kind && !index--) {
+            return &model->fn_views[i];
+        }
+    }
+    return nullptr;
+}
+
+static const writ_fn_view_t *
+fn_named_of(const writ_model_t *model, writ_fn_kind_t kind, writ_str_t name)
+{
+    for (size_t i = 0; model && i < model->fns.len; i++) {
+        if (model->fns.data[i].kind == kind && writ_str_eq(model->fn_views[i].contract_name, name)) {
+            return &model->fn_views[i];
+        }
+    }
+    return nullptr;
+}
+
+size_t
+writ_model_fn_count(const writ_model_t *model)
+{
+    return fn_count_of(model, WRIT_FN_FUNCTION);
 }
 
 const writ_fn_view_t *
 writ_model_fn_at(const writ_model_t *model, size_t index)
 {
-    for (size_t i = 0; model && i < model->fns.len; i++) {
-        if (model->fns.data[i].kind == WRIT_FN_FUNCTION && !index--) {
-            return &model->fn_views[i];
-        }
-    }
-    return nullptr;
+    return fn_at_of(model, WRIT_FN_FUNCTION, index);
 }
 
 const writ_fn_view_t *
 writ_model_fn_named(const writ_model_t *model, writ_str_t name)
 {
-    for (size_t i = 0; model && i < model->fns.len; i++) {
-        if (model->fns.data[i].kind == WRIT_FN_FUNCTION && writ_str_eq(model->fn_views[i].contract_name, name)) {
-            return &model->fn_views[i];
-        }
-    }
-    return nullptr;
+    return fn_named_of(model, WRIT_FN_FUNCTION, name);
+}
+
+size_t
+writ_model_callback_count(const writ_model_t *model)
+{
+    return fn_count_of(model, WRIT_FN_CALLBACK);
+}
+
+const writ_fn_view_t *
+writ_model_callback_at(const writ_model_t *model, size_t index)
+{
+    return fn_at_of(model, WRIT_FN_CALLBACK, index);
+}
+
+const writ_fn_view_t *
+writ_model_callback_named(const writ_model_t *model, writ_str_t name)
+{
+    return fn_named_of(model, WRIT_FN_CALLBACK, name);
 }
 
 uint32_t

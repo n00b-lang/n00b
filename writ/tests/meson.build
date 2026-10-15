@@ -253,9 +253,14 @@ endforeach
 
 generated_c = ['-std=c11', '-Wall', '-Wextra', '-Werror', '-U_FORTIFY_SOURCE', '-D_FORTIFY_SOURCE=0']
 
+callbacks_library = declare_dependency(
+    link_with: static_library('callbacks-library', 'callbacks/library.c', override_options: ['c_std=c11']),
+)
+
 foreach binding : [
     ['libc', 'libc/libc.writ', 'libc', []],
     ['zlib', 'zlib/zlib.writ', 'zlib', [zlib]],
+    ['callbacks', 'callbacks/callbacks.writ', 'callbacks', [callbacks_library]],
 ]
     generated = custom_target(
         binding[0] + '-binding',

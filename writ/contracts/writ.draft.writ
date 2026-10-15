@@ -438,6 +438,7 @@ const WRIT_SHAPE_ARRAY: c_int = 6
 const WRIT_SHAPE_RECORD: c_int = 7
 const WRIT_SHAPE_REST_PACK: c_int = 8
 const WRIT_SHAPE_KEYWORD_PACK: c_int = 9
+const WRIT_SHAPE_CALLBACK: c_int = 10
 const WRIT_AFTER_NONE: c_int = 0
 const WRIT_AFTER_BORROWED: c_int = 1
 const WRIT_AFTER_CALLER_OWNS: c_int = 2
@@ -456,6 +457,7 @@ const WRIT_PART_LENGTH: c_int = 2
 const WRIT_PART_CAPACITY: c_int = 3
 const WRIT_PART_CAPACITY_AND_LENGTH: c_int = 4
 const WRIT_PART_ELEMENTS: c_int = 5
+const WRIT_PART_USERDATA: c_int = 6
 const WRIT_LOCAL_BUFFER: c_int = 0
 const WRIT_LOCAL_CELL: c_int = 1
 const WRIT_LOCAL_TEXT: c_int = 2
@@ -515,6 +517,9 @@ fn writ_model_library(model: ?writ_model_t) -> ?writ_library_view_t unknown
 fn writ_model_fn_count(model: ?writ_model_t) -> usize
 fn writ_model_fn_at(model: ?writ_model_t, index: usize) -> ?writ_fn_view_t unknown
 fn writ_model_fn_named(model: ?writ_model_t, name: writ_str_t) -> ?writ_fn_view_t unknown
+fn writ_model_callback_count(model: ?writ_model_t) -> usize
+fn writ_model_callback_at(model: ?writ_model_t, index: usize) -> ?writ_fn_view_t unknown
+fn writ_model_callback_named(model: ?writ_model_t, name: writ_str_t) -> ?writ_fn_view_t unknown
 fn writ_model_const_count(model: ?writ_model_t) -> usize
 fn writ_model_const_at(model: ?writ_model_t, index: usize) -> ?writ_const_view_t unknown
 fn writ_model_const_named(model: ?writ_model_t, name: writ_str_t) -> ?writ_const_view_t unknown

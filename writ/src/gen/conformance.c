@@ -509,6 +509,15 @@ emit_inputs(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_view_t
             }
             writ_emit_line(emit, "size_t len_%.*s = %d;", S(item->name), s->arity);
             break;
+        case WRIT_SHAPE_CALLBACK: {
+            writ_str_t type = writ_c_type(c, item->type, false);
+            writ_emit_line(emit, "%.*s in_%.*s = (%.*s)(uintptr_t)%.*s_mock_object;", S(type), S(item->name), S(type),
+                           S(c->prefix));
+            if (writ_c_userdata_slot(plan, i) != WRIT_PLAN_NONE) {
+                writ_emit_line(emit, "void *ud_%.*s = (void *)%.*s_mock_object;", S(item->name), S(c->prefix));
+            }
+            break;
+        }
         case WRIT_SHAPE_RECORD: {
             writ_str_t record = writ_c_type(c, item->type->target, false);
             writ_emit_line(emit, "%.*s record_%.*s;", S(record), S(item->name));
@@ -563,7 +572,11 @@ emit_call(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_view_t *
         size_t count = writ_c_item_params(c, plan, order[o], params);
         writ_emit_text(emit, "%s%s%s_%.*s", o ? ", " : "", input ? "" : "&", input ? "in" : "out", S(item->name));
         if (count == 2) {
-            writ_emit_text(emit, input ? ", len_%.*s" : ", &out_%.*s_length", S(item->name));
+            writ_emit_text(emit,
+                           item->shape == WRIT_SHAPE_CALLBACK ? ", ud_%.*s"
+                           : input                           ? ", len_%.*s"
+                                                             : ", &out_%.*s_length",
+                           S(item->name));
         }
     }
     writ_emit_line(emit, ");");
@@ -590,6 +603,8 @@ check_slot(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_view_t 
                : item->shape == WRIT_SHAPE_TEXT ? 4
                : s->empty                      ? 0
                                                : INPUT_LENGTH);
+    } else if (slot->part == WRIT_PART_USERDATA) {
+        expect(emit, plan, s->name, "%.*s == 1", S(seen));
     } else if (slot->part == WRIT_PART_WHOLE && is_value_type(item->type)) {
         expect(emit, plan, s->name, "%.*s == (long long)in_%.*s", S(seen), S(item->name));
     } else if (slot->part == WRIT_PART_WHOLE) {
@@ -839,19 +854,25 @@ driver_text(const writ_c_context_t *c)
     writ_emit_line(&emit, "failures++;");
     writ_emit_close(&emit, nullptr);
     writ_emit_close(&emit, nullptr);
-    writ_emit_line(&emit, "");
-    writ_emit_open(&emit, "static bool matches_pattern(const uint8_t *data, size_t length)");
-    writ_emit_open(&emit, "for (size_t i = 0; i < length; i++)");
-    writ_emit_open(&emit, "if (data[i] != (uint8_t)(i * 7 + 3))");
-    writ_emit_line(&emit, "return false;");
-    writ_emit_close(&emit, nullptr);
-    writ_emit_close(&emit, nullptr);
-    writ_emit_line(&emit, "return true;");
-    writ_emit_close(&emit, nullptr);
+    writ_emit_t drivers;
+    writ_emit_init(&drivers);
     for (uint32_t i = 0; i < writ_model_fn_count(c->model); i++) {
-        writ_emit_line(&emit, "");
-        emit_driver_fn(c, &emit, i);
+        writ_emit_line(&drivers, "");
+        emit_driver_fn(c, &drivers, i);
     }
+    writ_str_t driver_text = writ_emit_finish(&drivers, c->model->session);
+    if (strstr(driver_text.data, "matches_pattern(")) {
+        writ_emit_line(&emit, "");
+        writ_emit_open(&emit, "static bool matches_pattern(const uint8_t *data, size_t length)");
+        writ_emit_open(&emit, "for (size_t i = 0; i < length; i++)");
+        writ_emit_open(&emit, "if (data[i] != (uint8_t)(i * 7 + 3))");
+        writ_emit_line(&emit, "return false;");
+        writ_emit_close(&emit, nullptr);
+        writ_emit_close(&emit, nullptr);
+        writ_emit_line(&emit, "return true;");
+        writ_emit_close(&emit, nullptr);
+    }
+    writ_emit_text(&emit, "%.*s", S(driver_text));
     writ_emit_line(&emit, "");
     writ_emit_open(&emit, "int main(void)");
     for (size_t i = 0; i < writ_model_fn_count(c->model); i++) {

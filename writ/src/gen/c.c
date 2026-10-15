@@ -111,6 +111,17 @@ writ_c_by_pointer(const writ_c_context_t *c, const writ_plan_item_view_t *item)
     return c->normalized && item->role == WRIT_ROLE_INPUT && item->type && item->type->kind == WRIT_TYPE_RECORD;
 }
 
+uint32_t
+writ_c_userdata_slot(const writ_plan_view_t *plan, uint32_t item)
+{
+    for (size_t i = 0; i < plan->slots_count; i++) {
+        if (plan->slots[i].item == item && plan->slots[i].part == WRIT_PART_USERDATA) {
+            return (uint32_t)i;
+        }
+    }
+    return WRIT_PLAN_NONE;
+}
+
 size_t
 writ_c_item_params(const writ_c_context_t *c, const writ_plan_view_t *plan, uint32_t index, writ_c_param_t params[2])
 {
@@ -132,6 +143,13 @@ writ_c_item_params(const writ_c_context_t *c, const writ_plan_view_t *plan, uint
             params[1] = (writ_c_param_t){writ_cstr("size_t"), suffixed(c, item->name, "_length")};
             return 2;
         }
+        case WRIT_SHAPE_CALLBACK:
+            params[0] = (writ_c_param_t){writ_c_type(c, item->type, false), item->name};
+            if (writ_c_userdata_slot(plan, index) == WRIT_PLAN_NONE) {
+                return 1;
+            }
+            params[1] = (writ_c_param_t){writ_cstr("void *"), suffixed(c, item->name, "_userdata")};
+            return 2;
         default:
             params[0] = (writ_c_param_t){writ_c_type(c, item->type, false), item->name};
             return 1;
@@ -730,6 +748,10 @@ emit_step(shim_env_t *env, writ_emit_t *emit, const writ_plan_step_view_t *step)
         } else {
             writ_emit_line(emit, "s%u = %s%.*s;", step->slot, writ_c_by_pointer(c, item) ? "*" : "", S(item->name));
         }
+        if (item && item->shape == WRIT_SHAPE_CALLBACK && step->second_slot != WRIT_PLAN_NONE) {
+            writ_emit_line(emit, "s%u = (%.*s)%.*s_userdata;", step->second_slot, S(slot_type(c, plan, step->second_slot)),
+                           S(item->name));
+        }
         return;
     case WRIT_STEP_ENCODE_CSTR:
         emit_encode(c, emit, step, item);
@@ -1026,6 +1048,23 @@ emit_declared_types(const writ_c_context_t *c, writ_emit_t *emit)
     writ_emit_line(emit, "");
 }
 
+static void
+emit_callback_types(const writ_c_context_t *c, writ_emit_t *emit)
+{
+    if (writ_model_library(c->model)->headers_count) {
+        return;
+    }
+    for (size_t i = 0; i < writ_model_callback_count(c->model); i++) {
+        const writ_fn_view_t *fn = writ_model_callback_at(c->model, i);
+        writ_emit_text(emit, "typedef ");
+        writ_c_emit_real_prototype(c, emit, fn, writ_str_format(c->model->session, "(*%.*s)", S(fn->contract_name)),
+                                   false, ";");
+    }
+    if (writ_model_callback_count(c->model)) {
+        writ_emit_line(emit, "");
+    }
+}
+
 static writ_str_t
 header_text(const writ_c_context_t *c, const writ_plan_view_t *const *plans, size_t count)
 {
@@ -1062,6 +1101,7 @@ header_text(const writ_c_context_t *c, const writ_plan_view_t *const *plans, siz
     writ_emit_line(&emit, "void %.*s_free(void *data);", S(c->prefix));
     writ_emit_line(&emit, "");
     emit_declared_types(c, &emit);
+    emit_callback_types(c, &emit);
     for (size_t i = 0; i < count; i++) {
         const writ_plan_view_t *plan = plans[i];
         writ_emit_line(&emit, "");

@@ -96,6 +96,11 @@ refine writ_model_fn_at {
     -> ?writ_fn_view_t with model
 }
 
+refine writ_model_callback_at {
+    model: *writ_model_t
+    -> ?writ_fn_view_t with model
+}
+
 refine writ_model_fn_plan {
     model: *writ_model_t
     fn: *writ_fn_view_t

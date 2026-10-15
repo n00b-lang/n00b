@@ -136,6 +136,7 @@ enum {
     WRIT_SHAPE_RECORD,
     WRIT_SHAPE_REST_PACK,
     WRIT_SHAPE_KEYWORD_PACK,
+    WRIT_SHAPE_CALLBACK,
 };
 
 typedef uint32_t writ_after_call_t;
@@ -166,6 +167,7 @@ enum {
     WRIT_PART_CAPACITY,
     WRIT_PART_CAPACITY_AND_LENGTH,
     WRIT_PART_ELEMENTS,
+    WRIT_PART_USERDATA,
 };
 
 typedef uint32_t writ_local_kind_t;
@@ -463,6 +465,9 @@ const writ_library_view_t *writ_model_library(const writ_model_t *model);
 size_t writ_model_fn_count(const writ_model_t *model);
 const writ_fn_view_t *writ_model_fn_at(const writ_model_t *model, size_t index);
 const writ_fn_view_t *writ_model_fn_named(const writ_model_t *model, writ_str_t name);
+size_t writ_model_callback_count(const writ_model_t *model);
+const writ_fn_view_t *writ_model_callback_at(const writ_model_t *model, size_t index);
+const writ_fn_view_t *writ_model_callback_named(const writ_model_t *model, writ_str_t name);
 size_t writ_model_const_count(const writ_model_t *model);
 const writ_const_view_t *writ_model_const_at(const writ_model_t *model, size_t index);
 const writ_const_view_t *writ_model_const_named(const writ_model_t *model, writ_str_t name);

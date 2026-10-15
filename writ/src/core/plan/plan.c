@@ -413,6 +413,19 @@ plan_out_pointer(builder_t *b, uint32_t index)
     }
 }
 
+static writ_plan_step_view_t
+whole_input(builder_t *b, uint32_t index, writ_plan_role_t role, writ_plan_shape_t shape, writ_after_call_t after)
+{
+    const writ_slot_rec_t *slot = contract_slot(b, index);
+    uint32_t item = add_item(b, slot->name, role, shape, after, slot->type, index);
+    b->items.data[item].nullable = writ_type(b->model, slot->type)->key.nullable;
+    bind_slot(b, index, item, WRIT_PART_WHOLE);
+    writ_plan_step_view_t pass = step(WRIT_STEP_PASS);
+    pass.item = item;
+    pass.slot = index;
+    return pass;
+}
+
 static void
 plan_value_input(builder_t *b, uint32_t index)
 {
@@ -427,12 +440,8 @@ plan_value_input(builder_t *b, uint32_t index)
     writ_after_call_t after = slot->mode == WRIT_MODE_CONSUME ? WRIT_AFTER_CALLEE_OWNS
                             : pointer                         ? writ_default(WRIT_DEFAULT_INPUT_AFTER_CALL)
                                                               : WRIT_AFTER_NONE;
-    uint32_t item = add_item(b, slot->name, role, shape, after, slot->type, index);
-    b->items.data[item].nullable = writ_type(b->model, slot->type)->key.nullable;
-    bind_slot(b, index, item, WRIT_PART_WHOLE);
-    writ_plan_step_view_t pass = step(WRIT_STEP_PASS);
-    pass.item = item;
-    pass.slot = index;
+    writ_plan_step_view_t pass = whole_input(b, index, role, shape, after);
+    uint32_t item = pass.item;
     emit_to(&b->prepare, pass);
     if (shape == WRIT_SHAPE_HANDLE && writ_type(b->model, slot->type)->key.kind == WRIT_TYPE_HANDLE) {
         const writ_type_rec_t *type = writ_type(b->model, slot->type);
@@ -447,6 +456,47 @@ plan_value_input(builder_t *b, uint32_t index)
         consumed.item = item;
         emit_outcomes(b, true, !on_state(b, index, WRIT_ON_NOT_CONSUMED), consumed);
     }
+}
+
+static uint32_t
+userdata_partner(const builder_t *b, uint32_t index)
+{
+    writ_sym_t name = contract_slot(b, index)->name;
+    for (uint32_t i = 0; i < b->record->slot_count; i++) {
+        const writ_slot_rec_t *slot = contract_slot(b, i);
+        if (slot->userdata && slot->userdata_for == name) {
+            return i;
+        }
+    }
+    return WRIT_NONE;
+}
+
+static writ_after_call_t
+callback_after_call(writ_span_kind_t span)
+{
+    switch (span) {
+    case WRIT_SPAN_UNTIL:
+        return WRIT_AFTER_BORROWED_UNTIL;
+    case WRIT_SPAN_ONCE:
+        return WRIT_AFTER_CALLEE_OWNS;
+    case WRIT_SPAN_STATIC:
+    case WRIT_SPAN_STATIC_PER_THREAD:
+        return WRIT_AFTER_STATIC;
+    default:
+        return WRIT_AFTER_BORROWED;
+    }
+}
+
+static void
+plan_callback_input(builder_t *b, uint32_t index)
+{
+    writ_plan_step_view_t pass = whole_input(b, index, WRIT_ROLE_INPUT, WRIT_SHAPE_CALLBACK,
+                                             callback_after_call(contract_slot(b, index)->span));
+    pass.second_slot = userdata_partner(b, index);
+    if (pass.second_slot != WRIT_NONE) {
+        bind_slot(b, pass.second_slot, pass.item, WRIT_PART_USERDATA);
+    }
+    emit_to(&b->prepare, pass);
 }
 
 static bool
@@ -484,6 +534,9 @@ hide_dependent_slots(builder_t *b)
     if (b->record->varargs_count_slot != WRIT_NONE) {
         b->hidden[b->record->varargs_count_slot] = true;
     }
+    for (uint32_t i = 0; i < b->record->slot_count; i++) {
+        b->hidden[i] = b->hidden[i] || contract_slot(b, i)->userdata;
+    }
 }
 
 static void
@@ -497,7 +550,7 @@ plan_inputs(builder_t *b)
             continue;
         }
         if (type->key.kind == WRIT_TYPE_CALLBACK) {
-            unsupported(b, slot, "callback parameters");
+            plan_callback_input(b, i);
         } else if (slot->extent_kind == WRIT_EXTENT_UNKNOWN || slot->span == WRIT_SPAN_UNKNOWN
                    || slot->mode == WRIT_MODE_UNKNOWN) {
             unsupported(b, slot, "a binding for a parameter with `unknown` facts");
