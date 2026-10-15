@@ -132,3 +132,15 @@ n00b_gc_barrier_value(const void *address, uint32_t type_index)
     (void)address;
     (void)type_index;
 }
+
+void
+n00b_gc_root_push(void **slot)
+{
+    (void)slot;
+}
+
+void
+n00b_gc_root_pop(uint64_t depth)
+{
+    (void)depth;
+}

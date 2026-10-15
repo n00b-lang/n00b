@@ -49,6 +49,7 @@ runtime_abi_headers = lantern.partial_dependency(
 
 runtime_abi_sources = ['runtime/runtime_abi.c', 'runtime/runtime_allocate.c', 'runtime/runtime_abi_io.c',
      'runtime/runtime_panic.c', 'runtime/runtime_dwarf.c', 'runtime/runtime_ffi.c',
+     'runtime/runtime_string.c',
      'runtime/runtime_abi_box.c', 'runtime/runtime_abi_hash.c',
      'runtime/runtime_literal_graph.c',
      'runtime/runtime_abi_storage.c', 'runtime/native_frame_runtime.c', 'runtime/builtin_os.c',
@@ -1292,6 +1293,16 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_bit_count.n'],
+)
+
+test(
+    'string-runtime-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_string_runtime.n'],
+    timeout: 120,
 )
 
 test(

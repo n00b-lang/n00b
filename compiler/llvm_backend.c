@@ -5751,6 +5751,115 @@ feasible_edge(lower_state_t *state, ir_block_t *from, ir_block_t *to,
     return false;
 }
 
+static LLVMValueRef
+phase_allocator(lower_state_t *state)
+{
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
+    LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
+    LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
+    const char *name = ir_func_execution_phase(state->function)
+        == IR_PHASE_COMPTIME ? "n00b_comptime_allocate" : "n00b_allocate";
+    LLVMTypeRef parameters[] = {i32, i32, i64, i32, pointer};
+    LLVMTypeRef signature = LLVMFunctionType(pointer, parameters, 5, false);
+    LLVMValueRef allocator = LLVMGetNamedFunction(state->module, name);
+    if (!allocator) allocator = LLVMAddFunction(state->module, name,
+                                                signature);
+    return allocator && LLVMGlobalGetValueType(allocator) == signature
+        ? allocator : nullptr;
+}
+
+static LLVMValueRef
+string_operand(lower_state_t *state, ir_operand_t *operand)
+{
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    if (operand->kind != IR_OPD_VALUE || !operand->value) return nullptr;
+    LLVMValueRef value = lowered_value(state, operand->value);
+    if (value && LLVMTypeOf(value) == box_llvm_type(context))
+        value = unbox_value(state, value, operand->value->type);
+    return value && LLVMGetTypeKind(LLVMTypeOf(value)) == LLVMStructTypeKind
+        && LLVMCountStructElementTypes(LLVMTypeOf(value)) == 2
+        ? value : nullptr;
+}
+
+static bool
+lower_string_add(lower_state_t *state, ir_instr_t *instruction,
+                 ir_operand_t *operands, uint32_t count)
+{
+    if (count != 3 || !instruction->dest) return false;
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
+    LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
+    LLVMValueRef left = string_operand(state, &operands[1]);
+    LLVMValueRef right = string_operand(state, &operands[2]);
+    LLVMValueRef allocator = phase_allocator(state);
+    LLVMValueRef byte_type = runtime_type_value(state,
+        th_name(ir_module_types(state->function->owner), "u8"));
+    if (!left || !right || !allocator || !byte_type) return false;
+    LLVMValueRef result_slot = entry_alloca(state, LLVMTypeOf(left));
+    LLVMTypeRef parameters[] = {i64, i64, i64, i64, i32, pointer, pointer};
+    LLVMTypeRef signature = LLVMFunctionType(LLVMVoidTypeInContext(context),
+                                             parameters, 7, false);
+    LLVMValueRef helper = LLVMGetNamedFunction(state->module,
+        "n00bb_bootstrap_string_add");
+    if (!helper) helper = LLVMAddFunction(state->module,
+        "n00bb_bootstrap_string_add", signature);
+    if (!result_slot || !helper || LLVMGlobalGetValueType(helper) != signature)
+        return false;
+    LLVMValueRef args[] = {
+        LLVMBuildExtractValue(state->builder, left, 0, "string.add.left.low"),
+        LLVMBuildExtractValue(state->builder, left, 1, "string.add.left.high"),
+        LLVMBuildExtractValue(state->builder, right, 0,
+                              "string.add.right.low"),
+        LLVMBuildExtractValue(state->builder, right, 1,
+                              "string.add.right.high"),
+        byte_type, allocator, result_slot};
+    LLVMBuildCall2(state->builder, signature, helper, args, 7, "");
+    return save_result(state, instruction, LLVMBuildLoad2(state->builder,
+        LLVMTypeOf(left), result_slot, "string.add"));
+}
+
+static bool
+lower_string_from_utf8(lower_state_t *state, ir_instr_t *instruction,
+                       ir_operand_t *operands, uint32_t count)
+{
+    if (count != 3 || !instruction->dest || operands[1].kind != IR_OPD_VALUE
+        || operands[2].kind != IR_OPD_VALUE) return false;
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
+    LLVMTypeRef array_type = value_type(state->function->owner,
+        operands[1].value->type, context);
+    LLVMValueRef array = lowered_value(state, operands[1].value);
+    if (array && LLVMTypeOf(array) == box_llvm_type(context))
+        array = unbox_value(state, array, operands[1].value->type);
+    LLVMValueRef address = lowered_value(state, operands[2].value);
+    if (address && LLVMTypeOf(address) == box_llvm_type(context))
+        address = boxed_reference_address(state, address);
+    LLVMValueRef allocator = phase_allocator(state);
+    LLVMValueRef byte_type = runtime_type_value(state,
+        th_name(ir_module_types(state->function->owner), "u8"));
+    if (!array || !array_type || LLVMTypeOf(array) != array_type
+        || !address || LLVMTypeOf(address) != pointer || !allocator
+        || !byte_type) return false;
+    LLVMValueRef array_slot = entry_alloca(state, array_type);
+    LLVMTypeRef parameters[] = {pointer, i32, pointer, pointer};
+    LLVMTypeRef signature = LLVMFunctionType(i32, parameters, 4, false);
+    LLVMValueRef helper = LLVMGetNamedFunction(state->module,
+        "n00bb_bootstrap_string_from_utf8");
+    if (!helper) helper = LLVMAddFunction(state->module,
+        "n00bb_bootstrap_string_from_utf8", signature);
+    if (!array_slot || !helper || LLVMGlobalGetValueType(helper) != signature)
+        return false;
+    LLVMBuildStore(state->builder, array, array_slot);
+    LLVMValueRef args[] = {array_slot, byte_type, allocator, address};
+    LLVMValueRef valid = LLVMBuildCall2(state->builder, signature, helper,
+                                        args, 4, "string.from_utf8");
+    return save_result(state, instruction, LLVMBuildICmp(state->builder,
+        LLVMIntNE, valid, LLVMConstNull(i32), "string.from_utf8.valid"));
+}
+
 static bool
 lower_instruction(lower_state_t *state, ir_instr_t *instruction)
 {
@@ -9164,6 +9273,13 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             ? operands[0].value->owner : nullptr;
         ir_annot_t *native_call = target
             ? ir_annot_get(&target->annots, "n00bb.abi.native") : nullptr;
+        if (target && target->name && !strcmp(target->name, "__string_add"))
+            return lower_string_add(state, instruction, operands, count);
+        if (native_call && native_call->kind == IR_ANNOT_STR
+            && native_call->s
+            && !strcmp(native_call->s, "__n00bb_string_from_utf8"))
+            return lower_string_from_utf8(state, instruction, operands,
+                                          count);
         if (native_call && native_call->kind == IR_ANNOT_STR
             && native_call->s
             && !strcmp(native_call->s, "__n00bb_hash_string")) {

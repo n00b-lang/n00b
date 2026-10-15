@@ -1008,6 +1008,17 @@ n00bb_fold_comptime_global_results(n00bb_link_analysis_t *analysis)
                                                    result)) return false;
             continue;
         }
+        if (result->materialized_kind == N00BB_LLVM_LITERAL_STRING) {
+            ir_global_init_value_t text = {
+                .kind = IR_GLOBAL_INIT_STRING,
+                .string = {(const char *)result->materialized_bytes,
+                           result->materialized_byte_len},
+            };
+            if (!ir_global_materialize_phase_result(binding->target_module,
+                    binding->target_global, binding->identifier, &text))
+                return false;
+            continue;
+        }
         if (result->materialized_count != 1
             || result->materialized_kind != N00BB_LLVM_LITERAL_RAW_VALUE)
             return false;

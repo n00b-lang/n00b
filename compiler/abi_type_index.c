@@ -300,6 +300,15 @@ n00bb_abi_type_index_find(n00bb_abi_type_index_t *index,
     return true;
 }
 
+static bool
+add_string_backing(n00bb_abi_type_index_t *index)
+{
+    th_ctx *types = ir_module_types(index->module);
+    uint32_t found = 0;
+    return !n00bb_abi_type_index_find(index, th_name(types, "string"), &found)
+        || add_type(index, th_name(types, "u8"), nullptr);
+}
+
 bool
 n00bb_abi_type_index_collect_module_types(n00bb_abi_type_index_t *index,
                                           ir_module_t *module)
@@ -324,7 +333,8 @@ n00bb_abi_type_index_collect_module_types(n00bb_abi_type_index_t *index,
         if (!global || !add_initializer_types(index,
             global->static_initializer, 0)) return false;
     }
-    return collect_call_specializations(index, module, nullptr, 0);
+    return collect_call_specializations(index, module, nullptr, 0)
+        && add_string_backing(index);
 }
 
 static bool
@@ -559,7 +569,8 @@ n00bb_abi_type_index_collect_comptime_functions(
         }
     }
     return collect_call_specializations(index, nullptr, functions,
-                                        function_count);
+                                        function_count)
+        && add_string_backing(index);
 }
 
 static th_type *

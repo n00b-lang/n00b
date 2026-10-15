@@ -268,7 +268,9 @@ publish_function_effect_summaries(core_link_unit_t *link,
 
         core_link_declaration_t *unknown_owner = nullptr;
         bool known_reference_builtin =
-            link_dependency_reference_builtin(&call, nullptr);
+            link_dependency_reference_builtin(&call, nullptr)
+            || n00bb_builtin_string_operator(
+                link_dependency_callee_symbol(analysis, &call));
         n00bb_link_payload_t *callee_payload = call.to
             ? core_link_declaration_payload(call.to) : nullptr;
         parse_sym_entry_t *callee_symbol = callee_payload

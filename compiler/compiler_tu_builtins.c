@@ -953,6 +953,11 @@ register_builtin_symbols(parse_annot_result_t *annotations,
     bool string_hash_registered = register_builtin_native_function(symtab,
         types, nil_type, "__hash_string", "__n00bb_hash_string",
         th_name(types, "u128"), string_hash_arguments, 1);
+    th_type *utf8_arguments[] = {th_array(types, th_name(types, "u8")),
+                                 th_ind(types, 0, th_name(types, "string"))};
+    bool utf8_registered = register_builtin_native_function(symtab, types,
+        nil_type, "__string_from_utf8", "__n00bb_string_from_utf8",
+        th_name(types, "bool"), utf8_arguments, 2);
     if (saved)
         parse_symtab_enter_scope(symtab, CORE_STRING_STATIC("builtin"),
                                  saved);
@@ -966,7 +971,7 @@ register_builtin_symbols(parse_annot_result_t *annotations,
         || !bit_counts_registered || !array_length_registered
         || !array_prefix_registered || !array_clear_registered
         || !hash_registered || !scalar_hash_registered
-        || !string_hash_registered) return false;
+        || !string_hash_registered || !utf8_registered) return false;
     symbol->type = signature;
     symbol->error_type = nil_type;
     symbol->callable_contract = contract;
