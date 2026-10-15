@@ -2022,6 +2022,9 @@ literal_element_layout_matches(ir_module_t *module, th_type *type,
         && (!definition || th_kind_of(definition) != TH_RECORD))
         return false;
     if (!name) name = "";
+    if (!strcmp(name, "any") && !count)
+        return layout->intrinsic_bits == 128
+            && native == box_llvm_type(LLVMGetTypeContext(native));
     if (!strcmp(name, "atomic") && count == 1) {
         const th_arg *argument = th_named_arg(th_resolve(type), 0);
         return argument && argument->kind == TH_ARG_TYPE

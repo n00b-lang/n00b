@@ -1584,6 +1584,7 @@ test(
 
 foreach fixture : [
     'bitcode_any_box.n',
+    'bitcode_any_record_field.n',
     'bitcode_callback.n',
     'bitcode_callback_state.n',
     'bitcode_callback_state_ref.n',
