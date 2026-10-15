@@ -9217,72 +9217,37 @@ cache_package_export_syntax(parse_grammar_t *grammar,
 }
 
 bool
-cache_package_declarations(parse_grammar_t *grammar,
-                           core_translation_unit_t *unit,
-                           parse_tree_t *node)
+cache_package_declaration_syntax(parse_grammar_t *grammar,
+                                 core_translation_unit_t *unit,
+                                 parse_tree_t *node)
 {
-    if (!node || core_tree_is_leaf(node)) return true;
     n00bb_tu_state_t *state = tu_state(unit);
-    if (!state) return false;
-    if (nt_is(grammar, node, "package-decl")) {
-        core_string_t name = package_node_name(grammar, state, node);
-        if (!name.data) return false;
-        for (size_t i = 0; i < state->package_declarations.len; i++) {
-            if (!core_string_eq(state->package_declarations.data[i].name,
-                                name)) continue;
-            core_buffer_t message = {0};
-            core_buffer_printf(&message,
-                "package interface '%.*s' is declared more than once",
-                (int)name.u8_bytes, name.data);
-            core_diagnostics_report_at(
-                core_translation_unit_diagnostics(unit), unit,
-                CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-M0001"),
-                core_string_borrow(message.data, message.byte_len),
-                link_source_location(node));
-            core_buffer_release(&message);
-            return false;
-        }
-        core_list_push(state->package_declarations,
-            ((n00bb_package_declaration_t){
-                .name = name,
-                .node = node,
-                .exports = core_list_new(n00bb_package_export_t),
-            }));
-        return true;
+    if (!state || !node || !nt_is(grammar, node, "package-decl"))
+        return false;
+    core_string_t name = package_node_name(grammar, state, node);
+    if (!name.data) return false;
+    for (size_t i = 0; i < state->package_declarations.len; i++) {
+        if (!core_string_eq(state->package_declarations.data[i].name,
+                            name)) continue;
+        core_buffer_t message = {0};
+        core_buffer_printf(&message,
+            "package interface '%.*s' is declared more than once",
+            (int)name.u8_bytes, name.data);
+        core_diagnostics_report_at(
+            core_translation_unit_diagnostics(unit), unit,
+            CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-M0001"),
+            core_string_borrow(message.data, message.byte_len),
+            link_source_location(node));
+        core_buffer_release(&message);
+        return false;
     }
-    for (size_t i = 0; i < core_tree_num_children(node); i++)
-        if (!cache_package_declarations(grammar, unit,
-                                        core_tree_child(node, i)))
-            return false;
+    core_list_push(state->package_declarations,
+        ((n00bb_package_declaration_t){
+            .name = name,
+            .node = node,
+            .exports = core_list_new(n00bb_package_export_t),
+        }));
     return true;
-}
-
-static bool
-cache_package_exports(parse_grammar_t *grammar,
-                      core_translation_unit_t *unit,
-                      parse_tree_t *node)
-{
-    if (!node || core_tree_is_leaf(node)) return true;
-    if (nt_is(grammar, node, "export-stmt"))
-        return cache_package_export_syntax(grammar, unit, node);
-    for (size_t i = 0; i < core_tree_num_children(node); i++)
-        if (!cache_package_exports(grammar, unit,
-                                   core_tree_child(node, i))) return false;
-    return true;
-}
-
-bool
-rebuild_package_declarations(parse_grammar_t *grammar,
-                             core_translation_unit_t *unit,
-                             parse_tree_t *tree)
-{
-    n00bb_tu_state_t *state = tu_state(unit);
-    if (!state || !tree) return false;
-    for (size_t i = 0; i < state->package_declarations.len; i++)
-        core_list_free(state->package_declarations.data[i].exports);
-    state->package_declarations.len = 0;
-    if (!cache_package_declarations(grammar, unit, tree)) return false;
-    return cache_package_exports(grammar, unit, tree);
 }
 
 bool

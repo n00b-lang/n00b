@@ -1404,10 +1404,10 @@ static bool
 load_interface_imports(import_driver_t *driver, parse_grammar_t *grammar,
                        core_translation_unit_t *unit);
 static bool
-load_referenced_subpackages(import_driver_t *driver,
-                            parse_grammar_t *grammar,
-                            core_translation_unit_t *unit,
-                            parse_tree_t *tree);
+process_postprune_package_syntax(import_driver_t *driver,
+                                 parse_grammar_t *grammar,
+                                 core_translation_unit_t *unit,
+                                 parse_tree_t *tree);
 
 static bool
 ensure_preprocessed_import(import_driver_t *driver, parse_grammar_t *grammar,
@@ -1428,12 +1428,10 @@ ensure_preprocessed_import(import_driver_t *driver, parse_grammar_t *grammar,
     if (!core_work_take_kind(driver->queue, N00BB_JOB_PREPROCESS, &ready)
         || ready != preprocess_job) return false;
     bool ok = n00bb_preprocessor_run(driver->preprocessor, grammar, tree, unit);
-    if (ok) ok = rebuild_package_declarations(grammar, unit, tree);
+    if (ok) ok = process_postprune_package_syntax(driver, grammar, unit, tree);
     n00bb_tu_state_t *state = tu_state(unit);
     if (ok && state && state->interface_module)
         ok = load_interface_imports(driver, grammar, unit);
-    if (ok && state && !state->interface_module)
-        ok = load_referenced_subpackages(driver, grammar, unit, tree);
     return core_work_complete_tu(driver->queue, preprocess_job, unit, ok)
         && core_work_job_state(driver->queue, preprocess_job)
             == CORE_WORK_SUCCEEDED;
@@ -1743,30 +1741,10 @@ load_package_reference(import_driver_t *driver, parse_grammar_t *grammar,
 }
 
 static bool
-scan_package_references(import_driver_t *driver, parse_grammar_t *grammar,
-                        core_translation_unit_t *unit, parse_tree_t *node)
-{
-    if (!node || core_tree_is_leaf(node)) return true;
-    for (size_t i = 0; i < core_tree_num_children(node); i++)
-        if (!scan_package_references(driver, grammar, unit,
-                                     core_tree_child(node, i))) return false;
-    if (!nt_is(grammar, node, "postfix-expr")
-        && !nt_is(grammar, node, "member-chain")
-        && !nt_is(grammar, node, "dotted-name")) return true;
-    core_buffer_t name = {0};
-    bool dotted = append_dotted_reference(grammar, node, &name)
-        && memchr(name.data, '.', name.byte_len) != nullptr;
-    bool ok = !dotted || load_package_reference(driver, grammar, unit, node,
-        core_string_borrow(name.data, name.byte_len));
-    core_buffer_release(&name);
-    return ok;
-}
-
-static bool
 load_referenced_subpackages(import_driver_t *driver,
                             parse_grammar_t *grammar,
                             core_translation_unit_t *unit,
-                            parse_tree_t *tree)
+                            core_list_t(parse_tree_ptr_t) *references)
 {
     n00bb_tu_state_t *state = tu_state(unit);
     bool has_parent = false;
@@ -1781,8 +1759,68 @@ load_referenced_subpackages(import_driver_t *driver,
             }
         if (has_parent) break;
     }
-    return !has_parent || scan_package_references(driver, grammar, unit,
-                                                   tree);
+    if (!has_parent) return true;
+    for (size_t i = 0; i < references->len; i++) {
+        parse_tree_t *node = references->data[i];
+        core_buffer_t name = {0};
+        bool dotted = append_dotted_reference(grammar, node, &name)
+            && memchr(name.data, '.', name.byte_len) != nullptr;
+        bool ok = !dotted || load_package_reference(driver, grammar, unit,
+            node, core_string_borrow(name.data, name.byte_len));
+        core_buffer_release(&name);
+        if (!ok) return false;
+    }
+    return true;
+}
+
+static void
+collect_postprune_package_syntax(parse_grammar_t *grammar,
+    parse_tree_t *node, bool inside_package,
+    core_list_t(parse_tree_ptr_t) *declarations,
+    core_list_t(parse_tree_ptr_t) *exports,
+    core_list_t(parse_tree_ptr_t) *references)
+{
+    if (!node || core_tree_is_leaf(node)) return;
+    bool package = nt_is(grammar, node, "package-decl");
+    if (package && !inside_package) core_list_push(*declarations, node);
+    if (nt_is(grammar, node, "export-stmt")) core_list_push(*exports, node);
+    for (size_t i = 0; i < core_tree_num_children(node); i++)
+        collect_postprune_package_syntax(grammar, core_tree_child(node, i),
+            inside_package || package, declarations, exports, references);
+    if (nt_is(grammar, node, "postfix-expr")
+        || nt_is(grammar, node, "member-chain")
+        || nt_is(grammar, node, "dotted-name"))
+        core_list_push(*references, node);
+}
+
+static bool
+process_postprune_package_syntax(import_driver_t *driver,
+                                 parse_grammar_t *grammar,
+                                 core_translation_unit_t *unit,
+                                 parse_tree_t *tree)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    if (!state || !tree) return false;
+    core_list_t(parse_tree_ptr_t) declarations = core_list_new(parse_tree_ptr_t);
+    core_list_t(parse_tree_ptr_t) exports = core_list_new(parse_tree_ptr_t);
+    core_list_t(parse_tree_ptr_t) references = core_list_new(parse_tree_ptr_t);
+    collect_postprune_package_syntax(grammar, tree, false, &declarations,
+                                     &exports, &references);
+    for (size_t i = 0; i < state->package_declarations.len; i++)
+        core_list_free(state->package_declarations.data[i].exports);
+    state->package_declarations.len = 0;
+    bool ok = true;
+    for (size_t i = 0; ok && i < declarations.len; i++)
+        ok = cache_package_declaration_syntax(grammar, unit,
+                                               declarations.data[i]);
+    for (size_t i = 0; ok && i < exports.len; i++)
+        ok = cache_package_export_syntax(grammar, unit, exports.data[i]);
+    if (ok && !state->interface_module)
+        ok = load_referenced_subpackages(driver, grammar, unit, &references);
+    core_list_free(references);
+    core_list_free(exports);
+    core_list_free(declarations);
+    return ok;
 }
 
 static bool
@@ -2117,10 +2155,7 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
                 bool job_ok = tree && n00bb_preprocessor_run(
                     preprocessor, grammar, tree, unit);
                 if (job_ok)
-                    job_ok = rebuild_package_declarations(grammar, unit,
-                                                          tree);
-                if (job_ok)
-                    job_ok = load_referenced_subpackages(&import_driver,
+                    job_ok = process_postprune_package_syntax(&import_driver,
                         grammar, unit, tree);
                 if (job_ok && native_build && !runtime_support_loaded) {
                     job_ok = load_implicit_builtin(&import_driver, grammar,

@@ -1000,12 +1000,9 @@ core_string_t store_semantic_string(n00bb_tu_state_t *state,
 bool cache_package_export_syntax(parse_grammar_t *grammar,
                                  core_translation_unit_t *unit,
                                  parse_tree_t *node);
-bool cache_package_declarations(parse_grammar_t *grammar,
-                                core_translation_unit_t *unit,
-                                parse_tree_t *node);
-bool rebuild_package_declarations(parse_grammar_t *grammar,
-                                  core_translation_unit_t *unit,
-                                  parse_tree_t *tree);
+bool cache_package_declaration_syntax(parse_grammar_t *grammar,
+                                      core_translation_unit_t *unit,
+                                      parse_tree_t *node);
 bool package_tree_may_declare(parse_grammar_t *grammar, parse_tree_t *tree,
                               core_string_t name);
 bool package_tree_syntax_index(parse_grammar_t *grammar, parse_tree_t *tree,
