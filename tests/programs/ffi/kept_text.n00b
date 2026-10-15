@@ -47,4 +47,13 @@ comptime {} else {
     } else failure {
         require false
     }
+    try {
+        var closed = kept.stmt_open()
+        kept.close(closed)!
+        bind(closed)!
+        require false
+    } else failure {
+        require failure.code == -1
+        require failure.fn == "bind_text"
+    }
 }
