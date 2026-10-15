@@ -1665,6 +1665,20 @@ apply_refine(resolver_t *r, uint32_t id)
 }
 
 static void
+check_event_expressions(writ_model_t *model, uint32_t f, uint32_t first, uint32_t count)
+{
+    for (uint32_t e = 0; e < count; e++) {
+        const writ_event_rec_t *event = &model->events.data[first + e];
+        for (uint32_t a = 0; a < event->arg_count; a++) {
+            const writ_event_arg_rec_t *arg = &model->event_args.data[event->first_arg + a];
+            if (arg->kind == WRIT_EVENT_ARG_EXPR) {
+                writ_expr_check(model, f, arg->expr);
+            }
+        }
+    }
+}
+
+static void
 check_fn_expressions(writ_model_t *model, uint32_t f)
 {
     const writ_fn_rec_t *fn = &model->fns.data[f];
@@ -1676,6 +1690,11 @@ check_fn_expressions(writ_model_t *model, uint32_t f)
             if (exprs[e]) {
                 writ_expr_check(model, f, exprs[e]);
             }
+        }
+        check_event_expressions(model, f, slot->first_event, slot->event_count);
+        for (uint32_t a = 0; a < slot->arm_count; a++) {
+            const writ_policy_arm_rec_t *arm = &model->policy_arms.data[slot->first_arm + a];
+            check_event_expressions(model, f, arm->first_event, arm->event_count);
         }
     }
     for (uint32_t o = 0; o < fn->outcome_count; o++) {

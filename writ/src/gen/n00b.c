@@ -1154,6 +1154,9 @@ emit_callback_type(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *cal
     emit_callback_invoker(g, emit, callback, name, receiver, packed);
 }
 
+static bool contract_has_event(const n00b_t *g, writ_str_t id);
+static void emit_event(writ_emit_t *emit, writ_str_t id, writ_str_t keys);
+
 static writ_str_t
 cell_constructor(const n00b_t *g, writ_str_t type)
 {
@@ -1270,6 +1273,10 @@ emit_handle_type(const n00b_t *g, writ_emit_t *emit, const writ_handle_view_t *h
     writ_emit_open(emit, "func __finalize(consume self: Ref[%.*s_Cell])", S(type));
     writ_emit_open(emit, "if self.raw != 0 and debug_enabled()");
     writ_emit_line(emit, "__fd_write(2, \"%.*s collected while open; releasing it\\n\")", S(type));
+    writ_str_t release_event = writ_str_format(g->session, "%.*s:release:%.*s", S(g->shim), S(handle->name));
+    if (contract_has_event(g, release_event)) {
+        emit_event(emit, release_event, writ_cstr("cast[u64](self.raw)"));
+    }
     writ_emit_line(emit, "let released = __%.*s(self.raw)", S(writ_c_plan_name(&g->c, release)));
     writ_emit_close(emit, nullptr);
     writ_emit_close(emit, nullptr);
@@ -1906,6 +1913,255 @@ emit_keyword_record(const wrapper_t *w, writ_emit_t *emit, uint32_t item, const 
     }
 }
 
+typedef struct {
+    writ_expr_env_t base;
+    const wrapper_t *w;
+    const core_list_t(shim_param_t) *params;
+} key_env_t;
+
+static bool
+item_is_local(const wrapper_t *w, const core_list_t(shim_param_t) *params, uint32_t index)
+{
+    if (index == w->receiver) {
+        return true;
+    }
+    for (size_t i = 0; i < params->len; i++) {
+        if (params->data[i].item == index && params->data[i].kind != PARAM_OWNED) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static writ_str_t
+result_local(const wrapper_t *w)
+{
+    for (uint32_t i = 0; can_fail(w) && i < w->plan->items_count; i++) {
+        if (w->plan->items[i].role == WRIT_ROLE_RESULT) {
+            return local_name(w, i);
+        }
+    }
+    return writ_cstr("result");
+}
+
+static writ_str_t
+item_value(const wrapper_t *w, const core_list_t(shim_param_t) *params, uint32_t index)
+{
+    if (index == WRIT_PLAN_NONE || !item_is_local(w, params, index)) {
+        return writ_cstr("0");
+    }
+    const writ_plan_item_view_t *item = &w->plan->items[index];
+    writ_str_t name = local_name(w, index);
+    if (item->shape == WRIT_SHAPE_CALLBACK) {
+        return writ_str_format(w->g->session, "%.*s_handle", S(name));
+    }
+    if (is_handle(item)) {
+        return writ_str_format(w->g->session, "%.*s.raw", S(name));
+    }
+    if (item->type && (item->type->kind == WRIT_TYPE_INT || item->type->kind == WRIT_TYPE_ENUM)) {
+        return name;
+    }
+    return writ_cstr("0");
+}
+
+static uint32_t
+item_for_contract_slot(const writ_plan_view_t *plan, uint32_t slot)
+{
+    for (uint32_t i = 0; i < plan->items_count; i++) {
+        if (plan->items[i].contract_slot == slot && plan->items[i].role != WRIT_ROLE_RESULT) {
+            return i;
+        }
+    }
+    return WRIT_PLAN_NONE;
+}
+
+static uint32_t
+item_for_slot_name(const writ_plan_view_t *plan, writ_str_t name)
+{
+    for (uint32_t s = 0; s < plan->fn->slots_count; s++) {
+        if (writ_str_eq(plan->fn->slots[s].name, name)) {
+            return item_for_contract_slot(plan, s);
+        }
+    }
+    return WRIT_PLAN_NONE;
+}
+
+static void
+key_ref(writ_expr_env_t *base, writ_ref_t ref, uint32_t expr, core_buffer_t *out)
+{
+    (void)expr;
+    key_env_t *env = (key_env_t *)base;
+    writ_str_t text = writ_cstr("0");
+    if (ref.kind == WRIT_REF_RESULT) {
+        text = result_local(env->w);
+    } else if (ref.kind == WRIT_REF_SLOT) {
+        uint32_t slot = writ_plan_contract_slot(env->w->g->model, env->w->plan, ref);
+        text = item_value(env->w, env->params,
+                          slot < env->w->plan->slots_count ? env->w->plan->slots[slot].item : WRIT_PLAN_NONE);
+    }
+    core_buffer_printf(out, "%.*s", S(text));
+}
+
+static writ_str_t
+event_key(const wrapper_t *w, const core_list_t(shim_param_t) *params, const writ_event_arg_view_t *arg)
+{
+    writ_str_t value = writ_cstr("0");
+    if (arg->kind == WRIT_EVENT_ARG_RESULT) {
+        value = result_local(w);
+    } else if (arg->kind == WRIT_EVENT_ARG_SLOT) {
+        value = item_value(w, params, item_for_slot_name(w->plan, arg->name));
+    } else {
+        key_env_t env = {{.print_ref = key_ref}, w, params};
+        core_buffer_t *buffer = core_buffer_empty();
+        writ_expr_print(w->g->model, arg->expr, WRIT_LANGUAGE_N00B, &env.base, buffer);
+        value = writ_str_from_buffer(w->g->session, buffer);
+    }
+    return writ_str_format(w->g->session, "cast[u64](%.*s)", S(value));
+}
+
+static const writ_slot_view_t *
+event_subject(const writ_fn_view_t *fn, const writ_event_view_t *event)
+{
+    if (!event->args_count) {
+        return nullptr;
+    }
+    if (event->args[0].kind == WRIT_EVENT_ARG_RESULT) {
+        return fn->result;
+    }
+    for (size_t s = 0; s < fn->slots_count; s++) {
+        if (writ_str_eq(fn->slots[s].name, event->args[0].name)) {
+            return &fn->slots[s];
+        }
+    }
+    return nullptr;
+}
+
+static writ_str_t
+event_id(const n00b_t *g, const writ_fn_view_t *fn, const writ_event_view_t *event)
+{
+    const writ_slot_view_t *subject = event_subject(fn, event);
+    writ_str_t type = subject && subject->type ? subject->type->name : writ_cstr("");
+    return event->kind == WRIT_EVENT_RELEASE ? writ_str_format(g->session, "%.*s:release:%.*s", S(g->shim), S(type))
+         : event->kind == WRIT_EVENT_ANY     ? writ_str_format(g->session, "%.*s:any:%.*s", S(g->shim), S(type))
+                                             : writ_str_format(g->session, "%.*s:%.*s", S(g->shim), S(event->function));
+}
+
+static bool
+contract_has_event(const n00b_t *g, writ_str_t id)
+{
+    for (size_t f = 0; f < writ_model_fn_count(g->model); f++) {
+        const writ_fn_view_t *fn = writ_model_fn_at(g->model, f);
+        for (size_t s = 0; s < fn->slots_count; s++) {
+            const writ_slot_view_t *slot = &fn->slots[s];
+            for (size_t e = 0; e < slot->span_events_count; e++) {
+                if (writ_str_eq(event_id(g, fn, &slot->span_events[e]), id)) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+static void
+emit_event(writ_emit_t *emit, writ_str_t id, writ_str_t keys)
+{
+    writ_emit_line(emit, "__ffi_callback_event(\"%.*s\", [%.*s]'array, __os_thread_id())", S(id), S(keys));
+}
+
+static void
+emit_event_sites(const wrapper_t *w, writ_emit_t *emit, const core_list_t(shim_param_t) *params)
+{
+    const n00b_t *g = w->g;
+    const writ_fn_view_t *fn = w->plan->fn;
+    writ_str_t call = writ_str_format(g->session, "%.*s:%.*s", S(g->shim), S(fn->contract_name));
+    if (contract_has_event(g, call)) {
+        core_buffer_t *keys = core_buffer_empty();
+        for (uint32_t s = 0; s < fn->slots_count; s++) {
+            writ_str_t value = item_value(w, params, item_for_contract_slot(w->plan, s));
+            core_buffer_printf(keys, "%scast[u64](%.*s)", s ? ", " : "", S(value));
+        }
+        emit_event(emit, call, writ_str_from_buffer(g->session, keys));
+    }
+    for (uint32_t s = 0; s < fn->slots_count; s++) {
+        const writ_type_view_t *type = fn->slots[s].type;
+        if (!type || type->kind != WRIT_TYPE_HANDLE) {
+            continue;
+        }
+        writ_str_t value = item_value(w, params, item_for_contract_slot(w->plan, s));
+        writ_str_t key = writ_str_format(g->session, "cast[u64](%.*s)", S(value));
+        writ_str_t any = writ_str_format(g->session, "%.*s:any:%.*s", S(g->shim), S(type->name));
+        if (contract_has_event(g, any)) {
+            emit_event(emit, any, key);
+        }
+        writ_str_t release = writ_str_format(g->session, "%.*s:release:%.*s", S(g->shim), S(type->name));
+        if (fn->slots[s].mode == WRIT_MODE_CONSUME && contract_has_event(g, release)) {
+            emit_event(emit, release, key);
+        }
+    }
+}
+
+static const writ_slot_view_t *
+callback_slot(const writ_plan_view_t *plan, uint32_t item)
+{
+    uint32_t slot = plan->items[item].contract_slot;
+    return slot < plan->fn->slots_count ? &plan->fn->slots[slot] : nullptr;
+}
+
+static void
+emit_callback_registrations(const wrapper_t *w, writ_emit_t *emit, const core_list_t(shim_param_t) *params)
+{
+    for (size_t i = 0; i < params->len; i++) {
+        const shim_param_t *p = &params->data[i];
+        if (p->kind != PARAM_CALLBACK) {
+            continue;
+        }
+        const writ_slot_view_t *slot = callback_slot(w->plan, p->item);
+        writ_str_t name = local_name(w, p->item);
+        writ_emit_line(emit, "let %.*s_handle = __ffi_callback_register(cast[Any]%.*s, ref %.*s, %s)", S(name),
+                       S(name), S(callback_invoker(w->g, writ_binding_type(w->g->b, w->plan->items[p->item].type->name))),
+                       slot && slot->span == WRIT_SPAN_ONCE ? "true" : "false");
+    }
+}
+
+static void
+emit_callback_failure_frees(const wrapper_t *w, writ_emit_t *emit, const core_list_t(shim_param_t) *params)
+{
+    for (size_t i = 0; i < params->len; i++) {
+        if (params->data[i].kind == PARAM_CALLBACK) {
+            writ_emit_line(emit, "__ffi_callback_free(%.*s_handle)", S(local_name(w, params->data[i].item)));
+        }
+    }
+}
+
+static void
+emit_callback_spans(const wrapper_t *w, writ_emit_t *emit, const core_list_t(shim_param_t) *params)
+{
+    for (size_t i = 0; i < params->len; i++) {
+        const shim_param_t *p = &params->data[i];
+        const writ_slot_view_t *slot = p->kind == PARAM_CALLBACK ? callback_slot(w->plan, p->item) : nullptr;
+        if (!slot) {
+            continue;
+        }
+        writ_str_t name = local_name(w, p->item);
+        if (slot->span == WRIT_SPAN_CALL || slot->span == WRIT_SPAN_NONE) {
+            writ_emit_line(emit, "__ffi_callback_free(%.*s_handle)", S(name));
+        }
+        for (size_t e = 0; slot->span == WRIT_SPAN_UNTIL && e < slot->span_events_count; e++) {
+            const writ_event_view_t *event = &slot->span_events[e];
+            core_buffer_t *keys = core_buffer_empty();
+            for (size_t a = 0; a < event->args_count; a++) {
+                writ_str_t key = event_key(w, params, &event->args[a]);
+                core_buffer_printf(keys, "%s%.*s", a ? ", " : "", S(key));
+            }
+            writ_str_t list = writ_str_from_buffer(w->g->session, keys);
+            writ_emit_line(emit, "__ffi_callback_hold(%.*s_handle, \"%.*s\", [%.*s]'array, %s)", S(name),
+                           S(event_id(w->g, w->plan->fn, event)), S(list),
+                           event->on_thread ? "__os_thread_id()" : "0");
+        }
+    }
+}
+
 static void
 emit_wrapper(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view_t *plan)
 {
@@ -1983,6 +2239,7 @@ emit_wrapper(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view
         }
     }
     emit_closed_checks(&w, emit, &params);
+    emit_callback_registrations(&w, emit, &params);
     writ_emit_text(emit, "%s__%.*s(", can_fail(&w) ? "let outcome = " : out_count ? "let result = " : "",
                    S(writ_c_plan_name(&g->c, plan)));
     bool passed = false;
@@ -2008,8 +2265,7 @@ emit_wrapper(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view
             bool length = !writ_str_eq(p->name, plan->items[p->item].name);
             writ_emit_text(emit, length ? "ref %.*s_length" : "ref %.*s", S(name));
         } else if (p->kind == PARAM_CALLBACK) {
-            writ_emit_text(emit, "__ffi_callback_register(cast[Any]%.*s, ref %.*s)", S(name),
-                           S(callback_invoker(g, writ_binding_type(g->b, plan->items[p->item].type->name))));
+            writ_emit_text(emit, "%.*s_handle", S(name));
         } else if (retry_capacity(plan, p->item)) {
             writ_emit_text(emit, "%u", writ_default(WRIT_DEFAULT_RETRY_CAPACITY));
         } else {
@@ -2019,16 +2275,20 @@ emit_wrapper(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view
     writ_emit_line(emit, ")");
     if (can_fail(&w)) {
         writ_emit_open(emit, "if outcome < 0");
+        emit_callback_failure_frees(&w, emit, &params);
         emit_fail(&w, emit, writ_str_format(g->session, "cast[%.*s]outcome", S(code_type(g))), writ_cstr("nil"));
         writ_emit_close(emit, nullptr);
         for (size_t o = 0; o < plan->outcomes_count; o++) {
             if (plan->outcomes[o].kind == WRIT_OUTCOME_FAILURE) {
                 writ_emit_open(emit, "if outcome == %zu", o);
+                emit_callback_failure_frees(&w, emit, &params);
                 emit_fail(&w, emit, detail_text(&w, (uint32_t)o, false), detail_text(&w, (uint32_t)o, true));
                 writ_emit_close(emit, nullptr);
             }
         }
     }
+    emit_event_sites(&w, emit, &params);
+    emit_callback_spans(&w, emit, &params);
     if (w.receiver != WRIT_PLAN_NONE && consumes(&w, w.receiver)) {
         writ_emit_line(emit, "self.raw = 0");
     }
