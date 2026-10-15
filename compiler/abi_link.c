@@ -3953,9 +3953,19 @@ n00bb_abi_merge_rows(const n00bb_abi_selected_objects_t *selected,
                 n00bb_abi_row_origin_t *origin = &origins[ti][final];
                 uint8_t *destination = table->records
                     + (size_t)final * table->record_bytes;
+                if (table->kind == N00B_ABI_TABLE_U32_STREAM) {
+                    valid = final < base_u32_count;
+                    if (!valid) break;
+                    if (!origin->present)
+                        *origin = (n00bb_abi_row_origin_t){input, local, true};
+                    if (!manifests.u32_kinds[final])
+                        manifests.u32_stream[final] = core_le_load_u32(
+                            n00bb_abi_object_row(view,
+                                N00B_ABI_TABLE_U32_STREAM, local));
+                    continue;
+                }
                 if (table->kind == N00B_ABI_TABLE_PACKAGE
-                    || table->kind == N00B_ABI_TABLE_SCC
-                    || table->kind == N00B_ABI_TABLE_U32_STREAM) {
+                    || table->kind == N00B_ABI_TABLE_SCC) {
                     if (!origin->present)
                         *origin = (n00bb_abi_row_origin_t){input, local, true};
                     continue;
@@ -4070,23 +4080,6 @@ n00bb_abi_merge_rows(const n00bb_abi_selected_objects_t *selected,
         n00bb_abi_merged_table(&built, N00B_ABI_TABLE_U32_STREAM);
     valid = valid && u32_table && u32_table->record_bytes == sizeof(uint32_t)
         && u32_table->record_count == manifests.u32_count + import_count;
-    for (size_t input = 0; valid && input < selected->count; input++) {
-        const n00bb_abi_object_view_t *view = &selected->views[input];
-        const n00bb_abi_directory_entry_t *source = n00bb_abi_object_table(
-            view, N00B_ABI_TABLE_U32_STREAM);
-        if (!source) continue;
-        for (uint32_t local = 0; valid && local < source->record_count;
-             local++) {
-            uint32_t final;
-            valid = n00bb_abi_index_plan_map(plan, input,
-                N00B_ABI_TABLE_U32_STREAM, local, &final)
-                && final < base_u32_count;
-            if (valid && !manifests.u32_kinds[final])
-                manifests.u32_stream[final] = core_le_load_u32(
-                    n00bb_abi_object_row(view, N00B_ABI_TABLE_U32_STREAM,
-                                         local));
-        }
-    }
     if (valid) memcpy(u32_table->records, manifests.u32_stream,
                       (size_t)manifests.u32_count * sizeof(uint32_t));
     if (valid) valid = resolve_module_imports(selected, plan, &built,
