@@ -8010,34 +8010,38 @@ collect_ir_parameters(parse_grammar_t *grammar, parse_tree_t *node,
                       parse_sym_entry_t **rest)
 {
     if (!node || core_tree_is_leaf(node)) return;
-    if (nt_is(grammar, node, "pos-param")
-        || nt_is(grammar, node, "default-param")
-        || nt_is(grammar, node, "trait-obj-tref")) {
-        core_list_push(*parameters, core_tree_node_value(node).sym);
+    if (nt_is(grammar, node, "func-type-signature"))
+        node = child_nt(grammar, node, "param-decl");
+    if (!node) return;
+    if (nt_is(grammar, node, "context-hook-params")) {
+        parse_tree_t *parameter = child_nt(grammar, node, "pos-param");
+        if (parameter)
+            core_list_push(*parameters, core_tree_node_value(parameter).sym);
         return;
     }
-    if (nt_is(grammar, node, "vargs-param")) {
-        *rest = core_tree_node_value(node).sym;
-        return;
+    bool trait_parameters = nt_is(grammar, node, "trait-param-decl");
+    if (!trait_parameters && !nt_is(grammar, node, "param-decl")) return;
+    if (trait_parameters) {
+        parse_tree_t *receiver = child_nt(grammar, node, "trait-obj-tref");
+        if (receiver)
+            core_list_push(*parameters, core_tree_node_value(receiver).sym);
     }
-    bool parameter_container = nt_is(grammar, node, "func-type-signature")
-        || nt_is(grammar, node, "trait-func-type-signature")
-        || nt_is(grammar, node, "trait-param-decl")
-        || nt_is(grammar, node, "param-decl")
-        || nt_is(grammar, node, "context-hook-params")
-        || nt_is(grammar, node, "formals")
-        || nt_is(grammar, node, "required-params")
-        || nt_is(grammar, node, "default-params");
-    if (!parameter_container) return;
-    for (size_t i = 0; i < core_tree_num_children(node); i++) {
-        parse_tree_t *child = core_tree_child(node, i);
-        if (!core_tree_node_value(child).group_top) {
-            collect_ir_parameters(grammar, child, parameters, rest);
-            continue;
-        }
-        for (size_t j = 0; j < core_tree_num_children(child); j++)
-            collect_ir_parameters(grammar, core_tree_child(child, j),
-                                  parameters, rest);
+    parse_tree_t *owner = core_tree_node_value(node).parent;
+    while (owner && !nt_is(grammar, owner, "func-def")
+           && !nt_is(grammar, owner, "callback-role")
+           && !nt_is(grammar, owner, "context-def")
+           && !nt_is(grammar, owner, "trait-spec"))
+        owner = core_tree_node_value(owner).parent;
+    parse_sym_entry_t *function = owner
+        ? core_tree_node_value(owner).sym : nullptr;
+    n00bb_function_parameter_facts_t *facts = function
+        ? parse_sym_binding(function, N00BB_PARAMETER_FACTS_KEY) : nullptr;
+    for (size_t i = 0; facts && i < facts->param_count; i++) {
+        n00bb_function_parameter_ref_t *fact = &facts->params[i];
+        parse_sym_entry_t *symbol = fact->node
+            ? core_tree_node_value(fact->node).sym : nullptr;
+        if (fact->variadic) *rest = symbol;
+        else core_list_push(*parameters, symbol);
     }
 }
 
