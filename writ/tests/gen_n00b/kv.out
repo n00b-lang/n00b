@@ -295,11 +295,22 @@ int32_t kv_kv_errstr(int s, const char **result) {
 }
 #include <stdint.h>
 #include <stddef.h>
+#include <string.h>
 
 #include "kv_writ.h"
 
 void *n00b_ffi_borrow(void *object, size_t *length, uint32_t access);
 void n00b_ffi_release(void *object);
+
+void kv_take_bytes(kv_bytes_t *bytes, void *out) {
+    size_t length = 0;
+    uint8_t *data = n00b_ffi_borrow(out, &length, 1);
+    if (data && bytes->data) {
+        memcpy(data, bytes->data, length < bytes->length ? length : bytes->length);
+    }
+    n00b_ffi_release(out);
+    kv_bytes_free(bytes);
+}
 
 int32_t kv_n00b_kv_open(const void *path, void *out_db, void *detail) {
     size_t path_length = 0;
@@ -342,9 +353,9 @@ int32_t kv_n00b_kv_iter_next(uint64_t it, void *result) {
 }
 
 type Error {
-    code: i64
-    text: string?
-    fn: string
+    public code: i64
+    public text: string?
+    public fn: string
 }
 
 type Db {
@@ -356,10 +367,10 @@ type Iter {
 }
 
 type Entry layout(c) {
-    key: uint
-    key_len: u64
-    val: uint
-    val_len: u64
+    public key: uint
+    public key_len: u64
+    public val: uint
+    public val_len: u64
 }
 
 enum Status {
@@ -369,6 +380,12 @@ enum Status {
 }
 
 
+func __ffi_take_bytes(bytes: Ref[Ffi_Bytes]) -> Array[u8] {
+    let value: Ffi_Bytes = ref_read(bytes)
+    var copied: Array[u8] = new[Array[u8]](cast[int]value.length)
+    __ffi_bytes_take(bytes, ref copied)
+    return copied
+}
 
 func db_open(path: string) -> Db fail: Error {
     var path_value = path
@@ -376,12 +393,12 @@ func db_open(path: string) -> Db fail: Error {
     var detail: i64 = 0
     let outcome = __kv_open(ref path_value, ref out_db, ref detail)
     if outcome < 0 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "kv_open")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "kv_open")
+        fail failure
     }
     if outcome == 0 {
-        let error: Error = (code = cast[i64]detail, text = nil, fn = "kv_open")
-        fail error
+        let failure: Error = (code = cast[i64]detail, text = nil, fn = "kv_open")
+        fail failure
     }
     return Db(raw = out_db)
 }
@@ -391,18 +408,18 @@ func put(self: Db, key: Array[u8], val: Array[u8]) fail: Error {
     var val_value = val
     let outcome = __kv_put(self.raw, ref key_value, ref val_value)
     if outcome < 0 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "kv_put")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "kv_put")
+        fail failure
     }
     if outcome == 0 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "kv_put")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "kv_put")
+        fail failure
     }
 }
 
 type Get_Result {
-    out_val: uint
-    out_len: u64
+    public out_val: uint
+    public out_len: u64
 }
 
 func get(self: Db, key: Array[u8]) -> Get_Result fail: Error {
@@ -411,12 +428,12 @@ func get(self: Db, key: Array[u8]) -> Get_Result fail: Error {
     var out_len: u64 = 0
     let outcome = __kv_get(self.raw, ref key_value, ref out_val, ref out_len)
     if outcome < 0 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "kv_get")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "kv_get")
+        fail failure
     }
     if outcome == 0 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "kv_get")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "kv_get")
+        fail failure
     }
     let values: Get_Result = (out_val = out_val, out_len = out_len)
     return values
@@ -427,12 +444,12 @@ func iter(self: Db, prefix: Array[u8]) -> Iter fail: Error {
     var result: uint = 0
     let outcome = __kv_iter_new(self.raw, ref prefix_value, ref result)
     if outcome < 0 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "kv_iter_new")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "kv_iter_new")
+        fail failure
     }
     if outcome == 0 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "kv_iter_new")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "kv_iter_new")
+        fail failure
     }
     return Iter(raw = result)
 }
@@ -441,8 +458,8 @@ func next(self: Iter) -> Entry fail: Error {
     var result: Ffi_Bytes = (data = 0, length = 0)
     let outcome = __kv_iter_next(self.raw, ref result)
     if outcome < 0 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "kv_iter_next")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "kv_iter_next")
+        fail failure
     }
     return __ffi_take_bytes(ref result)
 }
@@ -450,11 +467,11 @@ func next(self: Iter) -> Entry fail: Error {
 11	tests/gen_n00b/../bind/kv.writ:11:1	Iter
 15	tests/gen_n00b/../bind/kv.writ:15:1	kv_entry
 22	tests/gen_n00b/../bind/kv.writ:13:1	kv_status
-30	tests/gen_n00b/../bind/kv.writ:22:1	kv_open
-46	tests/gen_n00b/../bind/kv.writ:26:1	kv_put
-65	tests/gen_n00b/../bind/kv.writ:31:1	kv_get
-82	tests/gen_n00b/../bind/kv.writ:38:1	kv_iter_new
-97	tests/gen_n00b/../bind/kv.writ:42:1	kv_iter_next
+36	tests/gen_n00b/../bind/kv.writ:22:1	kv_open
+52	tests/gen_n00b/../bind/kv.writ:26:1	kv_put
+71	tests/gen_n00b/../bind/kv.writ:31:1	kv_get
+88	tests/gen_n00b/../bind/kv.writ:38:1	kv_iter_new
+103	tests/gen_n00b/../bind/kv.writ:42:1	kv_iter_next
 library kv
 load static
 extern __kv_open kv_n00b_kv_open (ref[string], ref[uint], ref[int]) -> i32 fail: nil
@@ -462,3 +479,4 @@ extern __kv_put kv_n00b_kv_put (uint, ref[array[u8]], ref[array[u8]]) -> i32 fai
 extern __kv_get kv_n00b_kv_get (uint, ref[array[u8]], ref[uint], ref[uint]) -> i32 fail: nil
 extern __kv_iter_new kv_n00b_kv_iter_new (uint, ref[array[u8]], ref[uint]) -> i32 fail: nil
 extern __kv_iter_next kv_n00b_kv_iter_next (uint, ref[builtin.ffi.Ffi_Bytes]) -> i32 fail: nil
+extern __ffi_bytes_take kv_take_bytes (ref[builtin.ffi.Ffi_Bytes], ref[array[u8]]) -> nil fail: nil

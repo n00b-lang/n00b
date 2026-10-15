@@ -372,11 +372,22 @@ shim_c_text(const n00b_t *g, const writ_plan_view_t *const *plans)
     writ_emit_init(&emit);
     writ_emit_line(&emit, "#include <stdint.h>");
     writ_emit_line(&emit, "#include <stddef.h>");
+    writ_emit_line(&emit, "#include <string.h>");
     writ_emit_line(&emit, "");
     writ_emit_line(&emit, "#include \"%.*s_writ.h\"", S(g->c.prefix));
     writ_emit_line(&emit, "");
     writ_emit_line(&emit, "void *n00b_ffi_borrow(void *object, size_t *length, uint32_t access);");
     writ_emit_line(&emit, "void n00b_ffi_release(void *object);");
+    writ_emit_line(&emit, "");
+    writ_emit_open(&emit, "void %.*s_take_bytes(%.*s_bytes_t *bytes, void *out)", S(g->shim), S(g->c.prefix));
+    writ_emit_line(&emit, "size_t length = 0;");
+    writ_emit_line(&emit, "uint8_t *data = n00b_ffi_borrow(out, &length, 1);");
+    writ_emit_open(&emit, "if (data && bytes->data)");
+    writ_emit_line(&emit, "memcpy(data, bytes->data, length < bytes->length ? length : bytes->length);");
+    writ_emit_close(&emit, nullptr);
+    writ_emit_line(&emit, "n00b_ffi_release(out);");
+    writ_emit_line(&emit, "%.*s_bytes_free(bytes);", S(g->c.prefix));
+    writ_emit_close(&emit, nullptr);
     writ_emit_line(&emit, "");
     for (size_t i = 0; i < writ_model_fn_count(g->model); i++) {
         writ_bound_fn_t bound = writ_binding_fn(g->b, i);
@@ -518,9 +529,9 @@ emit_types(const n00b_t *g, writ_emit_t *emit)
 {
     const writ_model_t *model = g->model;
     writ_emit_open(emit, "type Error");
-    writ_emit_line(emit, "code: %.*s", S(code_type(g)));
-    writ_emit_line(emit, "text: string?");
-    writ_emit_line(emit, "fn: string");
+    writ_emit_line(emit, "public code: %.*s", S(code_type(g)));
+    writ_emit_line(emit, "public text: string?");
+    writ_emit_line(emit, "public fn: string");
     writ_emit_close(emit, nullptr);
     for (size_t i = 0; i < writ_model_handle_count(model); i++) {
         const writ_handle_view_t *handle = writ_model_handle_at(model, i);
@@ -542,7 +553,7 @@ emit_types(const n00b_t *g, writ_emit_t *emit)
         for (size_t f = 0; f < record->fields_count; f++) {
             const writ_slot_view_t *field = &record->fields[f];
             writ_str_t name = writ_profile_name(g->profile, WRIT_NAMING_FIELD, field->name);
-            writ_emit_line(emit, "%.*s: %.*s", S(name), S(scalar_type(g, field->type)));
+            writ_emit_line(emit, "public %.*s: %.*s", S(name), S(scalar_type(g, field->type)));
         }
         writ_emit_close(emit, nullptr);
     }
@@ -737,7 +748,7 @@ emit_result_types(const wrapper_t *w, writ_emit_t *emit, const uint32_t *outs, s
         writ_emit_line(emit, "");
         writ_emit_open(emit, "type %.*s", S(result_type_name(w)));
         for (size_t i = 0; i < count; i++) {
-            writ_emit_line(emit, "%.*s: %.*s", S(local_name(w, outs[i])), S(item_type(w->g, w->fn, w->plan, outs[i])));
+            writ_emit_line(emit, "public %.*s: %.*s", S(local_name(w, outs[i])), S(item_type(w->g, w->fn, w->plan, outs[i])));
         }
         writ_emit_close(emit, nullptr);
     }
@@ -748,9 +759,9 @@ emit_fail(const wrapper_t *w, writ_emit_t *emit, writ_str_t code, writ_str_t tex
 {
     writ_str_t type = error_type(w);
     if (writ_str_eq(type, writ_cstr("Error"))) {
-        writ_emit_line(emit, "let error: Error = (code = %.*s, text = %.*s, fn = \"%.*s\")", S(code), S(text),
+        writ_emit_line(emit, "let failure: Error = (code = %.*s, text = %.*s, fn = \"%.*s\")", S(code), S(text),
                        S(w->plan->fn->contract_name));
-        writ_emit_line(emit, "fail error");
+        writ_emit_line(emit, "fail failure");
         return;
     }
     writ_emit_line(emit, "fail %.*s.from_ffi(%.*s, %.*s, \"%.*s\")", S(type), S(code), S(text),
@@ -924,7 +935,21 @@ emit_wrapper(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view
         writ_emit_line(emit, "self.raw = 0");
     }
     if (multiple_success) {
-        writ_emit_line(emit, "return cast[%.*s]outcome", S(outcome_type_name(&w)));
+        writ_str_t outcome_type = outcome_type_name(&w);
+        size_t last = plan->outcomes_count;
+        for (size_t o = 0; o < plan->outcomes_count; o++) {
+            if (plan->outcomes[o].kind == WRIT_OUTCOME_SUCCESS) {
+                last = o;
+            }
+        }
+        for (size_t o = 0; o < last; o++) {
+            if (plan->outcomes[o].kind == WRIT_OUTCOME_SUCCESS) {
+                writ_emit_open(emit, "if outcome == %zu", o);
+                writ_emit_line(emit, "return %.*s.%.*s", S(outcome_type), S(plan->outcomes[o].name));
+                writ_emit_close(emit, nullptr);
+            }
+        }
+        writ_emit_line(emit, "return %.*s.%.*s", S(outcome_type), S(plan->outcomes[last].name));
     } else if (!can_fail(&w) && out_count) {
         writ_emit_line(emit, "return result");
     } else if (out_count == 1) {
@@ -979,6 +1004,7 @@ emit_raw(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *fn, writ_boun
     writ_str_t result = raw_type(g, fn->result ? fn->result->type : nullptr);
     add_extern(g, writ_str_format(g->session, "__%.*s_raw", S(bound.name)), fn->link_symbol, types, fn->slots_count,
                result);
+    writ_emit_line(emit, "");
     mark(g, emit, fn->declared_at, fn->contract_name);
     writ_emit_text(emit, "public func %.*s_raw(", S(bound.name));
     for (size_t s = 0; s < fn->slots_count; s++) {
@@ -1002,7 +1028,6 @@ n00b_text(const n00b_t *g, const writ_plan_view_t *const *plans)
     writ_emit_init(&emit);
     emit_types(g, &emit);
     size_t count = writ_model_fn_count(g->model);
-    writ_emit_line(&emit, "");
     for (size_t i = 0; i < count; i++) {
         writ_bound_fn_t bound = writ_binding_fn(g->b, i);
         if (bound.bound && bound.raw) {
@@ -1010,6 +1035,22 @@ n00b_text(const n00b_t *g, const writ_plan_view_t *const *plans)
         } else if (bound.bound) {
             emit_extern(g, &emit, i, plans[i]);
         }
+    }
+    bool takes_bytes = false;
+    for (size_t i = 0; i < g->externs->len; i++) {
+        takes_bytes = takes_bytes || strstr(g->externs->data[i].signature.data, "Ffi_Bytes");
+    }
+    if (takes_bytes) {
+        writ_str_t take_params[] = {writ_cstr("Ref[Ffi_Bytes]"), writ_cstr("Ref[Array[u8]]")};
+        add_extern(g, writ_cstr("__ffi_bytes_take"), writ_str_format(g->session, "%.*s_take_bytes", S(g->shim)),
+                   take_params, 2, writ_cstr("nil"));
+        writ_emit_line(&emit, "");
+        writ_emit_line(&emit, "func __ffi_take_bytes(bytes: Ref[Ffi_Bytes]) -> Array[u8] {");
+        writ_emit_line(&emit, "    let value: Ffi_Bytes = ref_read(bytes)");
+        writ_emit_line(&emit, "    var copied: Array[u8] = new[Array[u8]](cast[int]value.length)");
+        writ_emit_line(&emit, "    __ffi_bytes_take(bytes, ref copied)");
+        writ_emit_line(&emit, "    return copied");
+        writ_emit_line(&emit, "}");
     }
     for (size_t i = 0; i < count; i++) {
         writ_bound_fn_t bound = writ_binding_fn(g->b, i);

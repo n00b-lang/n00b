@@ -33,5 +33,10 @@ profile n00b {
     naming const upper
     naming field snake
     naming module snake
-    reserved "func", "type", "const", "return", "fail", "callback", "trait", "enum"
+    reserved "alias", "and", "as", "assert", "break", "callback", "case", "cast", "comptime", "const", "consume",
+             "context", "continue", "elif", "else", "ensure", "enter", "enum", "error", "exit", "export", "fail",
+             "false", "flagset", "for", "from", "func", "if", "import", "in", "inline", "let", "litmod", "modify",
+             "new", "nil", "or", "out", "package", "private", "provides", "public", "record", "ref", "require",
+             "return", "step", "switch", "thread", "to", "trait", "true", "try", "type", "typecase", "typeof",
+             "unsafe_cast", "until", "var", "variant", "when", "where", "while", "with"
 }

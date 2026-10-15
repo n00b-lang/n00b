@@ -169,11 +169,22 @@ finish:
 }
 #include <stdint.h>
 #include <stddef.h>
+#include <string.h>
 
 #include "pts_writ.h"
 
 void *n00b_ffi_borrow(void *object, size_t *length, uint32_t access);
 void n00b_ffi_release(void *object);
+
+void pts_take_bytes(pts_bytes_t *bytes, void *out) {
+    size_t length = 0;
+    uint8_t *data = n00b_ffi_borrow(out, &length, 1);
+    if (data && bytes->data) {
+        memcpy(data, bytes->data, length < bytes->length ? length : bytes->length);
+    }
+    n00b_ffi_release(out);
+    pts_bytes_free(bytes);
+}
 
 int32_t pts_n00b_pt_scale(const void *p, double k) {
     size_t p_length = 0;
@@ -202,9 +213,9 @@ int32_t pts_n00b_pt_sum(const void *args, void *result) {
 }
 
 type Error {
-    code: i64
-    text: string?
-    fn: string
+    public code: i64
+    public text: string?
+    public fn: string
 }
 
 type Point {
@@ -259,8 +270,8 @@ func origin() -> Point fail: Error {
     var result = point()
     let outcome = __pt_origin(ref result.storage)
     if outcome < 0 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "pt_origin")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "pt_origin")
+        fail failure
     }
     return result
 }
@@ -275,8 +286,8 @@ func sum(args: List[f64]) -> f64 fail: Error {
     var result: f64 = 0
     let outcome = __pt_sum(ref args_value, ref result)
     if outcome < 0 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "pt_sum")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "pt_sum")
+        fail failure
     }
     return result
 }

@@ -949,11 +949,22 @@ finish:
 }
 #include <stdint.h>
 #include <stddef.h>
+#include <string.h>
 
 #include "resharp_writ.h"
 
 void *n00b_ffi_borrow(void *object, size_t *length, uint32_t access);
 void n00b_ffi_release(void *object);
+
+void resharp_take_bytes(resharp_bytes_t *bytes, void *out) {
+    size_t length = 0;
+    uint8_t *data = n00b_ffi_borrow(out, &length, 1);
+    if (data && bytes->data) {
+        memcpy(data, bytes->data, length < bytes->length ? length : bytes->length);
+    }
+    n00b_ffi_release(out);
+    resharp_bytes_free(bytes);
+}
 
 int32_t resharp_n00b_regex_options_free(uint64_t value) {
     int32_t writ_n00b_value = resharp_regex_options_free((writ_resharp_regex_options *)(uintptr_t)value);
@@ -1067,9 +1078,9 @@ int32_t resharp_n00b_regex_capture_index_for_name(uint64_t self, const void *nam
 }
 
 type Error {
-    code: i64
-    text: string?
-    fn: string
+    public code: i64
+    public text: string?
+    public fn: string
 }
 
 type Regex_Options {
@@ -1081,8 +1092,8 @@ type Regex {
 }
 
 type Match layout(c) {
-    start: u64
-    end: u64
+    public start: u64
+    public end: u64
 }
 
 enum Status {
@@ -1112,12 +1123,18 @@ enum Find_All {
 }
 
 
+func __ffi_take_bytes(bytes: Ref[Ffi_Bytes]) -> Array[u8] {
+    let value: Ffi_Bytes = ref_read(bytes)
+    var copied: Array[u8] = new[Array[u8]](cast[int]value.length)
+    __ffi_bytes_take(bytes, ref copied)
+    return copied
+}
 
 func close(modify self: Regex_Options) fail: Error {
     let outcome = __regex_options_free(self.raw)
     if outcome < 0 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "regex_options_free")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "regex_options_free")
+        fail failure
     }
     self.raw = 0
 }
@@ -1125,283 +1142,283 @@ func close(modify self: Regex_Options) fail: Error {
 func close(modify self: Regex) fail: Error {
     let outcome = __regex_free(self.raw)
     if outcome < 0 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "regex_free")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "regex_free")
+        fail failure
     }
     self.raw = 0
 }
 
 func regex_options_default() -> Regex_Options fail: Error {
-    var out: uint = 0
+    var out_: uint = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
-    let outcome = __regex_options_default(ref out, ref failed_detail, ref panicked_detail)
+    let outcome = __regex_options_default(ref out_, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "regex_options_default")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "regex_options_default")
+        fail failure
     }
     if outcome == 1 {
-        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_options_default")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_options_default")
+        fail failure
     }
     if outcome == 2 {
-        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_options_default")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_options_default")
+        fail failure
     }
-    return Regex_Options(raw = out)
+    return Regex_Options(raw = out_)
 }
 
 func unicode(modify self: Regex_Options, mode: Unicode_Mode) -> Regex_Options fail: Error {
-    var out: uint = 0
+    var out_: uint = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
-    let outcome = __regex_options_unicode(self.raw, mode, ref out, ref failed_detail, ref panicked_detail)
+    let outcome = __regex_options_unicode(self.raw, mode, ref out_, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "regex_options_unicode")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "regex_options_unicode")
+        fail failure
     }
     if outcome == 1 {
-        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_options_unicode")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_options_unicode")
+        fail failure
     }
     if outcome == 2 {
-        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_options_unicode")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_options_unicode")
+        fail failure
     }
     self.raw = 0
-    return Regex_Options(raw = out)
+    return Regex_Options(raw = out_)
 }
 
 func case_insensitive(modify self: Regex_Options, yes: bool) -> Regex_Options fail: Error {
-    var out: uint = 0
+    var out_: uint = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
-    let outcome = __regex_options_case_insensitive(self.raw, yes, ref out, ref failed_detail, ref panicked_detail)
+    let outcome = __regex_options_case_insensitive(self.raw, yes, ref out_, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "regex_options_case_insensitive")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "regex_options_case_insensitive")
+        fail failure
     }
     if outcome == 1 {
-        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_options_case_insensitive")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_options_case_insensitive")
+        fail failure
     }
     if outcome == 2 {
-        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_options_case_insensitive")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_options_case_insensitive")
+        fail failure
     }
     self.raw = 0
-    return Regex_Options(raw = out)
+    return Regex_Options(raw = out_)
 }
 
 func dot_matches_new_line(modify self: Regex_Options, yes: bool) -> Regex_Options fail: Error {
-    var out: uint = 0
+    var out_: uint = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
-    let outcome = __regex_options_dot_matches_new_line(self.raw, yes, ref out, ref failed_detail, ref panicked_detail)
+    let outcome = __regex_options_dot_matches_new_line(self.raw, yes, ref out_, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "regex_options_dot_matches_new_line")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "regex_options_dot_matches_new_line")
+        fail failure
     }
     if outcome == 1 {
-        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_options_dot_matches_new_line")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_options_dot_matches_new_line")
+        fail failure
     }
     if outcome == 2 {
-        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_options_dot_matches_new_line")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_options_dot_matches_new_line")
+        fail failure
     }
     self.raw = 0
-    return Regex_Options(raw = out)
+    return Regex_Options(raw = out_)
 }
 
 func multiline(modify self: Regex_Options, yes: bool) -> Regex_Options fail: Error {
-    var out: uint = 0
+    var out_: uint = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
-    let outcome = __regex_options_multiline(self.raw, yes, ref out, ref failed_detail, ref panicked_detail)
+    let outcome = __regex_options_multiline(self.raw, yes, ref out_, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "regex_options_multiline")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "regex_options_multiline")
+        fail failure
     }
     if outcome == 1 {
-        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_options_multiline")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_options_multiline")
+        fail failure
     }
     if outcome == 2 {
-        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_options_multiline")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_options_multiline")
+        fail failure
     }
     self.raw = 0
-    return Regex_Options(raw = out)
+    return Regex_Options(raw = out_)
 }
 
 func ignore_whitespace(modify self: Regex_Options, yes: bool) -> Regex_Options fail: Error {
-    var out: uint = 0
+    var out_: uint = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
-    let outcome = __regex_options_ignore_whitespace(self.raw, yes, ref out, ref failed_detail, ref panicked_detail)
+    let outcome = __regex_options_ignore_whitespace(self.raw, yes, ref out_, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "regex_options_ignore_whitespace")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "regex_options_ignore_whitespace")
+        fail failure
     }
     if outcome == 1 {
-        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_options_ignore_whitespace")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_options_ignore_whitespace")
+        fail failure
     }
     if outcome == 2 {
-        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_options_ignore_whitespace")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_options_ignore_whitespace")
+        fail failure
     }
     self.raw = 0
-    return Regex_Options(raw = out)
+    return Regex_Options(raw = out_)
 }
 
 func hardened(modify self: Regex_Options, yes: bool) -> Regex_Options fail: Error {
-    var out: uint = 0
+    var out_: uint = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
-    let outcome = __regex_options_hardened(self.raw, yes, ref out, ref failed_detail, ref panicked_detail)
+    let outcome = __regex_options_hardened(self.raw, yes, ref out_, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "regex_options_hardened")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "regex_options_hardened")
+        fail failure
     }
     if outcome == 1 {
-        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_options_hardened")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_options_hardened")
+        fail failure
     }
     if outcome == 2 {
-        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_options_hardened")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_options_hardened")
+        fail failure
     }
     self.raw = 0
-    return Regex_Options(raw = out)
+    return Regex_Options(raw = out_)
 }
 
 func unbounded_size(modify self: Regex_Options, yes: bool) -> Regex_Options fail: Error {
-    var out: uint = 0
+    var out_: uint = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
-    let outcome = __regex_options_unbounded_size(self.raw, yes, ref out, ref failed_detail, ref panicked_detail)
+    let outcome = __regex_options_unbounded_size(self.raw, yes, ref out_, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "regex_options_unbounded_size")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "regex_options_unbounded_size")
+        fail failure
     }
     if outcome == 1 {
-        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_options_unbounded_size")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_options_unbounded_size")
+        fail failure
     }
     if outcome == 2 {
-        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_options_unbounded_size")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_options_unbounded_size")
+        fail failure
     }
     self.raw = 0
-    return Regex_Options(raw = out)
+    return Regex_Options(raw = out_)
 }
 
 func implicit_captures(modify self: Regex_Options, yes: bool) -> Regex_Options fail: Error {
-    var out: uint = 0
+    var out_: uint = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
-    let outcome = __regex_options_implicit_captures(self.raw, yes, ref out, ref failed_detail, ref panicked_detail)
+    let outcome = __regex_options_implicit_captures(self.raw, yes, ref out_, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "regex_options_implicit_captures")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "regex_options_implicit_captures")
+        fail failure
     }
     if outcome == 1 {
-        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_options_implicit_captures")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_options_implicit_captures")
+        fail failure
     }
     if outcome == 2 {
-        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_options_implicit_captures")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_options_implicit_captures")
+        fail failure
     }
     self.raw = 0
-    return Regex_Options(raw = out)
+    return Regex_Options(raw = out_)
 }
 
 func is_match(self: Regex, input: string) -> bool fail: Error {
     var input_value = input
-    var out: bool = false
+    var out_: bool = false
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
-    let outcome = __regex_is_match(self.raw, ref input_value, ref out, ref failed_detail, ref panicked_detail)
+    let outcome = __regex_is_match(self.raw, ref input_value, ref out_, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "regex_is_match")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "regex_is_match")
+        fail failure
     }
     if outcome == 1 {
-        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_is_match")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_is_match")
+        fail failure
     }
     if outcome == 2 {
-        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_is_match")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_is_match")
+        fail failure
     }
-    return out
+    return out_
 }
 
-func regex_new(pattern: string) -> Regex fail: Error {
+func regex_new_(pattern: string) -> Regex fail: Error {
     var pattern_value = pattern
-    var out: uint = 0
+    var out_: uint = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
-    let outcome = __regex_new(ref pattern_value, ref out, ref failed_detail, ref panicked_detail)
+    let outcome = __regex_new(ref pattern_value, ref out_, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "regex_new")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "regex_new")
+        fail failure
     }
     if outcome == 1 {
-        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_new")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_new")
+        fail failure
     }
     if outcome == 2 {
-        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_new")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_new")
+        fail failure
     }
-    return Regex(raw = out)
+    return Regex(raw = out_)
 }
 
 func regex_with_options(pattern: string, opts: Regex_Options) -> Regex fail: Error {
     var pattern_value = pattern
-    var out: uint = 0
+    var out_: uint = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
-    let outcome = __regex_with_options(ref pattern_value, opts.raw, ref out, ref failed_detail, ref panicked_detail)
+    let outcome = __regex_with_options(ref pattern_value, opts.raw, ref out_, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "regex_with_options")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "regex_with_options")
+        fail failure
     }
     if outcome == 1 {
-        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_with_options")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_with_options")
+        fail failure
     }
     if outcome == 2 {
-        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_with_options")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_with_options")
+        fail failure
     }
-    return Regex(raw = out)
+    return Regex(raw = out_)
 }
 
 func find_all(self: Regex, input: Array[u8], out_capacity: u64) -> Array[Match] fail: Error {
     var input_value = input
-    var out: uint = 0
-    var out_length: uint = 0
+    var out_: uint = 0
+    var out__length: uint = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
-    let outcome = __regex_find_all(self.raw, ref input_value, out_capacity, ref out, ref out_length, ref failed_detail, ref panicked_detail)
+    let outcome = __regex_find_all(self.raw, ref input_value, out_capacity, ref out_, ref out__length, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "regex_find_all")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "regex_find_all")
+        fail failure
     }
     if outcome == 1 {
-        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_find_all")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_find_all")
+        fail failure
     }
     if outcome == 2 {
-        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_find_all")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_find_all")
+        fail failure
     }
-    return __ffi_take_array[Match](out, out_length)
+    return __ffi_take_array[Match](out_, out__length)
 }
 
 enum Find_Anchored_Outcome {
@@ -1411,44 +1428,47 @@ enum Find_Anchored_Outcome {
 
 func find_anchored(self: Regex, input: Array[u8]) -> Find_Anchored_Outcome fail: Error {
     var input_value = input
-    var out: Match = (start = 0, end = 0)
+    var out_: Match = (start = 0, end = 0)
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
-    let outcome = __regex_find_anchored(self.raw, ref input_value, ref out, ref failed_detail, ref panicked_detail)
+    let outcome = __regex_find_anchored(self.raw, ref input_value, ref out_, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "regex_find_anchored")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "regex_find_anchored")
+        fail failure
     }
     if outcome == 2 {
-        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_find_anchored")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_find_anchored")
+        fail failure
     }
     if outcome == 3 {
-        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_find_anchored")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_find_anchored")
+        fail failure
     }
-    return cast[Find_Anchored_Outcome]outcome
+    if outcome == 0 {
+        return Find_Anchored_Outcome.ok
+    }
+    return Find_Anchored_Outcome.none
 }
 
 func is_full_match(self: Regex, input: Array[u8]) -> bool fail: Error {
     var input_value = input
-    var out: bool = false
+    var out_: bool = false
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
-    let outcome = __regex_is_full_match(self.raw, ref input_value, ref out, ref failed_detail, ref panicked_detail)
+    let outcome = __regex_is_full_match(self.raw, ref input_value, ref out_, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "regex_is_full_match")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "regex_is_full_match")
+        fail failure
     }
     if outcome == 1 {
-        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_is_full_match")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_is_full_match")
+        fail failure
     }
     if outcome == 2 {
-        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_is_full_match")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_is_full_match")
+        fail failure
     }
-    return out
+    return out_
 }
 
 enum Capture_Index_For_Name_Outcome {
@@ -1458,23 +1478,26 @@ enum Capture_Index_For_Name_Outcome {
 
 func capture_index_for_name(self: Regex, name: string) -> Capture_Index_For_Name_Outcome fail: Error {
     var name_value = name
-    var out: u64 = 0
+    var out_: u64 = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
-    let outcome = __regex_capture_index_for_name(self.raw, ref name_value, ref out, ref failed_detail, ref panicked_detail)
+    let outcome = __regex_capture_index_for_name(self.raw, ref name_value, ref out_, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "regex_capture_index_for_name")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "regex_capture_index_for_name")
+        fail failure
     }
     if outcome == 2 {
-        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_capture_index_for_name")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_capture_index_for_name")
+        fail failure
     }
     if outcome == 3 {
-        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_capture_index_for_name")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_capture_index_for_name")
+        fail failure
     }
-    return cast[Capture_Index_For_Name_Outcome]outcome
+    if outcome == 0 {
+        return Capture_Index_For_Name_Outcome.ok
+    }
+    return Capture_Index_For_Name_Outcome.none
 }
 7	resharp.derived.writ:29:1	RegexOptions
 11	resharp.derived.writ:38:1	Regex
@@ -1482,24 +1505,24 @@ func capture_index_for_name(self: Regex, name: string) -> Capture_Index_For_Name
 20	resharp.derived.writ:5:1	Status
 27	resharp.derived.writ:21:1	UnicodeMode
 34	resharp.derived.writ:41:1	FindAll
-48	resharp.derived.writ:30:1	regex_options_free
-57	resharp.derived.writ:39:1	regex_free
-66	resharp.derived.writ:53:1	regex_options_default
-86	resharp.derived.writ:62:1	regex_options_unicode
-107	resharp.derived.writ:73:1	regex_options_case_insensitive
-128	resharp.derived.writ:84:1	regex_options_dot_matches_new_line
-149	resharp.derived.writ:95:1	regex_options_multiline
-170	resharp.derived.writ:106:1	regex_options_ignore_whitespace
-191	resharp.derived.writ:117:1	regex_options_hardened
-212	resharp.derived.writ:128:1	regex_options_unbounded_size
-233	resharp.derived.writ:139:5	regex_options_implicit_captures
-254	resharp.derived.writ:151:1	regex_is_match
-275	resharp.derived.writ:163:1	regex_new
-296	resharp.derived.writ:174:1	regex_with_options
-317	resharp.derived.writ:186:1	regex_find_all
-344	resharp.derived.writ:201:1	regex_find_anchored
-365	resharp.derived.writ:215:1	regex_is_full_match
-391	resharp.derived.writ:227:5	regex_capture_index_for_name
+54	resharp.derived.writ:30:1	regex_options_free
+63	resharp.derived.writ:39:1	regex_free
+72	resharp.derived.writ:53:1	regex_options_default
+92	resharp.derived.writ:62:1	regex_options_unicode
+113	resharp.derived.writ:73:1	regex_options_case_insensitive
+134	resharp.derived.writ:84:1	regex_options_dot_matches_new_line
+155	resharp.derived.writ:95:1	regex_options_multiline
+176	resharp.derived.writ:106:1	regex_options_ignore_whitespace
+197	resharp.derived.writ:117:1	regex_options_hardened
+218	resharp.derived.writ:128:1	regex_options_unbounded_size
+239	resharp.derived.writ:139:5	regex_options_implicit_captures
+260	resharp.derived.writ:151:1	regex_is_match
+281	resharp.derived.writ:163:1	regex_new
+302	resharp.derived.writ:174:1	regex_with_options
+323	resharp.derived.writ:186:1	regex_find_all
+350	resharp.derived.writ:201:1	regex_find_anchored
+374	resharp.derived.writ:215:1	regex_is_full_match
+400	resharp.derived.writ:227:5	regex_capture_index_for_name
 library resharp_writ
 search_path target/release
 load static
@@ -1521,3 +1544,4 @@ extern __regex_find_all resharp_n00b_regex_find_all (uint, ref[array[u8]], uint,
 extern __regex_find_anchored resharp_n00b_regex_find_anchored (uint, ref[array[u8]], ref[Match], ref[builtin.ffi.Ffi_Bytes], ref[builtin.ffi.Ffi_Bytes]) -> i32 fail: nil
 extern __regex_is_full_match resharp_n00b_regex_is_full_match (uint, ref[array[u8]], ref[bool], ref[builtin.ffi.Ffi_Bytes], ref[builtin.ffi.Ffi_Bytes]) -> i32 fail: nil
 extern __regex_capture_index_for_name resharp_n00b_regex_capture_index_for_name (uint, ref[string], ref[uint], ref[builtin.ffi.Ffi_Bytes], ref[builtin.ffi.Ffi_Bytes]) -> i32 fail: nil
+extern __ffi_bytes_take resharp_take_bytes (ref[builtin.ffi.Ffi_Bytes], ref[array[u8]]) -> nil fail: nil

@@ -138,7 +138,7 @@ enough to check off one at a time. The specs are `ffi-spec.md`,
 - [x] Link requirements as a public struct: libraries, frameworks, search paths, load mode
 - [x] `src/gen/n00b.c`: module skeleton from a `writ_binding_t`
 - [x] Functions: `func` declarations from plans, names from binding decisions
-- [ ] Extern declarations returned as data with the generated source
+- [x] Extern declarations returned as data with the generated source
 - [x] Scalars and `c_*` types per platform
 - [x] `layout c` records as `type X layout(c)`
 - [x] Records `layout(c)` can't express: opaque storage with accessors
@@ -253,45 +253,45 @@ enough to check off one at a time. The specs are `ffi-spec.md`,
 
 ### Generated modules
 
-- [ ] Generated n00b source parsed as its own module unit (the `n00bb_format_parse` sequence on a synthetic source)
-- [ ] Synthetic module name unique per literal and stable across builds
-- [ ] `resolve_one_package_export` (`compiler_link_packages.c`) treats an `'ffi` const as a module export
-- [ ] `export zlib as x` on an `'ffi` const is N00BB-M0007
-- [ ] `compiler_cli.c`: `--show-ffi MODULE.NAME` prints the generated source
+- [x] Generated n00b source parsed as its own module unit (the `n00bb_format_parse` sequence on a synthetic source)
+- [x] Synthetic module name unique per literal and stable across builds
+- [x] `resolve_one_package_export` (`compiler_link_packages.c`) treats an `'ffi` const as a module export
+- [x] `export zlib as x` on an `'ffi` const is N00BB-M0007
+- [x] `compiler_cli.c`: `--show-ffi MODULE.NAME` prints the generated source
 - [ ] Go-to-definition data maps bound names to the generated source
 
 ### Externs
 
-- [ ] Generated externs registered as native functions in the generated module
-- [ ] Extern declaration in user source is a compile error
-- [ ] Extern declarations lower through `ir_func_add(…, IR_LINK_EXTERN)` with the symbol annotation
-- [ ] `llvm_backend.c` types extern functions as their scalar-and-pointer signatures
+- [x] Generated externs registered as native functions in the generated module
+- [x] Extern declaration in user source is a compile error
+- [x] Extern declarations lower through `ir_func_add(…, IR_LINK_EXTERN)` with the symbol annotation
+- [x] `llvm_backend.c` types extern functions as their scalar-and-pointer signatures
 
 ### Shims and linking
 
-- [ ] Shim C written to the build's scratch directory
-- [ ] clang compiles shims to bitcode for the target triple
-- [ ] Shim bitcode cached by content hash in the native cache
-- [ ] With `--lto`: shim bitcode linked through `n00bb_llvm_backend_link_bitcode` and left inlinable
-- [ ] Without `--lto`: shims compiled to an object and passed as a link object
-- [ ] `n00bb_build_executable` (`compiler_abi_driver.c`): `-l`, `-framework` and `-L` from link requirements
-- [ ] Link requirements collected across every `'ffi` module in the program, deduplicated
+- [x] Shim C written to the build's scratch directory
+- [x] clang compiles shims to bitcode for the target triple
+- [x] Shim bitcode cached by content hash in the native cache
+- [x] With `--lto`: shim bitcode linked through `n00bb_llvm_backend_link_bitcode` and left inlinable
+- [x] Without `--lto`: shims compiled to an object and passed as a link object
+- [x] `n00bb_build_executable` (`compiler_abi_driver.c`): `-l`, `-framework` and `-L` from link requirements
+- [x] Link requirements collected across every `'ffi` module in the program, deduplicated
 
 ### Values
 
 - [ ] `Array[u8]` in: copied to a C buffer by the shim
-- [ ] `out` buffers: allocated by the shim at capacity, returned as `Array[u8]` at length
-- [ ] Status errors: `fail: zlib.Error` with `code` and `fn`
+- [x] `out` buffers: allocated by the shim at capacity, returned as `Array[u8]` at length
+- [x] Status errors: `fail: zlib.Error` with `code` and `fn`
 
 ### Tests
 
-- [ ] `tests/programs/ffi/zlib/__init.n`: `const zlib = [- use <zlib.writ> … -]'ffi` and `package zlib { export zlib }`
-- [ ] Consumer: `import zlib`; `compress2` and `uncompress` round-trip data
-- [ ] Subpackage form: `archive.zlib.compress`
-- [ ] `--show-ffi` output golden
+- [x] `tests/programs/ffi/zlib/__init.n`: `const zlib = [- use <zlib.writ> … -]'ffi` and `package zlib { export zlib }`
+- [x] Consumer: `import zlib`; `compress2` and `uncompress` round-trip data
+- [x] Subpackage form: `archive.zlib.compress`
+- [x] `--show-ffi` output golden
 - [ ] Reflection: the `'ffi` module has a module row, a `module` scope, and symbol rows for every bound name
 - [ ] Reflection: extern functions appear in the native-binding table with their C symbols
-- [ ] Passes with and without `--lto`
+- [x] Passes with and without `--lto`
 - [ ] Mach-O run green
 - [ ] Linux run green
 

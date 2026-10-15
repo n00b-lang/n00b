@@ -534,11 +534,22 @@ int32_t zlib_inflateInit(z_stream *strm, int *status) {
 }
 #include <stdint.h>
 #include <stddef.h>
+#include <string.h>
 
 #include "zlib_writ.h"
 
 void *n00b_ffi_borrow(void *object, size_t *length, uint32_t access);
 void n00b_ffi_release(void *object);
+
+void zlib_take_bytes(zlib_bytes_t *bytes, void *out) {
+    size_t length = 0;
+    uint8_t *data = n00b_ffi_borrow(out, &length, 1);
+    if (data && bytes->data) {
+        memcpy(data, bytes->data, length < bytes->length ? length : bytes->length);
+    }
+    n00b_ffi_release(out);
+    zlib_bytes_free(bytes);
+}
 
 int32_t zlib_n00b_zlibVersion(void *result) {
     int32_t writ_n00b_value = zlib_zlibVersion((const char **)result);
@@ -613,26 +624,26 @@ int32_t zlib_n00b_inflateInit(const void *strm, void *status) {
 }
 
 type Error {
-    code: i64
-    text: string?
-    fn: string
+    public code: i64
+    public text: string?
+    public fn: string
 }
 
 type Stream layout(c) {
-    next_in: uint
-    avail_in: u32
-    total_in: u64
-    next_out: uint
-    avail_out: u32
-    total_out: u64
-    msg: uint
-    state: uint
-    zalloc: uint
-    zfree: uint
-    opaque: uint
-    data_type: i32
-    adler: u64
-    reserved: u64
+    public next_in: uint
+    public avail_in: u32
+    public total_in: u64
+    public next_out: uint
+    public avail_out: u32
+    public total_out: u64
+    public msg: uint
+    public state: uint
+    public zalloc: uint
+    public zfree: uint
+    public opaque: uint
+    public data_type: i32
+    public adler: u64
+    public reserved: u64
 }
 
 public const ZLIB_VERSION: string = "1.2.12"
@@ -672,13 +683,19 @@ public const Z_UNKNOWN: i32 = 2
 public const Z_DEFLATED: i32 = 8
 public const Z_NULL: i32 = 0
 
+func __ffi_take_bytes(bytes: Ref[Ffi_Bytes]) -> Array[u8] {
+    let value: Ffi_Bytes = ref_read(bytes)
+    var copied: Array[u8] = new[Array[u8]](cast[int]value.length)
+    __ffi_bytes_take(bytes, ref copied)
+    return copied
+}
 
 func version() -> string fail: Error {
     var result: uint = 0
     let outcome = __zlibVersion(ref result)
     if outcome < 0 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "zlibVersion")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "zlibVersion")
+        fail failure
     }
     return __ffi_copy_cstr(result)
 }
@@ -692,30 +709,33 @@ func deflate(modify self: Stream, flush: i32) -> Deflate_Outcome fail: Error {
     var failed_status: i32 = 0
     let outcome = __deflate(ref self, flush, ref failed_status)
     if outcome < 0 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "deflate")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "deflate")
+        fail failure
     }
     if outcome == 2 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "deflate")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "deflate")
+        fail failure
     }
     if outcome == 3 {
-        let error: Error = (code = cast[i64]failed_status, text = nil, fn = "deflate")
-        fail error
+        let failure: Error = (code = cast[i64]failed_status, text = nil, fn = "deflate")
+        fail failure
     }
-    return cast[Deflate_Outcome]outcome
+    if outcome == 0 {
+        return Deflate_Outcome.progress
+    }
+    return Deflate_Outcome.done
 }
 
 func deflate_end(modify strm: Stream) fail: Error {
     var status: i32 = 0
     let outcome = __deflateEnd(ref strm, ref status)
     if outcome < 0 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "deflateEnd")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "deflateEnd")
+        fail failure
     }
     if outcome == 0 {
-        let error: Error = (code = cast[i64]status, text = nil, fn = "deflateEnd")
-        fail error
+        let failure: Error = (code = cast[i64]status, text = nil, fn = "deflateEnd")
+        fail failure
     }
 }
 
@@ -729,38 +749,41 @@ func inflate(modify self: Stream, flush: i32) -> Inflate_Outcome fail: Error {
     var failed_status: i32 = 0
     let outcome = __inflate(ref self, flush, ref corrupt_detail, ref failed_status)
     if outcome < 0 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "inflate")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "inflate")
+        fail failure
     }
     if outcome == 2 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "inflate")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "inflate")
+        fail failure
     }
     if outcome == 3 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "inflate")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "inflate")
+        fail failure
     }
     if outcome == 4 {
-        let error: Error = (code = cast[i64]corrupt_detail, text = nil, fn = "inflate")
-        fail error
+        let failure: Error = (code = cast[i64]corrupt_detail, text = nil, fn = "inflate")
+        fail failure
     }
     if outcome == 5 {
-        let error: Error = (code = cast[i64]failed_status, text = nil, fn = "inflate")
-        fail error
+        let failure: Error = (code = cast[i64]failed_status, text = nil, fn = "inflate")
+        fail failure
     }
-    return cast[Inflate_Outcome]outcome
+    if outcome == 0 {
+        return Inflate_Outcome.done
+    }
+    return Inflate_Outcome.progress
 }
 
 func inflate_end(modify strm: Stream) fail: Error {
     var status: i32 = 0
     let outcome = __inflateEnd(ref strm, ref status)
     if outcome < 0 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "inflateEnd")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "inflateEnd")
+        fail failure
     }
     if outcome == 0 {
-        let error: Error = (code = cast[i64]status, text = nil, fn = "inflateEnd")
-        fail error
+        let failure: Error = (code = cast[i64]status, text = nil, fn = "inflateEnd")
+        fail failure
     }
 }
 
@@ -770,12 +793,12 @@ func compress(source: Array[u8], level: i32) -> Array[u8] fail: Error {
     var status: i32 = 0
     let outcome = __compress2(ref source_value, level, ref dest, ref status)
     if outcome < 0 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "compress2")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "compress2")
+        fail failure
     }
     if outcome == 0 {
-        let error: Error = (code = cast[i64]status, text = nil, fn = "compress2")
-        fail error
+        let failure: Error = (code = cast[i64]status, text = nil, fn = "compress2")
+        fail failure
     }
     return __ffi_take_bytes(ref dest)
 }
@@ -791,12 +814,12 @@ func uncompress(dest_capacity: u64, source: Array[u8]) -> Array[u8] fail: Error 
     var status: i32 = 0
     let outcome = __uncompress(dest_capacity, ref source_value, ref dest, ref status)
     if outcome < 0 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "uncompress")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "uncompress")
+        fail failure
     }
     if outcome == 0 {
-        let error: Error = (code = cast[i64]status, text = nil, fn = "uncompress")
-        fail error
+        let failure: Error = (code = cast[i64]status, text = nil, fn = "uncompress")
+        fail failure
     }
     return __ffi_take_bytes(ref dest)
 }
@@ -806,8 +829,8 @@ func adler32(adler: u64, buf: Array[u8]) -> u64 fail: Error {
     var result: u64 = 0
     let outcome = __adler32(adler, ref buf_value, ref result)
     if outcome < 0 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "adler32")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "adler32")
+        fail failure
     }
     return result
 }
@@ -817,8 +840,8 @@ func crc32(crc: u64, buf: Array[u8]) -> u64 fail: Error {
     var result: u64 = 0
     let outcome = __crc32(crc, ref buf_value, ref result)
     if outcome < 0 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "crc32")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "crc32")
+        fail failure
     }
     return result
 }
@@ -827,12 +850,12 @@ func deflate_init(modify strm: Stream, level: i32) fail: Error {
     var status: i32 = 0
     let outcome = __deflateInit(ref strm, level, ref status)
     if outcome < 0 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "deflateInit")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "deflateInit")
+        fail failure
     }
     if outcome == 0 {
-        let error: Error = (code = cast[i64]status, text = nil, fn = "deflateInit")
-        fail error
+        let failure: Error = (code = cast[i64]status, text = nil, fn = "deflateInit")
+        fail failure
     }
 }
 
@@ -840,12 +863,12 @@ func inflate_init(modify strm: Stream) fail: Error {
     var status: i32 = 0
     let outcome = __inflateInit(ref strm, ref status)
     if outcome < 0 {
-        let error: Error = (code = cast[i64]outcome, text = nil, fn = "inflateInit")
-        fail error
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "inflateInit")
+        fail failure
     }
     if outcome == 0 {
-        let error: Error = (code = cast[i64]status, text = nil, fn = "inflateInit")
-        fail error
+        let failure: Error = (code = cast[i64]status, text = nil, fn = "inflateInit")
+        fail failure
     }
 }
 7	contracts/zlib/aarch64-apple-darwin.writ:8:1	z_stream
@@ -885,18 +908,18 @@ func inflate_init(modify strm: Stream) fail: Error {
 57	contracts/zlib/aarch64-apple-darwin.writ:59:1	Z_UNKNOWN
 58	contracts/zlib/aarch64-apple-darwin.writ:60:1	Z_DEFLATED
 59	contracts/zlib/aarch64-apple-darwin.writ:61:1	Z_NULL
-62	contracts/zlib/aarch64-apple-darwin.writ:63:1	zlibVersion
-77	contracts/zlib/aarch64-apple-darwin.writ:64:1	deflate
-95	contracts/zlib/aarch64-apple-darwin.writ:65:1	deflateEnd
-113	contracts/zlib/aarch64-apple-darwin.writ:66:1	inflate
-140	contracts/zlib/aarch64-apple-darwin.writ:67:1	inflateEnd
-153	contracts/zlib/aarch64-apple-darwin.writ:68:1	compress2
-169	contracts/zlib/aarch64-apple-darwin.writ:69:1	compressBound
-174	contracts/zlib/aarch64-apple-darwin.writ:70:1	uncompress
-190	contracts/zlib/aarch64-apple-darwin.writ:71:1	adler32
-201	contracts/zlib/aarch64-apple-darwin.writ:72:1	crc32
-212	contracts/zlib/aarch64-apple-darwin.writ:75:1	deflateInit
-225	contracts/zlib/aarch64-apple-darwin.writ:77:1	inflateInit
+68	contracts/zlib/aarch64-apple-darwin.writ:63:1	zlibVersion
+83	contracts/zlib/aarch64-apple-darwin.writ:64:1	deflate
+104	contracts/zlib/aarch64-apple-darwin.writ:65:1	deflateEnd
+122	contracts/zlib/aarch64-apple-darwin.writ:66:1	inflate
+152	contracts/zlib/aarch64-apple-darwin.writ:67:1	inflateEnd
+165	contracts/zlib/aarch64-apple-darwin.writ:68:1	compress2
+181	contracts/zlib/aarch64-apple-darwin.writ:69:1	compressBound
+186	contracts/zlib/aarch64-apple-darwin.writ:70:1	uncompress
+202	contracts/zlib/aarch64-apple-darwin.writ:71:1	adler32
+213	contracts/zlib/aarch64-apple-darwin.writ:72:1	crc32
+224	contracts/zlib/aarch64-apple-darwin.writ:75:1	deflateInit
+237	contracts/zlib/aarch64-apple-darwin.writ:77:1	inflateInit
 library z
 load static
 extern __zlibVersion zlib_n00b_zlibVersion (ref[uint]) -> i32 fail: nil
@@ -911,3 +934,4 @@ extern __adler32 zlib_n00b_adler32 (uint, ref[array[u8]], ref[uint]) -> i32 fail
 extern __crc32 zlib_n00b_crc32 (uint, ref[array[u8]], ref[uint]) -> i32 fail: nil
 extern __deflateInit zlib_n00b_deflateInit (ref[Stream], i32, ref[i32]) -> i32 fail: nil
 extern __inflateInit zlib_n00b_inflateInit (ref[Stream], ref[i32]) -> i32 fail: nil
+extern __ffi_bytes_take zlib_take_bytes (ref[builtin.ffi.Ffi_Bytes], ref[array[u8]]) -> nil fail: nil
