@@ -3998,6 +3998,12 @@ n00bb_lower_return(ir_lower_context_t *context, parse_visit_t *visit,
             return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
                 "could not convert the returned integer value");
     }
+    if (value && expected) {
+        value = ir_lower_value_as(context, value, expected, span);
+        if (!value)
+            return lower_error(context, IR_DIAG_INTERNAL, span,
+                "could not read through the returned reference");
+    }
     th_type *element = nullptr;
     if (value && n00bb_option_type_element(expected, &element)
         && !ir_type_eq(context->module, value->type, expected)) {
@@ -4578,6 +4584,16 @@ n00bb_lower_binary(ir_lower_context_t *context, parse_visit_t *visit,
 
     ir_value_t *left = operands[0];
     ir_value_t *right = operands[1];
+    th_type *left_value = n00bb_operand_value_type(left->type, right->type,
+                                                   comparison);
+    th_type *right_value = n00bb_operand_value_type(right->type, left->type,
+                                                    comparison);
+    left = ir_lower_value_as(context, left, left_value, span);
+    right = right ? ir_lower_value_as(context, right, right_value, span)
+                  : nullptr;
+    if (!left || !right)
+        return lower_error(context, IR_DIAG_INTERNAL, span,
+                           "could not read through an operator operand");
     bool shift = op == IR_OP_SHL || op == IR_OP_SHR;
     if (!shift && !ir_type_eq(context->module, left->type, right->type)) {
         ir_value_t *coerced = n00bb_typed_integer_literal(context,
@@ -12250,6 +12266,17 @@ n00bb_operator_error(ir_lower_context_t *context, ir_diagcode_t code,
 }
 
 static bool
+names_symbol_directly(parse_tree_t *node)
+{
+    while (node && !core_tree_is_leaf(node)) {
+        if (parse_tree_is_direct_symbol_reference(node)) return true;
+        if (core_tree_num_children(node) != 1) return false;
+        node = core_tree_child(node, 0);
+    }
+    return false;
+}
+
+static bool
 n00bb_unwrap_call_outcome(ir_lower_context_t *context, parse_visit_t *visit,
                           ir_value_t *outcome, ir_span_t span,
                           ir_value_t **success, bool trap_unhandled)
@@ -12386,9 +12413,10 @@ n00bb_lower_operator_annotation(ir_lower_context_t *context,
                 : nullptr;
             bool function_reference = target
                 && target->kind == PARSE_SYM_FUNCTION
-                && parse_tree_is_direct_symbol_reference(operand);
-            if (!operand || (!function_reference
-                    && !n00bb_mark_reference_target(context,
+                && names_symbol_directly(operand);
+            if (!operand || (function_reference
+                    ? !ir_lower_skip_value(context, visit->node, operand)
+                    : !n00bb_mark_reference_target(context,
                         visit->grammar, visit->node, operand)))
                 return n00bb_operator_error(context, IR_DIAG_INTERNAL,
                     lower_span_for_tree(context, visit->node),
@@ -12410,7 +12438,7 @@ n00bb_lower_operator_annotation(ir_lower_context_t *context,
             ? attached_symbol(visit->grammar, lower->unit, operand) : nullptr;
         bool function_reference = target
             && target->kind == PARSE_SYM_FUNCTION
-            && parse_tree_is_direct_symbol_reference(operand);
+            && names_symbol_directly(operand);
         ir_value_t *storage = nullptr;
         if (function_reference) {
             parse_sym_entry_t *function_target = canonical_symbol(target);
@@ -16389,10 +16417,12 @@ bind_missing_external(ir_lower_context_t *context,
     n00bb_tu_state_t *state = lower ? tu_state(lower->unit) : nullptr;
     if (!state || !symbol || !symbol->type) return false;
     if (symbol->kind == PARSE_SYM_FUNCTION) {
+        parse_sym_entry_t *function = canonical_symbol(symbol);
         ir_func_t *target = link_ir_function_for_phase(
-            state->link_analysis, symbol, lower->comptime_phase);
+            state->link_analysis, function, lower->comptime_phase);
         core_translation_unit_t *target_unit = target
-            ? unit_for_symbol(lower->grammar, lower->units, symbol) : nullptr;
+            ? unit_for_symbol(lower->grammar, lower->units, function)
+            : nullptr;
         ir_module_t *target_module = module_for_phase(
             target_unit ? tu_state(target_unit) : nullptr,
             lower->comptime_phase);

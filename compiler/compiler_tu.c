@@ -3064,6 +3064,30 @@ n00bb_option_type_element(th_type *type, th_type **element)
     return true;
 }
 
+th_type *
+n00bb_operand_value_type(th_type *operand, th_type *other, bool comparison)
+{
+    th_type *resolved = operand ? th_resolve(operand) : nullptr;
+    th_type *other_resolved = other ? th_resolve(other) : nullptr;
+    if (!resolved || th_kind_of(resolved) != TH_INDIRECTION) return operand;
+    bool other_reference = other_resolved
+        && (th_kind_of(other_resolved) == TH_INDIRECTION
+            || th_is_nil(other_resolved));
+    if (comparison && (!other_resolved || other_reference)) return operand;
+    return th_ind_referent(resolved);
+}
+
+bool
+n00bb_dereferences_to(th_ctx *types, th_type *actual, th_type *wanted)
+{
+    actual = actual ? th_resolve(actual) : nullptr;
+    wanted = wanted ? th_resolve(wanted) : nullptr;
+    return actual && wanted && th_kind_of(actual) == TH_INDIRECTION
+        && th_kind_of(wanted) != TH_INDIRECTION
+        && th_kind_of(wanted) != TH_VAR
+        && th_unify_probe(types, th_ind_referent(actual), wanted);
+}
+
 bool
 n00bb_practical_unsigned_to_signed(parse_grammar_t *grammar,
                                    n00bb_tu_state_t *state,
@@ -3169,12 +3193,14 @@ record_function_exit_fact(parse_grammar_t *grammar,
                     || (!n00bb_option_type_element(actual, nullptr)
                         && th_unify_probe(state->types, actual,
                                           option_element)));
-            th_type *unified = option_value || range_coercion ? wanted
-                : th_unify_in_place(state->types, actual, wanted);
+            bool dereference = n00bb_dereferences_to(state->types, actual,
+                                                     wanted);
+            th_type *unified = option_value || range_coercion || dereference
+                ? wanted : th_unify_in_place(state->types, actual, wanted);
             if (!unified) facts->conflict = true;
             else {
                 observed = wrap_atomic ? expected : unified;
-                if (!option_value && !range_coercion)
+                if (!option_value && !range_coercion && !dereference)
                     core_tree_node_value(value).type = observed;
             }
         }
@@ -10206,6 +10232,15 @@ refine_intrinsic_binary_result(parse_grammar_t *grammar,
         && !(left_type && th_ind_referent(th_resolve(left_type)))
         && !(right_type && th_ind_referent(th_resolve(right_type))))
         return true;
+    th_type *declared_left = left_type;
+    left_type = n00bb_operand_value_type(left_type, right_type, comparison);
+    right_type = n00bb_operand_value_type(right_type, declared_left,
+                                          comparison);
+    if (!comparison && result && declared_left != left_type
+        && th_resolve(result) == th_resolve(declared_left)) {
+        result = left_type;
+        core_tree_node_value(node).type = result;
+    }
     if (comparison && (!result || th_is_bottom(result))) {
         result = th_name(state->types, "bool");
         core_tree_node_value(node).type = result;

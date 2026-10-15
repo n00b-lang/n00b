@@ -1532,8 +1532,10 @@ resolve_imported_module_symbols(parse_grammar_t *grammar,
                         state->annotations->symtab, site->scope,
                         CORE_STRING_STATIC("builtin"), name);
                     if (n00bb_builtin_function(site->symbol)) {
-                        parse_tree_set_resolution_symbol(site->node,
-                                                         site->symbol);
+                        if (!parse_tree_set_resolution_symbol(site->node,
+                                                              site->symbol)
+                            || !parse_tree_mark_direct_symbol_reference(
+                                site->node)) return false;
                     }
                     else site->symbol = nullptr;
                 }
