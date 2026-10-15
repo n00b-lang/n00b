@@ -1158,6 +1158,7 @@ process_locate_job(locate_worker_context_t *context, core_work_job_t *job)
                     core_buffer_release(&message);
                     ok = false;
                 }
+                else parse_pwz_release_parse_state(result->parser);
             }
         }
     }

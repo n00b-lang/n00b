@@ -1989,6 +1989,11 @@ n00bb_lower_try_scope(ir_lower_context_t *context, parse_visit_t *visit,
     return true;
 }
 
+static ir_value_t *
+n00bb_switch_integer_scrutinee(ir_lower_context_t *context,
+                               n00bb_lower_context_t *lower,
+                               ir_value_t *scrutinee, ir_span_t span);
+
 static bool
 n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                         bool entering, void *state)
@@ -2464,6 +2469,9 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                         }
                 }
                 else {
+                    scrutinee = n00bb_switch_integer_scrutinee(context,
+                        lower, scrutinee,
+                        lower_span_for_tree(context, frame->node));
                     instruction = scrutinee
                         ? ir_instr_add(context->block, IR_OP_SWITCH) : nullptr;
                     emitted = instruction
@@ -2528,6 +2536,82 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
         return true;
     }
     return true;
+}
+
+static parse_sym_entry_t *
+n00bb_switch_enum_member(parse_grammar_t *grammar,
+                         n00bb_lower_context_t *lower,
+                         n00bb_switch_frame_t *frame, parse_tree_t *expression)
+{
+    if (!lower || !expression) return nullptr;
+    parse_sym_entry_t *member = attached_symbol(grammar, lower->unit,
+                                                expression);
+    if (!member || member->kind != PARSE_SYM_ENUM_CONST) {
+        member = nullptr;
+        n00bb_tu_state_t *state = tu_state(lower->unit);
+        parse_nt_node_t *parsed = &core_tree_node_value(expression);
+        th_type *type = frame->scrutinee
+            ? core_tree_node_value(frame->scrutinee).type : nullptr;
+        parse_sym_entry_t *owner = state && type
+            ? type_symbol_in_loaded_imports(lower->unit, state->types, type,
+                                            nullptr)
+            : nullptr;
+        if (owner && owner->member_scope
+            && parsed->end - parsed->start == 1)
+            member = parse_symtab_lookup_in(owner->member_scope,
+                                            first_token_text(expression));
+    }
+    if (!member || member->kind != PARSE_SYM_ENUM_CONST
+        || n00bb_flagset_member(member) || !member->has_comptime_value
+        || !member->comptime_value) return nullptr;
+    return member;
+}
+
+static ir_value_t *
+n00bb_switch_integer_scrutinee(ir_lower_context_t *context,
+                               n00bb_lower_context_t *lower,
+                               ir_value_t *scrutinee, ir_span_t span)
+{
+    if (!scrutinee || !lower) return scrutinee;
+    ir_class_t class = ir_machine_of(context->module, scrutinee->type).class;
+    if (class == IR_CLASS_SINT || class == IR_CLASS_UINT
+        || class == IR_CLASS_BOOL) return scrutinee;
+    n00bb_tu_state_t *state = tu_state(lower->unit);
+    parse_sym_entry_t *enum_symbol = state
+        ? n00bb_enum_type_symbol(state->link_analysis, scrutinee->type)
+        : nullptr;
+    const n00bb_enum_range_t *range = enum_symbol
+        ? parse_sym_binding(enum_symbol,
+                            CORE_STRING_STATIC("n00bb.enum-range"))
+        : nullptr;
+    if (!range) return scrutinee;
+    th_type *target = n00bb_ir_builtin_type(context->module,
+                                            range->is_signed ? "int" : "uint");
+    ir_instr_t *conversion = target
+        ? ir_lower_emit_instruction(context, IR_OP_ENUM_VALUE, span)
+        : nullptr;
+    if (!conversion
+        || !ir_lower_set_temp_dest(context, conversion, "__n00bb_", target)
+        || !ir_instr_operand_value(conversion, scrutinee)) return nullptr;
+    return conversion->dest;
+}
+
+static bool
+n00bb_prune_enum_case(ir_lower_context_t *context, parse_visit_t *visit,
+                      bool entering, void *opaque)
+{
+    (void)opaque;
+    n00bb_lower_context_t *lower = context ? context->user : nullptr;
+    if (!entering || !lower || !lower->switches.len) return true;
+    n00bb_switch_frame_t *frame =
+        &lower->switches.data[lower->switches.len - 1];
+    if (frame->variant_scope
+        || child_nt(visit->grammar, visit->node, "range-sep")) return true;
+    parse_tree_t *expression = child_nt(visit->grammar, visit->node,
+                                        "expression");
+    if (!n00bb_switch_enum_member(visit->grammar, lower, frame, expression))
+        return true;
+    return ir_lower_prune_node(context, visit->node);
 }
 
 static bool
@@ -2607,6 +2691,18 @@ n00bb_switch_collect(parse_grammar_t *grammar, parse_tree_t *node,
                     parse_sym_entry_t *variant_arm = nullptr;
                     core_string_t variant_arm_name = {0};
                     n00bb_lower_context_t *lower = context->user;
+                    parse_sym_entry_t *enum_member = !literal_pattern
+                        && !frame->variant_scope
+                        ? n00bb_switch_enum_member(grammar, lower, frame,
+                                                   expression)
+                        : nullptr;
+                    if (enum_member) {
+                        n00bb_enum_value_t *ordinal =
+                            enum_member->comptime_value;
+                        value = (ir_lit_t){.mag = ordinal->magnitude,
+                                           .neg = ordinal->negative};
+                        literal_pattern = true;
+                    }
                     if (!literal_pattern && frame->variant_scope && expression
                         && lower) {
                         variant_arm = attached_symbol(grammar, lower->unit,
@@ -4604,6 +4700,93 @@ n00bb_lower_typeof(ir_lower_context_t *context, parse_visit_t *visit,
     return (ir_lower_result_t){IR_LOWER_VALUE, instruction->dest};
 }
 
+static bool
+n00bb_literal_fits_machine(ir_lit_t literal, ir_machine_t machine)
+{
+    if (machine.width == 0 || machine.width > 128) return false;
+    if (machine.class == IR_CLASS_UINT)
+        return !literal.neg && (machine.width == 128
+            || literal.mag < ((ir_uint_t)1 << machine.width));
+    if (machine.class != IR_CLASS_SINT) return false;
+    ir_uint_t limit = (ir_uint_t)1 << (machine.width - 1);
+    return literal.neg ? literal.mag <= limit : literal.mag < limit;
+}
+
+static ir_value_t *
+n00bb_emit_value_instruction(ir_lower_context_t *context, ir_op_t op,
+                             th_type *type, ir_value_t *left,
+                             ir_value_t *right, ir_span_t span)
+{
+    ir_instr_t *instruction = ir_lower_emit_instruction(context, op, span);
+    if (!instruction
+        || !ir_lower_set_temp_dest(context, instruction, "__n00bb_", type)
+        || (left && !ir_instr_operand_value(instruction, left))
+        || (right && !ir_instr_operand_value(instruction, right)))
+        return nullptr;
+    return instruction->dest;
+}
+
+static ir_lower_result_t
+n00bb_lower_enum_from_value(ir_lower_context_t *context,
+                            n00bb_lower_context_t *lower,
+                            parse_sym_entry_t *enum_symbol,
+                            ir_value_t *operand, th_type *target,
+                            ir_span_t span)
+{
+    th_type *bool_type = n00bb_ir_builtin_type(context->module, "bool");
+    ir_machine_t machine = ir_machine_of(context->module, operand->type);
+    ir_block_t *join = n00bb_branch_block(context, lower, "enum_cast_join");
+    ir_block_t *failure = n00bb_branch_block(context, lower,
+                                              "enum_cast_failed");
+    ir_instr_t *trap = failure ? ir_instr_add(failure, IR_OP_TRAP) : nullptr;
+    if (!join || !failure || !trap)
+        return lower_error(context, IR_DIAG_INTERNAL, span,
+            "could not emit the enum range check");
+    trap->span = span;
+    for (parse_sym_entry_t *member = enum_symbol->member_scope
+             ? enum_symbol->member_scope->first_in_scope : nullptr;
+         member; member = member->next_in_scope) {
+        if (member->kind != PARSE_SYM_ENUM_CONST || !member->has_comptime_value
+            || !member->comptime_value) continue;
+        n00bb_enum_value_t *ordinal = member->comptime_value;
+        ir_lit_t literal = {.mag = ordinal->magnitude, .neg = ordinal->negative};
+        if (!n00bb_literal_fits_machine(literal, machine)) continue;
+        ir_instr_t *constant = ir_lower_emit_instruction(context, IR_OP_CONST,
+                                                         span);
+        if (!constant
+            || !ir_lower_set_temp_dest(context, constant, "__n00bb_",
+                                       operand->type)
+            || !ir_instr_operand_int_lit(constant, literal))
+            return lower_error(context, IR_DIAG_INTERNAL, span,
+                "could not emit the enum member value");
+        ir_value_t *equal = n00bb_emit_value_instruction(context, IR_OP_EQ,
+            bool_type, operand, constant->dest, span);
+        ir_block_t *next = n00bb_branch_block(context, lower,
+                                               "enum_cast_test");
+        ir_instr_t *branch = equal && next
+            ? ir_instr_add(context->block, IR_OP_BRANCH) : nullptr;
+        if (!branch || !ir_instr_operand_value(branch, equal)
+            || !ir_instr_operand_block(branch, join)
+            || !ir_instr_operand_block(branch, next))
+            return lower_error(context, IR_DIAG_INTERNAL, span,
+                "could not emit the enum membership test");
+        branch->span = span;
+        context->block = next;
+    }
+    ir_instr_t *jump = ir_instr_add(context->block, IR_OP_JUMP);
+    if (!jump || !ir_instr_operand_block(jump, failure))
+        return lower_error(context, IR_DIAG_INTERNAL, span,
+            "could not emit the enum range check");
+    jump->span = span;
+    context->block = join;
+    ir_value_t *converted = n00bb_emit_value_instruction(context,
+        IR_OP_ENUM_FROM_VALUE, target, operand, nullptr, span);
+    if (!converted)
+        return lower_error(context, IR_DIAG_INTERNAL, span,
+            "could not emit the integer-to-enum conversion");
+    return (ir_lower_result_t){IR_LOWER_VALUE, converted};
+}
+
 static ir_lower_result_t
 n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
                  ir_value_t *const *operands, size_t operand_count,
@@ -4690,6 +4873,11 @@ n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
                 "could not emit the semantic enum-to-integer conversion");
         return (ir_lower_result_t){IR_LOWER_VALUE, conversion->dest};
     }
+    parse_sym_entry_t *target_enum = caller
+        ? n00bb_enum_type_symbol(caller->link_analysis, target) : nullptr;
+    if (target_enum && is_integer_type(from))
+        return n00bb_lower_enum_from_value(context, lower, target_enum,
+                                           operands[0], target, span);
     th_type *from_definition = th_type_definition(types, from);
     th_type *to_definition = th_type_definition(types, target);
     if (unsafe_cast) {
@@ -4885,12 +5073,10 @@ n00bb_lower_negate(ir_lower_context_t *context, parse_visit_t *visit,
     parse_tree_t *literal = lower && lower->grammar && visit
         ? n00bb_simple_switch_literal(lower->grammar, visit->node,
                                       &negative, &saw_sign) : nullptr;
-    bool minimum_i128 = literal && negative && saw_sign
-        && n00bb_parse_switch_integer(first_token_text(literal), &magnitude)
-        && magnitude.mag == ((ir_uint_t)1 << 127)
-        && ir_type_eq(context->module, result_type,
-                      n00bb_ir_builtin_type(context->module, "i128"));
-    if (minimum_i128 && operand_count == 1 && operands && operands[0])
+    bool folded_literal = literal && negative && saw_sign
+        && !literal_modifier(lower->grammar, literal).data
+        && n00bb_parse_switch_integer(first_token_text(literal), &magnitude);
+    if (folded_literal && operand_count == 1 && operands && operands[0])
         return (ir_lower_result_t){IR_LOWER_VALUE, operands[0]};
     if (operand_count != 1 || !operands || !operands[0] || !result_type)
         return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
@@ -4978,12 +5164,11 @@ n00bb_skip_i128_min_magnitude(ir_lower_context_t *context,
         break;
     }
     if (!literal || !negative || !saw_sign
-        || !n00bb_parse_switch_integer(first_token_text(literal), &magnitude)
-        || magnitude.mag != ((ir_uint_t)1 << 127)) return true;
-    th_type *type = core_tree_node_value(visit->node).type;
-    if (!type || !ir_type_eq(context->module, type,
-                             n00bb_ir_builtin_type(context->module, "i128")))
+        || literal_modifier(lower->grammar, literal).data
+        || !n00bb_parse_switch_integer(first_token_text(literal), &magnitude))
         return true;
+    th_type *type = core_tree_node_value(visit->node).type;
+    if (!type) return true;
     ir_span_t span = lower_span_for_tree(context, visit->node);
     ir_instr_t *constant = ir_lower_emit_instruction(context, IR_OP_CONST,
                                                      span);
@@ -15023,6 +15208,74 @@ static_global_type(parse_grammar_t *grammar, core_translation_unit_t *unit,
     return declared;
 }
 
+static void
+zero_fixed_shape_release_items(ir_global_init_value_t *value)
+{
+    if (value->kind != IR_GLOBAL_INIT_SEQUENCE) return;
+    ir_global_init_value_t *items =
+        (ir_global_init_value_t *)value->aggregate.items;
+    for (size_t i = 0; i < value->aggregate.count; i++)
+        zero_fixed_shape_release_items(&items[i]);
+    core_free(items);
+}
+
+static void
+zero_fixed_shape_release(ir_global_init_value_t *value)
+{
+    if (!value) return;
+    zero_fixed_shape_release_items(value);
+    core_free(value);
+}
+
+static ir_global_init_value_t *
+zero_fixed_shape_initializer(ir_module_t *module, th_type *type,
+                             const ir_shape_t *shape, uint32_t dimension)
+{
+    type = type ? th_resolve(type) : nullptr;
+    th_type *element = type && th_kind_of(type) == TH_SEQUENCE
+        ? th_resolve(th_seq_elem(type)) : nullptr;
+    ir_shape_extent_t extent;
+    if (!shape || !element || !ir_shape_extent(shape, dimension, &extent)
+        || extent.kind != IR_SHAPE_EXTENT_STATIC
+        || extent.static_value > SIZE_MAX / sizeof(ir_global_init_value_t))
+        return nullptr;
+    size_t count = (size_t)extent.static_value;
+    ir_global_init_value_t *value = core_alloc_array(ir_global_init_value_t, 1);
+    ir_global_init_value_t *items = core_alloc_array(ir_global_init_value_t,
+                                                     count ? count : 1);
+    memset(items, 0, (count ? count : 1) * sizeof(*items));
+    *value = (ir_global_init_value_t){
+        .kind = IR_GLOBAL_INIT_SEQUENCE,
+        .aggregate = {.items = items, .count = count},
+    };
+    bool nested = th_kind_of(element) == TH_SEQUENCE;
+    ir_class_t category = ir_machine_of(module, element).class;
+    bool valid = true;
+    for (size_t i = 0; valid && i < count; i++) {
+        if (nested) {
+            ir_global_init_value_t *inner = zero_fixed_shape_initializer(
+                module, element, shape, dimension + 1);
+            valid = inner != nullptr;
+            if (valid) {
+                items[i] = *inner;
+                core_free(inner);
+            }
+        }
+        else if (category == IR_CLASS_SINT || category == IR_CLASS_UINT)
+            items[i].kind = IR_GLOBAL_INIT_INT;
+        else if (category == IR_CLASS_BOOL)
+            items[i].kind = IR_GLOBAL_INIT_BOOL;
+        else if (category == IR_CLASS_FLOAT)
+            items[i].kind = IR_GLOBAL_INIT_FLOAT;
+        else valid = false;
+    }
+    if (!valid) {
+        zero_fixed_shape_release(value);
+        return nullptr;
+    }
+    return value;
+}
+
 static bool
 initialize_static_global(parse_grammar_t *grammar,
                          core_translation_unit_t *unit,
@@ -15045,7 +15298,12 @@ initialize_static_global(parse_grammar_t *grammar,
                 "const globals require a compile-time initializer");
             return false;
         }
-        return true;
+        ir_global_init_value_t *zero = zero_fixed_shape_initializer(module,
+            global->type, global->shape, 0);
+        bool zeroed = !zero
+            || ir_global_set_static_initializer(module, global, zero);
+        zero_fixed_shape_release(zero);
+        return zeroed;
     }
 
     n00bb_tu_state_t *state = tu_state(unit);
@@ -20402,6 +20660,8 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         "assert-stmt", n00bb_lower_assert_statement, nullptr);
     ok = ok && ir_lowerer_register_nt_visit(lowerer,
         "expression", n00bb_capture_compound_target, nullptr);
+    ok = ok && ir_lowerer_register_nt_visit(lowerer,
+        "case-expr-item", n00bb_prune_enum_case, nullptr);
     ok = ok && ir_lowerer_register_nt_visit(lowerer,
         "and-rhs", n00bb_lower_branch_body, nullptr)
         && ir_lowerer_register_nt_visit(lowerer,

@@ -889,10 +889,18 @@ n00bb_propagate_integer_range_node(parse_grammar_t *grammar,
             if (literal_shape && literal_child)
                 parsed->integer_literal_origin =
                     core_tree_node_value(literal_child).integer_literal_origin;
-            result = n00bb_range_new_var(store, node, type_minimum,
-                                         type_maximum);
-            if (result < 0 || !core_csp_post_eq(store, result, child))
-                result = -1;
+            const core_csp_domain_t *domain = core_result_get_ok(
+                core_csp_var_domain(store, child));
+            if (domain && !core_csp_dom_is_empty(domain)
+                && core_csp_dom_min(domain) >= type_minimum
+                && core_csp_dom_max(domain) <= type_maximum)
+                result = child;
+            else {
+                result = n00bb_range_new_var(store, node, type_minimum,
+                                             type_maximum);
+                if (result < 0 || !core_csp_post_eq(store, result, child))
+                    result = -1;
+            }
         }
     }
 

@@ -331,7 +331,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             && core_tree_num_children(node) == 3) {
             contextualize_record_literal(grammar, unit, state,
                 core_tree_child(node, 2),
-                record_literal_expected_type(grammar,
+                record_literal_expected_type(grammar, state->types,
                     core_tree_child(node, 2)));
         }
         if (nt_is(grammar, node, "return-stmt")) {
@@ -468,10 +468,9 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             link_source_location(node));
         return;
     }
-    if (!entering && flagset_declaration_ancestor(grammar, node)
+    if (!entering && state->flagset_scope
         && !cache_flagset_semantics(grammar, unit, state, node)) {
-        parse_tree_t *declaration = flagset_declaration_ancestor(grammar,
-                                                                  node);
+        parse_tree_t *declaration = state->flagset_scope;
         parse_sym_entry_t *owner = declaration
             ? core_tree_node_value(declaration).sym : nullptr;
         if (owner && !parse_sym_binding(owner,
@@ -574,6 +573,19 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 parse_nt_node_t *parsed = &core_tree_node_value(node);
                 bool array_context = parsed->type
                     && th_kind_of(th_resolve(parsed->type)) == TH_SEQUENCE;
+                if (!array_context) {
+                    th_type *expected = record_literal_expected_type(grammar,
+                        state->types, node);
+                    th_type *unified = expected
+                        && th_kind_of(th_resolve(expected)) == TH_SEQUENCE
+                        ? (parsed->type ? th_unify_in_place(state->types,
+                               parsed->type, expected) : expected)
+                        : nullptr;
+                    if (unified) {
+                        parsed->type = unified;
+                        array_context = true;
+                    }
+                }
                 bool inferred = !array_context
                     && user_litmod(state, CORE_STRING_STATIC("list"),
                                    CORE_STRING_STATIC("array"))
@@ -1066,9 +1078,12 @@ enclosing_array_element_type(parse_grammar_t *grammar, parse_tree_t *node)
             return type && th_kind_of(type) == TH_SEQUENCE
                 ? th_seq_elem(type) : nullptr;
         }
-        if (nt_is(grammar, parent, "list-elems")) {
+        bool grouped = core_tree_node_value(parent).group_top
+            && nt_is(grammar, core_tree_node_value(parent).parent,
+                     "list-elems");
+        if (grouped || nt_is(grammar, parent, "list-elems")) {
             if (!nt_is(grammar, child, "expression")
-                && !nt_is(grammar, child, "list-elems")) return nullptr;
+                && !core_tree_node_value(child).group_top) return nullptr;
             continue;
         }
         if (core_tree_num_children(parent) != 1
@@ -1122,6 +1137,9 @@ semantic_walk_prepare(parse_visit_t *visit)
     }
     frame->in_expression |= nt_is(context->grammar, visit->node,
                                    "expression");
+    if (nt_is(context->grammar, visit->node, "flagset-stmt")
+        && tu_state(unit))
+        tu_state(unit)->flagset_scope = visit->node;
     semantic_annotation_node(context, unit, visit->node, visit->parent,
                              SEMANTIC_PREPARE_ENTER, visit,
                              &frame->annotation_cache);
@@ -1175,6 +1193,9 @@ semantic_walk_after_exit(parse_visit_t *visit)
     semantic_annotation_node(walk->context, walk->unit, visit->node,
                              visit->parent, SEMANTIC_AFTER_EXIT, nullptr,
                              &frame->annotation_cache);
+    n00bb_tu_state_t *exiting_state = tu_state(walk->unit);
+    if (exiting_state && exiting_state->flagset_scope == visit->node)
+        exiting_state->flagset_scope = nullptr;
     if (frame->in_expression
         && !cache_alias_edges(walk->context->grammar, visit->node,
                               tu_state(walk->unit)))

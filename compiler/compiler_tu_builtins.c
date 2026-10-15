@@ -1048,6 +1048,30 @@ register_builtin_symbols(parse_annot_result_t *annotations,
         && init_symbol->callable_contract;
 }
 
+bool
+n00bb_register_operator_function(th_env *environment, th_ctx *types,
+                                 const char *trait, const char *method,
+                                 const char *owner, th_type *self,
+                                 th_type *other, th_type *result,
+                                 const char *module, const char *package)
+{
+    th_param parameters[] = {
+        {.mode = TH_IN, .type = self},
+        {.mode = TH_IN, .type = other},
+    };
+    th_type *signature = th_func_with_error(types, result,
+        th_name(types, "nil"), parameters, other ? 2 : 1, nullptr, nullptr, 0);
+    core_buffer_t qualified = {0};
+    core_buffer_printf(&qualified, "%s.%s.%s.%s", module, trait, owner,
+                       method);
+    bool registered = signature && qualified.data
+        && th_env_register_function(environment, qualified.data, method,
+                                    module, package, TH_ENV_PUBLIC,
+                                    signature);
+    core_buffer_release(&qualified);
+    return registered;
+}
+
 static bool
 register_builtin_binary_operators(th_env *environment, th_ctx *types)
 {
@@ -1095,21 +1119,9 @@ register_builtin_binary_operators(th_env *environment, th_ctx *types)
             if (operators[o].integer_only && (name[0] == 'f')) continue;
             th_type *self = th_name(types, name);
             th_type *other = operators[o].shift ? th_name(types, "int") : self;
-            th_param parameters[] = {
-                {.mode = TH_IN, .type = self},
-                {.mode = TH_IN, .type = other},
-            };
-            th_type *signature = th_func_with_error(types, self,
-                th_name(types, "nil"), parameters, 2, nullptr, nullptr, 0);
-            core_buffer_t qualified = {0};
-            core_buffer_printf(&qualified, "builtins.%s.%s.%s",
-                               operators[o].trait, name, operators[o].method);
-            bool registered = signature && qualified.data
-                && th_env_register_function(environment, qualified.data,
-                    operators[o].method, "builtins", "default",
-                    TH_ENV_PUBLIC, signature);
-            core_buffer_release(&qualified);
-            if (!registered) return false;
+            if (!n00bb_register_operator_function(environment, types,
+                    operators[o].trait, operators[o].method, name, self,
+                    other, self, "builtins", "default")) return false;
         }
         if (!strcmp(operators[o].trait, "Add")) {
             th_type *string = th_name(types, "string");
@@ -1163,19 +1175,9 @@ register_builtin_unary_operators(th_env *environment, th_ctx *types)
             const char *name = operators[o].boolean
                 ? "bool" : numeric_types[n];
             th_type *self = th_name(types, name);
-            th_param parameter = {.mode = TH_IN, .type = self};
-            th_type *signature = th_func_with_error(types, self,
-                th_name(types, "nil"), &parameter, 1, nullptr, nullptr, 0);
-            core_buffer_t qualified = {0};
-            core_buffer_printf(&qualified, "builtins.%s.%s.%s",
-                               operators[o].trait, name,
-                               operators[o].method);
-            bool registered = signature && qualified.data
-                && th_env_register_function(environment, qualified.data,
-                    operators[o].method, "builtins", "default",
-                    TH_ENV_PUBLIC, signature);
-            core_buffer_release(&qualified);
-            if (!registered) return false;
+            if (!n00bb_register_operator_function(environment, types,
+                    operators[o].trait, operators[o].method, name, self,
+                    nullptr, self, "builtins", "default")) return false;
         }
     }
     return true;

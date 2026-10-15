@@ -304,7 +304,7 @@ resolve_local_enum_constant(parse_grammar_t *grammar,
         || !parse_tree_set_resolution_symbol(parent, item)) return false;
     site->symbol = type;
     core_tree_node_value(site->node).type = type->type;
-    core_tree_node_value(parent).type = item->type;
+    (void)n00bb_unify_node_type(state->types, parent, item->type);
     return true;
 }
 
@@ -519,6 +519,37 @@ prepare_variant_payload_type(parse_grammar_t *grammar,
 }
 
 bool
+n00bb_unify_node_type(th_ctx *types, parse_tree_t *node, th_type *type)
+{
+    if (!node || core_tree_is_leaf(node) || !type) return false;
+    th_type *previous = core_tree_node_value(node).type;
+    th_type *resolved = previous && types
+        ? th_unify_in_place(types, previous, type) : type;
+    if (!resolved) return false;
+    core_tree_node_value(node).type = resolved;
+    return true;
+}
+
+bool
+n00bb_receiver_names_type(parse_grammar_t *grammar,
+                          core_translation_unit_t *unit,
+                          n00bb_tu_state_t *state, parse_tree_t *receiver,
+                          parse_sym_entry_t *type_symbol)
+{
+    if (!receiver || !type_symbol) return false;
+    parse_node_resolution_t resolution = parse_tree_resolution(receiver);
+    n00bb_link_use_site_t *site = state
+        ? link_use_site_for_node(state, receiver) : nullptr;
+    return (resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
+            && resolution.target.symbol == type_symbol)
+        || (site && site->symbol == type_symbol)
+        || (!core_tree_is_leaf(receiver)
+            && core_string_eq(core_tree_node_value(receiver).unresolved_name,
+                              type_symbol->name))
+        || attached_symbol(grammar, unit, receiver) == type_symbol;
+}
+
+bool
 check_local_record_field_reference(parse_grammar_t *grammar,
                                    core_translation_unit_t *unit,
                                    parse_tree_t *node)
@@ -580,18 +611,8 @@ check_local_record_field_reference(parse_grammar_t *grammar,
     core_string_t name = first_token_text(core_tree_child(node, 2));
     parse_sym_entry_t *field = parse_symtab_lookup_in(members, name);
     if (field && n00bb_flagset_member(field)) {
-        parse_node_resolution_t receiver_resolution =
-            parse_tree_resolution(receiver_node);
-        n00bb_link_use_site_t *receiver_site =
-            link_use_site_for_node(state, receiver_node);
-        if ((receiver_resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
-                && receiver_resolution.target.symbol == owner_type)
-            || (receiver_site && receiver_site->symbol == owner_type)
-            || (!core_tree_is_leaf(receiver_node)
-                && core_string_eq(
-                    core_tree_node_value(receiver_node).unresolved_name,
-                    owner_type->name))
-            || attached_symbol(grammar, unit, receiver_node) == owner_type)
+        if (n00bb_receiver_names_type(grammar, unit, state, receiver_node,
+                                      owner_type))
             return false;
         core_tree_node_value(node).type = th_name(state->types, "bool");
         parse_tree_set_resolution_symbol(node, field);
@@ -1737,8 +1758,17 @@ infer_sequence_modifier_type(parse_grammar_t *grammar,
     core_string_t prefix = literal_modifier(grammar, node);
     parse_nt_node_t *parsed = &core_tree_node_value(node);
     th_type *context_type = parsed->type;
-    if (!context_type)
-        context_type = record_literal_expected_type(grammar, node);
+    th_type *resolved_context = context_type
+        ? th_resolve(context_type) : nullptr;
+    if (!resolved_context || th_kind_of(resolved_context) == TH_VAR
+        || (th_kind_of(resolved_context) == TH_SEQUENCE
+            && th_kind_of(th_resolve(th_seq_elem(resolved_context)))
+                == TH_VAR)) {
+        th_type *expected = record_literal_expected_type(grammar,
+                                                         state->types, node);
+        if (expected && th_kind_of(th_resolve(expected)) == TH_SEQUENCE)
+            context_type = expected;
+    }
     bool default_array = !prefix.data && context_type
         && th_kind_of(th_resolve(context_type)) == TH_SEQUENCE;
     const n00bb_literal_registration_t *handler = n00bb_literal_handler(
@@ -2400,7 +2430,6 @@ infer_anonymous_record(parse_grammar_t *grammar, parse_tree_t *node,
     return true;
 }
 
-
 bool
 contextualize_record_literal(parse_grammar_t *grammar,
                              core_translation_unit_t *unit,
@@ -2491,13 +2520,56 @@ contextualize_record_literal(parse_grammar_t *grammar,
     return true;
 }
 
+static th_type *
+named_field_expected_type(parse_grammar_t *grammar, th_ctx *types,
+                          parse_tree_t *field, parse_tree_t *value)
+{
+    size_t count = core_tree_num_children(field);
+    if (!count || core_tree_child(field, count - 1) != value
+        || !core_tree_is_leaf(core_tree_child(field, 0))) return nullptr;
+    core_string_t name = parse_tree_leaf_text(core_tree_child(field, 0));
+    parse_tree_t *list = core_tree_node_value(field).parent;
+    while (list && nt_is(grammar, core_tree_node_value(list).parent,
+                         "named-field-list"))
+        list = core_tree_node_value(list).parent;
+    parse_tree_t *record = list && nt_is(grammar, list, "named-field-list")
+        ? core_tree_node_value(list).parent : nullptr;
+    if (!record || !nt_is(grammar, record, "tuple-or-paren")) return nullptr;
+    th_type *outer = record_literal_expected_type(grammar, types, record);
+    th_type *definition = outer ? th_type_definition(types, outer) : nullptr;
+    definition = definition ? th_resolve(definition) : nullptr;
+    return definition && th_kind_of(definition) == TH_RECORD
+        ? th_record_lookup(definition, name.data) : nullptr;
+}
+
+static th_type *
+list_element_expected_type(parse_grammar_t *grammar, th_ctx *types,
+                           parse_tree_t *elements)
+{
+    parse_tree_t *list = elements;
+    while (list && nt_is(grammar, list, "list-elems"))
+        list = core_tree_node_value(list).parent;
+    if (!list || !nt_is(grammar, list, "list-lit")) return nullptr;
+    th_type *outer = core_tree_node_value(list).type;
+    if (!outer || th_kind_of(th_resolve(outer)) != TH_SEQUENCE)
+        outer = record_literal_expected_type(grammar, types, list);
+    outer = outer ? th_resolve(outer) : nullptr;
+    return outer && th_kind_of(outer) == TH_SEQUENCE
+        ? th_seq_elem(outer) : nullptr;
+}
+
 th_type *
-record_literal_expected_type(parse_grammar_t *grammar, parse_tree_t *literal)
+record_literal_expected_type(parse_grammar_t *grammar, th_ctx *types,
+                             parse_tree_t *literal)
 {
     if (!literal) return nullptr;
     parse_tree_t *child = literal;
     for (parse_tree_t *parent = core_tree_node_value(child).parent; parent;
          child = parent, parent = core_tree_node_value(parent).parent) {
+        if (types && nt_is(grammar, parent, "named-field"))
+            return named_field_expected_type(grammar, types, parent, child);
+        if (types && nt_is(grammar, parent, "list-elems"))
+            return list_element_expected_type(grammar, types, parent);
         if (nt_is(grammar, parent, "sym-decl")) {
             parse_tree_t *type_spec = child_nt(grammar, parent, "type-spec");
             return child == child_nt(grammar, parent, "expression")
@@ -2527,6 +2599,9 @@ record_literal_expected_type(parse_grammar_t *grammar, parse_tree_t *literal)
             }
             return expected;
         }
+        if (core_tree_node_value(parent).group_top
+            && nt_is(grammar, core_tree_node_value(parent).parent,
+                     "list-elems")) continue;
         if (core_tree_num_children(parent) != 1
             || core_tree_child(parent, 0) != child) return nullptr;
     }
@@ -2539,7 +2614,8 @@ contextualize_record_fields_before_inference(parse_grammar_t *grammar,
                                               n00bb_tu_state_t *state,
                                               parse_tree_t *literal)
 {
-    th_type *expected = record_literal_expected_type(grammar, literal);
+    th_type *expected = record_literal_expected_type(grammar, state->types,
+                                                     literal);
     th_type *definition = expected
         ? th_type_definition(state->types, expected) : nullptr;
     parse_tree_t *fields = child_nt(grammar, literal, "named-field-list");
@@ -4005,28 +4081,77 @@ direct_ref_target(parse_grammar_t *grammar, parse_tree_t *node)
     return nullptr;
 }
 
+static const struct {
+    const char *source;
+    const char *canonical;
+} N00BB_CANONICAL_TYPE_NAMES[] = {
+    {"i64", "int"},
+    {"u64", "uint"},
+    {"float", "f64"},
+    {"Array", "array"},
+    {"Array_Locking", "array_locking"},
+    {"List", "builtin.containers.list.List"},
+    {"List_Locking", "list_locking"},
+    {"Set", "builtin.containers.set.Set"},
+    {"Set_Locking", "set_locking"},
+    {"Dict", "builtin.containers.dict.Dict"},
+    {"Dict_Locking", "dict_locking"},
+    {"Option", "option"},
+    {"View", "builtin.containers.view.View"},
+    {"Atomic", "atomic"},
+    {"Ref", "ref"},
+    {"Tuple", "tuple"},
+    {"Any", "any"},
+};
+
+static const struct {
+    const char *name;
+    int arity;
+} N00BB_GENERIC_TYPE_ARITIES[] = {
+    {"Array", 1}, {"Array_Locking", 1}, {"List", 1}, {"List_Locking", 1},
+    {"Set", 1}, {"Set_Locking", 1}, {"Option", 1}, {"View", 1},
+    {"Atomic", 1}, {"Ref", 1}, {"Dict", 2}, {"Dict_Locking", 2},
+    {"Tuple", -2},
+};
+
+static const char *const N00BB_NAMED_BUILTIN_TYPES[] = {
+    "Allocator", "Any", "byte", "char", "string", "typespec",
+};
+
+static bool
+string_is_cstr(core_string_t text, const char *candidate)
+{
+    return core_string_eq(text, core_string_borrow(candidate,
+                                                   strlen(candidate)));
+}
+
+static int
+generic_type_arity_string(core_string_t name)
+{
+    for (size_t i = 0; i < sizeof(N00BB_GENERIC_TYPE_ARITIES)
+                            / sizeof(N00BB_GENERIC_TYPE_ARITIES[0]); i++)
+        if (string_is_cstr(name, N00BB_GENERIC_TYPE_ARITIES[i].name))
+            return N00BB_GENERIC_TYPE_ARITIES[i].arity;
+    return -1;
+}
+
+static const char *
+canonical_type_name_entry(core_string_t name)
+{
+    for (size_t i = 0; i < sizeof(N00BB_CANONICAL_TYPE_NAMES)
+                            / sizeof(N00BB_CANONICAL_TYPE_NAMES[0]); i++)
+        if (string_is_cstr(name, N00BB_CANONICAL_TYPE_NAMES[i].source))
+            return N00BB_CANONICAL_TYPE_NAMES[i].canonical;
+    return nullptr;
+}
+
 const char *
 canonical_builtin_type_name(const char *name)
 {
     if (!name) return nullptr;
-    if (!strcmp(name, "i64")) return "int";
-    if (!strcmp(name, "u64")) return "uint";
-    if (!strcmp(name, "float")) return "f64";
-    if (!strcmp(name, "Array")) return "array";
-    if (!strcmp(name, "Array_Locking")) return "array_locking";
-    if (!strcmp(name, "List")) return "builtin.containers.list.List";
-    if (!strcmp(name, "List_Locking")) return "list_locking";
-    if (!strcmp(name, "Set")) return "builtin.containers.set.Set";
-    if (!strcmp(name, "Set_Locking")) return "set_locking";
-    if (!strcmp(name, "Dict")) return "builtin.containers.dict.Dict";
-    if (!strcmp(name, "Dict_Locking")) return "dict_locking";
-    if (!strcmp(name, "Option")) return "option";
-    if (!strcmp(name, "View")) return "builtin.containers.view.View";
-    if (!strcmp(name, "Atomic")) return "atomic";
-    if (!strcmp(name, "Ref")) return "ref";
-    if (!strcmp(name, "Tuple")) return "tuple";
-    if (!strcmp(name, "Any")) return "any";
-    return name;
+    const char *canonical = canonical_type_name_entry(
+        core_string_borrow(name, strlen(name)));
+    return canonical ? canonical : name;
 }
 
 parse_sym_entry_t *
@@ -4152,37 +4277,31 @@ bind_declared_type_from_node(parse_grammar_t *grammar, parse_tree_t *node)
     resolution.target.symbol->type = type;
     core_tree_node_value(node).type = type;
 }
-static int
-source_builtin_generic_type_arity(const char *name)
+
+
+bool
+n00bb_builtin_type_name_string(core_string_t name)
 {
-    if (!name) return -1;
-    if (!strcmp(name, "Array") || !strcmp(name, "Array_Locking")
-        || !strcmp(name, "List") || !strcmp(name, "List_Locking")
-        || !strcmp(name, "Set") || !strcmp(name, "Set_Locking")
-        || !strcmp(name, "Option") || !strcmp(name, "View")
-        || !strcmp(name, "Atomic") || !strcmp(name, "Ref")) return 1;
-    if (!strcmp(name, "Dict") || !strcmp(name, "Dict_Locking")) return 2;
-    if (!strcmp(name, "Tuple")) return -2;
-    return -1;
+    if (!name.data) return false;
+    if (generic_type_arity_string(name) != -1) return true;
+    for (size_t i = 0; i < sizeof(N00BB_NAMED_BUILTIN_TYPES)
+                            / sizeof(N00BB_NAMED_BUILTIN_TYPES[0]); i++)
+        if (string_is_cstr(name, N00BB_NAMED_BUILTIN_TYPES[i])) return true;
+    const char *canonical = canonical_type_name_entry(name);
+    const ir_profile_t *profile = n00bb_type_profile();
+    for (size_t i = 0; i < profile->n_scalars; i++)
+        if (string_is_cstr(name, profile->scalars[i].type_text)
+            || (canonical
+                && !strcmp(canonical, profile->scalars[i].type_text)))
+            return true;
+    return false;
 }
-
-
 
 bool
 builtin_type_name(const char *name)
 {
-    const ir_profile_t *profile = n00bb_type_profile();
-    if (!name) return false;
-    if (source_builtin_generic_type_arity(name) != -1
-        || !strcmp(name, "Allocator") || !strcmp(name, "Any")
-        || !strcmp(name, "byte") || !strcmp(name, "char")
-        || !strcmp(name, "string") || !strcmp(name, "typespec"))
-        return true;
-    const char *canonical = canonical_builtin_type_name(name);
-    for (size_t i = 0; i < profile->n_scalars; i++)
-        if (!strcmp(name, profile->scalars[i].type_text)
-            || !strcmp(canonical, profile->scalars[i].type_text)) return true;
-    return false;
+    return name && n00bb_builtin_type_name_string(
+        core_string_borrow(name, strlen(name)));
 }
 
 bool
@@ -4725,7 +4844,8 @@ refine_integer_literal_type(parse_grammar_t *grammar,
         && !core_string_eq(terminal, CORE_STRING_STATIC("HEX_LIT")))
         return true;
     ir_lit_t literal = {0};
-    if (!n00bb_parse_switch_integer(first_token_text(node), &literal)) {
+    if (literal_modifier(grammar, node).data
+        || !n00bb_parse_switch_integer(first_token_text(node), &literal)) {
         return true;
     }
     ir_uint_t i64_max = (ir_uint_t)INT64_MAX;
@@ -4746,10 +4866,15 @@ refine_integer_literal_type(parse_grammar_t *grammar,
         }
         ancestor = core_tree_node_value(ancestor).parent;
     }
+    ir_uint_t i64_limit = (ir_uint_t)1 << 63;
     ir_uint_t i128_limit = (ir_uint_t)1 << 127;
-    if (literal.mag > i128_limit || (literal.mag == i128_limit && !negative))
-        return true;
-    th_type *wide = th_name(state->types, "i128");
+    const char *fit = negative
+        ? (literal.mag <= i64_limit ? "i64"
+           : literal.mag <= i128_limit ? "i128" : nullptr)
+        : (literal.mag <= (ir_uint_t)UINT64_MAX ? "u64"
+           : literal.mag < i128_limit ? "i128" : "u128");
+    if (!fit) return true;
+    th_type *wide = th_name(state->types, canonical_builtin_type_name(fit));
     if (!wide) return false;
     core_tree_node_value(node).type = wide;
     return true;
@@ -10175,6 +10300,7 @@ refine_flagset_operator_result(parse_grammar_t *grammar,
         th_type *result = core_tree_node_value(node).type;
         if (operand && result
             && (is_integer_type(operand)
+                || th_kind_of(th_resolve(operand)) == TH_VAR
                 || n00bb_flagset_type(unit, state, operand, nullptr))
             && th_unify_in_place(state->types, operand, result)) return true;
         core_diagnostics_report_at(core_translation_unit_diagnostics(unit),
@@ -11007,6 +11133,19 @@ literal_modifier_terminal(parse_grammar_t *grammar, parse_tree_t *leaf,
     return nt_is(grammar, parent, "tuple-or-paren")
         && parse_tree_leaf_is(leaf, CORE_STRING_STATIC(")"));
 }
+static void
+push_ungrouped_children(parse_tree_t *node,
+                        core_list_t(parse_tree_ptr_t) *children)
+{
+    for (size_t i = 0; i < core_tree_num_children(node); i++) {
+        parse_tree_t *child = core_tree_child(node, i);
+        if (!core_tree_is_leaf(child)
+            && core_tree_node_value(child).group_top)
+            push_ungrouped_children(child, children);
+        else core_list_push(*children, child);
+    }
+}
+
 bool
 cache_static_literal_node(parse_grammar_t *grammar,
                           n00bb_tu_state_t *state, parse_tree_t *node)
@@ -11035,8 +11174,11 @@ cache_static_literal_node(parse_grammar_t *grammar,
              || nt_is(grammar, node, "named-field-list")
              || nt_is(grammar, node, "tuple-or-paren"))) {
         is_static = true;
-        for (size_t i = 0; i < core_tree_num_children(node); i++) {
-            parse_tree_t *child = core_tree_child(node, i);
+        core_list_t(parse_tree_ptr_t) children =
+            core_list_new(parse_tree_ptr_t);
+        push_ungrouped_children(node, &children);
+        for (size_t i = 0; i < children.len; i++) {
+            parse_tree_t *child = children.data[i];
             if (!core_tree_is_leaf(child)
                 && (!n00bb_node_facts(child)
                     || !n00bb_node_facts(child)->static_literal)) {
@@ -11044,6 +11186,7 @@ cache_static_literal_node(parse_grammar_t *grammar,
                 break;
             }
         }
+        core_list_free(children);
     }
     if (!is_static) return true;
     n00bb_node_facts_t *facts = n00bb_ensure_node_facts(state, node);
@@ -11082,10 +11225,12 @@ cache_ordered_literal_children(parse_grammar_t *grammar,
         || nt_is(grammar, node, "tuple-or-paren");
     if (!list_node) return true;
 
+    core_list_t(parse_tree_ptr_t) children = core_list_new(parse_tree_ptr_t);
+    push_ungrouped_children(node, &children);
     core_list_t(parse_tree_ptr_t) items = core_list_new(parse_tree_ptr_t);
-    for (size_t i = 0; i < core_tree_num_children(node); i++)
+    for (size_t i = 0; i < children.len; i++)
     {
-        parse_tree_t *child = core_tree_child(node, i);
+        parse_tree_t *child = children.data[i];
         bool value_node = nt_is(grammar, child, "expression")
             || nt_is(grammar, child, "named-field");
         if (value_node) {
@@ -11101,6 +11246,7 @@ cache_ordered_literal_children(parse_grammar_t *grammar,
         if (list_child) {
             n00bb_ordered_nodes_t *cached = n00bb_node_ordered_nodes(child);
             if (!cached) {
+                core_list_free(children);
                 core_list_free(items);
                 return false;
             }
@@ -11110,6 +11256,7 @@ cache_ordered_literal_children(parse_grammar_t *grammar,
     }
 
     bool ok = store_ordered_children(state, node, &items);
+    core_list_free(children);
     core_list_free(items);
     return ok;
 }

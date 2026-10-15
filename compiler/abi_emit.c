@@ -2139,12 +2139,13 @@ n00bb_abi_emit_unit(
             .name = target->object_format == CORE_TARGET_OBJECT_MACH_O
                 ? "__n00b_aggregate"
                 : target->object_format == CORE_TARGET_OBJECT_COFF
-                    ? ".rdata$A" : ".rodata.n00b_aggregate",
+                    ? ".data$A" : ".data.n00b_aggregate",
             .segment = target->object_format == CORE_TARGET_OBJECT_MACH_O
-                ? "__DATA_CONST" : nullptr,
+                ? "__DATA" : nullptr,
             .bytes = (const uint8_t *)storage_rows.aggregates.data,
             .size = storage_rows.aggregates.byte_len,
             .alignment = storage_rows.aggregate_alignment,
+            .writable = true,
         }));
         aggregate_symbol = (core_object_emit_symbol_t){
             .name = "n00b_aggregate_pool",

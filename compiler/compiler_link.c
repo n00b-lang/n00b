@@ -209,18 +209,12 @@ bind_resolved_field_type(core_translation_unit_t *unit,
                          n00bb_tu_state_t *state, parse_tree_t *node,
                          th_type *field_type)
 {
-    th_type *previous = core_tree_node_value(node).type;
-    th_type *resolved = previous
-        ? th_unify_in_place(state->types, previous, field_type) : field_type;
-    if (!resolved) {
-        core_diagnostics_report_at(core_translation_unit_diagnostics(unit),
-            unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0002"),
-            CORE_STRING_STATIC("field access type conflicts with its resolved field"),
-            link_source_location(node));
-        return false;
-    }
-    core_tree_node_value(node).type = resolved;
-    return true;
+    if (n00bb_unify_node_type(state->types, node, field_type)) return true;
+    core_diagnostics_report_at(core_translation_unit_diagnostics(unit),
+        unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0002"),
+        CORE_STRING_STATIC("field access type conflicts with its resolved field"),
+        link_source_location(node));
+    return false;
 }
 
 static th_type *
@@ -235,6 +229,20 @@ field_receiver_type(parse_grammar_t *grammar, core_translation_unit_t *unit,
     }
     n00bb_tu_state_t *state = tu_state(unit);
     return n00bb_dereferenced_type(state ? state->types : nullptr, type);
+}
+
+static th_type *
+resolved_member_type(parse_grammar_t *grammar, core_translation_unit_t *unit,
+                     n00bb_tu_state_t *state, parse_tree_t *node,
+                     parse_sym_entry_t *member, th_type *receiver_type)
+{
+    if (member->kind == PARSE_SYM_ENUM_CONST)
+        return n00bb_flagset_member(member)
+            && n00bb_flagset_instance_access(grammar, unit, node, member)
+            ? th_name(state->types, "bool") : member->type;
+    return receiver_type
+        ? th_record_lookup_in(state->types, receiver_type, member->name.data)
+        : nullptr;
 }
 
 bool
@@ -258,15 +266,25 @@ resolve_inferred_field_references(core_link_unit_t *link,
             if (variant_assignment_arm(analysis->grammar, unit, node))
                 continue;
             parse_node_resolution_t existing = parse_tree_resolution(node);
-            if (existing.kind == PARSE_NODE_RESOLUTION_SYMBOL) {
+            bool resolved_to_receiver = existing.kind
+                    == PARSE_NODE_RESOLUTION_SYMBOL
+                && existing.target.symbol
+                && existing.target.symbol->kind == PARSE_SYM_VARIABLE
+                && !existing.target.symbol->is_field
+                && attached_symbol(analysis->grammar, unit,
+                       core_tree_child(node, 0)) == existing.target.symbol;
+            if (existing.kind == PARSE_NODE_RESOLUTION_SYMBOL
+                && !resolved_to_receiver) {
                 parse_sym_entry_t *field = existing.target.symbol;
-                if (field && field->is_field && field->type) {
+                if (field && field->type && (field->is_field
+                        || field->kind == PARSE_SYM_ENUM_CONST)) {
                     parse_tree_t *receiver = core_tree_child(node, 0);
-                    th_type *receiver_type = field_receiver_type(
-                        analysis->grammar, unit, receiver);
-                    th_type *member_type = receiver_type
-                        ? th_record_lookup_in(state->types, receiver_type,
-                                              field->name.data) : nullptr;
+                    th_type *receiver_type = field->is_field
+                        ? field_receiver_type(analysis->grammar, unit,
+                                              receiver) : nullptr;
+                    th_type *member_type = resolved_member_type(
+                        analysis->grammar, unit, state, node, field,
+                        receiver_type);
                     if (!member_type) {
                         core_diagnostics_report_at(
                             core_translation_unit_diagnostics(unit), unit,
@@ -387,17 +405,8 @@ resolve_inferred_field_references(core_link_unit_t *link,
                 return false;
             }
 
-            bool flagset_member = enum_constant
-                && core_string_eq(record_scope->scope_tag,
-                                  CORE_STRING_STATIC("flagset"))
-                && n00bb_flagset_instance_access(analysis->grammar, unit,
-                                                  node, field);
-            th_type *member_type = flagset_member
-                ? th_name(state->types, "bool")
-                : enum_constant ? field->type
-                : th_record_lookup_in(state->types,
-                                                       receiver_type,
-                                                        member.data);
+            th_type *member_type = resolved_member_type(analysis->grammar,
+                unit, state, node, field, receiver_type);
             if (!member_type) {
                 core_diagnostics_report_at(
                     core_translation_unit_diagnostics(unit), unit,
@@ -4223,6 +4232,32 @@ environment_has_trait(const th_env *environment, const char *name)
     return false;
 }
 
+static bool
+register_flagset_operators(th_env *defaults, th_ctx *types,
+                           core_translation_unit_t *unit,
+                           parse_sym_entry_t *symbol, th_type *flagset)
+{
+    static const char *const operators[][2] = {
+        {"Add", "__add"},
+        {"Subtract", "__subtract"},
+        {"Bit_And", "__bit_and"},
+        {"Bit_Or", "__bit_or"},
+        {"Bit_Xor", "__bit_xor"},
+    };
+    char *owner = core_strndup(symbol->name.data, symbol->name.u8_bytes);
+    core_string_t package = n00bb_package_id(unit);
+    char *package_name = core_strndup(package.data, package.u8_bytes);
+    bool ok = owner && package_name;
+    for (size_t i = 0; ok && i < sizeof(operators) / sizeof(operators[0]);
+         i++)
+        ok = n00bb_register_operator_function(defaults, types,
+            operators[i][0], operators[i][1], owner, flagset, flagset, flagset,
+            unit->module.identifier.data, package_name);
+    core_free(owner);
+    core_free(package_name);
+    return ok;
+}
+
 bool
 register_builtin_value_defaults(th_env *defaults, const th_env *base,
                                  core_link_unit_t *link,
@@ -4263,6 +4298,12 @@ register_builtin_value_defaults(th_env *defaults, const th_env *base,
                             symbol->member_scope->scope_tag,
                             CORE_STRING_STATIC("flagset")));
                 if (!record && !scalar) continue;
+                if (n00bb_flagset_type(unit, state, receiver, nullptr)
+                    && !register_flagset_operators(defaults, state->types,
+                        unit, symbol, receiver)) {
+                    th_ctx_free(probe);
+                    return false;
+                }
                 th_type *shape = th_type_definition(state->types, receiver);
                 if (!th_is_closed(state->types, receiver)
                     || (record && (!shape

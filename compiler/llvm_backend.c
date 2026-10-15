@@ -1469,6 +1469,27 @@ emit_trap(lower_state_t *state)
     emit_trap_reason(state, "runtime check failed");
 }
 
+static LLVMValueRef
+bitset_mask(lower_state_t *state, th_type *type)
+{
+    ir_module_t *source = state->function->owner;
+    th_type *representation = ir_type_definition(source, type);
+    uint64_t bits = 0;
+    th_bitint_flavor flavor = TH_BITINT_UNSIGNED;
+    LLVMTypeRef storage = value_type(source, type,
+                                     LLVMGetModuleContext(state->module));
+    if (!representation || !storage
+        || !th_bitint_info(representation, &bits, &flavor)
+        || LLVMGetTypeKind(storage) != LLVMIntegerTypeKind
+        || bits > LLVMGetIntTypeWidth(storage) || bits > 128) return nullptr;
+    uint64_t words[2] = {
+        bits >= 64 ? ~(uint64_t)0 : ((uint64_t)1 << bits) - 1,
+        bits <= 64 ? 0 : bits >= 128 ? ~(uint64_t)0
+                                     : ((uint64_t)1 << (bits - 64)) - 1,
+    };
+    return LLVMConstIntOfArbitraryPrecision(storage, 2, words);
+}
+
 static void
 emit_trap_if(lower_state_t *state, LLVMValueRef condition)
 {
@@ -3910,6 +3931,408 @@ cached_record_array_value(lower_state_t *state, ir_module_t *source,
     return nullptr;
 }
 
+typedef enum : uint8_t {
+    OPTION_REPR_POINTER,
+    OPTION_REPR_PACKED,
+    OPTION_REPR_SHARED,
+    OPTION_REPR_TAGGED,
+} option_repr_kind_t;
+
+typedef struct {
+    option_repr_kind_t kind;
+    th_type *payload_type;
+    LLVMTypeRef storage;
+    LLVMTypeRef payload;
+    uint64_t presence_bit;
+    uint8_t presence_mask;
+} option_repr_t;
+
+static bool
+option_repr(ir_module_t *module, th_type *type, LLVMContextRef context,
+            option_repr_t *out)
+{
+    th_type *payload_type = type ? option_payload_type(type) : nullptr;
+    LLVMTypeRef storage = payload_type
+        ? value_type(module, type, context) : nullptr;
+    if (!storage || !out) return false;
+    *out = (option_repr_t){
+        .payload_type = payload_type,
+        .storage = storage,
+        .payload = value_type(module, payload_type, context),
+        .presence_mask = 1,
+    };
+    if (LLVMGetTypeKind(storage) == LLVMPointerTypeKind) {
+        out->kind = OPTION_REPR_POINTER;
+        return true;
+    }
+    uint64_t bit = 0;
+    if (packed_option_type(module, type, context, &bit) == storage) {
+        out->kind = OPTION_REPR_PACKED;
+        out->presence_bit = bit;
+        return true;
+    }
+    if (LLVMGetTypeKind(storage) != LLVMStructTypeKind
+        || LLVMCountStructElementTypes(storage) != 2) return false;
+    uint8_t mask = 0;
+    if (shared_option_value_type(module, type, context, &mask) == storage) {
+        out->kind = OPTION_REPR_SHARED;
+        out->presence_mask = mask;
+        return true;
+    }
+    out->kind = OPTION_REPR_TAGGED;
+    return true;
+}
+
+static bool
+constant_image(LLVMTargetDataRef target, LLVMValueRef value,
+               uint8_t *bytes, uint64_t size)
+{
+    LLVMTypeRef type = LLVMTypeOf(value);
+    uint64_t extent = LLVMStoreSizeOfType(target, type);
+    if (extent > size) return false;
+    if (LLVMIsNull(value)) return true;
+    switch (LLVMGetTypeKind(type)) {
+    case LLVMIntegerTypeKind: {
+        unsigned width = LLVMGetIntTypeWidth(type);
+        if (width > 64) return false;
+        uint64_t bits = LLVMConstIntGetZExtValue(value);
+        for (uint64_t b = 0; b < extent && b < 8; b++)
+            bytes[b] = (uint8_t)(bits >> (b * 8));
+        return true;
+    }
+    case LLVMStructTypeKind: {
+        unsigned count = LLVMCountStructElementTypes(type);
+        for (unsigned i = 0; i < count; i++) {
+            uint64_t offset = LLVMOffsetOfElement(target, type, i);
+            LLVMValueRef element = LLVMGetAggregateElement(value, i);
+            if (!element || offset > size
+                || !constant_image(target, element, bytes + offset,
+                                   size - offset)) return false;
+        }
+        return true;
+    }
+    case LLVMArrayTypeKind: {
+        LLVMTypeRef element_type = LLVMGetElementType(type);
+        uint64_t stride = LLVMABISizeOfType(target, element_type);
+        unsigned count = LLVMGetArrayLength(type);
+        for (unsigned i = 0; i < count; i++) {
+            LLVMValueRef element = LLVMGetAggregateElement(value, i);
+            if (!element || i * stride > size
+                || !constant_image(target, element, bytes + i * stride,
+                                   size - i * stride)) return false;
+        }
+        return true;
+    }
+    default:
+        return false;
+    }
+}
+
+static LLVMValueRef
+constant_struct_like(LLVMTypeRef type, LLVMValueRef *fields, unsigned count)
+{
+    return LLVMGetStructName(type)
+        ? LLVMConstNamedStruct(type, fields, count)
+        : LLVMConstStructInContext(LLVMGetTypeContext(type), fields, count,
+                                   LLVMIsPackedStruct(type));
+}
+
+static LLVMValueRef
+option_some_constant(LLVMModuleRef module, const option_repr_t *repr,
+                     LLVMValueRef payload)
+{
+    if (!repr || !payload) return nullptr;
+    LLVMContextRef context = LLVMGetModuleContext(module);
+    switch (repr->kind) {
+    case OPTION_REPR_POINTER:
+        return LLVMTypeOf(payload) == repr->storage ? payload : nullptr;
+    case OPTION_REPR_SHARED: {
+        if (LLVMTypeOf(payload) != repr->storage) return nullptr;
+        LLVMValueRef tag = LLVMGetAggregateElement(payload, 1);
+        LLVMValueRef fields[] = {
+            LLVMGetAggregateElement(payload, 0),
+            tag ? LLVMConstInt(LLVMTypeOf(tag),
+                (LLVMConstIntGetZExtValue(tag) | repr->presence_mask) & 0xffu,
+                false) : nullptr,
+        };
+        return fields[0] && fields[1]
+            ? constant_struct_like(repr->storage, fields, 2) : nullptr;
+    }
+    case OPTION_REPR_TAGGED: {
+        if (LLVMStructGetTypeAtIndex(repr->storage, 0) != LLVMTypeOf(payload))
+            return nullptr;
+        LLVMValueRef fields[] = {
+            payload,
+            LLVMConstInt(LLVMStructGetTypeAtIndex(repr->storage, 1),
+                         repr->presence_mask, false),
+        };
+        return constant_struct_like(repr->storage, fields, 2);
+    }
+    case OPTION_REPR_PACKED: {
+        LLVMTargetDataRef target = LLVMGetModuleDataLayout(module);
+        uint64_t size = LLVMStoreSizeOfType(target, repr->storage);
+        if (!size || repr->presence_bit >= size * 8) return nullptr;
+        uint64_t words_count = (size + 7) / 8;
+        uint64_t *words = calloc(words_count, sizeof(*words));
+        uint8_t *bytes = calloc(words_count * 8, 1);
+        bool valid = words && bytes
+            && constant_image(target, payload, bytes, size);
+        LLVMValueRef result = nullptr;
+        if (valid) {
+            bytes[repr->presence_bit / 8] |=
+                (uint8_t)(1u << (repr->presence_bit % 8));
+            for (uint64_t w = 0; w < words_count; w++)
+                for (unsigned b = 0; b < 8; b++)
+                    words[w] |= (uint64_t)bytes[w * 8 + b] << (b * 8);
+            if (LLVMGetTypeKind(repr->storage) == LLVMIntegerTypeKind)
+                result = LLVMConstIntOfArbitraryPrecision(repr->storage,
+                    (unsigned)words_count, words);
+            else if (LLVMGetTypeKind(repr->storage) == LLVMArrayTypeKind
+                && LLVMGetArrayLength(repr->storage) == words_count) {
+                LLVMValueRef *elements = calloc(words_count,
+                                                sizeof(*elements));
+                if (elements) {
+                    for (uint64_t w = 0; w < words_count; w++)
+                        elements[w] = LLVMConstInt(
+                            LLVMInt64TypeInContext(context), words[w], false);
+                    result = LLVMConstArray(LLVMInt64TypeInContext(context),
+                        elements, (unsigned)words_count);
+                    free(elements);
+                }
+            }
+        }
+        free(words);
+        free(bytes);
+        return result;
+    }
+    }
+    return nullptr;
+}
+
+static LLVMValueRef
+static_packed_array_value(lower_state_t *state, ir_module_t *source,
+                          th_type *element,
+                          const ir_global_init_value_t *init,
+                          uint64_t packed_width, bool constant)
+{
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMTypeRef element_type = value_type(source, element, context);
+    uint64_t count = init->aggregate.count;
+    if (!element_type || LLVMGetTypeKind(element_type) != LLVMIntegerTypeKind
+        || packed_width > 64 || count > UINT32_MAX
+        || count > (UINT64_MAX - 7) / packed_width) return nullptr;
+    uint64_t payload_bytes = (count * packed_width + 7) / 8;
+    uint8_t *bytes = calloc(payload_bytes ? payload_bytes : 1, 1);
+    if (!bytes) return nullptr;
+    ir_machine_t machine = ir_machine_of(source, element);
+    bool valid = true;
+    for (uint64_t i = 0; valid && i < count; i++) {
+        const ir_global_init_value_t *item = &init->aggregate.items[i];
+        LLVMValueRef constant_item = item->kind == IR_GLOBAL_INIT_BOOL
+            ? integer_constant(machine, element_type,
+                               (ir_lit_t){.mag = item->boolean})
+            : item->kind == IR_GLOBAL_INIT_INT
+                ? integer_constant(machine, element_type, item->integer)
+                : nullptr;
+        valid = constant_item != nullptr;
+        if (!valid) break;
+        uint64_t bits = LLVMConstIntGetZExtValue(constant_item);
+        if (packed_width < 64) bits &= (UINT64_C(1) << packed_width) - 1;
+        for (uint64_t b = 0; b < packed_width; b++)
+            if ((bits >> b) & 1) {
+                uint64_t position = i * packed_width + b;
+                bytes[position >> 3] |= (uint8_t)(1u << (position & 7));
+            }
+    }
+    if (!valid) {
+        free(bytes);
+        return nullptr;
+    }
+    LLVMValueRef contents = LLVMConstStringInContext(context,
+        (const char *)bytes, (unsigned)(payload_bytes ? payload_bytes : 1),
+        true);
+    free(bytes);
+    LLVMValueRef data = LLVMAddGlobal(state->module, LLVMTypeOf(contents),
+                                      "n00bb.static.packed.array");
+    LLVMSetInitializer(data, contents);
+    LLVMSetAlignment(data, 8);
+    LLVMSetGlobalConstant(data, constant);
+    LLVMSetLinkage(data, LLVMPrivateLinkage);
+    return array_value_with_descriptor(state, data, count);
+}
+
+static LLVMValueRef
+static_init_value(lower_state_t *state, ir_module_t *source, th_type *type,
+                  const ir_global_init_value_t *init, bool constant);
+
+static const ir_global_init_value_t *
+static_record_item(const ir_global_init_value_t *init, const char *member)
+{
+    for (size_t i = 0; i < init->aggregate.count; i++) {
+        const ir_global_init_value_t *item = &init->aggregate.items[i];
+        if (item->member && member && !strcmp(item->member, member))
+            return item;
+    }
+    return nullptr;
+}
+
+static LLVMValueRef
+static_inline_array_value(lower_state_t *state, ir_module_t *source,
+                          th_type *array_type, LLVMTypeRef field_type,
+                          const ir_global_init_value_t *item, bool constant)
+{
+    th_type *element = th_kind_of(th_resolve(array_type)) == TH_SEQUENCE
+        ? th_seq_elem(th_resolve(array_type)) : nullptr;
+    if (!element || LLVMGetTypeKind(field_type) != LLVMArrayTypeKind
+        || item->kind != IR_GLOBAL_INIT_SEQUENCE
+        || item->aggregate.count != LLVMGetArrayLength(field_type))
+        return nullptr;
+    LLVMTypeRef element_type = LLVMGetElementType(field_type);
+    unsigned count = LLVMGetArrayLength(field_type);
+    LLVMValueRef *items = calloc(count ? count : 1, sizeof(*items));
+    if (!items) return nullptr;
+    bool valid = true;
+    for (unsigned i = 0; valid && i < count; i++) {
+        items[i] = static_init_value(state, source, element,
+                                     &item->aggregate.items[i], constant);
+        valid = items[i] && LLVMTypeOf(items[i]) == element_type;
+    }
+    LLVMValueRef value = valid
+        ? LLVMConstArray(element_type, items, count) : nullptr;
+    free(items);
+    return value;
+}
+
+static LLVMValueRef
+static_record_value(lower_state_t *state, ir_module_t *source, th_type *type,
+                    LLVMTypeRef native, const ir_global_init_value_t *init,
+                    bool constant)
+{
+    const ir_final_layout_t *layout = ir_layout_final(source, type,
+        ir_module_target(source));
+    if (!layout || LLVMGetTypeKind(native) != LLVMStructTypeKind
+        || LLVMCountStructElementTypes(native) != layout->n_members)
+        return nullptr;
+    size_t *order = calloc(layout->n_members ? layout->n_members : 1,
+                           sizeof(*order));
+    LLVMValueRef *fields = calloc(layout->n_members ? layout->n_members : 1,
+                                  sizeof(*fields));
+    bool valid = order && fields;
+    if (valid) record_layout_order(layout, order);
+    for (size_t i = 0; valid && i < layout->n_members; i++) {
+        const ir_final_member_layout_t *member = &layout->members[order[i]];
+        LLVMTypeRef field_type = LLVMStructGetTypeAtIndex(native,
+                                                          (unsigned)i);
+        const ir_global_init_value_t *item = static_record_item(init,
+                                                                member->name);
+        if (!item) {
+            fields[i] = LLVMConstNull(field_type);
+            continue;
+        }
+        fields[i] = member->inline_element_count
+            ? static_inline_array_value(state, source, member->type,
+                                        field_type, item, constant)
+            : static_init_value(state, source, member->type, item, constant);
+        if (fields[i] && LLVMTypeOf(fields[i]) != field_type
+            && LLVMGetTypeKind(field_type) == LLVMIntegerTypeKind
+            && LLVMGetTypeKind(LLVMTypeOf(fields[i])) == LLVMIntegerTypeKind
+            && LLVMGetIntTypeWidth(LLVMTypeOf(fields[i])) == 1)
+            fields[i] = LLVMConstInt(field_type,
+                LLVMConstIntGetZExtValue(fields[i]), false);
+        valid = fields[i] && LLVMTypeOf(fields[i]) == field_type;
+    }
+    LLVMValueRef record = valid ? constant_struct_like(native, fields,
+        (unsigned)layout->n_members) : nullptr;
+    free(order);
+    free(fields);
+    return record;
+}
+
+static LLVMValueRef
+static_init_value(lower_state_t *state, ir_module_t *source, th_type *type,
+                  const ir_global_init_value_t *init, bool constant)
+{
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    type = type ? th_resolve(type) : nullptr;
+    LLVMTypeRef native = type ? value_type(source, type, context) : nullptr;
+    if (!native || !init) return nullptr;
+    if (init->kind != IR_GLOBAL_INIT_NIL && option_payload_type(type)) {
+        option_repr_t repr;
+        if (!option_repr(source, type, context, &repr)) return nullptr;
+        LLVMValueRef payload = static_init_value(state, source,
+            repr.payload_type, init, constant);
+        return payload
+            ? option_some_constant(state->module, &repr, payload) : nullptr;
+    }
+    if (init->kind == IR_GLOBAL_INIT_RECORD)
+        return static_record_value(state, source, type, native, init,
+                                   constant);
+    ir_machine_t machine = ir_machine_of(source, type);
+    switch (init->kind) {
+    case IR_GLOBAL_INIT_INT:
+        return integer_constant(machine, native, init->integer);
+    case IR_GLOBAL_INIT_BOOL:
+        return integer_constant(machine, native,
+                                (ir_lit_t){.mag = init->boolean});
+    case IR_GLOBAL_INIT_FLOAT:
+        return machine.class == IR_CLASS_FLOAT && floating_type(native)
+            ? LLVMConstReal(native, init->floating) : nullptr;
+    case IR_GLOBAL_INIT_STRING:
+        return is_string_type(type)
+            ? string_value(state->module, (const uint8_t *)init->string.bytes,
+                init->string.length,
+                default_string_encoding(init->string.bytes,
+                                        init->string.length))
+            : nullptr;
+    case IR_GLOBAL_INIT_NIL:
+        return LLVMConstNull(native);
+    case IR_GLOBAL_INIT_SEQUENCE:
+        break;
+    default:
+        return nullptr;
+    }
+    if (th_kind_of(type) != TH_SEQUENCE
+        || init->aggregate.count > UINT32_MAX) return nullptr;
+    th_type *element = th_resolve(th_seq_elem(type));
+    const ir_final_layout_t *layout = element
+        ? ir_layout_final(source, element, ir_module_target(source)) : nullptr;
+    LLVMTypeRef element_type = element
+        ? value_type(source, element, context) : nullptr;
+    uint64_t packed_width = element ? packed_array_width(source, element) : 0;
+    if (packed_width)
+        return static_packed_array_value(state, source, element, init,
+                                         packed_width, constant);
+    if (!layout || !layout->alignment_bytes
+        || !literal_element_layout_matches(source, element, element_type,
+            LLVMGetModuleDataLayout(state->module))) return nullptr;
+    LLVMTypeRef storage_type = element_type;
+    unsigned count = (unsigned)init->aggregate.count;
+    LLVMValueRef *items = calloc(count ? count : 1, sizeof(*items));
+    if (!items) return nullptr;
+    bool valid = true;
+    for (unsigned i = 0; valid && i < count; i++) {
+        items[i] = static_init_value(state, source, element,
+                                     &init->aggregate.items[i], constant);
+        valid = items[i] && LLVMTypeOf(items[i]) == element_type;
+    }
+    if (!valid) {
+        free(items);
+        return nullptr;
+    }
+    if (!count) items[0] = LLVMConstNull(storage_type);
+    LLVMValueRef values = LLVMConstArray(storage_type, items,
+                                          count ? count : 1);
+    free(items);
+    LLVMValueRef data = LLVMAddGlobal(state->module, LLVMTypeOf(values),
+                                      "n00bb.static.array");
+    LLVMSetInitializer(data, values);
+    LLVMSetAlignment(data, (unsigned)layout->alignment_bytes);
+    LLVMSetGlobalConstant(data, constant);
+    LLVMSetLinkage(data, LLVMPrivateLinkage);
+    LLVMValueRef array = array_value_with_descriptor(state, data, count);
+    return array && LLVMTypeOf(array) == native ? array : nullptr;
+}
+
 static LLVMValueRef
 materialized_record_array(lower_state_t *state, ir_instr_t *instruction)
 {
@@ -5171,6 +5594,88 @@ unpack_option_integer(lower_state_t *state, LLVMValueRef value,
 }
 
 static LLVMValueRef
+option_presence(lower_state_t *state, const option_repr_t *repr,
+                LLVMValueRef value)
+{
+    if (!repr || !value || LLVMTypeOf(value) != repr->storage) return nullptr;
+    switch (repr->kind) {
+    case OPTION_REPR_POINTER:
+        return value;
+    case OPTION_REPR_PACKED:
+        return packed_option_presence(state, value, repr->presence_bit);
+    case OPTION_REPR_SHARED: {
+        LLVMValueRef tag = LLVMBuildExtractValue(state->builder, value, 1,
+                                                 "option.tag");
+        return LLVMBuildAnd(state->builder, tag,
+            LLVMConstInt(LLVMTypeOf(tag), repr->presence_mask, false),
+            "option.outer.tag");
+    }
+    case OPTION_REPR_TAGGED:
+        return LLVMBuildExtractValue(state->builder, value, 1, "option.tag");
+    }
+    return nullptr;
+}
+
+static LLVMValueRef
+option_payload(lower_state_t *state, const option_repr_t *repr,
+               th_type *type, LLVMValueRef value)
+{
+    if (!repr || !value || LLVMTypeOf(value) != repr->storage) return nullptr;
+    switch (repr->kind) {
+    case OPTION_REPR_POINTER:
+        return value;
+    case OPTION_REPR_PACKED:
+        return unpack_option_integer(state, value, type);
+    case OPTION_REPR_SHARED: {
+        LLVMValueRef tag = LLVMBuildExtractValue(state->builder, value, 1,
+                                                 "option.outer.tag");
+        tag = LLVMBuildAnd(state->builder, tag,
+            LLVMConstInt(LLVMTypeOf(tag), ~repr->presence_mask & 0xffu,
+                         false), "option.inner.tag");
+        return LLVMBuildInsertValue(state->builder, value, tag, 1,
+                                    "option.payload");
+    }
+    case OPTION_REPR_TAGGED:
+        return LLVMBuildExtractValue(state->builder, value, 0,
+                                     "option.payload");
+    }
+    return nullptr;
+}
+
+static LLVMValueRef
+option_some(lower_state_t *state, const option_repr_t *repr, th_type *type,
+            LLVMValueRef payload)
+{
+    if (!repr || !payload) return nullptr;
+    switch (repr->kind) {
+    case OPTION_REPR_POINTER:
+        return LLVMTypeOf(payload) == repr->storage ? payload : nullptr;
+    case OPTION_REPR_PACKED:
+        return pack_option_integer(state, payload, type);
+    case OPTION_REPR_SHARED: {
+        if (LLVMTypeOf(payload) != repr->storage) return nullptr;
+        LLVMValueRef tag = LLVMBuildExtractValue(state->builder, payload, 1,
+                                                 "option.inner.tag");
+        tag = LLVMBuildOr(state->builder, tag,
+            LLVMConstInt(LLVMTypeOf(tag), repr->presence_mask, false),
+            "option.outer.tag");
+        return LLVMBuildInsertValue(state->builder, payload, tag, 1,
+                                    "option.some");
+    }
+    case OPTION_REPR_TAGGED: {
+        if (LLVMStructGetTypeAtIndex(repr->storage, 0) != LLVMTypeOf(payload))
+            return nullptr;
+        LLVMValueRef stored = LLVMBuildInsertValue(state->builder,
+            LLVMGetUndef(repr->storage), payload, 0, "option.payload");
+        return LLVMBuildInsertValue(state->builder, stored,
+            LLVMConstInt(LLVMStructGetTypeAtIndex(repr->storage, 1),
+                         repr->presence_mask, false), 1, "option.some");
+    }
+    }
+    return nullptr;
+}
+
+static LLVMValueRef
 adapt_call_value(lower_state_t *state, LLVMValueRef value,
                  th_type *source_type, th_type *target_type)
 {
@@ -5180,45 +5685,28 @@ adapt_call_value(lower_state_t *state, LLVMValueRef value,
                                    context);
     if (!target) return nullptr;
     if (LLVMTypeOf(value) == target) return value;
-    th_type *source_payload = option_payload_type(source_type);
-    th_type *target_payload = option_payload_type(target_type);
-    LLVMTypeRef source = LLVMTypeOf(value);
-    uint64_t packed_bit = 0;
-    LLVMTypeRef packed_target = target_payload
-        ? packed_option_type(state->function->owner, target_type,
-                             context, &packed_bit) : nullptr;
-    uint64_t source_bit = 0;
-    LLVMTypeRef packed_source = source_payload
-        ? packed_option_type(state->function->owner, source_type,
-                             context, &source_bit) : nullptr;
-    bool source_packed = packed_source == source;
-    bool target_packed = packed_target == target;
-    bool source_struct = LLVMGetTypeKind(source) == LLVMStructTypeKind
-        && LLVMCountStructElementTypes(source) == 2;
-    bool target_struct = LLVMGetTypeKind(target) == LLVMStructTypeKind
-        && LLVMCountStructElementTypes(target) == 2;
-    if (source_payload && target_payload
-        && (source_packed || source_struct)
-        && (target_packed || target_struct)
+    option_repr_t source_repr, target_repr;
+    bool source_option = option_payload_type(source_type)
+        && option_repr(state->function->owner, source_type, context,
+                       &source_repr)
+        && source_repr.storage == LLVMTypeOf(value)
+        && source_repr.kind != OPTION_REPR_POINTER;
+    bool target_option = option_payload_type(target_type)
+        && option_repr(state->function->owner, target_type, context,
+                       &target_repr)
+        && target_repr.kind != OPTION_REPR_POINTER;
+    bool source_packed = source_option
+        && source_repr.kind == OPTION_REPR_PACKED;
+    bool target_packed = target_option
+        && target_repr.kind == OPTION_REPR_PACKED;
+    if (source_option && target_option
         && !(source_packed && target_packed)
-        && !(source_struct && target_struct
-            && LLVMStructGetTypeAtIndex(source, 1)
-                != LLVMStructGetTypeAtIndex(target, 1))) {
-        uint8_t source_mask = 1, target_mask = 1;
-        bool source_shared = source_struct
-            && shared_option_value_type(state->function->owner, source_type,
-                context, &source_mask) != nullptr;
-        bool target_shared = target_struct
-            && shared_option_value_type(state->function->owner, target_type,
-                context, &target_mask) != nullptr;
-        LLVMValueRef tag = source_struct
-            ? LLVMBuildExtractValue(state->builder, value, 1,
-                "option.call.tag") : nullptr;
-        LLVMValueRef presence = source_struct
-            ? LLVMBuildAnd(state->builder, tag,
-                LLVMConstInt(LLVMTypeOf(tag), source_mask, false),
-                "option.call.presence")
-            : packed_option_presence(state, value, source_bit);
+        && !(!source_packed && !target_packed
+            && LLVMStructGetTypeAtIndex(source_repr.storage, 1)
+                != LLVMStructGetTypeAtIndex(target_repr.storage, 1))) {
+        th_type *source_payload = source_repr.payload_type;
+        th_type *target_payload = target_repr.payload_type;
+        LLVMValueRef presence = option_presence(state, &source_repr, value);
         if (!presence) return nullptr;
         LLVMValueRef present = LLVMBuildICmp(state->builder, LLVMIntNE,
             presence, LLVMConstNull(LLVMTypeOf(presence)),
@@ -5233,39 +5721,13 @@ adapt_call_value(lower_state_t *state, LLVMValueRef value,
         LLVMPositionBuilderAtEnd(state->builder, absent);
         LLVMBuildBr(state->builder, done);
         LLVMPositionBuilderAtEnd(state->builder, selected);
-        LLVMValueRef payload = nullptr;
-        if (source_shared) {
-            LLVMValueRef inner_tag = LLVMBuildAnd(state->builder, tag,
-                LLVMConstInt(LLVMTypeOf(tag), ~source_mask & 0xffu, false),
-                "option.call.inner.tag");
-            payload = LLVMBuildInsertValue(state->builder, value, inner_tag,
-                1, "option.call.inner");
-        } else if (source_struct)
-            payload = LLVMBuildExtractValue(state->builder, value, 0,
-                "option.call.payload");
-        else payload = unpack_option_integer(state, value, source_type);
+        LLVMValueRef payload = option_payload(state, &source_repr,
+                                              source_type, value);
         LLVMValueRef converted = payload ? adapt_call_value(state, payload,
             source_payload, target_payload) : nullptr;
         if (!converted) return nullptr;
-        LLVMValueRef some = nullptr;
-        if (target_packed)
-            some = pack_option_integer(state, converted, target_type);
-        else if (target_shared && LLVMTypeOf(converted) == target) {
-            LLVMValueRef inner_tag = LLVMBuildExtractValue(state->builder,
-                converted, 1, "option.call.inner.tag");
-            LLVMValueRef outer_tag = LLVMBuildOr(state->builder, inner_tag,
-                LLVMConstInt(LLVMTypeOf(inner_tag), target_mask, false),
-                "option.call.outer.tag");
-            some = LLVMBuildInsertValue(state->builder, converted, outer_tag,
-                1, "option.call.some");
-        } else if (!target_shared && LLVMTypeOf(converted)
-            == LLVMStructGetTypeAtIndex(target, 0)) {
-            some = LLVMBuildInsertValue(state->builder,
-                LLVMConstNull(target), converted, 0, "option.call.value");
-            some = LLVMBuildInsertValue(state->builder, some,
-                LLVMConstInt(LLVMStructGetTypeAtIndex(target, 1),
-                    target_mask, false), 1, "option.call.some");
-        }
+        LLVMValueRef some = option_some(state, &target_repr, target_type,
+                                        converted);
         if (!some) return nullptr;
         LLVMBasicBlockRef some_end = LLVMGetInsertBlock(state->builder);
         LLVMBuildBr(state->builder, done);
@@ -6040,6 +6502,104 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                 : LLVMBuildZExt(state->builder, value, storage, "enum.const");
         return save_result(state, instruction, result);
     }
+    case IR_OP_BITSET_UNION:
+    case IR_OP_BITSET_DIFFERENCE:
+    case IR_OP_BITSET_INTERSECTION:
+    case IR_OP_BITSET_XOR:
+    case IR_OP_BITSET_COMPLEMENT:
+    case IR_OP_BITSET_CONTAINS:
+    case IR_OP_BITSET_SET:
+    case IR_OP_BITSET_IS_EMPTY: {
+        if (count < 1 || operands[0].kind != IR_OPD_VALUE
+            || !operands[0].value || !instruction->dest) break;
+        LLVMValueRef left = lowered_value(state, operands[0].value);
+        LLVMValueRef right = count >= 2 && operands[1].kind == IR_OPD_VALUE
+            ? lowered_value(state, operands[1].value) : nullptr;
+        LLVMValueRef mask = bitset_mask(state, operands[0].value->type);
+        if (!left || !mask
+            || LLVMGetTypeKind(LLVMTypeOf(left)) != LLVMIntegerTypeKind)
+            break;
+        LLVMBuilderRef builder = state->builder;
+        switch (instruction->op) {
+        case IR_OP_BITSET_UNION:
+            result = right ? LLVMBuildOr(builder, left, right, "bitset.union")
+                           : nullptr;
+            break;
+        case IR_OP_BITSET_DIFFERENCE:
+            result = right ? LLVMBuildAnd(builder, left,
+                LLVMBuildNot(builder, right, "bitset.not"),
+                "bitset.difference") : nullptr;
+            break;
+        case IR_OP_BITSET_INTERSECTION:
+            result = right ? LLVMBuildAnd(builder, left, right,
+                                          "bitset.intersection") : nullptr;
+            break;
+        case IR_OP_BITSET_XOR:
+            result = right ? LLVMBuildXor(builder, left, right, "bitset.xor")
+                           : nullptr;
+            break;
+        case IR_OP_BITSET_COMPLEMENT:
+            result = LLVMBuildXor(builder, left, mask, "bitset.complement");
+            break;
+        case IR_OP_BITSET_CONTAINS:
+            result = right ? LLVMBuildICmp(builder, LLVMIntEQ,
+                LLVMBuildAnd(builder, left, right, "bitset.common"), right,
+                "bitset.contains") : nullptr;
+            break;
+        case IR_OP_BITSET_SET: {
+            LLVMValueRef enabled = count == 3
+                && operands[2].kind == IR_OPD_VALUE
+                ? lowered_value(state, operands[2].value) : nullptr;
+            result = right && enabled ? LLVMBuildSelect(builder, enabled,
+                LLVMBuildOr(builder, left, right, "bitset.with"),
+                LLVMBuildAnd(builder, left,
+                    LLVMBuildNot(builder, right, "bitset.not"),
+                    "bitset.without"), "bitset.set") : nullptr;
+            break;
+        }
+        default:
+            result = LLVMBuildICmp(builder, LLVMIntEQ, left,
+                LLVMConstNull(LLVMTypeOf(left)), "bitset.is_empty");
+            break;
+        }
+        return result && save_result(state, instruction, result);
+    }
+    case IR_OP_BITSET_VALUE:
+    case IR_OP_BITSET_FROM_VALUE: {
+        if (count != 1 || operands[0].kind != IR_OPD_VALUE
+            || !operands[0].value || !instruction->dest) break;
+        ir_module_t *source = state->function->owner;
+        LLVMValueRef value = lowered_value(state, operands[0].value);
+        LLVMTypeRef target = value_type(source, instruction->dest->type,
+                                        LLVMGetModuleContext(state->module));
+        if (!value || !target
+            || LLVMGetTypeKind(LLVMTypeOf(value)) != LLVMIntegerTypeKind
+            || LLVMGetTypeKind(target) != LLVMIntegerTypeKind) break;
+        unsigned source_bits = LLVMGetIntTypeWidth(LLVMTypeOf(value));
+        unsigned target_bits = LLVMGetIntTypeWidth(target);
+        if (instruction->op == IR_OP_BITSET_FROM_VALUE
+            && ir_instr_has_mod(instruction, "trap")) {
+            LLVMValueRef mask = bitset_mask(state, instruction->dest->type);
+            if (!mask) break;
+            LLVMValueRef wide_mask = source_bits == target_bits ? mask
+                : source_bits > target_bits
+                    ? LLVMBuildZExt(state->builder, mask, LLVMTypeOf(value),
+                                    "bitset.mask")
+                    : LLVMBuildTrunc(state->builder, mask, LLVMTypeOf(value),
+                                     "bitset.mask");
+            LLVMValueRef outside = LLVMBuildAnd(state->builder, value,
+                LLVMBuildNot(state->builder, wide_mask, "bitset.invalid"),
+                "bitset.outside");
+            emit_trap_if(state, LLVMBuildICmp(state->builder, LLVMIntNE,
+                outside, LLVMConstNull(LLVMTypeOf(value)),
+                "bitset.out_of_range"));
+        }
+        result = target_bits == source_bits ? value
+            : target_bits < source_bits
+                ? LLVMBuildTrunc(state->builder, value, target, "bitset.value")
+                : LLVMBuildZExt(state->builder, value, target, "bitset.value");
+        return save_result(state, instruction, result);
+    }
     case IR_OP_ENUM_VALUE: {
         if (count != 1 || operands[0].kind != IR_OPD_VALUE
             || !operands[0].value || !instruction->dest) break;
@@ -6066,6 +6626,31 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                                    "enum.value")
                     : LLVMBuildZExt(state->builder, value, target,
                                    "enum.value");
+        return save_result(state, instruction, result);
+    }
+    case IR_OP_ENUM_FROM_VALUE: {
+        if (count != 1 || operands[0].kind != IR_OPD_VALUE
+            || !operands[0].value || !instruction->dest) break;
+        ir_module_t *source = state->function->owner;
+        LLVMValueRef value = lowered_value(state, operands[0].value);
+        LLVMTypeRef target = value_type(source, instruction->dest->type,
+                                        LLVMGetModuleContext(state->module));
+        if (!value || !target
+            || LLVMGetTypeKind(LLVMTypeOf(value)) != LLVMIntegerTypeKind
+            || LLVMGetTypeKind(target) != LLVMIntegerTypeKind) break;
+        unsigned source_bits = LLVMGetIntTypeWidth(LLVMTypeOf(value));
+        unsigned target_bits = LLVMGetIntTypeWidth(target);
+        bool signed_source = ir_machine_of(source,
+            operands[0].value->type).class == IR_CLASS_SINT;
+        result = target_bits == source_bits ? value
+            : target_bits < source_bits
+                ? LLVMBuildTrunc(state->builder, value, target,
+                                 "enum.from_value")
+                : signed_source
+                    ? LLVMBuildSExt(state->builder, value, target,
+                                   "enum.from_value")
+                    : LLVMBuildZExt(state->builder, value, target,
+                                   "enum.from_value");
         return save_result(state, instruction, result);
     }
     case IR_OP_COPY:
@@ -6213,90 +6798,28 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             || !instruction->dest) break;
         result = lowered_value(state, operands[0].value);
         if (!result) break;
-        if (instruction->op == IR_OP_OPTION_SOME) {
-            if (packed_option_type(state->function->owner,
-                    instruction->dest->type,
-                    LLVMGetModuleContext(state->module), nullptr)) {
-                result = pack_option_integer(state, result,
-                                             instruction->dest->type);
-                return result && save_result(state, instruction, result);
-            }
-            uint8_t shared_mask = 0;
-            LLVMTypeRef option = value_type(state->function->owner,
-                instruction->dest->type,
-                LLVMGetModuleContext(state->module));
-            LLVMTypeRef shared = shared_option_value_type(
-                state->function->owner, instruction->dest->type,
-                LLVMGetModuleContext(state->module), &shared_mask);
-            if (shared && option == LLVMTypeOf(result)) {
-                LLVMValueRef tag = LLVMBuildExtractValue(state->builder,
-                    result, 1, "option.inner.tag");
-                tag = LLVMBuildOr(state->builder, tag,
-                    LLVMConstInt(LLVMTypeOf(tag), shared_mask, false),
-                    "option.outer.tag");
-                result = LLVMBuildInsertValue(state->builder, result, tag,
-                                              1, "option.some");
-            }
-            else if (option && LLVMGetTypeKind(option) == LLVMStructTypeKind
-                && LLVMStructGetTypeAtIndex(option, 0) == LLVMTypeOf(result)) {
-                LLVMValueRef stored = LLVMBuildInsertValue(state->builder,
-                    LLVMGetUndef(option), result, 0, "option.payload");
-                result = LLVMBuildInsertValue(state->builder, stored,
-                    LLVMConstInt(LLVMInt8TypeInContext(
-                        LLVMGetModuleContext(state->module)), 1, false),
-                    1, "option.some");
-            }
-            else if (!option || LLVMGetTypeKind(option)
-                    != LLVMPointerTypeKind) break;
+        {
+            th_type *option_type = instruction->op == IR_OP_OPTION_SOME
+                ? instruction->dest->type : operands[0].value->type;
+            option_repr_t repr;
+            if (!option_repr(state->function->owner, option_type,
+                    LLVMGetModuleContext(state->module), &repr)) break;
+            result = instruction->op == IR_OP_OPTION_SOME
+                ? option_some(state, &repr, option_type, result)
+                : option_payload(state, &repr, option_type, result);
         }
-        else if (packed_option_type(state->function->owner,
-                     operands[0].value->type,
-                     LLVMGetModuleContext(state->module), nullptr)) {
-            result = unpack_option_integer(state, result,
-                                           operands[0].value->type);
-        }
-        else if (LLVMGetTypeKind(LLVMTypeOf(result)) == LLVMStructTypeKind) {
-            uint8_t shared_mask = 0;
-            LLVMTypeRef shared = shared_option_value_type(
-                state->function->owner, operands[0].value->type,
-                LLVMGetModuleContext(state->module), &shared_mask);
-            if (shared) {
-                LLVMValueRef tag = LLVMBuildExtractValue(state->builder,
-                    result, 1, "option.outer.tag");
-                tag = LLVMBuildAnd(state->builder, tag,
-                    LLVMConstInt(LLVMTypeOf(tag), ~shared_mask & 0xffu,
-                                 false), "option.inner.tag");
-                result = LLVMBuildInsertValue(state->builder, result, tag,
-                                              1, "option.get");
-            } else result = LLVMBuildExtractValue(state->builder, result, 0,
-                                                  "option.get");
-        }
+        if (!result) break;
         return save_result(state, instruction, result);
     case IR_OP_OPTION_IS_NIL: {
         if (count != 1 || operands[0].kind != IR_OPD_VALUE
             || !operands[0].value) break;
         LLVMValueRef value = lowered_value(state, operands[0].value);
+        option_repr_t repr;
+        if (!value || !option_repr(state->function->owner,
+                operands[0].value->type,
+                LLVMGetModuleContext(state->module), &repr)) break;
+        value = option_presence(state, &repr, value);
         if (!value) break;
-        LLVMTypeKind kind = LLVMGetTypeKind(LLVMTypeOf(value));
-        uint64_t packed_bit = 0;
-        LLVMTypeRef packed = packed_option_type(state->function->owner,
-            operands[0].value->type, LLVMGetModuleContext(state->module),
-            &packed_bit);
-        uint8_t shared_mask = 0;
-        LLVMTypeRef shared = shared_option_value_type(
-            state->function->owner, operands[0].value->type,
-            LLVMGetModuleContext(state->module), &shared_mask);
-        if (packed && LLVMTypeOf(value) == packed) {
-            value = packed_option_presence(state, value, packed_bit);
-            if (!value) break;
-        } else if (kind == LLVMStructTypeKind) {
-            value = LLVMBuildExtractValue(state->builder, value, 1,
-                                          "option.tag");
-            if (shared)
-                value = LLVMBuildAnd(state->builder, value,
-                    LLVMConstInt(LLVMTypeOf(value), shared_mask, false),
-                    "option.outer.tag");
-        } else if (kind != LLVMPointerTypeKind) break;
         result = LLVMBuildICmp(state->builder, LLVMIntEQ, value,
             LLVMConstNull(LLVMTypeOf(value)), "option.is_nil");
         return save_result(state, instruction, result);
@@ -6307,43 +6830,18 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             || !operands[0].value) break;
         LLVMValueRef value = lowered_value(state, operands[0].value);
         LLVMValueRef fallback = lowered_value(state, operands[1].value);
-        if (!value || !fallback) break;
-        LLVMTypeKind kind = LLVMGetTypeKind(LLVMTypeOf(value));
-        LLVMValueRef tag = value;
-        uint64_t packed_bit = 0;
-        LLVMTypeRef packed = packed_option_type(state->function->owner,
-            operands[0].value->type, LLVMGetModuleContext(state->module),
-            &packed_bit);
-        if (packed && LLVMTypeOf(value) == packed) {
-            tag = packed_option_presence(state, value, packed_bit);
-            if (!tag) break;
-            value = unpack_option_integer(state, value,
-                                          operands[0].value->type);
-            if (!value || LLVMTypeOf(value) != LLVMTypeOf(fallback)) break;
-        } else if (kind == LLVMStructTypeKind) {
-            uint8_t shared_mask = 0;
-            LLVMTypeRef shared = shared_option_value_type(
-                state->function->owner, operands[0].value->type,
-                LLVMGetModuleContext(state->module), &shared_mask);
-            if (!shared && LLVMStructGetTypeAtIndex(LLVMTypeOf(value), 0)
-                    != LLVMTypeOf(fallback)) break;
-            if (shared && LLVMTypeOf(value) != LLVMTypeOf(fallback)) break;
-            tag = LLVMBuildExtractValue(state->builder, value, 1,
-                                        "option.tag");
-            if (shared) {
-                LLVMValueRef inner_tag = LLVMBuildAnd(state->builder, tag,
-                    LLVMConstInt(LLVMTypeOf(tag), ~shared_mask & 0xffu,
-                                 false), "option.inner.tag");
-                value = LLVMBuildInsertValue(state->builder, value,
-                    inner_tag, 1, "option.payload");
-                tag = LLVMBuildAnd(state->builder, tag,
-                    LLVMConstInt(LLVMTypeOf(tag), shared_mask, false),
-                    "option.outer.tag");
-            } else value = LLVMBuildExtractValue(state->builder, value, 0,
-                                                 "option.payload");
-        }
-        else if (kind != LLVMPointerTypeKind
-            || LLVMTypeOf(value) != LLVMTypeOf(fallback)) break;
+        option_repr_t repr;
+        if (!value || !fallback || !option_repr(state->function->owner,
+                operands[0].value->type,
+                LLVMGetModuleContext(state->module), &repr)) break;
+        if (repr.kind == OPTION_REPR_TAGGED
+            ? LLVMStructGetTypeAtIndex(repr.storage, 0) != LLVMTypeOf(fallback)
+            : repr.kind != OPTION_REPR_PACKED
+                && repr.storage != LLVMTypeOf(fallback)) break;
+        LLVMValueRef tag = option_presence(state, &repr, value);
+        value = tag ? option_payload(state, &repr, operands[0].value->type,
+                                     value) : nullptr;
+        if (!value || LLVMTypeOf(value) != LLVMTypeOf(fallback)) break;
         LLVMValueRef is_nil = LLVMBuildICmp(state->builder, LLVMIntEQ,
             tag, LLVMConstNull(LLVMTypeOf(tag)), "option.is_nil");
         result = LLVMBuildSelect(state->builder, is_nil, fallback,
@@ -11135,6 +11633,16 @@ lower_module(LLVMModuleRef target, const ir_module_t *source,
                     value = cached_record_array_value(&cache,
                     (ir_module_t *)source, global->type,
                     result_id->s);
+                else value = static_init_value(&cache, (ir_module_t *)source,
+                    global->type, init, global->mutability == IR_MUT_CONST);
+            } else if (init->kind == IR_GLOBAL_INIT_SEQUENCE) {
+                lower_state_t cache = {
+                    .module = target,
+                    .phase_arrays = phase_arrays,
+                    .phase_array_count = phase_array_count,
+                };
+                value = static_init_value(&cache, (ir_module_t *)source,
+                    global->type, init, global->mutability == IR_MUT_CONST);
             }
         }
         if (!value)

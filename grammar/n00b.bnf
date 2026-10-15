@@ -615,9 +615,7 @@
 <list-lit> @emit("sequence_literal") @infer("`t") @nospace($1) @nospace($2) ::= %"[" <list-elems> %"]"
 <list-lit> @emit("sequence_literal") @infer("`t") @constrain($0, Bracket_Literal) @nospace ::= %"[" %"]"
 
-<list-elems> @infer("list[$0] unify $1") ::= <expression> %"," <list-elems>
-<list-elems> @infer("list[$0]")          ::= <expression>
-<list-elems> @infer("list[$0]")          ::= <expression> %","
+<list-elems> @infer("list[$*]") ::= <expression> (%"," <expression>)* %","?
 
 # Empty braces introduce a type variable with an implicit literal-shape trait.
 # Context and literal modifiers solve that shape; they are not an untyped

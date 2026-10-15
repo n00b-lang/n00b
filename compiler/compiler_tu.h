@@ -500,6 +500,7 @@ typedef struct {
     bool interface_module;
     bool semantic_annotation_started;
     bool semantic_annotation_complete;
+    parse_tree_t *flagset_scope;
 } n00bb_tu_state_t;
 static inline parse_tree_t *
 n00bb_tu_parsed_tree(const n00bb_tu_state_t *state)
@@ -541,6 +542,11 @@ parse_sym_entry_t *variant_assignment_arm(parse_grammar_t *grammar,
 bool prepare_variant_payload_type(parse_grammar_t *grammar,
                                   core_translation_unit_t *unit,
                                   parse_tree_t *node);
+bool n00bb_unify_node_type(th_ctx *types, parse_tree_t *node, th_type *type);
+bool n00bb_receiver_names_type(parse_grammar_t *grammar,
+                               core_translation_unit_t *unit,
+                               n00bb_tu_state_t *state, parse_tree_t *receiver,
+                               parse_sym_entry_t *type_symbol);
 bool check_local_record_field_reference(parse_grammar_t *grammar,
                                         core_translation_unit_t *unit,
                                         parse_tree_t *node);
@@ -595,7 +601,7 @@ bool contextualize_record_literal(parse_grammar_t *grammar,
                                   parse_tree_t *expression,
                                   th_type *expected);
 th_type *record_literal_expected_type(parse_grammar_t *grammar,
-                                      parse_tree_t *literal);
+                                      th_ctx *types, parse_tree_t *literal);
 bool contextualize_record_fields_before_inference(
     parse_grammar_t *grammar, core_translation_unit_t *unit,
     n00bb_tu_state_t *state, parse_tree_t *literal);
@@ -745,6 +751,11 @@ bool register_native_declarations(parse_annot_result_t *annotations,
                                   n00bb_native_declarations_t natives);
 bool register_builtin_symbols(parse_annot_result_t *annotations,
                               n00bb_tu_state_t *state, th_ctx *types);
+bool n00bb_register_operator_function(th_env *environment, th_ctx *types,
+                                      const char *trait, const char *method,
+                                      const char *owner, th_type *self,
+                                      th_type *other, th_type *result,
+                                      const char *module, const char *package);
 bool register_builtin_traits(th_env *environment, th_ctx *types,
                              core_arena_t *arena);
 bool record_function_parameter_fact(parse_grammar_t *grammar,

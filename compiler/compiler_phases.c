@@ -975,6 +975,43 @@ n00bb_fold_comptime_record_array(n00bb_link_analysis_t *analysis,
 }
 
 static bool
+n00bb_fold_comptime_scalar_array(n00bb_link_analysis_t *analysis,
+    n00bb_global_result_binding_t *binding,
+    const n00bb_phase_result_binding_t *result)
+{
+    ir_module_t *module = binding->target_module;
+    th_type *type = th_resolve(binding->target_global->type);
+    th_type *element = type && th_kind_of(type) == TH_SEQUENCE
+        ? th_seq_elem(type) : nullptr;
+    size_t stride = result->materialized_stride;
+    size_t count = (size_t)result->materialized_count;
+    if (!element || !stride
+        || result->materialized_count
+            > SIZE_MAX / sizeof(ir_global_init_value_t)
+        || (count && stride > SIZE_MAX / count)
+        || count * stride != result->materialized_byte_len)
+        return false;
+    ir_global_init_value_t *items = ir_alloc(analysis->ir_context,
+        (count ? count : 1) * sizeof(*items));
+    if (!items) return false;
+    size_t position = 0;
+    for (size_t i = 0; i < count; i++) {
+        const uint8_t *raw = result->materialized_bytes + position;
+        position += stride;
+        if (!n00bb_decode_comptime_value(analysis, module, element, raw,
+                stride, result->materialized_bytes,
+                result->materialized_byte_len, &position, &items[i], 0))
+            return false;
+    }
+    ir_global_init_value_t sequence = {
+        .kind = IR_GLOBAL_INIT_SEQUENCE,
+        .aggregate = {.items = items, .count = count},
+    };
+    return ir_global_materialize_phase_result(module,
+        binding->target_global, binding->identifier, &sequence);
+}
+
+static bool
 n00bb_fold_comptime_global_results(n00bb_link_analysis_t *analysis)
 {
     for (size_t g = 0; g < analysis->global_results.len; g++) {
@@ -1016,6 +1053,11 @@ n00bb_fold_comptime_global_results(n00bb_link_analysis_t *analysis)
             };
             if (!ir_global_materialize_phase_result(binding->target_module,
                     binding->target_global, binding->identifier, &text))
+                return false;
+            continue;
+        }
+        if (result->materialized_kind == N00BB_LLVM_LITERAL_ARRAY) {
+            if (!n00bb_fold_comptime_scalar_array(analysis, binding, result))
                 return false;
             continue;
         }
