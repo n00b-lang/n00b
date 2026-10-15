@@ -10790,6 +10790,17 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                 break;
             }
             if (value) value = ir_lower_node_value(context, argument);
+            if (value) {
+                value = ir_lower_value_as(context, value, literal_type,
+                    lower_span_for_tree(context, argument));
+                if (!value) {
+                    lower_error(context, IR_DIAG_INTERNAL,
+                        lower_span_for_tree(context, argument),
+                        "could not read through the reference argument");
+                    collected = false;
+                    break;
+                }
+            }
             th_type *option_element = nullptr;
             if (value && !option_builtin
                 && n00bb_option_type_element(parameter->type,

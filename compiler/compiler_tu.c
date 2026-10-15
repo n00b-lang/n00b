@@ -10045,6 +10045,14 @@ primitive_operator_site(n00bb_tu_state_t *state, n00bb_link_use_site_t *site)
     parse_tree_t *receiver = operator_receiver_node(site);
     if (core_tree_is_leaf(receiver)) return false;
     th_type *receiver_type = core_tree_node_value(receiver).type;
+    th_type *resolved_receiver = receiver_type
+        ? th_resolve(receiver_type) : nullptr;
+    if (resolved_receiver && th_kind_of(resolved_receiver) == TH_INDIRECTION
+        && state && state->types && site->dispatch_method.data
+        && !core_string_eq(site->dispatch_trait, CORE_STRING_STATIC("Equal"))
+        && !th_method_lookup(state->types, receiver_type,
+                             site->dispatch_method.data))
+        receiver_type = th_ind_referent(resolved_receiver);
     if (core_string_eq(site->dispatch_trait,
                        CORE_STRING_STATIC("Not")))
         return n00bb_scalar_class_is(receiver_type, IR_CLASS_BOOL);

@@ -88,6 +88,10 @@ unify_call_node_type(core_translation_unit_t *unit,
                                                     minimum, maximum)))
             return true;
     }
+    if (!unified && !wrap_expected && !unwrap_actual
+        && n00bb_dereferences_to(state->types, unification_actual,
+                                 unification_expected))
+        return true;
     if (!unified && into_option_context) unified = unification_expected;
     if (!unified && typed_node && !core_tree_is_leaf(typed_node)
         && n00bb_node_record_literal_origin(typed_node)
