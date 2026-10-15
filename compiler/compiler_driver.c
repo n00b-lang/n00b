@@ -3736,10 +3736,13 @@ n00bb_compiler_main(int argc, char **argv)
                 link_analysis->target.triple, compiler_executable,
                 &shim_bitcode, cli_diagnostics);
         core_free(compiler_executable);
+        core_list_t(core_string_t) archives = core_list_new(core_string_t);
         core_list_t(core_string_t) libraries = core_list_new(core_string_t);
         core_list_t(core_string_t) frameworks = core_list_new(core_string_t);
         core_list_t(core_string_t) search_paths =
             core_list_new(core_string_t);
+        for (size_t i = 0; i < n00bb_ffi_archive_count(ffi); i++)
+            core_list_push(archives, n00bb_ffi_archive_at(ffi, i));
         for (size_t i = 0; i < n00bb_ffi_library_count(ffi); i++)
             core_list_push(libraries, n00bb_ffi_library_at(ffi, i));
         for (size_t i = 0; i < n00bb_ffi_framework_count(ffi); i++)
@@ -3749,6 +3752,8 @@ n00bb_compiler_main(int argc, char **argv)
         n00bb_native_inputs_t native_inputs = {
             .bitcode = shim_bitcode.data,
             .bitcode_count = shim_bitcode.len,
+            .archives = archives.data,
+            .archive_count = archives.len,
             .libraries = libraries.data,
             .library_count = libraries.len,
             .frameworks = frameworks.data,
@@ -3763,6 +3768,7 @@ n00bb_compiler_main(int argc, char **argv)
         for (size_t i = 0; i < shim_bitcode.len; i++)
             core_buffer_release(&shim_bitcode.data[i]);
         core_list_free(shim_bitcode);
+        core_list_free(archives);
         core_list_free(libraries);
         core_list_free(frameworks);
         core_list_free(search_paths);

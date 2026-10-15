@@ -53,6 +53,8 @@ for marker in marker-literal-5be1 marker-contract-5be1; do
 done
 
 fails_with missing 'is not on the contract search path'
+fails_with missing_library 'missing_library.n00b:2:1'
+grep -q "N00BB-F0001.*'n00bb_absent_library'" "$tmp/missing_library.log"
 fails_with extern_hidden "has no visible function named '__abs_raw'"
 fails_with malformed 'malformed.n00b:5:30'
 fails_with binding_error 'binding_error.n00b:5:5'

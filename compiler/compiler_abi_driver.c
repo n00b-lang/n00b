@@ -927,18 +927,15 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     int output_rename_error = 0;
     if (ok) build_stage = "linking native executable";
     if (ok && archive) {
-#ifdef __APPLE__
-        const char *linker = "/usr/bin/clang";
-#else
-        const char *linker = "clang";
-#endif
+        const char *linker = N00BB_NATIVE_LINKER;
         int32_t extra_count = parse_cmdr_flag_value_count(args,
             CORE_STRING_STATIC("--link-object"));
         size_t object_count = 0;
         for (size_t i = 0; i < count + 4; i++)
             if (objects[i]) object_count++;
-        size_t native_flags = native->search_path_count
-            + native->library_count + 2 * native->framework_count;
+        size_t native_flags = native->archive_count
+            + native->search_path_count + native->library_count
+            + 2 * native->framework_count;
         char **arguments = calloc(object_count + (size_t)extra_count
                                       + native_flags
                                       + N00BB_SYSTEM_LIBRARY_COUNT + 5,
@@ -947,6 +944,9 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             ? calloc(native_flags, sizeof(*native_arguments)) : nullptr;
         ok = arguments != nullptr && (!native_flags || native_arguments);
         size_t native_used = 0;
+        for (size_t i = 0; ok && i < native->archive_count; i++)
+            native_arguments[native_used++] = n00bb_flag_argument("",
+                native->archives[i]);
         for (size_t i = 0; ok && i < native->search_path_count; i++)
             native_arguments[native_used++] = n00bb_flag_argument("-L",
                 native->search_paths[i]);

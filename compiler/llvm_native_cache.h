@@ -9,6 +9,7 @@
 
 typedef struct n00bb_native_cache_t n00bb_native_cache_t;
 
+char *n00bb_native_cache_root(void);
 n00bb_native_cache_t *n00bb_native_cache_open(const char *executable_path);
 void n00bb_native_cache_close(n00bb_native_cache_t *cache);
 

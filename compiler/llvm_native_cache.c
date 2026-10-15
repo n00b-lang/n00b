@@ -82,6 +82,29 @@ cache_file_path(const n00bb_native_cache_t *cache, core_uint128_t key)
 }
 #endif
 
+char *
+n00bb_native_cache_root(void)
+{
+#ifdef _WIN32
+    return nullptr;
+#else
+    const char *explicit_dir = getenv("N00BB_NATIVE_CACHE_DIR");
+    const char *home = getenv("HOME");
+    const char *xdg = getenv("XDG_CACHE_HOME");
+    core_buffer_t directory = {0};
+    if (explicit_dir && *explicit_dir)
+        core_buffer_printf(&directory, "%s", explicit_dir);
+    else if (xdg && *xdg)
+        core_buffer_printf(&directory, "%s/n00bb/native", xdg);
+    else if (home && *home)
+        core_buffer_printf(&directory, "%s/.cache/n00bb/native", home);
+    char *root = directory.data && cache_mkdirs(directory.data)
+        ? core_strdup(directory.data) : nullptr;
+    core_buffer_release(&directory);
+    return root;
+#endif
+}
+
 n00bb_native_cache_t *
 n00bb_native_cache_open(const char *executable_path)
 {
@@ -90,30 +113,10 @@ n00bb_native_cache_open(const char *executable_path)
     return nullptr;
 #else
     if (getenv("N00BB_NO_NATIVE_CACHE")) return nullptr;
-    const char *explicit_dir = getenv("N00BB_NATIVE_CACHE_DIR");
-    const char *root = explicit_dir;
-    const char *home = getenv("HOME");
-    const char *xdg = getenv("XDG_CACHE_HOME");
-    if (!root || !*root) {
-        if (xdg && *xdg) root = xdg;
-        else if (home && *home) root = home;
-        else return nullptr;
-    }
-    core_buffer_t directory = {0};
-    if (explicit_dir && *explicit_dir)
-        core_buffer_printf(&directory, "%s", root);
-    else if (xdg && *xdg)
-        core_buffer_printf(&directory, "%s/n00bb/native", root);
-    else
-        core_buffer_printf(&directory, "%s/.cache/n00bb/native", root);
     n00bb_native_cache_t *cache = core_alloc(n00bb_native_cache_t);
-    bool ok = cache && directory.data
-        && cache_compiler_hash(executable_path, &cache->compiler_hash)
-        && cache_mkdirs(directory.data);
-    if (ok) cache->directory = core_strdup(directory.data);
-    ok = ok && cache->directory;
-    core_buffer_release(&directory);
-    if (!ok) {
+    if (cache) cache->directory = n00bb_native_cache_root();
+    if (!cache || !cache->directory
+        || !cache_compiler_hash(executable_path, &cache->compiler_hash)) {
         n00bb_native_cache_close(cache);
         return nullptr;
     }

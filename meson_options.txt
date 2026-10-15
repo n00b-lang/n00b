@@ -5,3 +5,10 @@ option(
     min: 0,
     description: 'Maximum known object size kept in automatic local storage',
 )
+
+option(
+    'rust-transports',
+    type: 'feature',
+    value: 'auto',
+    description: 'Build Rust transport crates for Rust contracts with cargo',
+)

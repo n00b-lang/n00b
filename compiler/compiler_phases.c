@@ -1404,11 +1404,7 @@ n00bb_execute_comptime(core_link_unit_t *link,
         ok = path_created;
     }
     if (ok) {
-#ifdef __APPLE__
-        const char *linker = "/usr/bin/clang";
-#else
-        const char *linker = "clang";
-#endif
+        const char *linker = N00BB_NATIVE_LINKER;
         char *archive = n00bb_archive_path(compiler_path,
             "libn00b-abi-runtime.a");
         char *comptime_archive = n00bb_archive_path(compiler_path,

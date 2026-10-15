@@ -4,6 +4,12 @@
 #include "lib/link_unit.h"
 #include "parse/commander.h"
 
+#ifdef __APPLE__
+#define N00BB_NATIVE_LINKER "/usr/bin/clang"
+#else
+#define N00BB_NATIVE_LINKER "clang"
+#endif
+
 bool n00bb_finalize_comptime_layout(n00bb_link_analysis_t *analysis);
 bool n00bb_execute_comptime(core_link_unit_t *link,
                             n00bb_link_analysis_t *analysis,
@@ -13,6 +19,8 @@ bool n00bb_execute_comptime(core_link_unit_t *link,
 typedef struct {
     const core_buffer_t *bitcode;
     size_t bitcode_count;
+    const core_string_t *archives;
+    size_t archive_count;
     const core_string_t *libraries;
     size_t library_count;
     const core_string_t *frameworks;

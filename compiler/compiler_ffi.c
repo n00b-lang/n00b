@@ -1,16 +1,23 @@
 #include "compiler_ffi.h"
 
+#include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <ftw.h>
 #include <pthread.h>
 #include <spawn.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "compiler_phases.h"
 #include "llvm_native_cache.h"
 #include "lib/alloc.h"
 #include "lib/diagnostic.h"
+#include "lib/hash.h"
 #include "lib/list.h"
 #include "lib/string.h"
 #include "driver.h"
@@ -31,7 +38,10 @@ struct n00bb_ffi {
     core_list_t(core_string_t)     package_dirs;
     core_list_t(core_string_t)     inputs;
     core_list_t(ffi_output_t)      shims;
+    core_list_t(core_string_t)     archives;
     core_list_t(core_string_t)     libraries;
+    core_list_t(core_string_t)     found_libraries;
+    core_list_t(core_string_t)     transports;
     core_list_t(core_string_t)     frameworks;
     core_list_t(core_string_t)     search_paths;
     size_t                         literals;
@@ -49,16 +59,23 @@ as_core(writ_str_t text)
     return core_string_borrow(text.data, text.length);
 }
 
+static bool
+contains(const core_list_t(core_string_t) *list, core_string_t value)
+{
+    for (size_t i = 0; i < list->len; i++) {
+        if (core_string_eq(list->data[i], value)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void
 push_unique(core_list_t(core_string_t) *list, writ_str_t text)
 {
-    core_string_t value = as_core(text);
-    for (size_t i = 0; i < list->len; i++) {
-        if (core_string_eq(list->data[i], value)) {
-            return;
-        }
+    if (!contains(list, as_core(text))) {
+        core_list_push(*list, core_string_dup(as_core(text)));
     }
-    core_list_push(*list, core_string_dup(value));
 }
 
 static void
@@ -82,7 +99,10 @@ n00bb_ffi_new(void)
         .package_dirs  = core_list_new(core_string_t),
         .inputs       = core_list_new(core_string_t),
         .shims         = core_list_new(ffi_output_t),
+        .archives      = core_list_new(core_string_t),
         .libraries     = core_list_new(core_string_t),
+        .found_libraries = core_list_new(core_string_t),
+        .transports    = core_list_new(core_string_t),
         .frameworks    = core_list_new(core_string_t),
         .search_paths  = core_list_new(core_string_t),
     };
@@ -105,7 +125,10 @@ n00bb_ffi_free(n00bb_ffi_t *ffi)
         core_free((void *)ffi->shims.data[i].contents.data);
     }
     core_list_free(ffi->shims);
+    free_strings(&ffi->archives);
     free_strings(&ffi->libraries);
+    free_strings(&ffi->found_libraries);
+    free_strings(&ffi->transports);
     free_strings(&ffi->frameworks);
     free_strings(&ffi->search_paths);
     pthread_mutex_destroy(&ffi->lock);
@@ -188,7 +211,9 @@ static void
 keep_links(n00bb_ffi_t *ffi, const writ_link_requirements_t *links)
 {
     for (size_t i = 0; i < links->libraries_count; i++) {
-        push_unique(&ffi->libraries, links->libraries[i]);
+        if (!contains(&ffi->transports, as_core(links->libraries[i]))) {
+            push_unique(&ffi->libraries, links->libraries[i]);
+        }
     }
     for (size_t i = 0; i < links->frameworks_count; i++) {
         push_unique(&ffi->frameworks, links->frameworks[i]);
@@ -225,6 +250,303 @@ keep_externs(const writ_n00b_externs_t *externs, n00bb_native_declarations_t *na
     }
     natives->count = externs->count;
     return true;
+}
+
+extern char **environ;
+
+static bool
+write_whole_file(const char *path, core_string_t contents)
+{
+    FILE *file = fopen(path, "wb");
+    if (!file) {
+        return false;
+    }
+    bool ok = fwrite(contents.data, 1, contents.u8_bytes, file) == contents.u8_bytes;
+    return fclose(file) == 0 && ok;
+}
+
+static bool
+read_whole_file(const char *path, core_buffer_t *out)
+{
+    FILE *file = fopen(path, "rb");
+    if (!file) {
+        return false;
+    }
+    char chunk[65536];
+    size_t count = 0;
+    while ((count = fread(chunk, 1, sizeof chunk, file)) != 0) {
+        core_buffer_append(out, chunk, count);
+    }
+    bool ok = !ferror(file);
+    fclose(file);
+    return ok && out->byte_len;
+}
+
+static void
+report_error(core_translation_unit_t *unit, n00bb_literal_origin_t origin, const char *code, const char *message)
+{
+    core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit, CORE_DIAG_ERROR,
+                               core_string_borrow(code, strlen(code)), core_string_borrow(message, strlen(message)),
+                               (core_diag_location_t){origin.line, origin.column, origin.line, origin.column, true});
+}
+
+static bool
+run_logged(char **arguments, const char *log)
+{
+    posix_spawn_file_actions_t actions;
+    if (posix_spawn_file_actions_init(&actions)) {
+        return false;
+    }
+    posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, log ? log : "/dev/null", O_WRONLY | O_CREAT | O_TRUNC,
+                                     0600);
+    posix_spawn_file_actions_adddup2(&actions, STDOUT_FILENO, STDERR_FILENO);
+    pid_t child = 0;
+    int status = 0;
+    bool ok = !posix_spawnp(&child, arguments[0], &actions, nullptr, arguments, environ)
+           && waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    posix_spawn_file_actions_destroy(&actions);
+    return ok;
+}
+
+static bool
+library_found(n00bb_ffi_t *ffi, core_string_t library)
+{
+    if (contains(&ffi->found_libraries, library) || contains(&ffi->transports, library)) {
+        return true;
+    }
+    char directory[] = "/tmp/n00bb-probe.XXXXXX";
+    if (!mkdtemp(directory)) {
+        return false;
+    }
+    core_list_t(core_buffer_t) flags = core_list_new(core_buffer_t);
+    for (size_t i = 0; i < ffi->search_paths.len; i++) {
+        core_buffer_t flag = {0};
+        core_buffer_printf(&flag, "-L%.*s", (int)ffi->search_paths.data[i].u8_bytes, ffi->search_paths.data[i].data);
+        core_list_push(flags, flag);
+    }
+    core_buffer_t named = {0}, output = {0};
+    core_buffer_printf(&named, "-l%.*s", (int)library.u8_bytes, library.data);
+    core_buffer_printf(&output, "%s/probe", directory);
+    char **arguments = core_alloc_array(char *, flags.len + 10);
+    size_t next = 0;
+    arguments[next++] = N00BB_NATIVE_LINKER;
+    arguments[next++] = "-shared";
+    arguments[next++] = "-x";
+    arguments[next++] = "c";
+    arguments[next++] = "/dev/null";
+    for (size_t i = 0; i < flags.len; i++) {
+        arguments[next++] = flags.data[i].data;
+    }
+    arguments[next++] = named.data;
+    arguments[next++] = "-o";
+    arguments[next++] = output.data;
+    arguments[next] = nullptr;
+    bool found = run_logged(arguments, nullptr);
+    unlink(output.data);
+    rmdir(directory);
+    core_free(arguments);
+    for (size_t i = 0; i < flags.len; i++) {
+        core_buffer_release(&flags.data[i]);
+    }
+    core_list_free(flags);
+    core_buffer_release(&named);
+    core_buffer_release(&output);
+    if (found) {
+        core_list_push(ffi->found_libraries, core_string_dup(library));
+    }
+    return found;
+}
+
+static bool
+check_libraries(n00bb_ffi_t *ffi, core_translation_unit_t *unit, n00bb_literal_origin_t origin,
+                const writ_link_requirements_t *links)
+{
+    bool ok = true;
+    for (size_t i = 0; i < links->libraries_count; i++) {
+        core_string_t library = as_core(links->libraries[i]);
+        if (!library_found(ffi, library)) {
+            core_buffer_t message = {0};
+            core_buffer_printf(&message, "native library '%.*s' required by this 'ffi literal is not available to link",
+                               (int)library.u8_bytes, library.data);
+            report_error(unit, origin, "N00BB-F0001", message.data);
+            core_buffer_release(&message);
+            ok = false;
+        }
+    }
+    return ok;
+}
+
+static int
+remove_entry(const char *path, const struct stat *status, int kind, struct FTW *walk)
+{
+    (void)status;
+    (void)kind;
+    (void)walk;
+    return remove(path);
+}
+
+static bool
+write_crate(const char *directory, const capture_t *crate)
+{
+    bool ok = true;
+    for (size_t i = 0; ok && i < crate->files.len; i++) {
+        const ffi_output_t *file = &crate->files.data[i];
+        core_buffer_t path = {0};
+        core_buffer_printf(&path, "%s/%.*s", directory, (int)file->name.u8_bytes, file->name.data);
+        for (char *at = path.data + strlen(directory) + 1; ok && *at; at++) {
+            if (*at == '/') {
+                *at = '\0';
+                ok = !mkdir(path.data, 0700) || errno == EEXIST;
+                *at = '/';
+            }
+        }
+        ok = ok && write_whole_file(path.data, file->contents);
+        core_buffer_release(&path);
+    }
+    return ok;
+}
+
+static char *
+staticlib_name(const char *directory)
+{
+    core_buffer_t release = {0};
+    core_buffer_printf(&release, "%s/target/release", directory);
+    DIR *listing = opendir(release.data);
+    core_buffer_release(&release);
+    if (!listing) {
+        return nullptr;
+    }
+    char *name = nullptr;
+    for (struct dirent *entry = readdir(listing); entry && !name; entry = readdir(listing)) {
+        size_t length = strlen(entry->d_name);
+        if (length > 5 && !strncmp(entry->d_name, "lib", 3) && !strcmp(entry->d_name + length - 2, ".a")) {
+            name = core_strdup(entry->d_name);
+        }
+    }
+    closedir(listing);
+    return name;
+}
+
+static bool
+build_crate(const char *directory)
+{
+    core_buffer_t manifest = {0}, log = {0}, text = {0}, record = {0};
+    core_buffer_printf(&manifest, "%s/Cargo.toml", directory);
+    core_buffer_printf(&log, "%s/cargo.log", directory);
+    char *arguments[] = {N00BB_CARGO, "rustc", "--release", "--lib", "--crate-type", "staticlib", "--manifest-path",
+                         manifest.data, "--", "--print", "native-static-libs", nullptr};
+    bool ok = run_logged(arguments, log.data) && read_whole_file(log.data, &text);
+    core_buffer_append(&text, "", 1);
+    const char *marker = "native-static-libs:";
+    const char *flags = ok ? strstr(text.data, marker) : nullptr;
+    char *archive = ok ? staticlib_name(directory) : nullptr;
+    ok = flags && archive;
+    if (ok) {
+        flags += strlen(marker);
+        core_buffer_printf(&record, "%s\n%.*s\n", archive, (int)strcspn(flags, "\r\n"), flags);
+        core_buffer_t path = {0};
+        core_buffer_printf(&path, "%s/link", directory);
+        ok = write_whole_file(path.data, core_string_borrow(record.data, record.byte_len));
+        core_buffer_release(&path);
+    }
+    core_free(archive);
+    core_buffer_release(&manifest);
+    core_buffer_release(&log);
+    core_buffer_release(&text);
+    core_buffer_release(&record);
+    return ok;
+}
+
+static bool
+keep_crate(n00bb_ffi_t *ffi, const char *directory)
+{
+    core_buffer_t path = {0}, record = {0};
+    core_buffer_printf(&path, "%s/link", directory);
+    bool ok = read_whole_file(path.data, &record);
+    core_buffer_append(&record, "", 1);
+    core_buffer_release(&path);
+    char *flags = ok ? strchr(record.data, '\n') : nullptr;
+    ok = flags != nullptr;
+    if (ok) {
+        *flags++ = '\0';
+        core_buffer_t archive = {0};
+        core_buffer_printf(&archive, "%s/target/release/%s", directory, record.data);
+        push_unique(&ffi->archives, (writ_str_t){archive.data, archive.byte_len});
+        core_buffer_release(&archive);
+        push_unique(&ffi->transports, (writ_str_t){record.data + 3, strlen(record.data) - 5});
+        bool framework = false;
+        for (char *token = strtok(flags, " \t\r\n"); token; token = strtok(nullptr, " \t\r\n")) {
+            if (framework) {
+                push_unique(&ffi->frameworks, (writ_str_t){token, strlen(token)});
+                framework = false;
+            } else if (!strcmp(token, "-framework")) {
+                framework = true;
+            } else if (!strncmp(token, "-l", 2) && token[2]) {
+                push_unique(&ffi->libraries, (writ_str_t){token + 2, strlen(token + 2)});
+            } else if (!strncmp(token, "-L", 2) && token[2]) {
+                push_unique(&ffi->search_paths, (writ_str_t){token + 2, strlen(token + 2)});
+            }
+        }
+    }
+    core_buffer_release(&record);
+    return ok;
+}
+
+static bool
+keep_transport(n00bb_ffi_t *ffi, core_translation_unit_t *unit, n00bb_literal_origin_t origin,
+               const writ_model_t *model)
+{
+    capture_t crate = {core_list_new(ffi_output_t)};
+    writ_gen_rust_request_t request = {.struct_size = sizeof(request)};
+    writ_output_t output = {capture_file, &crate};
+    writ_status_t status = writ_gen_rust(model, &request, &output);
+    bool ok = status == WRIT_OK || status == WRIT_INVALID_ARGUMENT;
+    char *root = nullptr;
+    if (ok && status == WRIT_OK && !*N00BB_CARGO) {
+        report_error(unit, origin, "N00BB-F0002",
+                     "this 'ffi literal needs a Rust transport crate, but this n00bb was built without Rust transports");
+        ok = false;
+    } else if (ok && status == WRIT_OK && !(root = n00bb_native_cache_root())) {
+        report_error(unit, origin, "N00BB-F0003", "no cache directory is available for the Rust transport crate");
+        ok = false;
+    } else if (ok && status == WRIT_OK) {
+        core_buffer_t payload = {0}, directory = {0};
+        for (size_t i = 0; i < crate.files.len; i++) {
+            core_buffer_append(&payload, crate.files.data[i].name.data, crate.files.data[i].name.u8_bytes + 1);
+            core_buffer_append(&payload, crate.files.data[i].contents.data, crate.files.data[i].contents.u8_bytes + 1);
+        }
+        core_uint128_t key = core_xxh3_128bits_raw(payload.data, payload.byte_len);
+        core_buffer_printf(&directory, "%s/rust", root);
+        ok = !mkdir(directory.data, 0700) || errno == EEXIST;
+        core_buffer_printf(&directory, "/%016llx%016llx", (unsigned long long)(key >> 64), (unsigned long long)key);
+        if (ok && !keep_crate(ffi, directory.data)) {
+            core_buffer_t staging = {0};
+            core_buffer_printf(&staging, "%s.XXXXXX", directory.data);
+            ok = mkdtemp(staging.data) && write_crate(staging.data, &crate);
+            bool built = ok && build_crate(staging.data);
+            if (built && rename(staging.data, directory.data)) {
+                nftw(staging.data, remove_entry, 16, FTW_DEPTH | FTW_PHYS);
+            }
+            if (ok && !built) {
+                core_buffer_t message = {0};
+                core_buffer_printf(&message, "building the Rust transport crate failed; cargo output is in %s/cargo.log",
+                                   staging.data);
+                report_error(unit, origin, "N00BB-F0004", message.data);
+                core_buffer_release(&message);
+            }
+            ok = built && keep_crate(ffi, directory.data);
+            core_buffer_release(&staging);
+        }
+        core_buffer_release(&payload);
+        core_buffer_release(&directory);
+    }
+    core_free(root);
+    for (size_t i = 0; i < crate.files.len; i++) {
+        core_free((void *)crate.files.data[i].name.data);
+        core_free((void *)crate.files.data[i].contents.data);
+    }
+    core_list_free(crate.files);
+    return ok;
 }
 
 static bool
@@ -279,8 +601,10 @@ generate_locked(n00bb_ffi_t *ffi, core_translation_unit_t *unit, core_string_t n
         core_free((void *)capture.files.data[i].contents.data);
     }
     core_list_free(capture.files);
+    ok = ok && keep_transport(ffi, unit, origin, model);
     if (ok) {
         keep_links(ffi, &links);
+        ok = check_libraries(ffi, unit, origin, &links);
     }
     forward_diagnostics(ffi, unit, first, origin);
     return ok;
@@ -354,6 +678,18 @@ n00bb_ffi_shim_at(const n00bb_ffi_t *ffi, size_t index)
 }
 
 size_t
+n00bb_ffi_archive_count(const n00bb_ffi_t *ffi)
+{
+    return ffi ? ffi->archives.len : 0;
+}
+
+core_string_t
+n00bb_ffi_archive_at(const n00bb_ffi_t *ffi, size_t index)
+{
+    return ffi->archives.data[index];
+}
+
+size_t
 n00bb_ffi_library_count(const n00bb_ffi_t *ffi)
 {
     return ffi ? ffi->libraries.len : 0;
@@ -387,36 +723,6 @@ core_string_t
 n00bb_ffi_search_path_at(const n00bb_ffi_t *ffi, size_t index)
 {
     return ffi->search_paths.data[index];
-}
-
-extern char **environ;
-
-static bool
-write_whole_file(const char *path, core_string_t contents)
-{
-    FILE *file = fopen(path, "wb");
-    if (!file) {
-        return false;
-    }
-    bool ok = fwrite(contents.data, 1, contents.u8_bytes, file) == contents.u8_bytes;
-    return fclose(file) == 0 && ok;
-}
-
-static bool
-read_whole_file(const char *path, core_buffer_t *out)
-{
-    FILE *file = fopen(path, "rb");
-    if (!file) {
-        return false;
-    }
-    char chunk[65536];
-    size_t count = 0;
-    while ((count = fread(chunk, 1, sizeof chunk, file)) != 0) {
-        core_buffer_append(out, chunk, count);
-    }
-    bool ok = !ferror(file);
-    fclose(file);
-    return ok && out->byte_len;
 }
 
 static char *

@@ -23,6 +23,8 @@ size_t           n00bb_ffi_input_count(const n00bb_ffi_t *ffi);
 core_string_t    n00bb_ffi_input_at(const n00bb_ffi_t *ffi, size_t index);
 size_t           n00bb_ffi_shim_count(const n00bb_ffi_t *ffi);
 n00bb_ffi_file_t n00bb_ffi_shim_at(const n00bb_ffi_t *ffi, size_t index);
+size_t           n00bb_ffi_archive_count(const n00bb_ffi_t *ffi);
+core_string_t    n00bb_ffi_archive_at(const n00bb_ffi_t *ffi, size_t index);
 size_t           n00bb_ffi_library_count(const n00bb_ffi_t *ffi);
 core_string_t    n00bb_ffi_library_at(const n00bb_ffi_t *ffi, size_t index);
 size_t           n00bb_ffi_framework_count(const n00bb_ffi_t *ffi);

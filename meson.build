@@ -19,6 +19,12 @@ writ_paths = [
     '-DN00BB_WRIT_PROFILE_DIR="' + writ.get_variable(pkgconfig: 'profiledir') + '"',
     '-DN00BB_LLVM_CLANG="' + llvm.get_variable(configtool: 'bindir') / 'clang' + '"',
 ]
+cargo = find_program('cargo', required: get_option('rust-transports'))
+if cargo.found() and not get_option('rust-transports').disabled()
+    writ_paths += '-DN00BB_CARGO="' + cargo.full_path() + '"'
+else
+    writ_paths += '-DN00BB_CARGO=""'
+endif
 grammar_path = meson.current_source_dir() / 'grammar' / 'n00b.bnf'
 
 add_project_arguments(
