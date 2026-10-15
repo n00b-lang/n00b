@@ -92,6 +92,7 @@ typedef struct {
     void            *context;
     const char      *sequence;
     const char      *reference;
+    const char      *option_suffix;
     bool             omit_constraints;
 } th_print_options_t;
 

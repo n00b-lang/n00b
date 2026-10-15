@@ -353,6 +353,14 @@ static void expand(pctx *c, core_buffer_t *b, core_list_t(witem) *w, const th_ty
             return;
         }
 
+        if (c->options && c->options->option_suffix && !t->named.is_variant
+            && t->named.nargs == 1 && t->named.args[0].kind == TH_ARG_TYPE
+            && t->named.nlen == strlen("option")
+            && !memcmp(t->named.name, "option", t->named.nlen)) {
+            wlit(w, c->options->option_suffix);
+            wtype(w, t->named.args[0].type);
+            return;
+        }
         if (t->named.is_variant) {
             core_buffer_puts(b, "variant ");
         }
