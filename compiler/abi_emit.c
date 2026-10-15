@@ -1574,6 +1574,14 @@ symbol_in_unit(void *opaque, const parse_sym_entry_t *symbol,
     return true;
 }
 
+static bool
+abi_stream_advance(size_t *offset, size_t count)
+{
+    if (count > UINT32_MAX - *offset) return false;
+    *offset += count;
+    return true;
+}
+
 bool
 n00bb_abi_emit_unit(
     core_link_unit_t *link, core_translation_unit_t *unit,
@@ -1753,6 +1761,18 @@ n00bb_abi_emit_unit(
     n00bb_abi_storage_rows_t storage_rows = {0};
     abi_tls_metadata_t tls_metadata = {0};
     abi_native_bindings_t native_bindings = {0};
+    n00bb_abi_packed_tables_t packed = {0};
+    core_list_t(core_object_emit_section_t) extra_sections = {0};
+    uint32_t *stream = nullptr;
+    n00b_abi_parameter_v1 *parameters = nullptr;
+    n00b_abi_index_patch_v1 *index_patches = nullptr;
+    uint8_t *tls_descriptors = nullptr;
+    size_t tls_descriptor_count = 0;
+    core_object_emit_absolute64_t *relocations = nullptr;
+    core_object_emit_symbol_t *object_symbols = nullptr;
+    char **tls_template_names = nullptr;
+    uint8_t *object = nullptr;
+    size_t object_bytes = 0;
     size_t reference_count = link ? core_link_unit_reference_count(link) : 0;
     bool requirement_capacity_valid = requirements
         && reference_count <= UINT32_MAX - import_count - 1
@@ -1764,6 +1784,9 @@ n00bb_abi_emit_unit(
     const char *failed_stage = "setup";
     const char *typevar_failure = nullptr;
     uint32_t failed_layout_type = UINT32_MAX;
+    size_t stream_base = prefix_stream_count;
+    size_t signature_stream_base = 0;
+    size_t function_stream_base = 0;
     abi_symbol_owner_t symbol_owner = {
         .unit = unit, .source = node_source, .context = source_context,
     };
@@ -1814,44 +1837,47 @@ n00bb_abi_emit_unit(
             n00bb_abi_type_components_build(type_index,
                 (ir_module_t *)runtime_ir, prefix_stream_count,
                 &type_rows, &components))
+        && ABI_STAGE("component stream indexes",
+            abi_stream_advance(&stream_base, components.count))
         && ABI_STAGE("type layouts",
             n00bb_abi_type_layout_rows_build(type_index,
                 (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir,
-                false, prefix_stream_count + (uint32_t)components.count,
+                false, (uint32_t)stream_base,
                 declarations, pool, &type_rows, &layout_rows,
                 &failed_layout_type))
+        && ABI_STAGE("layout stream indexes",
+            abi_stream_advance(&stream_base,
+                layout_rows.stream_index_count))
         && ABI_STAGE("enum items",
             n00bb_abi_enum_rows_build(type_index, declarations, pool,
-                prefix_stream_count + (uint32_t)components.count
-                    + (uint32_t)layout_rows.stream_index_count,
-                &type_rows, &enum_rows))
-        && ABI_STAGE("callable signatures",
+                (uint32_t)stream_base, &type_rows, &enum_rows))
+        && ABI_STAGE("enum stream indexes",
+            abi_stream_advance(&stream_base, enum_rows.stream_index_count));
+    signature_stream_base = stream_base;
+    valid = valid && ABI_STAGE("callable signatures",
             n00bb_abi_type_signatures_build(type_index, &type_rows, pool,
-                prefix_stream_count + (uint32_t)components.count
-                    + (uint32_t)layout_rows.stream_index_count
-                    + (uint32_t)enum_rows.stream_index_count,
-                &signature_rows))
+                (uint32_t)stream_base, &signature_rows))
+        && ABI_STAGE("signature stream indexes",
+            abi_stream_advance(&stream_base,
+                signature_rows.parameter_index_count))
         && ABI_STAGE("declarations",
             n00bb_abi_declarations_build(declarations, type_index,
                 &type_rows, unit, tokens, pool, node_source, source_context,
-                prefix_stream_count + (uint32_t)components.count
-                    + (uint32_t)layout_rows.stream_index_count
-                    + (uint32_t)enum_rows.stream_index_count
-                    + (uint32_t)signature_rows.parameter_index_count,
-                &declaration_rows))
-        && ABI_STAGE("function rows",
+                (uint32_t)stream_base, &declaration_rows))
+        && ABI_STAGE("declaration stream indexes",
+            abi_stream_advance(&stream_base,
+                declaration_rows.stream_index_count));
+    function_stream_base = stream_base;
+    valid = valid && ABI_STAGE("function rows",
             n00bb_abi_function_rows_build(type_index, declarations,
                 &type_rows, &signature_rows,
-                prefix_stream_count + (uint32_t)components.count
-                    + (uint32_t)layout_rows.stream_index_count
-                    + (uint32_t)enum_rows.stream_index_count,
-                prefix_stream_count + (uint32_t)components.count
-                    + (uint32_t)layout_rows.stream_index_count
-                    + (uint32_t)enum_rows.stream_index_count
-                    + (uint32_t)signature_rows.parameter_index_count
-                    + (uint32_t)declaration_rows.stream_index_count,
+                (uint32_t)signature_stream_base,
+                (uint32_t)function_stream_base,
                 (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir,
                 pool, lookup, lookup_context, &function_rows))
+        && ABI_STAGE("function stream indexes",
+            abi_stream_advance(&stream_base,
+                function_rows.stream_index_count))
         && ABI_STAGE("frame layouts",
             build_frame_rows(&function_rows, type_index, &type_rows,
                              (ir_module_t *)runtime_ir, &frame_rows))
@@ -1880,25 +1906,16 @@ n00bb_abi_emit_unit(
     }
     valid = valid && ABI_STAGE("type constraints",
             n00bb_abi_constraint_rows_build(type_index, &type_rows,
-                declarations, &function_rows, pool,
-                prefix_stream_count + (uint32_t)components.count
-                    + (uint32_t)layout_rows.stream_index_count
-                    + (uint32_t)enum_rows.stream_index_count
-                    + (uint32_t)signature_rows.parameter_index_count
-                    + (uint32_t)declaration_rows.stream_index_count
-                    + (uint32_t)function_rows.stream_index_count,
+                declarations, &function_rows, pool, (uint32_t)stream_base,
                 (uint32_t)signature_rows.parameter_count,
                 &constraint_rows))
+        && ABI_STAGE("constraint stream indexes",
+            abi_stream_advance(&stream_base,
+                constraint_rows.stream_index_count))
         && ABI_STAGE("static storage",
             n00bb_abi_storage_rows_build(type_index, declarations,
                 &type_rows, (ir_module_t *)runtime_ir, pool,
-                prefix_stream_count + (uint32_t)components.count
-                    + (uint32_t)layout_rows.stream_index_count
-                    + (uint32_t)enum_rows.stream_index_count
-                    + (uint32_t)signature_rows.parameter_index_count
-                    + (uint32_t)declaration_rows.stream_index_count
-                    + (uint32_t)function_rows.stream_index_count
-                    + (uint32_t)constraint_rows.stream_index_count,
+                (uint32_t)stream_base,
                 lookup, lookup_context, graphs, &storage_rows));
 #undef ABI_STAGE
     if (valid) {
@@ -1909,16 +1926,9 @@ n00bb_abi_emit_unit(
     }
     if (valid) {
         failed_stage = "trait method membership";
-        size_t method_stream_base = prefix_stream_count + components.count
-            + layout_rows.stream_index_count + enum_rows.stream_index_count
-            + signature_rows.parameter_index_count
-            + declaration_rows.stream_index_count
-            + function_rows.stream_index_count
-            + constraint_rows.stream_index_count
-            + storage_rows.stream_count;
-        valid = method_stream_base <= UINT32_MAX
+        valid = abi_stream_advance(&stream_base, storage_rows.stream_count)
             && n00bb_abi_trait_method_rows_attach(&type_rows,
-                &trait_method_rows, (uint32_t)method_stream_base);
+                &trait_method_rows, (uint32_t)stream_base);
     }
     if (valid) {
         failed_stage = "imported variable requirements";
@@ -1963,16 +1973,11 @@ n00bb_abi_emit_unit(
     }
     if (valid) {
         failed_stage = "TLS metadata";
-        size_t base = prefix_stream_count + components.count
-            + layout_rows.stream_index_count + enum_rows.stream_index_count
-            + signature_rows.parameter_index_count
-            + declaration_rows.stream_index_count
-            + function_rows.stream_index_count
-            + constraint_rows.stream_index_count + storage_rows.stream_count
-            + trait_method_rows.stream_index_count;
-        valid = base <= UINT32_MAX && build_tls_metadata(&storage_rows,
-            n00bb_abi_name_pool_size(pool), (uint32_t)base, &modules[1],
-            &tls_metadata);
+        valid = abi_stream_advance(&stream_base,
+                trait_method_rows.stream_index_count)
+            && build_tls_metadata(&storage_rows,
+                n00bb_abi_name_pool_size(pool), (uint32_t)stream_base,
+                &modules[1], &tls_metadata);
     }
     if (!valid) {
         core_buffer_t message = {0};
@@ -2013,105 +2018,56 @@ n00bb_abi_emit_unit(
                            failed_type) : nullptr;
             if (spelling) core_buffer_printf(&message, " for %s", spelling);
         }
-        core_free(requirements);
-        native_bindings_release(&native_bindings);
-        tls_metadata_release(&tls_metadata);
-        n00bb_abi_storage_rows_release(&storage_rows);
-        n00bb_abi_trait_method_rows_release(&trait_method_rows);
-        n00bb_abi_constraint_rows_release(&constraint_rows);
-        frame_rows_release(&frame_rows);
-        n00bb_abi_function_rows_release(&function_rows);
-        n00bb_abi_declarations_release(&declaration_rows);
-        n00bb_abi_type_signatures_release(&signature_rows);
-        n00bb_abi_enum_rows_release(&enum_rows);
-        n00bb_abi_type_layout_rows_release(&layout_rows);
-        n00bb_abi_type_components_release(&components);
-        n00bb_abi_type_identity_rows_release(&type_rows);
-        n00bb_abi_name_pool_free(pool);
-        n00bb_abi_decl_index_free(declarations);
-        n00bb_abi_type_index_free(type_index);
-        bool result = abi_unit_error(unit, message.data);
+        abi_unit_error(unit, message.data);
         core_buffer_release(&message);
-        return result;
+        goto cleanup;
     }
 
     n00bb_abi_type_index_free(type_index);
+    type_index = nullptr;
 
-    size_t stream_count = prefix_stream_count + components.count
-        + layout_rows.stream_index_count
-        + enum_rows.stream_index_count
-        + signature_rows.parameter_index_count
-        + declaration_rows.stream_index_count
-        + function_rows.stream_index_count
-        + constraint_rows.stream_index_count
-        + storage_rows.stream_count
-        + trait_method_rows.stream_index_count
-        + tls_metadata.stream_count;
-    size_t frame_stream_base = stream_count;
-    stream_count += frame_rows.active_count;
-    uint32_t *stream = core_alloc_array(uint32_t, stream_count);
-    stream[0] = package_modules[0];
-    if (recursive) {
-        stream[1] = 1;
-        stream[2] = scc_ordinal;
+    valid = abi_stream_advance(&stream_base, tls_metadata.stream_count);
+    size_t frame_stream_base = stream_base;
+    valid = valid && abi_stream_advance(&stream_base,
+                                        frame_rows.active_count);
+    if (!valid) {
+        abi_unit_error(unit, "ABI stream index range exceeds 32 bits");
+        goto cleanup;
     }
-    if (components.count)
-        memcpy(stream + prefix_stream_count, components.indexes,
-               components.count * sizeof(*stream));
-    if (layout_rows.stream_index_count)
-        memcpy(stream + prefix_stream_count + components.count,
-               layout_rows.stream_indexes,
-               layout_rows.stream_index_count * sizeof(*stream));
-    if (enum_rows.stream_index_count)
-        memcpy(stream + prefix_stream_count + components.count
-                   + layout_rows.stream_index_count,
-               enum_rows.stream_indexes,
-               enum_rows.stream_index_count * sizeof(*stream));
-    if (signature_rows.parameter_index_count)
-        memcpy(stream + prefix_stream_count + components.count
-                   + layout_rows.stream_index_count
-                   + enum_rows.stream_index_count,
-               signature_rows.parameter_indexes,
-               signature_rows.parameter_index_count * sizeof(*stream));
-    if (declaration_rows.stream_index_count)
-        memcpy(stream + prefix_stream_count + components.count
-                   + layout_rows.stream_index_count
-                   + enum_rows.stream_index_count
-                   + signature_rows.parameter_index_count,
-               declaration_rows.stream_indexes,
-               declaration_rows.stream_index_count * sizeof(*stream));
-    if (function_rows.stream_index_count)
-        memcpy(stream + prefix_stream_count + components.count
-                   + layout_rows.stream_index_count
-                   + enum_rows.stream_index_count
-                   + signature_rows.parameter_index_count
-                   + declaration_rows.stream_index_count,
-               function_rows.stream_indexes,
-               function_rows.stream_index_count * sizeof(*stream));
-    if (constraint_rows.stream_index_count)
-        memcpy(stream + prefix_stream_count + components.count
-                   + layout_rows.stream_index_count
-                   + enum_rows.stream_index_count
-                   + signature_rows.parameter_index_count
-                   + declaration_rows.stream_index_count
-                   + function_rows.stream_index_count,
-               constraint_rows.stream_indexes,
-               constraint_rows.stream_index_count * sizeof(*stream));
-    if (storage_rows.stream_count)
-        memcpy(stream + frame_stream_base - tls_metadata.stream_count
-                   - storage_rows.stream_count
-                   - trait_method_rows.stream_index_count,
-               storage_rows.stream_indexes,
-               storage_rows.stream_count * sizeof(*stream));
-    if (trait_method_rows.stream_index_count)
-        memcpy(stream + frame_stream_base - tls_metadata.stream_count
-                   - trait_method_rows.stream_index_count,
-               trait_method_rows.stream_indexes,
-               trait_method_rows.stream_index_count * sizeof(*stream));
-    if (tls_metadata.stream_count)
-        memcpy(stream + frame_stream_base - tls_metadata.stream_count,
-               tls_metadata.stream_indexes,
-               tls_metadata.stream_count * sizeof(*stream));
+    size_t stream_count = stream_base;
+    stream = core_alloc_array(uint32_t, stream_count);
+    uint32_t prefix_values[3] = {package_modules[0], 1, scc_ordinal};
+    const struct {
+        const uint32_t *indexes;
+        size_t count;
+    } pieces[] = {
+        {prefix_values, prefix_stream_count},
+        {components.indexes, components.count},
+        {layout_rows.stream_indexes, layout_rows.stream_index_count},
+        {enum_rows.stream_indexes, enum_rows.stream_index_count},
+        {signature_rows.parameter_indexes,
+         signature_rows.parameter_index_count},
+        {declaration_rows.stream_indexes,
+         declaration_rows.stream_index_count},
+        {function_rows.stream_indexes, function_rows.stream_index_count},
+        {constraint_rows.stream_indexes, constraint_rows.stream_index_count},
+        {storage_rows.stream_indexes, storage_rows.stream_count},
+        {trait_method_rows.stream_indexes,
+         trait_method_rows.stream_index_count},
+        {tls_metadata.stream_indexes, tls_metadata.stream_count},
+    };
+    size_t stream_ordinal = 0;
+    for (size_t i = 0; i < sizeof(pieces) / sizeof(*pieces); i++) {
+        if (pieces[i].count)
+            memcpy(stream + stream_ordinal, pieces[i].indexes,
+                   pieces[i].count * sizeof(*stream));
+        stream_ordinal += pieces[i].count;
+    }
+    if (stream_ordinal != frame_stream_base) {
+        valid = false;
+        abi_unit_error(unit, "ABI stream sections do not match their indexes");
+        goto cleanup;
+    }
     size_t frame_ordinal = 0;
     for (size_t i = 1; i < function_rows.function_count; i++) {
         uint32_t frame_index = frame_rows.function_frames[i];
@@ -2122,13 +2078,9 @@ n00bb_abi_emit_unit(
         };
         stream[position] = frame_index;
     }
-    core_list_t(core_object_emit_section_t) extra_sections = {0};
     uint32_t storage_input_indexes[4] = {0};
     uint32_t aggregate_input_index = 0;
     uint32_t tls_descriptor_input_index = 0;
-    uint8_t *tls_descriptors = nullptr;
-    size_t tls_descriptor_count = 0;
-    n00b_abi_index_patch_v1 *index_patches = nullptr;
     core_object_emit_symbol_t string_symbol = {0};
     core_object_emit_symbol_t aggregate_symbol = {0};
     bool has_pool = n00bb_abi_name_pool_size(pool) != 0;
@@ -2249,7 +2201,6 @@ n00bb_abi_emit_unit(
     }
     size_t parameter_count = signature_rows.parameter_count
         + constraint_rows.call_parameter_count;
-    n00b_abi_parameter_v1 *parameters = nullptr;
     valid = valid
         && constraint_rows.call_parameter_count
             <= SIZE_MAX - signature_rows.parameter_count
@@ -2334,32 +2285,11 @@ n00bb_abi_emit_unit(
         {N00B_ABI_TABLE_INDEX_PATCH, index_patches,
          index_patches ? storage_rows.index_patch_count + 1 : 0},
     };
-    n00bb_abi_packed_tables_t packed = {0};
     valid = valid && n00bb_abi_pack_tables(target, artifact_capabilities,
         rows, sizeof(rows) / sizeof(*rows) - !index_patches, &packed);
-    core_free(index_patches);
-    core_free(parameters);
-    core_free(stream);
     if (!valid) {
-        core_list_free(extra_sections);
-        core_free(tls_descriptors);
-        core_free(requirements);
-        native_bindings_release(&native_bindings);
-        tls_metadata_release(&tls_metadata);
-        n00bb_abi_storage_rows_release(&storage_rows);
-        n00bb_abi_trait_method_rows_release(&trait_method_rows);
-        n00bb_abi_constraint_rows_release(&constraint_rows);
-        frame_rows_release(&frame_rows);
-        n00bb_abi_function_rows_release(&function_rows);
-        n00bb_abi_declarations_release(&declaration_rows);
-        n00bb_abi_type_signatures_release(&signature_rows);
-        n00bb_abi_enum_rows_release(&enum_rows);
-        n00bb_abi_type_layout_rows_release(&layout_rows);
-        n00bb_abi_type_components_release(&components);
-        n00bb_abi_type_identity_rows_release(&type_rows);
-        n00bb_abi_name_pool_free(pool);
-        n00bb_abi_decl_index_free(declarations);
-        return abi_unit_error(unit, "could not pack ABI tables");
+        abi_unit_error(unit, "could not pack ABI tables");
+        goto cleanup;
     }
 
     n00bb_abi_image_key_t key;
@@ -2372,7 +2302,6 @@ n00bb_abi_emit_unit(
         && n00bb_abi_container_read(packed.bytes, packed.byte_count,
             &key, schemas, schema_count, false, &header, entries,
             sizeof(entries) / sizeof(*entries));
-    core_object_emit_absolute64_t *relocations = nullptr;
     size_t relocation_count = 0;
     size_t storage_base_symbols =
         (storage_input_indexes[N00B_ABI_STORAGE_READ_ONLY] != 0)
@@ -2472,17 +2401,15 @@ n00bb_abi_emit_unit(
             relocation_count = total;
         }
     }
-    uint8_t *object = nullptr;
-    size_t object_bytes = 0;
     size_t symbol_count = (has_pool ? 1 : 0)
         + (has_aggregates ? 1 : 0)
         + storage_base_symbols
         + native_bindings.count - 1
         + (tls_descriptor_count ? tls_descriptor_count + 1 : 0);
-    core_object_emit_symbol_t *object_symbols = symbol_count
+    object_symbols = symbol_count
         ? core_alloc_array(core_object_emit_symbol_t, symbol_count)
         : nullptr;
-    char **tls_template_names = tls_descriptor_count
+    tls_template_names = tls_descriptor_count
         ? core_alloc_array(char *, tls_descriptor_count) : nullptr;
     if (has_pool) object_symbols[0] = string_symbol;
     if (has_aggregates) object_symbols[has_pool ? 1 : 0]
@@ -2545,10 +2472,22 @@ n00bb_abi_emit_unit(
             object_symbols, symbol_count,
             relocations, relocation_count,
             &object, &object_bytes);
+    if (!valid) {
+        core_buffer_t message = {0};
+        core_buffer_printf(&message, "could not write ABI object: %s",
+            object_failure);
+        abi_unit_error(unit, message.data);
+        core_buffer_release(&message);
+    }
+cleanup:
+    core_free(index_patches);
+    core_free(parameters);
+    core_free(stream);
     core_list_free(extra_sections);
     core_free(tls_descriptors);
-    for (size_t i = 0; i < tls_descriptor_count; i++)
-        core_free(tls_template_names[i]);
+    if (tls_template_names)
+        for (size_t i = 0; i < tls_descriptor_count; i++)
+            core_free(tls_template_names[i]);
     core_free(tls_template_names);
     core_free(object_symbols);
     core_free(relocations);
@@ -2568,14 +2507,11 @@ n00bb_abi_emit_unit(
     n00bb_abi_type_identity_rows_release(&type_rows);
     n00bb_abi_name_pool_free(pool);
     n00bb_abi_decl_index_free(declarations);
+    n00bb_abi_type_index_free(type_index);
     if (!valid) {
         n00bb_abi_packed_tables_release(&packed);
-        core_buffer_t message = {0};
-        core_buffer_printf(&message, "could not write ABI object: %s",
-            object_failure);
-        bool reported = abi_unit_error(unit, message.data);
-        core_buffer_release(&message);
-        return reported;
+        core_free(object);
+        return false;
     }
     *out_tables = packed;
     *out_object = object;
