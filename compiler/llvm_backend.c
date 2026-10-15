@@ -12871,7 +12871,7 @@ emit_native_module(n00bb_llvm_backend_t *backend, LLVMModuleRef module,
         backend->cpu_features ? backend->cpu_features : "",
         backend->debug_enabled ? LLVMCodeGenLevelDefault
                                : LLVMCodeGenLevelAggressive,
-        LLVMRelocDefault,
+        LLVMRelocPIC,
         LLVMCodeModelDefault);
     LLVMSetTarget(module, triple);
     LLVMDisposeMessage(triple);
