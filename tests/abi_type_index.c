@@ -71,50 +71,13 @@ main(void)
     assert(first_index != second_index);
 
     assert(ir_type_intern(comptime, th_array(types, integer)));
-    assert(n00bb_abi_type_index_collect_ir(index, comptime));
+    assert(n00bb_abi_type_index_collect_module_types(index, comptime));
     uint32_t array_index = UINT32_MAX;
     assert(n00bb_abi_type_index_find(index, th_array(types, integer),
                                      &array_index));
     assert(array_index != integer_index);
-    th_type *contract_var = th_var_named(types, "contract_value");
-    th_param concrete_param = {.mode = TH_IN, .type = integer};
-    th_param generic_param = {.mode = TH_IN, .type = contract_var};
-    th_type *concrete_call = th_func(types, nil, &concrete_param, 1,
-                                     nullptr, nullptr, 0);
-    th_type *generic_call = th_func(types, nil, &generic_param, 1,
-                                    nullptr, nullptr, 0);
-    ir_func_t *function_ir = ir_func_add(runtime, "identity",
-                                         concrete_call, IR_LINK_INTERNAL);
-    assert(function_ir && ir_func_set_callable_contract(function_ir,
-                                                         generic_call));
-    th_type *annotation_only = th_name(types, "example.AnnotationOnly");
-    assert(ir_annot_set(context, ir_module_annots(runtime), (ir_annot_t){
-        .key = "n00b.type_marker",
-        .kind = IR_ANNOT_TYPE,
-        .t = annotation_only,
-    }));
-    th_type *descriptor_only = th_name(types, "example.DescriptorOnly");
-    ir_global_t *selected_type = ir_global_add(runtime, "selected_type",
-                                                th_name(types, "typespec"));
-    ir_global_init_value_t descriptor_value = {
-        .kind = IR_GLOBAL_INIT_TYPE,
-        .descriptor_type = descriptor_only,
-    };
-    assert(selected_type && ir_global_set_static_initializer(runtime,
-        selected_type, &descriptor_value));
-    assert(n00bb_abi_type_index_collect_ir(index, runtime));
-    uint32_t contract_var_index = UINT32_MAX;
-    uint32_t annotation_index = UINT32_MAX;
-    uint32_t descriptor_index = UINT32_MAX;
-    assert(n00bb_abi_type_index_find(index, contract_var,
-                                     &contract_var_index));
-    assert(n00bb_abi_type_index_find(index, annotation_only,
-                                     &annotation_index));
-    assert(n00bb_abi_type_index_find(index, descriptor_only,
-                                     &descriptor_index));
-    assert(contract_var_index != integer_index);
     size_t count = n00bb_abi_type_index_count(index);
-    assert(n00bb_abi_type_index_collect_ir(index, comptime));
+    assert(n00bb_abi_type_index_collect_module_types(index, comptime));
     assert(n00bb_abi_type_index_count(index) == count);
 
     parse_symtab_t *symbols = parse_symtab_new();

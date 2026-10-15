@@ -51,21 +51,6 @@ add_optional(n00bb_abi_type_index_t *index, th_type *type)
 }
 
 static bool
-add_annotations(n00bb_abi_type_index_t *index, ir_annots_t *annotations)
-{
-    if (!annotations) return true;
-    for (uint32_t i = 0; i < ir_annot_count(annotations); i++) {
-        ir_annot_t *annotation = ir_annot_at(annotations, i);
-        if (!annotation) return false;
-        if (annotation->kind == IR_ANNOT_TYPE
-            && !add_optional(index, annotation->t)) return false;
-        if (annotation->kind == IR_ANNOT_VALUE && annotation->v
-            && !add_optional(index, annotation->v->type)) return false;
-    }
-    return true;
-}
-
-static bool
 add_initializer_types(n00bb_abi_type_index_t *index,
                       const ir_global_init_value_t *value, size_t depth)
 {
@@ -333,65 +318,12 @@ n00bb_abi_type_index_collect_module_types(n00bb_abi_type_index_t *index,
         if (th_is_closed(types, type)
             && !add_type(index, type, nullptr)) return false;
     }
-    return collect_call_specializations(index, module, nullptr, 0);
-}
-
-bool
-n00bb_abi_type_index_collect_ir(n00bb_abi_type_index_t *index,
-                                 ir_module_t *module)
-{
-    if (!index || !module || index->failed
-        || ir_module_types(module) != ir_module_types(index->module))
-        return false;
-    if (!add_annotations(index, ir_module_annots(module))) return false;
-    for (size_t i = 0; i < ir_type_count(module); i++)
-        if (!add_optional(index, ir_type_at(module, i))) return false;
     for (size_t i = 0; i < ir_global_count(module); i++) {
         ir_global_t *global = ir_global_at(module, i);
-        if (!global || !add_optional(index, global->type)
-            || !add_initializer_types(index, global->static_initializer, 0)
-            || !add_annotations(index, &global->annots)) return false;
+        if (!global || !add_initializer_types(index,
+            global->static_initializer, 0)) return false;
     }
-    for (size_t i = 0; i < ir_func_count(module); i++) {
-        ir_func_t *function = ir_func_at(module, i);
-        if (!function || !add_optional(index, function->type)
-            || !add_annotations(index, &function->annots)) return false;
-        if (!add_optional(index, ir_func_callable_contract(function)))
-            return false;
-        for (uint32_t p = 0; p < function->n_params; p++)
-            if (!function->params[p]
-                || !add_optional(index, function->params[p]->type)
-                || !add_annotations(index, &function->params[p]->annots))
-                return false;
-        for (uint32_t l = 0; l < function->n_locals; l++)
-            if (!function->locals[l]
-                || !add_optional(index, function->locals[l]->type)
-                || !add_annotations(index, &function->locals[l]->annots))
-                return false;
-        for (uint32_t b = 0; b < function->n_blocks; b++) {
-            ir_block_t *block = function->blocks[b];
-            if (!block || !add_annotations(index, &block->annots)) return false;
-            for (uint32_t j = 0; j < block->n_instrs; j++) {
-                ir_instr_t *instruction = block->instrs[j];
-                if (!instruction || (instruction->dest
-                    && (!add_optional(index, instruction->dest->type)
-                        || !add_annotations(index,
-                            &instruction->dest->annots)))
-                    || !add_annotations(index, &instruction->annots))
-                    return false;
-                for (uint32_t o = 0; o < instruction->n_operands; o++) {
-                    ir_operand_t *operand = &instruction->operands[o];
-                    ir_value_t *value = ir_operand_value(operand);
-                    if ((value && !add_optional(index, value->type))
-                        || (value && !add_annotations(index, &value->annots))
-                        || (operand->kind == IR_OPD_TYPE
-                            && !add_optional(index, operand->type)))
-                        return false;
-                }
-            }
-        }
-    }
-    return true;
+    return collect_call_specializations(index, module, nullptr, 0);
 }
 
 static bool

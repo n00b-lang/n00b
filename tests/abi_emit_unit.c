@@ -128,7 +128,7 @@ check_type_descriptor_storage(void)
     n00bb_abi_type_index_t *index = n00bb_abi_type_index_new(runtime);
     assert(index && n00bb_abi_type_index_collect_symbols(index, symbols,
                                                           nullptr, nullptr)
-        && n00bb_abi_type_index_collect_ir(index, runtime));
+        && n00bb_abi_type_index_collect_module_types(index, runtime));
     uint32_t referred_index = 0;
     assert(n00bb_abi_type_index_find(index, referred, &referred_index)
         && referred_index != 0);

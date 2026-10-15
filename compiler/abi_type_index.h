@@ -19,8 +19,6 @@ bool n00bb_abi_type_index_add(n00bb_abi_type_index_t *index,
  * method type variables into this TU's declaration universe. */
 bool n00bb_abi_type_index_add_imported_trait(
     n00bb_abi_type_index_t *index, th_type *type);
-bool n00bb_abi_type_index_collect_ir(n00bb_abi_type_index_t *index,
-                                     ir_module_t *module);
 bool n00bb_abi_type_index_collect_comptime_functions(
     n00bb_abi_type_index_t *index, ir_func_t *const *functions,
     size_t function_count);
