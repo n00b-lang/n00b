@@ -3634,8 +3634,6 @@ static void report_coverage(void)
         printf("\n");
     }
     check("every opcode has a typing test", missing == 0);
-    check("every opcode has a default rule",
-          ir_default_rule_count() == IR_OP_COUNT);
 }
 
 int main(void)

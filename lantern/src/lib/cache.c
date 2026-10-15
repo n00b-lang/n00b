@@ -49,9 +49,6 @@ core_cache_init(core_cache_t *c)
 
     c->entries = entries_new();
     c->gen     = 1;
-    c->hits    = 0;
-    c->misses  = 0;
-    c->stale   = 0;
     c->enabled = true;
 }
 
@@ -97,24 +94,12 @@ core_cache_invalidate(core_cache_t *c)
     }
 }
 
-uint64_t
-core_cache_generation(const core_cache_t *c)
-{
-    return c ? c->gen : 0;
-}
-
 void
 core_cache_set_enabled(core_cache_t *c, bool on)
 {
     if (c) {
         c->enabled = on;
     }
-}
-
-bool
-core_cache_enabled(const core_cache_t *c)
-{
-    return c && c->enabled;
 }
 
 bool
@@ -130,21 +115,14 @@ core_cache_get(core_cache_t *c, void *subject, uint32_t query, uint64_t param,
     void            *val   = _core_dict_get(c->entries, &key, &found);
 
     if (!found) {
-        c->misses++;
-
         return false;
     }
 
     cache_entry_t *e = (cache_entry_t *)val;
 
     if (e->gen != c->gen) {
-        c->stale++;
-        c->misses++;
-
         return false;
     }
-
-    c->hits++;
 
     if (out) {
         *out = e->result;
@@ -183,18 +161,3 @@ core_cache_put(core_cache_t *c, void *subject, uint32_t query, uint64_t param,
     _core_dict_put(c->entries, &e->key, e);
 }
 
-core_cache_stats_t
-core_cache_stats(const core_cache_t *c)
-{
-    if (!c) {
-        return (core_cache_stats_t){0};
-    }
-
-    return (core_cache_stats_t){
-        .hits       = c->hits,
-        .misses     = c->misses,
-        .stale      = c->stale,
-        .entries    = c->entries ? core_dict_len(c->entries) : 0,
-        .generation = c->gen,
-    };
-}

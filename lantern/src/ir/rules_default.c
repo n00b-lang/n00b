@@ -3275,7 +3275,3 @@ bool ir_rules_add_defaults(ir_rules_t *rs)
     return true;
 }
 
-size_t ir_default_rule_count(void)
-{
-    return sizeof(DEFAULTS) / sizeof(DEFAULTS[0]);
-}

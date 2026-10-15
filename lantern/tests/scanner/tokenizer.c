@@ -5,6 +5,7 @@
 #include "parse/bnf.h"
 #include "parse/pwz.h"
 #include "scanner/scan_builtins.h"
+#include "scanner/lex.h"
 #include "scanner/tokenizer.h"
 #include "scanner/token_stream.h"
 #include "private/parse/grammar.h"
@@ -158,17 +159,15 @@ main(void)
     check("an unregistered name resolves to nothing",
           scan_tokenizer_for(S("nope")) == nullptr);
 
-    size_t before = scan_tokenizer_count();
-
     check("a tokenizer can be registered by name",
           scan_tokenizer_register(S("shouty"), scan_shouty));
-    check("and shows up in the registry",
-          scan_tokenizer_count() == before + 1
-              && scan_tokenizer_for(S("shouty")) == scan_shouty);
+    check("and resolves from the registry",
+          scan_tokenizer_for(S("shouty")) == scan_shouty);
 
-    check("registering the same name again replaces it, not duplicates it",
-          scan_tokenizer_register(S("shouty"), scan_shouty)
-              && scan_tokenizer_count() == before + 1);
+    check("registering the same name again replaces it",
+          scan_tokenizer_register(S("shouty"), scan_lex_scan)
+              && scan_tokenizer_for(S("shouty")) == scan_lex_scan
+              && scan_tokenizer_register(S("shouty"), scan_shouty));
 
     parse_grammar_t *plain = parse_grammar_new();
 

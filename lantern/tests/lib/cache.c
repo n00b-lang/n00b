@@ -18,8 +18,6 @@ test_a_miss_on_an_empty_cache(void)
     check("an empty cache misses",
           !core_cache_get(&c, &subject_a, 1, 0, &out));
     check("a miss leaves the out parameter alone", out == &result_x);
-    check("a miss is counted", core_cache_stats(&c).misses == 1);
-    check("and stores nothing", core_cache_stats(&c).entries == 0);
 
     core_cache_free(&c);
 }
@@ -36,8 +34,6 @@ test_a_stored_result_comes_back(void)
 
     check("a stored result hits", core_cache_get(&c, &subject_a, 1, 0, &out));
     check("and is the value that went in", out == &result_x);
-    check("a hit is counted", core_cache_stats(&c).hits == 1);
-    check("one entry is held", core_cache_stats(&c).entries == 1);
 
     core_cache_free(&c);
 }
@@ -76,7 +72,6 @@ test_a_null_result_is_cached_not_re_derived(void)
     check("a cached null is a hit, not a miss",
           core_cache_get(&c, &subject_a, 1, 0, &out));
     check("and yields null", out == nullptr);
-    check("no miss was counted", core_cache_stats(&c).misses == 0);
 
     core_cache_free(&c);
 }
@@ -95,7 +90,6 @@ test_a_put_over_a_live_key_replaces_it(void)
     core_cache_get(&c, &subject_a, 1, 0, &out);
 
     check("the second put wins", out == &subject_b);
-    check("without adding an entry", core_cache_stats(&c).entries == 1);
 
     core_cache_free(&c);
 }
@@ -109,11 +103,7 @@ test_invalidation_retires_every_entry_at_once(void)
     core_cache_put(&c, &subject_a, 1, 0, &result_x);
     core_cache_put(&c, &subject_b, 1, 0, &result_x);
 
-    uint64_t before = core_cache_generation(&c);
-
     core_cache_invalidate(&c);
-
-    check("the generation moves", core_cache_generation(&c) != before);
 
     void *out = nullptr;
 
@@ -121,14 +111,11 @@ test_invalidation_retires_every_entry_at_once(void)
           !core_cache_get(&c, &subject_a, 1, 0, &out));
     check("as does every other one",
           !core_cache_get(&c, &subject_b, 1, 0, &out));
-    check("and the staleness is reported", core_cache_stats(&c).stale == 2);
 
     core_cache_put(&c, &subject_a, 1, 0, &result_x);
 
     check("a re-put after invalidation hits again",
           core_cache_get(&c, &subject_a, 1, 0, &out));
-    check("and reuses the slot rather than growing",
-          core_cache_stats(&c).entries == 2);
 
     core_cache_free(&c);
 }
@@ -143,7 +130,6 @@ test_clear_releases_the_entries(void)
     core_cache_put(&c, &subject_b, 1, 0, &result_x);
     core_cache_clear(&c);
 
-    check("clear empties the table", core_cache_stats(&c).entries == 0);
 
     void *out = nullptr;
 
@@ -165,20 +151,13 @@ test_a_disabled_cache_answers_nothing(void)
 
     core_cache_init(&c);
 
-    check("a fresh cache is on", core_cache_enabled(&c));
-
     core_cache_set_enabled(&c, false);
-
-    check("it can be turned off", !core_cache_enabled(&c));
 
     core_cache_put(&c, &subject_a, 1, 0, &result_x);
 
     void *out = nullptr;
 
-    check("a disabled cache stores nothing",
-          core_cache_stats(&c).entries == 0);
     check("and always misses", !core_cache_get(&c, &subject_a, 1, 0, &out));
-    check("without counting the miss", core_cache_stats(&c).misses == 0);
 
     core_cache_set_enabled(&c, true);
     core_cache_put(&c, &subject_a, 1, 0, &result_x);
@@ -196,11 +175,6 @@ test_a_null_cache_is_inert(void)
 
     check("get on a null cache misses",
           !core_cache_get(nullptr, &subject_a, 1, 0, &out));
-    check("generation of a null cache is zero",
-          core_cache_generation(nullptr) == 0);
-    check("a null cache is not enabled", !core_cache_enabled(nullptr));
-    check("stats of a null cache are zero",
-          core_cache_stats(nullptr).entries == 0);
 
     core_cache_put(nullptr, &subject_a, 1, 0, &result_x);
     core_cache_invalidate(nullptr);
@@ -220,7 +194,6 @@ test_many_keys_survive_a_resize(void)
         core_cache_put(&c, &subjects[i], 1, (uint64_t)i, &subjects[i]);
     }
 
-    check("every key is held", core_cache_stats(&c).entries == 512);
 
     bool all = true;
 

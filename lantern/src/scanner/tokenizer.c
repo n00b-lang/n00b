@@ -6,7 +6,7 @@
 #include "private/scanner/lex_program.h"
 #include "lib/alloc.h"
 #include "lib/buffer.h"
-#include "lib/list.h"
+#include "lib/dict.h"
 
 #include <pthread.h>
 #include <string.h>
@@ -17,16 +17,14 @@ typedef struct {
     const scan_lex_spec_t *spec;
 } tokenizer_t;
 
-core_list_decl(tokenizer_t);
-
-static core_list_t(tokenizer_t) registry;
+static core_dict_t registry;
 static pthread_once_t          registry_once = PTHREAD_ONCE_INIT;
 static pthread_mutex_t         registry_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static void
 initialize_registry(void)
 {
-    registry = core_list_new(tokenizer_t);
+    core_dict_init_string(&registry);
 }
 
 static void
@@ -38,13 +36,7 @@ seed(void)
 static tokenizer_t *
 find(core_string_t name)
 {
-    for (size_t i = 0; i < core_list_len(registry); i++) {
-        if (core_string_eq(registry.data[i].name, name)) {
-            return &registry.data[i];
-        }
-    }
-
-    return nullptr;
+    return core_dict_get(&registry, &name, nullptr);
 }
 
 bool
@@ -68,9 +60,9 @@ scan_tokenizer_register(core_string_t name, parse_scan_cb_t fn)
         return true;
     }
 
-    tokenizer_t t = {.name = name, .fn = fn};
-
-    core_list_push(registry, t);
+    tokenizer_t *t = core_alloc(tokenizer_t);
+    *t = (tokenizer_t){.name = name, .fn = fn};
+    core_dict_put(&registry, &t->name, t);
     pthread_mutex_unlock(&registry_lock);
 
     return true;
@@ -97,9 +89,9 @@ scan_lex_register(const scan_lex_spec_t *spec)
         return true;
     }
 
-    tokenizer_t t = {.name = spec->name, .fn = scan_lex_scan, .spec = spec};
-
-    core_list_push(registry, t);
+    tokenizer_t *t = core_alloc(tokenizer_t);
+    *t = (tokenizer_t){.name = spec->name, .fn = scan_lex_scan, .spec = spec};
+    core_dict_put(&registry, &t->name, t);
     pthread_mutex_unlock(&registry_lock);
 
     return true;
@@ -139,31 +131,6 @@ scan_tokenizer_for(core_string_t name)
     return fn ? fn : (core_string_eq(name,
                                     CORE_STRING_STATIC(SCAN_TOKENIZER_DEFAULT))
                            ? scan_lex_scan : nullptr);
-}
-
-size_t
-scan_tokenizer_count(void)
-{
-    seed();
-
-    pthread_mutex_lock(&registry_lock);
-    size_t count = core_list_len(registry);
-    pthread_mutex_unlock(&registry_lock);
-
-    return count;
-}
-
-core_string_t
-scan_tokenizer_name_at(size_t i)
-{
-    seed();
-
-    pthread_mutex_lock(&registry_lock);
-    core_string_t name = i < core_list_len(registry) ? registry.data[i].name
-                                                     : (core_string_t){0};
-    pthread_mutex_unlock(&registry_lock);
-
-    return name;
 }
 
 void

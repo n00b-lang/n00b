@@ -8,8 +8,6 @@
 
 bool          scan_tokenizer_register(core_string_t name, parse_scan_cb_t fn);
 parse_scan_cb_t scan_tokenizer_for(core_string_t name);
-size_t        scan_tokenizer_count(void);
-core_string_t  scan_tokenizer_name_at(size_t i);
 
 void         scan_grammar_set_tokenizer(parse_grammar_t *g, core_string_t name);
 core_string_t scan_grammar_tokenizer(parse_grammar_t *g);

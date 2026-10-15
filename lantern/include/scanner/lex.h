@@ -343,29 +343,6 @@ typedef struct {
 typedef struct scan_lex_t scan_lex_t;
 typedef struct scan_lex_session_t scan_lex_session_t;
 
-typedef struct {
-    size_t comments;
-    size_t strings;
-    size_t sigils;
-    size_t regexes;
-    size_t heredocs;
-    size_t embeds;
-    size_t fences;
-    size_t recoveries;
-    size_t number_forms;
-    size_t number_prefix_nodes;
-    size_t number_prefix_edges;
-    size_t number_suffix_nodes;
-    size_t number_suffix_edges;
-    size_t terminal_nodes;
-    size_t terminal_edges;
-    size_t opener_nodes;
-    size_t opener_edges;
-    size_t max_terminal_bytes;
-    size_t resident_bytes;
-    core_string_t unicode_version;
-} scan_lex_info_t;
-
 extern scan_lex_t *scan_lex_compile(const scan_lex_spec_t *spec,
                                   parse_grammar_t        *g);
 extern void       scan_lex_free(scan_lex_t *lex);
@@ -383,7 +360,6 @@ extern bool scan_lex_finalize_regions(parse_scanner_t *s);
 extern void scan_lex_reset_state(parse_scanner_t *s);
 extern void scan_lex_compact_state(parse_scanner_t *s, size_t removed_bytes);
 
-extern bool scan_lex_inspect(const scan_lex_t *lex, scan_lex_info_t *out);
 extern size_t scan_lex_issue_count(const scan_lex_t *lex);
 extern bool scan_lex_issue(const scan_lex_t *lex, size_t index,
                            scan_lex_issue_t *out);

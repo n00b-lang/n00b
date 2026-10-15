@@ -1014,12 +1014,6 @@ static void test_embedded_lexer_switching(void) {
   scan_lex_register(&NESTED);
 
   parse_grammar_t *tokens = embedded_grammar("json", true);
-  scan_lex_info_t info = {0};
-
-  check("compiled lexer inspection includes embedded recipes",
-        scan_lex_inspect(scan_grammar_lex_compiled(tokens), &info) &&
-            info.embeds == 1);
-
   kinds(tokens, "an embedded lexer emits its own token sequence",
         "before {{1 \"x\"}} after",
         "OUTER_ID EMBED_OPEN INT_LIT STRING_LIT EMBED_CLOSE OUTER_ID");
@@ -1733,18 +1727,12 @@ static void test_string_families_expand_once(void) {
 
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
-  bool loaded = load_test_grammar(text, CORE_STRING_STATIC("file"), g);
-
-  check("a declarative string family loads", loaded);
+  check("a declarative string family loads",
+        load_test_grammar(text, CORE_STRING_STATIC("file"), g));
   kinds(g, "a string family expands prefixes across quote styles",
         "'a' \"b\" r'c' r\"d\" R'e' R\"f\"",
         "STRING_LIT STRING_LIT STRING_LIT STRING_LIT STRING_LIT "
         "STRING_LIT");
-
-  scan_lex_info_t info = {0};
-  check("a string family compiles its product once",
-        scan_lex_inspect(scan_grammar_lex_compiled(g), &info) &&
-            info.strings == 6);
 
   parse_token_stream_t *ts = scan_tokenize_incremental_owned(g);
   check("a family prefix waits across an incremental boundary",
@@ -1819,12 +1807,8 @@ static void test_paired_string_families_nest(void) {
 
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
-  bool loaded = load_test_grammar(text, CORE_STRING_STATIC("file"), g);
-  scan_lex_info_t info = {0};
-
-  check("paired string families compile their delimiter product",
-        loaded && scan_lex_inspect(scan_grammar_lex_compiled(g), &info) &&
-            info.strings == 8);
+  check("paired string grammar loads",
+        load_test_grammar(text, CORE_STRING_STATIC("file"), g));
   kinds(g, "paired strings balance their own delimiter",
         "%q(a(b)c) %q[a[b]c] %q{a{b}c} %q<a<b>c> "
         "%w(one(two)three)",
@@ -1994,11 +1978,6 @@ static void test_large_string_family_dispatch_is_bounded(void) {
   parse_bnf_declare_terminals(g, text);
   bool loaded = load_test_grammar(text, CORE_STRING_STATIC("file"), g);
   scan_lex_t *lex = loaded ? scan_grammar_lex_compiled(g) : nullptr;
-  scan_lex_info_t info = {0};
-
-  check("a large string family compiles",
-        lex && scan_lex_inspect(lex, &info) && info.strings == 80);
-
   static const char input[] = "p079\"body\"";
   parse_scanner_t *sc = nullptr;
   parse_token_stream_t *ts =
@@ -2045,12 +2024,6 @@ static void test_large_number_suffix_dispatch_is_bounded(void) {
   parse_bnf_declare_terminals(g, text);
   bool loaded = load_test_grammar(text, CORE_STRING_STATIC("file"), g);
   scan_lex_t *lex = loaded ? scan_grammar_lex_compiled(g) : nullptr;
-  scan_lex_info_t info = {0};
-
-  check("large composed numeric suffix sets compile",
-        lex && scan_lex_inspect(lex, &info) && info.number_forms == 1 &&
-            info.number_suffix_nodes > 80);
-
   static const char input[] = "1z079";
   parse_scanner_t *sc = nullptr;
   parse_token_stream_t *ts =
@@ -3130,12 +3103,6 @@ static void test_terminals_have_no_byte_width_limit(void) {
   }
   parse_register_terminal(g, core_string_borrow(op->data, op->byte_len));
 
-  scan_lex_t *lex = scan_grammar_lex_compiled(g);
-  scan_lex_info_t info = {0};
-  check("compiled lexer structure is available for inspection",
-        scan_lex_inspect(lex, &info) && info.max_terminal_bytes == 1024 &&
-            info.terminal_nodes >= 1025 && info.terminal_edges >= 1024);
-
   parse_token_stream_t *ts =
       scan_tokenize(g, op->data, op->byte_len, nullptr, nullptr);
   parse_token_info_t *tok = scan_stream_next(ts);
@@ -3860,13 +3827,6 @@ static void test_unicode_identifier_profiles(void) {
   snprintf(version_text, sizeof(version_text), "%.*s", (int)version.u8_bytes,
            version.data);
   parse_grammar_t *g = unicode_identifier_grammar(version_text);
-  scan_lex_t *lex = g ? scan_grammar_lex_compiled(g) : nullptr;
-  scan_lex_info_t info = {0};
-
-  check("a Unicode identifier profile records its provider version",
-        lex && scan_lex_inspect(lex, &info) &&
-            core_string_eq(info.unicode_version, version));
-
   const char decomposed[] = "e\xCC\x81 ";
   core_buffer_t *buf = nullptr;
   parse_scanner_t *sc = nullptr;

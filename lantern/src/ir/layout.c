@@ -166,13 +166,6 @@ ir_descriptor_t *ir_layout_ensure_targetless(ir_module_t *m, th_type *t)
     return layout_ensure_exact(m, t, nullptr);
 }
 
-size_t ir_layout_count(ir_module_t *m, th_type *t)
-{
-    ir_typeslot_t *s = ir_type_slot(m, t);
-
-    return s ? s->n_descs : 0;
-}
-
 static bool valid_runs(const ir_layout_bit_run_t *runs, size_t count,
                        uint64_t extent)
 {

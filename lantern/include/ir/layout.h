@@ -111,7 +111,6 @@ void ir_layout_invalidate_type(ir_module_t *m, th_type *t);
 ir_descriptor_t *ir_layout_ensure(ir_module_t *m, th_type *t,
                                   const char *target);
 ir_descriptor_t *ir_layout_ensure_targetless(ir_module_t *m, th_type *t);
-size_t           ir_layout_count(ir_module_t *m, th_type *t);
 
 bool ir_layout_pin_size(ir_module_t *m, th_type *t, uint64_t bytes);
 bool ir_layout_pin_align(ir_module_t *m, th_type *t, uint64_t bytes);

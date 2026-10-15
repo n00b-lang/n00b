@@ -533,7 +533,6 @@ static void test_descriptors_are_keyed_and_scoped(void)
               && ir_layout_of(e->m, t, "wasm32") == b);
     check("the module's own target is the default",
           ir_layout_of(e->m, t, nullptr) == a);
-    check("two descriptors are counted as two", ir_layout_count(e->m, t) == 2);
 
     uint64_t before = th_hash(ir_ctx_types(e->ctx), t);
 
