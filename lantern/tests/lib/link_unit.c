@@ -215,15 +215,18 @@ test_link_unit_closure_and_linkage(void)
               0, &composed_environment, CORE_LINK_PAYLOAD_BORROWED, nullptr));
     core_link_artifact_view_t artifact = {0};
     check("artifact format and version are queryable",
-          core_link_unit_artifact_count(link) == 2
-              && core_link_unit_artifact(link, 0, &artifact)
+          core_link_unit_require_artifact(link,
+              CORE_STRING_STATIC("pkg.library"),
+              CORE_STRING_STATIC("lantern.type-environment"), 4, &artifact)
               && artifact.version == 4
               && artifact.payload == &semantic_environment
               && core_string_eq(artifact.module,
                                 CORE_STRING_STATIC("pkg.library"))
               && !artifact.unit_wide);
     check("unit-wide artifacts are distinct from per-module artifacts",
-          core_link_unit_artifact(link, 1, &artifact)
+          core_link_unit_require_artifact(link, (core_string_t){0},
+              CORE_STRING_STATIC("n00bb.frozen-type-environment"), 1,
+              &artifact)
               && artifact.unit_wide && !artifact.module.data
               && artifact.payload == &composed_environment);
     check("consumers can require an exact artifact version",
@@ -871,24 +874,36 @@ test_link_unit_stage_refresh(void)
                   run_probe_stage, &other_probe)
               && core_link_unit_run_stage(changed, 1)
               && core_link_unit_run_stage(other, 1)
-              && core_link_unit_artifact_count(changed) == 2);
+              && core_link_unit_require_artifact(changed,
+                  (core_string_t){0},
+                  CORE_STRING_STATIC("test.stage-artifact"), 1, nullptr));
     check("a changed import resets only its link unit stage",
           core_translation_unit_add_import(&root, &added)
               && core_link_unit_stage_state(changed, 1)
                      == CORE_LINK_STAGE_PENDING
-              && core_link_unit_artifact_count(changed) == 1
               && core_link_unit_stage_state(other, 1)
                      == CORE_LINK_STAGE_COMPLETE
               && core_link_unit_run_stage(changed, 1)
-              && core_link_unit_artifact_count(changed) == 2
+              && core_link_unit_require_artifact(changed,
+                  (core_string_t){0},
+                  CORE_STRING_STATIC("test.stage-artifact"), 1, nullptr)
               && changed_probe.calls == 2 && other_probe.calls == 1);
     check("explicit invalidation drops stage-owned artifacts",
           core_link_unit_invalidate_stage(changed, 1)
-              && core_link_unit_artifact_count(changed) == 1);
+              && core_link_unit_stage_state(changed, 1)
+                     == CORE_LINK_STAGE_PENDING);
     changed_probe.result = CORE_LINK_STAGE_RESULT_FAILED;
     check("failed stages do not retain published artifacts",
           !core_link_unit_run_stage(changed, 1)
-              && core_link_unit_artifact_count(changed) == 1);
+              && core_link_unit_stage_state(changed, 1)
+                     == CORE_LINK_STAGE_FAILED
+              && !core_link_unit_require_artifact(changed,
+                  (core_string_t){0},
+                  CORE_STRING_STATIC("test.stage-artifact"), 1, nullptr)
+              && core_link_unit_require_artifact(changed,
+                  (core_string_t){0},
+                  CORE_STRING_STATIC("test.external-artifact"), 1,
+                  nullptr));
     core_link_unit_free(changed);
     core_link_unit_free(other);
     core_translation_unit_release(&root);

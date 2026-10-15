@@ -363,9 +363,6 @@ bool core_link_unit_require_artifact(core_link_unit_t *link,
                                     core_string_t format,
                                     uint32_t required_version,
                                     core_link_artifact_view_t *out);
-size_t core_link_unit_artifact_count(core_link_unit_t *link);
-bool core_link_unit_artifact(core_link_unit_t *link, size_t index,
-                             core_link_artifact_view_t *out);
 
 /* Contributions are analysis facts, not necessarily serialized artifacts.
  * A missing record is different from a recorded pending/unavailable result.
