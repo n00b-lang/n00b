@@ -1028,6 +1028,21 @@ constructor_signature_instance(th_ctx *types, parse_sym_entry_t *symbol)
 }
 
 static bool
+constructor_argument_fits(n00bb_tu_state_t *state, parse_tree_t *node,
+                          th_type *parameter, th_type *argument)
+{
+    th_type *element = nullptr;
+    if (!n00bb_option_type_element(parameter, &element)
+        || th_unify_probe(state->types, parameter, argument))
+        return th_unify_in_place(state->types, parameter, argument) != nullptr;
+    if (n00bb_nil_type(state->types, argument)) return true;
+    if (core_tree_node_value(node).integer_literal_origin)
+        return n00bb_contextual_integer_literal(state, node, element);
+    return th_unify_probe(state->types, argument, element)
+        && th_unify_in_place(state->types, element, argument) != nullptr;
+}
+
+static bool
 constructor_arguments_match(parse_grammar_t *grammar,
                             core_translation_unit_t *unit,
                             parse_tree_t *construction,
@@ -1078,8 +1093,8 @@ constructor_arguments_match(parse_grammar_t *grammar,
             : core_tree_node_value(argument).type;
         if (!parameter || !argument_type
             || (index < parameter_count && provided[index])
-            || !th_unify_in_place(state->types, parameter->type,
-                                  argument_type)) {
+            || !constructor_argument_fits(state, argument, parameter->type,
+                                          argument_type)) {
             valid = false;
             break;
         }
@@ -1104,8 +1119,8 @@ constructor_arguments_match(parse_grammar_t *grammar,
             ? th_func_param(signature, index) : nullptr;
         if (!formal || index == 0 || !parameter || !argument_type
             || provided[index]
-            || !th_unify_in_place(state->types, parameter->type,
-                                  argument_type)) {
+            || !constructor_argument_fits(state, argument, parameter->type,
+                                          argument_type)) {
             valid = false;
             break;
         }

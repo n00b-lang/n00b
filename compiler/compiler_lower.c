@@ -9953,6 +9953,29 @@ n00bb_typed_integer_literal(ir_lower_context_t *context,
     return ir_lower_set_node_value(context, node, typed) ? typed : nullptr;
 }
 
+static ir_value_t *
+n00bb_option_argument(ir_lower_context_t *context, parse_tree_t *node,
+                      th_type *parameter, ir_span_t span)
+{
+    th_type *element = nullptr;
+    bool option = n00bb_option_type_element(parameter, &element);
+    ir_value_t *value = n00bb_typed_integer_literal(context, node,
+        option ? element : parameter);
+    if (!value || !option
+        || ir_type_eq(context->module, value->type, parameter)) return value;
+    bool empty = n00bb_nil_type(ir_module_types(context->module),
+                                value->type);
+    if (!empty && !ir_type_eq(context->module, value->type, element))
+        return value;
+    ir_instr_t *wrapped = ir_lower_emit_instruction(context,
+        empty ? IR_OP_OPTION_NONE : IR_OP_OPTION_SOME, span);
+    if (!wrapped || !ir_lower_set_temp_dest(context, wrapped, "__n00bb_",
+                                            parameter)
+        || (!empty && !ir_instr_operand_value(wrapped, value)))
+        return nullptr;
+    return wrapped->dest;
+}
+
 static bool n00bb_nominal_value_as(ir_lower_context_t *context,
                                    parse_visit_t *visit,
                                    th_type *target_type,
@@ -11727,7 +11750,8 @@ n00bb_lower_constructor_new(ir_lower_context_t *context, parse_visit_t *visit,
         ir_shape_t *required_shape = parse_sym_binding(formal,
             CORE_STRING_STATIC("ir.array-shape"));
         if (th_mode_is_input_only(mode)) {
-            ir_value_t *value = ir_lower_node_value(context, argument);
+            ir_value_t *value = n00bb_option_argument(context, argument,
+                parameter->type, lower_span_for_tree(context, argument));
             if (!value || !th_unify_in_place(types, parameter->type,
                                              value->type)
                 || !n00bb_attach_expression_shape(context, visit->grammar,
