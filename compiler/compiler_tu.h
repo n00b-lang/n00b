@@ -51,7 +51,6 @@ bool cache_record_layout_request(parse_grammar_t *grammar,
 bool register_record_semantic_shape(parse_grammar_t *grammar,
                                     core_translation_unit_t *unit,
                                     parse_tree_t *declaration);
-bool n00bb_tree_contains(parse_tree_t *ancestor, parse_tree_t *node);
 bool n00bb_assignment_target(parse_grammar_t *grammar, parse_tree_t *node,
                              bool *compound);
 th_type *resolved_iteration_item_type(parse_grammar_t *grammar,

@@ -39,7 +39,7 @@ n00bb_assignment_target(parse_grammar_t *grammar, parse_tree_t *node,
         parse_tree_t *target = assign
             ? parse_tree_resolve_child_ref(grammar, parent,
                                            assign->name_ref) : nullptr;
-        if (target && n00bb_tree_contains(target, node)) {
+        if (target && node_is_within(node, target)) {
             if (compound) *compound = is_compound;
             return true;
         }
@@ -2515,15 +2515,6 @@ contextualize_record_fields_before_inference(parse_grammar_t *grammar,
     return true;
 }
 
-bool
-n00bb_tree_contains(parse_tree_t *ancestor, parse_tree_t *node)
-{
-    for (parse_tree_t *current = node; current;
-         current = core_tree_node_value(current).parent)
-        if (current == ancestor) return true;
-    return false;
-}
-
 core_string_t
 call_keyword_name(parse_tree_t *argument)
 {
@@ -2583,7 +2574,7 @@ index_is_copyout_argument(parse_grammar_t *grammar,
         size_t actual_index = SIZE_MAX;
         for (size_t i = 0; i < actuals.len; i++)
             if (actuals.data[i] == argument
-                || n00bb_tree_contains(actuals.data[i], index_node)) {
+                || node_is_within(index_node, actuals.data[i])) {
                 actual_index = i;
                 break;
             }

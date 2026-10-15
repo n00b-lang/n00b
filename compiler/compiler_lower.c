@@ -1755,7 +1755,7 @@ n00bb_route_try_error(ir_lower_context_t *context, parse_tree_t *source,
     for (size_t i = lower->tries.len; i > 0; i--) {
         n00bb_try_frame_t *candidate = &lower->tries.data[i - 1];
         if (candidate->active && candidate->body
-            && n00bb_tree_contains(candidate->body, source)) {
+            && node_is_within(source, candidate->body)) {
             frame = candidate;
             break;
         }
@@ -3613,7 +3613,7 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
             n00bb_value_block_frame_t *frame =
                 &lower->value_blocks.data[i - 1];
             if (!frame->active
-                || !n00bb_tree_contains(frame->node, visit->node)) continue;
+                || !node_is_within(visit->node, frame->node)) continue;
             parse_tree_t *expression = child_nt(visit->grammar, visit->node,
                                                 "expression");
             ir_value_t *value = expression
@@ -3641,7 +3641,7 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
         for (size_t i = 0; i < lower->tries.len; i++) {
             n00bb_try_frame_t *frame = &lower->tries.data[i];
             if (frame->active && frame->expression
-                && n00bb_tree_contains(frame->node, visit->node)) {
+                && node_is_within(visit->node, frame->node)) {
                 handled_by_value_expression = true;
                 break;
             }
@@ -7360,18 +7360,18 @@ n00bb_emit_scoped_cleanups(ir_lower_context_t *context,
                 || !candidate->cleanup_active
                 || candidate->order <= stop_order
                 || candidate->order >= before
-                || !n00bb_tree_contains(candidate->node, exit_node)
-                || (handler && n00bb_tree_contains(candidate->node,
-                                                    handler->node)))
+                || !node_is_within(exit_node, candidate->node)
+                || (handler && node_is_within(handler->node,
+                                              candidate->node)))
                 continue;
             if (!loop || candidate->order > loop->order) loop = candidate;
         }
         for (size_t i = lower->withs.len; i > 0; i--) {
             n00bb_with_frame_t *candidate = &lower->withs.data[i - 1];
             if (!candidate->active
-                || !n00bb_tree_contains(candidate->node, exit_node)
-                || (handler && n00bb_tree_contains(candidate->node,
-                                                    handler->node)))
+                || !node_is_within(exit_node, candidate->node)
+                || (handler && node_is_within(handler->node,
+                                              candidate->node)))
                 continue;
             for (size_t j = candidate->items.len; j > 0; j--) {
                 n00bb_with_item_t *item = &candidate->items.data[j - 1];
@@ -7433,7 +7433,7 @@ n00bb_emit_with_failure_before(ir_lower_context_t *context,
     for (size_t i = lower->tries.len; i > 0; i--) {
         n00bb_try_frame_t *candidate = &lower->tries.data[i - 1];
         if (candidate->active && candidate->body
-            && n00bb_tree_contains(candidate->body, exit_node)) {
+            && node_is_within(exit_node, candidate->body)) {
             handler = candidate;
             break;
         }
@@ -7718,7 +7718,7 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
     if (!lower || !lower->withs.len)
         return 0;
     n00bb_with_frame_t *frame = &lower->withs.data[lower->withs.len - 1];
-    if (!frame->active || !n00bb_tree_contains(frame->node, visit->node))
+    if (!frame->active || !node_is_within(visit->node, frame->node))
         return 0;
 
     parse_tree_t *callee = core_tree_num_children(visit->node)
@@ -14006,7 +14006,7 @@ n00bb_reference_target(parse_grammar_t *grammar, parse_tree_t *node)
                 CORE_STRING_STATIC("ref"))) continue;
         for (size_t i = 0; i < core_tree_num_children(at); i++) {
             parse_tree_t *operand = core_tree_child(at, i);
-            if (!n00bb_tree_contains(operand, node)) continue;
+            if (!node_is_within(node, operand)) continue;
             for (parse_tree_t *path = node; path && path != operand;
                  path = core_tree_node_value(path).parent) {
                 parse_tree_t *parent = core_tree_node_value(path).parent;
@@ -14015,7 +14015,7 @@ n00bb_reference_target(parse_grammar_t *grammar, parse_tree_t *node)
                                                        &trait, &method)) {
                     parse_tree_t *receiver = core_tree_num_children(parent)
                         ? core_tree_child(parent, 0) : nullptr;
-                    if (!n00bb_tree_contains(receiver, node)) return false;
+                    if (!node_is_within(node, receiver)) return false;
                 }
             }
             return true;

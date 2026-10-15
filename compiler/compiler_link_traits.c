@@ -687,17 +687,6 @@ deferred_trait_method_requirement(parse_grammar_t *grammar,
 
 
 static bool
-tree_contains_node(parse_tree_t *root, parse_tree_t *wanted)
-{
-    if (!root || !wanted) return false;
-    if (root == wanted) return true;
-    if (core_tree_is_leaf(root)) return false;
-    for (size_t i = 0; i < core_tree_num_children(root); i++)
-        if (tree_contains_node(core_tree_child(root, i), wanted)) return true;
-    return false;
-}
-
-static bool
 field_use_is_write(parse_grammar_t *grammar, parse_sym_entry_t *field,
                    parse_tree_t *use,
                    bool *also_reads)
@@ -746,7 +735,7 @@ field_use_is_write(parse_grammar_t *grammar, parse_sym_entry_t *field,
                 || ref_write
                 ? call_argument_for_parameter(grammar, parent, callee,
                                               0, false) : nullptr;
-            if (first && tree_contains_node(first, use)
+            if (first && node_is_within(use, first)
                 && core_string_eq(first_token_text(first),
                                   CORE_STRING_STATIC("ref"))) {
                 *also_reads = exchange || cas || fetch_or || fetch_and
@@ -758,7 +747,7 @@ field_use_is_write(parse_grammar_t *grammar, parse_sym_entry_t *field,
         if (!nt_is(grammar, parent, "assign-stmt")
             && !nt_is(grammar, parent, "binop-assign-stmt")) continue;
         if (core_tree_num_children(parent) < 2
-            || !tree_contains_node(core_tree_child(parent, 0), use))
+            || !node_is_within(use, core_tree_child(parent, 0)))
             continue;
         for (parse_tree_t *path = use; path != parent;
              path = core_tree_node_value(path).parent) {
