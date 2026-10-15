@@ -1,5 +1,7 @@
 #include "gen.h"
 
+core_list_decl(writ_n00b_extern_t);
+
 typedef struct {
     const writ_binding_t *b;
     const writ_model_t   *model;
@@ -8,7 +10,93 @@ typedef struct {
     writ_c_context_t      c;
     writ_str_t            shim;
     core_buffer_t        *map;
+    writ_str_t            type_namespace;
+    core_list_t(writ_n00b_extern_t) *externs;
 } n00b_t;
+
+static bool
+canonical_primitive(writ_str_t name)
+{
+    static const char *const names[] = {
+        "int", "uint", "bool", "string", "byte", "nil", "float", "i8", "i16", "i32", "i128",
+        "u8", "u16", "u32", "u128", "f32", "f64",
+    };
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        if (writ_str_eq(name, writ_cstr(names[i]))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void
+canonical_name(const n00b_t *g, core_buffer_t *out, writ_str_t name)
+{
+    static const struct {
+        const char *from;
+        const char *to;
+    } renames[] = {
+        {"Ref", "ref"},
+        {"Array", "array"},
+        {"List", "builtin.containers.list.List"},
+        {"Ffi_Bytes", "builtin.ffi.Ffi_Bytes"},
+        {"i64", "int"},
+        {"u64", "uint"},
+    };
+    for (size_t i = 0; i < sizeof(renames) / sizeof(renames[0]); i++) {
+        if (writ_str_eq(name, writ_cstr(renames[i].from))) {
+            core_buffer_printf(out, "%s", renames[i].to);
+            return;
+        }
+    }
+    if (canonical_primitive(name) || (name.data[0] >= '0' && name.data[0] <= '9') || !g->type_namespace.length) {
+        core_buffer_printf(out, "%.*s", S(name));
+        return;
+    }
+    core_buffer_printf(out, "%.*s.%.*s", S(g->type_namespace), S(name));
+}
+
+static void
+canonical_type(const n00b_t *g, core_buffer_t *out, writ_str_t text)
+{
+    for (size_t i = 0; i < text.length;) {
+        char c = text.data[i];
+        bool word = c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
+        if (!word) {
+            core_buffer_printf(out, "%c", c);
+            i++;
+            continue;
+        }
+        size_t start = i;
+        while (i < text.length
+               && (text.data[i] == '_' || (text.data[i] >= 'a' && text.data[i] <= 'z')
+                   || (text.data[i] >= 'A' && text.data[i] <= 'Z') || (text.data[i] >= '0' && text.data[i] <= '9'))) {
+            i++;
+        }
+        canonical_name(g, out, (writ_str_t){text.data + start, i - start});
+    }
+}
+
+static void
+add_extern(const n00b_t *g, writ_str_t name, writ_str_t symbol, const writ_str_t *params, size_t count,
+           writ_str_t result)
+{
+    core_buffer_t signature = {0};
+    core_buffer_printf(&signature, "(");
+    for (size_t i = 0; i < count; i++) {
+        core_buffer_printf(&signature, "%s", i ? ", " : "");
+        canonical_type(g, &signature, params[i]);
+    }
+    core_buffer_printf(&signature, ") -> ");
+    canonical_type(g, &signature, result);
+    core_buffer_printf(&signature, " fail: nil");
+    core_list_push(*g->externs, ((writ_n00b_extern_t){
+                                    .name = name,
+                                    .symbol = symbol,
+                                    .signature = writ_str_copy(g->session, signature.data, signature.byte_len),
+                                }));
+    core_buffer_release(&signature);
+}
 
 static void
 mark(const n00b_t *g, const writ_emit_t *emit, writ_span_t span, writ_str_t name)
@@ -496,12 +584,12 @@ emit_types(const n00b_t *g, writ_emit_t *emit)
 static void
 emit_extern(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view_t *plan)
 {
+    (void)emit;
     core_list_t(shim_param_t) params = core_list_new(shim_param_t);
     shim_params(g, fn, plan, &params);
-    mark(g, emit, plan->fn->declared_at, plan->fn->contract_name);
-    writ_emit_text(emit, "extern<\"%.*s\"> __%.*s(", S(shim_symbol(g, plan->fn)), S(plan->fn->contract_name));
+    writ_str_t *types = writ_alloc(g->session, sizeof(writ_str_t) * (params.len ? params.len : 1));
     for (size_t i = 0; i < params.len; i++) {
-        writ_emit_text(emit, "%s%.*s: %.*s", i ? ", " : "", S(params.data[i].name), S(params.data[i].n00b_type));
+        types[i] = params.data[i].n00b_type;
     }
     writ_str_t ret = writ_c_returns_directly(&g->c, plan) ? writ_c_return_type(&g->c, plan) : writ_cstr("int32_t");
     const writ_plan_item_view_t *direct = nullptr;
@@ -511,7 +599,8 @@ emit_extern(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view_
     writ_str_t n00b_ret = !writ_c_returns_directly(&g->c, plan) ? prim(g, "i%u", 32)
                           : is_pointer(ret)               ? writ_cstr("uint")
                                                           : scalar_type(g, direct ? direct->type : nullptr);
-    writ_emit_line(emit, ") -> %.*s", S(n00b_ret));
+    add_extern(g, writ_str_format(g->session, "__%.*s", S(plan->fn->contract_name)), shim_symbol(g, plan->fn), types,
+               params.len, n00b_ret);
     core_list_free(params);
 }
 
@@ -883,13 +972,27 @@ raw_type(const n00b_t *g, const writ_type_view_t *type)
 static void
 emit_raw(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *fn, writ_bound_fn_t bound)
 {
+    writ_str_t *types = writ_alloc(g->session, sizeof(writ_str_t) * (fn->slots_count ? fn->slots_count : 1));
+    for (size_t s = 0; s < fn->slots_count; s++) {
+        types[s] = raw_type(g, fn->slots[s].type);
+    }
+    writ_str_t result = raw_type(g, fn->result ? fn->result->type : nullptr);
+    add_extern(g, writ_str_format(g->session, "__%.*s_raw", S(bound.name)), fn->link_symbol, types, fn->slots_count,
+               result);
     mark(g, emit, fn->declared_at, fn->contract_name);
-    writ_emit_text(emit, "extern<\"%.*s\"> %.*s_raw(", S(fn->link_symbol), S(bound.name));
+    writ_emit_text(emit, "public func %.*s_raw(", S(bound.name));
     for (size_t s = 0; s < fn->slots_count; s++) {
         writ_str_t name = writ_profile_name(g->profile, WRIT_NAMING_FIELD, fn->slots[s].name);
-        writ_emit_text(emit, "%s%.*s: %.*s", s ? ", " : "", S(name), S(raw_type(g, fn->slots[s].type)));
+        writ_emit_text(emit, "%s%.*s: %.*s", s ? ", " : "", S(name), S(types[s]));
     }
-    writ_emit_line(emit, ") -> %.*s", S(raw_type(g, fn->result ? fn->result->type : nullptr)));
+    writ_emit_line(emit, ") -> %.*s {", S(result));
+    writ_emit_text(emit, "    return __%.*s_raw(", S(bound.name));
+    for (size_t s = 0; s < fn->slots_count; s++) {
+        writ_str_t name = writ_profile_name(g->profile, WRIT_NAMING_FIELD, fn->slots[s].name);
+        writ_emit_text(emit, "%s%.*s", s ? ", " : "", S(name));
+    }
+    writ_emit_line(emit, ")");
+    writ_emit_line(emit, "}");
 }
 
 static writ_str_t
@@ -1090,19 +1193,22 @@ links_for(const n00b_t *g, writ_link_requirements_t *links)
 }
 
 writ_status_t
-writ_gen_n00b(const writ_gen_n00b_request_t *request, const writ_output_t *output, writ_link_requirements_t *links)
+writ_gen_n00b(const writ_gen_n00b_request_t *request, const writ_output_t *output, writ_link_requirements_t *links,
+              writ_n00b_externs_t *externs)
 {
-    if (!request || !request->binding || !output || !output->write_file || !links) {
+    if (!request || !request->binding || !output || !output->write_file || !links || !externs) {
         return WRIT_INVALID_ARGUMENT;
     }
+    *externs = (writ_n00b_externs_t){0};
     const writ_binding_t *b = request->binding;
     const writ_model_t *model = writ_binding_model(b);
     writ_session_t *session = model->session;
     writ_str_t prefix = request->shim_prefix.length ? request->shim_prefix : writ_model_library(model)->name;
     writ_str_t module = request->module_name.length ? request->module_name : writ_model_library(model)->name;
+    core_list_t(writ_n00b_extern_t) extern_list = core_list_new(writ_n00b_extern_t);
     n00b_t g = {.b = b, .model = model, .profile = writ_binding_profile(b), .session = session, .shim = prefix,
                 .c = {model, prefix, writ_name_case(session, prefix, WRIT_CASE_UPPER), true},
-                .map = core_buffer_empty()};
+                .map = core_buffer_empty(), .type_namespace = request->type_namespace, .externs = &extern_list};
     writ_on_session_free(session, map_release, g.map);
     size_t count = writ_model_fn_count(model);
     const writ_plan_view_t **plans = writ_alloc(session, sizeof(writ_plan_view_t *) * (count ? count : 1));
@@ -1136,5 +1242,11 @@ writ_gen_n00b(const writ_gen_n00b_request_t *request, const writ_output_t *outpu
         status = output->write_file(output->context, writ_str_format(session, "%.*s.n.map", S(module)),
                                     writ_str_copy(session, g.map->data ? g.map->data : "", g.map->byte_len));
     }
+    writ_n00b_extern_t *items = writ_alloc(session, sizeof(*items) * (extern_list.len ? extern_list.len : 1));
+    for (size_t i = 0; i < extern_list.len; i++) {
+        items[i] = extern_list.data[i];
+    }
+    *externs = (writ_n00b_externs_t){.count = extern_list.len, .items = items};
+    core_list_free(extern_list);
     return status;
 }

@@ -43,7 +43,19 @@ typedef struct {
     const writ_binding_t *binding;
     writ_str_t            module_name;
     writ_str_t            shim_prefix;
+    writ_str_t            type_namespace;
 } writ_gen_n00b_request_t;
+
+typedef struct {
+    writ_str_t name;
+    writ_str_t symbol;
+    writ_str_t signature;
+} writ_n00b_extern_t;
+
+typedef struct {
+    size_t                    count;
+    const writ_n00b_extern_t *items;
+} writ_n00b_externs_t;
 
 typedef struct {
     size_t            libraries_count;
@@ -56,7 +68,7 @@ typedef struct {
 } writ_link_requirements_t;
 
 writ_status_t writ_gen_n00b(const writ_gen_n00b_request_t *request, const writ_output_t *output,
-                            writ_link_requirements_t *links);
+                            writ_link_requirements_t *links, writ_n00b_externs_t *externs);
 
 #ifdef __cplusplus
 }

@@ -337,7 +337,8 @@ gen_n00b(writ_session_t *session, int argc, char **argv)
         } else if (!strcmp(argv[i], "--profile") && i + 1 < argc) {
             profiles = argv[++i];
         } else if (!take_list(argv, &i, argc, "--prefix", &request.shim_prefix, &taken)
-                   && !take_list(argv, &i, argc, "--module", &request.module_name, &taken)) {
+                   && !take_list(argv, &i, argc, "--module", &request.module_name, &taken)
+                   && !take_list(argv, &i, argc, "--namespace", &request.type_namespace, &taken)) {
             return 2;
         }
     }
@@ -358,7 +359,8 @@ gen_n00b(writ_session_t *session, int argc, char **argv)
     writ_output_t output;
     output_for(session, directory, &output);
     writ_link_requirements_t links;
-    writ_status_t status = writ_gen_n00b(&request, &output, &links);
+    writ_n00b_externs_t externs;
+    writ_status_t status = writ_gen_n00b(&request, &output, &links, &externs);
     if (status == WRIT_IO_FAILED) {
         fprintf(stderr, "writ: cannot write into %s\n", directory);
     }
@@ -367,6 +369,11 @@ gen_n00b(writ_session_t *session, int argc, char **argv)
         print_links("framework", links.frameworks, links.frameworks_count);
         print_links("search_path", links.search_paths, links.search_paths_count);
         printf("load %s\n", links.load_dynamic ? "dynamic" : "static");
+        for (size_t i = 0; i < externs.count; i++) {
+            printf("extern %.*s %.*s %.*s\n", (int)externs.items[i].name.length, externs.items[i].name.data,
+                   (int)externs.items[i].symbol.length, externs.items[i].symbol.data,
+                   (int)externs.items[i].signature.length, externs.items[i].signature.data);
+        }
     }
     return status == WRIT_OK ? 0 : 1;
 }

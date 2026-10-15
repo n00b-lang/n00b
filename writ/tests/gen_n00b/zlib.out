@@ -672,18 +672,6 @@ public const Z_UNKNOWN: i32 = 2
 public const Z_DEFLATED: i32 = 8
 public const Z_NULL: i32 = 0
 
-extern<"zlib_n00b_zlibVersion"> __zlibVersion(result: Ref[uint]) -> i32
-extern<"zlib_n00b_deflate"> __deflate(strm: Ref[Stream], flush: i32, failed_status: Ref[i32]) -> i32
-extern<"zlib_n00b_deflateEnd"> __deflateEnd(strm: Ref[Stream], status: Ref[i32]) -> i32
-extern<"zlib_n00b_inflate"> __inflate(strm: Ref[Stream], flush: i32, corrupt_detail: Ref[uint], failed_status: Ref[i32]) -> i32
-extern<"zlib_n00b_inflateEnd"> __inflateEnd(strm: Ref[Stream], status: Ref[i32]) -> i32
-extern<"zlib_n00b_compress2"> __compress2(source: Ref[Array[u8]], level: i32, dest: Ref[Ffi_Bytes], status: Ref[i32]) -> i32
-extern<"zlib_n00b_compressBound"> __compressBound(sourceLen: u64) -> u64
-extern<"zlib_n00b_uncompress"> __uncompress(dest_capacity: u64, source: Ref[Array[u8]], dest: Ref[Ffi_Bytes], status: Ref[i32]) -> i32
-extern<"zlib_n00b_adler32"> __adler32(adler: u64, buf: Ref[Array[u8]], result: Ref[u64]) -> i32
-extern<"zlib_n00b_crc32"> __crc32(crc: u64, buf: Ref[Array[u8]], result: Ref[u64]) -> i32
-extern<"zlib_n00b_deflateInit"> __deflateInit(strm: Ref[Stream], level: i32, status: Ref[i32]) -> i32
-extern<"zlib_n00b_inflateInit"> __inflateInit(strm: Ref[Stream], status: Ref[i32]) -> i32
 
 func version() -> string fail: Error {
     var result: uint = 0
@@ -897,29 +885,29 @@ func inflate_init(modify strm: Stream) fail: Error {
 57	contracts/zlib/aarch64-apple-darwin.writ:59:1	Z_UNKNOWN
 58	contracts/zlib/aarch64-apple-darwin.writ:60:1	Z_DEFLATED
 59	contracts/zlib/aarch64-apple-darwin.writ:61:1	Z_NULL
-61	contracts/zlib/aarch64-apple-darwin.writ:63:1	zlibVersion
-62	contracts/zlib/aarch64-apple-darwin.writ:64:1	deflate
-63	contracts/zlib/aarch64-apple-darwin.writ:65:1	deflateEnd
-64	contracts/zlib/aarch64-apple-darwin.writ:66:1	inflate
-65	contracts/zlib/aarch64-apple-darwin.writ:67:1	inflateEnd
-66	contracts/zlib/aarch64-apple-darwin.writ:68:1	compress2
-67	contracts/zlib/aarch64-apple-darwin.writ:69:1	compressBound
-68	contracts/zlib/aarch64-apple-darwin.writ:70:1	uncompress
-69	contracts/zlib/aarch64-apple-darwin.writ:71:1	adler32
-70	contracts/zlib/aarch64-apple-darwin.writ:72:1	crc32
-71	contracts/zlib/aarch64-apple-darwin.writ:75:1	deflateInit
-72	contracts/zlib/aarch64-apple-darwin.writ:77:1	inflateInit
-74	contracts/zlib/aarch64-apple-darwin.writ:63:1	zlibVersion
-89	contracts/zlib/aarch64-apple-darwin.writ:64:1	deflate
-107	contracts/zlib/aarch64-apple-darwin.writ:65:1	deflateEnd
-125	contracts/zlib/aarch64-apple-darwin.writ:66:1	inflate
-152	contracts/zlib/aarch64-apple-darwin.writ:67:1	inflateEnd
-165	contracts/zlib/aarch64-apple-darwin.writ:68:1	compress2
-181	contracts/zlib/aarch64-apple-darwin.writ:69:1	compressBound
-186	contracts/zlib/aarch64-apple-darwin.writ:70:1	uncompress
-202	contracts/zlib/aarch64-apple-darwin.writ:71:1	adler32
-213	contracts/zlib/aarch64-apple-darwin.writ:72:1	crc32
-224	contracts/zlib/aarch64-apple-darwin.writ:75:1	deflateInit
-237	contracts/zlib/aarch64-apple-darwin.writ:77:1	inflateInit
+62	contracts/zlib/aarch64-apple-darwin.writ:63:1	zlibVersion
+77	contracts/zlib/aarch64-apple-darwin.writ:64:1	deflate
+95	contracts/zlib/aarch64-apple-darwin.writ:65:1	deflateEnd
+113	contracts/zlib/aarch64-apple-darwin.writ:66:1	inflate
+140	contracts/zlib/aarch64-apple-darwin.writ:67:1	inflateEnd
+153	contracts/zlib/aarch64-apple-darwin.writ:68:1	compress2
+169	contracts/zlib/aarch64-apple-darwin.writ:69:1	compressBound
+174	contracts/zlib/aarch64-apple-darwin.writ:70:1	uncompress
+190	contracts/zlib/aarch64-apple-darwin.writ:71:1	adler32
+201	contracts/zlib/aarch64-apple-darwin.writ:72:1	crc32
+212	contracts/zlib/aarch64-apple-darwin.writ:75:1	deflateInit
+225	contracts/zlib/aarch64-apple-darwin.writ:77:1	inflateInit
 library z
 load static
+extern __zlibVersion zlib_n00b_zlibVersion (ref[uint]) -> i32 fail: nil
+extern __deflate zlib_n00b_deflate (ref[Stream], i32, ref[i32]) -> i32 fail: nil
+extern __deflateEnd zlib_n00b_deflateEnd (ref[Stream], ref[i32]) -> i32 fail: nil
+extern __inflate zlib_n00b_inflate (ref[Stream], i32, ref[uint], ref[i32]) -> i32 fail: nil
+extern __inflateEnd zlib_n00b_inflateEnd (ref[Stream], ref[i32]) -> i32 fail: nil
+extern __compress2 zlib_n00b_compress2 (ref[array[u8]], i32, ref[builtin.ffi.Ffi_Bytes], ref[i32]) -> i32 fail: nil
+extern __compressBound zlib_n00b_compressBound (uint) -> uint fail: nil
+extern __uncompress zlib_n00b_uncompress (uint, ref[array[u8]], ref[builtin.ffi.Ffi_Bytes], ref[i32]) -> i32 fail: nil
+extern __adler32 zlib_n00b_adler32 (uint, ref[array[u8]], ref[uint]) -> i32 fail: nil
+extern __crc32 zlib_n00b_crc32 (uint, ref[array[u8]], ref[uint]) -> i32 fail: nil
+extern __deflateInit zlib_n00b_deflateInit (ref[Stream], i32, ref[i32]) -> i32 fail: nil
+extern __inflateInit zlib_n00b_inflateInit (ref[Stream], ref[i32]) -> i32 fail: nil

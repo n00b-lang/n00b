@@ -241,11 +241,9 @@ flagset Mode {
 }
 
 
-extern<"pts_n00b_pt_scale"> __pt_scale(p: Ref[Array[u8]], k: f64) -> i32
-extern<"pts_n00b_pt_origin"> __pt_origin(result: Ref[Array[u8]]) -> i32
-extern<"pts_n00b_pt_type"> __pt_type(mode: Mode) -> i32
-extern<"pts_n00b_pt_sum"> __pt_sum(args: Ref[List[f64]], result: Ref[f64]) -> i32
-extern<"pt_peek"> peek_raw(p: uint) -> i32
+public func peek_raw(p: uint) -> i32 {
+    return __peek_raw(p)
+}
 
 func scale(modify p: Point, k: f64) fail: Scale_Failure {
     let outcome = __pt_scale(ref p.storage, k)
@@ -284,14 +282,15 @@ func sum(args: List[f64]) -> f64 fail: Error {
 }
 7	tests/gen_n00b/float_record.writ:4:1	point
 32	tests/gen_n00b/float_record.writ:9:1	pt_mode
-41	tests/gen_n00b/float_record.writ:11:1	pt_scale
-42	tests/gen_n00b/float_record.writ:14:1	pt_origin
-43	tests/gen_n00b/float_record.writ:16:1	pt_type
-44	tests/gen_n00b/float_record.writ:18:1	pt_sum
-45	tests/gen_n00b/float_record.writ:20:1	pt_peek
-47	tests/gen_n00b/float_record.writ:11:1	pt_scale
-57	tests/gen_n00b/float_record.writ:14:1	pt_origin
-67	tests/gen_n00b/float_record.writ:16:1	pt_type
-72	tests/gen_n00b/float_record.writ:18:1	pt_sum
+41	tests/gen_n00b/float_record.writ:20:1	pt_peek
+45	tests/gen_n00b/float_record.writ:11:1	pt_scale
+55	tests/gen_n00b/float_record.writ:14:1	pt_origin
+65	tests/gen_n00b/float_record.writ:16:1	pt_type
+70	tests/gen_n00b/float_record.writ:18:1	pt_sum
 library pts
 load static
+extern __pt_scale pts_n00b_pt_scale (ref[array[u8]], f64) -> i32 fail: nil
+extern __pt_origin pts_n00b_pt_origin (ref[array[u8]]) -> i32 fail: nil
+extern __pt_type pts_n00b_pt_type (Mode) -> i32 fail: nil
+extern __pt_sum pts_n00b_pt_sum (ref[builtin.containers.list.List[f64]], ref[f64]) -> i32 fail: nil
+extern __peek_raw pt_peek (uint) -> i32 fail: nil

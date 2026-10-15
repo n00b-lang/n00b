@@ -1112,24 +1112,6 @@ enum Find_All {
 }
 
 
-extern<"resharp_n00b_regex_options_free"> __regex_options_free(value: uint) -> i32
-extern<"resharp_n00b_regex_free"> __regex_free(value: uint) -> i32
-extern<"resharp_n00b_regex_options_default"> __regex_options_default(out: Ref[uint], failed_detail: Ref[Ffi_Bytes], panicked_detail: Ref[Ffi_Bytes]) -> i32
-extern<"resharp_n00b_regex_options_unicode"> __regex_options_unicode(self: uint, mode: Unicode_Mode, out: Ref[uint], failed_detail: Ref[Ffi_Bytes], panicked_detail: Ref[Ffi_Bytes]) -> i32
-extern<"resharp_n00b_regex_options_case_insensitive"> __regex_options_case_insensitive(self: uint, yes: bool, out: Ref[uint], failed_detail: Ref[Ffi_Bytes], panicked_detail: Ref[Ffi_Bytes]) -> i32
-extern<"resharp_n00b_regex_options_dot_matches_new_line"> __regex_options_dot_matches_new_line(self: uint, yes: bool, out: Ref[uint], failed_detail: Ref[Ffi_Bytes], panicked_detail: Ref[Ffi_Bytes]) -> i32
-extern<"resharp_n00b_regex_options_multiline"> __regex_options_multiline(self: uint, yes: bool, out: Ref[uint], failed_detail: Ref[Ffi_Bytes], panicked_detail: Ref[Ffi_Bytes]) -> i32
-extern<"resharp_n00b_regex_options_ignore_whitespace"> __regex_options_ignore_whitespace(self: uint, yes: bool, out: Ref[uint], failed_detail: Ref[Ffi_Bytes], panicked_detail: Ref[Ffi_Bytes]) -> i32
-extern<"resharp_n00b_regex_options_hardened"> __regex_options_hardened(self: uint, yes: bool, out: Ref[uint], failed_detail: Ref[Ffi_Bytes], panicked_detail: Ref[Ffi_Bytes]) -> i32
-extern<"resharp_n00b_regex_options_unbounded_size"> __regex_options_unbounded_size(self: uint, yes: bool, out: Ref[uint], failed_detail: Ref[Ffi_Bytes], panicked_detail: Ref[Ffi_Bytes]) -> i32
-extern<"resharp_n00b_regex_options_implicit_captures"> __regex_options_implicit_captures(self: uint, yes: bool, out: Ref[uint], failed_detail: Ref[Ffi_Bytes], panicked_detail: Ref[Ffi_Bytes]) -> i32
-extern<"resharp_n00b_regex_is_match"> __regex_is_match(self: uint, input: Ref[string], out: Ref[bool], failed_detail: Ref[Ffi_Bytes], panicked_detail: Ref[Ffi_Bytes]) -> i32
-extern<"resharp_n00b_regex_new"> __regex_new(pattern: Ref[string], out: Ref[uint], failed_detail: Ref[Ffi_Bytes], panicked_detail: Ref[Ffi_Bytes]) -> i32
-extern<"resharp_n00b_regex_with_options"> __regex_with_options(pattern: Ref[string], opts: uint, out: Ref[uint], failed_detail: Ref[Ffi_Bytes], panicked_detail: Ref[Ffi_Bytes]) -> i32
-extern<"resharp_n00b_regex_find_all"> __regex_find_all(self: uint, input: Ref[Array[u8]], out_capacity: u64, out: Ref[uint], out_length: Ref[uint], failed_detail: Ref[Ffi_Bytes], panicked_detail: Ref[Ffi_Bytes]) -> i32
-extern<"resharp_n00b_regex_find_anchored"> __regex_find_anchored(self: uint, input: Ref[Array[u8]], out: Ref[Match], failed_detail: Ref[Ffi_Bytes], panicked_detail: Ref[Ffi_Bytes]) -> i32
-extern<"resharp_n00b_regex_is_full_match"> __regex_is_full_match(self: uint, input: Ref[Array[u8]], out: Ref[bool], failed_detail: Ref[Ffi_Bytes], panicked_detail: Ref[Ffi_Bytes]) -> i32
-extern<"resharp_n00b_regex_capture_index_for_name"> __regex_capture_index_for_name(self: uint, name: Ref[string], out: Ref[u64], failed_detail: Ref[Ffi_Bytes], panicked_detail: Ref[Ffi_Bytes]) -> i32
 
 func close(modify self: Regex_Options) fail: Error {
     let outcome = __regex_options_free(self.raw)
@@ -1500,42 +1482,42 @@ func capture_index_for_name(self: Regex, name: string) -> Capture_Index_For_Name
 20	resharp.derived.writ:5:1	Status
 27	resharp.derived.writ:21:1	UnicodeMode
 34	resharp.derived.writ:41:1	FindAll
-47	resharp.derived.writ:30:1	regex_options_free
-48	resharp.derived.writ:39:1	regex_free
-49	resharp.derived.writ:53:1	regex_options_default
-50	resharp.derived.writ:62:1	regex_options_unicode
-51	resharp.derived.writ:73:1	regex_options_case_insensitive
-52	resharp.derived.writ:84:1	regex_options_dot_matches_new_line
-53	resharp.derived.writ:95:1	regex_options_multiline
-54	resharp.derived.writ:106:1	regex_options_ignore_whitespace
-55	resharp.derived.writ:117:1	regex_options_hardened
-56	resharp.derived.writ:128:1	regex_options_unbounded_size
-57	resharp.derived.writ:139:5	regex_options_implicit_captures
-58	resharp.derived.writ:151:1	regex_is_match
-59	resharp.derived.writ:163:1	regex_new
-60	resharp.derived.writ:174:1	regex_with_options
-61	resharp.derived.writ:186:1	regex_find_all
-62	resharp.derived.writ:201:1	regex_find_anchored
-63	resharp.derived.writ:215:1	regex_is_full_match
-64	resharp.derived.writ:227:5	regex_capture_index_for_name
-66	resharp.derived.writ:30:1	regex_options_free
-75	resharp.derived.writ:39:1	regex_free
-84	resharp.derived.writ:53:1	regex_options_default
-104	resharp.derived.writ:62:1	regex_options_unicode
-125	resharp.derived.writ:73:1	regex_options_case_insensitive
-146	resharp.derived.writ:84:1	regex_options_dot_matches_new_line
-167	resharp.derived.writ:95:1	regex_options_multiline
-188	resharp.derived.writ:106:1	regex_options_ignore_whitespace
-209	resharp.derived.writ:117:1	regex_options_hardened
-230	resharp.derived.writ:128:1	regex_options_unbounded_size
-251	resharp.derived.writ:139:5	regex_options_implicit_captures
-272	resharp.derived.writ:151:1	regex_is_match
-293	resharp.derived.writ:163:1	regex_new
-314	resharp.derived.writ:174:1	regex_with_options
-335	resharp.derived.writ:186:1	regex_find_all
-362	resharp.derived.writ:201:1	regex_find_anchored
-383	resharp.derived.writ:215:1	regex_is_full_match
-409	resharp.derived.writ:227:5	regex_capture_index_for_name
+48	resharp.derived.writ:30:1	regex_options_free
+57	resharp.derived.writ:39:1	regex_free
+66	resharp.derived.writ:53:1	regex_options_default
+86	resharp.derived.writ:62:1	regex_options_unicode
+107	resharp.derived.writ:73:1	regex_options_case_insensitive
+128	resharp.derived.writ:84:1	regex_options_dot_matches_new_line
+149	resharp.derived.writ:95:1	regex_options_multiline
+170	resharp.derived.writ:106:1	regex_options_ignore_whitespace
+191	resharp.derived.writ:117:1	regex_options_hardened
+212	resharp.derived.writ:128:1	regex_options_unbounded_size
+233	resharp.derived.writ:139:5	regex_options_implicit_captures
+254	resharp.derived.writ:151:1	regex_is_match
+275	resharp.derived.writ:163:1	regex_new
+296	resharp.derived.writ:174:1	regex_with_options
+317	resharp.derived.writ:186:1	regex_find_all
+344	resharp.derived.writ:201:1	regex_find_anchored
+365	resharp.derived.writ:215:1	regex_is_full_match
+391	resharp.derived.writ:227:5	regex_capture_index_for_name
 library resharp_writ
 search_path target/release
 load static
+extern __regex_options_free resharp_n00b_regex_options_free (uint) -> i32 fail: nil
+extern __regex_free resharp_n00b_regex_free (uint) -> i32 fail: nil
+extern __regex_options_default resharp_n00b_regex_options_default (ref[uint], ref[builtin.ffi.Ffi_Bytes], ref[builtin.ffi.Ffi_Bytes]) -> i32 fail: nil
+extern __regex_options_unicode resharp_n00b_regex_options_unicode (uint, Unicode_Mode, ref[uint], ref[builtin.ffi.Ffi_Bytes], ref[builtin.ffi.Ffi_Bytes]) -> i32 fail: nil
+extern __regex_options_case_insensitive resharp_n00b_regex_options_case_insensitive (uint, bool, ref[uint], ref[builtin.ffi.Ffi_Bytes], ref[builtin.ffi.Ffi_Bytes]) -> i32 fail: nil
+extern __regex_options_dot_matches_new_line resharp_n00b_regex_options_dot_matches_new_line (uint, bool, ref[uint], ref[builtin.ffi.Ffi_Bytes], ref[builtin.ffi.Ffi_Bytes]) -> i32 fail: nil
+extern __regex_options_multiline resharp_n00b_regex_options_multiline (uint, bool, ref[uint], ref[builtin.ffi.Ffi_Bytes], ref[builtin.ffi.Ffi_Bytes]) -> i32 fail: nil
+extern __regex_options_ignore_whitespace resharp_n00b_regex_options_ignore_whitespace (uint, bool, ref[uint], ref[builtin.ffi.Ffi_Bytes], ref[builtin.ffi.Ffi_Bytes]) -> i32 fail: nil
+extern __regex_options_hardened resharp_n00b_regex_options_hardened (uint, bool, ref[uint], ref[builtin.ffi.Ffi_Bytes], ref[builtin.ffi.Ffi_Bytes]) -> i32 fail: nil
+extern __regex_options_unbounded_size resharp_n00b_regex_options_unbounded_size (uint, bool, ref[uint], ref[builtin.ffi.Ffi_Bytes], ref[builtin.ffi.Ffi_Bytes]) -> i32 fail: nil
+extern __regex_options_implicit_captures resharp_n00b_regex_options_implicit_captures (uint, bool, ref[uint], ref[builtin.ffi.Ffi_Bytes], ref[builtin.ffi.Ffi_Bytes]) -> i32 fail: nil
+extern __regex_is_match resharp_n00b_regex_is_match (uint, ref[string], ref[bool], ref[builtin.ffi.Ffi_Bytes], ref[builtin.ffi.Ffi_Bytes]) -> i32 fail: nil
+extern __regex_new resharp_n00b_regex_new (ref[string], ref[uint], ref[builtin.ffi.Ffi_Bytes], ref[builtin.ffi.Ffi_Bytes]) -> i32 fail: nil
+extern __regex_with_options resharp_n00b_regex_with_options (ref[string], uint, ref[uint], ref[builtin.ffi.Ffi_Bytes], ref[builtin.ffi.Ffi_Bytes]) -> i32 fail: nil
+extern __regex_find_all resharp_n00b_regex_find_all (uint, ref[array[u8]], uint, ref[uint], ref[uint], ref[builtin.ffi.Ffi_Bytes], ref[builtin.ffi.Ffi_Bytes]) -> i32 fail: nil
+extern __regex_find_anchored resharp_n00b_regex_find_anchored (uint, ref[array[u8]], ref[Match], ref[builtin.ffi.Ffi_Bytes], ref[builtin.ffi.Ffi_Bytes]) -> i32 fail: nil
+extern __regex_is_full_match resharp_n00b_regex_is_full_match (uint, ref[array[u8]], ref[bool], ref[builtin.ffi.Ffi_Bytes], ref[builtin.ffi.Ffi_Bytes]) -> i32 fail: nil
+extern __regex_capture_index_for_name resharp_n00b_regex_capture_index_for_name (uint, ref[string], ref[uint], ref[builtin.ffi.Ffi_Bytes], ref[builtin.ffi.Ffi_Bytes]) -> i32 fail: nil

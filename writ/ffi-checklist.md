@@ -138,7 +138,7 @@ enough to check off one at a time. The specs are `ffi-spec.md`,
 - [x] Link requirements as a public struct: libraries, frameworks, search paths, load mode
 - [x] `src/gen/n00b.c`: module skeleton from a `writ_binding_t`
 - [x] Functions: `func` declarations from plans, names from binding decisions
-- [x] Extern declarations naming each shim symbol
+- [ ] Extern declarations returned as data with the generated source
 - [x] Scalars and `c_*` types per platform
 - [x] `layout c` records as `type X layout(c)`
 - [x] Records `layout(c)` can't express: opaque storage with accessors
@@ -262,7 +262,7 @@ enough to check off one at a time. The specs are `ffi-spec.md`,
 
 ### Externs
 
-- [ ] n00b grammar: extern function declaration accepted only in generated units
+- [ ] Generated externs registered as native functions in the generated module
 - [ ] Extern declaration in user source is a compile error
 - [ ] Extern declarations lower through `ir_func_add(…, IR_LINK_EXTERN)` with the symbol annotation
 - [ ] `llvm_backend.c` types extern functions as their scalar-and-pointer signatures
