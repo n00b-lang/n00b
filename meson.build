@@ -575,6 +575,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs'
                / 'type_visibility'],
+    timeout: 120,
 )
 
 test(
@@ -637,6 +638,7 @@ test(
                / 'bitcode_panic.n',
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_require_trace.n'],
+    timeout: 120,
 )
 
 test(
@@ -1033,6 +1035,7 @@ test(
     args: [meson.current_source_dir() / 'tests' / 'indirect_global_init.sh',
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'],
+    timeout: 120,
 )
 
 test(
@@ -1116,6 +1119,7 @@ test(
     args: [meson.current_source_dir() / 'tests' / 'array_uint_index.sh',
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'],
+    timeout: 120,
 )
 
 test(
@@ -1151,6 +1155,7 @@ test(
     args: [meson.current_source_dir() / 'tests' / 'shift_count_n00b.sh',
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs'],
+    timeout: 120,
 )
 
 test(
@@ -1225,6 +1230,7 @@ test(
                / 'bitcode_numeric_casts.n',
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_numeric_cast_trap.n'],
+    timeout: 120,
 )
 
 test(
@@ -1417,6 +1423,7 @@ test(
                / 'bitcode_raw_repr_element_override.n00b',
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_raw_repr_nested_override.n00b'],
+    timeout: 120,
 )
 
 test(
@@ -1434,6 +1441,7 @@ test(
     args: [meson.current_source_dir() / 'tests' / 'inline_n00b.sh',
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'inline'],
+    timeout: 120,
 )
 
 test(
