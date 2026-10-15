@@ -1,0 +1,231 @@
+#ifndef CALLBACKS_WRIT_H
+#define CALLBACKS_WRIT_H
+
+#include <stdarg.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define CALLBACKS_ARGUMENT_ERROR (-1)
+#define CALLBACKS_OUT_OF_MEMORY (-2)
+#define CALLBACKS_CONTRACT_VIOLATION (-3)
+
+typedef struct {
+    uint8_t *data;
+    size_t length;
+} callbacks_bytes_t;
+
+typedef struct {
+    const char *data;
+    size_t length;
+} callbacks_str_t;
+
+void callbacks_bytes_free(callbacks_bytes_t *bytes);
+void callbacks_free(void *data);
+
+typedef struct Event {
+    int code;
+} Event;
+
+typedef int (*Compare)(const void *a, const void *b);
+typedef void (*Handler)(const void *context, const Event *event);
+
+
+enum {
+    callbacks_sort_bytes_ok = 0,
+};
+int32_t callbacks_sort_bytes(const uint8_t *items, size_t items_length, Compare compare, int *result);
+
+uint64_t callbacks_bus_subscribe(Handler handler, void *handler_userdata);
+
+enum {
+    callbacks_bus_publish_ok = 0,
+};
+int32_t callbacks_bus_publish(int code);
+
+enum {
+    callbacks_bus_unsubscribe_ok = 0,
+};
+int32_t callbacks_bus_unsubscribe(uint64_t id);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
+#include "callbacks_writ.h"
+
+#include <stdlib.h>
+#include <string.h>
+
+int sort_bytes(const uint8_t *items, size_t count, Compare compare);
+uint64_t bus_subscribe(Handler handler, const void *context);
+void bus_publish(int code);
+void bus_unsubscribe(uint64_t id);
+
+static const uint8_t callbacks_empty[1];
+
+void callbacks_bytes_free(callbacks_bytes_t *bytes) {
+    free(bytes->data);
+    bytes->data = NULL;
+    bytes->length = 0;
+}
+
+void callbacks_free(void *data) {
+    free(data);
+}
+
+int32_t callbacks_sort_bytes(const uint8_t *items, size_t items_length, Compare compare, int *result) {
+    const uint8_t *s0 = 0;
+    size_t s1 = 0;
+    Compare s2 = 0;
+    int ret = 0;
+    int32_t outcome = 0;
+    if (!items && items_length) {
+        outcome = CALLBACKS_ARGUMENT_ERROR;
+        goto finish;
+    }
+    s0 = items_length ? (const uint8_t *)items : (const uint8_t *)callbacks_empty;
+    s1 = (size_t)items_length;
+    s2 = compare;
+    ret = sort_bytes(s0, s1, s2);
+    {
+        outcome = callbacks_sort_bytes_ok;
+    }
+    if (outcome == callbacks_sort_bytes_ok) {
+        *result = ret;
+    }
+finish:
+    return outcome;
+}
+
+uint64_t callbacks_bus_subscribe(Handler handler, void *handler_userdata) {
+    Handler s0 = 0;
+    const void *s1 = 0;
+    uint64_t ret = 0;
+    s0 = handler;
+    s1 = (const void *)handler_userdata;
+    ret = bus_subscribe(s0, s1);
+    return ret;
+}
+
+int32_t callbacks_bus_publish(int code) {
+    int s0 = 0;
+    int32_t outcome = 0;
+    s0 = code;
+    bus_publish(s0);
+    {
+        outcome = callbacks_bus_publish_ok;
+    }
+    return outcome;
+}
+
+int32_t callbacks_bus_unsubscribe(uint64_t id) {
+    uint64_t s0 = 0;
+    int32_t outcome = 0;
+    s0 = id;
+    bus_unsubscribe(s0);
+    {
+        outcome = callbacks_bus_unsubscribe_ok;
+    }
+    return outcome;
+}
+#include <stdint.h>
+#include <stddef.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "callbacks_writ.h"
+
+void *n00b_ffi_borrow(void *object, size_t *length, uint32_t access);
+void n00b_ffi_release(void *object);
+void n00bb_runtime_trap(const char *reason, uint64_t length);
+
+void callbacks_take_bytes(callbacks_bytes_t *bytes, void *out) {
+    size_t length = 0;
+    uint8_t *data = n00b_ffi_borrow(out, &length, 1);
+    if (data && bytes->data) {
+        memcpy(data, bytes->data, length < bytes->length ? length : bytes->length);
+    }
+    n00b_ffi_release(out);
+    callbacks_bytes_free(bytes);
+}
+
+int32_t n00b_ffi_dispatch(uint64_t handle, const void *arguments, void *result);
+
+typedef struct {
+    const Event *event;
+} callbacks_Handler_arguments;
+
+void callbacks_Handler_trampoline(const void *context, const Event *event) {
+    callbacks_Handler_arguments arguments = {event};
+    n00b_ffi_dispatch((uint64_t)(uintptr_t)context, &arguments, NULL);
+}
+
+uint64_t callbacks_n00b_bus_subscribe(uint64_t handler) {
+    uint64_t writ_n00b_value = callbacks_bus_subscribe(callbacks_Handler_trampoline, (void *)(uintptr_t)handler);
+    return writ_n00b_value;
+}
+
+int32_t callbacks_n00b_bus_publish(int code) {
+    int32_t writ_n00b_value = callbacks_bus_publish(code);
+    return writ_n00b_value;
+}
+
+int32_t callbacks_n00b_bus_unsubscribe(uint64_t id) {
+    int32_t writ_n00b_value = callbacks_bus_unsubscribe(id);
+    return writ_n00b_value;
+}
+
+type Error {
+    public code: i64
+    public text: string?
+    public fn: string
+}
+
+type Event layout(c) {
+    public code: i32
+}
+
+callback Event_Handler {
+    call(event: uint) -> nil
+    handler(event: uint) -> nil
+}
+
+type Event_Handler_Arguments layout(c) {
+    public event: uint
+}
+
+func bus_subscribe(handler: Event_Handler) -> u64 {
+    let result = __bus_subscribe(__ffi_callback_register(handler))
+    return result
+}
+
+func bus_publish(code: i32) fail: Error {
+    let outcome = __bus_publish(code)
+    if outcome < 0 {
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "bus_publish")
+        fail failure
+    }
+}
+
+func bus_unsubscribe(id: u64) fail: Error {
+    let outcome = __bus_unsubscribe(id)
+    if outcome < 0 {
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "bus_unsubscribe")
+        fail failure
+    }
+}
+7	tests/gen_n00b/../callbacks/callbacks.writ:7:1	Event
+11	tests/gen_n00b/../callbacks/callbacks.writ:9:1	Handler
+20	tests/gen_n00b/../callbacks/callbacks.writ:14:1	bus_subscribe
+25	tests/gen_n00b/../callbacks/callbacks.writ:16:1	bus_publish
+33	tests/gen_n00b/../callbacks/callbacks.writ:18:1	bus_unsubscribe
+load static
+extern __bus_subscribe callbacks_n00b_bus_subscribe (uint) -> uint fail: nil
+extern __bus_publish callbacks_n00b_bus_publish (i32) -> i32 fail: nil
+extern __bus_unsubscribe callbacks_n00b_bus_unsubscribe (uint) -> i32 fail: nil

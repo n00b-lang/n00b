@@ -1,0 +1,4 @@
+error[E0501]: the binding names nothing in the contract: no callback `Event`
+  --> tests/bind/callback_as.writ:3:5
+error[E0501]: the binding names nothing in the contract: no type `Handler`
+  --> tests/bind/callback_as.writ:4:5

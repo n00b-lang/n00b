@@ -117,6 +117,7 @@ typedef enum {
     PARAM_RECORD,
     PARAM_STORAGE,
     PARAM_OUT,
+    PARAM_CALLBACK,
 } param_kind_t;
 
 typedef struct {
@@ -207,6 +208,8 @@ item_type(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, uint32_t ind
                                S(scalar_type(g, item->type)));
     case WRIT_SHAPE_OPTIONAL:
         return writ_str_format(g->session, "%.*s?", S(scalar_type(g, element)));
+    case WRIT_SHAPE_CALLBACK:
+        return writ_binding_type(g->b, item->type->name);
     default:
         return scalar_type(g, record_target(item) ? record_target(item) : item->type);
     }
@@ -259,6 +262,13 @@ shim_params(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, core_list_
         writ_c_param_t c_params[2];
         size_t count = writ_c_item_params(&g->c, plan, index, c_params);
         shim_param_t param = {.item = index, .name = item->name, .c_type = c_params[0].type, .parts = count};
+        if (item->shape == WRIT_SHAPE_CALLBACK) {
+            param.kind = PARAM_CALLBACK;
+            param.c_type = writ_cstr("uint64_t");
+            param.n00b_type = writ_cstr("u64");
+            core_list_push(*params, param);
+            continue;
+        }
         if (writ_c_is_input(item)) {
             if (count == 2) {
                 param.kind = PARAM_VALUE;
@@ -302,6 +312,12 @@ shim_symbol(const n00b_t *g, const writ_fn_view_t *fn)
     return writ_str_format(g->session, "%.*s_n00b_%.*s", S(g->shim), S(fn->contract_name));
 }
 
+static writ_str_t
+trampoline_name(const n00b_t *g, writ_str_t callback)
+{
+    return writ_str_format(g->session, "%.*s_%.*s_trampoline", S(g->shim), S(callback));
+}
+
 static void
 emit_c_shim(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view_t *plan)
 {
@@ -313,8 +329,8 @@ emit_c_shim(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view_
     writ_emit_text(emit, "%.*s %.*s(", S(ret_type), S(shim_symbol(g, plan->fn)));
     for (size_t i = 0; i < params.len; i++) {
         const shim_param_t *p = &params.data[i];
-        writ_str_t type = p->kind == PARAM_SCALAR    ? p->c_type
-                          : p->kind == PARAM_ADDRESS ? writ_cstr("uint64_t")
+        writ_str_t type = p->kind == PARAM_SCALAR || p->kind == PARAM_CALLBACK ? p->c_type
+                          : p->kind == PARAM_ADDRESS                            ? writ_cstr("uint64_t")
                           : p->kind == PARAM_OUT     ? writ_cstr("void *")
                                                      : writ_cstr("const void *");
         writ_emit_text(emit, "%s%.*s%s%.*s", i ? ", " : "", S(type), is_pointer(type) ? "" : " ", S(p->name));
@@ -383,6 +399,12 @@ emit_c_shim(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view_
         case PARAM_SCALAR:
             writ_emit_text(emit, "%.*s", S(p->name));
             break;
+        case PARAM_CALLBACK:
+            writ_emit_text(emit, "%.*s", S(trampoline_name(g, plan->items[p->item].type->name)));
+            if (p->parts == 2) {
+                writ_emit_text(emit, ", (void *)(uintptr_t)%.*s", S(p->name));
+            }
+            break;
         default:
             writ_emit_text(emit, "(%.*s)%.*s", S(p->c_type), S(p->name));
             break;
@@ -400,6 +422,78 @@ emit_c_shim(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view_
     writ_emit_close(emit, nullptr);
     writ_emit_line(emit, "");
     core_list_free(params);
+}
+
+static uint32_t
+userdata_receiver(const writ_fn_view_t *callback)
+{
+    for (size_t i = 0; i < callback->slots_count; i++) {
+        if (callback->slots[i].userdata) {
+            return (uint32_t)i;
+        }
+    }
+    return WRIT_PLAN_NONE;
+}
+
+static writ_str_t
+callback_result_c_type(const n00b_t *g, const writ_fn_view_t *callback)
+{
+    const writ_type_view_t *result = callback->result ? callback->result->type : nullptr;
+    return writ_c_type(&g->c, result, writ_c_is_text(result) && callback->result && !callback->result->own);
+}
+
+static void
+emit_trampoline(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *callback)
+{
+    uint32_t receiver = userdata_receiver(callback);
+    if (receiver == WRIT_PLAN_NONE) {
+        return;
+    }
+    writ_str_t arguments = writ_str_format(g->session, "%.*s_%.*s_arguments", S(g->shim), S(callback->contract_name));
+    bool packed = callback->slots_count > 1;
+    if (packed) {
+        writ_emit_open(emit, "typedef struct");
+        for (size_t i = 0; i < callback->slots_count; i++) {
+            if (i != receiver) {
+                writ_str_t type = writ_c_real_param_type(&g->c, &callback->slots[i]);
+                writ_emit_line(emit, "%.*s%s%.*s;", S(type), is_pointer(type) ? "" : " ", S(callback->slots[i].name));
+            }
+        }
+        writ_emit_close(emit, writ_str_format(g->session, " %.*s;", S(arguments)).data);
+        writ_emit_line(emit, "");
+    }
+    writ_str_t ret = callback_result_c_type(g, callback);
+    bool returns = !writ_str_eq(ret, writ_cstr("void"));
+    writ_emit_text(emit, "%.*s %.*s(", S(ret), S(trampoline_name(g, callback->contract_name)));
+    for (size_t i = 0; i < callback->slots_count; i++) {
+        writ_str_t type = writ_c_real_param_type(&g->c, &callback->slots[i]);
+        writ_emit_text(emit, "%s%.*s%s%.*s", i ? ", " : "", S(type), is_pointer(type) ? "" : " ",
+                       S(callback->slots[i].name));
+    }
+    writ_emit_text(emit, "%s)", callback->slots_count ? "" : "void");
+    writ_emit_open(emit, "");
+    if (packed) {
+        writ_emit_text(emit, "%.*s arguments = {", S(arguments));
+        bool first = true;
+        for (size_t i = 0; i < callback->slots_count; i++) {
+            if (i != receiver) {
+                writ_emit_text(emit, "%s%.*s", first ? "" : ", ", S(callback->slots[i].name));
+                first = false;
+            }
+        }
+        writ_emit_line(emit, "};");
+    }
+    if (returns) {
+        writ_emit_line(emit, "%.*s result;", S(ret));
+        writ_emit_line(emit, "memset(&result, 0, sizeof result);");
+    }
+    writ_emit_line(emit, "n00b_ffi_dispatch((uint64_t)(uintptr_t)%.*s, %s, %s);", S(callback->slots[receiver].name),
+                   packed ? "&arguments" : "NULL", returns ? "&result" : "NULL");
+    if (returns) {
+        writ_emit_line(emit, "return result;");
+    }
+    writ_emit_close(emit, nullptr);
+    writ_emit_line(emit, "");
 }
 
 static writ_str_t
@@ -428,6 +522,17 @@ shim_c_text(const n00b_t *g, const writ_plan_view_t *const *plans)
     writ_emit_line(&emit, "%.*s_bytes_free(bytes);", S(g->c.prefix));
     writ_emit_close(&emit, nullptr);
     writ_emit_line(&emit, "");
+    bool dispatches = false;
+    for (size_t i = 0; i < writ_model_callback_count(g->model); i++) {
+        dispatches = dispatches || userdata_receiver(writ_model_callback_at(g->model, i)) != WRIT_PLAN_NONE;
+    }
+    if (dispatches) {
+        writ_emit_line(&emit, "int32_t n00b_ffi_dispatch(uint64_t handle, const void *arguments, void *result);");
+        writ_emit_line(&emit, "");
+    }
+    for (size_t i = 0; i < writ_model_callback_count(g->model); i++) {
+        emit_trampoline(g, &emit, writ_model_callback_at(g->model, i));
+    }
     for (size_t i = 0; i < writ_model_fn_count(g->model); i++) {
         writ_bound_fn_t bound = writ_binding_fn(g->b, i);
         if (bound.bound && !bound.raw && plans[i]) {
@@ -564,6 +669,52 @@ emit_flagset(const n00b_t *g, writ_emit_t *emit, const writ_enum_view_t *view)
 }
 
 static void
+emit_callback_role(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *callback, const char *role,
+                   uint32_t receiver)
+{
+    writ_emit_text(emit, "%s(", role);
+    bool first = true;
+    for (size_t i = 0; i < callback->slots_count; i++) {
+        if (i != receiver) {
+            writ_emit_text(emit, "%s%.*s: %.*s", first ? "" : ", ", S(writ_profile_name(g->profile, WRIT_NAMING_FIELD,
+                                                                                        callback->slots[i].name)),
+                           S(scalar_type(g, callback->slots[i].type)));
+            first = false;
+        }
+    }
+    writ_emit_line(emit, ") -> %.*s", S(scalar_type(g, callback->result ? callback->result->type : nullptr)));
+}
+
+static void
+emit_callback_type(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *callback)
+{
+    uint32_t receiver = userdata_receiver(callback);
+    if (receiver == WRIT_PLAN_NONE) {
+        return;
+    }
+    writ_str_t name = writ_binding_type(g->b, callback->contract_name);
+    writ_emit_line(emit, "");
+    mark(g, emit, callback->declared_at, callback->contract_name);
+    writ_emit_open(emit, "callback %.*s", S(name));
+    emit_callback_role(g, emit, callback, "call", receiver);
+    emit_callback_role(g, emit, callback, "handler", receiver);
+    writ_emit_close(emit, nullptr);
+    if (callback->slots_count < 2) {
+        return;
+    }
+    writ_emit_line(emit, "");
+    writ_emit_open(emit, "type %.*s_Arguments layout(c)", S(name));
+    for (size_t i = 0; i < callback->slots_count; i++) {
+        if (i != receiver) {
+            writ_emit_line(emit, "public %.*s: %.*s",
+                           S(writ_profile_name(g->profile, WRIT_NAMING_FIELD, callback->slots[i].name)),
+                           S(scalar_type(g, callback->slots[i].type)));
+        }
+    }
+    writ_emit_close(emit, nullptr);
+}
+
+static void
 emit_types(const n00b_t *g, writ_emit_t *emit)
 {
     const writ_model_t *model = g->model;
@@ -611,6 +762,9 @@ emit_types(const n00b_t *g, writ_emit_t *emit)
                            k + 1 < view->items_count ? "," : "");
         }
         writ_emit_close(emit, nullptr);
+    }
+    for (size_t i = 0; i < writ_model_callback_count(model); i++) {
+        emit_callback_type(g, emit, writ_model_callback_at(model, i));
     }
     if (writ_model_const_count(model)) {
         writ_emit_line(emit, "");
@@ -953,6 +1107,8 @@ emit_wrapper(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view
         } else if (p->kind == PARAM_OUT) {
             bool length = !writ_str_eq(p->name, plan->items[p->item].name);
             writ_emit_text(emit, length ? "ref %.*s_length" : "ref %.*s", S(name));
+        } else if (p->kind == PARAM_CALLBACK) {
+            writ_emit_text(emit, "__ffi_callback_register(%.*s)", S(name));
         } else {
             writ_emit_text(emit, "%.*s", S(name));
         }

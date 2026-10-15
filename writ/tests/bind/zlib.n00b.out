@@ -2,6 +2,8 @@ binding zlib for n00b import
 module zlib (chosen)
 load static (default)
 type z_stream: Stream (chosen)
+type alloc_func: Alloc_Func (default)
+type free_func: Free_Func (default)
 fn zlibVersion: version (chosen)
     result: utf8 as string (default)
 fn deflate: Stream.deflate (chosen)

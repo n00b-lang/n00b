@@ -197,6 +197,9 @@ default_fns(writ_binding_t *b)
     for (size_t i = 0; i < writ_model_enum_count(model); i++) {
         add_type(b, writ_model_enum_at(model, i)->name);
     }
+    for (size_t i = 0; i < writ_model_callback_count(model); i++) {
+        add_type(b, writ_model_callback_at(model, i)->contract_name);
+    }
     for (size_t i = 0; i < writ_model_fn_count(model); i++) {
         const writ_fn_view_t *fn = writ_model_fn_at(model, i);
         fn_decision_t *d = &b->fns[i];
@@ -444,10 +447,13 @@ apply_item(writ_binding_t *b, uint32_t id)
     case WRIT_N_NAME_ITEM:
         apply_name(b, id);
         return;
-    case WRIT_N_TYPE_AS: {
+    case WRIT_N_TYPE_AS:
+    case WRIT_N_CALLBACK_AS: {
         type_decision_t *type = type_named(b, text_of(b, item->name));
-        if (!type) {
-            writ_report(b->session, WRIT_D_BIND_TARGET, item->loc, "no type `%.*s`", S(text_of(b, item->name)));
+        bool callback = writ_model_callback_named(b->model, text_of(b, item->name)) != nullptr;
+        if (!type || callback != (item->kind == WRIT_N_CALLBACK_AS)) {
+            writ_report(b->session, WRIT_D_BIND_TARGET, item->loc, "no %s `%.*s`",
+                        item->kind == WRIT_N_CALLBACK_AS ? "callback" : "type", S(text_of(b, item->name)));
         } else {
             type->name = (choice_t){child_text(b, id, WRIT_N_TEXT), true};
         }

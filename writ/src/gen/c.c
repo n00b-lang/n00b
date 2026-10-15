@@ -254,8 +254,8 @@ writ_c_emit_signature(const writ_c_context_t *c, writ_emit_t *emit, const writ_p
     writ_emit_text(emit, "%s)", first ? "void" : "");
 }
 
-static writ_str_t
-real_param_type(const writ_c_context_t *c, const writ_slot_view_t *slot)
+writ_str_t
+writ_c_real_param_type(const writ_c_context_t *c, const writ_slot_view_t *slot)
 {
     const writ_type_view_t *type = slot->physical ? slot->physical : slot->type;
     bool constant = slot->mode == WRIT_MODE_IN && type->kind != WRIT_TYPE_HANDLE
@@ -275,7 +275,7 @@ writ_c_emit_real_prototype(const writ_c_context_t *c, writ_emit_t *emit, const w
         if (variadic_tail && fn->slots[i].type->kind == WRIT_TYPE_VA_LIST) {
             continue;
         }
-        emit_param(emit, &first, real_param_type(c, &fn->slots[i]), fn->slots[i].name);
+        emit_param(emit, &first, writ_c_real_param_type(c, &fn->slots[i]), fn->slots[i].name);
     }
     if (variadic_tail || (fn->varargs != WRIT_VARARGS_NONE && fn->varargs != WRIT_VARARGS_VA_LIST)) {
         writ_emit_text(emit, "%s...", first ? "" : ", ");
@@ -396,7 +396,7 @@ slot_type(const writ_c_context_t *c, const writ_plan_view_t *plan, uint32_t slot
         const writ_slot_view_t *result = plan->fn->result;
         return writ_c_type(c, result->type, writ_c_is_text(result->type) && !result->own);
     }
-    return real_param_type(c, &plan->fn->slots[physical->contract_slot]);
+    return writ_c_real_param_type(c, &plan->fn->slots[physical->contract_slot]);
 }
 
 static void

@@ -320,6 +320,7 @@ foreach case : [
     ['e0511', 'tests/zlib/zlib.writ', 'e0511', n00b_profile, true],
     ['e0512', 'tests/zlib/zlib.writ', 'zlib.n00b', ['--profile', 'tests/bind/e0512.profile.writ'], true],
     ['e0513', 'tests/zlib/zlib.writ', 'e0513', n00b_profile, true],
+    ['callback_as', 'tests/callbacks/callbacks.writ', 'callback_as', n00b_profile, true],
 ]
     test(
         'bind-' + case[0],
@@ -362,7 +363,7 @@ test(
     env: {'WRIT_CONTRACT_PATH': source_root / 'tests' / 'missing:' + source_root / 'contracts'},
 )
 
-foreach case : ['zlib', 'resharp', 'kv', 'kv_export', 'float_record']
+foreach case : ['zlib', 'resharp', 'kv', 'kv_export', 'float_record', 'callbacks']
     test(
         'gen-n00b-' + case,
         python,
@@ -375,7 +376,7 @@ test(
     'gen-n00b-compile',
     python,
     args: [source_root / 'tests' / 'gen_n00b' / 'compile.py', writ_exe, compiler, host_triple, source_root,
-           'zlib', 'resharp', 'kv_export', 'float_record'],
+           'zlib', 'resharp', 'kv_export', 'float_record', 'callbacks'],
 )
 
 resharp_root = get_option('resharp_root')
