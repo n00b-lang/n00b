@@ -504,6 +504,16 @@ test(
 )
 
 test(
+    'trait-operator-generic-result', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'containers' / 'readiness'
+               / 'trait_operator_generic_result.n'],
+    suite: 'regression',
+)
+
+test(
     'ref-field-compound-n00b', find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
            n00bb_exe.full_path(),
