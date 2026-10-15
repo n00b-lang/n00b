@@ -8004,6 +8004,9 @@ is_reference_symbol(parse_sym_entry_t *symbol)
     return type && th_kind_of(type) == TH_INDIRECTION;
 }
 
+static n00bb_function_parameter_facts_t *
+function_parameter_facts(parse_grammar_t *grammar, parse_tree_t *node);
+
 void
 collect_ir_parameters(parse_grammar_t *grammar, parse_tree_t *node,
                       core_list_t(parse_sym_entry_ptr_t) *parameters,
@@ -8026,16 +8029,8 @@ collect_ir_parameters(parse_grammar_t *grammar, parse_tree_t *node,
         if (receiver)
             core_list_push(*parameters, core_tree_node_value(receiver).sym);
     }
-    parse_tree_t *owner = core_tree_node_value(node).parent;
-    while (owner && !nt_is(grammar, owner, "func-def")
-           && !nt_is(grammar, owner, "callback-role")
-           && !nt_is(grammar, owner, "context-def")
-           && !nt_is(grammar, owner, "trait-spec"))
-        owner = core_tree_node_value(owner).parent;
-    parse_sym_entry_t *function = owner
-        ? core_tree_node_value(owner).sym : nullptr;
-    n00bb_function_parameter_facts_t *facts = function
-        ? parse_sym_binding(function, N00BB_PARAMETER_FACTS_KEY) : nullptr;
+    n00bb_function_parameter_facts_t *facts =
+        function_parameter_facts(grammar, node);
     for (size_t i = 0; facts && i < facts->param_count; i++) {
         n00bb_function_parameter_ref_t *fact = &facts->params[i];
         parse_sym_entry_t *symbol = fact->node
