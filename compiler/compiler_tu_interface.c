@@ -970,25 +970,16 @@ decode_static_value(const uint8_t *data, size_t size, size_t *offset,
     }
     case N00BB_STATIC_VALUE_SEQUENCE:
     case N00BB_STATIC_VALUE_TUPLE:
-    case N00BB_STATIC_VALUE_RECORD:
-    case N00BB_STATIC_VALUE_SET:
-    case N00BB_STATIC_VALUE_DICTIONARY: {
+    case N00BB_STATIC_VALUE_RECORD: {
         if (size - *offset < 4) return false;
         uint32_t count = read_u32_le(data + *offset);
         *offset += 4;
         if (count > (size - *offset)) return false;
         th_type *shape = nullptr;
-        if (kind == N00BB_STATIC_VALUE_SEQUENCE
-            || kind == N00BB_STATIC_VALUE_SET) {
+        if (kind == N00BB_STATIC_VALUE_SEQUENCE) {
             uint64_t extent = 0;
-            bool has_extent = kind == N00BB_STATIC_VALUE_SEQUENCE
-                && th_kind_of(type) == TH_SEQUENCE
-                && th_seq_extent(type, &extent);
-            if ((has_extent && extent != count)
-                || (kind == N00BB_STATIC_VALUE_SEQUENCE
-                    && th_builtin_applied(type, TH_BUILTIN_SET, 1))
-                || (kind == N00BB_STATIC_VALUE_SET
-                    && !th_builtin_applied(type, TH_BUILTIN_SET, 1)))
+            if (th_kind_of(type) == TH_SEQUENCE
+                && th_seq_extent(type, &extent) && extent != count)
                 return false;
         }
         else if (kind == N00BB_STATIC_VALUE_TUPLE) {
@@ -1000,33 +991,19 @@ decode_static_value(const uint8_t *data, size_t size, size_t *offset,
             if (!shape || th_kind_of(shape) != TH_RECORD
                 || th_record_len(shape) != count) return false;
         }
-        else if (kind == N00BB_STATIC_VALUE_DICTIONARY
-                 && ((count & 1u)
-                     || !th_builtin_applied(type, TH_BUILTIN_DICT, 2)))
-            return false;
         n00bb_static_value_t *items = count
             ? core_arena_alloc(&state->semantic_values,
                                count * sizeof(*items)) : nullptr;
         if (count && !items) return false;
-        const th_arg *dict_key = kind == N00BB_STATIC_VALUE_DICTIONARY
-            ? th_named_arg(type, 0) : nullptr;
-        const th_arg *dict_value = kind == N00BB_STATIC_VALUE_DICTIONARY
-            ? th_named_arg(type, 1) : nullptr;
         for (uint32_t i = 0; i < count; i++) {
             th_type *child_type = nullptr;
-            if (kind == N00BB_STATIC_VALUE_SEQUENCE
-                || kind == N00BB_STATIC_VALUE_SET)
+            if (kind == N00BB_STATIC_VALUE_SEQUENCE)
                 child_type = static_sequence_element_type(type);
             else if (kind == N00BB_STATIC_VALUE_TUPLE)
                 child_type = static_tuple_element_type(type, i, nullptr);
-            else if (kind == N00BB_STATIC_VALUE_RECORD) {
+            else {
                 const th_member *member = th_record_member(shape, i);
                 child_type = member ? member->type : nullptr;
-            }
-            else if (kind == N00BB_STATIC_VALUE_DICTIONARY) {
-                const th_arg *argument = (i & 1u) ? dict_value : dict_key;
-                child_type = argument && argument->kind == TH_ARG_TYPE
-                    ? argument->type : nullptr;
             }
             if (!child_type || !decode_static_value(data, size, offset,
                     child_type, state, loader, preferred_module,

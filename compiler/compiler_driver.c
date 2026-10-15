@@ -311,7 +311,7 @@ static_value_kind_name(n00bb_static_value_kind_t kind)
 {
     static const char *names[] = {
         "bool", "int", "float", "string", "sequence", "tuple",
-        "record", "set", "dictionary", "nil", "variant"};
+        "record", "nil", "variant"};
     return (size_t)kind < sizeof(names) / sizeof(names[0])
         ? names[kind] : "invalid";
 }
@@ -348,8 +348,6 @@ dump_static_value_contents(const n00bb_static_value_t *value, size_t depth)
     case N00BB_STATIC_VALUE_SEQUENCE:
     case N00BB_STATIC_VALUE_TUPLE:
     case N00BB_STATIC_VALUE_RECORD:
-    case N00BB_STATIC_VALUE_SET:
-    case N00BB_STATIC_VALUE_DICTIONARY:
         printf("[");
         for (size_t i = 0; i < value->as.aggregate.count; i++) {
             if (i) printf(",");

@@ -674,8 +674,6 @@ append_static_value(core_buffer_t *buffer,
     case N00BB_STATIC_VALUE_SEQUENCE:
     case N00BB_STATIC_VALUE_TUPLE:
     case N00BB_STATIC_VALUE_RECORD:
-    case N00BB_STATIC_VALUE_SET:
-    case N00BB_STATIC_VALUE_DICTIONARY:
         if (value->as.aggregate.count > UINT32_MAX
             || (value->as.aggregate.count && !value->as.aggregate.items)
             || !append_u32_le(buffer,

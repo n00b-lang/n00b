@@ -21133,8 +21133,6 @@ n00bb_static_value_to_ir_initializer(const n00bb_static_value_t *value,
     case N00BB_STATIC_VALUE_SEQUENCE:
     case N00BB_STATIC_VALUE_TUPLE:
     case N00BB_STATIC_VALUE_RECORD:
-    case N00BB_STATIC_VALUE_SET:
-    case N00BB_STATIC_VALUE_DICTIONARY:
         break;
     }
 
@@ -21149,9 +21147,6 @@ n00bb_static_value_to_ir_initializer(const n00bb_static_value_t *value,
     out->aggregate.count = count;
 
     if (value->kind == N00BB_STATIC_VALUE_SEQUENCE) {
-        if (th_kind_of(type) != TH_SEQUENCE
-            && !th_builtin_applied(type, TH_BUILTIN_LIST, 1)
-            && !th_builtin_applied(type, TH_BUILTIN_ARRAY, 1)) return false;
         th_type *element = static_sequence_element_type(type);
         if (!element) return false;
         out->kind = IR_GLOBAL_INIT_SEQUENCE;
@@ -21184,32 +21179,6 @@ n00bb_static_value_to_ir_initializer(const n00bb_static_value_t *value,
                     &items[i], depth + 1)) return false;
             items[i].member = member->name;
         }
-        return true;
-    }
-    if (value->kind == N00BB_STATIC_VALUE_SET) {
-        if (!th_builtin_applied(type, TH_BUILTIN_SET, 1)) return false;
-        th_type *element = static_sequence_element_type(type);
-        if (!element) return false;
-        out->kind = IR_GLOBAL_INIT_SET;
-        for (size_t i = 0; i < count; i++)
-            if (!n00bb_static_value_to_ir_initializer(
-                    &value->as.aggregate.items[i], element, state,
-                    &items[i], depth + 1)) return false;
-        return true;
-    }
-    if (value->kind == N00BB_STATIC_VALUE_DICTIONARY) {
-        if (!th_builtin_applied(type, TH_BUILTIN_DICT, 2) || (count & 1u))
-            return false;
-        const th_arg *key = th_named_arg(type, 0);
-        const th_arg *element = th_named_arg(type, 1);
-        if (!key || key->kind != TH_ARG_TYPE || !element
-            || element->kind != TH_ARG_TYPE) return false;
-        out->kind = IR_GLOBAL_INIT_DICTIONARY;
-        for (size_t i = 0; i < count; i++)
-            if (!n00bb_static_value_to_ir_initializer(
-                    &value->as.aggregate.items[i],
-                    i & 1u ? element->type : key->type, state, &items[i],
-                    depth + 1)) return false;
         return true;
     }
     return false;

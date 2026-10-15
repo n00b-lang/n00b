@@ -205,8 +205,6 @@ typedef enum {
     N00BB_STATIC_VALUE_SEQUENCE,
     N00BB_STATIC_VALUE_TUPLE,
     N00BB_STATIC_VALUE_RECORD,
-    N00BB_STATIC_VALUE_SET,
-    N00BB_STATIC_VALUE_DICTIONARY,
     N00BB_STATIC_VALUE_NIL,
     N00BB_STATIC_VALUE_VARIANT,
 } n00bb_static_value_kind_t;
@@ -949,7 +947,6 @@ void bind_function_body_signature(core_translation_unit_t *unit,
 bool resolve_function_parameter_facts(parse_grammar_t *grammar,
     n00bb_tu_state_t *state, n00bb_function_parameter_facts_t *facts,
     core_list_t(th_param) *params, th_param *rest, bool *has_rest);
-const char *source_builtin_type_name(const char *name);
 const char *n00bb_print_type(th_ctx *types, th_type *type);
 th_type *function_with_error_channel(th_ctx *types, th_type *function,
     th_type *error_type);

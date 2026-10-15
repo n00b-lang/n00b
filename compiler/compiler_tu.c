@@ -1241,10 +1241,8 @@ static_sequence_element_type(th_type *type)
     type = type ? th_resolve(type) : nullptr;
     if (!type) return nullptr;
     if (th_kind_of(type) == TH_SEQUENCE) return th_seq_elem(type);
-    if (!th_builtin_applied(type, TH_BUILTIN_LIST, 1)
-        && !th_builtin_applied(type, TH_BUILTIN_ARRAY, 1)
-        && !th_builtin_applied(type, TH_BUILTIN_SET, 1)) return nullptr;
-    const th_arg *argument = th_named_arg(type, 0);
+    type = th_builtin_applied(type, TH_BUILTIN_ARRAY, 1);
+    const th_arg *argument = type ? th_named_arg(type, 0) : nullptr;
     return argument && argument->kind == TH_ARG_TYPE ? argument->type : nullptr;
 }
 
@@ -1269,19 +1267,13 @@ static_value_matches_type(const n00bb_static_value_t *value, th_type *type,
     if (n00bb_atomic_element_type(type) != nullptr)
         return static_value_matches_type(value,
             n00bb_atomic_element_type(type), state, depth + 1);
-    if (value->kind == N00BB_STATIC_VALUE_SEQUENCE
-        || value->kind == N00BB_STATIC_VALUE_SET) {
+    if (value->kind == N00BB_STATIC_VALUE_SEQUENCE) {
         th_type *element_type = static_sequence_element_type(type);
         if (!element_type) return false;
-        if (value->kind == N00BB_STATIC_VALUE_SEQUENCE
-            && th_builtin_applied(type, TH_BUILTIN_SET, 1)) return false;
         uint64_t extent = 0;
-        if (value->kind == N00BB_STATIC_VALUE_SEQUENCE
-            && th_kind_of(type) == TH_SEQUENCE
+        if (th_kind_of(type) == TH_SEQUENCE
             && th_seq_extent(type, &extent)
             && extent != value->as.aggregate.count) return false;
-        if (value->kind == N00BB_STATIC_VALUE_SET
-            && !th_builtin_applied(type, TH_BUILTIN_SET, 1)) return false;
         for (size_t i = 0; i < value->as.aggregate.count; i++)
             if (!static_value_matches_type(&value->as.aggregate.items[i],
                     element_type, state, depth + 1)) return false;
@@ -1333,20 +1325,6 @@ static_value_matches_type(const n00bb_static_value_t *value, th_type *type,
         th_type *element = nullptr;
         return th_is_nil(type)
             || n00bb_option_type_element(type, &element);
-    }
-    if (value->kind == N00BB_STATIC_VALUE_DICTIONARY) {
-        if ((value->as.aggregate.count & 1u)
-            || !th_builtin_applied(type, TH_BUILTIN_DICT, 2)) return false;
-        const th_arg *key_arg = th_named_arg(type, 0);
-        const th_arg *value_arg = th_named_arg(type, 1);
-        if (!key_arg || !value_arg || key_arg->kind != TH_ARG_TYPE
-            || value_arg->kind != TH_ARG_TYPE) return false;
-        for (size_t i = 0; i < value->as.aggregate.count; i += 2)
-            if (!static_value_matches_type(&value->as.aggregate.items[i],
-                    key_arg->type, state, depth + 1)
-                || !static_value_matches_type(&value->as.aggregate.items[i + 1],
-                    value_arg->type, state, depth + 1)) return false;
-        return true;
     }
     if (th_kind_of(type) == TH_BITINT)
         return value->kind == N00BB_STATIC_VALUE_INT;
@@ -1484,15 +1462,12 @@ semantic_static_value_from_expression(parse_grammar_t *grammar,
     parse_tree_t *literal = probe.valid ? probe.literal : nullptr;
     parse_tree_t *sequence = nt_is(grammar, literal, "list-lit")
         ? literal : nullptr;
-    parse_tree_t *braces = nt_is(grammar, literal, "dict-or-set-lit")
-        ? literal : nullptr;
     parse_tree_t *tuple_or_record = nt_is(grammar, literal, "tuple-or-paren")
         ? literal : nullptr;
 
     if (sequence) {
         th_type *element_type = static_sequence_element_type(type);
-        if (!element_type || th_builtin_applied(type, TH_BUILTIN_SET, 1))
-            return false;
+        if (!element_type) return false;
         parse_tree_t *elements = child_nt(grammar, sequence, "list-elems");
         core_list_t(parse_tree_ptr_t) expressions =
             core_list_new(parse_tree_ptr_t);
@@ -1510,44 +1485,6 @@ semantic_static_value_from_expression(parse_grammar_t *grammar,
                 depth + 1);
         if (ok) *out = (n00bb_static_value_t){
             .kind = N00BB_STATIC_VALUE_SEQUENCE,
-            .as.aggregate = {.items = items, .count = expressions.len},
-        };
-        core_list_free(expressions);
-        return ok;
-    }
-
-    if (braces) {
-        parse_tree_t *set_entries = child_nt(grammar, braces, "set-entries");
-        parse_tree_t *dict_entries = child_nt(grammar, braces, "dict-entries");
-        core_list_t(parse_tree_ptr_t) expressions =
-            core_list_new(parse_tree_ptr_t);
-        parse_tree_t *entries = set_entries ? set_entries : dict_entries;
-        bool is_set = th_builtin_applied(type, TH_BUILTIN_SET, 1) != nullptr;
-        bool is_dict = th_builtin_applied(type, TH_BUILTIN_DICT, 2) != nullptr;
-        bool empty = !set_entries && !dict_entries;
-        bool ok = (is_set && (set_entries || (empty
-            && !dict_only_empty_literal(grammar, braces))))
-            || (is_dict && (dict_entries || empty));
-        if (ok) ok = collect_ordered_children(entries, &expressions);
-        ok = ok && (!is_dict || !(expressions.len & 1u));
-        const th_arg *first = is_dict ? th_named_arg(type, 0)
-                                      : th_named_arg(type, 0);
-        const th_arg *second = is_dict ? th_named_arg(type, 1) : nullptr;
-        ok = ok && first && first->kind == TH_ARG_TYPE
-            && (!is_dict || (second && second->kind == TH_ARG_TYPE));
-        n00bb_static_value_t *items = ok && expressions.len
-            ? core_arena_alloc(&state->semantic_values,
-                expressions.len * sizeof(*items)) : nullptr;
-        ok = ok && (!expressions.len || items);
-        for (size_t i = 0; ok && i < expressions.len; i++) {
-            th_type *item_type = is_dict && (i & 1u)
-                ? second->type : first->type;
-            ok = semantic_static_value_from_expression(grammar,
-                expressions.data[i], item_type, state, &items[i], depth + 1);
-        }
-        if (ok) *out = (n00bb_static_value_t){
-            .kind = is_set ? N00BB_STATIC_VALUE_SET
-                           : N00BB_STATIC_VALUE_DICTIONARY,
             .as.aggregate = {.items = items, .count = expressions.len},
         };
         core_list_free(expressions);
@@ -6028,34 +5965,9 @@ function_with_error_channel(th_ctx *types, th_type *function,
 }
 
 const char *
-source_builtin_type_name(const char *name)
-{
-    if (!name) return nullptr;
-    if (!strcmp(name, "list")) return "List";
-    if (!strcmp(name, "set")) return "Set";
-    if (!strcmp(name, "dict")) return "Dict";
-    return name;
-}
-
-static const char *
-n00bb_display_type_name(const char *name, size_t length, void *context)
-{
-    (void)context;
-    static const char *const names[] = {"list", "set", "dict"};
-    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
-        size_t candidate_length = strlen(names[i]);
-        if (length == candidate_length
-            && !memcmp(name, names[i], length))
-            return source_builtin_type_name(names[i]);
-    }
-    return nullptr;
-}
-
-const char *
 n00bb_print_type(th_ctx *types, th_type *type)
 {
     static const th_print_options_t options = {
-        .named = n00bb_display_type_name,
         .sequence = "Array",
         .reference = "Ref",
         .option_suffix = "?",
@@ -10732,7 +10644,7 @@ validate_builtin_generic_type_arity(parse_grammar_t *grammar,
     core_buffer_t message = {0};
     core_buffer_printf(&message,
         "built-in type '%s' requires %d type argument%s, but %zu provided",
-        source_builtin_type_name(name), expected,
+        name, expected,
         expected == 1 ? "" : "s", argument_count);
     core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit,
         CORE_DIAG_FATAL,
@@ -11368,8 +11280,6 @@ builtin_generic_type_arity(const char *name)
 {
     if (!name) return -1;
     name = canonical_builtin_type_name(name);
-    if (!strcmp(name, "list") || !strcmp(name, "set")) return 1;
-    if (!strcmp(name, "dict")) return 2;
     return generic_type_arity_string(core_string_borrow(name, strlen(name)));
 }
 
