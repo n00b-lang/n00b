@@ -303,6 +303,8 @@ bool append_link_symbol_key(parse_grammar_t *grammar,
 bool append_environment_symbol_name(parse_grammar_t *grammar,
     core_translation_unit_t *unit, parse_sym_entry_t *symbol,
     core_buffer_t *qualified);
+bool append_function_contract_identity(core_translation_unit_t *unit,
+    parse_sym_entry_t *symbol, core_buffer_t *key);
 core_string_t link_symbol_module(core_translation_unit_t *unit,
                                  parse_sym_entry_t *symbol);
 bool n00bb_bind_site_reference(core_translation_unit_t *unit,

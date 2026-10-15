@@ -1,0 +1,5 @@
+import inner
+
+package overloads {
+    export inner
+}

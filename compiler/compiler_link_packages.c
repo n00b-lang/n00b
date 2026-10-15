@@ -1598,7 +1598,8 @@ register_package_export_declaration(n00bb_link_analysis_t *analysis,
     th_env_metadata_owner_t metadata_kind =
         package_export_metadata_kind(source);
     bool include_members = true;
-    bool ok = external.data != nullptr;
+    bool ok = external.data != nullptr
+        && append_function_contract_identity(source_unit, binding, &external);
     if (ok && source->kind == PARSE_SYM_TYPEDEF) {
         if (source->decl_node && nt_is(analysis->grammar, source->decl_node,
                                       "trait-decl")) {
@@ -1996,6 +1997,22 @@ connect_package_subpackages(n00bb_link_analysis_t *analysis)
 }
 
 static bool
+export_name_conflicts(parse_scope_t *scope, parse_scope_t *types,
+                      core_string_t name, parse_sym_entry_t *source)
+{
+    if (parse_symtab_lookup_in(types, name)) return true;
+    for (parse_sym_entry_t *entry = scope->first_in_scope; entry;
+         entry = entry->next_in_scope) {
+        if (!core_string_eq(entry->name, name)) continue;
+        if (source->kind != PARSE_SYM_FUNCTION
+            || entry->kind != PARSE_SYM_FUNCTION
+            || canonical_symbol(entry) == canonical_symbol(source))
+            return true;
+    }
+    return false;
+}
+
+static bool
 add_package_export_symbol(core_translation_unit_t *interface_unit,
                           n00bb_package_declaration_t *package,
                           n00bb_package_export_t *export,
@@ -2007,8 +2024,8 @@ add_package_export_symbol(core_translation_unit_t *interface_unit,
     if (!symtab || !package->scope || !source) return false;
     parse_scope_t *type_scope = parse_symtab_scope_in_namespace(
         symtab, package->scope, CORE_STRING_STATIC("type"));
-    if (parse_symtab_lookup_in(package->scope, export->export_name)
-        || parse_symtab_lookup_in(type_scope, export->export_name)) {
+    if (export_name_conflicts(package->scope, type_scope, export->export_name,
+                              source)) {
         package_diagnostic(interface_unit, export->node, "N00BB-M0006",
                            "package export name conflicts with another binding");
         return false;

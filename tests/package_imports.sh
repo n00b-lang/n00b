@@ -42,6 +42,13 @@ if ! "$compiler" build --output "$tmp/init-order" \
 fi
 "$tmp/init-order"
 
+if ! "$compiler" build --output "$tmp/overload-export" \
+    overload_export_consumer.n00b >"$tmp/overload-export.log" 2>&1; then
+    cat "$tmp/overload-export.log" >&2
+    exit 1
+fi
+"$tmp/overload-export"
+
 if "$compiler" lower aligned.self_import >"$tmp/self-import.log" 2>&1; then
     echo 'a package unexpectedly imported its own external namespace' >&2
     exit 1

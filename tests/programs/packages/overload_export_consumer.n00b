@@ -1,0 +1,4 @@
+import overloads
+
+require overloads.measure(4) == 5
+require overloads.measure(4, 3) == 12

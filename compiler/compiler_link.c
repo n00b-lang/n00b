@@ -2639,7 +2639,7 @@ append_link_symbol_base(parse_grammar_t *grammar, parse_sym_entry_t *symbol,
     core_buffer_append(key, symbol->name.data, symbol->name.u8_bytes);
 }
 
-static bool
+bool
 append_function_contract_identity(core_translation_unit_t *unit,
                                   parse_sym_entry_t *symbol,
                                   core_buffer_t *key)
