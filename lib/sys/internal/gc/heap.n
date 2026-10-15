@@ -89,8 +89,8 @@ func config_default(config: Ref[internal.gc.core.Config]) {
     config.handshake_timeout_us = default_handshake_timeout_us
     config.scan_stacks = false
     config.world_timeout_ms = default_world_timeout_ms
-    config.finalizer_backlog_limit = 0
-    config.finalizer_assist = false
+    config.finalizer_backlog_limit = 64
+    config.finalizer_assist = true
     config.on_pause = nil
     config.on_cycle = nil
     config.finalizers_ready = nil
