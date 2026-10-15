@@ -337,6 +337,7 @@ typedef struct {
     parse_tree_t *declaration;
     parse_sym_entry_t *function;
     core_diag_location_t location;
+    core_string_t module;
 } n00bb_user_litmod_t;
 core_list_decl(n00bb_user_litmod_t);
 struct n00bb_litmod_site_t {
@@ -566,6 +567,8 @@ bool infer_user_literal_type(parse_grammar_t *grammar,
                              parse_tree_t *node);
 bool resolve_forward_literal_sites(core_translation_unit_t *unit,
                                    n00bb_tu_state_t *state);
+bool report_shadowed_litmods(core_translation_unit_t *unit,
+                             n00bb_tu_state_t *state);
 bool collect_ordered_children(parse_tree_t *node,
     core_list_t(parse_tree_ptr_t) *children);
 core_string_t named_field_identifier(parse_grammar_t *grammar,
@@ -672,7 +675,7 @@ bool n00bb_flagset_instance_access(parse_grammar_t *grammar,
                                    parse_sym_entry_t *member);
 n00bb_user_litmod_t *user_litmod(n00bb_tu_state_t *state,
                                  core_string_t modifier,
-                                 core_string_t kind);
+                                 core_string_t kind, bool *ambiguous);
 core_string_t literal_modifier(parse_grammar_t *grammar,
                                parse_tree_t *node);
 bool dict_only_empty_literal(parse_grammar_t *grammar,

@@ -62,13 +62,6 @@ core_list_decl(pp_module_t);
 core_list_decl(size_t);
 
 typedef struct {
-    core_string_t modifier;
-    core_string_t kind;
-    core_string_t module;
-} pp_litmod_t;
-core_list_decl(pp_litmod_t);
-
-typedef struct {
     parse_tree_t *parent;
     parse_tree_t *statement;
 } pp_deferred_stmt_t;
@@ -81,7 +74,6 @@ typedef struct {
     core_list_t(core_string_t) owned_strings;
     core_list_t(pp_module_t) modules;
     core_list_t(size_t) module_stack;
-    core_list_t(pp_litmod_t) litmods;
     const n00bb_preprocessor_options_t *options;
     bool cycle_warning_emitted;
     bool type_only;
@@ -634,29 +626,15 @@ register_litmod_name(pp_context_t *ctx, parse_tree_t *function,
                      parse_tree_t *node, core_string_t name,
                      core_string_t kind)
 {
-    for (size_t i = 0; i < ctx->litmods.len; i++) {
-        pp_litmod_t *existing = &ctx->litmods.data[i];
-        if (!core_string_eq(existing->modifier, name)
-            || !core_string_eq(existing->kind, kind)) continue;
-        core_buffer_t message = {0};
-        core_buffer_printf(&message,
-            "literal modifier '%.*s' for %.*s literals is already declared in module '%.*s'",
-            (int)name.u8_bytes, name.data, (int)kind.u8_bytes, kind.data,
-            (int)existing->module.u8_bytes, existing->module.data);
-        pp_error(ctx, node, message.data);
-        core_buffer_release(&message);
-        return false;
-    }
-    if (!ctx->options->register_litmod(ctx->options->litmod_context,
-            ctx->unit, function, name, kind)) {
-        pp_error(ctx, node, "duplicate literal modifier name and kind");
-        return false;
-    }
-    core_list_push(ctx->litmods, ((pp_litmod_t){
-        .modifier = name, .kind = kind,
-        .module = ctx->unit->module.identifier,
-    }));
-    return true;
+    if (ctx->options->register_litmod(ctx->options->litmod_context,
+            ctx->unit, function, name, kind)) return true;
+    core_buffer_t message = {0};
+    core_buffer_printf(&message,
+        "literal modifier '%.*s' for %.*s literals is already declared in this module",
+        (int)name.u8_bytes, name.data, (int)kind.u8_bytes, kind.data);
+    pp_error(ctx, node, message.data);
+    core_buffer_release(&message);
+    return false;
 }
 
 static bool
@@ -2512,7 +2490,6 @@ n00bb_preprocessor_new(const n00bb_preprocessor_options_t *options)
     preprocessor->context.owned_strings = core_list_new(core_string_t);
     preprocessor->context.modules = core_list_new(pp_module_t);
     preprocessor->context.module_stack = core_list_new(size_t);
-    preprocessor->context.litmods = core_list_new(pp_litmod_t);
     preprocessor->context.options = options;
     return preprocessor;
 }
@@ -2528,7 +2505,6 @@ n00bb_preprocessor_free(n00bb_preprocessor_t *preprocessor)
     core_list_free(ctx->bindings);
     core_list_free(ctx->modules);
     core_list_free(ctx->module_stack);
-    core_list_free(ctx->litmods);
     core_free(preprocessor);
 }
 

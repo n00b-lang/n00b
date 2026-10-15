@@ -1946,15 +1946,29 @@ infer_user_literal_type(parse_grammar_t *grammar,
         : tuple ? CORE_STRING_STATIC("tuple") : (core_string_t){0};
     if (braces && !kind.data) {
         bool has_dict = user_litmod(state, modifier,
-            CORE_STRING_STATIC("dict")) != nullptr;
+            CORE_STRING_STATIC("dict"), nullptr) != nullptr;
         bool has_set = user_litmod(state, modifier,
-            CORE_STRING_STATIC("set")) != nullptr;
+            CORE_STRING_STATIC("set"), nullptr) != nullptr;
         if (has_dict && has_set) return false;
         if (has_dict) kind = CORE_STRING_STATIC("dict");
         else if (has_set) kind = CORE_STRING_STATIC("set");
     }
     if (!kind.data) return false;
-    n00bb_user_litmod_t *registration = user_litmod(state, modifier, kind);
+    bool ambiguous = false;
+    n00bb_user_litmod_t *registration = user_litmod(state, modifier, kind,
+                                                    &ambiguous);
+    if (!registration && ambiguous) {
+        core_buffer_t message = {0};
+        core_buffer_printf(&message,
+            "literal modifier '%.*s' for %.*s literals is exported by more than one imported module",
+            (int)modifier.u8_bytes, modifier.data,
+            (int)kind.u8_bytes, kind.data);
+        core_diagnostics_report_at(core_translation_unit_diagnostics(unit),
+            unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0035"),
+            core_string_borrow(message.data, message.byte_len),
+            link_source_location(node));
+        core_buffer_release(&message);
+    }
     if (!registration) return false;
     th_type *input_type = th_name(state->types,
         core_string_eq(kind, CORE_STRING_STATIC("bool"))
@@ -10818,6 +10832,7 @@ register_user_litmod(void *context, core_translation_unit_t *unit,
                                          (int64_t)modifier.u8_bytes),
         .kind = core_string_from_raw(kind.data, (int64_t)kind.u8_bytes),
         .declaration = declaration,
+        .module = unit->module.identifier,
     };
     parse_token_info_t *token = parse_tree_find_first_terminal(declaration);
     if (token) registration.location = (core_diag_location_t){
@@ -10850,25 +10865,58 @@ local_user_litmod(n00bb_tu_state_t *state, core_string_t modifier,
     return nullptr;
 }
 
+static n00bb_user_litmod_t *imported_user_litmod(n00bb_tu_state_t *state,
+                                                 core_string_t modifier,
+                                                 core_string_t kind,
+                                                 bool *ambiguous);
+
+bool
+report_shadowed_litmods(core_translation_unit_t *unit,
+                        n00bb_tu_state_t *state)
+{
+    bool valid = true;
+    for (size_t i = 0; state && i < state->literal_modifiers.len; i++) {
+        n00bb_user_litmod_t *local = &state->literal_modifiers.data[i];
+        n00bb_user_litmod_t *visible = imported_user_litmod(state,
+            local->modifier, local->kind, nullptr);
+        if (!visible) continue;
+        core_buffer_t message = {0};
+        core_buffer_printf(&message,
+            "literal modifier '%.*s' for %.*s literals is already declared in module '%.*s'",
+            (int)local->modifier.u8_bytes, local->modifier.data,
+            (int)local->kind.u8_bytes, local->kind.data,
+            (int)visible->module.u8_bytes, visible->module.data);
+        core_diagnostics_report_at(core_translation_unit_diagnostics(unit),
+            unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-PP0001"),
+            core_string_borrow(message.data, message.byte_len),
+            local->location);
+        core_buffer_release(&message);
+        valid = false;
+    }
+    return valid;
+}
+
 n00bb_user_litmod_t *
 user_litmod(n00bb_tu_state_t *state, core_string_t modifier,
-            core_string_t kind)
+            core_string_t kind, bool *ambiguous)
 {
+    if (ambiguous) *ambiguous = false;
     n00bb_user_litmod_t *local = local_user_litmod(state, modifier, kind);
-    if (local || !state || !state->unit) return local;
+    return local ? local : imported_user_litmod(state, modifier, kind,
+                                                ambiguous);
+}
+
+static n00bb_user_litmod_t *
+imported_user_litmod(n00bb_tu_state_t *state, core_string_t modifier,
+                     core_string_t kind, bool *ambiguous)
+{
+    if (ambiguous) *ambiguous = false;
+    if (!state || !state->unit) return nullptr;
     n00bb_user_litmod_t *found = nullptr;
     for (size_t i = 0; i < core_translation_unit_import_count(state->unit);
          i++) {
         core_translation_unit_t *imported = core_translation_unit_import(
             state->unit, i);
-        n00bb_user_litmod_t *candidate =
-            n00bb_same_package(state->unit, imported)
-                ? local_user_litmod(tu_state(imported), modifier, kind)
-                : nullptr;
-        if (candidate) {
-            if (found && found != candidate) return nullptr;
-            found = candidate;
-        }
         n00bb_tu_state_t *imported_state = tu_state(imported);
         for (size_t alias_ix = 0; imported_state
                 && alias_ix < state->import_aliases.len; alias_ix++) {
@@ -10890,10 +10938,13 @@ user_litmod(n00bb_tu_state_t *state, core_string_t modifier,
                     parse_sym_entry_t *handler = exported && exported->declaration
                         ? core_tree_node_value(exported->declaration).sym
                         : nullptr;
-                    if (!handler
-                        || handler != canonical_symbol(export->symbol))
+                    if (!handler || (!export->module_export
+                            && handler != canonical_symbol(export->symbol)))
                         continue;
-                    if (found && found != exported) return nullptr;
+                    if (found && found != exported) {
+                        if (ambiguous) *ambiguous = true;
+                        return nullptr;
+                    }
                     found = exported;
                 }
             }

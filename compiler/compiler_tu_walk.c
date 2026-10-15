@@ -611,7 +611,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 }
                 bool user_literal = !array_context
                     && user_litmod(state, CORE_STRING_STATIC("list"),
-                                   CORE_STRING_STATIC("array"));
+                                   CORE_STRING_STATIC("array"), nullptr);
                 if (user_literal && !infer_literal_reporting(grammar, unit,
                         node, "N00BB-T0010",
                         "could not infer the bracket literal element type"))
@@ -1494,7 +1494,8 @@ semantic_annotate_closure(parse_grammar_t *grammar, th_ctx *types,
     n00bb_lex_result_t *lex = state->lex;
     parse_tree_t *tree = lex && lex->parser
         ? parse_pwz_get_tree(lex->parser) : nullptr;
-    if (!tree || !semantic_annotate_tree(grammar, types, unit, tree)
+    if (!tree || !report_shadowed_litmods(unit, state)
+        || !semantic_annotate_tree(grammar, types, unit, tree)
         || !resolve_forward_literal_sites(unit, state)
         || core_translation_unit_has_fatal_diagnostics(unit)
         || core_diagnostics_failed(core_translation_unit_diagnostics(unit))
