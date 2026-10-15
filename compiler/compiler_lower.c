@@ -16529,6 +16529,7 @@ cleanup:
     }
     core_list_free(lower_data.tuple_parts);
     core_list_free(lower_data.parameters_to_copy_out);
+    ir_lower_context_release(&context);
     return ok;
 }
 
