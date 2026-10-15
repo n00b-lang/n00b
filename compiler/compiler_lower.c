@@ -10062,7 +10062,9 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     if (!index_call && !(call_site && call_site->init_call)
         && symbol && call_annotation_symbol
         && call_annotation_symbol->kind == PARSE_SYM_FUNCTION
-        && call_annotation_symbol != symbol)
+        && call_annotation_symbol != symbol
+        && !(call_annotation_symbol->scope == symbol->scope
+             && core_string_eq(call_annotation_symbol->name, symbol->name)))
         return lower_error(context, IR_DIAG_INTERNAL, span,
             "call annotation target differs from the bound callee symbol");
     if (symbol && !trait_call) symbol = canonical_symbol(symbol);

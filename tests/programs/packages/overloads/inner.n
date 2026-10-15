@@ -1,7 +1,35 @@
+public type First {
+    public raw: uint
+}
+
+public type Second {
+    public raw: uint
+}
+
 public func measure(value: int) -> int {
     return value + 1
 }
 
 public func measure(value: int, scale: int) -> int {
     return value * scale
+}
+
+public func shut(modify self: First) {
+    self.raw = 1
+}
+
+public func shut(modify self: Second) {
+    self.raw = 2
+}
+
+public func second() -> Second {
+    return (raw = 0)
+}
+
+public func poke(modify self: Second) {
+    self.raw = 3
+}
+
+public func first() -> First {
+    return (raw = 0)
 }

@@ -1092,19 +1092,24 @@ module_member_is_call(parse_grammar_t *grammar, parse_tree_t *node)
     return false;
 }
 
-static parse_sym_entry_t *
-module_call_exact_arity(parse_grammar_t *grammar, n00bb_tu_state_t *state,
-                        parse_tree_t *member, parse_sym_entry_t *symbol)
+parse_sym_entry_t *
+n00bb_select_call_overload(parse_grammar_t *grammar, n00bb_tu_state_t *state,
+                           parse_cf_label_t *call, parse_sym_entry_t *symbol,
+                           bool *pending)
 {
-    if (!symbol || symbol->kind != PARSE_SYM_FUNCTION) return symbol;
-    parse_cf_label_t *call = call_label_for_member(grammar, state, member);
-    if (!call) return symbol;
+    if (pending) *pending = false;
+    if (!symbol || symbol->kind != PARSE_SYM_FUNCTION || !call || !symbol->scope)
+        return symbol;
+    parse_sym_entry_t *head = parse_symtab_lookup_in(symbol->scope,
+                                                     symbol->name);
+    if (head && head->scope == symbol->scope) symbol = head;
     parse_tree_t *args = call->then_body
         ? child_nt(grammar, call->then_body, "positional-args") : nullptr;
     core_list_t(n00bb_tree_ptr_t) arguments =
         core_list_new(n00bb_tree_ptr_t);
     if (args) collect_positional_nodes(grammar, args, &arguments);
     size_t count = arguments.len;
+    parse_tree_t *receiver = count ? arguments.data[0] : nullptr;
     core_list_free(arguments);
     if (call->then_body) {
         core_list_t(n00bb_tree_ptr_t) keywords =
@@ -1114,7 +1119,12 @@ module_call_exact_arity(parse_grammar_t *grammar, n00bb_tu_state_t *state,
         count += keywords.len;
         core_list_free(keywords);
     }
-    parse_sym_entry_t *match = nullptr;
+    th_type *receiver_type = receiver && !core_tree_is_leaf(receiver)
+        ? core_tree_node_value(receiver).type : nullptr;
+    bool typed_receiver = receiver_type && state && state->types
+        && th_is_closed(state->types, receiver_type);
+    parse_sym_entry_t *match = nullptr, *receiver_match = nullptr;
+    size_t matches = 0, receiver_matches = 0;
     for (parse_sym_entry_t *candidate = symbol; candidate
          && candidate->scope == symbol->scope
          && core_string_eq(candidate->name, symbol->name);
@@ -1124,10 +1134,28 @@ module_call_exact_arity(parse_grammar_t *grammar, n00bb_tu_state_t *state,
         if (candidate->kind != PARSE_SYM_FUNCTION || !signature
             || th_kind_of(th_resolve(signature)) != TH_FUNCTION
             || th_func_nparams(signature) != count) continue;
-        if (match) return symbol;
+        matches++;
         match = candidate;
+        const th_param *first = count ? th_func_param(signature, 0) : nullptr;
+        if (typed_receiver && first && first->type
+            && th_unify_probe(state->types, receiver_type, first->type)) {
+            receiver_matches++;
+            receiver_match = candidate;
+        }
     }
-    return match ? match : symbol;
+    if (matches == 1) return match;
+    if (receiver_matches == 1) return receiver_match;
+    if (pending) *pending = matches > 1 && !typed_receiver;
+    return symbol;
+}
+
+static parse_sym_entry_t *
+module_call_exact_arity(parse_grammar_t *grammar, n00bb_tu_state_t *state,
+                        parse_tree_t *member, parse_sym_entry_t *symbol)
+{
+    if (!symbol || symbol->kind != PARSE_SYM_FUNCTION) return symbol;
+    return n00bb_select_call_overload(grammar, state,
+        call_label_for_member(grammar, state, member), symbol, nullptr);
 }
 
 bool

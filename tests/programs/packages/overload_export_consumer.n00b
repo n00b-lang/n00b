@@ -2,3 +2,14 @@ import overloads
 
 require overloads.measure(4) == 5
 require overloads.measure(4, 3) == 12
+
+comptime {} else {
+    var second = overloads.second()
+    overloads.shut(second)
+    require second.raw == 2
+    var first = overloads.first()
+    overloads.shut(first)
+    require first.raw == 1
+    overloads.poke(second)
+    require second.raw == 3
+}

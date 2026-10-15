@@ -320,11 +320,40 @@ call_is_recursive(parse_grammar_t *grammar,
 
 
 static void
+rebind_call_node(n00bb_tu_state_t *state, parse_tree_t *node,
+                 parse_sym_entry_t *from, parse_sym_entry_t *to)
+{
+    parse_node_resolution_t resolution = parse_tree_resolution(node);
+    if (resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
+        && resolution.target.symbol == from)
+        parse_tree_set_resolution_symbol(node, to);
+    if (core_tree_node_value(node).sym == from)
+        core_tree_node_value(node).sym = to;
+    n00bb_link_use_site_t *site = link_use_site_for_node(state, node);
+    if (site && site->symbol == from) site->symbol = to;
+}
+
+static void
+rebind_call_callee(parse_grammar_t *grammar, n00bb_tu_state_t *state,
+                   parse_tree_t *call, parse_cf_label_t *label,
+                   parse_sym_entry_t *from, parse_sym_entry_t *to)
+{
+    for (parse_tree_t *at = label->cond; at && !core_tree_is_leaf(at);
+         at = core_tree_num_children(at) == 1 ? core_tree_child(at, 0)
+                                               : nullptr)
+        rebind_call_node(state, at, from, to);
+    parse_tree_t *member = member_access_node(grammar, label->cond);
+    if (member) rebind_call_node(state, member, from, to);
+    if (call && !core_tree_is_leaf(call)) rebind_call_node(state, call, from, to);
+}
+
+static void
 unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
                    core_link_unit_t *link,
                    n00bb_call_site_index_t *call_sites,
                    bool resolve_member_calls,
-                   bool deferred_trait_requirements_only)
+                   bool deferred_trait_requirements_only,
+                   bool force_overloads, size_t *deferred)
 {
     n00bb_tu_state_t *state = tu_state(unit);
     if (!state || !state->annotations || !state->types) return;
@@ -360,6 +389,20 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
             nt_is(grammar, label->self, "context-call")
                 ? attached_symbol(grammar, unit, label->cond) : nullptr;
         bool context_call = context_symbol(grammar, context_target);
+        if (callee_symbol && !context_call) {
+            bool pending = false;
+            parse_sym_entry_t *selected = n00bb_select_call_overload(grammar,
+                state, label, callee_symbol, &pending);
+            if (pending && !force_overloads) {
+                (*deferred)++;
+                continue;
+            }
+            if (selected && selected != callee_symbol) {
+                rebind_call_callee(grammar, state, item->key, label,
+                                   callee_symbol, selected);
+                callee_symbol = selected;
+            }
+        }
         parse_sym_entry_t *caller_symbol = enclosing_function_symbol(
             grammar, label->self);
         bool member_call = member && !context_call
@@ -716,15 +759,18 @@ unify_calls_until_stable(parse_grammar_t *grammar, core_link_unit_t *link,
     n00bb_call_site_index_t call_sites = {0};
     call_site_index_init(&call_sites, grammar, units, unit_count);
 
-    for (size_t round = 0; round <= call_count; round++) {
+    bool force_overloads = false;
+    for (size_t round = 0; round <= call_count + 1; round++) {
         core_buffer_t before = call_type_snapshot(units, unit_count);
+        size_t deferred = 0;
         for (size_t i = 0; i < unit_count; i++) {
             if (resolve_ordinary_calls)
                 unify_call_results(grammar, units[i], link, &call_sites,
-                    false, false);
+                    false, false, force_overloads, &deferred);
             if (resolve_member_calls)
                 unify_call_results(grammar, units[i], link, &call_sites,
-                    true, deferred_trait_requirements_only);
+                    true, deferred_trait_requirements_only,
+                    force_overloads, &deferred);
         }
         if (call_units_failed(units, unit_count)) {
             core_buffer_release(&before);
@@ -737,6 +783,10 @@ unify_calls_until_stable(parse_grammar_t *grammar, core_link_unit_t *link,
                 || !memcmp(before.data, after.data, before.byte_len));
         core_buffer_release(&before);
         core_buffer_release(&after);
+        if (stable && deferred && !force_overloads) {
+            force_overloads = true;
+            continue;
+        }
         if (stable) {
             call_site_index_free(&call_sites);
             return true;
