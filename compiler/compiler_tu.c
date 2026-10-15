@@ -19,8 +19,18 @@ core_list_decl(size_t);
 typedef th_type *th_type_ptr_t;
 core_list_decl(th_type_ptr_t);
 
-static th_type *infer_literal_item_type(th_ctx *types,
-                                        th_type *const *items, size_t count);
+typedef struct {
+    th_type *slot;
+    core_list_t(th_type_ptr_t) items;
+} literal_item_group_t;
+
+static bool unify_literal_items(th_ctx *types, literal_item_group_t *group,
+                                th_type **conflict);
+static void report_literal_item_conflict(core_translation_unit_t *unit,
+                                         n00bb_tu_state_t *state,
+                                         parse_tree_t *node,
+                                         literal_item_group_t *group,
+                                         th_type *conflict);
 
 bool
 n00bb_assignment_target(parse_grammar_t *grammar, parse_tree_t *node,
@@ -1705,8 +1715,16 @@ infer_sequence_modifier_type(parse_grammar_t *grammar,
         if (!item) collected = false;
         else core_list_push(element_types, item);
     }
-    if (collected) element = infer_literal_item_type(state->types,
-        element_types.data, element_types.len);
+    literal_item_group_t group = {
+        .slot = context_element ? context_element : th_var(state->types),
+        .items = element_types,
+    };
+    th_type *conflict = nullptr;
+    if (collected && !unify_literal_items(state->types, &group, &conflict)) {
+        report_literal_item_conflict(unit, state, node, &group, conflict);
+        collected = false;
+    }
+    element = collected ? group.slot : nullptr;
     core_list_free(element_types);
     core_list_free(expressions);
     if (!collected || !element) return false;
@@ -1816,23 +1834,73 @@ specialize_literal_handler(n00bb_tu_state_t *state, th_type *signature,
     return *specialized != nullptr;
 }
 
-static th_type *
-infer_literal_item_type(th_ctx *types, th_type *const *items, size_t count)
+static bool
+unify_literal_items(th_ctx *types, literal_item_group_t *group,
+                    th_type **conflict)
 {
-    if (!types) return nullptr;
-    bool only_nil = count > 0;
-    for (size_t i = 0; i < count; i++) {
-        if (!items[i]) return nullptr;
-        only_nil &= th_is_nil(items[i]);
+    th_type *declared = th_resolve(group->slot);
+    if (th_builtin_kind(types, declared) == TH_BUILTIN_ANY) return true;
+    th_comb comb;
+    if (th_sum_comb(declared, &comb) && comb == TH_UNION) {
+        for (size_t i = 0; i < group->items.len; i++) {
+            bool arm = false;
+            for (size_t a = 0; !arm && a < th_sum_len(declared); a++)
+                arm = th_unify_probe(types, th_sum_arm(declared, a),
+                                     group->items.data[i]) != nullptr;
+            if (!arm) {
+                *conflict = group->items.data[i];
+                return false;
+            }
+        }
+        return true;
     }
-    if (only_nil) return th_option(types, th_var(types));
-    return count ? th_sum(types, TH_UNION, items, count) : th_var(types);
+    bool has_nil = false;
+    for (size_t i = 0; i < group->items.len; i++)
+        has_nil |= th_is_nil(group->items.data[i]);
+    th_type *target = group->slot;
+    if (has_nil) {
+        th_type *item = th_var(types);
+        if (!th_unify_in_place(types, group->slot, th_option(types, item))) {
+            *conflict = group->slot;
+            return false;
+        }
+        target = item;
+    }
+    for (size_t i = 0; i < group->items.len; i++) {
+        th_type *item = group->items.data[i];
+        if (th_is_nil(item)) continue;
+        if (!th_unify_in_place(types, target, item)) {
+            *conflict = item;
+            return false;
+        }
+    }
+    return true;
+}
+
+static void
+report_literal_item_conflict(core_translation_unit_t *unit,
+                             n00bb_tu_state_t *state, parse_tree_t *node,
+                             literal_item_group_t *group, th_type *conflict)
+{
+    core_buffer_t message = {0};
+    core_buffer_printf(&message,
+        "literal items must share one type, but %s does not match %s",
+        n00bb_print_type(state->types, conflict),
+        n00bb_print_type(state->types, group->slot));
+    core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit,
+        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0034"),
+        core_string_borrow(message.data, message.byte_len),
+        link_source_location(node));
+    core_buffer_release(&message);
 }
 
 bool
-infer_user_literal_type(parse_grammar_t *grammar, parse_tree_t *node,
-                        n00bb_tu_state_t *state)
+infer_user_literal_type(parse_grammar_t *grammar,
+                        core_translation_unit_t *unit, parse_tree_t *node)
 {
+    n00bb_tu_state_t *state = tu_state(unit);
+    literal_item_group_t groups[2] = {0};
+    size_t group_count = 0;
     parse_tree_t *sequence = nt_is(grammar, node, "list-lit") ? node : nullptr;
     parse_token_info_t *scalar = nt_is(grammar, node, "simple-lit")
         ? parse_tree_find_first_terminal(node) : nullptr;
@@ -1891,99 +1959,87 @@ infer_user_literal_type(parse_grammar_t *grammar, parse_tree_t *node,
     th_type *input_type = th_name(state->types,
         core_string_eq(kind, CORE_STRING_STATIC("bool"))
             ? "bool" : "string");
-    if (sequence) {
-        parse_tree_t *entries = child_nt(grammar, sequence, "list-elems");
+    parse_tree_t *entries = sequence
+        ? child_nt(grammar, sequence, "list-elems")
+        : braces ? (dict_entries ? dict_entries : set_entries)
+        : record_fields ? record_fields : tuple ? parenthesized : nullptr;
+    bool dictionary = braces
+        && core_string_eq(kind, CORE_STRING_STATIC("dict"));
+    bool aggregate = sequence || braces || tuple || record_fields;
+    bool ok = true;
+    if (aggregate) {
+        group_count = dictionary ? 2 : 1;
+        for (size_t g = 0; g < group_count; g++)
+            groups[g] = (literal_item_group_t){
+                .slot = th_var(state->types),
+                .items = core_list_new(th_type_ptr_t),
+            };
         core_list_t(parse_tree_ptr_t) expressions =
             core_list_new(parse_tree_ptr_t);
-        core_list_t(th_type_ptr_t) element_types =
-            core_list_new(th_type_ptr_t);
-        bool ok = !entries || collect_ordered_children(entries,
-                                                       &expressions);
-        for (size_t i = 0; ok && i < expressions.len; i++) {
-            th_type *type = core_tree_node_value(expressions.data[i]).type;
-            if (!type) ok = false;
-            else core_list_push(element_types, type);
-        }
-        th_type *element = ok ? infer_literal_item_type(state->types,
-            element_types.data, element_types.len) : nullptr;
-        input_type = element ? th_array(state->types, element) : nullptr;
-        core_list_free(element_types);
-        core_list_free(expressions);
-    }
-    else if (braces) {
-        parse_tree_t *entries = dict_entries ? dict_entries : set_entries;
-        bool dictionary = core_string_eq(kind, CORE_STRING_STATIC("dict"));
-        core_list_t(parse_tree_ptr_t) expressions =
-            core_list_new(parse_tree_ptr_t);
-        core_list_t(th_type_ptr_t) first_types =
-            core_list_new(th_type_ptr_t);
-        core_list_t(th_type_ptr_t) second_types =
-            core_list_new(th_type_ptr_t);
-        bool ok = !entries || collect_ordered_children(entries,
-                                                       &expressions);
+        ok = !entries || collect_ordered_children(entries, &expressions);
         ok = ok && (!dictionary || !(expressions.len & 1u));
         for (size_t i = 0; ok && i < expressions.len; i++) {
             th_type *type = core_tree_node_value(expressions.data[i]).type;
             if (!type) ok = false;
-            else if (dictionary && (i & 1u))
-                core_list_push(second_types, type);
-            else core_list_push(first_types, type);
+            else core_list_push(groups[dictionary ? i & 1u : 0].items, type);
         }
-        th_type *first = ok ? infer_literal_item_type(state->types,
-            first_types.data, first_types.len) : nullptr;
-        th_type *second = dictionary && ok
-            ? infer_literal_item_type(state->types, second_types.data,
-                                      second_types.len) : nullptr;
-        th_type *members[] = {first, second};
-        th_type *element = dictionary && first && second
-            ? th_tuple(state->types, members, 2) : first;
-        input_type = element ? th_array(state->types, element) : nullptr;
-        core_list_free(second_types);
-        core_list_free(first_types);
         core_list_free(expressions);
-    }
-    else if (tuple || record_fields) {
-        core_list_t(parse_tree_ptr_t) items =
-            core_list_new(parse_tree_ptr_t);
-        core_list_t(th_type_ptr_t) types =
-            core_list_new(th_type_ptr_t);
-        bool ok = collect_ordered_children(
-            record_fields ? record_fields : parenthesized, &items);
-        for (size_t i = 0; ok && i < items.len; i++) {
-            th_type *item_type = core_tree_node_value(items.data[i]).type;
-            if (!item_type) ok = false;
-            else core_list_push(types, item_type);
+        th_type *element = groups[0].slot;
+        if (dictionary) {
+            th_type *members[] = {groups[0].slot, groups[1].slot};
+            element = th_tuple(state->types, members, 2);
         }
-        th_type *value = ok && types.len
-            ? th_sum(state->types, TH_UNION, types.data, types.len)
-            : ok ? th_var(state->types) : nullptr;
-        th_type *element = value;
-        if (record_fields && value) {
-            th_type *pair_types[] = {
-                th_name(state->types, "string"), value,
-            };
-            element = th_tuple(state->types, pair_types, 2);
+        else if (record_fields) {
+            th_type *members[] = {th_name(state->types, "string"),
+                                  groups[0].slot};
+            element = th_tuple(state->types, members, 2);
         }
-        input_type = element ? th_array(state->types, element) : nullptr;
-        core_list_free(types);
-        core_list_free(items);
+        input_type = ok ? th_array(state->types, element) : nullptr;
     }
     bool no_payload = core_string_eq(kind, CORE_STRING_STATIC("nil"));
-    if (!input_type && !no_payload) return false;
     th_param param = {.mode = TH_IN, .type = input_type};
-    th_type *expected = th_func_with_error(state->types,
-        th_var(state->types), th_name(state->types, "string"),
-        no_payload ? nullptr : &param, no_payload ? 0 : 1,
-        nullptr, nullptr, 0);
+    th_type *expected = ok && (input_type || no_payload)
+        ? th_func_with_error(state->types,
+            th_var(state->types), th_name(state->types, "string"),
+            no_payload ? nullptr : &param, no_payload ? 0 : 1,
+            nullptr, nullptr, 0) : nullptr;
     parse_sym_entry_t *function = registration->declaration
         ? core_tree_node_value(registration->declaration).sym : nullptr;
     th_type *signature = function && function->type
         ? th_resolve(function->type) : nullptr;
     bool deferred = !signature;
-    if (signature && th_kind_of(signature) != TH_FUNCTION) return false;
     th_type *specialized = expected;
-    if (!deferred && !specialize_literal_handler(state, signature, expected,
-            &specialized)) return false;
+    ok = expected && (deferred || (th_kind_of(signature) == TH_FUNCTION
+        && specialize_literal_handler(state, signature, expected,
+                                      &specialized)));
+    const th_param *payload = ok && aggregate
+        ? th_func_param(specialized, 0) : nullptr;
+    th_type *element = payload ? th_resolve(payload->type) : nullptr;
+    element = element && th_kind_of(element) == TH_SEQUENCE
+        ? th_resolve(th_seq_elem(element)) : nullptr;
+    if (aggregate && ok && !element) ok = false;
+    if (ok && (dictionary || record_fields)) {
+        const th_arg *first = th_named_arg(element, 0);
+        const th_arg *second = th_named_arg(element, 1);
+        ok = first && second && first->kind == TH_ARG_TYPE
+            && second->kind == TH_ARG_TYPE;
+        if (ok && dictionary) {
+            groups[0].slot = first->type;
+            groups[1].slot = second->type;
+        }
+        else if (ok) groups[0].slot = second->type;
+    }
+    else if (ok && aggregate) groups[0].slot = element;
+    th_type *conflict = nullptr;
+    for (size_t g = 0; g < group_count; g++) {
+        if (ok && !unify_literal_items(state->types, &groups[g], &conflict)) {
+            report_literal_item_conflict(unit, state, node, &groups[g],
+                                         conflict);
+            ok = false;
+        }
+        core_list_free(groups[g].items);
+    }
+    if (!ok) return false;
     th_type *result = specialized ? th_func_ret(specialized) : nullptr;
     if (!result) return false;
     const char *required_shape = sequence ? "Bracket_Literal"

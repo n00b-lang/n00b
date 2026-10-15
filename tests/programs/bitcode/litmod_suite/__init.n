@@ -34,6 +34,7 @@ import bitcode_litmod_bool_string_tuple
 import bitcode_litmod_bool_tuple_array
 import bitcode_litmod_bool_string_tuple_array
 import bitcode_litmod_declaration
+import bitcode_litmod_json
 import litmod_array_site
 
 func run_test() {
@@ -70,6 +71,7 @@ func run_test() {
     bitcode_litmod_bool_tuple_array.run_test()
     bitcode_litmod_bool_string_tuple_array.run_test()
     bitcode_litmod_declaration.run_test()
+    bitcode_litmod_json.run_test()
     let values: Array[int] = litmod_array_site.value()
     require values[0] == 1
     require values[1] == 2

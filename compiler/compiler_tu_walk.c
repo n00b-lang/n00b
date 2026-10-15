@@ -41,6 +41,29 @@ typedef enum {
 } semantic_step_t;
 
 static void
+report_literal_failure(core_translation_unit_t *unit, parse_tree_t *node,
+                       size_t before, const char *code, const char *message)
+{
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    if (core_diagnostics_count(diagnostics) == before)
+        core_diagnostics_report_at(diagnostics, unit, CORE_DIAG_ERROR,
+            core_string_from_cstr(code), core_string_from_cstr(message),
+            link_source_location(node));
+}
+
+static bool
+infer_literal_reporting(parse_grammar_t *grammar,
+                        core_translation_unit_t *unit, parse_tree_t *node,
+                        const char *code, const char *message)
+{
+    size_t before = core_diagnostics_count(
+        core_translation_unit_diagnostics(unit));
+    if (infer_user_literal_type(grammar, unit, node)) return true;
+    report_literal_failure(unit, node, before, code, message);
+    return false;
+}
+
+static void
 semantic_annotation_node(void *context, core_translation_unit_t *unit,
                          parse_tree_t *node, parse_tree_t *parent,
                          semantic_step_t step,
@@ -586,33 +609,29 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                         array_context = true;
                     }
                 }
-                bool inferred = !array_context
+                bool user_literal = !array_context
                     && user_litmod(state, CORE_STRING_STATIC("list"),
-                                   CORE_STRING_STATIC("array"))
-                    ? infer_user_literal_type(grammar, node, state)
-                    : infer_sequence_modifier_type(grammar, node, unit,
-                                                   state);
-                if (!inferred) {
-                    core_diagnostics_report_at(
-                        core_translation_unit_diagnostics(unit), unit,
-                        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0010"),
-                        CORE_STRING_STATIC("could not infer the bracket literal element type"),
-                        link_source_location(node));
+                                   CORE_STRING_STATIC("array"));
+                if (user_literal && !infer_literal_reporting(grammar, unit,
+                        node, "N00BB-T0010",
+                        "could not infer the bracket literal element type"))
+                    return;
+                size_t before = core_diagnostics_count(
+                    core_translation_unit_diagnostics(unit));
+                if (!user_literal && !infer_sequence_modifier_type(grammar,
+                        node, unit, state)) {
+                    report_literal_failure(unit, node, before, "N00BB-T0010",
+                        "could not infer the bracket literal element type");
                     return;
                 }
             }
             else if (nt_is(grammar, node, "dict-or-set-lit")) {
                 bool entries = child_nt(grammar, node, "dict-entries")
                     || child_nt(grammar, node, "set-entries");
-                if (entries && !infer_user_literal_type(grammar, node,
-                                                        state)) {
-                    core_diagnostics_report_at(
-                        core_translation_unit_diagnostics(unit), unit,
-                        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0010"),
-                        CORE_STRING_STATIC("could not infer the brace literal element types"),
-                        link_source_location(node));
+                if (entries && !infer_literal_reporting(grammar, unit, node,
+                        "N00BB-T0010",
+                        "could not infer the brace literal element types"))
                     return;
-                }
                 if (!entries && dict_only_empty_literal(grammar, node)) {
                     th_arg args[] = {
                         {.kind = TH_ARG_TYPE, .type = th_var(state->types)},
@@ -671,15 +690,10 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                     return;
                 }
             }
-            else if (!infer_user_literal_type(grammar, node, state)) {
-                core_diagnostics_report_at(
-                    core_translation_unit_diagnostics(unit), unit,
-                    CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0030"),
-                    CORE_STRING_STATIC(
-                        "literal handler cannot specialize for this payload"),
-                    link_source_location(node));
+            else if (!infer_literal_reporting(grammar, unit, node,
+                    "N00BB-T0030",
+                    "literal handler cannot specialize for this payload"))
                 return;
-            }
         }
     }
     if (!entering && nt_is(grammar, node, "new-expr")
@@ -881,13 +895,16 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             && literal_modifier(grammar, node).data) {
             bool shape = child_nt(grammar, node, "named-field-list")
                 || core_tree_num_children(node) == 5;
-            if (!shape || !infer_user_literal_type(grammar, node, state))
+            if (shape)
+                (void)infer_literal_reporting(grammar, unit, node,
+                    "N00BB-T0030",
+                    "literal handler cannot specialize for this payload");
+            else
                 core_diagnostics_report_at(
                     core_translation_unit_diagnostics(unit), unit,
                     CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0030"),
-                    core_string_from_cstr(shape
-                        ? "literal handler cannot specialize for this payload"
-                        : "literal modifier requires a tuple or record literal"),
+                    CORE_STRING_STATIC(
+                        "literal modifier requires a tuple or record literal"),
                     link_source_location(node));
         }
         else if (nt_is(grammar, node, "tuple-or-paren")

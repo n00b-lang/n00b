@@ -1,0 +1,59 @@
+func is_string(item: Any) -> int {
+    return typecase item {
+        case string { = 1 }
+        else { = 0 }
+    }
+}
+
+func count_strings(items: Array[Any]) -> int {
+    var n = 0
+    for item in items {
+        n = n + is_string(item)
+    }
+    return n
+}
+
+func count_string_values(pairs: Array[Tuple[string, Any]]) -> int {
+    var n = 0
+    for key, value in pairs {
+        n = n + is_string(value)
+    }
+    return n
+}
+
+litmod<array> json_array, json(items: Array[Any]) -> int fail: string {
+    return count_strings(items)
+}
+
+litmod<dict> json_object, json(pairs: Array[Tuple[string, Any]]) -> int fail: string {
+    return count_string_values(pairs)
+}
+
+litmod<tuple> json_tuple, json(items: Array[Any]) -> int fail: string {
+    return count_strings(items)
+}
+
+litmod<record> json_record, json(pairs: Array[Tuple[string, Any]]) -> int fail: string {
+    return count_string_values(pairs)
+}
+
+let lookup = {"one": 1, "two": 2}
+let flags = {1, 2, 3}
+
+func dynamic_array(value: string) -> int {
+    return [1, value, "b", true]'json
+}
+
+comptime {
+    require [1, "a", "b", true]'json == 2
+    require {"k": 1, "j": "x"}'json == 1
+    require (1, "a")'json == 1
+    require (a = "x", b = 2, c = "y")'json == 2
+}
+
+func run_test() {
+    require lookup["two"].get_or_else(0) == 2
+    require flags.len() == 3
+    require dynamic_array("a") == 2
+    require {"k": 1, "j": "x"}'json == 1
+}

@@ -2001,6 +2001,9 @@ literal_element_layout_matches(ir_module_t *module, th_type *type,
         return LLVMGetTypeKind(native) == LLVMPointerTypeKind
             && layout->intrinsic_bits == sizeof(void *) * 8;
 
+    if (th_kind_of(th_resolve(type)) == TH_SEQUENCE
+        && native == box_llvm_type(LLVMGetTypeContext(native)))
+        return layout->intrinsic_bits == 128;
     if (th_kind_of(th_resolve(type)) == TH_SEQUENCE)
         return layout->intrinsic_bits == sizeof(n00b_abi_array_value_v1) * 8
             && LLVMGetTypeKind(native) == LLVMStructTypeKind
@@ -7335,6 +7338,10 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                 if (!child_index) break;
                 result = LLVMBuildCall2(state->builder, signature, helper,
                     arguments, 4, "generic.array.element");
+                if (result && th_builtin_kind_of(element) == TH_BUILTIN_ANY)
+                    return save_result(state, instruction, LLVMBuildLoad2(
+                        state->builder, box_llvm_type(context), result,
+                        "generic.array.box"));
                 LLVMValueRef element_index = LLVMBuildLoad2(state->builder,
                     i32, child_index, "generic.element.type");
                 return result && save_result_with_dynamic_type(state,

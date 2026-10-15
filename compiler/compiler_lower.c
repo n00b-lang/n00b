@@ -5662,13 +5662,14 @@ n00bb_lower_literal_element(ir_lower_context_t *context, ir_value_t *value,
     th_comb comb;
     bool union_type = th_sum_comb(th_resolve(target), &comb)
         && comb == TH_UNION;
-    bool arm = false;
+    bool arm = th_builtin_kind(ir_module_types(context->module), target)
+        == TH_BUILTIN_ANY;
     for (size_t i = 0; union_type && i < th_sum_len(target); i++)
         arm |= ir_type_eq(context->module, value->type,
                           th_sum_arm(target, i));
     if (!arm)
         return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
-                           "literal element does not match its union type");
+                           "literal element does not match its target type");
     ir_instr_t *box = ir_lower_emit_instruction(context, IR_OP_BOX, span);
     if (!box || !ir_lower_set_temp_dest(context, box,
         "__n00bb_litmod_element_", target)

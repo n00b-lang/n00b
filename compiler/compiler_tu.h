@@ -561,8 +561,9 @@ bool infer_brace_modifier_type(parse_grammar_t *grammar, parse_tree_t *node,
                                n00bb_tu_state_t *state);
 bool infer_string_modifier_type(parse_grammar_t *grammar, parse_tree_t *node,
                                 n00bb_tu_state_t *state);
-bool infer_user_literal_type(parse_grammar_t *grammar, parse_tree_t *node,
-                             n00bb_tu_state_t *state);
+bool infer_user_literal_type(parse_grammar_t *grammar,
+                             core_translation_unit_t *unit,
+                             parse_tree_t *node);
 bool resolve_forward_literal_sites(core_translation_unit_t *unit,
                                    n00bb_tu_state_t *state);
 bool collect_ordered_children(parse_tree_t *node,

@@ -475,6 +475,10 @@ static void n00bb_bootstrap_load_box_known(const void *address,
     if (!address || !result || !type || !type_index
         || !type->alignment_bytes || !type->size_bits
         || type->size_bits > SIZE_MAX - 7) __builtin_trap();
+    if (type->kind == N00B_ABI_TYPE_BOX) {
+        *result = *(const n00b_abi_box_v1 *)address;
+        return;
+    }
     size_t bytes = (size_t)((type->size_bits + 7) / 8);
     *result = (n00b_abi_box_v1){.type_field = type_index};
     uint8_t *target = bytes <= sizeof(uint64_t)
@@ -670,6 +674,10 @@ void n00bb_bootstrap_array_borrow_box(const n00b_abi_box_v1 *source,
     void *address = n00bb_bootstrap_array_element(source->type_field,
         (uint64_t)(uintptr_t)array, index, &found);
     if (found != child_index) __builtin_trap();
+    if (element->kind == N00B_ABI_TYPE_BOX) {
+        *result = *(const n00b_abi_box_v1 *)address;
+        return;
+    }
     *result = (n00b_abi_box_v1){.type_field = child_index};
     result->payload.out_of_line = address;
 }
