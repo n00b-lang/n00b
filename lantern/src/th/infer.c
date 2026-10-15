@@ -867,11 +867,39 @@ void th_ctx_set_method_argument_coercions(th_ctx *ctx, uint8_t allowed)
     if (ctx) ctx->method_argument_coercions = allowed;
 }
 
+static th_type *resolve_constraint_method(th_ctx *ctx, th_type *receiver,
+                                          const char *name,
+                                          th_env_method_status_t *status)
+{
+    *status = TH_ENV_METHOD_NOT_FOUND;
+    th_type *signature = th_method_lookup(ctx, receiver, name);
+    if (signature) return signature;
+    th_env_method_t method = {0};
+    *status = th_env_method_resolve_by_name(ctx, receiver, name, &method,
+                                            nullptr);
+    return *status == TH_ENV_METHOD_FOUND ? method.signature : nullptr;
+}
+
+static th_type *dereferenced_argument(th_ctx *ctx, th_type *actual,
+                                      th_type *formal, th_mode mode)
+{
+    th_type *resolved_actual = th_resolve(actual);
+    th_type *resolved_formal = th_resolve(formal);
+    if (mode != TH_IN || th_kind_of(resolved_actual) != TH_INDIRECTION
+        || th_kind_of(resolved_formal) == TH_INDIRECTION
+        || th_kind_of(resolved_formal) == TH_VAR
+        || th_unify_probe(ctx, actual, formal)) return nullptr;
+    th_type *referent = th_ind_referent(resolved_actual);
+    return th_unify_probe(ctx, referent, formal) ? referent : nullptr;
+}
+
 static bool method_argument_unifies(th_ctx *ctx, th_type *actual,
                                     th_type *formal, th_mode mode,
                                     core_dict_t *seen)
 {
     if (!actual || !formal) return false;
+    th_type *referent = dereferenced_argument(ctx, actual, formal, mode);
+    if (referent) return uni(ctx, referent, formal, seen);
     if (!(ctx->method_argument_coercions
           & (TH_COERCE_OPTION_WRAP | TH_COERCE_NIL_OPTION
              | TH_COERCE_RECORD_CONSTRUCT)))
@@ -1190,14 +1218,15 @@ static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to,
             push_environment_constraint(ctx, TH_CON_METHOD, c->method.name,
                                         bound_to);
             th_env_method_status_t status = TH_ENV_METHOD_NOT_FOUND;
-            th_type *signature = th_method_lookup(ctx, bound_to,
-                                                  c->method.name);
-            if (!signature) {
-                th_env_method_t method = {0};
-                status = th_env_method_resolve_by_name(
-                    ctx, bound_to, c->method.name, &method, nullptr);
-                signature = status == TH_ENV_METHOD_FOUND
-                    ? method.signature : nullptr;
+            th_type *receiver_type = bound_to;
+            th_type *signature = resolve_constraint_method(ctx, receiver_type,
+                c->method.name, &status);
+            th_type *resolved_receiver = th_resolve(bound_to);
+            if (!signature && status != TH_ENV_METHOD_AMBIGUOUS
+                && th_kind_of(resolved_receiver) == TH_INDIRECTION) {
+                receiver_type = th_ind_referent(resolved_receiver);
+                signature = resolve_constraint_method(ctx, receiver_type,
+                    c->method.name, &status);
             }
             if (signature) signature = th_type_clone(ctx, signature);
             const th_param *receiver =
@@ -1208,7 +1237,7 @@ static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to,
             size_t receiver_errors = ctx->errors.len;
             bool receiver_matches = false;
             if (matches) {
-                matches = uni(ctx, receiver->type, bound_to, seen);
+                matches = uni(ctx, receiver->type, receiver_type, seen);
                 receiver_matches = matches;
                 receiver_errors = ctx->errors.len;
                 bool self_result = c->method.result == var

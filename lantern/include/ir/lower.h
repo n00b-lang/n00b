@@ -76,6 +76,8 @@ ir_instr_t *ir_lower_emit_terminator(ir_lower_context_t *context,
 bool ir_lower_set_temp_dest(ir_lower_context_t *context,
                             ir_instr_t *instruction, const char *prefix,
                             th_type *type);
+ir_value_t *ir_lower_value_as(ir_lower_context_t *context, ir_value_t *value,
+                              th_type *target, ir_span_t span);
 bool ir_lower_bind_value(ir_lower_context_t *context,
                          parse_sym_entry_t *symbol, ir_value_t *value);
 bool ir_lower_bind_local(ir_lower_context_t *context,

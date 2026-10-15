@@ -808,6 +808,24 @@ ir_lower_set_temp_dest(ir_lower_context_t *context, ir_instr_t *instruction,
     }
 }
 
+ir_value_t *
+ir_lower_value_as(ir_lower_context_t *context, ir_value_t *value,
+                  th_type *target, ir_span_t span)
+{
+    if (!context || !value || !target
+        || ir_type_eq(context->module, value->type, target))
+        return value;
+    th_type *source = th_resolve(value->type);
+    if (th_kind_of(source) != TH_INDIRECTION
+        || th_kind_of(th_resolve(target)) == TH_INDIRECTION
+        || !ir_type_eq(context->module, th_ind_referent(source), target))
+        return value;
+    ir_instr_t *load = ir_lower_emit_instruction(context, IR_OP_LOAD, span);
+    if (!load || !ir_lower_set_temp_dest(context, load, "__deref_", target)
+        || !ir_instr_operand_value(load, value)) return nullptr;
+    return load->dest;
+}
+
 static ir_lower_symbol_binding_t *
 lower_find_binding(ir_lower_context_t *context, parse_sym_entry_t *symbol)
 {
@@ -1353,8 +1371,9 @@ lower_tree_assignment(ir_lower_tree_state_t *state, parse_visit_t *visit,
     }
     if (binding->address) {
         th_type *referent = th_ind_referent(binding->address->type);
-        if (!referent || !ir_type_eq(state->context->module, referent,
-                                     value->type))
+        value = ir_lower_value_as(state->context, value, referent, span);
+        if (!value || !referent || !ir_type_eq(state->context->module,
+                                               referent, value->type))
             return lower_failure(state->context, IR_DIAG_TYPE_MISMATCH, span,
                                  "assigned value does not match the stored type");
         ir_instr_t *instruction = ir_instr_add(state->context->block,
@@ -1369,8 +1388,10 @@ lower_tree_assignment(ir_lower_tree_state_t *state, parse_visit_t *visit,
         instruction->span = span;
     }
     else if (binding->local) {
-        if (!ir_type_eq(state->context->module, binding->local->type,
-                        value->type))
+        value = ir_lower_value_as(state->context, value, binding->local->type,
+                                  span);
+        if (!value || !ir_type_eq(state->context->module,
+                                  binding->local->type, value->type))
             return lower_failure(state->context, IR_DIAG_TYPE_MISMATCH, span,
                                  "assigned value does not match the local type");
         ir_instr_t *instruction = ir_instr_add(state->context->block,
@@ -1436,6 +1457,13 @@ lower_tree_assignment(ir_lower_tree_state_t *state, parse_visit_t *visit,
         }
     }
     else if (binding->value && binding->value->kind == IR_VAL_GLOBAL) {
+        value = binding->value->global
+            ? ir_lower_value_as(state->context, value,
+                                binding->value->global->type, span)
+            : value;
+        if (!value)
+            return lower_failure(state->context, IR_DIAG_INTERNAL, span,
+                                 "could not read through the assigned reference");
         ir_instr_t *instruction = ir_instr_add(state->context->block,
                                                IR_OP_GLOBAL_STORE);
         if (!instruction || !ir_instr_operand_value(instruction,
