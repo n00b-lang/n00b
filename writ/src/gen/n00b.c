@@ -1083,6 +1083,53 @@ emit_callback_type(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *cal
     writ_emit_close(emit, nullptr);
 }
 
+static writ_str_t
+cell_constructor(const n00b_t *g, writ_str_t type)
+{
+    return writ_str_format(g->session, "__%.*s_cell", S(writ_name_case(g->session, type, WRIT_CASE_SNAKE)));
+}
+
+static const writ_plan_view_t *
+release_plan(const n00b_t *g, const writ_handle_view_t *handle)
+{
+    for (size_t i = 0; i < writ_model_fn_count(g->model); i++) {
+        writ_bound_fn_t bound = writ_binding_fn(g->b, i);
+        if (bound.bound && !bound.raw && writ_str_eq(writ_model_fn_at(g->model, i)->contract_name, handle->release)) {
+            return bound_plan(g, i, 0);
+        }
+    }
+    return nullptr;
+}
+
+static void
+emit_handle_type(const n00b_t *g, writ_emit_t *emit, const writ_handle_view_t *handle)
+{
+    writ_str_t type = writ_binding_type(g->b, handle->name);
+    writ_emit_line(emit, "");
+    mark(g, emit, handle->declared_at, handle->name);
+    writ_emit_open(emit, "type %.*s_Cell", S(type));
+    writ_emit_line(emit, "public raw: uint");
+    writ_emit_close(emit, nullptr);
+    writ_emit_line(emit, "");
+    writ_emit_line(emit, "alias %.*s = Ref[%.*s_Cell]", S(type), S(type));
+    writ_emit_line(emit, "");
+    writ_emit_open(emit, "func %.*s(raw: uint) -> %.*s", S(cell_constructor(g, type)), S(type));
+    writ_emit_line(emit, "var cell: %.*s_Cell = (raw = raw)", S(type));
+    writ_emit_line(emit, "return ref cell");
+    writ_emit_close(emit, nullptr);
+    const writ_plan_view_t *release = release_plan(g, handle);
+    if (!release) {
+        return;
+    }
+    writ_emit_line(emit, "");
+    writ_emit_open(emit, "func __finalize(consume self: Ref[%.*s_Cell])", S(type));
+    writ_emit_open(emit, "if self.raw != 0 and debug_enabled()");
+    writ_emit_line(emit, "__fd_write(2, \"%.*s collected while open; releasing it\\n\")", S(type));
+    writ_emit_line(emit, "let released = __%.*s(self.raw)", S(writ_c_plan_name(&g->c, release)));
+    writ_emit_close(emit, nullptr);
+    writ_emit_close(emit, nullptr);
+}
+
 static void
 emit_types(const n00b_t *g, writ_emit_t *emit)
 {
@@ -1093,12 +1140,7 @@ emit_types(const n00b_t *g, writ_emit_t *emit)
     writ_emit_line(emit, "public fn: string");
     writ_emit_close(emit, nullptr);
     for (size_t i = 0; i < writ_model_handle_count(model); i++) {
-        const writ_handle_view_t *handle = writ_model_handle_at(model, i);
-        writ_emit_line(emit, "");
-        mark(g, emit, handle->declared_at, handle->name);
-        writ_emit_open(emit, "type %.*s", S(writ_binding_type(g->b, handle->name)));
-        writ_emit_line(emit, "raw: uint");
-        writ_emit_close(emit, nullptr);
+        emit_handle_type(g, emit, writ_model_handle_at(model, i));
     }
     for (size_t i = 0; i < writ_model_record_count(model); i++) {
         const writ_record_view_t *record = writ_model_record_at(model, i);
@@ -1398,7 +1440,8 @@ lifted(const wrapper_t *w, const shim_param_t *param)
                                S(name));
     }
     if (item->shape == WRIT_SHAPE_HANDLE || (item->type && item->type->kind == WRIT_TYPE_HANDLE)) {
-        return writ_str_format(session, "(raw = %.*s)", S(name));
+        return writ_str_format(session, "%.*s(%.*s)",
+                               S(cell_constructor(w->g, item_type(w->g, w->fn, w->plan, param->item))), S(name));
     }
     if (item->shape == WRIT_SHAPE_TEXT) {
         return writ_str_format(session, "%.*s_text", S(name));
@@ -1853,7 +1896,7 @@ emit_wrapper(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view
         emit_text_check(&w, emit, writ_cstr("result"), false);
         writ_emit_line(emit, "return result_text");
     } else if (!can_fail(&w) && out_count == 1 && is_handle(&plan->items[outs[0]])) {
-        writ_emit_line(emit, "return (raw = result)");
+        writ_emit_line(emit, "return %.*s(result)", S(cell_constructor(g, item_type(g, fn, plan, outs[0]))));
     } else if (!can_fail(&w) && out_count) {
         writ_emit_line(emit, "return result");
     } else if (out_count == 1) {

@@ -318,8 +318,22 @@ type Error {
     public fn: string
 }
 
-type Stmt {
-    raw: uint
+type Stmt_Cell {
+    public raw: uint
+}
+
+alias Stmt = Ref[Stmt_Cell]
+
+func __stmt_cell(raw: uint) -> Stmt {
+    var cell: Stmt_Cell = (raw = raw)
+    return ref cell
+}
+
+func __finalize(consume self: Ref[Stmt_Cell]) {
+    if self.raw != 0 and debug_enabled() {
+        __fd_write(2, "Stmt collected while open; releasing it\n")
+        let released = __stmt_release(self.raw)
+    }
 }
 
 
@@ -393,10 +407,10 @@ func close(modify self: Stmt) fail: Error {
     self.raw = 0
 }
 7	tests/gen_n00b/../policy/policy.writ:4:1	Stmt
-12	tests/gen_n00b/../policy/policy.writ:11:1	bind_text
-27	tests/gen_n00b/../policy/policy.writ:11:1	bind_text
-42	tests/gen_n00b/../policy/policy.writ:11:1	bind_text
-73	tests/gen_n00b/../policy/policy.writ:22:1	stmt_release
+26	tests/gen_n00b/../policy/policy.writ:11:1	bind_text
+41	tests/gen_n00b/../policy/policy.writ:11:1	bind_text
+56	tests/gen_n00b/../policy/policy.writ:11:1	bind_text
+87	tests/gen_n00b/../policy/policy.writ:22:1	stmt_release
 load static
 extern __bind_text_text_static policy_n00b_bind_text_text_static (uint, ref[string], ref[i32]) -> i32 fail: nil
 extern __bind_text_text_transient policy_n00b_bind_text_text_transient (uint, ref[string], ref[i32]) -> i32 fail: nil

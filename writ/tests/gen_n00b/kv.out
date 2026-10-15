@@ -417,12 +417,26 @@ type Error {
     public fn: string
 }
 
-type Db {
-    raw: uint
+type Db_Cell {
+    public raw: uint
 }
 
-type Iter {
-    raw: uint
+alias Db = Ref[Db_Cell]
+
+func __db_cell(raw: uint) -> Db {
+    var cell: Db_Cell = (raw = raw)
+    return ref cell
+}
+
+type Iter_Cell {
+    public raw: uint
+}
+
+alias Iter = Ref[Iter_Cell]
+
+func __iter_cell(raw: uint) -> Iter {
+    var cell: Iter_Cell = (raw = raw)
+    return ref cell
 }
 
 type Entry layout(c) {
@@ -459,7 +473,7 @@ func db_open(path: string) -> Db fail: Error {
         let failure: Error = (code = cast[i64]detail, text = nil, fn = "kv_open")
         fail failure
     }
-    return (raw = out_db)
+    return __db_cell(out_db)
 }
 
 func __init(modify self: Db, path: string) {
@@ -530,7 +544,7 @@ func iter(self: Db, prefix: Array[u8]) -> Iter fail: Error {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "kv_iter_new")
         fail failure
     }
-    return (raw = result)
+    return __iter_cell(result)
 }
 
 func next(self: Iter) -> Entry fail: Error {
@@ -547,14 +561,14 @@ func next(self: Iter) -> Entry fail: Error {
     return __ffi_take_bytes(ref result)
 }
 7	tests/gen_n00b/../bind/kv.writ:10:1	Db
-11	tests/gen_n00b/../bind/kv.writ:11:1	Iter
-15	tests/gen_n00b/../bind/kv.writ:15:1	kv_entry
-22	tests/gen_n00b/../bind/kv.writ:13:1	kv_status
-36	tests/gen_n00b/../bind/kv.writ:22:1	kv_open
-60	tests/gen_n00b/../bind/kv.writ:26:1	kv_put
-83	tests/gen_n00b/../bind/kv.writ:31:1	kv_get
-104	tests/gen_n00b/../bind/kv.writ:38:1	kv_iter_new
-123	tests/gen_n00b/../bind/kv.writ:42:1	kv_iter_next
+18	tests/gen_n00b/../bind/kv.writ:11:1	Iter
+29	tests/gen_n00b/../bind/kv.writ:15:1	kv_entry
+36	tests/gen_n00b/../bind/kv.writ:13:1	kv_status
+50	tests/gen_n00b/../bind/kv.writ:22:1	kv_open
+74	tests/gen_n00b/../bind/kv.writ:26:1	kv_put
+97	tests/gen_n00b/../bind/kv.writ:31:1	kv_get
+118	tests/gen_n00b/../bind/kv.writ:38:1	kv_iter_new
+137	tests/gen_n00b/../bind/kv.writ:42:1	kv_iter_next
 library kv
 load static
 extern __kv_open kv_n00b_kv_open (ref[string], ref[uint], ref[int]) -> i32 fail: nil

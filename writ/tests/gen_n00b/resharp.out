@@ -1168,12 +1168,40 @@ type Error {
     public fn: string
 }
 
-type Regex_Options {
-    raw: uint
+type Regex_Options_Cell {
+    public raw: uint
 }
 
-type Regex {
-    raw: uint
+alias Regex_Options = Ref[Regex_Options_Cell]
+
+func __regex_options_cell(raw: uint) -> Regex_Options {
+    var cell: Regex_Options_Cell = (raw = raw)
+    return ref cell
+}
+
+func __finalize(consume self: Ref[Regex_Options_Cell]) {
+    if self.raw != 0 and debug_enabled() {
+        __fd_write(2, "Regex_Options collected while open; releasing it\n")
+        let released = __regex_options_free(self.raw)
+    }
+}
+
+type Regex_Cell {
+    public raw: uint
+}
+
+alias Regex = Ref[Regex_Cell]
+
+func __regex_cell(raw: uint) -> Regex {
+    var cell: Regex_Cell = (raw = raw)
+    return ref cell
+}
+
+func __finalize(consume self: Ref[Regex_Cell]) {
+    if self.raw != 0 and debug_enabled() {
+        __fd_write(2, "Regex collected while open; releasing it\n")
+        let released = __regex_free(self.raw)
+    }
 }
 
 type Match layout(c) {
@@ -1269,7 +1297,7 @@ func regex_options_default() -> Regex_Options fail: Error {
         let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_options_default")
         fail failure
     }
-    return (raw = out_)
+    return __regex_options_cell(out_)
 }
 
 func __init(modify self: Regex_Options) {
@@ -1302,7 +1330,7 @@ func unicode(modify self: Regex_Options, mode: Unicode_Mode) -> Regex_Options fa
         fail failure
     }
     self.raw = 0
-    return (raw = out_)
+    return __regex_options_cell(out_)
 }
 
 func case_insensitive(modify self: Regex_Options, yes: bool) -> Regex_Options fail: Error {
@@ -1327,7 +1355,7 @@ func case_insensitive(modify self: Regex_Options, yes: bool) -> Regex_Options fa
         fail failure
     }
     self.raw = 0
-    return (raw = out_)
+    return __regex_options_cell(out_)
 }
 
 func dot_matches_new_line(modify self: Regex_Options, yes: bool) -> Regex_Options fail: Error {
@@ -1352,7 +1380,7 @@ func dot_matches_new_line(modify self: Regex_Options, yes: bool) -> Regex_Option
         fail failure
     }
     self.raw = 0
-    return (raw = out_)
+    return __regex_options_cell(out_)
 }
 
 func multiline(modify self: Regex_Options, yes: bool) -> Regex_Options fail: Error {
@@ -1377,7 +1405,7 @@ func multiline(modify self: Regex_Options, yes: bool) -> Regex_Options fail: Err
         fail failure
     }
     self.raw = 0
-    return (raw = out_)
+    return __regex_options_cell(out_)
 }
 
 func ignore_whitespace(modify self: Regex_Options, yes: bool) -> Regex_Options fail: Error {
@@ -1402,7 +1430,7 @@ func ignore_whitespace(modify self: Regex_Options, yes: bool) -> Regex_Options f
         fail failure
     }
     self.raw = 0
-    return (raw = out_)
+    return __regex_options_cell(out_)
 }
 
 func hardened(modify self: Regex_Options, yes: bool) -> Regex_Options fail: Error {
@@ -1427,7 +1455,7 @@ func hardened(modify self: Regex_Options, yes: bool) -> Regex_Options fail: Erro
         fail failure
     }
     self.raw = 0
-    return (raw = out_)
+    return __regex_options_cell(out_)
 }
 
 func unbounded_size(modify self: Regex_Options, yes: bool) -> Regex_Options fail: Error {
@@ -1452,7 +1480,7 @@ func unbounded_size(modify self: Regex_Options, yes: bool) -> Regex_Options fail
         fail failure
     }
     self.raw = 0
-    return (raw = out_)
+    return __regex_options_cell(out_)
 }
 
 func implicit_captures(modify self: Regex_Options, yes: bool) -> Regex_Options fail: Error {
@@ -1477,7 +1505,7 @@ func implicit_captures(modify self: Regex_Options, yes: bool) -> Regex_Options f
         fail failure
     }
     self.raw = 0
-    return (raw = out_)
+    return __regex_options_cell(out_)
 }
 
 func is_match(self: Regex, input: string) -> bool fail: Error {
@@ -1523,7 +1551,7 @@ func regex_new(pattern: string) -> Regex fail: Error {
         let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_new")
         fail failure
     }
-    return (raw = out_)
+    return __regex_cell(out_)
 }
 
 func __init(modify self: Regex, pattern: string) {
@@ -1556,7 +1584,7 @@ func regex_with_options(pattern: string, opts: Regex_Options) -> Regex fail: Err
         let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_with_options")
         fail failure
     }
-    return (raw = out_)
+    return __regex_cell(out_)
 }
 
 func __init(modify self: Regex, pattern: string, opts: Regex_Options) {
@@ -1698,29 +1726,29 @@ func capture_index_for_name(self: Regex, name: string) -> Capture_Index_For_Name
     return values
 }
 7	resharp.derived.writ:29:1	RegexOptions
-11	resharp.derived.writ:38:1	Regex
-15	resharp.derived.writ:32:1	Match
-20	resharp.derived.writ:5:1	Status
-27	resharp.derived.writ:21:1	UnicodeMode
-34	resharp.derived.writ:41:1	FindAll
-73	resharp.derived.writ:30:1	regex_options_free
-82	resharp.derived.writ:39:1	regex_free
-91	resharp.derived.writ:53:1	regex_options_default
-119	resharp.derived.writ:62:1	regex_options_unicode
-144	resharp.derived.writ:73:1	regex_options_case_insensitive
-169	resharp.derived.writ:84:1	regex_options_dot_matches_new_line
-194	resharp.derived.writ:95:1	regex_options_multiline
-219	resharp.derived.writ:106:1	regex_options_ignore_whitespace
-244	resharp.derived.writ:117:1	regex_options_hardened
-269	resharp.derived.writ:128:1	regex_options_unbounded_size
-294	resharp.derived.writ:139:5	regex_options_implicit_captures
-319	resharp.derived.writ:151:1	regex_is_match
-344	resharp.derived.writ:163:1	regex_new
-373	resharp.derived.writ:174:1	regex_with_options
-406	resharp.derived.writ:186:1	regex_find_all
-442	resharp.derived.writ:201:1	regex_find_anchored
-472	resharp.derived.writ:215:1	regex_is_full_match
-507	resharp.derived.writ:227:5	regex_capture_index_for_name
+25	resharp.derived.writ:38:1	Regex
+43	resharp.derived.writ:32:1	Match
+48	resharp.derived.writ:5:1	Status
+55	resharp.derived.writ:21:1	UnicodeMode
+62	resharp.derived.writ:41:1	FindAll
+101	resharp.derived.writ:30:1	regex_options_free
+110	resharp.derived.writ:39:1	regex_free
+119	resharp.derived.writ:53:1	regex_options_default
+147	resharp.derived.writ:62:1	regex_options_unicode
+172	resharp.derived.writ:73:1	regex_options_case_insensitive
+197	resharp.derived.writ:84:1	regex_options_dot_matches_new_line
+222	resharp.derived.writ:95:1	regex_options_multiline
+247	resharp.derived.writ:106:1	regex_options_ignore_whitespace
+272	resharp.derived.writ:117:1	regex_options_hardened
+297	resharp.derived.writ:128:1	regex_options_unbounded_size
+322	resharp.derived.writ:139:5	regex_options_implicit_captures
+347	resharp.derived.writ:151:1	regex_is_match
+372	resharp.derived.writ:163:1	regex_new
+401	resharp.derived.writ:174:1	regex_with_options
+434	resharp.derived.writ:186:1	regex_find_all
+470	resharp.derived.writ:201:1	regex_find_anchored
+500	resharp.derived.writ:215:1	regex_is_full_match
+535	resharp.derived.writ:227:5	regex_capture_index_for_name
 library resharp_writ
 search_path target/release
 load static
