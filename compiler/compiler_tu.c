@@ -2434,7 +2434,14 @@ contextualize_record_literal(parse_grammar_t *grammar,
         bool nil_option = n00bb_is_nil_literal(grammar, value_node)
             && n00bb_option_type_element(field_type, nullptr);
         th_type *actual_field = core_tree_node_value(value_node).type;
-        if (!actual_field || (!nil_option
+        th_type *option_element = nullptr;
+        bool some_option = actual_field
+            && n00bb_option_type_element(field_type, &option_element)
+            && !n00bb_option_type_element(actual_field, nullptr)
+            && (th_unify_probe(state->types, actual_field, option_element)
+                || n00bb_contextual_integer_literal(state, value_node,
+                                                    option_element));
+        if (!actual_field || (!nil_option && !some_option
             && !th_unify_probe(state->types, actual_field, field_type)
             && !n00bb_contextual_integer_literal(state, value_node,
                                                    field_type))) {

@@ -33,3 +33,8 @@ public func poke(modify self: Second) {
 public func first() -> First {
     return (raw = 0)
 }
+
+public type Opts {
+    public a: i64?
+    public b: i64?
+}

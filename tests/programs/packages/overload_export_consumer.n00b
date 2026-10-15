@@ -13,3 +13,9 @@ comptime {} else {
     overloads.poke(second)
     require second.raw == 3
 }
+
+comptime {} else {
+    let opts: overloads.Opts = (a = 50, b = nil)
+    require opts.a != nil
+    require opts.b == nil
+}
