@@ -53,13 +53,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
     annotation_context_t *annotation_context = context;
     parse_grammar_t *grammar = annotation_context->grammar;
     n00bb_tu_state_t *state = tu_state(unit);
-    if (state && state->types && unit) {
-        core_string_t package = n00bb_package_id(unit);
-        if (!th_ctx_set_scope(state->types, unit->module.identifier.data,
-                              package.data)) return;
-    }
-    if (!state || !node || !prepare_initial_symbols(
-            unit, annotation_context->types)) return;
+    if (!state || !node) return;
     if (before_annotations) {
     if (entering && nt_is(grammar, node, "assign-stmt")
         && core_tree_num_children(node) == 3
@@ -1409,7 +1403,10 @@ semantic_annotate_tree(parse_grammar_t *grammar, th_ctx *types,
                        core_translation_unit_t *unit, parse_tree_t *root)
 {
     n00bb_tu_state_t *state = tu_state(unit);
-    if (!root || !prepare_initial_symbols(unit, types)) return false;
+    if (!root || !state) return false;
+    core_string_t package = n00bb_package_id(unit);
+    if (!th_ctx_set_scope(types, unit->module.identifier.data, package.data)
+        || !prepare_initial_symbols(unit, types)) return false;
     annotation_context_t context = {
         .grammar = grammar,
         .types = types,
