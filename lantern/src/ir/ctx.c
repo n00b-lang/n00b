@@ -40,40 +40,11 @@ char *ir_strdup(ir_ctx_t *ctx, const char *s)
     return d;
 }
 
-static size_t next_cap(size_t cap, size_t need)
-{
-    size_t want = cap ? cap * 2 : 8;
-
-    while (want < need) {
-        want *= 2;
-    }
-
-    return want;
-}
-
 void *ir_grow(ir_ctx_t *ctx, void *p, size_t *cap, size_t need, size_t elem)
 {
-    if (need <= *cap) {
-        return p;
-    }
-
-    size_t ncap = next_cap(*cap, need);
-
-    if (p && *cap
-        && core_arena_extend(&ctx->arena, p, *cap * elem, ncap * elem)) {
-        *cap = ncap;
-
-        return p;
-    }
-
-    void *q = ir_alloc(ctx, ncap * elem);
-
-    if (p && *cap) {
-        memcpy(q, p, *cap * elem);
-    }
-    *cap = ncap;
-
-    return q;
+    if (need <= *cap) return p;
+    return core_arena_try_reserve_raw(&ctx->arena, &p, cap,
+        need < 8 ? 8 : need, elem) ? p : nullptr;
 }
 
 ir_ctx_t *ir_ctx_new(void)

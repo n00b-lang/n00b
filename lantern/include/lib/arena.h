@@ -2,6 +2,7 @@
 
 #include <stdalign.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <string.h>
 
 #include "lib/alloc.h"
@@ -105,6 +106,36 @@ core_arena_alloc(core_arena_t *a, size_t size)
     a->current = block;
 
     return memset(block->data, 0, size);
+}
+
+static inline bool
+core_arena_try_reserve_raw(core_arena_t *arena, void **data,
+                           size_t *capacity, size_t needed,
+                           size_t element_size)
+{
+    if (needed <= *capacity) return true;
+    if (!element_size) return false;
+    size_t limit = (SIZE_MAX - sizeof(core_arena_block_t)
+                    - (CORE_ARENA_ALIGNMENT - 1)) / element_size;
+    if (needed > limit) return false;
+    size_t next = *capacity ? *capacity : 1;
+    while (next < needed) {
+        if (next > limit / 2) {
+            next = needed;
+            break;
+        }
+        next *= 2;
+    }
+    size_t old_bytes = *capacity * element_size;
+    size_t new_bytes = next * element_size;
+    if (!*data || !core_arena_extend(arena, *data, old_bytes, new_bytes)) {
+        void *grown = core_arena_alloc(arena, new_bytes);
+        if (!grown) return false;
+        if (*data) memcpy(grown, *data, old_bytes);
+        *data = grown;
+    }
+    *capacity = next;
+    return true;
 }
 
 static inline void
