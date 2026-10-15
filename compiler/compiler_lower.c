@@ -8276,12 +8276,12 @@ n00bb_mark_addressable_argument(ir_lower_context_t *context,
             member = member_access_node(grammar, at);
         }
         parse_tree_t *root = n00bb_simple_lvalue(at);
-        return root && ir_lower_mark_lvalue(context, owner, root);
+        return root && ir_lower_skip_value(context, owner, root);
     }
 
     parse_tree_t *lvalue = n00bb_simple_lvalue(argument);
-    return lvalue && ir_lower_mark_lvalue(context, owner, argument)
-        && ir_lower_mark_lvalue(context, owner, lvalue);
+    return lvalue && ir_lower_skip_value(context, owner, argument)
+        && ir_lower_skip_value(context, owner, lvalue);
 }
 
 static bool
@@ -8295,7 +8295,7 @@ n00bb_mark_reference_target(ir_lower_context_t *context,
         parse_tree_t *receiver = core_tree_num_children(index)
             ? core_tree_child(index, 0) : nullptr;
         parse_tree_t *root = n00bb_simple_lvalue(receiver);
-        return !root || ir_lower_mark_lvalue(context, owner, root);
+        return !root || ir_lower_skip_value(context, owner, root);
     }
     return n00bb_mark_addressable_argument(context, grammar, owner, target,
                                             TH_INOUT);
