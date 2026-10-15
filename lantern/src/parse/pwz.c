@@ -400,6 +400,42 @@ expand_group_nt(parse_pwz_parser_t *p, parse_grammar_t *g, int64_t nt_id)
 }
 
 static void
+expand_list_nt(parse_pwz_parser_t *p, parse_grammar_t *g, int32_t nt_id)
+{
+    parse_nonterm_t *nt    = parse_get_nonterm(g, nt_id);
+    pwz_exp_t       *steps = make_alt_exp(p, -1);
+
+    for (size_t j = 0; j < core_list_len(nt->rule_ids); j++) {
+        int32_t       rule_ix = nt->rule_ids.data[j];
+        parse_rule_t *rule    = parse_get_rule(g, rule_ix);
+        bool          step    = parse_rule_is_list_step(g, rule_ix);
+
+        pwz_exp_ptr_t *children;
+        int32_t        nchildren;
+
+        build_seq_children(p, rule, &children, &nchildren);
+
+        int32_t        kept  = step ? nchildren - 1 : nchildren;
+        pwz_exp_ptr_t *after = core_alloc_array(pwz_exp_ptr_t, kept + 1);
+
+        after[0] = steps;
+        memcpy(after + 1, children, (size_t)kept * sizeof(pwz_exp_ptr_t));
+        core_free(children);
+
+        pwz_exp_t *seq = make_seq_exp(p, nt->name, nt_id, (int32_t)j, after,
+                                      kept + 1);
+
+        seq->list_role = step ? PWZ_LIST_STEP : PWZ_LIST_END;
+        alt_add(step ? steps : p->nt_exps[nt_id], seq);
+    }
+
+    pwz_exp_t *none = make_seq_exp(p, nt->name, -1, -1, nullptr, 0);
+
+    none->list_role = PWZ_LIST_STEP;
+    alt_add(steps, none);
+}
+
+static void
 build_exp_graph(parse_pwz_parser_t *p, parse_grammar_t *g,
                 parse_nt_id_t start)
 {
@@ -416,6 +452,11 @@ build_exp_graph(parse_pwz_parser_t *p, parse_grammar_t *g,
 
         if (nt->group_nt) {
             expand_group_nt(p, g, i);
+            continue;
+        }
+
+        if (parse_nonterm_is_quadratic_list(g, nt)) {
+            expand_list_nt(p, g, i);
             continue;
         }
 
@@ -640,6 +681,7 @@ run_ddp(parse_pwz_parser_t *p, int32_t pos, parse_token_info_t *tok,
             pwz_exp_t *result = alloc_result_exp(p);
 
             result->kind          = PWZ_SEQ;
+            result->list_role     = exp->list_role;
             result->seq.name      = exp->seq.name;
             result->nt_id     = exp->nt_id;
             result->rule_ix   = exp->rule_ix;
@@ -652,6 +694,7 @@ run_ddp(parse_pwz_parser_t *p, int32_t pos, parse_token_info_t *tok,
             pwz_cxt_t *seq_cxt = alloc_cxt(p);
 
             seq_cxt->kind        = PWZ_CXT_SEQ;
+            seq_cxt->list_role   = exp->list_role;
             seq_cxt->seq.mem     = mem_retain(mem);
             seq_cxt->nt_id   = exp->nt_id;
             seq_cxt->rule_ix = exp->rule_ix;
@@ -683,6 +726,7 @@ run_ddp(parse_pwz_parser_t *p, int32_t pos, parse_token_info_t *tok,
             pwz_exp_t *alt_child = exp->alt.alts.data[i];
 
             if (can_filter_alts && alt_child->kind == PWZ_SEQ
+                && alt_child->list_role == PWZ_LIST_NONE
                 && alt_child->nt_id >= 0 && alt_child->rule_ix >= 0) {
                 parse_nonterm_t *nt = parse_get_nonterm(p->grammar,
                                                       alt_child->nt_id);
@@ -782,6 +826,7 @@ run_dup(parse_pwz_parser_t *p, int32_t pos, pwz_exp_t *result, pwz_cxt_t *cxt)
             pwz_exp_t *seq_result = alloc_result_exp(p);
 
             seq_result->kind          = PWZ_SEQ;
+            seq_result->list_role     = cxt->list_role;
             seq_result->seq.name      = cxt->nt_id >= 0
                 ? parse_get_nonterm(p->grammar, cxt->nt_id)->name
                 : (core_string_t){0};
@@ -807,6 +852,7 @@ run_dup(parse_pwz_parser_t *p, int32_t pos, pwz_exp_t *result, pwz_cxt_t *cxt)
             pwz_cxt_t *new_seq_cxt = alloc_cxt(p);
 
             new_seq_cxt->kind        = PWZ_CXT_SEQ;
+            new_seq_cxt->list_role   = cxt->list_role;
             new_seq_cxt->seq.mem     = mem_retain(cxt->seq.mem);
             new_seq_cxt->nt_id   = cxt->nt_id;
             new_seq_cxt->rule_ix = cxt->rule_ix;
@@ -1079,7 +1125,8 @@ typedef struct {
 static parse_rule_t *
 exp_to_rule(parse_pwz_parser_t *p, pwz_exp_t *exp)
 {
-    if (!exp || exp->kind != PWZ_SEQ || exp->nt_id < 0 || exp->rule_ix < 0) {
+    if (!exp || exp->kind != PWZ_SEQ || exp->nt_id < 0 || exp->rule_ix < 0
+        || exp->list_role != PWZ_LIST_NONE) {
         return nullptr;
     }
 
@@ -1392,12 +1439,33 @@ resolve_alts(parse_pwz_parser_t *p, pwz_exp_t *exp, int32_t pos)
 typedef struct {
     pwz_exp_t *exp;
     int32_t    start;
+    int32_t    tail_start;
     int32_t    child_ix;
     size_t     kids_mark;
     bool       entered;
 } conv_frame_t;
 
 core_list_decl(conv_frame_t);
+
+static bool
+continues_same_group(parse_pwz_parser_t *p, core_list_t(conv_frame_t) *frames,
+                     pwz_exp_t *e)
+{
+    if (e->kind != PWZ_SEQ || e->nt_id < 0 || frames->len < 2) {
+        return false;
+    }
+
+    parse_nonterm_t *nt = parse_get_nonterm(p->grammar, e->nt_id);
+
+    if (!nt || !nt->group_nt) {
+        return false;
+    }
+
+    conv_frame_t *outer = &frames->data[frames->len - 2];
+
+    return outer->exp && outer->exp->kind == PWZ_SEQ
+        && outer->exp->nt_id == e->nt_id && outer->child_ix == 1;
+}
 
 static parse_tree_t *
 convert_exp_to_tree(parse_pwz_parser_t *p, pwz_exp_t *exp,
@@ -1474,6 +1542,13 @@ convert_exp_to_tree(parse_pwz_parser_t *p, pwz_exp_t *exp,
 
             f->start = st->pos;
 
+            if (e->nchildren == 0
+                && (e->list_role == PWZ_LIST_STEP
+                    || continues_same_group(p, &frames, e))) {
+                frames.len--;
+                continue;
+            }
+
             if (e->nchildren == 0) {
                 parse_tree_t *t;
 
@@ -1500,6 +1575,10 @@ convert_exp_to_tree(parse_pwz_parser_t *p, pwz_exp_t *exp,
         pwz_exp_t *e = f->exp;
 
         if (f->child_ix < e->nchildren) {
+            if (f->child_ix == 1) {
+                f->tail_start = st->pos;
+            }
+
             pwz_exp_t *child = e->seq.children[f->child_ix++];
 
             core_list_push(frames, ((conv_frame_t){.exp = child}));
@@ -1514,6 +1593,37 @@ convert_exp_to_tree(parse_pwz_parser_t *p, pwz_exp_t *exp,
         size_t             nch   = done.len - mark;
         parse_tree_t **kids  = done.data + mark;
         parse_tree_t  *tree;
+
+        if (continues_same_group(p, &frames, e)) {
+            frames.len--;
+            continue;
+        }
+
+        if (e->list_role != PWZ_LIST_NONE) {
+            size_t pending = nch - (size_t)(e->nchildren - 1);
+
+            tree = make_nt_node(p->grammar, e->nt_id, e->rule_ix,
+                                f->tail_start, end);
+
+            for (size_t i = pending; i < nch; i++) {
+                add_child_flattening_same_group(tree, kids[i]);
+            }
+
+            if (e->list_role == PWZ_LIST_END) {
+                for (size_t i = pending; i-- > 0;) {
+                    core_tree_add_child(kids[i], tree);
+                    core_tree_node_value(kids[i]).end = end;
+                    tree = kids[i];
+                }
+
+                pending = 0;
+            }
+
+            done.len = mark + pending;
+            core_list_push(done, tree);
+            frames.len--;
+            continue;
+        }
 
         if (e->nt_id >= 0) {
             parse_nonterm_t *nt = parse_get_nonterm(p->grammar, e->nt_id);

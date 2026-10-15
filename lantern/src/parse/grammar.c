@@ -1328,6 +1328,133 @@ parse_grammar_prepare_contextual(parse_grammar_t *g,
     }
 }
 
+static bool
+list_match_equal(const parse_match_t *a, const parse_match_t *b)
+{
+    if (a->kind != b->kind) {
+        return false;
+    }
+
+    switch (a->kind) {
+    case PARSE_MATCH_NT:
+        return a->nt_id == b->nt_id;
+    case PARSE_MATCH_TERMINAL:
+        return a->terminal_id == b->terminal_id;
+    case PARSE_MATCH_ANY:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool
+ends_with_nt(const parse_rule_t *rule, int64_t nt_id)
+{
+    size_t n = rule->contents.len;
+
+    return n && rule->contents.data[n - 1].kind == PARSE_MATCH_NT
+        && rule->contents.data[n - 1].nt_id == nt_id;
+}
+
+static bool
+completes_inside(const parse_rule_t *base, const parse_rule_t *recursive)
+{
+    if (base->contents.len > recursive->contents.len - 1) {
+        return false;
+    }
+
+    for (size_t i = 0; i < base->contents.len; i++) {
+        if (!list_match_equal(&base->contents.data[i],
+                              &recursive->contents.data[i])) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool
+parse_rule_is_list_step(parse_grammar_t *g, int32_t rule_ix)
+{
+    parse_rule_t *rule = parse_get_rule(g, rule_ix);
+
+    return ends_with_nt(rule, rule->nt_id);
+}
+
+bool
+parse_nonterm_is_quadratic_list(parse_grammar_t *g, parse_nonterm_t *nt)
+{
+    if (nt->group_nt || !nt->rule_ids.len) {
+        return false;
+    }
+
+    size_t recursive = 0;
+    size_t base      = 0;
+
+    for (size_t i = 0; i < nt->rule_ids.len; i++) {
+        parse_rule_t *rule = parse_get_rule(g, nt->rule_ids.data[i]);
+
+        if (rule->penalty_rule || rule->disambig_predicate.data) {
+            return false;
+        }
+
+        for (size_t j = 0; j < rule->annotations.len; j++) {
+            if (rule->annotations.data[j]
+                && rule->annotations.data[j]->kind == PARSE_ANNOT_ADJACENT) {
+                return false;
+            }
+        }
+
+        size_t refs = 0;
+
+        for (size_t j = 0; j < rule->contents.len; j++) {
+            parse_match_t *m = &rule->contents.data[j];
+
+            if (m->kind == PARSE_MATCH_GROUP || m->kind == PARSE_MATCH_EMPTY) {
+                return false;
+            }
+
+            if (m->kind == PARSE_MATCH_NT && m->nt_id == nt->id) {
+                refs++;
+            }
+        }
+
+        if (!refs) {
+            base++;
+            continue;
+        }
+
+        if (refs != 1 || rule->contents.len < 2
+            || !ends_with_nt(rule, nt->id)) {
+            return false;
+        }
+
+        recursive++;
+    }
+
+    if (!recursive || !base) {
+        return false;
+    }
+
+    for (size_t i = 0; i < nt->rule_ids.len; i++) {
+        parse_rule_t *b = parse_get_rule(g, nt->rule_ids.data[i]);
+
+        if (ends_with_nt(b, nt->id)) {
+            continue;
+        }
+
+        for (size_t j = 0; j < nt->rule_ids.len; j++) {
+            parse_rule_t *r = parse_get_rule(g, nt->rule_ids.data[j]);
+
+            if (ends_with_nt(r, nt->id) && completes_inside(b, r)) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 void
 parse_grammar_finalize(parse_grammar_t *g)
 {

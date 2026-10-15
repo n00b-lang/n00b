@@ -57,9 +57,15 @@ typedef enum : uint8_t {
     PWZ_CXT_ALT,
 } pwz_cxt_kind_t;
 
+typedef enum : uint8_t {
+    PWZ_LIST_NONE,
+    PWZ_LIST_STEP,
+    PWZ_LIST_END,
+} pwz_list_role_t;
+
 typedef struct pwz_cxt_t {
-    pwz_cxt_kind_t kind;
-    uint8_t        _pad;
+    pwz_cxt_kind_t  kind;
+    pwz_list_role_t list_role;
     int16_t        nt_id;
     int16_t        rule_ix;
     int16_t        nleft;
@@ -96,6 +102,7 @@ struct pwz_exp_t {
     core_string_t contextual_spelling;
     int32_t       match_tid;
     pwz_exp_kind_t kind;
+    pwz_list_role_t list_role;
     int16_t         rule_ix;
     int16_t         nchildren;
     union {

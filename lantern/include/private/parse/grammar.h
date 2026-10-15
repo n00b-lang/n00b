@@ -183,3 +183,6 @@ parse_hide_penalties(parse_grammar_t *g)
 {
     return g->hide_penalty_rewrites && !g->suspend_penalty_hiding;
 }
+
+bool parse_rule_is_list_step(parse_grammar_t *g, int32_t rule_ix);
+bool parse_nonterm_is_quadratic_list(parse_grammar_t *g, parse_nonterm_t *nt);
