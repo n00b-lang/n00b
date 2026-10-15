@@ -1032,8 +1032,9 @@ source_function_parameter(parse_grammar_t *grammar,
         || !nt_is(grammar, function->decl_node, "func-def")) return nullptr;
     n00bb_function_parameter_facts_t *facts = parse_sym_binding(function,
         CORE_STRING_STATIC("n00bb.function.parameter-facts"));
-    return facts && index < facts->param_count
-        ? facts->params[index].symbol : nullptr;
+    parse_tree_t *node = facts && index < facts->param_count
+        ? facts->params[index].node : nullptr;
+    return node ? core_tree_node_value(node).sym : nullptr;
 }
 
 static bool

@@ -339,7 +339,6 @@ struct n00bb_litmod_site_t {
 
 typedef struct {
     parse_tree_t *node;
-    parse_sym_entry_t *symbol;
     th_type *generic_union_type;
     bool variadic;
     bool has_type_node;
@@ -348,6 +347,7 @@ typedef struct {
 typedef struct {
     n00bb_function_parameter_ref_t *params;
     size_t param_count;
+    size_t param_capacity;
     bool has_inferred_parameter;
 } n00bb_function_parameter_facts_t;
 

@@ -6444,8 +6444,8 @@ resolve_function_parameter_facts(parse_grammar_t *grammar,
     for (size_t i = 0; facts && i < facts->param_count; i++) {
         n00bb_function_parameter_ref_t *fact = &facts->params[i];
         parse_tree_t *node = fact->node;
-        parse_sym_entry_t *symbol = fact->symbol;
         if (!node) return false;
+        parse_sym_entry_t *symbol = core_tree_node_value(node).sym;
         parse_nt_node_t *parameter = &core_tree_node_value(node);
         parse_tree_t *owner = parameter->parent;
         while (owner && !nt_is(grammar, owner, "func-def")
@@ -6603,7 +6603,9 @@ bind_function_body_signature(core_translation_unit_t *unit,
             : th_func_param(body_type, i);
         th_type *type = formal ? formal->type : nullptr;
         if (fact->variadic && type) type = th_array(state->types, type);
-        if (!fact->node || !fact->symbol || !type) {
+        parse_sym_entry_t *parameter_symbol = fact->node
+            ? core_tree_node_value(fact->node).sym : nullptr;
+        if (!parameter_symbol || !type) {
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit), unit,
                 CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0004"),
@@ -6612,10 +6614,10 @@ bind_function_body_signature(core_translation_unit_t *unit,
                 link_source_location(fact->node ? fact->node : signature));
             return;
         }
-        th_type *previous = fact->symbol->type;
-        fact->symbol->type = type;
+        th_type *previous = parameter_symbol->type;
+        parameter_symbol->type = type;
         core_tree_node_value(fact->node).type = type;
-        propagate_symbol_type(fact->symbol, state->types, previous, type);
+        propagate_symbol_type(parameter_symbol, state->types, previous, type);
     }
     if (!parse_sym_set_binding(symbol,
             CORE_STRING_STATIC("n00bb.body-function-signature"), body_type))
@@ -9448,8 +9450,9 @@ validate_user_litmod_signatures(parse_grammar_t *grammar,
             && facts && !facts->has_inferred_parameter
             && facts->param_count == (no_payload ? 0 : 1)
             && (no_payload || (!facts->params[0].variadic
-                && facts->params[0].symbol
-                && !facts->params[0].symbol->is_optional))
+                && facts->params[0].node
+                && core_tree_node_value(facts->params[0].node).sym
+                && !core_tree_node_value(facts->params[0].node).sym->is_optional))
             && signature && th_kind_of(signature) == TH_FUNCTION
             && th_func_nparams(signature) == (no_payload ? 0 : 1)
             && !th_func_rest(signature) && !th_func_nkw(signature);
@@ -9618,7 +9621,6 @@ record_function_parameter_fact(parse_grammar_t *grammar,
         && !nt_is(grammar, node, "default-param")) return true;
     n00bb_function_parameter_facts_t *facts =
         function_parameter_facts(grammar, node);
-    parse_sym_entry_t *symbol = core_tree_node_value(node).sym;
     parse_tree_t *type_node = child_nt(grammar, node, "type-spec");
     if (!facts) return true;
     parse_tree_t *owner = core_tree_node_value(node).parent;
@@ -9634,20 +9636,25 @@ record_function_parameter_fact(parse_grammar_t *grammar,
             context_child = core_tree_node_value(context_child).parent;
         if (!nt_is(grammar, context_child, "param-decl")) return true;
     }
-    n00bb_function_parameter_ref_t *grown = core_arena_alloc(
-        &state->semantic_values,
-        (facts->param_count + 1) * sizeof(*facts->params));
-    if (!grown) return false;
-    if (facts->param_count)
-        memcpy(grown, facts->params,
-               facts->param_count * sizeof(*facts->params));
-    grown[facts->param_count++] = (n00bb_function_parameter_ref_t){
+    if (facts->param_count == facts->param_capacity) {
+        if (facts->param_capacity > SIZE_MAX / 2) return false;
+        size_t capacity = facts->param_capacity
+            ? facts->param_capacity * 2 : 1;
+        if (capacity > SIZE_MAX / sizeof(*facts->params)) return false;
+        n00bb_function_parameter_ref_t *grown = core_arena_alloc(
+            &state->semantic_values, capacity * sizeof(*facts->params));
+        if (!grown) return false;
+        if (facts->param_count)
+            memcpy(grown, facts->params,
+                   facts->param_count * sizeof(*facts->params));
+        facts->params = grown;
+        facts->param_capacity = capacity;
+    }
+    facts->params[facts->param_count++] = (n00bb_function_parameter_ref_t){
         .node = node,
-        .symbol = symbol,
         .variadic = variadic,
         .has_type_node = type_node != nullptr,
     };
-    facts->params = grown;
     facts->has_inferred_parameter = facts->has_inferred_parameter
         || type_node == nullptr;
     return true;
