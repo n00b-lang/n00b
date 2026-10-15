@@ -3686,10 +3686,45 @@ n00bb_compiler_main(int argc, char **argv)
             fprintf(stderr, "PROFILE abi %.3f\n", now - profile_tick);
             profile_tick = now;
         }
+        core_list_t(core_buffer_t) shim_bitcode =
+            core_list_new(core_buffer_t);
+        char *compiler_executable = located
+            ? n00bb_executable_path(argv[0]) : nullptr;
+        if (located && n00bb_ffi_shim_count(ffi))
+            located = n00bb_ffi_compile_shims(ffi,
+                link_analysis->target.triple, compiler_executable,
+                &shim_bitcode, cli_diagnostics);
+        core_free(compiler_executable);
+        core_list_t(core_string_t) libraries = core_list_new(core_string_t);
+        core_list_t(core_string_t) frameworks = core_list_new(core_string_t);
+        core_list_t(core_string_t) search_paths =
+            core_list_new(core_string_t);
+        for (size_t i = 0; i < n00bb_ffi_library_count(ffi); i++)
+            core_list_push(libraries, n00bb_ffi_library_at(ffi, i));
+        for (size_t i = 0; i < n00bb_ffi_framework_count(ffi); i++)
+            core_list_push(frameworks, n00bb_ffi_framework_at(ffi, i));
+        for (size_t i = 0; i < n00bb_ffi_search_path_count(ffi); i++)
+            core_list_push(search_paths, n00bb_ffi_search_path_at(ffi, i));
+        n00bb_native_inputs_t native_inputs = {
+            .bitcode = shim_bitcode.data,
+            .bitcode_count = shim_bitcode.len,
+            .libraries = libraries.data,
+            .library_count = libraries.len,
+            .frameworks = frameworks.data,
+            .framework_count = frameworks.len,
+            .search_paths = search_paths.data,
+            .search_path_count = search_paths.len,
+        };
         if (located)
             located = n00bb_build_executable(link, link_analysis, args,
                 !preprocessor_options.release_mode, native_cpu, argv[0],
-                cli_diagnostics);
+                &native_inputs, cli_diagnostics);
+        for (size_t i = 0; i < shim_bitcode.len; i++)
+            core_buffer_release(&shim_bitcode.data[i]);
+        core_list_free(shim_bitcode);
+        core_list_free(libraries);
+        core_list_free(frameworks);
+        core_list_free(search_paths);
         if (profile_compile) {
             double now = n00bb_profile_seconds();
             fprintf(stderr, "PROFILE native %.3f\n", now - profile_tick);

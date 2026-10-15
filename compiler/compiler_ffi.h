@@ -1,6 +1,10 @@
 #pragma once
 
 #include "compiler_module_literal.h"
+#include "lib/diagnostic.h"
+#include "lib/list.h"
+
+core_list_decl(core_buffer_t);
 
 typedef struct n00bb_ffi n00bb_ffi_t;
 
@@ -25,3 +29,5 @@ size_t           n00bb_ffi_framework_count(const n00bb_ffi_t *ffi);
 core_string_t    n00bb_ffi_framework_at(const n00bb_ffi_t *ffi, size_t index);
 size_t           n00bb_ffi_search_path_count(const n00bb_ffi_t *ffi);
 core_string_t    n00bb_ffi_search_path_at(const n00bb_ffi_t *ffi, size_t index);
+bool             n00bb_ffi_compile_shims(n00bb_ffi_t *ffi, const char *triple, const char *executable_path,
+                                         core_list_t(core_buffer_t) *bitcode, core_diagnostics_t *diagnostics);

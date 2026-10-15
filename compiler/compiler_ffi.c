@@ -1,9 +1,14 @@
 #include "compiler_ffi.h"
 
 #include <pthread.h>
+#include <spawn.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
+#include "llvm_native_cache.h"
 #include "lib/alloc.h"
 #include "lib/diagnostic.h"
 #include "lib/list.h"
@@ -382,4 +387,187 @@ core_string_t
 n00bb_ffi_search_path_at(const n00bb_ffi_t *ffi, size_t index)
 {
     return ffi->search_paths.data[index];
+}
+
+extern char **environ;
+
+static bool
+write_whole_file(const char *path, core_string_t contents)
+{
+    FILE *file = fopen(path, "wb");
+    if (!file) {
+        return false;
+    }
+    bool ok = fwrite(contents.data, 1, contents.u8_bytes, file) == contents.u8_bytes;
+    return fclose(file) == 0 && ok;
+}
+
+static bool
+read_whole_file(const char *path, core_buffer_t *out)
+{
+    FILE *file = fopen(path, "rb");
+    if (!file) {
+        return false;
+    }
+    char chunk[65536];
+    size_t count = 0;
+    while ((count = fread(chunk, 1, sizeof chunk, file)) != 0) {
+        core_buffer_append(out, chunk, count);
+    }
+    bool ok = !ferror(file);
+    fclose(file);
+    return ok && out->byte_len;
+}
+
+static char *
+sdk_root(void)
+{
+#ifdef __APPLE__
+    const char *configured = getenv("SDKROOT");
+    if (configured && *configured) {
+        return core_strdup(configured);
+    }
+    FILE *query = popen("/usr/bin/xcrun --show-sdk-path 2>/dev/null", "r");
+    if (!query) {
+        return nullptr;
+    }
+    char path[4096] = {0};
+    bool read = fgets(path, sizeof path, query) != nullptr;
+    pclose(query);
+    size_t length = read ? strlen(path) : 0;
+    while (length && (path[length - 1] == '\n' || path[length - 1] == '\r')) {
+        path[--length] = '\0';
+    }
+    return length ? core_strdup(path) : nullptr;
+#else
+    return nullptr;
+#endif
+}
+
+static bool
+run_clang(const char *triple, const char *directory, const char *source, const char *output)
+{
+    const char *compiler = getenv("N00BB_CC");
+    if (!compiler) {
+        compiler = N00BB_LLVM_CLANG;
+    }
+    core_buffer_t target = {0};
+    core_buffer_printf(&target, "--target=%s", triple);
+    char *arguments[16] = {(char *)compiler, target.data, "-std=c11", "-O2", "-fPIC", "-c", "-emit-llvm",
+                           "-I", (char *)directory};
+    size_t next = 9;
+    char *sysroot = sdk_root();
+    if (sysroot) {
+        arguments[next++] = "-isysroot";
+        arguments[next++] = sysroot;
+    }
+    arguments[next++] = (char *)source;
+    arguments[next++] = "-o";
+    arguments[next++] = (char *)output;
+    arguments[next] = nullptr;
+    pid_t child = 0;
+    int status = 0;
+    bool ok = !posix_spawnp(&child, compiler, nullptr, nullptr, arguments, environ)
+           && waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    core_free(sysroot);
+    core_buffer_release(&target);
+    return ok;
+}
+
+static core_uint128_t
+shim_key(const n00bb_ffi_t *ffi, const n00bb_native_cache_t *cache, const char *triple, size_t index)
+{
+    core_buffer_t payload = {0};
+    core_buffer_printf(&payload, "n00bb-shim-v1");
+    const ffi_output_t *shim = &ffi->shims.data[index];
+    core_buffer_append(&payload, shim->name.data, shim->name.u8_bytes + 1);
+    core_buffer_append(&payload, shim->contents.data, shim->contents.u8_bytes + 1);
+    for (size_t i = 0; i < ffi->shims.len; i++) {
+        if (ends_with(ffi->shims.data[i].name, ".h")) {
+            core_buffer_append(&payload, ffi->shims.data[i].name.data, ffi->shims.data[i].name.u8_bytes + 1);
+            core_buffer_append(&payload, ffi->shims.data[i].contents.data,
+                               ffi->shims.data[i].contents.u8_bytes + 1);
+        }
+    }
+    core_uint128_t key = n00bb_native_cache_key(cache, payload.data, payload.byte_len, triple, "shim", "", false,
+                                                false);
+    core_buffer_release(&payload);
+    return key;
+}
+
+static bool
+compile_uncached(const n00bb_ffi_t *ffi, const char *triple, size_t index, core_buffer_t *bitcode)
+{
+    char directory[] = "/tmp/n00bb-shims.XXXXXX";
+    if (!mkdtemp(directory)) {
+        return false;
+    }
+    core_list_t(core_string_t) written = core_list_new(core_string_t);
+    bool ok = true;
+    for (size_t i = 0; ok && i < ffi->shims.len; i++) {
+        const ffi_output_t *shim = &ffi->shims.data[i];
+        if (i != index && !ends_with(shim->name, ".h")) {
+            continue;
+        }
+        core_buffer_t path = {0};
+        core_buffer_printf(&path, "%s/%.*s", directory, (int)shim->name.u8_bytes, shim->name.data);
+        ok = write_whole_file(path.data, shim->contents);
+        core_list_push(written, core_string_dup(core_string_borrow(path.data, path.byte_len)));
+        core_buffer_release(&path);
+    }
+    core_buffer_t source = {0}, output = {0};
+    core_buffer_printf(&source, "%s/%.*s", directory, (int)ffi->shims.data[index].name.u8_bytes,
+                       ffi->shims.data[index].name.data);
+    core_buffer_printf(&output, "%s.bc", source.data);
+    ok = ok && run_clang(triple, directory, source.data, output.data) && read_whole_file(output.data, bitcode);
+    unlink(output.data);
+    for (size_t i = 0; i < written.len; i++) {
+        unlink(written.data[i].data);
+        core_free((void *)written.data[i].data);
+    }
+    core_list_free(written);
+    core_buffer_release(&source);
+    core_buffer_release(&output);
+    rmdir(directory);
+    return ok;
+}
+
+bool
+n00bb_ffi_compile_shims(n00bb_ffi_t *ffi, const char *triple, const char *executable_path,
+                        core_list_t(core_buffer_t) *bitcode, core_diagnostics_t *diagnostics)
+{
+    if (!ffi || !triple || !bitcode) {
+        return false;
+    }
+    n00bb_native_cache_t *cache = executable_path && !getenv("N00BB_NO_NATIVE_CACHE")
+                                    ? n00bb_native_cache_open(executable_path)
+                                    : nullptr;
+    bool ok = true;
+    for (size_t i = 0; ok && i < ffi->shims.len; i++) {
+        if (!ends_with(ffi->shims.data[i].name, ".c")) {
+            continue;
+        }
+        core_uint128_t key = cache ? shim_key(ffi, cache, triple, i) : 0;
+        core_buffer_t compiled = {0};
+        bool cached = cache && n00bb_native_cache_read(cache, key, &compiled);
+        if (!cached) {
+            ok = compile_uncached(ffi, triple, i, &compiled);
+            if (ok && cache) {
+                n00bb_native_cache_write(cache, key, compiled.data, compiled.byte_len);
+            }
+        }
+        if (ok) {
+            core_list_push(*bitcode, compiled);
+        } else {
+            core_buffer_release(&compiled);
+            core_buffer_t message = {0};
+            core_buffer_printf(&message, "could not compile the C shim %.*s",
+                               (int)ffi->shims.data[i].name.u8_bytes, ffi->shims.data[i].name.data);
+            core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-B0025"),
+                                    core_string_borrow(message.data, message.byte_len));
+            core_buffer_release(&message);
+        }
+    }
+    n00bb_native_cache_close(cache);
+    return ok;
 }

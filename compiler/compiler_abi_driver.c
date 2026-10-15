@@ -544,13 +544,25 @@ n00bb_validate_executable_completeness(core_link_unit_t *link,
     return true;
 }
 
+static char *
+n00bb_flag_argument(const char *prefix, core_string_t value)
+{
+    core_buffer_t argument = {0};
+    core_buffer_printf(&argument, "%s%.*s", prefix, (int)value.u8_bytes,
+                       value.data);
+    return argument.data;
+}
+
 bool
 n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
                        parse_cmdr_result_t *args, bool debug_enabled,
                        bool native_cpu,
                        const char *compiler_path,
+                       const n00bb_native_inputs_t *native,
                        core_diagnostics_t *diagnostics)
 {
+    const n00bb_native_inputs_t no_native = {0};
+    if (!native) native = &no_native;
     core_list_t(core_translation_unit_ptr_t) order =
         core_list_new(core_translation_unit_ptr_t);
     bool ok = link && analysis
@@ -572,7 +584,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     size_t count = order.len;
     bool lto = parse_cmdr_flag_present(args, CORE_STRING_STATIC("--lto"));
     char **names = calloc(count, sizeof(*names));
-    char **objects = calloc(count + 3, sizeof(*objects));
+    char **objects = calloc(count + 4, sizeof(*objects));
     core_buffer_t *lto_modules = lto
         ? calloc(count + 1, sizeof(*lto_modules)) : nullptr;
     size_t phase_capacity = analysis->phase_results.len;
@@ -819,8 +831,9 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         ok = runtime_path && n00bb_read_bitcode(runtime_path,
             &lto_modules[count]);
         core_free(runtime_path);
+        size_t input_count = count + 1 + native->bitcode_count;
         n00bb_llvm_bitcode_input_t *inputs = ok
-            ? calloc(count + 1, sizeof(*inputs)) : nullptr;
+            ? calloc(input_count, sizeof(*inputs)) : nullptr;
         ok = ok && inputs;
         for (size_t i = 0; ok && i < count + 1; i++)
             inputs[i] = (n00bb_llvm_bitcode_input_t){
@@ -828,8 +841,13 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
                 .length = lto_modules[i].byte_len,
                 .native_support = i == count,
             };
+        for (size_t i = 0; ok && i < native->bitcode_count; i++)
+            inputs[count + 1 + i] = (n00bb_llvm_bitcode_input_t){
+                .data = native->bitcode[i].data,
+                .length = native->bitcode[i].byte_len,
+            };
         core_buffer_t object = {0};
-        if (ok) ok = n00bb_llvm_backend_link_bitcode(inputs, count + 1,
+        if (ok) ok = n00bb_llvm_backend_link_bitcode(inputs, input_count,
             debug_enabled, native_cpu,
             !parse_cmdr_flag_present(args,
                 CORE_STRING_STATIC("--gc-conservative-stacks")),
@@ -839,6 +857,26 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         if (ok) objects[0] = n00bb_write_temporary_object(
             object.data, object.byte_len);
         ok = ok && objects[0];
+        core_buffer_release(&object);
+        free(inputs);
+    }
+    if (ok && !lto && native->bitcode_count) {
+        build_stage = "compiling C shims";
+        n00bb_llvm_bitcode_input_t *inputs = calloc(native->bitcode_count,
+                                                    sizeof(*inputs));
+        ok = inputs != nullptr;
+        for (size_t i = 0; ok && i < native->bitcode_count; i++)
+            inputs[i] = (n00bb_llvm_bitcode_input_t){
+                .data = native->bitcode[i].data,
+                .length = native->bitcode[i].byte_len,
+            };
+        core_buffer_t object = {0};
+        if (ok) ok = n00bb_llvm_backend_link_bitcode(inputs,
+            native->bitcode_count, debug_enabled, native_cpu, false,
+            &object, diagnostics);
+        if (ok) objects[count + 3] = n00bb_write_temporary_object(
+            object.data, object.byte_len);
+        ok = ok && objects[count + 3];
         core_buffer_release(&object);
         free(inputs);
     }
@@ -897,16 +935,35 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         int32_t extra_count = parse_cmdr_flag_value_count(args,
             CORE_STRING_STATIC("--link-object"));
         size_t object_count = 0;
-        for (size_t i = 0; i < count + 3; i++)
+        for (size_t i = 0; i < count + 4; i++)
             if (objects[i]) object_count++;
+        size_t native_flags = native->search_path_count
+            + native->library_count + 2 * native->framework_count;
         char **arguments = calloc(object_count + (size_t)extra_count
+                                      + native_flags
                                       + N00BB_SYSTEM_LIBRARY_COUNT + 5,
                                   sizeof(*arguments));
-        ok = arguments != nullptr;
+        char **native_arguments = native_flags
+            ? calloc(native_flags, sizeof(*native_arguments)) : nullptr;
+        ok = arguments != nullptr && (!native_flags || native_arguments);
+        size_t native_used = 0;
+        for (size_t i = 0; ok && i < native->search_path_count; i++)
+            native_arguments[native_used++] = n00bb_flag_argument("-L",
+                native->search_paths[i]);
+        for (size_t i = 0; ok && i < native->library_count; i++)
+            native_arguments[native_used++] = n00bb_flag_argument("-l",
+                native->libraries[i]);
+        for (size_t i = 0; ok && i < native->framework_count; i++) {
+            native_arguments[native_used++] = core_strdup("-framework");
+            native_arguments[native_used++] = n00bb_flag_argument("",
+                native->frameworks[i]);
+        }
+        for (size_t i = 0; ok && i < native_used; i++)
+            if (!native_arguments[i]) ok = false;
         if (ok) {
             arguments[0] = (char *)linker;
             size_t next = 1;
-            for (size_t i = 0; i < count + 3; i++)
+            for (size_t i = 0; i < count + 4; i++)
                 if (objects[i]) arguments[next++] = objects[i];
             for (int32_t i = 0; i < extra_count; i++) {
                 core_string_t value = parse_cmdr_flag_str_at(args,
@@ -918,6 +975,8 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             if (ok) {
                 size_t tail = next + (size_t)extra_count;
                 arguments[tail++] = archive;
+                for (size_t i = 0; i < native_used; i++)
+                    arguments[tail++] = native_arguments[i];
                 for (size_t s = 0; s < N00BB_SYSTEM_LIBRARY_COUNT; s++)
                     arguments[tail++] = (char *)n00bb_system_libraries[s];
                 arguments[tail++] = "-o";
@@ -959,12 +1018,15 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             for (int32_t i = 0; i < extra_count; i++)
                 core_free(arguments[next + (size_t)i]);
         }
+        for (size_t i = 0; i < native_used; i++)
+            core_free(native_arguments[i]);
+        free(native_arguments);
         free(arguments);
     } else ok = false;
     if (staging) unlink(staging);
     free(staging);
     core_free(archive);
-    for (size_t i = 0; i < count + 3; i++) {
+    for (size_t i = 0; i < count + 4; i++) {
         if (objects && objects[i]) {
             unlink(objects[i]);
             core_free(objects[i]);

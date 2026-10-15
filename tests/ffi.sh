@@ -40,6 +40,8 @@ builds_and_runs use_path
 builds_and_runs use_search
 builds_and_runs package_contracts
 builds_and_runs raw_extern
+builds_and_runs shim_call
+builds_and_runs shim_call --lto
 
 for marker in marker-literal-5be1 marker-contract-5be1; do
     for binary in constants use_path use_search; do

@@ -12,11 +12,13 @@ project(
 
 lantern = dependency('ir', method: 'pkg-config', required: true)
 writ = dependency('writ', method: 'pkg-config', required: true)
-writ_paths = [
-    '-DN00BB_WRIT_PROFILE_DIR="' + writ.get_variable(pkgconfig: 'profiledir') + '"',]
 llvm = dependency('llvm', method: 'config-tool',
                   modules: ['core', 'bitwriter', 'bitreader', 'linker'],
                   required: true)
+writ_paths = [
+    '-DN00BB_WRIT_PROFILE_DIR="' + writ.get_variable(pkgconfig: 'profiledir') + '"',
+    '-DN00BB_LLVM_CLANG="' + llvm.get_variable(configtool: 'bindir') / 'clang' + '"',
+]
 grammar_path = meson.current_source_dir() / 'grammar' / 'n00b.bnf'
 
 add_project_arguments(
