@@ -491,6 +491,46 @@ lantern's grammar has.
 
 ---
 
+## IC. Incremental build cache (n00bb)
+
+### Separate compilation per SCC
+
+- [ ] An SCC's native code emits every function it defines, not only the program's reachable set
+- [ ] Type, function, global and dispatch indices in code are read from a per-SCC index table in data
+- [ ] Every index table entry has an index-patch row (section, offset, table kind, SCC-local index)
+- [ ] Instantiations an SCC needs are recorded as specialization requests instead of cloned into its module
+- [ ] Test: a builtin SCC compiles to an identical object in two different programs
+
+### SCC objects
+
+- [ ] One object per SCC holds native code, ABI metadata, the semantic interface, runtime and comptime IR, and patch rows
+- [ ] Key: SCC freshness identity, imported SCC interface identities, imported freshness identities for inlined callees, compiler, flags and target
+- [ ] Objects live in the root's `.n00b-cache/obj/` and persist across builds
+
+### Build from cached SCCs
+
+- [ ] A cached SCC skips lexing, parsing, preprocessing, annotation, link stages, lowering and codegen
+- [ ] Cached SCCs feed the link stages through their interfaces
+- [ ] Inlining, specialization and comptime execution read callee bodies from cached IR
+
+### Incremental link
+
+- [ ] The ABI link rewrites each patched index from SCC-local to global
+- [ ] Specialization requests across all SCCs are collected; missing instantiations are generated from the generic's cached IR
+- [ ] Generated instantiations are cached by generic SCC identity and type arguments, with their own patch rows
+
+### Tests
+
+- [ ] An unchanged rebuild compiles only the root SCC
+- [ ] A source edit rebuilds exactly that SCC and the SCCs whose imported interface changed
+- [ ] An inline-body change rebuilds the SCCs that inline it
+- [ ] A new instantiation generates one specialization object and reuses cached ones
+- [ ] A cycle of modules is cached and invalidated as one SCC
+- [ ] Gate: n00bb `./build.sh test` green, Mach-O and Linux
+- [ ] Committed: "Incremental build cache"
+
+---
+
 ## Phase 1 close
 
 - [ ] `load dynamic` in a binding is rejected with a clear "not yet supported" error, in writ and in n00bb
