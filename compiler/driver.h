@@ -14,13 +14,14 @@ bool n00bb_operand_module_spec(const char *operand,
 bool n00bb_resolver_add_generated(n00bb_resolver_t *resolver,
                                   core_string_t identifier,
                                   core_string_t text,
-                                  core_string_t package);
+                                  const core_translation_unit_t *owner);
 core_module_resolve_status_t n00bb_locate_operand(
     n00bb_resolver_t *resolver, const char *operand,
     core_module_spec_t *module_out, core_source_file_t *source_out);
 bool n00bb_same_package(const core_translation_unit_t *left,
                         const core_translation_unit_t *right);
 core_string_t n00bb_package_id(const core_translation_unit_t *unit);
+core_string_t n00bb_package_namespace(const core_translation_unit_t *unit);
 void n00bb_source_file_set_package(core_source_file_t *source,
                                   const char *package_id);
 core_string_t n00bb_resolver_search_description(

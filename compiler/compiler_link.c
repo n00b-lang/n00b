@@ -1155,16 +1155,9 @@ resolve_module_member_site(parse_grammar_t *grammar,
         root = link_use_site_for_node(state, root->receiver_node);
     parse_sym_entry_t *base_symbol = root ? root->symbol : nullptr;
     if (base_symbol && base_symbol->kind != PARSE_SYM_MODULE) return true;
-    core_string_t package_id = n00bb_package_id(unit);
-    if (root && root->member_name.data
-        && !core_string_eq(package_id, CORE_STRING_STATIC("default"))) {
-        const char *base = package_id.data;
-        for (size_t i = 0; i < package_id.u8_bytes; i++)
-            if (package_id.data[i] == '/' || package_id.data[i] == '\\')
-                base = package_id.data + i + 1;
-        core_string_t external_root = core_string_borrow(base,
-            package_id.data + package_id.u8_bytes - base);
-        if (core_string_eq(root->member_name, external_root)) {
+    core_string_t package_namespace = n00bb_package_namespace(unit);
+    if (root && root->member_name.data && package_namespace.u8_bytes) {
+        if (core_string_eq(root->member_name, package_namespace)) {
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit), unit,
                 CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-M0011"),
@@ -2870,9 +2863,12 @@ register_link_declaration(core_link_unit_t *link,
     core_link_declaration_t *declaration = nullptr;
     core_string_t declaration_module = link_symbol_module(unit, symbol);
     core_string_t declaration_key = core_string_from_cstr(key.data);
-    bool alias_declaration = state && state->interface_module
-        && core_link_unit_find_declaration(link, declaration_module,
-                                           declaration_key);
+    core_link_declaration_t *aliased = state && state->interface_module
+        ? core_link_unit_find_declaration(link, declaration_module,
+                                          declaration_key)
+        : nullptr;
+    bool alias_declaration = aliased != nullptr;
+    if (aliased) metadata.contract = core_link_declaration_contract(aliased);
     n00bb_link_payload_t *payload = nullptr;
     if (!alias_declaration) {
         payload = core_alloc(n00bb_link_payload_t);

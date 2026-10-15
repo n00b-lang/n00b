@@ -23,11 +23,11 @@ N00B_PATH="$script_dir/programs/link_records" "$compiler" compile \
 [ -s "$tmp/record_dep_abi.n00bm" ]
 "$abi_link_input_test" --field "$tmp/record_dep_abi.n00bm"
 set --
-for module in builtin.io.debug builtin.io.raw \
+for module in builtin.__init builtin.io.debug builtin.io.raw builtin.ffi \
     builtin.containers.list builtin.containers.traits \
     builtin.containers.view builtin.cursor builtin.containers.dict \
     builtin.hash builtin.containers.hash_index builtin.sort \
-    builtin.containers.set; do
+    builtin.containers.set builtin.containers.tree; do
     N00B_PATH="$script_dir/programs/link_records" "$compiler" compile \
         --output "$tmp/$module.n00bm" "$module" 2>"$tmp/$module.err" || {
         cat "$tmp/$module.err"

@@ -1,0 +1,1 @@
+public func named_like_root() -> int { return 3 }

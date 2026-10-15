@@ -1,2 +1,2 @@
-import builtin.cycle_long_a
+import cycle_long_a
 public func c() -> int { return 3 }

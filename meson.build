@@ -575,6 +575,14 @@ test(
 )
 
 test(
+    'root-modules', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'root_modules.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'root_modules'],
+    timeout: 120,
+)
+
+test(
     'ffi', find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'ffi.sh',
            n00bb_exe.full_path(),

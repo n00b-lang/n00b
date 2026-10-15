@@ -1,0 +1,7 @@
+import helper
+import root_modules
+
+comptime {} else {
+    require helper.helper_value() == 4
+    require root_modules.named_like_root() == 3
+}

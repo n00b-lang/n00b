@@ -1290,16 +1290,11 @@ import_request_details(n00bb_resolver_t *resolver, parse_grammar_t *grammar,
         operand = core_string_borrow(raw.data + 1, raw.u8_bytes - 2);
     }
     core_string_t source_name = core_string_borrow(name->data, name->byte_len);
-    core_string_t package_id = n00bb_package_id(importer);
-    if (!path_token
-        && !core_string_eq(package_id, CORE_STRING_STATIC("default"))) {
-        const char *base = package_id.data;
-        for (size_t i = 0; i < package_id.u8_bytes; i++)
-            if (package_id.data[i] == '/' || package_id.data[i] == '\\')
-                base = package_id.data + i + 1;
-        size_t root_len = package_id.data + package_id.u8_bytes - base;
+    core_string_t package_namespace = n00bb_package_namespace(importer);
+    if (!path_token && package_namespace.u8_bytes) {
+        size_t root_len = package_namespace.u8_bytes;
         if (source_name.u8_bytes >= root_len
-            && !memcmp(source_name.data, base, root_len)
+            && !memcmp(source_name.data, package_namespace.data, root_len)
             && (source_name.u8_bytes == root_len
                 || source_name.data[root_len] == '.')) {
             core_buffer_free(name);
@@ -1659,7 +1654,8 @@ load_import_module(import_driver_t *driver, parse_grammar_t *grammar,
             "a package cannot import its own external namespace; use its internal module name");
         return false;
     }
-    if (statement && !n00bb_same_package(importer, imported)
+    if (statement && !state->interface_module
+        && !n00bb_same_package(importer, imported)
         && !find_package_declaration(imported, imported_name)) {
         import_error(importer, statement,
             "a library source module cannot be imported from another source package; import its package manifest");
@@ -1895,7 +1891,7 @@ load_module_literal(void *opaque, parse_grammar_t *grammar,
     core_module_spec_t module = {0};
     bool ok = n00bb_resolver_add_generated(driver->resolver, id,
                   core_string_borrow(source.data ? source.data : "", source.byte_len),
-                  n00bb_package_id(importer))
+                  importer)
         && core_module_spec_init(&module, id)
         && load_import_module(driver, grammar, literal, importer, &module,
                identifier.data, nullptr, module_out, tree_out)

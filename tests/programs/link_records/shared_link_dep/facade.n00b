@@ -1,6 +1,6 @@
-import shared_link_dep.impl
+import impl
 
 package shared_link_dep {
-    export shared_link_dep.impl.shared_link_value
-    export shared_link_dep.impl.SharedLinkContext
+    export impl.shared_link_value
+    export impl.SharedLinkContext
 }

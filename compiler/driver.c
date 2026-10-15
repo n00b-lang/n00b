@@ -41,6 +41,7 @@ core_list_decl(n00bb_root_t);
 
 typedef struct {
     core_string_t package_id;
+    core_string_t package_namespace;
     bool is_default_package;
 } n00bb_source_origin_t;
 
@@ -56,6 +57,8 @@ typedef struct {
     core_string_t identifier;
     core_string_t text;
     core_string_t package;
+    core_string_t package_namespace;
+    bool is_default_package;
 } n00bb_generated_module_t;
 core_list_decl(n00bb_generated_module_t);
 
@@ -73,6 +76,10 @@ struct n00bb_resolver_t {
 static char *join_path(const char *a, const char *b);
 static size_t source_suffix_length(const char *path);
 static uint64_t package_syntax_profile(const char *argv0);
+static void set_source_origin(core_source_file_t *source,
+                              core_string_t package_id,
+                              core_string_t package_namespace,
+                              bool is_default_package);
 #define PACKAGE_SYNTAX_KIND CORE_STRING_STATIC("n00bb.package-syntax.v1")
 static bool
 accept_source_path(void *context, core_string_t relative)
@@ -415,6 +422,7 @@ n00bb_resolver_free(n00bb_resolver_t *resolver)
         core_free(resolver->generated.data[i].identifier.data);
         core_free(resolver->generated.data[i].text.data);
         core_free(resolver->generated.data[i].package.data);
+        core_free(resolver->generated.data[i].package_namespace.data);
     }
     core_list_free(resolver->generated);
     pthread_mutex_destroy(&resolver->generated_lock);
@@ -423,14 +431,18 @@ n00bb_resolver_free(n00bb_resolver_t *resolver)
 
 bool
 n00bb_resolver_add_generated(n00bb_resolver_t *resolver, core_string_t identifier, core_string_t text,
-                             core_string_t package)
+                             const core_translation_unit_t *owner)
 {
-    if (!resolver || !identifier.u8_bytes) return false;
+    const n00bb_source_origin_t *origin = owner
+        ? core_source_file_user_data(&owner->source) : nullptr;
+    if (!resolver || !identifier.u8_bytes || !origin) return false;
     pthread_mutex_lock(&resolver->generated_lock);
     core_list_push(resolver->generated, ((n00bb_generated_module_t){
         .identifier = core_string_dup(identifier),
         .text = core_string_dup(text),
-        .package = core_string_dup(package),
+        .package = core_string_dup(origin->package_id),
+        .package_namespace = core_string_dup(origin->package_namespace),
+        .is_default_package = origin->is_default_package,
     }));
     pthread_mutex_unlock(&resolver->generated_lock);
     return true;
@@ -450,7 +462,8 @@ read_generated_source(n00bb_resolver_t *resolver, const char *operand, core_sour
         bool ok = core_source_file_init(source_out, core_string_borrow(path.data, path.byte_len),
                                         module->text.data, module->text.u8_bytes);
         core_buffer_release(&path);
-        if (ok) n00bb_source_file_set_package(source_out, module->package.data);
+        if (ok) set_source_origin(source_out, module->package, module->package_namespace,
+                                  module->is_default_package);
         status = ok ? CORE_MODULE_RESOLVED : CORE_MODULE_RESOLVE_ERROR;
         break;
     }
@@ -539,6 +552,25 @@ n00bb_resolver_supports_locator(n00bb_resolver_t *resolver,
     return false;
 }
 
+static void
+set_file_operand_origin(const n00bb_resolver_t *resolver, const char *operand,
+                        core_source_file_t *source)
+{
+    char *canonical = canonical_path(operand);
+    char *directory = canonical ? parent_path(canonical) : nullptr;
+    const n00bb_root_t *owner = nullptr;
+    for (size_t i = 0; directory && !owner && i < resolver->roots.len; i++)
+        if (!strcmp(resolver->roots.data[i].path.data, directory))
+            owner = &resolver->roots.data[i];
+    if (owner)
+        set_source_origin(source, owner->path, (core_string_t){0},
+                          owner->is_default_package);
+    else set_source_origin(source, (core_string_t){0}, (core_string_t){0},
+                           true);
+    core_free(directory);
+    core_free(canonical);
+}
+
 static bool
 is_file_operand(const char *operand)
 {
@@ -611,15 +643,17 @@ free_source_origin(void *data)
     n00bb_source_origin_t *origin = data;
     if (!origin) return;
     core_free(origin->package_id.data);
+    core_free(origin->package_namespace.data);
     core_free(origin);
 }
 
 static void
-set_source_origin(core_source_file_t *source, const char *package_id,
-                  bool is_default_package)
+set_source_origin(core_source_file_t *source, core_string_t package_id,
+                  core_string_t package_namespace, bool is_default_package)
 {
     n00bb_source_origin_t *origin = core_alloc(n00bb_source_origin_t);
-    origin->package_id = core_string_from_cstr(package_id ? package_id : "");
+    origin->package_id = core_string_dup(package_id);
+    origin->package_namespace = core_string_dup(package_namespace);
     origin->is_default_package = is_default_package;
     core_source_file_set_user_data(source, origin, free_source_origin);
 }
@@ -628,8 +662,24 @@ void
 n00bb_source_file_set_package(core_source_file_t *source,
                               const char *package_id)
 {
+    core_string_t id = core_string_from_cstr(package_id ? package_id : "");
     bool is_default = !package_id || !strcmp(package_id, "default");
-    set_source_origin(source, package_id, is_default);
+    size_t base = id.u8_bytes;
+    while (base && id.data[base - 1] != '/' && id.data[base - 1] != '\\')
+        base--;
+    core_string_t package_namespace = is_default ? (core_string_t){0}
+        : core_string_borrow(id.data + base, id.u8_bytes - base);
+    set_source_origin(source, id, package_namespace, is_default);
+    core_free(id.data);
+}
+
+core_string_t
+n00bb_package_namespace(const core_translation_unit_t *unit)
+{
+    const n00bb_source_origin_t *origin = unit
+        ? core_source_file_user_data(&unit->source) : nullptr;
+    return origin && !origin->is_default_package
+        ? origin->package_namespace : (core_string_t){0};
 }
 
 bool
@@ -714,10 +764,14 @@ resolve_file(void *context, const core_module_spec_t *module,
                     core_buffer_printf(&package, "%.*s/%.*s",
                         (int)root->path.u8_bytes, root->path.data,
                         (int)(separator - name.data), name.data);
-                    set_source_origin(out, package.data, false);
+                    set_source_origin(out,
+                        core_string_borrow(package.data, package.byte_len),
+                        core_string_borrow(name.data,
+                            (size_t)(separator - name.data)),
+                        false);
                     core_buffer_release(&package);
                 }
-                else set_source_origin(out, root->path.data,
+                else set_source_origin(out, root->path, (core_string_t){0},
                                        root->is_default_package);
             }
             core_free(relative);
@@ -919,11 +973,11 @@ n00bb_resolver_internal_import(n00bb_resolver_t *resolver,
     }
     core_free(relative);
     if (!found) return false;
-    const char *base = origin->package_id.data;
-    for (const char *at = base; *at; at++)
-        if (*at == '/' || *at == '\\') base = at + 1;
+    core_string_t package_namespace = n00bb_package_namespace(importer);
     core_buffer_t canonical = {0};
-    core_buffer_printf(&canonical, "%s.%.*s", base,
+    core_buffer_printf(&canonical, "%.*s%s%.*s",
+                       (int)package_namespace.u8_bytes, package_namespace.data,
+                       package_namespace.u8_bytes ? "." : "",
                        (int)name.u8_bytes, name.data);
     bool ok = core_module_spec_init(resolved,
         core_string_borrow(canonical.data, canonical.byte_len));
@@ -948,7 +1002,7 @@ n00bb_locate_operand(n00bb_resolver_t *resolver, const char *operand,
         core_module_resolve_status_t status =
             read_source_path(operand, source_out);
         if (status == CORE_MODULE_RESOLVED)
-            set_source_origin(source_out, nullptr, true);
+            set_file_operand_origin(resolver, operand, source_out);
         return status;
     }
     core_module_resolver_t interface = n00bb_resolver_interface(resolver);
