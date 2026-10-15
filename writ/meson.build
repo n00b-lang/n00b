@@ -218,7 +218,8 @@ writ_exe = executable(
     'writ',
     'src/cli/main.c',
     dependencies: writ_clang_dep,
-    c_args: ['-DWRIT_DEFAULT_LLVM_PREFIX="' + llvm_prefix + '"'],
+    c_args: ['-DWRIT_DEFAULT_LLVM_PREFIX="' + llvm_prefix + '"',
+             '-DWRIT_PROFILE_INSTALL_DIR="' + profile_install_dir + '"'],
 )
 
 subdir('tests')

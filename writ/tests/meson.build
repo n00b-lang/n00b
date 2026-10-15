@@ -362,8 +362,8 @@ foreach case : ['zlib', 'resharp', 'kv', 'kv_export', 'float_record']
         'gen-n00b-' + case,
         python,
         args: [golden, source_root / 'tests' / 'gen_n00b' / case + '.out', '--stdout', '--', writ_exe]
-              + embedded_flags + ['--feature', 'experimental_capture_groups'] + contract_dir
-              + ['gen', 'n00b', 'tests/gen_n00b' / case + '.writ'] + n00b_profile + ['-o', '-'],
+              + ['--platform', 'aarch64-apple-darwin', '--feature', 'experimental_capture_groups'] + contract_dir
+              + ['gen', 'n00b', '--embedded', 'tests/gen_n00b' / case + '.writ'] + n00b_profile + ['-o', '-'],
     )
 endforeach
 test(

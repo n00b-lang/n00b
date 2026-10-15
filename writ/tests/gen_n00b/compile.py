@@ -12,8 +12,8 @@ with tempfile.TemporaryDirectory() as scratch:
         out = os.path.join(scratch, case)
         os.makedirs(out)
         generated = subprocess.run(
-            [writ, "--platform", triple, "--feature", "experimental_capture_groups", "--embedded", "n00b",
-             "--contract-dir", os.path.join(root, "contracts"), "gen", "n00b",
+            [writ, "--platform", triple, "--feature", "experimental_capture_groups",
+             "--contract-dir", os.path.join(root, "contracts"), "gen", "n00b", "--embedded",
              os.path.join(root, "tests", "gen_n00b", case + ".writ"), "--profile",
              os.path.join(root, "profiles", "n00b.writ"), "-o", out],
             capture_output=True, text=True, cwd=root)

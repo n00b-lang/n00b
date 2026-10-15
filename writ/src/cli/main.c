@@ -329,11 +329,14 @@ gen_n00b(writ_session_t *session, int argc, char **argv)
 {
     writ_gen_n00b_request_t request = {.struct_size = sizeof(request)};
     const char *directory = ".";
-    const char *profiles = nullptr;
-    for (int i = 2; i < argc; i++) {
+    const char *profiles = WRIT_PROFILE_INSTALL_DIR "/n00b.writ";
+    const char *source = nullptr;
+    for (int i = 1; i < argc; i++) {
         size_t taken = 0;
         if (!strcmp(argv[i], "-o") && i + 1 < argc) {
             directory = argv[++i];
+        } else if (!strcmp(argv[i], "--embedded") && i + 1 < argc) {
+            source = argv[++i];
         } else if (!strcmp(argv[i], "--profile") && i + 1 < argc) {
             profiles = argv[++i];
         } else if (!take_list(argv, &i, argc, "--prefix", &request.shim_prefix, &taken)
@@ -342,11 +345,12 @@ gen_n00b(writ_session_t *session, int argc, char **argv)
             return 2;
         }
     }
-    if (!profiles || !embedded_language.length) {
+    if (!source) {
         return 2;
     }
+    embedded_language = arg("n00b");
     writ_platform_t *platform = platform_for(session);
-    writ_unit_t *unit = platform ? load(session, argv[1]) : nullptr;
+    writ_unit_t *unit = platform ? load(session, source) : nullptr;
     const writ_model_t *model = nullptr;
     writ_bind_request_t bind = {.struct_size = sizeof(bind), .binding = unit, .profiles = load_file(session, profiles),
                                 .language = embedded_language};
@@ -503,8 +507,8 @@ static const struct {
     {"import", cmd_import, "import --library NAME --header H... [--link L] [--define D] [-I DIR] [--only GLOB] [-o DIR]"},
     {"verify", cmd_verify, "verify FILE [--binary PATH]"},
     {"gen", cmd_gen,
-     "gen c FILE [-o DIR] [--prefix NAME] [--conformance] | gen rust FILE --crate-path DIR [-o DIR] | --embedded n00b "
-     "gen n00b FILE --profile FILE [--prefix NAME] [--module NAME] [-o DIR]"},
+     "gen c FILE [-o DIR] [--prefix NAME] [--conformance] | gen rust FILE --crate-path DIR [-o DIR] | "
+     "gen n00b --embedded FILE [--profile FILE] [--prefix NAME] [--module NAME] [-o DIR]"},
     {"parse", cmd_parse, "parse FILE"},
     {"check", cmd_check, "check FILE"},
     {"plan", cmd_plan, "plan FILE [FUNCTION]"},
@@ -531,7 +535,7 @@ main(int argc, char **argv)
             features[feature_count++] = arg(argv[++i]);
         } else if (!strcmp(argv[i], "--fix")) {
             fixing = true;
-        } else if (!strcmp(argv[i], "--embedded") && i + 1 < argc) {
+        } else if (!strcmp(argv[i], "--embedded") && i + 1 < argc && kept == 1) {
             embedded_language = arg(argv[++i]);
         } else if (!strcmp(argv[i], "--contract-dir") && i + 1 < argc && contract_dir_count < MAX_LIST) {
             contract_dirs[contract_dir_count++] = arg(argv[++i]);
