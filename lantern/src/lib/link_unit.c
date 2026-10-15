@@ -1292,24 +1292,29 @@ register_declaration(core_link_unit_t *link, core_string_t module,
         return true;
     }
 
-    bool compatible = decl->kind == metadata->kind
-        && decl->visibility == metadata->visibility
-        && core_string_eq(decl->overload_group, metadata->overload_group)
-        && (decl->external == external || decl->external_requirement
-            || external_requirement);
     core_link_contract_compatible_fn compare = decl->compatible
         ? decl->compatible : metadata->compatible;
     void *compare_context = decl->compatible
         ? decl->compatibility_context : metadata->compatibility_context;
-    if (compatible) {
-        compatible = compare
+    const char *mismatch = decl->kind != metadata->kind ? "kind"
+        : decl->visibility != metadata->visibility ? "visibility"
+        : !core_string_eq(decl->overload_group, metadata->overload_group)
+            ? "overload group"
+        : !(decl->external == external || decl->external_requirement
+            || external_requirement) ? "linkage"
+        : !(compare
             ? compare(decl->contract, metadata->contract, compare_context)
-            : decl->contract == metadata->contract;
-    }
-    if (!compatible) {
+            : decl->contract == metadata->contract) ? "contract"
+        : nullptr;
+    if (mismatch) {
+        core_buffer_t message = {0};
+        core_buffer_printf(&message,
+            "two declarations of '%.*s' in module '%.*s' disagree on %s",
+            (int)key.u8_bytes, key.data, (int)module.u8_bytes, module.data,
+            mismatch);
         link_report_at(link, owner, metadata->source_location,
-            "LANTERN-L0014",
-            "declarations for one identity have incompatible kind, visibility, or contract");
+            "LANTERN-L0014", message.data);
+        core_buffer_release(&message);
         return false;
     }
     if (is_definition && decl->is_defined) {
@@ -1875,6 +1880,12 @@ core_string_t
 core_link_declaration_key(const core_link_declaration_t *declaration)
 {
     return declaration ? declaration->key : (core_string_t){0};
+}
+
+const void *
+core_link_declaration_contract(const core_link_declaration_t *declaration)
+{
+    return declaration ? declaration->contract : nullptr;
 }
 
 void *

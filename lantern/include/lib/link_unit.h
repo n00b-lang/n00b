@@ -296,6 +296,8 @@ core_string_t core_link_declaration_module(
     const core_link_declaration_t *declaration);
 core_string_t core_link_declaration_key(
     const core_link_declaration_t *declaration);
+const void *core_link_declaration_contract(
+    const core_link_declaration_t *declaration);
 void *core_link_declaration_payload(
     const core_link_declaration_t *declaration);
 /* Bind a live, borrowed subsystem handle to a canonical declaration under an
