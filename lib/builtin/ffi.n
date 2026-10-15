@@ -11,8 +11,10 @@ type Ffi_Callback_Entry {
     once: bool
 }
 
-type Ffi_Callback_Hold {
-    handle: u64
+type Ffi_Hold {
+    group: u64
+    token: u64
+    release: Ref[(u64) -> nil]?
     event: string
     keys: Array[u64]
     thread_id: uint
@@ -20,7 +22,8 @@ type Ffi_Callback_Hold {
 
 var ffi_callbacks: List[Ffi_Callback_Entry] = new[List[Ffi_Callback_Entry]]()
 var ffi_free_callbacks: List[int] = new[List[int]]()
-var ffi_holds: List[Ffi_Callback_Hold] = new[List[Ffi_Callback_Hold]]()
+var ffi_holds: List[Ffi_Hold] = new[List[Ffi_Hold]]()
+var ffi_hold_groups: u64 = 0
 
 litmod<fence> ffi(source: string) -> nil fail: string {
     fail "an 'ffi literal is bound by the compiler"
@@ -51,22 +54,31 @@ func __ffi_callback_free(handle: u64) {
     let empty: Ffi_Callback_Entry = (value = nil, invoke = nil, once = false)
     ffi_callbacks[index] = empty
     ffi_free_callbacks.append(index)
-    var kept: List[Ffi_Callback_Hold] = new[List[Ffi_Callback_Hold]]()
+}
+
+func __ffi_hold_group() -> u64 {
+    ffi_hold_groups += 1
+    return ffi_hold_groups
+}
+
+func __ffi_hold(group: u64, token: u64, release: Ref[(u64) -> nil], event: string,
+                keys: Array[u64], thread_id: uint) {
+    let hold: Ffi_Hold = (group = group, token = token, release = release, event = event,
+                          keys = keys, thread_id = thread_id)
+    ffi_holds.append(hold)
+}
+
+func ffi_drop_group(group: u64) {
+    var kept: List[Ffi_Hold] = new[List[Ffi_Hold]]()
     var position = 0
     while position < cast[int]ffi_holds.len() {
         let hold = ffi_holds[position]
-        if hold.handle != handle {
+        if hold.group != group {
             kept.append(hold)
         }
         position += 1
     }
     ffi_holds = kept
-}
-
-func __ffi_callback_hold(handle: u64, event: string, keys: Array[u64], thread_id: uint) {
-    let hold: Ffi_Callback_Hold = (handle = handle, event = event, keys = keys,
-                                   thread_id = thread_id)
-    ffi_holds.append(hold)
 }
 
 func ffi_keys_match(expected: Array[u64], actual: Array[u64]) -> bool {
@@ -83,12 +95,16 @@ func ffi_keys_match(expected: Array[u64], actual: Array[u64]) -> bool {
     return true
 }
 
-func __ffi_callback_event(event: string, keys: Array[u64], thread_id: uint) {
+func __ffi_event(event: string, keys: Array[u64], thread_id: uint) {
     var position = 0
     while position < cast[int]ffi_holds.len() {
         let hold = ffi_holds[position]
         if hold.event == event and (hold.thread_id == 0 or hold.thread_id == thread_id) and ffi_keys_match(hold.keys, keys) {
-            __ffi_callback_free(hold.handle)
+            ffi_drop_group(hold.group)
+            if hold.release != nil {
+                let release: Ref[(u64) -> nil] = hold.release.get()
+                release.call(hold.token)
+            }
             position = 0
         } else {
             position += 1
