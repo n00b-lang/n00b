@@ -5924,6 +5924,7 @@ n00bb_print_type(th_ctx *types, th_type *type)
         .named = n00bb_display_type_name,
         .sequence = "Array",
         .reference = "Ref",
+        .option_suffix = "?",
     };
     return th_print_with_options(types, type, &options);
 }

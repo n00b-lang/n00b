@@ -292,16 +292,15 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 link_source_location(node));
             return;
         }
-        if (nt_is(grammar, node, "simple-lit")
-            && core_tree_node_value(node).integer_literal_origin == node) {
-            th_type *expected = n00bb_integer_literal_context(grammar,
-                state, node);
-            if (expected && is_integer_type(expected))
-                n00bb_contextual_integer_literal(state, node, expected);
-        }
         if (nt_is(grammar, node, "simple-lit")) {
             th_type *expected = n00bb_integer_literal_context(grammar,
                 state, node);
+            th_type *element = nullptr;
+            if (n00bb_option_type_element(expected, &element))
+                expected = element;
+            if (expected && is_integer_type(expected)
+                && core_tree_node_value(node).integer_literal_origin == node)
+                n00bb_contextual_integer_literal(state, node, expected);
             if (expected && is_float_type(expected))
                 n00bb_contextual_float_literal(node, expected);
         }

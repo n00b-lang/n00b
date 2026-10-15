@@ -10573,8 +10573,13 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                 CORE_STRING_STATIC("ir.array-shape"))
             : function_parameter_shape(symbol, index);
         if (th_mode_is_input_only(mode)) {
+            th_type *literal_type = parameter->type;
+            th_type *literal_element = nullptr;
+            if (!option_builtin
+                && n00bb_option_type_element(literal_type, &literal_element))
+                literal_type = literal_element;
             ir_value_t *value = n00bb_typed_integer_literal(context,
-                argument, parameter->type);
+                argument, literal_type);
             if (value && !n00bb_nominal_value_as(context, visit,
                                                   parameter->type, argument)) {
                 collected = false;

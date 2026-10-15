@@ -1,0 +1,8 @@
+func take(cache_kb: u32?) -> u32 {
+    return 0
+}
+
+comptime {} else {
+    let text: string = "x"
+    require take(text) == 0
+}

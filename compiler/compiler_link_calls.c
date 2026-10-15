@@ -63,6 +63,15 @@ unify_call_node_type(core_translation_unit_t *unit,
                                                     expected)) {
         unified = expected;
     }
+    th_type *literal_element = nullptr;
+    if (!unified && origin
+        && n00bb_option_type_element(unification_expected, &literal_element)
+        && n00bb_contextual_integer_literal(state, typed_node,
+                                            literal_element)) {
+        unified = unification_expected;
+        unification_actual = literal_element;
+        into_option_context = true;
+    }
     if (!unified && typed_node && !wrap_expected && !unwrap_actual
         && is_integer_type(unification_actual)
         && is_integer_type(unification_expected)) {

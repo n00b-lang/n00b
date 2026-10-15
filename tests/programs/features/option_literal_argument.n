@@ -1,0 +1,23 @@
+func take(cache_kb: u32?) -> u32 {
+    if cache_kb == nil {
+        return 0
+    }
+    return cache_kb.get()
+}
+
+func open(path: string, cache_kb: u32? = nil, ratio: f64? = nil) -> u32 {
+    if ratio != nil {
+        return 1
+    }
+    return take(cache_kb)
+}
+
+comptime {} else {
+    require take(64) == 64
+    let x: u32? = 5
+    require take(x) == 5
+    require take(nil) == 0
+    require open("a") == 0
+    require open("a", cache_kb = 64) == 64
+    require open("a", ratio = 0.5) == 1
+}

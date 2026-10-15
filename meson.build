@@ -571,8 +571,20 @@ test(
                / 'features' / 'byte_literal_trait_arguments.n'],
 )
 
+test(
+    'option-type-spelling-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'features'
+               / 'option_type_spelling_rejected.n',
+           '(string vs u32?)'],
+    timeout: 120,
+)
+
 foreach feature : ['fallible_without_result', 'try_error_binding',
-                   'builtin_type_record_literal', 'record_literal_nil_option']
+                   'builtin_type_record_literal', 'record_literal_nil_option',
+                   'option_literal_argument']
     test(
         feature.replace('_', '-'), find_program('sh'),
         args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
