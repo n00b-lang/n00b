@@ -1,0 +1,3 @@
+package archive {
+    export package zlib
+}

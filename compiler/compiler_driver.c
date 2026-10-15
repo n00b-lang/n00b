@@ -1894,6 +1894,38 @@ literal_origin(core_translation_unit_t *unit, parse_token_info_t *token)
     };
 }
 
+static void
+module_literal_identifier(core_buffer_t *out, core_string_t importer,
+                          core_string_t modifier, core_string_t name)
+{
+    size_t leaf = importer.u8_bytes;
+    while (leaf && importer.data[leaf - 1] != '.') leaf--;
+    core_buffer_printf(out, "%.*s__%.*s_%.*s_%.*s",
+        (int)leaf, importer.data, (int)modifier.u8_bytes, modifier.data,
+        (int)(importer.u8_bytes - leaf), importer.data + leaf,
+        (int)name.u8_bytes, name.data);
+}
+
+static bool
+show_module_literal(n00bb_resolver_t *resolver, core_string_t modifier,
+                    core_string_t qualified)
+{
+    size_t split = qualified.u8_bytes;
+    while (split && qualified.data[split - 1] != '.') split--;
+    if (split < 2 || split == qualified.u8_bytes) return false;
+    core_buffer_t identifier = {0};
+    module_literal_identifier(&identifier,
+        core_string_borrow(qualified.data, split - 1), modifier,
+        core_string_borrow(qualified.data + split,
+                           qualified.u8_bytes - split));
+    core_string_t text = {0};
+    bool found = n00bb_resolver_generated_text(resolver,
+        core_string_borrow(identifier.data, identifier.byte_len), &text);
+    if (found) fwrite(text.data, 1, text.u8_bytes, stdout);
+    core_buffer_release(&identifier);
+    return found;
+}
+
 static bool
 load_module_literal(void *opaque, parse_grammar_t *grammar,
                     core_translation_unit_t *importer, parse_tree_t *literal,
@@ -1911,14 +1943,9 @@ load_module_literal(void *opaque, parse_grammar_t *grammar,
     const char *contents = core_source_file_contents(&importer->source);
     core_string_t text = core_string_borrow(contents + token->content_start_byte,
         token->content_end_byte - token->content_start_byte);
-    core_string_t importer_id = importer->module.identifier;
-    size_t leaf = importer_id.u8_bytes;
-    while (leaf && importer_id.data[leaf - 1] != '.') leaf--;
     core_buffer_t identifier = {0};
-    core_buffer_printf(&identifier, "%.*s__%.*s_%.*s_%.*s",
-        (int)leaf, importer_id.data, (int)modifier.u8_bytes, modifier.data,
-        (int)(importer_id.u8_bytes - leaf), importer_id.data + leaf,
-        (int)name.u8_bytes, name.data);
+    module_literal_identifier(&identifier, importer->module.identifier,
+                              modifier, name);
     core_string_t id = core_string_borrow(identifier.data, identifier.byte_len);
     core_buffer_t source = {0};
     n00bb_native_declarations_t natives = {0};
@@ -3388,12 +3415,18 @@ n00bb_compiler_main(int argc, char **argv)
     bool normalize_fmt = fmt_command && parse_cmdr_flag_present(args,
         CORE_STRING_STATIC("--normalize"));
     bool locate_only = core_string_eq(command, CORE_STRING_STATIC("locate-tu"));
-    bool preprocess_command = core_string_eq(command, CORE_STRING_STATIC("preprocess"));
-    bool lower_command = core_string_eq(command, CORE_STRING_STATIC("lower"));
-    bool build_command = is_default
-        || core_string_eq(command, CORE_STRING_STATIC("build"));
-    bool library_command = core_string_eq(command, CORE_STRING_STATIC("library"));
-    bool compile_command = core_string_eq(command, CORE_STRING_STATIC("compile"));
+    bool show_ffi = parse_cmdr_flag_present(args,
+        CORE_STRING_STATIC("--show-ffi"));
+    bool preprocess_command = show_ffi
+        || core_string_eq(command, CORE_STRING_STATIC("preprocess"));
+    bool lower_command = !show_ffi
+        && core_string_eq(command, CORE_STRING_STATIC("lower"));
+    bool build_command = !show_ffi && (is_default
+        || core_string_eq(command, CORE_STRING_STATIC("build")));
+    bool library_command = !show_ffi
+        && core_string_eq(command, CORE_STRING_STATIC("library"));
+    bool compile_command = !show_ffi
+        && core_string_eq(command, CORE_STRING_STATIC("compile"));
     bool emit_interface = parse_cmdr_flag_present(args,
         CORE_STRING_STATIC("--emit-interface"));
     bool interface_ir_dump = emit_interface
@@ -3476,7 +3509,8 @@ n00bb_compiler_main(int argc, char **argv)
         args, CORE_STRING_STATIC("--dump-tokens"));
     bool show_tree = parse_command || parse_cmdr_flag_present(
         args, CORE_STRING_STATIC("--dump-tree"));
-    bool show_preprocessed = preprocess_command || parse_cmdr_flag_present(
+    bool show_preprocessed = (preprocess_command && !show_ffi)
+        || parse_cmdr_flag_present(
         args, CORE_STRING_STATIC("--dump-preprocessed"));
     bool show_symbols = parse_cmdr_flag_present(
         args, CORE_STRING_STATIC("--dump-symbols"));
@@ -3569,6 +3603,13 @@ n00bb_compiler_main(int argc, char **argv)
         &preprocessor_options,
         ir_context, types, (size_t)requested_jobs, &environment, &link,
         &link_analysis);
+    if (parse_cmdr_flag_present(args, CORE_STRING_STATIC("--show-ffi"))
+        && !show_module_literal(resolver, CORE_STRING_STATIC("ffi"),
+               parse_cmdr_flag_str(args, CORE_STRING_STATIC("--show-ffi")))) {
+        fprintf(stderr, "n00bb: no 'ffi literal named %s\n",
+                parse_cmdr_flag_str(args, CORE_STRING_STATIC("--show-ffi")).data);
+        located = false;
+    }
     if (located && fmt_command)
         located = n00bb_format_units(grammar, queue, &requests, args);
     if (profile_compile) {

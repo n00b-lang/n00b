@@ -606,8 +606,17 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
             (void)unify_call_node_type(unit, state, label->self, label->self,
                                        result, return_type);
         th_type *failure_type = th_func_error(signature);
-        if (failure_type && n00bb_call_is_error_propagated(
-                grammar, label->self) && caller_symbol
+        bool propagated = failure_type
+            && n00bb_call_is_error_propagated(grammar, label->self);
+        parse_sym_entry_t *handler = propagated
+            ? n00bb_try_error_symbol(grammar, label->self) : nullptr;
+        if (handler) {
+            th_type *bound = handler->type
+                ? th_unify_in_place(state->types, handler->type, failure_type)
+                : failure_type;
+            if (bound) handler->type = bound;
+        }
+        else if (propagated && caller_symbol
             && caller_symbol->error_type) {
             th_type *caller_failure = th_type_clone(
                 state->types, caller_symbol->error_type);

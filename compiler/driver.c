@@ -469,6 +469,23 @@ n00bb_native_declarations_release(n00bb_native_declarations_t *declarations)
     *declarations = (n00bb_native_declarations_t){0};
 }
 
+bool
+n00bb_resolver_generated_text(n00bb_resolver_t *resolver,
+                              core_string_t identifier, core_string_t *text)
+{
+    if (!resolver || !text) return false;
+    bool found = false;
+    pthread_mutex_lock(&resolver->generated_lock);
+    for (size_t i = 0; !found && i < resolver->generated.len; i++)
+        if (core_string_eq(resolver->generated.data[i].identifier,
+                           identifier)) {
+            *text = resolver->generated.data[i].text;
+            found = true;
+        }
+    pthread_mutex_unlock(&resolver->generated_lock);
+    return found;
+}
+
 n00bb_native_declarations_t
 n00bb_source_natives(const core_translation_unit_t *unit)
 {

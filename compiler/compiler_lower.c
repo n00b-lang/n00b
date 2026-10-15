@@ -1850,8 +1850,8 @@ n00bb_lower_try_scope(ir_lower_context_t *context, parse_visit_t *visit,
                 .expression = try_expression,
                 .active = context->reachable,
             };
-            frame.error_symbol = frame.error_clause
-                ? core_tree_node_value(frame.error_clause).sym : nullptr;
+            frame.error_symbol = n00bb_try_clause_symbol(visit->grammar,
+                                                         frame.error_clause);
             if (frame.active) {
                 frame.handler = n00bb_branch_block(context, lower,
                                                    "try_handler");
@@ -5119,6 +5119,9 @@ static ir_lower_result_t
 n00bb_lower_user_literal(ir_lower_context_t *context, parse_visit_t *visit,
                          n00bb_litmod_site_t *site, th_type *result_type,
                          ir_span_t span);
+static ir_lower_result_t
+n00bb_lower_literal_element(ir_lower_context_t *context, ir_value_t *value,
+                            th_type *target, ir_span_t span);
 
 static bool
 n00bb_lower_tuple_literal(ir_lower_context_t *context, parse_visit_t *visit,
@@ -5185,6 +5188,23 @@ n00bb_lower_tuple_literal(ir_lower_context_t *context, parse_visit_t *visit,
                     "could not lower the selected variant arm")
                     .status != IR_LOWER_FAILED;
             return ir_lower_set_node_value(context, visit->node, make->dest);
+        }
+        th_type *definition = th_kind_of(th_resolve(type)) == TH_RECORD
+            ? th_resolve(type)
+            : th_type_definition(ir_module_types(context->module), type);
+        for (size_t i = 0; definition && i < parts->values.len; i++) {
+            parse_tree_t *field = core_tree_node_value(
+                parts->expressions.data[i]).parent;
+            core_string_t name = field ? first_token_text(field)
+                                       : (core_string_t){0};
+            th_type *field_type = name.data
+                ? th_record_lookup(definition, name.data) : nullptr;
+            if (!field_type) continue;
+            ir_lower_result_t promoted = n00bb_lower_literal_element(context,
+                parts->values.data[i], field_type, span);
+            if (promoted.status != IR_LOWER_VALUE || !promoted.value)
+                return false;
+            parts->values.data[i] = promoted.value;
         }
         ir_instr_t *aggregate = ir_lower_emit_instruction(context,
                                                            IR_OP_AGGREGATE,

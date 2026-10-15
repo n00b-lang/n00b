@@ -1,0 +1,17 @@
+const zlib = [-
+use <zlib.writ>
+
+binding {
+    name compress2 "compress"
+    hide "zlibVersion"
+    hide "deflateInit_"
+    hide "inflateInit_"
+    type z_stream as "Stream"
+    method z_stream.deflate = deflate
+    method z_stream.inflate = inflate
+}
+-]'ffi
+
+package archive.zlib {
+    export zlib
+}

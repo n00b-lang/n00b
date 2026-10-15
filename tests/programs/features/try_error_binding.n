@@ -1,0 +1,39 @@
+func pick(v: int) -> int fail: string {
+    if v < 0 {
+        fail "negative"
+    }
+    return v
+}
+
+func caught(v: int) -> bool {
+    var matched = false
+    try {
+        pick(v)!
+    } else e {
+        matched = e == "negative"
+    }
+    return matched
+}
+
+comptime {} else {
+    require caught(-1)
+    require !caught(1)
+    let matched = try {
+        = pick(-1)! == 3
+    } else e {
+        = e == "negative"
+    }
+    require matched
+    let typed = try {
+        = pick(-2)! == 3
+    } else e: string {
+        = e == "negative"
+    }
+    require typed
+    let value = try {
+        = pick(5)!
+    } else e {
+        = 0
+    }
+    require value == 5
+}

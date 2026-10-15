@@ -1,0 +1,22 @@
+import zlib
+
+comptime {} else {
+    let text: Array[u8] = [104, 101, 108, 108, 111, 104, 101, 108, 108, 111]
+    try {
+        let packed = zlib.compress(text, 6)!
+        let unpacked = zlib.uncompress(64, packed)!
+        require __array_length(unpacked) == __array_length(text)
+        require unpacked[0] == 104
+        require unpacked[9] == 111
+    } else failure {
+        require false
+    }
+    try {
+        let packed = zlib.compress(text, 6)!
+        zlib.uncompress(2, packed)!
+        require false
+    } else failure {
+        require failure.code == -5
+        require failure.fn == "uncompress"
+    }
+}

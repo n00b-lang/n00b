@@ -42,7 +42,7 @@ runtime_abi_headers = lantern.partial_dependency(
 )
 
 runtime_abi_sources = ['runtime/runtime_abi.c', 'runtime/runtime_allocate.c', 'runtime/runtime_abi_io.c',
-     'runtime/runtime_panic.c', 'runtime/runtime_dwarf.c',
+     'runtime/runtime_panic.c', 'runtime/runtime_dwarf.c', 'runtime/runtime_ffi.c',
      'runtime/runtime_abi_box.c', 'runtime/runtime_abi_hash.c',
      'runtime/runtime_literal_graph.c',
      'runtime/runtime_abi_storage.c', 'runtime/native_frame_runtime.c', 'runtime/builtin_os.c',
@@ -570,6 +570,18 @@ test(
                / 'features' / 'byte_literal_trait_arguments.n'],
 )
 
+foreach feature : ['fallible_without_result', 'try_error_binding',
+                   'builtin_type_record_literal', 'record_literal_nil_option']
+    test(
+        feature.replace('_', '-'), find_program('sh'),
+        args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
+               n00bb_exe.full_path(),
+               meson.current_source_dir() / 'tests' / 'programs'
+                   / 'features' / feature + '.n'],
+        timeout: 120,
+    )
+endforeach
+
 test(
     'visibility-n00b', find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'visibility_n00b.sh',
@@ -609,6 +621,15 @@ test(
     args: [meson.current_source_dir() / 'tests' / 'ffi.sh',
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'ffi'],
+    timeout: 300,
+)
+
+test(
+    'ffi-zlib', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'ffi_zlib.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'ffi',
+           writ.get_variable(pkgconfig: 'contractdir')],
     timeout: 300,
 )
 

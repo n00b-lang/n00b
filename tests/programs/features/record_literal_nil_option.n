@@ -1,0 +1,16 @@
+type Failure {
+    code: i64
+    text: string?
+    origin: string
+}
+
+func make(c: i32) -> Failure {
+    let failure: Failure = (code = cast[i64]c, text = nil, origin = "x")
+    return failure
+}
+
+comptime {} else {
+    let failure = make(3)
+    require failure.code == 3
+    require failure.text == nil
+}

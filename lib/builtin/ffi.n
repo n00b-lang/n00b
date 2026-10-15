@@ -1,6 +1,6 @@
 type Ffi_Bytes layout(c) {
-    data: uint
-    length: uint
+    public data: uint
+    public length: uint
 }
 
 litmod<fence> ffi(source: string) -> nil fail: string {

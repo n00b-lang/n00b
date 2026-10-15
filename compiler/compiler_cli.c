@@ -43,6 +43,8 @@ static const parse_cmdr_flag_t FLAGS[] = {
      PARSE_CMDR_TYPE_WORD, true, CORE_STRING_STATIC("preprocessor definition")},
     {CORE_STRING_STATIC("--contract-dir"), {0}, PARSE_CMDR_TYPE_WORD, true,
      CORE_STRING_STATIC("directory searched for writ contracts")},
+    {CORE_STRING_STATIC("--show-ffi"), {0}, PARSE_CMDR_TYPE_WORD, true,
+     CORE_STRING_STATIC("print the n00b source generated for MODULE.NAME")},
     {CORE_STRING_STATIC("--release"), {0}, PARSE_CMDR_TYPE_BOOL, false,
      CORE_STRING_STATIC("disable debug assertions and optimize at LLVM O3")},
     {CORE_STRING_STATIC("--lto"), {0}, PARSE_CMDR_TYPE_BOOL, false,

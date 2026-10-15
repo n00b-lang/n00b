@@ -166,17 +166,16 @@
 <try-body-stmts> ::= <value-stmt>
                     | <body-stmt-list>
                     | <body-stmt-list> <eos>+ <value-stmt>
-<try-error-clause> @scope("try-error") @declares($1, "error") ::=
-       %"else" %IDENTIFIER <body>
-<try-error-clause> @scope("try-error") @declares($1, $3, "error") @infer("$1 unify $3") ::=
-       %"else" %IDENTIFIER %":" <type-spec> <body>
+<try-error-clause> @scope("try-error") ::=
+       %"else" <try-error-binding> <body>
+<try-error-binding> @declares($0, "error") ::= %IDENTIFIER
+<try-error-binding> @declares($0, $2, "error") @infer("$0 unify $2") ::=
+       %IDENTIFIER %":" <type-spec>
 
 <try-value-expr> @scope("try") @infer("$1 unify $2") ::=
        %"try" <value-body> <try-value-error-clause>
-<try-value-error-clause> @scope("try-error") @declares($1, "error") ::=
-       %"else" %IDENTIFIER <value-body>
-<try-value-error-clause> @scope("try-error") @declares($1, $3, "error") @infer("$1 unify $3") ::=
-       %"else" %IDENTIFIER %":" <type-spec> <value-body>
+<try-value-error-clause> @scope("try-error") @infer("$2") ::=
+       %"else" <try-error-binding> <value-body>
 
 # Using the `type` keyword creates a 'brand new' type, meaning that
 # name equiv is required for there to be equal types.

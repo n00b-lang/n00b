@@ -19,6 +19,9 @@ bool n00bb_resolver_add_generated(n00bb_resolver_t *resolver,
                                   n00bb_native_declarations_t natives);
 n00bb_native_declarations_t n00bb_source_natives(
     const core_translation_unit_t *unit);
+bool n00bb_resolver_generated_text(n00bb_resolver_t *resolver,
+                                   core_string_t identifier,
+                                   core_string_t *text);
 core_module_resolve_status_t n00bb_locate_operand(
     n00bb_resolver_t *resolver, const char *operand,
     core_module_spec_t *module_out, core_source_file_t *source_out);

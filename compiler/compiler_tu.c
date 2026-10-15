@@ -90,6 +90,31 @@ n00bb_call_is_error_propagated(parse_grammar_t *grammar, parse_tree_t *node)
     }
 }
 
+parse_sym_entry_t *
+n00bb_try_error_symbol(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    parse_tree_t *current = node;
+    for (parse_tree_t *at = node ? core_tree_node_value(node).parent : nullptr;
+         at; current = at, at = core_tree_node_value(at).parent) {
+        if (nt_is(grammar, at, "func-def")
+            || nt_is(grammar, at, "context-def")) return nullptr;
+        bool statement = nt_is(grammar, at, "try-stmt");
+        if (!statement && !nt_is(grammar, at, "try-value-expr")) continue;
+        if (child_nt(grammar, at, statement ? "try-body" : "value-body")
+            != current) continue;
+        return n00bb_try_clause_symbol(grammar, child_nt(grammar, at,
+            statement ? "try-error-clause" : "try-value-error-clause"));
+    }
+    return nullptr;
+}
+
+parse_sym_entry_t *
+n00bb_try_clause_symbol(parse_grammar_t *grammar, parse_tree_t *clause)
+{
+    parse_tree_t *binding = child_nt(grammar, clause, "try-error-binding");
+    return binding ? core_tree_node_value(binding).sym : nullptr;
+}
+
 bool
 bind_resolved_reference_alias(parse_grammar_t *grammar,
                               core_translation_unit_t *unit,
@@ -2406,9 +2431,11 @@ contextualize_record_literal(parse_grammar_t *grammar,
             valid = false;
             break;
         }
+        bool nil_option = n00bb_is_nil_literal(grammar, value_node)
+            && n00bb_option_type_element(field_type, nullptr);
         th_type *actual_field = core_tree_node_value(value_node).type;
-        if (!actual_field || (!th_unify_probe(state->types, actual_field,
-                                              field_type)
+        if (!actual_field || (!nil_option
+            && !th_unify_probe(state->types, actual_field, field_type)
             && !n00bb_contextual_integer_literal(state, value_node,
                                                    field_type))) {
             valid = false;
@@ -4146,6 +4173,39 @@ is_trait_type_symbol(parse_grammar_t *grammar, parse_sym_entry_t *symbol)
                 CORE_STRING_STATIC("trait"))));
 }
 
+static parse_sym_entry_t *
+builtin_package_type(parse_grammar_t *grammar, n00bb_tu_state_t *state,
+                     core_string_t name)
+{
+    core_string_t package_name = CORE_STRING_STATIC("builtin");
+    core_translation_unit_t *builtin = state->unit
+        ? find_direct_import(state->unit, package_name) : nullptr;
+    n00bb_package_declaration_t *package = builtin
+        ? find_package_declaration(builtin, package_name) : nullptr;
+    for (size_t i = 0; package && i < package->exports.len; i++) {
+        n00bb_package_export_t *export = &package->exports.data[i];
+        core_string_t source = export->source_name;
+        size_t leaf = source.u8_bytes;
+        while (leaf && source.data[leaf - 1] != '.') leaf--;
+        if (!leaf || !core_string_eq(export->export_name, name)
+            || !core_string_eq(core_string_borrow(source.data + leaf,
+                   source.u8_bytes - leaf), name)) continue;
+        core_translation_unit_t *module = find_direct_import(builtin,
+            core_string_borrow(source.data, leaf - 1));
+        n00bb_tu_state_t *module_state = tu_state(module);
+        parse_scope_t *types = module_state
+            ? type_module_scope(module_state) : nullptr;
+        parse_symtab_t *symtab = module_state && module_state->annotations
+            ? module_state->annotations->symtab : nullptr;
+        parse_sym_entry_t *symbol = types && symtab
+            ? parse_symtab_lookup_scoped(symtab, types,
+                CORE_STRING_STATIC("type"), name) : nullptr;
+        if (is_named_type_symbol(grammar, symbol)
+            && !is_trait_type_symbol(grammar, symbol)) return symbol;
+    }
+    return nullptr;
+}
+
 parse_sym_entry_t *
 lookup_named_type_reference(parse_grammar_t *grammar,
                            n00bb_tu_state_t *state,
@@ -4165,6 +4225,8 @@ lookup_named_type_reference(parse_grammar_t *grammar,
     if (!is_named_type_symbol(grammar, symbol))
         symbol = parse_symtab_lookup_scoped(symtab, scope,
             CORE_STRING_STATIC("builtin"), name);
+    if (!is_named_type_symbol(grammar, symbol))
+        symbol = builtin_package_type(grammar, state, name);
     return is_named_type_symbol(grammar, symbol) ? symbol : nullptr;
 }
 
@@ -5602,6 +5664,10 @@ record_function_signature(parse_grammar_t *grammar,
     th_type *declared = refine_symbol_type ? symbol->type : parsed_declared;
     th_type *inferred = th_func_with_error(state->types, success, failure,
         params.data, params.len, has_rest ? &rest : nullptr, nullptr, 0);
+    if (declared && check_body && !has_success_value
+        && th_kind_of(th_resolve(th_func_ret(declared))) == TH_VAR)
+        th_unify_in_place(state->types, th_func_ret(declared),
+                          th_name(state->types, "nil"));
     if (declared) {
         th_type *check_type = declared;
         th_type *check_inferred = inferred;
@@ -8712,9 +8778,7 @@ initial_symbol_node(parse_visit_t *visit, bool entering, void *context)
         parse_sym_set_phases(symbol, phases, PARSE_SYM_PHASE_NONE, phases);
     }
     else if ((nt_is(visit->grammar, visit->node, "for-binding")
-              || nt_is(visit->grammar, visit->node, "try-error-clause")
-              || nt_is(visit->grammar, visit->node,
-                       "try-value-error-clause"))
+              || nt_is(visit->grammar, visit->node, "try-error-binding"))
              && visit->pn->sym) {
         parse_sym_entry_t *symbol = visit->pn->sym;
         if (nt_is(visit->grammar, visit->node, "for-binding"))

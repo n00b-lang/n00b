@@ -1,0 +1,37 @@
+func check(v: int) fail: string {
+    if v < 0 {
+        fail "negative"
+    }
+}
+
+func check_return(v: int) fail: string {
+    if v < 0 {
+        fail "negative"
+    }
+    return
+}
+
+func pick(v: int) fail: string {
+    if v < 0 {
+        fail "negative"
+    }
+    return v + 1
+}
+
+comptime {} else {
+    var failed = false
+    try {
+        check(1)!
+        check_return(1)!
+        check(-1)!
+        require false
+    } else e {
+        failed = e == "negative"
+    }
+    require failed
+    try {
+        require pick(4)! == 5
+    } else e {
+        require false
+    }
+}
