@@ -634,7 +634,7 @@ builtin_comparable(const th_type *type)
     if (!th_named_info(type, &name, &nlen, nullptr, nullptr)) return false;
     static const char *const names[] = {
         "int", "uint", "i8", "i16", "i32", "i64", "i128",
-        "u8", "u16", "u32", "u64", "u128", "float", "f64",
+        "u8", "u16", "u32", "u64", "u128", "float", "f64", "f32",
         "string",
     };
     for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++)
