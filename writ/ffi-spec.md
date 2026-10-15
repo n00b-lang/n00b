@@ -1,48 +1,88 @@
-# The `'ffi_spec` Language
+# The `'ffi` Literal
 
-An `'ffi_spec` fence holds an n00b binding: n00b's choices for one writ
-contract, in one direction. This document defines what it may say, what
-each choice means for the generated n00b code, and what is reported when
-a binding contradicts its contract. It is the input for
-`n00b-integration.md` phases W1 and N3–N6.
+An `'ffi` literal holds one writ contract and n00b's choices for it. This
+document defines what the literal may say, what each choice means for the
+generated n00b code, how the bound API is named and exported, and what is
+reported when a binding contradicts its contract. It is the input for
+`n00b-integration.md` phases W1 and N2–N6.
 
 ---
 
 ## 1. Shape
 
-An `'ffi_spec` fence is a writ binding file (`dsl.md` §9.3) whose target
-language is `n00b`:
+An `'ffi` literal is an **embedded writ unit** (`dsl.md` §9.3): a contract,
+then at most one binding block whose header is implied.
 
-```writ
-binding zlib for n00b import {
-    module "zlib"
-    name compress2 "compress"
-}
+```
+const zlib = [-
+    use <zlib.writ>
+
+    binding {
+        name compress2 "compress"
+    }
+-]'ffi
+
+let packed = zlib.compress(data, 6)
 ```
 
+- **The contract part** is any contract directives and declarations
+  (`dsl.md` §3–§8), written inline, brought in with `use`, or both. A
+  literal that `use`s a shared contract can add `refine` blocks to it. The
+  contract part must name exactly one `library`.
+- **The binding part** is `binding { ITEM* }` for an import, or
+  `binding export { ITEM* }`. The contract is the literal's `library`, and
+  the language is `n00b`. With no binding part, the literal imports the
+  whole contract with the profile's defaults.
 - There is no n00b-only syntax. Everything n00b-specific lives in two
   places:
   - the **n00b profile** (`profiles/n00b.writ`), whose representation IDs
     (`string`, `buffer`, `list`, `record`, …) a binding chooses among;
   - the **n00b generator** (`writ_gen_n00b`), which gives those IDs their
     meaning in n00b code.
-- A fence holds exactly one `binding` block, and it must say `for n00b`.
-  Anything else is E0510 at the fence.
-- `ffi_bind(contract, binding)` checks that the binding's contract name is
-  the contract's `library` name (E0511 otherwise).
-- Every binding item, its targets, and diagnostics E0501–E0509 are as in
-  `dsl.md` §9.3. This document adds n00b's profile, its defaults, and how
-  each choice appears in n00b.
+- Every binding item except `module`, its targets, and diagnostics
+  E0501–E0514 are as in `dsl.md` §9.3. This document adds n00b's profile,
+  its defaults, and how each choice appears in n00b.
+
+### 1.1 Binding happens where the literal is
+
+- The preprocessor binds the literal when it evaluates it. There is no
+  separate call to make.
+- `'ffi` is declared in n00b's builtin library as
+  `litmod<fence> ffi(source: string) -> Module`, and the compiler supplies
+  its behaviour. `Module` is a builtin type. At run time, a `Module` value
+  is a reference to the module's reflection entry.
+
+  ```
+  const zlib = [- use <zlib.writ> -]'ffi
+  import zlib from [- use <zlib.writ> -]'ffi
+  ```
+
+  Both declare the module `zlib`. A `const` of type `Module` is a module in
+  every respect, and `import NAME from EXPR` accepts any `Module`
+  expression known at compile time.
+- Static member access (`zlib.compress(...)`), `export` and package
+  flattening need a `Module` known at compile time: a `const` or an
+  `import`. Any other `Module` value is used through reflection.
+- The module is the bound API's namespace: every bound function, type
+  and constant is reached through it (`zlib.compress`, `zlib.Stream`,
+  `zlib.Z_OK`). Nothing is added to the enclosing module's scope.
+- The program carries the generated declarations, shims and link
+  requirements, and the module's reflection entry like any other module.
+  The writ unit and the literal's text never reach it.
+- Every bound name in n00b code therefore leads back to a visible
+  declaration: the const or import, then its literal, then the contract
+  it `use`s. `n00bb --show-ffi MODULE.NAME` prints the generated n00b
+  declarations, and go-to-definition on a bound name lands in them.
 
 ---
 
 ## 2. Surface mapping
 
-### 2.1 Modules and names
+### 2.1 Names
 
 | Contract | n00b | Default |
 |---|---|---|
-| The contract | One module | `module` defaults to the `library` name |
+| The contract | The module the literal declares | — |
 | `fn f` | `func f` in the module | Name after `strip_prefix`, in `snake` case |
 | `handle H`, `opaque` crossing as a handle | `type H` holding the C value | `Snake_Case` |
 | `struct S` | `type S layout(c) { ... }` | `Snake_Case` |
@@ -51,7 +91,7 @@ binding zlib for n00b import {
 | `callback C` | n00b `callback` type | `Snake_Case` |
 
 - Names that collide with n00b's reserved words get a trailing `_`.
-- Two contract declarations that end up with one n00b name in one module
+- Two contract declarations that end up with one n00b name in the module
   are E0505, reported at the later declaration's binding item, or at the
   `strip_prefix` that caused it.
 - A `lang rust` contract names impl items as `T::m`. `name`, `method`,
@@ -67,7 +107,7 @@ binding zlib for n00b import {
   taking `self`, `&self` or `&mut self` become methods, and the rest
   become associated functions.
 - A handle's `release` function becomes the method `close()`, and is not
-  also bound as a module function.
+  also bound as a function of the namespace.
 - C contracts are not grouped by default. Grouping is always written out.
 
 ### 2.3 Hiding and renaming
@@ -175,7 +215,7 @@ func compress(source: Array[u8], level: i32) -> Array[u8] fail: zlib.Error
 
 - A function with `error` or `failure` outcomes returns `T fail: E`.
 - `E` is the binding's `error PATTERN -> "Type"` choice. The default is a
-  generated `type Error` in the module:
+  generated `type Error` in the module (`zlib.Error`):
 
   ```
   type Error {
@@ -240,8 +280,9 @@ func compress(source: Array[u8], level: i32) -> Array[u8] fail: zlib.Error
 
 - `load static` (default): symbols are linked; libraries come from the
   contract's `link`, as `-l`, `-framework` or `.lib` per platform.
-- `load dynamic`: the module gains
-  `func open(path: string?) -> nil fail: Error`. With no path it searches
+- `load dynamic`: the namespace gains
+  `func open(path: string?) -> nil fail: Error`, called as
+  `resharp.open(nil)`. With no path it searches
   the binding's `search_path`s and the platform's default for the
   library name. Missing symbols are reported by `open`, except those
   marked `weak`, `since` or feature-gated, which fail when called.
@@ -252,20 +293,26 @@ func compress(source: Array[u8], level: i32) -> Array[u8] fail: zlib.Error
 
 ## 8. Export
 
-```writ
-binding kv for n00b export {
-    provide kv_open        = "kvstore.open"
-    provide kv_put         = "kvstore.put"
-    provide kv_get         = "kvstore.get"
-    provide kv_iter_new    = "kvstore.iter_new"
-    provide kv_iter_next   = "kvstore.iter_next"
-    provide kv_errstr      = "kvstore.errstr"
-    on_panic error KV_ERR
-    allocator own -> kvheap
-    header "kv.h"
-}
+```
+const kv_api = [-
+    use "kv.writ"
+
+    binding export {
+        provide kv_open      = "kvstore.open"
+        provide kv_put       = "kvstore.put"
+        provide kv_get       = "kvstore.get"
+        provide kv_iter_new  = "kvstore.iter_new"
+        provide kv_iter_next = "kvstore.iter_next"
+        provide kv_errstr    = "kvstore.errstr"
+        on_panic error KV_ERR
+        allocator own -> kvheap
+        header "kv.h"
+    }
+-]'ffi
 ```
 
+- An export literal's module is empty. Its name identifies the export,
+  for `--show-ffi` and for the package that builds the library.
 - Every declaration the contract provides needs a `provide` (E0509).
 - The n00b function's signature must be the one the import mapping
   (§2–§4) would generate for that declaration. Mismatches are reported
@@ -282,18 +329,89 @@ binding kv for n00b export {
 
 ---
 
-## 9. Diagnostics
+## 9. Packages
 
-Binding diagnostics are reported at the binding item, in the `'ffi_spec`
-fence, with a note at the contract or profile line it conflicts with.
-The n00b compiler forwards them through `core_diagnostics_report_at`
+The module an `'ffi` literal declares follows n00b's package rules like
+any other module.
+
+- **Inside the package**, a `public const` module is reached by importing
+  the file module that declares it. A module declared with
+  `import NAME from` has the visibility of any other import.
+- **Outside the package**, a consumer sees it only through the logical
+  view a `package` statement builds:
+  - `export zlib` puts the bound names directly into the package's
+    namespace;
+  - it takes no `as`, because a module export takes none;
+  - to keep the bound names under their own name, export the module from
+    a subpackage and export that subpackage.
+
+A package that is a C library's binding and nothing else keeps the
+literal in the package's `__init.n`:
+
+```
+public const zlib = [-
+    use <zlib.writ>
+
+    binding {
+        name compress2 "compress"
+        name zlibVersion "version"
+    }
+-]'ffi
+
+package zlib {
+    export zlib
+}
+```
+
+A consumer imports the package and calls through its name:
+
+```
+import zlib
+
+let packed = zlib.compress(data, 6)
+```
+
+A package that contains a binding alongside other code gives the binding
+a subpackage:
+
+```
+import archive.formats
+
+package archive {
+    export formats.open_archive
+    export package zlib
+}
+
+package archive.zlib {
+    export formats.zlib
+}
+```
+
+Here the consumer calls `archive.zlib.compress(data, 6)`.
+
+---
+
+## 10. Diagnostics
+
+Binding diagnostics are reported at the binding item, in the `'ffi`
+literal, with a note at the contract or profile line it conflicts with.
+Diagnostics in a contract that the literal `use`s are reported in that
+file. The n00b compiler forwards them through `core_diagnostics_report_at`
 (`n00b-integration.md` §4.2).
 
 | Code | Rejects |
 |---|---|
-| E0501–E0509 | As in `dsl.md` §9.3 |
-| E0510 | A fence that isn't exactly one `binding ... for n00b` block |
-| E0511 | `ffi_bind` with a binding for a different contract |
+| E0501–E0513 | As in `dsl.md` §9.3; E0510 covers a literal with more than one binding part |
+| E0514 | A literal whose contract part doesn't name exactly one `library`, or whose binding has a `module` item |
+
+The n00b compiler itself rejects:
+
+- static member access, `export` or `import … from` on a `Module` value
+  not known at compile time;
+- a user literal modifier named `ffi`, as it does for any user modifier
+  that would shadow a builtin one;
+- exporting the module with `as`, with the same diagnostic as any renamed
+  module export (N00BB-M0007).
 
 Errors in the generated n00b source (an `error` type without
 `from_ffi`, an exported function with the wrong signature) report at the
@@ -301,34 +419,40 @@ binding item that chose them.
 
 ---
 
-## 10. Complete bindings
+## 11. Complete literals
 
-### 10.1 zlib
+### 11.1 zlib
 
-```writ
-binding zlib for n00b import {
-    module "zlib"
-    name compress2 "compress"
-    name zlibVersion "version"
-    hide "deflateInit_"
-    hide "inflateInit_"
-    type z_stream as "Stream"
-    method z_stream.deflate = deflate
-    method z_stream.inflate = inflate
-}
+```
+public const zlib = [-
+    use <zlib.writ>
+
+    binding {
+        name compress2 "compress"
+        name zlibVersion "version"
+        hide "deflateInit_"
+        hide "inflateInit_"
+        type z_stream as "Stream"
+        method z_stream.deflate = deflate
+        method z_stream.inflate = inflate
+    }
+-]'ffi
 ```
 
-### 10.2 resharp
+### 11.2 resharp
 
-```writ
-binding resharp for n00b import {
-    module "resharp"
-    load dynamic
-    search_path "target/release"
-    string Regex::is_match.input as string
-    buffer Regex::find_all.input as borrow
-    error * -> "resharp.Error"
-}
+```
+public const resharp = [-
+    use <resharp.writ>
+
+    binding {
+        load dynamic
+        search_path "target/release"
+        string Regex::is_match.input as string
+        buffer Regex::find_all.input as borrow
+        error * -> "resharp.Error"
+    }
+-]'ffi
 ```
 
 Bound API:
@@ -342,34 +466,37 @@ func (self: Regex) find_all(input: Array[u8]) -> Array[Match] fail: Error
 func (self: Regex) close() -> nil
 ```
 
-### 10.3 kv
+### 11.3 kv
 
 Import:
 
-```writ
-binding kv for n00b import {
-    module "kv"
-    strip_prefix "kv_"
-    method Db.put = kv_put
-    method Db.get = kv_get
-    method Db.iter = kv_iter_new
-    method Iter.next = kv_iter_next
-    static Db.open = kv_open
-    hide "kv_errstr"
-}
+```
+public const kv = [-
+    use "kv.writ"
+
+    binding {
+        strip_prefix "kv_"
+        method Db.put = kv_put
+        method Db.get = kv_get
+        method Db.iter = kv_iter_new
+        method Iter.next = kv_iter_next
+        static Db.open = kv_open
+        hide "kv_errstr"
+    }
+-]'ffi
 ```
 
 Export: §8.
 
 ---
 
-## 11. Decisions
+## 12. Decisions
 
 These settle `n00b-integration.md` §6.
 
 1. **Extern syntax.** An annotation only generated code produces. Users
-   bind C through `ffi_bind`; an `extern` declaration in user code would
-   be a second, unchecked way to do the same.
+   bind C through `'ffi` literals; an `extern` declaration in user code
+   would be a second, unchecked way to do the same.
 2. **GC movement.** Not visible to bindings. `n00b_ffi_borrow` roots,
    pins or copies, and generated code is the same in every case.
 3. **Finalizers.** Explicit `close()`. Leaked handles are reported in

@@ -8,64 +8,75 @@ Work lands in two repositories:
 
 - **writ**: an n00b language profile, an n00b generator, and the extra C shim
   output n00b needs.
-- **n00bb**: fence handling, compile-time binding, extern functions, linking,
-  and runtime support.
+- **n00bb**: the `'ffi` literal, compile-time binding, package export,
+  extern functions, linking, and runtime support.
 
 ---
 
 ## 1. What a user writes
 
-Proposed n00b syntax:
+The contract lives in its own file, `zlib.writ`:
+
+```writ
+library zlib
+link    "z"
+header  <zlib.h>
+platforms aarch64-apple-darwin, aarch64-linux-gnu, x86_64-linux-gnu, x86_64-pc-windows-msvc
+
+const Z_OK: c_int = 0
+
+fn compress2(
+    dest:      out *[u8; cap destLen.in, len destLen.out],
+    destLen:   inout *c_ulong,
+    source:    *[u8; sourceLen],
+    sourceLen: c_ulong,
+    level:     c_int,
+) -> c_int
+  error ret != Z_OK
+```
+
+n00b source binds it with one `'ffi` literal:
 
 ```
 const zlib = [-
-    library zlib
-    link    "z"
-    header  <zlib.h>
-    platforms aarch64-apple-darwin, aarch64-linux-gnu, x86_64-linux-gnu, x86_64-pc-windows-msvc
+    use <zlib.writ>
 
-    const Z_OK: c_int = 0
-
-    fn compress2(
-        dest:      out *[u8; cap destLen.in, len destLen.out],
-        destLen:   inout *c_ulong,
-        source:    *[u8; sourceLen],
-        sourceLen: c_ulong,
-        level:     c_int,
-    ) -> c_int
-      error ret != Z_OK
--]'writ
-
-const zlib_n00b = [-
-    binding zlib for n00b import {
-        module "zlib"
+    binding {
         name compress2 "compress"
     }
--]'ffi_spec
+-]'ffi
 
-ffi_bind(zlib, zlib_n00b)
+let packed = zlib.compress(data, 6)
 ```
 
-- `'writ` holds a contract: the C side.
-- `'ffi_spec` holds a binding: the n00b side. It is a writ binding file
-  (`dsl.md` §9.3) whose target language is n00b. Its exact language is
-  defined during the spec pause (§5.1); the examples here only
-  illustrate.
-- `ffi_bind(writ_spec, binding_spec)` is evaluated at compile time. The
-  binding names its direction, so one entry point covers both:
-  - `import` makes the C library available to n00b code;
-  - `export` makes n00b functions available as the contract's C API.
+- An `'ffi` literal is an embedded writ unit (`dsl.md` §9.3): the
+  contract, then n00b's choices for it. Its language is defined in
+  `ffi-spec.md`.
+- `use <zlib.writ>` brings in the contract from the contract search path,
+  so it can be updated without touching the n00b source. A contract can
+  also be written inline, or `use`d by a path relative to the n00b file.
+- `binding { … }` imports; `binding export { … }` makes n00b functions
+  available as the contract's C API. The contract and the language are
+  implied.
+- Binding happens when the preprocessor evaluates the literal. Its value
+  is a `Module`, a builtin type. Written as a `const` initializer or as
+  `import zlib from [- … -]'ffi`, `zlib` is a module known at compile
+  time, and the bound API's namespace: `zlib.compress`, `zlib.Error`.
 
-After the import above, n00b code calls `zlib.compress(data, level)`, which
-returns the compressed bytes or fails with a status. Everything the call
-needs (the extern declaration, the slice-to-pointer lowering, buffer
-sizing, error mapping, the C shim, linking `-lz`) is generated and linked
-by the compiler.
+`zlib.compress(data, 6)` returns the compressed bytes or fails with a
+status. Everything the call needs (the extern declaration, the
+slice-to-pointer lowering, buffer sizing, error mapping, the C shim,
+linking `-lz`) is generated and linked by the compiler.
 
-**Only the bound API survives into the program.** `zlib`, `zlib_n00b`, and
-the libwrit state behind them exist only during compilation. Nothing at
-run time references them, so none of it is emitted. What remains is the
-generated declarations, the shims, and the link requirements.
+**Only the bound API survives into the program.** The libwrit state and
+the literal's text exist only during compilation, so none of it is
+emitted. What remains is the generated module (with its reflection entry,
+like any module), the shims, and the link requirements.
+
+**Packages export it like any module.** `export zlib` in a `package`
+statement puts the bound names into the package's logical view, so a
+package `zlib` whose `__init.n` holds the literal gives consumers
+`import zlib` and `zlib.compress(...)` (`ffi-spec.md` §9).
 
 ---
 
@@ -81,15 +92,15 @@ declarations:
 
 writ therefore runs **in the preprocessor**:
 
-- `'writ` and `'ffi_spec` are **compiler-reserved literal modifiers**.
-  They are not user `litmod<fence>` handlers, and they are never sent to
-  the comptime process. The preprocessor hands the fence contents straight
-  to libwrit.
-- `ffi_bind` is a **preprocessor builtin**, alongside `compile_error` and
-  the `target_*` builtins. It resolves the contract for the target
-  platform, checks the binding against it, generates n00b declarations as
-  source, parses that source with the n00b grammar, and splices the result
-  into the module before typing.
+- `'ffi` is a **builtin literal modifier whose behaviour the compiler
+  supplies** (§4.2). Its function is never called, and the literal is
+  never sent to the comptime process. The preprocessor hands the
+  literal's contents straight to libwrit.
+- Evaluating an `'ffi` literal binds it. The preprocessor resolves the
+  contract for the target platform, checks the binding against it,
+  generates n00b declarations as source, and parses that source with the
+  n00b grammar as a module of its own. The const or import that the
+  literal initializes names that module, before typing.
 - The comptime process never needs libwrit, so nothing writ-related is
   added to its link line.
 
@@ -123,7 +134,7 @@ binding, it produces:
 - **n00b source text**: extern declarations (§4.3), wrapper functions,
   handle types and records. Each declaration has a span mapping back to the
   writ declaration that caused it, so errors in the generated code report
-  at the fence.
+  at the `'ffi` literal, or in the contract file it `use`s.
 - **C shim source** (through `writ_gen_c`): one C function per imported
   function, with an n00b-friendly signature (§4.4).
 - **Link requirements**: the libraries and frameworks from the contract's
@@ -147,34 +158,54 @@ compiled to object files.
 ### 4.1 Linking libwrit into the compiler
 
 - `meson.build` adds `dependency('writ-core')` and `dependency('writ-gen')` to
-  `n00bb_exe`. `writ-clang` is linked only when `ffi_bind` asks for
+  `n00bb_exe`. `writ-clang` is linked only when a binding asks for
   verification against headers.
 - The compiler already links a static lantern (`libir.a`). libwrit carries
   its own pinned lantern with every non-`writ_*` symbol localized
   (`implementation.md` §4.2), so the two never collide. A n00bb test links
-  both and parses a writ fence and an n00b file in one process.
+  both and parses an `'ffi` literal and an n00b file in one process.
 
-### 4.2 The `'writ` and `'ffi_spec` literal modifiers
+### 4.2 The `'ffi` literal modifier
 
-- `main.c:literal_modifier` / `user_litmod` resolution treats `writ` and
-  `ffi_spec` as reserved, ahead of user litmods. A user `litmod<fence>`
-  with either name is an error.
-- The preprocessor passes the fence's bytes, from `content_start_byte` to
-  `content_end_byte`, to `writ_unit_add_source`:
+- `Module` is a builtin type. At run time a `Module` value is a reference
+  to the module's reflection entry.
+  - A `const` of type `Module` is a module: member access, `export`, and
+    package flattening treat it exactly as an imported module.
+  - `import NAME from EXPR` accepts a `Module` expression known at compile
+    time, as well as a string.
+  - Static member access, `export` and `import … from` on a `Module` not
+    known at compile time are compile errors; such a value is used
+    through reflection.
+- A user literal modifier may not shadow a builtin one.
+- `'ffi` is declared in the builtin library as
+  `litmod<fence> ffi(source: string) -> Module`. The preprocessor
+  recognizes that builtin declaration and binds the literal itself; the
+  modifier's function is never called.
+- The preprocessor passes the literal's bytes, from `content_start_byte`
+  to `content_end_byte`, to `writ_unit_add_embedded` with the language
+  `n00b`:
   - The origin is the n00b file. Line and column are computed from
     `content_start_byte`, because tokens only store line and column for the
     `[-`.
-  - `'writ` fences use `WRIT_SOURCE_CONTRACT_FILE`.
-  - `'ffi_spec` fences use `WRIT_SOURCE_BINDING`, and must name `n00b` as
-    their target language.
-- A `const` bound to either fence holds a compile-time-only value: a handle
-  to the writ unit. Its only uses are as arguments to `ffi_bind`, and in
-  run-time binding (§4.9).
-- These consts and their libwrit sessions are discarded after compilation.
+  - Quoted `use` paths resolve relative to the n00b file.
+  - Before the first `'ffi` literal, the compiler adds its contract
+    directories to the search path with `writ_session_add_contract_dir`:
+    each `--contract-dir` from the command line, then `contracts/` in the
+    package being compiled.
+- After binding, every file in `writ_unit_file_at` is added to the
+  compilation's dependencies, so editing a used contract rebuilds the
+  modules that bind it.
+- At compile time the `Module` value also holds a handle to the writ
+  unit, kept only for run-time binding (§4.9).
+- The unit and its libwrit session are discarded after compilation.
   Nothing from them is emitted unless run-time binding asks for the spec
   text (§4.9).
+- `n00bb --show-ffi MODULE.NAME` prints the generated n00b declarations
+  for one `'ffi` module, and go-to-definition on a bound name lands in
+  them.
 - libwrit diagnostics are forwarded through `core_diagnostics_report_at`
   with the writ code in the message and the mapped line and column.
+  Diagnostics in a used contract report in that file.
 
 ### 4.3 Extern functions
 
@@ -281,7 +312,7 @@ These come from `writ_gen_n00b`'s link requirements, not from user flags.
 
 ### 4.8 Export direction
 
-`ffi_bind` with an `export` binding:
+An `'ffi` literal with a `binding export { … }` part:
 
 - generates C-ABI entry points, through `writ_gen_c`, that convert
   arguments, root GC values, and call the n00b function by its symbol
@@ -301,18 +332,20 @@ run time. There are two levels.
 loaded at run time.** The binding asks for it:
 
 ```
-const resharp_n00b = [-
-    binding resharp for n00b import {
+const resharp = [-
+    use <resharp.writ>
+
+    binding {
         load dynamic
     }
--]'ffi_spec
+-]'ffi
 ```
 
-- `ffi_bind` generates the same declarations and shims. The only
+- The literal generates the same declarations and shims. The only
   difference is that symbols are resolved through
   `dlopen`/`dlsym` (`LoadLibraryW`/`GetProcAddress` on Windows), not by
   the linker.
-- The generated module gets an `open(path)` that loads the library and
+- The namespace gets an `open(path)` that loads the library and
   reports any missing symbols. Functions marked `weak` or `since` that
   aren't present fail when called, not at load time.
 - libwrit is not needed at run time.
@@ -321,7 +354,7 @@ const resharp_n00b = [-
 reads a contract from a file, or builds one, uses a run-time FFI module:
 
 ```
-use ffi
+import ffi
 
 func main() {
     spec   := ffi.load_spec(read_file("plugin.writ"))?
@@ -330,6 +363,9 @@ func main() {
 }
 ```
 
+- `ffi.bind` returns a `Module` whose reflection entry is built at run
+  time from the contract. It is used through reflection like any `Module`
+  not known at compile time; `call` is reflection's dynamic call.
 - Using `ffi` links `libwrit` into the program. It is the only case
   where libwrit is present at run time.
 - Calls go through a **generic call path** driven by the model: argument
@@ -338,9 +374,24 @@ func main() {
   included), using the contract's `abi_class` facts.
 - Values cross as n00b dynamic values, and every contract check
   (nullability, extents, ownership on return) runs at the call.
-- A `const` spec can also be handed to `ffi.bind` at run time. Doing so
+- An `'ffi` module can also be handed to `ffi.bind` at run time. Doing so
   keeps the spec's text in the program, which is the one case where
   compile-time spec state is emitted.
+
+### 4.10 Package export
+
+An `'ffi` module is exported from a `package` statement like any module
+(`ffi-spec.md` §9):
+
+- `export zlib` puts every bound name into the package's logical view,
+  flattened.
+- `export zlib as name` is rejected, as any renamed module export is.
+- A subpackage that exports the module keeps the bound names under the
+  subpackage's name.
+
+Package export resolution reaches a `const` of type `Module` through the
+same path as an imported module. The bound names are ordinary
+declarations by then, so nothing else in package linking changes.
 
 ---
 
@@ -348,34 +399,35 @@ func main() {
 
 | Phase | Lands | Done when |
 |---|---|---|
-| S1 | **Spec pause: the `'ffi_spec` language.** Work stops here until the spec is written and signed off. It is the same pause as the start of `implementation.md` slice 2. | `ffi-spec.md` is approved (§5.1) |
-| W1 | `profiles/n00b.writ`, `writ_gen_n00b`, pointer-normalized shims and trampolines as bitcode | Golden n00b and C output for the zlib and resharp contracts |
-| N1 | libwrit linked into n00bb; symbol coexistence test | A test compiles an n00b program in a compiler that parsed a writ fence, with no symbol clash |
-| N2 | `'writ` and `'ffi_spec` fences, compile-time unit values, diagnostic forwarding | A malformed fence reports at the right n00b line and column, and no spec state appears in the output binary |
-| N3 | Extern declarations from generated code, `ffi_bind` import splicing, shim bitcode linking, library linking | An n00b test calls zlib `compress2` / `uncompress` and round-trips data on Mach-O and Linux |
+| S1 | **Spec pause: the `'ffi` literal.** Work stops here until the spec is written and signed off. It is the same pause as the start of `implementation.md` slice 2. | `ffi-spec.md` is approved (§5.1) |
+| W0 | Embedded units (`writ_unit_add_embedded`, E0514), `use <name.writ>` and the contract search path, `writ_unit_file_count` / `writ_unit_file_at` | Golden tests: an embedded unit that `use`s a contract by path and by search path, binds it with and without a binding part, and lists every file it read; each E0510 and E0514 case |
+| W1 | `profiles/n00b.writ`, `writ_gen_n00b`, pointer-normalized shims and trampolines as bitcode | Golden n00b and C output for the zlib and resharp literals |
+| N1 | libwrit linked into n00bb; symbol coexistence test | A test compiles an n00b program in a compiler that parsed an `'ffi` literal, with no symbol clash |
+| N2 | The `'ffi` literal, compile-time const values, contract directories, dependency recording, diagnostic forwarding, `--show-ffi` | A malformed literal reports at the right n00b line and column, an error in a used contract reports in that file, editing a used contract rebuilds the module, and no spec state appears in the output binary |
+| N3 | `Module` type, `import … from` a `Module`, extern declarations from generated code, the generated module, package export, shim bitcode linking, library linking | An n00b test calls zlib `compress2` / `uncompress` through a `zlib` package and round-trips data on Mach-O and Linux |
 | N4 | Strings and buffers through `n00b_ffi_borrow`, out-params, handles with `close()`, error channels | An n00b program compiles resharp patterns, matches, finds all spans, and reports a compile error from `resharp_last_error` |
 | N5 | Handle table, callback trampolines, `n00b_ffi_dispatch` | `qsort` with an n00b comparator; a registered callback kept until unregistered |
-| N6 | `ffi_bind` export: entry shims, symbol naming, generated header | A C program includes the generated header and calls an n00b implementation of the `kv` contract |
+| N6 | `binding export`: entry shims, symbol naming, generated header | A C program includes the generated header and calls an n00b implementation of the `kv` contract |
 | N7 | Late loading (`load dynamic`) | The resharp test passes with the library loaded through `open()`; a missing feature-gated symbol fails only when called |
-| N8 | Run-time `ffi` module: `load_spec`, `bind`, generic calls | A program loads `plugin.writ` at run time and calls into a plugin library, including a variadic call |
+| N8 | Run-time `ffi` module: `load_spec`, `bind` returning a `Module` with a reflection entry built at run time, generic calls | A program loads `plugin.writ` at run time and calls into a plugin library, including a variadic call |
 
 N1 can run before S1, since it only links libwrit and has no binding
-content. Everything else waits for S1. W1 runs in parallel with N2. N3
-needs `implementation.md` slice 1. N4 needs slice 2.
+content. Everything else waits for S1. W0 comes first after S1, and W1
+runs in parallel with N2. N3 needs `implementation.md` slice 1. N4 needs
+slice 2.
 
-### 5.1 The `'ffi_spec` spec pause
+### 5.1 The `'ffi` spec pause
 
-The `'ffi_spec` examples in this document only illustrate. The language
-itself is defined in `~/writ/ffi-spec.md`, and nothing that consumes it is
-built until that document is approved. It covers:
+The `'ffi` examples in this document only illustrate. The language itself
+is defined in `~/writ/ffi-spec.md`, and nothing that consumes it is built
+until that document is approved. It covers:
 
-- **Shape.** How an n00b binding file relates to the general binding
-  format in `dsl.md` §9.3, and which parts are n00b-specific. `dsl.md`
-  §9.3 is revised to match where the general format turns out
-  incomplete.
+- **Shape.** The `'ffi` literal as an embedded writ unit (`dsl.md` §9.3),
+  `use` and the contract search path (`dsl.md` §3.2), and which parts are
+  n00b-specific.
 - **Surface mapping.**
-  - Modules and names: how C declarations become n00b modules, functions,
-    methods and types.
+  - Names: how C declarations become functions, methods and types in the
+    literal's module.
   - Grouping functions into methods on handle types.
   - Hiding and renaming.
 - **Type choices.** For each contract construct, the n00b types a binding
@@ -401,9 +453,11 @@ built until that document is approved. It covers:
   and the generated header's name.
 - **Diagnostics.** What a binding that contradicts its contract reports,
   and where.
-- **Grammar and examples.** The `'ffi_spec` grammar, plus complete binding
-  specs for the zlib, resharp and kv contracts. These become the golden
-  inputs for W1 and N3–N6.
+- **Packages.** How an `'ffi` module is exported from a `package`
+  statement.
+- **Grammar and examples.** The embedded-unit grammar, plus complete
+  `'ffi` literals for the zlib, resharp and kv contracts. These become the
+  golden inputs for W1 and N3–N6.
 
 The decisions in §6 are settled during this pause, because several of
 them (keyword arguments, extern visibility, finalizers) decide what a

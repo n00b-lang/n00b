@@ -131,9 +131,27 @@ Trailing commas are allowed everywhere.
 parsed as one translation unit, in order, with the given `define`s and
 include paths, since many headers mean different things under different
 macros (`_FILE_OFFSET_BITS`, `WIN32_LEAN_AND_MEAN`, feature-test macros).
-Each imported declaration records which header it came from. A contract
-may also span several files with `use "other.writ"`, for libraries split
-into modules or for sharing common types between libraries.
+Each imported declaration records which header it came from.
+
+**Several files.** A contract may span several files, for libraries split
+into modules, for sharing common types between libraries, or for keeping
+a contract outside the host source that embeds it (§9.3):
+
+```writ
+use "zlib/types.writ"            # relative to this file, or absolute
+use <zlib.writ>                  # found on the contract search path
+```
+
+- `use` adds every directive and declaration of the named file to this
+  contract. A file reached twice, or through a cycle, is read once.
+- A quoted path is relative to the file that names it. For an embedded
+  unit, that is the host source file.
+- An angle-bracket name is looked up in the contract search path, in order:
+  the directories the host adds (`writ_session_add_contract_dir`), the
+  directories in `WRIT_CONTRACT_PATH`, then the contracts installed with
+  writ. The first match wins.
+- A file that can't be found or read is E0003 at the `use`.
+- Diagnostics in a used file report in that file.
 
 **No headers.** For a binary with no headers (a plugin ABI, a stripped
 vendor library, a library written in another language that exports a C
@@ -2519,6 +2537,38 @@ item, and names the contract or profile line it conflicts with:
 | E0507 | An item that belongs to the other direction |
 | E0508 | An `unknown` fact reached by a declaration that is neither hidden nor `raw` |
 | E0509 | An export binding that leaves a provided declaration without `provide` |
+| E0510 | A binding source without exactly one binding for the requested language, including an embedded unit with more than one binding part |
+| E0511 | A binding whose contract name isn't the contract's `library` |
+| E0512 | A profile item that may appear once, repeated |
+| E0513 | A binding for a language with no profile |
+| E0514 | An embedded unit whose contract part doesn't name exactly one `library`, or whose binding has a `module` item |
+
+#### Embedded units
+
+A host language that keeps writ inside its own source (n00b's `'ffi`
+literal, `ffi-spec.md`) passes an **embedded unit**: a contract, then at
+most one binding whose header is implied.
+
+```writ
+use <zlib.writ>
+
+binding {
+    name compress2 "compress"
+}
+```
+
+- The contract part is ordinary contract syntax, inline or through `use`,
+  and must name exactly one `library`.
+- `binding { ITEM* }` is an import binding and `binding export { ITEM* }`
+  an export binding. `CONTRACT` is the unit's `library`, and `LANGUAGE` is
+  the host's, given when the host adds the source
+  (`WRIT_SOURCE_EMBEDDED`).
+- With no binding part, the unit imports the whole contract with the
+  profile's defaults.
+- The contract part comes first, so contract facts, including `refine`,
+  are never written inside a binding.
+- `module` is not an item of an embedded binding. The host decides where
+  the bound API lives.
 
 ### 9.4 Other ABI families
 
@@ -2885,10 +2935,11 @@ stable toolchain imports as well. Building a binding never needs it.
 
 ```ebnf
 file        = { directive | decl } | profile { profile } | binding { binding } ;
+embedded    = { directive | decl } [ "binding" [ "export" ] "{" { binding_item } "}" ] ;
 (* ---------- contract files ---------- *)
 directive   = "library" ID | "link" STRING | "header" HEADER | "encoding" ID
             | "define" ID [ "=" expr ] | "include_path" STRING
-            | "compile_commands" STRING | "use" STRING
+            | "compile_commands" STRING | "use" ( STRING | HEADER )
             | "platforms" platform_list | "import" HEADER [ "raw" ]
             | "abi" ( "c" | "jvm" | "cpython" | ID ) | "lang" ( "c" | "c++" | "rust" )
             | "crate" ID STRING
@@ -3174,6 +3225,7 @@ that defines it.
 | 32 | Implementation scope | A core tier is implemented, and an extended tier is specified but rejected until a library needs it. | §1 |
 | 33 | Calls with more than two results | Ordered `outcome`s, each `success` or `failure` with its own predicate, detail and output rules. `error P via X` is shorthand for one failure outcome. | §6.4 |
 | 34 | Stale error channels | `reset before call` on a channel; generators clear it before the call | §6.4 |
+| 35 | Contracts inside host source | A host embeds one unit: the contract, usually through `use <name.writ>` so it stays in its own file, then one binding with an implied header. Files on disk keep contracts and bindings apart. | §3.2, §9.3 |
 
 
 ---

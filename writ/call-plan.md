@@ -372,7 +372,7 @@ the implementation. It needs the element types to be known, so a
 
 An export binding implements a function that someone else calls through
 the C ABI. The Rust transport's `extern "C"` functions and n00b's
-`ffi_bind` exports are both export bindings. They walk the same plan with
+`'ffi` exports are both export bindings. They walk the same plan with
 each step's mirror (§3), in the same phase order:
 
 ```

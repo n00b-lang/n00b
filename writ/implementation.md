@@ -276,6 +276,7 @@ enum {
     WRIT_SOURCE_CONTRACT_DECLARATIONS,
     WRIT_SOURCE_PROFILE,
     WRIT_SOURCE_BINDING,
+    WRIT_SOURCE_EMBEDDED,
 };
 
 typedef struct {
@@ -315,19 +316,34 @@ writ_status_t   writ_unit_add_source(writ_unit_t *unit, writ_source_kind_t kind,
                                      uint32_t *source_id);
 writ_status_t   writ_unit_add_file(writ_unit_t *unit, writ_str_t path,
                                    uint32_t *source_id);
+writ_status_t   writ_unit_add_embedded(writ_unit_t *unit, writ_str_t language,
+                                       writ_origin_t origin, writ_str_t text,
+                                       uint32_t *source_id);
+
+writ_status_t   writ_session_add_contract_dir(writ_session_t *session,
+                                              writ_str_t dir);
+size_t          writ_unit_file_count(const writ_unit_t *unit);
+writ_str_t      writ_unit_file_at(const writ_unit_t *unit, size_t index);
 ```
 
-**Embedding.** A host such as n00b passes each writ block it finds in its
-own source as a `WRIT_SOURCE_CONTRACT_DECLARATIONS` source:
+**Embedding.** A host such as n00b passes each writ literal it finds in
+its own source to `writ_unit_add_embedded`, which adds it as one
+`WRIT_SOURCE_EMBEDDED` source (`dsl.md` §9.3):
 
-- The block holds declarations only. Its `writ_origin_t` gives the host
-  file and where the block starts.
-- Every span writ reports is in **host coordinates**, so the compiler's
-  diagnostics point at the right line of the n00b file.
-- Library-level directives (`library`, `link`, `header`, `platforms`, ...)
-  come from one `WRIT_SOURCE_CONTRACT_FILE` source in the same unit. That
-  source may be text the host builds itself.
-- Any number of sources make up one contract.
+- The literal holds a contract part, then at most one binding part whose
+  contract is the unit's `library` and whose language is `language`.
+- Its `writ_origin_t` gives the host file and where the literal starts.
+  Quoted `use` paths resolve relative to the host file.
+- Every span writ reports in the literal is in **host coordinates**, so
+  the compiler's diagnostics point at the right line of the n00b file.
+  Spans in a used file are in that file.
+- `writ_session_add_contract_dir` adds a directory to the contract search
+  path for `use <name.writ>`. Host directories are searched in the order
+  they were added, ahead of `WRIT_CONTRACT_PATH` and the installed
+  contracts.
+- `writ_unit_file_count` and `writ_unit_file_at` list every file the unit
+  read, including through `use`, so the host can record them as build
+  dependencies.
 
 **Resolution and the model:**
 
@@ -1127,8 +1143,9 @@ resolves to on its own, without the context other examples supply.
 ### Slice 2 — resharp, through its Rust API
 
 **Specs.** The profile and binding formats are `dsl.md` §9.2–§9.3, and
-the `'ffi_spec` form is `ffi-spec.md` (`n00b-integration.md` §5.1). The
-derived transport contract is `dsl.md` §8.9.
+the `'ffi` literal is `ffi-spec.md` (`n00b-integration.md` §5.1), and
+embedded units and `use <…>` are `dsl.md` §9.3 and §3.2. The derived
+transport contract is `dsl.md` §8.9.
 
 **Target**: resharp's public Rust API (`Regex`, `RegexOptions`, `Match`,
 `UnicodeMode`, and the functions behind the `experimental_capture_groups`
