@@ -18,6 +18,9 @@
 #include "th/environment.h"
 #include "signature_typevars.h"
 
+#define N00BB_PARAMETER_FACTS_KEY \
+    CORE_STRING_STATIC("n00bb.parameter-facts")
+
 core_list_decl(th_param);
 core_list_decl(th_trait_requirement);
 typedef th_type *th_type_ptr_t;

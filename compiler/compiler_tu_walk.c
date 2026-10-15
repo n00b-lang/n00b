@@ -677,50 +677,28 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         }
     }
     if (entering && (nt_is(grammar, node, "func-def")
-                     || nt_is(grammar, node, "callback-role"))) {
+                     || nt_is(grammar, node, "callback-role")
+                     || nt_is(grammar, node, "trait-spec")
+                     || nt_is(grammar, node, "context-def"))) {
         parse_sym_entry_t *symbol = core_tree_node_value(node).sym;
         if (symbol) {
             n00bb_function_parameter_facts_t *parameter_facts =
                 core_arena_alloc(&state->semantic_values,
                                  sizeof(*parameter_facts));
             if (!parameter_facts
-                || !parse_sym_set_binding(symbol,
-                    CORE_STRING_STATIC(
-                        "n00bb.function.parameter-facts"),
-                    parameter_facts)) {
+                || !parse_sym_set_binding(symbol, N00BB_PARAMETER_FACTS_KEY,
+                                          parameter_facts)) {
                 core_diagnostics_report_at(
                     core_translation_unit_diagnostics(unit), unit,
                     CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0004"),
                     CORE_STRING_STATIC(
-                        "could not initialize function parameter facts"),
+                        "could not initialize parameter facts"),
                     link_source_location(node));
                 return;
             }
-            memset(parameter_facts, 0, sizeof(*parameter_facts));
         }
     }
 
-    if (entering && nt_is(grammar, node, "trait-spec")) {
-        parse_sym_entry_t *symbol = core_tree_node_value(node).sym;
-        if (symbol) {
-            n00bb_function_parameter_facts_t *parameter_facts =
-                core_arena_alloc(&state->semantic_values,
-                                 sizeof(*parameter_facts));
-            if (!parameter_facts
-                || !parse_sym_set_binding(symbol,
-                    CORE_STRING_STATIC("n00bb.trait.parameter-facts"),
-                    parameter_facts)) {
-                core_diagnostics_report_at(
-                    core_translation_unit_diagnostics(unit), unit,
-                    CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0004"),
-                    CORE_STRING_STATIC(
-                        "could not initialize trait method parameter facts"),
-                    link_source_location(node));
-                return;
-            }
-            memset(parameter_facts, 0, sizeof(*parameter_facts));
-        }
-    }
     if (!entering && nt_is(grammar, node, "trait-spec")) {
         parse_sym_entry_t *symbol = core_tree_node_value(node).sym;
         if (symbol) {
@@ -785,27 +763,6 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
 
     if (!entering && nt_is(grammar, node, "func-def"))
         record_function_signature(grammar, unit, node, state, true);
-    if (entering && nt_is(grammar, node, "context-def")) {
-        parse_sym_entry_t *symbol = core_tree_node_value(node).sym;
-        if (symbol) {
-            n00bb_function_parameter_facts_t *parameter_facts =
-                core_arena_alloc(&state->semantic_values,
-                                 sizeof(*parameter_facts));
-            if (!parameter_facts
-                || !parse_sym_set_binding(symbol,
-                    CORE_STRING_STATIC("n00bb.context.parameter-facts"),
-                    parameter_facts)) {
-                core_diagnostics_report_at(
-                    core_translation_unit_diagnostics(unit), unit,
-                    CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0004"),
-                    CORE_STRING_STATIC(
-                        "could not initialize context parameter facts"),
-                    link_source_location(node));
-                return;
-            }
-            memset(parameter_facts, 0, sizeof(*parameter_facts));
-        }
-    }
     if (entering && nt_is(grammar, node, "context-enter"))
         record_context_hook_signature(grammar, unit, node, state);
 

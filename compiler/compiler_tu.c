@@ -5274,7 +5274,7 @@ record_cached_declared_function_signature(parse_grammar_t *grammar,
         ? error_type ? core_tree_node_value(error_type).type : nullptr
         : th_name(state->types, "nil");
     n00bb_function_parameter_facts_t *facts = parse_sym_binding(symbol,
-        CORE_STRING_STATIC("n00bb.function.parameter-facts"));
+        N00BB_PARAMETER_FACTS_KEY);
     core_list_t(th_param) params = core_list_new(th_param);
     th_param rest = {0};
     bool has_rest = false;
@@ -5555,7 +5555,7 @@ record_function_signature(parse_grammar_t *grammar,
     th_type *declared_failure = parse_sym_binding(symbol,
         CORE_STRING_STATIC("n00bb.declared-function-failure"));
     n00bb_function_parameter_facts_t *parameter_facts = parse_sym_binding(
-        symbol, CORE_STRING_STATIC("n00bb.function.parameter-facts"));
+        symbol, N00BB_PARAMETER_FACTS_KEY);
     core_list_t(th_param) params = core_list_new(th_param);
     th_param rest = {0};
     bool has_rest = false;
@@ -5909,7 +5909,7 @@ record_context_signature(parse_grammar_t *grammar,
     th_param constructor_rest = {0};
     bool constructor_has_rest = false;
     n00bb_function_parameter_facts_t *parameter_facts = parse_sym_binding(
-        symbol, CORE_STRING_STATIC("n00bb.context.parameter-facts"));
+        symbol, N00BB_PARAMETER_FACTS_KEY);
     bool params_ok = resolve_function_parameter_facts(grammar, state,
         parameter_facts, &constructor_params, &constructor_rest,
         &constructor_has_rest);
@@ -5960,7 +5960,7 @@ record_context_hook_signature(parse_grammar_t *grammar,
     th_type *provided_type = th_func_ret(context_type);
     th_type *failure_type = symbol->error_type;
     n00bb_function_parameter_facts_t *parameter_facts = parse_sym_binding(
-        symbol, CORE_STRING_STATIC("n00bb.context.parameter-facts"));
+        symbol, N00BB_PARAMETER_FACTS_KEY);
     core_list_t(th_param) hook_params = core_list_new(th_param);
     th_param rest = {0};
     bool has_rest = false;
@@ -6094,7 +6094,7 @@ explicit_trait_method_signature(parse_grammar_t *grammar,
     parse_sym_entry_t *method_symbol = core_tree_node_value(method).sym;
     n00bb_function_parameter_facts_t *parameter_facts = method_symbol
         ? parse_sym_binding(method_symbol,
-            CORE_STRING_STATIC("n00bb.trait.parameter-facts")) : nullptr;
+            N00BB_PARAMETER_FACTS_KEY) : nullptr;
     collected = collected && resolve_function_parameter_facts(grammar,
         tu_state(unit), parameter_facts, &parameters, &rest, &has_rest);
     th_type *return_type = success
@@ -6268,7 +6268,7 @@ record_callback_role_signature(parse_grammar_t *grammar,
                                         "func-type-signature");
     n00bb_function_parameter_facts_t *facts = symbol
         ? parse_sym_binding(symbol,
-            CORE_STRING_STATIC("n00bb.function.parameter-facts")) : nullptr;
+            N00BB_PARAMETER_FACTS_KEY) : nullptr;
     core_list_t(th_param) parameters = core_list_new(th_param);
     th_param rest = {0};
     bool has_rest = false;
@@ -6587,7 +6587,7 @@ bind_function_body_signature(core_translation_unit_t *unit,
     };
 
     n00bb_function_parameter_facts_t *facts = parse_sym_binding(symbol,
-        CORE_STRING_STATIC("n00bb.function.parameter-facts"));
+        N00BB_PARAMETER_FACTS_KEY);
     for (size_t i = 0; facts && i < facts->param_count; i++) {
         n00bb_function_parameter_ref_t *fact = &facts->params[i];
         const th_param *formal = fact->variadic
@@ -9430,7 +9430,7 @@ validate_user_litmod_signatures(parse_grammar_t *grammar,
                                                "function-result");
         n00bb_function_parameter_facts_t *facts = symbol
             ? parse_sym_binding(symbol,
-                CORE_STRING_STATIC("n00bb.function.parameter-facts"))
+                N00BB_PARAMETER_FACTS_KEY)
             : nullptr;
         bool no_payload = core_string_eq(registration->kind,
                                          CORE_STRING_STATIC("nil"));
@@ -9596,12 +9596,7 @@ function_parameter_facts(parse_grammar_t *grammar, parse_tree_t *node)
     parse_sym_entry_t *symbol = function
         ? core_tree_node_value(function).sym : nullptr;
     if (!symbol) return nullptr;
-    core_string_t binding_key = nt_is(grammar, function, "trait-spec")
-        ? CORE_STRING_STATIC("n00bb.trait.parameter-facts")
-        : nt_is(grammar, function, "context-def")
-            ? CORE_STRING_STATIC("n00bb.context.parameter-facts")
-            : CORE_STRING_STATIC("n00bb.function.parameter-facts");
-    return parse_sym_binding(symbol, binding_key);
+    return parse_sym_binding(symbol, N00BB_PARAMETER_FACTS_KEY);
 }
 
 bool
