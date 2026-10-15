@@ -1,3 +1,5 @@
+#define _XOPEN_SOURCE 700
+
 #include <stdalign.h>
 #include <stdint.h>
 #include <stdio.h>
