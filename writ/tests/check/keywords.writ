@@ -1,0 +1,20 @@
+library opts
+
+opaque Db
+
+keywords Good presence mask(present) {
+    present: u32
+    timeout_ms: u32 = 30000
+}
+
+keywords NoNone presence sentinel { max_rows: i64 = -1 }
+
+keywords BadMask presence mask(name) { name: ?cstr, flag: bool }
+
+fn open_good(path: *cstr, opts: ?Good) -> own ?Db release db_close
+  pack keywords opts
+
+fn open_bad(path: *cstr, opts: c_int) -> own ?Db release db_close
+  pack keywords opts
+
+fn db_close(db: consume ?Db)

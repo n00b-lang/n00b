@@ -412,7 +412,9 @@ gather_decl(resolver_t *r, uint32_t id)
         return;
     }
     case WRIT_N_STRUCT:
-        core_list_push(model->records, ((writ_record_rec_t){.name = node->name, .loc = node->loc}));
+    case WRIT_N_KEYWORDS:
+        core_list_push(model->records,
+                       ((writ_record_rec_t){.name = node->name, .presence_field = WRIT_NONE, .loc = node->loc}));
         model->records.data[model->records.len - 1].type =
             declare_named_type(model, WRIT_TYPE_RECORD, node->name, (uint32_t)model->records.len - 1, node->loc);
         take_c_spelling(model, id, model->records.data[model->records.len - 1].type);
@@ -824,6 +826,7 @@ fn_record(writ_sym_t name, uint32_t node, writ_fn_kind_t kind, uint32_t first_sl
         .sizing_slot        = WRIT_NONE,
         .varargs_count_slot = WRIT_NONE,
         .format_slot        = WRIT_NONE,
+        .keywords_slot      = WRIT_NONE,
         .source_name        = name,
         .link_symbol        = name,
         .loc                = loc,
@@ -1015,6 +1018,9 @@ apply_clause(resolver_t *r, writ_fn_rec_t *fn, uint32_t id, fn_facts_t *stated)
     case WRIT_N_FORMAT:
         fn->format_slot = slot_ref(model, fn, first_of(model, id, WRIT_N_REF));
         return;
+    case WRIT_N_PACK_KEYWORDS:
+        fn->keywords_slot = slot_ref(model, fn, first_of(model, id, WRIT_N_REF));
+        return;
     case WRIT_N_PACK_REST:
     case WRIT_N_REENTRANT:
     case WRIT_N_UNWIND:
@@ -1044,6 +1050,7 @@ is_clause(writ_node_kind_t kind)
     case WRIT_N_SOURCE:
     case WRIT_N_SYMBOL:
     case WRIT_N_FORMAT:
+    case WRIT_N_PACK_KEYWORDS:
     case WRIT_N_PACK_REST:
     case WRIT_N_REENTRANT:
     case WRIT_N_UNWIND:
@@ -1188,6 +1195,27 @@ resolve_fn(resolver_t *r, uint32_t id, writ_fn_kind_t kind)
     }
 }
 
+static bool
+field_value(writ_model_t *model, uint32_t field, writ_node_kind_t kind, int64_t *value)
+{
+    uint32_t holder = first_of(model, field, kind);
+    uint32_t expr = holder ? child(model, holder, 0) : 0;
+    if (!expr) {
+        return false;
+    }
+    const writ_node_t *node = node_at(model, expr);
+    if (writ_is_text(model, node->name, "true") || writ_is_text(model, node->name, "false")) {
+        *value = writ_is_text(model, node->name, "true");
+        return true;
+    }
+    if (!writ_expr_check_in(model, WRIT_EXPR_SCOPE_CONSTANT, WRIT_NONE, expr)
+        || !writ_expr_eval(model, expr, nullptr, value)) {
+        writ_report(model->session, WRIT_D_NOT_CONSTANT, node->loc, nullptr);
+        return false;
+    }
+    return true;
+}
+
 static void
 resolve_record(resolver_t *r, uint32_t id)
 {
@@ -1207,10 +1235,24 @@ resolve_record(resolver_t *r, uint32_t id)
                 field.span = WRIT_SPAN_WITH;
                 field.span_with = sym(model, "self");
             }
+            field.has_default = field_value(model, part, WRIT_N_KEYWORD_DEFAULT, &field.default_value);
+            field.has_none = field_value(model, part, WRIT_N_NONE_VALUE, &field.none_value);
             core_list_push(model->slots, field);
             model->records.data[index].field_count++;
             break;
         }
+        case WRIT_N_PRESENCE_MASK:
+        case WRIT_N_PRESENCE_SIZE:
+            model->records.data[index].presence_name = node_at(model, child(model, part, 0))->name;
+            model->records.data[index].presence =
+                piece->kind == WRIT_N_PRESENCE_MASK ? WRIT_PRESENCE_MASK : WRIT_PRESENCE_SIZE;
+            break;
+        case WRIT_N_PRESENCE_SENTINEL:
+            model->records.data[index].presence = WRIT_PRESENCE_SENTINEL;
+            break;
+        case WRIT_N_PRESENCE_ALWAYS:
+            model->records.data[index].presence = WRIT_PRESENCE_ALWAYS;
+            break;
         case WRIT_N_LAYOUT:
             model->records.data[index].explicit_layout = writ_is_text(model, piece->payload, "explicit");
             if (model->records.data[index].explicit_layout) {
@@ -1234,6 +1276,16 @@ resolve_record(resolver_t *r, uint32_t id)
         default:
             break;
         }
+    }
+    record = &model->records.data[index];
+    for (uint32_t f = 0; record->presence_name && f < record->field_count; f++) {
+        if (model->slots.data[record->first_field + f].name == record->presence_name) {
+            record->presence_field = f;
+        }
+    }
+    if (record->presence_name && record->presence_field == WRIT_NONE) {
+        writ_report(model->session, WRIT_D_UNKNOWN_NAME, record->loc, "`%.*s`",
+                    S(writ_sym_str(model->session, record->presence_name)));
     }
 }
 
@@ -1387,6 +1439,7 @@ resolve_decl(resolver_t *r, uint32_t id)
         resolve_fn(r, id, WRIT_FN_CALLBACK);
         return;
     case WRIT_N_STRUCT:
+    case WRIT_N_KEYWORDS:
         resolve_record(r, id);
         return;
     case WRIT_N_HANDLE:

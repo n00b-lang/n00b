@@ -220,6 +220,15 @@ enum {
     WRIT_LANGUAGE_N00B,
 };
 
+typedef uint32_t writ_presence_t;
+enum {
+    WRIT_PRESENCE_NONE,
+    WRIT_PRESENCE_MASK,
+    WRIT_PRESENCE_SIZE,
+    WRIT_PRESENCE_SENTINEL,
+    WRIT_PRESENCE_ALWAYS,
+};
+
 typedef struct writ_type_view writ_type_view_t;
 typedef struct writ_const_view writ_const_view_t;
 typedef struct writ_slot_view writ_slot_view_t;
@@ -282,6 +291,10 @@ struct writ_slot_view {
     const writ_type_view_t *physical;
     bool userdata;
     writ_str_t userdata_for;
+    bool has_default;
+    int64_t default_value;
+    bool has_none;
+    int64_t none_value;
 };
 
 struct writ_outcome_view {
@@ -317,6 +330,7 @@ struct writ_fn_view {
     uint32_t expands_node;
     writ_thread_kind_t thread;
     writ_span_t declared_at;
+    uint32_t keywords_slot;
 };
 
 struct writ_record_view {
@@ -326,6 +340,8 @@ struct writ_record_view {
     size_t fields_count;
     const writ_slot_view_t *fields;
     writ_span_t declared_at;
+    writ_presence_t presence;
+    uint32_t presence_field;
 };
 
 struct writ_handle_view {

@@ -31,7 +31,7 @@
 <feature-source> ::= %"cargo" | %"define" | %"configure"
 <version-directive> ::= %"version" %"query" %IDENTIFIER %"(" %")" %"->" <type> %"format" <text>
 
-<decl> ::= <const-decl> | <alias-decl> | <opaque-decl> | <handle-decl> | <struct-decl> | <enum-decl> | <flags-decl> | <callback-decl> | <fn-decl> | <refine-decl> | <allocator-decl> | <when-decl> | <var-decl> | <interface-decl> | <symbol-decl> | <conventions-decl> | <channel-decl> | <impl-decl> | <rust-error-decl>
+<decl> ::= <const-decl> | <alias-decl> | <opaque-decl> | <handle-decl> | <struct-decl> | <enum-decl> | <flags-decl> | <callback-decl> | <keywords-decl> | <fn-decl> | <refine-decl> | <allocator-decl> | <when-decl> | <var-decl> | <interface-decl> | <symbol-decl> | <conventions-decl> | <channel-decl> | <impl-decl> | <rust-error-decl>
 <const-decl> ::= %"const" %IDENTIFIER %":" <type> %"=" <expr>
 <alias-decl> ::= %"type" %IDENTIFIER %"=" <type>
 <opaque-decl> ::= %"opaque" %IDENTIFIER <source-clause>? <thread-rule>?
@@ -55,6 +55,14 @@
 <closed-mark> ::= %"closed"
 <flags-decl> ::= %"flags" %IDENTIFIER %":" <type> %"{" (<enum-item> %","?)* %"}"
 <callback-decl> ::= %"callback" %IDENTIFIER %"=" %"fn" <signature> <fn-clause>*
+<keywords-decl> ::= %"keywords" %IDENTIFIER %"presence" <presence-rule> %"{" (<keyword-field> %","?)* %"}"
+<presence-rule> ::= <presence-mask> | <presence-size> | <presence-sentinel> | <presence-always>
+<presence-mask> ::= %"mask" %"(" <ref> %")"
+<presence-size> ::= %"size" %"(" <ref> %")"
+<presence-sentinel> ::= %"sentinel"
+<presence-always> ::= %"always"
+<keyword-field> ::= %IDENTIFIER %":" <slot-type> <keyword-default>? <none-value>?
+<keyword-default> ::= %"=" <expr>
 <fn-decl> ::= %"fn" %IDENTIFIER <signature> <fn-clause>*
 <signature> ::= %"(" (<param-item> (%"," <param-item>)* %","?)? %")" <fn-result>?
 <param-item> ::= <param> | <varargs> | <self-param>
@@ -124,7 +132,7 @@
 <bounded-extent> ::= %"cap" <expr> %"," %"len" <expr>
 <choice-extent> ::= <or-expr> %"?" <extent> %":" <extent>
 
-<fn-clause> ::= <pure-clause> | <sizing-clause> | <error-clause> | <outcome-clause> | <expands-clause> | <on-clause> | <thread-clause> | <reentrant-clause> | <unwind-clause> | <signal-safe-clause> | <note-clause> | <source-clause> | <symbol-clause> | <format-clause> | <pack-clause> | <since-clause> | <removed-clause>
+<fn-clause> ::= <pure-clause> | <sizing-clause> | <error-clause> | <outcome-clause> | <expands-clause> | <on-clause> | <thread-clause> | <reentrant-clause> | <unwind-clause> | <signal-safe-clause> | <note-clause> | <source-clause> | <symbol-clause> | <format-clause> | <pack-clause> | <pack-keywords-clause> | <since-clause> | <removed-clause>
 <pure-clause> ::= %"pure"
 <sizing-clause> ::= %"sizing" <sizing-protocol>? <sizing-for>? %"needs" <expr>
 <sizing-protocol> ::= <sizing-query> | <sizing-retry>
@@ -160,6 +168,7 @@
 <symbol-version> ::= %"version" %STRING
 <format-clause> ::= %"format" %"printf" %"(" <ref> %")"
 <pack-clause> ::= %"pack" %"rest" <pack-target>
+<pack-keywords-clause> ::= %"pack" %"keywords" <ref>
 <pack-target> ::= <ref> | <rest-ref>
 <rest-ref> ::= %"..."
 <since-clause> ::= %"since" <version-lit>

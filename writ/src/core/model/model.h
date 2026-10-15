@@ -121,6 +121,10 @@ typedef struct {
     bool               userdata;
     writ_sym_t         userdata_for;
     writ_loc_t         userdata_loc;
+    bool               has_default;
+    int64_t            default_value;
+    bool               has_none;
+    int64_t            none_value;
     writ_loc_t         loc;
 } writ_slot_rec_t;
 
@@ -180,20 +184,24 @@ typedef struct {
     writ_sym_t          expands_symbol;
     writ_thread_kind_t  thread;
     writ_sym_t          note;
+    uint32_t            keywords_slot;
     writ_loc_t          loc;
 } writ_fn_rec_t;
 
 typedef struct {
-    writ_sym_t   name;
-    writ_type_id type;
-    uint32_t     first_field;
-    uint32_t     field_count;
-    bool         explicit_layout;
-    uint32_t     pack;
-    uint32_t     align_assert;
-    uint32_t     size_assert;
-    uint32_t     none_node;
-    writ_loc_t   loc;
+    writ_sym_t      name;
+    writ_type_id    type;
+    uint32_t        first_field;
+    uint32_t        field_count;
+    bool            explicit_layout;
+    uint32_t        pack;
+    uint32_t        align_assert;
+    uint32_t        size_assert;
+    uint32_t        none_node;
+    writ_presence_t presence;
+    writ_sym_t      presence_name;
+    uint32_t        presence_field;
+    writ_loc_t      loc;
 } writ_record_rec_t;
 
 typedef struct {

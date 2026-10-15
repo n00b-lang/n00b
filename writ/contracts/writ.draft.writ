@@ -87,6 +87,7 @@ type writ_step_kind_t = u32
 type writ_phase_t = u32
 type writ_outcome_kind_t = u32
 type writ_language_t = u32
+type writ_presence_t = u32
 struct writ_type_view_t @size(80) @align(8) {
     struct_size: usize @0
     kind: writ_type_kind_t @8
@@ -108,7 +109,7 @@ struct writ_const_view_t @size(88) @align(8) {
     text: writ_str_t @40
     declared_at: writ_span_t @56
 }
-struct writ_slot_view_t @size(184) @align(8) {
+struct writ_slot_view_t @size(216) @align(8) {
     struct_size: usize @0
     name: writ_str_t @8
     type: ?writ_type_view_t @24
@@ -129,6 +130,10 @@ struct writ_slot_view_t @size(184) @align(8) {
     physical: ?writ_type_view_t @152
     userdata: bool @160
     userdata_for: writ_str_t @168
+    has_default: bool @184
+    default_value: i64 @192
+    has_none: bool @200
+    none_value: i64 @208
 }
 struct writ_outcome_view_t @size(40) @align(8) {
     struct_size: usize @0
@@ -138,7 +143,7 @@ struct writ_outcome_view_t @size(40) @align(8) {
     via_expr: u32 @32
     retry: bool @36
 }
-struct writ_fn_view_t @size(208) @align(8) {
+struct writ_fn_view_t @size(216) @align(8) {
     struct_size: usize @0
     contract_name: writ_str_t @8
     source_name: writ_str_t @24
@@ -162,14 +167,17 @@ struct writ_fn_view_t @size(208) @align(8) {
     expands_node: u32 @168
     thread: writ_thread_kind_t @172
     declared_at: writ_span_t @176
+    keywords_slot: u32 @208
 }
-struct writ_record_view_t @size(80) @align(8) {
+struct writ_record_view_t @size(88) @align(8) {
     struct_size: usize @0
     name: writ_str_t @8
     type: ?writ_type_view_t @24
     fields_count: usize @32
     fields: ?writ_slot_view_t @40
     declared_at: writ_span_t @48
+    presence: writ_presence_t @80
+    presence_field: u32 @84
 }
 struct writ_handle_view_t @size(112) @align(8) {
     struct_size: usize @0
@@ -488,6 +496,11 @@ const WRIT_OUTCOME_SUCCESS: c_int = 0
 const WRIT_OUTCOME_FAILURE: c_int = 1
 const WRIT_LANGUAGE_C: c_int = 0
 const WRIT_LANGUAGE_N00B: c_int = 1
+const WRIT_PRESENCE_NONE: c_int = 0
+const WRIT_PRESENCE_MASK: c_int = 1
+const WRIT_PRESENCE_SIZE: c_int = 2
+const WRIT_PRESENCE_SENTINEL: c_int = 3
+const WRIT_PRESENCE_ALWAYS: c_int = 4
 
 fn writ_api_version() -> u32
 fn writ_session_new(config: ?writ_session_config_t) -> ?writ_session_t unknown

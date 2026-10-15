@@ -1,0 +1,6 @@
+error[E0220]: `pack keywords` names a parameter that points to a `keywords` record
+  --> tests/check/keywords.writ:17:26
+error[E0221]: a `mask` or `size` presence field is an integer with a bit per keyword; under `sentinel` each keyword has a `none` value or is a pointer
+  --> tests/check/keywords.writ:10:1
+error[E0221]: a `mask` or `size` presence field is an integer with a bit per keyword; under `sentinel` each keyword has a `none` value or is a pointer
+  --> tests/check/keywords.writ:12:1

@@ -74,6 +74,10 @@ build_slots(writ_model_t *model)
             .declared_at   = writ_loc_span(session, record->loc),
             .userdata      = record->userdata,
             .userdata_for  = sym(model, record->userdata_for),
+            .has_default   = record->has_default,
+            .default_value = record->default_value,
+            .has_none      = record->has_none,
+            .none_value    = record->none_value,
         };
     }
 }
@@ -122,6 +126,7 @@ build_fns(writ_model_t *model)
             .expands_node       = record->expands_node,
             .thread             = record->thread,
             .declared_at        = writ_loc_span(session, record->loc),
+            .keywords_slot      = record->keywords_slot,
         };
     }
 }
@@ -155,8 +160,10 @@ build_decls(writ_model_t *model)
             .name         = sym(model, record->name),
             .type         = type_view(model, record->type),
             .fields_count = record->field_count,
-            .fields       = &model->slot_views[record->first_field],
-            .declared_at  = writ_loc_span(session, record->loc),
+            .fields         = &model->slot_views[record->first_field],
+            .declared_at    = writ_loc_span(session, record->loc),
+            .presence       = record->presence,
+            .presence_field = record->presence_field,
         };
     }
     model->handle_views = ALLOC_VIEWS(model, writ_handle_view_t, model->handles.len);

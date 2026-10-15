@@ -395,6 +395,62 @@ userdata_pairs(writ_model_t *model)
     }
 }
 
+static const writ_record_rec_t *
+keywords_record(const writ_model_t *model, writ_type_id type)
+{
+    const writ_type_rec_t *pointer = writ_type(model, writ_type_physical(model, type));
+    if (pointer->key.kind != WRIT_TYPE_POINTER) {
+        return nullptr;
+    }
+    const writ_type_rec_t *target = writ_type(model, pointer->key.target);
+    if (target->key.kind != WRIT_TYPE_RECORD || target->decl >= model->records.len) {
+        return nullptr;
+    }
+    const writ_record_rec_t *record = &model->records.data[target->decl];
+    return record->presence == WRIT_PRESENCE_NONE ? nullptr : record;
+}
+
+static bool
+presence_holds(const writ_model_t *model, const writ_record_rec_t *record)
+{
+    if (record->presence == WRIT_PRESENCE_SENTINEL) {
+        for (uint32_t f = 0; f < record->field_count; f++) {
+            const writ_slot_rec_t *field = &model->slots.data[record->first_field + f];
+            if (!field->has_none && !writ_type_is_pointer(model, field->type)) {
+                return false;
+            }
+        }
+        return true;
+    }
+    if (record->presence != WRIT_PRESENCE_MASK && record->presence != WRIT_PRESENCE_SIZE) {
+        return true;
+    }
+    if (record->presence_field == WRIT_NONE) {
+        return true;
+    }
+    const writ_slot_rec_t *field = &model->slots.data[record->first_field + record->presence_field];
+    if (!writ_type_is_integer(model, field->type)) {
+        return false;
+    }
+    return record->presence != WRIT_PRESENCE_MASK
+        || record->field_count - 1 <= 8 * writ_type(model, writ_type_physical(model, field->type))->size;
+}
+
+static void
+keyword_packs(writ_model_t *model)
+{
+    EACH_FN(model, f, fn) {
+        if (fn->keywords_slot != WRIT_NONE && !keywords_record(model, writ_fn_slot(model, fn, fn->keywords_slot)->type)) {
+            writ_report(model->session, WRIT_D_PACK_KEYWORDS, writ_fn_slot(model, fn, fn->keywords_slot)->loc, nullptr);
+        }
+    }
+    for (uint32_t r = 0; r < model->records.len; r++) {
+        if (!presence_holds(model, &model->records.data[r])) {
+            writ_report(model->session, WRIT_D_PRESENCE, model->records.data[r].loc, nullptr);
+        }
+    }
+}
+
 static void (*const checks[])(writ_model_t *model) = {
 #define WRIT_CHECK(name, section) name,
 #include "checks.def"

@@ -168,7 +168,7 @@ enough to check off one at a time. The specs are `ffi-spec.md`,
 - [x] Shims convert strings and buffers per binding decision
 - [x] Shims call `n00b_ffi_borrow` and `n00b_ffi_release` around borrowed spans
 - [x] Shim symbol names from the shim prefix
-- [ ] Callback trampolines calling `n00b_ffi_dispatch` with a writ-laid-out argument struct
+- [x] Callback trampolines calling `n00b_ffi_dispatch` with a writ-laid-out argument struct
 - [x] Export entry points calling n00b symbols, with `on_panic`
 - [x] Export header generation
 
