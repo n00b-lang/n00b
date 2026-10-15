@@ -84,14 +84,7 @@ encode_scalar(ir_module_t *module, n00bb_abi_type_index_t *index,
               uint64_t size_bits, uint8_t bytes[16],
               uint32_t *descriptor_index)
 {
-    const char *name = nullptr;
-    size_t name_length = 0, argument_count = 0;
-    if (th_kind_of(type) == TH_NAMED
-        && th_named_info(type, &name, &name_length, nullptr,
-                         &argument_count)
-        && name_length == sizeof("typespec") - 1
-        && !memcmp(name, "typespec", name_length)
-        && !argument_count) {
+    if (th_builtin_applied(type, TH_BUILTIN_TYPESPEC, 0)) {
         if (size_bits != 32) return false;
         if (!value) return true;
         uint32_t local_index = 0;
@@ -104,9 +97,7 @@ encode_scalar(ir_module_t *module, n00bb_abi_type_index_t *index,
         if (descriptor_index) *descriptor_index = local_index;
         return true;
     }
-    if (name && name_length == sizeof("atomic") - 1
-        && !memcmp(name, "atomic", name_length)
-        && argument_count == 1) {
+    if (th_builtin_applied(type, TH_BUILTIN_ATOMIC, 1)) {
         const th_arg *item = th_named_arg(type, 0);
         if (!item || item->kind != TH_ARG_TYPE) return false;
         type = item->type;
@@ -191,13 +182,7 @@ static th_type *
 array_element_type(th_type *type)
 {
     if (th_kind_of(type) == TH_SEQUENCE) return th_seq_elem(type);
-    if (th_kind_of(type) != TH_NAMED || th_named_nargs(type) != 1)
-        return nullptr;
-    const char *name = nullptr;
-    size_t length = 0;
-    if (!th_named_info(type, &name, &length, nullptr, nullptr) || !name
-        || !((length == 5 && !memcmp(name, "Array", 5))
-             || (length == 5 && !memcmp(name, "array", 5)))) return nullptr;
+    if (!th_builtin_applied(type, TH_BUILTIN_ARRAY, 1)) return nullptr;
     const th_arg *argument = th_named_arg(type, 0);
     return argument && argument->kind == TH_ARG_TYPE ? argument->type : nullptr;
 }
@@ -416,9 +401,7 @@ encode_aggregate(array_writer_t *writer, th_type *type,
         || (layout->n_members && !layout->members))
         return false;
     bool variant = layout->has_discriminant;
-    const char *name = nullptr;
-    bool tuple = th_named_info(type, &name, nullptr, nullptr, nullptr)
-        && name && !strcmp(name, TH_TUPLE);
+    bool tuple = th_builtin_kind_of(type) == TH_BUILTIN_TUPLE;
     if (variant ? value->kind != IR_GLOBAL_INIT_VARIANT
                 || value->aggregate.count != 1 || !value->aggregate.items
                 : value->kind != (tuple ? IR_GLOBAL_INIT_TUPLE

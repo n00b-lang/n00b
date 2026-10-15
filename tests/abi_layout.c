@@ -1,4 +1,5 @@
 #include "abi_layout.h"
+#include "builtin_types.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -219,6 +220,7 @@ check_variant(const core_target_desc_t *target)
 
 int main(void)
 {
+    n00bb_register_builtin_types();
     static const char *triples[] = {
         "x86_64-linux", "arm64-macos", "x86_64-windows",
     };
@@ -255,7 +257,7 @@ int main(void)
                             32, 32, 4)
             && check_scalar(module, &target, th_name(types, "typespec"),
                             32, 32, 4)
-            && check_scalar(module, &target, th_name(types, "any"),
+            && check_scalar(module, &target, th_name(types, "Any"),
                             128, 128, 8)
             && ir_type_define(module, wide, th_bitint(types, 65, true))
             && ir_type_define(module, wider, wide)
@@ -266,9 +268,6 @@ int main(void)
         };
         ok = ok && check_scalar(module, &target,
                 th_array(types, handle_element.type),
-                128, 128, 8)
-            && check_scalar(module, &target,
-                th_apply(types, "view", &handle_element, 1),
                 128, 128, 8);
         ok = ok && check_scalar(module, &target,
                 th_ind(types, 0, th_bitint(types, 64, false)), 64, 64, 8)
@@ -289,14 +288,14 @@ int main(void)
         th_arg byte_arg = {
             .kind = TH_ARG_TYPE, .type = th_name(types, "byte"),
         };
-        th_type *one_byte = th_apply(types, "option", &byte_arg, 1);
+        th_type *one_byte = th_apply(types, TH_OPTION, &byte_arg, 1);
         th_arg nested_byte_arg = {.kind = TH_ARG_TYPE, .type = one_byte};
-        th_type *two_byte = th_apply(types, "option", &nested_byte_arg, 1);
+        th_type *two_byte = th_apply(types, TH_OPTION, &nested_byte_arg, 1);
         th_arg pointer_arg = {
             .kind = TH_ARG_TYPE,
             .type = th_ind(types, 0, th_bitint(types, 64, false)),
         };
-        th_type *one_pointer = th_apply(types, "option", &pointer_arg, 1);
+        th_type *one_pointer = th_apply(types, TH_OPTION, &pointer_arg, 1);
         th_arg nested_pointer_arg = {
             .kind = TH_ARG_TYPE, .type = one_pointer,
         };
@@ -304,24 +303,24 @@ int main(void)
             .kind = TH_ARG_TYPE,
             .type = th_ind(types, 0, th_name(types, "bool")),
         };
-        th_type *one_bitptr = th_apply(types, "option", &bitptr_arg, 1);
+        th_type *one_bitptr = th_apply(types, TH_OPTION, &bitptr_arg, 1);
         th_arg nested_bitptr_arg = {
             .kind = TH_ARG_TYPE, .type = one_bitptr,
         };
-        th_type *two_bitptr = th_apply(types, "option", &nested_bitptr_arg,
+        th_type *two_bitptr = th_apply(types, TH_OPTION, &nested_bitptr_arg,
                                        1);
         ok = ok && check_option(module, &target, one_byte, 9, 8, 0, false)
             && check_option(module, &target, two_byte, 10, 8, 1, false)
             && check_option(module, &target, one_pointer, 64, 0, 0, true)
             && check_option(module, &target,
-                th_apply(types, "option", &nested_pointer_arg, 1),
+                th_apply(types, TH_OPTION, &nested_pointer_arg, 1),
                 65, 64, 0, false)
             && check_option(module, &target, one_bitptr, 128, 64, 0, true)
             && check_option(module, &target, two_bitptr, 128, 64, 0, true);
         th_arg atomic_option_arg = {
             .kind = TH_ARG_TYPE, .type = one_byte,
         };
-        th_type *atomic_option = th_apply(types, "atomic",
+        th_type *atomic_option = th_apply(types, "Atomic",
                                           &atomic_option_arg, 1);
         bool atomic_handled = false;
         ok = ok && atomic_option
@@ -346,16 +345,16 @@ int main(void)
             .kind = TH_ARG_TYPE, .type = atomic_option,
         };
         ok = ok && check_option(module, &target,
-                th_apply(types, "option", &option_atomic_arg, 1),
+                th_apply(types, TH_OPTION, &option_atomic_arg, 1),
                 17, 16, 0, false);
         bool handled = false;
         ok = ok && n00bb_abi_publish_direct_layout(module,
                 th_name(types, "user.string"), &target, &handled)
             && !handled;
         handled = false;
-        ok = ok && !n00bb_abi_publish_direct_layout(module,
-                th_name(types, "array"), &target, &handled)
-            && handled;
+        ok = ok && n00bb_abi_publish_direct_layout(module,
+                th_name(types, "Array"), &target, &handled)
+            && !handled;
         handled = false;
         th_type *record = th_record(types, nullptr, 0);
         ok = ok && n00bb_abi_publish_direct_layout(module, record, &target,
@@ -383,7 +382,7 @@ int main(void)
         th_arg atomic_element = {
             .kind = TH_ARG_TYPE, .type = th_bits(types, 17),
         };
-        th_type *atomic = th_apply(types, "atomic", &atomic_element, 1);
+        th_type *atomic = th_apply(types, "Atomic", &atomic_element, 1);
         handled = false;
         ok = ok && atomic
             && ir_type_define(module, atomic, atomic_element.type)

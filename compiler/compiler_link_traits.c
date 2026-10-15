@@ -887,7 +887,7 @@ validate_enclosing_return_type(parse_grammar_t *grammar,
         if (th_unify(state->types, expected, actual)) return true;
         th_type *element = nullptr;
         if (n00bb_option_type_element(expected, &element)
-            && (n00bb_nil_type(state->types, actual)
+            && (th_is_nil(actual)
                 || th_unify(state->types, element, actual))) return true;
         core_diagnostics_report_at(
             core_translation_unit_diagnostics(unit), unit, CORE_DIAG_ERROR,
@@ -1025,7 +1025,7 @@ constructor_argument_fits(n00bb_tu_state_t *state, parse_tree_t *node,
     if (!n00bb_option_type_element(parameter, &element)
         || th_unify_probe(state->types, parameter, argument))
         return th_unify_in_place(state->types, parameter, argument) != nullptr;
-    if (n00bb_nil_type(state->types, argument)) return true;
+    if (th_is_nil(argument)) return true;
     if (core_tree_node_value(node).integer_literal_origin)
         return n00bb_contextual_integer_literal(state, node, element);
     return th_unify_probe(state->types, argument, element)
@@ -2343,7 +2343,7 @@ resolve_generic_trait_specializations(core_link_unit_t *link,
                         && n00bb_option_type_element(return_type,
                                                      &returned_element);
                     returns_match = return_type && (optional_result
-                        ? n00bb_nil_type(types, return_type)
+                        ? th_is_nil(return_type)
                             || (returned_option
                                 ? th_unify_in_place(types,
                                     copied_function_result, return_type)

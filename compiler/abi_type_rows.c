@@ -17,12 +17,6 @@ core_list_decl(uint32_t);
 core_list_decl(n00b_abi_type_argument_v1);
 
 static bool
-name_is(const char *name, size_t length, const char *expected)
-{
-    return length == strlen(expected) && !memcmp(name, expected, length);
-}
-
-static bool
 kind_from_owner(const parse_sym_entry_t *owner, uint32_t *kind)
 {
     if (!owner) return false;
@@ -73,40 +67,28 @@ type_category(ir_module_t *module, th_type *type,
         return true;
     }
     case TH_NAMED: {
-        const char *name = nullptr;
-        size_t name_len = 0;
         bool variant = false;
-        if (!th_named_info(type, &name, &name_len, &variant, nullptr)
-            || !name) return false;
-        if (name_is(name, name_len, "nil"))
+        if (!th_named_info(type, nullptr, nullptr, &variant, nullptr))
+            return false;
+        th_builtin_kind_t builtin = th_builtin_kind_of(type);
+        if (builtin == TH_BUILTIN_NIL)
             row->kind = N00B_ABI_TYPE_NIL;
-        else if (name_is(name, name_len, "string"))
+        else if (builtin == TH_BUILTIN_STRING)
             row->kind = N00B_ABI_TYPE_STRING;
-        else if (name_is(name, name_len, "any"))
+        else if (builtin == TH_BUILTIN_ANY)
             row->kind = N00B_ABI_TYPE_BOX;
-        else if (name_is(name, name_len, "array")
-                 || name_is(name, name_len, "Array"))
+        else if (builtin == TH_BUILTIN_ARRAY)
             row->kind = N00B_ABI_TYPE_ARRAY;
-        else if (name_is(name, name_len, "view")
-                 || name_is(name, name_len, "View"))
-            row->kind = N00B_ABI_TYPE_VIEW;
-        else if (name_is(name, name_len, "option")
-                 || name_is(name, name_len, "Option"))
+        else if (builtin == TH_BUILTIN_OPTION)
             row->kind = N00B_ABI_TYPE_OPTION;
-        else if (name_is(name, name_len, "ref")
-                 || name_is(name, name_len, "Ref")) {
-            row->kind = N00B_ABI_TYPE_REFERENCE;
-            row->flags |= N00B_ABI_TYPE_FLAG_PLAIN_REF;
-        }
-        else if (name_is(name, name_len, "atomic")
-                 || name_is(name, name_len, "Atomic"))
+        else if (builtin == TH_BUILTIN_ATOMIC)
             row->kind = N00B_ABI_TYPE_ATOMIC;
-        else if (name_is(name, name_len, "Allocator")
-                 || name_is(name, name_len, "typespec")) {
+        else if (builtin == TH_BUILTIN_ALLOCATOR
+                 || builtin == TH_BUILTIN_TYPESPEC) {
             row->kind = N00B_ABI_TYPE_PRIMITIVE;
             row->semantic_width_bits = 32;
         }
-        else if (name_is(name, name_len, TH_TUPLE))
+        else if (builtin == TH_BUILTIN_TUPLE)
             row->kind = N00B_ABI_TYPE_TUPLE;
         else if (variant) row->kind = N00B_ABI_TYPE_VARIANT;
         else {

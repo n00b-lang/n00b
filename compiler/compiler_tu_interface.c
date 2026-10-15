@@ -935,7 +935,7 @@ decode_static_value(const uint8_t *data, size_t size, size_t *offset,
     case N00BB_STATIC_VALUE_NIL:
     {
         th_type *element = nullptr;
-        return n00bb_nil_type(state->types, type)
+        return th_is_nil(type)
             || n00bb_option_type_element(type, &element);
     }
     case N00BB_STATIC_VALUE_VARIANT: {
@@ -986,13 +986,13 @@ decode_static_value(const uint8_t *data, size_t size, size_t *offset,
                 && th_seq_extent(type, &extent);
             if ((has_extent && extent != count)
                 || (kind == N00BB_STATIC_VALUE_SEQUENCE
-                    && static_named_arguments(type, "set", 1))
+                    && th_builtin_applied(type, TH_BUILTIN_SET, 1))
                 || (kind == N00BB_STATIC_VALUE_SET
-                    && !static_named_arguments(type, "set", 1)))
+                    && !th_builtin_applied(type, TH_BUILTIN_SET, 1)))
                 return false;
         }
         else if (kind == N00BB_STATIC_VALUE_TUPLE) {
-            if (!static_named_arguments(type, TH_TUPLE, count)) return false;
+            if (!th_builtin_applied(type, TH_BUILTIN_TUPLE, count)) return false;
         }
         else if (kind == N00BB_STATIC_VALUE_RECORD) {
             shape = interface_static_record_shape(loader, state, type,
@@ -1002,7 +1002,7 @@ decode_static_value(const uint8_t *data, size_t size, size_t *offset,
         }
         else if (kind == N00BB_STATIC_VALUE_DICTIONARY
                  && ((count & 1u)
-                     || !static_named_arguments(type, "dict", 2)))
+                     || !th_builtin_applied(type, TH_BUILTIN_DICT, 2)))
             return false;
         n00bb_static_value_t *items = count
             ? core_arena_alloc(&state->semantic_values,

@@ -4209,7 +4209,7 @@ record_default_fields_support(th_ctx *probe, th_ctx *source,
             : TH_ENV_METHOD_NOT_FOUND;
         if (status == TH_ENV_METHOD_FOUND)
             supported = !selected.error_type
-                || n00bb_nil_type(probe, selected.error_type);
+                || th_is_nil(selected.error_type);
         else if (status == TH_ENV_METHOD_NOT_FOUND)
             supported = record_default_fields_support(probe, source,
                 field->type, trait, method, visiting);

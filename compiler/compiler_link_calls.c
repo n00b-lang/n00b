@@ -53,7 +53,7 @@ unify_call_node_type(core_translation_unit_t *unit,
     bool into_option_context = n00bb_option_type_element(
         unification_expected, &expected_option_element)
         && th_is_closed(state->types, unification_actual)
-        && (n00bb_nil_type(state->types, unification_actual)
+        && (th_is_nil(unification_actual)
             || th_unify(state->types, unification_actual,
                         expected_option_element));
     th_type *unified = nullptr;

@@ -673,13 +673,7 @@ bind_for_item_type(parse_grammar_t *grammar,
     collect_for_bindings(grammar, vars, &bindings);
     th_type *resolved_item = item_type ? th_resolve(item_type) : nullptr;
     th_type *resolved = resolved_item;
-    const char *tuple_name = nullptr;
-    size_t tuple_arity = 0;
-    bool tuple_variant = false;
-    bool ordered_tuple = resolved_item
-        && th_named_info(resolved_item, &tuple_name, nullptr, &tuple_variant,
-                         &tuple_arity)
-        && !tuple_variant && tuple_name && !strcmp(tuple_name, TH_TUPLE);
+    bool ordered_tuple = th_builtin_kind_of(resolved_item) == TH_BUILTIN_TUPLE;
     bool named_tuple = resolved && th_kind_of(resolved) == TH_RECORD;
     if (resolved && th_kind_of(resolved) == TH_NAMED && !ordered_tuple) {
         th_type *definition = th_type_definition(tu_state(unit)->types,
@@ -714,6 +708,7 @@ bind_for_item_type(parse_grammar_t *grammar,
     }
     bool valid = bindings.len != 0;
     bool unmatched_single_name = false;
+    size_t tuple_arity = ordered_tuple ? th_named_nargs(resolved_item) : 0;
     if (ordered_tuple && bindings.len > 1) {
         valid = tuple_arity == bindings.len;
         for (size_t i = 0; i < bindings.len; i++) {
@@ -1172,10 +1167,7 @@ resolved_iteration_item_type(parse_grammar_t *grammar,
     }
     if (cursor_type_out) *cursor_type_out = cursor_type;
     th_type *result = receiver;
-    const char *name = nullptr;
-    size_t name_len = 0;
-    if (th_named_info(th_resolve(result), &name, &name_len, nullptr, nullptr)
-        && name_len == 6 && !memcmp(name, "option", 6)) {
+    if (th_builtin_kind_of(result) == TH_BUILTIN_OPTION) {
         const th_arg *item = th_named_arg(th_resolve(result), 0);
         return item && item->kind == TH_ARG_TYPE ? item->type : nullptr;
     }
@@ -1242,21 +1234,6 @@ n00bb_switch_case_integer(parse_grammar_t *grammar, parse_tree_t *node,
     return true;
 }
 
-th_type *
-static_named_arguments(th_type *type, const char *expected_name,
-                       size_t expected_count)
-{
-    type = type ? th_resolve(type) : nullptr;
-    const char *name = nullptr;
-    size_t name_len = 0, argument_count = 0;
-    size_t expected_len = strlen(expected_name);
-    if (!type || th_kind_of(type) != TH_NAMED
-        || !th_named_info(type, &name, &name_len, nullptr, &argument_count)
-        || name_len != expected_len || memcmp(name, expected_name, expected_len)
-        || argument_count != expected_count)
-        return nullptr;
-    return type;
-}
 
 th_type *
 static_sequence_element_type(th_type *type)
@@ -1264,9 +1241,9 @@ static_sequence_element_type(th_type *type)
     type = type ? th_resolve(type) : nullptr;
     if (!type) return nullptr;
     if (th_kind_of(type) == TH_SEQUENCE) return th_seq_elem(type);
-    if (!static_named_arguments(type, "list", 1)
-        && !static_named_arguments(type, "array", 1)
-        && !static_named_arguments(type, "set", 1)) return nullptr;
+    if (!th_builtin_applied(type, TH_BUILTIN_LIST, 1)
+        && !th_builtin_applied(type, TH_BUILTIN_ARRAY, 1)
+        && !th_builtin_applied(type, TH_BUILTIN_SET, 1)) return nullptr;
     const th_arg *argument = th_named_arg(type, 0);
     return argument && argument->kind == TH_ARG_TYPE ? argument->type : nullptr;
 }
@@ -1274,7 +1251,7 @@ static_sequence_element_type(th_type *type)
 th_type *
 static_tuple_element_type(th_type *type, size_t index, size_t *count)
 {
-    type = static_named_arguments(type, TH_TUPLE, th_named_nargs(type));
+    type = th_builtin_applied(type, TH_BUILTIN_TUPLE, th_named_nargs(type));
     if (!type || index >= th_named_nargs(type)) return nullptr;
     if (count) *count = th_named_nargs(type);
     const th_arg *argument = th_named_arg(type, index);
@@ -1297,14 +1274,14 @@ static_value_matches_type(const n00bb_static_value_t *value, th_type *type,
         th_type *element_type = static_sequence_element_type(type);
         if (!element_type) return false;
         if (value->kind == N00BB_STATIC_VALUE_SEQUENCE
-            && static_named_arguments(type, "set", 1)) return false;
+            && th_builtin_applied(type, TH_BUILTIN_SET, 1)) return false;
         uint64_t extent = 0;
         if (value->kind == N00BB_STATIC_VALUE_SEQUENCE
             && th_kind_of(type) == TH_SEQUENCE
             && th_seq_extent(type, &extent)
             && extent != value->as.aggregate.count) return false;
         if (value->kind == N00BB_STATIC_VALUE_SET
-            && !static_named_arguments(type, "set", 1)) return false;
+            && !th_builtin_applied(type, TH_BUILTIN_SET, 1)) return false;
         for (size_t i = 0; i < value->as.aggregate.count; i++)
             if (!static_value_matches_type(&value->as.aggregate.items[i],
                     element_type, state, depth + 1)) return false;
@@ -1312,7 +1289,7 @@ static_value_matches_type(const n00bb_static_value_t *value, th_type *type,
     }
     if (value->kind == N00BB_STATIC_VALUE_TUPLE) {
         size_t count = th_named_nargs(type);
-        if (!static_named_arguments(type, TH_TUPLE, count)
+        if (!th_builtin_applied(type, TH_BUILTIN_TUPLE, count)
             || count != value->as.aggregate.count) return false;
         for (size_t i = 0; i < count; i++) {
             th_type *element_type = static_tuple_element_type(type, i, nullptr);
@@ -1346,7 +1323,7 @@ static_value_matches_type(const n00bb_static_value_t *value, th_type *type,
                                       core_string_from_cstr(arm->name)))
                 return value->as.variant.payload->kind
                     == N00BB_STATIC_VALUE_NIL
-                    ? n00bb_nil_type(state->types, arm->type)
+                    ? th_is_nil(arm->type)
                     : static_value_matches_type(value->as.variant.payload,
                         arm->type, state, depth + 1);
         }
@@ -1354,12 +1331,12 @@ static_value_matches_type(const n00bb_static_value_t *value, th_type *type,
     }
     if (value->kind == N00BB_STATIC_VALUE_NIL) {
         th_type *element = nullptr;
-        return n00bb_nil_type(state->types, type)
+        return th_is_nil(type)
             || n00bb_option_type_element(type, &element);
     }
     if (value->kind == N00BB_STATIC_VALUE_DICTIONARY) {
         if ((value->as.aggregate.count & 1u)
-            || !static_named_arguments(type, "dict", 2)) return false;
+            || !th_builtin_applied(type, TH_BUILTIN_DICT, 2)) return false;
         const th_arg *key_arg = th_named_arg(type, 0);
         const th_arg *value_arg = th_named_arg(type, 1);
         if (!key_arg || !value_arg || key_arg->kind != TH_ARG_TYPE
@@ -1373,30 +1350,19 @@ static_value_matches_type(const n00bb_static_value_t *value, th_type *type,
     }
     if (th_kind_of(type) == TH_BITINT)
         return value->kind == N00BB_STATIC_VALUE_INT;
-    const char *name = nullptr;
-    size_t name_len = 0;
-    if (th_kind_of(type) != TH_NAMED
-        || !th_named_info(type, &name, &name_len, nullptr, nullptr))
+    switch (value->kind) {
+    case N00BB_STATIC_VALUE_BOOL:
+        return n00bb_scalar_class_is(type, IR_CLASS_BOOL);
+    case N00BB_STATIC_VALUE_INT:
+        return is_integer_type(type)
+            || n00bb_scalar_role_is(type, IR_ROLE_BYTE);
+    case N00BB_STATIC_VALUE_FLOAT:
+        return is_float_type(type);
+    case N00BB_STATIC_VALUE_STRING:
+        return th_builtin_kind_of(type) == TH_BUILTIN_STRING;
+    default:
         return false;
-#define N00BB_TYPE_NAME(s) (name_len == sizeof(s) - 1 \
-    && !memcmp(name, s, sizeof(s) - 1))
-    bool matches = value->kind == N00BB_STATIC_VALUE_BOOL
-            ? N00BB_TYPE_NAME("bool")
-        : value->kind == N00BB_STATIC_VALUE_INT
-            ? N00BB_TYPE_NAME("int") || N00BB_TYPE_NAME("uint")
-                || N00BB_TYPE_NAME("byte") || N00BB_TYPE_NAME("i8")
-                || N00BB_TYPE_NAME("i16") || N00BB_TYPE_NAME("i32")
-                || N00BB_TYPE_NAME("i64") || N00BB_TYPE_NAME("i128")
-                || N00BB_TYPE_NAME("u8") || N00BB_TYPE_NAME("u16")
-                || N00BB_TYPE_NAME("u32") || N00BB_TYPE_NAME("u64")
-                || N00BB_TYPE_NAME("u128")
-        : value->kind == N00BB_STATIC_VALUE_FLOAT
-            ? N00BB_TYPE_NAME("float") || N00BB_TYPE_NAME("f64")
-                || N00BB_TYPE_NAME("f32")
-        : value->kind == N00BB_STATIC_VALUE_STRING
-            ? N00BB_TYPE_NAME("string") : false;
-#undef N00BB_TYPE_NAME
-    return matches;
+    }
 }
 
 static bool
@@ -1525,7 +1491,7 @@ semantic_static_value_from_expression(parse_grammar_t *grammar,
 
     if (sequence) {
         th_type *element_type = static_sequence_element_type(type);
-        if (!element_type || static_named_arguments(type, "set", 1))
+        if (!element_type || th_builtin_applied(type, TH_BUILTIN_SET, 1))
             return false;
         parse_tree_t *elements = child_nt(grammar, sequence, "list-elems");
         core_list_t(parse_tree_ptr_t) expressions =
@@ -1556,8 +1522,8 @@ semantic_static_value_from_expression(parse_grammar_t *grammar,
         core_list_t(parse_tree_ptr_t) expressions =
             core_list_new(parse_tree_ptr_t);
         parse_tree_t *entries = set_entries ? set_entries : dict_entries;
-        bool is_set = static_named_arguments(type, "set", 1) != nullptr;
-        bool is_dict = static_named_arguments(type, "dict", 2) != nullptr;
+        bool is_set = th_builtin_applied(type, TH_BUILTIN_SET, 1) != nullptr;
+        bool is_dict = th_builtin_applied(type, TH_BUILTIN_DICT, 2) != nullptr;
         bool empty = !set_entries && !dict_entries;
         bool ok = (is_set && (set_entries || (empty
             && !dict_only_empty_literal(grammar, braces))))
@@ -1661,7 +1627,7 @@ semantic_static_value_from_expression(parse_grammar_t *grammar,
             return ok;
         }
         size_t tuple_count = th_named_nargs(type);
-        if (!static_named_arguments(type, TH_TUPLE, tuple_count))
+        if (!th_builtin_applied(type, TH_BUILTIN_TUPLE, tuple_count))
             return false;
         core_list_t(parse_tree_ptr_t) expressions =
             core_list_new(parse_tree_ptr_t);
@@ -1917,24 +1883,13 @@ static th_type *
 infer_literal_item_type(th_ctx *types, th_type *const *items, size_t count)
 {
     if (!types) return nullptr;
-    core_list_t(th_type_ptr_t) values = core_list_new(th_type_ptr_t);
-    bool has_nil = false;
+    bool only_nil = count > 0;
     for (size_t i = 0; i < count; i++) {
-        if (!items[i]) {
-            core_list_free(values);
-            return nullptr;
-        }
-        if (n00bb_nil_type(types, items[i])) has_nil = true;
-        else core_list_push(values, items[i]);
+        if (!items[i]) return nullptr;
+        only_nil &= th_is_nil(items[i]);
     }
-    th_type *joined = values.len
-        ? th_sum(types, TH_UNION, values.data, values.len)
-        : th_var(types);
-    core_list_free(values);
-    if (!joined || !has_nil) return joined;
-    if (n00bb_option_type_element(joined, nullptr)) return joined;
-    th_arg argument = {.kind = TH_ARG_TYPE, .type = joined};
-    return th_apply(types, "option", &argument, 1);
+    if (only_nil) return th_option(types, th_var(types));
+    return count ? th_sum(types, TH_UNION, items, count) : th_var(types);
 }
 
 bool
@@ -2588,11 +2543,7 @@ record_literal_expected_type(parse_grammar_t *grammar, th_ctx *types,
             th_type *resolved = receiver ? th_resolve(receiver) : nullptr;
             if (resolved && th_kind_of(resolved) == TH_SEQUENCE)
                 return th_seq_elem(resolved);
-            const char *name = nullptr;
-            size_t count = 0;
-            if (resolved && th_named_info(resolved, &name, nullptr,
-                                          nullptr, &count)
-                && name && !strcmp(name, "array") && count == 1) {
+            if (th_builtin_applied(resolved, TH_BUILTIN_ARRAY, 1)) {
                 const th_arg *element = th_named_arg(resolved, 0);
                 if (element && element->kind == TH_ARG_TYPE)
                     return element->type;
@@ -3087,14 +3038,8 @@ function_parameter_named(parse_grammar_t *grammar, parse_sym_entry_t *symbol,
 th_type *
 n00bb_atomic_element_type(th_type *type)
 {
-    type = type ? th_resolve(type) : nullptr;
-    const char *name = nullptr;
-    size_t argument_count = 0;
-    if (!type || !th_named_info(type, &name, nullptr, nullptr,
-                                &argument_count)
-        || !name || strcmp(name, "atomic") || argument_count != 1)
-        return nullptr;
-    const th_arg *argument = th_named_arg(type, 0);
+    type = th_builtin_applied(type, TH_BUILTIN_ATOMIC, 1);
+    const th_arg *argument = type ? th_named_arg(type, 0) : nullptr;
     return argument && argument->kind == TH_ARG_TYPE
         ? argument->type : nullptr;
 }
@@ -3102,17 +3047,9 @@ n00bb_atomic_element_type(th_type *type)
 bool
 n00bb_option_type_element(th_type *type, th_type **element)
 {
-    const char *name = nullptr;
-    bool is_variant = true;
-    size_t nargs = 0;
-    type = type ? th_resolve(type) : nullptr;
-    const th_arg *argument = nullptr;
-    if (!th_named_info(type, &name, nullptr, &is_variant, &nargs)
-        || is_variant || nargs != 1 || !name
-        || strcmp(canonical_builtin_type_name(name), "option")
-        || !(argument = th_named_arg(type, 0))
-        || argument->kind != TH_ARG_TYPE) return false;
-    if (element) *element = argument->type;
+    th_type *item = th_option_item(type);
+    if (!item) return false;
+    if (element) *element = item;
     return true;
 }
 
@@ -3217,7 +3154,7 @@ record_function_exit_fact(parse_grammar_t *grammar,
             th_type *option_element = nullptr;
             bool option_value = n00bb_option_type_element(wanted,
                                                          &option_element)
-                && (n00bb_nil_type(state->types, actual)
+                && (th_is_nil(actual)
                     || (!n00bb_option_type_element(actual, nullptr)
                         && th_unify_probe(state->types, actual,
                                           option_element)));
@@ -3286,6 +3223,26 @@ n00bb_contextual_method_argument(parse_grammar_t *grammar,
 }
 
 static bool
+n00bb_scalar_repeats_earlier(const ir_profile_t *profile, size_t index)
+{
+    const ir_scalar_t *scalar = &profile->scalars[index];
+    for (size_t i = 0; i < index; i++)
+        if (profile->scalars[i].class == scalar->class
+            && profile->scalars[i].width == scalar->width
+            && profile->scalars[i].role == scalar->role) return true;
+    return false;
+}
+
+static bool
+n00bb_literal_candidate_scalar(const ir_profile_t *profile, size_t index)
+{
+    const ir_scalar_t *scalar = &profile->scalars[index];
+    return !n00bb_scalar_repeats_earlier(profile, index)
+        && (scalar->class == IR_CLASS_SINT || scalar->class == IR_CLASS_UINT)
+        && (scalar->role == IR_ROLE_NONE || scalar->role == IR_ROLE_BYTE);
+}
+
+static bool
 n00bb_constrain_literal_fit(parse_grammar_t *grammar,
                            n00bb_tu_state_t *state, parse_tree_t *origin,
                            parse_tree_t *node, th_type *type)
@@ -3311,15 +3268,12 @@ n00bb_constrain_literal_fit(parse_grammar_t *grammar,
     if (!alternatives) return false;
     size_t count = 0;
     for (size_t i = 0; i < scalar_count; i++) {
-        if (!strcmp(profile->scalars[i].type_text, "i64")
-            || !strcmp(profile->scalars[i].type_text, "u64")) continue;
+        if (!n00bb_literal_candidate_scalar(profile, i)
+            || !n00bb_literal_fits_scalar(literal.mag, negative,
+                                          &profile->scalars[i])) continue;
         th_type *candidate = th_name(state->types,
                                       profile->scalars[i].type_text);
-        if ((is_integer_type(candidate)
-             || !strcmp(profile->scalars[i].type_text, "byte"))
-            && n00bb_literal_fits_scalar(literal.mag, negative,
-                                          &profile->scalars[i]))
-            alternatives[count++] = candidate;
+        if (candidate) alternatives[count++] = candidate;
     }
     for (uint64_t width = 1; width <= N00BB_MAX_SIZED_BITS; width++) {
         for (size_t flavor = 0; flavor < 2; flavor++) {
@@ -3354,12 +3308,10 @@ n00bb_constrain_integer_fit(n00bb_tu_state_t *state, th_type *type,
     if (!alternatives) return false;
     size_t count = 0;
     for (size_t i = 0; i < scalar_count; i++) {
-        if (!strcmp(profile->scalars[i].type_text, "i64")
-            || !strcmp(profile->scalars[i].type_text, "u64")) continue;
+        if (!n00bb_literal_candidate_scalar(profile, i)) continue;
         th_type *candidate = th_name(state->types,
                                      profile->scalars[i].type_text);
-        if ((is_integer_type(candidate)
-             || !strcmp(profile->scalars[i].type_text, "byte"))
+        if (candidate
             && (n00bb_integer_type_promotes_to(source, candidate)
                 || (range_known
                     && n00bb_integer_interval_fits_type(candidate,
@@ -4088,20 +4040,10 @@ static const struct {
     {"i64", "int"},
     {"u64", "uint"},
     {"float", "f64"},
-    {"Array", "array"},
-    {"Array_Locking", "array_locking"},
     {"List", "builtin.containers.list.List"},
-    {"List_Locking", "list_locking"},
     {"Set", "builtin.containers.set.Set"},
-    {"Set_Locking", "set_locking"},
     {"Dict", "builtin.containers.dict.Dict"},
-    {"Dict_Locking", "dict_locking"},
-    {"Option", "option"},
     {"View", "builtin.containers.view.View"},
-    {"Atomic", "atomic"},
-    {"Ref", "ref"},
-    {"Tuple", "tuple"},
-    {"Any", "any"},
 };
 
 static const struct {
@@ -4109,7 +4051,7 @@ static const struct {
     int arity;
 } N00BB_GENERIC_TYPE_ARITIES[] = {
     {"Array", 1}, {"Array_Locking", 1}, {"List", 1}, {"List_Locking", 1},
-    {"Set", 1}, {"Set_Locking", 1}, {"Option", 1}, {"View", 1},
+    {"Set", 1}, {"Set_Locking", 1}, {"View", 1},
     {"Atomic", 1}, {"Ref", 1}, {"Dict", 2}, {"Dict_Locking", 2},
     {"Tuple", -2},
 };
@@ -4550,11 +4492,8 @@ n00bb_option_condition_refinement(parse_grammar_t *grammar,
     parse_tree_t *lvalue = n00bb_simple_lvalue(value);
     parse_sym_entry_t *subject = lvalue
         ? attached_symbol(grammar, unit, lvalue) : nullptr;
-    const char *type_name = nullptr;
-    bool is_variant = true;
-    size_t nargs = 0;
     th_type *type = subject ? th_resolve(subject->type) : nullptr;
-    const th_arg *argument = nullptr;
+    th_type *element = nullptr;
     if (subject && (subject->kind == PARSE_SYM_VARIABLE
                     || subject->kind == PARSE_SYM_PARAM)
         && type && th_kind_of(type) == TH_VAR) {
@@ -4564,14 +4503,10 @@ n00bb_option_condition_refinement(parse_grammar_t *grammar,
     }
     if (!subject || (subject->kind != PARSE_SYM_VARIABLE
                      && subject->kind != PARSE_SYM_PARAM)
-        || !th_named_info(type, &type_name, nullptr, &is_variant, &nargs)
-        || is_variant || nargs != 1 || !type_name
-        || strcmp(canonical_builtin_type_name(type_name), "option")
-        || !(argument = th_named_arg(type, 0))
-        || argument->kind != TH_ARG_TYPE)
+        || !n00bb_option_type_element(type, &element))
         return false;
     if (subject_out) *subject_out = subject;
-    if (element_out) *element_out = argument->type;
+    if (element_out) *element_out = element;
     return true;
 }
 
@@ -5980,7 +5915,7 @@ record_function_signature(parse_grammar_t *grammar,
                     "variant types cannot define __init; initialize a selected arm through its payload type"),
                 link_source_location(func));
         }
-        if (!n00bb_nil_type(state->types, symbol->error_type)) {
+        if (!th_is_nil(symbol->error_type)) {
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit), unit,
                 CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0018"),
@@ -5991,7 +5926,7 @@ record_function_signature(parse_grammar_t *grammar,
         th_type *constructor_result = constructor_type
             && th_kind_of(constructor_type) == TH_FUNCTION
                 ? th_func_ret(constructor_type) : nullptr;
-        if (!n00bb_nil_type(state->types, constructor_result)) {
+        if (!th_is_nil(constructor_result)) {
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit), unit,
                 CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0019"),
@@ -6026,7 +5961,7 @@ record_function_signature(parse_grammar_t *grammar,
                     "__finalize must take one consume Ref[T] receiver and no other parameters"),
                 link_source_location(func));
         }
-        if (!n00bb_nil_type(state->types, symbol->error_type)) {
+        if (!th_is_nil(symbol->error_type)) {
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit), unit,
                 CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0032"),
@@ -6036,7 +5971,7 @@ record_function_signature(parse_grammar_t *grammar,
         th_type *result = finalizer_type
             && th_kind_of(finalizer_type) == TH_FUNCTION
                 ? th_func_ret(finalizer_type) : nullptr;
-        if (!n00bb_nil_type(state->types, result)) {
+        if (!th_is_nil(result)) {
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit), unit,
                 CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0033"),
@@ -6092,20 +6027,9 @@ const char *
 source_builtin_type_name(const char *name)
 {
     if (!name) return nullptr;
-    if (!strcmp(name, "array")) return "Array";
-    if (!strcmp(name, "array_locking")) return "Array_Locking";
     if (!strcmp(name, "list")) return "List";
-    if (!strcmp(name, "list_locking")) return "List_Locking";
     if (!strcmp(name, "set")) return "Set";
-    if (!strcmp(name, "set_locking")) return "Set_Locking";
     if (!strcmp(name, "dict")) return "Dict";
-    if (!strcmp(name, "dict_locking")) return "Dict_Locking";
-    if (!strcmp(name, "option")) return "Option";
-    if (!strcmp(name, "view")) return "View";
-    if (!strcmp(name, "atomic")) return "Atomic";
-    if (!strcmp(name, "ref")) return "Ref";
-    if (!strcmp(name, "tuple")) return "Tuple";
-    if (!strcmp(name, "any")) return "Any";
     return name;
 }
 
@@ -6113,11 +6037,7 @@ static const char *
 n00bb_display_type_name(const char *name, size_t length, void *context)
 {
     (void)context;
-    static const char *const names[] = {
-        "array_locking", "list", "list_locking", "set", "set_locking",
-        "dict", "dict_locking", "option", "view", "atomic", "ref",
-        "tuple", "any",
-    };
+    static const char *const names[] = {"list", "set", "dict"};
     for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
         size_t candidate_length = strlen(names[i]);
         if (length == candidate_length
@@ -6677,7 +6597,7 @@ finalize_callback_contract(parse_grammar_t *grammar,
             && callback_type_equal(state->types, handler_referent,
                                    handler_type)
             && callback_type_equal(state->types, state_referent, state_type)
-            && n00bb_nil_type(state->types, th_func_ret(setup_type));
+            && th_is_nil(th_func_ret(setup_type));
     }
     if (!valid) {
         core_diagnostics_report_at(
@@ -7202,48 +7122,6 @@ cache_flagset_semantics(parse_grammar_t *grammar,
 }
 
 
-static const ir_scalar_t n00bb_scalars[] = {
-    {"int", IR_CLASS_SINT, 64, IR_ROLE_NONE},
-    {"uint", IR_CLASS_UINT, 64, IR_ROLE_NONE},
-    {"bool", IR_CLASS_BOOL, 1, IR_ROLE_NONE},
-    {"byte", IR_CLASS_UINT, 8, IR_ROLE_NONE},
-    {"f64", IR_CLASS_FLOAT, 64, IR_ROLE_NONE},
-    {"f32", IR_CLASS_FLOAT, 32, IR_ROLE_NONE},
-    {"float", IR_CLASS_FLOAT, 64, IR_ROLE_NONE},
-    {"nil", IR_CLASS_VOID, 0, IR_ROLE_NONE},
-    {"i8", IR_CLASS_SINT, 8, IR_ROLE_NONE},
-    {"i16", IR_CLASS_SINT, 16, IR_ROLE_NONE},
-    {"i32", IR_CLASS_SINT, 32, IR_ROLE_NONE},
-    {"i64", IR_CLASS_SINT, 64, IR_ROLE_NONE},
-    {"i128", IR_CLASS_SINT, 128, IR_ROLE_NONE},
-    {"u8", IR_CLASS_UINT, 8, IR_ROLE_NONE},
-    {"u16", IR_CLASS_UINT, 16, IR_ROLE_NONE},
-    {"u32", IR_CLASS_UINT, 32, IR_ROLE_NONE},
-    {"typespec", IR_CLASS_UINT, 32, IR_ROLE_NONE},
-    {"char", IR_CLASS_UINT, 24, IR_ROLE_CHAR},
-    {"u64", IR_CLASS_UINT, 64, IR_ROLE_NONE},
-    {"u128", IR_CLASS_UINT, 128, IR_ROLE_NONE},
-};
-
-static const ir_profile_t n00bb_profile = {
-    .name = "n00bb",
-    .n_scalars = sizeof(n00bb_scalars) / sizeof(n00bb_scalars[0]),
-    .scalars = n00bb_scalars,
-};
-
-const ir_profile_t *
-n00bb_type_profile(void)
-{
-    return &n00bb_profile;
-}
-
-bool
-n00bb_nil_type(th_ctx *types, th_type *type)
-{
-    return type && th_hash(types, th_resolve(type))
-        == th_hash(types, th_name(types, "nil"));
-}
-
 bool
 n00bb_parse_switch_integer(core_string_t text, ir_lit_t *literal)
 {
@@ -7451,7 +7329,6 @@ static bool
 type_may_contain_reference_alias_inner(th_ctx *types, th_type *type,
                                       core_list_t(th_type_ptr_t) *active)
 {
-    const ir_profile_t *profile = n00bb_type_profile();
     if (!type) return true;
     type = th_resolve(type);
     if (!type) return true;
@@ -7466,17 +7343,11 @@ type_may_contain_reference_alias_inner(th_ctx *types, th_type *type,
     case TH_SEQUENCE:
         return true;
     case TH_NAMED: {
-        const char *name = nullptr;
-        size_t name_len = 0;
-        bool is_variant = false;
         size_t argument_count = 0;
-        if (!th_named_info(type, &name, &name_len, &is_variant,
-                           &argument_count)) return true;
-        if (!is_variant && name_len == 4 && !memcmp(name, "view", 4))
+        if (!th_named_info(type, nullptr, nullptr, nullptr, &argument_count))
             return true;
-        if (!is_variant && name_len == 5 && !memcmp(name, "array", 5))
-            return true;
-        if (!is_variant && name_len == 6 && !memcmp(name, "string", 6))
+        th_builtin_kind_t builtin = th_builtin_kind_of(type);
+        if (builtin == TH_BUILTIN_ARRAY || builtin == TH_BUILTIN_STRING)
             return true;
         if (argument_count) {
             core_list_push(*active, type);
@@ -7493,12 +7364,7 @@ type_may_contain_reference_alias_inner(th_ctx *types, th_type *type,
             active->len--;
             return result;
         }
-        for (size_t i = 0; i < profile->n_scalars; i++) {
-            size_t scalar_len = strlen(profile->scalars[i].type_text);
-            if (scalar_len == name_len
-                && !memcmp(name, profile->scalars[i].type_text, scalar_len))
-                return false;
-        }
+        if (n00bb_scalar_of(type)) return false;
         th_type *definition = types
             ? th_type_definition(types, type) : nullptr;
         if (definition) {
@@ -7508,7 +7374,6 @@ type_may_contain_reference_alias_inner(th_ctx *types, th_type *type,
             active->len--;
             return result;
         }
-        (void)is_variant;
         return true;
     }
     case TH_BITINT:
@@ -7532,22 +7397,31 @@ type_may_contain_reference_alias(th_ctx *types, th_type *type)
 static const ir_scalar_t *
 n00bb_integer_scalar(th_type *type)
 {
-    const char *name = nullptr;
-    size_t length = 0, arguments = 0;
-    if (!type || th_kind_of(type) != TH_NAMED
-        || !th_named_info(type, &name, &length, nullptr, &arguments)
-        || !name || arguments) return nullptr;
-    for (size_t i = 0; i < n00bb_profile.n_scalars; i++) {
-        const ir_scalar_t *scalar = &n00bb_profile.scalars[i];
-        if ((scalar->class != IR_CLASS_SINT
-             && scalar->class != IR_CLASS_UINT)
-            || scalar->role != IR_ROLE_NONE
-            || !strcmp(scalar->type_text, "byte")
-            || !strcmp(scalar->type_text, "typespec")) continue;
-        if (length == strlen(scalar->type_text)
-            && !memcmp(name, scalar->type_text, length)) return scalar;
-    }
-    return nullptr;
+    const ir_scalar_t *scalar = n00bb_scalar_of(type);
+    return scalar && (scalar->class == IR_CLASS_SINT
+                      || scalar->class == IR_CLASS_UINT)
+        && scalar->role == IR_ROLE_NONE ? scalar : nullptr;
+}
+
+const ir_scalar_t *
+n00bb_scalar_of(th_type *type)
+{
+    const th_builtin_type_t *builtin = th_builtin_of(type);
+    return builtin ? builtin->scalar : nullptr;
+}
+
+bool
+n00bb_scalar_class_is(th_type *type, ir_class_t class)
+{
+    const ir_scalar_t *scalar = n00bb_scalar_of(type);
+    return scalar && scalar->class == class;
+}
+
+bool
+n00bb_scalar_role_is(th_type *type, ir_role_t role)
+{
+    const ir_scalar_t *scalar = n00bb_scalar_of(type);
+    return scalar && scalar->role == role;
 }
 
 bool
@@ -7591,13 +7465,9 @@ n00bb_integer_interval_type(th_type *type, int64_t *minimum,
     uint64_t width = 0;
     bool is_signed = false;
     if (!n00bb_integer_representation(type, &width, &is_signed)) {
-        type = type ? th_resolve(type) : nullptr;
-        const char *name = nullptr;
-        size_t length = 0, arguments = 0;
-        if (!type || !th_named_info(type, &name, &length, nullptr,
-                                    &arguments) || !name || arguments
-            || length != 4 || memcmp(name, "byte", 4)) return false;
-        width = 8;
+        const ir_scalar_t *scalar = n00bb_scalar_of(type);
+        if (!scalar || scalar->role != IR_ROLE_BYTE) return false;
+        width = scalar->width;
     }
     if (!width || width > 64 || (!is_signed && width > 63)) return false;
     if (is_signed) {
@@ -7785,10 +7655,8 @@ cache_type_syntax_node(parse_grammar_t *grammar, parse_tree_t *node)
 bool
 append_type_argument_pack(th_type *pack, core_list_t(th_arg) *arguments)
 {
-    const char *name = nullptr;
     if (!pack || !arguments
-        || !th_named_info(th_resolve(pack), &name, nullptr, nullptr, nullptr)
-        || !name || strcmp(name, TH_TUPLE)) return false;
+        || th_builtin_kind_of(pack) != TH_BUILTIN_TUPLE) return false;
     for (size_t i = 0; i < th_named_nargs(pack); i++) {
         const th_arg *argument = th_named_arg(pack, i);
         if (!argument || argument->kind != TH_ARG_TYPE) return false;
@@ -9823,13 +9691,9 @@ validate_user_litmod_signatures(parse_grammar_t *grammar,
             shape_valid = th_kind_of(payload) == TH_SEQUENCE;
             if (shape_valid && dictionary) {
                 th_type *element = th_resolve(th_seq_elem(payload));
-                const char *name = nullptr;
-                size_t length = 0;
-                size_t arity = 0;
-                shape_valid = element && th_named_info(element, &name,
-                    &length, nullptr, &arity)
-                    && length == strlen(TH_TUPLE)
-                    && !memcmp(name, TH_TUPLE, length) && arity == 2;
+                shape_valid = th_builtin_applied(element,
+                                                       TH_BUILTIN_TUPLE, 2)
+                    != nullptr;
                 if (shape_valid && core_string_eq(registration->kind,
                                     CORE_STRING_STATIC("record"))) {
                     const th_arg *first = th_named_arg(element, 0);
@@ -10151,34 +10015,14 @@ n00bb_init_target(parse_grammar_t *grammar, parse_tree_t *node)
 static bool
 primitive_ordering_type(th_type *type)
 {
-    if (is_integer_type(type)) return true;
-    type = type ? th_resolve(type) : nullptr;
-    const char *name = nullptr;
-    size_t length = 0;
-    size_t arguments = 0;
-    if (!type || !th_named_info(type, &name, &length, nullptr, &arguments)
-        || arguments) return false;
-    core_string_t type_name = core_string_borrow(name, length);
-    return is_float_type(type)
-        || core_string_eq(type_name, CORE_STRING_STATIC("string"));
-}
-
-bool
-named_type_is(th_type *type, const char *wanted)
-{
-    type = type ? th_resolve(type) : nullptr;
-    const char *name = nullptr;
-    size_t length = 0, arguments = 0;
-    return type && th_named_info(type, &name, &length, nullptr, &arguments)
-        && !arguments && strlen(wanted) == length
-        && !memcmp(name, wanted, length);
+    return is_integer_type(type) || is_float_type(type)
+        || th_builtin_kind_of(type) == TH_BUILTIN_STRING;
 }
 
 bool
 is_float_type(th_type *type)
 {
-    return named_type_is(type, "float") || named_type_is(type, "f64")
-        || named_type_is(type, "f32");
+    return n00bb_scalar_class_is(type, IR_CLASS_FLOAT);
 }
 
 bool
@@ -10191,7 +10035,7 @@ primitive_operator_site(n00bb_tu_state_t *state, n00bb_link_use_site_t *site)
     th_type *receiver_type = core_tree_node_value(receiver).type;
     if (core_string_eq(site->dispatch_trait,
                        CORE_STRING_STATIC("Not")))
-        return named_type_is(receiver_type, "bool");
+        return n00bb_scalar_class_is(receiver_type, IR_CLASS_BOOL);
     if (core_string_eq(site->dispatch_trait,
                        CORE_STRING_STATIC("Negate")))
         return is_integer_type(receiver_type) || is_float_type(receiver_type);
@@ -10207,14 +10051,16 @@ primitive_operator_site(n00bb_tu_state_t *state, n00bb_link_use_site_t *site)
         if (state && state->link_analysis
             && n00bb_enum_type_symbol(state->link_analysis, receiver_type))
             return true;
-        if (named_type_is(receiver_type, "bool")
-            || named_type_is(receiver_type, "nil")
-            || named_type_is(receiver_type, "char")
-            || named_type_is(receiver_type, "byte")
-            || named_type_is(receiver_type, "typespec")) return true;
+        th_builtin_kind_t kind = th_builtin_kind_of(receiver_type);
+        if (n00bb_scalar_class_is(receiver_type, IR_CLASS_BOOL)
+            || kind == TH_BUILTIN_NIL || kind == TH_BUILTIN_TYPESPEC
+            || n00bb_scalar_role_is(receiver_type, IR_ROLE_CHAR)
+            || n00bb_scalar_role_is(receiver_type, IR_ROLE_BYTE))
+            return true;
         parse_tree_t *other = core_tree_child(site->node, 2);
         return !core_tree_is_leaf(other)
-            && named_type_is(core_tree_node_value(other).type, "nil");
+            && th_builtin_kind_of(core_tree_node_value(other).type)
+                == TH_BUILTIN_NIL;
     }
     if (core_string_eq(site->dispatch_trait,
                        CORE_STRING_STATIC("Bit_And"))
@@ -11518,14 +11364,9 @@ builtin_generic_type_arity(const char *name)
 {
     if (!name) return -1;
     name = canonical_builtin_type_name(name);
-    if (!strcmp(name, "array") || !strcmp(name, "array_locking")
-        || !strcmp(name, "list") || !strcmp(name, "list_locking")
-        || !strcmp(name, "set") || !strcmp(name, "set_locking")
-        || !strcmp(name, "option") || !strcmp(name, "view")
-        || !strcmp(name, "atomic")) return 1;
-    if (!strcmp(name, "dict") || !strcmp(name, "dict_locking")) return 2;
-    if (!strcmp(name, "tuple")) return -2;
-    return -1;
+    if (!strcmp(name, "list") || !strcmp(name, "set")) return 1;
+    if (!strcmp(name, "dict")) return 2;
+    return generic_type_arity_string(core_string_borrow(name, strlen(name)));
 }
 
 static th_type *
@@ -11539,13 +11380,13 @@ apply_type_arguments(th_ctx *types, const char *name,
     for (size_t i = 0; expected != -1 && i < count; i++)
         if (arguments[i].kind != TH_ARG_TYPE) return nullptr;
     const char *canonical = canonical_builtin_type_name(name);
-    if (!strcmp(canonical, "array") && count == 1
+    if (!strcmp(canonical, "Array") && count == 1
         && arguments[0].kind == TH_ARG_TYPE)
         return th_array(types, arguments[0].type);
-    if (!strcmp(canonical, "ref") && count == 1
+    if (!strcmp(canonical, "Ref") && count == 1
         && arguments[0].kind == TH_ARG_TYPE)
         return th_ind(types, 0, arguments[0].type);
-    if (!strcmp(name, "tuple")) {
+    if (!strcmp(canonical, "Tuple")) {
         th_type **elements = count
             ? core_alloc_array(th_type *, count) : nullptr;
         bool valid = !count || elements;
@@ -11674,8 +11515,7 @@ compose_type_syntax_node(parse_grammar_t *grammar,
         th_type *element = base ? core_tree_node_value(base).type : nullptr;
         if (!element || !has_direct_leaf_text(node,
                 CORE_STRING_STATIC("?"))) return element;
-        th_arg argument = {.kind = TH_ARG_TYPE, .type = element};
-        return th_apply(state->types, "option", &argument, 1);
+        return th_option(state->types, element);
     }
     if (nt_is(grammar, node, "tspec-list"))
         return type_argument_pack(grammar, state->types, node);
@@ -11776,8 +11616,7 @@ compose_type_syntax_node(parse_grammar_t *grammar,
                     core_list_free(arms);
                     return nullptr;
                 }
-                if (n00bb_nil_type(state->types, type)
-                    && core_tree_num_children(node) > 1) {
+                if (th_is_nil(type) && core_tree_num_children(node) > 1) {
                     core_diagnostics_report_at(
                         core_translation_unit_diagnostics(unit), unit,
                         CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0029"),

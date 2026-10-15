@@ -659,7 +659,7 @@
 <union-tspec> ::= <one-tspec> (<pipe-op> <one-tspec>)+
                 | <one-tspec>
 
-<one-tspec> @infer("option[$0]") @nospace ::= <base-tspec> %"?"
+<one-tspec> @infer("Option[$0]") @nospace ::= <base-tspec> %"?"
 <one-tspec> ::= <base-tspec>
 
 <base-tspec> @nospace($1) ::= <base-tspec-core> <array-dimensions>*

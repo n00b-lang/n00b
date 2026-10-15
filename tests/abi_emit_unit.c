@@ -8,6 +8,7 @@
 #include "abi_link.h"
 #include "abi_storage.h"
 #include "abi_string.h"
+#include "builtin_types.h"
 #include "n00b-abi-v1.h"
 #include "ir/ir.h"
 #include "ir/typelang.h"
@@ -487,6 +488,7 @@ check_empty_unit(const char *triple, uint32_t target_id,
 int
 main(void)
 {
+    n00bb_register_builtin_types();
     check_type_descriptor_storage();
     check_empty_unit("x86_64-linux", N00BB_ABI_TARGET_X86_64_LINUX,
         nullptr, ".data.rel.ro.n00b_meta", nullptr,

@@ -3347,6 +3347,7 @@ int
 n00bb_compiler_main(int argc, char **argv)
 {
     setvbuf(stdout, nullptr, _IOLBF, 0);
+    n00bb_register_builtin_types();
     parse_cmdr_t *cli = n00bb_make_cli();
     if (argc == 1 || n00bb_is_help_request(argc, argv)) {
         parse_cmdr_print_usage(cli, argc == 1 ? stderr : stdout);

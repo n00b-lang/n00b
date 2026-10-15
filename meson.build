@@ -108,7 +108,7 @@ test('runtime-literal-graph', runtime_literal_graph_test)
 
 n00bb_exe = executable(
     'n00bb',
-    ['compiler/main.c', 'compiler/compiler_driver.c', 'compiler/compiler_lower.c', 'compiler/compiler_layout.c', 'compiler/compiler_phases.c', 'compiler/compiler_abi_driver.c', 'compiler/compiler_object_io.c', 'compiler/compiler_cli.c', 'compiler/compiler_tu.c',
+    ['compiler/main.c', 'compiler/compiler_driver.c', 'compiler/compiler_lower.c', 'compiler/compiler_layout.c', 'compiler/compiler_phases.c', 'compiler/compiler_abi_driver.c', 'compiler/compiler_object_io.c', 'compiler/compiler_cli.c', 'compiler/compiler_tu.c', 'compiler/builtin_types.c',
      'compiler/compiler_tu_range.c', 'compiler/compiler_tu_builtins.c',
      'compiler/compiler_tu_alias.c', 'compiler/compiler_tu_walk.c',
      'compiler/compiler_tu_interface.c',
@@ -251,7 +251,8 @@ test('abi-string-value', abi_string_value_test)
 
 abi_layout_test = executable(
     'abi-layout-test',
-    ['tests/abi_layout.c', 'compiler/abi_layout.c', 'compiler/abi_record_layout.c'],
+    ['tests/abi_layout.c', 'compiler/abi_layout.c', 'compiler/abi_record_layout.c',
+     'compiler/builtin_types.c'],
     dependencies: lantern,
 )
 
@@ -322,7 +323,8 @@ test('abi-emit', abi_emit_test)
 
 abi_emit_unit_test = executable(
     'abi-emit-unit-test',
-    ['tests/abi_emit_unit.c', 'compiler/abi_emit.c', 'compiler/abi_emit_strings.c', 'abi/abi_string.c',
+    ['tests/abi_emit_unit.c', 'compiler/builtin_types.c',
+     'compiler/abi_emit.c', 'compiler/abi_emit_strings.c', 'abi/abi_string.c',
      'compiler/abi_link.c', 'compiler/abi_link_finish.c', 'compiler/abi_link_strings.c',
      'compiler/abi_index_patch.c',
      'compiler/abi_layout.c', 'compiler/abi_record_layout.c',
@@ -377,7 +379,7 @@ test('abi-emit-strings', abi_emit_strings_test)
 
 abi_type_rows_test = executable(
     'abi-type-rows-test',
-    ['tests/abi_type_rows.c', 'compiler/abi_type_rows.c', 'compiler/abi_type_index.c',
+    ['tests/abi_type_rows.c', 'compiler/builtin_types.c', 'compiler/abi_type_rows.c', 'compiler/abi_type_index.c',
      'compiler/abi_emit_strings.c', 'abi/abi_string.c', 'compiler/abi_decl_index.c'],
     dependencies: lantern,
 )

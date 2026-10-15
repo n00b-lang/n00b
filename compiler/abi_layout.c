@@ -329,18 +329,14 @@ publish_direct_or_alias(ir_module_t *module, th_type *type,
         if (!child) {
             th_type *resolved = th_resolve(referent);
             th_kind kind = th_kind_of(resolved);
-            const char *referent_name = nullptr;
-            th_named_info(resolved, &referent_name, nullptr, nullptr, nullptr);
             th_type *definition = kind == TH_NAMED
                 ? ir_type_definition(module, resolved) : nullptr;
             if (kind != TH_RECORD && kind != TH_FUNCTION
-                && (!referent_name || strcmp(referent_name, "atomic"))
+                && th_builtin_kind_of(resolved) != TH_BUILTIN_ATOMIC
                 && (!definition || th_kind_of(definition) != TH_RECORD))
                 return true;
         }
-        const char *child_name = nullptr;
-        th_named_info(th_resolve(referent), &child_name, nullptr,
-                      nullptr, nullptr);
+        bool atomic_child = th_builtin_kind_of(referent) == TH_BUILTIN_ATOMIC;
         th_type *bits_type = th_resolve(referent);
         if (th_kind_of(bits_type) == TH_NAMED)
             bits_type = ir_type_definition(module, bits_type);
@@ -351,7 +347,7 @@ publish_direct_or_alias(ir_module_t *module, th_type *type,
             && th_bitint_info(bits_type, &width, &flavor)
             && flavor == TH_BITINT_BITS;
         bool packable = (explicit_bits || n00bb_abi_layout_packable(child))
-            && (!child_name || strcmp(child_name, "atomic"));
+            && !atomic_child;
         *handled = true;
         storage_bits = semantic_bits = packable ? 128 : 64;
         alignment_bytes = 8;
@@ -379,24 +375,22 @@ publish_direct_or_alias(ir_module_t *module, th_type *type,
         return publish_structural_record_layout(module, type, target,
                                                 seen, handled);
     else if (th_kind_of(type) == TH_NAMED) {
-        const char *name = nullptr;
         size_t arguments = 0;
-        th_named_info(type, &name, nullptr, nullptr, &arguments);
-        if (name && !strcmp(name, TH_TUPLE))
+        th_named_info(type, nullptr, nullptr, nullptr, &arguments);
+        th_builtin_kind_t builtin = th_builtin_kind_of(type);
+        if (builtin == TH_BUILTIN_TUPLE)
             return publish_tuple_layout(module, type, target, seen,
                                         handled);
-        if (name && !strcmp(name, "option"))
+        if (builtin == TH_BUILTIN_OPTION)
             return publish_option_layout(module, type, target, seen,
                                          handled);
-        bool fixed_handle = name && (!strcmp(name, "string")
-            || !strcmp(name, "any") || !strcmp(name, "array")
-            || !strcmp(name, "view"));
-        bool index_handle = name && (!strcmp(name, "Allocator")
-            || !strcmp(name, "typespec"));
+        bool generic_handle = builtin == TH_BUILTIN_ARRAY;
+        bool fixed_handle = generic_handle || builtin == TH_BUILTIN_STRING
+            || builtin == TH_BUILTIN_ANY;
+        bool index_handle = builtin == TH_BUILTIN_ALLOCATOR
+            || builtin == TH_BUILTIN_TYPESPEC;
         if (fixed_handle || index_handle) {
             *handled = true;
-            bool generic_handle = !strcmp(name, "array")
-                || !strcmp(name, "view");
             const th_arg *argument = generic_handle
                 ? th_named_arg(type, 0) : nullptr;
             if (arguments != (size_t)generic_handle
@@ -419,7 +413,7 @@ publish_direct_or_alias(ir_module_t *module, th_type *type,
             return publish_layout(module, type, target, semantic_bits,
                                   storage_bits, alignment_bytes, false);
         }
-        bool atomic = name && !strcmp(name, "atomic");
+        bool atomic = builtin == TH_BUILTIN_ATOMIC;
         th_type *definition = ir_type_definition(module, type);
         if (atomic && !definition) {
             const th_arg *element = arguments == 1
@@ -601,12 +595,9 @@ n00bb_abi_publish_record_layout(
         uint64_t child_stride = 0;
         bool bit_packed = inline_array && policy != N00BB_RECORD_C
             && n00bb_abi_layout_packable(child);
-        if (bit_packed) {
-            const char *name = nullptr;
-            th_type *resolved = th_resolve(storage_type);
-            if (th_named_info(resolved, &name, nullptr, nullptr, nullptr)
-                && name && !strcmp(name, "atomic")) bit_packed = false;
-        }
+        if (bit_packed
+            && th_builtin_kind_of(storage_type) == TH_BUILTIN_ATOMIC)
+            bit_packed = false;
         if (inline_array) {
             if (bit_packed) stride = child->occupied[0].width;
             else if (!ir_layout_final_stride_bits(child, &stride)) {

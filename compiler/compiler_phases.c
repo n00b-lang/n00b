@@ -86,18 +86,17 @@ n00bb_literal_raw_element(ir_module_t *module, th_type *type)
     if (machine.class == IR_CLASS_SINT || machine.class == IR_CLASS_UINT) {
         if (machine.width >= 8 && !(machine.width % 8)
             && layout->intrinsic_bits == machine.width) return true;
-        if (machine.class == IR_CLASS_UINT && named_type_is(type, "char")
+        if (machine.class == IR_CLASS_UINT && machine.role == IR_ROLE_CHAR
             && layout->intrinsic_bits >= machine.width) return true;
     }
     if (machine.class == IR_CLASS_FLOAT
         && (machine.width == 64 || machine.width == 32))
         return layout->intrinsic_bits == machine.width;
 
-    const char *name = nullptr;
     size_t count = 0;
-    if (!th_named_info(type, &name, nullptr, nullptr, &count)
-        || !name) return false;
-    if (!strcmp(name, "atomic") && count == 1) {
+    if (!th_named_info(type, nullptr, nullptr, nullptr, &count)) return false;
+    th_builtin_kind_t builtin = th_builtin_kind_of(type);
+    if (builtin == TH_BUILTIN_ATOMIC && count == 1) {
         const th_arg *argument = th_named_arg(type, 0);
         const ir_final_layout_t *child = argument
             && argument->kind == TH_ARG_TYPE
@@ -113,7 +112,7 @@ n00bb_literal_raw_element(ir_module_t *module, th_type *type)
             && (n00bb_literal_raw_element(module, argument->type)
                 || n00bb_literal_boolean_field(module, argument->type));
     }
-    if (strcmp(name, TH_TUPLE) || !count
+    if (builtin != TH_BUILTIN_TUPLE || !count
         || layout->n_members != count) return false;
     for (size_t i = 0; i < count; i++) {
         const th_arg *argument = th_named_arg(type, i);
@@ -191,11 +190,10 @@ n00bb_literal_string_offsets(ir_module_t *module, th_type *type,
         return false;
     if (n00bb_literal_raw_element(module, type)) return true;
     if (tuple_field && n00bb_literal_boolean_field(module, type)) return true;
-    const char *name = nullptr;
-    size_t length = 0, count = 0;
-    if (!th_named_info(type, &name, &length, nullptr, &count) || !name)
-        return false;
-    if (length == 6 && !memcmp(name, "string", 6) && !count) {
+    size_t count = 0;
+    if (!th_named_info(type, nullptr, nullptr, nullptr, &count)) return false;
+    th_builtin_kind_t builtin = th_builtin_kind_of(type);
+    if (builtin == TH_BUILTIN_STRING && !count) {
         if (layout->intrinsic_bits != sizeof(n00b_abi_string_v1) * 8
             || base > UINT32_MAX) return false;
         core_list_push(*offsets, (uint32_t)base);
@@ -208,7 +206,7 @@ n00bb_literal_string_offsets(ir_module_t *module, th_type *type,
         }
         return true;
     }
-    if (length != strlen(TH_TUPLE) || memcmp(name, TH_TUPLE, length)
+    if (builtin != TH_BUILTIN_TUPLE
         || !count || layout->n_members != count) return false;
     for (size_t i = 0; i < count; i++) {
         const th_arg *argument = th_named_arg(type, i);
@@ -798,11 +796,7 @@ n00bb_decode_comptime_value(n00bb_link_analysis_t *analysis,
         ? ir_layout_final(module, type, ir_module_target(module)) : nullptr;
     if (!layout || !out || !raw || depth > 64
         || layout->intrinsic_bits > raw_len * 8) return false;
-    const char *name = nullptr;
-    size_t name_length = 0, arity = 0;
-    bool named = th_named_info(type, &name, &name_length, nullptr, &arity);
-    if (named && name_length == 6 && !memcmp(name, "string", 6)
-        && !arity) {
+    if (th_builtin_applied(type, TH_BUILTIN_STRING, 0)) {
         uint64_t length;
         if (!position || *position > packed_len
             || packed_len - *position < sizeof(length) + 1) return false;
@@ -824,7 +818,7 @@ n00bb_decode_comptime_value(n00bb_link_analysis_t *analysis,
         return true;
     }
     if (layout->n_members && layout->members) {
-        bool tuple = named && name && !strcmp(name, TH_TUPLE);
+        bool tuple = th_builtin_kind_of(type) == TH_BUILTIN_TUPLE;
         size_t count = layout->n_members;
         ir_global_init_value_t *items = ir_alloc(analysis->ir_context,
             count * sizeof(*items));
@@ -1255,13 +1249,8 @@ n00bb_execute_comptime(core_link_unit_t *link,
                                    : nullptr;
         bool effect_only = result && ir_machine_of(producer->owner,
             result).class == IR_CLASS_VOID;
-        const char *result_name = nullptr;
-        size_t result_name_length = 0;
-        size_t result_arity = 0;
-        bool is_string = result && th_named_info(result, &result_name,
-            &result_name_length, nullptr, &result_arity)
-            && result_name_length == 6
-            && !memcmp(result_name, "string", 6) && !result_arity;
+        bool is_string = th_builtin_applied(result, TH_BUILTIN_STRING, 0)
+            != nullptr;
         th_type *element = result && th_kind_of(result) == TH_SEQUENCE
             ? th_seq_elem(result) : nullptr;
         const ir_final_layout_t *record_layout = result

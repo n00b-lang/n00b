@@ -16,6 +16,7 @@
 #include "scanner/token_stream.h"
 #include "ir/libir.h"
 #include "th/environment.h"
+#include "builtin_types.h"
 #include "compiler_module_literal.h"
 #include "signature_typevars.h"
 
@@ -227,9 +228,7 @@ typedef struct n00bb_static_value {
         } variant;
     } as;
 } n00bb_static_value_t;
-const ir_profile_t *n00bb_type_profile(void);
 bool n00bb_integer_type_promotes_to(th_type *source, th_type *target);
-bool n00bb_nil_type(th_ctx *types, th_type *type);
 uint64_t n00bb_shift_receiver_width(th_type *type);
 bool n00bb_unsigned_shift_type(th_type *type);
 bool n00bb_unsigned_shift_count_type(th_type *type);
@@ -574,8 +573,6 @@ core_string_t named_field_identifier(parse_grammar_t *grammar,
                                      parse_tree_t *field);
 bool n00bb_switch_case_integer(parse_grammar_t *grammar,
                                parse_tree_t *node, ir_lit_t *value);
-th_type *static_named_arguments(th_type *type, const char *expected_name,
-                                size_t expected_count);
 th_type *static_sequence_element_type(th_type *type);
 th_type *static_tuple_element_type(th_type *type, size_t index,
                                    size_t *count);
@@ -618,7 +615,9 @@ parse_tree_t *n00bb_init_target(parse_grammar_t *grammar,
                                 parse_tree_t *node);
 bool primitive_operator_site(n00bb_tu_state_t *state,
                              n00bb_link_use_site_t *site);
-bool named_type_is(th_type *type, const char *wanted);
+const ir_scalar_t *n00bb_scalar_of(th_type *type);
+bool n00bb_scalar_class_is(th_type *type, ir_class_t class);
+bool n00bb_scalar_role_is(th_type *type, ir_role_t role);
 bool is_float_type(th_type *type);
 bool n00bb_flagset_type(core_translation_unit_t *unit,
                         n00bb_tu_state_t *state, th_type *type,

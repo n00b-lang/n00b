@@ -1640,12 +1640,8 @@ n00bb_lower_container_body_enter(ir_lower_context_t *context,
         return false;
     }
     frame->iteration_cursor_value = current;
-    th_arg item_arg = {
-        .kind = TH_ARG_TYPE,
-        .type = frame->iteration_plan->item_type,
-    };
-    th_type *option_type = th_apply(ir_module_types(context->module),
-                                    "option", &item_arg, 1);
+    th_type *option_type = th_option(ir_module_types(context->module),
+                                     frame->iteration_plan->item_type);
     ir_value_t *option = current && option_type
         ? n00bb_emit_iteration_trait_call(context, frame,
             frame->iteration_plan->next_site, current, TH_INOUT,
@@ -3457,7 +3453,7 @@ n00bb_lower_variant_payload(ir_lower_context_t *context, parse_visit_t *visit,
                     th_ctx *types = tu_state(lower->unit)->types;
                     th_type *payload_type = th_apply_subst(types,
                         core_tree_node_value(visit->node).type);
-                    if (payload_type && n00bb_nil_type(types, payload_type)) {
+                    if (payload_type && th_is_nil(payload_type)) {
                         lower_error(context, IR_DIAG_TYPE_MISMATCH,
                             lower_span_for_tree(context, visit->node),
                             "nil variant arm has no readable payload");
@@ -3856,8 +3852,7 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
         if (routed) return routed > 0;
         th_type *failure_type = lower->function_symbol
             ? th_func_error(lower->function_symbol->type) : nullptr;
-        if (!failure_type || n00bb_nil_type(
-                tu_state(lower->unit)->types, failure_type)) {
+        if (!failure_type || th_is_nil(failure_type)) {
             lower_error(context, IR_DIAG_VERIFY_TYPED, span,
                 "fail statement requires a non-nil function failure type");
             return false;
@@ -4006,8 +4001,7 @@ n00bb_lower_return(ir_lower_context_t *context, parse_visit_t *visit,
     th_type *element = nullptr;
     if (value && n00bb_option_type_element(expected, &element)
         && !ir_type_eq(context->module, value->type, expected)) {
-        bool empty = n00bb_nil_type(ir_module_types(context->module),
-                                    value->type);
+        bool empty = th_is_nil(value->type);
         if (!empty && !ir_type_eq(context->module, value->type, element))
             return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
                 "returned value does not match the option element type");
@@ -4356,7 +4350,7 @@ n00bb_lower_operator_method(ir_lower_context_t *context,
                 "could not select the operator trait requirement");
     }
     th_type *failure = th_func_error(signature);
-    bool can_fail = failure && !n00bb_nil_type(types, failure);
+    bool can_fail = failure && !th_is_nil(failure);
     th_type *call_type = can_fail
         ? ir_call_outcome_type(context->module, signature)
         : th_func_ret(signature);
@@ -4527,20 +4521,11 @@ n00bb_lower_binary(ir_lower_context_t *context, parse_visit_t *visit,
         || op == IR_OP_LE || op == IR_OP_GT || op == IR_OP_GE;
     bool equality = op == IR_OP_EQ || op == IR_OP_NE;
     th_ctx *types = ir_module_types(context->module);
-    bool left_nil = n00bb_nil_type(types, operands[0]->type);
-    bool right_nil = n00bb_nil_type(types, operands[1]->type);
+    bool left_nil = th_is_nil(operands[0]->type);
+    bool right_nil = th_is_nil(operands[1]->type);
     if (equality && left_nil != right_nil) {
         ir_value_t *option = left_nil ? operands[1] : operands[0];
-        const char *name = nullptr;
-        bool is_variant = true;
-        size_t nargs = 0;
-        th_type *option_type = th_resolve(option->type);
-        const th_arg *argument = nullptr;
-        if (!th_named_info(option_type, &name, nullptr, &is_variant, &nargs)
-            || is_variant || nargs != 1 || !name
-            || strcmp(canonical_builtin_type_name(name), "option")
-            || !(argument = th_named_arg(option_type, 0))
-            || argument->kind != TH_ARG_TYPE)
+        if (!n00bb_option_type_element(option->type, nullptr))
             return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
                 "nil can only be compared with an option value");
         ir_instr_t *test = ir_lower_emit_instruction(context,
@@ -4680,7 +4665,7 @@ n00bb_lower_nil_literal(ir_lower_context_t *context, parse_visit_t *visit,
         return (ir_lower_result_t){IR_LOWER_VALUE, constant->dest};
     }
     if (operand_count || !result_type
-        || !n00bb_nil_type(ir_module_types(context->module), result_type))
+        || !th_is_nil(result_type))
         return lower_error(context, IR_DIAG_TYPE_LITERAL, span,
                            "nil literal must have the nil sentinel type");
     ir_instr_t *instruction = ir_lower_emit_instruction(context, IR_OP_NIL,
@@ -4911,7 +4896,7 @@ n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
                                "could not preserve unsafe reference cast provenance");
         return (ir_lower_result_t){IR_LOWER_VALUE, cast->dest};
     }
-    bool boxing = ir_type_eq(context->module, target, th_name(types, "any"));
+    bool boxing = th_builtin_kind(types, target) == TH_BUILTIN_ANY;
     bool nominal = (from_definition
             && ir_type_eq(context->module, from_definition, target))
         || (to_definition
@@ -5565,13 +5550,7 @@ n00bb_lower_string_literal(ir_lower_context_t *context,
     th_type *resolved = th_resolve(result_type);
     th_type *element_type = th_kind_of(resolved) == TH_SEQUENCE
         ? th_resolve(th_seq_elem(resolved)) : nullptr;
-    const char *element_name = nullptr;
-    size_t element_name_length = 0;
-    bool char_array = element_type
-        && th_named_info(element_type, &element_name, &element_name_length,
-                         nullptr, nullptr)
-        && element_name_length == 4
-        && !memcmp(element_name, "char", 4);
+    bool char_array = n00bb_scalar_role_is(element_type, IR_ROLE_CHAR);
     if (char_array) {
         if (decoded->byte_len > UINT32_MAX) {
             core_buffer_free(decoded);
@@ -5667,8 +5646,7 @@ n00bb_lower_literal_element(ir_lower_context_t *context, ir_value_t *value,
         return (ir_lower_result_t){IR_LOWER_VALUE, value};
     th_type *option_element = nullptr;
     if (n00bb_option_type_element(target, &option_element)) {
-        bool empty = n00bb_nil_type(ir_module_types(context->module),
-                                     value->type);
+        bool empty = th_is_nil(value->type);
         if (empty || ir_type_eq(context->module, value->type,
                                 option_element)) {
             ir_instr_t *option = ir_lower_emit_instruction(context,
@@ -5871,13 +5849,8 @@ n00bb_lower_sequence_aggregate(ir_lower_context_t *context,
         return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
                            "sequence literal has no inferred type");
     th_type *resolved_type = th_resolve(result_type);
-    const char *type_name = nullptr;
-    size_t type_name_length = 0;
-    bool is_list = th_named_info(resolved_type, &type_name,
-                                 &type_name_length, nullptr, nullptr)
-        && type_name_length == strlen("builtin.containers.list.List")
-        && !memcmp(type_name, "builtin.containers.list.List", type_name_length)
-        && th_named_nargs(resolved_type) == 1;
+    bool is_list = th_builtin_applied(resolved_type, TH_BUILTIN_CONTAINER_LIST, 1)
+        != nullptr;
     bool is_array = th_kind_of(resolved_type) == TH_SEQUENCE;
     if (!is_array && !is_list)
         return lower_error(context, IR_DIAG_TYPE_CLASS, span,
@@ -6008,20 +5981,11 @@ n00bb_lower_brace_literal(ir_lower_context_t *context,
     if (site)
         return n00bb_lower_user_literal(context, visit, site,
                                         result_type, span);
-    const char *constructor = nullptr;
-    size_t constructor_length = 0;
-    size_t argument_count = 0;
     th_type *resolved = result_type ? th_resolve(result_type) : nullptr;
-    bool named = resolved && th_named_info(resolved, &constructor,
-        &constructor_length, nullptr, &argument_count);
-    bool is_set = named
-        && constructor_length == strlen("builtin.containers.set.Set")
-        && !memcmp(constructor, "builtin.containers.set.Set",
-                   constructor_length) && argument_count == 1;
-    bool is_dict = named
-        && constructor_length == strlen("builtin.containers.dict.Dict")
-        && !memcmp(constructor, "builtin.containers.dict.Dict",
-                   constructor_length) && argument_count == 2;
+    bool is_set = th_builtin_applied(resolved, TH_BUILTIN_CONTAINER_SET, 1)
+        != nullptr;
+    bool is_dict = th_builtin_applied(resolved, TH_BUILTIN_CONTAINER_DICT, 2)
+        != nullptr;
     if (dict_only_empty_literal(visit->grammar, visit->node) && is_set)
         return lower_error(context, IR_DIAG_TYPE_CLASS, span,
                            "{:} is a dictionary literal, not a set literal");
@@ -6391,21 +6355,10 @@ n00bb_default_container_literal(parse_grammar_t *grammar,
     bool sequence = nt_is(grammar, node, "list-lit");
     bool braces = nt_is(grammar, node, "dict-or-set-lit");
     if (!sequence && !braces) return false;
-    const char *name = nullptr;
-    size_t length = 0, arguments = 0;
-    type = type ? th_resolve(type) : nullptr;
-    if (!type || !th_named_info(type, &name, &length, nullptr, &arguments))
-        return false;
     return sequence
-        ? length == strlen("builtin.containers.list.List")
-            && !memcmp(name, "builtin.containers.list.List", length)
-            && arguments == 1
-        : (length == strlen("builtin.containers.dict.Dict")
-            && !memcmp(name, "builtin.containers.dict.Dict", length)
-            && arguments == 2)
-          || (length == strlen("builtin.containers.set.Set")
-            && !memcmp(name, "builtin.containers.set.Set", length)
-            && arguments == 1);
+        ? th_builtin_applied(type, TH_BUILTIN_CONTAINER_LIST, 1) != nullptr
+        : th_builtin_applied(type, TH_BUILTIN_CONTAINER_DICT, 2) != nullptr
+          || th_builtin_applied(type, TH_BUILTIN_CONTAINER_SET, 1) != nullptr;
 }
 
 static void
@@ -6708,7 +6661,7 @@ n00bb_lower_callback_create(ir_lower_context_t *context,
 
     th_type *setup_type = contract->setup ? contract->setup->type : nullptr;
     th_type *failure = setup_type ? th_func_error(setup_type) : nullptr;
-    bool can_fail = failure && !n00bb_nil_type(state->types, failure);
+    bool can_fail = failure && !th_is_nil(failure);
     bool propagated = n00bb_call_is_error_propagated(visit->grammar,
                                                       visit->node);
     if (can_fail != propagated) {
@@ -7337,7 +7290,7 @@ n00bb_emit_context_hook_call(ir_lower_context_t *context,
     }
     th_type *error_type = th_func_error(signature);
     bool can_fail = error_type
-        && !n00bb_nil_type(state->types, error_type);
+        && !th_is_nil(error_type);
     if (can_fail && !failure) {
         lower_error(context, IR_DIAG_VERIFY_TYPED, span,
                     "this context hook is not allowed to fail");
@@ -7739,10 +7692,10 @@ n00bb_call_context_default(ir_lower_context_t *context,
     ir_value_t *address = ir_func_address(owner_state->ir_module, function);
     th_type *failure = th_func_error(signature);
     bool can_fail = failure
-        && !n00bb_nil_type(ir_module_types(context->module), failure);
+        && !th_is_nil(failure);
     th_type *result_type = th_func_ret(signature);
     if (!address || !result_type
-        || n00bb_nil_type(ir_module_types(context->module), result_type)) {
+        || th_is_nil(result_type)) {
         lower_error(context, IR_DIAG_TYPE_CLASS, span,
             "context defaults must produce a value for their parameter");
         return nullptr;
@@ -7827,7 +7780,7 @@ n00bb_call_context_default(ir_lower_context_t *context,
     context->reachable = true;
     ir_value_t *value = n00bb_emit_outcome_payload(context, call->dest,
         "ok", ok_type, span);
-    if (n00bb_nil_type(ir_module_types(context->module), ok_type))
+    if (th_is_nil(ok_type))
         value = nullptr;
     if (!value) {
         lower_error(context, IR_DIAG_TYPE_CLASS, span,
@@ -7990,7 +7943,7 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
         return -1;
     th_type *failure = th_func_error(signature);
     bool can_fail = failure
-        && !n00bb_nil_type(owner_state->types, failure);
+        && !th_is_nil(failure);
 
     parse_tree_t *args = call_arguments_node(visit->grammar, visit->node);
     core_list_t(n00bb_ir_value_ptr_t) captures =
@@ -8262,8 +8215,7 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
         core_list_free(captures);
         return -1;
     }
-    bool has_value = !n00bb_nil_type(ir_module_types(context->module),
-                                      provided_type);
+    bool has_value = !th_is_nil(provided_type);
     th_type *outcome_type = can_fail
         ? ir_call_outcome_type(context->module, signature) : provided_type;
     if (!outcome_type) {
@@ -8376,10 +8328,10 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
         }
         context->block = ok_block;
         context->reachable = true;
-        if (!n00bb_nil_type(ir_module_types(context->module), ok_type))
+        if (!th_is_nil(ok_type))
             provided = n00bb_emit_outcome_payload(context, call->dest,
                                                    "ok", ok_type, span);
-        if (!n00bb_nil_type(ir_module_types(context->module), ok_type)
+        if (!th_is_nil(ok_type)
             && !provided) {
             lower_error(context, IR_DIAG_INTERNAL, span,
                         "could not extract successful context enter value");
@@ -9219,7 +9171,7 @@ n00bb_record_equal_function(ir_lower_context_t *context, th_type *receiver)
         if (!field || th_env_method_resolve(state->types, field->type,
                 "Equal", "__equal", &selected) != TH_ENV_METHOD_FOUND
             || (selected.error_type
-                && !n00bb_nil_type(types, selected.error_type)))
+                && !th_is_nil(selected.error_type)))
             return nullptr;
         char left_name[64], right_name[64], test_name[64], next_name[64];
         snprintf(left_name, sizeof left_name, "field_%zu_left", i);
@@ -9310,7 +9262,7 @@ n00bb_record_hash_function(ir_lower_context_t *context, th_type *receiver)
                 "builtin.hash.Hash", "hash", &selected)
                 != TH_ENV_METHOD_FOUND
             || (selected.error_type
-                && !n00bb_nil_type(types, selected.error_type)))
+                && !th_is_nil(selected.error_type)))
             return nullptr;
         char field_name[64], hash_name[64], left_name[64], right_name[64];
         char rotated_name[64], mixed_name[64];
@@ -9632,8 +9584,7 @@ n00bb_emit_closed_trait_arm(ir_lower_context_t *context,
         ? th_func_ret(call_signature) : nullptr;
     th_type *call_failure = call_signature
         ? th_func_error(call_signature) : nullptr;
-    if (call_failure && !n00bb_nil_type(ir_module_types(context->module),
-                                         call_failure))
+    if (call_failure && !th_is_nil(call_failure))
         call_result = ir_call_outcome_type(context->module, call_signature);
     ir_instr_t *call = callee && call_signature && call_result
         ? ir_lower_emit_instruction(context, IR_OP_CALL, span) : nullptr;
@@ -9699,8 +9650,7 @@ n00bb_emit_closed_trait_call(ir_lower_context_t *context,
     char local_name[48];
     snprintf(local_name, sizeof(local_name), "__n00bb_dispatch_%llu",
              (unsigned long long)context->next_value_id++);
-    bool void_result = n00bb_nil_type(ir_module_types(context->module),
-                                       result_type);
+    bool void_result = th_is_nil(result_type);
     ir_local_t *result = void_result ? nullptr
         : ir_local_add(context->function, local_name, result_type);
     ir_block_t *join = n00bb_branch_block(context, lower,
@@ -9931,7 +9881,7 @@ n00bb_emit_iteration_trait_call(ir_lower_context_t *context,
         return (lower_error(context, IR_DIAG_UNDEFINED_SYMBOL, span,
             "iteration trait method has no IR binding"), nullptr);
 
-    bool can_fail = failure && !n00bb_nil_type(types, failure);
+    bool can_fail = failure && !th_is_nil(failure);
     th_type *call_type = can_fail
         ? ir_call_outcome_type(context->module, signature) : return_type;
     if (receiver_mode == TH_CONSUME) {
@@ -10167,8 +10117,7 @@ n00bb_option_argument(ir_lower_context_t *context, parse_tree_t *node,
         option ? element : parameter);
     if (!value || !option
         || ir_type_eq(context->module, value->type, parameter)) return value;
-    bool empty = n00bb_nil_type(ir_module_types(context->module),
-                                value->type);
+    bool empty = th_is_nil(value->type);
     if (!empty && !ir_type_eq(context->module, value->type, element))
         return value;
     ir_instr_t *wrapped = ir_lower_emit_instruction(context,
@@ -10830,8 +10779,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                                                    &option_element)
                 && !ir_type_eq(context->module, value->type,
                                parameter->type)) {
-                bool empty = n00bb_nil_type(ir_module_types(context->module),
-                                            value->type);
+                bool empty = th_is_nil(value->type);
                 if (!empty && !ir_type_eq(context->module, value->type,
                                           option_element)) {
                     lower_error(context, IR_DIAG_TYPE_ARGS,
@@ -11192,8 +11140,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         }
     }
     th_type *error_type = th_func_error(signature);
-    bool has_error = error_type && !n00bb_nil_type(
-        ir_module_types(context->module), error_type);
+    bool has_error = error_type && !th_is_nil(error_type);
     bool propagated = n00bb_call_is_error_propagated(visit->grammar, call_node);
     if (has_error != propagated) {
         core_list_free(values);
@@ -11848,8 +11795,8 @@ n00bb_lower_constructor_new(ir_lower_context_t *context, parse_visit_t *visit,
     th_type *source_type = constructor_signature_instance(types, symbol);
     if (!source_type || th_kind_of(source_type) != TH_FUNCTION
         || !th_func_nparams(source_type)
-        || !n00bb_nil_type(types, th_func_error(source_type))
-        || !n00bb_nil_type(types, th_func_ret(source_type)))
+        || !th_is_nil(th_func_error(source_type))
+        || !th_is_nil(th_func_ret(source_type)))
         return lower_error(context, IR_DIAG_TYPE_CLASS, span,
             "resolved __init does not have an infallible, no-value signature");
     const th_param *receiver = th_func_param(source_type, 0);
@@ -12853,8 +12800,7 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
         th_type *option_element = nullptr;
         if (n00bb_option_type_element(element, &option_element)
             && !ir_type_eq(context->module, value->type, element)) {
-            bool empty = n00bb_nil_type(ir_module_types(context->module),
-                                        value->type);
+            bool empty = th_is_nil(value->type);
             if (!empty && !ir_type_eq(context->module, value->type,
                                       option_element)) {
                 lower_error(context, IR_DIAG_TYPE_ARGS, span,
@@ -12947,10 +12893,8 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
                 bounds[position] = part;
         }
         th_type *integer = n00bb_ir_builtin_type(context->module, "int");
-        th_arg bound_arg = {.kind = TH_ARG_TYPE, .type = integer};
         th_type *bound_type = integer
-            ? th_apply(ir_module_types(context->module), "option",
-                       &bound_arg, 1) : nullptr;
+            ? th_option(ir_module_types(context->module), integer) : nullptr;
         ir_span_t span = lower_span_for_tree(context, contents);
         arguments[1] = separator_seen
             ? n00bb_lower_slice_bound(context, bounds[0], bound_type, span)
@@ -13129,7 +13073,7 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
         failure = th_resolve(failure);
     }
     bool has_failure = failure
-        && !n00bb_nil_type(ir_module_types(context->module), failure);
+        && !th_is_nil(failure);
     for (size_t i = 0; i < argument_count; i++) {
         const th_param *parameter = th_func_param(signature, i);
         th_mode mode = parameter ? parameter->mode : TH_IN;
@@ -13156,8 +13100,7 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
             && n00bb_option_type_element(parameter->type, &option_element)
             && !ir_type_eq(context->module, arguments[i]->type,
                            parameter->type)) {
-            bool empty = n00bb_nil_type(ir_module_types(context->module),
-                                        arguments[i]->type);
+            bool empty = th_is_nil(arguments[i]->type);
             if (empty || ir_type_eq(context->module, arguments[i]->type,
                                     option_element)) {
                 ir_span_t option_span = lower_span_for_tree(context,
@@ -14933,7 +14876,7 @@ n00bb_failure_channel_accepts(ir_lower_context_t *context,
         ? th_func_error(context->function->type) : nullptr;
     th_ctx *types = context ? ir_module_types(context->module) : nullptr;
     if (!types || !caller_error || !failure
-        || n00bb_nil_type(types, caller_error)) return false;
+        || th_is_nil(caller_error)) return false;
     if (th_kind_of(th_resolve(caller_error)) == TH_VAR
         || th_kind_of(th_resolve(failure)) == TH_VAR)
         return th_unify_in_place(types, caller_error, failure);
@@ -15376,7 +15319,7 @@ initialize_static_global(parse_grammar_t *grammar,
 
     if (!initialized) {
         if (symbol->mutability != PARSE_SYM_CONST) return true;
-        if (!n00bb_nil_type(state->types, static_type)) return true;
+        if (!th_is_nil(static_type)) return true;
         ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
             IR_DIAG_TYPE_LITERAL, span, "this global initializer");
         ir_diag_message(diagnostic, diagnostics,
@@ -16359,8 +16302,7 @@ n00bb_emit_default_param(ir_lowerer_t *lowerer,
         if (!ir_type_eq(context->module, parameter->local->type,
                         resolved->type)
             && n00bb_option_type_element(parameter->local->type, &element)) {
-            bool empty = n00bb_nil_type(ir_module_types(context->module),
-                                        resolved->type);
+            bool empty = th_is_nil(resolved->type);
             if (empty || ir_type_eq(context->module, element,
                                     resolved->type)) {
                 ir_instr_t *option = ir_lower_emit_instruction(context,
@@ -16881,7 +16823,7 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
         }
     }
     else if (context.reachable) {
-        if (!n00bb_nil_type(state->types, th_func_ret(function_type))) {
+        if (!th_is_nil(th_func_ret(function_type))) {
             ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
                 IR_DIAG_VERIFY_TYPED, lower_span_for_tree(&context, body),
                 "this function body");
@@ -18038,8 +17980,7 @@ exec_graph_function_id(ir_exec_graph_t *graph, uint32_t phase,
     bool external_initializer = !function->n_blocks
         && function->linkage == IR_LINK_EXTERN
         && ir_func_is_initializer(function)
-        && n00bb_nil_type(ir_module_types(function->owner),
-                          th_func_error(function->type));
+        && th_is_nil(th_func_error(function->type));
     ir_exec_graph_outcome_t success = IR_EXEC_GRAPH_OUTCOME_SUCCESS;
     bool added = external_initializer
         ? ir_exec_graph_add_external_function(graph, phase, function,
@@ -18207,8 +18148,7 @@ comptime_function_is_fallible(ir_func_t *function)
 {
     if (!function || !function->owner || !function->type) return false;
     th_type *failure = th_func_error(function->type);
-    return failure && !n00bb_nil_type(ir_module_types(function->owner),
-                                      failure);
+    return failure && !th_is_nil(failure);
 }
 
 static uint8_t
@@ -19549,7 +19489,7 @@ prepare_ir_type_layouts(parse_grammar_t *grammar,
             ok = false;
             break;
         }
-        if (name && !strcmp(name, "atomic")) {
+        if (th_builtin_kind_of(type) == TH_BUILTIN_ATOMIC) {
             const th_arg *argument = th_named_arg(type, 0);
             if (argument_count != 1 || !argument
                 || argument->kind != TH_ARG_TYPE
@@ -19570,7 +19510,7 @@ prepare_ir_type_layouts(parse_grammar_t *grammar,
                 ok = prepare_ir_type_layouts(grammar, unit, owner, module,
                                               argument->type, target, visited);
         }
-        if (ok && name && !strcmp(name, "atomic")
+        if (ok && th_builtin_kind_of(type) == TH_BUILTIN_ATOMIC
             && !atomic_aggregate_layout_pending(module, type, target)
             && !n00bb_atomic_native_support(module, type, target)) {
             core_diagnostics_report_at(
@@ -21159,7 +21099,7 @@ n00bb_static_value_to_ir_initializer(const n00bb_static_value_t *value,
         out->string.length = value->as.string.u8_bytes;
         return true;
     case N00BB_STATIC_VALUE_NIL:
-        if (!n00bb_nil_type(state->types, type)
+        if (!th_is_nil(type)
             && !n00bb_option_type_element(type, nullptr)) return false;
         out->kind = IR_GLOBAL_INIT_NIL;
         return true;
@@ -21207,8 +21147,8 @@ n00bb_static_value_to_ir_initializer(const n00bb_static_value_t *value,
 
     if (value->kind == N00BB_STATIC_VALUE_SEQUENCE) {
         if (th_kind_of(type) != TH_SEQUENCE
-            && !static_named_arguments(type, "list", 1)
-            && !static_named_arguments(type, "array", 1)) return false;
+            && !th_builtin_applied(type, TH_BUILTIN_LIST, 1)
+            && !th_builtin_applied(type, TH_BUILTIN_ARRAY, 1)) return false;
         th_type *element = static_sequence_element_type(type);
         if (!element) return false;
         out->kind = IR_GLOBAL_INIT_SEQUENCE;
@@ -21219,7 +21159,7 @@ n00bb_static_value_to_ir_initializer(const n00bb_static_value_t *value,
         return true;
     }
     if (value->kind == N00BB_STATIC_VALUE_TUPLE) {
-        if (!static_named_arguments(type, TH_TUPLE, count)) return false;
+        if (!th_builtin_applied(type, TH_BUILTIN_TUPLE, count)) return false;
         out->kind = IR_GLOBAL_INIT_TUPLE;
         for (size_t i = 0; i < count; i++) {
             th_type *element = static_tuple_element_type(type, i, nullptr);
@@ -21244,7 +21184,7 @@ n00bb_static_value_to_ir_initializer(const n00bb_static_value_t *value,
         return true;
     }
     if (value->kind == N00BB_STATIC_VALUE_SET) {
-        if (!static_named_arguments(type, "set", 1)) return false;
+        if (!th_builtin_applied(type, TH_BUILTIN_SET, 1)) return false;
         th_type *element = static_sequence_element_type(type);
         if (!element) return false;
         out->kind = IR_GLOBAL_INIT_SET;
@@ -21255,7 +21195,7 @@ n00bb_static_value_to_ir_initializer(const n00bb_static_value_t *value,
         return true;
     }
     if (value->kind == N00BB_STATIC_VALUE_DICTIONARY) {
-        if (!static_named_arguments(type, "dict", 2) || (count & 1u))
+        if (!th_builtin_applied(type, TH_BUILTIN_DICT, 2) || (count & 1u))
             return false;
         const th_arg *key = th_named_arg(type, 0);
         const th_arg *element = th_named_arg(type, 1);

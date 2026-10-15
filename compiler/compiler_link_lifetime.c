@@ -603,23 +603,6 @@ call_argument_aliases(parse_grammar_t *grammar,
         return true;
     }
 
-    th_type *holder_type = holder->type ? th_resolve(holder->type) : nullptr;
-    const char *holder_name = nullptr;
-    size_t holder_name_size = 0;
-    bool holder_is_variant = false;
-    if (source && (source->kind == PARSE_SYM_VARIABLE
-                   || source->kind == PARSE_SYM_PARAM)
-        && holder_type && th_named_info(holder_type, &holder_name,
-            &holder_name_size, &holder_is_variant, nullptr)
-        && !holder_is_variant && holder_name_size == 4
-        && !memcmp(holder_name, "view", 4)) {
-        parse_token_info_t *site = parse_tree_find_first_terminal(argument);
-        bool escapes = scope_has_lexical_lifetime(source->scope)
-            && !scope_is_within(holder->scope, source->scope);
-        return parse_symtab_add_alias(holder, source,
-            PARSE_SYM_ALIAS_DERIVED, site ? site->start_byte : 0, escapes);
-    }
-
     parse_tree_t *aggregate = aggregate_literal_root(grammar, argument);
     return aggregate && record_aggregate_aliases(grammar, unit, aggregate,
                                                    holder);

@@ -169,9 +169,8 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
     th_type *mapped_item = th_var(types);
     th_type *reference = mapped_item ? th_ind(types, 0, mapped_item) : nullptr;
     th_type *byte_reference = byte ? th_ind(types, 0, byte) : nullptr;
-    th_arg option_arg = {.kind = TH_ARG_TYPE, .type = byte_reference};
     th_type *optional_reference = byte_reference
-        ? th_apply(types, "option", &option_arg, 1) : nullptr;
+        ? th_option(types, byte_reference) : nullptr;
     th_type *map_args[] = {uint, uint};
     th_type *unmap_args[] = {reference, uint};
     th_type *protect_args[] = {byte_reference, uint, u32};
@@ -262,9 +261,7 @@ register_builtin_abi_symbols(parse_symtab_t *symtab, th_ctx *types,
     for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
         th_type *record = th_name(types, record_names[i]);
         th_type *reference = record ? th_ind(types, 0, record) : nullptr;
-        th_arg option_arg = {.kind = TH_ARG_TYPE, .type = reference};
-        th_type *result = reference
-            ? th_apply(types, "option", &option_arg, 1) : nullptr;
+        th_type *result = reference ? th_option(types, reference) : nullptr;
         th_type *args[] = {u32};
         if (!register_builtin_native_function(symtab, types, nil_type,
                 names[i], native_names[i], result, args, 1)) return false;
@@ -278,18 +275,14 @@ register_builtin_abi_symbols(parse_symtab_t *symtab, th_ctx *types,
     th_type *range_args[] = {u32, u32, u32};
     th_type *bytes_args[] = {u32, u32};
     th_type *byte_reference = th_ind(types, 0, th_name(types, "byte"));
-    th_arg bytes_option_arg = {.kind = TH_ARG_TYPE, .type = byte_reference};
     th_type *bytes_result = byte_reference
-        ? th_apply(types, "option", &bytes_option_arg, 1) : nullptr;
+        ? th_option(types, byte_reference) : nullptr;
     th_type *native_frame = th_name(types,
         "sys.internal.abi.Native_Frame_Record");
     th_type *native_frame_reference = native_frame
         ? th_ind(types, 0, native_frame) : nullptr;
-    th_arg frame_option_arg = {
-        .kind = TH_ARG_TYPE, .type = native_frame_reference,
-    };
     th_type *native_frame_result = native_frame_reference
-        ? th_apply(types, "option", &frame_option_arg, 1) : nullptr;
+        ? th_option(types, native_frame_reference) : nullptr;
     th_type *native_frame_args[] = {
         byte_reference, byte_reference, byte_reference,
     };
@@ -507,7 +500,7 @@ register_builtin_gc_symbols(parse_symtab_t *symtab, th_ctx *types,
     th_type *item = th_var(types);
     th_arg item_arg = {.kind = TH_ARG_TYPE, .type = item};
     th_type *generic_atomic = item
-        ? th_apply(types, "atomic", &item_arg, 1) : nullptr;
+        ? th_apply(types, "Atomic", &item_arg, 1) : nullptr;
     th_type *generic_ref = generic_atomic
         ? th_ind(types, 0, generic_atomic) : nullptr;
     th_param load_parameter = {.mode = TH_IN, .type = generic_ref};
@@ -730,11 +723,8 @@ register_builtin_symbols(parse_annot_result_t *annotations,
         ? th_env_signature_contract(types, write_signature, nil_type)
         : nullptr;
     th_type *option_is_nil_item = th_var(types);
-    th_arg option_is_nil_item_arg = {
-        .kind = TH_ARG_TYPE, .type = option_is_nil_item,
-    };
     th_type *option_is_nil_type = option_is_nil_item
-        ? th_apply(types, "option", &option_is_nil_item_arg, 1) : nullptr;
+        ? th_option(types, option_is_nil_item) : nullptr;
     th_param option_is_nil_parameter = {
         .mode = TH_IN, .type = option_is_nil_type,
     };
@@ -742,21 +732,15 @@ register_builtin_symbols(parse_annot_result_t *annotations,
         ? th_func_with_error(types, bool_type, nil_type,
             &option_is_nil_parameter, 1, nullptr, nullptr, 0) : nullptr;
     th_type *option_get_item = th_var(types);
-    th_arg option_get_item_arg = {
-        .kind = TH_ARG_TYPE, .type = option_get_item,
-    };
     th_type *option_get_type = option_get_item
-        ? th_apply(types, "option", &option_get_item_arg, 1) : nullptr;
+        ? th_option(types, option_get_item) : nullptr;
     th_param option_get_parameter = {.mode = TH_IN, .type = option_get_type};
     th_type *option_get_signature = option_get_type
         ? th_func_with_error(types, option_get_item, nil_type,
             &option_get_parameter, 1, nullptr, nullptr, 0) : nullptr;
     th_type *option_default_item = th_var(types);
-    th_arg option_default_item_arg = {
-        .kind = TH_ARG_TYPE, .type = option_default_item,
-    };
     th_type *option_default_type = option_default_item
-        ? th_apply(types, "option", &option_default_item_arg, 1) : nullptr;
+        ? th_option(types, option_default_item) : nullptr;
     th_param option_get_or_else_parameters[] = {
         {.mode = TH_IN, .type = option_default_type},
         {.mode = TH_IN, .type = option_default_item},
@@ -1345,8 +1329,7 @@ register_builtin_traits(th_env *environment, th_ctx *types,
     th_type *iterator = th_var(types);
     th_type *item = th_var(types);
     th_type *next_error = th_var(types);
-    th_arg item_arg = {.kind = TH_ARG_TYPE, .type = item};
-    th_type *optional_item = th_apply(types, "option", &item_arg, 1);
+    th_type *optional_item = th_option(types, item);
     th_param next_param = {.mode = TH_INOUT, .type = iterator};
     th_type *next_signature = optional_item
         ? th_func_with_error(types, optional_item, next_error, &next_param,
@@ -1399,24 +1382,21 @@ register_builtin_traits(th_env *environment, th_ctx *types,
     th_type *option_contracts = th_record(types, option_methods, 3);
 
     th_type *option_item = th_var(types);
-    th_arg option_item_arg = {.kind = TH_ARG_TYPE, .type = option_item};
-    th_type *option_type = th_apply(types, "option", &option_item_arg, 1);
+    th_type *option_type = th_option(types, option_item);
     th_param builtin_is_nil_parameter = {.mode = TH_IN, .type = option_type};
     th_type *builtin_is_nil_signature = option_type && option_bool
         ? th_func_with_error(types, option_bool, th_name(types, "nil"),
             &builtin_is_nil_parameter, 1, nullptr, nullptr, 0) : nullptr;
 
     th_type *get_item = th_var(types);
-    th_arg get_item_arg = {.kind = TH_ARG_TYPE, .type = get_item};
-    th_type *get_option = th_apply(types, "option", &get_item_arg, 1);
+    th_type *get_option = th_option(types, get_item);
     th_param builtin_get_parameter = {.mode = TH_IN, .type = get_option};
     th_type *builtin_get_signature = get_option
         ? th_func_with_error(types, get_item, th_name(types, "nil"),
             &builtin_get_parameter, 1, nullptr, nullptr, 0) : nullptr;
 
     th_type *fallback_item = th_var(types);
-    th_arg fallback_item_arg = {.kind = TH_ARG_TYPE, .type = fallback_item};
-    th_type *fallback_option = th_apply(types, "option", &fallback_item_arg, 1);
+    th_type *fallback_option = th_option(types, fallback_item);
     th_param builtin_get_or_else_parameters[] = {
         {.mode = TH_IN, .type = fallback_option},
         {.mode = TH_IN, .type = fallback_item},
@@ -1502,8 +1482,7 @@ register_builtin_traits(th_env *environment, th_ctx *types,
     };
     th_type *write_signature = th_func_with_error(types, write_result,
         write_error, write_parameters, 3, nullptr, nullptr, 0);
-    th_arg bound_arg = {.kind = TH_ARG_TYPE, .type = th_name(types, "int")};
-    th_type *optional_bound = th_apply(types, "option", &bound_arg, 1);
+    th_type *optional_bound = th_option(types, th_name(types, "int"));
     th_param slice_write_parameters[] = {
         {.mode = TH_INOUT, .type = write_receiver},
         {.mode = TH_IN, .type = optional_bound},

@@ -26,11 +26,8 @@ typedef bool (*n00bb_frame_root_visit_fn)(void *context,
 static inline bool
 n00bb_frame_pointer_option(th_type *type)
 {
-    type = th_resolve(type);
-    const char *name = nullptr;
-    size_t count = 0;
-    if (!th_named_info(type, &name, nullptr, nullptr, &count)
-        || !name || strcmp(name, "option") || count != 1) return false;
+    type = th_builtin_applied(type, TH_BUILTIN_OPTION, 1);
+    if (!type) return false;
     const th_arg *element = th_named_arg(type, 0);
     return element && element->kind == TH_ARG_TYPE
         && th_kind_of(th_resolve(element->type)) == TH_INDIRECTION;
@@ -208,7 +205,7 @@ n00bb_frame_member(void *opaque, n00bb_frame_root_kind_t kind, size_t index,
             ? th_name(ir_module_types(context->function->owner), "u64")
             : th_kind_of(th_resolve(type)) == TH_VAR
                 || th_kind_of(th_resolve(type)) == TH_TRAIT
-                ? th_name(ir_module_types(context->function->owner), "any")
+                ? th_name(ir_module_types(context->function->owner), "Any")
                 : type,
     };
     return context->members[index].type != nullptr;

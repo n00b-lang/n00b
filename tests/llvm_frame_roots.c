@@ -225,7 +225,7 @@ main(void)
         ? ir_param_add(opaque_local, "root", parameter->type) : nullptr;
     ir_local_t *opaque_root = opaque_local
         ? ir_local_add(opaque_local, "local.option",
-            ir_type_parse(runtime, "option[ref[Point]]")) : nullptr;
+            ir_type_parse(runtime, "Option[ref[Point]]")) : nullptr;
     ir_block_t *opaque_entry = opaque_local
         ? ir_block_add(opaque_local, "entry") : nullptr;
     ir_instr_t *opaque_return = opaque_entry
@@ -277,10 +277,10 @@ main(void)
         && ir_instr_set_call_signature(inline_call, inline_helper->type)
         && ir_instr_operand_value(then_return, inline_call->dest)
         && ir_instr_operand_value(else_return, caller_root));
-    th_type *optional_type = ir_type_parse(runtime, "option[ref[Point]]");
+    th_type *optional_type = ir_type_parse(runtime, "Option[ref[Point]]");
     ir_func_t *optional = ir_func_add(runtime, "pin_optional",
         ir_type_parse(runtime,
-            "(option[ref[Point]]) -> option[ref[Point]]"),
+            "(Option[ref[Point]]) -> Option[ref[Point]]"),
         IR_LINK_INTERNAL);
     ir_value_t *optional_param = optional
         ? ir_param_add(optional, "root", optional_type) : nullptr;

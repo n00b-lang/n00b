@@ -5,6 +5,7 @@
 #include "abi_string.h"
 #include "abi_type_rows.h"
 #include "abi_value_schema.h"
+#include "builtin_types.h"
 #include "ir/layout.h"
 #include "ir/typelang.h"
 #include "lib/alloc.h"
@@ -12,6 +13,7 @@
 int
 main(void)
 {
+    n00bb_register_builtin_types();
     n00b_abi_type_v1 reference = {
         .kind = N00B_ABI_TYPE_REFERENCE,
         .flags = N00B_ABI_TYPE_FLAG_PLAIN_REF,
@@ -100,12 +102,9 @@ main(void)
     n00bb_abi_type_index_t *handles = n00bb_abi_type_index_new(runtime);
     n00bb_abi_name_pool_t *handle_names = n00bb_abi_name_pool_new();
     th_arg item = {.kind = TH_ARG_TYPE, .type = string};
-    const char *handle_names_interned[] = {
-        "option", "ref", "atomic", "array", "view",
-    };
+    const char *handle_names_interned[] = {TH_OPTION, "Atomic", "Array"};
     const uint32_t handle_kinds[] = {
-        N00B_ABI_TYPE_OPTION, N00B_ABI_TYPE_REFERENCE,
-        N00B_ABI_TYPE_ATOMIC, N00B_ABI_TYPE_ARRAY, N00B_ABI_TYPE_VIEW,
+        N00B_ABI_TYPE_OPTION, N00B_ABI_TYPE_ATOMIC, N00B_ABI_TYPE_ARRAY,
     };
     uint32_t handle_indexes[sizeof(handle_kinds) / sizeof(*handle_kinds)];
     for (size_t i = 0; i < sizeof(handle_kinds) / sizeof(*handle_kinds); i++) {

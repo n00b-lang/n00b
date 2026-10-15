@@ -114,12 +114,8 @@ inline_layout_cycle(ir_module_t *module, th_type *type, const char *via,
     if (!type) return false;
     if (th_kind_of(type) == TH_NAMED) {
         th_type *definition = ir_type_definition(module, type);
-        const char *name = nullptr;
-        size_t name_len = 0, argument_count = 0;
-        th_named_info(type, &name, &name_len, nullptr, &argument_count);
-        bool inline_wrapper = name
-            && ((name_len == 6 && !memcmp(name, "Option", 6))
-                || (name_len == 6 && !memcmp(name, "atomic", 6)));
+        size_t argument_count = th_named_nargs(type);
+        bool inline_wrapper = th_builtin_kind_of(type) == TH_BUILTIN_ATOMIC;
         if (!definition && !inline_wrapper) return false;
         for (size_t i = 0; i < active->len; i++) {
             if (active->data[i] != type) continue;

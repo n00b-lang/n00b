@@ -452,30 +452,21 @@ packed_array_width(ir_module_t *module, th_type *type)
         && width <= N00BB_PACKED_MAX_BITS ? width : 0;
 }
 
-static bool
-is_atomic_bool(ir_module_t *module, th_type *type)
-{
-    const char *name = nullptr;
-    size_t count = 0;
-    type = th_resolve(type);
-    if (!th_named_info(type, &name, nullptr, nullptr, &count)
-        || !name || strcmp(name, "atomic") || count != 1) return false;
-    const th_arg *element = th_named_arg(type, 0);
-    return element && element->kind == TH_ARG_TYPE
-        && ir_machine_of(module, element->type).class == IR_CLASS_BOOL;
-}
-
 static th_type *
 atomic_element_type(th_type *type)
 {
-    const char *name = nullptr;
-    size_t count = 0;
-    type = th_resolve(type);
-    if (!th_named_info(type, &name, nullptr, nullptr, &count)
-        || !name || strcmp(name, "atomic") || count != 1) return nullptr;
-    const th_arg *element = th_named_arg(type, 0);
+    type = th_builtin_applied(type, TH_BUILTIN_ATOMIC, 1);
+    const th_arg *element = type ? th_named_arg(type, 0) : nullptr;
     return element && element->kind == TH_ARG_TYPE
         ? element->type : nullptr;
+}
+
+static bool
+is_atomic_bool(ir_module_t *module, th_type *type)
+{
+    th_type *element = atomic_element_type(type);
+    return element
+        && ir_machine_of(module, element).class == IR_CLASS_BOOL;
 }
 
 static LLVMTypeRef value_type(ir_module_t *module, th_type *type,
@@ -517,12 +508,8 @@ shared_option_value_type(ir_module_t *module, th_type *type,
 {
     const th_arg *argument = th_named_arg(type, 0);
     th_type *child = argument && argument->kind == TH_ARG_TYPE
-        ? th_resolve(argument->type) : nullptr;
-    const char *name = nullptr;
-    size_t arguments = 0;
-    if (!child || !th_named_info(child, &name, nullptr, nullptr, &arguments)
-        || !name || strcmp(name, "option") || arguments != 1)
-        return nullptr;
+        ? th_builtin_applied(argument->type, TH_BUILTIN_OPTION, 1) : nullptr;
+    if (!child) return nullptr;
     const char *target = ir_module_target(module);
     const ir_final_layout_t *outer = ir_layout_final(module, type, target);
     const ir_final_layout_t *inner = ir_layout_final_visible(module, child,
@@ -556,10 +543,7 @@ packed_option_type(ir_module_t *module, th_type *type,
     const th_arg *argument = th_named_arg(type, 0);
     th_type *child = argument && argument->kind == TH_ARG_TYPE
         ? argument->type : nullptr;
-    const char *name = nullptr;
-    size_t count = 0;
-    if (!child || !th_named_info(type, &name, nullptr, nullptr, &count)
-        || !name || strcmp(name, "option") || count != 1
+    if (!child || !th_builtin_applied(type, TH_BUILTIN_OPTION, 1)
         || !th_is_closed(ir_module_types(module), type)) return nullptr;
     const char *target = ir_module_target(module);
     const ir_final_layout_t *outer = ir_layout_final(module, type, target);
@@ -611,11 +595,8 @@ static LLVMTypeRef
 aggregate_option_type(ir_module_t *module, th_type *type,
                       LLVMContextRef context)
 {
-    type = th_resolve(type);
-    const char *name = nullptr;
-    size_t count = 0;
-    if (!th_named_info(type, &name, nullptr, nullptr, &count)
-        || !name || strcmp(name, "option") || count != 1) return nullptr;
+    type = th_builtin_applied(type, TH_BUILTIN_OPTION, 1);
+    if (!type) return nullptr;
     const th_arg *argument = th_named_arg(type, 0);
     if (!argument || argument->kind != TH_ARG_TYPE) return nullptr;
     if (!th_is_closed(ir_module_types(module), type)) {
@@ -735,15 +716,14 @@ value_type_uncached(ir_module_t *module, th_type *type,
         LLVMTypeRef fields[] = {pointer, pointer};
         return LLVMStructTypeInContext(context, fields, 2, false);
     }
-    const char *name = nullptr;
     size_t arguments = 0;
     bool variant = false;
-    if ((!th_named_info(th_resolve(type), &name, nullptr,
-                       &variant, &arguments) || !name)
+    if (!th_named_info(th_resolve(type), nullptr, nullptr, &variant,
+                       &arguments)
         && (!definition || th_kind_of(definition) != TH_RECORD))
         return nullptr;
-    if (!name) name = "";
-    if (!strcmp(name, "any") && !arguments)
+    th_builtin_kind_t builtin = th_builtin_kind_of(type);
+    if (builtin == TH_BUILTIN_ANY && !arguments)
         return box_llvm_type(context);
     if (variant) {
         const ir_final_layout_t *layout = ir_layout_final_visible(module, type,
@@ -760,7 +740,7 @@ value_type_uncached(ir_module_t *module, th_type *type,
             (unsigned)unit_bits);
         return LLVMArrayType(unit, (unsigned)(stride_bits / unit_bits));
     }
-    if (!strcmp(name, "atomic") && arguments == 1) {
+    if (builtin == TH_BUILTIN_ATOMIC && arguments == 1) {
         const th_arg *argument = th_named_arg(th_resolve(type), 0);
         return argument && argument->kind == TH_ARG_TYPE
             ? value_type(module, argument->type, context) : nullptr;
@@ -768,9 +748,9 @@ value_type_uncached(ir_module_t *module, th_type *type,
     if (n00bb_frame_pointer_option(type)
         && th_is_closed(ir_module_types(module), type))
         return LLVMPointerTypeInContext(context, 0);
-    if (!strcmp(name, "option") && arguments == 1)
+    if (builtin == TH_BUILTIN_OPTION && arguments == 1)
         return aggregate_option_type(module, type, context);
-    if (!strcmp(name, TH_TUPLE) && arguments <= UINT32_MAX) {
+    if (builtin == TH_BUILTIN_TUPLE && arguments <= UINT32_MAX) {
         if (!th_is_closed(ir_module_types(module), type))
             return box_llvm_type(context);
         LLVMTypeRef *fields = arguments
@@ -790,7 +770,7 @@ value_type_uncached(ir_module_t *module, th_type *type,
         free(fields);
         return tuple;
     }
-    if (!strcmp(name, "string") && !arguments) {
+    if (builtin == TH_BUILTIN_STRING && !arguments) {
         LLVMTypeRef word = LLVMInt64TypeInContext(context);
         LLVMTypeRef fields[] = {word, word};
         return LLVMStructTypeInContext(context, fields, 2, false);
@@ -2003,11 +1983,8 @@ literal_element_layout_matches(ir_module_t *module, th_type *type,
             && LLVMGetIntTypeWidth(native) == layout->intrinsic_bits;
     }
     if (machine.class == IR_CLASS_SINT || machine.class == IR_CLASS_UINT) {
-        const char *name = nullptr;
         bool padded_char = machine.class == IR_CLASS_UINT
-            && th_named_info(th_resolve(type), &name, nullptr,
-                             nullptr, nullptr)
-            && name && !strcmp(name, "char")
+            && machine.role == IR_ROLE_CHAR
             && layout->intrinsic_bits >= machine.width;
         if ((padded_char || (machine.width >= 8 && !(machine.width % 8)
                 && layout->intrinsic_bits == machine.width))
@@ -2036,17 +2013,15 @@ literal_element_layout_matches(ir_module_t *module, th_type *type,
         return layout->intrinsic_bits == 128
             && native == box_llvm_type(LLVMGetTypeContext(native));
 
-    const char *name = nullptr;
     size_t count = 0;
-    if ((!th_named_info(th_resolve(type), &name, nullptr, nullptr, &count)
-         || !name)
+    if (!th_named_info(th_resolve(type), nullptr, nullptr, nullptr, &count)
         && (!definition || th_kind_of(definition) != TH_RECORD))
         return false;
-    if (!name) name = "";
-    if (!strcmp(name, "any") && !count)
+    th_builtin_kind_t builtin = th_builtin_kind_of(type);
+    if (builtin == TH_BUILTIN_ANY && !count)
         return layout->intrinsic_bits == 128
             && native == box_llvm_type(LLVMGetTypeContext(native));
-    if (!strcmp(name, "atomic") && count == 1) {
+    if (builtin == TH_BUILTIN_ATOMIC && count == 1) {
         const th_arg *argument = th_named_arg(th_resolve(type), 0);
         return argument && argument->kind == TH_ARG_TYPE
             && (literal_boolean_field_matches(module, argument->type,
@@ -2061,7 +2036,7 @@ literal_element_layout_matches(ir_module_t *module, th_type *type,
             && layout->discriminant_is_niche
             && layout->discriminant.unit_bit_offset == 0
             && layout->discriminant.unit_width_bits == sizeof(void *) * 8;
-    if (!strcmp(name, "option") && count == 1) {
+    if (builtin == TH_BUILTIN_OPTION && count == 1) {
         const th_arg *argument = th_named_arg(th_resolve(type), 0);
         uint64_t presence_bit = 0;
         LLVMTypeRef packed = packed_option_type(module, type,
@@ -2086,7 +2061,7 @@ literal_element_layout_matches(ir_module_t *module, th_type *type,
             && literal_element_layout_matches(module, argument->type,
                 LLVMStructGetTypeAtIndex(native, 0), target);
     }
-    if (!strcmp(name, "string") && !count)
+    if (builtin == TH_BUILTIN_STRING && !count)
         return layout->intrinsic_bits == 128
             && LLVMGetTypeKind(native) == LLVMStructTypeKind
             && LLVMCountStructElementTypes(native) == 2
@@ -2132,7 +2107,7 @@ literal_element_layout_matches(ir_module_t *module, th_type *type,
         free(order);
         return valid;
     }
-    if (strcmp(name, TH_TUPLE)
+    if (builtin != TH_BUILTIN_TUPLE
         || LLVMGetTypeKind(native) != LLVMStructTypeKind
         || LLVMCountStructElementTypes(native) != count
         || layout->n_members != count) return false;
@@ -2250,10 +2225,8 @@ tuple_aggregate(lower_state_t *state, ir_instr_t *instruction)
 {
     th_type *type = instruction->dest
         ? th_resolve(instruction->dest->type) : nullptr;
-    const char *name = nullptr;
-    size_t count = 0;
-    if (!type || !th_named_info(type, &name, nullptr, nullptr, &count)
-        || !name || strcmp(name, TH_TUPLE)) return nullptr;
+    if (!type || th_builtin_kind_of(type) != TH_BUILTIN_TUPLE) return nullptr;
+    size_t count = th_named_nargs(type);
     if (count != instruction->n_operands) {
         state->failure_detail = "tuple definition and operands disagree";
         return nullptr;
@@ -3620,11 +3593,7 @@ string_value(LLVMModuleRef module, const uint8_t *bytes, size_t length,
 static bool
 is_string_type(th_type *type)
 {
-    const char *name = nullptr;
-    size_t length = 0, arguments = 0;
-    return type && th_named_info(th_resolve(type), &name, &length,
-                                 nullptr, &arguments)
-        && length == 6 && !memcmp(name, "string", 6) && !arguments;
+    return th_builtin_applied(type, TH_BUILTIN_STRING, 0) != nullptr;
 }
 
 static uint64_t
@@ -5443,12 +5412,8 @@ boxed_reference_address(lower_state_t *state, LLVMValueRef value)
 static th_type *
 option_payload_type(th_type *type)
 {
-    const char *name = nullptr;
-    size_t count = 0;
-    type = th_resolve(type);
-    if (!th_named_info(type, &name, nullptr, nullptr, &count)
-        || !name || strcmp(name, "option") || count != 1) return nullptr;
-    const th_arg *argument = th_named_arg(type, 0);
+    type = th_builtin_applied(type, TH_BUILTIN_OPTION, 1);
+    const th_arg *argument = type ? th_named_arg(type, 0) : nullptr;
     return argument && argument->kind == TH_ARG_TYPE
         ? argument->type : nullptr;
 }
@@ -7661,8 +7626,6 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             || !operands[0].value || !instruction->dest) break;
         LLVMValueRef source = lowered_value(state, operands[0].value);
         if (!source) break;
-        const char *source_name = nullptr, *target_name = nullptr;
-        size_t source_arity = 0, target_arity = 0;
         th_type *source_type = th_resolve(operands[0].value->type);
         th_type *target_type = th_resolve(instruction->dest->type);
         LLVMTypeRef target_native = value_type(state->function->owner,
@@ -7670,12 +7633,10 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         if (target_native && LLVMTypeOf(source) == target_native
             && ir_type_eq(state->function->owner, source_type, target_type))
             return save_result(state, instruction, source);
-        bool source_option = th_named_info(source_type, &source_name,
-            nullptr, nullptr, &source_arity) && source_name
-            && !strcmp(source_name, "option") && source_arity == 1;
-        bool target_option = th_named_info(target_type, &target_name,
-            nullptr, nullptr, &target_arity) && target_name
-            && !strcmp(target_name, "option") && target_arity == 1;
+        bool source_option = th_builtin_applied(source_type, TH_BUILTIN_OPTION,
+                                             1) != nullptr;
+        bool target_option = th_builtin_applied(target_type, TH_BUILTIN_OPTION,
+                                             1) != nullptr;
         if (source_option && target_option) {
             const th_arg *element = th_named_arg(source_type, 0);
             LLVMContextRef context = LLVMGetModuleContext(state->module);
@@ -8525,13 +8486,9 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             || LLVMGetTypeKind(descriptor_type) != LLVMIntegerTypeKind
             || LLVMGetIntTypeWidth(descriptor_type) != 32)
             break;
-        const char *name = nullptr;
-        size_t arguments = 0;
         bool dynamic = !th_is_closed(ir_module_types(state->function->owner),
             source_type) || th_kind_of(source_type) == TH_SUM
-            || (th_named_info(source_type, &name, nullptr, nullptr,
-                    &arguments) && name && !strcmp(name, "any")
-                && !arguments);
+            || th_builtin_applied(source_type, TH_BUILTIN_ANY, 0);
         if (dynamic) {
             LLVMValueRef value = lowered_value(state, operands[0].value);
             LLVMTypeRef box = box_llvm_type(
@@ -8675,9 +8632,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         {
         th_type *aggregate = instruction->dest
             ? th_resolve(instruction->dest->type) : nullptr;
-        const char *name = nullptr;
-        bool tuple = aggregate && th_named_info(aggregate, &name, nullptr,
-            nullptr, nullptr) && name && !strcmp(name, TH_TUPLE);
+        bool tuple = th_builtin_kind_of(aggregate) == TH_BUILTIN_TUPLE;
         result = tuple ? tuple_aggregate(state, instruction)
                        : record_aggregate(state, instruction);
         if (!result) result = dynamic_array(state, instruction);
@@ -9044,11 +8999,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         LLVMValueRef right = lowered_value(state, operands[1].value);
         if (!left || !right || LLVMTypeOf(left) != LLVMTypeOf(right)) break;
         LLVMTypeKind kind = LLVMGetTypeKind(LLVMTypeOf(left));
-        const char *left_name = nullptr;
-        bool string_compare = th_named_info(
-                             th_resolve(operands[0].value->type),
-                             &left_name, nullptr, nullptr, nullptr)
-            && left_name && !strcmp(left_name, "string");
+        bool string_compare = is_string_type(operands[0].value->type);
         bool boxed_reference = kind == LLVMStructTypeKind
             && LLVMTypeOf(left) == box_llvm_type(
                 LLVMGetModuleContext(state->module))
