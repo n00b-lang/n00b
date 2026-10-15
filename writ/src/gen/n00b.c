@@ -363,6 +363,193 @@ emit_owned_free(const n00b_t *g, writ_emit_t *emit, const writ_plan_view_t *plan
     writ_emit_line(emit, "");
 }
 
+static const shim_param_t *
+handle_param(const writ_plan_view_t *plan, const core_list_t(shim_param_t) *params)
+{
+    for (size_t i = 0; i < params->len; i++) {
+        if (params->data[i].kind == PARAM_ADDRESS && is_handle(&plan->items[params->data[i].item])) {
+            return &params->data[i];
+        }
+    }
+    return nullptr;
+}
+
+static bool
+keeps_until(const writ_plan_view_t *plan, const shim_param_t *param)
+{
+    return param->kind == PARAM_VALUE && plan->items[param->item].after_call == WRIT_AFTER_BORROWED_UNTIL;
+}
+
+static bool
+releases_handle(const writ_plan_view_t *plan, const shim_param_t *param)
+{
+    return param->kind == PARAM_ADDRESS && is_handle(&plan->items[param->item])
+        && plan->items[param->item].after_call == WRIT_AFTER_CALLEE_OWNS;
+}
+
+static bool
+text_result(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, const shim_param_t *param)
+{
+    return param->kind == PARAM_OUT && is_result(&plan->items[param->item])
+        && ends_with(param->n00b_type, "Ffi_Bytes]")
+        && writ_str_eq(item_type(g, fn, plan, param->item), writ_cstr("string"));
+}
+
+static bool
+cstr_result(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, const shim_param_t *param)
+{
+    (void)g;
+    (void)fn;
+    return param->kind == PARAM_OUT && is_result(&plan->items[param->item])
+        && plan->items[param->item].shape == WRIT_SHAPE_TEXT && !ends_with(param->n00b_type, "Ffi_Bytes]");
+}
+
+typedef bool (*param_match_fn)(const n00b_t *g, size_t fn, const writ_plan_view_t *plan,
+                               const core_list_t(shim_param_t) *params, const shim_param_t *param);
+typedef bool (*plan_match_fn)(const n00b_t *g, const writ_plan_view_t *plan);
+
+static bool
+any_param(const n00b_t *g, param_match_fn match, plan_match_fn plan_match)
+{
+    bool found = false;
+    for (size_t i = 0; i < writ_model_fn_count(g->model) && !found; i++) {
+        writ_bound_fn_t bound = writ_binding_fn(g->b, i);
+        for (size_t k = 0; bound.bound && !bound.raw && bound_plan(g, i, k) && !found; k++) {
+            const writ_plan_view_t *plan = bound_plan(g, i, k);
+            found = plan_match && plan_match(g, plan);
+            core_list_t(shim_param_t) params = core_list_new(shim_param_t);
+            shim_params(g, i, plan, &params);
+            for (size_t p = 0; match && p < params.len && !found; p++) {
+                found = match(g, i, plan, &params, &params.data[p]);
+            }
+            core_list_free(params);
+        }
+    }
+    return found;
+}
+
+static bool
+fetches_detail_text(const n00b_t *g, const writ_plan_view_t *plan)
+{
+    (void)g;
+    for (size_t s = 0; s < plan->steps_count; s++) {
+        const writ_plan_step_view_t *step = &plan->steps[s];
+        if (step->kind == WRIT_STEP_FETCH_DETAIL && step->item != WRIT_PLAN_NONE
+            && plan->items[step->item].shape == WRIT_SHAPE_TEXT) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool
+returns_text(const n00b_t *g, const writ_plan_view_t *plan)
+{
+    for (size_t t = 0; writ_c_returns_directly(&g->c, plan) && t < plan->items_count; t++) {
+        if (is_result(&plan->items[t]) && plan->items[t].shape == WRIT_SHAPE_TEXT) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool
+text_param(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, const core_list_t(shim_param_t) *params,
+           const shim_param_t *param)
+{
+    (void)params;
+    return text_result(g, fn, plan, param);
+}
+
+static bool
+cstr_param(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, const core_list_t(shim_param_t) *params,
+           const shim_param_t *param)
+{
+    (void)params;
+    return cstr_result(g, fn, plan, param);
+}
+
+static bool
+kept_param(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, const core_list_t(shim_param_t) *params,
+           const shim_param_t *param)
+{
+    (void)g;
+    (void)fn;
+    return keeps_until(plan, param) && handle_param(plan, params);
+}
+
+static bool
+takes_detail_text(const n00b_t *g)
+{
+    return any_param(g, nullptr, fetches_detail_text);
+}
+
+static bool
+takes_text(const n00b_t *g)
+{
+    return any_param(g, text_param, fetches_detail_text);
+}
+
+static bool
+copies_cstr(const n00b_t *g)
+{
+    return any_param(g, cstr_param, returns_text);
+}
+
+static bool
+shim_keeps(const n00b_t *g)
+{
+    return any_param(g, kept_param, nullptr);
+}
+
+static void
+emit_keep_table(const n00b_t *g, writ_emit_t *emit)
+{
+    writ_str_t s = g->shim;
+    writ_emit_line(emit, "typedef struct {");
+    writ_emit_line(emit, "    uint64_t owner;");
+    writ_emit_line(emit, "    void *data;");
+    writ_emit_line(emit, "} %.*s_kept_t;", S(s));
+    writ_emit_line(emit, "");
+    writ_emit_line(emit, "static %.*s_kept_t *%.*s_kept;", S(s), S(s));
+    writ_emit_line(emit, "static size_t %.*s_kept_count;", S(s));
+    writ_emit_line(emit, "static size_t %.*s_kept_capacity;", S(s));
+    writ_emit_line(emit, "static atomic_flag %.*s_kept_lock = ATOMIC_FLAG_INIT;", S(s));
+    writ_emit_line(emit, "");
+    writ_emit_open(emit, "static void %.*s_keep(uint64_t owner, void *data)", S(s));
+    writ_emit_line(emit, "while (atomic_flag_test_and_set_explicit(&%.*s_kept_lock, memory_order_acquire)) {", S(s));
+    writ_emit_line(emit, "}");
+    writ_emit_open(emit, "if (%.*s_kept_count == %.*s_kept_capacity)", S(s), S(s));
+    writ_emit_line(emit, "size_t capacity = %.*s_kept_capacity ? %.*s_kept_capacity * 2 : 8;", S(s), S(s));
+    writ_emit_line(emit, "%.*s_kept_t *grown = realloc(%.*s_kept, capacity * sizeof *grown);", S(s), S(s));
+    writ_emit_open(emit, "if (!grown)");
+    writ_emit_line(emit, "atomic_flag_clear_explicit(&%.*s_kept_lock, memory_order_release);", S(s));
+    writ_emit_line(emit, "n00bb_runtime_trap(\"out of memory\", 13);");
+    writ_emit_close(emit, nullptr);
+    writ_emit_line(emit, "%.*s_kept = grown;", S(s));
+    writ_emit_line(emit, "%.*s_kept_capacity = capacity;", S(s));
+    writ_emit_close(emit, nullptr);
+    writ_emit_line(emit, "%.*s_kept[%.*s_kept_count++] = (%.*s_kept_t){owner, data};", S(s), S(s), S(s));
+    writ_emit_line(emit, "atomic_flag_clear_explicit(&%.*s_kept_lock, memory_order_release);", S(s));
+    writ_emit_close(emit, nullptr);
+    writ_emit_line(emit, "");
+    writ_emit_open(emit, "static void %.*s_drop(uint64_t owner)", S(s));
+    writ_emit_line(emit, "while (atomic_flag_test_and_set_explicit(&%.*s_kept_lock, memory_order_acquire)) {", S(s));
+    writ_emit_line(emit, "}");
+    writ_emit_open(emit, "for (size_t i = 0; i < %.*s_kept_count;)", S(s));
+    writ_emit_open(emit, "if (%.*s_kept[i].owner == owner)", S(s));
+    writ_emit_line(emit, "free(%.*s_kept[i].data);", S(s));
+    writ_emit_line(emit, "%.*s_kept[i] = %.*s_kept[--%.*s_kept_count];", S(s), S(s), S(s));
+    writ_emit_close(emit, nullptr);
+    writ_emit_open(emit, "else");
+    writ_emit_line(emit, "i++;");
+    writ_emit_close(emit, nullptr);
+    writ_emit_close(emit, nullptr);
+    writ_emit_line(emit, "atomic_flag_clear_explicit(&%.*s_kept_lock, memory_order_release);", S(s));
+    writ_emit_close(emit, nullptr);
+    writ_emit_line(emit, "");
+}
+
 static void
 emit_c_shim(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view_t *plan)
 {
@@ -470,13 +657,20 @@ emit_c_shim(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view_
         }
     }
     writ_emit_line(emit, ");");
+    const shim_param_t *owner = handle_param(plan, &params);
+    bool keeps = shim_keeps(g);
     for (size_t i = 0; i < params.len; i++) {
         writ_after_call_t after = plan->items[params.data[i].item].after_call;
         bool handed_over = (owned_arm(plan) && after == WRIT_AFTER_CALLEE_OWNS) || after == WRIT_AFTER_BORROWED_UNTIL;
-        if (params.data[i].kind == PARAM_VALUE && !handed_over) {
+        if (keeps_until(plan, &params.data[i]) && owner) {
+            writ_emit_line(emit, "%.*s_keep(%.*s, %.*s_data);", S(g->shim), S(owner->name), S(params.data[i].name));
+        } else if (params.data[i].kind == PARAM_VALUE && !handed_over) {
             writ_emit_line(emit, "free(%.*s_data);", S(params.data[i].name));
         } else if (params.data[i].kind == PARAM_STORAGE) {
             writ_emit_line(emit, "n00b_ffi_release((void *)%.*s);", S(params.data[i].name));
+        }
+        if (keeps && releases_handle(plan, &params.data[i])) {
+            writ_emit_line(emit, "%.*s_drop(%.*s);", S(g->shim), S(params.data[i].name));
         }
     }
     writ_emit_line(emit, "return %swrit_n00b_value;", is_pointer(ret) ? "(uint64_t)(uintptr_t)" : "");
@@ -598,80 +792,6 @@ array_elements(const n00b_t *g)
     return elements;
 }
 
-static bool
-text_result(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, const shim_param_t *param)
-{
-    return param->kind == PARAM_OUT && is_result(&plan->items[param->item])
-        && ends_with(param->n00b_type, "Ffi_Bytes]")
-        && writ_str_eq(item_type(g, fn, plan, param->item), writ_cstr("string"));
-}
-
-static bool
-cstr_result(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, const shim_param_t *param)
-{
-    (void)g;
-    (void)fn;
-    return param->kind == PARAM_OUT && is_result(&plan->items[param->item])
-        && plan->items[param->item].shape == WRIT_SHAPE_TEXT && !ends_with(param->n00b_type, "Ffi_Bytes]");
-}
-
-typedef bool (*param_match_fn)(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, const shim_param_t *param);
-
-static bool
-any_param(const n00b_t *g, param_match_fn match, bool text_detail)
-{
-    bool found = false;
-    for (size_t i = 0; i < writ_model_fn_count(g->model) && !found; i++) {
-        writ_bound_fn_t bound = writ_binding_fn(g->b, i);
-        for (size_t k = 0; bound.bound && !bound.raw && bound_plan(g, i, k) && !found; k++) {
-            const writ_plan_view_t *plan = bound_plan(g, i, k);
-            for (size_t s = 0; text_detail && s < plan->steps_count && !found; s++) {
-                const writ_plan_step_view_t *step = &plan->steps[s];
-                found = step->kind == WRIT_STEP_FETCH_DETAIL && step->item != WRIT_PLAN_NONE
-                     && plan->items[step->item].shape == WRIT_SHAPE_TEXT;
-            }
-            for (size_t t = 0; !text_detail && writ_c_returns_directly(&g->c, plan) && t < plan->items_count && !found;
-                 t++) {
-                found = is_result(&plan->items[t]) && plan->items[t].shape == WRIT_SHAPE_TEXT;
-            }
-            core_list_t(shim_param_t) params = core_list_new(shim_param_t);
-            shim_params(g, i, plan, &params);
-            for (size_t p = 0; p < params.len && !found; p++) {
-                found = match(g, i, plan, &params.data[p]);
-            }
-            core_list_free(params);
-        }
-    }
-    return found;
-}
-
-static bool
-no_param(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, const shim_param_t *param)
-{
-    (void)g;
-    (void)fn;
-    (void)plan;
-    (void)param;
-    return false;
-}
-
-static bool
-takes_detail_text(const n00b_t *g)
-{
-    return any_param(g, no_param, true);
-}
-
-static bool
-takes_text(const n00b_t *g)
-{
-    return takes_detail_text(g) || any_param(g, text_result, false);
-}
-
-static bool
-copies_cstr(const n00b_t *g)
-{
-    return any_param(g, cstr_result, false);
-}
 
 static void
 emit_c_array_takers(const n00b_t *g, writ_emit_t *emit)
@@ -725,6 +845,10 @@ shim_c_text(const n00b_t *g, const writ_plan_view_t *const *plans)
     writ_emit_line(&emit, "#include <stddef.h>");
     writ_emit_line(&emit, "#include <stdlib.h>");
     writ_emit_line(&emit, "#include <string.h>");
+    bool keeps = shim_keeps(g);
+    if (keeps) {
+        writ_emit_line(&emit, "#include <stdatomic.h>");
+    }
     writ_emit_line(&emit, "");
     writ_emit_line(&emit, "#include \"%.*s_writ.h\"", S(g->c.prefix));
     writ_emit_line(&emit, "");
@@ -732,6 +856,9 @@ shim_c_text(const n00b_t *g, const writ_plan_view_t *const *plans)
     writ_emit_line(&emit, "void n00b_ffi_release(void *object);");
     writ_emit_line(&emit, "void n00bb_runtime_trap(const char *reason, uint64_t length);");
     writ_emit_line(&emit, "");
+    if (keeps) {
+        emit_keep_table(g, &emit);
+    }
     writ_emit_open(&emit, "void %.*s_take_bytes(%.*s_bytes_t *bytes, void *out)", S(g->shim), S(g->c.prefix));
     writ_emit_line(&emit, "size_t length = 0;");
     writ_emit_line(&emit, "uint8_t *data = n00b_ffi_borrow(out, &length, 1);");
@@ -1694,6 +1821,8 @@ emit_wrapper(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view
     } else if (!can_fail(&w) && out_count == 1 && plan->items[outs[0]].shape == WRIT_SHAPE_TEXT) {
         emit_text_check(&w, emit, writ_cstr("result"), false);
         writ_emit_line(emit, "return result_text");
+    } else if (!can_fail(&w) && out_count == 1 && is_handle(&plan->items[outs[0]])) {
+        writ_emit_line(emit, "return (raw = result)");
     } else if (!can_fail(&w) && out_count) {
         writ_emit_line(emit, "return result");
     } else if (out_count == 1) {

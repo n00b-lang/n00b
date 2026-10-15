@@ -183,12 +183,55 @@ int32_t policy_stmt_release(stmt_state *stmt) {
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdatomic.h>
 
 #include "policy_writ.h"
 
 void *n00b_ffi_borrow(void *object, size_t *length, uint32_t access);
 void n00b_ffi_release(void *object);
 void n00bb_runtime_trap(const char *reason, uint64_t length);
+
+typedef struct {
+    uint64_t owner;
+    void *data;
+} policy_kept_t;
+
+static policy_kept_t *policy_kept;
+static size_t policy_kept_count;
+static size_t policy_kept_capacity;
+static atomic_flag policy_kept_lock = ATOMIC_FLAG_INIT;
+
+static void policy_keep(uint64_t owner, void *data) {
+    while (atomic_flag_test_and_set_explicit(&policy_kept_lock, memory_order_acquire)) {
+    }
+    if (policy_kept_count == policy_kept_capacity) {
+        size_t capacity = policy_kept_capacity ? policy_kept_capacity * 2 : 8;
+        policy_kept_t *grown = realloc(policy_kept, capacity * sizeof *grown);
+        if (!grown) {
+            atomic_flag_clear_explicit(&policy_kept_lock, memory_order_release);
+            n00bb_runtime_trap("out of memory", 13);
+        }
+        policy_kept = grown;
+        policy_kept_capacity = capacity;
+    }
+    policy_kept[policy_kept_count++] = (policy_kept_t){owner, data};
+    atomic_flag_clear_explicit(&policy_kept_lock, memory_order_release);
+}
+
+static void policy_drop(uint64_t owner) {
+    while (atomic_flag_test_and_set_explicit(&policy_kept_lock, memory_order_acquire)) {
+    }
+    for (size_t i = 0; i < policy_kept_count;) {
+        if (policy_kept[i].owner == owner) {
+            free(policy_kept[i].data);
+            policy_kept[i] = policy_kept[--policy_kept_count];
+        }
+        else {
+            i++;
+        }
+    }
+    atomic_flag_clear_explicit(&policy_kept_lock, memory_order_release);
+}
 
 void policy_take_bytes(policy_bytes_t *bytes, void *out) {
     size_t length = 0;
@@ -216,6 +259,7 @@ int32_t policy_n00b_bind_text_text_static(uint64_t stmt, const void *text, void 
         return POLICY_OUT_OF_MEMORY;
     }
     int32_t writ_n00b_value = policy_bind_text_text_static((stmt_state *)(uintptr_t)stmt, (const char *)text_data, text_length, (int *)result);
+    policy_keep(stmt, text_data);
     return writ_n00b_value;
 }
 
@@ -264,6 +308,7 @@ int32_t policy_n00b_bind_text_with_dtor(uint64_t stmt, const void *text, void *r
 
 int32_t policy_n00b_stmt_release(uint64_t stmt) {
     int32_t writ_n00b_value = policy_stmt_release((stmt_state *)(uintptr_t)stmt);
+    policy_drop(stmt);
     return writ_n00b_value;
 }
 
