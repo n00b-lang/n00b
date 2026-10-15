@@ -1,0 +1,20 @@
+library policy
+
+callback text_free = fn(p: *void)
+const TEXT_STATIC: text_free = 0
+const COUNT: c_int = 3
+
+fn bad_constant(text: *[c_char; n], n: c_int, dtor: text_free policy {
+    COUNT => text: for call
+})
+
+fn bad_target(text: *[c_char; n], n: c_int, dtor: text_free policy {
+    TEXT_STATIC => nothing: for call
+})
+
+fn two_elses(text: *[c_char; n], n: c_int, dtor: text_free policy {
+    else => text: for call
+    else => text: for call
+})
+
+fn stray_span(text: *[c_char; n] span by n, n: c_int)

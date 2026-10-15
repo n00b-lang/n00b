@@ -294,14 +294,19 @@ cmd_plan(writ_session_t *session, int argc, char **argv)
                          || memcmp(argv[1], fn->contract_name.data, fn->contract_name.length))) {
             continue;
         }
-        const writ_plan_view_t *plan = writ_model_fn_plan(model, fn);
-        writ_str_t text;
-        if (!plan || writ_model_plan_render(model, plan, &text) != WRIT_OK) {
-            status = 1;
-            continue;
+        for (size_t arm = 0;; arm++) {
+            const writ_plan_view_t *plan = writ_model_fn_arm_plan(model, fn, arm);
+            writ_str_t text;
+            if (!plan && arm) {
+                break;
+            }
+            if (!plan || writ_model_plan_render(model, plan, &text) != WRIT_OK) {
+                status = 1;
+                break;
+            }
+            fwrite(text.data, 1, text.length, stdout);
+            fputc('\n', stdout);
         }
-        fwrite(text.data, 1, text.length, stdout);
-        fputc('\n', stdout);
     }
     return status;
 }

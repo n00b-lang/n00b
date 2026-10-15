@@ -197,6 +197,7 @@ enum {
     WRIT_STEP_COPY_BORROWED,
     WRIT_STEP_MARK_CONSUMED,
     WRIT_STEP_RELEASE_LOCAL,
+    WRIT_STEP_PASS_CONST,
 };
 
 typedef uint32_t writ_phase_t;
@@ -232,6 +233,7 @@ enum {
 typedef struct writ_type_view writ_type_view_t;
 typedef struct writ_const_view writ_const_view_t;
 typedef struct writ_slot_view writ_slot_view_t;
+typedef struct writ_policy_arm_view writ_policy_arm_view_t;
 typedef struct writ_outcome_view writ_outcome_view_t;
 typedef struct writ_fn_view writ_fn_view_t;
 typedef struct writ_record_view writ_record_view_t;
@@ -295,6 +297,24 @@ struct writ_slot_view {
     int64_t default_value;
     bool has_none;
     int64_t none_value;
+    size_t policy_arms_count;
+    const writ_policy_arm_view_t *policy_arms;
+    writ_str_t span_by;
+};
+
+struct writ_policy_arm_view {
+    size_t struct_size;
+    writ_str_t constant;
+    bool is_else;
+    int64_t value;
+    writ_str_t target;
+    bool has_mode;
+    writ_mode_t mode;
+    writ_span_kind_t span;
+    writ_str_t span_with;
+    writ_str_t release;
+    bool own;
+    writ_span_t declared_at;
 };
 
 struct writ_outcome_view {
@@ -473,6 +493,8 @@ struct writ_plan_view {
     size_t reset_channels_count;
     const uint32_t *reset_channels;
     bool variadic;
+    uint32_t policy_slot;
+    uint32_t policy_arm;
 };
 
 #define WRIT_PLAN_NONE UINT32_MAX
@@ -500,6 +522,7 @@ size_t writ_model_channel_count(const writ_model_t *model);
 const writ_channel_view_t *writ_model_channel_at(const writ_model_t *model, size_t index);
 const writ_channel_view_t *writ_model_channel_named(const writ_model_t *model, writ_str_t name);
 const writ_plan_view_t *writ_model_fn_plan(const writ_model_t *model, const writ_fn_view_t *fn);
+const writ_plan_view_t *writ_model_fn_arm_plan(const writ_model_t *model, const writ_fn_view_t *fn, size_t arm);
 writ_status_t writ_model_plan_render(const writ_model_t *model, const writ_plan_view_t *plan, writ_str_t *rendered);
 writ_status_t writ_lower_json(const writ_model_t *model, const writ_output_t *output);
 

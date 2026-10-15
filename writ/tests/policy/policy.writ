@@ -1,0 +1,22 @@
+library policy
+
+opaque stmt_state
+handle Stmt = *stmt_state release stmt_release
+
+callback text_free = fn(p: *void)
+
+const TEXT_STATIC: text_free = 0
+const TEXT_TRANSIENT: text_free = -1
+
+fn bind_text(
+    stmt: Stmt,
+    text: *[c_char; n] span by dtor,
+    n:    c_int,
+    dtor: text_free policy {
+        TEXT_STATIC    => text: keep until stmt_release(stmt)
+        TEXT_TRANSIENT => text: for call
+        else           => text: consume release dtor
+    },
+) -> c_int
+
+fn stmt_release(stmt: consume ?Stmt)

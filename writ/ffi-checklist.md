@@ -306,9 +306,9 @@ enough to check off one at a time. The specs are `ffi-spec.md`,
 
 ### Runtime
 
-- [ ] `runtime/runtime_ffi.c` added to `runtime_abi_sources`
-- [ ] `n00b_ffi_borrow(object, length, access)` and `n00b_ffi_release(object)`
-- [ ] Borrow roots through `n00b_gc_root_push` / `n00b_gc_root_pop`
+- [x] `runtime/runtime_ffi.c` added to `runtime_abi_sources`
+- [x] `n00b_ffi_borrow(object, length, access)` and `n00b_ffi_release(object)`
+- [x] Borrow roots through `n00b_gc_root_push` / `n00b_gc_root_pop`
 - [ ] Native registration for the borrow and release functions
 
 ### Values

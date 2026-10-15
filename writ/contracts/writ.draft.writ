@@ -109,7 +109,21 @@ struct writ_const_view_t @size(88) @align(8) {
     text: writ_str_t @40
     declared_at: writ_span_t @56
 }
-struct writ_slot_view_t @size(216) @align(8) {
+struct writ_policy_arm_view_t @size(144) @align(8) {
+    struct_size: usize @0
+    constant: writ_str_t @8
+    is_else: bool @24
+    value: i64 @32
+    target: writ_str_t @40
+    has_mode: bool @56
+    mode: writ_mode_t @60
+    span: writ_span_kind_t @64
+    span_with: writ_str_t @72
+    release: writ_str_t @88
+    own: bool @104
+    declared_at: writ_span_t @112
+}
+struct writ_slot_view_t @size(248) @align(8) {
     struct_size: usize @0
     name: writ_str_t @8
     type: ?writ_type_view_t @24
@@ -134,6 +148,9 @@ struct writ_slot_view_t @size(216) @align(8) {
     default_value: i64 @192
     has_none: bool @200
     none_value: i64 @208
+    policy_arms_count: usize @216
+    policy_arms: ?writ_policy_arm_view_t @224
+    span_by: writ_str_t @232
 }
 struct writ_outcome_view_t @size(40) @align(8) {
     struct_size: usize @0
@@ -279,7 +296,7 @@ struct writ_plan_assign_view_t @size(16) @align(8) {
     slot: u32 @8
     expr: u32 @12
 }
-struct writ_plan_view_t @size(144) @align(8) {
+struct writ_plan_view_t @size(152) @align(8) {
     struct_size: usize @0
     fn: ?writ_fn_view_t @8
     query_count: usize @16
@@ -298,6 +315,8 @@ struct writ_plan_view_t @size(144) @align(8) {
     reset_channels_count: usize @120
     reset_channels: ?u32 @128
     variadic: bool @136
+    policy_slot: u32 @140
+    policy_arm: u32 @144
 }
 struct writ_gen_c_request_t @size(32) @align(8) {
     struct_size: usize @0
@@ -487,6 +506,7 @@ const WRIT_STEP_WRAP_HANDLE: c_int = 14
 const WRIT_STEP_COPY_BORROWED: c_int = 15
 const WRIT_STEP_MARK_CONSUMED: c_int = 16
 const WRIT_STEP_RELEASE_LOCAL: c_int = 17
+const WRIT_STEP_PASS_CONST: c_int = 18
 const WRIT_PHASE_PREPARE: c_int = 0
 const WRIT_PHASE_ATTEMPT: c_int = 1
 const WRIT_PHASE_CLASSIFY: c_int = 2
@@ -549,6 +569,7 @@ fn writ_model_channel_count(model: ?writ_model_t) -> usize
 fn writ_model_channel_at(model: ?writ_model_t, index: usize) -> ?writ_channel_view_t unknown
 fn writ_model_channel_named(model: ?writ_model_t, name: writ_str_t) -> ?writ_channel_view_t unknown
 fn writ_model_fn_plan(model: ?writ_model_t, fn: ?writ_fn_view_t) -> ?writ_plan_view_t unknown
+fn writ_model_fn_arm_plan(model: ?writ_model_t, fn: ?writ_fn_view_t, arm: usize) -> ?writ_plan_view_t unknown
 fn writ_model_plan_render(model: ?writ_model_t, plan: ?writ_plan_view_t, rendered: unknown ?writ_str_t) -> writ_status_t
 fn writ_lower_json(model: ?writ_model_t, output: ?writ_output_t) -> writ_status_t
 fn writ_gen_c(model: ?writ_model_t, request: ?writ_gen_c_request_t, output: ?writ_output_t) -> writ_status_t

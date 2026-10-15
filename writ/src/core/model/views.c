@@ -46,10 +46,46 @@ build_types(writ_model_t *model)
     }
 }
 
+static int64_t
+constant_value(const writ_model_t *model, writ_sym_t name)
+{
+    for (size_t i = 0; i < model->consts.len; i++) {
+        if (model->consts.data[i].name == name) {
+            return model->consts.data[i].value;
+        }
+    }
+    return 0;
+}
+
+static void
+build_arms(writ_model_t *model)
+{
+    writ_session_t *session = model->session;
+    model->arm_views = ALLOC_VIEWS(model, writ_policy_arm_view_t, model->policy_arms.len);
+    for (size_t i = 0; i < model->policy_arms.len; i++) {
+        const writ_policy_arm_rec_t *record = &model->policy_arms.data[i];
+        model->arm_views[i] = (writ_policy_arm_view_t){
+            .struct_size = sizeof(writ_policy_arm_view_t),
+            .constant    = sym(model, record->constant),
+            .is_else     = record->is_else,
+            .value       = record->is_else ? 0 : constant_value(model, record->constant),
+            .target      = sym(model, record->target),
+            .has_mode    = record->has_mode,
+            .mode        = record->mode,
+            .span        = record->span,
+            .span_with   = sym(model, record->span_with),
+            .release     = sym(model, record->release),
+            .own         = record->own,
+            .declared_at = writ_loc_span(session, record->loc),
+        };
+    }
+}
+
 static void
 build_slots(writ_model_t *model)
 {
     writ_session_t *session = model->session;
+    build_arms(model);
     model->slot_views = ALLOC_VIEWS(model, writ_slot_view_t, model->slots.len);
     for (size_t i = 0; i < model->slots.len; i++) {
         const writ_slot_rec_t *record = &model->slots.data[i];
@@ -78,6 +114,9 @@ build_slots(writ_model_t *model)
             .default_value = record->default_value,
             .has_none      = record->has_none,
             .none_value    = record->none_value,
+            .policy_arms_count = record->arm_count,
+            .policy_arms       = record->arm_count ? &model->arm_views[record->first_arm] : nullptr,
+            .span_by           = sym(model, record->span_by),
         };
     }
 }
@@ -100,6 +139,7 @@ build_fns(writ_model_t *model)
     }
     model->fn_views = ALLOC_VIEWS(model, writ_fn_view_t, model->fns.len);
     model->plan_views = ALLOC_VIEWS(model, writ_plan_view_t *, model->fns.len);
+    model->arm_plan_views = ALLOC_VIEWS(model, const writ_plan_view_t **, model->fns.len);
     for (size_t i = 0; i < model->fns.len; i++) {
         const writ_fn_rec_t *record = &model->fns.data[i];
         model->fn_views[i] = (writ_fn_view_t){
@@ -352,7 +392,34 @@ writ_model_fn_plan(const writ_model_t *model, const writ_fn_view_t *fn)
     }
     writ_model_t *mutable_model = (writ_model_t *)model;
     if (!mutable_model->plan_views[index]) {
-        mutable_model->plan_views[index] = writ_plan_build(mutable_model, index);
+        mutable_model->plan_views[index] = writ_plan_build(mutable_model, index, 0);
     }
     return mutable_model->plan_views[index];
+}
+
+const writ_plan_view_t *
+writ_model_fn_arm_plan(const writ_model_t *model, const writ_fn_view_t *fn, size_t arm)
+{
+    uint32_t index = writ_model_fn_index(model, fn);
+    if (index == WRIT_NONE) {
+        return nullptr;
+    }
+    size_t arms = 0;
+    for (size_t s = 0; s < fn->slots_count; s++) {
+        arms = arms ? arms : fn->slots[s].policy_arms_count;
+    }
+    if (arm >= (arms ? arms : 1)) {
+        return nullptr;
+    }
+    if (!arm) {
+        return writ_model_fn_plan(model, fn);
+    }
+    writ_model_t *mutable_model = (writ_model_t *)model;
+    if (!mutable_model->arm_plan_views[index]) {
+        mutable_model->arm_plan_views[index] = ALLOC_VIEWS(mutable_model, const writ_plan_view_t *, arms);
+    }
+    if (!mutable_model->arm_plan_views[index][arm]) {
+        mutable_model->arm_plan_views[index][arm] = writ_plan_build(mutable_model, index, (uint32_t)arm);
+    }
+    return mutable_model->arm_plan_views[index][arm];
 }

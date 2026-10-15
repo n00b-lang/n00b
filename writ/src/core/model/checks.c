@@ -451,6 +451,62 @@ keyword_packs(writ_model_t *model)
     }
 }
 
+static bool
+arm_holds(const writ_model_t *model, const writ_fn_rec_t *fn, const writ_slot_rec_t *slot,
+          const writ_policy_arm_rec_t *arm)
+{
+    bool target = false;
+    for (uint32_t t = 0; t < fn->slot_count; t++) {
+        target = target || writ_fn_slot(model, fn, t)->name == arm->target;
+    }
+    if (!target) {
+        return false;
+    }
+    if (arm->is_else) {
+        return true;
+    }
+    for (size_t c = 0; c < model->consts.len; c++) {
+        if (model->consts.data[c].name == arm->constant) {
+            return writ_type_physical(model, model->consts.data[c].type) == writ_type_physical(model, slot->type);
+        }
+    }
+    return false;
+}
+
+static void
+policy_arms(writ_model_t *model)
+{
+    EACH_FN(model, f, fn) {
+        uint32_t policies = 0;
+        EACH_PARAM(model, fn, s, slot) {
+            uint32_t elses = 0;
+            policies += slot->arm_count != 0;
+            for (uint32_t a = 0; a < slot->arm_count; a++) {
+                const writ_policy_arm_rec_t *arm = &model->policy_arms.data[slot->first_arm + a];
+                elses += arm->is_else;
+                if (!arm_holds(model, fn, slot, arm) || elses > 1) {
+                    writ_report(model->session, WRIT_D_POLICY, arm->loc, nullptr);
+                }
+            }
+            if (policies > 1) {
+                writ_report(model->session, WRIT_D_UNSUPPORTED, slot->loc, "more than one policy parameter");
+            }
+            if (!slot->span_by) {
+                continue;
+            }
+            bool sets = false;
+            EACH_PARAM(model, fn, p, policy) {
+                for (uint32_t a = 0; policy->name == slot->span_by && a < policy->arm_count; a++) {
+                    sets = sets || model->policy_arms.data[policy->first_arm + a].target == slot->name;
+                }
+            }
+            if (!sets) {
+                writ_report(model->session, WRIT_D_POLICY, slot->loc, nullptr);
+            }
+        }
+    }
+}
+
 static void (*const checks[])(writ_model_t *model) = {
 #define WRIT_CHECK(name, section) name,
 #include "checks.def"

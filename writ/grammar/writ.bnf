@@ -77,8 +77,13 @@
 <count-end> ::= %"count" %IDENTIFIER
 <fn-result> ::= %"->" <own-attr>? <slot-type>
 
-<slot-type> ::= <type> <slot-attr>*
-<slot-attr> ::= <span> | <own-attr> | <release-attr> | <alloc-attr> | <userdata-attr> | <private-attr> | <align-attr> | <null-if-empty>
+<slot-type> ::= <type> <policy>? <slot-attr>*
+<policy> ::= %"policy" %"{" (<policy-arm> %","?)* %"}"
+<policy-arm> ::= <policy-choice> %"=>" %IDENTIFIER %":" <mode>? <slot-attr>*
+<policy-choice> ::= <ref> | <policy-else>
+<policy-else> ::= %"else"
+<slot-attr> ::= <span> | <own-attr> | <release-attr> | <alloc-attr> | <userdata-attr> | <private-attr> | <align-attr> | <null-if-empty> | <span-by>
+<span-by> ::= %"span" %"by" <ref>
 <span> ::= <span-call> | <span-static> | <span-with> | <span-until> | <span-once> | <span-unknown>
 <span-call> ::= %"for" %"call"
 <span-static> ::= %"static" <per-thread>?

@@ -1,0 +1,8 @@
+error[E0222]: a policy arm names a constant of its parameter's type and a parameter of its function, at most one arm is `else`, and `span by` names a policy parameter that sets this slot
+  --> tests/check/policy.writ:8:5
+error[E0222]: a policy arm names a constant of its parameter's type and a parameter of its function, at most one arm is `else`, and `span by` names a policy parameter that sets this slot
+  --> tests/check/policy.writ:12:5
+error[E0222]: a policy arm names a constant of its parameter's type and a parameter of its function, at most one arm is `else`, and `span by` names a policy parameter that sets this slot
+  --> tests/check/policy.writ:17:5
+error[E0222]: a policy arm names a constant of its parameter's type and a parameter of its function, at most one arm is `else`, and `span by` names a policy parameter that sets this slot
+  --> tests/check/policy.writ:20:15

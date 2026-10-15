@@ -125,8 +125,26 @@ typedef struct {
     int64_t            default_value;
     bool               has_none;
     int64_t            none_value;
+    uint32_t           first_arm;
+    uint32_t           arm_count;
+    writ_sym_t         span_by;
     writ_loc_t         loc;
 } writ_slot_rec_t;
+
+typedef struct {
+    writ_sym_t       constant;
+    bool             is_else;
+    int64_t          value;
+    writ_sym_t       target;
+    bool             has_mode;
+    writ_mode_t      mode;
+    writ_span_kind_t span;
+    uint32_t         span_node;
+    writ_sym_t       span_with;
+    writ_sym_t       release;
+    bool             own;
+    writ_loc_t       loc;
+} writ_policy_arm_rec_t;
 
 typedef struct {
     writ_sym_t          name;
@@ -262,6 +280,7 @@ core_list_decl(writ_type_rec_t);
 core_list_decl(writ_ref_t);
 core_list_decl(writ_const_rec_t);
 core_list_decl(writ_slot_rec_t);
+core_list_decl(writ_policy_arm_rec_t);
 core_list_decl(writ_outcome_rec_t);
 core_list_decl(writ_on_rec_t);
 core_list_decl(writ_assign_rec_t);
@@ -371,6 +390,7 @@ struct writ_model {
     core_dict_t                        type_names;
     core_list_t(writ_const_rec_t)      consts;
     core_list_t(writ_slot_rec_t)       slots;
+    core_list_t(writ_policy_arm_rec_t) policy_arms;
     core_list_t(writ_outcome_rec_t)    outcomes;
     core_list_t(writ_on_rec_t)         ons;
     core_list_t(writ_assign_rec_t)     assigns;
@@ -390,12 +410,14 @@ struct writ_model {
     writ_type_view_t                  *type_views;
     writ_const_view_t                 *const_views;
     writ_slot_view_t                  *slot_views;
+    writ_policy_arm_view_t            *arm_views;
     writ_fn_view_t                    *fn_views;
     writ_record_view_t                *record_views;
     writ_handle_view_t                *handle_views;
     writ_enum_view_t                  *enum_views;
     writ_channel_view_t               *channel_views;
     const writ_plan_view_t           **plan_views;
+    const writ_plan_view_t          ***arm_plan_views;
 };
 
 typedef enum {
@@ -451,7 +473,7 @@ bool                   writ_is_text(const writ_model_t *model, writ_sym_t sym, c
 
 void                    writ_model_check(writ_model_t *model);
 void                    writ_model_build_views(writ_model_t *model);
-const writ_plan_view_t *writ_plan_build(writ_model_t *model, uint32_t fn);
+const writ_plan_view_t *writ_plan_build(writ_model_t *model, uint32_t fn, uint32_t arm);
 uint32_t                writ_plan_cell_for_slot(const writ_plan_view_t *plan, uint32_t slot);
 uint32_t                writ_plan_contract_slot(const writ_model_t *model, const writ_plan_view_t *plan,
                                                 writ_ref_t ref);

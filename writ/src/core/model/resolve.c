@@ -21,6 +21,7 @@ model_release(void *object)
     core_dict_free(&model->type_names);
     core_list_free(model->consts);
     core_list_free(model->slots);
+    core_list_free(model->policy_arms);
     core_list_free(model->outcomes);
     core_list_free(model->ons);
     core_list_free(model->assigns);
@@ -55,6 +56,7 @@ model_new(writ_unit_t *unit, const writ_platform_t *platform)
         .platforms     = core_list_new(uint32_t),
         .consts        = core_list_new(writ_const_rec_t),
         .slots         = core_list_new(writ_slot_rec_t),
+        .policy_arms   = core_list_new(writ_policy_arm_rec_t),
         .outcomes      = core_list_new(writ_outcome_rec_t),
         .ons           = core_list_new(writ_on_rec_t),
         .assigns       = core_list_new(writ_assign_rec_t),
@@ -752,6 +754,46 @@ mode_of(const writ_model_t *model, writ_sym_t lexeme)
     return writ_default(WRIT_DEFAULT_PARAM_MODE);
 }
 
+static writ_policy_arm_rec_t
+resolve_policy_arm(writ_model_t *model, uint32_t id)
+{
+    const writ_node_t *node = node_at(model, id);
+    writ_policy_arm_rec_t arm = {.target = node->name, .has_mode = node->payload != 0, .loc = node->loc};
+    if (arm.has_mode) {
+        arm.mode = mode_of(model, node->payload);
+    }
+    for (uint32_t i = 0; i < node->child_count; i++) {
+        uint32_t part = child(model, id, i);
+        const writ_node_t *piece = node_at(model, part);
+        switch (piece->kind) {
+        case WRIT_N_REF:
+            arm.constant = piece->name;
+            break;
+        case WRIT_N_POLICY_ELSE:
+            arm.is_else = true;
+            break;
+        case WRIT_N_OWN:
+            arm.own = true;
+            break;
+        case WRIT_N_RELEASE:
+            arm.release = piece->name;
+            break;
+        case WRIT_N_SPAN_CALL:
+        case WRIT_N_SPAN_STATIC:
+        case WRIT_N_SPAN_WITH:
+        case WRIT_N_SPAN_UNTIL:
+        case WRIT_N_SPAN_ONCE:
+        case WRIT_N_SPAN_UNKNOWN:
+            take_span(model, part, &arm.span, &arm.span_node, &arm.span_with);
+            break;
+        default:
+            unsupported(model, part, "this policy arm effect");
+            break;
+        }
+    }
+    return arm;
+}
+
 static writ_slot_rec_t
 resolve_slot(resolver_t *r, uint32_t id, uint32_t owner)
 {
@@ -807,6 +849,16 @@ resolve_slot(resolver_t *r, uint32_t id, uint32_t owner)
         case WRIT_N_SPAN_ONCE:
         case WRIT_N_SPAN_UNKNOWN:
             take_span(model, attr, &slot.span, &slot.span_node, &slot.span_with);
+            break;
+        case WRIT_N_SPAN_BY:
+            slot.span_by = node_at(model, child(model, attr, 0))->name;
+            break;
+        case WRIT_N_POLICY:
+            slot.first_arm = (uint32_t)model->policy_arms.len;
+            for (uint32_t a = 0; a < part->child_count; a++) {
+                core_list_push(model->policy_arms, resolve_policy_arm(model, child(model, attr, a)));
+                slot.arm_count++;
+            }
             break;
         default:
             break;
@@ -1367,7 +1419,8 @@ resolve_const(resolver_t *r, uint32_t id)
     if (value_node->kind == WRIT_N_EXPR_STRING) {
         record.text = value_node->name;
     } else if (!writ_expr_check_in(model, WRIT_EXPR_SCOPE_CONSTANT, WRIT_NONE, value)
-               || !writ_expr_eval(model, value, nullptr, &record.value) || !writ_type_is_integer(model, record.type)) {
+               || !writ_expr_eval(model, value, nullptr, &record.value)
+               || !(writ_type_is_integer(model, record.type) || writ_type_is_pointer(model, record.type))) {
         writ_report(model->session, WRIT_D_NOT_CONSTANT, record.loc, nullptr);
     }
     if (declare(model, record.name, WRIT_SCOPE_CONST, (uint32_t)model->consts.len, record.loc)) {

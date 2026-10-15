@@ -29,6 +29,10 @@ typedef struct {
     uint32_t                              retry_local;
     bool                                  variadic;
     bool                                  supported;
+    uint32_t                              policy_slot;
+    uint32_t                              arm;
+    uint32_t                              target_index;
+    writ_slot_rec_t                       target;
 } builder_t;
 
 static const writ_type_view_t *
@@ -40,7 +44,55 @@ type_view(const writ_model_t *model, writ_type_id id)
 static const writ_slot_rec_t *
 contract_slot(const builder_t *b, uint32_t index)
 {
-    return writ_fn_slot(b->model, b->record, index);
+    return index == b->target_index ? &b->target : writ_fn_slot(b->model, b->record, index);
+}
+
+static const writ_policy_arm_rec_t *
+active_arm(const builder_t *b)
+{
+    if (b->policy_slot == WRIT_NONE) {
+        return nullptr;
+    }
+    const writ_slot_rec_t *slot = writ_fn_slot(b->model, b->record, b->policy_slot);
+    return &b->model->policy_arms.data[slot->first_arm + b->arm];
+}
+
+static void
+apply_policy_arm(builder_t *b)
+{
+    for (uint32_t i = 0; b->policy_slot == WRIT_NONE && i < b->record->slot_count; i++) {
+        if (writ_fn_slot(b->model, b->record, i)->arm_count) {
+            b->policy_slot = i;
+        }
+    }
+    const writ_policy_arm_rec_t *arm = active_arm(b);
+    for (uint32_t i = 0; arm && i < b->record->slot_count; i++) {
+        const writ_slot_rec_t *slot = writ_fn_slot(b->model, b->record, i);
+        if (slot->name != arm->target) {
+            continue;
+        }
+        b->target = *slot;
+        b->target_index = i;
+        if (arm->has_mode) {
+            b->target.mode = arm->mode;
+        }
+        if (arm->span) {
+            b->target.span = arm->span;
+            b->target.span_node = arm->span_node;
+            b->target.span_with = arm->span_with;
+        }
+        b->target.release = arm->release ? arm->release : b->target.release;
+        b->target.own = b->target.own || arm->own;
+    }
+}
+
+static writ_after_call_t
+input_after_call(const writ_slot_rec_t *slot)
+{
+    return slot->mode == WRIT_MODE_CONSUME   ? WRIT_AFTER_CALLEE_OWNS
+         : slot->span == WRIT_SPAN_UNTIL     ? WRIT_AFTER_BORROWED_UNTIL
+         : slot->span == WRIT_SPAN_STATIC    ? WRIT_AFTER_STATIC
+                                             : writ_default(WRIT_DEFAULT_INPUT_AFTER_CALL);
 }
 
 static const writ_type_rec_t *
@@ -197,8 +249,8 @@ plan_count_array(builder_t *b, uint32_t index)
         return;
     }
     b->hidden[length] = true;
-    uint32_t item = add_item(b, slot->name, WRIT_ROLE_INPUT, array_shape(b, slot->type),
-                             writ_default(WRIT_DEFAULT_INPUT_AFTER_CALL), slot->type, index);
+    uint32_t item =
+        add_item(b, slot->name, WRIT_ROLE_INPUT, array_shape(b, slot->type), input_after_call(slot), slot->type, index);
     b->items.data[item].nullable = physical(b, slot->type)->key.nullable;
     bind_slot(b, index, item, WRIT_PART_POINTER);
     bind_slot(b, length, item, WRIT_PART_LENGTH);
@@ -217,8 +269,7 @@ static void
 plan_text_input(builder_t *b, uint32_t index)
 {
     const writ_slot_rec_t *slot = contract_slot(b, index);
-    uint32_t item = add_item(b, slot->name, WRIT_ROLE_INPUT, WRIT_SHAPE_TEXT, writ_default(WRIT_DEFAULT_INPUT_AFTER_CALL),
-                             slot->type, index);
+    uint32_t item = add_item(b, slot->name, WRIT_ROLE_INPUT, WRIT_SHAPE_TEXT, input_after_call(slot), slot->type, index);
     b->items.data[item].nullable = physical(b, slot->type)->key.nullable;
     bind_slot(b, index, item, WRIT_PART_WHOLE);
     uint32_t local = add_local(b, WRIT_LOCAL_TEXT, writ_type_builtin(b->model, "c_char"), item);
@@ -552,7 +603,13 @@ plan_inputs(builder_t *b)
         if (b->hidden[i] || type->key.kind == WRIT_TYPE_VA_LIST) {
             continue;
         }
-        if (type->key.kind == WRIT_TYPE_CALLBACK) {
+        bool passes_in = slot->mode == WRIT_MODE_IN || slot->mode == WRIT_MODE_KEEP || slot->mode == WRIT_MODE_CONSUME;
+        if (i == b->policy_slot && !active_arm(b)->is_else) {
+            writ_plan_step_view_t pass = step(WRIT_STEP_PASS_CONST);
+            pass.slot = i;
+            pass.literal = writ_sym_str(b->model->session, active_arm(b)->constant);
+            emit_to(&b->prepare, pass);
+        } else if (type->key.kind == WRIT_TYPE_CALLBACK) {
             plan_callback_input(b, i);
         } else if (slot->extent_kind == WRIT_EXTENT_UNKNOWN || slot->span == WRIT_SPAN_UNKNOWN
                    || slot->mode == WRIT_MODE_UNKNOWN) {
@@ -565,7 +622,7 @@ plan_inputs(builder_t *b)
             }
         } else if (slot->mode == WRIT_MODE_OUT && type->key.kind == WRIT_TYPE_POINTER) {
             plan_out_pointer(b, i);
-        } else if (slot->mode == WRIT_MODE_IN && type->key.kind == WRIT_TYPE_ARRAY && slot->extent_kind == WRIT_EXTENT_COUNT) {
+        } else if (passes_in && type->key.kind == WRIT_TYPE_ARRAY && slot->extent_kind == WRIT_EXTENT_COUNT) {
             plan_count_array(b, i);
         } else if (slot->mode == WRIT_MODE_IN && is_text(b, slot->type)) {
             plan_text_input(b, i);
@@ -842,7 +899,7 @@ builder_free(builder_t *b)
 }
 
 const writ_plan_view_t *
-writ_plan_build(writ_model_t *model, uint32_t fn)
+writ_plan_build(writ_model_t *model, uint32_t fn, uint32_t arm)
 {
     writ_session_t *session = model->session;
     builder_t b = {
@@ -861,12 +918,16 @@ writ_plan_build(writ_model_t *model, uint32_t fn)
         .serialize_item = WRIT_PLAN_NONE,
         .retry_local    = WRIT_PLAN_NONE,
         .supported      = true,
+        .policy_slot    = WRIT_NONE,
+        .arm            = arm,
+        .target_index   = WRIT_NONE,
     };
     uint32_t slots = b.record->slot_count + 2;
     b.hidden = writ_alloc(session, sizeof(bool) * slots);
     b.slot_item = writ_alloc(session, sizeof(uint32_t) * slots);
     memset(b.hidden, 0, sizeof(bool) * slots);
     memset(b.slot_item, 0xff, sizeof(uint32_t) * slots);
+    apply_policy_arm(&b);
     plan_slots(&b);
     plan_outcomes(&b);
     plan_inputs(&b);
@@ -918,6 +979,8 @@ writ_plan_build(writ_model_t *model, uint32_t fn)
             .reset_channels_count = b.resets.len,
             .reset_channels       = COPY(session, b.resets),
             .variadic             = b.variadic,
+            .policy_slot          = b.policy_slot == WRIT_NONE ? WRIT_PLAN_NONE : b.policy_slot,
+            .policy_arm           = b.policy_slot == WRIT_NONE ? WRIT_PLAN_NONE : b.arm,
         };
     }
     builder_free(&b);

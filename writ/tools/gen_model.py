@@ -86,6 +86,7 @@ def header_text():
         ]
     lines += [
         "const writ_plan_view_t *writ_model_fn_plan(const writ_model_t *model, const writ_fn_view_t *fn);",
+        "const writ_plan_view_t *writ_model_fn_arm_plan(const writ_model_t *model, const writ_fn_view_t *fn, size_t arm);",
         "writ_status_t writ_model_plan_render(const writ_model_t *model, const writ_plan_view_t *plan, writ_str_t *rendered);",
         "writ_status_t writ_lower_json(const writ_model_t *model, const writ_output_t *output);",
         "",

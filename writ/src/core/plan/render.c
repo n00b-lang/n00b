@@ -157,6 +157,9 @@ render_operands(render_env_t *env, const writ_plan_step_view_t *step, core_buffe
     case WRIT_STEP_RELEASE_LOCAL:
         core_buffer_printf(out, "L%u unless handed over", step->local);
         return;
+    case WRIT_STEP_PASS_CONST:
+        core_buffer_printf(out, "%.*s -> s%u", (int)step->literal.length, step->literal.data, step->slot);
+        return;
     default:
         return;
     }
@@ -217,7 +220,13 @@ writ_model_plan_render(const writ_model_t *model, const writ_plan_view_t *plan, 
     render_env_t env = {{.print_ref = render_ref}, model, plan};
     writ_emit_t emit;
     writ_emit_init(&emit);
-    writ_emit_line(&emit, "plan %.*s", (int)plan->fn->contract_name.length, plan->fn->contract_name.data);
+    writ_emit_text(&emit, "plan %.*s", (int)plan->fn->contract_name.length, plan->fn->contract_name.data);
+    if (plan->policy_slot != WRIT_PLAN_NONE) {
+        const writ_policy_arm_view_t *arm = &plan->fn->slots[plan->policy_slot].policy_arms[plan->policy_arm];
+        writ_str_t name = arm->is_else ? writ_cstr("else") : arm->constant;
+        writ_emit_text(&emit, " arm %.*s", (int)name.length, name.data);
+    }
+    writ_emit_line(&emit, "");
     if (plan->serialize_item != WRIT_PLAN_NONE) {
         core_buffer_t *line = core_buffer_empty();
         put_item(plan, plan->serialize_item, line);
