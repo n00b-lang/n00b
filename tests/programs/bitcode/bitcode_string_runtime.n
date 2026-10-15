@@ -14,6 +14,9 @@ comptime {
     assert joined == "compile-time concatenation result"
     assert returned == "returned at compile time"
     assert join("ab", "cd") == "abcd"
+    var direct: string = "start"
+    direct = direct + " and a direct module-level concatenation"
+    assert direct == "start and a direct module-level concatenation"
     var total: string = ""
     var i = 0
     while i < 20000 {

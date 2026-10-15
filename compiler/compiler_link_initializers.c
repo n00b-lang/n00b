@@ -107,7 +107,8 @@ publish_link_initializer_uses(core_link_unit_t *link,
                 || n00bb_builtin_atomic_access_function(symbol)
                 || n00bb_builtin_fd_write_function(symbol)
                 || n00bb_builtin_repr_default_function(symbol)
-                || n00bb_builtin_native_function(symbol)) continue;
+                || n00bb_builtin_native_function(symbol)
+                || n00bb_builtin_string_operator(symbol)) continue;
             if (symbol && (symbol->kind == PARSE_SYM_MODULE
                     || symbol->kind == PARSE_SYM_ENUM_CONST
                     || symbol->kind == PARSE_SYM_TYPEDEF
@@ -163,6 +164,7 @@ publish_link_initializer_uses(core_link_unit_t *link,
             || !call.source_unit || !call.source_site) continue;
         parse_sym_entry_t *callee = link_dependency_callee_symbol(
             analysis, &call);
+        if (n00bb_builtin_string_operator(callee)) continue;
         if (call.state == CORE_LINK_DEPENDENCY_EXTERNAL
             && (link_dependency_reference_builtin(&call, nullptr)
                 || n00bb_builtin_native_function(callee)
