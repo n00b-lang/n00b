@@ -21,7 +21,11 @@ typedef struct {
     ir_value_t *value;
 } ir_lower_result_t;
 
-typedef struct {
+typedef struct ir_lower_context_t ir_lower_context_t;
+typedef bool (*ir_lower_bind_missing_fn)(ir_lower_context_t *context,
+                                         parse_sym_entry_t *symbol);
+
+struct ir_lower_context_t {
     ir_module_t *module;
     ir_func_t *function;
     ir_block_t *block;
@@ -29,9 +33,10 @@ typedef struct {
     int32_t file_id;
     void *lower_private;
     void *user;
+    ir_lower_bind_missing_fn bind_missing;
     uint64_t next_value_id;
     bool reachable;
-} ir_lower_context_t;
+};
 
 typedef ir_lower_result_t (*ir_lower_action_fn)(
     ir_lower_context_t *context, parse_visit_t *visit,

@@ -812,12 +812,18 @@ static ir_lower_symbol_binding_t *
 lower_find_binding(ir_lower_context_t *context, parse_sym_entry_t *symbol)
 {
     ir_lower_private_t *private = lower_private(context);
+    if (!private && context && context->bind_missing)
+        private = lower_ensure_private(context);
     if (!private) return nullptr;
     for (parse_sym_entry_t *view = symbol; view;
          view = parse_sym_binding_origin(view)) {
         ir_lower_symbol_binding_t *binding = core_dict_get(
             &private->by_symbol, view, nullptr);
         if (binding) return binding;
+        if (context->bind_missing && context->bind_missing(context, view)) {
+            binding = core_dict_get(&private->by_symbol, view, nullptr);
+            if (binding) return binding;
+        }
     }
     return nullptr;
 }
