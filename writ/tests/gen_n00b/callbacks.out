@@ -220,7 +220,8 @@ func __event_handler_invoke(value: Any, arguments: uint, result: uint) -> nil {
 func bus_subscribe(handler: Event_Handler) -> u64 {
     let handler_handle = __ffi_callback_register(cast[Any]handler, ref __event_handler_invoke, false)
     let result = __bus_subscribe(handler_handle)
-    __ffi_callback_hold(handler_handle, "callbacks:bus_unsubscribe", [cast[u64](result)]'array, 0)
+    let handler_group = __ffi_hold_group()
+    __ffi_hold(handler_group, cast[u64](handler_handle), ref __ffi_callback_free, "callbacks:bus_unsubscribe", [cast[u64](result)]'array, 0)
     return result
 }
 
@@ -238,13 +239,13 @@ func bus_unsubscribe(id: u64) fail: Error {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "bus_unsubscribe")
         fail failure
     }
-    __ffi_callback_event("callbacks:bus_unsubscribe", [cast[u64](id)]'array, __os_thread_id())
+    __ffi_event("callbacks:bus_unsubscribe", [cast[u64](id)]'array, __os_thread_id())
 }
 7	tests/gen_n00b/../callbacks/callbacks.writ:7:1	Event
 11	tests/gen_n00b/../callbacks/callbacks.writ:9:1	Handler
 33	tests/gen_n00b/../callbacks/callbacks.writ:14:1	bus_subscribe
-40	tests/gen_n00b/../callbacks/callbacks.writ:16:1	bus_publish
-48	tests/gen_n00b/../callbacks/callbacks.writ:18:1	bus_unsubscribe
+41	tests/gen_n00b/../callbacks/callbacks.writ:16:1	bus_publish
+49	tests/gen_n00b/../callbacks/callbacks.writ:18:1	bus_unsubscribe
 load static
 extern __event_handler_arguments_copy callbacks_Handler_arguments_copy (uint, ref[Event_Handler_Arguments]) -> nil fail: nil
 extern __bus_subscribe callbacks_n00b_bus_subscribe (uint) -> uint fail: nil

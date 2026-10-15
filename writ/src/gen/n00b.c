@@ -366,28 +366,10 @@ emit_owned_free(const n00b_t *g, writ_emit_t *emit, const writ_plan_view_t *plan
     writ_emit_line(emit, "");
 }
 
-static const shim_param_t *
-handle_param(const writ_plan_view_t *plan, const core_list_t(shim_param_t) *params)
-{
-    for (size_t i = 0; i < params->len; i++) {
-        if (params->data[i].kind == PARAM_ADDRESS && is_handle(&plan->items[params->data[i].item])) {
-            return &params->data[i];
-        }
-    }
-    return nullptr;
-}
-
 static bool
 keeps_until(const writ_plan_view_t *plan, const shim_param_t *param)
 {
     return param->kind == PARAM_VALUE && plan->items[param->item].after_call == WRIT_AFTER_BORROWED_UNTIL;
-}
-
-static bool
-releases_handle(const writ_plan_view_t *plan, const shim_param_t *param)
-{
-    return param->kind == PARAM_ADDRESS && is_handle(&plan->items[param->item])
-        && plan->items[param->item].after_call == WRIT_AFTER_CALLEE_OWNS;
 }
 
 static bool
@@ -478,7 +460,8 @@ kept_param(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, const core_
 {
     (void)g;
     (void)fn;
-    return keeps_until(plan, param) && handle_param(plan, params);
+    (void)params;
+    return keeps_until(plan, param);
 }
 
 static bool
@@ -506,49 +489,10 @@ shim_keeps(const n00b_t *g)
 }
 
 static void
-emit_keep_table(const n00b_t *g, writ_emit_t *emit)
+emit_kept_free(const n00b_t *g, writ_emit_t *emit)
 {
-    writ_str_t s = g->shim;
-    writ_emit_line(emit, "typedef struct {");
-    writ_emit_line(emit, "    uint64_t owner;");
-    writ_emit_line(emit, "    void *data;");
-    writ_emit_line(emit, "} %.*s_kept_t;", S(s));
-    writ_emit_line(emit, "");
-    writ_emit_line(emit, "static %.*s_kept_t *%.*s_kept;", S(s), S(s));
-    writ_emit_line(emit, "static size_t %.*s_kept_count;", S(s));
-    writ_emit_line(emit, "static size_t %.*s_kept_capacity;", S(s));
-    writ_emit_line(emit, "static atomic_flag %.*s_kept_lock = ATOMIC_FLAG_INIT;", S(s));
-    writ_emit_line(emit, "");
-    writ_emit_open(emit, "static void %.*s_keep(uint64_t owner, void *data)", S(s));
-    writ_emit_line(emit, "while (atomic_flag_test_and_set_explicit(&%.*s_kept_lock, memory_order_acquire)) {", S(s));
-    writ_emit_line(emit, "}");
-    writ_emit_open(emit, "if (%.*s_kept_count == %.*s_kept_capacity)", S(s), S(s));
-    writ_emit_line(emit, "size_t capacity = %.*s_kept_capacity ? %.*s_kept_capacity * 2 : 8;", S(s), S(s));
-    writ_emit_line(emit, "%.*s_kept_t *grown = realloc(%.*s_kept, capacity * sizeof *grown);", S(s), S(s));
-    writ_emit_open(emit, "if (!grown)");
-    writ_emit_line(emit, "atomic_flag_clear_explicit(&%.*s_kept_lock, memory_order_release);", S(s));
-    writ_emit_line(emit, "n00bb_runtime_trap(\"out of memory\", 13);");
-    writ_emit_close(emit, nullptr);
-    writ_emit_line(emit, "%.*s_kept = grown;", S(s));
-    writ_emit_line(emit, "%.*s_kept_capacity = capacity;", S(s));
-    writ_emit_close(emit, nullptr);
-    writ_emit_line(emit, "%.*s_kept[%.*s_kept_count++] = (%.*s_kept_t){owner, data};", S(s), S(s), S(s));
-    writ_emit_line(emit, "atomic_flag_clear_explicit(&%.*s_kept_lock, memory_order_release);", S(s));
-    writ_emit_close(emit, nullptr);
-    writ_emit_line(emit, "");
-    writ_emit_open(emit, "static void %.*s_drop(uint64_t owner)", S(s));
-    writ_emit_line(emit, "while (atomic_flag_test_and_set_explicit(&%.*s_kept_lock, memory_order_acquire)) {", S(s));
-    writ_emit_line(emit, "}");
-    writ_emit_open(emit, "for (size_t i = 0; i < %.*s_kept_count;)", S(s));
-    writ_emit_open(emit, "if (%.*s_kept[i].owner == owner)", S(s));
-    writ_emit_line(emit, "free(%.*s_kept[i].data);", S(s));
-    writ_emit_line(emit, "%.*s_kept[i] = %.*s_kept[--%.*s_kept_count];", S(s), S(s), S(s));
-    writ_emit_close(emit, nullptr);
-    writ_emit_open(emit, "else");
-    writ_emit_line(emit, "i++;");
-    writ_emit_close(emit, nullptr);
-    writ_emit_close(emit, nullptr);
-    writ_emit_line(emit, "atomic_flag_clear_explicit(&%.*s_kept_lock, memory_order_release);", S(s));
+    writ_emit_open(emit, "void %.*s_kept_free(uint64_t kept)", S(g->shim));
+    writ_emit_line(emit, "free((void *)(uintptr_t)kept);");
     writ_emit_close(emit, nullptr);
     writ_emit_line(emit, "");
 }
@@ -577,6 +521,12 @@ emit_c_shim(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view_
                                                      : writ_cstr("const void *");
         writ_emit_text(emit, "%s%.*s%s%.*s", any ? ", " : "", S(type), is_pointer(type) ? "" : " ", S(p->name));
         any = true;
+    }
+    for (size_t i = 0; i < params.len; i++) {
+        if (keeps_until(plan, &params.data[i])) {
+            writ_emit_text(emit, "%suint64_t *%.*s_kept", any ? ", " : "", S(params.data[i].name));
+            any = true;
+        }
     }
     writ_emit_text(emit, "%s)", any ? "" : "void");
     writ_emit_open(emit, "");
@@ -663,20 +613,16 @@ emit_c_shim(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view_
         }
     }
     writ_emit_line(emit, ");");
-    const shim_param_t *owner = handle_param(plan, &params);
-    bool keeps = shim_keeps(g);
     for (size_t i = 0; i < params.len; i++) {
         writ_after_call_t after = plan->items[params.data[i].item].after_call;
         bool handed_over = (owned_arm(plan) && after == WRIT_AFTER_CALLEE_OWNS) || after == WRIT_AFTER_BORROWED_UNTIL;
-        if (keeps_until(plan, &params.data[i]) && owner) {
-            writ_emit_line(emit, "%.*s_keep(%.*s, %.*s_data);", S(g->shim), S(owner->name), S(params.data[i].name));
+        if (keeps_until(plan, &params.data[i])) {
+            writ_emit_line(emit, "*%.*s_kept = (uint64_t)(uintptr_t)%.*s_data;", S(params.data[i].name),
+                           S(params.data[i].name));
         } else if (params.data[i].kind == PARAM_VALUE && !params.data[i].borrow && !handed_over) {
             writ_emit_line(emit, "free(%.*s_data);", S(params.data[i].name));
         } else if (params.data[i].kind == PARAM_STORAGE || params.data[i].borrow) {
             writ_emit_line(emit, "n00b_ffi_release((void *)%.*s);", S(params.data[i].name));
-        }
-        if (keeps && releases_handle(plan, &params.data[i])) {
-            writ_emit_line(emit, "%.*s_drop(%.*s);", S(g->shim), S(params.data[i].name));
         }
     }
     writ_emit_line(emit, "return %swrit_n00b_value;", is_pointer(ret) ? "(uint64_t)(uintptr_t)" : "");
@@ -871,10 +817,6 @@ shim_c_text(const n00b_t *g, const writ_plan_view_t *const *plans)
     writ_emit_line(&emit, "#include <stddef.h>");
     writ_emit_line(&emit, "#include <stdlib.h>");
     writ_emit_line(&emit, "#include <string.h>");
-    bool keeps = shim_keeps(g);
-    if (keeps) {
-        writ_emit_line(&emit, "#include <stdatomic.h>");
-    }
     writ_emit_line(&emit, "");
     writ_emit_line(&emit, "#include \"%.*s_writ.h\"", S(g->c.prefix));
     writ_emit_line(&emit, "");
@@ -882,8 +824,8 @@ shim_c_text(const n00b_t *g, const writ_plan_view_t *const *plans)
     writ_emit_line(&emit, "void n00b_ffi_release(void *object);");
     writ_emit_line(&emit, "void n00bb_runtime_trap(const char *reason, uint64_t length);");
     writ_emit_line(&emit, "");
-    if (keeps) {
-        emit_keep_table(g, &emit);
+    if (shim_keeps(g)) {
+        emit_kept_free(g, &emit);
     }
     writ_emit_open(&emit, "void %.*s_take_bytes(%.*s_bytes_t *bytes, void *out)", S(g->shim), S(g->c.prefix));
     writ_emit_line(&emit, "size_t length = 0;");
@@ -1277,6 +1219,10 @@ emit_handle_type(const n00b_t *g, writ_emit_t *emit, const writ_handle_view_t *h
     if (contract_has_event(g, release_event)) {
         emit_event(emit, release_event, writ_cstr("cast[u64](self.raw)"));
     }
+    writ_str_t release_call = writ_str_format(g->session, "%.*s:%.*s", S(g->shim), S(release->fn->contract_name));
+    if (contract_has_event(g, release_call)) {
+        emit_event(emit, release_call, writ_cstr("cast[u64](self.raw)"));
+    }
     writ_emit_line(emit, "let released = __%.*s(self.raw)", S(writ_c_plan_name(&g->c, release)));
     writ_emit_close(emit, nullptr);
     writ_emit_close(emit, nullptr);
@@ -1356,11 +1302,16 @@ emit_extern(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view_
     (void)emit;
     core_list_t(shim_param_t) params = core_list_new(shim_param_t);
     shim_params(g, fn, plan, &params);
-    writ_str_t *types = writ_alloc(g->session, sizeof(writ_str_t) * (params.len ? params.len : 1));
+    writ_str_t *types = writ_alloc(g->session, sizeof(writ_str_t) * (2 * params.len + 1));
     size_t typed = 0;
     for (size_t i = 0; i < params.len; i++) {
         if (params.data[i].kind != PARAM_OWNED) {
             types[typed++] = params.data[i].n00b_type;
+        }
+    }
+    for (size_t i = 0; i < params.len; i++) {
+        if (keeps_until(plan, &params.data[i])) {
+            types[typed++] = writ_cstr("Ref[uint]");
         }
     }
     writ_str_t ret = writ_c_returns_directly(&g->c, plan) ? writ_c_return_type(&g->c, plan) : writ_cstr("int32_t");
@@ -2058,6 +2009,14 @@ contract_has_event(const n00b_t *g, writ_str_t id)
                     return true;
                 }
             }
+            for (size_t a = 0; a < slot->policy_arms_count; a++) {
+                const writ_policy_arm_view_t *arm = &slot->policy_arms[a];
+                for (size_t e = 0; e < arm->span_events_count; e++) {
+                    if (writ_str_eq(event_id(g, fn, &arm->span_events[e]), id)) {
+                        return true;
+                    }
+                }
+            }
         }
     }
     return false;
@@ -2066,7 +2025,7 @@ contract_has_event(const n00b_t *g, writ_str_t id)
 static void
 emit_event(writ_emit_t *emit, writ_str_t id, writ_str_t keys)
 {
-    writ_emit_line(emit, "__ffi_callback_event(\"%.*s\", [%.*s]'array, __os_thread_id())", S(id), S(keys));
+    writ_emit_line(emit, "__ffi_event(\"%.*s\", [%.*s]'array, __os_thread_id())", S(id), S(keys));
 }
 
 static void
@@ -2113,6 +2072,9 @@ emit_callback_registrations(const wrapper_t *w, writ_emit_t *emit, const core_li
 {
     for (size_t i = 0; i < params->len; i++) {
         const shim_param_t *p = &params->data[i];
+        if (keeps_until(w->plan, p)) {
+            writ_emit_line(emit, "var %.*s_kept: uint = 0", S(local_name(w, p->item)));
+        }
         if (p->kind != PARAM_CALLBACK) {
             continue;
         }
@@ -2131,7 +2093,46 @@ emit_callback_failure_frees(const wrapper_t *w, writ_emit_t *emit, const core_li
         if (params->data[i].kind == PARAM_CALLBACK) {
             writ_emit_line(emit, "__ffi_callback_free(%.*s_handle)", S(local_name(w, params->data[i].item)));
         }
+        if (keeps_until(w->plan, &params->data[i])) {
+            writ_emit_line(emit, "__ffi_kept_free(cast[u64](%.*s_kept))", S(local_name(w, params->data[i].item)));
+        }
     }
+}
+
+static void
+emit_holds(const wrapper_t *w, writ_emit_t *emit, const core_list_t(shim_param_t) *params, writ_str_t name,
+           writ_str_t token, const char *release, const writ_event_view_t *events, size_t count)
+{
+    if (!count) {
+        return;
+    }
+    writ_emit_line(emit, "let %.*s_group = __ffi_hold_group()", S(name));
+    for (size_t e = 0; e < count; e++) {
+        const writ_event_view_t *event = &events[e];
+        core_buffer_t *keys = core_buffer_empty();
+        for (size_t a = 0; a < event->args_count; a++) {
+            writ_str_t key = event_key(w, params, &event->args[a]);
+            core_buffer_printf(keys, "%s%.*s", a ? ", " : "", S(key));
+        }
+        writ_str_t list = writ_str_from_buffer(w->g->session, keys);
+        writ_emit_line(emit, "__ffi_hold(%.*s_group, cast[u64](%.*s), ref %s, \"%.*s\", [%.*s]'array, %s)", S(name),
+                       S(token), release, S(event_id(w->g, w->plan->fn, event)), S(list),
+                       event->on_thread ? "__os_thread_id()" : "0");
+    }
+}
+
+static const writ_event_view_t *
+item_events(const writ_plan_view_t *plan, uint32_t item, size_t *count)
+{
+    const writ_policy_arm_view_t *arm = plan_arm(plan);
+    if (arm && arm->span == WRIT_SPAN_UNTIL && writ_str_eq(arm->target, plan->items[item].name)) {
+        *count = arm->span_events_count;
+        return arm->span_events;
+    }
+    uint32_t slot = plan->items[item].contract_slot;
+    const writ_slot_view_t *view = slot < plan->fn->slots_count ? &plan->fn->slots[slot] : nullptr;
+    *count = view && view->span == WRIT_SPAN_UNTIL ? view->span_events_count : 0;
+    return view ? view->span_events : nullptr;
 }
 
 static void
@@ -2139,26 +2140,23 @@ emit_callback_spans(const wrapper_t *w, writ_emit_t *emit, const core_list_t(shi
 {
     for (size_t i = 0; i < params->len; i++) {
         const shim_param_t *p = &params->data[i];
+        writ_str_t name = local_name(w, p->item);
+        size_t count = 0;
+        const writ_event_view_t *events = item_events(w->plan, p->item, &count);
+        if (keeps_until(w->plan, p)) {
+            emit_holds(w, emit, params, writ_str_format(w->g->session, "%.*s_kept", S(name)),
+                       writ_str_format(w->g->session, "%.*s_kept", S(name)), "__ffi_kept_free", events, count);
+            continue;
+        }
         const writ_slot_view_t *slot = p->kind == PARAM_CALLBACK ? callback_slot(w->plan, p->item) : nullptr;
         if (!slot) {
             continue;
         }
-        writ_str_t name = local_name(w, p->item);
         if (slot->span == WRIT_SPAN_CALL || slot->span == WRIT_SPAN_NONE) {
             writ_emit_line(emit, "__ffi_callback_free(%.*s_handle)", S(name));
         }
-        for (size_t e = 0; slot->span == WRIT_SPAN_UNTIL && e < slot->span_events_count; e++) {
-            const writ_event_view_t *event = &slot->span_events[e];
-            core_buffer_t *keys = core_buffer_empty();
-            for (size_t a = 0; a < event->args_count; a++) {
-                writ_str_t key = event_key(w, params, &event->args[a]);
-                core_buffer_printf(keys, "%s%.*s", a ? ", " : "", S(key));
-            }
-            writ_str_t list = writ_str_from_buffer(w->g->session, keys);
-            writ_emit_line(emit, "__ffi_callback_hold(%.*s_handle, \"%.*s\", [%.*s]'array, %s)", S(name),
-                           S(event_id(w->g, w->plan->fn, event)), S(list),
-                           event->on_thread ? "__os_thread_id()" : "0");
-        }
+        emit_holds(w, emit, params, name, writ_str_format(w->g->session, "%.*s_handle", S(name)),
+                   "__ffi_callback_free", events, count);
     }
 }
 
@@ -2270,6 +2268,12 @@ emit_wrapper(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view
             writ_emit_text(emit, "%u", writ_default(WRIT_DEFAULT_RETRY_CAPACITY));
         } else {
             writ_emit_text(emit, "%.*s", S(name));
+        }
+    }
+    for (size_t i = 0; i < params.len; i++) {
+        if (keeps_until(plan, &params.data[i])) {
+            writ_emit_text(emit, "%sref %.*s_kept", passed ? ", " : "", S(local_name(&w, params.data[i].item)));
+            passed = true;
         }
     }
     writ_emit_line(emit, ")");
@@ -2466,6 +2470,15 @@ n00b_text(const n00b_t *g)
     bool takes_bytes = false;
     for (size_t i = 0; i < g->externs->len; i++) {
         takes_bytes = takes_bytes || strstr(g->externs->data[i].signature.data, "Ffi_Bytes");
+    }
+    if (shim_keeps(g)) {
+        writ_str_t kept_params[] = {writ_cstr("u64")};
+        add_extern(g, writ_cstr("__ffi_kept_release"), writ_str_format(g->session, "%.*s_kept_free", S(g->shim)),
+                   kept_params, 1, writ_cstr("nil"));
+        writ_emit_line(&emit, "");
+        writ_emit_line(&emit, "func __ffi_kept_free(kept: u64) {");
+        writ_emit_line(&emit, "    __ffi_kept_release(kept)");
+        writ_emit_line(&emit, "}");
     }
     if (takes_bytes) {
         writ_str_t take_params[] = {writ_cstr("Ref[Ffi_Bytes]"), writ_cstr("Ref[Array[u8]]")};

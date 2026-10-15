@@ -245,6 +245,7 @@ func __stmt_cell(raw: uint) -> Stmt {
 func __finalize(consume self: Ref[Stmt_Cell]) {
     if self.raw != 0 and debug_enabled() {
         __fd_write(2, "Stmt collected while open; releasing it\n")
+        __ffi_event("policy:stmt_release", [cast[u64](self.raw)]'array, __os_thread_id())
         let released = __stmt_release(self.raw)
     }
 }
@@ -271,11 +272,12 @@ func close(modify self: Stmt) fail: Error {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "stmt_release")
         fail failure
     }
+    __ffi_event("policy:stmt_release", [cast[u64](self.raw)]'array, __os_thread_id())
     self.raw = 0
 }
 7	tests/gen_n00b/../policy/policy.writ:4:1	Stmt
-26	tests/gen_n00b/../policy/policy.writ:11:1	bind_text
-41	tests/gen_n00b/../policy/policy.writ:22:1	stmt_release
+27	tests/gen_n00b/../policy/policy.writ:11:1	bind_text
+42	tests/gen_n00b/../policy/policy.writ:22:1	stmt_release
 load static
 extern __bind_text_text_transient policy_n00b_bind_text_text_transient (uint, ref[string], ref[i32]) -> i32 fail: nil
 extern __stmt_release policy_n00b_stmt_release (uint) -> i32 fail: nil
