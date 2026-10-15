@@ -1,0 +1,22 @@
+const text = [-
+library text
+fn text_length(s: *cstr) -> usize
+fn text_greeting() -> *cstr static
+fn text_invalid() -> *cstr static
+-]'ffi
+
+comptime {} else {
+    try {
+        require text.text_length("hello")! == 5
+        require text.text_length("a string longer than the short form")! == 35
+        require text.text_greeting()! == "héllo from C"
+    } else failure {
+        require false
+    }
+    try {
+        text.text_invalid()!
+        require false
+    } else failure {
+        require failure.code == -3
+    }
+}
