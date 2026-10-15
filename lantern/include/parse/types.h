@@ -151,7 +151,6 @@ typedef struct parse_nt_node_t {
     int64_t integer_range_minimum;
     int64_t integer_range_maximum;
     void *integer_literal_origin;
-    void *record_literal_origin;
     void *frontend_data;
 } parse_nt_node_t;
 
