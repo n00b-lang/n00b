@@ -3077,15 +3077,25 @@ n00bb_operand_value_type(th_type *operand, th_type *other, bool comparison)
     return th_ind_referent(resolved);
 }
 
-bool
-n00bb_dereferences_to(th_ctx *types, th_type *actual, th_type *wanted)
+th_type *
+n00bb_dereference_target(th_ctx *types, th_type *actual, th_type *wanted)
 {
     actual = actual ? th_resolve(actual) : nullptr;
     wanted = wanted ? th_resolve(wanted) : nullptr;
-    return actual && wanted && th_kind_of(actual) == TH_INDIRECTION
-        && th_kind_of(wanted) != TH_INDIRECTION
-        && th_kind_of(wanted) != TH_VAR
-        && th_unify_probe(types, th_ind_referent(actual), wanted);
+    if (!actual || !wanted || th_kind_of(actual) != TH_INDIRECTION
+        || th_kind_of(wanted) == TH_INDIRECTION
+        || th_kind_of(wanted) == TH_VAR) return nullptr;
+    th_type *referent = th_ind_referent(actual);
+    if (th_unify_probe(types, referent, wanted)) return wanted;
+    th_type *element = th_option_item(wanted);
+    return element && th_kind_of(th_resolve(element)) != TH_INDIRECTION
+        && th_unify_probe(types, referent, element) ? element : nullptr;
+}
+
+bool
+n00bb_dereferences_to(th_ctx *types, th_type *actual, th_type *wanted)
+{
+    return n00bb_dereference_target(types, actual, wanted) != nullptr;
 }
 
 bool

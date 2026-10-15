@@ -3998,8 +3998,11 @@ n00bb_lower_return(ir_lower_context_t *context, parse_visit_t *visit,
             return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
                 "could not convert the returned integer value");
     }
-    if (value && expected) {
-        value = ir_lower_value_as(context, value, expected, span);
+    th_type *dereferenced = value && expected
+        ? n00bb_dereference_target(ir_module_types(context->module),
+                                   value->type, expected) : nullptr;
+    if (dereferenced) {
+        value = ir_lower_value_as(context, value, dereferenced, span);
         if (!value)
             return lower_error(context, IR_DIAG_INTERNAL, span,
                 "could not read through the returned reference");

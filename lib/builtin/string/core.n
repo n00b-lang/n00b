@@ -1,0 +1,129 @@
+private record String_Words layout(c) {
+    data:     Ref[byte]
+    selector: u64
+}
+
+private record Byte_Array_Value layout(c) {
+    data:       Ref[byte]
+    descriptor: Ref[Byte_Array_Shape]
+}
+
+private record Byte_Array_Shape layout(c) {
+    total_count:   u64
+    rank:          u32
+    flat_rank:     u32
+    flags:         u32
+    reserved_zero: u32
+    extent:        u64
+}
+
+private const tag_shift:      u64 = 62
+private const encoding_shift: u64 = 60
+private const length_mask:    u64 = 0x0fffffffffffffff
+private const short_capacity: uint = 14
+private const short_selector: uint = 15
+private const tag_long:       u64 = 1
+private const tag_span:       u64 = 2
+private const tag_rich:       u64 = 3
+
+private func words(self: Ref[string]) -> Ref[String_Words] {
+    return unsafe_cast[Ref[String_Words]] self
+}
+
+private func long_selector(n: uint, encoding: u8, tag: u64) -> u64 {
+    return cast[u64] n | (cast[u64] encoding << encoding_shift) |
+        (tag << tag_shift)
+}
+
+private func __string_tag(s: string) -> u8 {
+    return cast[u8](words(ref s).selector >> tag_shift)
+}
+
+private func __string_encoding_bits(s: string) -> u8 {
+    return cast[u8]((words(ref s).selector >> encoding_shift) & 3)
+}
+
+private func __string_byte_len(s: string) -> uint {
+    let selector: u64 = words(ref s).selector
+    if selector >> tag_shift == 0 {
+        return cast[uint]((selector >> 56) & 0xf)
+    }
+    return cast[uint](selector & length_mask)
+}
+
+private func __string_byte(s: string, i: uint) -> u8 {
+    let view: Ref[String_Words] = words(ref s)
+    if view.selector >> tag_shift == 0 {
+        let cell: byte = __gc_byte_offset(unsafe_cast[Ref[byte]] view,
+                                          cast[int] i)
+        return cast[u8] cell
+    }
+    let stored: byte = __gc_byte_offset(view.data, cast[int] i)
+    return cast[u8] stored
+}
+
+private func __string_make(bytes: Array[u8], at: uint, n: uint, encoding: u8,
+                           share: bool) -> string {
+    var text: string = ""
+    let view: Ref[String_Words] = words(ref text)
+    if n <= short_capacity {
+        let cells: Ref[byte] = unsafe_cast[Ref[byte]] view
+        var i: uint = 0
+        while i < n {
+            ref_write(__gc_byte_offset(cells, cast[int] i),
+                      cast[byte] bytes[at + i])
+            i += 1
+        }
+        ref_write(__gc_byte_offset(cells, cast[int] short_selector),
+                  cast[byte](n | (cast[uint] encoding << 4)))
+        return text
+    }
+    if share {
+        view.data = unsafe_cast[Ref[byte]] ref bytes[at]
+        view.selector = long_selector(n, encoding, tag_span)
+        return text
+    }
+    var copy: Array[u8] = new[Array[u8]](cast[int] n)
+    var i: uint = 0
+    while i < n {
+        copy[i] = bytes[at + i]
+        i += 1
+    }
+    view.data = unsafe_cast[Ref[byte]] ref copy[0]
+    view.selector = long_selector(n, encoding, tag_long)
+    return text
+}
+
+private func __string_span(s: string, at: uint, n: uint,
+                           encoding: u8) -> string {
+    var text: string = ""
+    let view: Ref[String_Words] = words(ref text)
+    view.data = __gc_byte_offset(words(ref s).data, cast[int] at)
+    view.selector = long_selector(n, encoding, tag_span)
+    return text
+}
+
+private func __string_rich_body(s: string) -> Ref[`T] {
+    return unsafe_cast[Ref[`T]] words(ref s).data
+}
+
+private func __string_make_rich(body: Ref[`T]) -> string {
+    var text: string = ""
+    let view: Ref[String_Words] = words(ref text)
+    view.data = unsafe_cast[Ref[byte]] body
+    view.selector = tag_rich << tag_shift
+    return text
+}
+
+private func __string_storage(s: string) -> Array[u8]? {
+    let view: Ref[String_Words] = words(ref s)
+    if view.selector >> tag_shift != tag_long {
+        return nil
+    }
+    let length: u64 = view.selector & length_mask
+    var shape: Byte_Array_Shape = (total_count = length, rank = 1,
+        flat_rank = 1, flags = 0, reserved_zero = 0, extent = length)
+    var value: Byte_Array_Value = (data = view.data, descriptor = ref shape)
+    let storage: Ref[Array[u8]] = unsafe_cast[Ref[Array[u8]]] ref value
+    return storage
+}

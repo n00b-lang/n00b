@@ -120,6 +120,8 @@ bool register_user_litmod(void *context, core_translation_unit_t *unit,
 th_type *n00bb_atomic_element_type(th_type *type);
 bool n00bb_option_type_element(th_type *type, th_type **element);
 bool n00bb_dereferences_to(th_ctx *types, th_type *actual, th_type *wanted);
+th_type *n00bb_dereference_target(th_ctx *types, th_type *actual,
+                                  th_type *wanted);
 th_type *n00bb_operand_value_type(th_type *operand, th_type *other,
                                   bool comparison);
 enum { N00BB_MAX_SIZED_BITS = sizeof(ir_uint_t) * CHAR_BIT };
