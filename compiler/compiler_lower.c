@@ -16070,7 +16070,7 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
 {
     n00bb_tu_state_t *state = tu_state(unit);
     ir_module_t *module = module_for_phase(state, comptime_phase);
-    th_type *function_type = th_resolve(function->type);
+    th_type *function_type = function ? th_resolve(function->type) : nullptr;
     if (!state || !module || !body || !function || !function_type)
         return false;
 
@@ -16108,6 +16108,9 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
         .parameters_to_copy_out = core_list_new(n00bb_copyout_t),
         .pending_call_copyouts = core_list_new(n00bb_pending_copyouts_t),
         .default_params = core_list_new(n00bb_default_param_t),
+        .branches = core_list_new(n00bb_branch_frame_t),
+        .switches = core_list_new(n00bb_switch_frame_t),
+        .typecases = core_list_new(n00bb_typecase_frame_t),
         .comptime_phase = comptime_phase,
     };
     ir_lower_context_t context = {
@@ -16119,6 +16122,7 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
         .user = &lower_data,
         .reachable = true,
     };
+    bool ok = false;
     for (size_t i = 0; i < parameters->len; i++) {
         parse_sym_entry_t *parameter = parameters->data[i];
         const th_param *type_param = th_func_param(function_type, i);
@@ -16132,8 +16136,7 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
             ir_diag_message(diagnostic, diagnostics,
                 "the parameter has an invalid passing mode, or a copy-out "
                 "parameter has a default");
-            core_list_free(lower_data.default_params);
-            return false;
+            goto cleanup;
         }
         th_type *signature_parameter_type = type_param->type;
         th_type *parameter_type = parameter->type
@@ -16143,7 +16146,7 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
         if (!parameter_type) {
             lower_error(&context, IR_DIAG_TYPE_MISMATCH, IR_SPAN_UNKNOWN,
                 "parameter symbol type does not match the callable signature");
-            return false;
+            goto cleanup;
         }
         parameter->type = parameter_type;
         if (parameter->decl_node)
@@ -16175,13 +16178,11 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
                     lower_error(&context, IR_DIAG_VERIFY_TYPED,
                         lower_span_for_tree(&context, parameter->decl_node),
                         "defaulted parameter has an invalid optional IR binding");
-                    core_list_free(lower_data.default_params);
-                    return false;
+                    goto cleanup;
                 }
                 if (!n00bb_attach_symbol_array_shape(&context, grammar,
                         parameter, parameter_type, argument, local)) {
-                    core_list_free(lower_data.default_params);
-                    return false;
+                    goto cleanup;
                 }
                 core_list_push(lower_data.default_params,
                     ((n00bb_default_param_t){
@@ -16197,13 +16198,11 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
                                              parameter_type);
             if (!value || !n00bb_set_reference_access(ir_context, value,
                                                        parameter_type)) {
-                core_list_free(lower_data.default_params);
-                return false;
+                goto cleanup;
             }
             if (!n00bb_attach_symbol_array_shape(&context, grammar,
                     parameter, parameter_type, value, nullptr)) {
-                core_list_free(lower_data.default_params);
-                return false;
+                goto cleanup;
             }
             if (parameter->storage_duration == PARSE_SYM_STORAGE_DYNAMIC
                 || (parameter->selected_storage_class.data
@@ -16230,13 +16229,11 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
                                                parameter_span)) {
                     lower_error(&context, IR_DIAG_INTERNAL, parameter_span,
                         "could not place the parameter in selected storage");
-                    core_list_free(lower_data.default_params);
-                    return false;
+                    goto cleanup;
                 }
             }
             else if (!ir_lower_bind_value(&context, parameter, value)) {
-                core_list_free(lower_data.default_params);
-                return false;
+                goto cleanup;
             }
             continue;
         }
@@ -16264,8 +16261,7 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
                                   parameter_span)) {
             lower_error(&context, IR_DIAG_VERIFY_TYPED, IR_SPAN_UNKNOWN,
                 "out and modify parameters need matching passing metadata and a typed local copy");
-            core_list_free(lower_data.default_params);
-            return false;
+            goto cleanup;
         }
         if (mode == TH_INOUT) {
             if (!n00bb_emit_local_write(&context, local, input,
@@ -16273,8 +16269,7 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
                 lower_error(&context, IR_DIAG_INTERNAL,
                     lower_span_for_tree(&context, parameter->decl_node),
                     "could not copy a modify parameter into its local storage");
-                core_list_free(lower_data.default_params);
-                return false;
+                goto cleanup;
             }
         }
         size_t output_index = 0;
@@ -16328,8 +16323,7 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
             lower_error(&context, IR_DIAG_VERIFY_TYPED,
                 lower_span_for_tree(&context, rest_parameter->decl_node),
                 "variadic parameter does not have its collected array type");
-            core_list_free(lower_data.default_params);
-            return false;
+            goto cleanup;
         }
     }
 
@@ -16351,8 +16345,7 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
                 ? ir_func_address(target_module, target) : nullptr;
             if (!address || !ir_lower_bind_value(&context, candidate, address)) {
                 core_list_free(function_scopes);
-                core_list_free(lower_data.default_params);
-                return false;
+                goto cleanup;
             }
         }
     }
@@ -16386,8 +16379,7 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
                 if (!value || !ir_lower_bind_value(&context, global_symbol,
                                                     value)) {
                     core_list_free(global_scopes);
-                    core_list_free(lower_data.default_params);
-                    return false;
+                    goto cleanup;
                 }
             }
         }
@@ -16396,8 +16388,7 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
 
     if (!n00bb_initialize_default_params(lowerer, &context,
                                           &lower_data.default_params)) {
-        core_list_free(lower_data.default_params);
-        return false;
+        goto cleanup;
     }
     for (size_t i = 0; i < lower_data.default_params.len; i++) {
         n00bb_default_param_t *parameter =
@@ -16424,8 +16415,7 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
             || !n00bb_emit_local_write(&context, bound, resolved, span)) {
             lower_error(&context, IR_DIAG_INTERNAL, span,
                 "could not bind the initialized default parameter value");
-            core_list_free(lower_data.default_params);
-            return false;
+            goto cleanup;
         }
     }
 
@@ -16436,7 +16426,7 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
         bool runtime_bound = false;
         for (uint32_t d = 0; shape && d < ir_shape_rank(shape); d++) {
             ir_shape_extent_t extent;
-            if (!ir_shape_extent(shape, d, &extent)) return false;
+            if (!ir_shape_extent(shape, d, &extent)) goto cleanup;
             runtime_bound |= extent.kind == IR_SHAPE_EXTENT_RUNTIME;
         }
         if (!runtime_bound) continue;
@@ -16447,7 +16437,7 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
                 &context, grammar, bound_shape)) {
             lower_error(&context, IR_DIAG_INTERNAL, span,
                 "could not lower a parameter's runtime array dimensions");
-            return false;
+            goto cleanup;
         }
         th_mode mode = parameter->has_mode ? parameter->mode : TH_IN;
         ir_local_t *local = ir_lower_bound_local(&context, parameter);
@@ -16456,7 +16446,7 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
         if ((local && !ir_local_set_shape(local, bound_shape))
             || (parameter_value
                 && !ir_value_set_shape(parameter_value, bound_shape)))
-            return false;
+            goto cleanup;
         for (size_t c = 0; c < lower_data.parameters_to_copy_out.len; c++)
             if (lower_data.parameters_to_copy_out.data[c].symbol == parameter)
                 lower_data.parameters_to_copy_out.data[c].required_shape =
@@ -16466,7 +16456,7 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
             ? n00bb_emit_local_read(&context, local, span)
             : parameter_value;
         if (!value || !n00bb_emit_sequence_shape_check_impl(&context,
-                value, bound_shape, span, true)) return false;
+                value, bound_shape, span, true)) goto cleanup;
     }
     ir_shape_t *return_shape = symbol ? parse_sym_binding(symbol,
         CORE_STRING_STATIC("ir.return-shape")) : nullptr;
@@ -16480,12 +16470,9 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
         lower_error(&context, IR_DIAG_INTERNAL,
             lower_span_for_tree(&context, symbol->decl_node),
             "could not lower the return's runtime array dimensions");
-        return false;
+        goto cleanup;
     }
 
-    lower_data.branches = core_list_new(n00bb_branch_frame_t);
-    lower_data.switches = core_list_new(n00bb_switch_frame_t);
-    lower_data.typecases = core_list_new(n00bb_typecase_frame_t);
     ir_lower_result_t lowered = {IR_LOWER_NO_VALUE, nullptr};
     if (roots) {
         for (size_t i = 0; i < roots->len; i++) {
@@ -16504,6 +16491,49 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
         }
     }
     else lowered = ir_lower_tree(lowerer, &context, grammar, body);
+    if (lowered.status == IR_LOWER_FAILED || ir_diags_failed(diagnostics))
+        goto cleanup;
+    if (expression_body) {
+        if (lowered.status != IR_LOWER_VALUE || !lowered.value) {
+            ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
+                IR_DIAG_VERIFY_TYPED,
+                lower_span_for_tree(&context, body),
+                "this context default expression");
+            ir_diag_message(diagnostic, diagnostics,
+                "the default expression does not produce a value on every successful path");
+            goto cleanup;
+        }
+        if (expression_result_hook
+            && !expression_result_hook(&context, &lowered.value,
+                                       expression_result_data))
+            goto cleanup;
+        if (context.reachable) {
+            if (!n00bb_emit_success_return(&context, lowered.value,
+                    &lower_data.parameters_to_copy_out,
+                    lower_span_for_tree(&context, body))) goto cleanup;
+        }
+    }
+    else if (context.reachable) {
+        if (!n00bb_nil_type(state->types, th_func_ret(function_type))) {
+            ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
+                IR_DIAG_VERIFY_TYPED, lower_span_for_tree(&context, body),
+                "this function body");
+            char message[256];
+            snprintf(message, sizeof(message),
+                     "function '%.*s' can reach its end without returning a value",
+                     symbol ? (int)symbol->name.u8_bytes : 0,
+                     symbol ? symbol->name.data : "");
+            ir_diag_message(diagnostic, diagnostics, message);
+            goto cleanup;
+        }
+        if (!n00bb_emit_with_success(&context, body)) goto cleanup;
+        if (!n00bb_emit_success_return(&context, nullptr,
+                &lower_data.parameters_to_copy_out, ir_module_span(module)))
+            goto cleanup;
+    }
+    ok = !ir_diags_failed(diagnostics);
+
+cleanup:
     for (size_t i = 0; i < lower_data.branches.len; i++)
         core_list_free(lower_data.branches.data[i].arms);
     core_list_free(lower_data.branches);
@@ -16534,49 +16564,8 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
         core_list_free(lower_data.tuple_parts.data[i].values);
     }
     core_list_free(lower_data.tuple_parts);
-    if (lowered.status == IR_LOWER_FAILED || ir_diags_failed(diagnostics)) {
-        return false;
-    }
-    if (expression_body) {
-        if (lowered.status != IR_LOWER_VALUE || !lowered.value) {
-            ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
-                IR_DIAG_VERIFY_TYPED,
-                lower_span_for_tree(&context, body),
-                "this context default expression");
-            ir_diag_message(diagnostic, diagnostics,
-                "the default expression does not produce a value on every successful path");
-            return false;
-        }
-        if (expression_result_hook
-            && !expression_result_hook(&context, &lowered.value,
-                                       expression_result_data))
-            return false;
-        if (context.reachable) {
-            if (!n00bb_emit_success_return(&context, lowered.value,
-                    &lower_data.parameters_to_copy_out,
-                    lower_span_for_tree(&context, body))) return false;
-        }
-    }
-    else if (context.reachable) {
-        if (!n00bb_nil_type(state->types, th_func_ret(function_type))) {
-            ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
-                IR_DIAG_VERIFY_TYPED, lower_span_for_tree(&context, body),
-                "this function body");
-            char message[256];
-            snprintf(message, sizeof(message),
-                     "function '%.*s' can reach its end without returning a value",
-                     symbol ? (int)symbol->name.u8_bytes : 0,
-                     symbol ? symbol->name.data : "");
-            ir_diag_message(diagnostic, diagnostics, message);
-            return false;
-        }
-        if (!n00bb_emit_with_success(&context, body)) return false;
-        if (!n00bb_emit_success_return(&context, nullptr,
-                &lower_data.parameters_to_copy_out, ir_module_span(module)))
-            return false;
-    }
     core_list_free(lower_data.parameters_to_copy_out);
-    return !ir_diags_failed(diagnostics);
+    return ok;
 }
 
 static bool
