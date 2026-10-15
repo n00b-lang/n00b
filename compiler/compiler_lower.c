@@ -20784,8 +20784,9 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         ok = n00bb_generate_value_methods(analysis);
     size_t lowered_comptime_functions = 0;
     if (ok) ok = lower_queued_comptime_functions(lowerer, grammar, &units,
-        ir_context, analysis, &lowered_comptime_functions);
-    if (ok) ok = publish_interned_variant_layouts(analysis);
+        ir_context, analysis, &lowered_comptime_functions)
+        && publish_declared_aggregate_layouts(analysis)
+        && publish_interned_variant_layouts(analysis);
     if (ok) ok = build_phase_reachable_functions(
         analysis, &comptime_init_order, true, diagnostics);
 
@@ -20798,6 +20799,8 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
     if (ok && lowered_comptime_functions != analysis->comptime_functions.len)
         ok = lower_queued_comptime_functions(lowerer, grammar, &units,
                 ir_context, analysis, &lowered_comptime_functions)
+            && publish_declared_aggregate_layouts(analysis)
+            && publish_interned_variant_layouts(analysis)
             && build_phase_reachable_functions(analysis,
                 &comptime_init_order, true, diagnostics);
     if (ok && !interface_closure_only)

@@ -3343,6 +3343,35 @@ n00bb_format_units(parse_grammar_t *grammar, core_work_queue_t *queue,
     return ok;
 }
 
+static bool
+specialize_phase_calls(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
+                       bool comptime, core_diagnostics_t *diagnostics)
+{
+    core_buffer_t failure = {0};
+    bool ok = n00bb_specialize_calls(comptime
+        ? &analysis->comptime_reachable_functions
+        : &analysis->runtime_reachable_functions, &failure);
+    if (ok) {
+        core_list_t(core_translation_unit_ptr_t) order =
+            core_list_new(core_translation_unit_ptr_t);
+        ok = n00bb_collect_initializer_order(link, comptime
+                ? "n00bb.comptime-module-initializer-order"
+                : "n00bb.runtime-module-initializer-order", &order)
+            && build_phase_reachable_functions(analysis, &order, comptime,
+                                               diagnostics);
+        core_list_free(order);
+    }
+    if (ok) ok = publish_declared_aggregate_layouts(analysis)
+        && publish_interned_variant_layouts(analysis);
+    if (!ok) core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
+        CORE_STRING_STATIC("N00BB-B0012"),
+        core_string_from_cstr(failure.data ? failure.data
+            : comptime ? "could not specialize compile-time calls"
+                       : "could not specialize runtime calls"));
+    core_buffer_release(&failure);
+    return ok;
+}
+
 int
 n00bb_compiler_main(int argc, char **argv)
 {
@@ -3675,9 +3704,14 @@ n00bb_compiler_main(int argc, char **argv)
         core_free(path);
     }
     bool abi_emitted = false;
+    bool specialize = !parse_cmdr_flag_present(args,
+        CORE_STRING_STATIC("--no-specialize"));
     if (located && (build_command || compile_command
                     || (library_command && !emit_interface))) {
-        located = n00bb_execute_comptime(link, link_analysis,
+        if (specialize)
+            located = specialize_phase_calls(link, link_analysis, true,
+                                             cli_diagnostics);
+        if (located) located = n00bb_execute_comptime(link, link_analysis,
             !preprocessor_options.release_mode, native_cpu, argv[0],
             cli_diagnostics);
         if (profile_compile) {
@@ -3693,29 +3727,9 @@ n00bb_compiler_main(int argc, char **argv)
         }
     }
     if (located && build_command) {
-        if (!parse_cmdr_flag_present(args,
-                CORE_STRING_STATIC("--no-specialize"))) {
-            core_buffer_t failure = {0};
-            located = n00bb_specialize_runtime_calls(
-                &link_analysis->runtime_reachable_functions, &failure);
-            if (located) {
-                core_list_t(core_translation_unit_ptr_t) order =
-                    core_list_new(core_translation_unit_ptr_t);
-                located = n00bb_collect_initializer_order(link,
-                    "n00bb.runtime-module-initializer-order", &order)
-                    && build_phase_reachable_functions(link_analysis,
-                        &order, false, cli_diagnostics);
-                core_list_free(order);
-            }
-            if (located) located = publish_declared_aggregate_layouts(
-                link_analysis)
-                && publish_interned_variant_layouts(link_analysis);
-            if (!located) core_diagnostics_report(cli_diagnostics, nullptr,
-                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-B0012"),
-                core_string_from_cstr(failure.data ? failure.data
-                    : "could not specialize runtime calls"));
-            core_buffer_release(&failure);
-        }
+        if (specialize)
+            located = specialize_phase_calls(link, link_analysis, false,
+                                             cli_diagnostics);
         if (profile_compile) {
             double now = n00bb_profile_seconds();
             fprintf(stderr, "PROFILE specialize %.3f\n", now - profile_tick);

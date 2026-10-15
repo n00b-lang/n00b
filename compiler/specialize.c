@@ -228,7 +228,7 @@ concrete_call_signature(ir_instr_t *call, ir_func_t *target, th_ctx *types)
     return signature;
 }
 
-bool n00bb_specialize_runtime_calls(
+bool n00bb_specialize_calls(
     core_list_t(n00bb_ir_func_ptr_t) *reachable, core_buffer_t *failure)
 {
     if (!reachable) return false;

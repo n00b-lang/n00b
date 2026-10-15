@@ -4705,6 +4705,70 @@ allocation_mutator(lower_state_t *state)
     return state->mutator;
 }
 
+static LLVMValueRef
+mutator_allocation(lower_state_t *state, uint32_t type_index, uint64_t bytes,
+                   uint32_t alignment, bool finalizable)
+{
+    LLVMValueRef mutator = allocation_mutator(state);
+    if (!mutator) return nullptr;
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
+    LLVMTypeRef i1 = LLVMInt1TypeInContext(context);
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
+    LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
+    LLVMTypeRef params[] = {pointer, i32, i64, i32, i1, pointer, pointer};
+    LLVMTypeRef allocator_type = LLVMFunctionType(pointer, params, 7, false);
+    const char *name =
+        "sys.internal.gc.alloc.allocate_runtime_known_on_mutator$gc_mutator";
+    LLVMValueRef allocator = LLVMGetNamedFunction(state->module, name);
+    if (!allocator)
+        allocator = LLVMAddFunction(state->module, name, allocator_type);
+    LLVMValueRef args[] = {
+        mutator,
+        LLVMConstInt(i32, type_index, false),
+        LLVMConstInt(i64, bytes, false),
+        LLVMConstInt(i32, alignment, false),
+        LLVMConstInt(i1, finalizable, false),
+        LLVMConstNull(pointer),
+        mutator,
+    };
+    LLVMValueRef result = LLVMBuildCall2(state->builder, allocator_type,
+                                         allocator, args, 7, "storage");
+    emit_trap_if(state, LLVMBuildIsNull(state->builder, result,
+                                        "allocation.failed"));
+    return result;
+}
+
+static LLVMValueRef
+comptime_allocation(lower_state_t *state, uint32_t type_index, uint64_t bytes,
+                    uint32_t alignment)
+{
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
+    LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
+    LLVMTypeRef params[] = {i32, i32, i64, i32, pointer};
+    LLVMTypeRef allocator_type = LLVMFunctionType(pointer, params, 5, false);
+    LLVMValueRef allocator = LLVMGetNamedFunction(state->module,
+        "n00b_comptime_allocate");
+    if (!allocator) allocator = LLVMAddFunction(state->module,
+        "n00b_comptime_allocate", allocator_type);
+    if (!allocator || LLVMGlobalGetValueType(allocator) != allocator_type)
+        return nullptr;
+    LLVMValueRef args[] = {
+        LLVMConstInt(i32, N00B_ABI_ALLOCATOR_GC, false),
+        LLVMConstInt(i32, type_index, false),
+        LLVMConstInt(i64, bytes, false),
+        LLVMConstInt(i32, alignment, false),
+        LLVMConstNull(pointer),
+    };
+    LLVMValueRef result = LLVMBuildCall2(state->builder, allocator_type,
+                                         allocator, args, 5, "storage");
+    emit_trap_if(state, LLVMBuildIsNull(state->builder, result,
+                                        "allocation.failed"));
+    return result;
+}
+
 static uint32_t
 runtime_type_index(lower_state_t *state, th_type *type)
 {
@@ -7926,36 +7990,14 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                 core_buffer_release(&message);
                 return reported;
             }
-            LLVMContextRef context = LLVMGetModuleContext(state->module);
-            LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
-            LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
-            LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
-            LLVMValueRef mutator = allocation_mutator(state);
-            if (!mutator) break;
-            LLVMTypeRef i1 = LLVMInt1TypeInContext(context);
-            LLVMTypeRef params[] = {pointer, i32, i64, i32, i1,
-                                    pointer, pointer};
-            LLVMTypeRef allocator_type = LLVMFunctionType(pointer, params,
-                                                          7, false);
-            LLVMValueRef allocator = LLVMGetNamedFunction(state->module,
-                "sys.internal.gc.alloc.allocate_runtime_known_on_mutator$gc_mutator");
-            if (!allocator)
-                allocator = LLVMAddFunction(state->module,
-                    "sys.internal.gc.alloc.allocate_runtime_known_on_mutator$gc_mutator",
-                    allocator_type);
-            LLVMValueRef args[] = {
-                mutator,
-                LLVMConstInt(i32, type_index, false),
-                LLVMConstInt(i64, bytes, false),
-                LLVMConstInt(i32, layout->alignment_bytes, false),
-                LLVMConstInt(i1, binding->finalizable, false),
-                LLVMConstNull(pointer),
-                mutator,
-            };
-            result = LLVMBuildCall2(state->builder, allocator_type, allocator,
-                                    args, 7, "storage");
-            emit_trap_if(state, LLVMBuildIsNull(state->builder, result,
-                "allocation.failed"));
+            result = ir_func_execution_phase(state->function)
+                    == IR_PHASE_COMPTIME
+                ? comptime_allocation(state, type_index, bytes,
+                                      layout->alignment_bytes)
+                : mutator_allocation(state, type_index, bytes,
+                                     layout->alignment_bytes,
+                                     binding->finalizable);
+            if (!result) break;
         }
         if (result && uses_bitptr(state->function->owner,
                 instruction->dest->type)) {

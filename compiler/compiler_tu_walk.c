@@ -602,32 +602,24 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 }
             }
             else if (nt_is(grammar, node, "dict-or-set-lit")) {
-                bool dictionary = dict_only_empty_literal(grammar, node);
-                parse_tree_t *entries = child_nt(grammar, node,
-                    "dict-entries");
-                if (entries) dictionary = true;
-                if (!entries) entries = child_nt(grammar, node,
-                    "set-entries");
-                if (entries || dictionary) {
-                    th_type *entry_type = entries
-                        ? th_resolve(core_tree_node_value(entries).type)
-                        : nullptr;
-                    const th_arg *first = entry_type
-                        ? th_named_arg(entry_type, 0) : nullptr;
-                    const th_arg *second = entry_type && dictionary
-                        ? th_named_arg(entry_type, 1) : nullptr;
+                bool entries = child_nt(grammar, node, "dict-entries")
+                    || child_nt(grammar, node, "set-entries");
+                if (entries && !infer_user_literal_type(grammar, node,
+                                                        state)) {
+                    core_diagnostics_report_at(
+                        core_translation_unit_diagnostics(unit), unit,
+                        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0010"),
+                        CORE_STRING_STATIC("could not infer the brace literal element types"),
+                        link_source_location(node));
+                    return;
+                }
+                if (!entries && dict_only_empty_literal(grammar, node)) {
                     th_arg args[] = {
-                        {.kind = TH_ARG_TYPE, .type = first
-                            && first->kind == TH_ARG_TYPE ? first->type
-                            : th_var(state->types)},
-                        {.kind = TH_ARG_TYPE, .type = second
-                            && second->kind == TH_ARG_TYPE ? second->type
-                            : th_var(state->types)},
+                        {.kind = TH_ARG_TYPE, .type = th_var(state->types)},
+                        {.kind = TH_ARG_TYPE, .type = th_var(state->types)},
                     };
-                    default_type = th_apply(state->types, dictionary
-                        ? "builtin.containers.dict.Dict"
-                        : "builtin.containers.set.Set", args,
-                        dictionary ? 2 : 1);
+                    default_type = th_apply(state->types,
+                        "builtin.containers.dict.Dict", args, 2);
                 }
             }
             if (default_type) {

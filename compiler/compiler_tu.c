@@ -1915,6 +1915,10 @@ infer_user_literal_type(parse_grammar_t *grammar, parse_tree_t *node,
     core_string_t modifier = literal_modifier(grammar, node);
     if (!modifier.data && sequence)
         modifier = CORE_STRING_STATIC("list");
+    else if (!modifier.data && dict_entries)
+        modifier = CORE_STRING_STATIC("dict");
+    else if (!modifier.data && set_entries)
+        modifier = CORE_STRING_STATIC("set");
     core_string_t kind = sequence ? CORE_STRING_STATIC("array")
         : core_string_eq(scalar_kind, CORE_STRING_STATIC("STRING_LIT"))
             ? CORE_STRING_STATIC("quotes")

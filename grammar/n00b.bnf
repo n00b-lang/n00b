@@ -615,7 +615,7 @@
 <list-lit> @emit("sequence_literal") @infer("`t") @nospace($1) @nospace($2) ::= %"[" <list-elems> %"]"
 <list-lit> @emit("sequence_literal") @infer("`t") @constrain($0, Bracket_Literal) @nospace ::= %"[" %"]"
 
-<list-elems> @infer("list[$*]") ::= <expression> (%"," <expression>)* %","?
+<list-elems> ::= <expression> (%"," <expression>)* %","?
 
 # Empty braces introduce a type variable with an implicit literal-shape trait.
 # Context and literal modifiers solve that shape; they are not an untyped
@@ -628,15 +628,15 @@
        %"{" %":" %"}"
 <dict-or-set-lit> @emit("brace_literal") @infer("`t") @constrain($0, Brace_Literal) ::= %"{" %"}"
 
-<dict-entries> @infer("$0 unify $1") ::= <dict-entry> %"," <dict-entries>
-<dict-entries>                       ::= <dict-entry>
-<dict-entries>                       ::= <dict-entry> %","
+<dict-entries> ::= <dict-entry> %"," <dict-entries>
+<dict-entries> ::= <dict-entry>
+<dict-entries> ::= <dict-entry> %","
 
-<dict-entry> @infer("dict[$0, $1]") ::= <expression> %":" <expression>
+<dict-entry> ::= <expression> %":" <expression>
 
-<set-entries> @infer("set[$0] unify $1") ::= <expression> %"," <set-entries>
-<set-entries> @infer("set[$0]")          ::= <expression>
-<set-entries> @infer("set[$0]")          ::= <expression> %","
+<set-entries> ::= <expression> %"," <set-entries>
+<set-entries> ::= <expression>
+<set-entries> ::= <expression> %","
 
 <tuple-or-paren> @infer("`t") @nospace($1) @nospace($2) @nospace($4) ::= %"(" <expression> %"," <expr-comma-list> %")"
 <tuple-or-paren> @infer("$1") @nospace ::= %"(" <expression> %")"
