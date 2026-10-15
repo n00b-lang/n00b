@@ -1,5 +1,6 @@
 #include "compiler_tu.h"
 #include "enum_value.h"
+#include "ir/typelang.h"
 
 bool
 n00bb_builtin_reference_function(parse_sym_entry_t *symbol)
@@ -91,6 +92,25 @@ register_builtin_comparison_symbols(parse_symtab_t *symtab,
 }
 
 static bool
+register_native_signature(parse_symtab_t *symtab, th_ctx *types,
+                          th_type *nil_type, core_string_t name,
+                          const char *native_name, th_type *signature)
+{
+    th_type *contract = signature
+        ? th_env_signature_contract(types, signature, nil_type) : nullptr;
+    parse_sym_entry_t *symbol = contract ? parse_symtab_add(symtab,
+        CORE_STRING_STATIC("builtin"), name, PARSE_SYM_FUNCTION, nullptr)
+        : nullptr;
+    if (!symbol || !parse_sym_set_binding(symbol,
+            CORE_STRING_STATIC("n00bb.abi.native"),
+            (void *)native_name)) return false;
+    symbol->type = signature;
+    symbol->error_type = nil_type;
+    symbol->callable_contract = contract;
+    return true;
+}
+
+static bool
 register_builtin_native_function(parse_symtab_t *symtab, th_ctx *types,
                                  th_type *nil_type, const char *name,
                                  const char *native_name, th_type *result,
@@ -110,17 +130,27 @@ register_builtin_native_function(parse_symtab_t *symtab, th_ctx *types,
         ? th_func_with_error(types, result, nil_type, parameters,
                              count, nullptr, nullptr, 0) : nullptr;
     core_free(parameters);
-    th_type *contract = signature
-        ? th_env_signature_contract(types, signature, nil_type) : nullptr;
-    parse_sym_entry_t *symbol = contract ? parse_symtab_add(symtab,
-        CORE_STRING_STATIC("builtin"), core_string_from_cstr(name),
-        PARSE_SYM_FUNCTION, nullptr) : nullptr;
-    if (!symbol || !parse_sym_set_binding(symbol,
-            CORE_STRING_STATIC("n00bb.abi.native"),
-            (void *)native_name)) return false;
-    symbol->type = signature;
-    symbol->error_type = nil_type;
-    symbol->callable_contract = contract;
+    return register_native_signature(symtab, types, nil_type,
+        core_string_from_cstr(name), native_name, signature);
+}
+
+bool
+register_native_declarations(parse_annot_result_t *annotations, th_ctx *types,
+                             n00bb_native_declarations_t natives)
+{
+    parse_symtab_t *symtab = annotations ? annotations->symtab : nullptr;
+    th_type *nil_type = types ? th_name(types, "nil") : nullptr;
+    if (!symtab || !nil_type) return false;
+    for (size_t i = 0; i < natives.count; i++) {
+        th_type *failure = nullptr;
+        char *error = nullptr;
+        th_type *signature = ir_typelang_parse_function(types,
+            natives.items[i].signature.data, &failure, &error);
+        free(error);
+        if (!register_native_signature(symtab, types, nil_type,
+                natives.items[i].name, natives.items[i].symbol.data,
+                signature)) return false;
+    }
     return true;
 }
 

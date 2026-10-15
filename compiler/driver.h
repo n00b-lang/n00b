@@ -1,6 +1,7 @@
 #pragma once
 
 #include "lib/module.h"
+#include "compiler_module_literal.h"
 
 typedef struct n00bb_resolver_t n00bb_resolver_t;
 
@@ -14,7 +15,10 @@ bool n00bb_operand_module_spec(const char *operand,
 bool n00bb_resolver_add_generated(n00bb_resolver_t *resolver,
                                   core_string_t identifier,
                                   core_string_t text,
-                                  const core_translation_unit_t *owner);
+                                  const core_translation_unit_t *owner,
+                                  n00bb_native_declarations_t natives);
+n00bb_native_declarations_t n00bb_source_natives(
+    const core_translation_unit_t *unit);
 core_module_resolve_status_t n00bb_locate_operand(
     n00bb_resolver_t *resolver, const char *operand,
     core_module_spec_t *module_out, core_source_file_t *source_out);

@@ -16,6 +16,7 @@
 #include "scanner/token_stream.h"
 #include "ir/libir.h"
 #include "th/environment.h"
+#include "compiler_module_literal.h"
 #include "signature_typevars.h"
 
 #define N00BB_PARAMETER_FACTS_KEY \
@@ -722,6 +723,9 @@ th_type *type_argument_pack(parse_grammar_t *grammar, th_ctx *types,
 th_type *function_parameter_pack(parse_grammar_t *grammar, th_ctx *types,
                                  parse_tree_t *node);
 th_type *n00bb_array_index_type(th_ctx *types, core_arena_t *arena);
+bool register_native_declarations(parse_annot_result_t *annotations,
+                                  th_ctx *types,
+                                  n00bb_native_declarations_t natives);
 bool register_builtin_symbols(parse_annot_result_t *annotations,
                               n00bb_tu_state_t *state, th_ctx *types);
 bool register_builtin_traits(th_env *environment, th_ctx *types,

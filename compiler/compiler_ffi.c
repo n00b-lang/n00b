@@ -201,8 +201,31 @@ ends_with(core_string_t text, const char *suffix)
 }
 
 static bool
-generate_locked(n00bb_ffi_t *ffi, core_translation_unit_t *unit, core_string_t name, n00bb_literal_origin_t origin,
-                core_string_t text, core_buffer_t *source)
+keep_externs(const writ_n00b_externs_t *externs, n00bb_native_declarations_t *natives)
+{
+    *natives = (n00bb_native_declarations_t){0};
+    if (!externs->count) {
+        return true;
+    }
+    natives->items = core_alloc_array(n00bb_native_declaration_t, externs->count);
+    if (!natives->items) {
+        return false;
+    }
+    for (size_t i = 0; i < externs->count; i++) {
+        natives->items[i] = (n00bb_native_declaration_t){
+            .name      = core_string_dup(as_core(externs->items[i].name)),
+            .symbol    = core_string_dup(as_core(externs->items[i].symbol)),
+            .signature = core_string_dup(as_core(externs->items[i].signature)),
+        };
+    }
+    natives->count = externs->count;
+    return true;
+}
+
+static bool
+generate_locked(n00bb_ffi_t *ffi, core_translation_unit_t *unit, core_string_t name, core_string_t module,
+                n00bb_literal_origin_t origin, core_string_t text, core_buffer_t *source,
+                n00bb_native_declarations_t *natives)
 {
     size_t first = writ_diag_count(ffi->session);
     writ_unit_t *literal = writ_unit_new(ffi->session);
@@ -230,9 +253,11 @@ generate_locked(n00bb_ffi_t *ffi, core_translation_unit_t *unit, core_string_t n
         core_buffer_printf(&prefix, "n00b_ffi_%zu", ffi->literals++);
         writ_gen_n00b_request_t request = {.struct_size = sizeof(request), .binding = binding,
                                            .module_name = as_writ(name),
-                                           .shim_prefix = (writ_str_t){prefix.data, prefix.byte_len}};
+                                           .shim_prefix = (writ_str_t){prefix.data, prefix.byte_len},
+                                           .type_namespace = as_writ(module)};
         writ_output_t output = {capture_file, &capture};
-        ok = writ_gen_n00b(&request, &output, &links) == WRIT_OK;
+        writ_n00b_externs_t externs = {0};
+        ok = writ_gen_n00b(&request, &output, &links, &externs) == WRIT_OK && keep_externs(&externs, natives);
         core_buffer_release(&prefix);
     }
     for (size_t i = 0; ok && i < capture.files.len; i++) {
@@ -281,18 +306,19 @@ add_package_contracts(n00bb_ffi_t *ffi, core_translation_unit_t *unit)
 }
 
 bool
-n00bb_ffi_generate(void *context, core_translation_unit_t *unit, core_string_t name, n00bb_literal_origin_t origin,
-                   core_string_t text, core_buffer_t *source)
+n00bb_ffi_generate(void *context, core_translation_unit_t *unit, core_string_t name, core_string_t module,
+                   n00bb_literal_origin_t origin, core_string_t text, core_buffer_t *source,
+                   n00bb_native_declarations_t *natives)
 {
     n00bb_ffi_t *ffi = context;
-    if (!ffi || !unit || !source) {
+    if (!ffi || !unit || !source || !natives) {
         return false;
     }
     pthread_mutex_lock(&ffi->lock);
     bool ok = open_session(ffi);
     if (ok) {
         add_package_contracts(ffi, unit);
-        ok = generate_locked(ffi, unit, name, origin, text, source);
+        ok = generate_locked(ffi, unit, name, module, origin, text, source, natives);
     }
     pthread_mutex_unlock(&ffi->lock);
     return ok;

@@ -4,6 +4,7 @@
 
 #include "compiler_tu.h"
 #include "compiler_link.h"
+#include "driver.h"
 #include "signature_typevars.h"
 #include "storage_selection.h"
 #include "enum_value.h"
@@ -4811,7 +4812,10 @@ prepare_initial_symbols(core_translation_unit_t *unit, th_ctx *types)
                                      state)) return false;
     parse_annot_result_set_type_node_resolver(state->annotations,
         n00bb_resolve_type_node, unit);
-    if (!register_builtin_symbols(state->annotations, state, types)) return false;
+    if (!register_builtin_symbols(state->annotations, state, types)
+        || !register_native_declarations(state->annotations, types,
+                                         n00bb_source_natives(unit)))
+        return false;
     parse_annot_result_set_diagnostics(state->annotations,
         core_translation_unit_diagnostics(unit), unit);
     parse_annot_result_set_node_callback(state->annotations,

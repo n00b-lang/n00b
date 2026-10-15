@@ -13,7 +13,8 @@ n00bb_ffi_t     *n00bb_ffi_new(void);
 void             n00bb_ffi_free(n00bb_ffi_t *ffi);
 bool             n00bb_ffi_add_contract_dir(n00bb_ffi_t *ffi, core_string_t dir);
 bool             n00bb_ffi_generate(void *ffi, core_translation_unit_t *unit, core_string_t name,
-                                    n00bb_literal_origin_t origin, core_string_t text, core_buffer_t *source);
+                                    core_string_t module, n00bb_literal_origin_t origin, core_string_t text,
+                                    core_buffer_t *source, n00bb_native_declarations_t *natives);
 size_t           n00bb_ffi_input_count(const n00bb_ffi_t *ffi);
 core_string_t    n00bb_ffi_input_at(const n00bb_ffi_t *ffi, size_t index);
 size_t           n00bb_ffi_shim_count(const n00bb_ffi_t *ffi);

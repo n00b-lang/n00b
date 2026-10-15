@@ -14,9 +14,23 @@ typedef struct {
     uint64_t      byte;
 } n00bb_literal_origin_t;
 
+typedef struct {
+    core_string_t name;
+    core_string_t symbol;
+    core_string_t signature;
+} n00bb_native_declaration_t;
+
+typedef struct {
+    n00bb_native_declaration_t *items;
+    size_t                      count;
+} n00bb_native_declarations_t;
+
+void n00bb_native_declarations_release(n00bb_native_declarations_t *declarations);
+
 typedef bool (*n00bb_module_generator_fn)(void *context, core_translation_unit_t *unit, core_string_t name,
-                                          n00bb_literal_origin_t origin, core_string_t text,
-                                          core_buffer_t *source);
+                                          core_string_t module, n00bb_literal_origin_t origin,
+                                          core_string_t text, core_buffer_t *source,
+                                          n00bb_native_declarations_t *natives);
 
 typedef struct {
     core_string_t             modifier;

@@ -1911,12 +1911,6 @@ load_module_literal(void *opaque, parse_grammar_t *grammar,
     const char *contents = core_source_file_contents(&importer->source);
     core_string_t text = core_string_borrow(contents + token->content_start_byte,
         token->content_end_byte - token->content_start_byte);
-    core_buffer_t source = {0};
-    if (!generator->generate(generator->context, importer, name,
-            literal_origin(importer, token), text, &source)) {
-        core_buffer_release(&source);
-        return false;
-    }
     core_string_t importer_id = importer->module.identifier;
     size_t leaf = importer_id.u8_bytes;
     while (leaf && importer_id.data[leaf - 1] != '.') leaf--;
@@ -1926,10 +1920,19 @@ load_module_literal(void *opaque, parse_grammar_t *grammar,
         (int)(importer_id.u8_bytes - leaf), importer_id.data + leaf,
         (int)name.u8_bytes, name.data);
     core_string_t id = core_string_borrow(identifier.data, identifier.byte_len);
+    core_buffer_t source = {0};
+    n00bb_native_declarations_t natives = {0};
+    if (!generator->generate(generator->context, importer, name, id,
+            literal_origin(importer, token), text, &source, &natives)) {
+        n00bb_native_declarations_release(&natives);
+        core_buffer_release(&source);
+        core_buffer_release(&identifier);
+        return false;
+    }
     core_module_spec_t module = {0};
     bool ok = n00bb_resolver_add_generated(driver->resolver, id,
                   core_string_borrow(source.data ? source.data : "", source.byte_len),
-                  importer)
+                  importer, natives)
         && core_module_spec_init(&module, id)
         && load_import_module(driver, grammar, literal, importer, &module,
                identifier.data, nullptr, module_out, tree_out)

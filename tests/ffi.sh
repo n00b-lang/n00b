@@ -39,6 +39,7 @@ builds_and_runs constants
 builds_and_runs use_path
 builds_and_runs use_search
 builds_and_runs package_contracts
+builds_and_runs raw_extern
 
 for marker in marker-literal-5be1 marker-contract-5be1; do
     for binary in constants use_path use_search; do
@@ -50,6 +51,7 @@ for marker in marker-literal-5be1 marker-contract-5be1; do
 done
 
 fails_with missing 'is not on the contract search path'
+fails_with extern_hidden "has no visible function named '__abs_raw'"
 fails_with malformed 'malformed.n00b:5:30'
 fails_with binding_error 'binding_error.n00b:5:5'
 grep -q 'E0501' "$tmp/binding_error.log"

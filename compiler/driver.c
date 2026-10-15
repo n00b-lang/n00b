@@ -43,6 +43,7 @@ typedef struct {
     core_string_t package_id;
     core_string_t package_namespace;
     bool is_default_package;
+    n00bb_native_declarations_t natives;
 } n00bb_source_origin_t;
 
 typedef struct {
@@ -59,6 +60,7 @@ typedef struct {
     core_string_t package;
     core_string_t package_namespace;
     bool is_default_package;
+    n00bb_native_declarations_t natives;
 } n00bb_generated_module_t;
 core_list_decl(n00bb_generated_module_t);
 
@@ -423,6 +425,7 @@ n00bb_resolver_free(n00bb_resolver_t *resolver)
         core_free(resolver->generated.data[i].text.data);
         core_free(resolver->generated.data[i].package.data);
         core_free(resolver->generated.data[i].package_namespace.data);
+        n00bb_native_declarations_release(&resolver->generated.data[i].natives);
     }
     core_list_free(resolver->generated);
     pthread_mutex_destroy(&resolver->generated_lock);
@@ -431,11 +434,15 @@ n00bb_resolver_free(n00bb_resolver_t *resolver)
 
 bool
 n00bb_resolver_add_generated(n00bb_resolver_t *resolver, core_string_t identifier, core_string_t text,
-                             const core_translation_unit_t *owner)
+                             const core_translation_unit_t *owner,
+                             n00bb_native_declarations_t natives)
 {
     const n00bb_source_origin_t *origin = owner
         ? core_source_file_user_data(&owner->source) : nullptr;
-    if (!resolver || !identifier.u8_bytes || !origin) return false;
+    if (!resolver || !identifier.u8_bytes || !origin) {
+        n00bb_native_declarations_release(&natives);
+        return false;
+    }
     pthread_mutex_lock(&resolver->generated_lock);
     core_list_push(resolver->generated, ((n00bb_generated_module_t){
         .identifier = core_string_dup(identifier),
@@ -443,9 +450,31 @@ n00bb_resolver_add_generated(n00bb_resolver_t *resolver, core_string_t identifie
         .package = core_string_dup(origin->package_id),
         .package_namespace = core_string_dup(origin->package_namespace),
         .is_default_package = origin->is_default_package,
+        .natives = natives,
     }));
     pthread_mutex_unlock(&resolver->generated_lock);
     return true;
+}
+
+void
+n00bb_native_declarations_release(n00bb_native_declarations_t *declarations)
+{
+    if (!declarations) return;
+    for (size_t i = 0; i < declarations->count; i++) {
+        core_free(declarations->items[i].name.data);
+        core_free(declarations->items[i].symbol.data);
+        core_free(declarations->items[i].signature.data);
+    }
+    core_free(declarations->items);
+    *declarations = (n00bb_native_declarations_t){0};
+}
+
+n00bb_native_declarations_t
+n00bb_source_natives(const core_translation_unit_t *unit)
+{
+    const n00bb_source_origin_t *origin = unit
+        ? core_source_file_user_data(&unit->source) : nullptr;
+    return origin ? origin->natives : (n00bb_native_declarations_t){0};
 }
 
 static core_module_resolve_status_t
@@ -464,6 +493,9 @@ read_generated_source(n00bb_resolver_t *resolver, const char *operand, core_sour
         core_buffer_release(&path);
         if (ok) set_source_origin(source_out, module->package, module->package_namespace,
                                   module->is_default_package);
+        n00bb_source_origin_t *origin = ok
+            ? (n00bb_source_origin_t *)core_source_file_user_data(source_out) : nullptr;
+        if (origin) origin->natives = module->natives;
         status = ok ? CORE_MODULE_RESOLVED : CORE_MODULE_RESOLVE_ERROR;
         break;
     }
