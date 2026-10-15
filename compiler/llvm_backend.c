@@ -5539,6 +5539,40 @@ variant_store_tag(lower_state_t *state, LLVMValueRef storage,
 }
 
 static LLVMValueRef
+checked_array_index(lower_state_t *state, LLVMValueRef index,
+                    LLVMValueRef limit, bool signed_index,
+                    bool check_bounds)
+{
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    if (!index || !limit
+        || LLVMGetTypeKind(LLVMTypeOf(index)) != LLVMIntegerTypeKind
+        || LLVMTypeOf(limit) != LLVMInt64TypeInContext(context))
+        return nullptr;
+    unsigned width = LLVMGetIntTypeWidth(LLVMTypeOf(index));
+    LLVMTypeRef arithmetic = LLVMIntTypeInContext(context,
+        width > 64 ? width : 64);
+    LLVMValueRef position = LLVMBuildIntCast2(state->builder, index,
+        arithmetic, signed_index, "index.extended");
+    LLVMValueRef bound = arithmetic == LLVMTypeOf(limit) ? limit
+        : LLVMBuildZExt(state->builder, limit, arithmetic,
+            "array.length.extended");
+    if (signed_index) {
+        LLVMValueRef negative = LLVMBuildICmp(state->builder, LLVMIntSLT,
+            position, LLVMConstNull(arithmetic), "index.negative");
+        LLVMValueRef from_end = LLVMBuildAdd(state->builder, position,
+            bound, "index.from.end");
+        position = LLVMBuildSelect(state->builder, negative, from_end,
+            position, "index.position");
+    }
+    if (check_bounds) {
+        LLVMValueRef invalid = LLVMBuildICmp(state->builder, LLVMIntUGE,
+            position, bound, "index.out.of.bounds");
+        emit_trap_if(state, invalid);
+    }
+    return position;
+}
+
+static LLVMValueRef
 native_array_slot(lower_state_t *state, LLVMValueRef array_address,
                   LLVMValueRef index, LLVMTypeRef array_type,
                   LLVMTypeRef element_type, bool signed_index)
@@ -5556,18 +5590,9 @@ native_array_slot(lower_state_t *state, LLVMValueRef array_address,
         "array.length.address");
     LLVMValueRef length = LLVMBuildLoad2(state->builder, i64,
         length_address, "array.length");
-    LLVMValueRef position = LLVMBuildIntCast2(state->builder, index, i64,
-        signed_index, "array.index");
-    if (signed_index) {
-        LLVMValueRef negative = LLVMBuildICmp(state->builder, LLVMIntSLT,
-            position, LLVMConstNull(i64), "array.index.negative");
-        LLVMValueRef from_end = LLVMBuildAdd(state->builder, position,
-            length, "array.index.from.end");
-        position = LLVMBuildSelect(state->builder, negative, from_end,
-            position, "array.index.position");
-    }
-    emit_trap_if(state, LLVMBuildICmp(state->builder, LLVMIntUGE,
-        position, length, "array.index.out.of.bounds"));
+    LLVMValueRef position = checked_array_index(state, index, length,
+        signed_index, true);
+    if (!position) return nullptr;
     return LLVMBuildInBoundsGEP2(state->builder, element_type, data,
         &position, 1, "array.element.address");
 }
@@ -6681,30 +6706,14 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                 "array.flat.rank");
             array = native_element;
         }
-        unsigned width = LLVMGetIntTypeWidth(LLVMTypeOf(index));
-        LLVMTypeRef arithmetic = LLVMIntTypeInContext(context,
-            width > 64 ? width : 64);
         bool signed_index = ir_machine_of(state->function->owner,
             operands[1].value->type).class == IR_CLASS_SINT;
-        LLVMValueRef position = LLVMBuildIntCast2(state->builder, index,
-            arithmetic, signed_index, "index.extended");
-        limit = inline_array ? LLVMConstInt(arithmetic, extent, false)
-            : LLVMTypeOf(limit) == arithmetic ? limit
-            : LLVMBuildZExt(state->builder, limit, arithmetic,
-                "array.length.extended");
-        if (signed_index) {
-            LLVMValueRef negative = LLVMBuildICmp(state->builder, LLVMIntSLT,
-                position, LLVMConstNull(arithmetic), "index.negative");
-            LLVMValueRef from_end = LLVMBuildAdd(state->builder, position,
-                limit, "index.from.end");
-            position = LLVMBuildSelect(state->builder, negative, from_end,
-                position, "index.position");
-        }
-        if (!ir_index_proven(state->index_proofs, instruction)) {
-            LLVMValueRef invalid = LLVMBuildICmp(state->builder, LLVMIntUGE,
-                position, limit, "index.out.of.bounds");
-            emit_trap_if(state, invalid);
-        }
+        limit = inline_array ? LLVMConstInt(
+            LLVMInt64TypeInContext(context), extent, false) : limit;
+        LLVMValueRef position = checked_array_index(state, index, limit,
+            signed_index, !ir_index_proven(state->index_proofs, instruction));
+        if (!position) break;
+        LLVMTypeRef arithmetic = LLVMTypeOf(position);
         if (inline_array) {
             LLVMValueRef indices[] = {
                 LLVMConstInt(arithmetic, 0, false), position,
