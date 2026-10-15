@@ -8,17 +8,27 @@ type Ffi_Bytes layout(c) {
 type Ffi_Callback_Entry {
     value: Any?
     invoke: Ref[(Any, uint, uint) -> nil]?
+    once: bool
+}
+
+type Ffi_Callback_Hold {
+    handle: u64
+    event: string
+    keys: Array[u64]
+    thread_id: uint
 }
 
 var ffi_callbacks: List[Ffi_Callback_Entry] = new[List[Ffi_Callback_Entry]]()
 var ffi_free_callbacks: List[int] = new[List[int]]()
+var ffi_holds: List[Ffi_Callback_Hold] = new[List[Ffi_Callback_Hold]]()
 
 litmod<fence> ffi(source: string) -> nil fail: string {
     fail "an 'ffi literal is bound by the compiler"
 }
 
-func __ffi_callback_register(value: Any, invoke: Ref[(Any, uint, uint) -> nil]) -> u64 {
-    let entry: Ffi_Callback_Entry = (value = value, invoke = invoke)
+func __ffi_callback_register(value: Any, invoke: Ref[(Any, uint, uint) -> nil],
+                             once: bool) -> u64 {
+    let entry: Ffi_Callback_Entry = (value = value, invoke = invoke, once = once)
     let reused = ffi_free_callbacks.pop()
     if reused != nil {
         let index = reused.get()
@@ -38,9 +48,52 @@ func __ffi_callback_free(handle: u64) {
     if entry.value == nil {
         return
     }
-    let empty: Ffi_Callback_Entry = (value = nil, invoke = nil)
+    let empty: Ffi_Callback_Entry = (value = nil, invoke = nil, once = false)
     ffi_callbacks[index] = empty
     ffi_free_callbacks.append(index)
+    var kept: List[Ffi_Callback_Hold] = new[List[Ffi_Callback_Hold]]()
+    var position = 0
+    while position < cast[int]ffi_holds.len() {
+        let hold = ffi_holds[position]
+        if hold.handle != handle {
+            kept.append(hold)
+        }
+        position += 1
+    }
+    ffi_holds = kept
+}
+
+func __ffi_callback_hold(handle: u64, event: string, keys: Array[u64], thread_id: uint) {
+    let hold: Ffi_Callback_Hold = (handle = handle, event = event, keys = keys,
+                                   thread_id = thread_id)
+    ffi_holds.append(hold)
+}
+
+func ffi_keys_match(expected: Array[u64], actual: Array[u64]) -> bool {
+    if __array_length(expected) > __array_length(actual) {
+        return false
+    }
+    var position: uint = 0
+    while position < __array_length(expected) {
+        if expected[cast[int]position] != actual[cast[int]position] {
+            return false
+        }
+        position += 1
+    }
+    return true
+}
+
+func __ffi_callback_event(event: string, keys: Array[u64], thread_id: uint) {
+    var position = 0
+    while position < cast[int]ffi_holds.len() {
+        let hold = ffi_holds[position]
+        if hold.event == event and (hold.thread_id == 0 or hold.thread_id == thread_id) and ffi_keys_match(hold.keys, keys) {
+            __ffi_callback_free(hold.handle)
+            position = 0
+        } else {
+            position += 1
+        }
+    }
 }
 
 func __ffi_dispatch(handle: u64, arguments: uint, result: uint) -> i32 {
@@ -54,5 +107,8 @@ func __ffi_dispatch(handle: u64, arguments: uint, result: uint) -> i32 {
     }
     let invoke: Ref[(Any, uint, uint) -> nil] = entry.invoke.get()
     invoke.call(entry.value.get(), arguments, result)
+    if entry.once {
+        __ffi_callback_free(handle)
+    }
     return 0
 }

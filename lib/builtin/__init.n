@@ -16,6 +16,8 @@ package builtin {
     export ffi.ffi
     export ffi.__ffi_callback_register
     export ffi.__ffi_callback_free
+    export ffi.__ffi_callback_hold
+    export ffi.__ffi_callback_event
     export panic.panic
     export containers.list.List
     export containers.list.list
