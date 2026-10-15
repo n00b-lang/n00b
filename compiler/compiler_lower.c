@@ -15532,7 +15532,8 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
     for (size_t i = 0; i < units->len; i++) {
         core_translation_unit_t *unit = units->data[i];
         n00bb_tu_state_t *state = tu_state(unit);
-        if (!state || !state->annotation_root)
+        parse_tree_t *tree = n00bb_tu_parsed_tree(state);
+        if (!tree || !state->semantic_annotation_complete)
             return ir_initialization_error(unit, "N00BB-L0024",
                 "translation unit has no annotated tree for Lantern IR");
         state->ir_module = ir_module_new(ir_context,
@@ -15555,7 +15556,7 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
             int32_t file_id = ir_file_add(modules[m], path.data);
             ir_module_set_span(modules[m], ir_span_make(file_id, 0,
                 (uint32_t)core_source_file_size(&unit->source), 1, 1, 1, 1));
-            ir_module_set_tree(modules[m], grammar, state->annotation_root);
+            ir_module_set_tree(modules[m], grammar, tree);
         }
     }
 
@@ -16769,9 +16770,10 @@ lower_ordered_array_bound_expressions(
     for (size_t i = 0; i < order->len; i++) {
         core_translation_unit_t *unit = order->data[i];
         n00bb_tu_state_t *state = tu_state(unit);
-        if (!state || !state->annotation_root
+        parse_tree_t *tree = n00bb_tu_parsed_tree(state);
+        if (!tree
             || !lower_array_bound_expressions(lowerer, grammar,
-                state->annotation_root, unit, ir_context, units, analysis))
+                tree, unit, ir_context, units, analysis))
             return false;
     }
     return true;
@@ -17475,7 +17477,8 @@ lower_module_initializer(ir_lowerer_t *lowerer,
 {
     n00bb_tu_state_t *state = tu_state(unit);
     ir_module_t *module = module_for_phase(state, comptime);
-    if (!state || !module || !state->annotation_root) return false;
+    parse_tree_t *tree = n00bb_tu_parsed_tree(state);
+    if (!module || !tree) return false;
     if (comptime && !roots->len) return true;
     const char *name = comptime ? "__n00bb_comptime_init"
                                 : "__n00bb_runtime_init";
@@ -17518,7 +17521,7 @@ lower_module_initializer(ir_lowerer_t *lowerer,
     core_list_t(parse_sym_entry_ptr_t) parameters =
         core_list_new(parse_sym_entry_ptr_t);
     bool ok = lower_ir_body(lowerer, grammar, unit, &symbol,
-        state->annotation_root, function, &parameters, roots, nullptr,
+        tree, function, &parameters, roots, nullptr,
         false, comptime, nullptr, ir_context, units, nullptr, nullptr);
     core_list_free(parameters);
     return ok;
@@ -18758,8 +18761,10 @@ lower_ordered_module_initializers(
             core_list_new(n00bb_tree_ptr_t);
         core_list_t(n00bb_tree_ptr_t) comptime_roots =
             core_list_new(n00bb_tree_ptr_t);
+        n00bb_tu_state_t *state = tu_state(unit);
+        parse_tree_t *tree = n00bb_tu_parsed_tree(state);
         bool collected = collect_module_initializer_roots(grammar, unit,
-            tu_state(unit)->annotation_root,
+            tree,
             &runtime_roots, &comptime_roots);
         core_list_t(n00bb_tree_ptr_t) *roots = comptime
             ? &comptime_roots : &runtime_roots;

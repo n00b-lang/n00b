@@ -99,19 +99,8 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             grammar, unit, node, parent))
         return;
     if (entering) n00bb_range_enter_node(grammar, state, node, parent);
-    if (!state->annotation_root) state->annotation_root = node;
     bool invalid_field_access = !entering
         && check_local_record_field_reference(grammar, unit, node);
-    if (!entering && nt_is(grammar, node, "export-stmt")
-        && !cache_package_export_syntax(grammar, unit, node)) {
-        core_diagnostics_report_at(
-            core_translation_unit_diagnostics(unit), unit,
-            CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-M0003"),
-            CORE_STRING_STATIC("invalid or conflicting package export"),
-            link_source_location(node));
-        return;
-    }
-
     bool variant_payload = !entering
         && prepare_variant_payload_type(grammar, unit, node);
     parse_node_resolution_t member_resolution = parse_tree_resolution(node);
@@ -1011,7 +1000,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         record_reference_facts(grammar, unit, node);
     }
 
-    if (!entering && node == state->annotation_root) {
+    if (!entering && node == n00bb_tu_parsed_tree(state)) {
         for (parse_scope_t *scope = state->annotations->symtab->all_scopes;
              scope; scope = scope->all_next) {
             for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;

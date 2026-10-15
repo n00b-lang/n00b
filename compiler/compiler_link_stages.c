@@ -162,7 +162,7 @@ n00bb_link_stage_semantics(core_link_unit_t *link, uint32_t stage_kind,
     }
     for (size_t i = 0; i < units->len; i++) {
         n00bb_tu_state_t *state = tu_state(units->data[i]);
-        if (!state || !state->annotation_root) {
+        if (!state || !state->semantic_annotation_complete) {
             th_env_free(environment);
             return CORE_LINK_STAGE_RESULT_FAILED;
         }

@@ -9360,7 +9360,8 @@ void
 finalize_module_inference(core_translation_unit_t *unit)
 {
     n00bb_tu_state_t *state = tu_state(unit);
-    if (!state || state->inference_finalized || !state->annotation_root
+    if (!state || state->inference_finalized
+        || !state->semantic_annotation_complete
         || !state->annotations || !state->types) return;
 
     parse_annot_resolve_undefined(state->annotations);

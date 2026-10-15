@@ -452,7 +452,6 @@ typedef struct {
     core_translation_unit_t *unit;
     n00bb_lex_result_t *lex;
     parse_annot_result_t *annotations;
-    parse_tree_t *annotation_root;
     core_list_t(parse_tree_ptr_t) module_top_level_statements;
     core_list_t(parse_tree_ptr_t) array_type_nodes;
     core_list_t(parse_tree_ptr_t) selected_when_bodies;
@@ -482,6 +481,12 @@ typedef struct {
     bool semantic_annotation_started;
     bool semantic_annotation_complete;
 } n00bb_tu_state_t;
+static inline parse_tree_t *
+n00bb_tu_parsed_tree(const n00bb_tu_state_t *state)
+{
+    return state && state->lex && state->lex->parser
+        ? parse_pwz_get_tree(state->lex->parser) : nullptr;
+}
 bool reference_is_simple_assignment_target(parse_grammar_t *grammar,
                                            core_translation_unit_t *unit,
                                            parse_tree_t *node,
