@@ -1111,23 +1111,6 @@ enum Find_All {
     FIND_ALL_CLASS_PLUS = 8
 }
 
-const STATUS_OK: Status = 0
-const STATUS_NONE: Status = 1
-const STATUS_ERROR: Status = 2
-const STATUS_PANIC: Status = 3
-const UNICODE_MODE_ASCII: Unicode_Mode = 0
-const UNICODE_MODE_DEFAULT: Unicode_Mode = 1
-const UNICODE_MODE_FULL: Unicode_Mode = 2
-const UNICODE_MODE_JAVASCRIPT: Unicode_Mode = 3
-const FIND_ALL_EMPTY_LANG: Find_All = 0
-const FIND_ALL_ANCHORED: Find_All = 1
-const FIND_ALL_END_ANCHORED: Find_All = 2
-const FIND_ALL_HARDENED: Find_All = 3
-const FIND_ALL_FWD_PREFIX: Find_All = 4
-const FIND_ALL_FWD_LB_PREFIX: Find_All = 5
-const FIND_ALL_BOUNDED: Find_All = 6
-const FIND_ALL_DFA: Find_All = 7
-const FIND_ALL_CLASS_PLUS: Find_All = 8
 
 extern<"resharp_n00b_regex_options_free"> __regex_options_free(value: uint) -> i32
 extern<"resharp_n00b_regex_free"> __regex_free(value: uint) -> i32
@@ -1446,7 +1429,7 @@ enum Find_Anchored_Outcome {
 
 func find_anchored(self: Regex, input: Array[u8]) -> Find_Anchored_Outcome fail: Error {
     var input_value = input
-    var out: Match = 0
+    var out: Match = (start = 0, end = 0)
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
     let outcome = __regex_find_anchored(self.raw, ref input_value, ref out, ref failed_detail, ref panicked_detail)
@@ -1517,59 +1500,42 @@ func capture_index_for_name(self: Regex, name: string) -> Capture_Index_For_Name
 20	resharp.derived.writ:5:1	Status
 27	resharp.derived.writ:21:1	UnicodeMode
 34	resharp.derived.writ:41:1	FindAll
-46	resharp.derived.writ:6:5	Status_Ok
-47	resharp.derived.writ:7:5	Status_None
-48	resharp.derived.writ:8:5	Status_Error
-49	resharp.derived.writ:9:5	Status_Panic
-50	resharp.derived.writ:22:5	UnicodeMode_Ascii
-51	resharp.derived.writ:23:5	UnicodeMode_Default
-52	resharp.derived.writ:24:5	UnicodeMode_Full
-53	resharp.derived.writ:25:5	UnicodeMode_Javascript
-54	resharp.derived.writ:42:5	FindAll_EmptyLang
-55	resharp.derived.writ:43:5	FindAll_Anchored
-56	resharp.derived.writ:44:5	FindAll_EndAnchored
-57	resharp.derived.writ:45:5	FindAll_Hardened
-58	resharp.derived.writ:46:5	FindAll_FwdPrefix
-59	resharp.derived.writ:47:5	FindAll_FwdLbPrefix
-60	resharp.derived.writ:48:5	FindAll_Bounded
-61	resharp.derived.writ:49:5	FindAll_Dfa
-62	resharp.derived.writ:50:5	FindAll_ClassPlus
-64	resharp.derived.writ:30:1	regex_options_free
-65	resharp.derived.writ:39:1	regex_free
-66	resharp.derived.writ:53:1	regex_options_default
-67	resharp.derived.writ:62:1	regex_options_unicode
-68	resharp.derived.writ:73:1	regex_options_case_insensitive
-69	resharp.derived.writ:84:1	regex_options_dot_matches_new_line
-70	resharp.derived.writ:95:1	regex_options_multiline
-71	resharp.derived.writ:106:1	regex_options_ignore_whitespace
-72	resharp.derived.writ:117:1	regex_options_hardened
-73	resharp.derived.writ:128:1	regex_options_unbounded_size
-74	resharp.derived.writ:139:5	regex_options_implicit_captures
-75	resharp.derived.writ:151:1	regex_is_match
-76	resharp.derived.writ:163:1	regex_new
-77	resharp.derived.writ:174:1	regex_with_options
-78	resharp.derived.writ:186:1	regex_find_all
-79	resharp.derived.writ:201:1	regex_find_anchored
-80	resharp.derived.writ:215:1	regex_is_full_match
-81	resharp.derived.writ:227:5	regex_capture_index_for_name
-83	resharp.derived.writ:30:1	regex_options_free
-92	resharp.derived.writ:39:1	regex_free
-101	resharp.derived.writ:53:1	regex_options_default
-121	resharp.derived.writ:62:1	regex_options_unicode
-142	resharp.derived.writ:73:1	regex_options_case_insensitive
-163	resharp.derived.writ:84:1	regex_options_dot_matches_new_line
-184	resharp.derived.writ:95:1	regex_options_multiline
-205	resharp.derived.writ:106:1	regex_options_ignore_whitespace
-226	resharp.derived.writ:117:1	regex_options_hardened
-247	resharp.derived.writ:128:1	regex_options_unbounded_size
-268	resharp.derived.writ:139:5	regex_options_implicit_captures
-289	resharp.derived.writ:151:1	regex_is_match
-310	resharp.derived.writ:163:1	regex_new
-331	resharp.derived.writ:174:1	regex_with_options
-352	resharp.derived.writ:186:1	regex_find_all
-379	resharp.derived.writ:201:1	regex_find_anchored
-400	resharp.derived.writ:215:1	regex_is_full_match
-426	resharp.derived.writ:227:5	regex_capture_index_for_name
+47	resharp.derived.writ:30:1	regex_options_free
+48	resharp.derived.writ:39:1	regex_free
+49	resharp.derived.writ:53:1	regex_options_default
+50	resharp.derived.writ:62:1	regex_options_unicode
+51	resharp.derived.writ:73:1	regex_options_case_insensitive
+52	resharp.derived.writ:84:1	regex_options_dot_matches_new_line
+53	resharp.derived.writ:95:1	regex_options_multiline
+54	resharp.derived.writ:106:1	regex_options_ignore_whitespace
+55	resharp.derived.writ:117:1	regex_options_hardened
+56	resharp.derived.writ:128:1	regex_options_unbounded_size
+57	resharp.derived.writ:139:5	regex_options_implicit_captures
+58	resharp.derived.writ:151:1	regex_is_match
+59	resharp.derived.writ:163:1	regex_new
+60	resharp.derived.writ:174:1	regex_with_options
+61	resharp.derived.writ:186:1	regex_find_all
+62	resharp.derived.writ:201:1	regex_find_anchored
+63	resharp.derived.writ:215:1	regex_is_full_match
+64	resharp.derived.writ:227:5	regex_capture_index_for_name
+66	resharp.derived.writ:30:1	regex_options_free
+75	resharp.derived.writ:39:1	regex_free
+84	resharp.derived.writ:53:1	regex_options_default
+104	resharp.derived.writ:62:1	regex_options_unicode
+125	resharp.derived.writ:73:1	regex_options_case_insensitive
+146	resharp.derived.writ:84:1	regex_options_dot_matches_new_line
+167	resharp.derived.writ:95:1	regex_options_multiline
+188	resharp.derived.writ:106:1	regex_options_ignore_whitespace
+209	resharp.derived.writ:117:1	regex_options_hardened
+230	resharp.derived.writ:128:1	regex_options_unbounded_size
+251	resharp.derived.writ:139:5	regex_options_implicit_captures
+272	resharp.derived.writ:151:1	regex_is_match
+293	resharp.derived.writ:163:1	regex_new
+314	resharp.derived.writ:174:1	regex_with_options
+335	resharp.derived.writ:186:1	regex_find_all
+362	resharp.derived.writ:201:1	regex_find_anchored
+383	resharp.derived.writ:215:1	regex_is_full_match
+409	resharp.derived.writ:227:5	regex_capture_index_for_name
 library resharp_writ
 search_path target/release
 load static

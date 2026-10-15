@@ -368,9 +368,6 @@ enum Status {
     KV_ERR = 2
 }
 
-const KV_OK: Status = 0
-const KV_NOTFOUND: Status = 1
-const KV_ERR: Status = 2
 
 extern<"kv_n00b_kv_open"> __kv_open(path: Ref[string], out_db: Ref[uint], detail: Ref[i64]) -> i32
 extern<"kv_n00b_kv_put"> __kv_put(db: uint, key: Ref[Array[u8]], val: Ref[Array[u8]]) -> i32
@@ -458,18 +455,15 @@ func next(self: Iter) -> Entry fail: Error {
 11	tests/gen_n00b/../bind/kv.writ:11:1	Iter
 15	tests/gen_n00b/../bind/kv.writ:15:1	kv_entry
 22	tests/gen_n00b/../bind/kv.writ:13:1	kv_status
-28	tests/gen_n00b/../bind/kv.writ:13:26	KV_OK
-29	tests/gen_n00b/../bind/kv.writ:13:37	KV_NOTFOUND
-30	tests/gen_n00b/../bind/kv.writ:13:54	KV_ERR
-32	tests/gen_n00b/../bind/kv.writ:22:1	kv_open
-33	tests/gen_n00b/../bind/kv.writ:26:1	kv_put
-34	tests/gen_n00b/../bind/kv.writ:31:1	kv_get
-35	tests/gen_n00b/../bind/kv.writ:38:1	kv_iter_new
-36	tests/gen_n00b/../bind/kv.writ:42:1	kv_iter_next
-38	tests/gen_n00b/../bind/kv.writ:22:1	kv_open
-54	tests/gen_n00b/../bind/kv.writ:26:1	kv_put
-73	tests/gen_n00b/../bind/kv.writ:31:1	kv_get
-90	tests/gen_n00b/../bind/kv.writ:38:1	kv_iter_new
-105	tests/gen_n00b/../bind/kv.writ:42:1	kv_iter_next
+29	tests/gen_n00b/../bind/kv.writ:22:1	kv_open
+30	tests/gen_n00b/../bind/kv.writ:26:1	kv_put
+31	tests/gen_n00b/../bind/kv.writ:31:1	kv_get
+32	tests/gen_n00b/../bind/kv.writ:38:1	kv_iter_new
+33	tests/gen_n00b/../bind/kv.writ:42:1	kv_iter_next
+35	tests/gen_n00b/../bind/kv.writ:22:1	kv_open
+51	tests/gen_n00b/../bind/kv.writ:26:1	kv_put
+70	tests/gen_n00b/../bind/kv.writ:31:1	kv_get
+87	tests/gen_n00b/../bind/kv.writ:38:1	kv_iter_new
+102	tests/gen_n00b/../bind/kv.writ:42:1	kv_iter_next
 library kv
 load static

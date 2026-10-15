@@ -1,0 +1,26 @@
+library pts
+link "pts"
+
+struct point @size(8) @align(4) {
+    x: f32 @0
+    y: f32 @4
+}
+
+flags pt_mode : c_int { PT_READ = 1, PT_WRITE = 2, PT_BOTH = 3, PT_EXEC = 8 }
+
+fn pt_scale(p: inout *point, k: f64) -> c_int
+  error ret != 0
+
+fn pt_origin() -> point
+
+fn pt_type(mode: pt_mode) -> c_int
+
+fn pt_sum(count: c_int, ... of f64 count count) -> f64
+
+fn pt_peek(p: unknown *void) -> c_int
+
+binding {
+    strip_prefix "pt_"
+    error pt_scale -> "Scale_Failure"
+    raw "pt_peek"
+}

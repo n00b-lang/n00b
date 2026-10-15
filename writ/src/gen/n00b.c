@@ -27,6 +27,7 @@ typedef enum {
     PARAM_VALUE,
     PARAM_ADDRESS,
     PARAM_RECORD,
+    PARAM_STORAGE,
     PARAM_OUT,
 } param_kind_t;
 
@@ -37,11 +38,20 @@ typedef struct {
     writ_str_t   c_type;
     writ_str_t   n00b_type;
     size_t       parts;
+    bool         storage;
 } shim_param_t;
 
 core_list_decl(shim_param_t);
 
 static const writ_type_view_t *record_target(const writ_plan_item_view_t *item);
+static bool expressible(const writ_record_view_t *record);
+
+static bool
+opaque_record(const n00b_t *g, const writ_type_view_t *type)
+{
+    const writ_record_view_t *record = type ? writ_model_record_named(g->model, type->name) : nullptr;
+    return record && !expressible(record);
+}
 
 static writ_str_t
 prim(const n00b_t *g, const char *format, unsigned bits)
@@ -154,7 +164,7 @@ static void
 shim_params(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, core_list_t(shim_param_t) *params)
 {
     uint32_t *order = writ_alloc(g->session, sizeof(uint32_t) * (plan->items_count + 1));
-    size_t ordered = writ_c_param_order(plan, order);
+    size_t ordered = writ_c_param_order(&g->c, plan, order);
     for (size_t o = 0; o < ordered; o++) {
         uint32_t index = order[o];
         const writ_plan_item_view_t *item = &plan->items[index];
@@ -165,12 +175,12 @@ shim_params(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, core_list_
             if (count == 2) {
                 param.kind = PARAM_VALUE;
                 param.n00b_type = writ_str_format(g->session, "Ref[%.*s]", S(item_type(g, fn, plan, index)));
-            } else if (writ_c_by_pointer(&g->c, item)) {
-                param.kind = PARAM_RECORD;
-                param.n00b_type = writ_str_format(g->session, "Ref[%.*s]", S(scalar_type(g, item->type)));
-            } else if (record_target(item)) {
-                param.kind = PARAM_RECORD;
-                param.n00b_type = writ_str_format(g->session, "Ref[%.*s]", S(scalar_type(g, record_target(item))));
+            } else if (writ_c_by_pointer(&g->c, item) || record_target(item)) {
+                const writ_type_view_t *record = record_target(item) ? record_target(item) : item->type;
+                bool opaque = opaque_record(g, record);
+                param.kind = opaque ? PARAM_STORAGE : PARAM_RECORD;
+                param.n00b_type = opaque ? writ_str_format(g->session, "Ref[%.*s]", S(buffer_type(g)))
+                                         : writ_str_format(g->session, "Ref[%.*s]", S(scalar_type(g, record)));
             } else if (is_pointer(param.c_type)) {
                 param.kind = PARAM_ADDRESS;
                 param.n00b_type = writ_cstr("uint");
@@ -184,9 +194,11 @@ shim_params(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, core_list_
         param.kind = PARAM_OUT;
         bool bytes = ends_with(param.c_type, "_bytes_t *");
         bool address = ends_with(param.c_type, "**") || count == 2;
-        param.n00b_type = bytes     ? writ_cstr("Ref[Ffi_Bytes]")
-                          : address ? writ_cstr("Ref[uint]")
-                                    : writ_str_format(g->session, "Ref[%.*s]", S(scalar_type(g, item->type)));
+        param.storage = !bytes && !address && opaque_record(g, item->type);
+        param.n00b_type = bytes           ? writ_cstr("Ref[Ffi_Bytes]")
+                          : address       ? writ_cstr("Ref[uint]")
+                          : param.storage ? writ_str_format(g->session, "Ref[%.*s]", S(buffer_type(g)))
+                                          : writ_str_format(g->session, "Ref[%.*s]", S(scalar_type(g, item->type)));
         core_list_push(*params, param);
         if (count == 2) {
             shim_param_t length = {.kind = PARAM_OUT, .item = index, .c_type = c_params[1].type,
@@ -207,7 +219,7 @@ emit_c_shim(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view_
 {
     core_list_t(shim_param_t) params = core_list_new(shim_param_t);
     shim_params(g, fn, plan, &params);
-    bool direct = writ_c_returns_directly(plan);
+    bool direct = writ_c_returns_directly(&g->c, plan);
     writ_str_t ret = direct ? writ_c_return_type(&g->c, plan) : writ_cstr("int32_t");
     writ_str_t ret_type = is_pointer(ret) ? writ_cstr("uint64_t") : ret;
     writ_emit_text(emit, "%.*s %.*s(", S(ret_type), S(shim_symbol(g, plan->fn)));
@@ -223,7 +235,7 @@ emit_c_shim(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view_
     writ_emit_open(emit, "");
     for (size_t i = 0; i < params.len; i++) {
         const shim_param_t *p = &params.data[i];
-        if (p->kind == PARAM_VALUE) {
+        if (p->kind == PARAM_VALUE || p->kind == PARAM_STORAGE) {
             writ_emit_line(emit, "size_t %.*s_length = 0;", S(p->name));
             writ_emit_line(emit, "const void *%.*s_data = n00b_ffi_borrow((void *)%.*s, &%.*s_length, 0);",
                            S(p->name), S(p->name), S(p->name));
@@ -239,6 +251,9 @@ emit_c_shim(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view_
         case PARAM_VALUE:
             writ_emit_text(emit, "(%.*s)%.*s_data, %.*s_length", S(p->c_type), S(p->name), S(p->name));
             break;
+        case PARAM_STORAGE:
+            writ_emit_text(emit, "(%.*s)%.*s_data", S(p->c_type), S(p->name));
+            break;
         case PARAM_ADDRESS:
             writ_emit_text(emit, "(%.*s)(uintptr_t)%.*s", S(p->c_type), S(p->name));
             break;
@@ -252,7 +267,7 @@ emit_c_shim(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view_
     }
     writ_emit_line(emit, ");");
     for (size_t i = 0; i < params.len; i++) {
-        if (params.data[i].kind == PARAM_VALUE) {
+        if (params.data[i].kind == PARAM_VALUE || params.data[i].kind == PARAM_STORAGE) {
             writ_emit_line(emit, "n00b_ffi_release((void *)%.*s);", S(params.data[i].name));
         }
     }
@@ -282,6 +297,74 @@ shim_c_text(const n00b_t *g, const writ_plan_view_t *const *plans)
         }
     }
     return writ_emit_finish(&emit, g->session);
+}
+
+static bool
+expressible_field(const writ_type_view_t *type)
+{
+    switch (type ? type->kind : WRIT_TYPE_VOID) {
+    case WRIT_TYPE_BOOL:
+    case WRIT_TYPE_INT:
+    case WRIT_TYPE_POINTER:
+    case WRIT_TYPE_ARRAY:
+    case WRIT_TYPE_CALLBACK:
+    case WRIT_TYPE_ENUM:
+    case WRIT_TYPE_HANDLE:
+    case WRIT_TYPE_RECORD:
+    case WRIT_TYPE_CSTR:
+        return true;
+    case WRIT_TYPE_FLOAT:
+        return type->size == 8;
+    case WRIT_TYPE_VIEW:
+        return expressible_field(type->target);
+    default:
+        return false;
+    }
+}
+
+static bool
+expressible(const writ_record_view_t *record)
+{
+    for (size_t f = 0; f < record->fields_count; f++) {
+        if (!expressible_field(record->fields[f].type)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void
+emit_opaque_record(const n00b_t *g, writ_emit_t *emit, const writ_record_view_t *record)
+{
+    writ_str_t type = writ_binding_type(g->b, record->name);
+    writ_emit_open(emit, "type %.*s", S(type));
+    writ_emit_line(emit, "storage: %.*s", S(buffer_type(g)));
+    writ_emit_close(emit, nullptr);
+    writ_emit_line(emit, "");
+    writ_emit_open(emit, "func %.*s() -> %.*s", S(writ_profile_name(g->profile, WRIT_NAMING_FN, record->name)),
+                   S(type));
+    writ_emit_line(emit, "let value: %.*s = (storage = new[%.*s](%u))", S(type), S(buffer_type(g)),
+                   record->type ? record->type->size : 0);
+    writ_emit_line(emit, "return value");
+    writ_emit_close(emit, nullptr);
+    for (size_t f = 0; f < record->fields_count; f++) {
+        const writ_slot_view_t *field = &record->fields[f];
+        writ_str_t name = writ_profile_name(g->profile, WRIT_NAMING_FIELD, field->name);
+        writ_str_t value = field->type && field->type->kind == WRIT_TYPE_FLOAT ? prim(g, "f%u", 64)
+                                                                              : scalar_type(g, field->type);
+        writ_str_t layout = writ_str_format(g->session, "%c%u", field->type && field->type->kind == WRIT_TYPE_FLOAT
+                                                                    ? 'f' : field->type && field->type->is_signed
+                                                                    ? 'i' : 'u',
+                                            field->type ? field->type->size * 8 : 0);
+        writ_emit_line(emit, "");
+        writ_emit_open(emit, "func %.*s(self: %.*s) -> %.*s", S(name), S(type), S(value));
+        writ_emit_line(emit, "return __ffi_read_%.*s(ref self.storage, %u)", S(layout), field->offset);
+        writ_emit_close(emit, nullptr);
+        writ_emit_line(emit, "");
+        writ_emit_open(emit, "func set_%.*s(modify self: %.*s, value: %.*s)", S(name), S(type), S(value));
+        writ_emit_line(emit, "__ffi_write_%.*s(ref self.storage, %u, value)", S(layout), field->offset);
+        writ_emit_close(emit, nullptr);
+    }
 }
 
 static int
@@ -363,6 +446,10 @@ emit_types(const n00b_t *g, writ_emit_t *emit)
         const writ_record_view_t *record = writ_model_record_at(model, i);
         writ_emit_line(emit, "");
         mark(g, emit, record->declared_at, record->name);
+        if (!expressible(record)) {
+            emit_opaque_record(g, emit, record);
+            continue;
+        }
         writ_emit_open(emit, "type %.*s layout(c)", S(writ_binding_type(g->b, record->name)));
         for (size_t f = 0; f < record->fields_count; f++) {
             const writ_slot_view_t *field = &record->fields[f];
@@ -392,12 +479,15 @@ emit_types(const n00b_t *g, writ_emit_t *emit)
     }
     for (size_t i = 0; i < writ_model_const_count(model); i++) {
         const writ_const_view_t *constant = writ_model_const_at(model, i);
+        if (constant->type && constant->type->kind == WRIT_TYPE_ENUM) {
+            continue;
+        }
         writ_str_t name = writ_profile_name(g->profile, WRIT_NAMING_CONST, constant->name);
         mark(g, emit, constant->declared_at, constant->name);
         if (constant->text.length) {
-            writ_emit_line(emit, "const %.*s: string = \"%.*s\"", S(name), S(constant->text));
+            writ_emit_line(emit, "public const %.*s: string = \"%.*s\"", S(name), S(constant->text));
         } else {
-            writ_emit_line(emit, "const %.*s: %.*s = %lld", S(name), S(scalar_type(g, constant->type)),
+            writ_emit_line(emit, "public const %.*s: %.*s = %lld", S(name), S(scalar_type(g, constant->type)),
                            (long long)constant->value);
         }
     }
@@ -413,12 +503,12 @@ emit_extern(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view_
     for (size_t i = 0; i < params.len; i++) {
         writ_emit_text(emit, "%s%.*s: %.*s", i ? ", " : "", S(params.data[i].name), S(params.data[i].n00b_type));
     }
-    writ_str_t ret = writ_c_returns_directly(plan) ? writ_c_return_type(&g->c, plan) : writ_cstr("int32_t");
+    writ_str_t ret = writ_c_returns_directly(&g->c, plan) ? writ_c_return_type(&g->c, plan) : writ_cstr("int32_t");
     const writ_plan_item_view_t *direct = nullptr;
     for (size_t i = 0; i < plan->items_count; i++) {
         direct = plan->items[i].role == WRIT_ROLE_RESULT ? &plan->items[i] : direct;
     }
-    writ_str_t n00b_ret = !writ_c_returns_directly(plan) ? prim(g, "i%u", 32)
+    writ_str_t n00b_ret = !writ_c_returns_directly(&g->c, plan) ? prim(g, "i%u", 32)
                           : is_pointer(ret)               ? writ_cstr("uint")
                                                           : scalar_type(g, direct ? direct->type : nullptr);
     writ_emit_line(emit, ") -> %.*s", S(n00b_ret));
@@ -512,7 +602,7 @@ results(const wrapper_t *w, uint32_t *out)
 static bool
 can_fail(const wrapper_t *w)
 {
-    return !writ_c_returns_directly(w->plan);
+    return !writ_c_returns_directly(&w->g->c, w->plan);
 }
 
 static size_t
@@ -627,6 +717,20 @@ lifted(const wrapper_t *w, const shim_param_t *param)
 }
 
 static void
+emit_zero_record(const n00b_t *g, writ_emit_t *emit, writ_str_t local, const writ_type_view_t *type)
+{
+    const writ_record_view_t *record = writ_model_record_named(g->model, type->name);
+    writ_emit_text(emit, "var %.*s: %.*s = (", S(local), S(scalar_type(g, type)));
+    for (size_t f = 0; record && f < record->fields_count; f++) {
+        const writ_type_view_t *field = record->fields[f].type;
+        writ_str_t zero = field && field->kind == WRIT_TYPE_BOOL ? writ_cstr("false") : writ_cstr("0");
+        writ_emit_text(emit, "%s%.*s = %.*s", f ? ", " : "",
+                       S(writ_profile_name(g->profile, WRIT_NAMING_FIELD, record->fields[f].name)), S(zero));
+    }
+    writ_emit_line(emit, ")");
+}
+
+static void
 emit_wrapper(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view_t *plan)
 {
     wrapper_t w = {g, fn, plan, writ_binding_fn(g->b, fn), WRIT_PLAN_NONE};
@@ -667,6 +771,12 @@ emit_wrapper(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view
         const shim_param_t *p = &params.data[i];
         if (p->kind == PARAM_VALUE && p->item != w.receiver) {
             writ_emit_line(emit, "var %.*s_value = %.*s", S(local_name(&w, p->item)), S(local_name(&w, p->item)));
+        } else if (p->kind == PARAM_OUT && p->storage) {
+            writ_emit_line(emit, "var %.*s = %.*s()", S(local_name(&w, p->item)),
+                           S(writ_profile_name(g->profile, WRIT_NAMING_FN, plan->items[p->item].type->name)));
+        } else if (p->kind == PARAM_OUT && plan->items[p->item].type
+                   && plan->items[p->item].type->kind == WRIT_TYPE_RECORD) {
+            emit_zero_record(g, emit, local_name(&w, p->item), plan->items[p->item].type);
         } else if (p->kind == PARAM_OUT) {
             writ_str_t local = p->name.length && !writ_str_eq(p->name, plan->items[p->item].name)
                                  ? writ_str_format(g->session, "%.*s_length", S(local_name(&w, p->item)))
@@ -697,6 +807,10 @@ emit_wrapper(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view
             writ_emit_text(emit, "%.*s.raw", S(name));
         } else if (p->kind == PARAM_RECORD) {
             writ_emit_text(emit, "ref %.*s", S(name));
+        } else if (p->kind == PARAM_STORAGE) {
+            writ_emit_text(emit, "ref %.*s.storage", S(name));
+        } else if (p->kind == PARAM_OUT && p->storage) {
+            writ_emit_text(emit, "ref %.*s.storage", S(name));
         } else if (p->kind == PARAM_OUT) {
             bool length = !writ_str_eq(p->name, plan->items[p->item].name);
             writ_emit_text(emit, length ? "ref %.*s_length" : "ref %.*s", S(name));
@@ -993,8 +1107,8 @@ writ_gen_n00b(const writ_gen_n00b_request_t *request, const writ_output_t *outpu
     size_t count = writ_model_fn_count(model);
     const writ_plan_view_t **plans = writ_alloc(session, sizeof(writ_plan_view_t *) * (count ? count : 1));
     for (size_t i = 0; i < count; i++) {
-        plans[i] = writ_model_fn_plan(model, writ_model_fn_at(model, i));
         writ_bound_fn_t bound = writ_binding_fn(b, i);
+        plans[i] = bound.raw ? nullptr : writ_model_fn_plan(model, writ_model_fn_at(model, i));
         if (!plans[i] && bound.bound && !bound.raw) {
             return WRIT_HAS_ERRORS;
         }

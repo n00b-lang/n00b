@@ -172,8 +172,8 @@ native_type(writ_binding_t *b, writ_str_t contract)
     return type ? type->name.text : contract;
 }
 
-static bool
-unknown_facts(const writ_fn_view_t *fn)
+bool
+writ_fn_has_unknown_facts(const writ_fn_view_t *fn)
 {
     for (size_t i = 0; i < fn->slots_count; i++) {
         const writ_slot_view_t *slot = &fn->slots[i];
@@ -247,7 +247,7 @@ default_slots(writ_binding_t *b)
 {
     for (size_t i = 0; i < writ_model_fn_count(b->model); i++) {
         const writ_fn_view_t *fn = writ_model_fn_at(b->model, i);
-        const writ_plan_view_t *plan = unknown_facts(fn) ? nullptr : writ_model_fn_plan(b->model, fn);
+        const writ_plan_view_t *plan = writ_fn_has_unknown_facts(fn) ? nullptr : writ_model_fn_plan(b->model, fn);
         for (size_t k = 0; plan && k < plan->items_count; k++) {
             const writ_plan_item_view_t *item = &plan->items[k];
             bool has_form = false;
@@ -561,7 +561,7 @@ check_fns(writ_binding_t *b)
         if (!bound(d)) {
             continue;
         }
-        if (!d->raw && unknown_facts(fn)) {
+        if (!d->raw && writ_fn_has_unknown_facts(fn)) {
             writ_loc_t block = b->anchor;
             uint32_t diag = writ_report(b->session, WRIT_D_BIND_UNKNOWN, block, "`%.*s`", S(fn->contract_name));
             if (b->block) {

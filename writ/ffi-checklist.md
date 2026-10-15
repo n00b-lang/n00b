@@ -38,10 +38,10 @@ enough to check off one at a time. The specs are `ffi-spec.md`,
 - [x] Baseline sanitizer build of writ is green
 - [x] Baseline Linux container run of writ is green
 - [x] Re-read `abi/n00b-abi-v1.h` module, scope, symbol and native-binding rows on the new base; stop if they differ from the checklist's assumptions
-- [ ] n00bb `tools/linux.Dockerfile`: LLVM, lantern, writ and n00bb built inside, sources mounted from the host
-- [ ] n00bb `build.sh linux test` runs the suite in that image, with the engine chosen as writ's `build.sh` does (`podman`, else `docker`)
+- [x] n00bb `tools/linux.Dockerfile`: LLVM, lantern, writ and n00bb built inside, sources mounted from the host
+- [x] n00bb `build.sh linux test` runs the suite in that image, with the engine chosen as writ's `build.sh` does (`podman`, else `docker`)
 - [ ] Baseline n00bb Linux run green on the new base, before any FFI work
-- [ ] Committed in n00bb: "Linux builds in a container"
+- [x] Committed in n00bb: "Linux builds in a container"
 
 ---
 
@@ -128,64 +128,64 @@ enough to check off one at a time. The specs are `ffi-spec.md`,
 
 ### Profile and operators
 
-- [ ] `profiles/n00b.writ` matches `ffi-spec.md` §3
-- [ ] `src/core/model/expr.c`: the n00b row of the operator table
+- [x] `profiles/n00b.writ` matches `ffi-spec.md` §3
+- [x] `src/core/model/expr.c`: the n00b row of the operator table
 
 ### `writ_gen_n00b`
 
-- [ ] `include/writ/gen.h`: `writ_gen_n00b_request_t` (binding, module name, shim prefix)
-- [ ] `include/writ/gen.h`: `writ_gen_n00b` output: n00b source, C shim source, link requirements
-- [ ] Link requirements as a public struct: libraries, frameworks, search paths, load mode
-- [ ] `src/gen/n00b.c`: module skeleton from a `writ_binding_t`
-- [ ] Functions: `func` declarations from plans, names from binding decisions
-- [ ] Extern declarations naming each shim symbol
-- [ ] Scalars and `c_*` types per platform
-- [ ] `layout c` records as `type X layout(c)`
-- [ ] Records `layout(c)` can't express: opaque storage with accessors
-- [ ] Enums and flags
-- [ ] Constants
-- [ ] Results: direct, or `F_Result` records (`ffi-spec.md` §3.2)
-- [ ] Consumed counts and lengths dropped from results
-- [ ] `fail: Error` from `error` and `failure` outcomes
-- [ ] Generated `type Error` with `code`, `text`, `fn`
-- [ ] `error PATTERN -> "Type"` calls `Type.from_ffi`
-- [ ] Several success outcomes: outcome enum as first result
-- [ ] Handles: wrapper types with `close()`
-- [ ] `method` and `static` grouping; Rust impl grouping by default
-- [ ] `string`, `buffer`, `borrow` representations per slot
-- [ ] Rest packs as `List[T]` or `Array[T]`
+- [x] `include/writ/gen.h`: `writ_gen_n00b_request_t` (binding, module name, shim prefix)
+- [x] `include/writ/gen.h`: `writ_gen_n00b` output: n00b source, C shim source, link requirements
+- [x] Link requirements as a public struct: libraries, frameworks, search paths, load mode
+- [x] `src/gen/n00b.c`: module skeleton from a `writ_binding_t`
+- [x] Functions: `func` declarations from plans, names from binding decisions
+- [x] Extern declarations naming each shim symbol
+- [x] Scalars and `c_*` types per platform
+- [x] `layout c` records as `type X layout(c)`
+- [x] Records `layout(c)` can't express: opaque storage with accessors
+- [x] Enums and flags
+- [x] Constants
+- [x] Results: direct, or `F_Result` records (`ffi-spec.md` §3.2)
+- [x] Consumed counts and lengths dropped from results
+- [x] `fail: Error` from `error` and `failure` outcomes
+- [x] Generated `type Error` with `code`, `text`, `fn`
+- [x] `error PATTERN -> "Type"` calls `Type.from_ffi`
+- [x] Several success outcomes: outcome enum as first result
+- [x] Handles: wrapper types with `close()`
+- [x] `method` and `static` grouping; Rust impl grouping by default
+- [x] `string`, `buffer`, `borrow` representations per slot
+- [x] Rest packs as `List[T]` or `Array[T]`
 - [ ] Keyword packs as keyword arguments or `F_Options`
 - [ ] Policy parameters: fixed arm, or an enum parameter
-- [ ] Reserved words get a trailing `_`
-- [ ] `raw` declarations with `ptr` slots and a `_raw` suffix
-- [ ] Each generated declaration carries a span to its writ declaration
+- [x] Reserved words get a trailing `_`
+- [x] `raw` declarations with `ptr` slots and a `_raw` suffix
+- [x] Each generated declaration carries a span to its writ declaration
 
 ### Shims
 
-- [ ] `src/gen/c.c`: pointer-normalized shim mode on `writ_gen_c_request_t`
-- [ ] Shims take only scalars and pointers
-- [ ] By-value aggregates passed and returned through pointers
-- [ ] Shims convert strings and buffers per binding decision
-- [ ] Shims call `n00b_ffi_borrow` and `n00b_ffi_release` around borrowed spans
-- [ ] Shim symbol names from the shim prefix
+- [x] `src/gen/c.c`: pointer-normalized shim mode on `writ_gen_c_request_t`
+- [x] Shims take only scalars and pointers
+- [x] By-value aggregates passed and returned through pointers
+- [x] Shims convert strings and buffers per binding decision
+- [x] Shims call `n00b_ffi_borrow` and `n00b_ffi_release` around borrowed spans
+- [x] Shim symbol names from the shim prefix
 - [ ] Callback trampolines calling `n00b_ffi_dispatch` with a writ-laid-out argument struct
-- [ ] Export entry points calling n00b symbols, with `on_panic`
-- [ ] Export header generation
+- [x] Export entry points calling n00b symbols, with `on_panic`
+- [x] Export header generation
 
 ### CLI and tests
 
-- [ ] `writ gen n00b --embedded FILE -o DIR`
-- [ ] Golden n00b and C output: zlib
-- [ ] Golden n00b and C output: resharp, linked statically
-- [ ] Golden n00b and C output: kv import
-- [ ] Golden n00b and C output: kv export
-- [ ] Generated C shims compile with clang to bitcode for the host triple
-- [ ] Generated C shims compile for every platform in the zlib contract (`-fsyntax-only` per triple)
+- [x] `writ gen n00b --embedded FILE -o DIR`
+- [x] Golden n00b and C output: zlib
+- [x] Golden n00b and C output: resharp, linked statically
+- [x] Golden n00b and C output: kv import
+- [x] Golden n00b and C output: kv export
+- [x] Generated C shims compile with clang to bitcode for the host triple
+- [x] Generated C shims compile for every platform in the zlib contract (`-fsyntax-only` per triple)
 
 ### Gate
 
-- [ ] `./build.sh test` green
-- [ ] Sanitizer build green
+- [x] `./build.sh test` green
+- [x] Sanitizer build green
 - [ ] Linux container green
 - [ ] Committed: "writ_gen_n00b and pointer-normalized shims"
 
@@ -193,13 +193,13 @@ enough to check off one at a time. The specs are `ffi-spec.md`,
 
 ## N1. libwrit in n00bb
 
-- [ ] writ produces uninstalled pkg-config files `n00bb` can find
-- [ ] n00bb `build.sh` adds writ's `meson-uninstalled` directory to `PKG_CONFIG_PATH`
-- [ ] n00bb `build.sh` builds writ when it is stale
-- [ ] n00bb `meson.build`: `dependency('writ')` on `n00bb_exe`
-- [ ] Coexistence test: one process parses an `'ffi` literal through libwrit and an n00b file through lantern
-- [ ] Gate: n00bb `./build.sh test` green
-- [ ] Committed in n00bb: "Link libwrit"
+- [x] writ produces uninstalled pkg-config files `n00bb` can find
+- [x] n00bb `build.sh` adds writ's `meson-uninstalled` directory to `PKG_CONFIG_PATH`
+- [x] n00bb `build.sh` builds writ when it is stale
+- [x] n00bb `meson.build`: `dependency('writ')` on `n00bb_exe`
+- [x] Coexistence test: one process parses an `'ffi` literal through libwrit and an n00b file through lantern
+- [x] Gate: n00bb `./build.sh test` green
+- [x] Committed in n00bb: "Link libwrit"
 
 ---
 
@@ -210,47 +210,47 @@ enough to check off one at a time. The specs are `ffi-spec.md`,
 - [ ] `Module` builtin type registered in the builtin type table
 - [ ] `Module`'s run-time representation is a module index into the current reflection snapshot
 - [ ] Reflection type row for `Module` emitted like any builtin type
-- [ ] `lib/builtin/ffi.n`: `litmod<fence> ffi(source: string) -> Module`
-- [ ] Implicit import of `builtin.ffi`
+- [x] `lib/builtin/ffi.n`: `litmod<fence> ffi(source: string) -> Module`
+- [x] Implicit import of `builtin.ffi`
 - [ ] `register_user_litmod` (`compiler_tu.c`): a user modifier that shadows a builtin one is an error
-- [ ] Test: a local `litmod<fence> ffi` is rejected
+- [x] Test: a local `litmod<fence> ffi` is rejected
 
 ### Evaluation
 
-- [ ] Preprocessor recognizes an `'ffi` literal as a const initializer
+- [x] Preprocessor recognizes an `'ffi` literal as a const initializer
 - [ ] Preprocessor recognizes an `'ffi` literal as an `import … from` source
-- [ ] An `'ffi` literal elsewhere is a compile error at the literal
-- [ ] One writ session per compilation, created on first use
-- [ ] Contract directories added before the first literal: each `--contract-dir`, then the package's `contracts/`
-- [ ] Literal content bytes from `content_start_byte` to `content_end_byte`
-- [ ] Content line and column computed by scanning the source from `start_byte`
-- [ ] `writ_unit_add_embedded` with language `n00b` and the n00b file as origin
-- [ ] `writ_resolve` for the target triple
-- [ ] `writ_bind` with the n00b profile
-- [ ] libwrit diagnostics forwarded through `core_diagnostics_report_at` with the writ code and mapped location
-- [ ] Diagnostics in a used contract report in that file
+- [x] An `'ffi` literal elsewhere is a compile error at the literal
+- [x] One writ session per compilation, created on first use
+- [x] Contract directories added before the first literal: each `--contract-dir`, then the package's `contracts/`
+- [x] Literal content bytes from `content_start_byte` to `content_end_byte`
+- [x] Content line and column computed by scanning the source from `start_byte`
+- [x] `writ_unit_add_embedded` with language `n00b` and the n00b file as origin
+- [x] `writ_resolve` for the target triple
+- [x] `writ_bind` with the n00b profile
+- [x] libwrit diagnostics forwarded through `core_diagnostics_report_at` with the writ code and mapped location
+- [x] Diagnostics in a used contract report in that file
 - [ ] `infer_user_literal_type` types an `'ffi` literal as `Module` without calling the modifier
-- [ ] `n00bb_lower_user_literal` never lowers an `'ffi` literal
+- [x] `n00bb_lower_user_literal` never lowers an `'ffi` literal
 
 ### Dependencies and flags
 
-- [ ] `compiler_cli.c`: `--contract-dir DIR`, repeatable
+- [x] `compiler_cli.c`: `--contract-dir DIR`, repeatable
 - [ ] Every file from `writ_unit_file_at` joins the module's cache fingerprint
-- [ ] Editing a used contract invalidates the module's cached build
+- [x] Editing a used contract invalidates the module's cached build
 
 ### Tests
 
-- [ ] `tests/programs/ffi/` directory and `tests/ffi.sh`, registered in `meson.build`
-- [ ] Malformed literal: error at the right n00b line and column
-- [ ] Error in a used contract: reported in the contract file
-- [ ] Binding error (E0501): reported at the binding item in the literal
-- [ ] `'ffi` literal outside a const or import: rejected
-- [ ] Edit a used contract between builds: the module rebuilds
-- [ ] Built binary contains no literal text and no contract text
+- [x] `tests/programs/ffi/` directory and `tests/ffi.sh`, registered in `meson.build`
+- [x] Malformed literal: error at the right n00b line and column
+- [x] Error in a used contract: reported in the contract file
+- [x] Binding error (E0501): reported at the binding item in the literal
+- [x] `'ffi` literal outside a const or import: rejected
+- [x] Edit a used contract between builds: the module rebuilds
+- [x] Built binary contains no literal text and no contract text
 
 ### Gate
 
-- [ ] n00bb `./build.sh test` green
+- [x] n00bb `./build.sh test` green
 - [ ] Committed: "'ffi literal and Module"
 
 ---

@@ -534,7 +534,7 @@ emit_inputs(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_view_t
 static void
 emit_call(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_view_t *plan)
 {
-    bool direct = writ_c_returns_directly(plan);
+    bool direct = writ_c_returns_directly(c, plan);
     for (uint32_t i = 0; !direct && i < plan->items_count; i++) {
         const writ_plan_item_view_t *item = &plan->items[i];
         if (item->role != WRIT_ROLE_RESULT && item->role != WRIT_ROLE_ERROR_DETAIL) {
@@ -555,7 +555,7 @@ emit_call(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_view_t *
     writ_str_t ret = writ_c_return_type(c, plan);
     writ_emit_text(emit, "%.*s got = %.*s_%.*s(", S(ret), S(c->prefix), S(plan->fn->contract_name));
     uint32_t *order = writ_alloc(c->model->session, sizeof(uint32_t) * (plan->items_count + 1));
-    size_t ordered = writ_c_param_order(plan, order);
+    size_t ordered = writ_c_param_order(c, plan, order);
     for (size_t o = 0; o < ordered; o++) {
         const writ_plan_item_view_t *item = &plan->items[order[o]];
         bool input = writ_c_is_input(item);
@@ -745,7 +745,7 @@ emit_scenario(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_view
     writ_emit_line(emit, "%.*s_mock_fill = %d;", S(c->prefix), s->fill);
     emit_inputs(c, emit, plan, s);
     emit_call(c, emit, plan);
-    if (writ_c_returns_directly(plan)) {
+    if (writ_c_returns_directly(c, plan)) {
         emit_direct_check(c, emit, plan, s);
     } else {
         expect(emit, plan, s->name, "got == %u", s->outcome);
@@ -783,7 +783,7 @@ emit_driver_fn(const writ_c_context_t *c, writ_emit_t *emit, uint32_t index)
     for (uint32_t o = 0; is_mocked(c->model, fn) && o < plan->outcomes_count; o++) {
         int64_t ret = SCALAR_INPUT + PURE_OFFSET;
         int64_t channel = 0;
-        if (!writ_c_returns_directly(plan) && !find_outcome(c->model, plan, o, &ret, &channel)) {
+        if (!writ_c_returns_directly(c, plan) && !find_outcome(c->model, plan, o, &ret, &channel)) {
             continue;
         }
         if (fn->sizing == WRIT_SIZING_QUERY) {

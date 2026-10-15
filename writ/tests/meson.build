@@ -356,7 +356,7 @@ test(
     env: {'WRIT_CONTRACT_PATH': source_root / 'tests' / 'missing:' + source_root / 'contracts'},
 )
 
-foreach case : ['zlib', 'resharp', 'kv', 'kv_export']
+foreach case : ['zlib', 'resharp', 'kv', 'kv_export', 'float_record']
     test(
         'gen-n00b-' + case,
         python,
@@ -369,7 +369,7 @@ test(
     'gen-n00b-compile',
     python,
     args: [source_root / 'tests' / 'gen_n00b' / 'compile.py', writ_exe, compiler, host_triple, source_root,
-           'zlib', 'resharp', 'kv_export'],
+           'zlib', 'resharp', 'kv_export', 'float_record'],
 )
 
 resharp_root = get_option('resharp_root')

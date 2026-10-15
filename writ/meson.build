@@ -152,6 +152,7 @@ endif
 
 libwrit_shared = shared_library(
     'writ',
+    include_directories: include_directories('include'),
     link_whole: writ_raw,
     link_args: export_args + [lantern_prefix / 'lib' / 'libir.a'] + lantern_external,
     version: meson.project_version(),
@@ -168,6 +169,8 @@ install_headers(
 )
 
 install_subdir('contracts', install_dir: contract_install_dir, strip_directory: true)
+profile_install_dir = get_option('prefix') / get_option('datadir') / 'writ' / 'profiles'
+install_subdir('profiles', install_dir: profile_install_dir, strip_directory: true)
 
 llvm_prefix = get_option('llvm_prefix')
 libclang = declare_dependency(
@@ -200,6 +203,9 @@ pkgconfig.generate(
     name: 'writ',
     description: 'The writ contract language for C ABI surfaces',
     libraries_private: lantern_external,
+    variables: ['profiledir=' + profile_install_dir, 'contractdir=' + contract_install_dir],
+    uninstalled_variables: ['profiledir=' + meson.current_source_dir() / 'profiles',
+                            'contractdir=' + meson.current_source_dir() / 'contracts'],
 )
 pkgconfig.generate(
     libwrit_clang_shared,
