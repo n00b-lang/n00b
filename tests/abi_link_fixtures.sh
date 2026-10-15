@@ -113,3 +113,6 @@ N00B_PATH="$script_dir/programs/abi" "$compiler" compile \
 N00B_PATH="$script_dir/programs/abi" "$compiler" library \
     --output "$tmp/cycle_self_linked.n00bm" builtin.cycle_self
 "$abi_register_object_test" "$tmp/cycle_self_linked.n00bm" '>=1'
+N00B_PATH="$script_dir/programs/abi" "$compiler" library \
+    --output "$tmp/enum_export_linked.n00bm" enum_export.__init
+"$abi_register_object_test" "$tmp/enum_export_linked.n00bm" '>=2'

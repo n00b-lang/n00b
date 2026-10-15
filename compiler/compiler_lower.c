@@ -14657,7 +14657,8 @@ n00bb_reject_runtime_initializer_failure(ir_lower_context_t *context,
 
 static bool
 register_nominal_types(parse_grammar_t *grammar,
-                       core_translation_unit_t *unit, ir_module_t *module)
+                       core_translation_unit_t *unit, ir_module_t *module,
+                       bool imported)
 {
     n00bb_tu_state_t *state = tu_state(unit);
     if (!state || !state->annotations || !state->annotations->symtab)
@@ -14666,7 +14667,8 @@ register_nominal_types(parse_grammar_t *grammar,
          scope; scope = scope->all_next) {
         for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
              symbol = symbol->next_in_scope) {
-            if (symbol->kind != PARSE_SYM_TYPEDEF || !symbol->type) continue;
+            if (symbol->kind != PARSE_SYM_TYPEDEF || !symbol->type
+                || !!parse_sym_binding_origin(symbol) != imported) continue;
             if (core_string_eq(symbol->adt_kind,
                                CORE_STRING_STATIC("callback"))) {
                 th_ctx *types = ir_module_types(module);
@@ -15567,8 +15569,20 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
         ir_module_t *modules[] = {
             state->comptime_ir_module, state->ir_module,
         };
+        for (size_t m = 0; m < sizeof(modules) / sizeof(modules[0]); m++)
+            if (!register_nominal_types(grammar, unit, modules[m], false))
+                return ir_initialization_error(unit, "N00BB-L0026",
+                    "could not retain nominal representations in Lantern IR");
+    }
+
+    for (size_t i = 0; i < units->len; i++) {
+        core_translation_unit_t *unit = units->data[i];
+        n00bb_tu_state_t *state = tu_state(unit);
+        ir_module_t *modules[] = {
+            state->comptime_ir_module, state->ir_module,
+        };
         for (size_t m = 0; m < sizeof(modules) / sizeof(modules[0]); m++) {
-            if (!register_nominal_types(grammar, unit, modules[m]))
+            if (!register_nominal_types(grammar, unit, modules[m], true))
                 return ir_initialization_error(unit, "N00BB-L0026",
                     "could not retain nominal representations in Lantern IR");
             if (!register_variant_types(grammar, unit, modules[m]))

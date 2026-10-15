@@ -1,0 +1,18 @@
+import zlib
+import archive
+
+comptime {} else {
+    let text: Array[u8] = [120, 121, 122, 120, 121, 122]
+    var packed: Array[u8] = []
+    try {
+        packed = zlib.compress(text, 1)!
+    } else failure {
+        require false
+    }
+    try {
+        let unpacked = archive.zlib.uncompress(16, packed)!
+        require __array_length(unpacked) == 6
+    } else failure {
+        require false
+    }
+}

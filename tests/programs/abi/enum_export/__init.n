@@ -1,0 +1,5 @@
+import inner
+
+package enum_export {
+    export inner
+}

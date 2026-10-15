@@ -24,6 +24,11 @@ builds_and_runs zlib_round_trip
 builds_and_runs zlib_round_trip --lto
 builds_and_runs zlib_subpackage
 builds_and_runs zlib_subpackage --lto
+builds_and_runs zlib_two_modules
+if grep -q 'duplicate libraries' "$tmp/zlib_two_modules.log"; then
+    cat "$tmp/zlib_two_modules.log" >&2
+    exit 1
+fi
 
 "$compiler" build --contract-dir "$contract_dir" \
     --show-ffi zlib.__init.zlib zlib_round_trip.n00b \
