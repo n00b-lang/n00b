@@ -3,6 +3,13 @@ library text
 fn text_length(s: *cstr) -> usize
 fn text_greeting() -> *cstr static
 fn text_invalid() -> *cstr static
+fn text_fill(dest: out *[u8; cap capacity, len ret], capacity: usize) -> usize
+fn text_fill_invalid(dest: out *[u8; cap capacity, len ret], capacity: usize) -> usize
+
+binding {
+    string text_fill.dest as string
+    string text_fill_invalid.dest as string
+}
 -]'ffi
 
 comptime {} else {
@@ -10,11 +17,18 @@ comptime {} else {
         require text.text_length("hello")! == 5
         require text.text_length("a string longer than the short form")! == 35
         require text.text_greeting()! == "héllo from C"
+        require text.text_fill(64)! == "filled by C"
     } else failure {
         require false
     }
     try {
         text.text_invalid()!
+        require false
+    } else failure {
+        require failure.code == -3
+    }
+    try {
+        text.text_fill_invalid(64)!
         require false
     } else failure {
         require failure.code == -3
