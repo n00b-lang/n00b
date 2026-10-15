@@ -4690,10 +4690,8 @@ validate_package_body_statement(parse_grammar_t *grammar,
     if (!ancestor || child_nt(grammar, node, "import-stmt")
         || child_nt(grammar, node, "export-stmt")) return true;
     parse_tree_t *body = child_nt(grammar, node, "body");
-    n00bb_tu_state_t *state = tu_state(unit);
-    for (size_t i = 0; body && state
-            && i < state->selected_when_bodies.len; i++)
-        if (state->selected_when_bodies.data[i] == body) return true;
+    n00bb_node_facts_t *facts = body ? n00bb_node_facts(body) : nullptr;
+    if (facts && facts->selected_when_body) return true;
     package_diagnostic(unit, node, "N00BB-M0010",
         "a selected package branch may contain only imports, exports, and nested when statements");
     return false;
@@ -8889,7 +8887,6 @@ free_tu_state(void *data)
     core_list_free(state->link_use_sites);
     core_list_free(state->module_top_level_statements);
     core_list_free(state->array_type_nodes);
-    core_list_free(state->selected_when_bodies);
     for (size_t i = 0; i < state->literal_modifiers.len; i++) {
         core_free(state->literal_modifiers.data[i].modifier.data);
         core_free(state->literal_modifiers.data[i].kind.data);
@@ -8910,7 +8907,6 @@ free_tu_state(void *data)
     }
     core_list_free(state->integer_range_branches);
     core_dict_free(&state->integer_range_variables);
-    core_dict_free(&state->integer_proven_above_int64_nodes);
     core_csp_store_free(state->integer_range_store);
     core_arena_free(&state->semantic_values);
     parse_annot_result_free(state->annotations);
@@ -8932,15 +8928,12 @@ n00bb_tu_state_new(core_translation_unit_t *unit, n00bb_lex_result_t *lex,
     state->link_use_sites = core_list_new(n00bb_link_use_site_t);
     state->module_top_level_statements = core_list_new(parse_tree_ptr_t);
     state->array_type_nodes = core_list_new(parse_tree_ptr_t);
-    state->selected_when_bodies = core_list_new(parse_tree_ptr_t);
     state->literal_modifiers = core_list_new(n00bb_user_litmod_t);
     state->package_declarations = core_list_new(n00bb_package_declaration_t);
     state->import_aliases = core_list_new(n00bb_import_alias_t);
     core_dict_init_string(&state->import_alias_index);
     state->literal_site_nodes = core_list_new(parse_tree_ptr_t);
     core_dict_init(&state->flagset_values, nullptr, nullptr);
-    core_dict_init(&state->integer_proven_above_int64_nodes,
-                   nullptr, nullptr);
     state->lex = lex;
     state->unit = unit;
     state->types = types;
@@ -9300,7 +9293,9 @@ n00bb_tu_remember_selected_when_body(void *opaque,
     (void)opaque;
     n00bb_tu_state_t *state = tu_state(unit);
     if (!state || !body) return false;
-    core_list_push(state->selected_when_bodies, body);
+    n00bb_node_facts_t *facts = n00bb_ensure_node_facts(state, body);
+    if (!facts) return false;
+    facts->selected_when_body = true;
     return true;
 }
 

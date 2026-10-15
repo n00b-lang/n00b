@@ -297,6 +297,8 @@ typedef struct {
     size_t first_link_use_site;
     size_t last_link_use_site;
     bool static_literal;
+    bool selected_when_body;
+    bool proven_above_int64;
 } n00bb_node_facts_t;
 typedef core_translation_unit_t *core_translation_unit_ptr_t;
 core_list_decl(core_translation_unit_ptr_t);
@@ -454,7 +456,6 @@ typedef struct {
     parse_annot_result_t *annotations;
     core_list_t(parse_tree_ptr_t) module_top_level_statements;
     core_list_t(parse_tree_ptr_t) array_type_nodes;
-    core_list_t(parse_tree_ptr_t) selected_when_bodies;
     core_list_t(n00bb_user_litmod_t) literal_modifiers;
     core_list_t(n00bb_package_declaration_t) package_declarations;
     core_list_t(n00bb_import_alias_t) import_aliases;
@@ -471,7 +472,6 @@ typedef struct {
     core_csp_store_t *integer_range_store;
     parse_tree_t *integer_range_root;
     core_dict_t integer_range_variables;
-    core_dict_t integer_proven_above_int64_nodes;
     core_list_t(n00bb_symbol_range_t) integer_symbol_ranges;
     core_list_t(parse_sym_entry_ptr_t) integer_range_invalidated_symbols;
     core_list_t(n00bb_range_branch_frame_t) integer_range_branches;

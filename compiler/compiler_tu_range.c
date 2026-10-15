@@ -544,8 +544,8 @@ n00bb_range_proven_above_int64(parse_grammar_t *grammar,
                                parse_tree_t *node)
 {
     if (!grammar || !state || !node || core_tree_is_leaf(node)) return false;
-    if (core_dict_contains(&state->integer_proven_above_int64_nodes, node))
-        return true;
+    n00bb_node_facts_t *facts = n00bb_node_facts(node);
+    if (facts && facts->proven_above_int64) return true;
     uint64_t constant = 0;
     if (n00bb_range_constant_uint64(grammar, node, &constant))
         return constant > INT64_MAX;
@@ -963,8 +963,7 @@ n00bb_range_after_children(parse_grammar_t *grammar,
     if (!state->integer_range_store) return;
     n00bb_propagate_integer_range_node(grammar, state, node);
     if (n00bb_range_proven_above_int64(grammar, state, node))
-        core_dict_put(&state->integer_proven_above_int64_nodes, node,
-                      (void *)1);
+        n00bb_ensure_node_facts(state, node)->proven_above_int64 = true;
     if (node == state->integer_range_root)
         n00bb_finish_integer_range_expression(state);
 }
