@@ -458,7 +458,6 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs'
                / 'containers' / 'readiness' / 'dict_basic.n'],
-    suite: 'regression',
 )
 
 test(
@@ -467,7 +466,6 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs'
                / 'features' / 'public_literal_handler.n'],
-    suite: 'regression',
 )
 
 test(
@@ -477,7 +475,6 @@ test(
            meson.current_source_dir() / 'tests' / 'programs'
                / 'operator_compound_evaluation_order.n00b'],
     env: ['N00B_PATH=' + (meson.current_source_dir() / 'tests' / 'programs')],
-    suite: 'regression',
 )
 
 test(
@@ -486,7 +483,6 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs'
                / 'containers' / 'readiness' / 'dict_tuple_pairs.n'],
-    suite: 'regression',
 )
 
 test(
@@ -495,7 +491,6 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs'
                / 'containers' / 'readiness' / 'tree_basic.n'],
-    suite: 'regression',
 )
 
 test(
@@ -505,7 +500,6 @@ test(
            meson.current_source_dir() / 'tests' / 'programs'
                / 'containers' / 'readiness'
                / 'trait_typecase_generic_pair.n'],
-    suite: 'regression',
 )
 
 test(
@@ -514,7 +508,6 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs'
                / 'bitcode' / 'bitcode_ref_field_compound.n'],
-    suite: 'regression',
 )
 
 test(
@@ -523,7 +516,6 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs'
                / 'features' / 'let_integer_runtime.n'],
-    suite: 'regression',
 )
 
 test(
@@ -532,7 +524,6 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs'
                / 'features' / 'generic_trait_unbound_method.n'],
-    suite: 'regression',
 )
 
 test(
@@ -541,7 +532,6 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs'
                / 'features' / 'generic_union_parameter.n'],
-    suite: 'regression',
 )
 
 test(
@@ -550,7 +540,6 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs'
                / 'features' / 'typecase_array_index.n'],
-    suite: 'regression',
 )
 
 test(
@@ -559,7 +548,6 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs'
                / 'features' / 'default_integer_keywords.n'],
-    suite: 'regression',
 )
 
 test(
@@ -568,7 +556,6 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs'
                / 'features' / 'byte_literal_trait_arguments.n'],
-    suite: 'regression',
 )
 
 test(
@@ -577,7 +564,6 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs'
                / 'type_visibility'],
-    suite: 'regression',
 )
 
 test(
@@ -585,7 +571,7 @@ test(
     args: [meson.current_source_dir() / 'tests' / 'package_imports.sh',
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'packages'],
-    suite: 'regression',
+    timeout: 120,
 )
 
 test(
@@ -1082,7 +1068,6 @@ test(
     args: [meson.current_source_dir() / 'tests' / 'array_uint_index.sh',
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'],
-    suite: 'regression',
 )
 
 test(
@@ -1398,7 +1383,6 @@ test(
 test(
     'inline-n00b',
     find_program('sh'),
-    suite: 'regression',
     args: [meson.current_source_dir() / 'tests' / 'inline_n00b.sh',
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'inline'],
@@ -1407,7 +1391,6 @@ test(
 test(
     'abi-link-fixtures',
     find_program('sh'),
-    suite: 'regression',
     args: [meson.current_source_dir() / 'tests' / 'abi_link_fixtures.sh',
            n00bb_exe.full_path(), abi_record_object_test.full_path(),
            abi_link_input_test.full_path(),
@@ -1436,7 +1419,6 @@ foreach fixture : [
     test(
         fixture,
         find_program('sh'),
-        suite: 'regression',
         args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
                n00bb_exe.full_path(),
                meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'

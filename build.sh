@@ -33,8 +33,7 @@ Usage: ./build.sh [command] [args]
   (no command)        configure if needed, compile only
   configure [opts]    reconfigure from scratch; opts go to meson setup
   compile [opts]      compile only; opts go to meson compile
-  test [names/opts]   compile, then run short tests (or selected short tests)
-  test-full [opts]    compile, then run the full regression suite
+  test [names/opts]   compile, then run every test (or the selected tests)
   bench [opts]        compile, then run the benchmarks and gates
   tu <file.c>         recompile exactly one lantern source file
   linux <command>     run any of these commands in the Linux container
@@ -143,12 +142,6 @@ refuse_stale() {
 do_test() {
     do_compile || refuse_stale tests
 
-    meson test -C "$BUILD_DIR" --no-suite regression "$@"
-}
-
-do_test_full() {
-    do_compile || refuse_stale tests
-
     meson test -C "$BUILD_DIR" "$@"
 }
 
@@ -201,10 +194,6 @@ case "${1:-}" in
     test)
         shift
         do_test "$@"
-        ;;
-    test-full)
-        shift
-        do_test_full "$@"
         ;;
     bench)
         shift
