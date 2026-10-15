@@ -102,6 +102,21 @@ bool publish_link_initializer_uses(core_link_unit_t *link,
     core_link_contribution_state_t *state_out);
 bool has_initializer_write_candidate(core_link_unit_t *link,
     n00bb_link_analysis_t *analysis, parse_sym_entry_t *symbol);
+bool n00bb_module_initializer_writes(n00bb_link_analysis_t *analysis,
+                                     parse_sym_entry_t *symbol);
+bool n00bb_function_writes_global(core_link_unit_t *link,
+                                  n00bb_link_analysis_t *analysis,
+                                  parse_sym_entry_t *symbol,
+                                  bool comptime_only);
+bool n00bb_next_call_within(core_translation_unit_t *unit, parse_tree_t *node,
+                            size_t *cursor, core_link_dependency_view_t *call,
+                            th_type **signature);
+bool n00bb_signature_writes_arguments(th_type *signature);
+bool n00bb_callee_writes_globals(core_link_unit_t *link,
+                                 core_link_declaration_t *callee);
+bool n00bb_use_writes_root(core_translation_unit_t *unit,
+                           parse_grammar_t *grammar, parse_tree_t *use,
+                           parse_tree_t *region);
 bool validate_initializer_cycles(core_link_unit_t *link,
     n00bb_link_analysis_t *analysis,
     core_link_contribution_state_t *state_out);
@@ -129,7 +144,8 @@ parse_sym_entry_t *trait_method_requirement_symbol(
     core_string_t method_name);
 parse_sym_entry_t *linkable_trait_requirement(
     n00bb_link_analysis_t *analysis, core_translation_unit_t *unit,
-    n00bb_link_use_site_t *site, parse_sym_entry_t *symbol);
+    n00bb_link_use_site_t *site, parse_sym_entry_t *symbol,
+    bool comptime_phase);
 bool diagnose_unused_link_symbols(parse_grammar_t *grammar,
     n00bb_link_analysis_t *analysis);
 bool resolve_inferred_trait_references(parse_grammar_t *grammar,
@@ -369,6 +385,7 @@ typedef struct {
     ir_global_t *source_global;
     ir_module_t *target_module;
     ir_global_t *target_global;
+    bool declared_static;
 } n00bb_global_result_binding_t;
 core_list_decl(n00bb_global_result_binding_t);
 
@@ -432,6 +449,13 @@ typedef struct n00bb_link_analysis_t {
     bool returned_parameters_computed;
     n00bb_resolver_t *resolver;
 } n00bb_link_analysis_t;
+
+static inline bool
+n00bb_open_dispatch(const n00bb_link_analysis_t *analysis, bool comptime_phase)
+{
+    return analysis && analysis->may_link_further && !comptime_phase;
+}
+
 parse_sym_entry_t *n00bb_enum_type_symbol(n00bb_link_analysis_t *analysis,
                                           th_type *type);
 

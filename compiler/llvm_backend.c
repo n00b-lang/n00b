@@ -11,7 +11,7 @@
 #include "llvm_stack_maps.h"
 #include "llvm_native_cache.h"
 #include "n00b-abi-v1.h"
-#include "runtime_native_roots.h"
+#include "compiler_native_roots.h"
 #include <llvm-c/Analysis.h>
 #include <llvm-c/BitReader.h>
 #include <llvm-c/BitWriter.h>
@@ -11847,12 +11847,12 @@ lower_module(LLVMModuleRef target, const ir_module_t *source,
     core_list_free(member_matches);
     const char *module_name = ir_module_name(source);
     size_t prefix = strlen(module_name);
-    for (size_t i = 0; i < n00bb_runtime_native_root_count; i++) {
-        const n00bb_runtime_native_root_t *root = &n00bb_runtime_native_roots[i];
-        const char *name = root->qualified_name;
-        if (strncmp(name, module_name, prefix) || name[prefix] != '.')
-            continue;
-        LLVMValueRef function = LLVMGetNamedFunction(target, name);
+    size_t cursor = 0;
+    const n00bb_runtime_native_root_t *root;
+    while ((root = n00bb_native_root_in_module(module_name, prefix,
+                                               &cursor))) {
+        LLVMValueRef function = LLVMGetNamedFunction(target,
+                                                     root->qualified_name);
         if (!function || LLVMIsDeclaration(function)) continue;
         if (!root->c_alias) continue;
         if (LLVMGetNamedFunction(target, root->c_alias)

@@ -121,7 +121,7 @@ n00bb_exe = executable(
      'compiler/enum_value.c',
      'compiler/preprocessor.c', 'compiler/rich_string.c', 'abi/abi_string.c',
      'compiler/specialize.c',
-     'runtime/runtime_native_roots.c',
+     'runtime/runtime_native_roots.c', 'compiler/compiler_native_roots.c',
      'compiler/abi_layout.c', 'compiler/abi_record_layout.c', 'compiler/abi_static_graph.c',
      'abi/abi_directory.c',
      'compiler/abi_container.c', 'compiler/abi_index_patch.c', 'compiler/abi_emit.c', 'compiler/abi_link.c',
@@ -434,7 +434,7 @@ test('abi-type-index', abi_type_index_test)
 llvm_backend_test = executable(
     'llvm-backend-test',
     ['tests/llvm_backend.c', 'compiler/llvm_backend.c', 'compiler/llvm_native_cache.c',
-     'runtime/runtime_native_roots.c'],
+     'runtime/runtime_native_roots.c', 'compiler/compiler_native_roots.c'],
     dependencies: [lantern, llvm],
 )
 
@@ -458,7 +458,8 @@ test('llvm-stack-maps', llvm_stack_maps_test)
 llvm_frame_roots_test = executable(
     'llvm-frame-roots-test',
     ['tests/llvm_frame_roots.c', 'compiler/llvm_backend.c', 'compiler/llvm_native_cache.c',
-     'compiler/llvm_stack_maps.c', 'compiler/native_frame_maps.c', 'runtime/runtime_native_roots.c'],
+     'compiler/llvm_stack_maps.c', 'compiler/native_frame_maps.c', 'runtime/runtime_native_roots.c',
+     'compiler/compiler_native_roots.c'],
     dependencies: [lantern, llvm],
 )
 test('llvm-frame-roots', llvm_frame_roots_test)

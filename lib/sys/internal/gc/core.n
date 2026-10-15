@@ -523,11 +523,18 @@ func resolve_object_header_bytes() -> uint {
     require false
 }
 
+func resolve_layout() {
+    if object_header_size != 0 {
+        return
+    }
+    object_header_size      = resolve_object_header_bytes()
+    block_header_line_count = resolve_header_lines()
+}
+
 comptime {
     /* nada, runtime init only */
 } else {
-    object_header_size      = resolve_object_header_bytes()
-    block_header_line_count = resolve_header_lines()
+    resolve_layout()
 }
 
 inline func object_header_bytes() -> uint {

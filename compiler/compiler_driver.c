@@ -3674,7 +3674,8 @@ n00bb_compiler_main(int argc, char **argv)
         core_free(path);
     }
     bool abi_emitted = false;
-    if (located && (build_command || compile_command)) {
+    if (located && (build_command || compile_command
+                    || (library_command && !emit_interface))) {
         located = n00bb_execute_comptime(link, link_analysis,
             !preprocessor_options.release_mode, native_cpu, argv[0],
             cli_diagnostics);

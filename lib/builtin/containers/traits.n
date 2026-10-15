@@ -7,8 +7,8 @@ trait Appendable {
 }
 
 trait ListLike {
-    func append(modify self : `L, value: `T, front: bool) -> nil
-    func pop(modify self : `L, front: bool) -> `T?
+    func append(modify self : `L, value: `T, front: bool = false) -> nil
+    func pop(modify self : `L, front: bool = false) -> `T?
     func insert(modify self : `L, index: int, value: `T) -> nil
 }
 

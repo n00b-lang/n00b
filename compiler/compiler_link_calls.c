@@ -982,7 +982,7 @@ publish_link_call_dependencies(core_link_unit_t *link,
                 n00bb_link_use_site_t *site = link_use_site_for_node(
                     state, member);
                 callee = linkable_trait_requirement(analysis, unit,
-                                                     site, callee);
+                                                     site, callee, false);
             }
             parse_sym_entry_t *context = attached_symbol(
                 analysis->grammar, unit, label->cond);
@@ -1083,7 +1083,7 @@ publish_link_call_dependencies(core_link_unit_t *link,
                 ? link_declaration_for_symbol(analysis, caller) : nullptr;
             parse_sym_entry_t *callee = site->symbol
                 ? linkable_trait_requirement(analysis, unit,
-                    site, site->symbol) : nullptr;
+                    site, site->symbol, false) : nullptr;
             core_link_declaration_t *target = callee
                 ? link_declaration_for_symbol(analysis, callee) : nullptr;
             core_link_reference_t *reference = site->reference;

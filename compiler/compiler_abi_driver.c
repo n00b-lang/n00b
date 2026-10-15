@@ -13,6 +13,7 @@ extern char **environ;
 #include "compiler_cli.h"
 #include "compiler_tu.h"
 #include "compiler_link.h"
+#include "compiler_lower.h"
 #include "compiler_phases.h"
 #include "compiler_abi_driver.h"
 #include "compiler_object_io.h"
@@ -25,7 +26,7 @@ extern char **environ;
 #include "llvm_native_cache.h"
 #include "native_frame_maps.h"
 #include "n00b-abi-v1.h"
-#include "runtime_native_roots.h"
+#include "compiler_native_roots.h"
 #include "lib/alloc.h"
 #include "lib/buffer.h"
 #include "lib/dict.h"
@@ -326,16 +327,11 @@ n00bb_native_unmanaged_parameter(const ir_value_t *parameter, void *context)
         || !origin || origin->has_user_native_objects) return false;
     const char *module = ir_module_name(parameter->owner->owner);
     const char *function = parameter->owner->name;
-    size_t module_length = module ? strlen(module) : 0;
-    for (size_t i = 0; i < n00bb_runtime_native_root_count; i++) {
-        const n00bb_runtime_native_root_t *root = &n00bb_runtime_native_roots[i];
-        const char *name = root->qualified_name;
-        if (!module_length || strncmp(name, module, module_length)
-            || name[module_length] != '.'
-            || strcmp(name + module_length + 1, function)) continue;
-        for (size_t j = 0; j < root->unmanaged_parameter_count; j++)
-            if (root->unmanaged_parameters[j] == parameter->index) return true;
-    }
+    const n00bb_runtime_native_root_t *root = module && function
+        ? n00bb_native_root_named(module, strlen(module), function,
+                                  strlen(function)) : nullptr;
+    for (size_t j = 0; root && j < root->unmanaged_parameter_count; j++)
+        if (root->unmanaged_parameters[j] == parameter->index) return true;
     return false;
 }
 
@@ -349,15 +345,8 @@ n00bb_closed_callers(const ir_func_t *function, void *context)
     if (!strcmp(function->name, "__finalize")
         || !strncmp(function->name, "__finalize#", 11)) return false;
     const char *module = ir_module_name(function->owner);
-    size_t module_length = module ? strlen(module) : 0;
-    for (size_t i = 0; i < n00bb_runtime_native_root_count; i++) {
-        const char *root = n00bb_runtime_native_roots[i].qualified_name;
-        if (module_length && !strncmp(root, module, module_length)
-            && root[module_length] == '.'
-            && !strcmp(root + module_length + 1, function->name))
-            return false;
-    }
-    return true;
+    return !module || !n00bb_native_root_named(module, strlen(module),
+        function->name, strlen(function->name));
 }
 
 static bool
@@ -1344,7 +1333,9 @@ n00bb_emit_abi_artifacts(core_link_unit_t *link,
             n00bb_package_id(unit),
             state->annotations->symtab, state->lex->tokens,
             state->comptime_ir_module, state->ir_module,
-            phase_code_present, &analysis->target,
+            phase_code_present
+                || n00bb_module_initializers_baked(analysis->grammar, unit),
+            &analysis->target,
             debug_enabled ? N00B_ABI_CAP_DEBUG : 0,
             abi_declaration_for_symbol, analysis,
             abi_source_of_node, &sources, abi_type_owner, &sources, &graphs,

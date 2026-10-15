@@ -353,3 +353,85 @@ publish_function_effect_summaries(core_link_unit_t *link,
                           : CORE_LINK_CONTRIBUTION_UNAVAILABLE;
     return true;
 }
+
+bool
+n00bb_next_call_within(core_translation_unit_t *unit, parse_tree_t *node,
+                       size_t *cursor, core_link_dependency_view_t *call,
+                       th_type **signature)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    core_link_unit_t *link = state ? state->link : nullptr;
+    size_t count = link ? core_link_unit_dependency_count(link) : 0;
+    while (*cursor < count) {
+        size_t i = (*cursor)++;
+        if (!core_link_unit_dependency_at(link, i, call)
+            || (call->kind != N00BB_LINK_DEPENDENCY_CALL
+                && call->kind != N00BB_LINK_DEPENDENCY_TRAIT_DISPATCH
+                && call->kind != N00BB_LINK_DEPENDENCY_CONTEXT_CALL)
+            || call->source_unit != unit || !call->to
+            || !node_is_within((parse_tree_t *)call->source_site, node))
+            continue;
+        ir_func_t *callee = core_link_declaration_binding(call->to,
+            CORE_STRING_STATIC("n00bb.ir.function"));
+        *signature = callee ? th_resolve(callee->type) : nullptr;
+        return true;
+    }
+    return false;
+}
+
+bool
+n00bb_signature_writes_arguments(th_type *signature)
+{
+    for (size_t p = 0; signature && p < th_func_nparams(signature); p++) {
+        const th_param *parameter = th_func_param(signature, p);
+        if (parameter && th_mode_produces_output(parameter->mode))
+            return true;
+    }
+    const th_param *rest = signature ? th_func_rest(signature) : nullptr;
+    return rest && th_mode_produces_output(rest->mode);
+}
+
+bool
+n00bb_callee_writes_globals(core_link_unit_t *link,
+                            core_link_declaration_t *callee)
+{
+    for (size_t j = 0; j < core_link_unit_dependency_count(link); j++) {
+        core_link_dependency_view_t effect;
+        if (!core_link_unit_dependency_at(link, j, &effect)
+            || effect.from != callee) continue;
+        if (effect.kind == N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_WRITE
+            || effect.kind == N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_READ_WRITE
+            || effect.kind
+                == N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_WRITE_SUMMARY
+            || effect.kind
+                == N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_READ_WRITE_SUMMARY)
+            return true;
+    }
+    return false;
+}
+
+bool
+n00bb_use_writes_root(core_translation_unit_t *unit, parse_grammar_t *grammar,
+                      parse_tree_t *use, parse_tree_t *region)
+{
+    for (parse_tree_t *at = core_tree_node_value(use).parent;
+         at && at != region; at = core_tree_node_value(at).parent) {
+        if ((nt_is(grammar, at, "assign-stmt")
+             || nt_is(grammar, at, "binop-assign-stmt"))
+            && node_is_within(use, core_tree_child(at, 0))) return true;
+        if (nt_is(grammar, at, "unary-expr")
+            && core_string_eq(first_token_text(at), CORE_STRING_STATIC("ref")))
+            return true;
+        if (!nt_is(grammar, at, "postfix-expr")
+            || core_tree_num_children(at) < 3
+            || !parse_tree_leaf_is(core_tree_child(at, 1),
+                                   CORE_STRING_STATIC("("))) continue;
+        size_t cursor = 0;
+        core_link_dependency_view_t call;
+        th_type *signature = nullptr;
+        while (n00bb_next_call_within(unit, at, &cursor, &call, &signature))
+            if (!signature || n00bb_signature_writes_arguments(signature))
+                return true;
+    }
+    return false;
+}

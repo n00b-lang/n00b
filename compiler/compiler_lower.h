@@ -5,6 +5,8 @@
 
 bool n00bb_atomic_native_support(ir_module_t *module, th_type *atomic_type,
                                   const core_target_desc_t *target);
+bool n00bb_module_initializers_baked(parse_grammar_t *grammar,
+                                     core_translation_unit_t *unit);
 bool initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
                            core_link_unit_t *link,
                            n00bb_link_analysis_t *analysis,

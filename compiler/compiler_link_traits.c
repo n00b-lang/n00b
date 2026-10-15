@@ -3,7 +3,7 @@
 #include "compiler_link.h"
 #include "compiler_tu.h"
 #include "parse/tree_util.h"
-#include "runtime_native_roots.h"
+#include "compiler_native_roots.h"
 
 typedef th_type *th_type_ptr_t;
 core_list_decl(th_type_ptr_t);
@@ -613,10 +613,10 @@ parse_sym_entry_t *
 linkable_trait_requirement(n00bb_link_analysis_t *analysis,
                            core_translation_unit_t *unit,
                            n00bb_link_use_site_t *site,
-                           parse_sym_entry_t *symbol)
+                           parse_sym_entry_t *symbol, bool comptime_phase)
 {
     if (!analysis || !unit || !symbol) return nullptr;
-    if (!analysis->may_link_further || (symbol->scope
+    if (!n00bb_open_dispatch(analysis, comptime_phase) || (symbol->scope
         && core_string_eq(symbol->scope->scope_tag,
                           CORE_STRING_STATIC("trait")))) return symbol;
     if (!site || !site->resolved_trait_name) return nullptr;
@@ -840,19 +840,9 @@ diagnose_unused_link_symbols(parse_grammar_t *grammar,
                         break;
                     }
                 }
-                for (size_t r = 0; r < n00bb_runtime_native_root_count; r++) {
-                    const char *name = n00bb_runtime_native_roots[r].qualified_name;
-                    if (strlen(name) == module_name.u8_bytes + 1
-                            + symbol->name.u8_bytes
-                        && !memcmp(name, module_name.data, module_name.u8_bytes)
-                        && name[module_name.u8_bytes] == '.'
-                        && !memcmp(name + module_name.u8_bytes + 1,
-                                   symbol->name.data, symbol->name.u8_bytes)) {
-                        native_root = true;
-                        break;
-                    }
-                }
-                if (native_root) continue;
+                if (native_root || n00bb_native_root_named(module_name.data,
+                        module_name.u8_bytes, symbol->name.data,
+                        symbol->name.u8_bytes)) continue;
                 bool literal_handler = false;
                 for (size_t r = 0; r < state->literal_modifiers.len; r++)
                     if (symbol == state->literal_modifiers.data[r].function) {

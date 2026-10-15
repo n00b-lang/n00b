@@ -38,7 +38,7 @@ double n00bb_profile_seconds(void);
 #include "llvm_native_cache.h"
 #include "native_frame_maps.h"
 #include "n00b-abi-v1.h"
-#include "runtime_native_roots.h"
+#include "compiler_native_roots.h"
 #include "storage_selection.h"
 #include "specialize.h"
 #include "lib/alloc.h"
@@ -4200,6 +4200,46 @@ static bool n00bb_attach_call_return_alias(ir_lower_context_t *context,
 static bool n00bb_tree_returns_value(parse_grammar_t *grammar,
                                      parse_tree_t *node);
 
+static ir_value_t *
+n00bb_abstract_trait_requirement(ir_lower_context_t *context,
+                                 n00bb_link_use_site_t *site,
+                                 th_type *requirement_contract,
+                                 th_type *signature, ir_value_t *receiver,
+                                 ir_span_t span)
+{
+    th_ctx *types = ir_module_types(context->module);
+    core_buffer_t requirement_name = {0};
+    core_buffer_printf(&requirement_name, "__trait_req_%s_%.*s",
+        site->resolved_trait_name,
+        (int)site->dispatch_method.u8_bytes,
+        site->dispatch_method.data);
+    ir_func_t *requirement = requirement_name.data
+        ? ir_func_find(context->module, requirement_name.data) : nullptr;
+    if (!requirement && requirement_name.data) {
+        th_type *requirement_type = th_type_clone(types, requirement_contract);
+        requirement = ir_func_add(context->module,
+            requirement_name.data, requirement_type, IR_LINK_EXTERN);
+        if (requirement && !th_is_closed(types, requirement_contract)
+            && !ir_func_set_callable_contract(requirement,
+                                              requirement_contract))
+            requirement = nullptr;
+    }
+    core_buffer_release(&requirement_name);
+    ir_value_t *requirement_address = requirement
+        ? ir_func_address(context->module, requirement) : nullptr;
+    ir_instr_t *selection = requirement_address
+        ? ir_lower_emit_instruction(context, IR_OP_TRAIT_METHOD, span)
+        : nullptr;
+    if (!selection || !ir_lower_set_temp_dest(context, selection,
+                                              "__n00bb_", signature)
+        || !ir_instr_operand_name(selection, site->resolved_trait_name)
+        || !ir_instr_operand_name(selection, site->dispatch_method.data)
+        || !ir_instr_operand_value(selection, receiver)
+        || !ir_instr_operand_value(selection, requirement_address))
+        return nullptr;
+    return selection->dest;
+}
+
 static ir_lower_result_t
 n00bb_lower_operator_method(ir_lower_context_t *context,
                           parse_visit_t *visit,
@@ -4220,9 +4260,10 @@ n00bb_lower_operator_method(ir_lower_context_t *context,
     bool builtin_operator_trait = site && site->resolved_trait_name
         && site->dispatch_trait.data
         && !strcmp(site->resolved_trait_name, site->dispatch_trait.data);
-    if (!builtin_string_add || analysis->may_link_further) {
+    bool open_dispatch = n00bb_open_dispatch(analysis, lower->comptime_phase);
+    if (!builtin_string_add || open_dispatch) {
         parse_sym_entry_t *requirement = linkable_trait_requirement(analysis,
-            lower->unit, site, symbol);
+            lower->unit, site, symbol, lower->comptime_phase);
         symbol = requirement ? requirement
             : builtin_operator_trait ? symbol : nullptr;
     }
@@ -4246,7 +4287,7 @@ n00bb_lower_operator_method(ir_lower_context_t *context,
             requirement, operands[0]->type);
         callee = builtin ? ir_func_address(context->module, builtin) : nullptr;
     }
-    if (!callee && builtin_string_add && !analysis->may_link_further) {
+    if (!callee && builtin_string_add && !open_dispatch) {
         th_ctx *builtin_types = ir_module_types(context->module);
         th_type *string = th_name(builtin_types, "string");
         th_param builtin_params[] = {
@@ -4263,7 +4304,7 @@ n00bb_lower_operator_method(ir_lower_context_t *context,
         callee = builtin ? ir_func_address(context->module, builtin) : nullptr;
     }
     bool abstract_builtin = builtin_operator_trait
-        && (analysis->may_link_further || builtin_requirement);
+        && (open_dispatch || builtin_requirement);
     if (!callee && !abstract_builtin && !closed_dispatch)
         return lower_error(context, IR_DIAG_UNDEFINED_SYMBOL, span,
             "operator has no resolved trait method in this execution phase");
@@ -4301,40 +4342,11 @@ n00bb_lower_operator_method(ir_lower_context_t *context,
         && core_string_eq(symbol->scope->scope_tag,
                           CORE_STRING_STATIC("trait"));
     if (abstract_builtin && !closed_dispatch) {
-        core_buffer_t requirement_name = {0};
-        core_buffer_printf(&requirement_name, "__trait_req_%s_%.*s",
-            site->resolved_trait_name,
-            (int)site->dispatch_method.u8_bytes,
-            site->dispatch_method.data);
-        ir_func_t *requirement = requirement_name.data
-            ? ir_func_find(context->module, requirement_name.data) : nullptr;
-        if (!requirement && requirement_name.data) {
-            th_type *requirement_type = th_type_clone(types,
-                                                      requirement_contract);
-            requirement = ir_func_add(context->module,
-                requirement_name.data, requirement_type, IR_LINK_EXTERN);
-            if (requirement && !th_is_closed(types, requirement_contract)
-                && !ir_func_set_callable_contract(requirement,
-                                                  requirement_contract))
-                requirement = nullptr;
-        }
-        core_buffer_release(&requirement_name);
-        ir_value_t *requirement_address = requirement
-            ? ir_func_address(context->module, requirement) : nullptr;
-        ir_instr_t *selection = requirement_address
-            ? ir_lower_emit_instruction(context, IR_OP_TRAIT_METHOD, span)
-            : nullptr;
-        if (!selection || !ir_lower_set_temp_dest(context, selection,
-                                                  "__n00bb_", signature)
-            || !ir_instr_operand_name(selection,
-                                      site->resolved_trait_name)
-            || !ir_instr_operand_name(selection,
-                                      site->dispatch_method.data)
-            || !ir_instr_operand_value(selection, operands[0])
-            || !ir_instr_operand_value(selection, requirement_address))
+        callee = n00bb_abstract_trait_requirement(context, site,
+            requirement_contract, signature, operands[0], span);
+        if (!callee)
             return lower_error(context, IR_DIAG_INTERNAL, span,
                 "could not retain the builtin operator trait selection");
-        callee = selection->dest;
     }
     if (semantic_trait_call) {
         callee = n00bb_select_trait_method(context, visit->grammar,
@@ -9832,7 +9844,8 @@ n00bb_emit_iteration_trait_call(ir_lower_context_t *context,
         return (lower_error(context, IR_DIAG_VERIFY_TYPED, span,
             "iteration trait call has incomplete semantic bindings"), nullptr);
 
-    symbol = linkable_trait_requirement(analysis, lower->unit, site, symbol);
+    symbol = linkable_trait_requirement(analysis, lower->unit, site, symbol,
+                                        lower->comptime_phase);
     core_translation_unit_t *owner = symbol
         ? unit_for_symbol(lower->grammar, lower->units, symbol) : nullptr;
     n00bb_tu_state_t *owner_state = owner ? tu_state(owner) : nullptr;
@@ -10174,6 +10187,10 @@ static bool n00bb_nominal_value_as(ir_lower_context_t *context,
 static bool n00bb_option_path_proven(n00bb_lower_context_t *lower,
                                      parse_grammar_t *grammar,
                                      parse_tree_t *receiver);
+static bool comptime_global_result_is_bound(n00bb_link_analysis_t *analysis,
+                                            parse_sym_entry_t *symbol);
+static const n00bb_global_result_binding_t *comptime_global_result_binding(
+    n00bb_link_analysis_t *analysis, parse_sym_entry_t *symbol);
 
 static ir_lower_result_t
 n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
@@ -10351,7 +10368,8 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         ? caller_state->link_analysis : nullptr;
     if (trait_call && !reference_builtin && !option_builtin) {
         symbol = linkable_trait_requirement(analysis, lower->unit,
-                                            dispatch_site, symbol);
+                                            dispatch_site, symbol,
+                                            lower->comptime_phase);
         if (!symbol)
             return lower_error(context, IR_DIAG_INTERNAL, span,
                 "linkable trait call has no accessible method requirement");
@@ -13003,7 +13021,7 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
         }
     }
     symbol = linkable_trait_requirement(caller->link_analysis, lower->unit,
-                                        site, symbol);
+                                        site, symbol, lower->comptime_phase);
     if (!symbol) {
         lower_error(context, IR_DIAG_INTERNAL,
             lower_span_for_tree(context, site_node),
@@ -13030,7 +13048,12 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
         ? symbol->callable_contract : symbol->type;
     th_type *signature = th_type_clone(ir_module_types(context->module),
                                        callable);
-    if (!callee || !signature || th_kind_of(signature) != TH_FUNCTION
+    bool abstract_requirement = !callee
+        && n00bb_open_dispatch(caller->link_analysis, lower->comptime_phase)
+        && site->resolved_trait_name && site->dispatch_trait.data
+        && !strcmp(site->resolved_trait_name, site->dispatch_trait.data);
+    if ((!callee && !abstract_requirement) || !signature
+        || th_kind_of(signature) != TH_FUNCTION
         || th_func_nparams(signature) != argument_count
         || th_func_rest(signature)) {
         lower_error(context, IR_DIAG_TYPE_ARGS,
@@ -13092,6 +13115,19 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
         .output_index = 0,
     };
     th_type *failure = th_func_error(signature);
+    if (abstract_requirement && failure
+        && th_kind_of(th_resolve(failure)) == TH_VAR && !lower->tries.len) {
+        th_type *enclosing = th_func_error(context->function->type);
+        if (!th_unify_in_place(ir_module_types(context->module), failure,
+                enclosing ? enclosing
+                          : th_name(ir_module_types(context->module), "nil"))) {
+            lower_error(context, IR_DIAG_TYPE_MISMATCH,
+                lower_span_for_tree(context, site_node),
+                "an uncaught indexed write failure must match the enclosing function's failure channel");
+            return false;
+        }
+        failure = th_resolve(failure);
+    }
     bool has_failure = failure
         && !n00bb_nil_type(ir_module_types(context->module), failure);
     for (size_t i = 0; i < argument_count; i++) {
@@ -13158,7 +13194,17 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
         }
     }
 
-    if (semantic_trait_call) {
+    if (abstract_requirement) {
+        callee = n00bb_abstract_trait_requirement(context, site, callable,
+            signature, arguments[0], lower_span_for_tree(context, index_node));
+        if (!callee) {
+            lower_error(context, IR_DIAG_INTERNAL,
+                lower_span_for_tree(context, site_node),
+                "could not select the indexed write trait requirement");
+            return false;
+        }
+    }
+    else if (semantic_trait_call) {
         ir_value_t *selection = n00bb_select_trait_method(context,
             grammar, callee_unit, symbol, signature, arguments[0],
             callee, lower_span_for_tree(context, index_node));
@@ -13183,7 +13229,8 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
         && ir_instr_operand_value(call, callee);
     for (size_t i = 0; emitted && i < argument_count; i++)
         emitted = ir_instr_operand_value(call, arguments[i]);
-    if (emitted && ir_func_callable_contract(callee_function)) {
+    if (emitted && (abstract_requirement
+                    || ir_func_callable_contract(callee_function))) {
         th_param params[5];
         for (size_t i = 0; i < argument_count; i++)
             params[i] = (th_param){.mode = i == 0 ? TH_INOUT : TH_IN,
@@ -17480,43 +17527,6 @@ n00bb_lower_comptime_statement(ir_lower_context_t *context,
     return false;
 }
 
-static bool
-n00bb_next_call_within(n00bb_lower_context_t *lower, parse_tree_t *node,
-                       size_t *cursor, core_link_dependency_view_t *call,
-                       th_type **signature)
-{
-    n00bb_tu_state_t *state = tu_state(lower->unit);
-    core_link_unit_t *link = state ? state->link : nullptr;
-    size_t count = link ? core_link_unit_dependency_count(link) : 0;
-    while (*cursor < count) {
-        size_t i = (*cursor)++;
-        if (!core_link_unit_dependency_at(link, i, call)
-            || (call->kind != N00BB_LINK_DEPENDENCY_CALL
-                && call->kind != N00BB_LINK_DEPENDENCY_TRAIT_DISPATCH
-                && call->kind != N00BB_LINK_DEPENDENCY_CONTEXT_CALL)
-            || call->source_unit != lower->unit || !call->to
-            || !node_is_within((parse_tree_t *)call->source_site, node))
-            continue;
-        ir_func_t *callee = core_link_declaration_binding(call->to,
-            CORE_STRING_STATIC("n00bb.ir.function"));
-        *signature = callee ? th_resolve(callee->type) : nullptr;
-        return true;
-    }
-    return false;
-}
-
-static bool
-n00bb_signature_writes_arguments(th_type *signature)
-{
-    for (size_t p = 0; signature && p < th_func_nparams(signature); p++) {
-        const th_param *parameter = th_func_param(signature, p);
-        if (parameter && th_mode_produces_output(parameter->mode))
-            return true;
-    }
-    const th_param *rest = signature ? th_func_rest(signature) : nullptr;
-    return rest && th_mode_produces_output(rest->mode);
-}
-
 static parse_tree_t *
 n00bb_region_child(parse_tree_t *node, parse_tree_t *region)
 {
@@ -17537,32 +17547,6 @@ n00bb_region_includes(parse_tree_t *node, parse_tree_t *region,
         parse_tree_t *at = core_tree_child(region, i);
         if (at == guard) return child != guard;
         if (at == child) return false;
-    }
-    return false;
-}
-
-static bool
-n00bb_use_writes_root(n00bb_lower_context_t *lower, parse_grammar_t *grammar,
-                      parse_tree_t *use, parse_tree_t *region)
-{
-    for (parse_tree_t *at = core_tree_node_value(use).parent;
-         at && at != region; at = core_tree_node_value(at).parent) {
-        if ((nt_is(grammar, at, "assign-stmt")
-             || nt_is(grammar, at, "binop-assign-stmt"))
-            && node_is_within(use, core_tree_child(at, 0))) return true;
-        if (nt_is(grammar, at, "unary-expr")
-            && core_string_eq(first_token_text(at), CORE_STRING_STATIC("ref")))
-            return true;
-        if (!nt_is(grammar, at, "postfix-expr")
-            || core_tree_num_children(at) < 3
-            || !parse_tree_leaf_is(core_tree_child(at, 1),
-                                   CORE_STRING_STATIC("("))) continue;
-        size_t cursor = 0;
-        core_link_dependency_view_t call;
-        th_type *signature = nullptr;
-        while (n00bb_next_call_within(lower, at, &cursor, &call, &signature))
-            if (!signature || n00bb_signature_writes_arguments(signature))
-                return true;
     }
     return false;
 }
@@ -17592,7 +17576,7 @@ n00bb_option_path_stable(n00bb_lower_context_t *lower,
     for (size_t i = 0; i < root->use_count; i++) {
         parse_tree_t *use = root->use_nodes[i];
         if (n00bb_region_includes(use, path->region, path->after)
-            && n00bb_use_writes_root(lower, grammar, use, path->region))
+            && n00bb_use_writes_root(lower->unit, grammar, use, path->region))
             return false;
     }
     return true;
@@ -17629,27 +17613,70 @@ n00bb_assert_has_known_side_effect(n00bb_lower_context_t *lower,
     n00bb_tu_state_t *state = tu_state(lower->unit);
     core_link_unit_t *link = state ? state->link : nullptr;
     if (!link) return false;
-    size_t count = core_link_unit_dependency_count(link);
     size_t cursor = 0;
     core_link_dependency_view_t call;
     th_type *signature = nullptr;
-    while (n00bb_next_call_within(lower, node, &cursor, &call, &signature)) {
-        if (n00bb_signature_writes_arguments(signature)) return true;
-        for (size_t j = 0; j < count; j++) {
-            core_link_dependency_view_t effect;
-            if (!core_link_unit_dependency_at(link, j, &effect)
-                || effect.from != call.to) continue;
-            if (effect.kind == N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_WRITE
-                || effect.kind
-                    == N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_READ_WRITE
-                || effect.kind
-                    == N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_WRITE_SUMMARY
-                || effect.kind
-                    == N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_READ_WRITE_SUMMARY)
-                return true;
-        }
-    }
+    while (n00bb_next_call_within(lower->unit, node, &cursor, &call,
+                                  &signature))
+        if (n00bb_signature_writes_arguments(signature)
+            || n00bb_callee_writes_globals(link, call.to)) return true;
     return false;
+}
+
+static bool
+n00bb_construction_writes_only_receiver(parse_grammar_t *grammar,
+                                        const core_link_dependency_view_t *call,
+                                        th_type *signature)
+{
+    parse_tree_t *site = (parse_tree_t *)call->source_site;
+    while (site && !nt_is(grammar, site, "new-expr")
+           && core_tree_num_children(site) == 1)
+        site = core_tree_child(site, 0);
+    if (!signature || !nt_is(grammar, site, "new-expr")) return false;
+    for (size_t p = 1; p < th_func_nparams(signature); p++) {
+        const th_param *parameter = th_func_param(signature, p);
+        if (parameter && th_mode_produces_output(parameter->mode))
+            return false;
+    }
+    const th_param *rest = th_func_rest(signature);
+    return !rest || !th_mode_produces_output(rest->mode);
+}
+
+static bool
+n00bb_initializer_is_effect_free(parse_grammar_t *grammar,
+                                 core_translation_unit_t *unit,
+                                 parse_tree_t *initializer)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    core_link_unit_t *link = state ? state->link : nullptr;
+    if (!link || !initializer) return false;
+    size_t cursor = 0;
+    core_link_dependency_view_t call;
+    th_type *signature = nullptr;
+    while (n00bb_next_call_within(unit, initializer, &cursor, &call,
+                                  &signature)) {
+        if (!signature || n00bb_callee_writes_globals(link, call.to))
+            return false;
+        if (n00bb_signature_writes_arguments(signature)
+            && !n00bb_construction_writes_only_receiver(grammar, &call,
+                                                        signature))
+            return false;
+    }
+    return true;
+}
+
+static bool
+n00bb_runtime_initializer_redundant(parse_grammar_t *grammar,
+                                    core_translation_unit_t *unit,
+                                    parse_sym_entry_t *symbol,
+                                    parse_tree_t *initializer)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    n00bb_link_analysis_t *analysis = state ? state->link_analysis : nullptr;
+    return analysis && comptime_global_result_is_bound(analysis, symbol)
+        && !n00bb_module_initializer_writes(analysis, symbol)
+        && !n00bb_function_writes_global(state->link, analysis, symbol, true)
+        && n00bb_initializer_is_effect_free(grammar, unit, initializer);
 }
 
 static bool
@@ -17821,7 +17848,16 @@ collect_dynamic_sym_declarations(parse_grammar_t *grammar,
         ir_global_t *global = symbol
             ? link_ir_global_for_symbol(state->link_analysis, symbol)
             : nullptr;
-        if (global && !global->has_static_initializer)
+        const n00bb_global_result_binding_t *baked = symbol
+            && state->link_analysis
+            ? comptime_global_result_binding(state->link_analysis, symbol)
+            : nullptr;
+        bool dynamic = baked ? !baked->declared_static
+                             : global && !global->has_static_initializer;
+        if (global && dynamic
+            && !(baked && n00bb_runtime_initializer_redundant(grammar,
+                     state->unit, symbol,
+                     child_nt(grammar, node, "expression"))))
             core_list_push(*roots, node);
         return;
     }
@@ -17901,6 +17937,19 @@ collect_module_initializer_roots(parse_grammar_t *grammar,
                 comptime)) return false;
     (void)node;
     return true;
+}
+
+bool
+n00bb_module_initializers_baked(parse_grammar_t *grammar,
+                                core_translation_unit_t *unit)
+{
+    core_list_t(n00bb_tree_ptr_t) runtime = core_list_new(n00bb_tree_ptr_t);
+    core_list_t(n00bb_tree_ptr_t) comptime = core_list_new(n00bb_tree_ptr_t);
+    bool baked = collect_module_initializer_roots(grammar, unit, nullptr,
+        &runtime, &comptime) && !runtime.len && !comptime.len;
+    core_list_free(runtime);
+    core_list_free(comptime);
+    return baked;
 }
 
 static bool
@@ -18285,11 +18334,12 @@ build_phase_reachable_functions(
                     core_list_push(roots, function);
             }
             size_t prefix = strlen(module_name);
-            for (size_t j = 0; j < n00bb_runtime_native_root_count; j++) {
-                const char *name = n00bb_runtime_native_roots[j].qualified_name;
-                if (strncmp(name, module_name, prefix) || name[prefix] != '.')
-                    continue;
-                ir_func_t *function = ir_func_find(module, name + prefix + 1);
+            size_t cursor = 0;
+            const n00bb_runtime_native_root_t *native;
+            while ((native = n00bb_native_root_in_module(module_name, prefix,
+                                                         &cursor))) {
+                ir_func_t *function = ir_func_find(module,
+                    n00bb_native_root_function(native, prefix));
                 if (function && function->n_blocks)
                     core_list_push(roots, function);
             }
@@ -18963,6 +19013,7 @@ bind_comptime_global_results(
         if (!succeeds || !has_successful_write || !initialized)
             continue;
 
+        bool declared_static = target->has_static_initializer;
         core_string_t package = n00bb_package_id(unit);
         core_buffer_t key = {0};
         core_buffer_printf(&key, "%.*s:%.*s:global-state:%.*s",
@@ -19002,6 +19053,7 @@ bind_comptime_global_results(
                 .source_global = candidate->source,
                 .target_module = state->ir_module,
                 .target_global = target,
+                .declared_static = declared_static,
             }));
     }
     free(targets);
@@ -19298,6 +19350,26 @@ build_n00bb_execution_graph(
     core_list_free(scheduled_producers);
     core_list_free(registered_functions);
     if (ok) analysis->execution_graph = graph;
+    return ok;
+}
+
+static bool
+lower_queued_comptime_functions(ir_lowerer_t *lowerer,
+                                parse_grammar_t *grammar,
+                                core_list_t(core_translation_unit_ptr_t) *units,
+                                ir_ctx_t *ir_context,
+                                n00bb_link_analysis_t *analysis,
+                                size_t *lowered)
+{
+    bool ok = true;
+    for (; ok && *lowered < analysis->comptime_functions.len; (*lowered)++) {
+        parse_sym_entry_t *symbol =
+            analysis->comptime_functions.data[*lowered];
+        core_translation_unit_t *unit = unit_for_symbol(grammar, units,
+                                                        symbol);
+        ok = unit && lower_function_body(lowerer, grammar, unit, symbol,
+            true, ir_context, units);
+    }
     return ok;
 }
 
@@ -19723,15 +19795,22 @@ bind_link_declarations_to_ir(parse_grammar_t *grammar,
 
 
 
-static bool
-comptime_global_result_is_bound(n00bb_link_analysis_t *analysis,
-                                parse_sym_entry_t *symbol)
+static const n00bb_global_result_binding_t *
+comptime_global_result_binding(n00bb_link_analysis_t *analysis,
+                               parse_sym_entry_t *symbol)
 {
     ir_global_t *target = link_ir_global_for_symbol(analysis, symbol);
     for (size_t i = 0; target && i < analysis->global_results.len; i++)
         if (analysis->global_results.data[i].target_global == target)
-            return true;
-    return false;
+            return &analysis->global_results.data[i];
+    return nullptr;
+}
+
+static bool
+comptime_global_result_is_bound(n00bb_link_analysis_t *analysis,
+                                parse_sym_entry_t *symbol)
+{
+    return comptime_global_result_binding(analysis, symbol) != nullptr;
 }
 
 static size_t
@@ -20755,9 +20834,6 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         &initializer_dependencies);
     ok = ok && lower_ordered_module_initializers(lowerer, grammar, &units,
         ir_context, &comptime_init_order, true);
-    if (ok && !interface_closure_only)
-        ok = lower_ordered_module_initializers(lowerer, grammar, &units,
-            ir_context, &runtime_init_order, false);
     if (ok)
         ok = lower_ordered_array_bound_expressions(lowerer, grammar,
             &comptime_init_order, ir_context, &units, analysis);
@@ -20766,25 +20842,29 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
             &comptime_init_order, ir_context, analysis);
     if (ok && !interface_closure_only)
         ok = n00bb_generate_value_methods(analysis);
-    for (size_t i = 0; ok && i < analysis->comptime_functions.len; i++) {
-        parse_sym_entry_t *symbol = analysis->comptime_functions.data[i];
-        core_translation_unit_t *unit = unit_for_symbol(
-            grammar, &units, symbol);
-        ok = unit && lower_function_body(lowerer, grammar, unit, symbol,
-            true, ir_context, &units);
-    }
+    size_t lowered_comptime_functions = 0;
+    if (ok) ok = lower_queued_comptime_functions(lowerer, grammar, &units,
+        ir_context, analysis, &lowered_comptime_functions);
     if (ok) ok = publish_interned_variant_layouts(analysis);
     if (ok) ok = build_phase_reachable_functions(
         analysis, &comptime_init_order, true, diagnostics);
+
+    bool comptime_phase_succeeds = true;
+    if (ok && !interface_closure_only) ok = bind_comptime_global_results(link, analysis,
+        &comptime_init_order, &comptime_phase_succeeds);
+    if (ok && !interface_closure_only)
+        ok = lower_ordered_module_initializers(lowerer, grammar, &units,
+            ir_context, &runtime_init_order, false);
+    if (ok && lowered_comptime_functions != analysis->comptime_functions.len)
+        ok = lower_queued_comptime_functions(lowerer, grammar, &units,
+                ir_context, analysis, &lowered_comptime_functions)
+            && build_phase_reachable_functions(analysis,
+                &comptime_init_order, true, diagnostics);
     if (ok && !interface_closure_only)
         ok = build_phase_reachable_functions(
             analysis, &runtime_init_order, false, diagnostics);
 
     if (ok) ok = diagnose_unused_link_symbols(grammar, analysis);
-
-    bool comptime_phase_succeeds = true;
-    if (ok && !interface_closure_only) ok = bind_comptime_global_results(link, analysis,
-        &comptime_init_order, &comptime_phase_succeeds);
     n00bb_runtime_init_analysis_t runtime_init = {0};
     bool analyze_runtime_init = ok && !interface_closure_only
         && comptime_phase_succeeds;

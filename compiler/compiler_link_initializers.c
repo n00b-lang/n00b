@@ -265,20 +265,42 @@ has_initializer_write_candidate(core_link_unit_t *link,
                                 n00bb_link_analysis_t *analysis,
                                 parse_sym_entry_t *symbol)
 {
-    for (size_t i = 0; i < analysis->units.len; i++) {
-        n00bb_tu_state_t *state = tu_state(analysis->units.data[i]);
-        if (!state) continue;
-        for (size_t site = 0; site < state->link_use_sites.len; site++) {
-            n00bb_link_use_site_t *use = &state->link_use_sites.data[site];
-            if (use->symbol == symbol && use->in_module_initializer
-                && (n00bb_assignment_target(analysis->grammar, use->node,
-                                            nullptr)
-                    || initializer_node_is_out_argument(analysis->grammar,
-                                                        analysis->units.data[i],
-                                                        use->node)))
-                return true;
-        }
-    }
+    return n00bb_module_initializer_writes(analysis, symbol)
+        || n00bb_function_writes_global(link, analysis, symbol, false);
+}
+
+static core_translation_unit_t *
+unit_owning_node(n00bb_link_analysis_t *analysis, parse_tree_t *node)
+{
+    while (node && core_tree_node_value(node).parent)
+        node = core_tree_node_value(node).parent;
+    for (size_t i = 0; node && i < analysis->units.len; i++)
+        if (n00bb_tu_parsed_tree(tu_state(analysis->units.data[i])) == node)
+            return analysis->units.data[i];
+    return nullptr;
+}
+
+static bool
+comptime_reachable_declaration(n00bb_link_analysis_t *analysis,
+                               core_link_declaration_t *declaration)
+{
+    n00bb_link_payload_t *payload = declaration
+        ? core_link_declaration_payload(declaration) : nullptr;
+    ir_func_t *function = payload && payload->symbol
+        ? link_ir_function_for_phase(analysis, payload->symbol, true)
+        : nullptr;
+    for (size_t i = 0; function
+         && i < analysis->comptime_reachable_functions.len; i++)
+        if (analysis->comptime_reachable_functions.data[i] == function)
+            return true;
+    return !function;
+}
+
+bool
+n00bb_function_writes_global(core_link_unit_t *link,
+                             n00bb_link_analysis_t *analysis,
+                             parse_sym_entry_t *symbol, bool comptime_only)
+{
     core_link_declaration_t *target =
         link_declaration_for_symbol(analysis, symbol);
     for (size_t i = 0; target
@@ -293,7 +315,38 @@ has_initializer_write_candidate(core_link_unit_t *link,
                 == N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_READ_WRITE_SUMMARY
             || edge.kind
                 == N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_ALIAS_SUMMARY;
-        if (writes && edge.to == target) return true;
+        if (writes && edge.to == target
+            && (!comptime_only
+                || comptime_reachable_declaration(analysis, edge.from)))
+            return true;
+    }
+    return false;
+}
+
+bool
+n00bb_module_initializer_writes(n00bb_link_analysis_t *analysis,
+                                parse_sym_entry_t *symbol)
+{
+    for (size_t i = 0; i < analysis->units.len; i++) {
+        n00bb_tu_state_t *state = tu_state(analysis->units.data[i]);
+        if (!state) continue;
+        for (size_t site = 0; site < state->link_use_sites.len; site++) {
+            n00bb_link_use_site_t *use = &state->link_use_sites.data[site];
+            if (use->symbol == symbol && use->in_module_initializer
+                && (n00bb_assignment_target(analysis->grammar, use->node,
+                                            nullptr)
+                    || initializer_node_is_out_argument(analysis->grammar,
+                                                        analysis->units.data[i],
+                                                        use->node)))
+                return true;
+        }
+    }
+    for (size_t u = 0; u < symbol->use_count; u++) {
+        parse_tree_t *use = symbol->use_nodes[u];
+        if (enclosing_function_symbol(analysis->grammar, use)) continue;
+        core_translation_unit_t *owner = unit_owning_node(analysis, use);
+        if (owner && n00bb_use_writes_root(owner, analysis->grammar, use,
+                                           nullptr)) return true;
     }
     return false;
 }
