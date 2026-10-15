@@ -1,6 +1,0 @@
-callback State_Mismatch {
-    call(value: int) -> int
-    handler(modify state: string, value: int) -> int
-    setup(handler: Ref[(modify state: string, value: int) -> int],
-          state: Ref[int]) -> nil
-}

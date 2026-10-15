@@ -1,5 +1,0 @@
-import deep.tools.math.core
-
-func use_deep(item: deep.tools.math.core.DeepAnswer) -> int {
-    return deep.tools.math.core.answer(item)
-}

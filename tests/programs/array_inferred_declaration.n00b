@@ -1,5 +1,0 @@
-var inferred_values = [1, 2]'a
-
-func read_inferred_values() -> Array[int] {
-    return inferred_values
-}

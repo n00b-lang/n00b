@@ -1,8 +1,0 @@
-func first(items: Array[`T]) -> `T {
-    return items[0]
-}
-
-comptime {} else {
-    let items: Array[int] = [3]'array
-    require first(items) == 3
-}

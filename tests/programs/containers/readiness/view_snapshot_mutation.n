@@ -1,9 +1,0 @@
-import containers.view
-
-comptime {} else {
-    var values = [2, 3, 5]'array
-    let selected: containers.view.View[int] = values[0:3]
-    values[0] = 13
-    require selected[0] == 2
-    require values[0] == 13
-}

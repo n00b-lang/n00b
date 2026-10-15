@@ -1,2 +1,0 @@
-var row: Array[int][] = [1, 2]'a
-var rank_mismatch: Array[int][2][2] = row

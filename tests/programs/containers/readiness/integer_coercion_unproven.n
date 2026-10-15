@@ -1,7 +1,0 @@
-func echo_unsigned(value: uint) -> uint {
-    return value
-}
-
-func unknown(value: int) -> uint {
-    return echo_unsigned(value)
-}

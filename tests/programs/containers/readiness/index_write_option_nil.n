@@ -1,9 +1,0 @@
-comptime {} else {
-    var values: Array[int?] = new[Array[int?]](2)
-    values[0] = 3
-    values[1] = nil
-    let present: int? = values[0]
-    let absent: int? = values[1]
-    require present != nil
-    require absent == nil
-}

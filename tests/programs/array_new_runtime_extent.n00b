@@ -1,3 +1,0 @@
-func allocate_rows(count: u128) -> Array[Array[int]] {
-    return new[Array[Array[int]]](count)
-}

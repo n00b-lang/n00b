@@ -1,8 +1,0 @@
-import callback_imported_setup_dep
-
-func make_imported(
-    modify state: callback_imported_setup_dep.Imported_State
-) -> callback_imported_setup_dep.Imported_Callback {
-    return callback[callback_imported_setup_dep.Imported_Callback](
-        ref callback_imported_setup_dep.handle, ref state)
-}

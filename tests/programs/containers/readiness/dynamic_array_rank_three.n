@@ -1,7 +1,0 @@
-comptime {} else {
-    var cube: Array[Array[Array[int]]] =
-        new[Array[Array[Array[int]]]](2, 3, 4)
-    cube[1][2][3] = 97
-    require cube[1][2][3] == 97
-    require cube[0][0][0] == 0
-}

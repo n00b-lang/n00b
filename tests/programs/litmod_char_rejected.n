@@ -1,7 +1,0 @@
-litmod<quotes> identity(raw: string) -> string fail: string {
-    return raw
-}
-
-func value() -> char {
-    return 'a''identity
-}

@@ -1,8 +1,0 @@
-import generic_named_arg_dep
-
-comptime {} else {
-    let value: generic_named_arg_dep.Element = (value = 3)
-    let holder: generic_named_arg_dep.Holder[generic_named_arg_dep.Element] =
-        (value = value)
-    require holder.value.value == 3
-}

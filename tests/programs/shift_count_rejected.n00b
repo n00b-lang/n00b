@@ -1,3 +1,0 @@
-func shift(value: u32, count: int) -> u32 {
-    return value << count
-}

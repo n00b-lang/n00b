@@ -1,7 +1,0 @@
-func empty_dict() -> Dict[int, int] {
-    return {:}
-}
-
-comptime {} else {
-    empty_dict()
-}

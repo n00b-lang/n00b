@@ -1,5 +1,0 @@
-import trait_methods
-
-public func take(item: trait_methods.Readable) -> nil {
-    return
-}

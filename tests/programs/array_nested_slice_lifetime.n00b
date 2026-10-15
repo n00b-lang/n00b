@@ -1,6 +1,0 @@
-import array_nested_slice
-
-func nested_view(items: Array[int]) -> View[int] {
-    var first_view: View[int] = items [:]
-    return first_view [:]
-}

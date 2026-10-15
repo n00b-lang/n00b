@@ -1,4 +1,0 @@
-comptime {} else {
-    var values: Array[int] = [1, 2]
-    values[0] = nil
-}

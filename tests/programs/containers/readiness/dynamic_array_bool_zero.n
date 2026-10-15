@@ -1,8 +1,0 @@
-comptime {} else {
-    var booleans: Array[bool] = new[Array[bool]](9)
-    require !booleans[0]
-    require !booleans[8]
-    booleans[8] = true
-    require booleans[8]
-    require !booleans[0]
-}

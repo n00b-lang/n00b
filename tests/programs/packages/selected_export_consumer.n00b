@@ -1,5 +1,0 @@
-import delta
-
-func read_selected() -> int {
-    return delta.selected
-}

@@ -1,5 +1,0 @@
-func make_rows() {
-    var rows: Array[int][][] = new[Array[Array[int]]](3)
-    rows [0] = new[Array[int]](5)
-    rows [1] = new[Array[int]](2)
-}

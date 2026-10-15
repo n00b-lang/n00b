@@ -1,6 +1,0 @@
-import operator_nominal_archive_dep
-
-func round_trip(value: int) -> int {
-    var amount = operator_nominal_archive_dep.make_amount(value)
-    return cast[int] amount
-}

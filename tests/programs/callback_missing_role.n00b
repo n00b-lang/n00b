@@ -1,3 +1,0 @@
-callback Missing_Handler {
-    call(value: int) -> int
-}

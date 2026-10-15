@@ -1,9 +1,0 @@
-import generic_trait_specialization.contract
-
-public func render(self: Dict[`K, string]) -> int {
-    return 2
-}
-
-public func measure(self: Dict[`K, string]) -> int {
-    return 2
-}

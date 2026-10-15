@@ -1,9 +1,0 @@
-import array_phase_archive_dep
-
-func read_fixed_values() -> Array[int] {
-    return array_phase_archive_dep.fixed_values
-}
-
-func read_worker_values() -> Array[int] {
-    return array_phase_archive_dep.worker_values
-}

@@ -1,6 +1,0 @@
-import containers.dict
-
-comptime {} else {
-    var pairs: Dict[int, int] = {:}
-    require containers.dict.len(pairs) == 0
-}

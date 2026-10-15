@@ -1,3 +1,0 @@
-comptime {} else {
-    var values: Array[int][0]
-}

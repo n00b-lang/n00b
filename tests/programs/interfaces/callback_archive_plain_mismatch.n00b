@@ -1,9 +1,0 @@
-import callback_archive_dep
-
-func wrong(value: string) -> int {
-    return 0
-}
-
-func reject_plain() -> callback_archive_dep.Archived_Event {
-    return callback[callback_archive_dep.Archived_Event](ref wrong)
-}

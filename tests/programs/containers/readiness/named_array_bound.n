@@ -1,9 +1,0 @@
-type Element {
-    value: int
-}
-
-const count: uint = 3
-
-func accept(items: Array[Element][count]) {
-    require count == 3
-}

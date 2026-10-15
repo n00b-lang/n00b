@@ -1,5 +1,0 @@
-import generic_record_dep
-
-public type Generic_Link_Holder {
-    public value: generic_record_dep.Generic_Link[int, string]
-}

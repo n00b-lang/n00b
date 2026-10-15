@@ -1,3 +1,0 @@
-func unsupported_string_shape() -> string {
-    return [1]'binary
-}

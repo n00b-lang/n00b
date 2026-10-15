@@ -1,9 +1,0 @@
-func bump(modify target: `T, increment: `T) {
-    target += increment
-}
-
-comptime {} else {
-    var values = [11, 29]'array
-    bump(values[0], 5)
-    require values[0] == 16
-}

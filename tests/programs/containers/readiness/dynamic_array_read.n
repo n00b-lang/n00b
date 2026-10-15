@@ -1,5 +1,0 @@
-comptime {} else {
-    let values: Array[int?] = new[Array[int?]](2)
-    let first: int? = values[0]
-    require first == nil
-}

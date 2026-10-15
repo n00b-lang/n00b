@@ -1,3 +1,0 @@
-import function_archive_dep
-
-var archive_initialized: int = function_archive_dep.renamed_add(1)

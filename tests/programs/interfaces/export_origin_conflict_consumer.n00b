@@ -1,7 +1,0 @@
-import conflict.left
-import conflict.right
-
-func incompatible_identity(
-    token: conflict.left.Token) -> conflict.right.Token {
-    return token
-}

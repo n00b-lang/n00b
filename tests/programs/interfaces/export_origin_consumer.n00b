@@ -1,7 +1,0 @@
-import export_origin.left
-import export_origin.right
-
-func preserve_identity(
-    token: export_origin.left.Token) -> export_origin.right.Token {
-    return token
-}

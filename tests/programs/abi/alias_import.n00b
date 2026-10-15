@@ -1,5 +1,0 @@
-import alias_export.impl
-
-public func identity(value: alias_export.impl.Number) -> alias_export.impl.Number {
-    return value
-}

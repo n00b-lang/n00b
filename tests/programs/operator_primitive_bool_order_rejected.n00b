@@ -1,7 +1,0 @@
-func generic_less(left: `T, right: `T) -> bool where `T: Comparable {
-    return left < right
-}
-
-func bool_order(left: bool, right: bool) -> bool {
-    return generic_less(left, right)
-}

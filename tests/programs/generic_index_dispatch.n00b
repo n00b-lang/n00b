@@ -1,9 +1,0 @@
-trait Index_Read {
-    func __read(self: `T, index: int) -> string
-}
-
-func __read(self: Array[int], index: int) -> string { return "loaded" }
-
-func generic_get(items: `C, index: int) -> string where `C: Index_Read {
-    return items [index]
-}

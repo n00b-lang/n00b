@@ -1,6 +1,0 @@
-callback Signature_Mismatch {
-    call(value: int) -> int fail: string
-    handler(modify state: string, value: int) -> bool fail: int
-    setup(handler: Ref[(modify state: string, value: int) -> bool fail: int],
-          state: Ref[string]) -> nil
-}

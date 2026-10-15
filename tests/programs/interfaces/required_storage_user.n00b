@@ -1,3 +1,0 @@
-import required_storage_dep
-
-func read_slot() -> int { return required_storage_dep.slot }

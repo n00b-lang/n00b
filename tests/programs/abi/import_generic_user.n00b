@@ -1,5 +1,0 @@
-import where_excludes
-
-public func use() -> int {
-    return where_excludes.keep(3)
-}

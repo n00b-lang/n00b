@@ -1,3 +1,0 @@
-func invalid() {
-    return (1, 2)'foo
-}

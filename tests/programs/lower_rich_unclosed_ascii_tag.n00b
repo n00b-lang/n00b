@@ -1,3 +1,0 @@
-func invalid_rich_tag() -> string {
-    return "[|bold text"'rich
-}

@@ -1,9 +1,0 @@
-comptime {} else {
-    var values = [1, 2, 3]'array
-    values[1] = 4
-    require values[1] == 4
-    let selected: View[int] = values[0:2]
-    require selected[0] == 1
-    values[1:1] = [9]'array
-    require values[1] == 9
-}

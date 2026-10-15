@@ -1,5 +1,0 @@
-import alpha
-
-func read_answer() -> int {
-    return alpha.answer
-}

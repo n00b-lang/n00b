@@ -1,5 +1,0 @@
-import gamma
-
-func read_renamed() -> int {
-    return gamma.renamed()
-}

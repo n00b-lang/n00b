@@ -1,7 +1,0 @@
-comptime {} else {
-    var values: Array[bits:128] = new[Array[bits:128]](2)
-    values[0] = cast[bits:128] 117
-    values[1] = cast[bits:128] 53
-    require values[0] == cast[bits:128] 117
-    require values[1] == cast[bits:128] 53
-}

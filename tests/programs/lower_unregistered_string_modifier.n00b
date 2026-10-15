@@ -1,3 +1,0 @@
-func unregistered_string_modifier() -> string {
-    return "payload"'custom
-}

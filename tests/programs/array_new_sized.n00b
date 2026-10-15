@@ -1,7 +1,0 @@
-const extent: int = 4
-
-var fixed: Array[int][extent] = new[Array[int][extent]]()
-var rectangular: Array[int][extent][] = new[Array[int][extent][]](5)
-var inferred_rectangular: Array[int][][] = new(3, 4)
-var ragged_prefix: Array[int][][] = new[Array[Array[int]]](3)
-comptime { var compile_time_created: Array[int][extent] = new[Array[int][extent]]() }

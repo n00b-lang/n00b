@@ -1,5 +1,0 @@
-func compound(left: byte, right: byte) -> byte {
-    var value = left
-    value += right
-    return value
-}

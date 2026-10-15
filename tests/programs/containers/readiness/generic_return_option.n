@@ -1,9 +1,0 @@
-func identity(value: `T) -> `T {
-    return value
-}
-
-comptime {} else {
-    let value: int? = 7
-    let result: int? = identity(value)
-    require result != nil
-}

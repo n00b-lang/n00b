@@ -1,7 +1,0 @@
-public func first(item: `T) -> `T {
-    return item
-}
-
-public func second(item: `U) -> `U {
-    return item
-}

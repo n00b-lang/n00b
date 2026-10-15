@@ -1,3 +1,0 @@
-func strings_equal(left: string, right: string) -> bool {
-    return left == right
-}

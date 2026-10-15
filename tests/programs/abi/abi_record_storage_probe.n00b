@@ -1,6 +1,0 @@
-public type Point {
-    x: int
-    label: string
-}
-
-public const point: Point = (label = "record storage has a long string value", x = 7)

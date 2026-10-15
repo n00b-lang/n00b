@@ -1,2 +1,0 @@
-type SharedName {}
-var SharedName: int

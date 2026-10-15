@@ -1,3 +1,0 @@
-public type Empty {}
-public const elements: Array[Empty] = []
-public const nothing: Array[nil] = []

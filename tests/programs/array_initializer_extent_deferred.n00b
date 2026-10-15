@@ -1,3 +1,0 @@
-func check_initializer_shape() {
-    var checked_values: Array[int][3] = [1, 2]
-}

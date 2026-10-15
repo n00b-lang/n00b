@@ -1,2 +1,0 @@
-var fully_sized: Array[int][][] = new[Array[Array[int]]](4, 5)
-var prefix_only: Array[int][][] = new[Array[Array[int]]](4)

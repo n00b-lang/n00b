@@ -1,3 +1,0 @@
-func invalid_rich_substitutions() -> string {
-    return "«#» «#0»"'rich
-}

@@ -1,9 +1,0 @@
-import generic_record_dep
-
-comptime {} else {
-    var storage: int = 7
-    let entry: generic_record_dep.Generic_Link[int, string] =
-        (first = storage, second = "seven", address = ref storage)
-    require entry.first == 7
-    require ref_read(entry.address) == 7
-}

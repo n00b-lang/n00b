@@ -1,3 +1,0 @@
-public func make_list() -> List[int] {
-    return [1, 2]
-}

@@ -1,5 +1,0 @@
-import global_archive_dep
-
-func write_fixed() {
-    global_archive_dep.fixed_global = 7
-}

@@ -1,6 +1,0 @@
-trait Index_Write {
-    func __write(modify self: `T, index: int, item: int) -> int
-}
-
-func __write(modify self: Array[int], index: int, item: int) -> int { return item }
-func set_item(modify items: Array[int]) { items [0] = 1 }

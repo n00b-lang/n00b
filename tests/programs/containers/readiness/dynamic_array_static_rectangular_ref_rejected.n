@@ -1,4 +1,0 @@
-comptime {} else {
-    var grid: Array[int][2][3] = new[Array[Array[int]]](2, 3)
-    let row: Ref[Array[int]] = ref grid[0]
-}

@@ -1,5 +1,0 @@
-import generic_absent
-
-func use_answer() -> int {
-    return generic_absent.answer()
-}

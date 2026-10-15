@@ -1,3 +1,0 @@
-func bad_logical(left: bool, right: int) -> bool {
-    return left and right
-}

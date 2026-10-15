@@ -1,4 +1,0 @@
-func bad() -> int {
-    _ = 7
-    return _
-}

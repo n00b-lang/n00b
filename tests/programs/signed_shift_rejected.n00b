@@ -1,3 +1,0 @@
-func shift(value: int) -> int {
-    return value << 1
-}

@@ -1,5 +1,0 @@
-enum Zero { only = 0 }
-enum Unsigned { low = 0, high = 255 }
-enum Signed { low = -8, high = 7 }
-enum Wider { low = 0, high = 2048 }
-enum Wide { high = 0xffffffffffffffffffffffffffffffff }

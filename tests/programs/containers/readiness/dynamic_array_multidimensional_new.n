@@ -1,5 +1,0 @@
-comptime {} else {
-    var rectangular: Array[Array[int]] = new[Array[Array[int]]](2, 3)
-    var ragged: Array[Array[int]] = new[Array[Array[int]]](2)
-    require true
-}

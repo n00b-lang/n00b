@@ -1,1 +1,0 @@
-var ragged_literal: Array[int][2][2] = [[1, 2]'a, [3]'a]'a

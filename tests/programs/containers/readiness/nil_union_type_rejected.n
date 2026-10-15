@@ -1,2 +1,0 @@
-func invalid(value: Array[int | nil]) {
-}

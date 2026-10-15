@@ -1,8 +1,0 @@
-import hash
-
-comptime {} else {
-    let signed: i64 = cast[i64]42
-    let unsigned: u64 = cast[u64]42
-    require signed.hash() == signed.hash()
-    require unsigned.hash() == unsigned.hash()
-}

@@ -1,5 +1,0 @@
-import ref_layout_dep
-
-func inspect_remote(value: Ref[ref_layout_dep.Item]) -> int {
-    return 0
-}

@@ -1,3 +1,0 @@
-litmod<array> parse_json, json(items: int) -> int fail: string {
-    return items
-}

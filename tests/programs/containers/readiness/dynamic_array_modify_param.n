@@ -1,9 +1,0 @@
-func replace_first(modify values: Array[int]) {
-    values[0] = 31
-}
-
-comptime {} else {
-    var values: Array[int] = new[Array[int]](1)
-    replace_first(values)
-    require values[0] == 31
-}

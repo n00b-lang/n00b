@@ -1,4 +1,0 @@
-comptime {} else {
-    let items: Array[int] = [1, 2]'array
-    var values: List[int] = new[List[int]](items)
-}

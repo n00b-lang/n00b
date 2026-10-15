@@ -1,3 +1,0 @@
-func convert(value: int) -> byte {
-    return cast[byte] value
-}

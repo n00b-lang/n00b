@@ -1,3 +1,0 @@
-import array_dimension_range_dep
-
-var positive_imported: Array[int][array_dimension_range_dep.extent + 1] = new[Array[int][array_dimension_range_dep.extent + 1]]()

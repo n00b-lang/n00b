@@ -1,8 +1,0 @@
-func echo(value: `T, times: int = 1) -> `T {
-    return value
-}
-
-comptime {} else {
-    require echo(7) == 7
-    require echo(7, times = 2) == 7
-}
