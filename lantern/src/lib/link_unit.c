@@ -167,6 +167,7 @@ struct core_link_declaration_t {
 };
 
 struct core_link_reference_t {
+    core_link_unit_t *owner;
     core_translation_unit_t *referrer;
     const void *use_site;
     const void *source_scope;
@@ -1649,6 +1650,7 @@ reference_at_internal(core_link_unit_t *link,
     }
     core_link_reference_t *ref = core_alloc(core_link_reference_t);
     *ref = (core_link_reference_t){
+        .owner = link,
         .referrer = referrer,
         .use_site = use_site,
         .source_scope = source_scope,
@@ -1684,10 +1686,7 @@ core_link_unit_defer_reference(core_link_unit_t *link,
                                uint32_t prerequisite_stage)
 {
     if (!link || !reference || !reason.data || !reason.u8_bytes) return false;
-    bool owned_reference = false;
-    for (size_t i = 0; i < link->reference_count; i++)
-        owned_reference |= link->references[i] == reference;
-    if (!owned_reference) return false;
+    if (reference->owner != link) return false;
     core_string_t reason_copy = core_string_dup(reason);
     core_free(reference->deferral_reason.data);
     reference->deferral_reason = reason_copy;
@@ -1706,10 +1705,7 @@ core_link_unit_resolve_reference(core_link_unit_t *link,
 {
     if (!link || !reference || !target_module.data || !target_module.u8_bytes
         || !declaration_key.data || !declaration_key.u8_bytes) return false;
-    bool owned_reference = false;
-    for (size_t i = 0; i < link->reference_count; i++)
-        owned_reference |= link->references[i] == reference;
-    if (!owned_reference) return false;
+    if (reference->owner != link) return false;
     core_string_t module_copy = core_string_dup(target_module);
     core_string_t key_copy = core_string_dup(declaration_key);
     core_free(reference->target_module.data);
@@ -2022,10 +2018,7 @@ core_link_reference_set_source_info(core_link_unit_t *link,
                                     core_string_t provenance)
 {
     if (!link || !reference) return false;
-    bool owned_reference = false;
-    for (size_t i = 0; i < link->reference_count; i++)
-        owned_reference |= link->references[i] == reference;
-    if (!owned_reference) return false;
+    if (reference->owner != link) return false;
     if (reference->source_location.has_location
         || reference->provenance.data) {
         bool same_location = reference->source_location.line == location.line

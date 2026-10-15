@@ -140,6 +140,16 @@ test_link_unit_closure_and_linkage(void)
               && core_link_reference_use_site(site_one) == &call_site_one
               && core_link_reference_use_site(site_two) == &call_site_two
               && core_link_reference_target(site_one) == nullptr);
+    core_link_unit_t *foreign_link = core_link_unit_new();
+    check("reference handles cannot be modified through another link unit",
+          !core_link_unit_defer_reference(foreign_link, site_one,
+              CORE_STRING_STATIC("wrong owner"), 1)
+              && !core_link_unit_resolve_reference(foreign_link, site_one,
+                  CORE_STRING_STATIC("pkg.shared"),
+                  CORE_STRING_STATIC("type.Widget"))
+              && !core_link_reference_set_source_info(foreign_link, site_one,
+                  (core_diag_location_t){0}, (core_string_t){0}));
+    core_link_unit_free(foreign_link);
     core_link_reference_t *site_one_second = nullptr;
     core_link_declaration_t *other_definition = nullptr;
     check("source sites retain distinct references to multiple targets",
