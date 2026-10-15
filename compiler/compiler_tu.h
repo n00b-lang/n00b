@@ -870,6 +870,8 @@ n00bb_ordered_nodes_t *n00bb_node_ordered_nodes(parse_tree_t *node);
 n00bb_litmod_site_t *n00bb_node_literal_site(parse_tree_t *node);
 parse_tree_t *n00bb_node_record_literal_origin(parse_tree_t *node);
 parse_sym_entry_t *bound_function_symbol(parse_tree_t *node);
+th_type *n00bb_reference_definition(th_ctx *types, th_type *type);
+th_type *n00bb_dereferenced_type(th_ctx *types, th_type *type);
 n00bb_node_facts_t *n00bb_ensure_node_facts(n00bb_tu_state_t *state,
     parse_tree_t *node);
 n00bb_return_source_t *n00bb_node_return_source(parse_tree_t *node);

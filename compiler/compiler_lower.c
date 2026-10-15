@@ -1070,8 +1070,12 @@ static bool
 n00bb_set_reference_access(ir_ctx_t *context, ir_value_t *value,
                            th_type *type)
 {
+    th_ctx *types = value && value->owner && value->owner->owner
+        ? ir_module_types(value->owner->owner) : nullptr;
+    bool reference = type && (th_kind_of(th_resolve(type)) == TH_INDIRECTION
+        || n00bb_reference_definition(types, type));
     return value && type
-        && (th_kind_of(th_resolve(type)) != TH_INDIRECTION
+        && (!reference
             || ir_value_set_indirect_access(context, value,
                 IR_INDIRECT_ACCESS_READ_WRITE));
 }
@@ -8654,7 +8658,9 @@ n00bb_lower_module_member(ir_lower_context_t *context, parse_visit_t *visit,
             base = ir_lower_bound_value(context, base_symbol);
         if (!base || !n00bb_check_phase_read(context, visit, true, nullptr))
             return (ir_lower_result_t){IR_LOWER_FAILED, nullptr};
-        if (th_kind_of(th_resolve(base->type)) == TH_INDIRECTION) {
+        if (th_kind_of(th_resolve(base->type)) == TH_INDIRECTION
+            || n00bb_reference_definition(ir_module_types(context->module),
+                                          base->type)) {
             ir_value_t *address = n00bb_record_field_address(context,
                 visit->grammar, lower->unit, visit->node, span);
             ir_instr_t *load = address
@@ -13342,6 +13348,27 @@ n00bb_assignment_root_symbol(parse_grammar_t *grammar,
 }
 
 static ir_value_t *
+n00bb_reference_view(ir_lower_context_t *context, ir_value_t *value,
+                     ir_span_t span)
+{
+    n00bb_lower_context_t *lower = context ? context->user : nullptr;
+    th_type *definition = value && lower
+        ? n00bb_reference_definition(ir_module_types(context->module),
+                                     value->type) : nullptr;
+    if (!definition) return value;
+    ir_instr_t *conversion = ir_lower_emit_instruction(context,
+        IR_OP_NOMINAL_CAST, span);
+    if (!conversion || !ir_lower_set_temp_dest(context, conversion,
+                                               "__n00bb_", definition)
+        || !ir_instr_operand_value(conversion, value)
+        || !ir_value_copy_alias_targets(lower->ir_context, conversion->dest,
+                                        value)
+        || !n00bb_set_reference_access(lower->ir_context, conversion->dest,
+                                       definition)) return nullptr;
+    return conversion->dest;
+}
+
+static ir_value_t *
 n00bb_record_field_address(ir_lower_context_t *context,
                            parse_grammar_t *grammar,
                            core_translation_unit_t *unit,
@@ -13354,7 +13381,8 @@ n00bb_record_field_address(ir_lower_context_t *context,
         parse_tree_t *base_node = core_tree_num_children(member)
             ? core_tree_child(member, 0) : nullptr;
         parse_sym_entry_t *field = attached_symbol(grammar, unit, member);
-        ir_value_t *base = ir_lower_node_value(context, base_node);
+        ir_value_t *base = n00bb_reference_view(context,
+            ir_lower_node_value(context, base_node), span);
         parse_sym_entry_t *base_symbol = attached_symbol(grammar, unit,
                                                          base_node);
         ir_value_t *binding = base_symbol
@@ -13605,7 +13633,9 @@ n00bb_lower_record_field_assignment(ir_lower_context_t *context,
         th_type *receiver_type = th_resolve(
             core_tree_node_value(receiver).type);
         bool through_reference = receiver_type
-            && th_kind_of(receiver_type) == TH_INDIRECTION;
+            && (th_kind_of(receiver_type) == TH_INDIRECTION
+                || n00bb_reference_definition(ir_module_types(context->module),
+                                              receiver_type));
         parse_sym_entry_t *root = n00bb_assignment_root_symbol(
             visit->grammar, lower->unit, target);
         parse_sym_phase_t phase = lower->comptime_phase

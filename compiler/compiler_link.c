@@ -233,10 +233,8 @@ field_receiver_type(parse_grammar_t *grammar, core_translation_unit_t *unit,
         parse_sym_entry_t *symbol = attached_symbol(grammar, unit, receiver);
         if (symbol && symbol->type) type = symbol->type;
     }
-    type = type ? th_resolve(type) : nullptr;
-    while (type && th_kind_of(type) == TH_INDIRECTION)
-        type = th_resolve(th_ind_referent(type));
-    return type;
+    n00bb_tu_state_t *state = tu_state(unit);
+    return n00bb_dereferenced_type(state ? state->types : nullptr, type);
 }
 
 bool
@@ -466,10 +464,8 @@ diagnose_known_missing_record_fields(n00bb_link_analysis_t *analysis)
                     analysis->grammar, unit, receiver);
                 if (symbol && symbol->type) receiver_type = symbol->type;
             }
-            receiver_type = receiver_type ? th_resolve(receiver_type) : nullptr;
-            while (receiver_type
-                   && th_kind_of(receiver_type) == TH_INDIRECTION)
-                receiver_type = th_resolve(th_ind_referent(receiver_type));
+            receiver_type = n00bb_dereferenced_type(state->types,
+                                                    receiver_type);
             if (!receiver_type || th_kind_of(receiver_type) != TH_NAMED)
                 continue;
 

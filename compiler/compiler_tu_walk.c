@@ -402,6 +402,24 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             if (alias && !alias->type) alias->type = th_var(state->types);
             if (alias) core_tree_node_value(node).type = alias->type;
         }
+        else if (nt_is(grammar, node, "alias-stmt")) {
+            parse_sym_entry_t *named = core_tree_node_value(node).sym;
+            th_type *representation = declared_type_from_node(grammar, unit,
+                                                              node);
+            representation = representation ? th_resolve(representation)
+                                             : nullptr;
+            if (named && representation
+                && th_kind_of(representation) == TH_INDIRECTION
+                && th_is_closed(state->types, representation)) {
+                core_buffer_t qualified = {0};
+                append_module_type_name(unit, named->name, &qualified);
+                th_type *type = named->type ? named->type
+                    : qualified.data ? th_name(state->types, qualified.data)
+                                     : nullptr;
+                if (type) th_type_define(state->types, type, representation);
+                core_buffer_release(&qualified);
+            }
+        }
         record_function_exit_fact(grammar, unit, node, state);
         if (type_reference || dotted_symbol_path_node(grammar, node))
             remember_link_use_site(grammar, unit, state, node);

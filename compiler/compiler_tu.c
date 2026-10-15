@@ -540,9 +540,8 @@ check_local_record_field_reference(parse_grammar_t *grammar,
                                                        receiver_node);
         if (receiver && receiver->type) receiver_type = receiver->type;
     }
-    receiver_type = receiver_type ? th_resolve(receiver_type) : nullptr;
-    while (receiver_type && th_kind_of(receiver_type) == TH_INDIRECTION)
-        receiver_type = th_ind_referent(receiver_type);
+    receiver_type = state ? n00bb_dereferenced_type(state->types, receiver_type)
+                          : nullptr;
     if (!state || !state->types || !state->annotations || !receiver_type
         || th_kind_of(receiver_type) != TH_NAMED) return false;
 
@@ -550,6 +549,20 @@ check_local_record_field_reference(parse_grammar_t *grammar,
     core_translation_unit_t *owner_unit = nullptr;
     owner_type = type_symbol_in_loaded_imports(
         unit, state->types, receiver_type, &owner_unit);
+    for (size_t depth = 0; owner_type && owner_type->decl_node
+         && nt_is(grammar, owner_type->decl_node, "alias-stmt") && depth < 16;
+         depth++) {
+        th_type *representation = declared_type_from_node(grammar, owner_unit,
+            owner_type->decl_node);
+        representation = representation ? th_resolve(representation) : nullptr;
+        if (!representation || th_kind_of(representation) != TH_INDIRECTION)
+            break;
+        receiver_type = n00bb_dereferenced_type(state->types, representation);
+        if (!receiver_type || th_kind_of(receiver_type) != TH_NAMED)
+            return false;
+        owner_type = type_symbol_in_loaded_imports(
+            unit, state->types, receiver_type, &owner_unit);
+    }
     parse_scope_t *members = owner_type ? owner_type->member_scope : nullptr;
     if (!members) {
         if (owner_type && parse_sym_binding(owner_type,
@@ -7813,6 +7826,29 @@ n00bb_node_record_literal_origin(parse_tree_t *node)
 {
     n00bb_node_facts_t *facts = n00bb_node_facts(node);
     return facts ? facts->record_literal_origin : nullptr;
+}
+
+th_type *
+n00bb_reference_definition(th_ctx *types, th_type *type)
+{
+    type = type ? th_resolve(type) : nullptr;
+    th_type *definition = type && types && th_kind_of(type) == TH_NAMED
+        ? th_type_definition(types, type) : nullptr;
+    definition = definition ? th_resolve(definition) : nullptr;
+    return definition && th_kind_of(definition) == TH_INDIRECTION
+        ? definition : nullptr;
+}
+
+th_type *
+n00bb_dereferenced_type(th_ctx *types, th_type *type)
+{
+    type = type ? th_resolve(type) : nullptr;
+    for (;;) {
+        th_type *definition = n00bb_reference_definition(types, type);
+        if (definition) type = definition;
+        if (!type || th_kind_of(type) != TH_INDIRECTION) return type;
+        type = th_resolve(th_ind_referent(type));
+    }
 }
 
 parse_sym_entry_t *
