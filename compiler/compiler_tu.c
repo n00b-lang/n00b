@@ -3038,9 +3038,11 @@ record_function_exit_fact(parse_grammar_t *grammar,
 
     bool success_channel = nt_is(grammar, node, "return-stmt");
     if (success_channel) {
-        parse_tree_t **returns = core_arena_alloc(&state->semantic_values,
-            (facts->return_expression_count + 1) * sizeof(*returns));
-        if (!returns) {
+        if (!core_arena_try_reserve_raw(&state->semantic_values,
+                (void **)&facts->return_expressions,
+                &facts->return_expression_capacity,
+                facts->return_expression_count + 1,
+                sizeof(*facts->return_expressions))) {
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit), unit,
                 CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0004"),
@@ -3049,11 +3051,7 @@ record_function_exit_fact(parse_grammar_t *grammar,
                 link_source_location(node));
             return;
         }
-        if (facts->return_expression_count)
-            memcpy(returns, facts->return_expressions,
-                facts->return_expression_count * sizeof(*returns));
-        returns[facts->return_expression_count++] = value;
-        facts->return_expressions = returns;
+        facts->return_expressions[facts->return_expression_count++] = value;
 
         if (!observed) return;
 
@@ -5228,16 +5226,10 @@ signature_typevar_for_node(parse_grammar_t *grammar,
     if (!type || th_kind_of(th_resolve(type)) != TH_VAR)
         type = th_var_named(state->types, name.data);
     if (!type) return nullptr;
-    n00bb_typevar_binding_t *grown = core_arena_alloc(
-        &state->semantic_values,
-        (variables->len + 1) * sizeof(*variables->data));
-    if (!grown) return nullptr;
-    if (variables->len)
-        memcpy(grown, variables->data,
-               variables->len * sizeof(*variables->data));
-    grown[variables->len] = (n00bb_typevar_binding_t){name, type};
-    variables->data = grown;
-    variables->len++;
+    if (!core_arena_try_reserve_raw(&state->semantic_values,
+            (void **)&variables->data, &variables->cap,
+            variables->len + 1, sizeof(*variables->data))) return nullptr;
+    variables->data[variables->len++] = (n00bb_typevar_binding_t){name, type};
     core_tree_node_value(node).type = type;
     return type;
 }
@@ -9636,20 +9628,9 @@ record_function_parameter_fact(parse_grammar_t *grammar,
             context_child = core_tree_node_value(context_child).parent;
         if (!nt_is(grammar, context_child, "param-decl")) return true;
     }
-    if (facts->param_count == facts->param_capacity) {
-        if (facts->param_capacity > SIZE_MAX / 2) return false;
-        size_t capacity = facts->param_capacity
-            ? facts->param_capacity * 2 : 1;
-        if (capacity > SIZE_MAX / sizeof(*facts->params)) return false;
-        n00bb_function_parameter_ref_t *grown = core_arena_alloc(
-            &state->semantic_values, capacity * sizeof(*facts->params));
-        if (!grown) return false;
-        if (facts->param_count)
-            memcpy(grown, facts->params,
-                   facts->param_count * sizeof(*facts->params));
-        facts->params = grown;
-        facts->param_capacity = capacity;
-    }
+    if (!core_arena_try_reserve_raw(&state->semantic_values,
+            (void **)&facts->params, &facts->param_capacity,
+            facts->param_count + 1, sizeof(*facts->params))) return false;
     facts->params[facts->param_count++] = (n00bb_function_parameter_ref_t){
         .node = node,
         .variadic = variadic,

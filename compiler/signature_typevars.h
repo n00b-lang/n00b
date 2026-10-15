@@ -22,6 +22,7 @@ core_list_decl(n00bb_typevar_binding_t);
 typedef struct {
     n00bb_typevar_binding_t *data;
     size_t len;
+    size_t cap;
 } n00bb_signature_typevars_t;
 
 typedef struct {

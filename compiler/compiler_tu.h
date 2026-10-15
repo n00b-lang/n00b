@@ -357,6 +357,7 @@ typedef struct {
     bool conflict;
     parse_tree_t **return_expressions;
     size_t return_expression_count;
+    size_t return_expression_capacity;
     size_t returned_parameter;
 } n00bb_function_return_facts_t;
 
