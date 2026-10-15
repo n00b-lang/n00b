@@ -205,20 +205,16 @@ enough to check off one at a time. The specs are `ffi-spec.md`,
 
 ## N2. The `'ffi` literal
 
-### `Module` and the declaration
+### The declaration
 
-- [ ] `Module` builtin type registered in the builtin type table
-- [ ] `Module`'s run-time representation is a module index into the current reflection snapshot
-- [ ] Reflection type row for `Module` emitted like any builtin type
-- [x] `lib/builtin/ffi.n`: `litmod<fence> ffi(source: string) -> Module`
+- [x] `lib/builtin/ffi.n`: `litmod<fence> ffi(source: string)`
 - [x] Implicit import of `builtin.ffi`
-- [ ] `register_user_litmod` (`compiler_tu.c`): a user modifier that shadows a builtin one is an error
+- [x] Two declarations of one literal modifier for one literal kind anywhere in the program are an error, builtins included
 - [x] Test: a local `litmod<fence> ffi` is rejected
 
 ### Evaluation
 
-- [x] Preprocessor recognizes an `'ffi` literal as a const initializer
-- [ ] Preprocessor recognizes an `'ffi` literal as an `import … from` source
+- [x] Preprocessor recognizes an `'ffi` literal as a module-level const initializer and replaces the const with an import of the generated module
 - [x] An `'ffi` literal elsewhere is a compile error at the literal
 - [x] One writ session per compilation, created on first use
 - [x] Contract directories added before the first literal: each `--contract-dir`, then the package's `contracts/`
@@ -229,14 +225,12 @@ enough to check off one at a time. The specs are `ffi-spec.md`,
 - [x] `writ_bind` with the n00b profile
 - [x] libwrit diagnostics forwarded through `core_diagnostics_report_at` with the writ code and mapped location
 - [x] Diagnostics in a used contract report in that file
-- [ ] `infer_user_literal_type` types an `'ffi` literal as `Module` without calling the modifier
 - [x] `n00bb_lower_user_literal` never lowers an `'ffi` literal
 
 ### Dependencies and flags
 
 - [x] `compiler_cli.c`: `--contract-dir DIR`, repeatable
-- [ ] Every file from `writ_unit_file_at` joins the module's cache fingerprint
-- [x] Editing a used contract invalidates the module's cached build
+- [x] Editing a used contract changes the next build
 
 ### Tests
 
@@ -244,29 +238,25 @@ enough to check off one at a time. The specs are `ffi-spec.md`,
 - [x] Malformed literal: error at the right n00b line and column
 - [x] Error in a used contract: reported in the contract file
 - [x] Binding error (E0501): reported at the binding item in the literal
-- [x] `'ffi` literal outside a const or import: rejected
+- [x] `'ffi` literal outside a module-level const: rejected
 - [x] Edit a used contract between builds: the module rebuilds
 - [x] Built binary contains no literal text and no contract text
 
 ### Gate
 
 - [x] n00bb `./build.sh test` green
-- [ ] Committed: "'ffi literal and Module"
+- [x] Committed: "'ffi module literals"
 
 ---
 
 ## N3. zlib end to end
 
-### Modules from `Module` values
+### Generated modules
 
 - [ ] Generated n00b source parsed as its own module unit (the `n00bb_format_parse` sequence on a synthetic source)
 - [ ] Synthetic module name unique per literal and stable across builds
-- [ ] A `const` of type `Module` resolves as a module in member access
-- [ ] `import NAME from EXPR` accepts a compile-time `Module`
-- [ ] `import … from` a run-time `Module` is a compile error
-- [ ] Static member access on a run-time `Module` is a compile error
-- [ ] `resolve_one_package_export` (`compiler_link_packages.c`) treats a `Module` const as a module export
-- [ ] `export zlib as x` on a `Module` const is N00BB-M0007
+- [ ] `resolve_one_package_export` (`compiler_link_packages.c`) treats an `'ffi` const as a module export
+- [ ] `export zlib as x` on an `'ffi` const is N00BB-M0007
 - [ ] `compiler_cli.c`: `--show-ffi MODULE.NAME` prints the generated source
 - [ ] Go-to-definition data maps bound names to the generated source
 
@@ -297,12 +287,10 @@ enough to check off one at a time. The specs are `ffi-spec.md`,
 
 - [ ] `tests/programs/ffi/zlib/__init.n`: `const zlib = [- use <zlib.writ> … -]'ffi` and `package zlib { export zlib }`
 - [ ] Consumer: `import zlib`; `compress2` and `uncompress` round-trip data
-- [ ] Same program with `import zlib from [- … -]'ffi`
 - [ ] Subpackage form: `archive.zlib.compress`
 - [ ] `--show-ffi` output golden
 - [ ] Reflection: the `'ffi` module has a module row, a `module` scope, and symbol rows for every bound name
 - [ ] Reflection: extern functions appear in the native-binding table with their C symbols
-- [ ] Reflection: a `Module` value read at run time finds the module through `n00b_abi_v1_module`
 - [ ] Passes with and without `--lto`
 - [ ] Mach-O run green
 - [ ] Linux run green
