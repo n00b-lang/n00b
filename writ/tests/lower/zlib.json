@@ -38,7 +38,9 @@
         "release": "",
         "span": "none",
         "span_with": "",
-        "type": 23
+        "type": 23,
+        "userdata": false,
+        "userdata_for": ""
       },
       "sizing": "none",
       "sizing_expr": null,
@@ -61,7 +63,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 23
+          "type": 23,
+          "userdata": false,
+          "userdata_for": ""
         }
       ],
       "source_name": "compressBound",
@@ -113,7 +117,9 @@
         "release": "",
         "span": "none",
         "span_with": "",
-        "type": 20
+        "type": 20,
+        "userdata": false,
+        "userdata_for": ""
       },
       "sizing": "needs",
       "sizing_expr": "compressBound(sourceLen)",
@@ -136,7 +142,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 28
+          "type": 28,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -155,7 +163,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 29
+          "type": 29,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -174,7 +184,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 28
+          "type": 28,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -193,7 +205,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 23
+          "type": 23,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -212,7 +226,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 20
+          "type": 20,
+          "userdata": false,
+          "userdata_for": ""
         }
       ],
       "source_name": "compress2",
@@ -264,7 +280,9 @@
         "release": "",
         "span": "none",
         "span_with": "",
-        "type": 20
+        "type": 20,
+        "userdata": false,
+        "userdata_for": ""
       },
       "sizing": "none",
       "sizing_expr": null,
@@ -287,7 +305,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 28
+          "type": 28,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -306,7 +326,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 29
+          "type": 29,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -325,7 +347,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 28
+          "type": 28,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -344,7 +368,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 23
+          "type": 23,
+          "userdata": false,
+          "userdata_for": ""
         }
       ],
       "source_name": "uncompress",

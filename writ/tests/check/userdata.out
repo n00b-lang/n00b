@@ -1,0 +1,14 @@
+error[E0219]: `userdata` names one callback parameter of its function; inside a callback, one slot is `userdata` with no name
+  --> tests/check/userdata.writ:5:49
+error[E0219]: `userdata` names one callback parameter of its function; inside a callback, one slot is `userdata` with no name
+  --> tests/check/userdata.writ:7:31
+error[E0110]: names no parameter of this function
+  --> tests/check/userdata.writ:11:44
+error[E0219]: `userdata` names one callback parameter of its function; inside a callback, one slot is `userdata` with no name
+  --> tests/check/userdata.writ:13:37
+error[E0219]: `userdata` names one callback parameter of its function; inside a callback, one slot is `userdata` with no name
+  --> tests/check/userdata.writ:15:41
+error[E0219]: `userdata` names one callback parameter of its function; inside a callback, one slot is `userdata` with no name
+  --> tests/check/userdata.writ:17:43
+error[E0219]: `userdata` names one callback parameter of its function; inside a callback, one slot is `userdata` with no name
+  --> tests/check/userdata.writ:17:65

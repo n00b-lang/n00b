@@ -787,7 +787,13 @@ resolve_slot(resolver_t *r, uint32_t id, uint32_t owner)
             slot.offset_assert = (uint32_t)strtoul(writ_sym_str(model->session, part->name).data, nullptr, 0);
             break;
         case WRIT_N_USERDATA:
-            unsupported(model, attr, "callback user data (dsl.md §6.3)");
+            slot.userdata = true;
+            slot.userdata_loc = part->loc;
+            if (part->child_count > 1) {
+                unsupported(model, attr, "user data shared by several callbacks");
+            } else if (part->child_count == 1) {
+                slot.userdata_for = node_at(model, child(model, attr, 0))->name;
+            }
             break;
         case WRIT_N_ALIGN_ATTR:
             unsupported(model, attr, "field alignment");

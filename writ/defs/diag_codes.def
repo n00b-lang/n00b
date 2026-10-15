@@ -30,6 +30,7 @@ WRIT_DIAG(ON_UNKNOWN_OUTCOME, "E0215", WRIT_ERROR, "`on` names no outcome of thi
 WRIT_DIAG(REINTERPRET, "E0216", WRIT_ERROR, "reinterpreted elements must be records that pack exactly into the physical element")
 WRIT_DIAG(VIEW_DOMAIN, "E0217", WRIT_ERROR, "the success domain does not fit the result's view")
 WRIT_DIAG(TEXT_CHANNEL, "E0218", WRIT_ERROR, "a text channel's function fills one bounded output under `sizing retry` or `sizing query`")
+WRIT_DIAG(BAD_USERDATA, "E0219", WRIT_ERROR, "`userdata` names one callback parameter of its function; inside a callback, one slot is `userdata` with no name")
 WRIT_DIAG(TOOLCHAIN, "E0301", WRIT_ERROR, "toolchain failure")
 WRIT_DIAG(LAYOUT_TOOLCHAIN, "E0302", WRIT_ERROR, "the contract's layout disagrees with the compiler")
 WRIT_DIAG(SYMBOL_MISSING, "E0303", WRIT_ERROR, "symbol not exported by the library")

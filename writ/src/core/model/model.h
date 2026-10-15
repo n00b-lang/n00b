@@ -118,6 +118,9 @@ typedef struct {
     writ_sym_t         alloc;
     uint32_t           offset_assert;
     uint32_t           offset;
+    bool               userdata;
+    writ_sym_t         userdata_for;
+    writ_loc_t         userdata_loc;
     writ_loc_t         loc;
 } writ_slot_rec_t;
 

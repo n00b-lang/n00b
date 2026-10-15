@@ -59,6 +59,8 @@ WRIT_FIELD(slot, bool, is_private)
 WRIT_FIELD(slot, uint32_t, offset)
 WRIT_FIELD(slot, writ_span_t, declared_at)
 WRIT_REF(slot, type, physical)
+WRIT_FIELD(slot, bool, userdata)
+WRIT_FIELD(slot, writ_str_t, userdata_for)
 WRIT_END(slot)
 
 WRIT_VIEW(outcome)

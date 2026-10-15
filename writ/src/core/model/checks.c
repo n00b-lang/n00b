@@ -352,6 +352,49 @@ text_channels_have_buffers(writ_model_t *model)
     }
 }
 
+static bool
+is_callback_slot(const writ_model_t *model, const writ_slot_rec_t *slot)
+{
+    const writ_type_rec_t *type = writ_type(model, writ_type_physical(model, slot->type));
+    return type->key.kind == WRIT_TYPE_CALLBACK;
+}
+
+static void
+userdata_pairs(writ_model_t *model)
+{
+    EACH_FN(model, f, fn) {
+        uint32_t receivers = 0;
+        EACH_PARAM(model, fn, s, slot) {
+            if (!slot->userdata) {
+                continue;
+            }
+            if (fn->kind == WRIT_FN_CALLBACK) {
+                if (slot->userdata_for || ++receivers > 1) {
+                    writ_report(model->session, WRIT_D_BAD_USERDATA, slot->userdata_loc, nullptr);
+                }
+                continue;
+            }
+            uint32_t target = WRIT_NONE;
+            for (uint32_t t = 0; slot->userdata_for && t < fn->slot_count; t++) {
+                if (writ_fn_slot(model, fn, t)->name == slot->userdata_for) {
+                    target = t;
+                }
+            }
+            if (slot->userdata_for && target == WRIT_NONE) {
+                writ_report(model->session, WRIT_D_UNKNOWN_SLOT, slot->userdata_loc, nullptr);
+                continue;
+            }
+            bool paired = false;
+            EACH_PARAM(model, fn, o, other) {
+                paired = paired || (other != slot && other->userdata && other->userdata_for == slot->userdata_for);
+            }
+            if (target == WRIT_NONE || !is_callback_slot(model, writ_fn_slot(model, fn, target)) || paired) {
+                writ_report(model->session, WRIT_D_BAD_USERDATA, slot->userdata_loc, nullptr);
+            }
+        }
+    }
+}
+
 static void (*const checks[])(writ_model_t *model) = {
 #define WRIT_CHECK(name, section) name,
 #include "checks.def"

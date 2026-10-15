@@ -283,7 +283,9 @@
         "release": "",
         "span": "none",
         "span_with": "",
-        "type": 34
+        "type": 34,
+        "userdata": false,
+        "userdata_for": ""
       },
       "sizing": "none",
       "sizing_expr": null,
@@ -306,7 +308,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 34
+          "type": 34,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -325,7 +329,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 21
+          "type": 21,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -344,7 +350,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 21
+          "type": 21,
+          "userdata": false,
+          "userdata_for": ""
         }
       ],
       "source_name": "alloc_func",
@@ -386,7 +394,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 34
+          "type": 34,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -405,7 +415,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 34
+          "type": 34,
+          "userdata": false,
+          "userdata_for": ""
         }
       ],
       "source_name": "free_func",
@@ -442,7 +454,9 @@
         "release": "",
         "span": "static",
         "span_with": "",
-        "type": 32
+        "type": 32,
+        "userdata": false,
+        "userdata_for": ""
       },
       "sizing": "none",
       "sizing_expr": null,
@@ -511,7 +525,9 @@
         "release": "",
         "span": "none",
         "span_with": "",
-        "type": 20
+        "type": 20,
+        "userdata": false,
+        "userdata_for": ""
       },
       "sizing": "none",
       "sizing_expr": null,
@@ -534,7 +550,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 41
+          "type": 41,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -553,7 +571,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 20
+          "type": 20,
+          "userdata": false,
+          "userdata_for": ""
         }
       ],
       "source_name": "deflate",
@@ -605,7 +625,9 @@
         "release": "",
         "span": "none",
         "span_with": "",
-        "type": 20
+        "type": 20,
+        "userdata": false,
+        "userdata_for": ""
       },
       "sizing": "none",
       "sizing_expr": null,
@@ -628,7 +650,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 41
+          "type": 41,
+          "userdata": false,
+          "userdata_for": ""
         }
       ],
       "source_name": "deflateEnd",
@@ -708,7 +732,9 @@
         "release": "",
         "span": "none",
         "span_with": "",
-        "type": 20
+        "type": 20,
+        "userdata": false,
+        "userdata_for": ""
       },
       "sizing": "none",
       "sizing_expr": null,
@@ -731,7 +757,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 41
+          "type": 41,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -750,7 +778,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 20
+          "type": 20,
+          "userdata": false,
+          "userdata_for": ""
         }
       ],
       "source_name": "inflate",
@@ -802,7 +832,9 @@
         "release": "",
         "span": "none",
         "span_with": "",
-        "type": 20
+        "type": 20,
+        "userdata": false,
+        "userdata_for": ""
       },
       "sizing": "none",
       "sizing_expr": null,
@@ -825,7 +857,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 41
+          "type": 41,
+          "userdata": false,
+          "userdata_for": ""
         }
       ],
       "source_name": "inflateEnd",
@@ -877,7 +911,9 @@
         "release": "",
         "span": "none",
         "span_with": "",
-        "type": 20
+        "type": 20,
+        "userdata": false,
+        "userdata_for": ""
       },
       "sizing": "needs",
       "sizing_expr": "compressBound(sourceLen)",
@@ -900,7 +936,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 39
+          "type": 39,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -919,7 +957,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 40
+          "type": 40,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -938,7 +978,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 39
+          "type": 39,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -957,7 +999,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 23
+          "type": 23,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -976,7 +1020,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 20
+          "type": 20,
+          "userdata": false,
+          "userdata_for": ""
         }
       ],
       "source_name": "compress2",
@@ -1013,7 +1059,9 @@
         "release": "",
         "span": "none",
         "span_with": "",
-        "type": 23
+        "type": 23,
+        "userdata": false,
+        "userdata_for": ""
       },
       "sizing": "none",
       "sizing_expr": null,
@@ -1036,7 +1084,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 23
+          "type": 23,
+          "userdata": false,
+          "userdata_for": ""
         }
       ],
       "source_name": "compressBound",
@@ -1088,7 +1138,9 @@
         "release": "",
         "span": "none",
         "span_with": "",
-        "type": 20
+        "type": 20,
+        "userdata": false,
+        "userdata_for": ""
       },
       "sizing": "none",
       "sizing_expr": null,
@@ -1111,7 +1163,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 39
+          "type": 39,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -1130,7 +1184,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 40
+          "type": 40,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -1149,7 +1205,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 39
+          "type": 39,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -1168,7 +1226,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 23
+          "type": 23,
+          "userdata": false,
+          "userdata_for": ""
         }
       ],
       "source_name": "uncompress",
@@ -1205,7 +1265,9 @@
         "release": "",
         "span": "none",
         "span_with": "",
-        "type": 23
+        "type": 23,
+        "userdata": false,
+        "userdata_for": ""
       },
       "sizing": "none",
       "sizing_expr": null,
@@ -1228,7 +1290,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 23
+          "type": 23,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -1247,7 +1311,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 39
+          "type": 39,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -1266,7 +1332,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 21
+          "type": 21,
+          "userdata": false,
+          "userdata_for": ""
         }
       ],
       "source_name": "adler32",
@@ -1303,7 +1371,9 @@
         "release": "",
         "span": "none",
         "span_with": "",
-        "type": 23
+        "type": 23,
+        "userdata": false,
+        "userdata_for": ""
       },
       "sizing": "none",
       "sizing_expr": null,
@@ -1326,7 +1396,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 23
+          "type": 23,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -1345,7 +1417,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 39
+          "type": 39,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -1364,7 +1438,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 21
+          "type": 21,
+          "userdata": false,
+          "userdata_for": ""
         }
       ],
       "source_name": "crc32",
@@ -1416,7 +1492,9 @@
         "release": "",
         "span": "none",
         "span_with": "",
-        "type": 20
+        "type": 20,
+        "userdata": false,
+        "userdata_for": ""
       },
       "sizing": "none",
       "sizing_expr": null,
@@ -1439,7 +1517,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 41
+          "type": 41,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -1458,7 +1538,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 20
+          "type": 20,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -1477,7 +1559,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 32
+          "type": 32,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -1496,7 +1580,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 20
+          "type": 20,
+          "userdata": false,
+          "userdata_for": ""
         }
       ],
       "source_name": "deflateInit_",
@@ -1548,7 +1634,9 @@
         "release": "",
         "span": "none",
         "span_with": "",
-        "type": 20
+        "type": 20,
+        "userdata": false,
+        "userdata_for": ""
       },
       "sizing": "none",
       "sizing_expr": null,
@@ -1571,7 +1659,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 41
+          "type": 41,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -1590,7 +1680,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 32
+          "type": 32,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -1609,7 +1701,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 20
+          "type": 20,
+          "userdata": false,
+          "userdata_for": ""
         }
       ],
       "source_name": "inflateInit_",
@@ -1661,7 +1755,9 @@
         "release": "",
         "span": "none",
         "span_with": "",
-        "type": 20
+        "type": 20,
+        "userdata": false,
+        "userdata_for": ""
       },
       "sizing": "none",
       "sizing_expr": null,
@@ -1684,7 +1780,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 41
+          "type": 41,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -1703,7 +1801,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 20
+          "type": 20,
+          "userdata": false,
+          "userdata_for": ""
         }
       ],
       "source_name": "deflateInit",
@@ -1755,7 +1855,9 @@
         "release": "",
         "span": "none",
         "span_with": "",
-        "type": 20
+        "type": 20,
+        "userdata": false,
+        "userdata_for": ""
       },
       "sizing": "none",
       "sizing_expr": null,
@@ -1778,7 +1880,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 41
+          "type": 41,
+          "userdata": false,
+          "userdata_for": ""
         }
       ],
       "source_name": "inflateInit",
@@ -1824,7 +1928,9 @@
           "release": "",
           "span": "with",
           "span_with": "self",
-          "type": 35
+          "type": 35,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -1843,7 +1949,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 21
+          "type": 21,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -1862,7 +1970,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 23
+          "type": 23,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -1881,7 +1991,9 @@
           "release": "",
           "span": "with",
           "span_with": "self",
-          "type": 35
+          "type": 35,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -1900,7 +2012,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 21
+          "type": 21,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -1919,7 +2033,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 23
+          "type": 23,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -1938,7 +2054,9 @@
           "release": "",
           "span": "with",
           "span_with": "self",
-          "type": 36
+          "type": 36,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -1957,7 +2075,9 @@
           "release": "",
           "span": "with",
           "span_with": "self",
-          "type": 37
+          "type": 37,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -1976,7 +2096,9 @@
           "release": "",
           "span": "with",
           "span_with": "self",
-          "type": 29
+          "type": 29,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -1995,7 +2117,9 @@
           "release": "",
           "span": "with",
           "span_with": "self",
-          "type": 30
+          "type": 30,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -2014,7 +2138,9 @@
           "release": "",
           "span": "with",
           "span_with": "self",
-          "type": 34
+          "type": 34,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -2033,7 +2159,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 20
+          "type": 20,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -2052,7 +2180,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 23
+          "type": 23,
+          "userdata": false,
+          "userdata_for": ""
         },
         {
           "alloc": "",
@@ -2071,7 +2201,9 @@
           "release": "",
           "span": "none",
           "span_with": "",
-          "type": 23
+          "type": 23,
+          "userdata": false,
+          "userdata_for": ""
         }
       ],
       "name": "z_stream",

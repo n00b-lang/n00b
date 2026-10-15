@@ -72,6 +72,8 @@ build_slots(writ_model_t *model)
             .is_private    = record->is_private,
             .offset        = record->offset,
             .declared_at   = writ_loc_span(session, record->loc),
+            .userdata      = record->userdata,
+            .userdata_for  = sym(model, record->userdata_for),
         };
     }
 }

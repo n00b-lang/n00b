@@ -278,6 +278,8 @@ struct writ_slot_view {
     uint32_t offset;
     writ_span_t declared_at;
     const writ_type_view_t *physical;
+    bool userdata;
+    writ_str_t userdata_for;
 };
 
 struct writ_outcome_view {

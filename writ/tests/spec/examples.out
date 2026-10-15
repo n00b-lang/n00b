@@ -28,7 +28,7 @@ error[E0102]: unknown type: `alloc_func`
   --> dsl.md-8.writ:10:17
 error[E0102]: unknown type: `free_func`
   --> dsl.md-8.writ:11:17
-error[E0901]: not supported yet: callback user data (dsl.md §6.3)
+error[E0901]: not supported yet: user data shared by several callbacks
   --> dsl.md-8.writ:12:22
 == dsl.md example 9
 error[E0102]: unknown type: `Item`
@@ -102,14 +102,10 @@ error[E0102]: unknown type: `Regex`
 error[E0102]: unknown type: `Span`
   --> dsl.md-23.writ:2:32
 == dsl.md example 24
-error[E0901]: not supported yet: callback user data (dsl.md §6.3)
-  --> dsl.md-24.writ:12:33
 error[E0102]: unknown type: `Event`
   --> dsl.md-24.writ:12:48
 error[E0102]: unknown type: `Bus`
   --> dsl.md-24.writ:17:10
-error[E0901]: not supported yet: callback user data (dsl.md §6.3)
-  --> dsl.md-24.writ:19:16
 error[E0102]: unknown type: `SubId`
   --> dsl.md-24.writ:20:6
 == dsl.md example 25
