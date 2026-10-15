@@ -510,7 +510,6 @@ test(
            meson.current_source_dir() / 'tests' / 'programs'
                / 'containers' / 'readiness'
                / 'trait_operator_generic_result.n'],
-    suite: 'regression',
 )
 
 test(
