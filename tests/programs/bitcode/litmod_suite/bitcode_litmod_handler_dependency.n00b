@@ -1,8 +1,8 @@
-litmod<quotes> make_outer, outer(raw: string) -> string fail: string {
-    return "an inner long string payload"'inner
+litmod<quotes> make_outer_handler_dependency, outer_handler_dependency(raw: string) -> string fail: string {
+    return "an inner long string payload"'inner_handler_dependency
 }
 
-litmod<quotes> identity, inner(raw: string) -> string fail: string {
+litmod<quotes> identity_handler_dependency, inner_handler_dependency(raw: string) -> string fail: string {
     return raw
 }
 
@@ -11,9 +11,9 @@ func observe(value: string) {
 }
 
 comptime {
-    observe("ignored"'outer)
+    observe("ignored"'outer_handler_dependency)
 }
 
 func run_test() {
-    observe("ignored"'outer)
+    observe("ignored"'outer_handler_dependency)
 }

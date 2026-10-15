@@ -1,13 +1,13 @@
-litmod<quotes> identity_string, raw(raw: string) -> string fail: string {
+litmod<quotes> identity_string, raw_nested(raw: string) -> string fail: string {
     return raw
 }
 
-litmod<array> identity_array, bundle(items: Array[string]) -> Array[string] fail: string {
+litmod<array> identity_array, bundle_nested(items: Array[string]) -> Array[string] fail: string {
     return items
 }
 
 func value(x: string) -> Array[string] {
-    return ["static"'raw, x]'bundle
+    return ["static"'raw_nested, x]'bundle_nested
 }
 
 comptime {

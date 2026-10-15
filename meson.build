@@ -575,6 +575,15 @@ test(
 )
 
 test(
+    'litmod-duplicates', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'litmod_duplicates.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'litmod_duplicates'],
+    timeout: 300,
+)
+
+test(
     'root-modules', find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'root_modules.sh',
            n00bb_exe.full_path(),

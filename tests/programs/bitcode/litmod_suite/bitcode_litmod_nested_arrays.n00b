@@ -1,13 +1,13 @@
-litmod<array> identity, bundle(items: Array[Array[int]]) -> Array[Array[int]] fail: string {
+litmod<array> identity_nested_arrays, bundle_nested_arrays(items: Array[Array[int]]) -> Array[Array[int]] fail: string {
     return items
 }
 
 func values() -> Array[Array[int]] {
-    return [[1, 2]'array, [3]'array]'bundle
+    return [[1, 2]'array, [3]'array]'bundle_nested_arrays
 }
 
 func dynamic(x: int) -> Array[Array[int]] {
-    return [[1, x]'array, [3]'array]'bundle
+    return [[1, x]'array, [3]'array]'bundle_nested_arrays
 }
 
 func observe(items: Array[Array[int]]) {
@@ -15,7 +15,7 @@ func observe(items: Array[Array[int]]) {
 }
 
 comptime {
-    observe([[4, 5]'array, [6]'array]'bundle)
+    observe([[4, 5]'array, [6]'array]'bundle_nested_arrays)
 }
 
 func run_test() {

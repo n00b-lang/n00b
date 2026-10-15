@@ -1,14 +1,14 @@
-litmod<array> identity, bundle(items: Array[Array[string]]) -> Array[Array[string]] fail: string {
+litmod<array> identity_nested_strings, bundle_nested_strings(items: Array[Array[string]]) -> Array[Array[string]] fail: string {
     return items
 }
 
 func values() -> Array[Array[string]] {
     return [["the first long string payload", "two"]'array,
-                  ["another long string payload"]'array]'bundle
+                  ["another long string payload"]'array]'bundle_nested_strings
 }
 
 func dynamic(text: string) -> Array[Array[string]] {
-    return [["one", text]'array, ["three"]'array]'bundle
+    return [["one", text]'array, ["three"]'array]'bundle_nested_strings
 }
 
 func observe(items: Array[Array[string]]) {
@@ -17,7 +17,7 @@ func observe(items: Array[Array[string]]) {
 
 comptime {
     observe([["a comptime long string payload", "five"]'array,
-                   ["six"]'array]'bundle)
+                   ["six"]'array]'bundle_nested_strings)
 }
 
 func run_test() {

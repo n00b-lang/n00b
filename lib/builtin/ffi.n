@@ -1,12 +1,8 @@
-type Module {
-    index: u32
-}
-
 type Ffi_Bytes layout(c) {
     data: uint
     length: uint
 }
 
-litmod<fence> ffi(source: string) -> Module fail: string {
+litmod<fence> ffi(source: string) -> nil fail: string {
     fail "an 'ffi literal is bound by the compiler"
 }

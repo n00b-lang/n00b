@@ -58,8 +58,8 @@ test "$(grep -c '^error\[E0001\]' "$tmp/broken_contract.log")" = 1
 fails_with local 'a module literal initializes exactly one const'
 fails_with not_const 'a module literal initializes exactly one const'
 fails_with expression 'a module literal only initializes a module-level const'
-fails_with shadow 'cannot shadow a builtin module literal'
-fails_with shadow_alias 'cannot shadow a builtin module literal'
+fails_with shadow "literal modifier 'ffi' for fence literals is already declared in module 'builtin.ffi'"
+fails_with shadow_alias "literal modifier 'ffi' for fence literals is already declared in module 'builtin.ffi'"
 
 mkdir "$tmp/source"
 cp use_search.n00b "$tmp/source/edit.n00b"

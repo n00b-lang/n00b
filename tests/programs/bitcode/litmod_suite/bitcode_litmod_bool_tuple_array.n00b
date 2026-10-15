@@ -1,13 +1,13 @@
-litmod<array> identity, bundle(items: Array[Tuple[bool, int]]) -> Array[Tuple[bool, int]] fail: string {
+litmod<array> identity_bool_tuple_array, bundle_bool_tuple_array(items: Array[Tuple[bool, int]]) -> Array[Tuple[bool, int]] fail: string {
     return items
 }
 
 func static_values() -> Array[Tuple[bool, int]] {
-    return [(true, 7), (false, 8)]'bundle
+    return [(true, 7), (false, 8)]'bundle_bool_tuple_array
 }
 
 func dynamic_values(value: int) -> Array[Tuple[bool, int]] {
-    return [(true, value)]'bundle
+    return [(true, value)]'bundle_bool_tuple_array
 }
 
 comptime {

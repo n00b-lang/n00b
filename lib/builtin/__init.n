@@ -11,7 +11,6 @@ import io.raw
 import ffi
 
 package builtin {
-    export ffi.Module
     export ffi.Ffi_Bytes
     export ffi.ffi
     export containers.list.List

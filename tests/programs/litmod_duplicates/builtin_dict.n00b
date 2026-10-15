@@ -1,0 +1,3 @@
+litmod<dict> mine, dict(items: int) -> int fail: string {
+    return items
+}

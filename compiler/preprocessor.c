@@ -62,6 +62,13 @@ core_list_decl(pp_module_t);
 core_list_decl(size_t);
 
 typedef struct {
+    core_string_t modifier;
+    core_string_t kind;
+    core_string_t module;
+} pp_litmod_t;
+core_list_decl(pp_litmod_t);
+
+typedef struct {
     parse_tree_t *parent;
     parse_tree_t *statement;
 } pp_deferred_stmt_t;
@@ -74,6 +81,7 @@ typedef struct {
     core_list_t(core_string_t) owned_strings;
     core_list_t(pp_module_t) modules;
     core_list_t(size_t) module_stack;
+    core_list_t(pp_litmod_t) litmods;
     const n00bb_preprocessor_options_t *options;
     bool cycle_warning_emitted;
     bool type_only;
@@ -621,29 +629,33 @@ builtin_argument_count(pp_context_t *ctx, parse_tree_t *call)
 }
 
 static bool
-in_builtin_package(const core_translation_unit_t *unit)
-{
-    core_string_t name = unit->module.identifier;
-    return name.u8_bytes >= sizeof("builtin.") - 1
-        && !memcmp(name.data, "builtin.", sizeof("builtin.") - 1);
-}
-
-static bool
 register_litmod_name(pp_context_t *ctx, parse_tree_t *function,
                      parse_tree_t *node, core_string_t name,
                      core_string_t kind)
 {
-    for (size_t i = 0; !in_builtin_package(ctx->unit)
-         && i < ctx->options->module_modifier_count; i++) {
-        if (core_string_eq(name, ctx->options->module_modifiers[i])) {
-            pp_error(ctx, node, "a literal modifier cannot shadow a builtin module literal");
-            return false;
-        }
+    for (size_t i = 0; i < ctx->litmods.len; i++) {
+        pp_litmod_t *existing = &ctx->litmods.data[i];
+        if (!core_string_eq(existing->modifier, name)
+            || !core_string_eq(existing->kind, kind)) continue;
+        core_buffer_t message = {0};
+        core_buffer_printf(&message,
+            "literal modifier '%.*s' for %.*s literals is already declared in module '%.*s'",
+            (int)name.u8_bytes, name.data, (int)kind.u8_bytes, kind.data,
+            (int)existing->module.u8_bytes, existing->module.data);
+        pp_error(ctx, node, message.data);
+        core_buffer_release(&message);
+        return false;
     }
-    if (ctx->options->register_litmod(ctx->options->litmod_context,
-            ctx->unit, function, name, kind)) return true;
-    pp_error(ctx, node, "duplicate literal modifier name and kind");
-    return false;
+    if (!ctx->options->register_litmod(ctx->options->litmod_context,
+            ctx->unit, function, name, kind)) {
+        pp_error(ctx, node, "duplicate literal modifier name and kind");
+        return false;
+    }
+    core_list_push(ctx->litmods, ((pp_litmod_t){
+        .modifier = name, .kind = kind,
+        .module = ctx->unit->module.identifier,
+    }));
+    return true;
 }
 
 static bool
@@ -2022,7 +2034,8 @@ module_literal_leaf(pp_context_t *ctx, parse_tree_t *node, core_string_t *modifi
         node = core_tree_child(node, 0);
     }
     parse_token_info_t *token = node ? parse_node_token(node) : nullptr;
-    if (!token || !token->has_content_span
+    if (!token || !core_string_eq(parse_terminal_name(ctx->grammar, token->tid),
+                                  CORE_STRING_STATIC("EMBED"))
         || !core_option_is_set(token->postfix_modifier)) return nullptr;
     core_string_t name = core_option_get(token->postfix_modifier);
     for (size_t i = 0; ctx->options && i < ctx->options->module_modifier_count; i++) {
@@ -2490,6 +2503,7 @@ n00bb_preprocessor_new(const n00bb_preprocessor_options_t *options)
     preprocessor->context.owned_strings = core_list_new(core_string_t);
     preprocessor->context.modules = core_list_new(pp_module_t);
     preprocessor->context.module_stack = core_list_new(size_t);
+    preprocessor->context.litmods = core_list_new(pp_litmod_t);
     preprocessor->context.options = options;
     return preprocessor;
 }
@@ -2505,6 +2519,7 @@ n00bb_preprocessor_free(n00bb_preprocessor_t *preprocessor)
     core_list_free(ctx->bindings);
     core_list_free(ctx->modules);
     core_list_free(ctx->module_stack);
+    core_list_free(ctx->litmods);
     core_free(preprocessor);
 }
 

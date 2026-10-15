@@ -1,9 +1,9 @@
-litmod<quotes> make_pair, pair(raw: string) -> Tuple[bool, int] fail: string {
+litmod<quotes> make_pair_bool_tuple, pair_bool_tuple(raw: string) -> Tuple[bool, int] fail: string {
     return (true, 7)
 }
 
 func value() -> Tuple[bool, int] {
-    return "ignored"'pair
+    return "ignored"'pair_bool_tuple
 }
 
 comptime {

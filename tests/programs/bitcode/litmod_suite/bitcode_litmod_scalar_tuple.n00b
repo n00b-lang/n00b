@@ -1,4 +1,4 @@
-litmod<quotes> identity, bundle(raw: string) -> Tuple[string, int] fail: string {
+litmod<quotes> identity_scalar_tuple, bundle(raw: string) -> Tuple[string, int] fail: string {
     return (raw, 7)
 }
 

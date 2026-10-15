@@ -1,13 +1,13 @@
-litmod<array> identity, bundle(items: Array[string]) -> Array[string] fail: string {
+litmod<array> identity_static_strings, bundle_static_strings(items: Array[string]) -> Array[string] fail: string {
     return items
 }
 
 func values() -> Array[string] {
-    return ["one", "a string longer than the inline capacity"]'bundle
+    return ["one", "a string longer than the inline capacity"]'bundle_static_strings
 }
 
 func empty() -> Array[string] {
-    return []'bundle
+    return []'bundle_static_strings
 }
 
 func observe(items: Array[string]) {
@@ -15,7 +15,7 @@ func observe(items: Array[string]) {
 }
 
 comptime {
-    observe(["compile-time cached string"]'bundle)
+    observe(["compile-time cached string"]'bundle_static_strings)
 }
 
 func run_test() {

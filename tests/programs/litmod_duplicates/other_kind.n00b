@@ -1,0 +1,9 @@
+import provider
+
+litmod<int> stamp(repr: string) -> string fail: string {
+    return repr
+}
+
+comptime {} else {
+    require 7'stamp == "7"
+}

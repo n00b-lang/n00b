@@ -1,11 +1,11 @@
-litmod<quotes> read_number, number(raw: string) -> int fail: string {
+litmod<quotes> read_number, number_scalar(raw: string) -> int fail: string {
     return 7
 }
 
 comptime {
-    require "seven"'number == 7
+    require "seven"'number_scalar == 7
 }
 
 func run_test() {
-    require "seven"'number == 7
+    require "seven"'number_scalar == 7
 }

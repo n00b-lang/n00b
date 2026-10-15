@@ -1,0 +1,7 @@
+litmod<quotes> first, twice(text: string) -> int fail: string {
+    return 1
+}
+
+litmod<quotes> second, twice(text: string) -> int fail: string {
+    return 2
+}

@@ -1,7 +1,7 @@
-litmod<array> parse_json, json(items: Array[int]) -> Array[int] fail: string {
+litmod<array> parse_json_array_site, json_array_site(items: Array[int]) -> Array[int] fail: string {
     return items
 }
 
 func value() -> Array[int] {
-    return [1, 2]'json
+    return [1, 2]'json_array_site
 }
