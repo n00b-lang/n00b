@@ -1993,17 +1993,25 @@ replace_builtin(pp_context_t *ctx, parse_visit_t *visit)
     }
     int32_t primary_rule = parse_grammar_single_child_rule(ctx->grammar,
         CORE_STRING_STATIC("postfix-expr"), CORE_STRING_STATIC("primary"));
-    parse_tree_t *postfix = primary_rule >= 0
-        ? parse_tree_make_nt(ctx->grammar,
-            CORE_STRING_STATIC("postfix-expr"), primary_rule) : nullptr;
-    if (!postfix || !core_tree_add_child(postfix, primary)) {
-        parse_tree_free(postfix);
+    parse_tree_t *call = node;
+    while (call && !core_tree_is_leaf(call)
+           && !is_name(ctx->grammar, call, "postfix-expr")
+           && core_tree_num_children(call) == 1)
+        call = core_tree_child(call, 0);
+    if (primary_rule < 0 || !call || core_tree_is_leaf(call)
+        || !is_name(ctx->grammar, call, "postfix-expr")) {
         parse_tree_free(primary);
         pp_error(ctx, node, "cannot rewrite processor-time literal");
         return false;
     }
-    visit->replace = postfix;
-    visit->revisit_replacement = true;
+    while (core_tree_num_children(call))
+        parse_tree_free(core_tree_remove_child(call, 0));
+    core_tree_node_value(call).rule_index = primary_rule;
+    if (!core_tree_add_child(call, primary)) {
+        parse_tree_free(primary);
+        pp_error(ctx, node, "cannot rewrite processor-time literal");
+        return false;
+    }
     return true;
 }
 
