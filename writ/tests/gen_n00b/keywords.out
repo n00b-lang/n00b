@@ -198,10 +198,13 @@ void keywords_take_bytes(keywords_bytes_t *bytes, void *out) {
 
 int32_t keywords_n00b_db_open(const void *path, const void *opts, void *result) {
     size_t path_length = 0;
-    const void *path_borrowed = n00b_ffi_borrow((void *)path, &path_length, 0);
-    uint8_t *path_data = malloc(path_length ? path_length : 1);
+    const void *path_borrowed = n00b_ffi_borrow((void *)path, &path_length, 2);
+    uint8_t *path_data = malloc(path_length + 1);
     if (path_data && path_length) {
         memcpy(path_data, path_borrowed, path_length);
+    }
+    if (path_data) {
+        path_data[path_length] = 0;
     }
     n00b_ffi_release((void *)path);
     if (!path_data) {

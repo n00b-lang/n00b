@@ -968,6 +968,17 @@ void resharp_take_bytes(resharp_bytes_t *bytes, void *out) {
     resharp_bytes_free(bytes);
 }
 
+void resharp_take_array_Match(uint64_t data, uint64_t length, void *out) {
+    size_t capacity = 0;
+    uint8_t *items = n00b_ffi_borrow(out, &capacity, 1);
+    size_t count = length < capacity ? (size_t)length : capacity;
+    if (items && data && count) {
+        memcpy(items, (const void *)(uintptr_t)data, count * sizeof(Match));
+    }
+    n00b_ffi_release(out);
+    resharp_free((void *)(uintptr_t)data);
+}
+
 int32_t resharp_n00b_regex_options_free(uint64_t value) {
     int32_t writ_n00b_value = resharp_regex_options_free((writ_resharp_regex_options *)(uintptr_t)value);
     return writ_n00b_value;
@@ -1025,10 +1036,13 @@ int32_t resharp_n00b_regex_options_implicit_captures(uint64_t self, bool yes, vo
 
 int32_t resharp_n00b_regex_is_match(uint64_t self, const void *input, void *out, void *failed_detail, void *panicked_detail) {
     size_t input_length = 0;
-    const void *input_borrowed = n00b_ffi_borrow((void *)input, &input_length, 0);
-    uint8_t *input_data = malloc(input_length ? input_length : 1);
+    const void *input_borrowed = n00b_ffi_borrow((void *)input, &input_length, 2);
+    uint8_t *input_data = malloc(input_length + 1);
     if (input_data && input_length) {
         memcpy(input_data, input_borrowed, input_length);
+    }
+    if (input_data) {
+        input_data[input_length] = 0;
     }
     n00b_ffi_release((void *)input);
     if (!input_data) {
@@ -1042,10 +1056,13 @@ int32_t resharp_n00b_regex_is_match(uint64_t self, const void *input, void *out,
 
 int32_t resharp_n00b_regex_new(const void *pattern, void *out, void *failed_detail, void *panicked_detail) {
     size_t pattern_length = 0;
-    const void *pattern_borrowed = n00b_ffi_borrow((void *)pattern, &pattern_length, 0);
-    uint8_t *pattern_data = malloc(pattern_length ? pattern_length : 1);
+    const void *pattern_borrowed = n00b_ffi_borrow((void *)pattern, &pattern_length, 2);
+    uint8_t *pattern_data = malloc(pattern_length + 1);
     if (pattern_data && pattern_length) {
         memcpy(pattern_data, pattern_borrowed, pattern_length);
+    }
+    if (pattern_data) {
+        pattern_data[pattern_length] = 0;
     }
     n00b_ffi_release((void *)pattern);
     if (!pattern_data) {
@@ -1059,10 +1076,13 @@ int32_t resharp_n00b_regex_new(const void *pattern, void *out, void *failed_deta
 
 int32_t resharp_n00b_regex_with_options(const void *pattern, uint64_t opts, void *out, void *failed_detail, void *panicked_detail) {
     size_t pattern_length = 0;
-    const void *pattern_borrowed = n00b_ffi_borrow((void *)pattern, &pattern_length, 0);
-    uint8_t *pattern_data = malloc(pattern_length ? pattern_length : 1);
+    const void *pattern_borrowed = n00b_ffi_borrow((void *)pattern, &pattern_length, 2);
+    uint8_t *pattern_data = malloc(pattern_length + 1);
     if (pattern_data && pattern_length) {
         memcpy(pattern_data, pattern_borrowed, pattern_length);
+    }
+    if (pattern_data) {
+        pattern_data[pattern_length] = 0;
     }
     n00b_ffi_release((void *)pattern);
     if (!pattern_data) {
@@ -1077,9 +1097,12 @@ int32_t resharp_n00b_regex_with_options(const void *pattern, uint64_t opts, void
 int32_t resharp_n00b_regex_find_all(uint64_t self, const void *input, size_t out_capacity, void *out, void *out_length, void *failed_detail, void *panicked_detail) {
     size_t input_length = 0;
     const void *input_borrowed = n00b_ffi_borrow((void *)input, &input_length, 0);
-    uint8_t *input_data = malloc(input_length ? input_length : 1);
+    uint8_t *input_data = malloc(input_length + 1);
     if (input_data && input_length) {
         memcpy(input_data, input_borrowed, input_length);
+    }
+    if (input_data) {
+        input_data[input_length] = 0;
     }
     n00b_ffi_release((void *)input);
     if (!input_data) {
@@ -1094,9 +1117,12 @@ int32_t resharp_n00b_regex_find_all(uint64_t self, const void *input, size_t out
 int32_t resharp_n00b_regex_find_anchored(uint64_t self, const void *input, void *out, void *failed_detail, void *panicked_detail) {
     size_t input_length = 0;
     const void *input_borrowed = n00b_ffi_borrow((void *)input, &input_length, 0);
-    uint8_t *input_data = malloc(input_length ? input_length : 1);
+    uint8_t *input_data = malloc(input_length + 1);
     if (input_data && input_length) {
         memcpy(input_data, input_borrowed, input_length);
+    }
+    if (input_data) {
+        input_data[input_length] = 0;
     }
     n00b_ffi_release((void *)input);
     if (!input_data) {
@@ -1111,9 +1137,12 @@ int32_t resharp_n00b_regex_find_anchored(uint64_t self, const void *input, void 
 int32_t resharp_n00b_regex_is_full_match(uint64_t self, const void *input, void *out, void *failed_detail, void *panicked_detail) {
     size_t input_length = 0;
     const void *input_borrowed = n00b_ffi_borrow((void *)input, &input_length, 0);
-    uint8_t *input_data = malloc(input_length ? input_length : 1);
+    uint8_t *input_data = malloc(input_length + 1);
     if (input_data && input_length) {
         memcpy(input_data, input_borrowed, input_length);
+    }
+    if (input_data) {
+        input_data[input_length] = 0;
     }
     n00b_ffi_release((void *)input);
     if (!input_data) {
@@ -1127,10 +1156,13 @@ int32_t resharp_n00b_regex_is_full_match(uint64_t self, const void *input, void 
 
 int32_t resharp_n00b_regex_capture_index_for_name(uint64_t self, const void *name, void *out, void *failed_detail, void *panicked_detail) {
     size_t name_length = 0;
-    const void *name_borrowed = n00b_ffi_borrow((void *)name, &name_length, 0);
-    uint8_t *name_data = malloc(name_length ? name_length : 1);
+    const void *name_borrowed = n00b_ffi_borrow((void *)name, &name_length, 2);
+    uint8_t *name_data = malloc(name_length + 1);
     if (name_data && name_length) {
         memcpy(name_data, name_borrowed, name_length);
+    }
+    if (name_data) {
+        name_data[name_length] = 0;
     }
     n00b_ffi_release((void *)name);
     if (!name_data) {
@@ -1193,6 +1225,21 @@ func __ffi_take_bytes(bytes: Ref[Ffi_Bytes]) -> Array[u8] {
     var copied: Array[u8] = new[Array[u8]](cast[int]value.length)
     __ffi_bytes_take(bytes, ref copied)
     return copied
+}
+
+func __ffi_take_string(bytes: Ref[Ffi_Bytes]) -> string? {
+    let copied = __ffi_take_bytes(bytes)
+    var text: string = ""
+    if __string_from_utf8(copied, ref text) {
+        return text
+    }
+    return nil
+}
+
+func __ffi_take_array_Match(data: uint, length: uint) -> Array[Match] {
+    var items: Array[Match] = new[Array[Match]](cast[int]length)
+    __ffi_array_take_Match(data, length, ref items)
+    return items
 }
 
 func close(modify self: Regex_Options) fail: Error {
@@ -1430,7 +1477,7 @@ func is_match(self: Regex, input: string) -> bool fail: Error {
     return out_
 }
 
-func regex_new_(pattern: string) -> Regex fail: Error {
+func regex_new(pattern: string) -> Regex fail: Error {
     var pattern_value = pattern
     var out_: uint = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
@@ -1453,9 +1500,9 @@ func regex_new_(pattern: string) -> Regex fail: Error {
 
 func __init(modify self: Regex, pattern: string) {
     try {
-        self = regex_new_(pattern)!
+        self = regex_new(pattern)!
     } else failure {
-        panic("regex_new_ failed")
+        panic("regex_new failed")
     }
 }
 
@@ -1488,13 +1535,13 @@ func __init(modify self: Regex, pattern: string, opts: Regex_Options) {
     }
 }
 
-func find_all(self: Regex, input: Array[u8], out_capacity: u64) -> Array[Match] fail: Error {
+func find_all(self: Regex, input: Array[u8]) -> Array[Match] fail: Error {
     var input_value = input
     var out_: uint = 0
     var out__length: uint = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
-    let outcome = __regex_find_all(self.raw, ref input_value, out_capacity, ref out_, ref out__length, ref failed_detail, ref panicked_detail)
+    let outcome = __regex_find_all(self.raw, ref input_value, 64, ref out_, ref out__length, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "regex_find_all")
         fail failure
@@ -1507,7 +1554,7 @@ func find_all(self: Regex, input: Array[u8], out_capacity: u64) -> Array[Match] 
         let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_find_all")
         fail failure
     }
-    return __ffi_take_array[Match](out_, out__length)
+    return __ffi_take_array_Match(out_, out__length)
 }
 
 enum Find_Anchored_Outcome {
@@ -1515,7 +1562,12 @@ enum Find_Anchored_Outcome {
     none = 1
 }
 
-func find_anchored(self: Regex, input: Array[u8]) -> Find_Anchored_Outcome fail: Error {
+type Find_Anchored_Result {
+    public outcome: Find_Anchored_Outcome
+    public out_: Match
+}
+
+func find_anchored(self: Regex, input: Array[u8]) -> Find_Anchored_Result fail: Error {
     var input_value = input
     var out_: Match = (start = 0, end = 0)
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
@@ -1533,10 +1585,12 @@ func find_anchored(self: Regex, input: Array[u8]) -> Find_Anchored_Outcome fail:
         let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_find_anchored")
         fail failure
     }
+    var which: Find_Anchored_Outcome = Find_Anchored_Outcome.none
     if outcome == 0 {
-        return Find_Anchored_Outcome.ok
+        which = Find_Anchored_Outcome.ok
     }
-    return Find_Anchored_Outcome.none
+    let values: Find_Anchored_Result = (outcome = which, out_ = out_)
+    return values
 }
 
 func is_full_match(self: Regex, input: Array[u8]) -> bool fail: Error {
@@ -1565,7 +1619,12 @@ enum Capture_Index_For_Name_Outcome {
     none = 1
 }
 
-func capture_index_for_name(self: Regex, name: string) -> Capture_Index_For_Name_Outcome fail: Error {
+type Capture_Index_For_Name_Result {
+    public outcome: Capture_Index_For_Name_Outcome
+    public out_: u64
+}
+
+func capture_index_for_name(self: Regex, name: string) -> Capture_Index_For_Name_Result fail: Error {
     var name_value = name
     var out_: u64 = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
@@ -1583,10 +1642,12 @@ func capture_index_for_name(self: Regex, name: string) -> Capture_Index_For_Name
         let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_capture_index_for_name")
         fail failure
     }
+    var which: Capture_Index_For_Name_Outcome = Capture_Index_For_Name_Outcome.none
     if outcome == 0 {
-        return Capture_Index_For_Name_Outcome.ok
+        which = Capture_Index_For_Name_Outcome.ok
     }
-    return Capture_Index_For_Name_Outcome.none
+    let values: Capture_Index_For_Name_Result = (outcome = which, out_ = out_)
+    return values
 }
 7	resharp.derived.writ:29:1	RegexOptions
 11	resharp.derived.writ:38:1	Regex
@@ -1594,24 +1655,24 @@ func capture_index_for_name(self: Regex, name: string) -> Capture_Index_For_Name
 20	resharp.derived.writ:5:1	Status
 27	resharp.derived.writ:21:1	UnicodeMode
 34	resharp.derived.writ:41:1	FindAll
-54	resharp.derived.writ:30:1	regex_options_free
-63	resharp.derived.writ:39:1	regex_free
-72	resharp.derived.writ:53:1	regex_options_default
-100	resharp.derived.writ:62:1	regex_options_unicode
-121	resharp.derived.writ:73:1	regex_options_case_insensitive
-142	resharp.derived.writ:84:1	regex_options_dot_matches_new_line
-163	resharp.derived.writ:95:1	regex_options_multiline
-184	resharp.derived.writ:106:1	regex_options_ignore_whitespace
-205	resharp.derived.writ:117:1	regex_options_hardened
-226	resharp.derived.writ:128:1	regex_options_unbounded_size
-247	resharp.derived.writ:139:5	regex_options_implicit_captures
-268	resharp.derived.writ:151:1	regex_is_match
-289	resharp.derived.writ:163:1	regex_new
-318	resharp.derived.writ:174:1	regex_with_options
-347	resharp.derived.writ:186:1	regex_find_all
-374	resharp.derived.writ:201:1	regex_find_anchored
-398	resharp.derived.writ:215:1	regex_is_full_match
-424	resharp.derived.writ:227:5	regex_capture_index_for_name
+69	resharp.derived.writ:30:1	regex_options_free
+78	resharp.derived.writ:39:1	regex_free
+87	resharp.derived.writ:53:1	regex_options_default
+115	resharp.derived.writ:62:1	regex_options_unicode
+136	resharp.derived.writ:73:1	regex_options_case_insensitive
+157	resharp.derived.writ:84:1	regex_options_dot_matches_new_line
+178	resharp.derived.writ:95:1	regex_options_multiline
+199	resharp.derived.writ:106:1	regex_options_ignore_whitespace
+220	resharp.derived.writ:117:1	regex_options_hardened
+241	resharp.derived.writ:128:1	regex_options_unbounded_size
+262	resharp.derived.writ:139:5	regex_options_implicit_captures
+283	resharp.derived.writ:151:1	regex_is_match
+304	resharp.derived.writ:163:1	regex_new
+333	resharp.derived.writ:174:1	regex_with_options
+362	resharp.derived.writ:186:1	regex_find_all
+394	resharp.derived.writ:201:1	regex_find_anchored
+420	resharp.derived.writ:215:1	regex_is_full_match
+451	resharp.derived.writ:227:5	regex_capture_index_for_name
 library resharp_writ
 search_path target/release
 load static
@@ -1634,3 +1695,4 @@ extern __regex_find_anchored resharp_n00b_regex_find_anchored (uint, ref[array[u
 extern __regex_is_full_match resharp_n00b_regex_is_full_match (uint, ref[array[u8]], ref[bool], ref[builtin.ffi.Ffi_Bytes], ref[builtin.ffi.Ffi_Bytes]) -> i32 fail: nil
 extern __regex_capture_index_for_name resharp_n00b_regex_capture_index_for_name (uint, ref[string], ref[uint], ref[builtin.ffi.Ffi_Bytes], ref[builtin.ffi.Ffi_Bytes]) -> i32 fail: nil
 extern __ffi_bytes_take resharp_take_bytes (ref[builtin.ffi.Ffi_Bytes], ref[array[u8]]) -> nil fail: nil
+extern __ffi_array_take_Match resharp_take_array_Match (uint, uint, ref[array[Match]]) -> nil fail: nil

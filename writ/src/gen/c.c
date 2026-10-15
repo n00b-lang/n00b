@@ -1104,9 +1104,9 @@ header_text(const writ_c_context_t *c, const writ_plan_view_t *const *plans, siz
     writ_emit_line(&emit, "extern \"C\" {");
     writ_emit_line(&emit, "#endif");
     writ_emit_line(&emit, "");
-    writ_emit_line(&emit, "#define %.*s_ARGUMENT_ERROR (-1)", S(c->upper));
-    writ_emit_line(&emit, "#define %.*s_OUT_OF_MEMORY (-2)", S(c->upper));
-    writ_emit_line(&emit, "#define %.*s_CONTRACT_VIOLATION (-3)", S(c->upper));
+    writ_emit_line(&emit, "#define %.*s_ARGUMENT_ERROR (%d)", S(c->upper), WRIT_C_ARGUMENT_ERROR);
+    writ_emit_line(&emit, "#define %.*s_OUT_OF_MEMORY (%d)", S(c->upper), WRIT_C_OUT_OF_MEMORY);
+    writ_emit_line(&emit, "#define %.*s_CONTRACT_VIOLATION (%d)", S(c->upper), WRIT_C_CONTRACT_VIOLATION);
     writ_emit_line(&emit, "");
     writ_emit_open(&emit, "typedef struct");
     writ_emit_line(&emit, "uint8_t *data;");

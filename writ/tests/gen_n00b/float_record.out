@@ -209,9 +209,12 @@ int pts_n00b_pt_type(int mode) {
 int32_t pts_n00b_pt_sum(const void *args, void *result) {
     size_t args_length = 0;
     const void *args_borrowed = n00b_ffi_borrow((void *)args, &args_length, 0);
-    uint8_t *args_data = malloc(args_length ? args_length : 1);
+    uint8_t *args_data = malloc(args_length + 1);
     if (args_data && args_length) {
         memcpy(args_data, args_borrowed, args_length);
+    }
+    if (args_data) {
+        args_data[args_length] = 0;
     }
     n00b_ffi_release((void *)args);
     if (!args_data) {

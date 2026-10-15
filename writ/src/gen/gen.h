@@ -4,6 +4,12 @@
 #include "../core/syntax/syntax.h"
 #include "writ/gen.h"
 
+enum {
+    WRIT_C_ARGUMENT_ERROR = -1,
+    WRIT_C_OUT_OF_MEMORY = -2,
+    WRIT_C_CONTRACT_VIOLATION = -3,
+};
+
 typedef enum {
     WRIT_REPR_CSTR,
     WRIT_REPR_UTF8,

@@ -581,9 +581,12 @@ int32_t zlib_n00b_inflateEnd(const void *strm, void *status) {
 int32_t zlib_n00b_compress2(const void *source, int level, void *dest, void *status) {
     size_t source_length = 0;
     const void *source_borrowed = n00b_ffi_borrow((void *)source, &source_length, 0);
-    uint8_t *source_data = malloc(source_length ? source_length : 1);
+    uint8_t *source_data = malloc(source_length + 1);
     if (source_data && source_length) {
         memcpy(source_data, source_borrowed, source_length);
+    }
+    if (source_data) {
+        source_data[source_length] = 0;
     }
     n00b_ffi_release((void *)source);
     if (!source_data) {
@@ -603,9 +606,12 @@ unsigned long zlib_n00b_compressBound(unsigned long sourceLen) {
 int32_t zlib_n00b_uncompress(unsigned long dest_capacity, const void *source, void *dest, void *status) {
     size_t source_length = 0;
     const void *source_borrowed = n00b_ffi_borrow((void *)source, &source_length, 0);
-    uint8_t *source_data = malloc(source_length ? source_length : 1);
+    uint8_t *source_data = malloc(source_length + 1);
     if (source_data && source_length) {
         memcpy(source_data, source_borrowed, source_length);
+    }
+    if (source_data) {
+        source_data[source_length] = 0;
     }
     n00b_ffi_release((void *)source);
     if (!source_data) {
@@ -620,9 +626,12 @@ int32_t zlib_n00b_uncompress(unsigned long dest_capacity, const void *source, vo
 int32_t zlib_n00b_adler32(unsigned long adler, const void *buf, void *result) {
     size_t buf_length = 0;
     const void *buf_borrowed = n00b_ffi_borrow((void *)buf, &buf_length, 0);
-    uint8_t *buf_data = malloc(buf_length ? buf_length : 1);
+    uint8_t *buf_data = malloc(buf_length + 1);
     if (buf_data && buf_length) {
         memcpy(buf_data, buf_borrowed, buf_length);
+    }
+    if (buf_data) {
+        buf_data[buf_length] = 0;
     }
     n00b_ffi_release((void *)buf);
     if (!buf_data) {
@@ -637,9 +646,12 @@ int32_t zlib_n00b_adler32(unsigned long adler, const void *buf, void *result) {
 int32_t zlib_n00b_crc32(unsigned long crc, const void *buf, void *result) {
     size_t buf_length = 0;
     const void *buf_borrowed = n00b_ffi_borrow((void *)buf, &buf_length, 0);
-    uint8_t *buf_data = malloc(buf_length ? buf_length : 1);
+    uint8_t *buf_data = malloc(buf_length + 1);
     if (buf_data && buf_length) {
         memcpy(buf_data, buf_borrowed, buf_length);
+    }
+    if (buf_data) {
+        buf_data[buf_length] = 0;
     }
     n00b_ffi_release((void *)buf);
     if (!buf_data) {
@@ -758,10 +770,11 @@ func deflate(modify self: Stream, flush: i32) -> Deflate_Outcome fail: Error {
         let failure: Error = (code = cast[i64]failed_status, text = nil, fn = "deflate")
         fail failure
     }
+    var which: Deflate_Outcome = Deflate_Outcome.done
     if outcome == 0 {
-        return Deflate_Outcome.progress
+        which = Deflate_Outcome.progress
     }
-    return Deflate_Outcome.done
+    return which
 }
 
 func deflate_end(modify strm: Stream) fail: Error {
@@ -806,10 +819,11 @@ func inflate(modify self: Stream, flush: i32) -> Inflate_Outcome fail: Error {
         let failure: Error = (code = cast[i64]failed_status, text = nil, fn = "inflate")
         fail failure
     }
+    var which: Inflate_Outcome = Inflate_Outcome.progress
     if outcome == 0 {
-        return Inflate_Outcome.done
+        which = Inflate_Outcome.done
     }
-    return Inflate_Outcome.progress
+    return which
 }
 
 func inflate_end(modify strm: Stream) fail: Error {
@@ -948,16 +962,16 @@ func inflate_init(modify strm: Stream) fail: Error {
 59	contracts/zlib/aarch64-apple-darwin.writ:61:1	Z_NULL
 68	contracts/zlib/aarch64-apple-darwin.writ:63:1	zlibVersion
 83	contracts/zlib/aarch64-apple-darwin.writ:64:1	deflate
-104	contracts/zlib/aarch64-apple-darwin.writ:65:1	deflateEnd
-122	contracts/zlib/aarch64-apple-darwin.writ:66:1	inflate
-152	contracts/zlib/aarch64-apple-darwin.writ:67:1	inflateEnd
-165	contracts/zlib/aarch64-apple-darwin.writ:68:1	compress2
-181	contracts/zlib/aarch64-apple-darwin.writ:69:1	compressBound
-186	contracts/zlib/aarch64-apple-darwin.writ:70:1	uncompress
-202	contracts/zlib/aarch64-apple-darwin.writ:71:1	adler32
-213	contracts/zlib/aarch64-apple-darwin.writ:72:1	crc32
-224	contracts/zlib/aarch64-apple-darwin.writ:75:1	deflateInit
-237	contracts/zlib/aarch64-apple-darwin.writ:77:1	inflateInit
+105	contracts/zlib/aarch64-apple-darwin.writ:65:1	deflateEnd
+123	contracts/zlib/aarch64-apple-darwin.writ:66:1	inflate
+154	contracts/zlib/aarch64-apple-darwin.writ:67:1	inflateEnd
+167	contracts/zlib/aarch64-apple-darwin.writ:68:1	compress2
+183	contracts/zlib/aarch64-apple-darwin.writ:69:1	compressBound
+188	contracts/zlib/aarch64-apple-darwin.writ:70:1	uncompress
+204	contracts/zlib/aarch64-apple-darwin.writ:71:1	adler32
+215	contracts/zlib/aarch64-apple-darwin.writ:72:1	crc32
+226	contracts/zlib/aarch64-apple-darwin.writ:75:1	deflateInit
+239	contracts/zlib/aarch64-apple-darwin.writ:77:1	inflateInit
 library z
 load static
 extern __zlibVersion zlib_n00b_zlibVersion (ref[uint]) -> i32 fail: nil

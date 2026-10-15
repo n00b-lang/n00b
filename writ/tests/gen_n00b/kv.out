@@ -316,10 +316,13 @@ void kv_take_bytes(kv_bytes_t *bytes, void *out) {
 
 int32_t kv_n00b_kv_open(const void *path, void *out_db, void *detail) {
     size_t path_length = 0;
-    const void *path_borrowed = n00b_ffi_borrow((void *)path, &path_length, 0);
-    uint8_t *path_data = malloc(path_length ? path_length : 1);
+    const void *path_borrowed = n00b_ffi_borrow((void *)path, &path_length, 2);
+    uint8_t *path_data = malloc(path_length + 1);
     if (path_data && path_length) {
         memcpy(path_data, path_borrowed, path_length);
+    }
+    if (path_data) {
+        path_data[path_length] = 0;
     }
     n00b_ffi_release((void *)path);
     if (!path_data) {
@@ -334,16 +337,22 @@ int32_t kv_n00b_kv_open(const void *path, void *out_db, void *detail) {
 int32_t kv_n00b_kv_put(uint64_t db, const void *key, const void *val) {
     size_t key_length = 0;
     const void *key_borrowed = n00b_ffi_borrow((void *)key, &key_length, 0);
-    uint8_t *key_data = malloc(key_length ? key_length : 1);
+    uint8_t *key_data = malloc(key_length + 1);
     if (key_data && key_length) {
         memcpy(key_data, key_borrowed, key_length);
+    }
+    if (key_data) {
+        key_data[key_length] = 0;
     }
     n00b_ffi_release((void *)key);
     size_t val_length = 0;
     const void *val_borrowed = n00b_ffi_borrow((void *)val, &val_length, 0);
-    uint8_t *val_data = malloc(val_length ? val_length : 1);
+    uint8_t *val_data = malloc(val_length + 1);
     if (val_data && val_length) {
         memcpy(val_data, val_borrowed, val_length);
+    }
+    if (val_data) {
+        val_data[val_length] = 0;
     }
     n00b_ffi_release((void *)val);
     if (!key_data || !val_data) {
@@ -360,9 +369,12 @@ int32_t kv_n00b_kv_put(uint64_t db, const void *key, const void *val) {
 int32_t kv_n00b_kv_get(uint64_t db, const void *key, void *out_val, void *out_len) {
     size_t key_length = 0;
     const void *key_borrowed = n00b_ffi_borrow((void *)key, &key_length, 0);
-    uint8_t *key_data = malloc(key_length ? key_length : 1);
+    uint8_t *key_data = malloc(key_length + 1);
     if (key_data && key_length) {
         memcpy(key_data, key_borrowed, key_length);
+    }
+    if (key_data) {
+        key_data[key_length] = 0;
     }
     n00b_ffi_release((void *)key);
     if (!key_data) {
@@ -377,9 +389,12 @@ int32_t kv_n00b_kv_get(uint64_t db, const void *key, void *out_val, void *out_le
 int32_t kv_n00b_kv_iter_new(uint64_t db, const void *prefix, void *result) {
     size_t prefix_length = 0;
     const void *prefix_borrowed = n00b_ffi_borrow((void *)prefix, &prefix_length, 0);
-    uint8_t *prefix_data = malloc(prefix_length ? prefix_length : 1);
+    uint8_t *prefix_data = malloc(prefix_length + 1);
     if (prefix_data && prefix_length) {
         memcpy(prefix_data, prefix_borrowed, prefix_length);
+    }
+    if (prefix_data) {
+        prefix_data[prefix_length] = 0;
     }
     n00b_ffi_release((void *)prefix);
     if (!prefix_data) {

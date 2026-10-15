@@ -2,6 +2,8 @@
 
 core_list_decl(writ_n00b_extern_t);
 
+enum { N00B_FFI_WRITE = 1, N00B_FFI_STRING = 2 };
+
 typedef struct {
     const writ_binding_t *b;
     const writ_model_t   *model;
@@ -397,13 +399,16 @@ emit_c_shim(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view_
                            S(p->name), S(p->name), S(p->name));
         } else if (p->kind == PARAM_VALUE) {
             writ_emit_line(emit, "size_t %.*s_length = 0;", S(p->name));
-            writ_emit_line(emit, "const void *%.*s_borrowed = n00b_ffi_borrow((void *)%.*s, &%.*s_length, 0);",
-                           S(p->name), S(p->name), S(p->name));
-            writ_emit_line(emit, "uint8_t *%.*s_data = malloc(%.*s_length ? %.*s_length : 1);", S(p->name),
-                           S(p->name), S(p->name));
+            writ_emit_line(emit, "const void *%.*s_borrowed = n00b_ffi_borrow((void *)%.*s, &%.*s_length, %d);",
+                           S(p->name), S(p->name), S(p->name),
+                           writ_str_eq(p->n00b_type, writ_cstr("Ref[string]")) ? N00B_FFI_STRING : 0);
+            writ_emit_line(emit, "uint8_t *%.*s_data = malloc(%.*s_length + 1);", S(p->name), S(p->name));
             writ_emit_open(emit, "if (%.*s_data && %.*s_length)", S(p->name), S(p->name));
             writ_emit_line(emit, "memcpy(%.*s_data, %.*s_borrowed, %.*s_length);", S(p->name), S(p->name),
                            S(p->name));
+            writ_emit_close(emit, nullptr);
+            writ_emit_open(emit, "if (%.*s_data)", S(p->name));
+            writ_emit_line(emit, "%.*s_data[%.*s_length] = 0;", S(p->name), S(p->name));
             writ_emit_close(emit, nullptr);
             writ_emit_line(emit, "n00b_ffi_release((void *)%.*s);", S(p->name));
             copies++;
@@ -552,6 +557,122 @@ emit_trampoline(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *callba
     writ_emit_line(emit, "");
 }
 
+static bool
+array_result(const writ_plan_item_view_t *item)
+{
+    return item->shape == WRIT_SHAPE_ARRAY && !writ_c_is_input(item) && item->type && item->type->target;
+}
+
+static writ_str_t
+array_element_name(const n00b_t *g, const writ_type_view_t *element)
+{
+    return scalar_type(g, element);
+}
+
+typedef const writ_type_view_t *type_view_ptr_t;
+core_list_decl(type_view_ptr_t);
+
+static core_list_t(type_view_ptr_t)
+array_elements(const n00b_t *g)
+{
+    core_list_t(type_view_ptr_t) elements = core_list_new(type_view_ptr_t);
+    for (size_t i = 0; i < writ_model_fn_count(g->model); i++) {
+        writ_bound_fn_t bound = writ_binding_fn(g->b, i);
+        for (size_t k = 0; bound.bound && !bound.raw && bound_plan(g, i, k); k++) {
+            const writ_plan_view_t *plan = bound_plan(g, i, k);
+            for (size_t t = 0; t < plan->items_count; t++) {
+                if (!array_result(&plan->items[t])) {
+                    continue;
+                }
+                const writ_type_view_t *element = plan->items[t].type->target;
+                bool seen = false;
+                for (size_t e = 0; e < elements.len && !seen; e++) {
+                    seen = writ_str_eq(array_element_name(g, elements.data[e]), array_element_name(g, element));
+                }
+                if (!seen) {
+                    core_list_push(elements, element);
+                }
+            }
+        }
+    }
+    return elements;
+}
+
+static bool
+text_result(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, const shim_param_t *param)
+{
+    return param->kind == PARAM_OUT && is_result(&plan->items[param->item])
+        && ends_with(param->n00b_type, "Ffi_Bytes]")
+        && writ_str_eq(item_type(g, fn, plan, param->item), writ_cstr("string"));
+}
+
+static bool
+takes_text(const n00b_t *g)
+{
+    bool found = false;
+    for (size_t i = 0; i < writ_model_fn_count(g->model) && !found; i++) {
+        writ_bound_fn_t bound = writ_binding_fn(g->b, i);
+        for (size_t k = 0; bound.bound && !bound.raw && bound_plan(g, i, k) && !found; k++) {
+            const writ_plan_view_t *plan = bound_plan(g, i, k);
+            for (size_t s = 0; s < plan->steps_count && !found; s++) {
+                const writ_plan_step_view_t *step = &plan->steps[s];
+                found = step->kind == WRIT_STEP_FETCH_DETAIL && step->item != WRIT_PLAN_NONE
+                     && plan->items[step->item].shape == WRIT_SHAPE_TEXT;
+            }
+            core_list_t(shim_param_t) params = core_list_new(shim_param_t);
+            shim_params(g, i, plan, &params);
+            for (size_t p = 0; p < params.len && !found; p++) {
+                found = text_result(g, i, plan, &params.data[p]);
+            }
+            core_list_free(params);
+        }
+    }
+    return found;
+}
+
+static void
+emit_c_array_takers(const n00b_t *g, writ_emit_t *emit)
+{
+    core_list_t(type_view_ptr_t) elements = array_elements(g);
+    for (size_t e = 0; e < elements.len; e++) {
+        writ_emit_open(emit, "void %.*s_take_array_%.*s(uint64_t data, uint64_t length, void *out)", S(g->shim),
+                       S(array_element_name(g, elements.data[e])));
+        writ_emit_line(emit, "size_t capacity = 0;");
+        writ_emit_line(emit, "uint8_t *items = n00b_ffi_borrow(out, &capacity, %d);", N00B_FFI_WRITE);
+        writ_emit_line(emit, "size_t count = length < capacity ? (size_t)length : capacity;");
+        writ_emit_open(emit, "if (items && data && count)");
+        writ_emit_line(emit, "memcpy(items, (const void *)(uintptr_t)data, count * sizeof(%.*s));",
+                       S(writ_c_type(&g->c, elements.data[e], false)));
+        writ_emit_close(emit, nullptr);
+        writ_emit_line(emit, "n00b_ffi_release(out);");
+        writ_emit_line(emit, "%.*s_free((void *)(uintptr_t)data);", S(g->c.prefix));
+        writ_emit_close(emit, nullptr);
+        writ_emit_line(emit, "");
+    }
+    core_list_free(elements);
+}
+
+static void
+emit_n00b_array_takers(const n00b_t *g, writ_emit_t *emit)
+{
+    core_list_t(type_view_ptr_t) elements = array_elements(g);
+    for (size_t e = 0; e < elements.len; e++) {
+        writ_str_t name = array_element_name(g, elements.data[e]);
+        writ_str_t array = writ_str_format(g->session, "Array[%.*s]", S(name));
+        writ_str_t take = writ_str_format(g->session, "__ffi_array_take_%.*s", S(name));
+        writ_str_t params[] = {writ_cstr("uint"), writ_cstr("uint"), writ_str_format(g->session, "Ref[%.*s]", S(array))};
+        add_extern(g, take, writ_str_format(g->session, "%.*s_take_array_%.*s", S(g->shim), S(name)), params, 3,
+                   writ_cstr("nil"));
+        writ_emit_line(emit, "");
+        writ_emit_open(emit, "func __ffi_take_array_%.*s(data: uint, length: uint) -> %.*s", S(name), S(array));
+        writ_emit_line(emit, "var items: %.*s = new[%.*s](cast[int]length)", S(array), S(array));
+        writ_emit_line(emit, "%.*s(data, length, ref items)", S(take));
+        writ_emit_line(emit, "return items");
+        writ_emit_close(emit, nullptr);
+    }
+    core_list_free(elements);
+}
+
 static writ_str_t
 shim_c_text(const n00b_t *g, const writ_plan_view_t *const *plans)
 {
@@ -578,6 +699,7 @@ shim_c_text(const n00b_t *g, const writ_plan_view_t *const *plans)
     writ_emit_line(&emit, "%.*s_bytes_free(bytes);", S(g->c.prefix));
     writ_emit_close(&emit, nullptr);
     writ_emit_line(&emit, "");
+    emit_c_array_takers(g, &emit);
     bool dispatches = false;
     for (size_t i = 0; i < writ_model_callback_count(g->model); i++) {
         dispatches = dispatches || userdata_receiver(writ_model_callback_at(g->model, i)) != WRIT_PLAN_NONE;
@@ -928,12 +1050,23 @@ consumes(const wrapper_t *w, uint32_t item)
 }
 
 static writ_str_t
+unescaped(const n00b_t *g, writ_str_t name)
+{
+    if (!ends_with(name, "_")) {
+        return name;
+    }
+    writ_str_t base = {name.data, name.length - 1};
+    return writ_str_eq(writ_profile_name(g->profile, WRIT_NAMING_FN, base), name) ? base : name;
+}
+
+static writ_str_t
 wrapper_name(const wrapper_t *w)
 {
     writ_str_t name = w->bound.name;
     if (w->bound.owner.length && w->bound.is_static) {
         writ_str_t owner = writ_name_case(w->g->session, w->bound.owner, WRIT_CASE_SNAKE);
-        name = writ_str_format(w->g->session, "%.*s_%.*s", S(owner), S(w->bound.name));
+        name = writ_profile_name(w->g->profile, WRIT_NAMING_FN,
+                                 writ_str_format(w->g->session, "%.*s_%.*s", S(owner), S(unescaped(w->g, name))));
     }
     return w->suffix.length ? writ_str_format(w->g->session, "%.*s_%.*s", S(name), S(w->suffix)) : name;
 }
@@ -1012,9 +1145,13 @@ emit_result_types(const wrapper_t *w, writ_emit_t *emit, const uint32_t *outs, s
         }
         writ_emit_close(emit, nullptr);
     }
-    if (count > 1) {
+    bool multiple_success = success_count(w->plan) > 1;
+    if (count > 1 || (count && multiple_success)) {
         writ_emit_line(emit, "");
         writ_emit_open(emit, "type %.*s", S(result_type_name(w)));
+        if (multiple_success) {
+            writ_emit_line(emit, "public outcome: %.*s", S(outcome_type_name(w)));
+        }
         for (size_t i = 0; i < count; i++) {
             writ_emit_line(emit, "public %.*s: %.*s", S(local_name(w, outs[i])), S(item_type(w->g, w->fn, w->plan, outs[i])));
         }
@@ -1065,10 +1202,8 @@ lifted(const wrapper_t *w, const shim_param_t *param)
     writ_str_t name = local_name(w, param->item);
     writ_session_t *session = w->g->session;
     if (ends_with(param->n00b_type, "Ffi_Bytes]")) {
-        return writ_str_format(session, item->shape == WRIT_SHAPE_TEXT && !ends_with(item_type(w->g, w->fn, w->plan,
-                                                                                               param->item), "]")
-                                            ? "__ffi_take_string(ref %.*s)"
-                                            : "__ffi_take_bytes(ref %.*s)",
+        return writ_str_format(session,
+                               text_result(w->g, w->fn, w->plan, param) ? "%.*s_text.get()" : "__ffi_take_bytes(ref %.*s)",
                                S(name));
     }
     if (item->shape == WRIT_SHAPE_HANDLE || (item->type && item->type->kind == WRIT_TYPE_HANDLE)) {
@@ -1078,10 +1213,49 @@ lifted(const wrapper_t *w, const shim_param_t *param)
         return writ_str_format(session, "__ffi_copy_cstr(%.*s)", S(name));
     }
     if (item->shape == WRIT_SHAPE_ARRAY) {
-        return writ_str_format(session, "__ffi_take_array[%.*s](%.*s, %.*s_length)",
-                               S(scalar_type(w->g, item->type->target)), S(name), S(name));
+        return writ_str_format(session, "__ffi_take_array_%.*s(%.*s, %.*s_length)",
+                               S(array_element_name(w->g, item->type->target)), S(name), S(name));
     }
     return name;
+}
+
+static void
+emit_values(const wrapper_t *w, writ_emit_t *emit, const core_list_t(shim_param_t) *params, const uint32_t *outs,
+            size_t count, bool with_outcome)
+{
+    writ_emit_text(emit, "let values: %.*s = (%s", S(result_type_name(w)), with_outcome ? "outcome = which" : "");
+    for (size_t r = 0; r < count; r++) {
+        for (size_t i = 0; i < params->len; i++) {
+            const shim_param_t *p = &params->data[i];
+            if (p->kind == PARAM_OUT && p->item == outs[r] && writ_str_eq(p->name, w->plan->items[outs[r]].name)) {
+                writ_emit_text(emit, "%s%.*s = %.*s", r || with_outcome ? ", " : "", S(local_name(w, outs[r])),
+                               S(lifted(w, p)));
+            }
+        }
+    }
+    writ_emit_line(emit, ")");
+    writ_emit_line(emit, "return values");
+}
+
+static void
+emit_text_checks(const wrapper_t *w, writ_emit_t *emit, const core_list_t(shim_param_t) *params)
+{
+    for (size_t i = 0; i < params->len; i++) {
+        const shim_param_t *p = &params->data[i];
+        if (!text_result(w->g, w->fn, w->plan, p) || !writ_str_eq(p->name, w->plan->items[p->item].name)) {
+            continue;
+        }
+        writ_str_t name = local_name(w, p->item);
+        writ_emit_line(emit, "let %.*s_text = __ffi_take_string(ref %.*s)", S(name), S(name));
+        writ_emit_open(emit, "if %.*s_text == nil", S(name));
+        if (can_fail(w)) {
+            emit_fail(w, emit, writ_str_format(w->g->session, "%d", WRIT_C_CONTRACT_VIOLATION),
+                      writ_cstr("\"invalid UTF-8 text\""));
+        } else {
+            writ_emit_line(emit, "panic(\"%.*s returned invalid UTF-8 text\")", S(w->plan->fn->contract_name));
+        }
+        writ_emit_close(emit, nullptr);
+    }
 }
 
 static void
@@ -1171,12 +1345,31 @@ emit_keyword_params(const wrapper_t *w, writ_emit_t *emit, const writ_record_vie
     }
 }
 
+static bool
+retry_capacity(const writ_plan_view_t *plan, uint32_t item)
+{
+    for (size_t s = 0; s < plan->steps_count; s++) {
+        const writ_plan_step_view_t *step = &plan->steps[s];
+        if (step->kind == WRIT_STEP_SIZE_RETRY && step->local != WRIT_PLAN_NONE
+            && plan->locals[step->local].capacity_item == item) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool
+exposed_input(const writ_plan_view_t *plan, uint32_t item)
+{
+    return writ_c_is_input(&plan->items[item]) && !policy_item(plan, item) && !retry_capacity(plan, item);
+}
+
 static void
 emit_wrapper_params(const wrapper_t *w, writ_emit_t *emit, uint32_t keywords, bool options_record, bool *first)
 {
     const writ_plan_view_t *plan = w->plan;
     for (uint32_t i = 0; i < plan->items_count; i++) {
-        if (!writ_c_is_input(&plan->items[i]) || (i == keywords && !options_record) || policy_item(plan, i)) {
+        if (!exposed_input(plan, i) || (i == keywords && !options_record)) {
             continue;
         }
         bool modify = (i == w->receiver && consumes(w, i))
@@ -1197,7 +1390,7 @@ emit_wrapper_arguments(const wrapper_t *w, writ_emit_t *emit, uint32_t keywords,
     const writ_plan_view_t *plan = w->plan;
     bool first = true;
     for (uint32_t i = 0; i < plan->items_count; i++) {
-        if (writ_c_is_input(&plan->items[i]) && (i != keywords || options_record) && !policy_item(plan, i)) {
+        if (exposed_input(plan, i) && (i != keywords || options_record)) {
             writ_emit_text(emit, "%s%.*s", first ? "" : ", ", S(local_name(w, i)));
             first = false;
         }
@@ -1312,7 +1505,9 @@ emit_wrapper(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view
     emit_wrapper_params(&w, emit, keywords, options_record, &first);
     writ_emit_text(emit, ")");
     bool multiple_success = success_count(plan) > 1;
-    if (multiple_success) {
+    if (multiple_success && out_count) {
+        writ_emit_text(emit, " -> %.*s", S(result_type_name(&w)));
+    } else if (multiple_success) {
         writ_emit_text(emit, " -> %.*s", S(outcome_type_name(&w)));
     } else if (out_count == 1) {
         writ_emit_text(emit, " -> %.*s", S(item_type(g, fn, plan, outs[0])));
@@ -1382,6 +1577,8 @@ emit_wrapper(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view
             writ_emit_text(emit, length ? "ref %.*s_length" : "ref %.*s", S(name));
         } else if (p->kind == PARAM_CALLBACK) {
             writ_emit_text(emit, "__ffi_callback_register(%.*s)", S(name));
+        } else if (retry_capacity(plan, p->item)) {
+            writ_emit_text(emit, "%u", writ_default(WRIT_DEFAULT_RETRY_CAPACITY));
         } else {
             writ_emit_text(emit, "%.*s", S(name));
         }
@@ -1402,6 +1599,7 @@ emit_wrapper(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view
     if (w.receiver != WRIT_PLAN_NONE && consumes(&w, w.receiver)) {
         writ_emit_line(emit, "self.raw = 0");
     }
+    emit_text_checks(&w, emit, &params);
     if (multiple_success) {
         writ_str_t outcome_type = outcome_type_name(&w);
         size_t last = plan->outcomes_count;
@@ -1410,14 +1608,20 @@ emit_wrapper(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view
                 last = o;
             }
         }
+        writ_emit_line(emit, "var which: %.*s = %.*s.%.*s", S(outcome_type), S(outcome_type),
+                       S(plan->outcomes[last].name));
         for (size_t o = 0; o < last; o++) {
             if (plan->outcomes[o].kind == WRIT_OUTCOME_SUCCESS) {
                 writ_emit_open(emit, "if outcome == %zu", o);
-                writ_emit_line(emit, "return %.*s.%.*s", S(outcome_type), S(plan->outcomes[o].name));
+                writ_emit_line(emit, "which = %.*s.%.*s", S(outcome_type), S(plan->outcomes[o].name));
                 writ_emit_close(emit, nullptr);
             }
         }
-        writ_emit_line(emit, "return %.*s.%.*s", S(outcome_type), S(plan->outcomes[last].name));
+        if (!out_count) {
+            writ_emit_line(emit, "return which");
+        } else {
+            emit_values(&w, emit, &params, outs, out_count, true);
+        }
     } else if (!can_fail(&w) && out_count) {
         writ_emit_line(emit, "return result");
     } else if (out_count == 1) {
@@ -1428,18 +1632,7 @@ emit_wrapper(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view
             }
         }
     } else if (out_count > 1) {
-        writ_emit_text(emit, "let values: %.*s = (", S(result_type_name(&w)));
-        for (size_t r = 0; r < out_count; r++) {
-            for (size_t i = 0; i < params.len; i++) {
-                if (params.data[i].kind == PARAM_OUT && params.data[i].item == outs[r]
-                    && writ_str_eq(params.data[i].name, plan->items[outs[r]].name)) {
-                    writ_emit_text(emit, "%s%.*s = %.*s", r ? ", " : "", S(local_name(&w, outs[r])),
-                                   S(lifted(&w, &params.data[i])));
-                }
-            }
-        }
-        writ_emit_line(emit, ")");
-        writ_emit_line(emit, "return values");
+        emit_values(&w, emit, &params, outs, out_count, false);
     }
     writ_emit_close(emit, nullptr);
     core_list_free(params);
@@ -1588,6 +1781,18 @@ n00b_text(const n00b_t *g)
         writ_emit_line(&emit, "    return copied");
         writ_emit_line(&emit, "}");
     }
+    if (takes_bytes && takes_text(g)) {
+        writ_emit_line(&emit, "");
+        writ_emit_open(&emit, "func __ffi_take_string(bytes: Ref[Ffi_Bytes]) -> string?");
+        writ_emit_line(&emit, "let copied = __ffi_take_bytes(bytes)");
+        writ_emit_line(&emit, "var text: string = \"\"");
+        writ_emit_open(&emit, "if __string_from_utf8(copied, ref text)");
+        writ_emit_line(&emit, "return text");
+        writ_emit_close(&emit, nullptr);
+        writ_emit_line(&emit, "return nil");
+        writ_emit_close(&emit, nullptr);
+    }
+    emit_n00b_array_takers(g, &emit);
     for (size_t i = 0; i < count; i++) {
         writ_bound_fn_t bound = writ_binding_fn(g->b, i);
         for (size_t k = 0; bound.bound && !bound.raw && bound_plan(g, i, k); k++) {

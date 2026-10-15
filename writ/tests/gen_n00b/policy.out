@@ -202,10 +202,13 @@ void policy_take_bytes(policy_bytes_t *bytes, void *out) {
 
 int32_t policy_n00b_bind_text_text_static(uint64_t stmt, const void *text, void *result) {
     size_t text_length = 0;
-    const void *text_borrowed = n00b_ffi_borrow((void *)text, &text_length, 0);
-    uint8_t *text_data = malloc(text_length ? text_length : 1);
+    const void *text_borrowed = n00b_ffi_borrow((void *)text, &text_length, 2);
+    uint8_t *text_data = malloc(text_length + 1);
     if (text_data && text_length) {
         memcpy(text_data, text_borrowed, text_length);
+    }
+    if (text_data) {
+        text_data[text_length] = 0;
     }
     n00b_ffi_release((void *)text);
     if (!text_data) {
@@ -218,10 +221,13 @@ int32_t policy_n00b_bind_text_text_static(uint64_t stmt, const void *text, void 
 
 int32_t policy_n00b_bind_text_text_transient(uint64_t stmt, const void *text, void *result) {
     size_t text_length = 0;
-    const void *text_borrowed = n00b_ffi_borrow((void *)text, &text_length, 0);
-    uint8_t *text_data = malloc(text_length ? text_length : 1);
+    const void *text_borrowed = n00b_ffi_borrow((void *)text, &text_length, 2);
+    uint8_t *text_data = malloc(text_length + 1);
     if (text_data && text_length) {
         memcpy(text_data, text_borrowed, text_length);
+    }
+    if (text_data) {
+        text_data[text_length] = 0;
     }
     n00b_ffi_release((void *)text);
     if (!text_data) {
@@ -239,10 +245,13 @@ void policy_n00b_bind_text_with_dtor_free(const void *p) {
 
 int32_t policy_n00b_bind_text_with_dtor(uint64_t stmt, const void *text, void *result) {
     size_t text_length = 0;
-    const void *text_borrowed = n00b_ffi_borrow((void *)text, &text_length, 0);
-    uint8_t *text_data = malloc(text_length ? text_length : 1);
+    const void *text_borrowed = n00b_ffi_borrow((void *)text, &text_length, 2);
+    uint8_t *text_data = malloc(text_length + 1);
     if (text_data && text_length) {
         memcpy(text_data, text_borrowed, text_length);
+    }
+    if (text_data) {
+        text_data[text_length] = 0;
     }
     n00b_ffi_release((void *)text);
     if (!text_data) {
