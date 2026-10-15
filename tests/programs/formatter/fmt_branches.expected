@@ -13,7 +13,7 @@ func classify(value: int) -> int {
     }
 }
 
-func classify_type(value: any) -> int {
+func classify_type(value: Any) -> int {
     typecase value {
         case int {
             return value
@@ -39,7 +39,7 @@ func choose(value: int) -> int {
     }
 }
 
-func choose_type(value: any) -> int {
+func choose_type(value: Any) -> int {
     return typecase value {
         case int {
             = value
@@ -61,7 +61,7 @@ func compact(value: int) -> int {
     }
 }
 
-func compact_type(value: any) -> int {
+func compact_type(value: Any) -> int {
     return typecase value {
         case int {
             = value

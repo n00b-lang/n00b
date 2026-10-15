@@ -1,6 +1,6 @@
 type Entry {
     value: int
-    other: any
+    other: Any
 }
 
 var entries: List[Entry] = new[List[Entry]]()
@@ -9,7 +9,7 @@ func fill() {
     var i = 0
     while i < 64 {
         let text = "boxed text that is long enough to need heap storage " + "x"
-        let e: Entry = (value = i, other = cast[any]text)
+        let e: Entry = (value = i, other = cast[Any]text)
         entries.append(e)
         i = i + 1
     }

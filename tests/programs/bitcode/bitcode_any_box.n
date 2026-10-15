@@ -1,26 +1,26 @@
-func box_integer(value: int) -> any {
-    return cast[any] value
+func box_integer(value: int) -> Any {
+    return cast[Any] value
 }
 
-func box_string(value: string) -> any {
-    return cast[any] value
+func box_string(value: string) -> Any {
+    return cast[Any] value
 }
 
-func inspect_integer(value: any) -> int {
+func inspect_integer(value: Any) -> int {
     return typecase value {
         case int { = value }
         else { = 0 }
     }
 }
 
-func inspect_string(value: any) -> string {
+func inspect_string(value: Any) -> string {
     return typecase value {
         case string { = value }
         else { = "bad" }
     }
 }
 
-func echo_box(value: any) -> any {
+func echo_box(value: Any) -> Any {
     return value
 }
 

@@ -4025,6 +4025,7 @@ canonical_builtin_type_name(const char *name)
     if (!strcmp(name, "Atomic")) return "atomic";
     if (!strcmp(name, "Ref")) return "ref";
     if (!strcmp(name, "Tuple")) return "tuple";
+    if (!strcmp(name, "Any")) return "any";
     return name;
 }
 
@@ -4173,7 +4174,7 @@ builtin_type_name(const char *name)
     const ir_profile_t *profile = n00bb_type_profile();
     if (!name) return false;
     if (source_builtin_generic_type_arity(name) != -1
-        || !strcmp(name, "Allocator") || !strcmp(name, "any")
+        || !strcmp(name, "Allocator") || !strcmp(name, "Any")
         || !strcmp(name, "byte") || !strcmp(name, "char")
         || !strcmp(name, "string") || !strcmp(name, "typespec"))
         return true;
@@ -5926,6 +5927,7 @@ source_builtin_type_name(const char *name)
     if (!strcmp(name, "atomic")) return "Atomic";
     if (!strcmp(name, "ref")) return "Ref";
     if (!strcmp(name, "tuple")) return "Tuple";
+    if (!strcmp(name, "any")) return "Any";
     return name;
 }
 
@@ -5936,7 +5938,7 @@ n00bb_display_type_name(const char *name, size_t length, void *context)
     static const char *const names[] = {
         "array_locking", "list", "list_locking", "set", "set_locking",
         "dict", "dict_locking", "option", "view", "atomic", "ref",
-        "tuple",
+        "tuple", "any",
     };
     for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
         size_t candidate_length = strlen(names[i]);

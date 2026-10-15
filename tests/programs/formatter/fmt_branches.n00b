@@ -9,7 +9,7 @@ func classify(value: int) -> int {
     }
 }
 
-func classify_type(value: any) -> int {
+func classify_type(value: Any) -> int {
     typecase value {
         case int { return value }
         case string {
@@ -27,7 +27,7 @@ func choose(value: int) -> int {
     }
 }
 
-func choose_type(value: any) -> int {
+func choose_type(value: Any) -> int {
     return typecase value {
         case int { = value }
         else { = 0 }
@@ -36,7 +36,7 @@ func choose_type(value: any) -> int {
 
 func compact(value: int) -> int { return switch value { case 1 { = 2 } else { = 3 } } }
 
-func compact_type(value: any) -> int { return typecase value { case int { = value } case string { = 4 } else { = 0 } } }
+func compact_type(value: Any) -> int { return typecase value { case int { = value } case string { = 4 } else { = 0 } } }
 
 func nested(value: int) -> int {
     switch value {
