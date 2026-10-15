@@ -1296,6 +1296,10 @@ func unicode(modify self: Regex_Options, mode: Unicode_Mode) -> Regex_Options fa
     var out_: uint = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
+    if self.raw == 0 {
+        let failure: Error = (code = -1, text = "handle is closed", fn = "regex_options_unicode")
+        fail failure
+    }
     let outcome = __regex_options_unicode(self.raw, mode, ref out_, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "regex_options_unicode")
@@ -1317,6 +1321,10 @@ func case_insensitive(modify self: Regex_Options, yes: bool) -> Regex_Options fa
     var out_: uint = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
+    if self.raw == 0 {
+        let failure: Error = (code = -1, text = "handle is closed", fn = "regex_options_case_insensitive")
+        fail failure
+    }
     let outcome = __regex_options_case_insensitive(self.raw, yes, ref out_, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "regex_options_case_insensitive")
@@ -1338,6 +1346,10 @@ func dot_matches_new_line(modify self: Regex_Options, yes: bool) -> Regex_Option
     var out_: uint = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
+    if self.raw == 0 {
+        let failure: Error = (code = -1, text = "handle is closed", fn = "regex_options_dot_matches_new_line")
+        fail failure
+    }
     let outcome = __regex_options_dot_matches_new_line(self.raw, yes, ref out_, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "regex_options_dot_matches_new_line")
@@ -1359,6 +1371,10 @@ func multiline(modify self: Regex_Options, yes: bool) -> Regex_Options fail: Err
     var out_: uint = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
+    if self.raw == 0 {
+        let failure: Error = (code = -1, text = "handle is closed", fn = "regex_options_multiline")
+        fail failure
+    }
     let outcome = __regex_options_multiline(self.raw, yes, ref out_, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "regex_options_multiline")
@@ -1380,6 +1396,10 @@ func ignore_whitespace(modify self: Regex_Options, yes: bool) -> Regex_Options f
     var out_: uint = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
+    if self.raw == 0 {
+        let failure: Error = (code = -1, text = "handle is closed", fn = "regex_options_ignore_whitespace")
+        fail failure
+    }
     let outcome = __regex_options_ignore_whitespace(self.raw, yes, ref out_, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "regex_options_ignore_whitespace")
@@ -1401,6 +1421,10 @@ func hardened(modify self: Regex_Options, yes: bool) -> Regex_Options fail: Erro
     var out_: uint = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
+    if self.raw == 0 {
+        let failure: Error = (code = -1, text = "handle is closed", fn = "regex_options_hardened")
+        fail failure
+    }
     let outcome = __regex_options_hardened(self.raw, yes, ref out_, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "regex_options_hardened")
@@ -1422,6 +1446,10 @@ func unbounded_size(modify self: Regex_Options, yes: bool) -> Regex_Options fail
     var out_: uint = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
+    if self.raw == 0 {
+        let failure: Error = (code = -1, text = "handle is closed", fn = "regex_options_unbounded_size")
+        fail failure
+    }
     let outcome = __regex_options_unbounded_size(self.raw, yes, ref out_, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "regex_options_unbounded_size")
@@ -1443,6 +1471,10 @@ func implicit_captures(modify self: Regex_Options, yes: bool) -> Regex_Options f
     var out_: uint = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
+    if self.raw == 0 {
+        let failure: Error = (code = -1, text = "handle is closed", fn = "regex_options_implicit_captures")
+        fail failure
+    }
     let outcome = __regex_options_implicit_captures(self.raw, yes, ref out_, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "regex_options_implicit_captures")
@@ -1465,6 +1497,10 @@ func is_match(self: Regex, input: string) -> bool fail: Error {
     var out_: bool = false
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
+    if self.raw == 0 {
+        let failure: Error = (code = -1, text = "handle is closed", fn = "regex_is_match")
+        fail failure
+    }
     let outcome = __regex_is_match(self.raw, ref input_value, ref out_, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "regex_is_match")
@@ -1515,6 +1551,10 @@ func regex_with_options(pattern: string, opts: Regex_Options) -> Regex fail: Err
     var out_: uint = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
+    if opts.raw == 0 {
+        let failure: Error = (code = -1, text = "handle is closed", fn = "regex_with_options")
+        fail failure
+    }
     let outcome = __regex_with_options(ref pattern_value, opts.raw, ref out_, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "regex_with_options")
@@ -1545,6 +1585,10 @@ func find_all(self: Regex, input: Array[u8]) -> Array[Match] fail: Error {
     var out__length: uint = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
+    if self.raw == 0 {
+        let failure: Error = (code = -1, text = "handle is closed", fn = "regex_find_all")
+        fail failure
+    }
     let outcome = __regex_find_all(self.raw, ref input_value, 64, ref out_, ref out__length, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "regex_find_all")
@@ -1576,6 +1620,10 @@ func find_anchored(self: Regex, input: Array[u8]) -> Find_Anchored_Result fail: 
     var out_: Match = (start = 0, end = 0)
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
+    if self.raw == 0 {
+        let failure: Error = (code = -1, text = "handle is closed", fn = "regex_find_anchored")
+        fail failure
+    }
     let outcome = __regex_find_anchored(self.raw, ref input_value, ref out_, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "regex_find_anchored")
@@ -1602,6 +1650,10 @@ func is_full_match(self: Regex, input: Array[u8]) -> bool fail: Error {
     var out_: bool = false
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
+    if self.raw == 0 {
+        let failure: Error = (code = -1, text = "handle is closed", fn = "regex_is_full_match")
+        fail failure
+    }
     let outcome = __regex_is_full_match(self.raw, ref input_value, ref out_, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "regex_is_full_match")
@@ -1633,6 +1685,10 @@ func capture_index_for_name(self: Regex, name: string) -> Capture_Index_For_Name
     var out_: u64 = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
+    if self.raw == 0 {
+        let failure: Error = (code = -1, text = "handle is closed", fn = "regex_capture_index_for_name")
+        fail failure
+    }
     let outcome = __regex_capture_index_for_name(self.raw, ref name_value, ref out_, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "regex_capture_index_for_name")
@@ -1663,20 +1719,20 @@ func capture_index_for_name(self: Regex, name: string) -> Capture_Index_For_Name
 82	resharp.derived.writ:39:1	regex_free
 91	resharp.derived.writ:53:1	regex_options_default
 119	resharp.derived.writ:62:1	regex_options_unicode
-140	resharp.derived.writ:73:1	regex_options_case_insensitive
-161	resharp.derived.writ:84:1	regex_options_dot_matches_new_line
-182	resharp.derived.writ:95:1	regex_options_multiline
-203	resharp.derived.writ:106:1	regex_options_ignore_whitespace
-224	resharp.derived.writ:117:1	regex_options_hardened
-245	resharp.derived.writ:128:1	regex_options_unbounded_size
-266	resharp.derived.writ:139:5	regex_options_implicit_captures
-287	resharp.derived.writ:151:1	regex_is_match
-308	resharp.derived.writ:163:1	regex_new
-337	resharp.derived.writ:174:1	regex_with_options
-366	resharp.derived.writ:186:1	regex_find_all
-398	resharp.derived.writ:201:1	regex_find_anchored
-424	resharp.derived.writ:215:1	regex_is_full_match
-455	resharp.derived.writ:227:5	regex_capture_index_for_name
+144	resharp.derived.writ:73:1	regex_options_case_insensitive
+169	resharp.derived.writ:84:1	regex_options_dot_matches_new_line
+194	resharp.derived.writ:95:1	regex_options_multiline
+219	resharp.derived.writ:106:1	regex_options_ignore_whitespace
+244	resharp.derived.writ:117:1	regex_options_hardened
+269	resharp.derived.writ:128:1	regex_options_unbounded_size
+294	resharp.derived.writ:139:5	regex_options_implicit_captures
+319	resharp.derived.writ:151:1	regex_is_match
+344	resharp.derived.writ:163:1	regex_new
+373	resharp.derived.writ:174:1	regex_with_options
+406	resharp.derived.writ:186:1	regex_find_all
+442	resharp.derived.writ:201:1	regex_find_anchored
+472	resharp.derived.writ:215:1	regex_is_full_match
+507	resharp.derived.writ:227:5	regex_capture_index_for_name
 library resharp_writ
 search_path target/release
 load static

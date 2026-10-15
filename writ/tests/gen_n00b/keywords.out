@@ -312,6 +312,9 @@ func db_limit(db: Db, limits: Db_Limit_Options) -> i64 {
     } else {
         limits_record.min_rows = -1
     }
+    if db.raw == 0 {
+        panic("db_limit: handle is closed")
+    }
     let result = __db_limit(db.raw, ref limits_record)
     return result
 }
@@ -320,6 +323,9 @@ func db_flags(db: Db, flags: u32 = 4) -> u32 {
     var sized_record: Sized = (size = 0, flags = 0)
     sized_record.flags = flags
     sized_record.size = 8
+    if db.raw == 0 {
+        panic("db_flags: handle is closed")
+    }
     let result = __db_flags(db.raw, ref sized_record)
     return result
 }
@@ -327,6 +333,9 @@ func db_flags(db: Db, flags: u32 = 4) -> u32 {
 func db_depth(db: Db, depth: i32 = 3) -> i32 {
     var plain_record: Plain = (depth = 0)
     plain_record.depth = depth
+    if db.raw == 0 {
+        panic("db_depth: handle is closed")
+    }
     let result = __db_depth(db.raw, ref plain_record)
     return result
 }
@@ -346,9 +355,9 @@ func close(modify self: Db) fail: Error {
 28	tests/gen_n00b/../keywords/keywords.writ:23:1	Plain
 32	tests/gen_n00b/../keywords/keywords.writ:27:1	db_open
 65	tests/gen_n00b/../keywords/keywords.writ:30:1	db_limit
-81	tests/gen_n00b/../keywords/keywords.writ:33:1	db_flags
-89	tests/gen_n00b/../keywords/keywords.writ:36:1	db_depth
-96	tests/gen_n00b/../keywords/keywords.writ:39:1	db_close
+84	tests/gen_n00b/../keywords/keywords.writ:33:1	db_flags
+95	tests/gen_n00b/../keywords/keywords.writ:36:1	db_depth
+105	tests/gen_n00b/../keywords/keywords.writ:39:1	db_close
 load static
 extern __db_open keywords_n00b_db_open (ref[string], ref[Open_Opts], ref[uint]) -> i32 fail: nil
 extern __db_limit keywords_n00b_db_limit (uint, ref[Limits]) -> int fail: nil

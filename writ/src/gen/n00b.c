@@ -1441,6 +1441,26 @@ emit_text_check(const wrapper_t *w, writ_emit_t *emit, writ_str_t name, bool byt
 }
 
 static void
+emit_closed_checks(const wrapper_t *w, writ_emit_t *emit, const core_list_t(shim_param_t) *params)
+{
+    for (size_t i = 0; i < params->len; i++) {
+        const shim_param_t *p = &params->data[i];
+        const writ_plan_item_view_t *item = &w->plan->items[p->item];
+        if (p->kind != PARAM_ADDRESS || !is_handle(item) || (item->type && item->type->nullable)) {
+            continue;
+        }
+        writ_emit_open(emit, "if %.*s.raw == 0", S(local_name(w, p->item)));
+        if (can_fail(w)) {
+            emit_fail(w, emit, writ_str_format(w->g->session, "%d", WRIT_C_ARGUMENT_ERROR),
+                      writ_cstr("\"handle is closed\""));
+        } else {
+            writ_emit_line(emit, "panic(\"%.*s: handle is closed\")", S(w->plan->fn->contract_name));
+        }
+        writ_emit_close(emit, nullptr);
+    }
+}
+
+static void
 emit_text_checks(const wrapper_t *w, writ_emit_t *emit, const core_list_t(shim_param_t) *params)
 {
     for (size_t i = 0; i < params->len; i++) {
@@ -1747,6 +1767,7 @@ emit_wrapper(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view
             writ_emit_line(emit, "var %.*s: %.*s = %.*s", S(local), S(type), S(zero));
         }
     }
+    emit_closed_checks(&w, emit, &params);
     writ_emit_text(emit, "%s__%.*s(", can_fail(&w) ? "let outcome = " : out_count ? "let result = " : "",
                    S(writ_c_plan_name(&g->c, plan)));
     bool passed = false;

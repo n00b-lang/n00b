@@ -326,6 +326,10 @@ type Stmt {
 func bind_text_text_static(stmt: Stmt, text: string) -> i32 fail: Error {
     var text_value = text
     var result: i32 = 0
+    if stmt.raw == 0 {
+        let failure: Error = (code = -1, text = "handle is closed", fn = "bind_text")
+        fail failure
+    }
     let outcome = __bind_text_text_static(stmt.raw, ref text_value, ref result)
     if outcome < 0 {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "bind_text")
@@ -337,6 +341,10 @@ func bind_text_text_static(stmt: Stmt, text: string) -> i32 fail: Error {
 func bind_text_text_transient(stmt: Stmt, text: string) -> i32 fail: Error {
     var text_value = text
     var result: i32 = 0
+    if stmt.raw == 0 {
+        let failure: Error = (code = -1, text = "handle is closed", fn = "bind_text")
+        fail failure
+    }
     let outcome = __bind_text_text_transient(stmt.raw, ref text_value, ref result)
     if outcome < 0 {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "bind_text")
@@ -348,6 +356,10 @@ func bind_text_text_transient(stmt: Stmt, text: string) -> i32 fail: Error {
 func bind_text_owned(stmt: Stmt, text: string) -> i32 fail: Error {
     var text_value = text
     var result: i32 = 0
+    if stmt.raw == 0 {
+        let failure: Error = (code = -1, text = "handle is closed", fn = "bind_text")
+        fail failure
+    }
     let outcome = __bind_text_with_dtor(stmt.raw, ref text_value, ref result)
     if outcome < 0 {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "bind_text")
@@ -382,9 +394,9 @@ func close(modify self: Stmt) fail: Error {
 }
 7	tests/gen_n00b/../policy/policy.writ:4:1	Stmt
 12	tests/gen_n00b/../policy/policy.writ:11:1	bind_text
-23	tests/gen_n00b/../policy/policy.writ:11:1	bind_text
-34	tests/gen_n00b/../policy/policy.writ:11:1	bind_text
-61	tests/gen_n00b/../policy/policy.writ:22:1	stmt_release
+27	tests/gen_n00b/../policy/policy.writ:11:1	bind_text
+42	tests/gen_n00b/../policy/policy.writ:11:1	bind_text
+73	tests/gen_n00b/../policy/policy.writ:22:1	stmt_release
 load static
 extern __bind_text_text_static policy_n00b_bind_text_text_static (uint, ref[string], ref[i32]) -> i32 fail: nil
 extern __bind_text_text_transient policy_n00b_bind_text_text_transient (uint, ref[string], ref[i32]) -> i32 fail: nil
