@@ -179,29 +179,6 @@ parse_tree_scan_leaves(parse_tree_t *root, bool reverse, parse_leaf_fn fn,
     return hit;
 }
 
-static bool has_text(parse_tree_t *leaf, void *arg)
-{
-    (void)arg;
-
-    parse_token_info_t *tok = core_tree_leaf_value(leaf);
-
-    return tok && core_option_is_set(tok->value)
-        && core_option_get(tok->value).u8_bytes > 0;
-}
-
-core_string_t
-parse_tree_extract_first_identifier(parse_tree_t *node)
-{
-    parse_tree_t *hit = parse_tree_scan_leaves(node, false, has_text,
-                                                 nullptr);
-
-    if (!hit) {
-        return (core_string_t){0};
-    }
-
-    return core_option_get(core_tree_leaf_value(hit)->value);
-}
-
 parse_token_info_t *
 parse_tree_find_first_terminal(parse_tree_t *node)
 {

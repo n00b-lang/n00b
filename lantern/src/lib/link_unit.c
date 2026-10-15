@@ -182,7 +182,6 @@ struct core_link_reference_t {
     core_link_declaration_t *target;
     core_link_reference_t *next_at_site;
     core_link_reference_t *last_at_site;
-    size_t count_at_site;
 };
 
 static core_hash_value_t
@@ -1669,10 +1668,8 @@ reference_at_internal(core_link_unit_t *link,
     if (found) {
         first->last_at_site->next_at_site = ref;
         first->last_at_site = ref;
-        first->count_at_site++;
     } else {
         ref->last_at_site = ref;
-        ref->count_at_site = 1;
         core_dict_add(&link->reference_index, ref, ref);
     }
     link->validated = false;
@@ -1742,42 +1739,6 @@ core_link_unit_reference_at_index(const core_link_unit_t *link, size_t index)
 {
     return link && index < link->reference_count
         ? link->references[index] : nullptr;
-}
-
-size_t
-core_link_unit_reference_count_at(const core_link_unit_t *link,
-                                  const core_translation_unit_t *referrer,
-                                  const void *use_site)
-{
-    if (!link || !referrer || !use_site) return 0;
-    core_link_reference_t site_key = {
-        .referrer = (core_translation_unit_t *)referrer,
-        .use_site = use_site,
-    };
-    bool found = false;
-    core_link_reference_t *first = core_dict_get(
-        (core_dict_t *)&link->reference_index, &site_key, &found);
-    return found ? first->count_at_site : 0;
-}
-
-core_link_reference_t *
-core_link_unit_reference_at_use_site(const core_link_unit_t *link,
-                                     const core_translation_unit_t *referrer,
-                                     const void *use_site, size_t index)
-{
-    if (!link || !referrer || !use_site) return nullptr;
-    core_link_reference_t site_key = {
-        .referrer = (core_translation_unit_t *)referrer,
-        .use_site = use_site,
-    };
-    bool found = false;
-    core_link_reference_t *first = core_dict_get(
-        (core_dict_t *)&link->reference_index, &site_key, &found);
-    for (core_link_reference_t *reference = found ? first : nullptr;
-         reference; reference = reference->next_at_site) {
-        if (!index--) return reference;
-    }
-    return nullptr;
 }
 
 bool

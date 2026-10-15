@@ -282,12 +282,6 @@ core_link_reference_t *core_link_unit_reference_at_index(
 /* References are owned by the LinkUnit and keyed by their borrowed source
  * node. A source node may carry multiple references; these queries enumerate
  * them without requiring a frontend-side handle cache. */
-size_t core_link_unit_reference_count_at(
-    const core_link_unit_t *link, const core_translation_unit_t *referrer,
-    const void *use_site);
-core_link_reference_t *core_link_unit_reference_at_use_site(
-    const core_link_unit_t *link, const core_translation_unit_t *referrer,
-    const void *use_site, size_t index);
 bool core_link_unit_validate(core_link_unit_t *link);
 
 core_translation_unit_t *core_link_declaration_owner(

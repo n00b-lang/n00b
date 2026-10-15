@@ -987,7 +987,7 @@ test_the_walk_builds_a_symbol_table(parse_grammar_t *g)
         core_tree_node_value(name_node).unresolved_name = S("a");
     check("a reference test uses the declared name",
           name_node && core_string_eq(
-              parse_tree_extract_first_identifier(name_node), S("a")));
+              parse_tree_leaf_text(core_tree_first_leaf_node(name_node)), S("a")));
     check("a reference node resolves and retains its symbol",
           name_node && parse_symtab_resolve_node(
               st, name_node, core_string_empty()) == a
@@ -1028,11 +1028,11 @@ test_the_walk_builds_a_symbol_table(parse_grammar_t *g)
                   && cf->cond != cf->then_body
                   && cf->then_body != cf->else_body);
         check("and each arm is the child the annotation named",
-              core_string_eq(parse_tree_extract_first_identifier(cf->cond), S("x"))
+              core_string_eq(parse_tree_leaf_text(core_tree_first_leaf_node(cf->cond)), S("x"))
                   && core_string_eq(
-                      parse_tree_extract_first_identifier(cf->then_body), S("y"))
+                      parse_tree_leaf_text(core_tree_first_leaf_node(cf->then_body)), S("y"))
                   && core_string_eq(
-                      parse_tree_extract_first_identifier(cf->else_body),
+                      parse_tree_leaf_text(core_tree_first_leaf_node(cf->else_body)),
                       S("z")));
     }
 

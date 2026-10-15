@@ -140,17 +140,9 @@ test_link_unit_closure_and_linkage(void)
               && core_link_reference_use_site(site_one) == &call_site_one
               && core_link_reference_use_site(site_two) == &call_site_two
               && core_link_reference_target(site_one) == nullptr);
-    check("source nodes enumerate their LinkUnit-owned references",
-          core_link_unit_reference_count_at(link, &root_a, &call_site_one) == 1
-              && core_link_unit_reference_at_use_site(
-                  link, &root_a, &call_site_one, 0) == site_one
-              && core_link_unit_reference_at_use_site(
-                  link, &root_a, &call_site_one, 1) == nullptr
-              && core_link_unit_reference_count_at(
-                  link, &root_a, &call_site_two) == 1);
     core_link_reference_t *site_one_second = nullptr;
     core_link_declaration_t *other_definition = nullptr;
-    check("source references keep insertion order when a site gains a target",
+    check("source sites retain distinct references to multiple targets",
           core_link_unit_define(link, &shared,
               CORE_STRING_STATIC("type.Other"), &shared_type,
               CORE_LINK_PAYLOAD_BORROWED, nullptr, &other_definition)
@@ -158,14 +150,8 @@ test_link_unit_closure_and_linkage(void)
               CORE_STRING_STATIC("pkg.shared"),
               CORE_STRING_STATIC("type.Other"), &site_one_second)
               && site_one_second != site_one
-              && core_link_unit_reference_count_at(link, &root_a,
-                  &call_site_one) == 2
-              && core_link_unit_reference_at_use_site(link, &root_a,
-                  &call_site_one, 0) == site_one
-              && core_link_unit_reference_at_use_site(link, &root_a,
-                  &call_site_one, 1) == site_one_second
-              && core_link_unit_reference_at_use_site(link, &root_a,
-                  &call_site_one, 2) == nullptr);
+              && core_link_reference_use_site(site_one_second)
+                  == &call_site_one);
     check("frontend lexical scope is retained opaquely on a reference",
           core_link_unit_reference_at_scoped_kind(link, &root_a,
               &scoped_call_site, &lexical_scope,
@@ -951,8 +937,6 @@ test_link_unit_deferred_references(void)
                   CORE_STRING_STATIC("second operation at the same node"),
                   80, &second_reference)
               && second_reference != reference
-              && core_link_unit_reference_count_at(
-                  link, &root, &use_site) == 2
               && core_link_unit_resolve_reference(
                   link, second_reference, CORE_STRING_STATIC("pkg.actual"),
                   CORE_STRING_STATIC("function.go"))

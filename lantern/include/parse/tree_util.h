@@ -13,8 +13,6 @@ typedef bool (*parse_leaf_fn)(parse_tree_t *leaf, void *arg);
 parse_tree_t *parse_tree_scan_leaves(parse_tree_t *root, bool reverse,
                                        parse_leaf_fn fn, void *arg);
 
-core_string_t parse_tree_extract_first_identifier(parse_tree_t *node);
-
 parse_token_info_t *parse_tree_find_first_terminal(parse_tree_t *node);
 
 parse_tree_t *parse_tree_find_direct_child_by_nt_name(parse_grammar_t *g,
