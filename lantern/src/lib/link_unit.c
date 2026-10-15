@@ -73,6 +73,28 @@ typedef struct {
     bool unit_wide;
 } core_link_contribution_t;
 
+static core_hash_value_t
+contribution_hash(void *opaque)
+{
+    const core_link_contribution_t *contribution = opaque;
+    core_hash_value_t fields[] = {
+        core_string_hash(contribution->module),
+        core_string_hash(contribution->domain),
+        contribution->unit_wide,
+    };
+    return core_hash_raw(fields, sizeof fields);
+}
+
+static bool
+contribution_eq(const void *left, const void *right)
+{
+    const core_link_contribution_t *a = left;
+    const core_link_contribution_t *b = right;
+    return a->unit_wide == b->unit_wide
+        && core_string_eq(a->module, b->module)
+        && core_string_eq(a->domain, b->domain);
+}
+
 struct core_link_dependency_t {
     uint32_t kind;
     uint32_t producer_stage;
@@ -242,9 +264,10 @@ struct core_link_unit_t {
     size_t stage_count;
     size_t stage_capacity;
     core_dict_t stage_index;
-    core_link_contribution_t *contributions;
+    core_link_contribution_t **contributions;
     size_t contribution_count;
     size_t contribution_capacity;
+    core_dict_t contribution_index;
     core_link_dependency_t **dependencies;
     size_t dependency_count;
     size_t dependency_capacity;
@@ -333,7 +356,7 @@ static void
 reset_stage_contributions(core_link_unit_t *link, const bool *invalidated)
 {
     for (size_t i = 0; i < link->contribution_count; i++) {
-        core_link_contribution_t *contribution = &link->contributions[i];
+        core_link_contribution_t *contribution = link->contributions[i];
         if (!contribution->producer_stage) continue;
         core_link_stage_record_t *producer =
             find_stage(link, contribution->producer_stage);
@@ -432,7 +455,7 @@ finish_stage_contributions(core_link_unit_t *link, uint32_t stage_kind,
         ? CORE_LINK_CONTRIBUTION_UNAVAILABLE
         : CORE_LINK_CONTRIBUTION_FAILED;
     for (size_t i = 0; i < link->contribution_count; i++) {
-        core_link_contribution_t *contribution = &link->contributions[i];
+        core_link_contribution_t *contribution = link->contributions[i];
         if (contribution->producer_stage != stage_kind) continue;
         clear_contribution_payload(contribution);
         contribution->state = state;
@@ -633,6 +656,8 @@ core_link_unit_new(void)
     core_dict_init_string(&link->module_index);
     core_dict_init(&link->scc_index, nullptr, nullptr);
     core_dict_init(&link->artifact_index, artifact_key_hash, artifact_key_eq);
+    core_dict_init(&link->contribution_index, contribution_hash,
+                   contribution_eq);
     core_dict_init(&link->dependency_index, dependency_hash, dependency_eq);
     core_dict_init(&link->stage_index, nullptr, nullptr);
     return link;
@@ -650,6 +675,7 @@ core_link_unit_free(core_link_unit_t *link)
     core_dict_free(&link->unit_index);
     core_dict_free(&link->module_index);
     core_dict_free(&link->artifact_index);
+    core_dict_free(&link->contribution_index);
     core_dict_free(&link->stage_index);
     for (size_t i = 0; i < link->declaration_count; i++) {
         core_link_declaration_t *decl = link->declarations[i];
@@ -682,11 +708,12 @@ core_link_unit_free(core_link_unit_t *link)
         core_free(link->stages[i].provenance.data);
     }
     for (size_t i = 0; i < link->contribution_count; i++) {
-        core_link_contribution_t *contribution = &link->contributions[i];
+        core_link_contribution_t *contribution = link->contributions[i];
         clear_contribution_payload(contribution);
         core_free(contribution->module.data);
         core_free(contribution->domain.data);
         core_free(contribution->provenance.data);
+        core_free(contribution);
     }
     for (size_t i = 0; i < link->dependency_count; i++) {
         core_free(link->dependencies[i]->provenance.data);
@@ -2153,14 +2180,10 @@ static core_link_contribution_t *
 find_contribution(core_link_unit_t *link, core_string_t module,
                  core_string_t domain, bool unit_wide)
 {
-    for (size_t i = 0; i < link->contribution_count; i++) {
-        core_link_contribution_t *contribution = &link->contributions[i];
-        if (contribution->unit_wide == unit_wide
-            && core_string_eq(contribution->module, module)
-            && core_string_eq(contribution->domain, domain))
-            return contribution;
-    }
-    return nullptr;
+    core_link_contribution_t probe = {
+        .module = module, .domain = domain, .unit_wide = unit_wide,
+    };
+    return core_dict_get(&link->contribution_index, &probe, nullptr);
 }
 
 static void
@@ -2213,13 +2236,16 @@ core_link_unit_set_contribution(
                                    link->contribution_count + 1,
                                    sizeof(*link->contributions)))
             abort();
-        contribution = &link->contributions[link->contribution_count++];
+        contribution = core_alloc(core_link_contribution_t);
         *contribution = (core_link_contribution_t){
             .module = unit_wide ? (core_string_t){0}
                                 : core_string_dup(module),
             .domain = core_string_dup(domain),
             .unit_wide = unit_wide,
         };
+        link->contributions[link->contribution_count++] = contribution;
+        if (!core_dict_add(&link->contribution_index, contribution,
+                           contribution)) abort();
     }
     else {
         clear_contribution_payload(contribution);
@@ -2248,17 +2274,11 @@ core_link_unit_contribution(core_link_unit_t *link,
         || !domain.data || !domain.u8_bytes
         || ((!module.data) != (module.u8_bytes == 0))) return false;
     bool unit_wide = !module.data;
-    for (size_t i = 0; i < link->contribution_count; i++) {
-        const core_link_contribution_t *contribution =
-            &link->contributions[i];
-        if (contribution->unit_wide == unit_wide
-            && core_string_eq(contribution->module, module)
-            && core_string_eq(contribution->domain, domain)) {
-            if (out) contribution_view(contribution, out);
-            return true;
-        }
-    }
-    return false;
+    core_link_contribution_t *contribution = find_contribution(
+        link, module, domain, unit_wide);
+    if (!contribution) return false;
+    if (out) contribution_view(contribution, out);
+    return true;
 }
 
 bool
@@ -2316,7 +2336,7 @@ core_link_unit_contribution_at(core_link_unit_t *link, size_t index,
 {
     if (!link || (link->root_count && !core_link_unit_collect(link)) || !out
         || index >= link->contribution_count) return false;
-    contribution_view(&link->contributions[index], out);
+    contribution_view(link->contributions[index], out);
     return true;
 }
 
