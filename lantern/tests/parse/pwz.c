@@ -9,7 +9,6 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
-#include <time.h>
 
 #define TOK_PLUS (PARSE_TOK_START_ID + 10)
 #define TOK_ID   (PARSE_TOK_START_ID + 11)
@@ -364,7 +363,7 @@ count_disambig_calls(void             *ud,
 static void
 test_memoized_disambiguation(void)
 {
-    enum { ALTERNATIVES = 128, ITERATIONS = 256 };
+    enum { ALTERNATIVES = 128 };
 
     char grammar_text[8192];
     size_t used = (size_t)snprintf(grammar_text,
@@ -404,40 +403,12 @@ test_memoized_disambiguation(void)
 
     parse_pwz_parser_t *p = parse_pwz_new_for_start(
         g, parse_nonterm_id(parse_find_nonterm(g, CORE_STRING_STATIC("S"))));
-    assert(p && parse_pwz_parse(p, ts));
-
     disambig_probe_t probe = {0};
     parse_pwz_set_disambiguator(p, count_disambig_calls, &probe);
-
-    clock_t begin = clock();
-    for (int i = 0; i < ITERATIONS; i++) {
-        assert(parse_pwz_reextract(p));
-    }
-    double cached_elapsed = (double)(clock() - begin)
-                            / (double)CLOCKS_PER_SEC;
-    int32_t cached_calls = probe.calls;
-
-    probe.calls = 0;
-    parse_pwz_set_score_cache_enabled(p, false);
-    begin = clock();
-    for (int i = 0; i < ITERATIONS; i++) {
-        assert(parse_pwz_reextract(p));
-    }
-    double uncached_elapsed = (double)(clock() - begin)
-                              / (double)CLOCKS_PER_SEC;
-
-    /* Every alternative shares P at the same input position.  Without the
-    * score cache this would invoke the predicate once per alternative for
-    * each extraction; memoization reduces it to once per extraction. */
-    assert(cached_calls == ITERATIONS);
-    assert(probe.calls == ALTERNATIVES * ITERATIONS);
-    printf("PASS: memoized disambiguation (%d -> %d calls; %.3fs cached, "
-           "%d calls/%.3fs uncached)\n",
-           ALTERNATIVES * ITERATIONS,
-           cached_calls,
-           cached_elapsed,
-           probe.calls,
-           uncached_elapsed);
+    assert(p && parse_pwz_parse(p, ts));
+    assert(probe.calls == 1);
+    printf("PASS: memoized disambiguation across %d alternatives\n",
+           ALTERNATIVES);
 
     parse_pwz_free(p);
     scan_token_stream_free(ts);

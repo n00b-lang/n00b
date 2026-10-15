@@ -36,8 +36,6 @@ void parse_pwz_set_disambiguator(parse_pwz_parser_t    *p,
                                parse_pwz_disambig_fn  cb,
                                void                *ud);
 
-parse_tree_t *parse_pwz_reextract(parse_pwz_parser_t *p);
-
 parse_tree_array_t parse_pwz_get_trees(parse_pwz_parser_t *p);
 
 parse_forest_t parse_pwz_get_forest(parse_pwz_parser_t *p);

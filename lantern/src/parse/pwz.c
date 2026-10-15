@@ -1170,12 +1170,6 @@ score_cache_free(parse_pwz_parser_t *p)
 static pwz_score_entry_t *
 score_cache_entry(parse_pwz_parser_t *p, pwz_exp_t *exp, int32_t pos)
 {
-    if (!p->score_cache_enabled) {
-        core_list_push(p->score_cache,
-                       ((pwz_score_entry_t){.exp = exp, .pos = pos}));
-        return &p->score_cache.data[p->score_cache.len - 1];
-    }
-
     if (p->score_index_cap == 0) {
         score_index_grow(p);
     }
@@ -1210,10 +1204,6 @@ score_cache_entry(parse_pwz_parser_t *p, pwz_exp_t *exp, int32_t pos)
 static int32_t
 score_exp(parse_pwz_parser_t *p, pwz_exp_t *root, int32_t *pos)
 {
-    if (p->score_evaluations < UINT32_MAX) {
-        p->score_evaluations++;
-    }
-
     core_list_t(score_frame_t) frames = core_list_new(score_frame_t);
     int32_t                   last   = 0;
 
@@ -1270,14 +1260,12 @@ score_exp(parse_pwz_parser_t *p, pwz_exp_t *root, int32_t *pos)
 
                     if (p->disambig_cb(p->disambig_ud,
                                        rule->disambig_predicate.data, tok)) {
-                        if (p->score_predicate_calls < UINT32_MAX) {
+                        if (p->score_predicate_calls < UINT32_MAX)
                             p->score_predicate_calls++;
-                        }
                         f->cost += rule->disambig_cost;
                     }
-                    else if (p->score_predicate_calls < UINT32_MAX) {
+                    else if (p->score_predicate_calls < UINT32_MAX)
                         p->score_predicate_calls++;
-                    }
                 }
             }
             else {
@@ -1384,9 +1372,8 @@ resolve_alts(parse_pwz_parser_t *p, pwz_exp_t *exp, int32_t pos)
 
                 if (c <= best) {
                     if (i > 0 && c == best
-                        && p->score_tie_count < UINT32_MAX) {
+                        && p->score_tie_count < UINT32_MAX)
                         p->score_tie_count++;
-                    }
                     best = c;
                     pick = i;
                 }
@@ -1752,7 +1739,6 @@ parse_pwz_new_for_start(parse_grammar_t *g, parse_nt_id_t start)
     p->worklist_swap = core_list_new(pwz_zipper_t);
     p->tops          = core_list_new(pwz_exp_ptr_t);
     p->score_cache   = core_list_new(pwz_score_entry_t);
-    p->score_cache_enabled = true;
     p->disambig_cb   = nullptr;
     p->disambig_ud   = nullptr;
 
@@ -1766,17 +1752,6 @@ parse_pwz_new_for_start(parse_grammar_t *g, parse_nt_id_t start)
     build_exp_graph(p, g, start);
 
     return p;
-}
-
-void
-parse_pwz_set_score_cache_enabled(parse_pwz_parser_t *p, bool enabled)
-{
-    if (!p) {
-        return;
-    }
-
-    p->score_cache_enabled = enabled;
-    score_cache_clear(p);
 }
 
 void
@@ -1870,7 +1845,6 @@ parse_pwz_reset(parse_pwz_parser_t *p)
     p->result_tree  = nullptr;
     p->result_trees = (parse_tree_array_t){0};
     p->error_pos    = -1;
-    p->score_evaluations = 0;
     p->score_predicate_calls = 0;
     p->score_tie_count = 0;
 }
@@ -1949,29 +1923,6 @@ parse_pwz_set_disambiguator(parse_pwz_parser_t    *p,
 
     p->disambig_cb = cb;
     p->disambig_ud = ud;
-}
-
-parse_tree_t *
-parse_pwz_reextract(parse_pwz_parser_t *p)
-{
-    if (!p || core_list_len(p->tops) == 0) {
-        return p ? p->result_tree : nullptr;
-    }
-
-    if (p->result_trees.data) {
-        for (size_t i = 0; i < p->result_trees.len; i++) {
-            if (p->result_trees.data[i] == p->result_tree) {
-                p->result_tree = nullptr;
-            }
-            parse_tree_free(p->result_trees.data[i]);
-        }
-        core_array_free(p->result_trees);
-        p->result_trees = (parse_tree_array_t){0};
-    }
-    parse_tree_free(p->result_tree);
-    p->result_tree = build_result_tree(p, p->tops.data[0]);
-
-    return p->result_tree;
 }
 
 parse_tree_array_t

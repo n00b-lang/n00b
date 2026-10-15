@@ -166,7 +166,6 @@ struct parse_pwz_parser_t {
     core_list_t(pwz_score_entry_t) score_cache;
     int32_t                    *score_index;
     size_t                      score_index_cap;
-    bool                        score_cache_enabled;
 
     pwz_exp_t                  *longest_top;
     int32_t                     longest_end;
@@ -183,10 +182,6 @@ struct parse_pwz_parser_t {
 
     parse_pwz_disambig_fn         disambig_cb;
     void                       *disambig_ud;
-    uint32_t                    score_evaluations;
     uint32_t                    score_predicate_calls;
     uint32_t                    score_tie_count;
 };
-
-/* Test/diagnostic hook; normal parsers keep score memoization enabled. */
-void parse_pwz_set_score_cache_enabled(parse_pwz_parser_t *p, bool enabled);
