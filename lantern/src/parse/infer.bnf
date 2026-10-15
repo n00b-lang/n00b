@@ -5,6 +5,7 @@
 <infer-op> ::= %"unify" | %"|"
 
 <infer-term> ::= <self-ref>
+               | <children-ref>
                | <return-ref>
                | <child-app>
                | <child-ref>
@@ -18,6 +19,8 @@
                | <named>
 
 <self-ref> ::= %"$" %"$"
+
+<children-ref> ::= %"$" %"*"
 
 <return-ref> ::= %"$" %IDENTIFIER
 

@@ -247,6 +247,12 @@ r_self_ref(parse_reduce_t *r)
 }
 
 static void *
+r_children_ref(parse_reduce_t *r)
+{
+    return wrap(r->thunk, expr_new(PARSE_INFER_CHILDREN));
+}
+
+static void *
 r_return_ref(parse_reduce_t *r)
 {
     if (!core_string_eq(kid_text(r, 1), CORE_STRING_STATIC("return"))) {
@@ -513,6 +519,7 @@ install(parse_tree_walk_t *w, in_ctx *c)
     REG(CORE_STRING_STATIC("infer-op"), r_op);
     REG(CORE_STRING_STATIC("infer-term"), r_pass);
     REG(CORE_STRING_STATIC("self-ref"), r_self_ref);
+    REG(CORE_STRING_STATIC("children-ref"), r_children_ref);
     REG(CORE_STRING_STATIC("return-ref"), r_return_ref);
     REG(CORE_STRING_STATIC("child-ref"), r_child_ref);
     REG(CORE_STRING_STATIC("child-app"), r_child_app);
@@ -693,6 +700,7 @@ parse_infer_kind_name(parse_infer_kind_t k)
     case PARSE_INFER_METHOD_RESULT: return "method-result";
     case PARSE_INFER_UNIFY:     return "unify";
     case PARSE_INFER_SUM:       return "sum";
+    case PARSE_INFER_CHILDREN:  return "children";
     }
 
     return "?";
@@ -747,6 +755,10 @@ print_one(sbuf *b, const parse_infer_expr_t *e)
 
     case PARSE_INFER_SELF:
         emit(b, "$$");
+        break;
+
+    case PARSE_INFER_CHILDREN:
+        emit(b, "$*");
         break;
 
     case PARSE_INFER_RETURN:

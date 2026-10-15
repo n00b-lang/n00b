@@ -20,6 +20,7 @@ typedef enum : uint8_t {
     PARSE_INFER_METHOD_RESULT,
     PARSE_INFER_UNIFY,
     PARSE_INFER_SUM,
+    PARSE_INFER_CHILDREN,
 } parse_infer_kind_t;
 
 typedef enum : uint8_t {

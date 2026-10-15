@@ -500,6 +500,43 @@ type_of(ictx *c, int32_t ix)
     return pn->type;
 }
 
+static bool
+unify_children(ictx *c, parse_tree_t *node, th_type **joined)
+{
+    size_t nc = core_tree_num_children(node);
+
+    for (size_t i = 0; i < nc; i++) {
+        parse_tree_t *k = core_tree_child(node, i);
+
+        if (!k || core_tree_is_leaf(k)) {
+            continue;
+        }
+
+        parse_nt_node_t *pn = &core_tree_node_value(k);
+
+        if (pn->group_top) {
+            if (!unify_children(c, k, joined)) {
+                return false;
+            }
+
+            continue;
+        }
+
+        if (!pn->type) {
+            pn->type = fresh(c);
+        }
+
+        *joined = *joined ? th_unify_in_place(c->tc, *joined, pn->type)
+                          : pn->type;
+
+        if (!*joined) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 static th_type *
 tvar(ictx *c, core_string_t name)
 {
@@ -1037,6 +1074,16 @@ eval(ictx *c, const parse_infer_expr_t *e)
         th_type *t = type_of(c, e->index);
 
         return t ? t : fresh(c);
+    }
+
+    case PARSE_INFER_CHILDREN: {
+        th_type *joined = nullptr;
+
+        if (!unify_children(c, c->v->node, &joined) || !joined) {
+            return fresh(c);
+        }
+
+        return joined;
     }
 
     case PARSE_INFER_SELF:
