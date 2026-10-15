@@ -258,7 +258,7 @@ enough to check off one at a time. The specs are `ffi-spec.md`,
 - [x] `resolve_one_package_export` (`compiler_link_packages.c`) treats an `'ffi` const as a module export
 - [x] `export zlib as x` on an `'ffi` const is N00BB-M0007
 - [x] `compiler_cli.c`: `--show-ffi MODULE.NAME` prints the generated source
-- [ ] Go-to-definition data maps bound names to the generated source
+- [x] Go-to-definition data maps bound names to the generated source
 
 ### Externs
 
@@ -289,15 +289,15 @@ enough to check off one at a time. The specs are `ffi-spec.md`,
 - [x] Consumer: `import zlib`; `compress2` and `uncompress` round-trip data
 - [x] Subpackage form: `archive.zlib.compress`
 - [x] `--show-ffi` output golden
-- [ ] Reflection: the `'ffi` module has a module row, a `module` scope, and symbol rows for every bound name
-- [ ] Reflection: extern functions appear in the native-binding table with their C symbols
+- [x] Reflection: the `'ffi` module has a module row, a `module` scope, and symbol rows for every bound name
+- [x] Reflection: extern functions appear in the native-binding table with their C symbols
 - [x] Passes with and without `--lto`
-- [ ] Mach-O run green
+- [x] Mach-O run green
 - [ ] Linux run green
 
 ### Gate
 
-- [ ] n00bb `./build.sh test` green
+- [x] n00bb `./build.sh test` green
 - [ ] Committed: "zlib through 'ffi"
 
 ---
