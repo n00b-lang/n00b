@@ -322,7 +322,7 @@ convert(converter_t *converter, parse_tree_t *tree, writ_loc_t *loc, writ_sym_t 
 
 static void
 report_syntax_error(writ_session_t *session, uint32_t source, parse_token_stream_t *stream, int32_t position,
-                    parse_scanner_t *scanner)
+                    parse_scanner_t *scanner, bool embedded)
 {
     scan_diagnostic_t lexical;
     if (scanner && scan_status(scanner) == SCAN_STATUS_INVALID && scan_diagnostic(scanner, &lexical)) {
@@ -340,6 +340,18 @@ report_syntax_error(writ_session_t *session, uint32_t source, parse_token_stream
     }
     writ_loc_t loc = {source, (uint32_t)token->start_byte, (uint32_t)token->end_byte};
     writ_str_t spelling = writ_loc_text(session, loc);
+    bool second_binding = false;
+    for (int32_t i = 0; embedded && writ_str_eq(spelling, writ_cstr("binding")) && i < position; i++) {
+        parse_token_info_t *earlier = scan_stream_get(stream, i);
+        second_binding = second_binding
+                      || (earlier && writ_str_eq(writ_loc_text(session, (writ_loc_t){source, (uint32_t)earlier->start_byte,
+                                                                                      (uint32_t)earlier->end_byte}),
+                                                 writ_cstr("binding")));
+    }
+    if (second_binding) {
+        writ_report(session, WRIT_D_BIND_LANGUAGE, loc, "a second binding part");
+        return;
+    }
     writ_report(session, WRIT_D_SYNTAX, loc, "unexpected `%.*s`", (int)spelling.length, spelling.data);
 }
 
@@ -362,7 +374,8 @@ parse_source(writ_unit_t *unit, uint32_t source, writ_source_kind_t kind, writ_g
     parse_pwz_parser_t *parser = parse_pwz_new_for_start(grammar->grammar, start);
     writ_status_t status = WRIT_OK;
     if (!parse_pwz_parse(parser, stream)) {
-        report_syntax_error(session, source, stream, parse_pwz_error_pos(parser), scanner);
+        report_syntax_error(session, source, stream, parse_pwz_error_pos(parser), scanner,
+                            kind == WRIT_SOURCE_EMBEDDED);
         status = WRIT_HAS_ERRORS;
     } else {
         parse_forest_t forest = parse_pwz_get_forest(parser);

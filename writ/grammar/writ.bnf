@@ -1,6 +1,6 @@
 <file> ::= <item>* | <profile-decl> <profile-decl>* | <binding-decl> <binding-decl>*
 <declarations> ::= <item>*
-<embedded> ::= <item>* <embedded-binding>*
+<embedded> ::= <item>* <embedded-binding>?
 <item> ::= <directive> | <decl>
 
 <directive> ::= <library-directive> | <link-directive> | <header-directive> | <encoding-directive> | <define-directive> | <include-path-directive> | <compile-commands-directive> | <use-directive> | <platforms-directive> | <import-directive> | <abi-directive> | <lang-directive> | <crate-directive> | <feature-directive> | <version-directive>

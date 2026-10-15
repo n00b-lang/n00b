@@ -50,7 +50,7 @@ enough to check off one at a time. The specs are `ffi-spec.md`,
 ### Grammar
 
 - [x] `grammar/writ.bnf`: `<use-directive>` takes `%STRING` or `<header-angle>`
-- [ ] `grammar/writ.bnf`: `<embedded> ::= <item>* <embedded-binding>?`
+- [x] `grammar/writ.bnf`: `<embedded> ::= <item>* <embedded-binding>?`
 - [x] `grammar/writ.bnf`: `<embedded-binding> ::= "binding" "export"? "{" <binding-item>* "}"`
 - [x] Keyword corpus test still passes (`keywords-are-identifiers`)
 
