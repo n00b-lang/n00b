@@ -52,6 +52,8 @@ builds_and_runs keyword_args --link-object "$tmp/keywords.o"
 builds_and_runs with_source --link-object "$tmp/cursor.o"
 "${CC:-cc}" -c dispatch/dispatch.c -o "$tmp/dispatch.o"
 builds_and_runs callback_table --link-object "$tmp/dispatch.o"
+"${CC:-cc}" -c callbacks/hooks.c -o "$tmp/hooks.o"
+builds_and_runs hook_calls --link-object "$tmp/hooks.o"
 
 for marker in marker-literal-5be1 marker-contract-5be1; do
     for binary in constants use_path use_search; do
