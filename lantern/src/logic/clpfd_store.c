@@ -66,6 +66,22 @@ struct core_csp_store {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+static void *grow_zeroed(void *data, int32_t old_cap, int32_t new_cap,
+                         size_t elem_size) {
+  char *grown = core_realloc(data, (size_t)new_cap * elem_size);
+  memset(grown + (size_t)old_cap * elem_size, 0,
+         (size_t)(new_cap - old_cap) * elem_size);
+  return grown;
+}
+
+static int32_t grown_cap(int32_t cap, int32_t initial, int32_t needed) {
+  int32_t new_cap = cap ? cap : initial;
+  while (new_cap <= needed) {
+    new_cap *= 2;
+  }
+  return new_cap;
+}
+
 static void watchlist_add(core_csp_store_t *s, core_csp_var_id_t var,
                           int32_t con_idx) {
   if (var < 0 || var >= s->watchlist_cap) {
@@ -75,13 +91,8 @@ static void watchlist_add(core_csp_store_t *s, core_csp_var_id_t var,
   csp_index_list_t *wl = &s->watchlist[var];
 
   if (wl->count >= wl->cap) {
-    int32_t new_cap = wl->cap ? wl->cap * 2 : 4;
-    int32_t *new_indices = core_alloc_array(int32_t, new_cap);
-    if (wl->count > 0) {
-      memcpy(new_indices, wl->indices, wl->count * sizeof(int32_t));
-    }
-    core_free(wl->indices);
-    wl->indices = new_indices;
+    int32_t new_cap = grown_cap(wl->cap, 4, wl->count);
+    wl->indices = grow_zeroed(wl->indices, wl->cap, new_cap, sizeof(int32_t));
     wl->cap = new_cap;
   }
 
@@ -115,28 +126,17 @@ static void ensure_watchlist(core_csp_store_t *s, int32_t var_count) {
     return;
   }
 
-  int32_t old_cap = s->watchlist_cap;
-  int32_t new_cap = var_count;
-  csp_index_list_t *new_wl = core_alloc_array(csp_index_list_t, new_cap);
-  if (old_cap > 0) {
-    memcpy(new_wl, s->watchlist, old_cap * sizeof(csp_index_list_t));
-  }
-  core_free(s->watchlist);
-  s->watchlist = new_wl;
+  int32_t new_cap = grown_cap(s->watchlist_cap, 16, var_count - 1);
+  s->watchlist = grow_zeroed(s->watchlist, s->watchlist_cap, new_cap,
+                             sizeof(csp_index_list_t));
   s->watchlist_cap = new_cap;
-  memset(&s->watchlist[old_cap], 0,
-         (new_cap - old_cap) * sizeof(csp_index_list_t));
 }
 
 static void enqueue_constraint(core_csp_store_t *s, int32_t con_idx) {
   if (con_idx < 0 || con_idx >= s->in_queue_cap) {
-    int32_t new_cap = con_idx + 16;
-    bool *new_in_queue = core_alloc_array(bool, new_cap);
-    if (s->in_queue_cap > 0) {
-      memcpy(new_in_queue, s->in_queue, s->in_queue_cap * sizeof(bool));
-    }
-    core_free(s->in_queue);
-    s->in_queue = new_in_queue;
+    int32_t new_cap = grown_cap(s->in_queue_cap, 16, con_idx);
+    s->in_queue = grow_zeroed(s->in_queue, s->in_queue_cap, new_cap,
+                              sizeof(bool));
     s->in_queue_cap = new_cap;
   }
 
@@ -148,21 +148,14 @@ static void enqueue_constraint(core_csp_store_t *s, int32_t con_idx) {
   int32_t next_tail = (s->queue_tail + 1) % s->queue_cap;
 
   if (next_tail == s->queue_head) {
-    int32_t new_cap = s->queue_cap * 2;
-    int32_t *new_q = core_alloc_array(int32_t, new_cap);
-    int32_t count = 0;
-    int32_t i = s->queue_head;
-
-    while (i != s->queue_tail) {
-      new_q[count++] = s->queue[i];
-      i = (i + 1) % s->queue_cap;
+    int32_t old_cap = s->queue_cap;
+    s->queue = core_realloc(s->queue, (size_t)old_cap * 2 * sizeof(int32_t));
+    if (s->queue_tail < s->queue_head) {
+      memcpy(&s->queue[old_cap], s->queue,
+             (size_t)s->queue_tail * sizeof(int32_t));
+      s->queue_tail += old_cap;
     }
-
-    core_free(s->queue);
-    s->queue = new_q;
-    s->queue_head = 0;
-    s->queue_tail = count;
-    s->queue_cap = new_cap;
+    s->queue_cap = old_cap * 2;
   }
 
   s->queue[s->queue_tail] = con_idx;
@@ -200,13 +193,9 @@ static void enqueue_watching(core_csp_store_t *s, core_csp_var_id_t var) {
 
 static void trail_save(core_csp_store_t *s, core_csp_var_id_t var) {
   if (s->trail_len >= s->trail_cap) {
-    int32_t new_cap = s->trail_cap ? s->trail_cap * 2 : 64;
-    csp_trail_entry_t *new_trail = core_alloc_array(csp_trail_entry_t, new_cap);
-    if (s->trail_len > 0) {
-      memcpy(new_trail, s->trail, s->trail_len * sizeof(csp_trail_entry_t));
-    }
-    core_free(s->trail);
-    s->trail = new_trail;
+    int32_t new_cap = grown_cap(s->trail_cap, 64, s->trail_len);
+    s->trail = grow_zeroed(s->trail, s->trail_cap, new_cap,
+                           sizeof(csp_trail_entry_t));
     s->trail_cap = new_cap;
   }
 
@@ -289,13 +278,8 @@ void core_csp_store_free(core_csp_store_t *s) {
 core_csp_var_id_t core_csp_new_var(core_csp_store_t *s, core_string_t name,
                                    core_csp_domain_t dom) {
   if (s->var_count >= s->var_cap) {
-    int32_t new_cap = s->var_cap ? s->var_cap * 2 : 16;
-    core_csp_var_t *new_vars = core_alloc_array(core_csp_var_t, new_cap);
-    if (s->var_count > 0) {
-      memcpy(new_vars, s->vars, s->var_count * sizeof(core_csp_var_t));
-    }
-    core_free(s->vars);
-    s->vars = new_vars;
+    int32_t new_cap = grown_cap(s->var_cap, 16, s->var_count);
+    s->vars = grow_zeroed(s->vars, s->var_cap, new_cap, sizeof(core_csp_var_t));
     s->var_cap = new_cap;
   }
 
@@ -414,15 +398,9 @@ int32_t core_csp_dom_iterate(core_csp_store_t *s, core_csp_var_id_t v,
 
 static int32_t add_constraint(core_csp_store_t *s, core_csp_constraint_t con) {
   if (s->con_count >= s->con_cap) {
-    int32_t new_cap = s->con_cap ? s->con_cap * 2 : 16;
-    core_csp_constraint_t *new_cons =
-        core_alloc_array(core_csp_constraint_t, new_cap);
-    if (s->con_count > 0) {
-      memcpy(new_cons, s->constraints,
-             s->con_count * sizeof(core_csp_constraint_t));
-    }
-    core_free(s->constraints);
-    s->constraints = new_cons;
+    int32_t new_cap = grown_cap(s->con_cap, 16, s->con_count);
+    s->constraints = grow_zeroed(s->constraints, s->con_cap, new_cap,
+                                 sizeof(core_csp_constraint_t));
     s->con_cap = new_cap;
   }
 
@@ -611,14 +589,9 @@ bool core_csp_post_alldiff_with_provenance(core_csp_store_t *s,
 
 void core_csp_push_state(core_csp_store_t *s) {
   if (s->cp_count >= s->cp_cap) {
-    int32_t new_cap = s->cp_cap ? s->cp_cap * 2 : 16;
-    csp_choice_point_t *new_cps = core_alloc_array(csp_choice_point_t, new_cap);
-    if (s->cp_count > 0) {
-      memcpy(new_cps, s->choice_points,
-             s->cp_count * sizeof(csp_choice_point_t));
-    }
-    core_free(s->choice_points);
-    s->choice_points = new_cps;
+    int32_t new_cap = grown_cap(s->cp_cap, 16, s->cp_count);
+    s->choice_points = grow_zeroed(s->choice_points, s->cp_cap, new_cap,
+                                   sizeof(csp_choice_point_t));
     s->cp_cap = new_cap;
   }
 
