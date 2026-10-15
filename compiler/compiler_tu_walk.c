@@ -334,6 +334,20 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 record_literal_expected_type(grammar,
                     core_tree_child(node, 2)));
         }
+        if (nt_is(grammar, node, "return-stmt")) {
+            parse_tree_t *function = node;
+            while (function && !nt_is(grammar, function, "func-def"))
+                function = core_tree_node_value(function).parent;
+            parse_sym_entry_t *symbol = function
+                ? core_tree_node_value(function).sym : nullptr;
+            th_type *declared = symbol ? parse_sym_binding(symbol,
+                CORE_STRING_STATIC("n00bb.declared-function-signature"))
+                : nullptr;
+            if (declared)
+                contextualize_record_literal(grammar, unit, state,
+                    child_nt(grammar, node, "expression"),
+                    th_func_ret(declared));
+        }
         return;
         }
         if (core_tree_num_children(node) == 1) {
