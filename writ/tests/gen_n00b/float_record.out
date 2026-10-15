@@ -270,10 +270,10 @@ public func peek_raw(p: uint) -> i32 {
 func scale(modify p: Point, k: f64) fail: Scale_Failure {
     let outcome = __pt_scale(ref p.storage, k)
     if outcome < 0 {
-        fail Scale_Failure.from_ffi(cast[i64]outcome, nil, "pt_scale")
+        fail new[Scale_Failure](cast[i64]outcome, nil, "pt_scale")
     }
     if outcome == 0 {
-        fail Scale_Failure.from_ffi(cast[i64]outcome, nil, "pt_scale")
+        fail new[Scale_Failure](cast[i64]outcome, nil, "pt_scale")
     }
 }
 

@@ -289,7 +289,7 @@ func db_open(path: string, timeout_ms: u32? = nil, readonly: bool? = nil, cache_
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "db_open")
         fail failure
     }
-    return Db(raw = result)
+    return (raw = result)
 }
 
 type Db_Limit_Options {

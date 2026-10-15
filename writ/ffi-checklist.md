@@ -154,7 +154,7 @@ enough to check off one at a time. The specs are `ffi-spec.md`,
 - [x] `method` and `static` grouping; Rust impl grouping by default
 - [x] `string`, `buffer`, `borrow` representations per slot
 - [x] Rest packs as `List[T]` or `Array[T]`
-- [ ] Keyword packs as keyword arguments or `F_Options`
+- [x] Keyword packs as keyword arguments or `F_Options`
 - [ ] Policy parameters: fixed arm, or an enum parameter
 - [x] Reserved words get a trailing `_`
 - [x] `raw` declarations with `ptr` slots and a `_raw` suffix

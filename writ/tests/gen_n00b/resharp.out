@@ -1230,7 +1230,15 @@ func regex_options_default() -> Regex_Options fail: Error {
         let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_options_default")
         fail failure
     }
-    return Regex_Options(raw = out_)
+    return (raw = out_)
+}
+
+func __init(modify self: Regex_Options) {
+    try {
+        self = regex_options_default()!
+    } else failure {
+        panic("regex_options_default failed")
+    }
 }
 
 func unicode(modify self: Regex_Options, mode: Unicode_Mode) -> Regex_Options fail: Error {
@@ -1251,7 +1259,7 @@ func unicode(modify self: Regex_Options, mode: Unicode_Mode) -> Regex_Options fa
         fail failure
     }
     self.raw = 0
-    return Regex_Options(raw = out_)
+    return (raw = out_)
 }
 
 func case_insensitive(modify self: Regex_Options, yes: bool) -> Regex_Options fail: Error {
@@ -1272,7 +1280,7 @@ func case_insensitive(modify self: Regex_Options, yes: bool) -> Regex_Options fa
         fail failure
     }
     self.raw = 0
-    return Regex_Options(raw = out_)
+    return (raw = out_)
 }
 
 func dot_matches_new_line(modify self: Regex_Options, yes: bool) -> Regex_Options fail: Error {
@@ -1293,7 +1301,7 @@ func dot_matches_new_line(modify self: Regex_Options, yes: bool) -> Regex_Option
         fail failure
     }
     self.raw = 0
-    return Regex_Options(raw = out_)
+    return (raw = out_)
 }
 
 func multiline(modify self: Regex_Options, yes: bool) -> Regex_Options fail: Error {
@@ -1314,7 +1322,7 @@ func multiline(modify self: Regex_Options, yes: bool) -> Regex_Options fail: Err
         fail failure
     }
     self.raw = 0
-    return Regex_Options(raw = out_)
+    return (raw = out_)
 }
 
 func ignore_whitespace(modify self: Regex_Options, yes: bool) -> Regex_Options fail: Error {
@@ -1335,7 +1343,7 @@ func ignore_whitespace(modify self: Regex_Options, yes: bool) -> Regex_Options f
         fail failure
     }
     self.raw = 0
-    return Regex_Options(raw = out_)
+    return (raw = out_)
 }
 
 func hardened(modify self: Regex_Options, yes: bool) -> Regex_Options fail: Error {
@@ -1356,7 +1364,7 @@ func hardened(modify self: Regex_Options, yes: bool) -> Regex_Options fail: Erro
         fail failure
     }
     self.raw = 0
-    return Regex_Options(raw = out_)
+    return (raw = out_)
 }
 
 func unbounded_size(modify self: Regex_Options, yes: bool) -> Regex_Options fail: Error {
@@ -1377,7 +1385,7 @@ func unbounded_size(modify self: Regex_Options, yes: bool) -> Regex_Options fail
         fail failure
     }
     self.raw = 0
-    return Regex_Options(raw = out_)
+    return (raw = out_)
 }
 
 func implicit_captures(modify self: Regex_Options, yes: bool) -> Regex_Options fail: Error {
@@ -1398,7 +1406,7 @@ func implicit_captures(modify self: Regex_Options, yes: bool) -> Regex_Options f
         fail failure
     }
     self.raw = 0
-    return Regex_Options(raw = out_)
+    return (raw = out_)
 }
 
 func is_match(self: Regex, input: string) -> bool fail: Error {
@@ -1440,7 +1448,15 @@ func regex_new_(pattern: string) -> Regex fail: Error {
         let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_new")
         fail failure
     }
-    return Regex(raw = out_)
+    return (raw = out_)
+}
+
+func __init(modify self: Regex, pattern: string) {
+    try {
+        self = regex_new_(pattern)!
+    } else failure {
+        panic("regex_new_ failed")
+    }
 }
 
 func regex_with_options(pattern: string, opts: Regex_Options) -> Regex fail: Error {
@@ -1461,7 +1477,15 @@ func regex_with_options(pattern: string, opts: Regex_Options) -> Regex fail: Err
         let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_with_options")
         fail failure
     }
-    return Regex(raw = out_)
+    return (raw = out_)
+}
+
+func __init(modify self: Regex, pattern: string, opts: Regex_Options) {
+    try {
+        self = regex_with_options(pattern, opts)!
+    } else failure {
+        panic("regex_with_options failed")
+    }
 }
 
 func find_all(self: Regex, input: Array[u8], out_capacity: u64) -> Array[Match] fail: Error {
@@ -1573,21 +1597,21 @@ func capture_index_for_name(self: Regex, name: string) -> Capture_Index_For_Name
 54	resharp.derived.writ:30:1	regex_options_free
 63	resharp.derived.writ:39:1	regex_free
 72	resharp.derived.writ:53:1	regex_options_default
-92	resharp.derived.writ:62:1	regex_options_unicode
-113	resharp.derived.writ:73:1	regex_options_case_insensitive
-134	resharp.derived.writ:84:1	regex_options_dot_matches_new_line
-155	resharp.derived.writ:95:1	regex_options_multiline
-176	resharp.derived.writ:106:1	regex_options_ignore_whitespace
-197	resharp.derived.writ:117:1	regex_options_hardened
-218	resharp.derived.writ:128:1	regex_options_unbounded_size
-239	resharp.derived.writ:139:5	regex_options_implicit_captures
-260	resharp.derived.writ:151:1	regex_is_match
-281	resharp.derived.writ:163:1	regex_new
-302	resharp.derived.writ:174:1	regex_with_options
-323	resharp.derived.writ:186:1	regex_find_all
-350	resharp.derived.writ:201:1	regex_find_anchored
-374	resharp.derived.writ:215:1	regex_is_full_match
-400	resharp.derived.writ:227:5	regex_capture_index_for_name
+100	resharp.derived.writ:62:1	regex_options_unicode
+121	resharp.derived.writ:73:1	regex_options_case_insensitive
+142	resharp.derived.writ:84:1	regex_options_dot_matches_new_line
+163	resharp.derived.writ:95:1	regex_options_multiline
+184	resharp.derived.writ:106:1	regex_options_ignore_whitespace
+205	resharp.derived.writ:117:1	regex_options_hardened
+226	resharp.derived.writ:128:1	regex_options_unbounded_size
+247	resharp.derived.writ:139:5	regex_options_implicit_captures
+268	resharp.derived.writ:151:1	regex_is_match
+289	resharp.derived.writ:163:1	regex_new
+318	resharp.derived.writ:174:1	regex_with_options
+347	resharp.derived.writ:186:1	regex_find_all
+374	resharp.derived.writ:201:1	regex_find_anchored
+398	resharp.derived.writ:215:1	regex_is_full_match
+424	resharp.derived.writ:227:5	regex_capture_index_for_name
 library resharp_writ
 search_path target/release
 load static

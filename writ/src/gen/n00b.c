@@ -957,7 +957,7 @@ emit_fail(const wrapper_t *w, writ_emit_t *emit, writ_str_t code, writ_str_t tex
         writ_emit_line(emit, "fail failure");
         return;
     }
-    writ_emit_line(emit, "fail %.*s.from_ffi(%.*s, %.*s, \"%.*s\")", S(type), S(code), S(text),
+    writ_emit_line(emit, "fail new[%.*s](%.*s, %.*s, \"%.*s\")", S(type), S(code), S(text),
                    S(w->plan->fn->contract_name));
 }
 
@@ -997,7 +997,7 @@ lifted(const wrapper_t *w, const shim_param_t *param)
                                S(name));
     }
     if (item->shape == WRIT_SHAPE_HANDLE || (item->type && item->type->kind == WRIT_TYPE_HANDLE)) {
-        return writ_str_format(session, "%.*s(raw = %.*s)", S(item_type(w->g, w->fn, w->plan, param->item)), S(name));
+        return writ_str_format(session, "(raw = %.*s)", S(name));
     }
     if (item->shape == WRIT_SHAPE_TEXT) {
         return writ_str_format(session, "__ffi_copy_cstr(%.*s)", S(name));
@@ -1097,6 +1097,73 @@ emit_keyword_params(const wrapper_t *w, writ_emit_t *emit, const writ_record_vie
 }
 
 static void
+emit_wrapper_params(const wrapper_t *w, writ_emit_t *emit, uint32_t keywords, bool options_record, bool *first)
+{
+    const writ_plan_view_t *plan = w->plan;
+    for (uint32_t i = 0; i < plan->items_count; i++) {
+        if (!writ_c_is_input(&plan->items[i]) || (i == keywords && !options_record)) {
+            continue;
+        }
+        bool modify = (i == w->receiver && consumes(w, i))
+                   || (plan->items[i].role == WRIT_ROLE_INPUT_OUTPUT && record_target(&plan->items[i]));
+        writ_str_t type = i == keywords ? options_type_name(w) : receiver_type(w, i);
+        writ_emit_text(emit, "%s%s%.*s: %.*s", *first ? "" : ", ", modify ? "modify " : "", S(local_name(w, i)),
+                       S(type));
+        *first = false;
+    }
+    if (keywords != WRIT_PLAN_NONE && !options_record) {
+        emit_keyword_params(w, emit, keyword_record(w->g, &plan->items[keywords]), first);
+    }
+}
+
+static void
+emit_wrapper_arguments(const wrapper_t *w, writ_emit_t *emit, uint32_t keywords, bool options_record)
+{
+    const writ_plan_view_t *plan = w->plan;
+    bool first = true;
+    for (uint32_t i = 0; i < plan->items_count; i++) {
+        if (writ_c_is_input(&plan->items[i]) && (i != keywords || options_record)) {
+            writ_emit_text(emit, "%s%.*s", first ? "" : ", ", S(local_name(w, i)));
+            first = false;
+        }
+    }
+    const writ_record_view_t *record = keywords != WRIT_PLAN_NONE && !options_record
+                                         ? keyword_record(w->g, &plan->items[keywords])
+                                         : nullptr;
+    for (size_t f = 0; record && f < record->fields_count; f++) {
+        if (f != record->presence_field) {
+            writ_str_t key = keyword_name(w->g, &record->fields[f]);
+            writ_emit_text(emit, "%s%.*s = %.*s", first ? "" : ", ", S(key), S(key));
+            first = false;
+        }
+    }
+}
+
+static void
+emit_static_init(const wrapper_t *w, writ_emit_t *emit, uint32_t keywords, bool options_record)
+{
+    writ_emit_line(emit, "");
+    writ_emit_text(emit, "func __init(modify self: %.*s", S(w->bound.owner));
+    bool first = false;
+    emit_wrapper_params(w, emit, keywords, options_record, &first);
+    writ_emit_text(emit, ")");
+    writ_emit_open(emit, "");
+    if (can_fail(w)) {
+        writ_emit_open(emit, "try");
+    }
+    writ_emit_text(emit, "self = %.*s(", S(wrapper_name(w)));
+    emit_wrapper_arguments(w, emit, keywords, options_record);
+    writ_emit_line(emit, ")%s", can_fail(w) ? "!" : "");
+    if (can_fail(w)) {
+        writ_emit_close(emit, " else failure {");
+        writ_emit_indent(emit, 1);
+        writ_emit_line(emit, "panic(\"%.*s failed\")", S(wrapper_name(w)));
+        writ_emit_close(emit, nullptr);
+    }
+    writ_emit_close(emit, nullptr);
+}
+
+static void
 emit_keyword_record(const wrapper_t *w, writ_emit_t *emit, uint32_t item, const writ_record_view_t *record)
 {
     const n00b_t *g = w->g;
@@ -1164,20 +1231,7 @@ emit_wrapper(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view
     mark(g, emit, plan->fn->declared_at, plan->fn->contract_name);
     writ_emit_text(emit, "func %.*s(", S(wrapper_name(&w)));
     bool first = true;
-    for (uint32_t i = 0; i < plan->items_count; i++) {
-        if (!writ_c_is_input(&plan->items[i]) || (i == keywords && !options_record)) {
-            continue;
-        }
-        bool modify = (i == w.receiver && consumes(&w, i))
-                   || (plan->items[i].role == WRIT_ROLE_INPUT_OUTPUT && record_target(&plan->items[i]));
-        writ_str_t type = i == keywords ? options_type_name(&w) : receiver_type(&w, i);
-        writ_emit_text(emit, "%s%s%.*s: %.*s", first ? "" : ", ", modify ? "modify " : "", S(local_name(&w, i)),
-                       S(type));
-        first = false;
-    }
-    if (keyword_view && !options_record) {
-        emit_keyword_params(&w, emit, keyword_view, &first);
-    }
+    emit_wrapper_params(&w, emit, keywords, options_record, &first);
     writ_emit_text(emit, ")");
     bool multiple_success = success_count(plan) > 1;
     if (multiple_success) {
@@ -1306,6 +1360,10 @@ emit_wrapper(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view
     }
     writ_emit_close(emit, nullptr);
     core_list_free(params);
+    if (w.bound.is_static && w.bound.owner.length && out_count == 1 && !multiple_success
+        && writ_str_eq(item_type(g, fn, plan, outs[0]), w.bound.owner)) {
+        emit_static_init(&w, emit, keywords, options_record);
+    }
 }
 
 static writ_str_t

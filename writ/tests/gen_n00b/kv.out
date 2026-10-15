@@ -444,7 +444,15 @@ func db_open(path: string) -> Db fail: Error {
         let failure: Error = (code = cast[i64]detail, text = nil, fn = "kv_open")
         fail failure
     }
-    return Db(raw = out_db)
+    return (raw = out_db)
+}
+
+func __init(modify self: Db, path: string) {
+    try {
+        self = db_open(path)!
+    } else failure {
+        panic("db_open failed")
+    }
 }
 
 func put(self: Db, key: Array[u8], val: Array[u8]) fail: Error {
@@ -495,7 +503,7 @@ func iter(self: Db, prefix: Array[u8]) -> Iter fail: Error {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "kv_iter_new")
         fail failure
     }
-    return Iter(raw = result)
+    return (raw = result)
 }
 
 func next(self: Iter) -> Entry fail: Error {
@@ -512,10 +520,10 @@ func next(self: Iter) -> Entry fail: Error {
 15	tests/gen_n00b/../bind/kv.writ:15:1	kv_entry
 22	tests/gen_n00b/../bind/kv.writ:13:1	kv_status
 36	tests/gen_n00b/../bind/kv.writ:22:1	kv_open
-52	tests/gen_n00b/../bind/kv.writ:26:1	kv_put
-71	tests/gen_n00b/../bind/kv.writ:31:1	kv_get
-88	tests/gen_n00b/../bind/kv.writ:38:1	kv_iter_new
-103	tests/gen_n00b/../bind/kv.writ:42:1	kv_iter_next
+60	tests/gen_n00b/../bind/kv.writ:26:1	kv_put
+79	tests/gen_n00b/../bind/kv.writ:31:1	kv_get
+96	tests/gen_n00b/../bind/kv.writ:38:1	kv_iter_new
+111	tests/gen_n00b/../bind/kv.writ:42:1	kv_iter_next
 library kv
 load static
 extern __kv_open kv_n00b_kv_open (ref[string], ref[uint], ref[int]) -> i32 fail: nil
