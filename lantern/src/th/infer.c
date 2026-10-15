@@ -235,8 +235,11 @@ static bool same_method_obligation(th_ctx *ctx, const th_constraint *a,
     return true;
 }
 
+static bool merge_method_types(th_ctx *ctx, th_type *a, th_type *b,
+                               core_dict_t *seen);
+
 static bool set_method_failure(th_ctx *ctx, th_constraint *constraint,
-                               th_type *error)
+                               th_type *error, core_dict_t *seen)
 {
     th_type *call = th_resolve(constraint->method.call);
     if (!call) {
@@ -248,7 +251,7 @@ static bool set_method_failure(th_ctx *ctx, th_constraint *constraint,
     if (th_kind_of(call) != TH_FUNCTION) return false;
     th_type *existing = th_func_error(call);
     if (existing)
-        return th_unify_in_place(ctx, existing, error) != nullptr;
+        return merge_method_types(ctx, existing, error, seen);
     constraint->method.call = th_func_with_error(ctx, th_func_ret(call),
         error, call->fn.params, call->fn.np, call->fn.rest,
         call->fn.kw, call->fn.nkw);
@@ -257,34 +260,53 @@ static bool set_method_failure(th_ctx *ctx, th_constraint *constraint,
 
 static bool complete_method_failure(th_ctx *ctx, th_type *owner,
                                     th_constraint *slot,
-                                    const th_constraint *incoming)
+                                    const th_constraint *incoming,
+                                    core_dict_t *seen)
 {
     th_type *have = th_resolve(slot->method.call);
     th_type *want = th_resolve(incoming->method.call);
     if (!have || !want || have->fn.error || !want->fn.error) return true;
-    bool completed = set_method_failure(ctx, slot, want->fn.error);
+    bool completed = set_method_failure(ctx, slot, want->fn.error, seen);
     if (completed) owner->revision++;
     return completed;
 }
 
+static bool uni(th_ctx *ctx, th_type *a, th_type *b, core_dict_t *seen);
+static void uni_seen_free(core_dict_t *seen);
+
+static bool merge_method_types(th_ctx *ctx, th_type *a, th_type *b,
+                               core_dict_t *seen)
+{
+    size_t before = th_error_count(ctx);
+    if (!uni(ctx, a, b, seen)) {
+        if (th_error_count(ctx) == before)
+            th_err(ctx, TH_ERR_UNIFY, nullptr, b, a, "types do not unify");
+        return false;
+    }
+    th_normalize(th_apply_subst(ctx, a));
+    return true;
+}
+
 static bool merge_method_obligation(th_ctx *ctx, th_type *owner,
                                     th_constraint *slot,
-                                    const th_constraint *incoming)
+                                    const th_constraint *incoming,
+                                    core_dict_t *seen)
 {
     th_type *have_call = th_resolve(slot->method.call);
     th_type *want_call = th_resolve(incoming->method.call);
-    return th_unify_in_place(ctx, incoming->method.result,
-               slot->method.result)
+    return merge_method_types(ctx, incoming->method.result,
+               slot->method.result, seen)
         && (!have_call || !want_call
-            || (th_unify_in_place(ctx, want_call->fn.ret,
-                    have_call->fn.ret)
+            || (merge_method_types(ctx, want_call->fn.ret,
+                    have_call->fn.ret, seen)
                 && (!have_call->fn.error || !want_call->fn.error
-                    || th_unify_in_place(ctx, want_call->fn.error,
-                        have_call->fn.error))))
-        && complete_method_failure(ctx, owner, slot, incoming);
+                    || merge_method_types(ctx, want_call->fn.error,
+                        have_call->fn.error, seen))))
+        && complete_method_failure(ctx, owner, slot, incoming, seen);
 }
 
-bool th_var_constrain(th_ctx *ctx, th_type *var, th_constraint c)
+static bool th_var_constrain_seen(th_ctx *ctx, th_type *var,
+                                  th_constraint c, core_dict_t *seen)
 {
     if (!var || var->kind != TH_VAR) {
         return false;
@@ -311,7 +333,7 @@ bool th_var_constrain(th_ctx *ctx, th_type *var, th_constraint c)
                 && !strcmp(slot->method.name, c.method.name)
                 && same_constraint_scope(slot, &c)
                 && same_method_obligation(ctx, slot, var, &c, var)) {
-                return merge_method_obligation(ctx, var, slot, &c);
+                return merge_method_obligation(ctx, var, slot, &c, seen);
             }
         }
         core_list_push(var->var.cons, c);
@@ -366,6 +388,15 @@ bool th_var_constrain(th_ctx *ctx, th_type *var, th_constraint c)
     return true;
 }
 
+bool th_var_constrain(th_ctx *ctx, th_type *var, th_constraint c)
+{
+    core_dict_t seen;
+    core_dict_init(&seen, nullptr, nullptr);
+    bool result = th_var_constrain_seen(ctx, var, c, &seen);
+    uni_seen_free(&seen);
+    return result;
+}
+
 bool th_require_method(th_ctx *ctx, th_type *receiver, const char *name,
                        th_type *result, th_type *call)
 {
@@ -414,7 +445,10 @@ bool th_method_obligation_set_error(th_ctx *ctx, th_type *receiver,
                 break;
             }
         }
-    bool updated = match && set_method_failure(ctx, match, error);
+    core_dict_t seen;
+    core_dict_init(&seen, nullptr, nullptr);
+    bool updated = match && set_method_failure(ctx, match, error, &seen);
+    uni_seen_free(&seen);
     if (updated) variable->revision++;
     return updated;
 }
@@ -549,9 +583,7 @@ bool th_type_promotes_to(th_ctx *ctx, const th_type *from, const th_type *to)
            th_promotes_to(ctx, from_name, to_name);
 }
 
-static bool uni(th_ctx *ctx, th_type *a, th_type *b, core_dict_t *seen);
 static bool uni_in_place(th_ctx *ctx, th_type *a, th_type *b);
-static void uni_seen_free(core_dict_t *seen);
 
 void th_register_iface(th_ctx *ctx, const char *name, th_type *methods)
 {
@@ -972,14 +1004,15 @@ static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to,
                         || !same_constraint_scope(slot, &constraint)
                         || !same_method_obligation(ctx, slot, bt,
                             &constraint, (th_type *)var)) continue;
-                    if (!merge_method_obligation(ctx, bt, slot, &constraint))
+                    if (!merge_method_obligation(ctx, bt, slot, &constraint,
+                                                 seen))
                         return false;
                     matched = true;
                     break;
                 }
             }
             if (matched) continue;
-            if (!th_var_constrain(ctx, bt, constraint)) {
+            if (!th_var_constrain_seen(ctx, bt, constraint, seen)) {
                 return false;
             }
         }
