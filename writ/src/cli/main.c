@@ -512,7 +512,7 @@ static const struct {
     {"import", cmd_import, "import --library NAME --header H... [--link L] [--define D] [-I DIR] [--only GLOB] [-o DIR]"},
     {"verify", cmd_verify, "verify FILE [--binary PATH]"},
     {"gen", cmd_gen,
-     "gen c FILE [-o DIR] [--prefix NAME] [--conformance] | gen rust FILE --crate-path DIR [-o DIR] | "
+     "gen c FILE [-o DIR] [--prefix NAME] [--conformance] | gen rust FILE [--crate-path DIR] [-o DIR] | "
      "gen n00b --embedded FILE [--profile FILE] [--prefix NAME] [--module NAME] [-o DIR]"},
     {"parse", cmd_parse, "parse FILE"},
     {"check", cmd_check, "check FILE"},

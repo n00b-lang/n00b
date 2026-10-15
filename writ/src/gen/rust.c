@@ -418,7 +418,11 @@ manifest_text(printer_t *p, const writ_gen_rust_request_t *request)
     writ_emit_line(&e, "crate-type = [\"staticlib\", \"cdylib\", \"rlib\"]");
     writ_emit_line(&e, "");
     writ_emit_line(&e, "[dependencies]");
-    writ_emit_line(&e, "%.*s = { path = \"%.*s\" }", S(package), S(request->crate_path));
+    if (request->crate_path.length) {
+        writ_emit_line(&e, "%.*s = { path = \"%.*s\" }", S(package), S(request->crate_path));
+    } else {
+        writ_emit_line(&e, "%.*s = \"=%.*s\"", S(package), S(sym(p, rust->version)));
+    }
     writ_emit_line(&e, "");
     writ_emit_line(&e, "[features]");
     for (size_t i = 0; i < rust->features.len; i++) {
@@ -433,7 +437,7 @@ manifest_text(printer_t *p, const writ_gen_rust_request_t *request)
 writ_status_t
 writ_gen_rust(const writ_model_t *model, const writ_gen_rust_request_t *request, const writ_output_t *output)
 {
-    if (!model || !request || !output || !model->rust || !request->crate_path.length) {
+    if (!model || !request || !output || !model->rust) {
         return WRIT_INVALID_ARGUMENT;
     }
     printer_t p = {.rust = model->rust,

@@ -1,0 +1,447 @@
+[package]
+name = "resharp-writ"
+version = "0.7.6"
+edition = "2021"
+publish = false
+
+[lib]
+name = "resharp_writ"
+path = "src/lib.rs"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies]
+resharp = "=0.7.6"
+
+[features]
+experimental_capture_groups = ["resharp/experimental_capture_groups"]
+
+[workspace]
+#![allow(non_camel_case_types, clippy::missing_safety_doc)]
+
+use std::cell::RefCell;
+use std::ffi::c_int;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+
+pub const STATUS_OK: c_int = 0;
+pub const STATUS_NONE: c_int = 1;
+pub const STATUS_ERROR: c_int = 2;
+pub const STATUS_PANIC: c_int = 3;
+
+thread_local! {
+    static LAST_ERROR: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+}
+
+fn fail(text: String) -> c_int {
+    LAST_ERROR.with(|cell| *cell.borrow_mut() = text.into_bytes());
+    STATUS_ERROR
+}
+
+fn guard(body: impl FnOnce() -> c_int) -> c_int {
+    match catch_unwind(AssertUnwindSafe(body)) {
+        Ok(status) => status,
+        Err(payload) => {
+            let text = payload
+                .downcast_ref::<&str>()
+                .map(|text| text.to_string())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "panic".to_string());
+            fail(text);
+            STATUS_PANIC
+        }
+    }
+}
+
+unsafe fn slice<'a, T>(data: *const T, len: usize) -> &'a [T] {
+    if len == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(data, len)
+    }
+}
+
+unsafe fn text<'a>(data: *const u8, len: usize) -> Result<&'a str, c_int> {
+    std::str::from_utf8(slice(data, len)).map_err(|error| fail(error.to_string()))
+}
+
+unsafe fn borrow<'a, T>(handle: *const T) -> Result<&'a T, c_int> {
+    handle.as_ref().ok_or_else(|| fail("null handle".to_string()))
+}
+
+unsafe fn take<T>(handle: *mut T) -> Result<T, c_int> {
+    if handle.is_null() {
+        Err(fail("null handle".to_string()))
+    } else {
+        Ok(*Box::from_raw(handle))
+    }
+}
+
+unsafe fn write_all<T, U>(values: &[T], out: *mut U, cap: usize, total: *mut usize, convert: impl Fn(&T) -> U) {
+    for (index, value) in values.iter().take(cap).enumerate() {
+        out.add(index).write(convert(value));
+    }
+    *total = values.len();
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writ_resharp_last_error(buf: *mut u8, cap: usize) -> usize {
+    LAST_ERROR.with(|cell| {
+        let text = cell.borrow();
+        let count = text.len().min(cap);
+        if count > 0 {
+            std::ptr::copy_nonoverlapping(text.as_ptr(), buf, count);
+        }
+        text.len()
+    })
+}
+
+pub struct writ_resharp_regex_options(resharp::RegexOptions);
+
+#[no_mangle]
+pub unsafe extern "C" fn writ_resharp_regex_options_free(value: *mut writ_resharp_regex_options) {
+    if !value.is_null() {
+        let _ = catch_unwind(AssertUnwindSafe(|| drop(Box::from_raw(value))));
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct Match {
+    pub start: usize,
+    pub end: usize,
+}
+
+pub struct writ_resharp_regex(resharp::Regex);
+
+#[no_mangle]
+pub unsafe extern "C" fn writ_resharp_regex_free(value: *mut writ_resharp_regex) {
+    if !value.is_null() {
+        let _ = catch_unwind(AssertUnwindSafe(|| drop(Box::from_raw(value))));
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writ_resharp_regex_options_default(
+    out: *mut *mut writ_resharp_regex_options,
+) -> c_int {
+    guard(|| {
+        let result = resharp::RegexOptions::default();
+        *out = Box::into_raw(Box::new(writ_resharp_regex_options(result)));
+        STATUS_OK
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writ_resharp_regex_options_unicode(
+    this: *mut writ_resharp_regex_options,
+    mode: c_int,
+    out: *mut *mut writ_resharp_regex_options,
+) -> c_int {
+    guard(|| {
+        let this = match take(this) {
+            Ok(value) => value.0,
+            Err(status) => return status,
+        };
+        let mode = match mode {
+            0 => resharp::UnicodeMode::Ascii,
+            1 => resharp::UnicodeMode::Default,
+            2 => resharp::UnicodeMode::Full,
+            3 => resharp::UnicodeMode::Javascript,
+            _ => return fail("invalid UnicodeMode".to_string()),
+        };
+        let result = this.unicode(mode);
+        *out = Box::into_raw(Box::new(writ_resharp_regex_options(result)));
+        STATUS_OK
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writ_resharp_regex_options_case_insensitive(
+    this: *mut writ_resharp_regex_options,
+    yes: bool,
+    out: *mut *mut writ_resharp_regex_options,
+) -> c_int {
+    guard(|| {
+        let this = match take(this) {
+            Ok(value) => value.0,
+            Err(status) => return status,
+        };
+        let result = this.case_insensitive(yes);
+        *out = Box::into_raw(Box::new(writ_resharp_regex_options(result)));
+        STATUS_OK
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writ_resharp_regex_options_dot_matches_new_line(
+    this: *mut writ_resharp_regex_options,
+    yes: bool,
+    out: *mut *mut writ_resharp_regex_options,
+) -> c_int {
+    guard(|| {
+        let this = match take(this) {
+            Ok(value) => value.0,
+            Err(status) => return status,
+        };
+        let result = this.dot_matches_new_line(yes);
+        *out = Box::into_raw(Box::new(writ_resharp_regex_options(result)));
+        STATUS_OK
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writ_resharp_regex_options_multiline(
+    this: *mut writ_resharp_regex_options,
+    yes: bool,
+    out: *mut *mut writ_resharp_regex_options,
+) -> c_int {
+    guard(|| {
+        let this = match take(this) {
+            Ok(value) => value.0,
+            Err(status) => return status,
+        };
+        let result = this.multiline(yes);
+        *out = Box::into_raw(Box::new(writ_resharp_regex_options(result)));
+        STATUS_OK
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writ_resharp_regex_options_ignore_whitespace(
+    this: *mut writ_resharp_regex_options,
+    yes: bool,
+    out: *mut *mut writ_resharp_regex_options,
+) -> c_int {
+    guard(|| {
+        let this = match take(this) {
+            Ok(value) => value.0,
+            Err(status) => return status,
+        };
+        let result = this.ignore_whitespace(yes);
+        *out = Box::into_raw(Box::new(writ_resharp_regex_options(result)));
+        STATUS_OK
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writ_resharp_regex_options_hardened(
+    this: *mut writ_resharp_regex_options,
+    yes: bool,
+    out: *mut *mut writ_resharp_regex_options,
+) -> c_int {
+    guard(|| {
+        let this = match take(this) {
+            Ok(value) => value.0,
+            Err(status) => return status,
+        };
+        let result = this.hardened(yes);
+        *out = Box::into_raw(Box::new(writ_resharp_regex_options(result)));
+        STATUS_OK
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writ_resharp_regex_options_unbounded_size(
+    this: *mut writ_resharp_regex_options,
+    yes: bool,
+    out: *mut *mut writ_resharp_regex_options,
+) -> c_int {
+    guard(|| {
+        let this = match take(this) {
+            Ok(value) => value.0,
+            Err(status) => return status,
+        };
+        let result = this.unbounded_size(yes);
+        *out = Box::into_raw(Box::new(writ_resharp_regex_options(result)));
+        STATUS_OK
+    })
+}
+
+#[cfg(feature = "experimental_capture_groups")]
+#[no_mangle]
+pub unsafe extern "C" fn writ_resharp_regex_options_implicit_captures(
+    this: *mut writ_resharp_regex_options,
+    yes: bool,
+    out: *mut *mut writ_resharp_regex_options,
+) -> c_int {
+    guard(|| {
+        let this = match take(this) {
+            Ok(value) => value.0,
+            Err(status) => return status,
+        };
+        let result = this.implicit_captures(yes);
+        *out = Box::into_raw(Box::new(writ_resharp_regex_options(result)));
+        STATUS_OK
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writ_resharp_regex_is_match(
+    this: *const writ_resharp_regex,
+    input: *const u8,
+    input_len: usize,
+    out: *mut bool,
+) -> c_int {
+    guard(|| {
+        let this = match borrow(this) {
+            Ok(value) => &value.0,
+            Err(status) => return status,
+        };
+        let input = slice(input, input_len);
+        let result = this.is_match(input);
+        let result = match result {
+            Ok(value) => value,
+            Err(error) => return fail(error.to_string()),
+        };
+        *out = result;
+        STATUS_OK
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writ_resharp_regex_new(
+    pattern: *const u8,
+    pattern_len: usize,
+    out: *mut *mut writ_resharp_regex,
+) -> c_int {
+    guard(|| {
+        let pattern = match text(pattern, pattern_len) {
+            Ok(value) => value,
+            Err(status) => return status,
+        };
+        let result = resharp::Regex::new(pattern);
+        let result = match result {
+            Ok(value) => value,
+            Err(error) => return fail(error.to_string()),
+        };
+        *out = Box::into_raw(Box::new(writ_resharp_regex(result)));
+        STATUS_OK
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writ_resharp_regex_with_options(
+    pattern: *const u8,
+    pattern_len: usize,
+    opts: *mut writ_resharp_regex_options,
+    out: *mut *mut writ_resharp_regex,
+) -> c_int {
+    guard(|| {
+        let pattern = match text(pattern, pattern_len) {
+            Ok(value) => value,
+            Err(status) => return status,
+        };
+        let opts = match take(opts) {
+            Ok(value) => value.0,
+            Err(status) => return status,
+        };
+        let result = resharp::Regex::with_options(pattern, opts);
+        let result = match result {
+            Ok(value) => value,
+            Err(error) => return fail(error.to_string()),
+        };
+        *out = Box::into_raw(Box::new(writ_resharp_regex(result)));
+        STATUS_OK
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writ_resharp_regex_find_all(
+    this: *const writ_resharp_regex,
+    input: *const u8,
+    input_len: usize,
+    out: *mut Match,
+    out_cap: usize,
+    out_total: *mut usize,
+) -> c_int {
+    guard(|| {
+        let this = match borrow(this) {
+            Ok(value) => &value.0,
+            Err(status) => return status,
+        };
+        let input = slice(input, input_len);
+        let result = this.find_all(input);
+        let result = match result {
+            Ok(value) => value,
+            Err(error) => return fail(error.to_string()),
+        };
+        write_all(&result, out, out_cap, out_total, |value| Match { start: value.start, end: value.end });
+        STATUS_OK
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writ_resharp_regex_find_anchored(
+    this: *const writ_resharp_regex,
+    input: *const u8,
+    input_len: usize,
+    out: *mut Match,
+) -> c_int {
+    guard(|| {
+        let this = match borrow(this) {
+            Ok(value) => &value.0,
+            Err(status) => return status,
+        };
+        let input = slice(input, input_len);
+        let result = this.find_anchored(input);
+        let result = match result {
+            Ok(value) => value,
+            Err(error) => return fail(error.to_string()),
+        };
+        let result = match result {
+            Some(value) => value,
+            None => return STATUS_NONE,
+        };
+        *out = Match { start: result.start, end: result.end };
+        STATUS_OK
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writ_resharp_regex_is_full_match(
+    this: *const writ_resharp_regex,
+    input: *const u8,
+    input_len: usize,
+    out: *mut bool,
+) -> c_int {
+    guard(|| {
+        let this = match borrow(this) {
+            Ok(value) => &value.0,
+            Err(status) => return status,
+        };
+        let input = slice(input, input_len);
+        let result = this.is_full_match(input);
+        let result = match result {
+            Ok(value) => value,
+            Err(error) => return fail(error.to_string()),
+        };
+        *out = result;
+        STATUS_OK
+    })
+}
+
+#[cfg(feature = "experimental_capture_groups")]
+#[no_mangle]
+pub unsafe extern "C" fn writ_resharp_regex_capture_index_for_name(
+    this: *const writ_resharp_regex,
+    name: *const u8,
+    name_len: usize,
+    out: *mut usize,
+) -> c_int {
+    guard(|| {
+        let this = match borrow(this) {
+            Ok(value) => &value.0,
+            Err(status) => return status,
+        };
+        let name = match text(name, name_len) {
+            Ok(value) => value,
+            Err(status) => return status,
+        };
+        let result = this.capture_index_for_name(name);
+        let result = match result {
+            Some(value) => value,
+            None => return STATUS_NONE,
+        };
+        *out = result;
+        STATUS_OK
+    })
+}

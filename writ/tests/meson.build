@@ -426,6 +426,12 @@ test(
     args: [golden, source_root / 'tests' / 'plan' / 'resharp.full.plan', '--', writ_exe, '--platform',
            'aarch64-apple-darwin'] + resharp_features + ['plan', 'contracts/resharp.writ'],
 )
+test(
+    'resharp-transport-registry',
+    python,
+    args: [golden, source_root / 'tests' / 'resharp' / 'transport.registry.out', '--stdout', '--', writ_exe, 'gen',
+           'rust', 'contracts/resharp.writ', '-o', '-'],
+)
 foreach variant : ['plain', 'features', 'miri']
     test(
         'resharp-transport-' + variant,
