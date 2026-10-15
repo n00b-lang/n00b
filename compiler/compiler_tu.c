@@ -10714,11 +10714,43 @@ user_litmod(n00bb_tu_state_t *state, core_string_t modifier,
          i++) {
         core_translation_unit_t *imported = core_translation_unit_import(
             state->unit, i);
-        n00bb_user_litmod_t *candidate = local_user_litmod(
-            tu_state(imported), modifier, kind);
-        if (!candidate) continue;
-        if (found && found != candidate) return nullptr;
-        found = candidate;
+        n00bb_user_litmod_t *candidate =
+            n00bb_same_package(state->unit, imported)
+                ? local_user_litmod(tu_state(imported), modifier, kind)
+                : nullptr;
+        if (candidate) {
+            if (found && found != candidate) return nullptr;
+            found = candidate;
+        }
+        n00bb_tu_state_t *imported_state = tu_state(imported);
+        for (size_t alias_ix = 0; imported_state
+                && alias_ix < state->import_aliases.len; alias_ix++) {
+            n00bb_import_alias_t *alias = &state->import_aliases.data[alias_ix];
+            if (alias->unit != imported) continue;
+            for (size_t package_ix = 0;
+                 package_ix < imported_state->package_declarations.len;
+                 package_ix++) {
+                n00bb_package_declaration_t *package =
+                    &imported_state->package_declarations.data[package_ix];
+                if (!core_string_eq(package->name, alias->name)) continue;
+                for (size_t export_ix = 0; export_ix < package->exports.len;
+                     export_ix++) {
+                    n00bb_package_export_t *export =
+                        &package->exports.data[export_ix];
+                    if (!export->source_unit) continue;
+                    n00bb_user_litmod_t *exported = local_user_litmod(
+                        tu_state(export->source_unit), modifier, kind);
+                    parse_sym_entry_t *handler = exported && exported->declaration
+                        ? core_tree_node_value(exported->declaration).sym
+                        : nullptr;
+                    if (!handler
+                        || handler != canonical_symbol(export->symbol))
+                        continue;
+                    if (found && found != exported) return nullptr;
+                    found = exported;
+                }
+            }
+        }
     }
     return found;
 }

@@ -1,4 +1,4 @@
-import builtin.hash
+import hash
 
 enum Status { ready = 1, done = 2 }
 flagset Mode { read, write }

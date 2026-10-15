@@ -1,8 +1,8 @@
-import builtin.containers.view
+import containers.view
 
 comptime {} else {
     var values: Array[int] = [2, 3, 5]'array
-    let selected: builtin.containers.view.View[int] = values[0:3]
+    let selected: containers.view.View[int] = values[0:3]
     require selected[0] == 2
     require selected[2] == 5
     values[0] = 7

@@ -1,4 +1,4 @@
-import builtin.hash
+import hash
 
 comptime {} else {
     var first: int = 1

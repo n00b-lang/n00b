@@ -1,7 +1,0 @@
-import builtin.containers.hash_index
-
-comptime {} else {
-    var index: builtin.containers.hash_index.Hash_Index =
-        new[builtin.containers.hash_index.Hash_Index]()
-    require builtin.containers.hash_index.capacity(index) == 0
-}

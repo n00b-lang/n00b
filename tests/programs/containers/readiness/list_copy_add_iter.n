@@ -1,3 +1,5 @@
+import containers.list
+
 comptime {} else {
     var values: List[int] = [2, 3]
     var copied: List[int] = values
@@ -5,7 +7,7 @@ comptime {} else {
     require values[0] == 5
 
     let joined: List[int] = values + [7]
-    require builtin.containers.list.len(joined) == 3
+    require containers.list.len(joined) == 3
     require joined[0] == 5
     require joined[1] == 3
     require joined[2] == 7

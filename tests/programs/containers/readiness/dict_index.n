@@ -1,4 +1,4 @@
-import builtin.containers.dict
+import containers.dict
 
 comptime {} else {
     var values: Dict[int, int] = new[Dict[int, int]]()

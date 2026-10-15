@@ -1,4 +1,4 @@
-import builtin.containers.dict
+import containers.dict
 
 type High_Key {
     value: u64
@@ -13,16 +13,16 @@ comptime {} else {
     var i: u64 = 0
     while i < 40 {
         let key: High_Key = (value = i)
-        require builtin.containers.dict.add(values, key, cast[int] i)
+        require containers.dict.add(values, key, cast[int] i)
         i += 1
     }
     i = 0
     while i < 40 {
         let key: High_Key = (value = i)
-        let found: int? = builtin.containers.dict.get(values, key)
+        let found: int? = containers.dict.get(values, key)
         require found != nil
         require found.get() == cast[int] i
         i += 1
     }
-    require builtin.containers.dict.len(values) == 40
+    require containers.dict.len(values) == 40
 }

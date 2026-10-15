@@ -1,7 +1,9 @@
+import containers.list
+
 comptime {} else {
     var values: List[int] = [1, 2, 3]
     values[1:1] = [9, 8]
-    require builtin.containers.list.len(values) == 5
+    require containers.list.len(values) == 5
     require values[1] == 9
     require values[2] == 8
     require values[3] == 2
@@ -11,14 +13,14 @@ comptime {} else {
     require selected[1] == 8
     require selected[2] == 2
     values[2:4] = []
-    require builtin.containers.list.len(values) == 3
+    require containers.list.len(values) == 3
     require values[0] == 1
     require values[1] == 9
     require values[2] == 3
     require selected[2] == 2
 
     values[1:1] = values
-    require builtin.containers.list.len(values) == 6
+    require containers.list.len(values) == 6
     require values[0] == 1
     require values[1] == 1
     require values[2] == 9
@@ -26,7 +28,7 @@ comptime {} else {
     require values[4] == 9
     require values[5] == 3
     values[0:2] = [7]
-    require builtin.containers.list.len(values) == 5
+    require containers.list.len(values) == 5
     require values[0] == 7
     require values[1] == 9
 }

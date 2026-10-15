@@ -1,6 +1,6 @@
-import builtin.hash
+import hash
 
 comptime {} else {
     let bytes: Array[byte] = new[Array[byte]](0)
-    _ = builtin.hash.xxh3_128(bytes)
+    _ = hash.xxh3_128(bytes)
 }

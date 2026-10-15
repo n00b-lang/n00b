@@ -1,4 +1,4 @@
-import builtin.containers.traits
+import containers.traits
 
 type NumberList {
     value: int
@@ -46,7 +46,7 @@ func insert(modify self: WordList, index: int, value: Word) {
     self.present = true
 }
 
-func round_trip(modify values: `L, value: `T) where `L: builtin.containers.traits.ListLike {
+func round_trip(modify values: `L, value: `T) where `L: containers.traits.ListLike {
     values.append(value, false)
     _ = values.pop(false)
 }

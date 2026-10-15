@@ -1,4 +1,4 @@
-import builtin.containers.set
+import containers.set
 
 type Key {
     value: int

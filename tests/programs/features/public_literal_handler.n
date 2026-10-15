@@ -1,0 +1,2 @@
+let values: List[int] = [1, 2]'l
+require values.len() == 2

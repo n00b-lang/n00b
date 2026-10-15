@@ -1,5 +1,3 @@
-import builtin.containers.traits
-
 type Box { value: int }
 type OtherBox { value: int }
 
@@ -12,13 +10,13 @@ func append(modify self: OtherBox, value: int) {
 }
 
 func put_in(modify values: `L, value: `T)
-            where `L: builtin.containers.traits.Appendable {
+            where `L: Appendable {
     values.append(value)
 }
 
 func put_in_typecase(modify values: `L, value: `T) {
     typecase values {
-        case builtin.containers.traits.Appendable { values.append(value) }
+        case Appendable { values.append(value) }
         else { require false }
     }
 }

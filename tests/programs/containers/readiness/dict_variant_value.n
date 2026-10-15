@@ -1,4 +1,4 @@
-import builtin.containers.dict
+import containers.dict
 import dict_variant_value_dep
 
 comptime {} else {
@@ -6,6 +6,6 @@ comptime {} else {
         dict_variant_value_dep.make_payload()
     var items: Dict[int, dict_variant_value_dep.Payload] =
         new[Dict[int, dict_variant_value_dep.Payload]]()
-    require builtin.containers.dict.add(items, 1, value)
-    require builtin.containers.dict.len(items) == 1
+    require containers.dict.add(items, 1, value)
+    require containers.dict.len(items) == 1
 }

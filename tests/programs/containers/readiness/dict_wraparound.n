@@ -1,4 +1,4 @@
-import builtin.containers.dict
+import containers.dict
 
 type Key {
     value: int
@@ -15,21 +15,21 @@ comptime {} else {
     let second: Key = (value = 2, bucket = 14)
     let third: Key = (value = 3, bucket = 15)
     let missing: Key = (value = 4, bucket = 14)
-    require builtin.containers.dict.add(values, first, 10)
-    require builtin.containers.dict.add(values, second, 20)
-    require builtin.containers.dict.add(values, third, 30)
-    require builtin.containers.dict.get(values, missing) == nil
-    require builtin.containers.dict.remove(values, first)
-    require builtin.containers.dict.get(values, first) == nil
-    let found_second: int? = builtin.containers.dict.get(values, second)
+    require containers.dict.add(values, first, 10)
+    require containers.dict.add(values, second, 20)
+    require containers.dict.add(values, third, 30)
+    require containers.dict.get(values, missing) == nil
+    require containers.dict.remove(values, first)
+    require containers.dict.get(values, first) == nil
+    let found_second: int? = containers.dict.get(values, second)
     require found_second != nil
     require found_second.get() == 20
-    let found_third: int? = builtin.containers.dict.get(values, third)
+    let found_third: int? = containers.dict.get(values, third)
     require found_third != nil
     require found_third.get() == 30
-    require builtin.containers.dict.add(values, missing, 40)
-    let found_missing: int? = builtin.containers.dict.get(values, missing)
+    require containers.dict.add(values, missing, 40)
+    let found_missing: int? = containers.dict.get(values, missing)
     require found_missing != nil
     require found_missing.get() == 40
-    require builtin.containers.dict.len(values) == 3
+    require containers.dict.len(values) == 3
 }

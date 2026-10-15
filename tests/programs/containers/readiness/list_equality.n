@@ -1,28 +1,30 @@
+import containers.list
+
 comptime {} else {
     var numbers: List[int] = new[List[int]]()
     numbers.append(4)
     numbers.append(7)
     numbers.append(4)
-    let found: int? = builtin.containers.list.find(numbers, 7)
+    let found: int? = containers.list.find(numbers, 7)
     if found != nil {
         require found.get() == 1
     } else {
         require false
     }
-    require builtin.containers.list.remove(numbers, 4, all = false) == 1
-    require builtin.containers.list.len(numbers) == 2
+    require containers.list.remove(numbers, 4, all = false) == 1
+    require containers.list.len(numbers) == 2
     require numbers[0] == 7
-    require builtin.containers.list.remove(numbers, 4) == 1
-    require builtin.containers.list.len(numbers) == 1
+    require containers.list.remove(numbers, 4) == 1
+    require containers.list.len(numbers) == 1
 
     var words: List[string] = ["red", "blue", "red"]
-    let blue: int? = builtin.containers.list.find(words, "blue")
+    let blue: int? = containers.list.find(words, "blue")
     if blue != nil {
         require blue.get() == 1
     } else {
         require false
     }
-    require builtin.containers.list.remove(words, "red") == 2
-    require builtin.containers.list.len(words) == 1
+    require containers.list.remove(words, "red") == 2
+    require containers.list.len(words) == 1
     require words[0] == "blue"
 }

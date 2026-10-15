@@ -1,4 +1,4 @@
-import builtin.containers.dict
+import containers.dict
 
 type Key {
     value: int
@@ -15,15 +15,15 @@ comptime {} else {
     let second: Key = (value = 2, bucket = 6)
     let third: Key = (value = 3, bucket = 5)
     let missing: Key = (value = 4, bucket = 5)
-    require builtin.containers.dict.add(items, first, 10)
-    require builtin.containers.dict.add(items, second, 20)
-    require builtin.containers.dict.add(items, third, 30)
+    require containers.dict.add(items, first, 10)
+    require containers.dict.add(items, second, 20)
+    require containers.dict.add(items, third, 30)
 
-    require builtin.containers.dict.get(items, missing) == nil
+    require containers.dict.get(items, missing) == nil
 
-    require builtin.containers.dict.remove(items, second)
-    let found: int? = builtin.containers.dict.get(items, third)
+    require containers.dict.remove(items, second)
+    let found: int? = containers.dict.get(items, third)
     require found != nil
     require found.get() == 30
-    require builtin.containers.dict.len(items) == 2
+    require containers.dict.len(items) == 2
 }

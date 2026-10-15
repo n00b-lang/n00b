@@ -1,5 +1,5 @@
-import builtin.containers.dict
-import builtin.containers.view
+import containers.dict
+import containers.view
 
 type Key { value: int }
 
@@ -9,20 +9,20 @@ comptime {} else {
     var items: Dict[Key, int] = new[Dict[Key, int]]()
     let first: Key = (value = 1)
     let second: Key = (value = 2)
-    _ = builtin.containers.dict.put(items, first, 10)
-    _ = builtin.containers.dict.put(items, second, 20)
-    let key_view = builtin.containers.dict.keys(items)
-    let value_view = builtin.containers.dict.values(items)
-    require builtin.containers.view.len(key_view) == 2
-    require builtin.containers.view.len(value_view) == 2
+    _ = containers.dict.put(items, first, 10)
+    _ = containers.dict.put(items, second, 20)
+    let key_view = containers.dict.keys(items)
+    let value_view = containers.dict.values(items)
+    require containers.view.len(key_view) == 2
+    require containers.view.len(value_view) == 2
     let key_zero: Key = key_view[0]
     let key_one: Key = key_view[1]
     require key_zero.value == 1
     require key_one.value == 2
     require value_view[0] == 10
     require value_view[1] == 20
-    _ = builtin.containers.dict.put(items, first, 99)
-    require builtin.containers.dict.remove(items, second)
+    _ = containers.dict.put(items, first, 99)
+    require containers.dict.remove(items, second)
     let retained_zero: Key = key_view[0]
     let retained_one: Key = key_view[1]
     require retained_zero.value == 1

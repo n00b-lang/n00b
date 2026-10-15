@@ -1,20 +1,30 @@
 import containers.list
 import containers.dict
 import containers.set
+import containers.tree
 import containers.view
 import cursor
 import hash
 import containers.traits
 import io.debug
+import io.raw
 
 package builtin {
     export containers.list.List
+    export containers.list.list
     export containers.dict.Dict
+    export containers.dict.dict
     export containers.set.Set
+    export containers.set.set
+    export containers.tree.Tree
     export containers.view.View
     export cursor.Cursor
     export hash.Hash
     export containers.traits.Container
     export containers.traits.Appendable
+    export containers.traits.Associative
+    export containers.traits.SetLike
+    export containers.traits.TreeLike
     export io.debug.raw_debug
+    export io.raw.Raw_Repr
 }

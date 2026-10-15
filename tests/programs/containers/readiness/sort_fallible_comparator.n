@@ -1,4 +1,4 @@
-import builtin.sort
+import sort
 
 type Entry {
     key: int
@@ -12,5 +12,5 @@ comptime {} else {
     var values: Array[Entry] = new[Array[Entry]](2)
     values[0] = (key = 1)
     values[1] = (key = 2)
-    builtin.sort.sort(values)
+    sort.sort(values)
 }

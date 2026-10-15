@@ -1,5 +1,3 @@
-import builtin.containers.list
-
 var bytes: List[byte] = []
 bytes.append(65)
 require bytes[0] == 65

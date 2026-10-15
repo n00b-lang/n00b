@@ -1,0 +1,19 @@
+import containers.dict
+
+package containers.dict {
+    export containers.dict.Dict
+    export containers.dict.dict
+    export containers.dict.Item
+    export containers.dict.Sort_Order
+    export containers.dict.len
+    export containers.dict.get
+    export containers.dict.contains
+    export containers.dict.put
+    export containers.dict.add
+    export containers.dict.replace
+    export containers.dict.remove
+    export containers.dict.clear
+    export containers.dict.iter
+    export containers.dict.keys
+    export containers.dict.values
+}

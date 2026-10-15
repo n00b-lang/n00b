@@ -1,0 +1,5 @@
+public var imported_root: Ref[byte]? = nil
+
+package gc_root_support {
+    export imported_root
+}

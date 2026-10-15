@@ -1,4 +1,4 @@
-import builtin.containers.view
+import containers.view
 
 type Pair {
     left: int
@@ -7,9 +7,9 @@ type Pair {
 comptime {} else {
     let pair: Pair = (left = 2)
     let values: Array[Pair] = [pair]'array
-    let selected: builtin.containers.view.View[Pair] =
+    let selected: containers.view.View[Pair] =
         values[0:1]
-    require builtin.containers.view.len(selected) == 1
+    require containers.view.len(selected) == 1
     let item: Pair = selected[0]
     require item.left == 2
 }

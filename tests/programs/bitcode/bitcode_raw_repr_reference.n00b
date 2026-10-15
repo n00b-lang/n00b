@@ -1,4 +1,3 @@
-import builtin.io.raw
 
 var value: int = 5
 

@@ -1,6 +1,6 @@
-import builtin.containers.dict
-import builtin.containers.set
-import builtin.hash
+import containers.dict
+import containers.set
+import hash
 
 type Key {
     value: int

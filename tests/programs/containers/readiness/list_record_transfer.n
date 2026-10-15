@@ -1,3 +1,5 @@
+import containers.list
+
 type Cell {
     public value: int
 }
@@ -9,14 +11,14 @@ func __init(modify self: Cell, value: int) {
 comptime {} else {
     var values: List[Cell] = [new[Cell](1), new[Cell](2)]
     values.insert(1, new[Cell](9))
-    require builtin.containers.list.len(values) == 3
+    require containers.list.len(values) == 3
     require values[1].value == 9
     let popped: Cell? = values.pop(front = true)
     require popped != nil
     require popped.get().value == 1
 
     var retained: List[Cell] = values
-    var taken: Array[Cell] = builtin.containers.list.to_array(values)
+    var taken: Array[Cell] = containers.list.to_array(values)
     require __array_length(taken) == 2
     require taken[0].value == 9
     taken[0] = new[Cell](12)

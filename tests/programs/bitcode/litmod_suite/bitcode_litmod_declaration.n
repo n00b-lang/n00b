@@ -42,15 +42,15 @@ comptime {
 }
 
 func run_test() {
-    builtin.io.debug.raw_debug(alias_quote())
-    builtin.io.debug.raw_debug("|")
-    builtin.io.debug.raw_debug(primary_quote())
-    builtin.io.debug.raw_debug("|")
-    builtin.io.debug.raw_debug(alias_int())
-    builtin.io.debug.raw_debug("|")
-    builtin.io.debug.raw_debug(alias_hex())
-    builtin.io.debug.raw_debug("|")
-    builtin.io.debug.raw_debug(alias_float())
-    builtin.io.debug.raw_debug("|")
-    builtin.io.debug.raw_debug("last"'solo)
+    raw_debug(alias_quote())
+    raw_debug("|")
+    raw_debug(primary_quote())
+    raw_debug("|")
+    raw_debug(alias_int())
+    raw_debug("|")
+    raw_debug(alias_hex())
+    raw_debug("|")
+    raw_debug(alias_float())
+    raw_debug("|")
+    raw_debug("last"'solo)
 }

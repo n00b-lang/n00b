@@ -1,4 +1,4 @@
-import builtin.containers.dict
+import containers.dict
 
 func make_values() -> Dict[string, int] {
     return {"a key longer than the inline string capacity": 3}'dict
@@ -7,11 +7,11 @@ func make_values() -> Dict[string, int] {
 comptime {} else {
     var first = make_values()
     var second = make_values()
-    _ = builtin.containers.dict.put(first,
+    _ = containers.dict.put(first,
         "a key longer than the inline string capacity", 11)
-    let left: int? = builtin.containers.dict.get(first,
+    let left: int? = containers.dict.get(first,
         "a key longer than the inline string capacity")
-    let right: int? = builtin.containers.dict.get(second,
+    let right: int? = containers.dict.get(second,
         "a key longer than the inline string capacity")
     require left != nil
     require right != nil

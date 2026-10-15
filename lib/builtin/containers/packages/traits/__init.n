@@ -1,0 +1,10 @@
+import containers.traits
+
+package containers.traits {
+    export containers.traits.Container
+    export containers.traits.Appendable
+    export containers.traits.ListLike
+    export containers.traits.Associative
+    export containers.traits.SetLike
+    export containers.traits.TreeLike
+}

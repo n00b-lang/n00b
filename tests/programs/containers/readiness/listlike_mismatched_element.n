@@ -1,4 +1,4 @@
-import builtin.containers.traits
+import containers.traits
 
 type MixedList {
     count: int
@@ -16,7 +16,7 @@ func insert(modify self: MixedList, index: int, value: int) {
     self.count = self.count + 1
 }
 
-func use_list(value: `L) where `L: builtin.containers.traits.ListLike {
+func use_list(value: `L) where `L: containers.traits.ListLike {
     _ = value
 }
 

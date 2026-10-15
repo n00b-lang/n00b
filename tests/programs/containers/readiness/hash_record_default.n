@@ -1,4 +1,4 @@
-import builtin.hash
+import hash
 
 type Key {
     leading: byte

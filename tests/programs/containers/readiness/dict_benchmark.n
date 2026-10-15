@@ -1,16 +1,16 @@
-import builtin.containers.dict
+import containers.dict
 
 comptime {} else {
     var items: Dict[int, int] = new[Dict[int, int]]()
     var i: int = 0
     while i < 100000 {
-        require builtin.containers.dict.add(items, i, i * 3)
+        require containers.dict.add(items, i, i * 3)
         i += 1
     }
     var sum: int = 0
     i = 0
     while i < 100000 {
-        let found: int? = builtin.containers.dict.get(items, i)
+        let found: int? = containers.dict.get(items, i)
         require found != nil
         sum += found.get()
         i += 1
@@ -18,15 +18,15 @@ comptime {} else {
     require sum == 14999850000
     i = 100000
     while i < 200000 {
-        require builtin.containers.dict.get(items, i) == nil
+        require containers.dict.get(items, i) == nil
         i += 1
     }
     i = 1
     while i < 100000 {
-        require builtin.containers.dict.remove(items, i)
+        require containers.dict.remove(items, i)
         i += 2
     }
-    require builtin.containers.dict.len(items) == 50000
+    require containers.dict.len(items) == 50000
     var count: int = 0
     for key, value in items {
         require value == key * 3

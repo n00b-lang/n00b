@@ -1,4 +1,4 @@
-import builtin.containers.traits
+import containers.traits
 
 type MixedMap {
     value: int
@@ -21,7 +21,7 @@ func contains(self: MixedMap, key: int) -> bool {
     return true
 }
 
-func use_map(modify value: `M) -> bool where `M: builtin.containers.traits.Associative {
+func use_map(modify value: `M) -> bool where `M: containers.traits.Associative {
     return value.contains(1)
 }
 

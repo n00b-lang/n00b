@@ -2,3 +2,5 @@ comptime {
 } else {
     require 2 + 3 == 6
 }
+
+package bitcode_dep {}

@@ -1,4 +1,4 @@
-import builtin.sort
+import sort
 
 func descending(left: int, right: int) -> Comparison {
     if left > right { return Comparison.less }
@@ -8,9 +8,9 @@ func descending(left: int, right: int) -> Comparison {
 
 comptime {} else {
     var values: Array[int] = [1, 4, 2, 3]
-    let comparator: builtin.sort.Comparator[int] =
-        callback[builtin.sort.Comparator](ref descending)
-    builtin.sort.sort_by(values, comparator)
+    let comparator: sort.Comparator[int] =
+        callback[sort.Comparator](ref descending)
+    sort.sort_by(values, comparator)
     require values[0] == 4
     require values[1] == 3
     require values[2] == 2

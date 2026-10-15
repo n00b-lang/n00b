@@ -1,9 +1,9 @@
-import builtin.containers.dict
+import containers.dict
 
 comptime {} else {
     var values: Dict[int, int] = new[Dict[int, int]]()
-    _ = builtin.containers.dict.put(values, 1, 10)
-    _ = builtin.containers.dict.put(values, 2, 20)
+    _ = containers.dict.put(values, 1, 10)
+    _ = containers.dict.put(values, 2, 20)
     var count: int = 0
     for let item in values {
         require item.value == item.key * 10

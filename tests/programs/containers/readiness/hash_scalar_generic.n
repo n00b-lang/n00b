@@ -1,6 +1,6 @@
-import builtin.hash
+import hash
 
-func hash_generic(value: `T) -> u128 where `T: builtin.hash.Hash {
+func hash_generic(value: `T) -> u128 where `T: hash.Hash {
     return value.hash()
 }
 

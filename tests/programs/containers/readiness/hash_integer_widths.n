@@ -1,4 +1,4 @@
-import builtin.hash
+import hash
 
 comptime {} else {
     let signed: i64 = cast[i64]42

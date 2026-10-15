@@ -1,4 +1,4 @@
-import builtin.containers.dict
+import containers.dict
 
 type Key { value: int }
 type Payload { value: int }
@@ -16,10 +16,10 @@ comptime {} else {
     let second: Key = (value = 2)
     let high: Payload = (value = 9)
     let low: Payload = (value = 4)
-    _ = builtin.containers.dict.put(items, first, high)
-    _ = builtin.containers.dict.put(items, second, low)
-    let ordered = builtin.containers.dict.values(items,
-        builtin.containers.dict.Sort_Order.value)
+    _ = containers.dict.put(items, first, high)
+    _ = containers.dict.put(items, second, low)
+    let ordered = containers.dict.values(items,
+        containers.dict.Sort_Order.value)
     require ordered[0].value == 4
     require ordered[1].value == 9
 }

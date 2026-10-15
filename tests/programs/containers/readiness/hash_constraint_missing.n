@@ -1,4 +1,4 @@
-import builtin.hash
+import hash
 
 type Key {
     value: int
@@ -8,7 +8,7 @@ func __equal(self: Key, other: Key) -> bool {
     return self.value == other.value
 }
 
-func require_hash(value: `T) -> u128 where `T: Equal + builtin.hash.Hash {
+func require_hash(value: `T) -> u128 where `T: Equal + hash.Hash {
     return cast[u128]1
 }
 

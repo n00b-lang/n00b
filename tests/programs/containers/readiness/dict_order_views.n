@@ -1,9 +1,9 @@
-import builtin.containers.dict
-import builtin.containers.view
+import containers.dict
+import containers.view
 
-func check(view: builtin.containers.view.View[int],
+func check(view: containers.view.View[int],
            first: int, second: int, third: int, fourth: int) {
-    require builtin.containers.view.len(view) == 4
+    require containers.view.len(view) == 4
     require view[0] == first
     require view[1] == second
     require view[2] == third
@@ -12,27 +12,27 @@ func check(view: builtin.containers.view.View[int],
 
 comptime {} else {
     var items: Dict[int, int] = new[Dict[int, int]]()
-    _ = builtin.containers.dict.put(items, 3, 30)
-    _ = builtin.containers.dict.put(items, 1, 50)
-    _ = builtin.containers.dict.put(items, 2, 20)
-    _ = builtin.containers.dict.put(items, 4, 10)
-    require builtin.containers.dict.replace(items, 3, 35)
-    require builtin.containers.dict.remove(items, 1)
-    require builtin.containers.dict.add(items, 1, 15)
+    _ = containers.dict.put(items, 3, 30)
+    _ = containers.dict.put(items, 1, 50)
+    _ = containers.dict.put(items, 2, 20)
+    _ = containers.dict.put(items, 4, 10)
+    require containers.dict.replace(items, 3, 35)
+    require containers.dict.remove(items, 1)
+    require containers.dict.add(items, 1, 15)
 
-    check(builtin.containers.dict.keys(items, builtin.containers.dict.Sort_Order.none), 3, 4, 2, 1)
-    check(builtin.containers.dict.values(items, builtin.containers.dict.Sort_Order.none), 35, 10, 20, 15)
-    check(builtin.containers.dict.keys(items, builtin.containers.dict.Sort_Order.insertion), 3, 2, 4, 1)
-    check(builtin.containers.dict.values(items, builtin.containers.dict.Sort_Order.insertion), 35, 20, 10, 15)
-    check(builtin.containers.dict.keys(items, builtin.containers.dict.Sort_Order.key), 1, 2, 3, 4)
-    check(builtin.containers.dict.values(items, builtin.containers.dict.Sort_Order.key), 15, 20, 35, 10)
-    check(builtin.containers.dict.keys(items, builtin.containers.dict.Sort_Order.value), 4, 1, 2, 3)
-    check(builtin.containers.dict.values(items, builtin.containers.dict.Sort_Order.value), 10, 15, 20, 35)
+    check(containers.dict.keys(items, containers.dict.Sort_Order.none), 3, 4, 2, 1)
+    check(containers.dict.values(items, containers.dict.Sort_Order.none), 35, 10, 20, 15)
+    check(containers.dict.keys(items, containers.dict.Sort_Order.insertion), 3, 2, 4, 1)
+    check(containers.dict.values(items, containers.dict.Sort_Order.insertion), 35, 20, 10, 15)
+    check(containers.dict.keys(items, containers.dict.Sort_Order.key), 1, 2, 3, 4)
+    check(containers.dict.values(items, containers.dict.Sort_Order.key), 15, 20, 35, 10)
+    check(containers.dict.keys(items, containers.dict.Sort_Order.value), 4, 1, 2, 3)
+    check(containers.dict.values(items, containers.dict.Sort_Order.value), 10, 15, 20, 35)
 
-    var order: builtin.containers.dict.Sort_Order = builtin.containers.dict.Sort_Order.key
-    if builtin.containers.dict.len(items) == 4 { order = builtin.containers.dict.Sort_Order.value }
-    check(builtin.containers.dict.keys(items, order), 4, 1, 2, 3)
-    let retained = builtin.containers.dict.values(items, builtin.containers.dict.Sort_Order.insertion)
-    _ = builtin.containers.dict.put(items, 5, 99)
+    var order: containers.dict.Sort_Order = containers.dict.Sort_Order.key
+    if containers.dict.len(items) == 4 { order = containers.dict.Sort_Order.value }
+    check(containers.dict.keys(items, order), 4, 1, 2, 3)
+    let retained = containers.dict.values(items, containers.dict.Sort_Order.insertion)
+    _ = containers.dict.put(items, 5, 99)
     check(retained, 35, 20, 10, 15)
 }

@@ -1,4 +1,4 @@
-import builtin.sort
+import sort
 
 func unordered(left: int, right: int) -> Comparison {
     return Comparison.unordered
@@ -6,7 +6,7 @@ func unordered(left: int, right: int) -> Comparison {
 
 comptime {} else {
     var values: Array[int] = [2, 1]
-    let comparator: builtin.sort.Comparator[int] =
-        callback[builtin.sort.Comparator](ref unordered)
-    builtin.sort.sort_by(values, comparator)
+    let comparator: sort.Comparator[int] =
+        callback[sort.Comparator](ref unordered)
+    sort.sort_by(values, comparator)
 }

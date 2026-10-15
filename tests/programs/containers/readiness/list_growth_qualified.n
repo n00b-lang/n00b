@@ -1,7 +1,9 @@
+import containers.list
+
 comptime {} else {
     var values: List[int] = [1, 2]
     values.append(3, false)
-    require builtin.containers.list.len(values) == 3
+    require containers.list.len(values) == 3
     let popped: int? = values.pop(false)
     if popped != nil {
         require popped.get() == 3

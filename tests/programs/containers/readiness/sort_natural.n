@@ -1,4 +1,4 @@
-import builtin.sort
+import sort
 
 type Entry {
     key: int
@@ -17,7 +17,7 @@ comptime {} else {
     values[2] = (key = 2)
     values[3] = (key = 7)
     values[4] = (key = 1)
-    builtin.sort.sort(values)
+    sort.sort(values)
     require values[0].key == 1
     require values[1].key == 2
     require values[2].key == 2

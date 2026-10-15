@@ -2425,6 +2425,40 @@ package_trait_symbol(parse_grammar_t *grammar, core_translation_unit_t *unit,
         ? binding : nullptr;
 }
 
+static parse_sym_entry_t *
+implicit_builtin_trait_symbol(parse_grammar_t *grammar,
+                              core_translation_unit_t *unit,
+                              core_string_t name,
+                              core_translation_unit_t **owner_out)
+{
+    core_translation_unit_t *builtin = find_direct_import(
+        unit, CORE_STRING_STATIC("builtin"));
+    n00bb_package_declaration_t *package = builtin
+        ? find_package_declaration(builtin, CORE_STRING_STATIC("builtin"))
+        : nullptr;
+    for (size_t i = 0; package && i < package->exports.len; i++) {
+        n00bb_package_export_t *item = &package->exports.data[i];
+        if (item->subpackage || !core_string_eq(item->export_name, name))
+            continue;
+        core_string_t source = item->source_name;
+        size_t split = source.u8_bytes;
+        while (split && source.data[split - 1] != '.') split--;
+        if (!split) continue;
+        core_string_t module_name = core_string_borrow(source.data,
+                                                       split - 1);
+        core_string_t source_name = core_string_borrow(source.data + split,
+                                                       source.u8_bytes - split);
+        core_translation_unit_t *origin = find_direct_import(builtin,
+                                                               module_name);
+        parse_sym_entry_t *symbol = origin
+            ? unit_trait_symbol(grammar, origin, source_name, true) : nullptr;
+        if (!symbol) continue;
+        if (owner_out) *owner_out = origin;
+        return symbol;
+    }
+    return nullptr;
+}
+
 bool
 n00bb_resolve_trait_reference(parse_grammar_t *grammar,
                          core_translation_unit_t *unit,
@@ -2502,6 +2536,9 @@ n00bb_resolve_trait_reference(parse_grammar_t *grammar,
                 target = imported;
                 symbol = candidate;
             }
+            if (!symbol)
+                symbol = implicit_builtin_trait_symbol(grammar, unit,
+                                                       trait, &target);
         }
     }
 

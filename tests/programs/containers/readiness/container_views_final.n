@@ -1,6 +1,6 @@
-import builtin.containers.dict
-import builtin.containers.list
-import builtin.containers.set
+import containers.dict
+import containers.list
+import containers.set
 
 comptime {} else {
     let numbers: List[int] = [1, 2, 3]
@@ -18,11 +18,11 @@ comptime {} else {
     for key, value in entries { pair_total += key + value }
     require pair_total == 33
 
-    let saved_keys = builtin.containers.dict.keys(entries,
-        builtin.containers.dict.Sort_Order.insertion)
-    let saved_values = builtin.containers.dict.values(entries,
-        builtin.containers.dict.Sort_Order.insertion)
-    _ = builtin.containers.dict.put(entries, 3, 30)
+    let saved_keys = containers.dict.keys(entries,
+        containers.dict.Sort_Order.insertion)
+    let saved_values = containers.dict.values(entries,
+        containers.dict.Sort_Order.insertion)
+    _ = containers.dict.put(entries, 3, 30)
 
     var key_total: int = 0
     for key in saved_keys { key_total += key }

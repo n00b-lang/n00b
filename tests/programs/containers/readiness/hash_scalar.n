@@ -1,4 +1,4 @@
-import builtin.hash
+import hash
 
 comptime {} else {
     let seven: int = 7
@@ -53,8 +53,8 @@ comptime {} else {
     bytes[0] = cast[byte] 1
     bytes[1] = cast[byte] 2
     bytes[2] = cast[byte] 3
-    let first_hash: u128 = builtin.hash.xxh3_128(bytes)
-    require first_hash == builtin.hash.xxh3_128(bytes)
+    let first_hash: u128 = hash.xxh3_128(bytes)
+    require first_hash == hash.xxh3_128(bytes)
     bytes[2] = cast[byte] 4
-    require first_hash != builtin.hash.xxh3_128(bytes)
+    require first_hash != hash.xxh3_128(bytes)
 }

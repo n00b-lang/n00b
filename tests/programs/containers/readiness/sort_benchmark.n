@@ -1,5 +1,4 @@
-import builtin.sort
-import builtin.io.debug
+import sort
 
 type Entry {
     key: int
@@ -27,9 +26,9 @@ func bench_int(pattern: int, count: int) {
         items[i] = input_value(i, count, pattern)
         i += 1
     }
-    builtin.io.debug.raw_debug("start int\n")
-    builtin.sort.sort(items)
-    builtin.io.debug.raw_debug("end int\n")
+    raw_debug("start int\n")
+    sort.sort(items)
+    raw_debug("end int\n")
     i = 1
     while i < count {
         require items[i - 1] <= items[i]
@@ -44,9 +43,9 @@ func bench_entry(pattern: int, count: int) {
         items[i] = (key = input_value(i, count, pattern), payload = i)
         i += 1
     }
-    builtin.io.debug.raw_debug("start record\n")
-    builtin.sort.sort(items)
-    builtin.io.debug.raw_debug("end record\n")
+    raw_debug("start record\n")
+    sort.sort(items)
+    raw_debug("end record\n")
     i = 1
     while i < count {
         require items[i - 1].key <= items[i].key

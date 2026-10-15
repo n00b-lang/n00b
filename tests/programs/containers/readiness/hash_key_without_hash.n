@@ -1,4 +1,4 @@
-import builtin.containers.dict
+import containers.dict
 
 type Key {
     value: int

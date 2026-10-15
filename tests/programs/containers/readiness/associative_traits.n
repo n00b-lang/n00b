@@ -1,4 +1,4 @@
-import builtin.containers.traits
+import containers.traits
 
 type Word {
     text: int
@@ -64,13 +64,13 @@ func contains(self: WordMap, key: bool) -> bool {
     return self.present and self.key == key
 }
 
-func store(modify table: `M, key: `K, value: `V) -> bool where `M: builtin.containers.traits.Associative {
+func store(modify table: `M, key: `K, value: `V) -> bool where `M: containers.traits.Associative {
     _ = table.put(key, value)
     _ = table.get(key)
     return table.contains(key)
 }
 
-func erase(modify table: `M, key: `K) -> bool where `M: builtin.containers.traits.Associative {
+func erase(modify table: `M, key: `K) -> bool where `M: containers.traits.Associative {
     return table.remove(key)
 }
 

@@ -1,4 +1,4 @@
-import builtin.hash
+import hash
 
 comptime {} else {
     let short_a: string = "equal"

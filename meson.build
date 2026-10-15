@@ -452,6 +452,15 @@ test(
 )
 
 test(
+    'public-literal-handler', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'features' / 'public_literal_handler.n'],
+    suite: 'regression',
+)
+
+test(
     'compound-order-n00b', find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
            n00bb_exe.full_path(),

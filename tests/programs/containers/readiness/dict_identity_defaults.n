@@ -1,5 +1,5 @@
-import builtin.containers.dict
-import builtin.hash
+import containers.dict
+import hash
 
 comptime {} else {
     var first: Dict[int, int] = new[Dict[int, int]]()
@@ -10,15 +10,15 @@ comptime {} else {
     require first.hash() == copy.hash()
     var outer: Dict[Dict[int, int], int] =
         new[Dict[Dict[int, int], int]]()
-    _ = builtin.containers.dict.put(outer, first, 11)
-    let before: int? = builtin.containers.dict.get(outer, copy)
+    _ = containers.dict.put(outer, first, 11)
+    let before: int? = containers.dict.get(outer, copy)
     require before != nil
     require before.get() == 11
-    _ = builtin.containers.dict.put(first, 1, 2)
+    _ = containers.dict.put(first, 1, 2)
     require first == copy
     require first != separate
     require first.hash() == copy.hash()
-    let after: int? = builtin.containers.dict.get(outer, copy)
+    let after: int? = containers.dict.get(outer, copy)
     require after != nil
     require after.get() == 11
 }

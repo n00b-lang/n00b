@@ -1,4 +1,4 @@
-import builtin.containers.dict
+import containers.dict
 import dict_variant_value_dep
 
 comptime {} else {
@@ -6,10 +6,10 @@ comptime {} else {
         dict_variant_value_dep.make_payload()
     var items: Dict[int, dict_variant_value_dep.Payload] =
         new[Dict[int, dict_variant_value_dep.Payload]]()
-    require builtin.containers.dict.add(items, 1, value)
+    require containers.dict.add(items, 1, value)
     let found: dict_variant_value_dep.Payload? =
-        builtin.containers.dict.get(items, 1)
+        containers.dict.get(items, 1)
     require found != nil
     require dict_variant_value_dep.is_expected(found.get())
-    require builtin.containers.dict.get(items, 2) == nil
+    require containers.dict.get(items, 2) == nil
 }
