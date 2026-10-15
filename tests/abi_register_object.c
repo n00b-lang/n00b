@@ -70,8 +70,9 @@ check_ffi_module(const n00b_abi_snapshot_v1 *snapshot, const char *path,
         N00B_ABI_TABLE_SYMBOL);
     for (int n = 0; n < name_count; n++) {
         const char *equals = strchr(names[n], '=');
+        const char *at = strchr(names[n], '@');
         size_t length = equals ? (size_t)(equals - names[n])
-                               : strlen(names[n]);
+            : at ? (size_t)(at - names[n]) : strlen(names[n]);
         const n00b_abi_symbol_v1 *found = nullptr;
         for (uint32_t i = 1; i < symbol_count; i++) {
             const n00b_abi_symbol_v1 *symbol = n00b_abi_v1_symbol(snapshot, i);
@@ -85,6 +86,20 @@ check_ffi_module(const n00b_abi_snapshot_v1 *snapshot, const char *path,
         if (!found) fprintf(stderr, "no symbol row for %.*s\n",
                             (int)length, names[n]);
         assert(found);
+        if (at) {
+            const n00b_abi_source_location_v1 *location =
+                n00b_abi_v1_source_location(snapshot,
+                    found->declaration_location_index);
+            const n00b_abi_source_file_v1 *file = location
+                ? n00b_abi_v1_record(snapshot, N00B_ABI_TABLE_SOURCE_FILE,
+                    location->file_index, nullptr) : nullptr;
+            char generated[256];
+            snprintf(generated, sizeof(generated), "<generated:%s>", path);
+            assert(location && file
+                && location->start_line == strtoul(at + 1, nullptr, 10)
+                && string_is(snapshot, &file->path, generated,
+                             strlen(generated)));
+        }
         if (!equals) continue;
         const n00b_abi_native_binding_v1 *binding = n00b_abi_v1_record(
             snapshot, N00B_ABI_TABLE_NATIVE_BINDING,
