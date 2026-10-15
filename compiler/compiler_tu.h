@@ -385,7 +385,7 @@ typedef struct {
     parse_tree_t *receiver_node;
     parse_scope_t *scope;
     parse_sym_entry_t *symbol;
-    size_t reference_ordinal;
+    core_link_reference_t *reference;
     size_t next_for_node;
     core_string_t member_name;
     core_string_t *trait_path_parts;

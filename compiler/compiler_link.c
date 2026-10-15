@@ -1394,7 +1394,7 @@ resolve_imported_module_symbols(parse_grammar_t *grammar,
                 if (site->symbol) parse_sym_remove_use(site->symbol,
                                                        site->node);
                 site->symbol = nullptr;
-                site->reference_ordinal = 0;
+                site->reference = nullptr;
                 site->dispatch_trait = (core_string_t){0};
                 site->dispatch_method = (core_string_t){0};
                 site->operator_dispatch = false;
@@ -2558,30 +2558,16 @@ n00bb_resolve_trait_reference(parse_grammar_t *grammar,
     return !symbol || parse_sym_add_use(symbol, node);
 }
 
-core_link_reference_t *
-n00bb_site_reference(core_link_unit_t *link, core_translation_unit_t *unit,
-                     const n00bb_link_use_site_t *site)
-{
-    return site && site->reference_ordinal
-        ? core_link_unit_reference_at_use_site(link, unit, site->node,
-                                               site->reference_ordinal - 1)
-        : nullptr;
-}
-
 bool
-n00bb_bind_site_reference(core_link_unit_t *link,
-                          core_translation_unit_t *unit,
+n00bb_bind_site_reference(core_translation_unit_t *unit,
                           n00bb_link_use_site_t *site,
                           core_link_reference_t *reference)
 {
-    size_t count = core_link_unit_reference_count_at(link, unit, site->node);
-    for (size_t i = 0; i < count; i++) {
-        if (core_link_unit_reference_at_use_site(link, unit, site->node, i)
-            != reference) continue;
-        site->reference_ordinal = i + 1;
-        return true;
-    }
-    return false;
+    if (!site || !reference || core_link_reference_referrer(reference) != unit
+        || core_link_reference_use_site(reference) != site->node)
+        return false;
+    site->reference = reference;
+    return true;
 }
 
 bool
@@ -3072,7 +3058,7 @@ register_link_use_sites(core_link_unit_t *link,
                 if (!deferred
                     || !core_link_reference_set_source_info(link, reference,
                         link_source_location(node), provenance)) return false;
-                if (!n00bb_bind_site_reference(link, unit, site, reference))
+                if (!n00bb_bind_site_reference(unit, site, reference))
                     return false;
                 continue;
             }
@@ -3090,7 +3076,7 @@ register_link_use_sites(core_link_unit_t *link,
                 if (!ok || !core_link_reference_set_source_info(link,
                         reference, link_source_location(node), provenance))
                     return false;
-                if (!n00bb_bind_site_reference(link, unit, site, reference))
+                if (!n00bb_bind_site_reference(unit, site, reference))
                     return false;
                 continue;
             }
@@ -3118,7 +3104,7 @@ register_link_use_sites(core_link_unit_t *link,
                     || !core_link_reference_set_source_info(link,
                         reference, link_source_location(node),
                         provenance)) return false;
-                if (!n00bb_bind_site_reference(link, unit, site, reference))
+                if (!n00bb_bind_site_reference(unit, site, reference))
                     return false;
                 continue;
             }
@@ -3135,7 +3121,7 @@ register_link_use_sites(core_link_unit_t *link,
             if (!ok || !core_link_reference_set_source_info(link, reference,
                     link_source_location(node), provenance))
                 return false;
-            if (!n00bb_bind_site_reference(link, unit, site, reference))
+            if (!n00bb_bind_site_reference(unit, site, reference))
                 return false;
         }
     }

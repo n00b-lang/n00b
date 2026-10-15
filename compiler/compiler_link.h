@@ -305,10 +305,8 @@ bool append_environment_symbol_name(parse_grammar_t *grammar,
     core_buffer_t *qualified);
 core_string_t link_symbol_module(core_translation_unit_t *unit,
                                  parse_sym_entry_t *symbol);
-core_link_reference_t *n00bb_site_reference(core_link_unit_t *link,
-    core_translation_unit_t *unit, const n00bb_link_use_site_t *site);
-bool n00bb_bind_site_reference(core_link_unit_t *link,
-    core_translation_unit_t *unit, n00bb_link_use_site_t *site,
+bool n00bb_bind_site_reference(core_translation_unit_t *unit,
+    n00bb_link_use_site_t *site,
     core_link_reference_t *reference);
 typedef n00bb_trait_specialization_t *n00bb_trait_specialization_ptr_t;
 core_list_decl(n00bb_trait_specialization_ptr_t);

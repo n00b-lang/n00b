@@ -2740,7 +2740,7 @@ remember_link_use_site(parse_grammar_t *grammar,
         && core_string_eq(dispatch_trait,
                           CORE_STRING_STATIC("Index_Read"))) {
         use_site.symbol = nullptr;
-        use_site.reference_ordinal = 0;
+        use_site.reference = nullptr;
         use_site.dispatch_trait = CORE_STRING_STATIC("Index_Write");
         use_site.dispatch_method = CORE_STRING_STATIC("__write");
         use_site.resolved_trait_name = nullptr;

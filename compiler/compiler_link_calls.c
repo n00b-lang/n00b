@@ -342,8 +342,7 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
         if (deferred_trait_requirements_only) {
             n00bb_link_use_site_t *site = member
                 ? link_use_site_for_node(state, member) : nullptr;
-            core_link_reference_t *reference = n00bb_site_reference(
-                state->link, unit, site);
+            core_link_reference_t *reference = site ? site->reference : nullptr;
             if (!site || !site->function_owner || !site->symbol
                 || !site->symbol->owner_type || !reference
                 || !core_link_reference_is_deferred(reference)) continue;
@@ -1019,8 +1018,7 @@ publish_link_call_dependencies(core_link_unit_t *link,
                     site, site->symbol) : nullptr;
             core_link_declaration_t *target = callee
                 ? link_declaration_for_symbol(analysis, callee) : nullptr;
-            core_link_reference_t *reference = n00bb_site_reference(
-                link, unit, site);
+            core_link_reference_t *reference = site->reference;
             if (!reference && primitive_operator_site(state, site)) continue;
             bool resolved = target && (!caller || source)
                 && reference && !core_link_reference_is_deferred(reference);

@@ -14,7 +14,7 @@ resolve_linked_method(core_link_unit_t *link, n00bb_link_use_site_t *site,
                      core_translation_unit_t *unit,
                      const th_env_method_t *method)
 {
-    core_link_reference_t *reference = n00bb_site_reference(link, unit, site);
+    core_link_reference_t *reference = site ? site->reference : nullptr;
     if (!reference || !method
         || !method->module || !method->root_name) return nullptr;
     parse_sym_entry_t *builtin_symbol = nullptr;
@@ -1354,7 +1354,7 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
                         core_string_from_cstr(name)) : nullptr;
                 if (n00bb_builtin_option_function(builtin)) {
                     core_link_reference_t *reference =
-                        n00bb_site_reference(link, unit, site);
+                        site->reference;
                     core_link_declaration_metadata_t metadata = {
                         .kind = PARSE_SYM_FUNCTION,
                         .visibility = 0,
@@ -1393,8 +1393,7 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
                                                   unit, site)) return false;
                 continue;
             }
-            core_link_reference_t *reference = n00bb_site_reference(
-                link, unit, site);
+            core_link_reference_t *reference = site->reference;
             if (!reference
                 && (site->operator_dispatch || site->semantic_dispatch)) {
                 if (site->operator_dispatch
@@ -1418,7 +1417,7 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
                         link_source_location(site->node),
                         core_source_file_path(&unit->source)))
                     return false;
-                if (!n00bb_bind_site_reference(link, unit, site, reference))
+                if (!n00bb_bind_site_reference(unit, site, reference))
                     return false;
             }
             if (site->callback_setup) {
