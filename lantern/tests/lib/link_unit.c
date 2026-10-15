@@ -1202,8 +1202,20 @@ test_link_unit_dependencies(void)
               && edge.from == caller && edge.to == nullptr
               && edge.source_site == &call_site);
     core_link_unit_invalidate_stage(link, 91);
+    probe.result = CORE_LINK_STAGE_RESULT_UNAVAILABLE;
+    check("unavailable dependency stages remove partial edges",
+          !core_link_unit_run_stage(link, 91)
+              && core_link_unit_dependency_count(link) == 0);
     probe.to = callee;
     probe.state = CORE_LINK_DEPENDENCY_RESOLVED;
+    probe.result = CORE_LINK_STAGE_RESULT_COMPLETE;
+    check("retrying an unavailable dependency stage uses a clean index",
+          core_link_unit_invalidate_stage(link, 91)
+              && core_link_unit_run_stage(link, 91)
+              && core_link_unit_dependency_count(link) == 1
+              && core_link_unit_dependency_at(link, 0, &edge)
+              && edge.to == callee);
+    core_link_unit_invalidate_stage(link, 91);
     probe.result = CORE_LINK_STAGE_RESULT_FAILED;
     check("failed dependency stages do not leave partial edges",
           !core_link_unit_run_stage(link, 91)
