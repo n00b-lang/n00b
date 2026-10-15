@@ -293,7 +293,7 @@ static void
 remove_dependency_at(core_link_unit_t *link, size_t index)
 {
     core_link_dependency_t *dependency = link->dependencies[index];
-    core_dict_remove(&link->dependency_index, dependency);
+    if (!core_dict_remove(&link->dependency_index, dependency)) abort();
     core_free(dependency->provenance.data);
     core_free(dependency);
     memmove(link->dependencies + index, link->dependencies + index + 1,
@@ -378,7 +378,7 @@ remove_stage_artifacts(core_link_unit_t *link, const bool *invalidated,
             i++;
             continue;
         }
-        core_dict_remove(&link->artifact_index, artifact);
+        if (!core_dict_remove(&link->artifact_index, artifact)) abort();
         release_artifact(artifact);
         memmove(link->artifacts + i, link->artifacts + i + 1,
             (link->artifact_count - i - 1) * sizeof(*link->artifacts));
@@ -1234,7 +1234,7 @@ register_declaration(core_link_unit_t *link, core_string_t module,
                                    sizeof(*link->declarations)))
             abort();
         link->declarations[link->declaration_count++] = decl;
-        core_dict_add(&link->declaration_index, decl, decl);
+        if (!core_dict_add(&link->declaration_index, decl, decl)) abort();
         append_declaration_site(decl, owner, metadata, external, is_definition,
                                 external_requirement);
         link->validated = false;
@@ -2056,7 +2056,7 @@ add_artifact(core_link_unit_t *link, core_string_t module,
         .unit_wide = unit_wide,
     };
     link->artifacts[link->artifact_count++] = artifact;
-    core_dict_add(&link->artifact_index, artifact, artifact);
+    if (!core_dict_add(&link->artifact_index, artifact, artifact)) abort();
     link->validated = false;
     return true;
 }
@@ -2383,7 +2383,8 @@ core_link_unit_add_dependency(
     };
     link->dependencies[link->dependency_count++] = dependency;
     link->validated = false;
-    core_dict_add(&link->dependency_index, dependency, dependency);
+    if (!core_dict_add(&link->dependency_index, dependency, dependency))
+        abort();
     if (out) *out = dependency;
     return true;
 }
