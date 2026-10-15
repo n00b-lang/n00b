@@ -94,6 +94,14 @@ lower_private_cleanup(void *raw)
     core_dict_free(&state->active_bindings);
 }
 
+void
+ir_lower_context_release(ir_lower_context_t *context)
+{
+    if (!context || !context->lower_private) return;
+    lower_private_cleanup(context->lower_private);
+    context->lower_private = nullptr;
+}
+
 static ir_lower_private_t *
 lower_private(ir_lower_context_t *context)
 {

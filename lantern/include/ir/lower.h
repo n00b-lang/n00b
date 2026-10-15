@@ -115,5 +115,6 @@ ir_lower_result_t ir_lower_emit(
 ir_lower_result_t ir_lower_tree(ir_lowerer_t *lowerer,
                                 ir_lower_context_t *context,
                                 parse_grammar_t *grammar, parse_tree_t *root);
+void ir_lower_context_release(ir_lower_context_t *context);
 
 #endif
