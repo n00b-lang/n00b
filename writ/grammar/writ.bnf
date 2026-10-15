@@ -1,5 +1,6 @@
 <file> ::= <item>* | <profile-decl> <profile-decl>* | <binding-decl> <binding-decl>*
 <declarations> ::= <item>*
+<embedded> ::= <item>* <embedded-binding>*
 <item> ::= <directive> | <decl>
 
 <directive> ::= <library-directive> | <link-directive> | <header-directive> | <encoding-directive> | <define-directive> | <include-path-directive> | <compile-commands-directive> | <use-directive> | <platforms-directive> | <import-directive> | <abi-directive> | <lang-directive> | <crate-directive> | <feature-directive> | <version-directive>
@@ -16,7 +17,7 @@
 <define-directive> ::= %"define" %IDENTIFIER (%"=" <expr>)?
 <include-path-directive> ::= %"include_path" %STRING
 <compile-commands-directive> ::= %"compile_commands" %STRING
-<use-directive> ::= %"use" %STRING
+<use-directive> ::= %"use" %STRING | %"use" <header-angle>
 <platforms-directive> ::= %"platforms" <platform-name> (%"," <platform-name>)*
 <platform-name> ::= <platform-part> (%"-" <platform-part>)*
 <platform-part> ::= %IDENTIFIER | %"*"
@@ -252,6 +253,8 @@
 
 <binding-decl> ::= %"binding" %IDENTIFIER %"for" <ref> <direction> %"{" <binding-item>* %"}"
 <direction> ::= %"import" | %"export"
+<embedded-binding> ::= %"binding" <export-mark>? %"{" <binding-item>* %"}"
+<export-mark> ::= %"export"
 <binding-item> ::= <module-item> | <strip-prefix-item> | <name-item> | <type-as-item> | <method-item> | <repr-item> | <keywords-item> | <error-map-item> | <borrow-item> | <policy-item> | <callback-as-item> | <label-map-item> | <hide-item> | <raw-item> | <load-item> | <library-item> | <search-path-item> | <header-item> | <provide-item> | <on-panic-item> | <allocator-own-item>
 <target> ::= %IDENTIFIER (%"::" %IDENTIFIER)? (%"." %IDENTIFIER)?
 <module-item> ::= %"module" %STRING

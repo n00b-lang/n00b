@@ -1,0 +1,9 @@
+use <zlib.writ>
+
+binding {
+    name compress2 "compress"
+}
+
+binding {
+    name uncompress "expand"
+}

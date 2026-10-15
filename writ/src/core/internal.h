@@ -82,7 +82,11 @@ struct writ_session {
     writ_str_t                      llvm_prefix;
     core_list_t(writ_cleanup_t)     cleanups;
     void                           *grammars[WRIT_GRAMMAR_COUNT];
+    core_list_t(uint32_t)           contract_dirs;
+    core_list_t(uint32_t)           env_contract_dirs;
 };
+
+writ_str_t writ_find_contract(writ_session_t *session, writ_str_t name);
 
 void      *writ_alloc(writ_session_t *session, size_t size);
 void       writ_on_session_free(writ_session_t *session, void (*release)(void *), void *object);

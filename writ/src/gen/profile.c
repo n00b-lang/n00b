@@ -101,6 +101,12 @@ read_item(reader_t *r, uint32_t id)
                                                                       "and snake, Snake_Case, pascal, camel, upper or keep");
         return;
     }
+    case WRIT_N_PRIM_ITEM: {
+        writ_sym_t contract = node(r, writ_node_child(r->unit, id, 0))->name;
+        writ_sym_t native = node(r, writ_node_child(r->unit, id, 1))->name;
+        core_list_push(profile->prims, ((writ_prim_t){contract, writ_sym_str(profile->session, native)}));
+        return;
+    }
     case WRIT_N_RESERVED:
         for (uint32_t i = 0; i < item->child_count; i++) {
             core_list_push(profile->reserved, node(r, writ_node_child(r->unit, id, i))->name);
@@ -138,6 +144,7 @@ profile_release(void *object)
 {
     writ_profile_t *profile = object;
     core_list_free(profile->reprs);
+    core_list_free(profile->prims);
     core_list_free(profile->reserved);
 }
 
@@ -147,7 +154,8 @@ writ_profile_read(writ_unit_t *unit, writ_sym_t language)
     writ_session_t *session = unit->session;
     writ_profile_t *profile = writ_alloc(session, sizeof(writ_profile_t));
     *profile = (writ_profile_t){.session = session, .name = language, .reprs = core_list_new(writ_repr_t),
-                                .reserved = core_list_new(writ_sym_t), .variadic_call = true};
+                                .prims = core_list_new(writ_prim_t), .reserved = core_list_new(writ_sym_t),
+                                .variadic_call = true};
     writ_on_session_free(session, profile_release, profile);
     bool found = false;
     for (uint32_t block = 0; (block = writ_unit_next_item(unit, WRIT_N_PROFILE, block));) {
@@ -201,4 +209,16 @@ writ_profile_name(const writ_profile_t *profile, writ_naming_kind_t kind, writ_s
         }
     }
     return cased;
+}
+
+writ_str_t
+writ_profile_prim(const writ_profile_t *profile, writ_str_t contract)
+{
+    writ_sym_t sym = writ_intern_str(profile->session, contract);
+    for (size_t i = 0; i < profile->prims.len; i++) {
+        if (profile->prims.data[i].contract == sym) {
+            return profile->prims.data[i].native;
+        }
+    }
+    return contract;
 }

@@ -200,21 +200,91 @@ declare_named_type(writ_model_t *model, writ_type_kind_t kind, writ_sym_t name, 
 
 static void gather(resolver_t *r, uint32_t root);
 
-static void
-gather_use(resolver_t *r, uint32_t id)
+static writ_sym_t
+use_search_name(const writ_unit_t *unit, uint32_t id)
 {
-    writ_model_t *model = r->model;
-    const writ_node_t *node = node_at(model, id);
-    writ_str_t relative = writ_sym_str(model->session, node->name);
-    writ_str_t base = writ_source_at(model->session, node->loc.source)->path;
+    uint32_t search = writ_node_first_of(unit, id, WRIT_N_HEADER);
+    return search ? writ_node(unit, search)->name : 0;
+}
+
+static writ_str_t
+use_path(writ_unit_t *unit, uint32_t id)
+{
+    writ_session_t *session = unit->session;
+    const writ_node_t *node = writ_node(unit, id);
+    writ_sym_t search = use_search_name(unit, id);
+    if (search) {
+        return writ_find_contract(session, writ_sym_str(session, search));
+    }
+    writ_str_t name = writ_sym_str(session, node->name);
+    writ_str_t base = writ_source_at(session, node->loc.source)->path;
     size_t cut = base.length;
     while (cut > 0 && base.data[cut - 1] != '/') {
         cut--;
     }
-    writ_str_t path = relative.length && relative.data[0] == '/'
-                        ? relative
-                        : writ_str_format(model->session, "%.*s%.*s", (int)cut, base.data, (int)relative.length,
-                                          relative.data);
+    return name.length && name.data[0] == '/'
+             ? name
+             : writ_str_format(session, "%.*s%.*s", (int)cut, base.data, (int)name.length, name.data);
+}
+
+static bool
+use_loaded(const writ_unit_t *unit, writ_str_t path)
+{
+    for (size_t i = 0; i < unit->roots.len; i++) {
+        if (unit->roots.data[i].used && writ_str_eq(writ_source_at(unit->session, unit->roots.data[i].source)->path,
+                                                    path)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static writ_status_t
+load_use(writ_unit_t *unit, writ_str_t path, size_t *first)
+{
+    *first = unit->roots.len;
+    writ_status_t status = writ_unit_read_file(unit, path, nullptr);
+    for (size_t i = *first; i < unit->roots.len; i++) {
+        unit->roots.data[i].used = true;
+    }
+    return status;
+}
+
+static void
+preload_uses(writ_unit_t *unit)
+{
+    size_t roots = unit->roots.len;
+    for (size_t i = 0; i < roots; i++) {
+        if (unit->roots.data[i].used) {
+            continue;
+        }
+        uint32_t root = unit->roots.data[i].root;
+        for (uint32_t c = 0; c < writ_node(unit, root)->child_count; c++) {
+            uint32_t item = writ_node_child(unit, root, c);
+            if (writ_node(unit, item)->kind != WRIT_N_USE) {
+                continue;
+            }
+            writ_str_t path = use_path(unit, item);
+            size_t first = 0;
+            if (path.length && !use_loaded(unit, path)) {
+                load_use(unit, path, &first);
+            }
+        }
+    }
+}
+
+static void
+gather_use(resolver_t *r, uint32_t id)
+{
+    writ_model_t *model = r->model;
+    writ_unit_t *unit = model->unit;
+    const writ_node_t *node = node_at(model, id);
+    writ_str_t path = use_path(unit, id);
+    if (!path.length) {
+        writ_report(model->session, WRIT_D_UNREADABLE, node->loc, "`<%.*s>` is not on the contract search path",
+                    S(writ_sym_str(model->session, use_search_name(unit, id))));
+        return;
+    }
     writ_sym_t key = writ_intern_str(model->session, path);
     core_list_foreach(model->uses, seen) {
         if (*seen == key) {
@@ -222,14 +292,23 @@ gather_use(resolver_t *r, uint32_t id)
         }
     }
     core_list_push(model->uses, key);
-    size_t roots = model->unit->roots.len;
-    writ_status_t status = writ_unit_read_file(model->unit, path, nullptr);
-    if (status == WRIT_IO_FAILED) {
+    if (use_loaded(unit, path)) {
+        for (size_t i = 0; i < unit->roots.len; i++) {
+            if (unit->roots.data[i].used
+                && writ_str_eq(writ_source_at(model->session, unit->roots.data[i].source)->path, path)) {
+                gather(r, unit->roots.data[i].root);
+            }
+        }
+        return;
+    }
+    size_t first = 0;
+    if (load_use(unit, path, &first) == WRIT_IO_FAILED) {
         writ_report(model->session, WRIT_D_UNREADABLE, node->loc, "`%.*s`", (int)path.length, path.data);
         return;
     }
-    for (size_t i = roots; i < model->unit->roots.len; i++) {
-        gather(r, model->unit->roots.data[i].root);
+    size_t read = unit->roots.len;
+    for (size_t i = first; i < read; i++) {
+        gather(r, unit->roots.data[i].root);
     }
 }
 
@@ -240,7 +319,9 @@ gather_directive(resolver_t *r, uint32_t id)
     const writ_node_t *node = node_at(model, id);
     switch (node->kind) {
     case WRIT_N_LIBRARY:
-        if (model->library) {
+        if (model->library && model->unit->language) {
+            writ_report(model->session, WRIT_D_EMBEDDED_SHAPE, node->loc, "a second `library`");
+        } else if (model->library) {
             writ_report(model->session, WRIT_D_DUPLICATE, node->loc, "`library`");
         }
         model->library = node->name;
@@ -1557,6 +1638,7 @@ writ_resolve(writ_unit_t *unit, const writ_platform_t *platform, const writ_mode
     if (!unit || !platform || !out) {
         return WRIT_INVALID_ARGUMENT;
     }
+    preload_uses(unit);
     if (writ_unit_is_rust(unit)) {
         return resolve_rust(unit, platform, out);
     }
@@ -1567,7 +1649,9 @@ writ_resolve(writ_unit_t *unit, const writ_platform_t *platform, const writ_mode
     writ_model_t *model = r.model;
     size_t roots = unit->roots.len;
     for (size_t i = 0; i < roots; i++) {
-        gather(&r, unit->roots.data[i].root);
+        if (!unit->roots.data[i].used) {
+            gather(&r, unit->roots.data[i].root);
+        }
     }
     for (size_t i = 0; i < r.decls.len; i++) {
         writ_node_kind_t kind = node_at(model, r.decls.data[i])->kind;

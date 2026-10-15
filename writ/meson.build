@@ -88,10 +88,14 @@ core_sources = files(
     'src/gen/rust.c',
     'src/gen/profile.c',
     'src/gen/binding.c',
+    'src/gen/n00b.c',
     'src/toolchain/probe.c',
     'src/toolchain/exports.c',
     'src/toolchain/rustdoc.c',
 )
+
+contract_install_dir = get_option('prefix') / get_option('datadir') / 'writ' / 'contracts'
+core_args = ['-DWRIT_CONTRACT_INSTALL_DIR="' + contract_install_dir + '"']
 
 writ_raw = static_library(
     'writ_raw',
@@ -103,6 +107,7 @@ writ_raw = static_library(
     model_json_h,
     include_directories: writ_inc,
     dependencies: lantern_headers,
+    c_args: core_args,
 )
 
 libwrit = custom_target(
@@ -161,6 +166,8 @@ install_headers(
     'include/writ/clang.h',
     subdir: 'writ',
 )
+
+install_subdir('contracts', install_dir: contract_install_dir, strip_directory: true)
 
 llvm_prefix = get_option('llvm_prefix')
 libclang = declare_dependency(

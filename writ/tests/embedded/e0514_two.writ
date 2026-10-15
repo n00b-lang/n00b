@@ -1,0 +1,6 @@
+use <zlib.writ>
+
+library other
+
+binding {
+}

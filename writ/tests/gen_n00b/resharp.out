@@ -1,0 +1,1575 @@
+#ifndef RESHARP_WRIT_H
+#define RESHARP_WRIT_H
+
+#include <stdarg.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define RESHARP_ARGUMENT_ERROR (-1)
+#define RESHARP_OUT_OF_MEMORY (-2)
+#define RESHARP_CONTRACT_VIOLATION (-3)
+
+typedef struct {
+    uint8_t *data;
+    size_t length;
+} resharp_bytes_t;
+
+typedef struct {
+    const char *data;
+    size_t length;
+} resharp_str_t;
+
+void resharp_bytes_free(resharp_bytes_t *bytes);
+void resharp_free(void *data);
+
+typedef struct writ_resharp_regex_options writ_resharp_regex_options;
+typedef struct writ_resharp_regex writ_resharp_regex;
+enum {
+    RESHARP_STATUS_OK = 0,
+    RESHARP_STATUS_NONE = 1,
+    RESHARP_STATUS_ERROR = 2,
+    RESHARP_STATUS_PANIC = 3,
+};
+enum {
+    RESHARP_UNICODE_MODE_ASCII = 0,
+    RESHARP_UNICODE_MODE_DEFAULT = 1,
+    RESHARP_UNICODE_MODE_FULL = 2,
+    RESHARP_UNICODE_MODE_JAVASCRIPT = 3,
+};
+enum {
+    RESHARP_FIND_ALL_EMPTY_LANG = 0,
+    RESHARP_FIND_ALL_ANCHORED = 1,
+    RESHARP_FIND_ALL_END_ANCHORED = 2,
+    RESHARP_FIND_ALL_HARDENED = 3,
+    RESHARP_FIND_ALL_FWD_PREFIX = 4,
+    RESHARP_FIND_ALL_FWD_LB_PREFIX = 5,
+    RESHARP_FIND_ALL_BOUNDED = 6,
+    RESHARP_FIND_ALL_DFA = 7,
+    RESHARP_FIND_ALL_CLASS_PLUS = 8,
+};
+typedef struct Match {
+    size_t start;
+    size_t end;
+} Match;
+
+
+enum {
+    resharp_error_message_ok = 0,
+};
+int32_t resharp_error_message(size_t buf_capacity, resharp_bytes_t *buf);
+
+enum {
+    resharp_regex_options_free_ok = 0,
+};
+int32_t resharp_regex_options_free(writ_resharp_regex_options *value);
+
+enum {
+    resharp_regex_free_ok = 0,
+};
+int32_t resharp_regex_free(writ_resharp_regex *value);
+
+enum {
+    resharp_regex_options_default_ok = 0,
+    resharp_regex_options_default_failed = 1,
+    resharp_regex_options_default_panicked = 2,
+};
+int32_t resharp_regex_options_default(writ_resharp_regex_options **out, resharp_bytes_t *failed_detail, resharp_bytes_t *panicked_detail);
+
+enum {
+    resharp_regex_options_unicode_ok = 0,
+    resharp_regex_options_unicode_failed = 1,
+    resharp_regex_options_unicode_panicked = 2,
+};
+int32_t resharp_regex_options_unicode(writ_resharp_regex_options *self, int mode, writ_resharp_regex_options **out, resharp_bytes_t *failed_detail, resharp_bytes_t *panicked_detail);
+
+enum {
+    resharp_regex_options_case_insensitive_ok = 0,
+    resharp_regex_options_case_insensitive_failed = 1,
+    resharp_regex_options_case_insensitive_panicked = 2,
+};
+int32_t resharp_regex_options_case_insensitive(writ_resharp_regex_options *self, bool yes, writ_resharp_regex_options **out, resharp_bytes_t *failed_detail, resharp_bytes_t *panicked_detail);
+
+enum {
+    resharp_regex_options_dot_matches_new_line_ok = 0,
+    resharp_regex_options_dot_matches_new_line_failed = 1,
+    resharp_regex_options_dot_matches_new_line_panicked = 2,
+};
+int32_t resharp_regex_options_dot_matches_new_line(writ_resharp_regex_options *self, bool yes, writ_resharp_regex_options **out, resharp_bytes_t *failed_detail, resharp_bytes_t *panicked_detail);
+
+enum {
+    resharp_regex_options_multiline_ok = 0,
+    resharp_regex_options_multiline_failed = 1,
+    resharp_regex_options_multiline_panicked = 2,
+};
+int32_t resharp_regex_options_multiline(writ_resharp_regex_options *self, bool yes, writ_resharp_regex_options **out, resharp_bytes_t *failed_detail, resharp_bytes_t *panicked_detail);
+
+enum {
+    resharp_regex_options_ignore_whitespace_ok = 0,
+    resharp_regex_options_ignore_whitespace_failed = 1,
+    resharp_regex_options_ignore_whitespace_panicked = 2,
+};
+int32_t resharp_regex_options_ignore_whitespace(writ_resharp_regex_options *self, bool yes, writ_resharp_regex_options **out, resharp_bytes_t *failed_detail, resharp_bytes_t *panicked_detail);
+
+enum {
+    resharp_regex_options_hardened_ok = 0,
+    resharp_regex_options_hardened_failed = 1,
+    resharp_regex_options_hardened_panicked = 2,
+};
+int32_t resharp_regex_options_hardened(writ_resharp_regex_options *self, bool yes, writ_resharp_regex_options **out, resharp_bytes_t *failed_detail, resharp_bytes_t *panicked_detail);
+
+enum {
+    resharp_regex_options_unbounded_size_ok = 0,
+    resharp_regex_options_unbounded_size_failed = 1,
+    resharp_regex_options_unbounded_size_panicked = 2,
+};
+int32_t resharp_regex_options_unbounded_size(writ_resharp_regex_options *self, bool yes, writ_resharp_regex_options **out, resharp_bytes_t *failed_detail, resharp_bytes_t *panicked_detail);
+
+enum {
+    resharp_regex_options_implicit_captures_ok = 0,
+    resharp_regex_options_implicit_captures_failed = 1,
+    resharp_regex_options_implicit_captures_panicked = 2,
+};
+int32_t resharp_regex_options_implicit_captures(writ_resharp_regex_options *self, bool yes, writ_resharp_regex_options **out, resharp_bytes_t *failed_detail, resharp_bytes_t *panicked_detail);
+
+enum {
+    resharp_regex_is_match_ok = 0,
+    resharp_regex_is_match_failed = 1,
+    resharp_regex_is_match_panicked = 2,
+};
+int32_t resharp_regex_is_match(writ_resharp_regex *self, const uint8_t *input, size_t input_length, bool *out, resharp_bytes_t *failed_detail, resharp_bytes_t *panicked_detail);
+
+enum {
+    resharp_regex_new_ok = 0,
+    resharp_regex_new_failed = 1,
+    resharp_regex_new_panicked = 2,
+};
+int32_t resharp_regex_new(const char *pattern, size_t pattern_length, writ_resharp_regex **out, resharp_bytes_t *failed_detail, resharp_bytes_t *panicked_detail);
+
+enum {
+    resharp_regex_with_options_ok = 0,
+    resharp_regex_with_options_failed = 1,
+    resharp_regex_with_options_panicked = 2,
+};
+int32_t resharp_regex_with_options(const char *pattern, size_t pattern_length, writ_resharp_regex_options *opts, writ_resharp_regex **out, resharp_bytes_t *failed_detail, resharp_bytes_t *panicked_detail);
+
+enum {
+    resharp_regex_find_all_ok = 0,
+    resharp_regex_find_all_failed = 1,
+    resharp_regex_find_all_panicked = 2,
+};
+int32_t resharp_regex_find_all(writ_resharp_regex *self, const uint8_t *input, size_t input_length, size_t out_capacity, Match **out, size_t *out_length, resharp_bytes_t *failed_detail, resharp_bytes_t *panicked_detail);
+
+enum {
+    resharp_regex_find_anchored_ok = 0,
+    resharp_regex_find_anchored_none = 1,
+    resharp_regex_find_anchored_failed = 2,
+    resharp_regex_find_anchored_panicked = 3,
+};
+int32_t resharp_regex_find_anchored(writ_resharp_regex *self, const uint8_t *input, size_t input_length, Match *out, resharp_bytes_t *failed_detail, resharp_bytes_t *panicked_detail);
+
+enum {
+    resharp_regex_is_full_match_ok = 0,
+    resharp_regex_is_full_match_failed = 1,
+    resharp_regex_is_full_match_panicked = 2,
+};
+int32_t resharp_regex_is_full_match(writ_resharp_regex *self, const uint8_t *input, size_t input_length, bool *out, resharp_bytes_t *failed_detail, resharp_bytes_t *panicked_detail);
+
+enum {
+    resharp_regex_capture_index_for_name_ok = 0,
+    resharp_regex_capture_index_for_name_none = 1,
+    resharp_regex_capture_index_for_name_failed = 2,
+    resharp_regex_capture_index_for_name_panicked = 3,
+};
+int32_t resharp_regex_capture_index_for_name(writ_resharp_regex *self, const char *name, size_t name_length, size_t *out, resharp_bytes_t *failed_detail, resharp_bytes_t *panicked_detail);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
+#include "resharp_writ.h"
+
+#include <stdlib.h>
+#include <string.h>
+
+size_t writ_resharp_last_error(uint8_t *buf, size_t cap);
+void writ_resharp_regex_options_free(writ_resharp_regex_options *value);
+void writ_resharp_regex_free(writ_resharp_regex *value);
+int writ_resharp_regex_options_default(writ_resharp_regex_options * *out);
+int writ_resharp_regex_options_unicode(writ_resharp_regex_options *self, int mode, writ_resharp_regex_options * *out);
+int writ_resharp_regex_options_case_insensitive(writ_resharp_regex_options *self, bool yes, writ_resharp_regex_options * *out);
+int writ_resharp_regex_options_dot_matches_new_line(writ_resharp_regex_options *self, bool yes, writ_resharp_regex_options * *out);
+int writ_resharp_regex_options_multiline(writ_resharp_regex_options *self, bool yes, writ_resharp_regex_options * *out);
+int writ_resharp_regex_options_ignore_whitespace(writ_resharp_regex_options *self, bool yes, writ_resharp_regex_options * *out);
+int writ_resharp_regex_options_hardened(writ_resharp_regex_options *self, bool yes, writ_resharp_regex_options * *out);
+int writ_resharp_regex_options_unbounded_size(writ_resharp_regex_options *self, bool yes, writ_resharp_regex_options * *out);
+int writ_resharp_regex_options_implicit_captures(writ_resharp_regex_options *self, bool yes, writ_resharp_regex_options * *out);
+int writ_resharp_regex_is_match(writ_resharp_regex *self, const uint8_t *input, size_t input_len, bool *out);
+int writ_resharp_regex_new(uint8_t *pattern, size_t pattern_len, writ_resharp_regex * *out);
+int writ_resharp_regex_with_options(uint8_t *pattern, size_t pattern_len, writ_resharp_regex_options *opts, writ_resharp_regex * *out);
+int writ_resharp_regex_find_all(writ_resharp_regex *self, const uint8_t *input, size_t input_len, Match *out, size_t out_cap, size_t *out_total);
+int writ_resharp_regex_find_anchored(writ_resharp_regex *self, const uint8_t *input, size_t input_len, Match *out);
+int writ_resharp_regex_is_full_match(writ_resharp_regex *self, const uint8_t *input, size_t input_len, bool *out);
+int writ_resharp_regex_capture_index_for_name(writ_resharp_regex *self, uint8_t *name, size_t name_len, size_t *out);
+
+void resharp_bytes_free(resharp_bytes_t *bytes) {
+    free(bytes->data);
+    bytes->data = NULL;
+    bytes->length = 0;
+}
+
+void resharp_free(void *data) {
+    free(data);
+}
+
+int32_t resharp_error_message(size_t buf_capacity, resharp_bytes_t *buf) {
+    uint8_t *s0 = 0;
+    size_t s1 = 0;
+    size_t ret = 0;
+    uint8_t *l0 = NULL;
+    size_t l0_capacity = 0;
+    int32_t outcome = 0;
+    for (;;) {
+        l0_capacity = (size_t)buf_capacity;
+        l0 = malloc(l0_capacity ? l0_capacity * sizeof(uint8_t) : 1);
+        if (!l0) {
+            outcome = RESHARP_OUT_OF_MEMORY;
+            goto finish;
+        }
+        s1 = (size_t)l0_capacity;
+        s0 = (uint8_t *)l0;
+        ret = writ_resharp_last_error(s0, s1);
+        if ((size_t)(((long long)ret)) > l0_capacity) {
+            buf_capacity = (size_t)(((long long)ret));
+            free(l0);
+            l0 = NULL;
+            continue;
+        }
+        break;
+    }
+    {
+        outcome = resharp_error_message_ok;
+    }
+    if (outcome == resharp_error_message_ok) {
+        if ((((((long long)ret)) < (((long long)s1)) ? (((long long)ret)) : (((long long)s1)))) < 0 || (size_t)(((((long long)ret)) < (((long long)s1)) ? (((long long)ret)) : (((long long)s1)))) > l0_capacity) {
+            outcome = RESHARP_CONTRACT_VIOLATION;
+            goto finish;
+        }
+        buf->data = (uint8_t *)l0;
+        buf->length = (size_t)(((((long long)ret)) < (((long long)s1)) ? (((long long)ret)) : (((long long)s1))));
+        l0 = NULL;
+    }
+finish:
+    free(l0);
+    return outcome;
+}
+
+int32_t resharp_regex_options_free(writ_resharp_regex_options *value) {
+    writ_resharp_regex_options *s0 = 0;
+    int32_t outcome = 0;
+    s0 = value;
+    writ_resharp_regex_options_free(s0);
+    {
+        outcome = resharp_regex_options_free_ok;
+    }
+    if (outcome == resharp_regex_options_free_ok) {
+    }
+    return outcome;
+}
+
+int32_t resharp_regex_free(writ_resharp_regex *value) {
+    writ_resharp_regex *s0 = 0;
+    int32_t outcome = 0;
+    s0 = value;
+    writ_resharp_regex_free(s0);
+    {
+        outcome = resharp_regex_free_ok;
+    }
+    if (outcome == resharp_regex_free_ok) {
+    }
+    return outcome;
+}
+
+int32_t resharp_regex_options_default(writ_resharp_regex_options **out, resharp_bytes_t *failed_detail, resharp_bytes_t *panicked_detail) {
+    writ_resharp_regex_options * *s0 = 0;
+    int ret = 0;
+    writ_resharp_regex_options *l0 = 0;
+    int32_t outcome = 0;
+    s0 = (writ_resharp_regex_options * *)&l0;
+    ret = writ_resharp_regex_options_default(s0);
+    if (((long long)ret) == 0) {
+        outcome = resharp_regex_options_default_ok;
+    }
+    else if (((long long)ret) == 2) {
+        outcome = resharp_regex_options_default_failed;
+    }
+    else {
+        outcome = resharp_regex_options_default_panicked;
+    }
+    if (outcome == resharp_regex_options_default_ok) {
+        *out = l0;
+    }
+    if (outcome == resharp_regex_options_default_failed) {
+        failed_detail->data = NULL;
+        failed_detail->length = 0;
+        (void)resharp_error_message(64, failed_detail);
+    }
+    if (outcome == resharp_regex_options_default_panicked) {
+        panicked_detail->data = NULL;
+        panicked_detail->length = 0;
+        (void)resharp_error_message(64, panicked_detail);
+    }
+    return outcome;
+}
+
+int32_t resharp_regex_options_unicode(writ_resharp_regex_options *self, int mode, writ_resharp_regex_options **out, resharp_bytes_t *failed_detail, resharp_bytes_t *panicked_detail) {
+    writ_resharp_regex_options *s0 = 0;
+    int s1 = 0;
+    writ_resharp_regex_options * *s2 = 0;
+    int ret = 0;
+    writ_resharp_regex_options *l0 = 0;
+    int32_t outcome = 0;
+    s0 = self;
+    s1 = mode;
+    s2 = (writ_resharp_regex_options * *)&l0;
+    ret = writ_resharp_regex_options_unicode(s0, s1, s2);
+    if (((long long)ret) == 0) {
+        outcome = resharp_regex_options_unicode_ok;
+    }
+    else if (((long long)ret) == 2) {
+        outcome = resharp_regex_options_unicode_failed;
+    }
+    else {
+        outcome = resharp_regex_options_unicode_panicked;
+    }
+    if (outcome == resharp_regex_options_unicode_ok) {
+        *out = l0;
+    }
+    if (outcome == resharp_regex_options_unicode_failed) {
+        failed_detail->data = NULL;
+        failed_detail->length = 0;
+        (void)resharp_error_message(64, failed_detail);
+    }
+    if (outcome == resharp_regex_options_unicode_panicked) {
+        panicked_detail->data = NULL;
+        panicked_detail->length = 0;
+        (void)resharp_error_message(64, panicked_detail);
+    }
+    return outcome;
+}
+
+int32_t resharp_regex_options_case_insensitive(writ_resharp_regex_options *self, bool yes, writ_resharp_regex_options **out, resharp_bytes_t *failed_detail, resharp_bytes_t *panicked_detail) {
+    writ_resharp_regex_options *s0 = 0;
+    bool s1 = 0;
+    writ_resharp_regex_options * *s2 = 0;
+    int ret = 0;
+    writ_resharp_regex_options *l0 = 0;
+    int32_t outcome = 0;
+    s0 = self;
+    s1 = yes;
+    s2 = (writ_resharp_regex_options * *)&l0;
+    ret = writ_resharp_regex_options_case_insensitive(s0, s1, s2);
+    if (((long long)ret) == 0) {
+        outcome = resharp_regex_options_case_insensitive_ok;
+    }
+    else if (((long long)ret) == 2) {
+        outcome = resharp_regex_options_case_insensitive_failed;
+    }
+    else {
+        outcome = resharp_regex_options_case_insensitive_panicked;
+    }
+    if (outcome == resharp_regex_options_case_insensitive_ok) {
+        *out = l0;
+    }
+    if (outcome == resharp_regex_options_case_insensitive_failed) {
+        failed_detail->data = NULL;
+        failed_detail->length = 0;
+        (void)resharp_error_message(64, failed_detail);
+    }
+    if (outcome == resharp_regex_options_case_insensitive_panicked) {
+        panicked_detail->data = NULL;
+        panicked_detail->length = 0;
+        (void)resharp_error_message(64, panicked_detail);
+    }
+    return outcome;
+}
+
+int32_t resharp_regex_options_dot_matches_new_line(writ_resharp_regex_options *self, bool yes, writ_resharp_regex_options **out, resharp_bytes_t *failed_detail, resharp_bytes_t *panicked_detail) {
+    writ_resharp_regex_options *s0 = 0;
+    bool s1 = 0;
+    writ_resharp_regex_options * *s2 = 0;
+    int ret = 0;
+    writ_resharp_regex_options *l0 = 0;
+    int32_t outcome = 0;
+    s0 = self;
+    s1 = yes;
+    s2 = (writ_resharp_regex_options * *)&l0;
+    ret = writ_resharp_regex_options_dot_matches_new_line(s0, s1, s2);
+    if (((long long)ret) == 0) {
+        outcome = resharp_regex_options_dot_matches_new_line_ok;
+    }
+    else if (((long long)ret) == 2) {
+        outcome = resharp_regex_options_dot_matches_new_line_failed;
+    }
+    else {
+        outcome = resharp_regex_options_dot_matches_new_line_panicked;
+    }
+    if (outcome == resharp_regex_options_dot_matches_new_line_ok) {
+        *out = l0;
+    }
+    if (outcome == resharp_regex_options_dot_matches_new_line_failed) {
+        failed_detail->data = NULL;
+        failed_detail->length = 0;
+        (void)resharp_error_message(64, failed_detail);
+    }
+    if (outcome == resharp_regex_options_dot_matches_new_line_panicked) {
+        panicked_detail->data = NULL;
+        panicked_detail->length = 0;
+        (void)resharp_error_message(64, panicked_detail);
+    }
+    return outcome;
+}
+
+int32_t resharp_regex_options_multiline(writ_resharp_regex_options *self, bool yes, writ_resharp_regex_options **out, resharp_bytes_t *failed_detail, resharp_bytes_t *panicked_detail) {
+    writ_resharp_regex_options *s0 = 0;
+    bool s1 = 0;
+    writ_resharp_regex_options * *s2 = 0;
+    int ret = 0;
+    writ_resharp_regex_options *l0 = 0;
+    int32_t outcome = 0;
+    s0 = self;
+    s1 = yes;
+    s2 = (writ_resharp_regex_options * *)&l0;
+    ret = writ_resharp_regex_options_multiline(s0, s1, s2);
+    if (((long long)ret) == 0) {
+        outcome = resharp_regex_options_multiline_ok;
+    }
+    else if (((long long)ret) == 2) {
+        outcome = resharp_regex_options_multiline_failed;
+    }
+    else {
+        outcome = resharp_regex_options_multiline_panicked;
+    }
+    if (outcome == resharp_regex_options_multiline_ok) {
+        *out = l0;
+    }
+    if (outcome == resharp_regex_options_multiline_failed) {
+        failed_detail->data = NULL;
+        failed_detail->length = 0;
+        (void)resharp_error_message(64, failed_detail);
+    }
+    if (outcome == resharp_regex_options_multiline_panicked) {
+        panicked_detail->data = NULL;
+        panicked_detail->length = 0;
+        (void)resharp_error_message(64, panicked_detail);
+    }
+    return outcome;
+}
+
+int32_t resharp_regex_options_ignore_whitespace(writ_resharp_regex_options *self, bool yes, writ_resharp_regex_options **out, resharp_bytes_t *failed_detail, resharp_bytes_t *panicked_detail) {
+    writ_resharp_regex_options *s0 = 0;
+    bool s1 = 0;
+    writ_resharp_regex_options * *s2 = 0;
+    int ret = 0;
+    writ_resharp_regex_options *l0 = 0;
+    int32_t outcome = 0;
+    s0 = self;
+    s1 = yes;
+    s2 = (writ_resharp_regex_options * *)&l0;
+    ret = writ_resharp_regex_options_ignore_whitespace(s0, s1, s2);
+    if (((long long)ret) == 0) {
+        outcome = resharp_regex_options_ignore_whitespace_ok;
+    }
+    else if (((long long)ret) == 2) {
+        outcome = resharp_regex_options_ignore_whitespace_failed;
+    }
+    else {
+        outcome = resharp_regex_options_ignore_whitespace_panicked;
+    }
+    if (outcome == resharp_regex_options_ignore_whitespace_ok) {
+        *out = l0;
+    }
+    if (outcome == resharp_regex_options_ignore_whitespace_failed) {
+        failed_detail->data = NULL;
+        failed_detail->length = 0;
+        (void)resharp_error_message(64, failed_detail);
+    }
+    if (outcome == resharp_regex_options_ignore_whitespace_panicked) {
+        panicked_detail->data = NULL;
+        panicked_detail->length = 0;
+        (void)resharp_error_message(64, panicked_detail);
+    }
+    return outcome;
+}
+
+int32_t resharp_regex_options_hardened(writ_resharp_regex_options *self, bool yes, writ_resharp_regex_options **out, resharp_bytes_t *failed_detail, resharp_bytes_t *panicked_detail) {
+    writ_resharp_regex_options *s0 = 0;
+    bool s1 = 0;
+    writ_resharp_regex_options * *s2 = 0;
+    int ret = 0;
+    writ_resharp_regex_options *l0 = 0;
+    int32_t outcome = 0;
+    s0 = self;
+    s1 = yes;
+    s2 = (writ_resharp_regex_options * *)&l0;
+    ret = writ_resharp_regex_options_hardened(s0, s1, s2);
+    if (((long long)ret) == 0) {
+        outcome = resharp_regex_options_hardened_ok;
+    }
+    else if (((long long)ret) == 2) {
+        outcome = resharp_regex_options_hardened_failed;
+    }
+    else {
+        outcome = resharp_regex_options_hardened_panicked;
+    }
+    if (outcome == resharp_regex_options_hardened_ok) {
+        *out = l0;
+    }
+    if (outcome == resharp_regex_options_hardened_failed) {
+        failed_detail->data = NULL;
+        failed_detail->length = 0;
+        (void)resharp_error_message(64, failed_detail);
+    }
+    if (outcome == resharp_regex_options_hardened_panicked) {
+        panicked_detail->data = NULL;
+        panicked_detail->length = 0;
+        (void)resharp_error_message(64, panicked_detail);
+    }
+    return outcome;
+}
+
+int32_t resharp_regex_options_unbounded_size(writ_resharp_regex_options *self, bool yes, writ_resharp_regex_options **out, resharp_bytes_t *failed_detail, resharp_bytes_t *panicked_detail) {
+    writ_resharp_regex_options *s0 = 0;
+    bool s1 = 0;
+    writ_resharp_regex_options * *s2 = 0;
+    int ret = 0;
+    writ_resharp_regex_options *l0 = 0;
+    int32_t outcome = 0;
+    s0 = self;
+    s1 = yes;
+    s2 = (writ_resharp_regex_options * *)&l0;
+    ret = writ_resharp_regex_options_unbounded_size(s0, s1, s2);
+    if (((long long)ret) == 0) {
+        outcome = resharp_regex_options_unbounded_size_ok;
+    }
+    else if (((long long)ret) == 2) {
+        outcome = resharp_regex_options_unbounded_size_failed;
+    }
+    else {
+        outcome = resharp_regex_options_unbounded_size_panicked;
+    }
+    if (outcome == resharp_regex_options_unbounded_size_ok) {
+        *out = l0;
+    }
+    if (outcome == resharp_regex_options_unbounded_size_failed) {
+        failed_detail->data = NULL;
+        failed_detail->length = 0;
+        (void)resharp_error_message(64, failed_detail);
+    }
+    if (outcome == resharp_regex_options_unbounded_size_panicked) {
+        panicked_detail->data = NULL;
+        panicked_detail->length = 0;
+        (void)resharp_error_message(64, panicked_detail);
+    }
+    return outcome;
+}
+
+int32_t resharp_regex_options_implicit_captures(writ_resharp_regex_options *self, bool yes, writ_resharp_regex_options **out, resharp_bytes_t *failed_detail, resharp_bytes_t *panicked_detail) {
+    writ_resharp_regex_options *s0 = 0;
+    bool s1 = 0;
+    writ_resharp_regex_options * *s2 = 0;
+    int ret = 0;
+    writ_resharp_regex_options *l0 = 0;
+    int32_t outcome = 0;
+    s0 = self;
+    s1 = yes;
+    s2 = (writ_resharp_regex_options * *)&l0;
+    ret = writ_resharp_regex_options_implicit_captures(s0, s1, s2);
+    if (((long long)ret) == 0) {
+        outcome = resharp_regex_options_implicit_captures_ok;
+    }
+    else if (((long long)ret) == 2) {
+        outcome = resharp_regex_options_implicit_captures_failed;
+    }
+    else {
+        outcome = resharp_regex_options_implicit_captures_panicked;
+    }
+    if (outcome == resharp_regex_options_implicit_captures_ok) {
+        *out = l0;
+    }
+    if (outcome == resharp_regex_options_implicit_captures_failed) {
+        failed_detail->data = NULL;
+        failed_detail->length = 0;
+        (void)resharp_error_message(64, failed_detail);
+    }
+    if (outcome == resharp_regex_options_implicit_captures_panicked) {
+        panicked_detail->data = NULL;
+        panicked_detail->length = 0;
+        (void)resharp_error_message(64, panicked_detail);
+    }
+    return outcome;
+}
+
+int32_t resharp_regex_is_match(writ_resharp_regex *self, const uint8_t *input, size_t input_length, bool *out, resharp_bytes_t *failed_detail, resharp_bytes_t *panicked_detail) {
+    writ_resharp_regex *s0 = 0;
+    const uint8_t *s1 = 0;
+    size_t s2 = 0;
+    bool *s3 = 0;
+    int ret = 0;
+    bool l0 = 0;
+    int32_t outcome = 0;
+    s0 = self;
+    if (!input && input_length) {
+        outcome = RESHARP_ARGUMENT_ERROR;
+        goto finish;
+    }
+    s1 = input_length ? (const uint8_t *)input : NULL;
+    s2 = (size_t)input_length;
+    s3 = (bool *)&l0;
+    ret = writ_resharp_regex_is_match(s0, s1, s2, s3);
+    if (((long long)ret) == 0) {
+        outcome = resharp_regex_is_match_ok;
+    }
+    else if (((long long)ret) == 2) {
+        outcome = resharp_regex_is_match_failed;
+    }
+    else {
+        outcome = resharp_regex_is_match_panicked;
+    }
+    if (outcome == resharp_regex_is_match_ok) {
+        *out = l0;
+    }
+    if (outcome == resharp_regex_is_match_failed) {
+        failed_detail->data = NULL;
+        failed_detail->length = 0;
+        (void)resharp_error_message(64, failed_detail);
+    }
+    if (outcome == resharp_regex_is_match_panicked) {
+        panicked_detail->data = NULL;
+        panicked_detail->length = 0;
+        (void)resharp_error_message(64, panicked_detail);
+    }
+finish:
+    return outcome;
+}
+
+int32_t resharp_regex_new(const char *pattern, size_t pattern_length, writ_resharp_regex **out, resharp_bytes_t *failed_detail, resharp_bytes_t *panicked_detail) {
+    uint8_t *s0 = 0;
+    size_t s1 = 0;
+    writ_resharp_regex * *s2 = 0;
+    int ret = 0;
+    writ_resharp_regex *l0 = 0;
+    int32_t outcome = 0;
+    if (!pattern && pattern_length) {
+        outcome = RESHARP_ARGUMENT_ERROR;
+        goto finish;
+    }
+    s0 = pattern_length ? (uint8_t *)pattern : NULL;
+    s1 = (size_t)pattern_length;
+    s2 = (writ_resharp_regex * *)&l0;
+    ret = writ_resharp_regex_new(s0, s1, s2);
+    if (((long long)ret) == 0) {
+        outcome = resharp_regex_new_ok;
+    }
+    else if (((long long)ret) == 2) {
+        outcome = resharp_regex_new_failed;
+    }
+    else {
+        outcome = resharp_regex_new_panicked;
+    }
+    if (outcome == resharp_regex_new_ok) {
+        *out = l0;
+    }
+    if (outcome == resharp_regex_new_failed) {
+        failed_detail->data = NULL;
+        failed_detail->length = 0;
+        (void)resharp_error_message(64, failed_detail);
+    }
+    if (outcome == resharp_regex_new_panicked) {
+        panicked_detail->data = NULL;
+        panicked_detail->length = 0;
+        (void)resharp_error_message(64, panicked_detail);
+    }
+finish:
+    return outcome;
+}
+
+int32_t resharp_regex_with_options(const char *pattern, size_t pattern_length, writ_resharp_regex_options *opts, writ_resharp_regex **out, resharp_bytes_t *failed_detail, resharp_bytes_t *panicked_detail) {
+    uint8_t *s0 = 0;
+    size_t s1 = 0;
+    writ_resharp_regex_options *s2 = 0;
+    writ_resharp_regex * *s3 = 0;
+    int ret = 0;
+    writ_resharp_regex *l0 = 0;
+    int32_t outcome = 0;
+    if (!pattern && pattern_length) {
+        outcome = RESHARP_ARGUMENT_ERROR;
+        goto finish;
+    }
+    s0 = pattern_length ? (uint8_t *)pattern : NULL;
+    s1 = (size_t)pattern_length;
+    s2 = opts;
+    s3 = (writ_resharp_regex * *)&l0;
+    ret = writ_resharp_regex_with_options(s0, s1, s2, s3);
+    if (((long long)ret) == 0) {
+        outcome = resharp_regex_with_options_ok;
+    }
+    else if (((long long)ret) == 2) {
+        outcome = resharp_regex_with_options_failed;
+    }
+    else {
+        outcome = resharp_regex_with_options_panicked;
+    }
+    if (outcome == resharp_regex_with_options_ok) {
+        *out = l0;
+    }
+    if (outcome == resharp_regex_with_options_failed) {
+        failed_detail->data = NULL;
+        failed_detail->length = 0;
+        (void)resharp_error_message(64, failed_detail);
+    }
+    if (outcome == resharp_regex_with_options_panicked) {
+        panicked_detail->data = NULL;
+        panicked_detail->length = 0;
+        (void)resharp_error_message(64, panicked_detail);
+    }
+finish:
+    return outcome;
+}
+
+int32_t resharp_regex_find_all(writ_resharp_regex *self, const uint8_t *input, size_t input_length, size_t out_capacity, Match **out, size_t *out_length, resharp_bytes_t *failed_detail, resharp_bytes_t *panicked_detail) {
+    writ_resharp_regex *s0 = 0;
+    const uint8_t *s1 = 0;
+    size_t s2 = 0;
+    Match *s3 = 0;
+    size_t s4 = 0;
+    size_t *s5 = 0;
+    int ret = 0;
+    Match *l0 = NULL;
+    size_t l0_capacity = 0;
+    size_t l1 = 0;
+    int32_t outcome = 0;
+    s0 = self;
+    if (!input && input_length) {
+        outcome = RESHARP_ARGUMENT_ERROR;
+        goto finish;
+    }
+    s1 = input_length ? (const uint8_t *)input : NULL;
+    s2 = (size_t)input_length;
+    for (;;) {
+        l0_capacity = (size_t)out_capacity;
+        l0 = malloc(l0_capacity ? l0_capacity * sizeof(Match) : 1);
+        if (!l0) {
+            outcome = RESHARP_OUT_OF_MEMORY;
+            goto finish;
+        }
+        s4 = (size_t)l0_capacity;
+        s3 = (Match *)l0;
+        s5 = (size_t *)&l1;
+        ret = writ_resharp_regex_find_all(s0, s1, s2, s3, s4, s5);
+        if ((size_t)(((long long)l1)) > l0_capacity) {
+            out_capacity = (size_t)(((long long)l1));
+            free(l0);
+            l0 = NULL;
+            continue;
+        }
+        break;
+    }
+    if (((long long)ret) == 0) {
+        outcome = resharp_regex_find_all_ok;
+    }
+    else if (((long long)ret) == 2) {
+        outcome = resharp_regex_find_all_failed;
+    }
+    else {
+        outcome = resharp_regex_find_all_panicked;
+    }
+    if (outcome == resharp_regex_find_all_ok) {
+        if ((((((long long)l1)) < (((long long)s4)) ? (((long long)l1)) : (((long long)s4)))) < 0 || (size_t)(((((long long)l1)) < (((long long)s4)) ? (((long long)l1)) : (((long long)s4)))) > l0_capacity) {
+            outcome = RESHARP_CONTRACT_VIOLATION;
+            goto finish;
+        }
+        *out = l0;
+        *out_length = (size_t)(((((long long)l1)) < (((long long)s4)) ? (((long long)l1)) : (((long long)s4))));
+        l0 = NULL;
+    }
+    if (outcome == resharp_regex_find_all_failed) {
+        failed_detail->data = NULL;
+        failed_detail->length = 0;
+        (void)resharp_error_message(64, failed_detail);
+    }
+    if (outcome == resharp_regex_find_all_panicked) {
+        panicked_detail->data = NULL;
+        panicked_detail->length = 0;
+        (void)resharp_error_message(64, panicked_detail);
+    }
+finish:
+    free(l0);
+    return outcome;
+}
+
+int32_t resharp_regex_find_anchored(writ_resharp_regex *self, const uint8_t *input, size_t input_length, Match *out, resharp_bytes_t *failed_detail, resharp_bytes_t *panicked_detail) {
+    writ_resharp_regex *s0 = 0;
+    const uint8_t *s1 = 0;
+    size_t s2 = 0;
+    Match *s3 = 0;
+    int ret = 0;
+    Match l0 = {0};
+    int32_t outcome = 0;
+    s0 = self;
+    if (!input && input_length) {
+        outcome = RESHARP_ARGUMENT_ERROR;
+        goto finish;
+    }
+    s1 = input_length ? (const uint8_t *)input : NULL;
+    s2 = (size_t)input_length;
+    s3 = (Match *)&l0;
+    ret = writ_resharp_regex_find_anchored(s0, s1, s2, s3);
+    if (((long long)ret) == 0) {
+        outcome = resharp_regex_find_anchored_ok;
+    }
+    else if (((long long)ret) == 1) {
+        outcome = resharp_regex_find_anchored_none;
+    }
+    else if (((long long)ret) == 2) {
+        outcome = resharp_regex_find_anchored_failed;
+    }
+    else {
+        outcome = resharp_regex_find_anchored_panicked;
+    }
+    if (outcome == resharp_regex_find_anchored_ok) {
+        *out = l0;
+    }
+    if (outcome == resharp_regex_find_anchored_failed) {
+        failed_detail->data = NULL;
+        failed_detail->length = 0;
+        (void)resharp_error_message(64, failed_detail);
+    }
+    if (outcome == resharp_regex_find_anchored_panicked) {
+        panicked_detail->data = NULL;
+        panicked_detail->length = 0;
+        (void)resharp_error_message(64, panicked_detail);
+    }
+finish:
+    return outcome;
+}
+
+int32_t resharp_regex_is_full_match(writ_resharp_regex *self, const uint8_t *input, size_t input_length, bool *out, resharp_bytes_t *failed_detail, resharp_bytes_t *panicked_detail) {
+    writ_resharp_regex *s0 = 0;
+    const uint8_t *s1 = 0;
+    size_t s2 = 0;
+    bool *s3 = 0;
+    int ret = 0;
+    bool l0 = 0;
+    int32_t outcome = 0;
+    s0 = self;
+    if (!input && input_length) {
+        outcome = RESHARP_ARGUMENT_ERROR;
+        goto finish;
+    }
+    s1 = input_length ? (const uint8_t *)input : NULL;
+    s2 = (size_t)input_length;
+    s3 = (bool *)&l0;
+    ret = writ_resharp_regex_is_full_match(s0, s1, s2, s3);
+    if (((long long)ret) == 0) {
+        outcome = resharp_regex_is_full_match_ok;
+    }
+    else if (((long long)ret) == 2) {
+        outcome = resharp_regex_is_full_match_failed;
+    }
+    else {
+        outcome = resharp_regex_is_full_match_panicked;
+    }
+    if (outcome == resharp_regex_is_full_match_ok) {
+        *out = l0;
+    }
+    if (outcome == resharp_regex_is_full_match_failed) {
+        failed_detail->data = NULL;
+        failed_detail->length = 0;
+        (void)resharp_error_message(64, failed_detail);
+    }
+    if (outcome == resharp_regex_is_full_match_panicked) {
+        panicked_detail->data = NULL;
+        panicked_detail->length = 0;
+        (void)resharp_error_message(64, panicked_detail);
+    }
+finish:
+    return outcome;
+}
+
+int32_t resharp_regex_capture_index_for_name(writ_resharp_regex *self, const char *name, size_t name_length, size_t *out, resharp_bytes_t *failed_detail, resharp_bytes_t *panicked_detail) {
+    writ_resharp_regex *s0 = 0;
+    uint8_t *s1 = 0;
+    size_t s2 = 0;
+    size_t *s3 = 0;
+    int ret = 0;
+    size_t l0 = 0;
+    int32_t outcome = 0;
+    s0 = self;
+    if (!name && name_length) {
+        outcome = RESHARP_ARGUMENT_ERROR;
+        goto finish;
+    }
+    s1 = name_length ? (uint8_t *)name : NULL;
+    s2 = (size_t)name_length;
+    s3 = (size_t *)&l0;
+    ret = writ_resharp_regex_capture_index_for_name(s0, s1, s2, s3);
+    if (((long long)ret) == 0) {
+        outcome = resharp_regex_capture_index_for_name_ok;
+    }
+    else if (((long long)ret) == 1) {
+        outcome = resharp_regex_capture_index_for_name_none;
+    }
+    else if (((long long)ret) == 2) {
+        outcome = resharp_regex_capture_index_for_name_failed;
+    }
+    else {
+        outcome = resharp_regex_capture_index_for_name_panicked;
+    }
+    if (outcome == resharp_regex_capture_index_for_name_ok) {
+        *out = l0;
+    }
+    if (outcome == resharp_regex_capture_index_for_name_failed) {
+        failed_detail->data = NULL;
+        failed_detail->length = 0;
+        (void)resharp_error_message(64, failed_detail);
+    }
+    if (outcome == resharp_regex_capture_index_for_name_panicked) {
+        panicked_detail->data = NULL;
+        panicked_detail->length = 0;
+        (void)resharp_error_message(64, panicked_detail);
+    }
+finish:
+    return outcome;
+}
+#include <stdint.h>
+#include <stddef.h>
+
+#include "resharp_writ.h"
+
+void *n00b_ffi_borrow(void *object, size_t *length, uint32_t access);
+void n00b_ffi_release(void *object);
+
+int32_t resharp_n00b_regex_options_free(uint64_t value) {
+    int32_t writ_n00b_value = resharp_regex_options_free((writ_resharp_regex_options *)(uintptr_t)value);
+    return writ_n00b_value;
+}
+
+int32_t resharp_n00b_regex_free(uint64_t value) {
+    int32_t writ_n00b_value = resharp_regex_free((writ_resharp_regex *)(uintptr_t)value);
+    return writ_n00b_value;
+}
+
+int32_t resharp_n00b_regex_options_default(void *out, void *failed_detail, void *panicked_detail) {
+    int32_t writ_n00b_value = resharp_regex_options_default((writ_resharp_regex_options **)out, (resharp_bytes_t *)failed_detail, (resharp_bytes_t *)panicked_detail);
+    return writ_n00b_value;
+}
+
+int32_t resharp_n00b_regex_options_unicode(uint64_t self, int mode, void *out, void *failed_detail, void *panicked_detail) {
+    int32_t writ_n00b_value = resharp_regex_options_unicode((writ_resharp_regex_options *)(uintptr_t)self, mode, (writ_resharp_regex_options **)out, (resharp_bytes_t *)failed_detail, (resharp_bytes_t *)panicked_detail);
+    return writ_n00b_value;
+}
+
+int32_t resharp_n00b_regex_options_case_insensitive(uint64_t self, bool yes, void *out, void *failed_detail, void *panicked_detail) {
+    int32_t writ_n00b_value = resharp_regex_options_case_insensitive((writ_resharp_regex_options *)(uintptr_t)self, yes, (writ_resharp_regex_options **)out, (resharp_bytes_t *)failed_detail, (resharp_bytes_t *)panicked_detail);
+    return writ_n00b_value;
+}
+
+int32_t resharp_n00b_regex_options_dot_matches_new_line(uint64_t self, bool yes, void *out, void *failed_detail, void *panicked_detail) {
+    int32_t writ_n00b_value = resharp_regex_options_dot_matches_new_line((writ_resharp_regex_options *)(uintptr_t)self, yes, (writ_resharp_regex_options **)out, (resharp_bytes_t *)failed_detail, (resharp_bytes_t *)panicked_detail);
+    return writ_n00b_value;
+}
+
+int32_t resharp_n00b_regex_options_multiline(uint64_t self, bool yes, void *out, void *failed_detail, void *panicked_detail) {
+    int32_t writ_n00b_value = resharp_regex_options_multiline((writ_resharp_regex_options *)(uintptr_t)self, yes, (writ_resharp_regex_options **)out, (resharp_bytes_t *)failed_detail, (resharp_bytes_t *)panicked_detail);
+    return writ_n00b_value;
+}
+
+int32_t resharp_n00b_regex_options_ignore_whitespace(uint64_t self, bool yes, void *out, void *failed_detail, void *panicked_detail) {
+    int32_t writ_n00b_value = resharp_regex_options_ignore_whitespace((writ_resharp_regex_options *)(uintptr_t)self, yes, (writ_resharp_regex_options **)out, (resharp_bytes_t *)failed_detail, (resharp_bytes_t *)panicked_detail);
+    return writ_n00b_value;
+}
+
+int32_t resharp_n00b_regex_options_hardened(uint64_t self, bool yes, void *out, void *failed_detail, void *panicked_detail) {
+    int32_t writ_n00b_value = resharp_regex_options_hardened((writ_resharp_regex_options *)(uintptr_t)self, yes, (writ_resharp_regex_options **)out, (resharp_bytes_t *)failed_detail, (resharp_bytes_t *)panicked_detail);
+    return writ_n00b_value;
+}
+
+int32_t resharp_n00b_regex_options_unbounded_size(uint64_t self, bool yes, void *out, void *failed_detail, void *panicked_detail) {
+    int32_t writ_n00b_value = resharp_regex_options_unbounded_size((writ_resharp_regex_options *)(uintptr_t)self, yes, (writ_resharp_regex_options **)out, (resharp_bytes_t *)failed_detail, (resharp_bytes_t *)panicked_detail);
+    return writ_n00b_value;
+}
+
+int32_t resharp_n00b_regex_options_implicit_captures(uint64_t self, bool yes, void *out, void *failed_detail, void *panicked_detail) {
+    int32_t writ_n00b_value = resharp_regex_options_implicit_captures((writ_resharp_regex_options *)(uintptr_t)self, yes, (writ_resharp_regex_options **)out, (resharp_bytes_t *)failed_detail, (resharp_bytes_t *)panicked_detail);
+    return writ_n00b_value;
+}
+
+int32_t resharp_n00b_regex_is_match(uint64_t self, const void *input, void *out, void *failed_detail, void *panicked_detail) {
+    size_t input_length = 0;
+    const void *input_data = n00b_ffi_borrow((void *)input, &input_length, 0);
+    int32_t writ_n00b_value = resharp_regex_is_match((writ_resharp_regex *)(uintptr_t)self, (const uint8_t *)input_data, input_length, (bool *)out, (resharp_bytes_t *)failed_detail, (resharp_bytes_t *)panicked_detail);
+    n00b_ffi_release((void *)input);
+    return writ_n00b_value;
+}
+
+int32_t resharp_n00b_regex_new(const void *pattern, void *out, void *failed_detail, void *panicked_detail) {
+    size_t pattern_length = 0;
+    const void *pattern_data = n00b_ffi_borrow((void *)pattern, &pattern_length, 0);
+    int32_t writ_n00b_value = resharp_regex_new((const char *)pattern_data, pattern_length, (writ_resharp_regex **)out, (resharp_bytes_t *)failed_detail, (resharp_bytes_t *)panicked_detail);
+    n00b_ffi_release((void *)pattern);
+    return writ_n00b_value;
+}
+
+int32_t resharp_n00b_regex_with_options(const void *pattern, uint64_t opts, void *out, void *failed_detail, void *panicked_detail) {
+    size_t pattern_length = 0;
+    const void *pattern_data = n00b_ffi_borrow((void *)pattern, &pattern_length, 0);
+    int32_t writ_n00b_value = resharp_regex_with_options((const char *)pattern_data, pattern_length, (writ_resharp_regex_options *)(uintptr_t)opts, (writ_resharp_regex **)out, (resharp_bytes_t *)failed_detail, (resharp_bytes_t *)panicked_detail);
+    n00b_ffi_release((void *)pattern);
+    return writ_n00b_value;
+}
+
+int32_t resharp_n00b_regex_find_all(uint64_t self, const void *input, size_t out_capacity, void *out, void *out_length, void *failed_detail, void *panicked_detail) {
+    size_t input_length = 0;
+    const void *input_data = n00b_ffi_borrow((void *)input, &input_length, 0);
+    int32_t writ_n00b_value = resharp_regex_find_all((writ_resharp_regex *)(uintptr_t)self, (const uint8_t *)input_data, input_length, out_capacity, (Match **)out, (size_t *)out_length, (resharp_bytes_t *)failed_detail, (resharp_bytes_t *)panicked_detail);
+    n00b_ffi_release((void *)input);
+    return writ_n00b_value;
+}
+
+int32_t resharp_n00b_regex_find_anchored(uint64_t self, const void *input, void *out, void *failed_detail, void *panicked_detail) {
+    size_t input_length = 0;
+    const void *input_data = n00b_ffi_borrow((void *)input, &input_length, 0);
+    int32_t writ_n00b_value = resharp_regex_find_anchored((writ_resharp_regex *)(uintptr_t)self, (const uint8_t *)input_data, input_length, (Match *)out, (resharp_bytes_t *)failed_detail, (resharp_bytes_t *)panicked_detail);
+    n00b_ffi_release((void *)input);
+    return writ_n00b_value;
+}
+
+int32_t resharp_n00b_regex_is_full_match(uint64_t self, const void *input, void *out, void *failed_detail, void *panicked_detail) {
+    size_t input_length = 0;
+    const void *input_data = n00b_ffi_borrow((void *)input, &input_length, 0);
+    int32_t writ_n00b_value = resharp_regex_is_full_match((writ_resharp_regex *)(uintptr_t)self, (const uint8_t *)input_data, input_length, (bool *)out, (resharp_bytes_t *)failed_detail, (resharp_bytes_t *)panicked_detail);
+    n00b_ffi_release((void *)input);
+    return writ_n00b_value;
+}
+
+int32_t resharp_n00b_regex_capture_index_for_name(uint64_t self, const void *name, void *out, void *failed_detail, void *panicked_detail) {
+    size_t name_length = 0;
+    const void *name_data = n00b_ffi_borrow((void *)name, &name_length, 0);
+    int32_t writ_n00b_value = resharp_regex_capture_index_for_name((writ_resharp_regex *)(uintptr_t)self, (const char *)name_data, name_length, (size_t *)out, (resharp_bytes_t *)failed_detail, (resharp_bytes_t *)panicked_detail);
+    n00b_ffi_release((void *)name);
+    return writ_n00b_value;
+}
+
+type Error {
+    code: i64
+    text: string?
+    fn: string
+}
+
+type Regex_Options {
+    raw: uint
+}
+
+type Regex {
+    raw: uint
+}
+
+type Match layout(c) {
+    start: u64
+    end: u64
+}
+
+enum Status {
+    STATUS_OK = 0,
+    STATUS_NONE = 1,
+    STATUS_ERROR = 2,
+    STATUS_PANIC = 3
+}
+
+enum Unicode_Mode {
+    UNICODE_MODE_ASCII = 0,
+    UNICODE_MODE_DEFAULT = 1,
+    UNICODE_MODE_FULL = 2,
+    UNICODE_MODE_JAVASCRIPT = 3
+}
+
+enum Find_All {
+    FIND_ALL_EMPTY_LANG = 0,
+    FIND_ALL_ANCHORED = 1,
+    FIND_ALL_END_ANCHORED = 2,
+    FIND_ALL_HARDENED = 3,
+    FIND_ALL_FWD_PREFIX = 4,
+    FIND_ALL_FWD_LB_PREFIX = 5,
+    FIND_ALL_BOUNDED = 6,
+    FIND_ALL_DFA = 7,
+    FIND_ALL_CLASS_PLUS = 8
+}
+
+const STATUS_OK: Status = 0
+const STATUS_NONE: Status = 1
+const STATUS_ERROR: Status = 2
+const STATUS_PANIC: Status = 3
+const UNICODE_MODE_ASCII: Unicode_Mode = 0
+const UNICODE_MODE_DEFAULT: Unicode_Mode = 1
+const UNICODE_MODE_FULL: Unicode_Mode = 2
+const UNICODE_MODE_JAVASCRIPT: Unicode_Mode = 3
+const FIND_ALL_EMPTY_LANG: Find_All = 0
+const FIND_ALL_ANCHORED: Find_All = 1
+const FIND_ALL_END_ANCHORED: Find_All = 2
+const FIND_ALL_HARDENED: Find_All = 3
+const FIND_ALL_FWD_PREFIX: Find_All = 4
+const FIND_ALL_FWD_LB_PREFIX: Find_All = 5
+const FIND_ALL_BOUNDED: Find_All = 6
+const FIND_ALL_DFA: Find_All = 7
+const FIND_ALL_CLASS_PLUS: Find_All = 8
+
+extern<"resharp_n00b_regex_options_free"> __regex_options_free(value: uint) -> i32
+extern<"resharp_n00b_regex_free"> __regex_free(value: uint) -> i32
+extern<"resharp_n00b_regex_options_default"> __regex_options_default(out: Ref[uint], failed_detail: Ref[Ffi_Bytes], panicked_detail: Ref[Ffi_Bytes]) -> i32
+extern<"resharp_n00b_regex_options_unicode"> __regex_options_unicode(self: uint, mode: Unicode_Mode, out: Ref[uint], failed_detail: Ref[Ffi_Bytes], panicked_detail: Ref[Ffi_Bytes]) -> i32
+extern<"resharp_n00b_regex_options_case_insensitive"> __regex_options_case_insensitive(self: uint, yes: bool, out: Ref[uint], failed_detail: Ref[Ffi_Bytes], panicked_detail: Ref[Ffi_Bytes]) -> i32
+extern<"resharp_n00b_regex_options_dot_matches_new_line"> __regex_options_dot_matches_new_line(self: uint, yes: bool, out: Ref[uint], failed_detail: Ref[Ffi_Bytes], panicked_detail: Ref[Ffi_Bytes]) -> i32
+extern<"resharp_n00b_regex_options_multiline"> __regex_options_multiline(self: uint, yes: bool, out: Ref[uint], failed_detail: Ref[Ffi_Bytes], panicked_detail: Ref[Ffi_Bytes]) -> i32
+extern<"resharp_n00b_regex_options_ignore_whitespace"> __regex_options_ignore_whitespace(self: uint, yes: bool, out: Ref[uint], failed_detail: Ref[Ffi_Bytes], panicked_detail: Ref[Ffi_Bytes]) -> i32
+extern<"resharp_n00b_regex_options_hardened"> __regex_options_hardened(self: uint, yes: bool, out: Ref[uint], failed_detail: Ref[Ffi_Bytes], panicked_detail: Ref[Ffi_Bytes]) -> i32
+extern<"resharp_n00b_regex_options_unbounded_size"> __regex_options_unbounded_size(self: uint, yes: bool, out: Ref[uint], failed_detail: Ref[Ffi_Bytes], panicked_detail: Ref[Ffi_Bytes]) -> i32
+extern<"resharp_n00b_regex_options_implicit_captures"> __regex_options_implicit_captures(self: uint, yes: bool, out: Ref[uint], failed_detail: Ref[Ffi_Bytes], panicked_detail: Ref[Ffi_Bytes]) -> i32
+extern<"resharp_n00b_regex_is_match"> __regex_is_match(self: uint, input: Ref[string], out: Ref[bool], failed_detail: Ref[Ffi_Bytes], panicked_detail: Ref[Ffi_Bytes]) -> i32
+extern<"resharp_n00b_regex_new"> __regex_new(pattern: Ref[string], out: Ref[uint], failed_detail: Ref[Ffi_Bytes], panicked_detail: Ref[Ffi_Bytes]) -> i32
+extern<"resharp_n00b_regex_with_options"> __regex_with_options(pattern: Ref[string], opts: uint, out: Ref[uint], failed_detail: Ref[Ffi_Bytes], panicked_detail: Ref[Ffi_Bytes]) -> i32
+extern<"resharp_n00b_regex_find_all"> __regex_find_all(self: uint, input: Ref[Array[u8]], out_capacity: u64, out: Ref[uint], out_length: Ref[uint], failed_detail: Ref[Ffi_Bytes], panicked_detail: Ref[Ffi_Bytes]) -> i32
+extern<"resharp_n00b_regex_find_anchored"> __regex_find_anchored(self: uint, input: Ref[Array[u8]], out: Ref[Match], failed_detail: Ref[Ffi_Bytes], panicked_detail: Ref[Ffi_Bytes]) -> i32
+extern<"resharp_n00b_regex_is_full_match"> __regex_is_full_match(self: uint, input: Ref[Array[u8]], out: Ref[bool], failed_detail: Ref[Ffi_Bytes], panicked_detail: Ref[Ffi_Bytes]) -> i32
+extern<"resharp_n00b_regex_capture_index_for_name"> __regex_capture_index_for_name(self: uint, name: Ref[string], out: Ref[u64], failed_detail: Ref[Ffi_Bytes], panicked_detail: Ref[Ffi_Bytes]) -> i32
+
+func close(modify self: Regex_Options) fail: Error {
+    let outcome = __regex_options_free(self.raw)
+    if outcome < 0 {
+        let error: Error = (code = cast[i64]outcome, text = nil, fn = "regex_options_free")
+        fail error
+    }
+    self.raw = 0
+}
+
+func close(modify self: Regex) fail: Error {
+    let outcome = __regex_free(self.raw)
+    if outcome < 0 {
+        let error: Error = (code = cast[i64]outcome, text = nil, fn = "regex_free")
+        fail error
+    }
+    self.raw = 0
+}
+
+func regex_options_default() -> Regex_Options fail: Error {
+    var out: uint = 0
+    var failed_detail: Ffi_Bytes = (data = 0, length = 0)
+    var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
+    let outcome = __regex_options_default(ref out, ref failed_detail, ref panicked_detail)
+    if outcome < 0 {
+        let error: Error = (code = cast[i64]outcome, text = nil, fn = "regex_options_default")
+        fail error
+    }
+    if outcome == 1 {
+        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_options_default")
+        fail error
+    }
+    if outcome == 2 {
+        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_options_default")
+        fail error
+    }
+    return Regex_Options(raw = out)
+}
+
+func unicode(modify self: Regex_Options, mode: Unicode_Mode) -> Regex_Options fail: Error {
+    var out: uint = 0
+    var failed_detail: Ffi_Bytes = (data = 0, length = 0)
+    var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
+    let outcome = __regex_options_unicode(self.raw, mode, ref out, ref failed_detail, ref panicked_detail)
+    if outcome < 0 {
+        let error: Error = (code = cast[i64]outcome, text = nil, fn = "regex_options_unicode")
+        fail error
+    }
+    if outcome == 1 {
+        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_options_unicode")
+        fail error
+    }
+    if outcome == 2 {
+        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_options_unicode")
+        fail error
+    }
+    self.raw = 0
+    return Regex_Options(raw = out)
+}
+
+func case_insensitive(modify self: Regex_Options, yes: bool) -> Regex_Options fail: Error {
+    var out: uint = 0
+    var failed_detail: Ffi_Bytes = (data = 0, length = 0)
+    var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
+    let outcome = __regex_options_case_insensitive(self.raw, yes, ref out, ref failed_detail, ref panicked_detail)
+    if outcome < 0 {
+        let error: Error = (code = cast[i64]outcome, text = nil, fn = "regex_options_case_insensitive")
+        fail error
+    }
+    if outcome == 1 {
+        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_options_case_insensitive")
+        fail error
+    }
+    if outcome == 2 {
+        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_options_case_insensitive")
+        fail error
+    }
+    self.raw = 0
+    return Regex_Options(raw = out)
+}
+
+func dot_matches_new_line(modify self: Regex_Options, yes: bool) -> Regex_Options fail: Error {
+    var out: uint = 0
+    var failed_detail: Ffi_Bytes = (data = 0, length = 0)
+    var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
+    let outcome = __regex_options_dot_matches_new_line(self.raw, yes, ref out, ref failed_detail, ref panicked_detail)
+    if outcome < 0 {
+        let error: Error = (code = cast[i64]outcome, text = nil, fn = "regex_options_dot_matches_new_line")
+        fail error
+    }
+    if outcome == 1 {
+        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_options_dot_matches_new_line")
+        fail error
+    }
+    if outcome == 2 {
+        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_options_dot_matches_new_line")
+        fail error
+    }
+    self.raw = 0
+    return Regex_Options(raw = out)
+}
+
+func multiline(modify self: Regex_Options, yes: bool) -> Regex_Options fail: Error {
+    var out: uint = 0
+    var failed_detail: Ffi_Bytes = (data = 0, length = 0)
+    var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
+    let outcome = __regex_options_multiline(self.raw, yes, ref out, ref failed_detail, ref panicked_detail)
+    if outcome < 0 {
+        let error: Error = (code = cast[i64]outcome, text = nil, fn = "regex_options_multiline")
+        fail error
+    }
+    if outcome == 1 {
+        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_options_multiline")
+        fail error
+    }
+    if outcome == 2 {
+        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_options_multiline")
+        fail error
+    }
+    self.raw = 0
+    return Regex_Options(raw = out)
+}
+
+func ignore_whitespace(modify self: Regex_Options, yes: bool) -> Regex_Options fail: Error {
+    var out: uint = 0
+    var failed_detail: Ffi_Bytes = (data = 0, length = 0)
+    var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
+    let outcome = __regex_options_ignore_whitespace(self.raw, yes, ref out, ref failed_detail, ref panicked_detail)
+    if outcome < 0 {
+        let error: Error = (code = cast[i64]outcome, text = nil, fn = "regex_options_ignore_whitespace")
+        fail error
+    }
+    if outcome == 1 {
+        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_options_ignore_whitespace")
+        fail error
+    }
+    if outcome == 2 {
+        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_options_ignore_whitespace")
+        fail error
+    }
+    self.raw = 0
+    return Regex_Options(raw = out)
+}
+
+func hardened(modify self: Regex_Options, yes: bool) -> Regex_Options fail: Error {
+    var out: uint = 0
+    var failed_detail: Ffi_Bytes = (data = 0, length = 0)
+    var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
+    let outcome = __regex_options_hardened(self.raw, yes, ref out, ref failed_detail, ref panicked_detail)
+    if outcome < 0 {
+        let error: Error = (code = cast[i64]outcome, text = nil, fn = "regex_options_hardened")
+        fail error
+    }
+    if outcome == 1 {
+        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_options_hardened")
+        fail error
+    }
+    if outcome == 2 {
+        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_options_hardened")
+        fail error
+    }
+    self.raw = 0
+    return Regex_Options(raw = out)
+}
+
+func unbounded_size(modify self: Regex_Options, yes: bool) -> Regex_Options fail: Error {
+    var out: uint = 0
+    var failed_detail: Ffi_Bytes = (data = 0, length = 0)
+    var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
+    let outcome = __regex_options_unbounded_size(self.raw, yes, ref out, ref failed_detail, ref panicked_detail)
+    if outcome < 0 {
+        let error: Error = (code = cast[i64]outcome, text = nil, fn = "regex_options_unbounded_size")
+        fail error
+    }
+    if outcome == 1 {
+        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_options_unbounded_size")
+        fail error
+    }
+    if outcome == 2 {
+        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_options_unbounded_size")
+        fail error
+    }
+    self.raw = 0
+    return Regex_Options(raw = out)
+}
+
+func implicit_captures(modify self: Regex_Options, yes: bool) -> Regex_Options fail: Error {
+    var out: uint = 0
+    var failed_detail: Ffi_Bytes = (data = 0, length = 0)
+    var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
+    let outcome = __regex_options_implicit_captures(self.raw, yes, ref out, ref failed_detail, ref panicked_detail)
+    if outcome < 0 {
+        let error: Error = (code = cast[i64]outcome, text = nil, fn = "regex_options_implicit_captures")
+        fail error
+    }
+    if outcome == 1 {
+        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_options_implicit_captures")
+        fail error
+    }
+    if outcome == 2 {
+        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_options_implicit_captures")
+        fail error
+    }
+    self.raw = 0
+    return Regex_Options(raw = out)
+}
+
+func is_match(self: Regex, input: string) -> bool fail: Error {
+    var input_value = input
+    var out: bool = false
+    var failed_detail: Ffi_Bytes = (data = 0, length = 0)
+    var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
+    let outcome = __regex_is_match(self.raw, ref input_value, ref out, ref failed_detail, ref panicked_detail)
+    if outcome < 0 {
+        let error: Error = (code = cast[i64]outcome, text = nil, fn = "regex_is_match")
+        fail error
+    }
+    if outcome == 1 {
+        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_is_match")
+        fail error
+    }
+    if outcome == 2 {
+        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_is_match")
+        fail error
+    }
+    return out
+}
+
+func regex_new(pattern: string) -> Regex fail: Error {
+    var pattern_value = pattern
+    var out: uint = 0
+    var failed_detail: Ffi_Bytes = (data = 0, length = 0)
+    var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
+    let outcome = __regex_new(ref pattern_value, ref out, ref failed_detail, ref panicked_detail)
+    if outcome < 0 {
+        let error: Error = (code = cast[i64]outcome, text = nil, fn = "regex_new")
+        fail error
+    }
+    if outcome == 1 {
+        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_new")
+        fail error
+    }
+    if outcome == 2 {
+        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_new")
+        fail error
+    }
+    return Regex(raw = out)
+}
+
+func regex_with_options(pattern: string, opts: Regex_Options) -> Regex fail: Error {
+    var pattern_value = pattern
+    var out: uint = 0
+    var failed_detail: Ffi_Bytes = (data = 0, length = 0)
+    var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
+    let outcome = __regex_with_options(ref pattern_value, opts.raw, ref out, ref failed_detail, ref panicked_detail)
+    if outcome < 0 {
+        let error: Error = (code = cast[i64]outcome, text = nil, fn = "regex_with_options")
+        fail error
+    }
+    if outcome == 1 {
+        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_with_options")
+        fail error
+    }
+    if outcome == 2 {
+        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_with_options")
+        fail error
+    }
+    return Regex(raw = out)
+}
+
+func find_all(self: Regex, input: Array[u8], out_capacity: u64) -> Array[Match] fail: Error {
+    var input_value = input
+    var out: uint = 0
+    var out_length: uint = 0
+    var failed_detail: Ffi_Bytes = (data = 0, length = 0)
+    var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
+    let outcome = __regex_find_all(self.raw, ref input_value, out_capacity, ref out, ref out_length, ref failed_detail, ref panicked_detail)
+    if outcome < 0 {
+        let error: Error = (code = cast[i64]outcome, text = nil, fn = "regex_find_all")
+        fail error
+    }
+    if outcome == 1 {
+        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_find_all")
+        fail error
+    }
+    if outcome == 2 {
+        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_find_all")
+        fail error
+    }
+    return __ffi_take_array[Match](out, out_length)
+}
+
+enum Find_Anchored_Outcome {
+    ok = 0,
+    none = 1
+}
+
+func find_anchored(self: Regex, input: Array[u8]) -> Find_Anchored_Outcome fail: Error {
+    var input_value = input
+    var out: Match = 0
+    var failed_detail: Ffi_Bytes = (data = 0, length = 0)
+    var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
+    let outcome = __regex_find_anchored(self.raw, ref input_value, ref out, ref failed_detail, ref panicked_detail)
+    if outcome < 0 {
+        let error: Error = (code = cast[i64]outcome, text = nil, fn = "regex_find_anchored")
+        fail error
+    }
+    if outcome == 2 {
+        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_find_anchored")
+        fail error
+    }
+    if outcome == 3 {
+        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_find_anchored")
+        fail error
+    }
+    return cast[Find_Anchored_Outcome]outcome
+}
+
+func is_full_match(self: Regex, input: Array[u8]) -> bool fail: Error {
+    var input_value = input
+    var out: bool = false
+    var failed_detail: Ffi_Bytes = (data = 0, length = 0)
+    var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
+    let outcome = __regex_is_full_match(self.raw, ref input_value, ref out, ref failed_detail, ref panicked_detail)
+    if outcome < 0 {
+        let error: Error = (code = cast[i64]outcome, text = nil, fn = "regex_is_full_match")
+        fail error
+    }
+    if outcome == 1 {
+        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_is_full_match")
+        fail error
+    }
+    if outcome == 2 {
+        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_is_full_match")
+        fail error
+    }
+    return out
+}
+
+enum Capture_Index_For_Name_Outcome {
+    ok = 0,
+    none = 1
+}
+
+func capture_index_for_name(self: Regex, name: string) -> Capture_Index_For_Name_Outcome fail: Error {
+    var name_value = name
+    var out: u64 = 0
+    var failed_detail: Ffi_Bytes = (data = 0, length = 0)
+    var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
+    let outcome = __regex_capture_index_for_name(self.raw, ref name_value, ref out, ref failed_detail, ref panicked_detail)
+    if outcome < 0 {
+        let error: Error = (code = cast[i64]outcome, text = nil, fn = "regex_capture_index_for_name")
+        fail error
+    }
+    if outcome == 2 {
+        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref failed_detail), fn = "regex_capture_index_for_name")
+        fail error
+    }
+    if outcome == 3 {
+        let error: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_capture_index_for_name")
+        fail error
+    }
+    return cast[Capture_Index_For_Name_Outcome]outcome
+}
+7	resharp.derived.writ:29:1	RegexOptions
+11	resharp.derived.writ:38:1	Regex
+15	resharp.derived.writ:32:1	Match
+20	resharp.derived.writ:5:1	Status
+27	resharp.derived.writ:21:1	UnicodeMode
+34	resharp.derived.writ:41:1	FindAll
+46	resharp.derived.writ:6:5	Status_Ok
+47	resharp.derived.writ:7:5	Status_None
+48	resharp.derived.writ:8:5	Status_Error
+49	resharp.derived.writ:9:5	Status_Panic
+50	resharp.derived.writ:22:5	UnicodeMode_Ascii
+51	resharp.derived.writ:23:5	UnicodeMode_Default
+52	resharp.derived.writ:24:5	UnicodeMode_Full
+53	resharp.derived.writ:25:5	UnicodeMode_Javascript
+54	resharp.derived.writ:42:5	FindAll_EmptyLang
+55	resharp.derived.writ:43:5	FindAll_Anchored
+56	resharp.derived.writ:44:5	FindAll_EndAnchored
+57	resharp.derived.writ:45:5	FindAll_Hardened
+58	resharp.derived.writ:46:5	FindAll_FwdPrefix
+59	resharp.derived.writ:47:5	FindAll_FwdLbPrefix
+60	resharp.derived.writ:48:5	FindAll_Bounded
+61	resharp.derived.writ:49:5	FindAll_Dfa
+62	resharp.derived.writ:50:5	FindAll_ClassPlus
+64	resharp.derived.writ:30:1	regex_options_free
+65	resharp.derived.writ:39:1	regex_free
+66	resharp.derived.writ:53:1	regex_options_default
+67	resharp.derived.writ:62:1	regex_options_unicode
+68	resharp.derived.writ:73:1	regex_options_case_insensitive
+69	resharp.derived.writ:84:1	regex_options_dot_matches_new_line
+70	resharp.derived.writ:95:1	regex_options_multiline
+71	resharp.derived.writ:106:1	regex_options_ignore_whitespace
+72	resharp.derived.writ:117:1	regex_options_hardened
+73	resharp.derived.writ:128:1	regex_options_unbounded_size
+74	resharp.derived.writ:139:5	regex_options_implicit_captures
+75	resharp.derived.writ:151:1	regex_is_match
+76	resharp.derived.writ:163:1	regex_new
+77	resharp.derived.writ:174:1	regex_with_options
+78	resharp.derived.writ:186:1	regex_find_all
+79	resharp.derived.writ:201:1	regex_find_anchored
+80	resharp.derived.writ:215:1	regex_is_full_match
+81	resharp.derived.writ:227:5	regex_capture_index_for_name
+83	resharp.derived.writ:30:1	regex_options_free
+92	resharp.derived.writ:39:1	regex_free
+101	resharp.derived.writ:53:1	regex_options_default
+121	resharp.derived.writ:62:1	regex_options_unicode
+142	resharp.derived.writ:73:1	regex_options_case_insensitive
+163	resharp.derived.writ:84:1	regex_options_dot_matches_new_line
+184	resharp.derived.writ:95:1	regex_options_multiline
+205	resharp.derived.writ:106:1	regex_options_ignore_whitespace
+226	resharp.derived.writ:117:1	regex_options_hardened
+247	resharp.derived.writ:128:1	regex_options_unbounded_size
+268	resharp.derived.writ:139:5	regex_options_implicit_captures
+289	resharp.derived.writ:151:1	regex_is_match
+310	resharp.derived.writ:163:1	regex_new
+331	resharp.derived.writ:174:1	regex_with_options
+352	resharp.derived.writ:186:1	regex_find_all
+379	resharp.derived.writ:201:1	regex_find_anchored
+400	resharp.derived.writ:215:1	regex_is_full_match
+426	resharp.derived.writ:227:5	regex_capture_index_for_name
+library resharp_writ
+search_path target/release
+load static

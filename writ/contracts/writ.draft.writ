@@ -293,6 +293,7 @@ struct writ_gen_c_request_t @size(32) @align(8) {
     struct_size: usize @0
     prefix: writ_str_t @8
     conformance: bool @24
+    pointer_normalized: bool @25
 }
 struct writ_gen_rust_request_t @size(24) @align(8) {
     struct_size: usize @0
@@ -304,6 +305,21 @@ struct writ_bind_request_t @size(40) @align(8) {
     profiles: ?writ_unit_t @8
     binding: ?writ_unit_t @16
     language: writ_str_t @24
+}
+struct writ_gen_n00b_request_t @size(48) @align(8) {
+    struct_size: usize @0
+    binding: ?writ_binding_t @8
+    module_name: writ_str_t @16
+    shim_prefix: writ_str_t @32
+}
+struct writ_link_requirements_t @size(56) @align(8) {
+    libraries_count: usize @0
+    libraries: ?writ_str_t @8
+    frameworks_count: usize @16
+    frameworks: ?writ_str_t @24
+    search_paths_count: usize @32
+    search_paths: ?writ_str_t @40
+    load_dynamic: bool @48
 }
 struct writ_rust_import_request_t @size(104) @align(8) {
     struct_size: usize @0
@@ -327,6 +343,7 @@ const WRIT_SOURCE_CONTRACT_FILE: c_int = 0
 const WRIT_SOURCE_CONTRACT_DECLARATIONS: c_int = 1
 const WRIT_SOURCE_PROFILE: c_int = 2
 const WRIT_SOURCE_BINDING: c_int = 3
+const WRIT_SOURCE_EMBEDDED: c_int = 4
 const WRIT_ERROR: c_int = 0
 const WRIT_WARNING: c_int = 1
 const WRIT_NOTE: c_int = 2
@@ -456,10 +473,12 @@ const WRIT_PHASE_FINALLY: c_int = 4
 const WRIT_OUTCOME_SUCCESS: c_int = 0
 const WRIT_OUTCOME_FAILURE: c_int = 1
 const WRIT_LANGUAGE_C: c_int = 0
+const WRIT_LANGUAGE_N00B: c_int = 1
 
 fn writ_api_version() -> u32
 fn writ_session_new(config: ?writ_session_config_t) -> ?writ_session_t unknown
 fn writ_session_free(session: unknown ?writ_session_t)
+fn writ_session_add_contract_dir(session: unknown ?writ_session_t, dir: writ_str_t) -> writ_status_t
 fn writ_session_set_diag_sink(session: unknown ?writ_session_t, sink: writ_diag_sink_fn, context: unknown ?void)
 fn writ_diag_count(session: ?writ_session_t) -> usize
 fn writ_diag_at(session: ?writ_session_t, index: usize) -> ?writ_diag_t unknown
@@ -467,6 +486,9 @@ fn writ_diag_render(session: ?writ_session_t, diag: ?writ_diag_t, rendered: unkn
 fn writ_unit_new(session: unknown ?writ_session_t) -> ?writ_unit_t unknown
 fn writ_unit_add_source(unit: unknown ?writ_unit_t, kind: writ_source_kind_t, origin: writ_origin_t, text: writ_str_t, source_id: unknown ?u32) -> writ_status_t
 fn writ_unit_add_file(unit: unknown ?writ_unit_t, path: writ_str_t, source_id: unknown ?u32) -> writ_status_t
+fn writ_unit_add_embedded(unit: unknown ?writ_unit_t, language: writ_str_t, origin: writ_origin_t, text: writ_str_t, source_id: unknown ?u32) -> writ_status_t
+fn writ_unit_file_count(unit: ?writ_unit_t) -> usize
+fn writ_unit_file_at(unit: ?writ_unit_t, index: usize) -> writ_str_t
 fn writ_unit_dump(unit: ?writ_unit_t, rendered: unknown ?writ_str_t) -> writ_status_t
 fn writ_format_unit(unit: ?writ_unit_t, output: ?writ_output_t) -> writ_status_t
 fn writ_platform_host_triple() -> writ_str_t
@@ -503,6 +525,7 @@ fn writ_gen_c(model: ?writ_model_t, request: ?writ_gen_c_request_t, output: ?wri
 fn writ_gen_rust(model: ?writ_model_t, request: ?writ_gen_rust_request_t, output: ?writ_output_t) -> writ_status_t
 fn writ_bind(model: ?writ_model_t, request: ?writ_bind_request_t, binding: unknown ??writ_binding_t) -> writ_status_t
 fn writ_binding_render(binding: ?writ_binding_t, rendered: unknown ?writ_str_t) -> writ_status_t
+fn writ_gen_n00b(request: ?writ_gen_n00b_request_t, output: ?writ_output_t, links: unknown ?writ_link_requirements_t) -> writ_status_t
 fn writ_toolchain_import_rust(session: unknown ?writ_session_t, request: ?writ_rust_import_request_t, output: ?writ_output_t) -> writ_status_t
 fn writ_toolchain_verify_probes(model: ?writ_model_t, sysroot: writ_str_t, report: unknown ?writ_str_t) -> writ_status_t
 fn writ_toolchain_abi_classes(model: ?writ_model_t, sysroot: writ_str_t, report: unknown ?writ_str_t) -> writ_status_t

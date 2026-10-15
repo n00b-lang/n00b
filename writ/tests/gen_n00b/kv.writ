@@ -1,0 +1,11 @@
+use "../bind/kv.writ"
+
+binding {
+    strip_prefix "kv_"
+    method Db.put = kv_put
+    method Db.get = kv_get
+    method Db.iter = kv_iter_new
+    method Iter.next = kv_iter_next
+    static Db.open = kv_open
+    hide "kv_errstr"
+}

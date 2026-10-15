@@ -3,202 +3,208 @@
 error[E0901]: not supported yet: `import` inside a contract; run `writ import` and `use` the draft
   --> dsl.md-2.writ:12:1
 == dsl.md example 3
+error[E0003]: cannot read file: `zlib/types.writ`
+  --> dsl.md-3.writ:1:1
+error[E0003]: cannot read file: `<zlib.writ>` is not on the contract search path
+  --> dsl.md-3.writ:2:1
 == dsl.md example 4
-error[E0103]: unknown name: `errno`
-  --> dsl.md-4.writ:4:87
-error[E0103]: unknown name: `errno`
-  --> dsl.md-4.writ:5:86
-error[E0103]: unknown name: `errno`
-  --> dsl.md-4.writ:6:49
 == dsl.md example 5
-error[E0102]: unknown type: `GtkWindow`
-  --> dsl.md-5.writ:2:18
+error[E0103]: unknown name: `errno`
+  --> dsl.md-5.writ:4:87
+error[E0103]: unknown name: `errno`
+  --> dsl.md-5.writ:5:86
+error[E0103]: unknown name: `errno`
+  --> dsl.md-5.writ:6:49
 == dsl.md example 6
-error[E0102]: unknown type: `GWeakRef`
-  --> dsl.md-6.writ:1:19
-error[E0102]: unknown type: `GObj`
-  --> dsl.md-6.writ:2:39
+error[E0102]: unknown type: `GtkWindow`
+  --> dsl.md-6.writ:2:18
 == dsl.md example 7
-error[E0102]: unknown type: `alloc_func`
-  --> dsl.md-7.writ:10:17
-error[E0102]: unknown type: `free_func`
-  --> dsl.md-7.writ:11:17
-error[E0901]: not supported yet: callback user data (dsl.md §6.3)
-  --> dsl.md-7.writ:12:22
+error[E0102]: unknown type: `GWeakRef`
+  --> dsl.md-7.writ:1:19
+error[E0102]: unknown type: `GObj`
+  --> dsl.md-7.writ:2:39
 == dsl.md example 8
-error[E0102]: unknown type: `Item`
-  --> dsl.md-8.writ:3:13
+error[E0102]: unknown type: `alloc_func`
+  --> dsl.md-8.writ:10:17
+error[E0102]: unknown type: `free_func`
+  --> dsl.md-8.writ:11:17
+error[E0901]: not supported yet: callback user data (dsl.md §6.3)
+  --> dsl.md-8.writ:12:22
 == dsl.md example 9
+error[E0102]: unknown type: `Item`
+  --> dsl.md-9.writ:3:13
 == dsl.md example 10
-error[E0102]: unknown type: `Regex`
-  --> dsl.md-10.writ:1:24
-error[E0103]: unknown name: `last_error`
-  --> dsl.md-10.writ:2:23
 == dsl.md example 11
+error[E0102]: unknown type: `Regex`
+  --> dsl.md-11.writ:1:24
+error[E0103]: unknown name: `last_error`
+  --> dsl.md-11.writ:2:23
 == dsl.md example 12
 == dsl.md example 13
-error[E0901]: not supported yet: library version queries
-  --> dsl.md-13.writ:1:1
-error[E0109]: a condition tests platform facts, features and versions only
-  --> dsl.md-13.writ:7:6
-error[E0102]: unknown type: `Db`
-  --> dsl.md-13.writ:4:29
-error[E0901]: not supported yet: `since` and `removed` (they need a version query)
-  --> dsl.md-13.writ:4:43
-error[E0102]: unknown type: `Db`
-  --> dsl.md-13.writ:5:24
-error[E0901]: not supported yet: `since` and `removed` (they need a version query)
-  --> dsl.md-13.writ:5:43
 == dsl.md example 14
+error[E0901]: not supported yet: library version queries
+  --> dsl.md-14.writ:1:1
+error[E0109]: a condition tests platform facts, features and versions only
+  --> dsl.md-14.writ:7:6
+error[E0102]: unknown type: `Db`
+  --> dsl.md-14.writ:4:29
+error[E0901]: not supported yet: `since` and `removed` (they need a version query)
+  --> dsl.md-14.writ:4:43
+error[E0102]: unknown type: `Db`
+  --> dsl.md-14.writ:5:24
+error[E0901]: not supported yet: `since` and `removed` (they need a version query)
+  --> dsl.md-14.writ:5:43
 == dsl.md example 15
-error[E0102]: unknown type: `File`
-  --> dsl.md-15.writ:2:13
-error[E0102]: unknown type: `File`
-  --> dsl.md-15.writ:17:22
 == dsl.md example 16
-error[E0102]: unknown type: `Db`
-  --> dsl.md-16.writ:3:20
-error[E0102]: unknown type: `Db`
-  --> dsl.md-16.writ:11:23
-error[E0102]: unknown type: `Stmt`
-  --> dsl.md-16.writ:13:30
-error[E0103]: unknown name: `SQLITE_OK`
-  --> dsl.md-16.writ:7:16
-error[E0103]: unknown name: `sqlite3_column_bytes` is not a function
-  --> dsl.md-16.writ:14:14
+error[E0102]: unknown type: `File`
+  --> dsl.md-16.writ:2:13
+error[E0102]: unknown type: `File`
+  --> dsl.md-16.writ:17:22
 == dsl.md example 17
+error[E0102]: unknown type: `Db`
+  --> dsl.md-17.writ:3:20
+error[E0102]: unknown type: `Db`
+  --> dsl.md-17.writ:11:23
+error[E0102]: unknown type: `Stmt`
+  --> dsl.md-17.writ:13:30
+error[E0103]: unknown name: `SQLITE_OK`
+  --> dsl.md-17.writ:7:16
+error[E0103]: unknown name: `sqlite3_column_bytes` is not a function
+  --> dsl.md-17.writ:14:14
 == dsl.md example 18
 == dsl.md example 19
-error[E0901]: not supported yet: ownership and spans on array elements
-  --> dsl.md-19.writ:3:14
-error[E0102]: unknown type: `HashTable`
-  --> dsl.md-19.writ:6:38
-error[E0901]: not supported yet: ownership and spans on array elements
-  --> dsl.md-19.writ:7:14
-error[E0901]: not supported yet: ownership and spans on array elements
-  --> dsl.md-19.writ:10:34
 == dsl.md example 20
-error[E0102]: unknown type: `xmlDoc`
-  --> dsl.md-20.writ:1:15
-error[E0102]: unknown type: `xmlDoc`
-  --> dsl.md-20.writ:7:16
+error[E0901]: not supported yet: ownership and spans on array elements
+  --> dsl.md-20.writ:3:14
+error[E0102]: unknown type: `HashTable`
+  --> dsl.md-20.writ:6:38
+error[E0901]: not supported yet: ownership and spans on array elements
+  --> dsl.md-20.writ:7:14
+error[E0901]: not supported yet: ownership and spans on array elements
+  --> dsl.md-20.writ:10:34
 == dsl.md example 21
-error[E0103]: unknown name: `errno`
-  --> dsl.md-21.writ:2:81
-error[E0103]: unknown name: `errno`
-  --> dsl.md-21.writ:6:21
-error[E0103]: unknown name: `errno`
-  --> dsl.md-21.writ:13:80
-error[E0103]: unknown name: `errno`
-  --> dsl.md-21.writ:17:87
+error[E0102]: unknown type: `xmlDoc`
+  --> dsl.md-21.writ:1:15
+error[E0102]: unknown type: `xmlDoc`
+  --> dsl.md-21.writ:7:16
 == dsl.md example 22
-error[E0102]: unknown type: `Regex`
-  --> dsl.md-22.writ:1:24
-error[E0102]: unknown type: `Span`
-  --> dsl.md-22.writ:2:32
-== dsl.md example 23
-error[E0901]: not supported yet: callback user data (dsl.md §6.3)
-  --> dsl.md-23.writ:12:33
-error[E0102]: unknown type: `Event`
-  --> dsl.md-23.writ:12:48
-error[E0102]: unknown type: `Bus`
-  --> dsl.md-23.writ:17:10
-error[E0901]: not supported yet: callback user data (dsl.md §6.3)
-  --> dsl.md-23.writ:19:16
-error[E0102]: unknown type: `SubId`
-  --> dsl.md-23.writ:20:6
-== dsl.md example 24
-error[E0901]: not supported yet: interfaces (dsl.md §9.1)
-  --> dsl.md-24.writ:1:1
-== dsl.md example 25
-error[E0102]: unknown type: not a handle
-  --> dsl.md-25.writ:10:26
-error[E0103]: unknown name: `errno_location` is not a function
-  --> dsl.md-25.writ:2:11
-error[E0103]: unknown name: `resharp_last_error` is not a function
-  --> dsl.md-25.writ:6:10
-error[E0103]: unknown name: `sqlite3_errmsg` is not a function
-  --> dsl.md-25.writ:11:10
-== dsl.md example 26
-error[E0102]: unknown type: `z_stream`
-  --> dsl.md-26.writ:1:25
-error[E0103]: unknown name: `Z_STREAM_END`
-  --> dsl.md-26.writ:2:40
-error[E0103]: unknown name: `Z_OK`
-  --> dsl.md-26.writ:3:40
-error[E0103]: unknown name: `Z_BUF_ERROR`
-  --> dsl.md-26.writ:4:40
-error[E0103]: unknown name: `Z_DATA_ERROR`
-  --> dsl.md-26.writ:5:40
-error[E0103]: unknown name: no field `msg`
-  --> dsl.md-26.writ:5:57
-error[E0102]: unknown type: `ZStatus`
-  --> dsl.md-26.writ:6:32
-== dsl.md example 27
-error[E0102]: unknown type: `Widget`
-  --> dsl.md-27.writ:1:23
-error[E0102]: unknown type: `Db`
-  --> dsl.md-27.writ:2:33
-error[E0102]: unknown type: `Mutex`
-  --> dsl.md-27.writ:3:29
-== dsl.md example 28
-error[E0102]: unknown type: `Db`
-  --> dsl.md-28.writ:1:38
-== dsl.md example 29
-== dsl.md example 30
-error[E0102]: unknown type: `Stat`
-  --> dsl.md-30.writ:9:32
-error[E0901]: not supported yet: text encodings other than the library's
-  --> dsl.md-30.writ:13:26
-error[E0102]: unknown type: `Handle`
-  --> dsl.md-30.writ:13:48
 error[E0103]: unknown name: `errno`
-  --> dsl.md-30.writ:9:66
-== dsl.md example 31
+  --> dsl.md-22.writ:2:81
+error[E0103]: unknown name: `errno`
+  --> dsl.md-22.writ:6:21
+error[E0103]: unknown name: `errno`
+  --> dsl.md-22.writ:13:80
+error[E0103]: unknown name: `errno`
+  --> dsl.md-22.writ:17:87
+== dsl.md example 23
+error[E0102]: unknown type: `Regex`
+  --> dsl.md-23.writ:1:24
+error[E0102]: unknown type: `Span`
+  --> dsl.md-23.writ:2:32
+== dsl.md example 24
+error[E0901]: not supported yet: callback user data (dsl.md §6.3)
+  --> dsl.md-24.writ:12:33
+error[E0102]: unknown type: `Event`
+  --> dsl.md-24.writ:12:48
+error[E0102]: unknown type: `Bus`
+  --> dsl.md-24.writ:17:10
+error[E0901]: not supported yet: callback user data (dsl.md §6.3)
+  --> dsl.md-24.writ:19:16
+error[E0102]: unknown type: `SubId`
+  --> dsl.md-24.writ:20:6
+== dsl.md example 25
+error[E0901]: not supported yet: interfaces (dsl.md §9.1)
+  --> dsl.md-25.writ:1:1
+== dsl.md example 26
+error[E0102]: unknown type: not a handle
+  --> dsl.md-26.writ:10:26
+error[E0103]: unknown name: `errno_location` is not a function
+  --> dsl.md-26.writ:2:11
+error[E0103]: unknown name: `resharp_last_error` is not a function
+  --> dsl.md-26.writ:6:10
+error[E0103]: unknown name: `sqlite3_errmsg` is not a function
+  --> dsl.md-26.writ:11:10
+== dsl.md example 27
 error[E0102]: unknown type: `z_stream`
-  --> dsl.md-31.writ:1:29
-error[E0103]: unknown name: `ZLIB_VERSION`
-  --> dsl.md-31.writ:2:37
-error[E0102]: unknown type: `sizeof` takes one type name
-  --> dsl.md-31.writ:2:51
+  --> dsl.md-27.writ:1:25
+error[E0103]: unknown name: `Z_STREAM_END`
+  --> dsl.md-27.writ:2:40
+error[E0103]: unknown name: `Z_OK`
+  --> dsl.md-27.writ:3:40
+error[E0103]: unknown name: `Z_BUF_ERROR`
+  --> dsl.md-27.writ:4:40
+error[E0103]: unknown name: `Z_DATA_ERROR`
+  --> dsl.md-27.writ:5:40
+error[E0103]: unknown name: no field `msg`
+  --> dsl.md-27.writ:5:57
+error[E0102]: unknown type: `ZStatus`
+  --> dsl.md-27.writ:6:32
+== dsl.md example 28
+error[E0102]: unknown type: `Widget`
+  --> dsl.md-28.writ:1:23
+error[E0102]: unknown type: `Db`
+  --> dsl.md-28.writ:2:33
+error[E0102]: unknown type: `Mutex`
+  --> dsl.md-28.writ:3:29
+== dsl.md example 29
+error[E0102]: unknown type: `Db`
+  --> dsl.md-29.writ:1:38
+== dsl.md example 30
+== dsl.md example 31
+error[E0102]: unknown type: `Stat`
+  --> dsl.md-31.writ:9:32
+error[E0901]: not supported yet: text encodings other than the library's
+  --> dsl.md-31.writ:13:26
+error[E0102]: unknown type: `Handle`
+  --> dsl.md-31.writ:13:48
+error[E0103]: unknown name: `errno`
+  --> dsl.md-31.writ:9:66
 == dsl.md example 32
-error[E0102]: unknown type: `File`
-  --> dsl.md-32.writ:1:13
+error[E0102]: unknown type: `z_stream`
+  --> dsl.md-32.writ:1:29
+error[E0103]: unknown name: `ZLIB_VERSION`
+  --> dsl.md-32.writ:2:37
+error[E0102]: unknown type: `sizeof` takes one type name
+  --> dsl.md-32.writ:2:51
 == dsl.md example 33
-error[E0901]: not supported yet: a result type no transport rule covers (dsl.md §8.9)
-  --> dsl.md-33.writ:19:27
-error[E0901]: not supported yet: a result type no transport rule covers (dsl.md §8.9)
-  --> dsl.md-33.writ:20:59
-error[E0901]: not supported yet: a result type no transport rule covers (dsl.md §8.9)
-  --> dsl.md-33.writ:21:41
-error[E0901]: not supported yet: a result type no transport rule covers (dsl.md §8.9)
-  --> dsl.md-33.writ:22:41
-error[E0901]: not supported yet: a result type no transport rule covers (dsl.md §8.9)
-  --> dsl.md-33.writ:23:46
+error[E0102]: unknown type: `File`
+  --> dsl.md-33.writ:1:13
 == dsl.md example 34
+error[E0901]: not supported yet: a result type no transport rule covers (dsl.md §8.9)
+  --> dsl.md-34.writ:19:27
+error[E0901]: not supported yet: a result type no transport rule covers (dsl.md §8.9)
+  --> dsl.md-34.writ:20:59
+error[E0901]: not supported yet: a result type no transport rule covers (dsl.md §8.9)
+  --> dsl.md-34.writ:21:41
+error[E0901]: not supported yet: a result type no transport rule covers (dsl.md §8.9)
+  --> dsl.md-34.writ:22:41
+error[E0901]: not supported yet: a result type no transport rule covers (dsl.md §8.9)
+  --> dsl.md-34.writ:23:46
 == dsl.md example 35
-error[E0901]: not supported yet: interfaces (dsl.md §9.1)
-  --> dsl.md-35.writ:2:1
-error[E0901]: not supported yet: interfaces (dsl.md §9.1)
-  --> dsl.md-35.writ:6:1
 == dsl.md example 36
+error[E0901]: not supported yet: interfaces (dsl.md §9.1)
+  --> dsl.md-36.writ:2:1
+error[E0901]: not supported yet: interfaces (dsl.md §9.1)
+  --> dsl.md-36.writ:6:1
 == dsl.md example 37
 == dsl.md example 38
-error[E0901]: not supported yet: `import` inside a contract; run `writ import` and `use` the draft
-  --> dsl.md-38.writ:1:1
-error[E0102]: unknown type: `sqlite3`
-  --> dsl.md-38.writ:3:16
-error[E0102]: unknown type: `sqlite3_stmt`
-  --> dsl.md-38.writ:4:16
-error[E0106]: `refine` names no function: `sqlite3_prepare_v2`
-  --> dsl.md-38.writ:6:1
-error[E0106]: `refine` names no function: `sqlite3_column_blob`
-  --> dsl.md-38.writ:13:1
 == dsl.md example 39
-error[E0106]: `refine` names no function: `some_api`
-  --> dsl.md-39.writ:1:1
 == dsl.md example 40
+error[E0901]: not supported yet: `import` inside a contract; run `writ import` and `use` the draft
+  --> dsl.md-40.writ:1:1
+error[E0102]: unknown type: `sqlite3`
+  --> dsl.md-40.writ:3:16
+error[E0102]: unknown type: `sqlite3_stmt`
+  --> dsl.md-40.writ:4:16
+error[E0106]: `refine` names no function: `sqlite3_prepare_v2`
+  --> dsl.md-40.writ:6:1
+error[E0106]: `refine` names no function: `sqlite3_column_blob`
+  --> dsl.md-40.writ:13:1
 == dsl.md example 41
+error[E0106]: `refine` names no function: `some_api`
+  --> dsl.md-41.writ:1:1
+== dsl.md example 42
+== dsl.md example 43
 == call-plan.md example 1
 error[E0102]: unknown type: `z_stream`
   --> call-plan.md-1.writ:1:25

@@ -19,6 +19,7 @@ test(
 test(
     'host-embedded',
     executable('host-embedded', 'host/embedded.c', dependencies: writ_dep, c_args: sanitize, link_args: sanitize),
+    args: [source_root],
 )
 
 test(
@@ -101,8 +102,8 @@ test(
         source_root / 'dsl.md',
         source_root / 'call-plan.md',
         source_root / 'tests' / 'libc' / 'libc.writ',
-        source_root / 'tests' / 'zlib' / 'zlib.writ',
-        source_root / 'tests' / 'zlib' / 'draft' / host_triple + '.writ',
+        source_root / 'contracts' / 'zlib.writ',
+        source_root / 'contracts' / 'zlib' / host_triple + '.writ',
         source_root / 'tests' / 'skeleton' / 'zlib.writ',
         source_root / 'ffi-spec.md',
         source_root / 'contracts' / 'resharp.writ',
@@ -112,6 +113,9 @@ test(
         source_root / 'profiles' / 'rust.writ',
         source_root / 'profiles' / 'n00b.writ',
         source_root / 'tests' / 'bind' / 'kv.export.writ',
+        source_root / 'tests' / 'embedded' / 'zlib_search.writ',
+        source_root / 'tests' / 'embedded' / 'export.writ',
+        source_root / 'tests' / 'embedded' / 'refine.writ',
     ],
     depends: writ_exe,
 )
@@ -127,13 +131,15 @@ fuzz_writ = static_library(
     model_json_h,
     include_directories: writ_inc,
     dependencies: lantern_headers,
-    c_args: fuzz_flags,
+    c_args: fuzz_flags + core_args,
 )
 fuzz_seeds = []
-foreach seed : ['libc/libc.writ', 'zlib/zlib.writ', 'skeleton/zlib.writ', 'zlib/draft' / host_triple + '.writ',
-                'resharp/resharp.derived.writ', 'bind/kv.n00b.writ']
+foreach seed : ['libc/libc.writ', 'zlib/zlib.writ', 'skeleton/zlib.writ',
+                'resharp/resharp.derived.writ', 'bind/kv.n00b.writ', 'embedded/zlib_search.writ',
+                'embedded/export.writ', 'embedded/e0510.writ']
     fuzz_seeds += source_root / 'tests' / seed
 endforeach
+fuzz_seeds += source_root / 'contracts' / 'zlib' / host_triple + '.writ'
 test(
     'fuzz-parse',
     executable(
@@ -221,7 +227,7 @@ endforeach
 test(
     'zlib-import',
     python,
-    args: [golden, source_root / 'tests' / 'zlib' / 'draft' / host_triple + '.writ', '--', writ_exe, 'import',
+    args: [golden, source_root / 'contracts' / 'zlib' / host_triple + '.writ', '--', writ_exe, 'import',
            '--library', 'zlib', '--header', 'zlib.h', '--link', 'z', '-o', '-'] + zlib_only,
 )
 
@@ -318,6 +324,53 @@ foreach case : [
                case[1], 'tests/bind' / case[2] + '.writ'] + case[3],
     )
 endforeach
+
+embedded_flags = ['--platform', 'aarch64-apple-darwin', '--embedded', 'n00b']
+contract_dir = ['--contract-dir', 'contracts']
+foreach case : [
+    ['zlib_path', 'bind', [], false],
+    ['zlib_search', 'bind', contract_dir, false],
+    ['defaults', 'bind', [], false],
+    ['export', 'bind', [], false],
+    ['refine', 'lower', contract_dir, false],
+    ['e0510', 'bind', contract_dir, true],
+    ['e0514_module', 'bind', contract_dir, true],
+    ['e0514_none', 'bind', [], true],
+    ['e0514_two', 'bind', contract_dir, true],
+    ['e0003_path', 'bind', [], true],
+    ['e0003_search', 'bind', contract_dir, true],
+]
+    test(
+        'embedded-' + case[0],
+        python,
+        args: [golden, source_root / 'tests' / 'embedded' / case[0] + '.out'] + (case[3] ? ['--fails'] : [])
+              + ['--', writ_exe] + embedded_flags + case[2] + [case[1], 'tests/embedded' / case[0] + '.writ']
+              + (case[1] == 'bind' ? n00b_profile : []),
+    )
+endforeach
+test(
+    'embedded-zlib_env',
+    python,
+    args: [golden, source_root / 'tests' / 'embedded' / 'zlib_env.out', '--', writ_exe] + embedded_flags
+          + ['bind', 'tests/embedded/zlib_env.writ'] + n00b_profile,
+    env: {'WRIT_CONTRACT_PATH': source_root / 'tests' / 'missing:' + source_root / 'contracts'},
+)
+
+foreach case : ['zlib', 'resharp', 'kv', 'kv_export']
+    test(
+        'gen-n00b-' + case,
+        python,
+        args: [golden, source_root / 'tests' / 'gen_n00b' / case + '.out', '--stdout', '--', writ_exe]
+              + embedded_flags + ['--feature', 'experimental_capture_groups'] + contract_dir
+              + ['gen', 'n00b', 'tests/gen_n00b' / case + '.writ'] + n00b_profile + ['-o', '-'],
+    )
+endforeach
+test(
+    'gen-n00b-compile',
+    python,
+    args: [source_root / 'tests' / 'gen_n00b' / 'compile.py', writ_exe, compiler, host_triple, source_root,
+           'zlib', 'resharp', 'kv_export'],
+)
 
 resharp_root = get_option('resharp_root')
 resharp_features = ['--feature', 'experimental_capture_groups']

@@ -11,6 +11,7 @@ typedef struct {
     size_t     struct_size;
     writ_str_t prefix;
     bool       conformance;
+    bool       pointer_normalized;
 } writ_gen_c_request_t;
 
 writ_status_t writ_gen_c(const writ_model_t *model, const writ_gen_c_request_t *request,
@@ -36,6 +37,26 @@ typedef struct {
 writ_status_t writ_bind(const writ_model_t *model, const writ_bind_request_t *request,
                         const writ_binding_t **binding);
 writ_status_t writ_binding_render(const writ_binding_t *binding, writ_str_t *rendered);
+
+typedef struct {
+    size_t                struct_size;
+    const writ_binding_t *binding;
+    writ_str_t            module_name;
+    writ_str_t            shim_prefix;
+} writ_gen_n00b_request_t;
+
+typedef struct {
+    size_t            libraries_count;
+    const writ_str_t *libraries;
+    size_t            frameworks_count;
+    const writ_str_t *frameworks;
+    size_t            search_paths_count;
+    const writ_str_t *search_paths;
+    bool              load_dynamic;
+} writ_link_requirements_t;
+
+writ_status_t writ_gen_n00b(const writ_gen_n00b_request_t *request, const writ_output_t *output,
+                            writ_link_requirements_t *links);
 
 #ifdef __cplusplus
 }

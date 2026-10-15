@@ -215,6 +215,7 @@ enum {
 typedef uint32_t writ_language_t;
 enum {
     WRIT_LANGUAGE_C,
+    WRIT_LANGUAGE_N00B,
 };
 
 typedef struct writ_type_view writ_type_view_t;

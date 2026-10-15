@@ -89,8 +89,13 @@ run_linux() {
     local engine
     engine="$(command -v podman || command -v docker)" || fail "no container engine"
     verify_pin
-    "$engine" build -q -t writ-linux -f "$ROOT/tools/linux.Containerfile" "$ROOT/tools" >/dev/null
-    "$engine" run --rm \
+    local platform=linux/amd64
+    case "$(uname -m)" in
+        arm64|aarch64) platform=linux/arm64 ;;
+    esac
+    "$engine" build -q --platform "$platform" -t writ-linux -f "$ROOT/tools/linux.Containerfile" "$ROOT/tools" \
+        >/dev/null
+    "$engine" run --rm --platform "$platform" \
         -v "$ROOT:/work/writ" \
         -v "$LANTERN_ROOT:/work/lantern:ro" \
         -v "$RESHARP_ROOT:/work/resharp:ro" \

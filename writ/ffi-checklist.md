@@ -33,11 +33,11 @@ enough to check off one at a time. The specs are `ffi-spec.md`,
 
 ## P. Preparation
 
-- [ ] Baseline `./build.sh test` in `~/n00bb` is green; record the base commit
-- [ ] Baseline `./build.sh test` in `~/writ` is green
-- [ ] Baseline sanitizer build of writ is green
-- [ ] Baseline Linux container run of writ is green
-- [ ] Re-read `abi/n00b-abi-v1.h` module, scope, symbol and native-binding rows on the new base; stop if they differ from the checklist's assumptions
+- [x] Baseline `./build.sh test` in `~/n00bb` is green; record the base commit
+- [x] Baseline `./build.sh test` in `~/writ` is green
+- [x] Baseline sanitizer build of writ is green
+- [x] Baseline Linux container run of writ is green
+- [x] Re-read `abi/n00b-abi-v1.h` module, scope, symbol and native-binding rows on the new base; stop if they differ from the checklist's assumptions
 - [ ] n00bb `tools/linux.Dockerfile`: LLVM, lantern, writ and n00bb built inside, sources mounted from the host
 - [ ] n00bb `build.sh linux test` runs the suite in that image, with the engine chosen as writ's `build.sh` does (`podman`, else `docker`)
 - [ ] Baseline n00bb Linux run green on the new base, before any FFI work
@@ -49,78 +49,78 @@ enough to check off one at a time. The specs are `ffi-spec.md`,
 
 ### Grammar
 
-- [ ] `grammar/writ.bnf`: `<use-directive>` takes `%STRING` or `<header-angle>`
+- [x] `grammar/writ.bnf`: `<use-directive>` takes `%STRING` or `<header-angle>`
 - [ ] `grammar/writ.bnf`: `<embedded> ::= <item>* <embedded-binding>?`
-- [ ] `grammar/writ.bnf`: `<embedded-binding> ::= "binding" "export"? "{" <binding-item>* "}"`
-- [ ] Keyword corpus test still passes (`keywords-are-identifiers`)
+- [x] `grammar/writ.bnf`: `<embedded-binding> ::= "binding" "export"? "{" <binding-item>* "}"`
+- [x] Keyword corpus test still passes (`keywords-are-identifiers`)
 
 ### Parsing
 
-- [ ] `include/writ/writ.h`: `WRIT_SOURCE_EMBEDDED`
-- [ ] `src/core/syntax/parse.c`: `grammar_specs[WRIT_GRAMMAR_WRIT]` gains the `embedded` start symbol
-- [ ] `parse_source` picks the `embedded` start for `WRIT_SOURCE_EMBEDDED`
-- [ ] `writ_unit_add_embedded(unit, language, origin, text, source_id)` in `parse.c`, declared in `writ.h`
-- [ ] The unit records the embedded language
-- [ ] Embedded spans are in host coordinates (origin line, column and byte)
-- [ ] The embedded binding parses to `WRIT_N_BINDING` with no name and no language node
-- [ ] `src/core/syntax/fmt.c` formats an embedded unit and round-trips it
-- [ ] `fmt_roundtrip.py` covers an embedded unit
+- [x] `include/writ/writ.h`: `WRIT_SOURCE_EMBEDDED`
+- [x] `src/core/syntax/parse.c`: `grammar_specs[WRIT_GRAMMAR_WRIT]` gains the `embedded` start symbol
+- [x] `parse_source` picks the `embedded` start for `WRIT_SOURCE_EMBEDDED`
+- [x] `writ_unit_add_embedded(unit, language, origin, text, source_id)` in `parse.c`, declared in `writ.h`
+- [x] The unit records the embedded language
+- [x] Embedded spans are in host coordinates (origin line, column and byte)
+- [x] The embedded binding parses to `WRIT_N_BINDING` with no name and no language node
+- [x] `src/core/syntax/fmt.c` formats an embedded unit and round-trips it
+- [x] `fmt_roundtrip.py` covers an embedded unit
 
 ### `use`
 
-- [ ] `gather_use` in `src/core/model/resolve.c`: angle form searches the contract path
-- [ ] Session stores contract directories in insertion order
-- [ ] `writ_session_add_contract_dir` in `src/core/session.c`, declared in `writ.h`
-- [ ] `WRIT_CONTRACT_PATH` read once per session, split on `:`
-- [ ] Installed contract directory from a meson-configured path
-- [ ] Search order: host dirs, then `WRIT_CONTRACT_PATH`, then installed
-- [ ] Quoted `use` from an embedded source resolves against `origin.host_path`
-- [ ] Missing file is E0003 at the `use`, for both forms
-- [ ] Diagnostics in a used file report in that file
-- [ ] `meson.build` installs `contracts/` to the installed contract directory
-- [ ] `contracts/zlib.writ` holds the zlib contract; `tests/zlib/zlib.writ` uses it instead of a copy
+- [x] `gather_use` in `src/core/model/resolve.c`: angle form searches the contract path
+- [x] Session stores contract directories in insertion order
+- [x] `writ_session_add_contract_dir` in `src/core/session.c`, declared in `writ.h`
+- [x] `WRIT_CONTRACT_PATH` read once per session, split on `:`
+- [x] Installed contract directory from a meson-configured path
+- [x] Search order: host dirs, then `WRIT_CONTRACT_PATH`, then installed
+- [x] Quoted `use` from an embedded source resolves against `origin.host_path`
+- [x] Missing file is E0003 at the `use`, for both forms
+- [x] Diagnostics in a used file report in that file
+- [x] `meson.build` installs `contracts/` to the installed contract directory
+- [x] `contracts/zlib.writ` holds the zlib contract; `tests/zlib/zlib.writ` uses it instead of a copy
 
 ### File list
 
-- [ ] Unit records every file it reads, in read order, once each
-- [ ] `writ_unit_file_count` and `writ_unit_file_at` in `ast.c`, declared in `writ.h`
-- [ ] Files read through `use` inside `use` are listed
+- [x] Unit records every file it reads, in read order, once each
+- [x] `writ_unit_file_count` and `writ_unit_file_at` in `ast.c`, declared in `writ.h`
+- [x] Files read through `use` inside `use` are listed
 
 ### Binding an embedded unit
 
-- [ ] `find_block` in `src/gen/binding.c`: an embedded binding's contract is the unit's `library`, its language the unit's language
-- [ ] An embedded unit with no binding part binds as an import with defaults
-- [ ] `binding export { }` sets the export side
-- [ ] `module` in an embedded binding is E0514
-- [ ] Zero or several `library` directives in an embedded unit is E0514
-- [ ] Two binding parts is E0510
-- [ ] `defs/diag_codes.def`: `EMBEDDED_SHAPE` as E0514
-- [ ] `writ_bind` takes the binding from the embedded unit when `request->binding` is that unit
+- [x] `find_block` in `src/gen/binding.c`: an embedded binding's contract is the unit's `library`, its language the unit's language
+- [x] An embedded unit with no binding part binds as an import with defaults
+- [x] `binding export { }` sets the export side
+- [x] `module` in an embedded binding is E0514
+- [x] Zero or several `library` directives in an embedded unit is E0514
+- [x] Two binding parts is E0510
+- [x] `defs/diag_codes.def`: `EMBEDDED_SHAPE` as E0514
+- [x] `writ_bind` takes the binding from the embedded unit when `request->binding` is that unit
 
 ### CLI and tests
 
-- [ ] `writ bind --embedded LANGUAGE FILE` reads `FILE` as an embedded unit
-- [ ] `writ --contract-dir DIR` for every command that resolves
-- [ ] `tests/embedded/zlib_path.writ`: quoted `use`, golden binding
-- [ ] `tests/embedded/zlib_search.writ`: angle `use` through `--contract-dir`, golden binding
-- [ ] `tests/embedded/zlib_env.writ`: angle `use` through `WRIT_CONTRACT_PATH`
-- [ ] `tests/embedded/defaults.writ`: no binding part, golden binding
-- [ ] `tests/embedded/export.writ`: `binding export` over `kv`, golden binding
-- [ ] `tests/embedded/refine.writ`: `use` plus `refine`, golden model
-- [ ] Golden tests for each E0510 and E0514 case
-- [ ] Golden test for E0003 on both `use` forms
-- [ ] `tests/host/embedded.c`: `writ_unit_add_embedded` with a host origin; spans in host coordinates; `writ_unit_file_at` lists the used files
-- [ ] `tests/spec_examples.py` parses `writ-embedded` blocks as embedded units
-- [ ] `dsl.md` §9.3 and `ffi-spec.md` embedded examples tagged `writ-embedded`
-- [ ] Spec-example goldens regenerated and reviewed
-- [ ] libFuzzer target covers `writ_unit_add_embedded`
+- [x] `writ bind --embedded LANGUAGE FILE` reads `FILE` as an embedded unit
+- [x] `writ --contract-dir DIR` for every command that resolves
+- [x] `tests/embedded/zlib_path.writ`: quoted `use`, golden binding
+- [x] `tests/embedded/zlib_search.writ`: angle `use` through `--contract-dir`, golden binding
+- [x] `tests/embedded/zlib_env.writ`: angle `use` through `WRIT_CONTRACT_PATH`
+- [x] `tests/embedded/defaults.writ`: no binding part, golden binding
+- [x] `tests/embedded/export.writ`: `binding export` over `kv`, golden binding
+- [x] `tests/embedded/refine.writ`: `use` plus `refine`, golden model
+- [x] Golden tests for each E0510 and E0514 case
+- [x] Golden test for E0003 on both `use` forms
+- [x] `tests/host/embedded.c`: `writ_unit_add_embedded` with a host origin; spans in host coordinates; `writ_unit_file_at` lists the used files
+- [x] `tests/spec_examples.py` parses `writ-embedded` blocks as embedded units
+- [x] `dsl.md` §9.3 and `ffi-spec.md` embedded examples tagged `writ-embedded`
+- [x] Spec-example goldens regenerated and reviewed
+- [x] libFuzzer target covers `writ_unit_add_embedded`
 
 ### Gate
 
-- [ ] `./build.sh test` green
-- [ ] Sanitizer build green
-- [ ] Linux container green
-- [ ] Committed: "Embedded units, use <...>, unit file list"
+- [x] `./build.sh test` green
+- [x] Sanitizer build green
+- [x] Linux container green
+- [x] Committed: "Embedded units, use <...>, unit file list"
 
 ---
 

@@ -1,0 +1,925 @@
+#ifndef ZLIB_WRIT_H
+#define ZLIB_WRIT_H
+
+#include <stdarg.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <zlib.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define ZLIB_ARGUMENT_ERROR (-1)
+#define ZLIB_OUT_OF_MEMORY (-2)
+#define ZLIB_CONTRACT_VIOLATION (-3)
+
+typedef struct {
+    uint8_t *data;
+    size_t length;
+} zlib_bytes_t;
+
+typedef struct {
+    const char *data;
+    size_t length;
+} zlib_str_t;
+
+void zlib_bytes_free(zlib_bytes_t *bytes);
+void zlib_free(void *data);
+
+
+enum {
+    zlib_zlibVersion_ok = 0,
+};
+int32_t zlib_zlibVersion(const char **result);
+
+enum {
+    zlib_deflate_progress = 0,
+    zlib_deflate_done = 1,
+    zlib_deflate_stalled = 2,
+    zlib_deflate_failed = 3,
+};
+int32_t zlib_deflate(z_stream *strm, int flush, int *failed_status);
+
+enum {
+    zlib_deflateEnd_error = 0,
+    zlib_deflateEnd_ok = 1,
+};
+int32_t zlib_deflateEnd(z_stream *strm, int *status);
+
+enum {
+    zlib_inflate_done = 0,
+    zlib_inflate_progress = 1,
+    zlib_inflate_stalled = 2,
+    zlib_inflate_needs_dictionary = 3,
+    zlib_inflate_corrupt = 4,
+    zlib_inflate_failed = 5,
+};
+int32_t zlib_inflate(z_stream *strm, int flush, char **corrupt_detail, int *failed_status);
+
+enum {
+    zlib_inflateEnd_error = 0,
+    zlib_inflateEnd_ok = 1,
+};
+int32_t zlib_inflateEnd(z_stream *strm, int *status);
+
+enum {
+    zlib_compress2_error = 0,
+    zlib_compress2_ok = 1,
+};
+int32_t zlib_compress2(const uint8_t *source, size_t source_length, int level, zlib_bytes_t *dest, int *status);
+
+unsigned long zlib_compressBound(unsigned long sourceLen);
+
+enum {
+    zlib_uncompress_error = 0,
+    zlib_uncompress_ok = 1,
+};
+int32_t zlib_uncompress(unsigned long dest_capacity, const uint8_t *source, size_t source_length, zlib_bytes_t *dest, int *status);
+
+enum {
+    zlib_adler32_ok = 0,
+};
+int32_t zlib_adler32(unsigned long adler, const uint8_t *buf, size_t buf_length, unsigned long *result);
+
+enum {
+    zlib_crc32_ok = 0,
+};
+int32_t zlib_crc32(unsigned long crc, const uint8_t *buf, size_t buf_length, unsigned long *result);
+
+enum {
+    zlib_deflateInit__error = 0,
+    zlib_deflateInit__ok = 1,
+};
+int32_t zlib_deflateInit_(z_stream *strm, int level, const char *version, size_t version_length, int stream_size, int *status);
+
+enum {
+    zlib_inflateInit__error = 0,
+    zlib_inflateInit__ok = 1,
+};
+int32_t zlib_inflateInit_(z_stream *strm, const char *version, size_t version_length, int stream_size, int *status);
+
+enum {
+    zlib_deflateInit_error = 0,
+    zlib_deflateInit_ok = 1,
+};
+int32_t zlib_deflateInit(z_stream *strm, int level, int *status);
+
+enum {
+    zlib_inflateInit_error = 0,
+    zlib_inflateInit_ok = 1,
+};
+int32_t zlib_inflateInit(z_stream *strm, int *status);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
+#include "zlib_writ.h"
+
+#include <stdlib.h>
+#include <string.h>
+
+static const uint8_t zlib_empty[1];
+
+void zlib_bytes_free(zlib_bytes_t *bytes) {
+    free(bytes->data);
+    bytes->data = NULL;
+    bytes->length = 0;
+}
+
+void zlib_free(void *data) {
+    free(data);
+}
+
+static int32_t zlib_encode(const char *text, size_t length, char **out) {
+    if (memchr(text, 0, length)) {
+        return ZLIB_ARGUMENT_ERROR;
+    }
+    *out = malloc(length + 1);
+    if (!*out) {
+        return ZLIB_OUT_OF_MEMORY;
+    }
+    memcpy(*out, text, length);
+    (*out)[length] = 0;
+    return 0;
+}
+
+int32_t zlib_zlibVersion(const char **result) {
+    const char *ret = 0;
+    int32_t outcome = 0;
+    ret = zlibVersion();
+    {
+        outcome = zlib_zlibVersion_ok;
+    }
+    if (outcome == zlib_zlibVersion_ok) {
+        *result = ret;
+    }
+    return outcome;
+}
+
+int32_t zlib_deflate(z_stream *strm, int flush, int *failed_status) {
+    z_stream *s0 = 0;
+    int s1 = 0;
+    int ret = 0;
+    int32_t outcome = 0;
+    s0 = strm;
+    s1 = flush;
+    ret = deflate(s0, s1);
+    if (((long long)ret) == Z_OK) {
+        outcome = zlib_deflate_progress;
+    }
+    else if (((long long)ret) == Z_STREAM_END) {
+        outcome = zlib_deflate_done;
+    }
+    else if (((long long)ret) == Z_BUF_ERROR) {
+        outcome = zlib_deflate_stalled;
+    }
+    else {
+        outcome = zlib_deflate_failed;
+    }
+    if (outcome == zlib_deflate_failed) {
+        *failed_status = (int)(((long long)ret));
+    }
+    return outcome;
+}
+
+int32_t zlib_deflateEnd(z_stream *strm, int *status) {
+    z_stream *s0 = 0;
+    int ret = 0;
+    int32_t outcome = 0;
+    s0 = strm;
+    ret = deflateEnd(s0);
+    if (((long long)ret) != Z_OK) {
+        outcome = zlib_deflateEnd_error;
+    }
+    else {
+        outcome = zlib_deflateEnd_ok;
+    }
+    if (outcome == zlib_deflateEnd_error) {
+        *status = (int)(((long long)ret));
+    }
+    return outcome;
+}
+
+int32_t zlib_inflate(z_stream *strm, int flush, char **corrupt_detail, int *failed_status) {
+    z_stream *s0 = 0;
+    int s1 = 0;
+    int ret = 0;
+    int32_t outcome = 0;
+    s0 = strm;
+    s1 = flush;
+    ret = inflate(s0, s1);
+    if (((long long)ret) == Z_STREAM_END) {
+        outcome = zlib_inflate_done;
+    }
+    else if (((long long)ret) == Z_OK) {
+        outcome = zlib_inflate_progress;
+    }
+    else if (((long long)ret) == Z_BUF_ERROR) {
+        outcome = zlib_inflate_stalled;
+    }
+    else if (((long long)ret) == Z_NEED_DICT) {
+        outcome = zlib_inflate_needs_dictionary;
+    }
+    else if (((long long)ret) == Z_DATA_ERROR) {
+        outcome = zlib_inflate_corrupt;
+    }
+    else {
+        outcome = zlib_inflate_failed;
+    }
+    if (outcome == zlib_inflate_corrupt) {
+        *corrupt_detail = (char *)(s0->msg);
+    }
+    if (outcome == zlib_inflate_failed) {
+        *failed_status = (int)(((long long)ret));
+    }
+    return outcome;
+}
+
+int32_t zlib_inflateEnd(z_stream *strm, int *status) {
+    z_stream *s0 = 0;
+    int ret = 0;
+    int32_t outcome = 0;
+    s0 = strm;
+    ret = inflateEnd(s0);
+    if (((long long)ret) != Z_OK) {
+        outcome = zlib_inflateEnd_error;
+    }
+    else {
+        outcome = zlib_inflateEnd_ok;
+    }
+    if (outcome == zlib_inflateEnd_error) {
+        *status = (int)(((long long)ret));
+    }
+    return outcome;
+}
+
+int32_t zlib_compress2(const uint8_t *source, size_t source_length, int level, zlib_bytes_t *dest, int *status) {
+    uint8_t *s0 = 0;
+    unsigned long *s1 = 0;
+    const uint8_t *s2 = 0;
+    unsigned long s3 = 0;
+    int s4 = 0;
+    int ret = 0;
+    uint8_t *l0 = NULL;
+    size_t l0_capacity = 0;
+    unsigned long l1 = 0;
+    int32_t outcome = 0;
+    if (!source && source_length) {
+        outcome = ZLIB_ARGUMENT_ERROR;
+        goto finish;
+    }
+    s2 = source_length ? (const uint8_t *)source : (const uint8_t *)zlib_empty;
+    s3 = (unsigned long)source_length;
+    s4 = level;
+    l0_capacity = (size_t)(compressBound(((long long)s3)));
+    l0 = malloc(l0_capacity ? l0_capacity * sizeof(uint8_t) : 1);
+    if (!l0) {
+        outcome = ZLIB_OUT_OF_MEMORY;
+        goto finish;
+    }
+    l1 = (unsigned long)l0_capacity;
+    s0 = (uint8_t *)l0;
+    s1 = (unsigned long *)&l1;
+    ret = compress2(s0, s1, s2, s3, s4);
+    if (((long long)ret) != Z_OK) {
+        outcome = zlib_compress2_error;
+    }
+    else {
+        outcome = zlib_compress2_ok;
+    }
+    if (outcome == zlib_compress2_error) {
+        *status = (int)(((long long)ret));
+    }
+    if (outcome == zlib_compress2_ok) {
+        if ((((long long)l1)) < 0 || (size_t)(((long long)l1)) > l0_capacity) {
+            outcome = ZLIB_CONTRACT_VIOLATION;
+            goto finish;
+        }
+        dest->data = (uint8_t *)l0;
+        dest->length = (size_t)(((long long)l1));
+        l0 = NULL;
+    }
+finish:
+    free(l0);
+    return outcome;
+}
+
+unsigned long zlib_compressBound(unsigned long sourceLen) {
+    unsigned long s0 = 0;
+    unsigned long ret = 0;
+    s0 = sourceLen;
+    ret = compressBound(s0);
+    return ret;
+}
+
+int32_t zlib_uncompress(unsigned long dest_capacity, const uint8_t *source, size_t source_length, zlib_bytes_t *dest, int *status) {
+    uint8_t *s0 = 0;
+    unsigned long *s1 = 0;
+    const uint8_t *s2 = 0;
+    unsigned long s3 = 0;
+    int ret = 0;
+    uint8_t *l0 = NULL;
+    size_t l0_capacity = 0;
+    unsigned long l1 = 0;
+    int32_t outcome = 0;
+    if (!source && source_length) {
+        outcome = ZLIB_ARGUMENT_ERROR;
+        goto finish;
+    }
+    s2 = source_length ? (const uint8_t *)source : (const uint8_t *)zlib_empty;
+    s3 = (unsigned long)source_length;
+    l0_capacity = (size_t)dest_capacity;
+    l0 = malloc(l0_capacity ? l0_capacity * sizeof(uint8_t) : 1);
+    if (!l0) {
+        outcome = ZLIB_OUT_OF_MEMORY;
+        goto finish;
+    }
+    l1 = (unsigned long)l0_capacity;
+    s0 = (uint8_t *)l0;
+    s1 = (unsigned long *)&l1;
+    ret = uncompress(s0, s1, s2, s3);
+    if (((long long)ret) != Z_OK) {
+        outcome = zlib_uncompress_error;
+    }
+    else {
+        outcome = zlib_uncompress_ok;
+    }
+    if (outcome == zlib_uncompress_error) {
+        *status = (int)(((long long)ret));
+    }
+    if (outcome == zlib_uncompress_ok) {
+        if ((((long long)l1)) < 0 || (size_t)(((long long)l1)) > l0_capacity) {
+            outcome = ZLIB_CONTRACT_VIOLATION;
+            goto finish;
+        }
+        dest->data = (uint8_t *)l0;
+        dest->length = (size_t)(((long long)l1));
+        l0 = NULL;
+    }
+finish:
+    free(l0);
+    return outcome;
+}
+
+int32_t zlib_adler32(unsigned long adler, const uint8_t *buf, size_t buf_length, unsigned long *result) {
+    unsigned long s0 = 0;
+    const uint8_t *s1 = 0;
+    unsigned int s2 = 0;
+    unsigned long ret = 0;
+    int32_t outcome = 0;
+    s0 = adler;
+    if (!buf && buf_length) {
+        outcome = ZLIB_ARGUMENT_ERROR;
+        goto finish;
+    }
+    if ((uint64_t)buf_length > UINT64_C(4294967295)) {
+        outcome = ZLIB_ARGUMENT_ERROR;
+        goto finish;
+    }
+    s1 = buf_length ? (const uint8_t *)buf : NULL;
+    s2 = (unsigned int)buf_length;
+    ret = adler32(s0, s1, s2);
+    {
+        outcome = zlib_adler32_ok;
+    }
+    if (outcome == zlib_adler32_ok) {
+        *result = ret;
+    }
+finish:
+    return outcome;
+}
+
+int32_t zlib_crc32(unsigned long crc, const uint8_t *buf, size_t buf_length, unsigned long *result) {
+    unsigned long s0 = 0;
+    const uint8_t *s1 = 0;
+    unsigned int s2 = 0;
+    unsigned long ret = 0;
+    int32_t outcome = 0;
+    s0 = crc;
+    if (!buf && buf_length) {
+        outcome = ZLIB_ARGUMENT_ERROR;
+        goto finish;
+    }
+    if ((uint64_t)buf_length > UINT64_C(4294967295)) {
+        outcome = ZLIB_ARGUMENT_ERROR;
+        goto finish;
+    }
+    s1 = buf_length ? (const uint8_t *)buf : NULL;
+    s2 = (unsigned int)buf_length;
+    ret = crc32(s0, s1, s2);
+    {
+        outcome = zlib_crc32_ok;
+    }
+    if (outcome == zlib_crc32_ok) {
+        *result = ret;
+    }
+finish:
+    return outcome;
+}
+
+int32_t zlib_deflateInit_(z_stream *strm, int level, const char *version, size_t version_length, int stream_size, int *status) {
+    z_stream *s0 = 0;
+    int s1 = 0;
+    const char *s2 = 0;
+    int s3 = 0;
+    int ret = 0;
+    char *l0 = NULL;
+    int32_t outcome = 0;
+    s0 = strm;
+    s1 = level;
+    if (version) {
+        int32_t status = zlib_encode(version, version_length, &l0);
+        if (status) {
+            outcome = status;
+            goto finish;
+        }
+    }
+    else {
+        outcome = ZLIB_ARGUMENT_ERROR;
+        goto finish;
+    }
+    s2 = l0;
+    s3 = stream_size;
+    ret = deflateInit_(s0, s1, s2, s3);
+    if (((long long)ret) != Z_OK) {
+        outcome = zlib_deflateInit__error;
+    }
+    else {
+        outcome = zlib_deflateInit__ok;
+    }
+    if (outcome == zlib_deflateInit__error) {
+        *status = (int)(((long long)ret));
+    }
+finish:
+    free(l0);
+    return outcome;
+}
+
+int32_t zlib_inflateInit_(z_stream *strm, const char *version, size_t version_length, int stream_size, int *status) {
+    z_stream *s0 = 0;
+    const char *s1 = 0;
+    int s2 = 0;
+    int ret = 0;
+    char *l0 = NULL;
+    int32_t outcome = 0;
+    s0 = strm;
+    if (version) {
+        int32_t status = zlib_encode(version, version_length, &l0);
+        if (status) {
+            outcome = status;
+            goto finish;
+        }
+    }
+    else {
+        outcome = ZLIB_ARGUMENT_ERROR;
+        goto finish;
+    }
+    s1 = l0;
+    s2 = stream_size;
+    ret = inflateInit_(s0, s1, s2);
+    if (((long long)ret) != Z_OK) {
+        outcome = zlib_inflateInit__error;
+    }
+    else {
+        outcome = zlib_inflateInit__ok;
+    }
+    if (outcome == zlib_inflateInit__error) {
+        *status = (int)(((long long)ret));
+    }
+finish:
+    free(l0);
+    return outcome;
+}
+
+int32_t zlib_deflateInit(z_stream *strm, int level, int *status) {
+    z_stream *s0 = 0;
+    int s1 = 0;
+    int ret = 0;
+    int32_t outcome = 0;
+    s0 = strm;
+    s1 = level;
+    ret = deflateInit_(s0, ((long long)s1), ZLIB_VERSION, sizeof(z_stream));
+    if (((long long)ret) != Z_OK) {
+        outcome = zlib_deflateInit_error;
+    }
+    else {
+        outcome = zlib_deflateInit_ok;
+    }
+    if (outcome == zlib_deflateInit_error) {
+        *status = (int)(((long long)ret));
+    }
+    return outcome;
+}
+
+int32_t zlib_inflateInit(z_stream *strm, int *status) {
+    z_stream *s0 = 0;
+    int ret = 0;
+    int32_t outcome = 0;
+    s0 = strm;
+    ret = inflateInit_(s0, ZLIB_VERSION, sizeof(z_stream));
+    if (((long long)ret) != Z_OK) {
+        outcome = zlib_inflateInit_error;
+    }
+    else {
+        outcome = zlib_inflateInit_ok;
+    }
+    if (outcome == zlib_inflateInit_error) {
+        *status = (int)(((long long)ret));
+    }
+    return outcome;
+}
+#include <stdint.h>
+#include <stddef.h>
+
+#include "zlib_writ.h"
+
+void *n00b_ffi_borrow(void *object, size_t *length, uint32_t access);
+void n00b_ffi_release(void *object);
+
+int32_t zlib_n00b_zlibVersion(void *result) {
+    int32_t writ_n00b_value = zlib_zlibVersion((const char **)result);
+    return writ_n00b_value;
+}
+
+int32_t zlib_n00b_deflate(const void *strm, int flush, void *failed_status) {
+    int32_t writ_n00b_value = zlib_deflate((z_stream *)strm, flush, (int *)failed_status);
+    return writ_n00b_value;
+}
+
+int32_t zlib_n00b_deflateEnd(const void *strm, void *status) {
+    int32_t writ_n00b_value = zlib_deflateEnd((z_stream *)strm, (int *)status);
+    return writ_n00b_value;
+}
+
+int32_t zlib_n00b_inflate(const void *strm, int flush, void *corrupt_detail, void *failed_status) {
+    int32_t writ_n00b_value = zlib_inflate((z_stream *)strm, flush, (char **)corrupt_detail, (int *)failed_status);
+    return writ_n00b_value;
+}
+
+int32_t zlib_n00b_inflateEnd(const void *strm, void *status) {
+    int32_t writ_n00b_value = zlib_inflateEnd((z_stream *)strm, (int *)status);
+    return writ_n00b_value;
+}
+
+int32_t zlib_n00b_compress2(const void *source, int level, void *dest, void *status) {
+    size_t source_length = 0;
+    const void *source_data = n00b_ffi_borrow((void *)source, &source_length, 0);
+    int32_t writ_n00b_value = zlib_compress2((const uint8_t *)source_data, source_length, level, (zlib_bytes_t *)dest, (int *)status);
+    n00b_ffi_release((void *)source);
+    return writ_n00b_value;
+}
+
+unsigned long zlib_n00b_compressBound(unsigned long sourceLen) {
+    unsigned long writ_n00b_value = zlib_compressBound(sourceLen);
+    return writ_n00b_value;
+}
+
+int32_t zlib_n00b_uncompress(unsigned long dest_capacity, const void *source, void *dest, void *status) {
+    size_t source_length = 0;
+    const void *source_data = n00b_ffi_borrow((void *)source, &source_length, 0);
+    int32_t writ_n00b_value = zlib_uncompress(dest_capacity, (const uint8_t *)source_data, source_length, (zlib_bytes_t *)dest, (int *)status);
+    n00b_ffi_release((void *)source);
+    return writ_n00b_value;
+}
+
+int32_t zlib_n00b_adler32(unsigned long adler, const void *buf, void *result) {
+    size_t buf_length = 0;
+    const void *buf_data = n00b_ffi_borrow((void *)buf, &buf_length, 0);
+    int32_t writ_n00b_value = zlib_adler32(adler, (const uint8_t *)buf_data, buf_length, (unsigned long *)result);
+    n00b_ffi_release((void *)buf);
+    return writ_n00b_value;
+}
+
+int32_t zlib_n00b_crc32(unsigned long crc, const void *buf, void *result) {
+    size_t buf_length = 0;
+    const void *buf_data = n00b_ffi_borrow((void *)buf, &buf_length, 0);
+    int32_t writ_n00b_value = zlib_crc32(crc, (const uint8_t *)buf_data, buf_length, (unsigned long *)result);
+    n00b_ffi_release((void *)buf);
+    return writ_n00b_value;
+}
+
+int32_t zlib_n00b_deflateInit(const void *strm, int level, void *status) {
+    int32_t writ_n00b_value = zlib_deflateInit((z_stream *)strm, level, (int *)status);
+    return writ_n00b_value;
+}
+
+int32_t zlib_n00b_inflateInit(const void *strm, void *status) {
+    int32_t writ_n00b_value = zlib_inflateInit((z_stream *)strm, (int *)status);
+    return writ_n00b_value;
+}
+
+type Error {
+    code: i64
+    text: string?
+    fn: string
+}
+
+type Stream layout(c) {
+    next_in: uint
+    avail_in: u32
+    total_in: u64
+    next_out: uint
+    avail_out: u32
+    total_out: u64
+    msg: uint
+    state: uint
+    zalloc: uint
+    zfree: uint
+    opaque: uint
+    data_type: i32
+    adler: u64
+    reserved: u64
+}
+
+const ZLIB_VERSION: string = "1.2.12"
+const ZLIB_VERNUM: i32 = 4800
+const ZLIB_VER_MAJOR: i32 = 1
+const ZLIB_VER_MINOR: i32 = 2
+const ZLIB_VER_REVISION: i32 = 12
+const ZLIB_VER_SUBREVISION: i32 = 0
+const Z_NO_FLUSH: i32 = 0
+const Z_PARTIAL_FLUSH: i32 = 1
+const Z_SYNC_FLUSH: i32 = 2
+const Z_FULL_FLUSH: i32 = 3
+const Z_FINISH: i32 = 4
+const Z_BLOCK: i32 = 5
+const Z_TREES: i32 = 6
+const Z_OK: i32 = 0
+const Z_STREAM_END: i32 = 1
+const Z_NEED_DICT: i32 = 2
+const Z_ERRNO: i32 = -1
+const Z_STREAM_ERROR: i32 = -2
+const Z_DATA_ERROR: i32 = -3
+const Z_MEM_ERROR: i32 = -4
+const Z_BUF_ERROR: i32 = -5
+const Z_VERSION_ERROR: i32 = -6
+const Z_NO_COMPRESSION: i32 = 0
+const Z_BEST_SPEED: i32 = 1
+const Z_BEST_COMPRESSION: i32 = 9
+const Z_DEFAULT_COMPRESSION: i32 = -1
+const Z_FILTERED: i32 = 1
+const Z_HUFFMAN_ONLY: i32 = 2
+const Z_RLE: i32 = 3
+const Z_FIXED: i32 = 4
+const Z_DEFAULT_STRATEGY: i32 = 0
+const Z_BINARY: i32 = 0
+const Z_TEXT: i32 = 1
+const Z_UNKNOWN: i32 = 2
+const Z_DEFLATED: i32 = 8
+const Z_NULL: i32 = 0
+
+extern<"zlib_n00b_zlibVersion"> __zlibVersion(result: Ref[uint]) -> i32
+extern<"zlib_n00b_deflate"> __deflate(strm: Ref[Stream], flush: i32, failed_status: Ref[i32]) -> i32
+extern<"zlib_n00b_deflateEnd"> __deflateEnd(strm: Ref[Stream], status: Ref[i32]) -> i32
+extern<"zlib_n00b_inflate"> __inflate(strm: Ref[Stream], flush: i32, corrupt_detail: Ref[uint], failed_status: Ref[i32]) -> i32
+extern<"zlib_n00b_inflateEnd"> __inflateEnd(strm: Ref[Stream], status: Ref[i32]) -> i32
+extern<"zlib_n00b_compress2"> __compress2(source: Ref[Array[u8]], level: i32, dest: Ref[Ffi_Bytes], status: Ref[i32]) -> i32
+extern<"zlib_n00b_compressBound"> __compressBound(sourceLen: u64) -> u64
+extern<"zlib_n00b_uncompress"> __uncompress(dest_capacity: u64, source: Ref[Array[u8]], dest: Ref[Ffi_Bytes], status: Ref[i32]) -> i32
+extern<"zlib_n00b_adler32"> __adler32(adler: u64, buf: Ref[Array[u8]], result: Ref[u64]) -> i32
+extern<"zlib_n00b_crc32"> __crc32(crc: u64, buf: Ref[Array[u8]], result: Ref[u64]) -> i32
+extern<"zlib_n00b_deflateInit"> __deflateInit(strm: Ref[Stream], level: i32, status: Ref[i32]) -> i32
+extern<"zlib_n00b_inflateInit"> __inflateInit(strm: Ref[Stream], status: Ref[i32]) -> i32
+
+func version() -> string fail: Error {
+    var result: uint = 0
+    let outcome = __zlibVersion(ref result)
+    if outcome < 0 {
+        let error: Error = (code = cast[i64]outcome, text = nil, fn = "zlibVersion")
+        fail error
+    }
+    return __ffi_copy_cstr(result)
+}
+
+enum Deflate_Outcome {
+    progress = 0,
+    done = 1
+}
+
+func deflate(modify self: Stream, flush: i32) -> Deflate_Outcome fail: Error {
+    var failed_status: i32 = 0
+    let outcome = __deflate(ref self, flush, ref failed_status)
+    if outcome < 0 {
+        let error: Error = (code = cast[i64]outcome, text = nil, fn = "deflate")
+        fail error
+    }
+    if outcome == 2 {
+        let error: Error = (code = cast[i64]outcome, text = nil, fn = "deflate")
+        fail error
+    }
+    if outcome == 3 {
+        let error: Error = (code = cast[i64]failed_status, text = nil, fn = "deflate")
+        fail error
+    }
+    return cast[Deflate_Outcome]outcome
+}
+
+func deflate_end(modify strm: Stream) fail: Error {
+    var status: i32 = 0
+    let outcome = __deflateEnd(ref strm, ref status)
+    if outcome < 0 {
+        let error: Error = (code = cast[i64]outcome, text = nil, fn = "deflateEnd")
+        fail error
+    }
+    if outcome == 0 {
+        let error: Error = (code = cast[i64]status, text = nil, fn = "deflateEnd")
+        fail error
+    }
+}
+
+enum Inflate_Outcome {
+    done = 0,
+    progress = 1
+}
+
+func inflate(modify self: Stream, flush: i32) -> Inflate_Outcome fail: Error {
+    var corrupt_detail: uint = 0
+    var failed_status: i32 = 0
+    let outcome = __inflate(ref self, flush, ref corrupt_detail, ref failed_status)
+    if outcome < 0 {
+        let error: Error = (code = cast[i64]outcome, text = nil, fn = "inflate")
+        fail error
+    }
+    if outcome == 2 {
+        let error: Error = (code = cast[i64]outcome, text = nil, fn = "inflate")
+        fail error
+    }
+    if outcome == 3 {
+        let error: Error = (code = cast[i64]outcome, text = nil, fn = "inflate")
+        fail error
+    }
+    if outcome == 4 {
+        let error: Error = (code = cast[i64]corrupt_detail, text = nil, fn = "inflate")
+        fail error
+    }
+    if outcome == 5 {
+        let error: Error = (code = cast[i64]failed_status, text = nil, fn = "inflate")
+        fail error
+    }
+    return cast[Inflate_Outcome]outcome
+}
+
+func inflate_end(modify strm: Stream) fail: Error {
+    var status: i32 = 0
+    let outcome = __inflateEnd(ref strm, ref status)
+    if outcome < 0 {
+        let error: Error = (code = cast[i64]outcome, text = nil, fn = "inflateEnd")
+        fail error
+    }
+    if outcome == 0 {
+        let error: Error = (code = cast[i64]status, text = nil, fn = "inflateEnd")
+        fail error
+    }
+}
+
+func compress(source: Array[u8], level: i32) -> Array[u8] fail: Error {
+    var source_value = source
+    var dest: Ffi_Bytes = (data = 0, length = 0)
+    var status: i32 = 0
+    let outcome = __compress2(ref source_value, level, ref dest, ref status)
+    if outcome < 0 {
+        let error: Error = (code = cast[i64]outcome, text = nil, fn = "compress2")
+        fail error
+    }
+    if outcome == 0 {
+        let error: Error = (code = cast[i64]status, text = nil, fn = "compress2")
+        fail error
+    }
+    return __ffi_take_bytes(ref dest)
+}
+
+func compress_bound(source_len: u64) -> u64 {
+    let result = __compressBound(source_len)
+    return result
+}
+
+func uncompress(dest_capacity: u64, source: Array[u8]) -> Array[u8] fail: Error {
+    var source_value = source
+    var dest: Ffi_Bytes = (data = 0, length = 0)
+    var status: i32 = 0
+    let outcome = __uncompress(dest_capacity, ref source_value, ref dest, ref status)
+    if outcome < 0 {
+        let error: Error = (code = cast[i64]outcome, text = nil, fn = "uncompress")
+        fail error
+    }
+    if outcome == 0 {
+        let error: Error = (code = cast[i64]status, text = nil, fn = "uncompress")
+        fail error
+    }
+    return __ffi_take_bytes(ref dest)
+}
+
+func adler32(adler: u64, buf: Array[u8]) -> u64 fail: Error {
+    var buf_value = buf
+    var result: u64 = 0
+    let outcome = __adler32(adler, ref buf_value, ref result)
+    if outcome < 0 {
+        let error: Error = (code = cast[i64]outcome, text = nil, fn = "adler32")
+        fail error
+    }
+    return result
+}
+
+func crc32(crc: u64, buf: Array[u8]) -> u64 fail: Error {
+    var buf_value = buf
+    var result: u64 = 0
+    let outcome = __crc32(crc, ref buf_value, ref result)
+    if outcome < 0 {
+        let error: Error = (code = cast[i64]outcome, text = nil, fn = "crc32")
+        fail error
+    }
+    return result
+}
+
+func deflate_init(modify strm: Stream, level: i32) fail: Error {
+    var status: i32 = 0
+    let outcome = __deflateInit(ref strm, level, ref status)
+    if outcome < 0 {
+        let error: Error = (code = cast[i64]outcome, text = nil, fn = "deflateInit")
+        fail error
+    }
+    if outcome == 0 {
+        let error: Error = (code = cast[i64]status, text = nil, fn = "deflateInit")
+        fail error
+    }
+}
+
+func inflate_init(modify strm: Stream) fail: Error {
+    var status: i32 = 0
+    let outcome = __inflateInit(ref strm, ref status)
+    if outcome < 0 {
+        let error: Error = (code = cast[i64]outcome, text = nil, fn = "inflateInit")
+        fail error
+    }
+    if outcome == 0 {
+        let error: Error = (code = cast[i64]status, text = nil, fn = "inflateInit")
+        fail error
+    }
+}
+7	contracts/zlib/aarch64-apple-darwin.writ:8:1	z_stream
+24	contracts/zlib/aarch64-apple-darwin.writ:26:1	ZLIB_VERSION
+25	contracts/zlib/aarch64-apple-darwin.writ:27:1	ZLIB_VERNUM
+26	contracts/zlib/aarch64-apple-darwin.writ:28:1	ZLIB_VER_MAJOR
+27	contracts/zlib/aarch64-apple-darwin.writ:29:1	ZLIB_VER_MINOR
+28	contracts/zlib/aarch64-apple-darwin.writ:30:1	ZLIB_VER_REVISION
+29	contracts/zlib/aarch64-apple-darwin.writ:31:1	ZLIB_VER_SUBREVISION
+30	contracts/zlib/aarch64-apple-darwin.writ:32:1	Z_NO_FLUSH
+31	contracts/zlib/aarch64-apple-darwin.writ:33:1	Z_PARTIAL_FLUSH
+32	contracts/zlib/aarch64-apple-darwin.writ:34:1	Z_SYNC_FLUSH
+33	contracts/zlib/aarch64-apple-darwin.writ:35:1	Z_FULL_FLUSH
+34	contracts/zlib/aarch64-apple-darwin.writ:36:1	Z_FINISH
+35	contracts/zlib/aarch64-apple-darwin.writ:37:1	Z_BLOCK
+36	contracts/zlib/aarch64-apple-darwin.writ:38:1	Z_TREES
+37	contracts/zlib/aarch64-apple-darwin.writ:39:1	Z_OK
+38	contracts/zlib/aarch64-apple-darwin.writ:40:1	Z_STREAM_END
+39	contracts/zlib/aarch64-apple-darwin.writ:41:1	Z_NEED_DICT
+40	contracts/zlib/aarch64-apple-darwin.writ:42:1	Z_ERRNO
+41	contracts/zlib/aarch64-apple-darwin.writ:43:1	Z_STREAM_ERROR
+42	contracts/zlib/aarch64-apple-darwin.writ:44:1	Z_DATA_ERROR
+43	contracts/zlib/aarch64-apple-darwin.writ:45:1	Z_MEM_ERROR
+44	contracts/zlib/aarch64-apple-darwin.writ:46:1	Z_BUF_ERROR
+45	contracts/zlib/aarch64-apple-darwin.writ:47:1	Z_VERSION_ERROR
+46	contracts/zlib/aarch64-apple-darwin.writ:48:1	Z_NO_COMPRESSION
+47	contracts/zlib/aarch64-apple-darwin.writ:49:1	Z_BEST_SPEED
+48	contracts/zlib/aarch64-apple-darwin.writ:50:1	Z_BEST_COMPRESSION
+49	contracts/zlib/aarch64-apple-darwin.writ:51:1	Z_DEFAULT_COMPRESSION
+50	contracts/zlib/aarch64-apple-darwin.writ:52:1	Z_FILTERED
+51	contracts/zlib/aarch64-apple-darwin.writ:53:1	Z_HUFFMAN_ONLY
+52	contracts/zlib/aarch64-apple-darwin.writ:54:1	Z_RLE
+53	contracts/zlib/aarch64-apple-darwin.writ:55:1	Z_FIXED
+54	contracts/zlib/aarch64-apple-darwin.writ:56:1	Z_DEFAULT_STRATEGY
+55	contracts/zlib/aarch64-apple-darwin.writ:57:1	Z_BINARY
+56	contracts/zlib/aarch64-apple-darwin.writ:58:1	Z_TEXT
+57	contracts/zlib/aarch64-apple-darwin.writ:59:1	Z_UNKNOWN
+58	contracts/zlib/aarch64-apple-darwin.writ:60:1	Z_DEFLATED
+59	contracts/zlib/aarch64-apple-darwin.writ:61:1	Z_NULL
+61	contracts/zlib/aarch64-apple-darwin.writ:63:1	zlibVersion
+62	contracts/zlib/aarch64-apple-darwin.writ:64:1	deflate
+63	contracts/zlib/aarch64-apple-darwin.writ:65:1	deflateEnd
+64	contracts/zlib/aarch64-apple-darwin.writ:66:1	inflate
+65	contracts/zlib/aarch64-apple-darwin.writ:67:1	inflateEnd
+66	contracts/zlib/aarch64-apple-darwin.writ:68:1	compress2
+67	contracts/zlib/aarch64-apple-darwin.writ:69:1	compressBound
+68	contracts/zlib/aarch64-apple-darwin.writ:70:1	uncompress
+69	contracts/zlib/aarch64-apple-darwin.writ:71:1	adler32
+70	contracts/zlib/aarch64-apple-darwin.writ:72:1	crc32
+71	contracts/zlib/aarch64-apple-darwin.writ:75:1	deflateInit
+72	contracts/zlib/aarch64-apple-darwin.writ:77:1	inflateInit
+74	contracts/zlib/aarch64-apple-darwin.writ:63:1	zlibVersion
+89	contracts/zlib/aarch64-apple-darwin.writ:64:1	deflate
+107	contracts/zlib/aarch64-apple-darwin.writ:65:1	deflateEnd
+125	contracts/zlib/aarch64-apple-darwin.writ:66:1	inflate
+152	contracts/zlib/aarch64-apple-darwin.writ:67:1	inflateEnd
+165	contracts/zlib/aarch64-apple-darwin.writ:68:1	compress2
+181	contracts/zlib/aarch64-apple-darwin.writ:69:1	compressBound
+186	contracts/zlib/aarch64-apple-darwin.writ:70:1	uncompress
+202	contracts/zlib/aarch64-apple-darwin.writ:71:1	adler32
+213	contracts/zlib/aarch64-apple-darwin.writ:72:1	crc32
+224	contracts/zlib/aarch64-apple-darwin.writ:75:1	deflateInit
+237	contracts/zlib/aarch64-apple-darwin.writ:77:1	inflateInit
+library z
+load static

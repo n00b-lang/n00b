@@ -37,7 +37,58 @@ writ_session_new(const writ_session_config_t *config)
     if (config && config->struct_size >= sizeof(writ_session_config_t) && config->llvm_prefix.length) {
         session->llvm_prefix = writ_str_copy(session, config->llvm_prefix.data, config->llvm_prefix.length);
     }
+    session->contract_dirs     = core_list_new(uint32_t);
+    session->env_contract_dirs = core_list_new(uint32_t);
+    const char *search = getenv("WRIT_CONTRACT_PATH");
+    while (search && *search) {
+        const char *end = strchr(search, ':');
+        size_t      length = end ? (size_t)(end - search) : strlen(search);
+        if (length) {
+            core_list_push(session->env_contract_dirs, writ_intern(session, search, length));
+        }
+        search = end ? end + 1 : nullptr;
+    }
     return session;
+}
+
+writ_status_t
+writ_session_add_contract_dir(writ_session_t *session, writ_str_t dir)
+{
+    if (!session || !dir.length) {
+        return WRIT_INVALID_ARGUMENT;
+    }
+    core_list_push(session->contract_dirs, writ_intern_str(session, dir));
+    return WRIT_OK;
+}
+
+static writ_str_t
+contract_in(writ_session_t *session, writ_str_t dir, writ_str_t name)
+{
+    writ_str_t path = writ_str_format(session, "%.*s/%.*s", S(dir), S(name));
+    FILE      *file = fopen(path.data, "rb");
+    if (!file) {
+        return (writ_str_t){nullptr, 0};
+    }
+    fclose(file);
+    return path;
+}
+
+writ_str_t
+writ_find_contract(writ_session_t *session, writ_str_t name)
+{
+    core_list_foreach(session->contract_dirs, dir) {
+        writ_str_t found = contract_in(session, writ_sym_str(session, *dir), name);
+        if (found.length) {
+            return found;
+        }
+    }
+    core_list_foreach(session->env_contract_dirs, dir) {
+        writ_str_t found = contract_in(session, writ_sym_str(session, *dir), name);
+        if (found.length) {
+            return found;
+        }
+    }
+    return contract_in(session, writ_cstr(WRIT_CONTRACT_INSTALL_DIR), name);
 }
 
 void
@@ -59,6 +110,8 @@ writ_session_free(writ_session_t *session)
     }
     core_list_free(session->sources);
     core_list_free(session->diags);
+    core_list_free(session->contract_dirs);
+    core_list_free(session->env_contract_dirs);
     core_diagnostics_free(session->diagnostics);
     core_indexed_table_free(session->strings);
     core_arena_free(&session->arena);

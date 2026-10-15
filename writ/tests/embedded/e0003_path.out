@@ -1,0 +1,2 @@
+error[E0003]: cannot read file: `tests/embedded/missing.writ`
+  --> tests/embedded/e0003_path.writ:1:1

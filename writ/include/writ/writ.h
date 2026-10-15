@@ -37,6 +37,7 @@ enum {
     WRIT_SOURCE_CONTRACT_DECLARATIONS,
     WRIT_SOURCE_PROFILE,
     WRIT_SOURCE_BINDING,
+    WRIT_SOURCE_EMBEDDED,
 };
 
 typedef struct {
@@ -112,6 +113,7 @@ uint32_t        writ_api_version(void);
 
 writ_session_t *writ_session_new(const writ_session_config_t *config);
 void            writ_session_free(writ_session_t *session);
+writ_status_t   writ_session_add_contract_dir(writ_session_t *session, writ_str_t dir);
 
 void              writ_session_set_diag_sink(writ_session_t *session,
                                              writ_diag_sink_fn sink, void *context);
@@ -125,6 +127,11 @@ writ_status_t writ_unit_add_source(writ_unit_t *unit, writ_source_kind_t kind,
                                    writ_origin_t origin, writ_str_t text,
                                    uint32_t *source_id);
 writ_status_t writ_unit_add_file(writ_unit_t *unit, writ_str_t path, uint32_t *source_id);
+writ_status_t writ_unit_add_embedded(writ_unit_t *unit, writ_str_t language,
+                                     writ_origin_t origin, writ_str_t text,
+                                     uint32_t *source_id);
+size_t        writ_unit_file_count(const writ_unit_t *unit);
+writ_str_t    writ_unit_file_at(const writ_unit_t *unit, size_t index);
 writ_status_t writ_unit_dump(const writ_unit_t *unit, writ_str_t *rendered);
 writ_status_t writ_format_unit(const writ_unit_t *unit, const writ_output_t *output);
 

@@ -44,6 +44,7 @@ struct writ_binding {
     writ_session_t               *session;
     writ_unit_t                  *unit;
     uint32_t                      block;
+    writ_loc_t                    anchor;
     bool                          export_side;
     writ_str_t                    language;
     choice_t                      module;
@@ -51,6 +52,9 @@ struct writ_binding {
     choice_t                      header;
     core_list_t(writ_sym_t)       prefixes;
     core_list_t(writ_sym_t)       libraries;
+    core_list_t(writ_sym_t)       search_paths;
+    writ_str_t                    panic_value;
+    writ_str_t                    allocator;
     fn_decision_t                *fns;
     core_list_t(slot_decision_t)  slots;
     core_list_t(type_decision_t)  types;
@@ -486,9 +490,13 @@ apply_item(writ_binding_t *b, uint32_t id)
         }
         return;
     case WRIT_N_LIBRARY_FILE:
-    case WRIT_N_SEARCH_PATH:
         if (for_side(b, id, false)) {
             core_list_push(b->libraries, at(b, writ_node_first_of(b->unit, id, WRIT_N_TEXT))->name);
+        }
+        return;
+    case WRIT_N_SEARCH_PATH:
+        if (for_side(b, id, false)) {
+            core_list_push(b->search_paths, at(b, writ_node_first_of(b->unit, id, WRIT_N_TEXT))->name);
         }
         return;
     case WRIT_N_HEADER_NAME:
@@ -505,8 +513,16 @@ apply_item(writ_binding_t *b, uint32_t id)
         }
         return;
     case WRIT_N_ON_PANIC:
+        if (for_side(b, id, true)) {
+            uint32_t error = writ_node_first_of(b->unit, id, WRIT_N_PANIC_ERROR);
+            uint32_t value = error ? writ_node_child(b->unit, error, 0) : 0;
+            b->panic_value = value ? writ_loc_text(b->session, at(b, value)->loc) : (writ_str_t){0};
+        }
+        return;
     case WRIT_N_ALLOCATOR_OWN:
-        for_side(b, id, true);
+        if (for_side(b, id, true)) {
+            b->allocator = text_of(b, item->name);
+        }
         return;
     default:
         return;
@@ -527,7 +543,7 @@ check_clashes(writ_binding_t *b)
         for (size_t j = i + 1; j < count && bound(&b->fns[i]); j++) {
             const fn_decision_t *x = &b->fns[i], *y = &b->fns[j];
             if (bound(y) && writ_str_eq(x->owner, y->owner) && writ_str_eq(x->name.text, y->name.text)) {
-                writ_report(b->session, WRIT_D_BIND_NAME_CLASH, at(b, b->block)->loc, "`%.*s` and `%.*s` are both `%.*s`",
+                writ_report(b->session, WRIT_D_BIND_NAME_CLASH, b->anchor, "`%.*s` and `%.*s` are both `%.*s`",
                             S(writ_model_fn_at(b->model, i)->contract_name),
                             S(writ_model_fn_at(b->model, j)->contract_name), S(x->name.text));
             }
@@ -546,27 +562,62 @@ check_fns(writ_binding_t *b)
             continue;
         }
         if (!d->raw && unknown_facts(fn)) {
-            writ_loc_t block = at(b, b->block)->loc;
+            writ_loc_t block = b->anchor;
             uint32_t diag = writ_report(b->session, WRIT_D_BIND_UNKNOWN, block, "`%.*s`", S(fn->contract_name));
-            writ_loc_t brace = {block.source, block.end - 1, block.end - 1};
-            writ_report_suggest(b->session, diag, brace,
-                                writ_str_format(b->session, "    raw \"%.*s\"\n", S(fn->contract_name)),
-                                writ_cstr("bind it without safety"));
+            if (b->block) {
+                writ_loc_t brace = {block.source, block.end - 1, block.end - 1};
+                writ_report_suggest(b->session, diag, brace,
+                                    writ_str_format(b->session, "    raw \"%.*s\"\n", S(fn->contract_name)),
+                                    writ_cstr("bind it without safety"));
+            }
         }
         bool c_variadic = fn->varargs != WRIT_VARARGS_NONE && fn->varargs != WRIT_VARARGS_VA_LIST;
         if (c_variadic && !b->profile->variadic_call && !b->export_side) {
-            writ_report(b->session, WRIT_D_BIND_PROFILE, at(b, b->block)->loc, "`%.*s` cannot call C variadic `%.*s`",
+            writ_report(b->session, WRIT_D_BIND_PROFILE, b->anchor, "`%.*s` cannot call C variadic `%.*s`",
                         S(b->language), S(fn->contract_name));
         }
         if (b->export_side && !d->provide.length) {
-            writ_report(b->session, WRIT_D_BIND_PROVIDE, at(b, b->block)->loc, "`%.*s`", S(fn->contract_name));
+            writ_report(b->session, WRIT_D_BIND_PROVIDE, b->anchor, "`%.*s`", S(fn->contract_name));
         }
     }
 }
 
-static uint32_t
+static bool
+find_embedded_block(writ_binding_t *b, writ_str_t library)
+{
+    writ_unit_t *unit = b->unit;
+    uint32_t first = 0, count = 0;
+    for (uint32_t block = 0; (block = writ_unit_next_item(unit, WRIT_N_BINDING, block)); count++) {
+        if (count == 1) {
+            writ_report(b->session, WRIT_D_BIND_LANGUAGE, at(b, block)->loc, "`%.*s`",
+                        S(text_of(b, unit->language)));
+            return false;
+        }
+        first = block;
+    }
+    for (size_t i = 0; i < unit->roots.len && !first; i++) {
+        if (unit->roots.data[i].kind == WRIT_SOURCE_EMBEDDED) {
+            b->anchor = at(b, unit->roots.data[i].root)->loc;
+        }
+    }
+    if (first) {
+        b->anchor = at(b, first)->loc;
+    }
+    if (!library.length) {
+        writ_report(b->session, WRIT_D_EMBEDDED_SHAPE, b->anchor, "no `library` in the contract");
+        return false;
+    }
+    b->block    = first;
+    b->language = text_of(b, unit->language);
+    return true;
+}
+
+static bool
 find_block(writ_binding_t *b, const writ_bind_request_t *request, writ_str_t library)
 {
+    if (request->binding->language) {
+        return find_embedded_block(b, library);
+    }
     uint32_t chosen = 0, count = 0;
     for (uint32_t block = 0; (block = writ_unit_next_item(request->binding, WRIT_N_BINDING, block)); count++) {
         if (!chosen || writ_str_eq(text_of(b, at(b, block)->name), library)) {
@@ -577,14 +628,16 @@ find_block(writ_binding_t *b, const writ_bind_request_t *request, writ_str_t lib
     if (!chosen || (request->language.length && (count != 1 || !writ_str_eq(language, request->language)))) {
         writ_report(b->session, WRIT_D_BIND_LANGUAGE, chosen ? at(b, chosen)->loc : WRIT_NO_LOC, "`%.*s`",
                     S(request->language.length ? request->language : writ_cstr("any")));
-        return 0;
+        return false;
     }
     if (!writ_str_eq(text_of(b, at(b, chosen)->name), library)) {
         writ_report(b->session, WRIT_D_BIND_CONTRACT, at(b, chosen)->loc, "the contract is `%.*s`", S(library));
-        return 0;
+        return false;
     }
     b->language = language;
-    return chosen;
+    b->block    = chosen;
+    b->anchor   = at(b, chosen)->loc;
+    return true;
 }
 
 static void
@@ -593,6 +646,7 @@ binding_release(void *object)
     writ_binding_t *b = object;
     core_list_free(b->prefixes);
     core_list_free(b->libraries);
+    core_list_free(b->search_paths);
     core_list_free(b->slots);
     core_list_free(b->types);
 }
@@ -608,11 +662,11 @@ writ_bind(const writ_model_t *model, const writ_bind_request_t *request, const w
     writ_binding_t *b = writ_alloc(session, sizeof(writ_binding_t));
     *b = (writ_binding_t){.model = model, .session = session, .unit = request->binding,
                           .prefixes = core_list_new(writ_sym_t), .libraries = core_list_new(writ_sym_t),
-                          .slots = core_list_new(slot_decision_t), .types = core_list_new(type_decision_t)};
+                          .search_paths = core_list_new(writ_sym_t), .slots = core_list_new(slot_decision_t),
+                          .types = core_list_new(type_decision_t)};
     writ_on_session_free(session, binding_release, b);
     writ_str_t library = writ_model_library(model)->name;
-    b->block = find_block(b, request, library);
-    if (b->block) {
+    if (find_block(b, request, library)) {
         b->profile = writ_profile_read(request->profiles, writ_intern_str(session, b->language));
     }
     if (b->profile) {
@@ -626,6 +680,9 @@ writ_bind(const writ_model_t *model, const writ_bind_request_t *request, const w
             uint32_t item = writ_node_child(b->unit, b->block, i);
             if (at(b, item)->kind == WRIT_N_STRIP_PREFIX) {
                 core_list_push(b->prefixes, at(b, item)->name);
+            } else if (at(b, item)->kind == WRIT_N_MODULE && b->unit->language) {
+                writ_report(session, WRIT_D_EMBEDDED_SHAPE, at(b, item)->loc,
+                            "the host decides where the bound API lives");
             } else if (at(b, item)->kind == WRIT_N_MODULE) {
                 b->module = (choice_t){text_of(b, at(b, item)->name), true};
             }
@@ -704,4 +761,100 @@ writ_binding_render(const writ_binding_t *b, writ_str_t *rendered)
     }
     *rendered = writ_emit_finish(&e, b->session);
     return WRIT_OK;
+}
+
+const writ_model_t *
+writ_binding_model(const writ_binding_t *b)
+{
+    return b->model;
+}
+
+const writ_profile_t *
+writ_binding_profile(const writ_binding_t *b)
+{
+    return b->profile;
+}
+
+bool
+writ_binding_exports(const writ_binding_t *b)
+{
+    return b->export_side;
+}
+
+writ_str_t
+writ_binding_load(const writ_binding_t *b)
+{
+    return b->load.text;
+}
+
+writ_str_t
+writ_binding_header(const writ_binding_t *b)
+{
+    return b->header.text;
+}
+
+writ_str_t
+writ_binding_panic_value(const writ_binding_t *b)
+{
+    return b->panic_value;
+}
+
+writ_str_t
+writ_binding_allocator(const writ_binding_t *b)
+{
+    return b->allocator;
+}
+
+writ_bound_fn_t
+writ_binding_fn(const writ_binding_t *b, size_t fn)
+{
+    const fn_decision_t *d = &b->fns[fn];
+    return (writ_bound_fn_t){.bound = bound(d), .raw = d->raw, .is_static = d->is_static, .name = d->name.text,
+                             .owner = d->owner, .error = d->error.text, .provide = d->provide};
+}
+
+writ_str_t
+writ_binding_slot_repr(const writ_binding_t *b, size_t fn, writ_str_t slot)
+{
+    for (size_t i = 0; i < b->slots.len; i++) {
+        if (b->slots.data[i].fn == fn && writ_str_eq(b->slots.data[i].slot, slot)) {
+            return b->slots.data[i].repr.text;
+        }
+    }
+    return (writ_str_t){0};
+}
+
+writ_str_t
+writ_binding_type(const writ_binding_t *b, writ_str_t contract)
+{
+    for (size_t i = 0; i < b->types.len; i++) {
+        if (writ_str_eq(b->types.data[i].contract, contract)) {
+            return b->types.data[i].name.text;
+        }
+    }
+    return writ_profile_name(b->profile, WRIT_NAMING_TYPE, contract);
+}
+
+size_t
+writ_binding_library_count(const writ_binding_t *b)
+{
+    return b->libraries.len;
+}
+
+writ_str_t
+writ_binding_library_at(const writ_binding_t *b, size_t index)
+{
+    return text_of(b, b->libraries.data[index]);
+}
+
+size_t
+writ_binding_search_path_count(const writ_binding_t *b)
+{
+    return b->search_paths.len;
+}
+
+writ_str_t
+writ_binding_search_path_at(const writ_binding_t *b, size_t index)
+{
+    return text_of(b, b->search_paths.data[index]);
 }

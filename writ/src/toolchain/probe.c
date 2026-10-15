@@ -164,7 +164,7 @@ static writ_str_t
 abi_probe(const writ_model_t *model)
 {
     writ_session_t *session = model->session;
-    writ_c_context_t c = {model, writ_cstr("writ"), writ_cstr("WRIT")};
+    writ_c_context_t c = {model, writ_cstr("writ"), writ_cstr("WRIT"), false};
     writ_emit_t emit;
     writ_emit_init(&emit);
     writ_emit_text(&emit, "%.*s", S(writ_probe_includes(model)));

@@ -16,6 +16,11 @@ refine writ_session_free {
     session: consume ?writ_session_t
 }
 
+refine writ_session_add_contract_dir {
+    session: Session
+    error ret != WRIT_OK via ret
+}
+
 refine writ_session_set_diag_sink {
     session: Session
     context: keep ?void until writ_session_free(session)
@@ -52,6 +57,20 @@ refine writ_unit_add_file {
     unit: inout *writ_unit_t
     source_id: out ?u32
     error ret != WRIT_OK via ret
+}
+
+refine writ_unit_add_embedded {
+    unit: inout *writ_unit_t
+    source_id: out ?u32
+    error ret != WRIT_OK via ret
+}
+
+refine writ_unit_file_count {
+    unit: *writ_unit_t
+}
+
+refine writ_unit_file_at {
+    unit: *writ_unit_t
 }
 
 refine writ_platform_from_triple {

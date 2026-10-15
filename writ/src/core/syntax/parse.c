@@ -99,6 +99,7 @@ typedef struct {
     core_dict_t      rule_by_id;
     parse_nt_id_t    file_start;
     parse_nt_id_t    declarations_start;
+    parse_nt_id_t    embedded_start;
 } writ_grammar_t;
 
 static void
@@ -121,11 +122,12 @@ typedef struct {
     const scan_lex_spec_t  *lexer;
     const char             *file;
     const char             *declarations;
+    const char             *embedded;
 } grammar_spec_t;
 
 static const grammar_spec_t grammar_specs[] = {
-    [WRIT_GRAMMAR_WRIT] = {CORE_STRING_STATIC(writ_grammar_text), &writ_lexer, "file", "declarations"},
-    [WRIT_GRAMMAR_JSON] = {CORE_STRING_STATIC(json_grammar_text), &json_lexer, "json-file", "json-file"},
+    [WRIT_GRAMMAR_WRIT] = {CORE_STRING_STATIC(writ_grammar_text), &writ_lexer, "file", "declarations", "embedded"},
+    [WRIT_GRAMMAR_JSON] = {CORE_STRING_STATIC(json_grammar_text), &json_lexer, "json-file", "json-file", "json-file"},
 };
 
 static writ_grammar_t *
@@ -153,6 +155,7 @@ grammar_for(writ_session_t *session, writ_grammar_id_t which)
     }
     grammar->file_start         = nonterminal_id(grammar->grammar, spec->file);
     grammar->declarations_start = nonterminal_id(grammar->grammar, spec->declarations);
+    grammar->embedded_start     = nonterminal_id(grammar->grammar, spec->embedded);
     session->grammars[which]    = grammar;
     writ_on_session_free(session, grammar_release, grammar);
     return grammar;
@@ -353,7 +356,9 @@ parse_source(writ_unit_t *unit, uint32_t source, writ_source_kind_t kind, writ_g
     parse_scanner_t *scanner = nullptr;
     parse_token_stream_t *stream =
         scan_tokenize(grammar->grammar, text->text.data, text->text.length, &buffer, &scanner);
-    parse_nt_id_t start = kind == WRIT_SOURCE_CONTRACT_DECLARATIONS ? grammar->declarations_start : grammar->file_start;
+    parse_nt_id_t start = kind == WRIT_SOURCE_CONTRACT_DECLARATIONS ? grammar->declarations_start
+                        : kind == WRIT_SOURCE_EMBEDDED           ? grammar->embedded_start
+                                                                 : grammar->file_start;
     parse_pwz_parser_t *parser = parse_pwz_new_for_start(grammar->grammar, start);
     writ_status_t status = WRIT_OK;
     if (!parse_pwz_parse(parser, stream)) {
@@ -371,7 +376,7 @@ parse_source(writ_unit_t *unit, uint32_t source, writ_source_kind_t kind, writ_g
         convert(&converter, parse_forest_tree(&forest, 0), &loc, &lexeme);
         if (converter.scratch.len) {
             core_list_push(unit->roots, ((writ_unit_root_t){kind, source, converter.scratch.data[0], first_token,
-                                                            (uint32_t)unit->tokens.len}));
+                                                            (uint32_t)unit->tokens.len, false}));
         }
         core_list_free(converter.scratch);
         parse_forest_free(&forest);
@@ -400,6 +405,17 @@ writ_unit_add_source(writ_unit_t *unit, writ_source_kind_t kind, writ_origin_t o
     return status;
 }
 
+writ_status_t
+writ_unit_add_embedded(writ_unit_t *unit, writ_str_t language, writ_origin_t origin, writ_str_t text,
+                       uint32_t *source_id)
+{
+    if (!unit || !language.length) {
+        return WRIT_INVALID_ARGUMENT;
+    }
+    unit->language = writ_intern_str(unit->session, language);
+    return writ_unit_add_source(unit, WRIT_SOURCE_EMBEDDED, origin, text, source_id);
+}
+
 static writ_status_t
 read_source(writ_unit_t *unit, writ_str_t path, uint32_t *source_id)
 {
@@ -420,6 +436,13 @@ read_source(writ_unit_t *unit, writ_str_t path, uint32_t *source_id)
     writ_origin_t origin = {.host_path = terminated};
     *source_id = writ_source_add(unit->session, WRIT_SOURCE_CONTRACT_FILE, origin, terminated,
                                  (writ_str_t){data, read});
+    writ_sym_t file_sym = writ_intern_str(unit->session, terminated);
+    core_list_foreach(unit->files, seen) {
+        if (*seen == file_sym) {
+            return WRIT_OK;
+        }
+    }
+    core_list_push(unit->files, file_sym);
     return WRIT_OK;
 }
 

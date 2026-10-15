@@ -29,6 +29,7 @@ typedef struct {
     uint32_t           root;
     uint32_t           first_token;
     uint32_t           last_token;
+    bool               used;
 } writ_unit_root_t;
 
 core_list_decl(writ_unit_root_t);
@@ -40,6 +41,8 @@ struct writ_unit {
     core_list_t(uint32_t)          children;
     core_list_t(writ_unit_root_t)  roots;
     core_list_t(writ_loc_t)        tokens;
+    core_list_t(uint32_t)          files;
+    writ_sym_t                     language;
 };
 
 writ_status_t      writ_unit_read_json(writ_unit_t *unit, writ_str_t path, uint32_t *root);

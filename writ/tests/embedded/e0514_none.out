@@ -1,0 +1,2 @@
+error[E0514]: an embedded unit names one library and binds it without `module`: no `library` in the contract
+  --> tests/embedded/e0514_none.writ:3:1

@@ -244,6 +244,8 @@ read_items(reader_t *r, uint32_t parent, uint32_t from, writ_sym_t feature)
             rust->library = item->name;
             break;
         case WRIT_N_LANG:
+        case WRIT_N_USE:
+        case WRIT_N_BINDING:
             break;
         case WRIT_N_CRATE:
             rust->crate = item->name;

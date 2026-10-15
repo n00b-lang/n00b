@@ -33,9 +33,64 @@ resolve_embedded(writ_session_t *session, const char *declarations, const writ_m
     return writ_resolve(unit, platform, model);
 }
 
-int
-main(void)
+static bool
+ends_with(writ_str_t value, const char *suffix)
 {
+    size_t length = strlen(suffix);
+    return value.length >= length && !memcmp(value.data + value.length - length, suffix, length);
+}
+
+static void
+check_literal(const char *source_root)
+{
+    char contracts[4096];
+    char host[4096];
+    snprintf(contracts, sizeof(contracts), "%s/contracts", source_root);
+    snprintf(host, sizeof(host), "%s/tests/host/program.n00b", source_root);
+
+    writ_session_t *session = writ_session_new(nullptr);
+    writ_session_add_contract_dir(session, text(contracts));
+    writ_unit_t *unit = writ_unit_new(session);
+    writ_origin_t literal = {.host_path = text(host), .first_line = 20, .first_column = 9, .first_byte = 400};
+    expect(writ_unit_add_embedded(unit, text("n00b"), literal, text("use <zlib.writ>\nbinding {\n}\n"), nullptr)
+               == WRIT_OK,
+           "an embedded literal parses");
+    writ_platform_t *platform = nullptr;
+    writ_platform_from_triple(session, text("aarch64-apple-darwin"), &platform);
+    const writ_model_t *model = nullptr;
+    expect(writ_resolve(unit, platform, &model) == WRIT_OK && model, "the literal resolves through the search path");
+    expect(writ_unit_file_count(unit) == 2, "the unit lists the contract and its platform draft");
+    expect(ends_with(writ_unit_file_at(unit, 0), "contracts/zlib.writ"), "the used contract is listed first");
+    expect(ends_with(writ_unit_file_at(unit, 1), "contracts/zlib/aarch64-apple-darwin.writ"),
+           "files used by a used file are listed");
+    expect(!writ_unit_file_at(unit, 2).data, "the list ends");
+    expect(writ_resolve(unit, platform, &model) == WRIT_OK, "resolving twice reuses the used files");
+    expect(writ_unit_file_count(unit) == 2, "resolving twice reads nothing again");
+    writ_session_free(session);
+
+    session = writ_session_new(nullptr);
+    unit = writ_unit_new(session);
+    writ_unit_add_embedded(unit, text("n00b"), literal, text("use \"../../contracts/zlib.writ\"\nbinding }\n"),
+                           nullptr);
+    const writ_diag_t *syntax = writ_diag_at(session, 0);
+    expect(syntax && syntax->primary.span.line == 21, "a syntax error maps to the host line");
+    expect(syntax && !strncmp(syntax->path.data, host, syntax->path.length), "the error names the host file");
+    writ_session_free(session);
+
+    session = writ_session_new(nullptr);
+    unit = writ_unit_new(session);
+    writ_unit_add_embedded(unit, text("n00b"), literal, text("use \"../../contracts/zlib.writ\"\n"), nullptr);
+    writ_platform_from_triple(session, text("aarch64-apple-darwin"), &platform);
+    expect(writ_resolve(unit, platform, &model) == WRIT_OK, "a quoted use resolves against the host file");
+    writ_session_free(session);
+}
+
+int
+main(int argc, char **argv)
+{
+    if (argc > 1) {
+        check_literal(argv[1]);
+    }
     writ_session_t *session = writ_session_new(nullptr);
     const writ_model_t *model = nullptr;
     resolve_embedded(session, "fn f(x: c_nope)", &model);

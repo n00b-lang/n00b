@@ -1,0 +1,10 @@
+use <zlib.writ>
+
+refine crc32 {
+    buf: *[u8; len]
+}
+
+binding {
+    hide "deflateInit_"
+    hide "inflateInit_"
+}

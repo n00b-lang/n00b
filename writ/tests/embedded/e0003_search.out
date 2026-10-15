@@ -1,0 +1,2 @@
+error[E0003]: cannot read file: `<missing.writ>` is not on the contract search path
+  --> tests/embedded/e0003_search.writ:1:1

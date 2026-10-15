@@ -102,11 +102,22 @@ text_list_type(const writ_c_context_t *c)
     return writ_str_format(c->model->session, "const %.*s_str_t *", S(c->prefix));
 }
 
+bool
+writ_c_by_pointer(const writ_c_context_t *c, const writ_plan_item_view_t *item)
+{
+    return c->normalized && item->role == WRIT_ROLE_INPUT && item->type && item->type->kind == WRIT_TYPE_RECORD;
+}
+
 size_t
 writ_c_item_params(const writ_c_context_t *c, const writ_plan_view_t *plan, uint32_t index, writ_c_param_t params[2])
 {
     const writ_plan_item_view_t *item = &plan->items[index];
     writ_session_t *session = c->model->session;
+    if (writ_c_by_pointer(c, item)) {
+        params[0] = (writ_c_param_t){writ_str_format(session, "const %.*s *", S(writ_c_type(c, item->type, false))),
+                                     item->name};
+        return 1;
+    }
     if (item->role == WRIT_ROLE_INPUT || item->role == WRIT_ROLE_INPUT_OUTPUT) {
         switch (item->shape) {
         case WRIT_SHAPE_BYTES:
@@ -571,6 +582,64 @@ emit_expand(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_step_v
     (void)step;
 }
 
+static writ_str_t
+count_field(const writ_model_t *model, const writ_slot_view_t *field)
+{
+    if (field->extent_kind != WRIT_EXTENT_COUNT || !field->count_expr) {
+        return (writ_str_t){0};
+    }
+    writ_ref_t ref = writ_expr_ref(model, field->count_expr);
+    return ref.kind == WRIT_REF_SLOT && ref.index < model->slots.len
+             ? writ_sym_str(model->session, model->slots.data[ref.index].name)
+             : (writ_str_t){0};
+}
+
+static void
+emit_copy_record(const writ_c_context_t *c, writ_emit_t *emit, writ_str_t source, const writ_plan_item_view_t *item)
+{
+    const writ_model_t *model = c->model;
+    const writ_type_view_t *target = item->type && item->type->target ? item->type->target : item->type;
+    const writ_record_view_t *record = target ? writ_model_record_named(model, target->name) : nullptr;
+    writ_str_t type = writ_c_type(c, target, false);
+    writ_emit_open(emit, "if (!%.*s)", S(source));
+    writ_emit_line(emit, "%.*s->data = NULL;", S(item->name));
+    writ_emit_line(emit, "%.*s->length = 0;", S(item->name));
+    writ_emit_line(emit, "goto finish;");
+    writ_emit_close(emit, nullptr);
+    writ_emit_line(emit, "size_t total = sizeof(%.*s);", S(type));
+    for (size_t f = 0; record && f < record->fields_count; f++) {
+        writ_str_t count = count_field(model, &record->fields[f]);
+        if (count.length) {
+            writ_str_t element = writ_c_type(c, record->fields[f].type->target, false);
+            writ_emit_line(emit, "total = (total + _Alignof(%.*s) - 1) & ~(_Alignof(%.*s) - 1);", S(element),
+                           S(element));
+            writ_emit_line(emit, "total += (size_t)%.*s->%.*s * sizeof(%.*s);", S(source), S(count), S(element));
+        }
+    }
+    writ_emit_line(emit, "uint8_t *block = malloc(total);");
+    writ_emit_open(emit, "if (!block)");
+    fail(c, emit, "OUT_OF_MEMORY");
+    writ_emit_close(emit, nullptr);
+    writ_emit_line(emit, "%.*s *copy = (%.*s *)block;", S(type), S(type));
+    writ_emit_line(emit, "*copy = *%.*s;", S(source));
+    writ_emit_line(emit, "size_t at = sizeof(%.*s);", S(type));
+    for (size_t f = 0; record && f < record->fields_count; f++) {
+        writ_str_t count = count_field(model, &record->fields[f]);
+        if (!count.length) {
+            continue;
+        }
+        writ_str_t name = record->fields[f].name;
+        writ_str_t element = writ_c_type(c, record->fields[f].type->target, false);
+        writ_emit_line(emit, "at = (at + _Alignof(%.*s) - 1) & ~(_Alignof(%.*s) - 1);", S(element), S(element));
+        writ_emit_line(emit, "memcpy(block + at, %.*s->%.*s, (size_t)%.*s->%.*s * sizeof(%.*s));", S(source), S(name),
+                       S(source), S(count), S(element));
+        writ_emit_line(emit, "copy->%.*s = (void *)(block + at);", S(name));
+        writ_emit_line(emit, "at += (size_t)%.*s->%.*s * sizeof(%.*s);", S(source), S(count), S(element));
+    }
+    writ_emit_line(emit, "%.*s->data = block;", S(item->name));
+    writ_emit_line(emit, "%.*s->length = total;", S(item->name));
+}
+
 static void
 emit_lift(shim_env_t *env, writ_emit_t *emit, const writ_plan_step_view_t *step, const writ_plan_item_view_t *item)
 {
@@ -585,7 +654,7 @@ emit_lift(shim_env_t *env, writ_emit_t *emit, const writ_plan_step_view_t *step,
     }
     if (step->kind == WRIT_STEP_COPY_BORROWED) {
         if (!writ_c_is_text(item->type)) {
-            writ_emit_line(emit, "#error \"copying borrowed non-text results is not generated for C\"");
+            emit_copy_record(c, emit, source, item);
             return;
         }
         writ_emit_open(emit, "if (%.*s_copy_text(%.*s, %.*s))", S(c->prefix), S(source), S(item->name));
@@ -655,7 +724,7 @@ emit_step(shim_env_t *env, writ_emit_t *emit, const writ_plan_step_view_t *step)
         } else if (plan->slots[step->slot].part == WRIT_PART_LENGTH) {
             writ_emit_line(emit, "s%u = (%.*s)%.*s_count;", step->slot, S(slot_type(c, plan, step->slot)), S(item->name));
         } else {
-            writ_emit_line(emit, "s%u = %.*s;", step->slot, S(item->name));
+            writ_emit_line(emit, "s%u = %s%.*s;", step->slot, writ_c_by_pointer(c, item) ? "*" : "", S(item->name));
         }
         return;
     case WRIT_STEP_ENCODE_CSTR:
@@ -1138,16 +1207,19 @@ writ_gen_c(const writ_model_t *model, const writ_gen_c_request_t *request, const
     }
     writ_session_t *session = model->session;
     writ_str_t prefix = request->prefix.length ? request->prefix : writ_model_library(model)->name;
-    writ_c_context_t c = {model, writ_str_copy(session, prefix.data, prefix.length), upper(session, prefix)};
-    size_t count = writ_model_fn_count(model);
-    const writ_plan_view_t **plans = writ_alloc(session, sizeof(writ_plan_view_t *) * (count ? count : 1));
-    bool complete = true;
-    for (size_t i = 0; i < count; i++) {
-        plans[i] = writ_model_fn_plan(model, writ_model_fn_at(model, i));
-        complete = complete && plans[i];
-    }
-    if (!complete) {
-        return WRIT_HAS_ERRORS;
+    writ_c_context_t c = {model, writ_str_copy(session, prefix.data, prefix.length), upper(session, prefix),
+                          request->struct_size >= sizeof(writ_gen_c_request_t) && request->pointer_normalized};
+    size_t total = writ_model_fn_count(model);
+    const writ_plan_view_t **plans = writ_alloc(session, sizeof(writ_plan_view_t *) * (total ? total : 1));
+    size_t count = 0;
+    for (size_t i = 0; i < total; i++) {
+        const writ_plan_view_t *plan = writ_model_fn_plan(model, writ_model_fn_at(model, i));
+        if (!plan && !c.normalized) {
+            return WRIT_HAS_ERRORS;
+        }
+        if (plan) {
+            plans[count++] = plan;
+        }
     }
     writ_status_t status = output->write_file(output->context, writ_str_format(session, "%.*s_writ.h", S(c.prefix)),
                                               header_text(&c, plans, count));

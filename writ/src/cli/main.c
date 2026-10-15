@@ -21,6 +21,9 @@ arg(const char *text)
 static writ_str_t platform_triple;
 static writ_str_t features[MAX_LIST];
 static size_t     feature_count;
+static writ_str_t contract_dirs[MAX_LIST];
+static size_t     contract_dir_count;
+static writ_str_t embedded_language;
 static bool       fixing;
 
 static writ_status_t
@@ -91,15 +94,41 @@ print_fixed(const writ_session_t *session)
     fwrite(text + at, 1, length - at, stdout);
 }
 
+static writ_status_t
+add_embedded(writ_unit_t *unit, const char *path)
+{
+    FILE *file = fopen(path, "rb");
+    if (!file) {
+        return WRIT_IO_FAILED;
+    }
+    static char text[1 << 20];
+    size_t length = fread(text, 1, sizeof(text), file);
+    fclose(file);
+    writ_origin_t origin = {.host_path = arg(path), .first_line = 1, .first_column = 1};
+    return writ_unit_add_embedded(unit, embedded_language, origin, (writ_str_t){text, length}, nullptr);
+}
+
 static writ_unit_t *
-load(writ_session_t *session, const char *path)
+load_unit(writ_session_t *session, const char *path, bool embedded)
 {
     writ_unit_t *unit = writ_unit_new(session);
-    writ_status_t status = writ_unit_add_file(unit, (writ_str_t){path, strlen(path)}, nullptr);
+    writ_status_t status = embedded ? add_embedded(unit, path) : writ_unit_add_file(unit, arg(path), nullptr);
     if (status == WRIT_IO_FAILED) {
         fprintf(stderr, "writ: cannot read %s\n", path);
     }
     return status == WRIT_OK ? unit : nullptr;
+}
+
+static writ_unit_t *
+load(writ_session_t *session, const char *path)
+{
+    return load_unit(session, path, embedded_language.length != 0);
+}
+
+static writ_unit_t *
+load_file(writ_session_t *session, const char *path)
+{
+    return load_unit(session, path, false);
 }
 
 static int
@@ -154,8 +183,32 @@ cmd_check(writ_session_t *session, int argc, char **argv)
 }
 
 static int
+bind_embedded(writ_session_t *session, int argc, char **argv)
+{
+    if (argc != 3 || strcmp(argv[1], "--profile")) {
+        return 2;
+    }
+    writ_platform_t *platform = platform_for(session);
+    writ_unit_t *unit = platform ? load(session, argv[0]) : nullptr;
+    const writ_model_t *model = nullptr;
+    writ_bind_request_t request = {.struct_size = sizeof(request), .binding = unit,
+                                   .profiles = load_file(session, argv[2]), .language = embedded_language};
+    const writ_binding_t *binding = nullptr;
+    writ_str_t text;
+    if (!unit || !request.profiles || writ_resolve(unit, platform, &model) != WRIT_OK
+        || writ_bind(model, &request, &binding) != WRIT_OK || writ_binding_render(binding, &text) != WRIT_OK) {
+        return 1;
+    }
+    fwrite(text.data, 1, text.length, stdout);
+    return 0;
+}
+
+static int
 cmd_bind(writ_session_t *session, int argc, char **argv)
 {
+    if (embedded_language.length) {
+        return bind_embedded(session, argc, argv);
+    }
     if (argc != 4 && !(argc == 6 && !strcmp(argv[4], "--language"))) {
         return 2;
     }
@@ -263,9 +316,67 @@ take_list(char **argv, int *i, int argc, const char *flag, writ_str_t *list, siz
     return true;
 }
 
+static void
+print_links(const char *label, const writ_str_t *items, size_t count)
+{
+    for (size_t i = 0; i < count; i++) {
+        printf("%s %.*s\n", label, (int)items[i].length, items[i].data);
+    }
+}
+
+static int
+gen_n00b(writ_session_t *session, int argc, char **argv)
+{
+    writ_gen_n00b_request_t request = {.struct_size = sizeof(request)};
+    const char *directory = ".";
+    const char *profiles = nullptr;
+    for (int i = 2; i < argc; i++) {
+        size_t taken = 0;
+        if (!strcmp(argv[i], "-o") && i + 1 < argc) {
+            directory = argv[++i];
+        } else if (!strcmp(argv[i], "--profile") && i + 1 < argc) {
+            profiles = argv[++i];
+        } else if (!take_list(argv, &i, argc, "--prefix", &request.shim_prefix, &taken)
+                   && !take_list(argv, &i, argc, "--module", &request.module_name, &taken)) {
+            return 2;
+        }
+    }
+    if (!profiles || !embedded_language.length) {
+        return 2;
+    }
+    writ_platform_t *platform = platform_for(session);
+    writ_unit_t *unit = platform ? load(session, argv[1]) : nullptr;
+    const writ_model_t *model = nullptr;
+    writ_bind_request_t bind = {.struct_size = sizeof(bind), .binding = unit, .profiles = load_file(session, profiles),
+                                .language = embedded_language};
+    const writ_binding_t *binding = nullptr;
+    if (!unit || !bind.profiles || writ_resolve(unit, platform, &model) != WRIT_OK
+        || writ_bind(model, &bind, &binding) != WRIT_OK) {
+        return 1;
+    }
+    request.binding = binding;
+    writ_output_t output;
+    output_for(session, directory, &output);
+    writ_link_requirements_t links;
+    writ_status_t status = writ_gen_n00b(&request, &output, &links);
+    if (status == WRIT_IO_FAILED) {
+        fprintf(stderr, "writ: cannot write into %s\n", directory);
+    }
+    if (status == WRIT_OK) {
+        print_links("library", links.libraries, links.libraries_count);
+        print_links("framework", links.frameworks, links.frameworks_count);
+        print_links("search_path", links.search_paths, links.search_paths_count);
+        printf("load %s\n", links.load_dynamic ? "dynamic" : "static");
+    }
+    return status == WRIT_OK ? 0 : 1;
+}
+
 static int
 cmd_gen(writ_session_t *session, int argc, char **argv)
 {
+    if (argc >= 2 && !strcmp(argv[0], "n00b")) {
+        return gen_n00b(session, argc, argv);
+    }
     bool rust = argc >= 2 && !strcmp(argv[0], "rust");
     if (argc < 2 || (strcmp(argv[0], "c") && !rust)) {
         return 2;
@@ -384,13 +495,15 @@ static const struct {
 } commands[] = {
     {"import", cmd_import, "import --library NAME --header H... [--link L] [--define D] [-I DIR] [--only GLOB] [-o DIR]"},
     {"verify", cmd_verify, "verify FILE [--binary PATH]"},
-    {"gen", cmd_gen, "gen c FILE [-o DIR] [--prefix NAME] [--conformance] | gen rust FILE --crate-path DIR [-o DIR]"},
+    {"gen", cmd_gen,
+     "gen c FILE [-o DIR] [--prefix NAME] [--conformance] | gen rust FILE --crate-path DIR [-o DIR] | --embedded n00b "
+     "gen n00b FILE --profile FILE [--prefix NAME] [--module NAME] [-o DIR]"},
     {"parse", cmd_parse, "parse FILE"},
     {"check", cmd_check, "check FILE"},
     {"plan", cmd_plan, "plan FILE [FUNCTION]"},
     {"lower", cmd_lower, "lower FILE [-o DIR]"},
     {"derive", cmd_derive, "derive FILE [-o DIR]"},
-    {"bind", cmd_bind, "bind CONTRACT BINDING --profile FILE [--language NAME]"},
+    {"bind", cmd_bind, "bind CONTRACT BINDING --profile FILE [--language NAME] | --embedded NAME bind FILE --profile FILE"},
     {"fmt", cmd_fmt, "fmt FILE"},
 };
 
@@ -411,6 +524,10 @@ main(int argc, char **argv)
             features[feature_count++] = arg(argv[++i]);
         } else if (!strcmp(argv[i], "--fix")) {
             fixing = true;
+        } else if (!strcmp(argv[i], "--embedded") && i + 1 < argc) {
+            embedded_language = arg(argv[++i]);
+        } else if (!strcmp(argv[i], "--contract-dir") && i + 1 < argc && contract_dir_count < MAX_LIST) {
+            contract_dirs[contract_dir_count++] = arg(argv[++i]);
         } else {
             argv[kept++] = argv[i];
         }
@@ -424,6 +541,9 @@ main(int argc, char **argv)
         writ_session_config_t config = {.struct_size = sizeof(config),
                                         .llvm_prefix = arg(llvm && *llvm ? llvm : WRIT_DEFAULT_LLVM_PREFIX)};
         writ_session_t *session = writ_session_new(&config);
+        for (size_t d = 0; d < contract_dir_count; d++) {
+            writ_session_add_contract_dir(session, contract_dirs[d]);
+        }
         int status = commands[i].run(session, argc - 2, argv + 2);
         print_diags(session);
         if (fixing) {

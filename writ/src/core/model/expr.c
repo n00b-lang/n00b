@@ -353,10 +353,11 @@ parse_int(writ_str_t text, int64_t *out)
 static const struct {
     const char *text;
     const char *c;
+    const char *n00b;
 } operators[] = {
-    {"==", "=="}, {"!=", "!="}, {"<", "<"},   {">", ">"},   {"<=", "<="},
-    {">=", ">="}, {"+", "+"},   {"-", "-"},   {"*", "*"},   {"/", "/"},
-    {"and", "&&"}, {"or", "||"},
+    {"==", "==", "=="}, {"!=", "!=", "!="}, {"<", "<", "<"},       {">", ">", ">"},
+    {"<=", "<=", "<="}, {">=", ">=", ">="}, {"+", "+", "+"},       {"-", "-", "-"},
+    {"*", "*", "*"},    {"/", "/", "/"},    {"and", "&&", "and"}, {"or", "||", "or"},
 };
 
 static bool
@@ -542,7 +543,7 @@ print_ref(const writ_model_t *model, uint32_t expr, writ_ref_t ref, writ_languag
         return;
     }
     case WRIT_REF_NULL:
-        core_buffer_puts(out, "NULL");
+        core_buffer_puts(out, language == WRIT_LANGUAGE_N00B ? "nil" : "NULL");
         return;
     case WRIT_REF_NONE_OF:
         core_buffer_printf(out, "(%lld)", (long long)model->handles.data[ref.index].none_value);
@@ -633,7 +634,7 @@ writ_expr_print(const writ_model_t *model, uint32_t expr, writ_language_t langua
         int length = (int)op.length;
         for (size_t i = 0; i < sizeof(operators) / sizeof(operators[0]); i++) {
             if (writ_str_eq(op, writ_cstr(operators[i].text))) {
-                spelled = operators[i].c;
+                spelled = language == WRIT_LANGUAGE_N00B ? operators[i].n00b : operators[i].c;
                 length = (int)strlen(spelled);
             }
         }

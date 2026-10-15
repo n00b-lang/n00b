@@ -53,6 +53,7 @@ writ_unit_new(writ_session_t *session)
         .children = core_list_new(uint32_t),
         .roots    = core_list_new(writ_unit_root_t),
         .tokens   = core_list_new(writ_loc_t),
+        .files    = core_list_new(uint32_t),
     };
     core_list_push(unit->nodes, ((writ_node_t){0}));
     writ_on_session_free(session, writ_unit_release, unit);
@@ -67,6 +68,20 @@ writ_unit_release(void *object)
     core_list_free(unit->children);
     core_list_free(unit->roots);
     core_list_free(unit->tokens);
+    core_list_free(unit->files);
+}
+
+size_t
+writ_unit_file_count(const writ_unit_t *unit)
+{
+    return unit ? unit->files.len : 0;
+}
+
+writ_str_t
+writ_unit_file_at(const writ_unit_t *unit, size_t index)
+{
+    return unit && index < unit->files.len ? writ_sym_str(unit->session, unit->files.data[index])
+                                           : (writ_str_t){nullptr, 0};
 }
 
 uint32_t

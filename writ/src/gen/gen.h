@@ -33,9 +33,17 @@ core_list_decl(writ_repr_t);
 core_list_decl(writ_sym_t);
 
 typedef struct {
+    writ_sym_t contract;
+    writ_str_t native;
+} writ_prim_t;
+
+core_list_decl(writ_prim_t);
+
+typedef struct {
     writ_session_t           *session;
     writ_sym_t                name;
     core_list_t(writ_repr_t)  reprs;
+    core_list_t(writ_prim_t)  prims;
     core_list_t(writ_sym_t)   reserved;
     writ_case_t               naming[WRIT_NAMING_COUNT];
     writ_str_t                handle_close;
@@ -47,6 +55,32 @@ const writ_profile_t *writ_profile_read(writ_unit_t *unit, writ_sym_t language);
 const writ_repr_t    *writ_profile_repr(const writ_profile_t *profile, writ_sym_t id, writ_repr_form_t form);
 const writ_repr_t    *writ_profile_default(const writ_profile_t *profile, writ_repr_form_t form);
 writ_str_t            writ_profile_name(const writ_profile_t *profile, writ_naming_kind_t kind, writ_str_t name);
+writ_str_t            writ_profile_prim(const writ_profile_t *profile, writ_str_t contract);
+
+typedef struct {
+    bool       bound;
+    bool       raw;
+    bool       is_static;
+    writ_str_t name;
+    writ_str_t owner;
+    writ_str_t error;
+    writ_str_t provide;
+} writ_bound_fn_t;
+
+const writ_model_t   *writ_binding_model(const writ_binding_t *b);
+const writ_profile_t *writ_binding_profile(const writ_binding_t *b);
+bool                  writ_binding_exports(const writ_binding_t *b);
+writ_str_t            writ_binding_load(const writ_binding_t *b);
+writ_str_t            writ_binding_header(const writ_binding_t *b);
+writ_str_t            writ_binding_panic_value(const writ_binding_t *b);
+writ_str_t            writ_binding_allocator(const writ_binding_t *b);
+writ_bound_fn_t       writ_binding_fn(const writ_binding_t *b, size_t fn);
+writ_str_t            writ_binding_slot_repr(const writ_binding_t *b, size_t fn, writ_str_t slot);
+writ_str_t            writ_binding_type(const writ_binding_t *b, writ_str_t contract);
+size_t                writ_binding_library_count(const writ_binding_t *b);
+writ_str_t            writ_binding_library_at(const writ_binding_t *b, size_t index);
+size_t                writ_binding_search_path_count(const writ_binding_t *b);
+writ_str_t            writ_binding_search_path_at(const writ_binding_t *b, size_t index);
 
 enum {
     WRIT_C_MAX_ARITY = 8,
@@ -56,7 +90,10 @@ typedef struct {
     const writ_model_t *model;
     writ_str_t          prefix;
     writ_str_t          upper;
+    bool                normalized;
 } writ_c_context_t;
+
+bool writ_c_by_pointer(const writ_c_context_t *c, const writ_plan_item_view_t *item);
 
 typedef struct {
     writ_str_t type;

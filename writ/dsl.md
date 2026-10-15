@@ -2549,7 +2549,7 @@ A host language that keeps writ inside its own source (n00b's `'ffi`
 literal, `ffi-spec.md`) passes an **embedded unit**: a contract, then at
 most one binding whose header is implied.
 
-```writ
+```writ-embedded
 use <zlib.writ>
 
 binding {

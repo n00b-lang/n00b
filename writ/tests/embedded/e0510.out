@@ -1,0 +1,2 @@
+error[E0510]: expected exactly one binding for this language: `n00b`
+  --> tests/embedded/e0510.writ:7:1

@@ -47,4 +47,5 @@ WRIT_DIAG(BIND_LANGUAGE, "E0510", WRIT_ERROR, "expected exactly one binding for 
 WRIT_DIAG(BIND_CONTRACT, "E0511", WRIT_ERROR, "the binding is for a different contract")
 WRIT_DIAG(PROFILE_REPEAT, "E0512", WRIT_ERROR, "this profile item may appear once")
 WRIT_DIAG(NO_PROFILE, "E0513", WRIT_ERROR, "no profile for this language")
+WRIT_DIAG(EMBEDDED_SHAPE, "E0514", WRIT_ERROR, "an embedded unit names one library and binds it without `module`")
 WRIT_DIAG(UNSUPPORTED, "E0901", WRIT_ERROR, "not supported yet")

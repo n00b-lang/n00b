@@ -1,0 +1,121 @@
+#ifndef KV_N00B_EXPORT_H
+#define KV_N00B_EXPORT_H
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+typedef struct kv_db kv_db;
+typedef struct kv_iter kv_iter;
+enum {
+    KV_OK = 0,
+    KV_NOTFOUND = 1,
+    KV_ERR = 2,
+};
+#define KV_OK 0
+#define KV_NOTFOUND 1
+#define KV_ERR 2
+typedef struct kv_entry {
+    uint8_t *key;
+    size_t key_len;
+    uint8_t *val;
+    size_t val_len;
+} kv_entry;
+
+int kv_open(const char *path, kv_db * *out_db);
+int kv_put(kv_db *db, const uint8_t *key, size_t klen, const uint8_t *val, size_t vlen);
+int kv_get(kv_db *db, const uint8_t *key, size_t klen, uint8_t * *out_val, size_t *out_len);
+kv_iter * kv_iter_new(kv_db *db, const uint8_t *prefix, size_t plen);
+kv_entry * kv_iter_next(kv_iter *it);
+const char * kv_errstr(int s);
+
+#endif
+#include <stdint.h>
+#include <stddef.h>
+
+#include "kv.h"
+
+int32_t n00b_ffi_enter(void);
+void n00b_ffi_leave(int32_t depth);
+int32_t n00b_ffi_failed(void);
+
+int n00b_kvstore_open(const char *path, kv_db * *out_db);
+int kv_open(const char *path, kv_db * *out_db)
+{
+    int32_t depth = n00b_ffi_enter();
+    int result = n00b_kvstore_open(path, out_db);
+    int32_t failed = n00b_ffi_failed();
+    n00b_ffi_leave(depth);
+    if (failed) {
+        __builtin_trap();
+    }
+    return result;
+}
+
+int n00b_kvstore_put(kv_db *db, const uint8_t *key, size_t klen, const uint8_t *val, size_t vlen);
+int kv_put(kv_db *db, const uint8_t *key, size_t klen, const uint8_t *val, size_t vlen)
+{
+    int32_t depth = n00b_ffi_enter();
+    int result = n00b_kvstore_put(db, key, klen, val, vlen);
+    int32_t failed = n00b_ffi_failed();
+    n00b_ffi_leave(depth);
+    if (failed) {
+        __builtin_trap();
+    }
+    return result;
+}
+
+int n00b_kvstore_get(kv_db *db, const uint8_t *key, size_t klen, uint8_t * *out_val, size_t *out_len);
+int kv_get(kv_db *db, const uint8_t *key, size_t klen, uint8_t * *out_val, size_t *out_len)
+{
+    int32_t depth = n00b_ffi_enter();
+    int result = n00b_kvstore_get(db, key, klen, out_val, out_len);
+    int32_t failed = n00b_ffi_failed();
+    n00b_ffi_leave(depth);
+    if (failed) {
+        __builtin_trap();
+    }
+    return result;
+}
+
+kv_iter * n00b_kvstore_iter_new(kv_db *db, const uint8_t *prefix, size_t plen);
+kv_iter * kv_iter_new(kv_db *db, const uint8_t *prefix, size_t plen)
+{
+    int32_t depth = n00b_ffi_enter();
+    kv_iter *result = n00b_kvstore_iter_new(db, prefix, plen);
+    int32_t failed = n00b_ffi_failed();
+    n00b_ffi_leave(depth);
+    if (failed) {
+        return NULL;
+    }
+    return result;
+}
+
+kv_entry * n00b_kvstore_iter_next(kv_iter *it);
+kv_entry * kv_iter_next(kv_iter *it)
+{
+    int32_t depth = n00b_ffi_enter();
+    kv_entry *result = n00b_kvstore_iter_next(it);
+    int32_t failed = n00b_ffi_failed();
+    n00b_ffi_leave(depth);
+    if (failed) {
+        return NULL;
+    }
+    return result;
+}
+
+const char * n00b_kvstore_errstr(int s);
+const char * kv_errstr(int s)
+{
+    int32_t depth = n00b_ffi_enter();
+    const char *result = n00b_kvstore_errstr(s);
+    int32_t failed = n00b_ffi_failed();
+    n00b_ffi_leave(depth);
+    if (failed) {
+        return NULL;
+    }
+    return result;
+}
+
+library kv
+load static
