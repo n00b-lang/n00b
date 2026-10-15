@@ -321,13 +321,48 @@ emit_c_shim(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view_
     }
     writ_emit_text(emit, "%s)", params.len ? "" : "void");
     writ_emit_open(emit, "");
+    size_t copies = 0;
     for (size_t i = 0; i < params.len; i++) {
         const shim_param_t *p = &params.data[i];
-        if (p->kind == PARAM_VALUE || p->kind == PARAM_STORAGE) {
+        if (p->kind == PARAM_STORAGE) {
             writ_emit_line(emit, "size_t %.*s_length = 0;", S(p->name));
             writ_emit_line(emit, "const void *%.*s_data = n00b_ffi_borrow((void *)%.*s, &%.*s_length, 0);",
                            S(p->name), S(p->name), S(p->name));
+        } else if (p->kind == PARAM_VALUE) {
+            writ_emit_line(emit, "size_t %.*s_length = 0;", S(p->name));
+            writ_emit_line(emit, "const void *%.*s_borrowed = n00b_ffi_borrow((void *)%.*s, &%.*s_length, 0);",
+                           S(p->name), S(p->name), S(p->name));
+            writ_emit_line(emit, "uint8_t *%.*s_data = malloc(%.*s_length ? %.*s_length : 1);", S(p->name),
+                           S(p->name), S(p->name));
+            writ_emit_open(emit, "if (%.*s_data && %.*s_length)", S(p->name), S(p->name));
+            writ_emit_line(emit, "memcpy(%.*s_data, %.*s_borrowed, %.*s_length);", S(p->name), S(p->name),
+                           S(p->name));
+            writ_emit_close(emit, nullptr);
+            writ_emit_line(emit, "n00b_ffi_release((void *)%.*s);", S(p->name));
+            copies++;
         }
+    }
+    if (copies) {
+        writ_emit_text(emit, "if (");
+        size_t emitted = 0;
+        for (size_t i = 0; i < params.len; i++) {
+            if (params.data[i].kind == PARAM_VALUE) {
+                writ_emit_text(emit, "%s!%.*s_data", emitted++ ? " || " : "", S(params.data[i].name));
+            }
+        }
+        writ_emit_text(emit, ")");
+        writ_emit_open(emit, "");
+        for (size_t i = 0; i < params.len; i++) {
+            if (params.data[i].kind == PARAM_VALUE) {
+                writ_emit_line(emit, "free(%.*s_data);", S(params.data[i].name));
+            }
+        }
+        if (direct) {
+            writ_emit_line(emit, "n00bb_runtime_trap(\"out of memory\", 13);");
+        } else {
+            writ_emit_line(emit, "return %.*s_OUT_OF_MEMORY;", S(g->c.upper));
+        }
+        writ_emit_close(emit, nullptr);
     }
     writ_emit_text(emit, "%.*s writ_n00b_value = %.*s_%.*s(", S(ret), S(g->c.prefix), S(plan->fn->contract_name));
     bool first = true;
@@ -355,7 +390,9 @@ emit_c_shim(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view_
     }
     writ_emit_line(emit, ");");
     for (size_t i = 0; i < params.len; i++) {
-        if (params.data[i].kind == PARAM_VALUE || params.data[i].kind == PARAM_STORAGE) {
+        if (params.data[i].kind == PARAM_VALUE) {
+            writ_emit_line(emit, "free(%.*s_data);", S(params.data[i].name));
+        } else if (params.data[i].kind == PARAM_STORAGE) {
             writ_emit_line(emit, "n00b_ffi_release((void *)%.*s);", S(params.data[i].name));
         }
     }
@@ -372,12 +409,14 @@ shim_c_text(const n00b_t *g, const writ_plan_view_t *const *plans)
     writ_emit_init(&emit);
     writ_emit_line(&emit, "#include <stdint.h>");
     writ_emit_line(&emit, "#include <stddef.h>");
+    writ_emit_line(&emit, "#include <stdlib.h>");
     writ_emit_line(&emit, "#include <string.h>");
     writ_emit_line(&emit, "");
     writ_emit_line(&emit, "#include \"%.*s_writ.h\"", S(g->c.prefix));
     writ_emit_line(&emit, "");
     writ_emit_line(&emit, "void *n00b_ffi_borrow(void *object, size_t *length, uint32_t access);");
     writ_emit_line(&emit, "void n00b_ffi_release(void *object);");
+    writ_emit_line(&emit, "void n00bb_runtime_trap(const char *reason, uint64_t length);");
     writ_emit_line(&emit, "");
     writ_emit_open(&emit, "void %.*s_take_bytes(%.*s_bytes_t *bytes, void *out)", S(g->shim), S(g->c.prefix));
     writ_emit_line(&emit, "size_t length = 0;");

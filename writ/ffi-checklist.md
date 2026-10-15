@@ -279,7 +279,7 @@ enough to check off one at a time. The specs are `ffi-spec.md`,
 
 ### Values
 
-- [ ] `Array[u8]` in: copied to a C buffer by the shim
+- [x] `Array[u8]` in: copied to a C buffer by the shim
 - [x] `out` buffers: allocated by the shim at capacity, returned as `Array[u8]` at length
 - [x] Status errors: `fail: zlib.Error` with `code` and `fn`
 

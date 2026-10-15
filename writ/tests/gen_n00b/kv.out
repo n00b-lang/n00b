@@ -295,12 +295,14 @@ int32_t kv_kv_errstr(int s, const char **result) {
 }
 #include <stdint.h>
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "kv_writ.h"
 
 void *n00b_ffi_borrow(void *object, size_t *length, uint32_t access);
 void n00b_ffi_release(void *object);
+void n00bb_runtime_trap(const char *reason, uint64_t length);
 
 void kv_take_bytes(kv_bytes_t *bytes, void *out) {
     size_t length = 0;
@@ -314,36 +316,78 @@ void kv_take_bytes(kv_bytes_t *bytes, void *out) {
 
 int32_t kv_n00b_kv_open(const void *path, void *out_db, void *detail) {
     size_t path_length = 0;
-    const void *path_data = n00b_ffi_borrow((void *)path, &path_length, 0);
-    int32_t writ_n00b_value = kv_kv_open((const char *)path_data, path_length, (kv_db **)out_db, (int64_t *)detail);
+    const void *path_borrowed = n00b_ffi_borrow((void *)path, &path_length, 0);
+    uint8_t *path_data = malloc(path_length ? path_length : 1);
+    if (path_data && path_length) {
+        memcpy(path_data, path_borrowed, path_length);
+    }
     n00b_ffi_release((void *)path);
+    if (!path_data) {
+        free(path_data);
+        return KV_OUT_OF_MEMORY;
+    }
+    int32_t writ_n00b_value = kv_kv_open((const char *)path_data, path_length, (kv_db **)out_db, (int64_t *)detail);
+    free(path_data);
     return writ_n00b_value;
 }
 
 int32_t kv_n00b_kv_put(uint64_t db, const void *key, const void *val) {
     size_t key_length = 0;
-    const void *key_data = n00b_ffi_borrow((void *)key, &key_length, 0);
-    size_t val_length = 0;
-    const void *val_data = n00b_ffi_borrow((void *)val, &val_length, 0);
-    int32_t writ_n00b_value = kv_kv_put((kv_db *)(uintptr_t)db, (const uint8_t *)key_data, key_length, (const uint8_t *)val_data, val_length);
+    const void *key_borrowed = n00b_ffi_borrow((void *)key, &key_length, 0);
+    uint8_t *key_data = malloc(key_length ? key_length : 1);
+    if (key_data && key_length) {
+        memcpy(key_data, key_borrowed, key_length);
+    }
     n00b_ffi_release((void *)key);
+    size_t val_length = 0;
+    const void *val_borrowed = n00b_ffi_borrow((void *)val, &val_length, 0);
+    uint8_t *val_data = malloc(val_length ? val_length : 1);
+    if (val_data && val_length) {
+        memcpy(val_data, val_borrowed, val_length);
+    }
     n00b_ffi_release((void *)val);
+    if (!key_data || !val_data) {
+        free(key_data);
+        free(val_data);
+        return KV_OUT_OF_MEMORY;
+    }
+    int32_t writ_n00b_value = kv_kv_put((kv_db *)(uintptr_t)db, (const uint8_t *)key_data, key_length, (const uint8_t *)val_data, val_length);
+    free(key_data);
+    free(val_data);
     return writ_n00b_value;
 }
 
 int32_t kv_n00b_kv_get(uint64_t db, const void *key, void *out_val, void *out_len) {
     size_t key_length = 0;
-    const void *key_data = n00b_ffi_borrow((void *)key, &key_length, 0);
-    int32_t writ_n00b_value = kv_kv_get((kv_db *)(uintptr_t)db, (const uint8_t *)key_data, key_length, (uint8_t **)out_val, (size_t *)out_len);
+    const void *key_borrowed = n00b_ffi_borrow((void *)key, &key_length, 0);
+    uint8_t *key_data = malloc(key_length ? key_length : 1);
+    if (key_data && key_length) {
+        memcpy(key_data, key_borrowed, key_length);
+    }
     n00b_ffi_release((void *)key);
+    if (!key_data) {
+        free(key_data);
+        return KV_OUT_OF_MEMORY;
+    }
+    int32_t writ_n00b_value = kv_kv_get((kv_db *)(uintptr_t)db, (const uint8_t *)key_data, key_length, (uint8_t **)out_val, (size_t *)out_len);
+    free(key_data);
     return writ_n00b_value;
 }
 
 int32_t kv_n00b_kv_iter_new(uint64_t db, const void *prefix, void *result) {
     size_t prefix_length = 0;
-    const void *prefix_data = n00b_ffi_borrow((void *)prefix, &prefix_length, 0);
-    int32_t writ_n00b_value = kv_kv_iter_new((kv_db *)(uintptr_t)db, (const uint8_t *)prefix_data, prefix_length, (kv_iter **)result);
+    const void *prefix_borrowed = n00b_ffi_borrow((void *)prefix, &prefix_length, 0);
+    uint8_t *prefix_data = malloc(prefix_length ? prefix_length : 1);
+    if (prefix_data && prefix_length) {
+        memcpy(prefix_data, prefix_borrowed, prefix_length);
+    }
     n00b_ffi_release((void *)prefix);
+    if (!prefix_data) {
+        free(prefix_data);
+        return KV_OUT_OF_MEMORY;
+    }
+    int32_t writ_n00b_value = kv_kv_iter_new((kv_db *)(uintptr_t)db, (const uint8_t *)prefix_data, prefix_length, (kv_iter **)result);
+    free(prefix_data);
     return writ_n00b_value;
 }
 

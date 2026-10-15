@@ -949,12 +949,14 @@ finish:
 }
 #include <stdint.h>
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "resharp_writ.h"
 
 void *n00b_ffi_borrow(void *object, size_t *length, uint32_t access);
 void n00b_ffi_release(void *object);
+void n00bb_runtime_trap(const char *reason, uint64_t length);
 
 void resharp_take_bytes(resharp_bytes_t *bytes, void *out) {
     size_t length = 0;
@@ -1023,57 +1025,120 @@ int32_t resharp_n00b_regex_options_implicit_captures(uint64_t self, bool yes, vo
 
 int32_t resharp_n00b_regex_is_match(uint64_t self, const void *input, void *out, void *failed_detail, void *panicked_detail) {
     size_t input_length = 0;
-    const void *input_data = n00b_ffi_borrow((void *)input, &input_length, 0);
-    int32_t writ_n00b_value = resharp_regex_is_match((writ_resharp_regex *)(uintptr_t)self, (const uint8_t *)input_data, input_length, (bool *)out, (resharp_bytes_t *)failed_detail, (resharp_bytes_t *)panicked_detail);
+    const void *input_borrowed = n00b_ffi_borrow((void *)input, &input_length, 0);
+    uint8_t *input_data = malloc(input_length ? input_length : 1);
+    if (input_data && input_length) {
+        memcpy(input_data, input_borrowed, input_length);
+    }
     n00b_ffi_release((void *)input);
+    if (!input_data) {
+        free(input_data);
+        return RESHARP_OUT_OF_MEMORY;
+    }
+    int32_t writ_n00b_value = resharp_regex_is_match((writ_resharp_regex *)(uintptr_t)self, (const uint8_t *)input_data, input_length, (bool *)out, (resharp_bytes_t *)failed_detail, (resharp_bytes_t *)panicked_detail);
+    free(input_data);
     return writ_n00b_value;
 }
 
 int32_t resharp_n00b_regex_new(const void *pattern, void *out, void *failed_detail, void *panicked_detail) {
     size_t pattern_length = 0;
-    const void *pattern_data = n00b_ffi_borrow((void *)pattern, &pattern_length, 0);
-    int32_t writ_n00b_value = resharp_regex_new((const char *)pattern_data, pattern_length, (writ_resharp_regex **)out, (resharp_bytes_t *)failed_detail, (resharp_bytes_t *)panicked_detail);
+    const void *pattern_borrowed = n00b_ffi_borrow((void *)pattern, &pattern_length, 0);
+    uint8_t *pattern_data = malloc(pattern_length ? pattern_length : 1);
+    if (pattern_data && pattern_length) {
+        memcpy(pattern_data, pattern_borrowed, pattern_length);
+    }
     n00b_ffi_release((void *)pattern);
+    if (!pattern_data) {
+        free(pattern_data);
+        return RESHARP_OUT_OF_MEMORY;
+    }
+    int32_t writ_n00b_value = resharp_regex_new((const char *)pattern_data, pattern_length, (writ_resharp_regex **)out, (resharp_bytes_t *)failed_detail, (resharp_bytes_t *)panicked_detail);
+    free(pattern_data);
     return writ_n00b_value;
 }
 
 int32_t resharp_n00b_regex_with_options(const void *pattern, uint64_t opts, void *out, void *failed_detail, void *panicked_detail) {
     size_t pattern_length = 0;
-    const void *pattern_data = n00b_ffi_borrow((void *)pattern, &pattern_length, 0);
-    int32_t writ_n00b_value = resharp_regex_with_options((const char *)pattern_data, pattern_length, (writ_resharp_regex_options *)(uintptr_t)opts, (writ_resharp_regex **)out, (resharp_bytes_t *)failed_detail, (resharp_bytes_t *)panicked_detail);
+    const void *pattern_borrowed = n00b_ffi_borrow((void *)pattern, &pattern_length, 0);
+    uint8_t *pattern_data = malloc(pattern_length ? pattern_length : 1);
+    if (pattern_data && pattern_length) {
+        memcpy(pattern_data, pattern_borrowed, pattern_length);
+    }
     n00b_ffi_release((void *)pattern);
+    if (!pattern_data) {
+        free(pattern_data);
+        return RESHARP_OUT_OF_MEMORY;
+    }
+    int32_t writ_n00b_value = resharp_regex_with_options((const char *)pattern_data, pattern_length, (writ_resharp_regex_options *)(uintptr_t)opts, (writ_resharp_regex **)out, (resharp_bytes_t *)failed_detail, (resharp_bytes_t *)panicked_detail);
+    free(pattern_data);
     return writ_n00b_value;
 }
 
 int32_t resharp_n00b_regex_find_all(uint64_t self, const void *input, size_t out_capacity, void *out, void *out_length, void *failed_detail, void *panicked_detail) {
     size_t input_length = 0;
-    const void *input_data = n00b_ffi_borrow((void *)input, &input_length, 0);
-    int32_t writ_n00b_value = resharp_regex_find_all((writ_resharp_regex *)(uintptr_t)self, (const uint8_t *)input_data, input_length, out_capacity, (Match **)out, (size_t *)out_length, (resharp_bytes_t *)failed_detail, (resharp_bytes_t *)panicked_detail);
+    const void *input_borrowed = n00b_ffi_borrow((void *)input, &input_length, 0);
+    uint8_t *input_data = malloc(input_length ? input_length : 1);
+    if (input_data && input_length) {
+        memcpy(input_data, input_borrowed, input_length);
+    }
     n00b_ffi_release((void *)input);
+    if (!input_data) {
+        free(input_data);
+        return RESHARP_OUT_OF_MEMORY;
+    }
+    int32_t writ_n00b_value = resharp_regex_find_all((writ_resharp_regex *)(uintptr_t)self, (const uint8_t *)input_data, input_length, out_capacity, (Match **)out, (size_t *)out_length, (resharp_bytes_t *)failed_detail, (resharp_bytes_t *)panicked_detail);
+    free(input_data);
     return writ_n00b_value;
 }
 
 int32_t resharp_n00b_regex_find_anchored(uint64_t self, const void *input, void *out, void *failed_detail, void *panicked_detail) {
     size_t input_length = 0;
-    const void *input_data = n00b_ffi_borrow((void *)input, &input_length, 0);
-    int32_t writ_n00b_value = resharp_regex_find_anchored((writ_resharp_regex *)(uintptr_t)self, (const uint8_t *)input_data, input_length, (Match *)out, (resharp_bytes_t *)failed_detail, (resharp_bytes_t *)panicked_detail);
+    const void *input_borrowed = n00b_ffi_borrow((void *)input, &input_length, 0);
+    uint8_t *input_data = malloc(input_length ? input_length : 1);
+    if (input_data && input_length) {
+        memcpy(input_data, input_borrowed, input_length);
+    }
     n00b_ffi_release((void *)input);
+    if (!input_data) {
+        free(input_data);
+        return RESHARP_OUT_OF_MEMORY;
+    }
+    int32_t writ_n00b_value = resharp_regex_find_anchored((writ_resharp_regex *)(uintptr_t)self, (const uint8_t *)input_data, input_length, (Match *)out, (resharp_bytes_t *)failed_detail, (resharp_bytes_t *)panicked_detail);
+    free(input_data);
     return writ_n00b_value;
 }
 
 int32_t resharp_n00b_regex_is_full_match(uint64_t self, const void *input, void *out, void *failed_detail, void *panicked_detail) {
     size_t input_length = 0;
-    const void *input_data = n00b_ffi_borrow((void *)input, &input_length, 0);
-    int32_t writ_n00b_value = resharp_regex_is_full_match((writ_resharp_regex *)(uintptr_t)self, (const uint8_t *)input_data, input_length, (bool *)out, (resharp_bytes_t *)failed_detail, (resharp_bytes_t *)panicked_detail);
+    const void *input_borrowed = n00b_ffi_borrow((void *)input, &input_length, 0);
+    uint8_t *input_data = malloc(input_length ? input_length : 1);
+    if (input_data && input_length) {
+        memcpy(input_data, input_borrowed, input_length);
+    }
     n00b_ffi_release((void *)input);
+    if (!input_data) {
+        free(input_data);
+        return RESHARP_OUT_OF_MEMORY;
+    }
+    int32_t writ_n00b_value = resharp_regex_is_full_match((writ_resharp_regex *)(uintptr_t)self, (const uint8_t *)input_data, input_length, (bool *)out, (resharp_bytes_t *)failed_detail, (resharp_bytes_t *)panicked_detail);
+    free(input_data);
     return writ_n00b_value;
 }
 
 int32_t resharp_n00b_regex_capture_index_for_name(uint64_t self, const void *name, void *out, void *failed_detail, void *panicked_detail) {
     size_t name_length = 0;
-    const void *name_data = n00b_ffi_borrow((void *)name, &name_length, 0);
-    int32_t writ_n00b_value = resharp_regex_capture_index_for_name((writ_resharp_regex *)(uintptr_t)self, (const char *)name_data, name_length, (size_t *)out, (resharp_bytes_t *)failed_detail, (resharp_bytes_t *)panicked_detail);
+    const void *name_borrowed = n00b_ffi_borrow((void *)name, &name_length, 0);
+    uint8_t *name_data = malloc(name_length ? name_length : 1);
+    if (name_data && name_length) {
+        memcpy(name_data, name_borrowed, name_length);
+    }
     n00b_ffi_release((void *)name);
+    if (!name_data) {
+        free(name_data);
+        return RESHARP_OUT_OF_MEMORY;
+    }
+    int32_t writ_n00b_value = resharp_regex_capture_index_for_name((writ_resharp_regex *)(uintptr_t)self, (const char *)name_data, name_length, (size_t *)out, (resharp_bytes_t *)failed_detail, (resharp_bytes_t *)panicked_detail);
+    free(name_data);
     return writ_n00b_value;
 }
 

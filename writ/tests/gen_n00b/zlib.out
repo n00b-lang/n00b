@@ -534,12 +534,14 @@ int32_t zlib_inflateInit(z_stream *strm, int *status) {
 }
 #include <stdint.h>
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "zlib_writ.h"
 
 void *n00b_ffi_borrow(void *object, size_t *length, uint32_t access);
 void n00b_ffi_release(void *object);
+void n00bb_runtime_trap(const char *reason, uint64_t length);
 
 void zlib_take_bytes(zlib_bytes_t *bytes, void *out) {
     size_t length = 0;
@@ -578,9 +580,18 @@ int32_t zlib_n00b_inflateEnd(const void *strm, void *status) {
 
 int32_t zlib_n00b_compress2(const void *source, int level, void *dest, void *status) {
     size_t source_length = 0;
-    const void *source_data = n00b_ffi_borrow((void *)source, &source_length, 0);
-    int32_t writ_n00b_value = zlib_compress2((const uint8_t *)source_data, source_length, level, (zlib_bytes_t *)dest, (int *)status);
+    const void *source_borrowed = n00b_ffi_borrow((void *)source, &source_length, 0);
+    uint8_t *source_data = malloc(source_length ? source_length : 1);
+    if (source_data && source_length) {
+        memcpy(source_data, source_borrowed, source_length);
+    }
     n00b_ffi_release((void *)source);
+    if (!source_data) {
+        free(source_data);
+        return ZLIB_OUT_OF_MEMORY;
+    }
+    int32_t writ_n00b_value = zlib_compress2((const uint8_t *)source_data, source_length, level, (zlib_bytes_t *)dest, (int *)status);
+    free(source_data);
     return writ_n00b_value;
 }
 
@@ -591,25 +602,52 @@ unsigned long zlib_n00b_compressBound(unsigned long sourceLen) {
 
 int32_t zlib_n00b_uncompress(unsigned long dest_capacity, const void *source, void *dest, void *status) {
     size_t source_length = 0;
-    const void *source_data = n00b_ffi_borrow((void *)source, &source_length, 0);
-    int32_t writ_n00b_value = zlib_uncompress(dest_capacity, (const uint8_t *)source_data, source_length, (zlib_bytes_t *)dest, (int *)status);
+    const void *source_borrowed = n00b_ffi_borrow((void *)source, &source_length, 0);
+    uint8_t *source_data = malloc(source_length ? source_length : 1);
+    if (source_data && source_length) {
+        memcpy(source_data, source_borrowed, source_length);
+    }
     n00b_ffi_release((void *)source);
+    if (!source_data) {
+        free(source_data);
+        return ZLIB_OUT_OF_MEMORY;
+    }
+    int32_t writ_n00b_value = zlib_uncompress(dest_capacity, (const uint8_t *)source_data, source_length, (zlib_bytes_t *)dest, (int *)status);
+    free(source_data);
     return writ_n00b_value;
 }
 
 int32_t zlib_n00b_adler32(unsigned long adler, const void *buf, void *result) {
     size_t buf_length = 0;
-    const void *buf_data = n00b_ffi_borrow((void *)buf, &buf_length, 0);
-    int32_t writ_n00b_value = zlib_adler32(adler, (const uint8_t *)buf_data, buf_length, (unsigned long *)result);
+    const void *buf_borrowed = n00b_ffi_borrow((void *)buf, &buf_length, 0);
+    uint8_t *buf_data = malloc(buf_length ? buf_length : 1);
+    if (buf_data && buf_length) {
+        memcpy(buf_data, buf_borrowed, buf_length);
+    }
     n00b_ffi_release((void *)buf);
+    if (!buf_data) {
+        free(buf_data);
+        return ZLIB_OUT_OF_MEMORY;
+    }
+    int32_t writ_n00b_value = zlib_adler32(adler, (const uint8_t *)buf_data, buf_length, (unsigned long *)result);
+    free(buf_data);
     return writ_n00b_value;
 }
 
 int32_t zlib_n00b_crc32(unsigned long crc, const void *buf, void *result) {
     size_t buf_length = 0;
-    const void *buf_data = n00b_ffi_borrow((void *)buf, &buf_length, 0);
-    int32_t writ_n00b_value = zlib_crc32(crc, (const uint8_t *)buf_data, buf_length, (unsigned long *)result);
+    const void *buf_borrowed = n00b_ffi_borrow((void *)buf, &buf_length, 0);
+    uint8_t *buf_data = malloc(buf_length ? buf_length : 1);
+    if (buf_data && buf_length) {
+        memcpy(buf_data, buf_borrowed, buf_length);
+    }
     n00b_ffi_release((void *)buf);
+    if (!buf_data) {
+        free(buf_data);
+        return ZLIB_OUT_OF_MEMORY;
+    }
+    int32_t writ_n00b_value = zlib_crc32(crc, (const uint8_t *)buf_data, buf_length, (unsigned long *)result);
+    free(buf_data);
     return writ_n00b_value;
 }
 

@@ -169,12 +169,14 @@ finish:
 }
 #include <stdint.h>
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "pts_writ.h"
 
 void *n00b_ffi_borrow(void *object, size_t *length, uint32_t access);
 void n00b_ffi_release(void *object);
+void n00bb_runtime_trap(const char *reason, uint64_t length);
 
 void pts_take_bytes(pts_bytes_t *bytes, void *out) {
     size_t length = 0;
@@ -206,9 +208,18 @@ int pts_n00b_pt_type(int mode) {
 
 int32_t pts_n00b_pt_sum(const void *args, void *result) {
     size_t args_length = 0;
-    const void *args_data = n00b_ffi_borrow((void *)args, &args_length, 0);
-    int32_t writ_n00b_value = pts_pt_sum((const double *)args_data, args_length, (double *)result);
+    const void *args_borrowed = n00b_ffi_borrow((void *)args, &args_length, 0);
+    uint8_t *args_data = malloc(args_length ? args_length : 1);
+    if (args_data && args_length) {
+        memcpy(args_data, args_borrowed, args_length);
+    }
     n00b_ffi_release((void *)args);
+    if (!args_data) {
+        free(args_data);
+        return PTS_OUT_OF_MEMORY;
+    }
+    int32_t writ_n00b_value = pts_pt_sum((const double *)args_data, args_length, (double *)result);
+    free(args_data);
     return writ_n00b_value;
 }
 
