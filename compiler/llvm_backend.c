@@ -5070,63 +5070,38 @@ adapt_call_value(lower_state_t *state, LLVMValueRef value,
     LLVMTypeRef packed_target = target_payload
         ? packed_option_type(state->function->owner, target_type,
                              context, &packed_bit) : nullptr;
-    if (source_payload && target_payload && packed_target
-        && LLVMGetTypeKind(source) == LLVMStructTypeKind
-        && LLVMCountStructElementTypes(source) == 2) {
-        uint8_t source_mask = 1;
-        bool source_shared = shared_option_value_type(
-            state->function->owner, source_type, context,
-            &source_mask) != nullptr;
-        LLVMValueRef tag = LLVMBuildExtractValue(state->builder, value, 1,
-                                                  "option.call.tag");
-        LLVMValueRef present = LLVMBuildICmp(state->builder, LLVMIntNE,
-            LLVMBuildAnd(state->builder, tag,
-                LLVMConstInt(LLVMTypeOf(tag), source_mask, false),
-                "option.call.presence"),
-            LLVMConstNull(LLVMTypeOf(tag)), "option.call.present");
-        LLVMBasicBlockRef absent = LLVMAppendBasicBlockInContext(context,
-            state->target_function, "option.call.absent");
-        LLVMBasicBlockRef selected = LLVMAppendBasicBlockInContext(context,
-            state->target_function, "option.call.present");
-        LLVMBasicBlockRef done = LLVMAppendBasicBlockInContext(context,
-            state->target_function, "option.call.done");
-        LLVMBuildCondBr(state->builder, present, selected, absent);
-        LLVMPositionBuilderAtEnd(state->builder, absent);
-        LLVMBuildBr(state->builder, done);
-        LLVMPositionBuilderAtEnd(state->builder, selected);
-        LLVMValueRef payload = nullptr;
-        if (source_shared) {
-            LLVMValueRef inner_tag = LLVMBuildAnd(state->builder, tag,
-                LLVMConstInt(LLVMTypeOf(tag), ~source_mask & 0xffu, false),
-                "option.call.inner.tag");
-            payload = LLVMBuildInsertValue(state->builder, value, inner_tag,
-                1, "option.call.inner");
-        } else payload = LLVMBuildExtractValue(state->builder, value, 0,
-                                                "option.call.payload");
-        LLVMValueRef converted = adapt_call_value(state, payload,
-            source_payload, target_payload);
-        LLVMValueRef some = converted
-            ? pack_option_integer(state, converted, target_type) : nullptr;
-        if (!some) return nullptr;
-        LLVMBasicBlockRef some_end = LLVMGetInsertBlock(state->builder);
-        LLVMBuildBr(state->builder, done);
-        LLVMPositionBuilderAtEnd(state->builder, done);
-        LLVMValueRef result = LLVMBuildPhi(state->builder, packed_target,
-                                           "option.call.result");
-        LLVMValueRef incoming[] = {LLVMConstNull(packed_target), some};
-        LLVMBasicBlockRef blocks[] = {absent, some_end};
-        LLVMAddIncoming(result, incoming, blocks, 2);
-        return result;
-    }
     uint64_t source_bit = 0;
     LLVMTypeRef packed_source = source_payload
         ? packed_option_type(state->function->owner, source_type,
                              context, &source_bit) : nullptr;
-    if (source_payload && target_payload && packed_source == source
-        && LLVMGetTypeKind(target) == LLVMStructTypeKind
-        && LLVMCountStructElementTypes(target) == 2) {
-        LLVMValueRef presence = packed_option_presence(state, value,
-                                                        source_bit);
+    bool source_packed = packed_source == source;
+    bool target_packed = packed_target == target;
+    bool source_struct = LLVMGetTypeKind(source) == LLVMStructTypeKind
+        && LLVMCountStructElementTypes(source) == 2;
+    bool target_struct = LLVMGetTypeKind(target) == LLVMStructTypeKind
+        && LLVMCountStructElementTypes(target) == 2;
+    if (source_payload && target_payload
+        && (source_packed || source_struct)
+        && (target_packed || target_struct)
+        && !(source_packed && target_packed)
+        && !(source_struct && target_struct
+            && LLVMStructGetTypeAtIndex(source, 1)
+                != LLVMStructGetTypeAtIndex(target, 1))) {
+        uint8_t source_mask = 1, target_mask = 1;
+        bool source_shared = source_struct
+            && shared_option_value_type(state->function->owner, source_type,
+                context, &source_mask) != nullptr;
+        bool target_shared = target_struct
+            && shared_option_value_type(state->function->owner, target_type,
+                context, &target_mask) != nullptr;
+        LLVMValueRef tag = source_struct
+            ? LLVMBuildExtractValue(state->builder, value, 1,
+                "option.call.tag") : nullptr;
+        LLVMValueRef presence = source_struct
+            ? LLVMBuildAnd(state->builder, tag,
+                LLVMConstInt(LLVMTypeOf(tag), source_mask, false),
+                "option.call.presence")
+            : packed_option_presence(state, value, source_bit);
         if (!presence) return nullptr;
         LLVMValueRef present = LLVMBuildICmp(state->builder, LLVMIntNE,
             presence, LLVMConstNull(LLVMTypeOf(presence)),
@@ -5141,31 +5116,38 @@ adapt_call_value(lower_state_t *state, LLVMValueRef value,
         LLVMPositionBuilderAtEnd(state->builder, absent);
         LLVMBuildBr(state->builder, done);
         LLVMPositionBuilderAtEnd(state->builder, selected);
-        LLVMValueRef payload = unpack_option_integer(state, value,
-                                                     source_type);
+        LLVMValueRef payload = nullptr;
+        if (source_shared) {
+            LLVMValueRef inner_tag = LLVMBuildAnd(state->builder, tag,
+                LLVMConstInt(LLVMTypeOf(tag), ~source_mask & 0xffu, false),
+                "option.call.inner.tag");
+            payload = LLVMBuildInsertValue(state->builder, value, inner_tag,
+                1, "option.call.inner");
+        } else if (source_struct)
+            payload = LLVMBuildExtractValue(state->builder, value, 0,
+                "option.call.payload");
+        else payload = unpack_option_integer(state, value, source_type);
         LLVMValueRef converted = payload ? adapt_call_value(state, payload,
             source_payload, target_payload) : nullptr;
-        uint8_t target_mask = 1;
-        bool target_shared = shared_option_value_type(
-            state->function->owner, target_type, context,
-            &target_mask) != nullptr;
+        if (!converted) return nullptr;
         LLVMValueRef some = nullptr;
-        if (converted && target_shared && LLVMTypeOf(converted) == target) {
-            LLVMValueRef tag = LLVMBuildExtractValue(state->builder,
+        if (target_packed)
+            some = pack_option_integer(state, converted, target_type);
+        else if (target_shared && LLVMTypeOf(converted) == target) {
+            LLVMValueRef inner_tag = LLVMBuildExtractValue(state->builder,
                 converted, 1, "option.call.inner.tag");
-            tag = LLVMBuildOr(state->builder, tag,
-                LLVMConstInt(LLVMTypeOf(tag), target_mask, false),
+            LLVMValueRef outer_tag = LLVMBuildOr(state->builder, inner_tag,
+                LLVMConstInt(LLVMTypeOf(inner_tag), target_mask, false),
                 "option.call.outer.tag");
-            some = LLVMBuildInsertValue(state->builder, converted, tag, 1,
-                                        "option.call.some");
-        } else if (converted && !target_shared
-            && LLVMTypeOf(converted)
-                == LLVMStructGetTypeAtIndex(target, 0)) {
+            some = LLVMBuildInsertValue(state->builder, converted, outer_tag,
+                1, "option.call.some");
+        } else if (!target_shared && LLVMTypeOf(converted)
+            == LLVMStructGetTypeAtIndex(target, 0)) {
             some = LLVMBuildInsertValue(state->builder,
                 LLVMConstNull(target), converted, 0, "option.call.value");
             some = LLVMBuildInsertValue(state->builder, some,
-                LLVMConstInt(LLVMStructGetTypeAtIndex(target, 1), 1, false),
-                1, "option.call.some");
+                LLVMConstInt(LLVMStructGetTypeAtIndex(target, 1),
+                    target_mask, false), 1, "option.call.some");
         }
         if (!some) return nullptr;
         LLVMBasicBlockRef some_end = LLVMGetInsertBlock(state->builder);
@@ -5175,79 +5157,6 @@ adapt_call_value(lower_state_t *state, LLVMValueRef value,
                                            "option.call.result");
         LLVMValueRef incoming[] = {LLVMConstNull(target), some};
         LLVMBasicBlockRef blocks[] = {absent, some_end};
-        LLVMAddIncoming(result, incoming, blocks, 2);
-        return result;
-    }
-    if (source_payload && target_payload
-        && LLVMGetTypeKind(source) == LLVMStructTypeKind
-        && LLVMGetTypeKind(target) == LLVMStructTypeKind
-        && LLVMCountStructElementTypes(source) == 2
-        && LLVMCountStructElementTypes(target) == 2
-        && LLVMStructGetTypeAtIndex(source, 1)
-            == LLVMStructGetTypeAtIndex(target, 1)) {
-        uint8_t source_mask = 1, target_mask = 1;
-        bool source_shared = shared_option_value_type(
-            state->function->owner, source_type, context,
-            &source_mask) != nullptr;
-        bool target_shared = shared_option_value_type(
-            state->function->owner, target_type, context,
-            &target_mask) != nullptr;
-        LLVMValueRef tag = LLVMBuildExtractValue(state->builder, value, 1,
-            "option.call.tag");
-        LLVMValueRef source_presence = LLVMBuildAnd(state->builder, tag,
-            LLVMConstInt(LLVMTypeOf(tag), source_mask, false),
-            "option.call.presence");
-        LLVMValueRef present = LLVMBuildICmp(state->builder, LLVMIntNE,
-            source_presence, LLVMConstNull(LLVMTypeOf(tag)),
-            "option.call.present");
-        LLVMBasicBlockRef absent_block = LLVMAppendBasicBlockInContext(context,
-            state->target_function, "option.call.absent");
-        LLVMBasicBlockRef present_block = LLVMAppendBasicBlockInContext(context,
-            state->target_function, "option.call.present");
-        LLVMBasicBlockRef done_block = LLVMAppendBasicBlockInContext(context,
-            state->target_function, "option.call.done");
-        LLVMBuildCondBr(state->builder, present, present_block, absent_block);
-        LLVMPositionBuilderAtEnd(state->builder, absent_block);
-        LLVMBuildBr(state->builder, done_block);
-        LLVMPositionBuilderAtEnd(state->builder, present_block);
-        LLVMValueRef payload = nullptr;
-        if (source_shared) {
-            LLVMValueRef inner_tag = LLVMBuildAnd(state->builder, tag,
-                LLVMConstInt(LLVMTypeOf(tag), ~source_mask & 0xffu, false),
-                "option.call.inner.tag");
-            payload = LLVMBuildInsertValue(state->builder, value, inner_tag,
-                1, "option.call.inner");
-        } else payload = LLVMBuildExtractValue(state->builder, value, 0,
-                                               "option.call.payload");
-        LLVMValueRef converted = adapt_call_value(state, payload,
-            source_payload, target_payload);
-        if (!converted) return nullptr;
-        LLVMValueRef some = nullptr;
-        if (target_shared) {
-            if (LLVMTypeOf(converted) != target) return nullptr;
-            LLVMValueRef inner_tag = LLVMBuildExtractValue(state->builder,
-                converted, 1, "option.call.inner.tag");
-            LLVMValueRef outer_tag = LLVMBuildOr(state->builder, inner_tag,
-                LLVMConstInt(LLVMTypeOf(inner_tag), target_mask, false),
-                "option.call.outer.tag");
-            some = LLVMBuildInsertValue(state->builder, converted, outer_tag,
-                1, "option.call.some");
-        } else {
-            if (LLVMTypeOf(converted)
-                != LLVMStructGetTypeAtIndex(target, 0)) return nullptr;
-            some = LLVMBuildInsertValue(state->builder,
-                LLVMConstNull(target), converted, 0, "option.call.value");
-            some = LLVMBuildInsertValue(state->builder, some,
-                LLVMConstInt(LLVMTypeOf(tag), target_mask, false), 1,
-                "option.call.some");
-        }
-        LLVMBasicBlockRef some_end = LLVMGetInsertBlock(state->builder);
-        LLVMBuildBr(state->builder, done_block);
-        LLVMPositionBuilderAtEnd(state->builder, done_block);
-        LLVMValueRef result = LLVMBuildPhi(state->builder, target,
-            "option.call.result");
-        LLVMValueRef incoming[] = {LLVMConstNull(target), some};
-        LLVMBasicBlockRef blocks[] = {absent_block, some_end};
         LLVMAddIncoming(result, incoming, blocks, 2);
         return result;
     }
