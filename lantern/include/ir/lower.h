@@ -46,8 +46,6 @@ ir_value_t *ir_lower_node_value(ir_lower_context_t *context,
                                 parse_tree_t *node);
 bool ir_lower_set_node_value(ir_lower_context_t *context,
                              parse_tree_t *node, ir_value_t *value);
-bool ir_lower_mark_lvalue(ir_lower_context_t *context, parse_tree_t *owner,
-                          parse_tree_t *node);
 /* Suppress only this node's annotation-driven emit action. Children are
  * still lowered and remain available to visit callbacks. */
 bool ir_lower_suppress_emit(ir_lower_context_t *context, parse_tree_t *node);
@@ -64,9 +62,6 @@ bool ir_lower_evaluate_assignment_target(ir_lower_context_t *context,
                                          parse_tree_t *assignment);
 bool ir_lower_skip_value(ir_lower_context_t *context, parse_tree_t *owner,
                          parse_tree_t *node);
-ir_value_t *ir_lower_child_value(ir_lower_context_t *context,
-                                 parse_visit_t *visit,
-                                 parse_child_ref_t child);
 /* Append one non-terminator or terminator to the current block, attaching its
  * source span and updating reachability for terminators. */
 ir_instr_t *ir_lower_emit_instruction(ir_lower_context_t *context,

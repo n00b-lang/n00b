@@ -418,30 +418,12 @@ ir_lower_prune_node(ir_lower_context_t *context, parse_tree_t *node)
 }
 
 bool
-ir_lower_mark_lvalue(ir_lower_context_t *context, parse_tree_t *owner,
-                     parse_tree_t *node)
-{
-    return ir_lower_skip_value(context, owner, node);
-}
-
-bool
 ir_lower_suppress_emit(ir_lower_context_t *context, parse_tree_t *node)
 {
     ir_lower_tree_state_t *state = lower_active_tree(context);
     if (!state || !node) return false;
     core_dict_put(&state->suppressed_emits, node, (void *)1);
     return true;
-}
-
-ir_value_t *
-ir_lower_child_value(ir_lower_context_t *context, parse_visit_t *visit,
-                     parse_child_ref_t child)
-{
-    if (!lower_active_tree(context) || !visit || !visit->grammar)
-        return nullptr;
-    parse_tree_t *node = parse_tree_resolve_child_ref(
-        visit->grammar, visit->node, child);
-    return ir_lower_node_value(context, node);
 }
 
 static bool
