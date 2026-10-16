@@ -411,11 +411,17 @@ func __export_kv_errstr(c_s: i32, failed: uint) -> uint {
 9	tests/gen_n00b/../bind/kv.writ:15:1	kv_entry
 14	tests/gen_n00b/../bind/kv.writ:13:1	kv_status
 96	tests/gen_n00b/../bind/kv.writ:22:1	kv_open
+103	tests/gen_n00b/kv_export.writ:4:5	kvstore.open
 112	tests/gen_n00b/../bind/kv.writ:26:1	kv_put
+123	tests/gen_n00b/kv_export.writ:5:5	kvstore.put
 131	tests/gen_n00b/../bind/kv.writ:31:1	kv_get
+140	tests/gen_n00b/kv_export.writ:6:5	kvstore.get
 153	tests/gen_n00b/../bind/kv.writ:41:1	kv_iter_new
+162	tests/gen_n00b/kv_export.writ:7:5	kvstore.iter_new
 170	tests/gen_n00b/../bind/kv.writ:45:1	kv_iter_next
+176	tests/gen_n00b/kv_export.writ:8:5	kvstore.iter_next
 183	tests/gen_n00b/../bind/kv.writ:47:1	kv_errstr
+185	tests/gen_n00b/kv_export.writ:9:5	kvstore.errstr
 library kv
 load static
 extern __export_failed kv_export_failed (uint, uint) -> nil fail: nil

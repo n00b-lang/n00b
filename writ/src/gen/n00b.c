@@ -3075,6 +3075,7 @@ emit_export_call(const n00b_t *g, writ_emit_t *emit, const wrapper_t *w, bool bi
                                          S(export_implementation(g, plan->items[i].type->name)));
         }
     }
+    mark(g, emit, w->bound.provided_at, w->bound.provide);
     writ_emit_text(emit, "%s%.*s%s%.*s(", binds ? "let result" : "", S(annotation), binds ? " = " : "",
                    S(w->bound.provide));
     bool first = true;

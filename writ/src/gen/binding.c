@@ -9,12 +9,13 @@ typedef struct {
     choice_t   name;
     choice_t   error;
     writ_str_t owner;
-    writ_str_t provide;
-    bool       is_static;
-    bool       hidden;
-    bool       raw;
-    bool       internal;
-    uint32_t   policy_arm;
+    writ_str_t  provide;
+    writ_span_t provided_at;
+    bool        is_static;
+    bool        hidden;
+    bool        raw;
+    bool        internal;
+    uint32_t    policy_arm;
 } fn_decision_t;
 
 typedef struct {
@@ -623,6 +624,7 @@ apply_item(writ_binding_t *b, uint32_t id)
                                                           child_text(b, id, WRIT_N_TEXT)}));
         } else {
             b->fns[fn].provide = child_text(b, id, WRIT_N_TEXT);
+            b->fns[fn].provided_at = writ_loc_span(b->session, at(b, id)->loc);
         }
         return;
     }
@@ -965,7 +967,7 @@ writ_binding_fn(const writ_binding_t *b, size_t fn)
     const fn_decision_t *d = &b->fns[fn];
     return (writ_bound_fn_t){.bound = bound(d), .raw = d->raw, .is_static = d->is_static, .name = d->name.text,
                              .owner = d->owner, .error = d->error.text, .provide = d->provide,
-                             .policy_arm = d->policy_arm};
+                             .provided_at = d->provided_at, .policy_arm = d->policy_arm};
 }
 
 writ_str_t
