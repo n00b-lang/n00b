@@ -1857,18 +1857,20 @@ unify_literal_items(th_ctx *types, literal_item_group_t *group,
     bool has_nil = false;
     for (size_t i = 0; i < group->items.len; i++)
         has_nil |= th_is_nil(group->items.data[i]);
-    th_type *target = group->slot;
-    if (has_nil) {
-        th_type *item = th_var(types);
-        if (!th_unify_in_place(types, group->slot, th_option(types, item))) {
+    th_type *payload = nullptr;
+    if (!n00bb_option_type_element(group->slot, &payload) && has_nil) {
+        payload = th_var(types);
+        if (!th_unify_in_place(types, group->slot,
+                               th_option(types, payload))) {
             *conflict = group->slot;
             return false;
         }
-        target = item;
     }
     for (size_t i = 0; i < group->items.len; i++) {
         th_type *item = group->items.data[i];
         if (th_is_nil(item)) continue;
+        th_type *target = payload && !n00bb_option_type_element(item, nullptr)
+            ? payload : group->slot;
         if (!th_unify_in_place(types, target, item)) {
             *conflict = item;
             return false;
@@ -2403,6 +2405,8 @@ contextualize_record_literal(parse_grammar_t *grammar,
                              parse_tree_t *expression, th_type *expected)
 {
     if (!expression || !expected) return true;
+    th_type *payload = nullptr;
+    if (n00bb_option_type_element(expected, &payload)) expected = payload;
     parse_tree_t *literal = n00bb_node_record_literal_origin(expression);
     parse_tree_t *fields = literal
         ? child_nt(grammar, literal, "named-field-list") : nullptr;
@@ -2514,9 +2518,9 @@ list_element_expected_type(parse_grammar_t *grammar, th_ctx *types,
         ? th_seq_elem(outer) : nullptr;
 }
 
-th_type *
-record_literal_expected_type(parse_grammar_t *grammar, th_ctx *types,
-                             parse_tree_t *literal)
+static th_type *
+literal_context_type(parse_grammar_t *grammar, th_ctx *types,
+                     parse_tree_t *literal)
 {
     if (!literal) return nullptr;
     parse_tree_t *child = literal;
@@ -2558,6 +2562,15 @@ record_literal_expected_type(parse_grammar_t *grammar, th_ctx *types,
             || core_tree_child(parent, 0) != child) return nullptr;
     }
     return nullptr;
+}
+
+th_type *
+record_literal_expected_type(parse_grammar_t *grammar, th_ctx *types,
+                             parse_tree_t *literal)
+{
+    th_type *context = literal_context_type(grammar, types, literal);
+    th_type *element = nullptr;
+    return n00bb_option_type_element(context, &element) ? element : context;
 }
 
 bool

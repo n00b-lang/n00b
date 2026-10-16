@@ -595,7 +595,7 @@ test(
 foreach feature : ['fallible_without_result', 'try_error_binding',
                    'builtin_type_record_literal', 'record_literal_nil_option',
                    'option_literal_argument', 'record_literal_return',
-                   'constructor_option_argument']
+                   'constructor_option_argument', 'option_literal_context']
     test(
         feature.replace('_', '-'), find_program('sh'),
         args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
