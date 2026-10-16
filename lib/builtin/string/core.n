@@ -115,6 +115,57 @@ private func __string_make_rich(body: Ref[`T]) -> string {
     return text
 }
 
+private func base_text(self: string) -> string {
+    var text: string = self
+    while __string_tag(text) == cast[u8] tag_rich {
+        let body: Ref[string] = unsafe_cast[Ref[string]] words(ref text).data
+        text = body
+    }
+    return text
+}
+
+private func joined_encoding(left: u8, right: u8) -> u8 {
+    if left == 0 or right == 0 {
+        return 0
+    }
+    if left == 2 or right == 2 {
+        return 2
+    }
+    return 1
+}
+
+private func adopt_bytes(bytes: Array[u8], n: uint, encoding: u8) -> string {
+    if n <= short_capacity {
+        return __string_make(bytes, 0, n, encoding, false)
+    }
+    var text: string = ""
+    let view: Ref[String_Words] = words(ref text)
+    view.data = unsafe_cast[Ref[byte]] ref bytes[0]
+    view.selector = long_selector(n, encoding, tag_long)
+    return text
+}
+
+func __add(self: string, other: string) -> string {
+    let left: string = base_text(self)
+    let right: string = base_text(other)
+    let left_length: uint = __string_byte_len(left)
+    let right_length: uint = __string_byte_len(right)
+    let n: uint = left_length + right_length
+    var bytes: Array[u8] = new[Array[u8]](cast[int] n)
+    var i: uint = 0
+    while i < left_length {
+        bytes[i] = __string_byte(left, i)
+        i += 1
+    }
+    var j: uint = 0
+    while j < right_length {
+        bytes[left_length + j] = __string_byte(right, j)
+        j += 1
+    }
+    return adopt_bytes(bytes, n, joined_encoding(
+        __string_encoding_bits(left), __string_encoding_bits(right)))
+}
+
 private func __string_storage(s: string) -> Array[u8]? {
     let view: Ref[String_Words] = words(ref s)
     if view.selector >> tag_shift != tag_long {

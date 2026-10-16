@@ -4243,6 +4243,11 @@ n00bb_abstract_trait_requirement(ir_lower_context_t *context,
     return selection->dest;
 }
 
+static void queue_comptime_function(n00bb_link_analysis_t *analysis,
+                                    parse_sym_entry_t *symbol,
+                                    ir_func_t *function,
+                                    parse_grammar_t *grammar, bool comptime);
+
 static ir_lower_result_t
 n00bb_lower_operator_method(ir_lower_context_t *context,
                           parse_visit_t *visit,
@@ -4259,17 +4264,14 @@ n00bb_lower_operator_method(ir_lower_context_t *context,
     n00bb_link_analysis_t *analysis = caller
         ? caller->link_analysis : nullptr;
     parse_sym_entry_t *symbol = site ? site->symbol : nullptr;
-    bool builtin_string_add = n00bb_builtin_string_operator(symbol);
     bool builtin_operator_trait = site && site->resolved_trait_name
         && site->dispatch_trait.data
         && !strcmp(site->resolved_trait_name, site->dispatch_trait.data);
     bool open_dispatch = n00bb_open_dispatch(analysis, lower->comptime_phase);
-    if (!builtin_string_add || open_dispatch) {
-        parse_sym_entry_t *requirement = linkable_trait_requirement(analysis,
-            lower->unit, site, symbol, lower->comptime_phase);
-        symbol = requirement ? requirement
-            : builtin_operator_trait ? symbol : nullptr;
-    }
+    parse_sym_entry_t *requirement = linkable_trait_requirement(analysis,
+        lower->unit, site, symbol, lower->comptime_phase);
+    symbol = requirement ? requirement
+        : builtin_operator_trait ? symbol : nullptr;
     bool builtin_requirement = symbol && parse_sym_binding(symbol,
         CORE_STRING_STATIC("n00bb.builtin-trait-method"));
     core_translation_unit_t *owner = symbol
@@ -4278,6 +4280,8 @@ n00bb_lower_operator_method(ir_lower_context_t *context,
     ir_func_t *function = owner_state
         ? link_ir_function_for_phase(analysis, symbol,
                                     lower->comptime_phase) : nullptr;
+    queue_comptime_function(analysis, symbol, function, visit->grammar,
+                            lower->comptime_phase);
     ir_module_t *module = owner_state
         ? module_for_phase(owner_state, lower->comptime_phase) : nullptr;
     ir_value_t *callee = module && function
@@ -4288,22 +4292,6 @@ n00bb_lower_operator_method(ir_lower_context_t *context,
             CORE_STRING_STATIC("n00bb.builtin-operator"));
         ir_func_t *builtin = n00bb_closed_builtin_operator(context, symbol,
             requirement, operands[0]->type);
-        callee = builtin ? ir_func_address(context->module, builtin) : nullptr;
-    }
-    if (!callee && builtin_string_add && !open_dispatch) {
-        th_ctx *builtin_types = ir_module_types(context->module);
-        th_type *string = th_name(builtin_types, "string");
-        th_param builtin_params[] = {
-            {.mode = TH_IN, .type = string},
-            {.mode = TH_IN, .type = string},
-        };
-        th_type *builtin_signature = th_func_with_error(builtin_types,
-            string, th_name(builtin_types, "nil"), builtin_params, 2,
-            nullptr, nullptr, 0);
-        ir_func_t *builtin = ir_func_find(context->module, "__string_add");
-        if (!builtin && builtin_signature)
-            builtin = ir_func_add(context->module, "__string_add",
-                                  builtin_signature, IR_LINK_EXTERN);
         callee = builtin ? ir_func_address(context->module, builtin) : nullptr;
     }
     bool abstract_builtin = builtin_operator_trait
@@ -9461,14 +9449,9 @@ n00bb_closed_builtin_operator(ir_lower_context_t *context,
     th_type *return_type = th_func_ret(signature);
     if (!left_type || !right_type || !return_type) return nullptr;
 
-    bool string_add = ir_type_eq(context->module, left_type->type,
+    bool string_operands = ir_type_eq(context->module, left_type->type,
         th_name(ir_module_types(context->module), "string"));
-    if (string_add && op == IR_OP_ADD) {
-        ir_func_t *existing = ir_func_find(context->module, "__string_add");
-        return existing ? existing : ir_func_add(context->module,
-            "__string_add", signature, IR_LINK_EXTERN);
-    }
-    if (string_add && strcmp(method, "__cmp") && op != IR_OP_EQ)
+    if (string_operands && strcmp(method, "__cmp") && op != IR_OP_EQ)
         return nullptr;
 
     core_buffer_t name = {0};

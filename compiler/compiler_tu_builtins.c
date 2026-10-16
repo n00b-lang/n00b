@@ -780,16 +780,6 @@ register_builtin_symbols(parse_annot_result_t *annotations,
     th_type *repr_contract = repr_signature
         ? th_env_signature_contract(types, repr_signature, nil_type)
         : nullptr;
-    th_param string_add_parameters[] = {
-        {.mode = TH_IN, .type = string_type},
-        {.mode = TH_IN, .type = string_type},
-    };
-    th_type *string_add_signature = string_type
-        ? th_func_with_error(types, string_type, nil_type,
-            string_add_parameters, 2, nullptr, nullptr, 0) : nullptr;
-    th_type *string_add_contract = string_add_signature
-        ? th_env_signature_contract(types, string_add_signature, nil_type)
-        : nullptr;
     th_type *array_item = th_var(types);
     th_type *array_type = th_array(types, array_item);
     th_type *array_write_index = n00bb_array_index_type(
@@ -831,7 +821,7 @@ register_builtin_symbols(parse_annot_result_t *annotations,
         || !write_signature || !write_contract || !option_is_nil_signature
         || !option_get_signature || !option_get_or_else_signature
         || !option_is_nil_contract || !option_get_contract
-        || !option_get_or_else_contract || !string_add_contract
+        || !option_get_or_else_contract
         || !fd_write_contract || !repr_contract || !array_read_contract
         || !array_write_contract)
         return false;
@@ -877,9 +867,6 @@ register_builtin_symbols(parse_annot_result_t *annotations,
         CORE_STRING_STATIC("builtin"),
         CORE_STRING_STATIC("__option_get_or_else"), PARSE_SYM_FUNCTION,
         nullptr);
-    parse_sym_entry_t *string_add_symbol = parse_symtab_add(symtab,
-        CORE_STRING_STATIC("builtin"), CORE_STRING_STATIC("__string_add"),
-        PARSE_SYM_FUNCTION, nullptr);
     parse_sym_entry_t *array_write_symbol = parse_symtab_add(symtab,
         CORE_STRING_STATIC("builtin"), CORE_STRING_STATIC("__array_write"),
         PARSE_SYM_FUNCTION, nullptr);
@@ -958,7 +945,7 @@ register_builtin_symbols(parse_annot_result_t *annotations,
                                  saved);
     if (!symbol || !read_symbol || !write_symbol || !option_is_nil_symbol
         || !option_get_symbol || !option_get_or_else_symbol
-        || !string_add_symbol || !array_read_symbol || !array_write_symbol
+        || !array_read_symbol || !array_write_symbol
         || !fd_write_symbol || !repr_symbol
         || !init_symbol || !init_contract
         || !os_builtins_registered || !abi_builtins_registered
@@ -986,9 +973,6 @@ register_builtin_symbols(parse_annot_result_t *annotations,
     option_get_or_else_symbol->type = option_get_or_else_signature;
     option_get_or_else_symbol->error_type = nil_type;
     option_get_or_else_symbol->callable_contract = option_get_or_else_contract;
-    string_add_symbol->type = string_add_signature;
-    string_add_symbol->error_type = nil_type;
-    string_add_symbol->callable_contract = string_add_contract;
     array_read_symbol->type = array_read_signature;
     array_read_symbol->error_type = nil_type;
     array_read_symbol->callable_contract = array_read_contract;
@@ -1024,7 +1008,6 @@ register_builtin_symbols(parse_annot_result_t *annotations,
         && option_is_nil_symbol->callable_contract
         && option_get_symbol->callable_contract
         && option_get_or_else_symbol->callable_contract
-        && string_add_symbol->callable_contract
         && array_read_symbol->callable_contract
         && array_write_symbol->callable_contract
         && fd_write_symbol->callable_contract
@@ -1106,18 +1089,6 @@ register_builtin_binary_operators(th_env *environment, th_ctx *types)
             if (!n00bb_register_operator_function(environment, types,
                     operators[o].trait, operators[o].method, name, self,
                     other, self, "builtins", "default")) return false;
-        }
-        if (!strcmp(operators[o].trait, "Add")) {
-            th_type *string = th_name(types, "string");
-            th_param parameters[] = {
-                {.mode = TH_IN, .type = string},
-                {.mode = TH_IN, .type = string},
-            };
-            th_type *signature = th_func_with_error(types, string,
-                th_name(types, "nil"), parameters, 2, nullptr, nullptr, 0);
-            if (!signature || !th_env_register_function(environment,
-                    "builtins.__string_add", "__add", "builtins",
-                    "default", TH_ENV_PUBLIC, signature)) return false;
         }
     }
     return true;
@@ -1560,7 +1531,6 @@ n00bb_builtin_function(parse_sym_entry_t *symbol)
             || n00bb_builtin_option_function(symbol)
             || n00bb_builtin_array_read_function(symbol)
             || n00bb_builtin_array_write_function(symbol)
-            || n00bb_builtin_string_operator(symbol)
             || n00bb_builtin_reference_function(symbol)
             || n00bb_builtin_byte_offset_function(symbol)
             || n00bb_builtin_byte_diff_function(symbol)
@@ -1608,18 +1578,6 @@ n00bb_builtin_init_function(parse_sym_entry_t *symbol)
 {
     return symbol && symbol->kind == PARSE_SYM_FUNCTION
         && parse_sym_binding(symbol, CORE_STRING_STATIC("n00bb.init"));
-}
-
-bool
-n00bb_builtin_string_operator(parse_sym_entry_t *symbol)
-{
-    return symbol && symbol->kind == PARSE_SYM_FUNCTION
-        && !symbol->decl_node && symbol->scope && !symbol->scope->parent
-        && symbol->scope->ns
-        && core_string_eq(symbol->scope->ns->ns_name,
-                          CORE_STRING_STATIC("builtin"))
-        && core_string_eq(symbol->name,
-                          CORE_STRING_STATIC("__string_add"));
 }
 
 bool

@@ -10,6 +10,7 @@ import io.debug
 import io.raw
 import ffi
 import panic
+import string.core
 
 package builtin {
     export ffi.Ffi_Bytes

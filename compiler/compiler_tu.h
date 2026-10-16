@@ -823,7 +823,6 @@ bool n00bb_builtin_fd_write_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_repr_default_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_native_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_init_function(parse_sym_entry_t *symbol);
-bool n00bb_builtin_string_operator(parse_sym_entry_t *symbol);
 bool n00bb_builtin_array_read_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_array_write_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_byte_offset_function(parse_sym_entry_t *symbol);

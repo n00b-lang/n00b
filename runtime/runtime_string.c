@@ -6,20 +6,6 @@
 typedef void *(*n00bb_string_allocator_t)(uint32_t, uint32_t, uint64_t,
                                           uint32_t, void *);
 
-static const uint8_t *
-string_bytes(const n00b_abi_string_v1 *text, uint64_t *length,
-             n00bb_abi_string_encoding_t *encoding)
-{
-    n00bb_abi_string_header_t header;
-    if (!n00bb_abi_string_decode((const uint8_t *)text, sizeof *text,
-                                 &header)
-        || header.tag == N00BB_ABI_STRING_RICH) __builtin_trap();
-    *length = header.length;
-    *encoding = header.encoding;
-    return header.tag == N00BB_ABI_STRING_SHORT ? text->short_value.bytes
-                                                : text->long_value.data;
-}
-
 static uint8_t *
 string_storage(n00b_abi_string_v1 *result, uint64_t length,
                n00bb_abi_string_encoding_t encoding, uint32_t byte_type,
@@ -44,41 +30,6 @@ string_storage(n00b_abi_string_v1 *result, uint64_t length,
     return data;
 }
 
-static n00bb_abi_string_encoding_t
-joined_encoding(n00bb_abi_string_encoding_t left,
-                n00bb_abi_string_encoding_t right)
-{
-    if (left == N00BB_ABI_STRING_BINARY || right == N00BB_ABI_STRING_BINARY)
-        return N00BB_ABI_STRING_BINARY;
-    if (left == N00BB_ABI_STRING_UTF8 || right == N00BB_ABI_STRING_UTF8)
-        return N00BB_ABI_STRING_UTF8;
-    return N00BB_ABI_STRING_ASCII;
-}
-
-void n00bb_bootstrap_string_add(uint64_t left_low, uint64_t left_high,
-                                uint64_t right_low, uint64_t right_high,
-                                uint32_t byte_type,
-                                n00bb_string_allocator_t allocate,
-                                n00b_abi_string_v1 *result)
-{
-    n00b_abi_string_v1 left = {.words = {left_low, left_high}};
-    n00b_abi_string_v1 right = {.words = {right_low, right_high}};
-    uint64_t left_length = 0, right_length = 0, length = 0;
-    n00bb_abi_string_encoding_t left_encoding, right_encoding;
-    const uint8_t *left_bytes = string_bytes(&left, &left_length,
-                                             &left_encoding);
-    const uint8_t *right_bytes = string_bytes(&right, &right_length,
-                                              &right_encoding);
-    if (!result || __builtin_add_overflow(left_length, right_length, &length))
-        __builtin_trap();
-    n00b_abi_string_v1 joined;
-    uint8_t *data = string_storage(&joined, length,
-        joined_encoding(left_encoding, right_encoding), byte_type, allocate);
-    for (uint64_t i = 0; i < left_length; i++) data[i] = left_bytes[i];
-    for (uint64_t i = 0; i < right_length; i++)
-        data[left_length + i] = right_bytes[i];
-    *result = joined;
-}
 
 static uint64_t
 utf8_sequence(const uint8_t *bytes, uint64_t remaining)

@@ -30,8 +30,7 @@ resolve_linked_method(core_link_unit_t *link, n00bb_link_use_site_t *site,
                 core_string_borrow(internal_name, strlen(internal_name)));
         if (!n00bb_builtin_option_function(builtin_symbol)
             && !n00bb_builtin_array_read_function(builtin_symbol)
-            && !n00bb_builtin_array_write_function(builtin_symbol)
-            && !n00bb_builtin_string_operator(builtin_symbol))
+            && !n00bb_builtin_array_write_function(builtin_symbol))
             builtin_symbol = nullptr;
         if (builtin_symbol) {
             core_link_declaration_metadata_t metadata = {
@@ -1682,8 +1681,7 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
                 resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
                     ? resolution.target.symbol
                     : core_tree_node_value(site->node).sym;
-            if (n00bb_builtin_string_operator(symbol)
-                || n00bb_builtin_array_read_function(symbol)
+            if (n00bb_builtin_array_read_function(symbol)
                 || n00bb_builtin_array_write_function(symbol)
                 || (symbol && parse_sym_binding(symbol,
                     CORE_STRING_STATIC("n00bb.builtin-operator")))) continue;
