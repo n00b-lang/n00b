@@ -4556,11 +4556,22 @@ runtime_function_index(lower_state_t *state, const ir_func_t *function)
 }
 
 static bool
-native_call_outcome(ir_module_t *module, const ir_value_t *value)
+native_call_outcome_within(ir_module_t *module, const ir_value_t *value,
+                           unsigned depth)
 {
     const ir_instr_t *instruction = value ? value->def : nullptr;
     th_type *signature = nullptr;
-    if (!instruction) return false;
+    if (!instruction || depth > 64) return false;
+    if (instruction->op == IR_OP_COPY || instruction->op == IR_OP_PHI) {
+        bool any = false;
+        for (uint32_t i = 0; i < instruction->n_operands; i++) {
+            if (instruction->operands[i].kind != IR_OPD_VALUE) continue;
+            if (!native_call_outcome_within(module,
+                    instruction->operands[i].value, depth + 1)) return false;
+            any = true;
+        }
+        return any;
+    }
     if (instruction->op == IR_OP_CALL
         || instruction->op == IR_OP_CALLBACK_INVOKE)
         signature = ir_instr_call_signature(instruction);
@@ -4568,6 +4579,12 @@ native_call_outcome(ir_module_t *module, const ir_value_t *value)
         ir_instr_callback_contract(instruction, nullptr, nullptr, &signature);
     th_type *failure = signature ? th_func_error(signature) : nullptr;
     return failure && ir_machine_of(module, failure).class != IR_CLASS_VOID;
+}
+
+static bool
+native_call_outcome(ir_module_t *module, const ir_value_t *value)
+{
+    return native_call_outcome_within(module, value, 0);
 }
 
 static bool
@@ -8662,6 +8679,8 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             || !operands[0].value
             || !instruction->dest) break;
         ir_module_t *owner = state->function->owner;
+        if (ir_machine_of(owner, instruction->dest->type).class
+            == IR_CLASS_VOID) return true;
         const ir_final_layout_t *layout = nullptr;
         uint64_t stride = 0;
         bool named_variant = false;

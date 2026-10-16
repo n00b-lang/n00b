@@ -15,6 +15,7 @@ ir_func_t *n00bb_root_entry(const n00bb_link_analysis_t *analysis,
                             const char *name);
 ir_func_t *n00bb_baked_function(const n00bb_link_analysis_t *analysis,
                                 const char *module, const char *name);
+bool n00bb_dump_ir(const n00bb_link_analysis_t *analysis);
 
 bool n00bb_atomic_native_support(ir_module_t *module, th_type *atomic_type,
                                   const core_target_desc_t *target);

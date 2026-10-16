@@ -1174,6 +1174,35 @@ n00bb_ir_builtin_type(ir_module_t *module, const char *name)
     return type ? ir_type_intern(module, type) : nullptr;
 }
 
+static ir_instr_t *
+n00bb_branch_on_outcome(ir_lower_context_t *context, ir_value_t *outcome,
+                        ir_block_t *ok_block, ir_block_t *error_block,
+                        ir_span_t span)
+{
+    th_type *uint_type = n00bb_ir_builtin_type(context->module, "uint");
+    th_type *bool_type = n00bb_ir_builtin_type(context->module, "bool");
+    ir_instr_t *tag = ir_lower_emit_instruction(context, IR_OP_VARIANT_TAG,
+                                                span);
+    ir_instr_t *literal = ir_lower_emit_instruction(context, IR_OP_CONST, span);
+    ir_instr_t *test = ir_lower_emit_instruction(context, IR_OP_EQ, span);
+    bool emitted = uint_type && bool_type
+        && tag && ir_lower_set_temp_dest(context, tag, "__n00bb_tag_",
+                                          uint_type)
+        && ir_instr_operand_value(tag, outcome)
+        && literal && ir_lower_set_temp_dest(context, literal,
+                                              "__n00bb_tag_lit_", uint_type)
+        && ir_instr_operand_uint(literal, th_arm_tag("ok"))
+        && test && ir_lower_set_temp_dest(context, test, "__n00bb_is_ok_",
+                                          bool_type)
+        && ir_instr_operand_value(test, tag->dest)
+        && ir_instr_operand_value(test, literal->dest);
+    ir_instr_t *branch = emitted
+        ? ir_instr_add(context->block, IR_OP_BRANCH) : nullptr;
+    return branch && ir_instr_operand_value(branch, test->dest)
+        && ir_instr_operand_block(branch, ok_block)
+        && ir_instr_operand_block(branch, error_block) ? branch : nullptr;
+}
+
 static bool
 collect_elif_arms(parse_grammar_t *grammar, parse_annot_result_t *annotations,
                   parse_tree_t *node, const char *clause_kind,
@@ -9654,6 +9683,25 @@ n00bb_emit_closed_trait_call(ir_lower_context_t *context,
         emitted = emitted && (void_result
             || (store && ir_instr_set_dest_local(store, result)
                 && ir_instr_operand_value(store, arm_result)));
+        th_type *call_failure = emitted ? th_func_error(call_signature)
+                                        : nullptr;
+        bool guarded = emitted && copyouts && copyouts->len && call_failure
+            && !th_is_nil(call_failure);
+        ir_block_t *failed = nullptr;
+        if (guarded) {
+            ir_block_t *copied = n00bb_branch_block(context, lower,
+                "trait_dispatch_copyout");
+            failed = n00bb_branch_block(context, lower,
+                "trait_dispatch_failed");
+            emitted = copied && failed && n00bb_branch_on_outcome(context,
+                call->dest, copied, failed, span);
+            context->block = copied;
+        }
+        ir_value_t *call_outputs = guarded && emitted
+            ? n00bb_emit_outcome_payload(context, call->dest, "ok",
+                th_func_ret(call_signature), span)
+            : emitted ? call->dest : nullptr;
+        emitted = emitted && call_outputs;
         for (size_t p = 0; emitted && copyouts && p < copyouts->len; p++) {
             n00bb_copyout_t *copyout = &copyouts->data[p];
             const th_param *formal = n00bb_output_formal(call_signature,
@@ -9665,7 +9713,7 @@ n00bb_emit_closed_trait_call(ir_lower_context_t *context,
             emitted = projection
                 && ir_lower_set_temp_dest(context, projection, "__n00bb_",
                                           formal->type)
-                && ir_instr_operand_value(projection, call->dest)
+                && ir_instr_operand_value(projection, call_outputs)
                 && ir_instr_operand_uint(projection, copyout->output_index);
             ir_value_t *output = projection ? projection->dest : nullptr;
             if (emitted && !ir_type_eq(context->module, formal->type,
@@ -9678,6 +9726,13 @@ n00bb_emit_closed_trait_call(ir_lower_context_t *context,
                 emitted = n00bb_emit_copyout_write(context, copyout,
                                                     output, span);
             }
+        }
+        if (guarded && emitted) {
+            ir_instr_t *copied_jump = ir_instr_add(context->block,
+                                                   IR_OP_JUMP);
+            emitted = copied_jump && ir_instr_operand_block(copied_jump, join);
+            if (copied_jump) copied_jump->span = span;
+            context->block = failed;
         }
         ir_instr_t *jump = emitted
             ? ir_instr_add(context->block, IR_OP_JUMP) : nullptr;
@@ -12312,29 +12367,11 @@ n00bb_unwrap_call_outcome(ir_lower_context_t *context, parse_visit_t *visit,
     ir_block_t *ok_block = ir_block_add(context->function, ok_block_name);
     ir_block_t *error_block = ir_block_add(context->function,
                                            error_block_name);
-    th_type *uint_type = n00bb_ir_builtin_type(context->module, "uint");
-    th_type *bool_type = n00bb_ir_builtin_type(context->module, "bool");
-    ir_instr_t *tag = ir_lower_emit_instruction(context, IR_OP_VARIANT_TAG,
-                                                span);
-    ir_instr_t *literal = ir_lower_emit_instruction(context, IR_OP_CONST, span);
-    ir_instr_t *test = ir_lower_emit_instruction(context, IR_OP_EQ, span);
-    bool emitted = ok_block && error_block && uint_type && bool_type
-        && tag && ir_lower_set_temp_dest(context, tag, "__n00bb_tag_",
-                                          uint_type)
-        && ir_instr_operand_value(tag, outcome)
-        && literal && ir_lower_set_temp_dest(context, literal,
-                                              "__n00bb_tag_lit_", uint_type)
-        && ir_instr_operand_uint(literal, th_arm_tag("ok"))
-        && test && ir_lower_set_temp_dest(context, test, "__n00bb_is_ok_",
-                                          bool_type)
-        && ir_instr_operand_value(test, tag->dest)
-        && ir_instr_operand_value(test, literal->dest);
-    ir_instr_t *branch = emitted
-        ? ir_instr_add(context->block, IR_OP_BRANCH) : nullptr;
-    emitted = emitted && branch
-        && ir_instr_operand_value(branch, test->dest)
-        && ir_instr_operand_block(branch, ok_block)
-        && ir_instr_operand_block(branch, error_block);
+    ir_instr_t *branch = ok_block && error_block
+        ? n00bb_branch_on_outcome(context, outcome, ok_block, error_block,
+                                  span)
+        : nullptr;
+    bool emitted = branch != nullptr;
     if (!emitted)
         return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
             "could not branch on the call outcome");
@@ -19514,6 +19551,19 @@ n00bb_validate_consume_states(n00bb_link_analysis_t *analysis,
 }
 
 bool
+n00bb_dump_ir(const n00bb_link_analysis_t *analysis)
+{
+    for (size_t i = 0; analysis && i < analysis->units.len; i++) {
+        char *text = ir_module_print(
+            unit_module(tu_state(analysis->units.data[i])));
+        if (!text) return false;
+        fputs(text, stdout);
+        core_free(text);
+    }
+    return analysis != nullptr;
+}
+
+bool
 lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
                      n00bb_link_analysis_t *analysis,
                      ir_ctx_t *ir_context,
@@ -19749,14 +19799,7 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         fprintf(stderr, "PROFILE lower-initializers %.3f\n",
             n00bb_profile_seconds() - profile_start);
 
-    if (ok && dump_ir) {
-        for (size_t i = 0; i < units.len; i++) {
-            char *text = ir_module_print(tu_state(units.data[i])->ir_module);
-            if (!text) { ok = false; break; }
-            fputs(text, stdout);
-            core_free(text);
-        }
-    }
+    if (ok && dump_ir) ok = n00bb_dump_ir(analysis);
 
     for (size_t i = 0; ok && i < units.len; i++) {
         core_translation_unit_t *unit = units.data[i];

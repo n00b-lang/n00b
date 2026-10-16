@@ -3781,7 +3781,8 @@ n00bb_compiler_main(int argc, char **argv)
                                             || interface_ir_dump))))
         located = lower_requests_to_ir(grammar, link,
             link_analysis, ir_context, cli_diagnostics,
-            parse_cmdr_flag_present(args, CORE_STRING_STATIC("--dump-ir"))
+            (!build_command
+                && parse_cmdr_flag_present(args, CORE_STRING_STATIC("--dump-ir")))
                 || (lower_command && !parse_cmdr_flag_present(args,
                         CORE_STRING_STATIC("--dump-control-flow"))
                     && !parse_cmdr_flag_present(args,
@@ -3840,9 +3841,12 @@ n00bb_compiler_main(int argc, char **argv)
     bool emit_program = located && build_command
         && (n00bb_compile_phase() == PARSE_SYM_PHASE_RUNTIME
             || n00bb_build_time_run_needed(link_analysis));
+    if (emit_program && specialize)
+        located = specialize_calls(link, link_analysis, cli_diagnostics);
+    if (located && build_command
+        && parse_cmdr_flag_present(args, CORE_STRING_STATIC("--dump-ir")))
+        located = n00bb_dump_ir(link_analysis);
     if (emit_program) {
-        if (specialize)
-            located = specialize_calls(link, link_analysis, cli_diagnostics);
         if (profile_compile) {
             double now = n00bb_profile_seconds();
             fprintf(stderr, "PROFILE specialize %.3f\n", now - profile_tick);

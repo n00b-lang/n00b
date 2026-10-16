@@ -1787,6 +1787,7 @@ foreach fixture : [
     'bitcode_callback_failure.n',
     'bitcode_callback_setup_failure.n',
     'bitcode_callback_handler_ref.n',
+    'bitcode_generic_trait_calls.n',
 ]
     test(
         fixture,

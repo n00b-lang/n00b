@@ -308,6 +308,8 @@ n00bb_abi_constraint_rows_build(
         core_list_t(uint32_t) members = {0};
         for (size_t j = 0; valid && j < declared->len; j++) {
             th_trait_requirement *requirement = &declared->data[j];
+            if (th_kind_of(th_resolve(requirement->subject)) != TH_VAR)
+                continue;
             size_t ordinal = variables->len;
             for (size_t k = 0; k < variables->len; k++)
                 if (th_resolve(requirement->subject)
