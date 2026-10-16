@@ -4397,7 +4397,7 @@ resolve_local_type_reference(parse_grammar_t *grammar,
         parse_sym_remove_use(previous.target.symbol, node);
     if (!parse_tree_set_resolution_symbol(node, symbol)
         || !parse_sym_add_use(symbol, node)
-        || !bind_array_shape_type_source(node, symbol)
+        || !bind_array_shape_type_source(grammar, node, symbol)
         || !bind_array_shape_alias_source(grammar, node, symbol)) {
         core_diagnostics_report_at(
             core_translation_unit_diagnostics(unit), unit,
@@ -8432,17 +8432,18 @@ select_storage_classes(core_list_t(core_translation_unit_ptr_t) *units)
 
 
 bool
-bind_array_shape_type_source(parse_tree_t *type_reference,
+bind_array_shape_type_source(parse_grammar_t *grammar,
+                             parse_tree_t *type_reference,
                              parse_sym_entry_t *symbol)
 {
     if (!type_reference || core_tree_is_leaf(type_reference) || !symbol)
         return true;
     parse_tree_t *core = core_tree_node_value(type_reference).parent;
-    if (!core || core_tree_is_leaf(core)
+    if (!nt_is(grammar, core, "base-tspec-core")
         || core_tree_num_children(core) != 1
         || core_tree_child(core, 0) != type_reference) return true;
     parse_tree_t *base = core_tree_node_value(core).parent;
-    return !base || core_tree_is_leaf(base)
+    return !nt_is(grammar, base, "base-tspec")
         || parse_tree_set_resolution_symbol(base, symbol);
 }
 

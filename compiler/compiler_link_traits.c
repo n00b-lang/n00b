@@ -1858,7 +1858,7 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
         }
     }
     return core_link_unit_validate(link)
-        && bind_link_references_to_nodes(link);
+        && bind_link_references_to_nodes(grammar, link);
 }
 
 

@@ -113,7 +113,7 @@ n00bb_prepare_ir_bindings(core_link_unit_t *link,
                 CORE_STRING_STATIC("Lantern rejected the link unit"));
         return false;
     }
-    if (!bind_link_references_to_nodes(link)) {
+    if (!bind_link_references_to_nodes(analysis->grammar, link)) {
         core_diagnostics_report(core_translation_unit_diagnostics(
                 analysis->units.data[0]), analysis->units.data[0],
             CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0033"),
@@ -618,17 +618,11 @@ value_body_expression(parse_grammar_t *grammar, parse_tree_t *body)
 static parse_tree_t *
 n00bb_switch_tag_primary(parse_grammar_t *grammar, parse_tree_t *expression)
 {
-    static const char *const path[] = {
-        "or-expr", "and-expr", "equality-expr", "compare-expr",
-        "bitor-expr", "bitxor-expr", "bitand-expr", "shift-expr",
-        "add-expr", "mul-expr", "unary-expr", "postfix-expr",
-        "primary",
-    };
     parse_tree_t *node = expression;
-    for (size_t i = 0; node && i < sizeof(path) / sizeof(path[0]); i++) {
-        node = child_nt(grammar, node, path[i]);
-    }
-    return node;
+    while (node && !core_tree_is_leaf(node) && !nt_is(grammar, node, "primary")
+           && core_tree_num_children(node) == 1)
+        node = core_tree_child(node, 0);
+    return nt_is(grammar, node, "primary") ? node : nullptr;
 }
 
 

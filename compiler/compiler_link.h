@@ -283,7 +283,8 @@ bool register_link_declarations(core_link_unit_t *link,
     core_dict_t *declarations_by_symbol);
 bool register_link_use_sites(core_link_unit_t *link,
     parse_grammar_t *grammar, core_list_t(core_translation_unit_ptr_t) *units);
-bool bind_link_references_to_nodes(core_link_unit_t *link);
+bool bind_link_references_to_nodes(parse_grammar_t *grammar,
+                                   core_link_unit_t *link);
 bool publish_function_global_effects(core_link_unit_t *link,
     n00bb_link_analysis_t *analysis, uint32_t producer_stage,
     core_link_contribution_state_t *state_out);

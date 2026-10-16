@@ -804,7 +804,7 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
             }
             if (!parse_tree_set_resolution_symbol(reference, symbol)
                 || !parse_sym_add_use(symbol, reference)
-                || !bind_array_shape_type_source(reference, symbol)
+                || !bind_array_shape_type_source(grammar, reference, symbol)
                 || !bind_array_shape_alias_source(grammar, reference,
                                                   symbol)) {
                 core_diagnostics_report_at(
@@ -3192,7 +3192,7 @@ register_link_use_sites(core_link_unit_t *link,
 }
 
 bool
-bind_link_references_to_nodes(core_link_unit_t *link)
+bind_link_references_to_nodes(parse_grammar_t *grammar, core_link_unit_t *link)
 {
     for (size_t i = 0; i < core_link_unit_reference_count(link); i++) {
         core_link_reference_t *reference =
@@ -3207,7 +3207,8 @@ bind_link_references_to_nodes(core_link_unit_t *link)
             ? core_link_declaration_payload(target) : nullptr;
         if (!use_site || !payload || !payload->symbol
             || !parse_tree_set_resolution_symbol(use_site, payload->symbol)
-            || !bind_array_shape_type_source(use_site, payload->symbol)) {
+            || !bind_array_shape_type_source(grammar, use_site,
+                                             payload->symbol)) {
             core_translation_unit_t *unit =
                 core_link_reference_referrer(reference);
             if (unit) {
@@ -3267,7 +3268,7 @@ n00bb_link_stage_symbols(core_link_unit_t *link, uint32_t stage_kind,
     if (!core_link_unit_validate(link)) {
         return CORE_LINK_STAGE_RESULT_FAILED;
     }
-    if (!bind_link_references_to_nodes(link))
+    if (!bind_link_references_to_nodes(analysis->grammar, link))
         return CORE_LINK_STAGE_RESULT_FAILED;
     bind_return_call_sources(analysis);
     return CORE_LINK_STAGE_RESULT_COMPLETE;
