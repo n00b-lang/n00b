@@ -17,16 +17,19 @@ n00bb_builtin_reference_function(parse_sym_entry_t *symbol)
 th_type *
 n00bb_array_index_type(th_ctx *types, core_arena_t *arena)
 {
+    static const char *const names[] = {
+        "int", "uint", "u64", "u32", "u16", "u8",
+    };
+    size_t n = sizeof(names) / sizeof(names[0]);
     th_type *index = th_var(types);
     th_type **choices = arena && index
-        ? core_arena_alloc(arena, 2 * sizeof(*choices)) : nullptr;
+        ? core_arena_alloc(arena, n * sizeof(*choices)) : nullptr;
     if (!choices) return nullptr;
-    choices[0] = th_name(types, "int");
-    choices[1] = th_name(types, "uint");
-    if (!choices[0] || !choices[1]
-        || !th_var_constrain(types, index, (th_constraint){
+    for (size_t i = 0; i < n; i++)
+        if (!(choices[i] = th_name(types, names[i]))) return nullptr;
+    if (!th_var_constrain(types, index, (th_constraint){
             .kind = TH_CON_ONE_OF,
-            .one_of = {.types = choices, .n = 2},
+            .one_of = {.types = choices, .n = n},
         })) return nullptr;
     return index;
 }
