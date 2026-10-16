@@ -3545,8 +3545,6 @@ n00bb_compiler_main(int argc, char **argv)
 #endif
 
     core_string_t command = parse_cmdr_result_command(args);
-    bool is_default = !command.data;
-    if (is_default) command = CORE_STRING_STATIC("build");
 
     int32_t input_count = parse_cmdr_arg_count(args);
     core_work_queue_t *queue = core_work_queue_new();
@@ -3583,8 +3581,8 @@ n00bb_compiler_main(int argc, char **argv)
         || core_string_eq(command, CORE_STRING_STATIC("preprocess"));
     bool lower_command = !show_ffi
         && core_string_eq(command, CORE_STRING_STATIC("lower"));
-    bool build_command = !show_ffi && (is_default
-        || core_string_eq(command, CORE_STRING_STATIC("build")));
+    bool build_command = !show_ffi
+        && core_string_eq(command, CORE_STRING_STATIC("build"));
     bool library_command = !show_ffi
         && core_string_eq(command, CORE_STRING_STATIC("library"));
     bool compile_command = !show_ffi
@@ -3601,36 +3599,6 @@ n00bb_compiler_main(int argc, char **argv)
         ? parse_cmdr_flag_str(args,
             CORE_STRING_STATIC("--emit-interface")) : (core_string_t){0};
     bool options_valid = true;
-    if (!fmt_command && (parse_cmdr_flag_present(args,
-            CORE_STRING_STATIC("--check"))
-        || parse_cmdr_flag_present(args,
-            CORE_STRING_STATIC("--normalize")))) {
-        core_diagnostics_report(cli_diagnostics, nullptr, CORE_DIAG_ERROR,
-            CORE_STRING_STATIC("N00BB-B0003"),
-            CORE_STRING_STATIC("--check and --normalize are only valid with the fmt command"));
-        options_valid = false;
-    }
-    if (!build_command && parse_cmdr_flag_present(args,
-            CORE_STRING_STATIC("--link-object"))) {
-        core_diagnostics_report(cli_diagnostics, nullptr, CORE_DIAG_ERROR,
-            CORE_STRING_STATIC("N00BB-B0017"),
-            CORE_STRING_STATIC("--link-object is only valid with the build command"));
-        options_valid = false;
-    }
-    if (!build_command && parse_cmdr_flag_present(args,
-            CORE_STRING_STATIC("--native-root"))) {
-        core_diagnostics_report(cli_diagnostics, nullptr, CORE_DIAG_ERROR,
-            CORE_STRING_STATIC("N00BB-B0018"),
-            CORE_STRING_STATIC("--native-root is only valid with the build command"));
-        options_valid = false;
-    }
-    if (!build_command && parse_cmdr_flag_present(args,
-            CORE_STRING_STATIC("--lto"))) {
-        core_diagnostics_report(cli_diagnostics, nullptr, CORE_DIAG_ERROR,
-            CORE_STRING_STATIC("N00BB-B0017"),
-            CORE_STRING_STATIC("--lto is only valid with the build command"));
-        options_valid = false;
-    }
     bool build_time = parse_cmdr_flag_present(args,
         CORE_STRING_STATIC("--build-time"));
     n00bb_set_build_time(build_time);

@@ -2,86 +2,131 @@
 
 #include <string.h>
 
-static const parse_cmdr_flag_t FLAGS[] = {
-    {CORE_STRING_STATIC("--help"), CORE_STRING_STATIC("-h"),
-     PARSE_CMDR_TYPE_BOOL, false, CORE_STRING_STATIC("show this help")},
-    {CORE_STRING_STATIC("--output"), CORE_STRING_STATIC("-o"),
-     PARSE_CMDR_TYPE_WORD, true, CORE_STRING_STATIC("output file")},
-    {CORE_STRING_STATIC("--build-time"), {0}, PARSE_CMDR_TYPE_BOOL, false,
-     CORE_STRING_STATIC("compile the program that computes consts")},
-    {CORE_STRING_STATIC("--check"), {0}, PARSE_CMDR_TYPE_BOOL, false,
-     CORE_STRING_STATIC("check formatting without writing files")},
-    {CORE_STRING_STATIC("--normalize"), {0}, PARSE_CMDR_TYPE_BOOL, false,
-     CORE_STRING_STATIC("normalize source using inferred type information")},
-    {CORE_STRING_STATIC("--link-object"), {0}, PARSE_CMDR_TYPE_WORD,
-     true, CORE_STRING_STATIC("native object to link into an executable")},
-    {CORE_STRING_STATIC("--native-root"), {0}, PARSE_CMDR_TYPE_WORD,
-     true, CORE_STRING_STATIC("qualified n00b function used by native code")},
-    {CORE_STRING_STATIC("--link-interface"), {0}, PARSE_CMDR_TYPE_WORD,
-     true, CORE_STRING_STATIC("load a frozen semantic library interface")},
-    {CORE_STRING_STATIC("--emit-interface"), {0}, PARSE_CMDR_TYPE_WORD,
-     true, CORE_STRING_STATIC("write a frozen semantic interface archive")},
-    {CORE_STRING_STATIC("--jobs"), {0}, PARSE_CMDR_TYPE_INT, true,
-     CORE_STRING_STATIC("maximum worker count")},
-    {CORE_STRING_STATIC("--dump-tokens"), {0}, PARSE_CMDR_TYPE_BOOL, false,
-     CORE_STRING_STATIC("dump tokens after lexing and continue")},
-    {CORE_STRING_STATIC("--dump-tree"), {0}, PARSE_CMDR_TYPE_BOOL, false,
-     CORE_STRING_STATIC("dump the parse tree and continue")},
-    {CORE_STRING_STATIC("--dump-preprocessed"), {0}, PARSE_CMDR_TYPE_BOOL, false,
-     CORE_STRING_STATIC("dump the preprocessed tree and continue")},
-    {CORE_STRING_STATIC("--dump-symbols"), {0}, PARSE_CMDR_TYPE_BOOL, false,
-     CORE_STRING_STATIC("dump collected symbols after preprocessing")},
-    {CORE_STRING_STATIC("--dump-link-unit"), {0}, PARSE_CMDR_TYPE_BOOL,
-     false, CORE_STRING_STATIC("dump canonical link-unit analysis facts")},
-    {CORE_STRING_STATIC("--dump-ir"), {0}, PARSE_CMDR_TYPE_BOOL, false,
-     CORE_STRING_STATIC("dump lowered intermediate representation")},
-    {CORE_STRING_STATIC("--dump-control-flow"), {0}, PARSE_CMDR_TYPE_BOOL,
-     false, CORE_STRING_STATIC("dump control-flow edges")},
-    {CORE_STRING_STATIC("--dump-pdg"), {0}, PARSE_CMDR_TYPE_BOOL, false,
-     CORE_STRING_STATIC("dump the full program-dependence graph")},
-    {CORE_STRING_STATIC("--dump-layout"), {0}, PARSE_CMDR_TYPE_BOOL, false,
-     CORE_STRING_STATIC("dump target layouts for named types")},
-    {CORE_STRING_STATIC("--define"), CORE_STRING_STATIC("-D"),
-     PARSE_CMDR_TYPE_WORD, true, CORE_STRING_STATIC("preprocessor definition")},
-    {CORE_STRING_STATIC("--contract-dir"), {0}, PARSE_CMDR_TYPE_WORD, true,
-     CORE_STRING_STATIC("directory searched for writ contracts")},
-    {CORE_STRING_STATIC("--show-ffi"), {0}, PARSE_CMDR_TYPE_WORD, true,
-     CORE_STRING_STATIC("print the n00b source generated for MODULE.NAME")},
-    {CORE_STRING_STATIC("--release"), {0}, PARSE_CMDR_TYPE_BOOL, false,
-     CORE_STRING_STATIC("disable debug assertions and optimize at LLVM O3")},
-    {CORE_STRING_STATIC("--lto"), {0}, PARSE_CMDR_TYPE_BOOL, false,
-     CORE_STRING_STATIC("optimize runtime modules and C support together")},
-    {CORE_STRING_STATIC("--native"), {0}, PARSE_CMDR_TYPE_BOOL, false,
-     CORE_STRING_STATIC("tune generated code for this CPU (default on macOS)")},
-    {CORE_STRING_STATIC("--generic"), {0}, PARSE_CMDR_TYPE_BOOL, false,
-     CORE_STRING_STATIC("use baseline CPU code generation")},
-    {CORE_STRING_STATIC("--no-specialize"), {0}, PARSE_CMDR_TYPE_BOOL, false,
-     CORE_STRING_STATIC("keep concrete generic calls on the boxed path")},
-    {CORE_STRING_STATIC("--gc-conservative-stacks"), {0},
-     PARSE_CMDR_TYPE_BOOL, false,
-     CORE_STRING_STATIC("scan all stacks conservatively")},
-    {{0}, {0}, 0, false, {0}},
+#define FLAG(name, alias, type, value, doc) \
+    {CORE_STRING_STATIC(name), alias, PARSE_CMDR_TYPE_##type, value, \
+     CORE_STRING_STATIC(doc)}
+#define NO_ALIAS {0}
+#define END_FLAGS {{0}, {0}, 0, false, {0}}
+
+#define OUTPUT_FLAG \
+    FLAG("--output", CORE_STRING_STATIC("-o"), WORD, true, "output file")
+#define LINK_INTERFACE_FLAG \
+    FLAG("--link-interface", NO_ALIAS, WORD, true, \
+         "load a frozen semantic library interface")
+#define SHOW_FFI_FLAG \
+    FLAG("--show-ffi", NO_ALIAS, WORD, true, \
+         "print the n00b source generated for MODULE.NAME")
+#define FRONT_END_DUMP_FLAGS \
+    FLAG("--dump-tokens", NO_ALIAS, BOOL, false, \
+         "dump tokens after lexing and continue"), \
+    FLAG("--dump-tree", NO_ALIAS, BOOL, false, \
+         "dump the parse tree and continue"), \
+    FLAG("--dump-preprocessed", NO_ALIAS, BOOL, false, \
+         "dump the preprocessed tree and continue"), \
+    FLAG("--dump-symbols", NO_ALIAS, BOOL, false, \
+         "dump collected symbols after preprocessing")
+#define LOWERING_DUMP_FLAGS \
+    FLAG("--dump-link-unit", NO_ALIAS, BOOL, false, \
+         "dump canonical link-unit analysis facts"), \
+    FLAG("--dump-ir", NO_ALIAS, BOOL, false, \
+         "dump lowered intermediate representation"), \
+    FLAG("--dump-control-flow", NO_ALIAS, BOOL, false, \
+         "dump control-flow edges"), \
+    FLAG("--dump-pdg", NO_ALIAS, BOOL, false, \
+         "dump the full program-dependence graph"), \
+    FLAG("--dump-layout", NO_ALIAS, BOOL, false, \
+         "dump target layouts for named types")
+
+static const parse_cmdr_flag_t GLOBAL_FLAGS[] = {
+    FLAG("--help", CORE_STRING_STATIC("-h"), BOOL, false, "show this help"),
+    FLAG("--jobs", NO_ALIAS, INT, true, "maximum worker count"),
+    FLAG("--define", CORE_STRING_STATIC("-D"), WORD, true,
+         "preprocessor definition"),
+    FLAG("--contract-dir", NO_ALIAS, WORD, true,
+         "directory searched for writ contracts"),
+    FLAG("--release", NO_ALIAS, BOOL, false,
+         "disable debug assertions and optimize at LLVM O3"),
+    END_FLAGS,
+};
+
+static const parse_cmdr_flag_t FMT_FLAGS[] = {
+    OUTPUT_FLAG,
+    FLAG("--check", NO_ALIAS, BOOL, false,
+         "check formatting without writing files"),
+    FLAG("--normalize", NO_ALIAS, BOOL, false,
+         "normalize source using inferred type information"),
+    END_FLAGS,
+};
+
+static const parse_cmdr_flag_t BUILD_FLAGS[] = {
+    OUTPUT_FLAG,
+    LINK_INTERFACE_FLAG,
+    SHOW_FFI_FLAG,
+    FRONT_END_DUMP_FLAGS,
+    LOWERING_DUMP_FLAGS,
+    FLAG("--build-time", NO_ALIAS, BOOL, false,
+         "compile the program that computes consts"),
+    FLAG("--link-object", NO_ALIAS, WORD, true,
+         "native object to link into an executable"),
+    FLAG("--native-root", NO_ALIAS, WORD, true,
+         "qualified n00b function used by native code"),
+    FLAG("--lto", NO_ALIAS, BOOL, false,
+         "optimize runtime modules and C support together"),
+    FLAG("--native", NO_ALIAS, BOOL, false,
+         "tune generated code for this CPU (default on macOS)"),
+    FLAG("--generic", NO_ALIAS, BOOL, false,
+         "use baseline CPU code generation"),
+    FLAG("--no-specialize", NO_ALIAS, BOOL, false,
+         "keep concrete generic calls on the boxed path"),
+    FLAG("--gc-conservative-stacks", NO_ALIAS, BOOL, false,
+         "scan all stacks conservatively"),
+    END_FLAGS,
+};
+
+static const parse_cmdr_flag_t LIBRARY_FLAGS[] = {
+    OUTPUT_FLAG,
+    LINK_INTERFACE_FLAG,
+    FRONT_END_DUMP_FLAGS,
+    LOWERING_DUMP_FLAGS,
+    FLAG("--emit-interface", NO_ALIAS, WORD, true,
+         "write a frozen semantic interface archive"),
+    END_FLAGS,
+};
+
+static const parse_cmdr_flag_t LOWERING_FLAGS[] = {
+    OUTPUT_FLAG,
+    LINK_INTERFACE_FLAG,
+    FRONT_END_DUMP_FLAGS,
+    LOWERING_DUMP_FLAGS,
+    END_FLAGS,
+};
+
+static const parse_cmdr_flag_t PREPROCESS_FLAGS[] = {
+    OUTPUT_FLAG,
+    SHOW_FFI_FLAG,
+    FRONT_END_DUMP_FLAGS,
+    END_FLAGS,
 };
 
 static const parse_cmdr_cmd_t COMMANDS[] = {
     {CORE_STRING_STATIC("fmt"),
      CORE_STRING_STATIC("format source files in place"),
-     nullptr, CORE_STRING_STATIC("input"), 1, -1},
+     FMT_FLAGS, CORE_STRING_STATIC("input"), 1, -1},
     {CORE_STRING_STATIC("build"),
      CORE_STRING_STATIC("build an executable from one module or file"),
-     nullptr, CORE_STRING_STATIC("input"), 1, 1},
+     BUILD_FLAGS, CORE_STRING_STATIC("input"), 1, 1},
     {CORE_STRING_STATIC("library"),
      CORE_STRING_STATIC("emit a library interface or ABI metadata"),
-     nullptr, CORE_STRING_STATIC("input"), 1, -1},
+     LIBRARY_FLAGS, CORE_STRING_STATIC("input"), 1, -1},
     {CORE_STRING_STATIC("compile"),
      CORE_STRING_STATIC("emit ABI metadata for one translation unit"),
-     nullptr, CORE_STRING_STATIC("input"), 1, 1},
+     LOWERING_FLAGS, CORE_STRING_STATIC("input"), 1, 1},
     {CORE_STRING_STATIC("preprocess"),
      CORE_STRING_STATIC("emit preprocessor output for one input"),
-     nullptr, CORE_STRING_STATIC("input"), 1, 1},
+     PREPROCESS_FLAGS, CORE_STRING_STATIC("input"), 1, 1},
     {CORE_STRING_STATIC("lower"),
      CORE_STRING_STATIC("lower a module and its imports to Lantern IR"),
-     nullptr, CORE_STRING_STATIC("input"), 1, 1},
+     LOWERING_FLAGS, CORE_STRING_STATIC("input"), 1, 1},
     {CORE_STRING_STATIC("locate-tu"),
      CORE_STRING_STATIC("locate and load translation units"),
      nullptr, CORE_STRING_STATIC("input"), 1, -1},
@@ -102,11 +147,9 @@ n00bb_make_cli(void)
         .usage = CORE_STRING_STATIC(
             "usage: n00bb [options] <module|file>\n"
             "       n00bb <command> [options] <module|file>..."),
-        .flags = FLAGS,
+        .flags = GLOBAL_FLAGS,
         .commands = COMMANDS,
-        .arg = CORE_STRING_STATIC("input"),
-        .min_args = 1,
-        .max_args = 1,
+        .default_command = CORE_STRING_STATIC("build"),
     };
     parse_cmdr_t *cli = parse_cmdr_new(&spec);
     const core_string_t repeatable[] = {
@@ -116,9 +159,20 @@ n00bb_make_cli(void)
         CORE_STRING_STATIC("--link-object"),
         CORE_STRING_STATIC("--native-root"),
     };
-    for (size_t i = 0; i < sizeof(repeatable) / sizeof(repeatable[0]); i++)
-        parse_cmdr_flag_set_repeatable(cli, (core_string_t){0},
-                                       repeatable[i], true);
+    for (size_t i = 0; i < sizeof(repeatable) / sizeof(repeatable[0]); i++) {
+        for (const parse_cmdr_flag_t *flag = GLOBAL_FLAGS; flag->name.data;
+             flag++)
+            if (core_string_eq(flag->name, repeatable[i]))
+                parse_cmdr_flag_set_repeatable(cli, (core_string_t){0},
+                                               repeatable[i], true);
+        for (const parse_cmdr_cmd_t *command = COMMANDS; command->name.data;
+             command++)
+            for (const parse_cmdr_flag_t *flag = command->flags;
+                 flag && flag->name.data; flag++)
+                if (core_string_eq(flag->name, repeatable[i]))
+                    parse_cmdr_flag_set_repeatable(cli, command->name,
+                                                   repeatable[i], true);
+    }
     return cli;
 }
 
