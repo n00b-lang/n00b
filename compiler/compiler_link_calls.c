@@ -501,7 +501,6 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
         parse_tree_t *positional = child_nt(grammar, label->then_body,
                                             "positional-args");
         size_t parameter_count = th_func_nparams(signature);
-        size_t argument_index = 0;
         size_t parameter_offset = member_call ? 1 : 0;
         if (member_call) {
             const th_param *receiver = th_func_param(signature, 0);
@@ -513,37 +512,25 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
                     receiver_node, receiver_type, receiver->type))
                 continue;
         }
-        for (size_t i = 0; positional
-             && i < core_tree_num_children(positional); i++) {
-            parse_tree_t *argument = core_tree_child(positional, i);
-            if (!nt_is(grammar, argument, "expression")) continue;
-            size_t parameter_index = argument_index + parameter_offset;
-            const th_param *parameter = th_func_param(signature,
-                                                       parameter_index);
-            if (!parameter && parameter_index >= parameter_count)
-                parameter = th_func_rest(signature);
-            if (parameter && !core_tree_is_leaf(argument))
-                (void)unify_call_node_type(unit, state, label->self, argument,
-                    core_tree_node_value(argument).type, parameter->type);
-            argument_index++;
-        }
         core_list_t(n00bb_tree_ptr_t) arguments =
             core_list_new(n00bb_tree_ptr_t);
         collect_positional_nodes(grammar, positional, &arguments);
         for (size_t i = 0; i < arguments.len; i++) {
+            parse_tree_t *argument = arguments.data[i];
             const th_param *parameter = th_func_param(signature,
                 i + parameter_offset);
             if (!parameter && i + parameter_offset >= parameter_count)
                 parameter = th_func_rest(signature);
-            if (parameter)
-                (void)n00bb_contextual_float_literal(arguments.data[i],
-                                                     parameter->type);
+            if (!parameter || core_tree_is_leaf(argument)) continue;
+            (void)unify_call_node_type(unit, state, label->self, argument,
+                core_tree_node_value(argument).type, parameter->type);
+            (void)n00bb_contextual_float_literal(argument, parameter->type);
         }
         core_list_free(arguments);
         th_type *return_type = th_func_ret(signature);
-        if (return_type)
-            (void)unify_call_node_type(unit, state, label->self, label->self,
-                                       result, return_type);
+        if (return_type && !th_unify_in_place(state->types, result, return_type))
+            report_call_type_error(unit, label->self, state->types, result,
+                                   return_type);
         th_type *failure_type = th_func_error(signature);
         bool propagated = failure_type
             && n00bb_call_is_error_propagated(grammar, label->self);

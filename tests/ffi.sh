@@ -60,6 +60,8 @@ fails_with unprovided_callback 'E0509' --link-object "$tmp/sorter.o"
 fails_with provided_missing "provided function 'provided_missing.missing'" --link-object "$tmp/sorter.o"
 "${CC:-cc}" -c guard/guard.c -o "$tmp/guard.o"
 builds_and_runs guard_calls --link-object "$tmp/guard.o" 2>/dev/null
+"${CC:-cc}" -c kv/kv.c -o "$tmp/kv.o"
+builds_and_runs kv_store --link-object "$tmp/kv.o"
 
 for marker in marker-literal-5be1 marker-contract-5be1; do
     for binary in constants use_path use_search; do

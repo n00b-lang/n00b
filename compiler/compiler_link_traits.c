@@ -946,6 +946,15 @@ validate_enclosing_return_type(parse_grammar_t *grammar,
 }
 
 static bool
+operand_unifies(th_ctx *types, th_type *parameter, th_type *operand)
+{
+    if (th_unify_probe(types, parameter, operand))
+        return th_unify_in_place(types, parameter, operand) != nullptr;
+    th_type *promoted = n00bb_dereferenced_type(types, operand);
+    return promoted && th_unify_in_place(types, parameter, promoted);
+}
+
+static bool
 validate_index_dispatch_result(parse_grammar_t *grammar,
                                core_translation_unit_t *unit,
                                n00bb_tu_state_t *state,
@@ -962,6 +971,13 @@ validate_index_dispatch_result(parse_grammar_t *grammar,
     th_type *signature = symbol->callable_contract
         ? symbol->callable_contract : symbol->type;
     signature = th_type_clone(state->types, signature);
+    const th_param *self = signature && th_kind_of(signature) == TH_FUNCTION
+        ? th_func_param(signature, 0) : nullptr;
+    th_type *receiver = !core_tree_is_leaf(site->node)
+        && core_tree_num_children(site->node)
+        ? core_tree_node_value(core_tree_child(site->node, 0)).type : nullptr;
+    if (self && receiver)
+        (void)operand_unifies(state->types, self->type, receiver);
     th_type *expected = signature ? th_func_ret(signature) : nullptr;
     th_type *actual = core_tree_is_leaf(site->node)
         ? nullptr : core_tree_node_value(site->node).type;
@@ -982,15 +998,6 @@ validate_index_dispatch_result(parse_grammar_t *grammar,
         link_source_location(site->node));
     core_buffer_release(&message);
     return false;
-}
-
-static bool
-operand_unifies(th_ctx *types, th_type *parameter, th_type *operand)
-{
-    if (th_unify_probe(types, parameter, operand))
-        return th_unify_in_place(types, parameter, operand) != nullptr;
-    th_type *promoted = n00bb_dereferenced_type(types, operand);
-    return promoted && th_unify_in_place(types, parameter, promoted);
 }
 
 static bool
@@ -1366,6 +1373,38 @@ resolve_constructor_use_site(parse_grammar_t *grammar, core_link_unit_t *link,
     return ok;
 }
 
+static size_t
+tree_depth(parse_tree_t *node)
+{
+    size_t depth = 0;
+    for (parse_tree_t *at = node; at && !core_tree_is_leaf(at);
+         at = core_tree_node_value(at).parent) depth++;
+    return depth;
+}
+
+static size_t *
+innermost_site_order(n00bb_tu_state_t *state)
+{
+    size_t count = state->link_use_sites.len;
+    size_t *order = count
+        ? core_arena_alloc(&state->semantic_values, count * sizeof(size_t))
+        : nullptr;
+    size_t *depth = count
+        ? core_arena_alloc(&state->semantic_values, count * sizeof(size_t))
+        : nullptr;
+    if (!order || !depth) return nullptr;
+    for (size_t s = 0; s < count; s++) {
+        depth[s] = tree_depth(state->link_use_sites.data[s].node);
+        size_t at = s;
+        while (at && depth[order[at - 1]] < depth[s]) {
+            order[at] = order[at - 1];
+            at--;
+        }
+        order[at] = s;
+    }
+    return order;
+}
+
 bool
 resolve_inferred_trait_references(parse_grammar_t *grammar,
                                   core_link_unit_t *link,
@@ -1378,8 +1417,10 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
         if (!state || !th_ctx_set_environment_scope(state->types,
                 unit->module.identifier.data,
                 n00bb_package_id(unit).data)) return false;
+        size_t *order = innermost_site_order(state);
+        if (state->link_use_sites.len && !order) return false;
         for (size_t s = 0; s < state->link_use_sites.len; s++) {
-            n00bb_link_use_site_t *site = &state->link_use_sites.data[s];
+            n00bb_link_use_site_t *site = &state->link_use_sites.data[order[s]];
             if (site->callback_call) continue;
             if (!site->symbol && site->member_name.data
                 && site->receiver_node

@@ -1,0 +1,88 @@
+const kv = [-
+library kv
+
+allocator kvheap alloc kv_malloc release kv_free
+
+opaque kv_db
+opaque kv_iter
+handle Db   = *kv_db   release kv_close
+handle Iter = *kv_iter release kv_iter_free
+
+enum kv_status : c_int { KV_OK = 0, KV_NOTFOUND = 1, KV_ERR = 2 }
+
+struct kv_entry @size(32) @align(8) {
+    key:     *[u8; key_len]   with self   @0
+    key_len: usize                        @8
+    val:     *[u8; val_len]   with self   @16
+    val_len: usize                        @24
+}
+
+fn kv_open(path: *cstr, out_db: out *Db) -> c_int as kv_status
+  error ret != KV_OK via kv_errstr(ret)
+  on error out_db: unset
+
+fn kv_put(db: Db, key: *[u8; klen], klen: usize, val: *[u8; vlen], vlen: usize)
+    -> c_int as kv_status
+  error ret != KV_OK
+
+fn kv_get(db: Db, key: *[u8; klen], klen: usize,
+          out_val: out *?[u8; *out_len] own release kv_free,
+          out_len: out *usize)
+    -> c_int as kv_status
+  error ret == KV_ERR
+  on error out_val: unset
+
+fn kv_iter_new(db: Db, prefix: ?[u8; plen], plen: usize) -> own ?Iter with db
+  error ret == null
+
+fn kv_iter_next(it: Iter) -> ?kv_entry until next kv_iter_next(it), release(it)
+
+fn kv_errstr(s: c_int) -> *cstr static
+
+fn kv_live() -> c_int
+
+binding {
+    strip_prefix "kv_"
+    method Db.put = kv_put
+    method Db.get = kv_get
+    method Db.iter = kv_iter_new
+    method Iter.next = kv_iter_next
+    static Db.open = kv_open
+    hide "kv_errstr"
+    raw "kv_live"
+}
+-]'ffi
+
+comptime {} else {
+    try {
+        let db = kv.db_open("store")!
+        kv.put(db, [97, 49], [111, 110, 101])!
+        kv.put(db, [97, 50], [116, 119, 111])!
+        kv.put(db, [98, 49], [120])!
+        let found = kv.get(db, [97, 50])!
+        require found != nil
+        if found != nil {
+            require found.len() == 3
+            require found[0] == 116
+        }
+        require kv.get(db, [122])! == nil
+        require kv.live_raw() == 0
+        let iter = kv.iter(db, [97])!
+        var keys = 0
+        var more = true
+        while more {
+            let entry = kv.next(iter)!
+            if entry != nil {
+                require entry.key.len() == 2
+                require entry.val.len() == 3
+                require entry.key[0] == 97
+                keys = keys + 1
+            } else {
+                more = false
+            }
+        }
+        require keys == 2
+    } else failure {
+        require false
+    }
+}

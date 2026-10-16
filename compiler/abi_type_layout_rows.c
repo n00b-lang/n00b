@@ -249,6 +249,29 @@ trace_child_append(const trace_source_t *source,
 }
 
 static bool
+external_untraced(const trace_source_t *source, uint32_t type_index)
+{
+    const n00b_abi_type_v1 *type = &source->types->rows[type_index];
+    if (type->tracing_index || type->layout_index) return false;
+    th_type *actual = n00bb_abi_type_index_at(source->index, type_index);
+    ir_module_t *owner = actual
+        ? ir_type_definition_owner(source->module, actual) : nullptr;
+    return owner && owner != source->module;
+}
+
+static bool
+linked_unary_trace(trace_source_t *source, uint32_t type_index)
+{
+    const n00b_abi_type_v1 *type = &source->types->rows[type_index];
+    uint32_t child_index = 0;
+    return (type->kind == N00B_ABI_TYPE_OPTION
+            || type->kind == N00B_ABI_TYPE_WRAPPER
+            || type->kind == N00B_ABI_TYPE_ATOMIC)
+        && trace_unary_component(source, type_index, &child_index)
+        && external_untraced(source, child_index);
+}
+
+static bool
 append_traces(trace_source_t *source,
               const core_list_t(n00b_abi_layout_v1) *layouts,
               const core_list_t(n00b_abi_tag_extractor_v1) *tags,
@@ -266,7 +289,8 @@ append_traces(trace_source_t *source,
         n00b_abi_type_v1 *type = &source->types->rows[type_index];
         trace_need_t need = trace_need(source, type_index);
         if (need == TRACE_INVALID) return false;
-        if (need != TRACE_PRESENT) continue;
+        if (need != TRACE_PRESENT || linked_unary_trace(source, type_index))
+            continue;
         if (!type->layout_index) {
             th_type *actual = n00bb_abi_type_index_at(source->index,
                                                        type_index);

@@ -5209,6 +5209,12 @@ n00bb_mark_builtin_index_receiver(ir_lower_context_t *context,
         return true;
     parse_tree_t *receiver = core_tree_num_children(visit->node)
         ? core_tree_child(visit->node, 0) : nullptr;
+    for (parse_tree_t *member = member_access_node(visit->grammar, receiver);
+         member; member = member_access_node(visit->grammar,
+                                             core_tree_child(member, 0)))
+        if (n00bb_option_type_element(
+                core_tree_node_value(core_tree_child(member, 0)).type,
+                nullptr)) return true;
     parse_tree_t *member = member_access_node(visit->grammar, receiver);
     while (member) {
         if (!ir_lower_suppress_emit(context, member)) return false;
@@ -13659,7 +13665,9 @@ n00bb_record_field_address(ir_lower_context_t *context,
                     load->dest, referent)) return nullptr;
             base = load->dest;
         }
-        if (!field || !field->is_field || !field->type || !base)
+        if (!field || !field->is_field || !field->type || !base
+            || n00bb_option_type_element(th_ind_referent(th_resolve(base->type)),
+                                         nullptr))
             return nullptr;
         th_type *member_type = core_tree_node_value(member).type;
         th_type *pointer_type = th_ind(ir_module_types(context->module), 0,
