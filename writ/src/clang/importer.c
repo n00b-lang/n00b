@@ -9,6 +9,7 @@ typedef struct {
     const writ_import_request_t *request;
     writ_tu_t                    tu;
     writ_map_t                  *record_names;
+    writ_map_t                  *record_sources;
     writ_map_t                  *declared;
     writ_emit_t                  types;
     writ_emit_t                  values;
@@ -307,7 +308,25 @@ typedef struct {
     writ_emit_t fields;
     bool        ok;
     CXType      record;
+    writ_str_t  name;
+    writ_str_t  spelled;
 } record_visit_t;
+
+static void
+name_anonymous_union(record_visit_t *visit, CXType type, writ_str_t field)
+{
+    importer_t *im = visit->im;
+    CXType named = type.kind == CXType_Elaborated ? clang_Type_getNamedType(type) : type;
+    CXCursor decl = clang_getTypeDeclaration(named);
+    if (named.kind != CXType_Record || clang_getCursorKind(decl) != CXCursor_UnionDecl
+        || !clang_Cursor_isAnonymous(decl) || !field.length) {
+        return;
+    }
+    writ_sym_t key = usr(im, decl);
+    writ_map_put(im->record_names, key, sym_of(im, writ_str_format(im->session, "%.*s_%.*s", S(visit->name), S(field))));
+    writ_map_put(im->record_sources, key, sym_of(im, writ_str_format(im->session, "__typeof__(((%.*s *)0)->%.*s)",
+                                                                      S(visit->spelled), S(field))));
+}
 
 static enum CXChildVisitResult
 visit_field(CXCursor cursor, CXCursor parent, CXClientData data)
@@ -318,6 +337,7 @@ visit_field(CXCursor cursor, CXCursor parent, CXClientData data)
         return CXChildVisit_Continue;
     }
     writ_str_t name = spelling(visit->im, cursor);
+    name_anonymous_union(visit, clang_getCursorType(cursor), name);
     writ_str_t type = type_text(visit->im, clang_getCursorType(cursor));
     if (clang_Cursor_isBitField(cursor) || !name.length || !type.length) {
         visit->ok = false;
@@ -335,14 +355,18 @@ emit_record(importer_t *im, CXCursor decl)
     if (!name.length || !claim(im, name)) {
         return;
     }
-    bool tagged = clang_getCursorKind(decl) == CXCursor_StructDecl;
+    const char *keyword = clang_getCursorKind(decl) == CXCursor_UnionDecl ? "union" : "struct";
+    uint64_t sourced = 0;
     bool typedefed = writ_map_get(im->record_names, usr(im, decl), nullptr);
-    writ_str_t source = typedefed ? writ_cstr("")
-                                  : writ_str_format(im->session, " source \"%s %.*s\"", tagged ? "struct" : "union",
-                                                    S(spelling(im, decl)));
+    writ_str_t spelled = writ_map_get(im->record_sources, usr(im, decl), &sourced)
+                           ? writ_sym_str(im->session, (writ_sym_t)sourced)
+                       : typedefed ? name
+                                   : writ_str_format(im->session, "%s %.*s", keyword, S(spelling(im, decl)));
+    writ_str_t source = writ_str_eq(spelled, name) ? writ_cstr("")
+                                                   : writ_str_format(im->session, " source \"%.*s\"", S(spelled));
     CXType type = clang_getCursorType(decl);
     long long size = clang_Type_getSizeOf(type);
-    record_visit_t visit = {.im = im, .ok = tagged && size > 0, .record = type};
+    record_visit_t visit = {.im = im, .ok = size > 0, .record = type, .name = name, .spelled = spelled};
     writ_emit_init(&visit.fields);
     if (visit.ok) {
         clang_visitChildren(decl, visit_field, &visit);
@@ -352,7 +376,7 @@ emit_record(importer_t *im, CXCursor decl)
         writ_emit_line(&im->types, "opaque %.*s%.*s", S(name), S(source));
         return;
     }
-    writ_emit_line(&im->types, "struct %.*s%.*s @size(%lld) @align(%lld) {", S(name), S(source), size,
+    writ_emit_line(&im->types, "%s %.*s%.*s @size(%lld) @align(%lld) {", keyword, S(name), S(source), size,
                    clang_Type_getAlignOf(type));
     writ_emit_text(&im->types, "%.*s", S(fields));
     writ_emit_line(&im->types, "}");
@@ -705,8 +729,9 @@ writ_clang_import(writ_session_t *session, const writ_platform_t *platform, cons
     importer_t im = {
         .session      = session,
         .request      = request,
-        .record_names = writ_map_new(session),
-        .declared     = writ_map_new(session),
+        .record_names   = writ_map_new(session),
+        .record_sources = writ_map_new(session),
+        .declared       = writ_map_new(session),
     };
     writ_str_t error = {0};
     writ_status_t status = writ_tu_open(session, &im.tu, writ_platform_triple(platform), request, true, &error);

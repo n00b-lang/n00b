@@ -576,6 +576,61 @@ events_resolve(writ_model_t *model)
     }
 }
 
+static uint32_t
+tag_enum(const writ_model_t *model, writ_type_id type)
+{
+    const writ_type_rec_t *tag = writ_type(model, type);
+    if (tag->key.kind == WRIT_TYPE_VIEW) {
+        tag = writ_type(model, writ_type_named(model, tag->key.name));
+    }
+    return tag->key.kind == WRIT_TYPE_ENUM ? tag->decl : WRIT_NONE;
+}
+
+static bool
+arm_in_enum(const writ_model_t *model, const writ_union_arm_rec_t *arm, uint32_t enumeration)
+{
+    uint32_t index = 0;
+    return enumeration == WRIT_NONE || !arm->constant
+        || (writ_scope_lookup(model, arm->constant, WRIT_SCOPE_CONST, &index)
+            && model->consts.data[index].owner == enumeration);
+}
+
+static void
+union_tags(writ_model_t *model)
+{
+    for (uint32_t r = 0; r < model->records.len; r++) {
+        const writ_record_rec_t *tagged = &model->records.data[r];
+        if (tagged->owner == WRIT_NONE) {
+            continue;
+        }
+        const writ_record_rec_t *owner = &model->records.data[tagged->owner];
+        const writ_slot_rec_t *field = &model->slots.data[owner->first_field + tagged->owner_field];
+        const writ_slot_rec_t *tag = field->tag_field == WRIT_NONE ? nullptr
+                                                                   : &model->slots.data[owner->first_field + field->tag_field];
+        if (!tag || !writ_type_is_integer(model, tag->type)) {
+            writ_report(model->session, WRIT_D_UNION_TAG, field->loc, "`%.*s` is not an earlier integer field",
+                        S(writ_sym_str(model->session, field->tag_name)));
+            continue;
+        }
+        uint32_t enumeration = tag_enum(model, tag->type);
+        for (uint32_t a = 0; a < tagged->arm_count; a++) {
+            const writ_union_arm_rec_t *arm = &model->union_arms.data[tagged->first_arm + a];
+            bool repeated = false;
+            for (uint32_t b = 0; b < a; b++) {
+                repeated = repeated || model->union_arms.data[tagged->first_arm + b].value == arm->value;
+            }
+            if (repeated) {
+                writ_report(model->session, WRIT_D_UNION_TAG, arm->loc, "value %lld names two arms",
+                            (long long)arm->value);
+            } else if (!arm_in_enum(model, arm, enumeration)) {
+                writ_report(model->session, WRIT_D_UNION_TAG, arm->loc, "`%.*s` is not an item of `%.*s`",
+                            S(writ_sym_str(model->session, arm->constant)),
+                            S(writ_sym_str(model->session, model->enums.data[enumeration].name)));
+            }
+        }
+    }
+}
+
 static void (*const checks[])(writ_model_t *model) = {
 #define WRIT_CHECK(name, section) name,
 #include "checks.def"

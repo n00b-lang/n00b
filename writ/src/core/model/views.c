@@ -158,6 +158,7 @@ build_slots(writ_model_t *model)
             .span_by           = sym(model, record->span_by),
             .span_events_count = record->event_count,
             .span_events       = event_views_at(model, record->first_event, record->event_count),
+            .tag_field         = record->tag_field,
         };
     }
 }
@@ -233,6 +234,17 @@ static void
 build_decls(writ_model_t *model)
 {
     writ_session_t *session = model->session;
+    model->union_arm_views = ALLOC_VIEWS(model, writ_union_arm_view_t, model->union_arms.len);
+    for (size_t i = 0; i < model->union_arms.len; i++) {
+        const writ_union_arm_rec_t *record = &model->union_arms.data[i];
+        model->union_arm_views[i] = (writ_union_arm_view_t){
+            .struct_size = sizeof(writ_union_arm_view_t),
+            .constant    = sym(model, record->constant),
+            .value       = record->value,
+            .field       = record->field,
+            .declared_at = writ_loc_span(session, record->loc),
+        };
+    }
     model->record_views = ALLOC_VIEWS(model, writ_record_view_t, model->records.len);
     for (size_t i = 0; i < model->records.len; i++) {
         const writ_record_rec_t *record = &model->records.data[i];
@@ -245,6 +257,8 @@ build_decls(writ_model_t *model)
             .declared_at    = writ_loc_span(session, record->loc),
             .presence       = record->presence,
             .presence_field = record->presence_field,
+            .arms_count     = record->arm_count,
+            .arms           = record->arm_count ? &model->union_arm_views[record->first_arm] : nullptr,
         };
     }
     model->handle_views = ALLOC_VIEWS(model, writ_handle_view_t, model->handles.len);

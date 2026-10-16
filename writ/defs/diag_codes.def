@@ -35,6 +35,7 @@ WRIT_DIAG(PRESENCE, "E0221", WRIT_ERROR, "a `mask` or `size` presence field is a
 WRIT_DIAG(POLICY, "E0222", WRIT_ERROR, "a policy arm names a constant of its parameter's type and a parameter of its function, at most one arm is `else`, and `span by` names a policy parameter that sets this slot")
 WRIT_DIAG(BAD_USERDATA, "E0219", WRIT_ERROR, "`userdata` names one callback parameter of its function; inside a callback, one slot is `userdata` with no name")
 WRIT_DIAG(EVENT, "E0223", WRIT_ERROR, "an event calls a function of the contract with this function's parameters or `ret`, or is `release` or `any` of one handle")
+WRIT_DIAG(UNION_TAG, "E0224", WRIT_ERROR, "`union by` names an earlier integer field of its struct; each arm's value is distinct and, when that field is viewed as an enum, an item of it or an integer")
 WRIT_DIAG(TOOLCHAIN, "E0301", WRIT_ERROR, "toolchain failure")
 WRIT_DIAG(LAYOUT_TOOLCHAIN, "E0302", WRIT_ERROR, "the contract's layout disagrees with the compiler")
 WRIT_DIAG(SYMBOL_MISSING, "E0303", WRIT_ERROR, "symbol not exported by the library")

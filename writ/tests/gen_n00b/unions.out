@@ -1,0 +1,235 @@
+#ifndef UNIONS_WRIT_H
+#define UNIONS_WRIT_H
+
+#include <stdarg.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define UNIONS_ARGUMENT_ERROR (-1)
+#define UNIONS_OUT_OF_MEMORY (-2)
+#define UNIONS_CONTRACT_VIOLATION (-3)
+
+typedef struct {
+    uint8_t *data;
+    size_t length;
+} unions_bytes_t;
+
+typedef struct {
+    const char *data;
+    size_t length;
+} unions_str_t;
+
+void unions_bytes_free(unions_bytes_t *bytes);
+void unions_free(void *data);
+
+enum {
+    UNIONS_VK_INT = 1,
+    UNIONS_VK_REAL = 2,
+    UNIONS_VK_TEXT = 3,
+    UNIONS_VK_NULL = 5,
+};
+typedef union Raw {
+    int64_t i;
+    double d;
+    void *p;
+} Raw;
+typedef struct Value {
+    int kind;
+    union {
+        int64_t i;
+        double d;
+        char *s;
+    } v;
+} Value;
+typedef struct Cell {
+    Raw raw;
+    uint8_t flag;
+} Cell;
+
+
+int unions_value_kind(Value *value);
+
+uint8_t unions_cell_flag(Cell *cell, Raw *raw);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
+#include "unions_writ.h"
+
+#include <stdlib.h>
+#include <string.h>
+
+int value_kind(const Value *value);
+uint8_t cell_flag(const Cell *cell, const Raw *raw);
+
+void unions_bytes_free(unions_bytes_t *bytes) {
+    free(bytes->data);
+    bytes->data = NULL;
+    bytes->length = 0;
+}
+
+void unions_free(void *data) {
+    free(data);
+}
+
+int unions_value_kind(Value *value) {
+    const Value *s0 = 0;
+    int ret = 0;
+    s0 = value;
+    ret = value_kind(s0);
+    return ret;
+}
+
+uint8_t unions_cell_flag(Cell *cell, Raw *raw) {
+    const Cell *s0 = 0;
+    const Raw *s1 = 0;
+    uint8_t ret = 0;
+    s0 = cell;
+    s1 = raw;
+    ret = cell_flag(s0, s1);
+    return ret;
+}
+#include <stdint.h>
+#include <stddef.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "unions_writ.h"
+
+void *n00b_ffi_borrow(void *object, size_t *length, uint32_t access);
+void n00b_ffi_release(void *object);
+void n00bb_runtime_trap(const char *reason, uint64_t length);
+
+void unions_take_bytes(unions_bytes_t *bytes, void *out) {
+    size_t length = 0;
+    uint8_t *data = n00b_ffi_borrow(out, &length, 1);
+    if (data && bytes->data) {
+        memcpy(data, bytes->data, length < bytes->length ? length : bytes->length);
+    }
+    n00b_ffi_release(out);
+    unions_bytes_free(bytes);
+}
+
+int unions_n00b_value_kind(const void *value) {
+    size_t value_length = 0;
+    const void *value_data = n00b_ffi_borrow((void *)value, &value_length, 0);
+    int writ_n00b_value = unions_value_kind((Value *)value_data);
+    n00b_ffi_release((void *)value);
+    return writ_n00b_value;
+}
+
+uint8_t unions_n00b_cell_flag(const void *cell, uint64_t raw) {
+    size_t cell_length = 0;
+    const void *cell_data = n00b_ffi_borrow((void *)cell, &cell_length, 0);
+    uint8_t writ_n00b_value = unions_cell_flag((Cell *)cell_data, (Raw *)(uintptr_t)raw);
+    n00b_ffi_release((void *)cell);
+    return writ_n00b_value;
+}
+
+type Error {
+    public code: i64
+    public text: string?
+    public fn: string
+}
+
+type Raw {
+    storage: Array[u8]
+}
+
+func raw() -> Raw {
+    let value: Raw = (storage = new[Array[u8]](8))
+    return value
+}
+
+func i(self: Raw) -> i64 {
+    return __ffi_read_i64(ref self.storage, 0)
+}
+
+func set_i(modify self: Raw, value: i64) {
+    __ffi_write_i64(ref self.storage, 0, value)
+}
+
+func d(self: Raw) -> f64 {
+    return __ffi_read_f64(ref self.storage, 0)
+}
+
+func set_d(modify self: Raw, value: f64) {
+    __ffi_write_f64(ref self.storage, 0, value)
+}
+
+func p(self: Raw) -> uint {
+    return __ffi_read_u64(ref self.storage, 0)
+}
+
+func set_p(modify self: Raw, value: uint) {
+    __ffi_write_u64(ref self.storage, 0, value)
+}
+
+type Value {
+    storage: Array[u8]
+}
+
+func value() -> Value {
+    let value: Value = (storage = new[Array[u8]](16))
+    return value
+}
+
+func kind(self: Value) -> i32 {
+    return __ffi_read_i32(ref self.storage, 0)
+}
+
+func set_kind(modify self: Value, value: i32) {
+    __ffi_write_i32(ref self.storage, 0, value)
+}
+
+type Cell {
+    storage: Array[u8]
+}
+
+func cell() -> Cell {
+    let value: Cell = (storage = new[Array[u8]](16))
+    return value
+}
+
+func flag(self: Cell) -> u8 {
+    return __ffi_read_u8(ref self.storage, 8)
+}
+
+func set_flag(modify self: Cell, value: u8) {
+    __ffi_write_u8(ref self.storage, 8, value)
+}
+
+enum Value_Kind {
+    VK_INT = 1,
+    VK_REAL = 2,
+    VK_TEXT = 3,
+    VK_NULL = 5
+}
+
+
+func value_kind(value: Value) -> i32 {
+    let result = __value_kind(ref value.storage)
+    return result
+}
+
+func cell_flag(cell: Cell, raw: uint) -> u8 {
+    let result = __cell_flag(ref cell.storage, raw)
+    return result
+}
+7	tests/gen_n00b/unions.writ:6:1	Raw
+40	tests/gen_n00b/unions.writ:8:1	Value
+57	tests/gen_n00b/unions.writ:18:1	Cell
+74	tests/gen_n00b/unions.writ:4:1	ValueKind
+82	tests/gen_n00b/unions.writ:23:1	value_kind
+87	tests/gen_n00b/unions.writ:24:1	cell_flag
+library unions
+load static
+extern __value_kind unions_n00b_value_kind (ref[array[u8]]) -> i32 fail: nil
+extern __cell_flag unions_n00b_cell_flag (ref[array[u8]], uint) -> u8 fail: nil

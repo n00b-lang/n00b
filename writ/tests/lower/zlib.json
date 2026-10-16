@@ -46,6 +46,7 @@
         "span_by": "",
         "span_events": [],
         "span_with": "",
+        "tag_field": null,
         "type": 23,
         "userdata": false,
         "userdata_for": ""
@@ -78,6 +79,7 @@
           "span_by": "",
           "span_events": [],
           "span_with": "",
+          "tag_field": null,
           "type": 23,
           "userdata": false,
           "userdata_for": ""
@@ -140,6 +142,7 @@
         "span_by": "",
         "span_events": [],
         "span_with": "",
+        "tag_field": null,
         "type": 20,
         "userdata": false,
         "userdata_for": ""
@@ -172,6 +175,7 @@
           "span_by": "",
           "span_events": [],
           "span_with": "",
+          "tag_field": null,
           "type": 28,
           "userdata": false,
           "userdata_for": ""
@@ -200,6 +204,7 @@
           "span_by": "",
           "span_events": [],
           "span_with": "",
+          "tag_field": null,
           "type": 29,
           "userdata": false,
           "userdata_for": ""
@@ -228,6 +233,7 @@
           "span_by": "",
           "span_events": [],
           "span_with": "",
+          "tag_field": null,
           "type": 28,
           "userdata": false,
           "userdata_for": ""
@@ -256,6 +262,7 @@
           "span_by": "",
           "span_events": [],
           "span_with": "",
+          "tag_field": null,
           "type": 23,
           "userdata": false,
           "userdata_for": ""
@@ -284,6 +291,7 @@
           "span_by": "",
           "span_events": [],
           "span_with": "",
+          "tag_field": null,
           "type": 20,
           "userdata": false,
           "userdata_for": ""
@@ -346,6 +354,7 @@
         "span_by": "",
         "span_events": [],
         "span_with": "",
+        "tag_field": null,
         "type": 20,
         "userdata": false,
         "userdata_for": ""
@@ -378,6 +387,7 @@
           "span_by": "",
           "span_events": [],
           "span_with": "",
+          "tag_field": null,
           "type": 28,
           "userdata": false,
           "userdata_for": ""
@@ -406,6 +416,7 @@
           "span_by": "",
           "span_events": [],
           "span_with": "",
+          "tag_field": null,
           "type": 29,
           "userdata": false,
           "userdata_for": ""
@@ -434,6 +445,7 @@
           "span_by": "",
           "span_events": [],
           "span_with": "",
+          "tag_field": null,
           "type": 28,
           "userdata": false,
           "userdata_for": ""
@@ -462,6 +474,7 @@
           "span_by": "",
           "span_events": [],
           "span_with": "",
+          "tag_field": null,
           "type": 23,
           "userdata": false,
           "userdata_for": ""

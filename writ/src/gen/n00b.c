@@ -138,13 +138,13 @@ typedef struct {
 core_list_decl(shim_param_t);
 
 static const writ_type_view_t *record_target(const writ_plan_item_view_t *item);
-static bool expressible(const writ_record_view_t *record);
+static bool expressible(const writ_model_t *model, const writ_record_view_t *record);
 
 static bool
 opaque_record(const n00b_t *g, const writ_type_view_t *type)
 {
     const writ_record_view_t *record = type ? writ_model_record_named(g->model, type->name) : nullptr;
-    return record && !expressible(record);
+    return record && !expressible(g->model, record);
 }
 
 static writ_str_t
@@ -217,6 +217,9 @@ counted_field(const writ_model_t *model, const writ_record_view_t *record, writ_
 static bool
 liftable_record(const writ_model_t *model, const writ_record_view_t *record)
 {
+    if (record && record->type->kind == WRIT_TYPE_UNION) {
+        return false;
+    }
     bool arrays = false;
     for (size_t f = 0; record && f < record->fields_count; f++) {
         const writ_slot_view_t *field = &record->fields[f];
@@ -1143,7 +1146,7 @@ shim_c_text(const n00b_t *g, const writ_plan_view_t *const *plans)
 }
 
 static bool
-expressible_field(const writ_type_view_t *type)
+expressible_field(const writ_model_t *model, const writ_type_view_t *type)
 {
     switch (type ? type->kind : WRIT_TYPE_VOID) {
     case WRIT_TYPE_BOOL:
@@ -1153,23 +1156,27 @@ expressible_field(const writ_type_view_t *type)
     case WRIT_TYPE_CALLBACK:
     case WRIT_TYPE_ENUM:
     case WRIT_TYPE_HANDLE:
-    case WRIT_TYPE_RECORD:
     case WRIT_TYPE_CSTR:
         return true;
+    case WRIT_TYPE_RECORD:
+        return expressible(model, writ_model_record_at(model, type->decl));
     case WRIT_TYPE_FLOAT:
         return type->size == 8;
     case WRIT_TYPE_VIEW:
-        return expressible_field(type->target);
+        return expressible_field(model, type->target);
     default:
         return false;
     }
 }
 
 static bool
-expressible(const writ_record_view_t *record)
+expressible(const writ_model_t *model, const writ_record_view_t *record)
 {
+    if (record->type->kind == WRIT_TYPE_UNION) {
+        return false;
+    }
     for (size_t f = 0; f < record->fields_count; f++) {
-        if (!expressible_field(record->fields[f].type)) {
+        if (!expressible_field(model, record->fields[f].type)) {
             return false;
         }
     }
@@ -1192,6 +1199,9 @@ emit_opaque_record(const n00b_t *g, writ_emit_t *emit, const writ_record_view_t 
     writ_emit_close(emit, nullptr);
     for (size_t f = 0; f < record->fields_count; f++) {
         const writ_slot_view_t *field = &record->fields[f];
+        if (field->type && (field->type->kind == WRIT_TYPE_UNION || field->type->kind == WRIT_TYPE_RECORD)) {
+            continue;
+        }
         writ_str_t name = writ_profile_name(g->profile, WRIT_NAMING_FIELD, field->name);
         writ_str_t value = field->type && field->type->kind == WRIT_TYPE_FLOAT ? prim(g, "f%u", 64)
                                                                               : scalar_type(g, field->type);
@@ -1548,6 +1558,9 @@ emit_types(const n00b_t *g, writ_emit_t *emit, bool handles)
     }
     for (size_t i = 0; i < writ_model_record_count(model); i++) {
         const writ_record_view_t *record = writ_model_record_at(model, i);
+        if (record->arms_count) {
+            continue;
+        }
         writ_emit_line(emit, "");
         mark(g, emit, record->declared_at, record->name);
         if (liftable_record(model, record)) {
@@ -1563,7 +1576,7 @@ emit_types(const n00b_t *g, writ_emit_t *emit, bool handles)
             writ_emit_close(emit, nullptr);
             continue;
         }
-        if (!expressible(record)) {
+        if (!expressible(model, record)) {
             emit_opaque_record(g, emit, record);
             continue;
         }
@@ -3712,15 +3725,7 @@ export_header_text(const n00b_t *g)
             writ_emit_line(&emit, "#define %.*s %lld", S(constant->name), (long long)constant->value);
         }
     }
-    for (size_t i = 0; i < writ_model_record_count(model); i++) {
-        const writ_record_view_t *record = writ_model_record_at(model, i);
-        writ_emit_open(&emit, "typedef struct %.*s", S(record->name));
-        for (size_t f = 0; f < record->fields_count; f++) {
-            writ_str_t type = writ_c_type(&g->c, record->fields[f].type, false);
-            writ_emit_line(&emit, "%.*s%s%.*s;", S(type), is_pointer(type) ? "" : " ", S(record->fields[f].name));
-        }
-        writ_emit_close(&emit, writ_str_format(g->session, " %.*s;", S(record->name)).data);
-    }
+    writ_c_emit_records(&g->c, &emit);
     writ_emit_line(&emit, "");
     for (size_t i = 0; i < writ_model_fn_count(model); i++) {
         const writ_fn_view_t *fn = writ_model_fn_at(model, i);

@@ -215,7 +215,8 @@ laid_out(writ_model_t *model, writ_type_id id, uint8_t *state)
         inline_type->align = element->align;
         return inline_type;
     }
-    if (type->key.kind == WRIT_TYPE_RECORD && type->decl != WRIT_NONE && state[type->decl] != 2) {
+    if ((type->key.kind == WRIT_TYPE_RECORD || type->key.kind == WRIT_TYPE_UNION) && type->decl != WRIT_NONE
+        && state[type->decl] != 2) {
         layout_record(model, type->decl, state);
     }
     return writ_type(model, id);
@@ -229,7 +230,9 @@ layout_record(writ_model_t *model, uint32_t index, uint8_t *state)
     }
     state[index] = 1;
     writ_record_rec_t *record = &model->records.data[index];
+    bool overlaid = writ_type(model, record->type)->key.kind == WRIT_TYPE_UNION;
     uint32_t offset = 0;
+    uint32_t end = 0;
     uint32_t max_align = 1;
     for (uint32_t i = 0; i < record->field_count; i++) {
         writ_slot_rec_t *field = &model->slots.data[record->first_field + i];
@@ -238,16 +241,17 @@ layout_record(writ_model_t *model, uint32_t index, uint8_t *state)
         if (record->pack && align > record->pack) {
             align = record->pack;
         }
-        offset = align_up(offset, align);
+        offset = overlaid ? 0 : align_up(offset, align);
         field->offset = offset;
         offset += type->size;
+        end = offset > end ? offset : end;
         max_align = align > max_align ? align : max_align;
     }
     if (record->align_assert > max_align) {
         max_align = record->align_assert;
     }
     writ_type_rec_t *self = &model->types.data[record->type];
-    self->size = align_up(offset, max_align);
+    self->size = align_up(end, max_align);
     self->align = max_align;
     state[index] = 2;
 }

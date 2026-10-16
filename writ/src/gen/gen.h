@@ -126,6 +126,7 @@ writ_str_t writ_c_return_type(const writ_c_context_t *c, const writ_plan_view_t 
 bool       writ_c_is_input(const writ_plan_item_view_t *item);
 size_t     writ_c_param_order(const writ_c_context_t *c, const writ_plan_view_t *plan, uint32_t *order);
 void       writ_c_emit_signature(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_view_t *plan);
+void       writ_c_emit_records(const writ_c_context_t *c, writ_emit_t *emit);
 void       writ_c_emit_real_prototype(const writ_c_context_t *c, writ_emit_t *emit, const writ_fn_view_t *fn,
                                       writ_str_t name, bool variadic_tail, const char *terminator);
 writ_str_t writ_c_callee(const writ_c_context_t *c, const writ_fn_view_t *fn);

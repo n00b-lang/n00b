@@ -31,14 +31,15 @@
 <feature-source> ::= %"cargo" | %"define" | %"configure"
 <version-directive> ::= %"version" %"query" %IDENTIFIER %"(" %")" %"->" <type> %"format" <text>
 
-<decl> ::= <const-decl> | <alias-decl> | <opaque-decl> | <handle-decl> | <struct-decl> | <enum-decl> | <flags-decl> | <callback-decl> | <keywords-decl> | <fn-decl> | <refine-decl> | <allocator-decl> | <when-decl> | <var-decl> | <interface-decl> | <symbol-decl> | <conventions-decl> | <channel-decl> | <impl-decl> | <rust-error-decl>
+<decl> ::= <const-decl> | <alias-decl> | <opaque-decl> | <handle-decl> | <struct-decl> | <union-decl> | <enum-decl> | <flags-decl> | <callback-decl> | <keywords-decl> | <fn-decl> | <refine-decl> | <allocator-decl> | <when-decl> | <var-decl> | <interface-decl> | <symbol-decl> | <conventions-decl> | <channel-decl> | <impl-decl> | <rust-error-decl>
 <const-decl> ::= %"const" %IDENTIFIER %":" <type> %"=" <expr>
 <alias-decl> ::= %"type" %IDENTIFIER %"=" <type>
 <opaque-decl> ::= %"opaque" %IDENTIFIER <source-clause>? <thread-rule>?
 <handle-decl> ::= %"handle" %IDENTIFIER %"=" <type> <none-value>? <release-attr> <thread-rule>?
 <none-value> ::= %"none" <expr>
 <thread-rule> ::= %"shared" | %"thread_affine"
-<struct-decl> ::= %"struct" %IDENTIFIER <record-attr>* %"{" (<field> %","?)* %"}" <struct-none>?
+<struct-decl> ::= %"struct" %IDENTIFIER <record-attr>* %"{" (<struct-member> %","?)* %"}" <struct-none>?
+<struct-member> ::= <field> | <union-field>
 <record-attr> ::= <layout-attr> | <size-attr> | <align-attr> | <pack-attr> | <source-clause>
 <layout-attr> ::= %"layout" <layout-mode>
 <layout-mode> ::= %"c" | %"explicit"
@@ -48,6 +49,12 @@
 <pack-attr> ::= %"@" %"pack" %"(" %INTEGER %")"
 <field> ::= %IDENTIFIER %":" <own-attr>? <slot-type> <field-offset>?
 <field-offset> ::= %"@" %INTEGER
+<union-field> ::= %IDENTIFIER %":" %"union" %"by" <ref> <field-offset>? %"{" <union-arm> %","? (<union-arm> %","?)* %"}"
+<union-arm> ::= <arm-value> %"=>" <arm-target>
+<arm-value> ::= <name-ref> | <int-lit> | <neg-expr>
+<arm-target> ::= <field> | <no-arm>
+<no-arm> ::= %IDENTIFIER
+<union-decl> ::= %"union" %IDENTIFIER <record-attr>* %"{" (<field> %","?)* %"}"
 <struct-none> ::= %"none" %"{" <field-value> (%"," <field-value>)* %","? %"}"
 <field-value> ::= %IDENTIFIER %":" <expr>
 <enum-decl> ::= %"enum" %IDENTIFIER (%":" <type>)? %"{" (<enum-item> %","?)* %"}" <closed-mark>?

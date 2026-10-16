@@ -209,7 +209,10 @@ default_fns(writ_binding_t *b)
         add_type(b, writ_model_handle_at(model, i)->name);
     }
     for (size_t i = 0; i < writ_model_record_count(model); i++) {
-        add_type(b, writ_model_record_at(model, i)->name);
+        const writ_record_view_t *record = writ_model_record_at(model, i);
+        if (!record->arms_count) {
+            add_type(b, record->name);
+        }
     }
     for (size_t i = 0; i < writ_model_enum_count(model); i++) {
         add_type(b, writ_model_enum_at(model, i)->name);

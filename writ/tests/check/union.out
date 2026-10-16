@@ -1,0 +1,12 @@
+error[E0210]: the asserted layout does not match the platform's C layout: size 4 asserted, 8 computed
+  --> tests/check/union.writ:6:1
+error[E0210]: the asserted layout does not match the platform's C layout: offset 4 asserted, 0 computed
+  --> tests/check/union.writ:6:30
+error[E0224]: `union by` names an earlier integer field of its struct; each arm's value is distinct and, when that field is viewed as an enum, an item of it or an integer: `kind` is not an earlier integer field
+  --> tests/check/union.writ:9:5
+error[E0224]: `union by` names an earlier integer field of its struct; each arm's value is distinct and, when that field is viewed as an enum, an item of it or an integer: `kind` is not an earlier integer field
+  --> tests/check/union.writ:17:5
+error[E0224]: `union by` names an earlier integer field of its struct; each arm's value is distinct and, when that field is viewed as an enum, an item of it or an integer: value 1 names two arms
+  --> tests/check/union.writ:27:9
+error[E0224]: `union by` names an earlier integer field of its struct; each arm's value is distinct and, when that field is viewed as an enum, an item of it or an integer: `OTHER` is not an item of `Kind`
+  --> tests/check/union.writ:28:9

@@ -29,13 +29,49 @@ find_type(CXCursor cursor, CXCursor parent, CXClientData data)
     return CXChildVisit_Continue;
 }
 
+static const char member_prefix[] = "__typeof__(((";
+static const char member_infix[] = " *)0)->";
+
+static enum CXVisitorResult
+find_member(CXCursor cursor, CXClientData data)
+{
+    lookup_t *lookup = data;
+    if (writ_str_eq(writ_tu_text(lookup->tu->session, clang_getCursorSpelling(cursor)), lookup->spelling)) {
+        lookup->found = clang_getCanonicalType(clang_getCursorType(cursor));
+        lookup->matched = true;
+        return CXVisit_Break;
+    }
+    return CXVisit_Continue;
+}
+
+static void
+lookup_type(writ_tu_t *tu, lookup_t *lookup)
+{
+    writ_str_t spelled = writ_str_copy(tu->session, lookup->spelling.data, lookup->spelling.length);
+    const char *infix = strstr(spelled.data, member_infix);
+    if (strncmp(spelled.data, member_prefix, sizeof member_prefix - 1) || !infix) {
+        clang_visitChildren(clang_getTranslationUnitCursor(tu->unit), find_type, lookup);
+        return;
+    }
+    const char *owner_start = spelled.data + sizeof member_prefix - 1;
+    lookup_t owner = {.tu = tu, .spelling = {owner_start, (size_t)(infix - owner_start)}};
+    lookup_type(tu, &owner);
+    const char *field = infix + sizeof member_infix - 1;
+    lookup_t member = {.tu = tu, .spelling = {field, spelled.length - (size_t)(field - spelled.data) - 1}};
+    if (owner.matched) {
+        clang_Type_visitFields(owner.found, find_member, &member);
+    }
+    lookup->found = member.found;
+    lookup->matched = member.matched;
+}
+
 static void
 verify_record(writ_tu_t *tu, const writ_model_t *model, const writ_record_rec_t *record, writ_emit_t *report)
 {
     writ_session_t *session = model->session;
     const writ_type_rec_t *type = writ_type(model, record->type);
     lookup_t lookup = {.tu = tu, .spelling = writ_sym_str(session, type->c_spelling)};
-    clang_visitChildren(clang_getTranslationUnitCursor(tu->unit), find_type, &lookup);
+    lookup_type(tu, &lookup);
     writ_str_t name = writ_sym_str(session, record->name);
     if (!lookup.matched) {
         writ_report(session, WRIT_D_LAYOUT_TOOLCHAIN, record->loc, "`%.*s` is not declared by the headers",

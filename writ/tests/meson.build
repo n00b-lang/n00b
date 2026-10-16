@@ -116,6 +116,8 @@ test(
         source_root / 'tests' / 'embedded' / 'zlib_search.writ',
         source_root / 'tests' / 'embedded' / 'export.writ',
         source_root / 'tests' / 'embedded' / 'refine.writ',
+        source_root / 'tests' / 'unions' / 'unions.writ',
+        source_root / 'tests' / 'check' / 'union.writ',
     ],
     depends: writ_exe,
 )
@@ -136,7 +138,7 @@ fuzz_writ = static_library(
 fuzz_seeds = []
 foreach seed : ['libc/libc.writ', 'zlib/zlib.writ', 'skeleton/zlib.writ',
                 'resharp/resharp.derived.writ', 'bind/kv.n00b.writ', 'embedded/zlib_search.writ',
-                'embedded/export.writ', 'embedded/e0510.writ']
+                'embedded/export.writ', 'embedded/e0510.writ', 'unions/unions.writ']
     fuzz_seeds += source_root / 'tests' / seed
 endforeach
 fuzz_seeds += source_root / 'contracts' / 'zlib' / host_triple + '.writ'
@@ -202,7 +204,7 @@ test(
 
 foreach name : ['unknown_type', 'not_pure', 'bad_phase', 'out_unbounded', 'syntax', 'duplicate', 'reinterpret',
                 'view_domain', 'return_span', 'record_none', 'userdata', 'keywords',
-                'policy', 'events']
+                'policy', 'events', 'union']
     test(
         'check-' + name,
         python,
@@ -251,6 +253,15 @@ test(
 foreach contract : ['zlib', 'libc']
     test(contract + '-verify', writ_exe, args: ['verify', source_root / 'tests' / contract / contract + '.writ'])
 endforeach
+
+test(
+    'unions-import',
+    python,
+    args: [golden, source_root / 'tests' / 'unions' / 'import.writ', '--', writ_exe, 'import', '--library', 'unions',
+           '--header', 'unions.h', '-I', 'tests/unions', '-o', '-'],
+)
+
+test('unions-verify', writ_exe, args: ['verify', 'tests/unions/tagged.writ'], workdir: source_root)
 
 generated_c = ['-std=c11', '-Wall', '-Wextra', '-Werror', '-U_FORTIFY_SOURCE', '-D_FORTIFY_SOURCE=0']
 
@@ -302,7 +313,7 @@ foreach binding : [
     )
 endforeach
 
-foreach contract : ['keywords', 'policy']
+foreach contract : ['keywords', 'policy', 'unions']
     generated = custom_target(
         contract + '-binding',
         input: source_root / 'tests' / contract / contract + '.writ',
@@ -387,7 +398,7 @@ test(
 )
 
 foreach case : ['zlib', 'resharp', 'kv', 'kv_export', 'float_record', 'callbacks', 'keywords', 'policy',
-                'policy_fixed']
+                'policy_fixed', 'unions']
     test(
         'gen-n00b-' + case,
         python,
@@ -400,7 +411,8 @@ test(
     'gen-n00b-compile',
     python,
     args: [source_root / 'tests' / 'gen_n00b' / 'compile.py', writ_exe, compiler, host_triple, source_root,
-           'zlib', 'resharp', 'kv_export', 'float_record', 'callbacks', 'keywords', 'policy', 'policy_fixed'],
+           'zlib', 'resharp', 'kv_export', 'float_record', 'callbacks', 'keywords', 'policy', 'policy_fixed',
+           'unions'],
 )
 
 resharp_root = get_option('resharp_root')

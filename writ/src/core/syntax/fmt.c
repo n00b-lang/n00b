@@ -56,6 +56,8 @@ is_block(writ_node_kind_t kind)
 {
     switch (kind) {
     case WRIT_N_STRUCT:
+    case WRIT_N_UNION:
+    case WRIT_N_UNION_FIELD:
     case WRIT_N_ENUM:
     case WRIT_N_FLAGS:
     case WRIT_N_WHEN:
@@ -78,7 +80,11 @@ is_member(writ_node_kind_t parent, writ_node_kind_t child)
 {
     switch (parent) {
     case WRIT_N_STRUCT:
+        return child == WRIT_N_FIELD || child == WRIT_N_UNION_FIELD;
+    case WRIT_N_UNION:
         return child == WRIT_N_FIELD;
+    case WRIT_N_UNION_FIELD:
+        return child == WRIT_N_UNION_ARM;
     case WRIT_N_ENUM:
     case WRIT_N_FLAGS:
         return child == WRIT_N_ENUM_ITEM;

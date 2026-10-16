@@ -24,6 +24,7 @@ enum {
     WRIT_TYPE_CALLBACK,
     WRIT_TYPE_VIEW,
     WRIT_TYPE_INLINE,
+    WRIT_TYPE_UNION,
 };
 
 typedef uint32_t writ_mode_t;
@@ -252,6 +253,7 @@ typedef struct writ_event_view writ_event_view_t;
 typedef struct writ_policy_arm_view writ_policy_arm_view_t;
 typedef struct writ_outcome_view writ_outcome_view_t;
 typedef struct writ_fn_view writ_fn_view_t;
+typedef struct writ_union_arm_view writ_union_arm_view_t;
 typedef struct writ_record_view writ_record_view_t;
 typedef struct writ_handle_view writ_handle_view_t;
 typedef struct writ_enum_view writ_enum_view_t;
@@ -318,6 +320,7 @@ struct writ_slot_view {
     writ_str_t span_by;
     size_t span_events_count;
     const writ_event_view_t *span_events;
+    uint32_t tag_field;
 };
 
 struct writ_event_arg_view {
@@ -391,6 +394,14 @@ struct writ_fn_view {
     uint32_t keywords_slot;
 };
 
+struct writ_union_arm_view {
+    size_t struct_size;
+    writ_str_t constant;
+    int64_t value;
+    uint32_t field;
+    writ_span_t declared_at;
+};
+
 struct writ_record_view {
     size_t struct_size;
     writ_str_t name;
@@ -400,6 +411,8 @@ struct writ_record_view {
     writ_span_t declared_at;
     writ_presence_t presence;
     uint32_t presence_field;
+    size_t arms_count;
+    const writ_union_arm_view_t *arms;
 };
 
 struct writ_handle_view {

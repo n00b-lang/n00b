@@ -1068,6 +1068,43 @@ emit_includes(const writ_c_context_t *c, writ_emit_t *emit)
 }
 
 static void
+emit_record_fields(const writ_c_context_t *c, writ_emit_t *emit, const writ_record_view_t *record)
+{
+    const writ_model_t *model = c->model;
+    for (size_t f = 0; f < record->fields_count; f++) {
+        const writ_slot_view_t *field = &record->fields[f];
+        const writ_record_view_t *tagged = field->type && field->type->kind == WRIT_TYPE_UNION
+                                             ? writ_model_record_at(model, field->type->decl)
+                                             : nullptr;
+        if (tagged && tagged->arms_count) {
+            writ_emit_open(emit, "union");
+            emit_record_fields(c, emit, tagged);
+            writ_emit_close(emit, writ_str_format(model->session, " %.*s;", S(field->name)).data);
+            continue;
+        }
+        writ_str_t type = writ_c_type(c, field->type, false);
+        bool pointer = type.length && type.data[type.length - 1] == '*';
+        writ_emit_line(emit, "%.*s%s%.*s;", S(type), pointer ? "" : " ", S(field->name));
+    }
+}
+
+void
+writ_c_emit_records(const writ_c_context_t *c, writ_emit_t *emit)
+{
+    const writ_model_t *model = c->model;
+    for (size_t i = 0; i < writ_model_record_count(model); i++) {
+        const writ_record_view_t *record = writ_model_record_at(model, i);
+        if (record->arms_count) {
+            continue;
+        }
+        writ_emit_open(emit, "typedef %s %.*s", record->type->kind == WRIT_TYPE_UNION ? "union" : "struct",
+                       S(record->name));
+        emit_record_fields(c, emit, record);
+        writ_emit_close(emit, writ_str_format(model->session, " %.*s;", S(record->name)).data);
+    }
+}
+
+static void
 emit_declared_types(const writ_c_context_t *c, writ_emit_t *emit)
 {
     const writ_model_t *model = c->model;
@@ -1089,16 +1126,7 @@ emit_declared_types(const writ_c_context_t *c, writ_emit_t *emit)
         }
         writ_emit_close(emit, ";");
     }
-    for (size_t i = 0; i < writ_model_record_count(model); i++) {
-        const writ_record_view_t *record = writ_model_record_at(model, i);
-        writ_emit_open(emit, "typedef struct %.*s", S(record->name));
-        for (size_t f = 0; f < record->fields_count; f++) {
-            writ_str_t type = writ_c_type(c, record->fields[f].type, false);
-            bool pointer = type.length && type.data[type.length - 1] == '*';
-            writ_emit_line(emit, "%.*s%s%.*s;", S(type), pointer ? "" : " ", S(record->fields[f].name));
-        }
-        writ_emit_close(emit, writ_str_format(model->session, " %.*s;", S(record->name)).data);
-    }
+    writ_c_emit_records(c, emit);
     writ_emit_line(emit, "");
 }
 

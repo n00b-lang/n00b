@@ -130,8 +130,18 @@ typedef struct {
     writ_sym_t         span_by;
     uint32_t           first_event;
     uint32_t           event_count;
+    writ_sym_t         tag_name;
+    uint32_t           tag_field;
     writ_loc_t         loc;
 } writ_slot_rec_t;
+
+typedef struct {
+    writ_sym_t constant;
+    uint32_t   value_expr;
+    int64_t    value;
+    uint32_t   field;
+    writ_loc_t loc;
+} writ_union_arm_rec_t;
 
 typedef struct {
     writ_event_kind_t kind;
@@ -239,6 +249,10 @@ typedef struct {
     writ_presence_t presence;
     writ_sym_t      presence_name;
     uint32_t        presence_field;
+    uint32_t        owner;
+    uint32_t        owner_field;
+    uint32_t        first_arm;
+    uint32_t        arm_count;
     writ_loc_t      loc;
 } writ_record_rec_t;
 
@@ -300,6 +314,7 @@ core_list_decl(writ_type_rec_t);
 core_list_decl(writ_ref_t);
 core_list_decl(writ_const_rec_t);
 core_list_decl(writ_slot_rec_t);
+core_list_decl(writ_union_arm_rec_t);
 core_list_decl(writ_policy_arm_rec_t);
 core_list_decl(writ_event_rec_t);
 core_list_decl(writ_event_arg_rec_t);
@@ -412,6 +427,7 @@ struct writ_model {
     core_dict_t                        type_names;
     core_list_t(writ_const_rec_t)      consts;
     core_list_t(writ_slot_rec_t)       slots;
+    core_list_t(writ_union_arm_rec_t)  union_arms;
     core_list_t(writ_policy_arm_rec_t) policy_arms;
     core_list_t(writ_event_rec_t)      events;
     core_list_t(writ_event_arg_rec_t)  event_args;
@@ -434,6 +450,7 @@ struct writ_model {
     writ_type_view_t                  *type_views;
     writ_const_view_t                 *const_views;
     writ_slot_view_t                  *slot_views;
+    writ_union_arm_view_t             *union_arm_views;
     writ_policy_arm_view_t            *arm_views;
     writ_event_view_t                 *event_views;
     writ_event_arg_view_t             *event_arg_views;

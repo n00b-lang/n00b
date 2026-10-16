@@ -21,6 +21,7 @@ model_release(void *object)
     core_dict_free(&model->type_names);
     core_list_free(model->consts);
     core_list_free(model->slots);
+    core_list_free(model->union_arms);
     core_list_free(model->policy_arms);
     core_list_free(model->events);
     core_list_free(model->event_args);
@@ -58,6 +59,7 @@ model_new(writ_unit_t *unit, const writ_platform_t *platform)
         .platforms     = core_list_new(uint32_t),
         .consts        = core_list_new(writ_const_rec_t),
         .slots         = core_list_new(writ_slot_rec_t),
+        .union_arms    = core_list_new(writ_union_arm_rec_t),
         .policy_arms   = core_list_new(writ_policy_arm_rec_t),
         .events        = core_list_new(writ_event_rec_t),
         .event_args    = core_list_new(writ_event_arg_rec_t),
@@ -399,6 +401,40 @@ take_c_spelling(writ_model_t *model, uint32_t id, writ_type_id type)
     }
 }
 
+static uint32_t
+add_record(writ_model_t *model, writ_sym_t name, writ_type_kind_t kind, writ_loc_t loc)
+{
+    core_list_push(model->records, ((writ_record_rec_t){.name = name, .presence_field = WRIT_NONE, .owner = WRIT_NONE,
+                                                        .owner_field = WRIT_NONE, .loc = loc}));
+    uint32_t index = (uint32_t)model->records.len - 1;
+    model->records.data[index].type = declare_named_type(model, kind, name, index, loc);
+    return index;
+}
+
+static void
+gather_tagged_unions(writ_model_t *model, uint32_t id, uint32_t owner)
+{
+    writ_session_t *session = model->session;
+    const writ_node_t *node = node_at(model, id);
+    writ_str_t owner_name = writ_sym_str(session, node->name);
+    writ_str_t owner_c = writ_sym_str(session, writ_type(model, model->records.data[owner].type)->c_spelling);
+    uint32_t field = 0;
+    for (uint32_t i = 0; i < node->child_count; i++) {
+        const writ_node_t *part = node_at(model, child(model, id, i));
+        if (part->kind == WRIT_N_UNION_FIELD) {
+            writ_str_t field_name = writ_sym_str(session, part->name);
+            writ_sym_t name = writ_intern_str(session, writ_str_format(session, "%.*s.%.*s", S(owner_name),
+                                                                       S(field_name)));
+            uint32_t index = add_record(model, name, WRIT_TYPE_UNION, part->loc);
+            model->records.data[index].owner = owner;
+            model->records.data[index].owner_field = field;
+            model->types.data[model->records.data[index].type].c_spelling = writ_intern_str(
+                session, writ_str_format(session, "__typeof__(((%.*s *)0)->%.*s)", S(owner_c), S(field_name)));
+        }
+        field += part->kind == WRIT_N_FIELD || part->kind == WRIT_N_UNION_FIELD;
+    }
+}
+
 static void
 gather_decl(resolver_t *r, uint32_t id)
 {
@@ -419,12 +455,13 @@ gather_decl(resolver_t *r, uint32_t id)
     }
     case WRIT_N_STRUCT:
     case WRIT_N_KEYWORDS:
-        core_list_push(model->records,
-                       ((writ_record_rec_t){.name = node->name, .presence_field = WRIT_NONE, .loc = node->loc}));
-        model->records.data[model->records.len - 1].type =
-            declare_named_type(model, WRIT_TYPE_RECORD, node->name, (uint32_t)model->records.len - 1, node->loc);
-        take_c_spelling(model, id, model->records.data[model->records.len - 1].type);
+    case WRIT_N_UNION: {
+        uint32_t index = add_record(model, node->name, node->kind == WRIT_N_UNION ? WRIT_TYPE_UNION : WRIT_TYPE_RECORD,
+                                    node->loc);
+        take_c_spelling(model, id, model->records.data[index].type);
+        gather_tagged_unions(model, id, index);
         break;
+    }
     case WRIT_N_OPAQUE:
         take_c_spelling(model, id, declare_named_type(model, WRIT_TYPE_OPAQUE, node->name, WRIT_NONE, node->loc));
         break;
@@ -868,6 +905,7 @@ resolve_slot(resolver_t *r, uint32_t id, uint32_t owner)
         .owner         = owner,
         .mode          = node->kind == WRIT_N_PARAM ? mode_of(model, node->payload) : WRIT_MODE_IN,
         .offset_assert = WRIT_NONE,
+        .tag_field     = WRIT_NONE,
         .loc           = node->loc,
     };
     uint32_t type = type_child(model, id);
@@ -1335,6 +1373,67 @@ field_value(writ_model_t *model, uint32_t field, writ_node_kind_t kind, int64_t 
     return true;
 }
 
+static writ_slot_rec_t
+resolve_field(resolver_t *r, uint32_t id, uint32_t owner)
+{
+    writ_model_t *model = r->model;
+    writ_slot_rec_t field = resolve_slot(r, id, owner);
+    if (!field.span && writ_type_is_pointer(model, field.type)) {
+        field.span = WRIT_SPAN_WITH;
+        field.span_with = sym(model, "self");
+    }
+    field.has_default = field_value(model, id, WRIT_N_KEYWORD_DEFAULT, &field.default_value);
+    field.has_none = field_value(model, id, WRIT_N_NONE_VALUE, &field.none_value);
+    return field;
+}
+
+static uint32_t
+tagged_union(const writ_model_t *model, uint32_t owner, uint32_t field)
+{
+    for (uint32_t i = owner + 1; i < model->records.len; i++) {
+        const writ_record_rec_t *record = &model->records.data[i];
+        if (record->owner == owner && record->owner_field == field) {
+            return i;
+        }
+    }
+    return WRIT_NONE;
+}
+
+static void
+resolve_union_arms(resolver_t *r, uint32_t id, uint32_t index)
+{
+    writ_model_t *model = r->model;
+    const writ_node_t *node = node_at(model, id);
+    model->records.data[index].first_field = (uint32_t)model->slots.len;
+    model->records.data[index].first_arm = (uint32_t)model->union_arms.len;
+    for (uint32_t i = 0; i < node->child_count; i++) {
+        uint32_t arm = child(model, id, i);
+        if (node_at(model, arm)->kind != WRIT_N_UNION_ARM) {
+            continue;
+        }
+        const writ_node_t *value = node_at(model, child(model, arm, 0));
+        const writ_node_t *target = node_at(model, child(model, arm, 1));
+        writ_union_arm_rec_t record = {
+            .constant   = value->kind == WRIT_N_EXPR_NAME ? value->name : 0,
+            .value_expr = child(model, arm, 0),
+            .field      = WRIT_NONE,
+            .loc        = node_at(model, arm)->loc,
+        };
+        if (!writ_expr_check_in(model, WRIT_EXPR_SCOPE_CONSTANT, WRIT_NONE, record.value_expr)
+            || !writ_expr_eval(model, record.value_expr, nullptr, &record.value)) {
+            writ_report(model->session, WRIT_D_NOT_CONSTANT, value->loc, nullptr);
+        }
+        if (target->kind == WRIT_N_FIELD) {
+            record.field = model->records.data[index].field_count++;
+            core_list_push(model->slots, resolve_field(r, child(model, arm, 1), index));
+        } else if (!writ_is_text(model, target->name, "_")) {
+            writ_report(model->session, WRIT_D_SYNTAX, target->loc, "an arm is `_` or a field");
+        }
+        core_list_push(model->union_arms, record);
+        model->records.data[index].arm_count++;
+    }
+}
+
 static void
 resolve_record(resolver_t *r, uint32_t id)
 {
@@ -1348,14 +1447,15 @@ resolve_record(resolver_t *r, uint32_t id)
         uint32_t part = child(model, id, i);
         const writ_node_t *piece = node_at(model, part);
         switch (piece->kind) {
-        case WRIT_N_FIELD: {
+        case WRIT_N_FIELD:
+            core_list_push(model->slots, resolve_field(r, part, index));
+            model->records.data[index].field_count++;
+            break;
+        case WRIT_N_UNION_FIELD: {
             writ_slot_rec_t field = resolve_slot(r, part, index);
-            if (!field.span && writ_type_is_pointer(model, field.type)) {
-                field.span = WRIT_SPAN_WITH;
-                field.span_with = sym(model, "self");
-            }
-            field.has_default = field_value(model, part, WRIT_N_KEYWORD_DEFAULT, &field.default_value);
-            field.has_none = field_value(model, part, WRIT_N_NONE_VALUE, &field.none_value);
+            uint32_t tagged = tagged_union(model, index, model->records.data[index].field_count);
+            field.type = tagged == WRIT_NONE ? 0 : model->records.data[tagged].type;
+            field.tag_name = node_at(model, first_of(model, part, WRIT_N_REF))->name;
             core_list_push(model->slots, field);
             model->records.data[index].field_count++;
             break;
@@ -1405,6 +1505,24 @@ resolve_record(resolver_t *r, uint32_t id)
     if (record->presence_name && record->presence_field == WRIT_NONE) {
         writ_report(model->session, WRIT_D_UNKNOWN_NAME, record->loc, "`%.*s`",
                     S(writ_sym_str(model->session, record->presence_name)));
+    }
+    for (uint32_t f = 0; f < record->field_count; f++) {
+        writ_slot_rec_t *field = &model->slots.data[record->first_field + f];
+        for (uint32_t t = 0; field->tag_name && t < f; t++) {
+            if (model->slots.data[record->first_field + t].name == field->tag_name) {
+                field->tag_field = t;
+            }
+        }
+    }
+    uint32_t position = 0;
+    for (uint32_t i = 0; i < node->child_count; i++) {
+        uint32_t part = child(model, id, i);
+        writ_node_kind_t kind = node_at(model, part)->kind;
+        uint32_t tagged = kind == WRIT_N_UNION_FIELD ? tagged_union(model, index, position) : WRIT_NONE;
+        if (tagged != WRIT_NONE) {
+            resolve_union_arms(r, part, tagged);
+        }
+        position += kind == WRIT_N_FIELD || kind == WRIT_N_UNION_FIELD;
     }
 }
 
@@ -1560,6 +1678,7 @@ resolve_decl(resolver_t *r, uint32_t id)
         return;
     case WRIT_N_STRUCT:
     case WRIT_N_KEYWORDS:
+    case WRIT_N_UNION:
         resolve_record(r, id);
         return;
     case WRIT_N_HANDLE:

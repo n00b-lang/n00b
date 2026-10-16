@@ -143,7 +143,7 @@ struct writ_policy_arm_view_t @size(160) @align(8) {
     span_events_count: usize @144
     span_events: ?writ_event_view_t @152
 }
-struct writ_slot_view_t @size(264) @align(8) {
+struct writ_slot_view_t @size(272) @align(8) {
     struct_size: usize @0
     name: writ_str_t @8
     type: ?writ_type_view_t @24
@@ -173,6 +173,7 @@ struct writ_slot_view_t @size(264) @align(8) {
     span_by: writ_str_t @232
     span_events_count: usize @248
     span_events: ?writ_event_view_t @256
+    tag_field: u32 @264
 }
 struct writ_outcome_view_t @size(40) @align(8) {
     struct_size: usize @0
@@ -208,7 +209,14 @@ struct writ_fn_view_t @size(216) @align(8) {
     declared_at: writ_span_t @176
     keywords_slot: u32 @208
 }
-struct writ_record_view_t @size(88) @align(8) {
+struct writ_union_arm_view_t @size(72) @align(8) {
+    struct_size: usize @0
+    constant: writ_str_t @8
+    value: i64 @24
+    field: u32 @32
+    declared_at: writ_span_t @40
+}
+struct writ_record_view_t @size(104) @align(8) {
     struct_size: usize @0
     name: writ_str_t @8
     type: ?writ_type_view_t @24
@@ -217,6 +225,8 @@ struct writ_record_view_t @size(88) @align(8) {
     declared_at: writ_span_t @48
     presence: writ_presence_t @80
     presence_field: u32 @84
+    arms_count: usize @88
+    arms: ?writ_union_arm_view_t @96
 }
 struct writ_handle_view_t @size(112) @align(8) {
     struct_size: usize @0
@@ -431,6 +441,7 @@ const WRIT_TYPE_VA_LIST: c_int = 11
 const WRIT_TYPE_CALLBACK: c_int = 12
 const WRIT_TYPE_VIEW: c_int = 13
 const WRIT_TYPE_INLINE: c_int = 14
+const WRIT_TYPE_UNION: c_int = 15
 const WRIT_MODE_IN: c_int = 0
 const WRIT_MODE_OUT: c_int = 1
 const WRIT_MODE_INOUT: c_int = 2
