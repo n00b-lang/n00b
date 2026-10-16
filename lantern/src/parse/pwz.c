@@ -32,6 +32,9 @@ alloc_mem(parse_pwz_parser_t *p)
     }
     else {
         m = core_arena_alloc(&p->parse_arena, sizeof(pwz_mem_t));
+        m->mark = 0;
+        core_list_push(p->arena_mems, m);
+        p->mems_since_collect++;
     }
 
     m->parents   = nullptr;
@@ -74,6 +77,9 @@ mem_release(parse_pwz_parser_t *p, pwz_mem_t *m)
     while (node) {
         pwz_cxt_node_t *next = node->next;
         cxt_release_mem(p, node->cxt);
+        core_list_push(p->pending_cxts, node->cxt);
+        node->next           = p->pending_cxt_nodes;
+        p->pending_cxt_nodes = node;
         node = next;
     }
     m->parents = (pwz_cxt_node_t *)p->free_mems;
@@ -83,15 +89,108 @@ mem_release(parse_pwz_parser_t *p, pwz_mem_t *m)
 static pwz_cxt_t *
 alloc_cxt(parse_pwz_parser_t *p)
 {
-    pwz_cxt_t *c = core_arena_alloc(&p->parse_arena, sizeof(pwz_cxt_t));
+    pwz_cxt_t *c = p->free_cxts.len
+        ? p->free_cxts.data[--p->free_cxts.len]
+        : core_arena_alloc(&p->parse_arena, sizeof(pwz_cxt_t));
     *c = (pwz_cxt_t){0};
     return c;
+}
+
+static void
+recycle_released_cxts(parse_pwz_parser_t *p)
+{
+    while (p->pending_cxt_nodes) {
+        pwz_cxt_node_t *node = p->pending_cxt_nodes;
+        p->pending_cxt_nodes = node->next;
+        node->next           = p->free_cxt_nodes;
+        p->free_cxt_nodes    = node;
+    }
+    for (size_t i = 0; i < p->pending_cxts.len; i++)
+        core_list_push(p->free_cxts, p->pending_cxts.data[i]);
+    core_list_clear(p->pending_cxts);
+}
+
+static void
+drop_released_cxts(parse_pwz_parser_t *p)
+{
+    p->free_cxt_nodes    = nullptr;
+    p->pending_cxt_nodes = nullptr;
+    core_list_clear(p->free_cxts);
+    core_list_clear(p->pending_cxts);
+    core_list_clear(p->arena_mems);
+    p->mems_since_collect = 0;
+}
+
+static pwz_mem_t *
+cxt_mem(pwz_cxt_t *c)
+{
+    switch (c->kind) {
+    case PWZ_CXT_SEQ: return c->seq.mem;
+    case PWZ_CXT_ALT: return c->alt.mem;
+    case PWZ_CXT_TOP: return nullptr;
+    }
+    return nullptr;
+}
+
+static size_t
+mark_reachable_mems(parse_pwz_parser_t *p, uint32_t epoch)
+{
+    size_t live = 0;
+    core_list_clear(p->mark_stack);
+    for (size_t i = 0; i < p->worklist.len; i++)
+        core_list_push(p->mark_stack, p->worklist.data[i].mem);
+    while (p->mark_stack.len) {
+        pwz_mem_t *m = p->mark_stack.data[--p->mark_stack.len];
+        if (!m || m->mark == epoch) continue;
+        m->mark = epoch;
+        live++;
+        for (pwz_cxt_node_t *node = m->parents; node; node = node->next)
+            core_list_push(p->mark_stack, cxt_mem(node->cxt));
+    }
+    return live;
+}
+
+static void
+free_unreachable_mem(parse_pwz_parser_t *p, pwz_mem_t *m, uint32_t epoch)
+{
+    pwz_cxt_node_t *node = m->parents;
+    while (node) {
+        pwz_cxt_node_t *next = node->next;
+        pwz_mem_t      *held = cxt_mem(node->cxt);
+        if (held && held->mark == epoch) mem_release(p, held);
+        core_list_push(p->free_cxts, node->cxt);
+        node->next        = p->free_cxt_nodes;
+        p->free_cxt_nodes = node;
+        node              = next;
+    }
+    m->refcount  = 0;
+    m->parents   = (pwz_cxt_node_t *)p->free_mems;
+    p->free_mems = m;
+}
+
+static void
+collect_unreachable_mems(parse_pwz_parser_t *p)
+{
+    uint32_t epoch = ++p->mark_epoch;
+    size_t   live  = mark_reachable_mems(p, epoch);
+    for (size_t i = 0; i < p->all_exps.len; i++) {
+        pwz_exp_t *exp = p->all_exps.data[i];
+        if (exp->mem && exp->mem->mark != epoch) exp->mem = nullptr;
+    }
+    for (size_t i = 0; i < p->arena_mems.len; i++) {
+        pwz_mem_t *m = p->arena_mems.data[i];
+        if (m->refcount && m->mark != epoch) free_unreachable_mem(p, m, epoch);
+    }
+    p->mems_since_collect = 0;
+    p->collect_threshold  = live * 2 > 65536 ? live * 2 : 65536;
 }
 
 static pwz_cxt_node_t *
 alloc_cxt_node(parse_pwz_parser_t *p, pwz_cxt_t *cxt, pwz_cxt_node_t *next)
 {
-    pwz_cxt_node_t *n = core_arena_alloc(&p->parse_arena, sizeof(pwz_cxt_node_t));
+    pwz_cxt_node_t *n = p->free_cxt_nodes;
+    if (n) p->free_cxt_nodes = n->next;
+    else n = core_arena_alloc(&p->parse_arena, sizeof(pwz_cxt_node_t));
 
     n->cxt  = cxt;
     n->next = next;
@@ -944,11 +1043,15 @@ run_parse(parse_pwz_parser_t *p)
     }
 
     for (int32_t pos = 0; ; pos++) {
+        recycle_released_cxts(p);
         core_list_t(pwz_zipper_t) tmp = p->worklist;
         p->worklist      = p->worklist_swap;
         p->worklist_swap = tmp;
         core_list_clear(p->worklist_swap);
         core_list_clear(p->tops);
+        if (p->mems_since_collect >= (p->collect_threshold
+                                          ? p->collect_threshold : 65536))
+            collect_unreachable_mems(p);
 
         size_t wl_len = core_list_len(p->worklist);
 
@@ -1921,6 +2024,10 @@ parse_pwz_free(parse_pwz_parser_t *p)
     core_free(p->exp_bottom);
     core_free(p->mem_bottom);
     core_list_free(p->worklist);
+    core_list_free(p->free_cxts);
+    core_list_free(p->pending_cxts);
+    core_list_free(p->arena_mems);
+    core_list_free(p->mark_stack);
     core_list_free(p->worklist_swap);
     core_list_free(p->tops);
     core_list_free(p->steps);
@@ -1950,6 +2057,7 @@ parse_pwz_release_parse_state(parse_pwz_parser_t *p)
     reset_memos(p);
     core_arena_free(&p->parse_arena);
     p->free_mems = nullptr;
+    drop_released_cxts(p);
     core_list_clear(p->worklist);
     core_list_clear(p->worklist_swap);
     core_list_clear(p->tops);
@@ -1975,6 +2083,7 @@ parse_pwz_reset(parse_pwz_parser_t *p)
     reset_memos(p);
     core_arena_reset(&p->parse_arena);
     p->free_mems = nullptr;
+    drop_released_cxts(p);
     core_list_clear(p->worklist);
     core_list_clear(p->worklist_swap);
     core_list_clear(p->tops);

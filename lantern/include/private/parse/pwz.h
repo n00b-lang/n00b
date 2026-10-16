@@ -26,7 +26,12 @@ typedef struct pwz_mem_t {
     int32_t         start_pos;
     int32_t         end_pos;
     uint32_t        refcount;
+    uint32_t        mark;
 } pwz_mem_t;
+
+typedef pwz_mem_t *pwz_mem_ptr_t;
+
+core_list_decl(pwz_mem_ptr_t);
 
 static inline bool
 pwz_mem_in_progress(const pwz_mem_t *m)
@@ -81,6 +86,10 @@ typedef struct pwz_cxt_t {
         } alt;
     };
 } pwz_cxt_t;
+
+typedef pwz_cxt_t *pwz_cxt_ptr_t;
+
+core_list_decl(pwz_cxt_ptr_t);
 
 typedef enum {
     PWZ_TOK,
@@ -166,6 +175,15 @@ struct parse_pwz_parser_t {
 
     core_arena_t                 parse_arena;
     pwz_mem_t                  *free_mems;
+    pwz_cxt_node_t             *free_cxt_nodes;
+    pwz_cxt_node_t             *pending_cxt_nodes;
+    core_list_t(pwz_cxt_ptr_t)   free_cxts;
+    core_list_t(pwz_cxt_ptr_t)   pending_cxts;
+    core_list_t(pwz_mem_ptr_t)   arena_mems;
+    core_list_t(pwz_mem_ptr_t)   mark_stack;
+    uint32_t                     mark_epoch;
+    size_t                       mems_since_collect;
+    size_t                       collect_threshold;
     core_list_t(pwz_zipper_t)    worklist;
     core_list_t(pwz_zipper_t)    worklist_swap;
     core_list_t(pwz_exp_ptr_t)   tops;
