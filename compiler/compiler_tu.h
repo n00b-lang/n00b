@@ -441,6 +441,7 @@ struct n00bb_ordered_nodes_t {
 typedef struct {
     core_string_t source_name;
     core_string_t export_name;
+    core_string_t grantee;
     parse_tree_t *node;
     parse_sym_entry_t *symbol;
     core_translation_unit_t *source_unit;

@@ -9410,9 +9410,23 @@ cache_package_export_syntax(parse_grammar_t *grammar,
                 link_source_location(node));
             return false;
         }
+    parse_tree_t *grantee = child_nt(grammar, node, "export-grantee");
+    core_buffer_t grantee_name = {0};
+    if (grantee && !append_dotted_name(grammar,
+            child_nt(grammar, grantee, "dotted-name"), &grantee_name)) {
+        core_buffer_release(&grantee_name);
+        return false;
+    }
+    core_string_t stored_grantee = grantee_name.byte_len
+        ? store_semantic_string(state, core_string_borrow(grantee_name.data,
+                                                          grantee_name.byte_len))
+        : (core_string_t){0};
+    core_buffer_release(&grantee_name);
+    if (grantee && !stored_grantee.data) return false;
     core_list_push(package->exports, ((n00bb_package_export_t){
         .source_name = stored_source,
         .export_name = stored_export,
+        .grantee = stored_grantee,
         .node = node,
         .renamed = alias != nullptr,
         .subpackage = subpackage,

@@ -2,4 +2,7 @@ import internal.abi
 
 package sys.abi {
     export internal.abi
+    export builtin.copy_items
+    export builtin.compare_items
+    export builtin.list_with_length
 }

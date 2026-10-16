@@ -16,6 +16,12 @@ func len(self: List[`T]) -> uint {
     return self.count
 }
 
+func list_with_length(items: Array[`T], n: uint) -> List[`T] {
+    var list: List[`T] = new[List[`T]](items)
+    list.count = n
+    return list
+}
+
 func checked_index(self: List[`T], index: int) -> int {
     var at: int = index
     if at < 0 {

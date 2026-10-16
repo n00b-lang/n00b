@@ -2072,6 +2072,44 @@ lookup_export_symbol_in_scope(parse_symtab_t *symtab, parse_scope_t *scope,
     return value ? value : type;
 }
 
+static parse_sym_entry_t *
+granted_export_symbol(core_translation_unit_t *provider, core_string_t name,
+                      core_string_t grantee)
+{
+    n00bb_tu_state_t *state = tu_state(provider);
+    for (size_t p = 0; state && p < state->package_declarations.len; p++) {
+        n00bb_package_declaration_t *package =
+            &state->package_declarations.data[p];
+        for (size_t e = 0; e < package->exports.len; e++) {
+            n00bb_package_export_t *export = &package->exports.data[e];
+            if (export->symbol && export->grantee.data
+                && core_string_eq(export->grantee, grantee)
+                && core_string_eq(export->export_name, name))
+                return export->symbol;
+        }
+    }
+    return nullptr;
+}
+
+static bool
+granted_to(core_translation_unit_t *provider, parse_sym_entry_t *symbol,
+           core_string_t grantee)
+{
+    n00bb_tu_state_t *state = tu_state(provider);
+    for (size_t p = 0; state && p < state->package_declarations.len; p++) {
+        n00bb_package_declaration_t *package =
+            &state->package_declarations.data[p];
+        for (size_t e = 0; e < package->exports.len; e++) {
+            n00bb_package_export_t *export = &package->exports.data[e];
+            if (export->symbol && export->grantee.data
+                && core_string_eq(export->grantee, grantee)
+                && canonical_symbol(export->symbol) == symbol)
+                return true;
+        }
+    }
+    return false;
+}
+
 static int
 resolve_one_package_export(core_translation_unit_t *unit,
                            n00bb_package_declaration_t *package,
@@ -2148,6 +2186,8 @@ resolve_one_package_export(core_translation_unit_t *unit,
                                                 end - component);
         symbol = lookup_export_symbol_in_scope(
             tu_state(source_unit)->annotations->symtab, scope, name);
+        if (!symbol && source_unit != unit)
+            symbol = granted_export_symbol(source_unit, name, package->name);
         if (!symbol) return 0;
         if (end < source.u8_bytes) {
             scope = symbol->member_scope;
@@ -2162,6 +2202,10 @@ resolve_one_package_export(core_translation_unit_t *unit,
         return -1;
     }
     export->source_unit = source_unit;
+    if (export->grantee.data) {
+        export->symbol = symbol;
+        return 1;
+    }
     return add_package_export_symbol(unit, package, export, symbol) ? 1 : -1;
 }
 
@@ -2227,7 +2271,11 @@ populate_package_interfaces(n00bb_link_analysis_t *analysis)
                                           &analysis->units, source) : nullptr;
                     if (symbol_owner) owner = symbol_owner;
                 }
-                if (owner && !n00bb_same_package(unit, owner)) {
+                if (owner && !n00bb_same_package(unit, owner)
+                    && !(export->symbol && export->source_unit
+                         && granted_to(export->source_unit,
+                                       canonical_symbol(export->symbol),
+                                       package->name))) {
                     package_diagnostic(unit, export->node, "N00BB-M0010",
                         "a manifest can export only symbols from its own source package");
                     return false;

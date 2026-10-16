@@ -280,9 +280,10 @@
 <package-body> ::= <block-start> <package-items>? <block-end>
 <package-items> ::= <package-item> (<eos>+ <package-item>)*
 <package-item> ::= <export-stmt> | <when-stmt>
-<export-stmt> ::= %"export" <dotted-name> (<export-alias>)?
+<export-stmt> ::= %"export" <dotted-name> (<export-alias>)? (<export-grantee>)?
 <export-stmt> ::= %"export" %"package" <dotted-name>
 <export-alias> ::= %"as" %IDENTIFIER
+<export-grantee> ::= %"to" <dotted-name>
 <dotted-name> ::= <dotted-name> %"." %IDENTIFIER | %IDENTIFIER
 
 <variable-decl> ::= <variable-visibility>? <declaration-prefix> <sym-decl-list>

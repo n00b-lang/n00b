@@ -1,0 +1,35 @@
+func copy_items(modify dst: Array[`T], dst_at: uint, src: Array[`T],
+                src_at: uint, n: uint) {
+    if n == 0 {
+        return
+    }
+    let target: uint = __abi_ref_address(ref dst[dst_at])
+    let source: uint = __abi_ref_address(ref src[src_at])
+    if target > source {
+        var i: uint = n
+        while i > 0 {
+            i -= 1
+            dst[dst_at + i] = src[src_at + i]
+        }
+        return
+    }
+    var i: uint = 0
+    while i < n {
+        dst[dst_at + i] = src[src_at + i]
+        i += 1
+    }
+}
+
+func compare_items(a: Array[u8], a_at: uint, b: Array[u8], b_at: uint,
+                   n: uint) -> int {
+    var i: uint = 0
+    while i < n {
+        let left: u8 = a[a_at + i]
+        let right: u8 = b[b_at + i]
+        if left != right {
+            return cast[int] left - cast[int] right
+        }
+        i += 1
+    }
+    return 0
+}

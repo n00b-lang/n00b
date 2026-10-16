@@ -1,3 +1,4 @@
+import containers.array
 import containers.list
 import containers.dict
 import containers.set
@@ -13,6 +14,9 @@ import panic
 import string.core
 
 package builtin {
+    export containers.array.copy_items to sys.abi
+    export containers.array.compare_items to sys.abi
+    export containers.list.list_with_length to sys.abi
     export string.core.__string_from_utf8
     export ffi.Ffi_Bytes
     export ffi.ffi
