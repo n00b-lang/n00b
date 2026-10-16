@@ -10037,8 +10037,7 @@ n00bb_init_target(parse_grammar_t *grammar, parse_tree_t *node)
 static bool
 primitive_ordering_type(th_type *type)
 {
-    return is_integer_type(type) || is_float_type(type)
-        || th_builtin_kind_of(type) == TH_BUILTIN_STRING;
+    return is_integer_type(type) || is_float_type(type);
 }
 
 bool

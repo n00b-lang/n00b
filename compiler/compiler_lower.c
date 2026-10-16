@@ -9449,11 +9449,6 @@ n00bb_closed_builtin_operator(ir_lower_context_t *context,
     th_type *return_type = th_func_ret(signature);
     if (!left_type || !right_type || !return_type) return nullptr;
 
-    bool string_operands = ir_type_eq(context->module, left_type->type,
-        th_name(ir_module_types(context->module), "string"));
-    if (string_operands && strcmp(method, "__cmp") && op != IR_OP_EQ)
-        return nullptr;
-
     core_buffer_t name = {0};
     core_buffer_printf(&name, "__dispatch_%.*s",
         (int)implementation->name.u8_bytes, implementation->name.data);

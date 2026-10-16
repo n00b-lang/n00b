@@ -166,6 +166,53 @@ func __add(self: string, other: string) -> string {
         __string_encoding_bits(left), __string_encoding_bits(right)))
 }
 
+func __equal(self: string, other: string) -> bool {
+    let left: string = base_text(self)
+    let right: string = base_text(other)
+    let n: uint = __string_byte_len(left)
+    if n != __string_byte_len(right) {
+        return false
+    }
+    var i: uint = 0
+    while i < n {
+        if __string_byte(left, i) != __string_byte(right, i) {
+            return false
+        }
+        i += 1
+    }
+    return true
+}
+
+func __cmp(self: string, other: string) -> Comparison {
+    let left: string = base_text(self)
+    let right: string = base_text(other)
+    let left_length: uint = __string_byte_len(left)
+    let right_length: uint = __string_byte_len(right)
+    var common: uint = left_length
+    if right_length < common {
+        common = right_length
+    }
+    var i: uint = 0
+    while i < common {
+        let a: u8 = __string_byte(left, i)
+        let b: u8 = __string_byte(right, i)
+        if a < b {
+            return Comparison.less
+        }
+        if a > b {
+            return Comparison.greater
+        }
+        i += 1
+    }
+    if left_length < right_length {
+        return Comparison.less
+    }
+    if left_length > right_length {
+        return Comparison.greater
+    }
+    return Comparison.equal
+}
+
 private func __string_storage(s: string) -> Array[u8]? {
     let view: Ref[String_Words] = words(ref s)
     if view.selector >> tag_shift != tag_long {

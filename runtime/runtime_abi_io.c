@@ -138,54 +138,6 @@ int32_t n00bb_bootstrap_fd_write(int32_t fd, uint64_t low, uint64_t high)
     return n00b_abi_v1_raw_fd_write(fd, text);
 }
 
-int32_t n00bb_bootstrap_string_equal(uint64_t left_low, uint64_t left_high,
-                                     uint64_t right_low, uint64_t right_high)
-{
-    n00b_abi_string_v1 left = {.words = {left_low, left_high}};
-    n00b_abi_string_v1 right = {.words = {right_low, right_high}};
-    n00bb_abi_string_header_t left_header, right_header;
-    if (!n00bb_abi_string_decode((const uint8_t *)&left, sizeof(left),
-                                 &left_header)
-        || !n00bb_abi_string_decode((const uint8_t *)&right, sizeof(right),
-                                    &right_header)
-        || left_header.tag == N00BB_ABI_STRING_RICH
-        || right_header.tag == N00BB_ABI_STRING_RICH) __builtin_trap();
-    if (left_header.length != right_header.length) return 0;
-    const uint8_t *left_bytes = left_header.tag == N00BB_ABI_STRING_SHORT
-        ? left.short_value.bytes : left.long_value.data;
-    const uint8_t *right_bytes = right_header.tag == N00BB_ABI_STRING_SHORT
-        ? right.short_value.bytes : right.long_value.data;
-    for (uint64_t i = 0; i < left_header.length; i++)
-        if (left_bytes[i] != right_bytes[i]) return 0;
-    return 1;
-}
-
-int32_t n00bb_bootstrap_string_compare(uint64_t left_low, uint64_t left_high,
-                                       uint64_t right_low, uint64_t right_high)
-{
-    n00b_abi_string_v1 left = {.words = {left_low, left_high}};
-    n00b_abi_string_v1 right = {.words = {right_low, right_high}};
-    n00bb_abi_string_header_t left_header, right_header;
-    if (!n00bb_abi_string_decode((const uint8_t *)&left, sizeof left,
-                                 &left_header)
-        || !n00bb_abi_string_decode((const uint8_t *)&right, sizeof right,
-                                    &right_header)
-        || left_header.tag == N00BB_ABI_STRING_RICH
-        || right_header.tag == N00BB_ABI_STRING_RICH) __builtin_trap();
-    const uint8_t *left_bytes = left_header.tag == N00BB_ABI_STRING_SHORT
-        ? left.short_value.bytes : left.long_value.data;
-    const uint8_t *right_bytes = right_header.tag == N00BB_ABI_STRING_SHORT
-        ? right.short_value.bytes : right.long_value.data;
-    uint64_t common = left_header.length < right_header.length
-        ? left_header.length : right_header.length;
-    for (uint64_t i = 0; i < common; i++) {
-        if (left_bytes[i] < right_bytes[i]) return -1;
-        if (left_bytes[i] > right_bytes[i]) return 1;
-    }
-    if (left_header.length < right_header.length) return -1;
-    if (left_header.length > right_header.length) return 1;
-    return 0;
-}
 
 static bool write_all(int32_t fd, const uint8_t *bytes, uint64_t count)
 {

@@ -8997,7 +8997,6 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         LLVMValueRef right = lowered_value(state, operands[1].value);
         if (!left || !right || LLVMTypeOf(left) != LLVMTypeOf(right)) break;
         LLVMTypeKind kind = LLVMGetTypeKind(LLVMTypeOf(left));
-        bool string_compare = is_string_type(operands[0].value->type);
         bool boxed_reference = kind == LLVMStructTypeKind
             && LLVMTypeOf(left) == box_llvm_type(
                 LLVMGetModuleContext(state->module))
@@ -9051,42 +9050,6 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             result = LLVMBuildICmp(state->builder,
                 instruction->op == IR_OP_EQ ? LLVMIntNE : LLVMIntEQ,
                 equal, LLVMConstNull(LLVMTypeOf(equal)), "reference.compare");
-        } else if (string_compare && kind == LLVMStructTypeKind
-            && LLVMCountStructElementTypes(LLVMTypeOf(left)) == 2) {
-            LLVMContextRef context = LLVMGetModuleContext(state->module);
-            LLVMTypeRef integer = LLVMInt64TypeInContext(context);
-            LLVMTypeRef parameters[] = {integer, integer, integer, integer};
-            LLVMTypeRef signature = LLVMFunctionType(
-                LLVMInt32TypeInContext(context), parameters, 4, false);
-            bool equality = instruction->op == IR_OP_EQ
-                || instruction->op == IR_OP_NE;
-            const char *function_name = equality
-                ? "n00bb_bootstrap_string_equal"
-                : "n00bb_bootstrap_string_compare";
-            LLVMValueRef callee = LLVMGetNamedFunction(state->module,
-                function_name);
-            if (!callee) callee = LLVMAddFunction(state->module,
-                function_name, signature);
-            if (!callee || LLVMGlobalGetValueType(callee) != signature) break;
-            LLVMValueRef arguments[] = {
-                LLVMBuildExtractValue(state->builder, left, 0, "string.left.low"),
-                LLVMBuildExtractValue(state->builder, left, 1, "string.left.high"),
-                LLVMBuildExtractValue(state->builder, right, 0, "string.right.low"),
-                LLVMBuildExtractValue(state->builder, right, 1, "string.right.high"),
-            };
-            LLVMValueRef comparison = LLVMBuildCall2(state->builder,
-                signature, callee, arguments, 4, "string.compare");
-            LLVMIntPredicate predicate = instruction->op == IR_OP_EQ
-                ? LLVMIntNE : instruction->op == IR_OP_NE
-                    ? LLVMIntEQ : instruction->op == IR_OP_LT
-                        ? LLVMIntSLT : instruction->op == IR_OP_LE
-                            ? LLVMIntSLE : instruction->op == IR_OP_GT
-                                ? LLVMIntSGT : LLVMIntSGE;
-            LLVMValueRef zero = equality
-                ? LLVMConstNull(LLVMTypeOf(comparison))
-                : LLVMConstInt(LLVMTypeOf(comparison), 0, false);
-            result = LLVMBuildICmp(state->builder, predicate, comparison,
-                                   zero, "string.compare.bool");
         } else if (floating_kind(kind)) {
             LLVMRealPredicate predicate = instruction->op == IR_OP_EQ
                 ? LLVMRealOEQ : instruction->op == IR_OP_NE

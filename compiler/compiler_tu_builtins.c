@@ -1144,7 +1144,6 @@ register_builtin_comparison_operators(th_env *environment, th_ctx *types)
     static const char *const ordered_types[] = {
         "int", "uint", "i8", "i16", "i32", "i128",
         "u8", "u16", "u32", "u128", "float", "f64", "f32",
-        "string",
     };
     static const char *const equality_types[] = {
         "bool", "char", "byte", "typespec",
