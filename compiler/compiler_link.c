@@ -3012,7 +3012,6 @@ register_link_declarations(core_link_unit_t *link, parse_grammar_t *grammar,
     static const char *builtin_names[] = {
         "has_type", "ref_read", "ref_write", "__fd_write",
         "__repr_default", "__gc_byte_offset", "__gc_byte_diff",
-        "unsafe_add", "unsafe_sub", "unsafe_mul", "unsafe_shl",
         "__count_leading_zeros", "__count_trailing_zeros",
         "__gc_memset", "__gc_memcpy",
         "__gc_invoke_finalizer",
@@ -3046,7 +3045,8 @@ register_link_declarations(core_link_unit_t *link, parse_grammar_t *grammar,
                 || parse_sym_binding(symbol,
                     CORE_STRING_STATIC("n00bb.abi.repr_default"))
                 || parse_sym_binding(symbol,
-                    CORE_STRING_STATIC("n00bb.abi.native"));
+                    CORE_STRING_STATIC("n00bb.abi.native"))
+                || n00bb_builtin_unsafe_arithmetic(symbol);
             for (size_t b = 0; !selected
                  && b < sizeof(builtin_names) / sizeof(builtin_names[0]); b++)
                 selected = core_string_eq(name,
@@ -4255,7 +4255,9 @@ register_flagset_operators(th_env *defaults, th_ctx *types,
          i++)
         ok = n00bb_register_operator_function(defaults, types,
             operators[i][0], operators[i][1], owner, flagset, flagset, flagset,
-            unit->module.identifier.data, package_name);
+            unit->module.identifier.data, package_name,
+            symbol_is_public_declaration(symbol) ? TH_ENV_PUBLIC
+                                                 : TH_ENV_PRIVATE);
     core_free(owner);
     core_free(package_name);
     return ok;

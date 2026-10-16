@@ -41,17 +41,6 @@ n00bb_array_index_type(th_ctx *types, core_arena_t *arena)
                               sizeof(names) / sizeof(names[0]));
 }
 
-static th_type *
-integer_type_variable(th_ctx *types, core_arena_t *arena)
-{
-    static const char *const names[] = {
-        "int", "uint", "i8", "i16", "i32", "i128",
-        "u8", "u16", "u32", "u128",
-    };
-    return one_of_named_types(types, arena, names,
-                              sizeof(names) / sizeof(names[0]));
-}
-
 
 static bool
 register_builtin_comparison_symbols(parse_symtab_t *symtab,
@@ -340,28 +329,34 @@ register_builtin_abi_symbols(parse_symtab_t *symtab, th_ctx *types,
 }
 
 static n00bb_unsafe_arithmetic_t unsafe_arithmetic[] = {
-    {"unsafe_add", IR_OP_ADD, false},
-    {"unsafe_sub", IR_OP_SUB, false},
-    {"unsafe_mul", IR_OP_MUL, false},
-    {"unsafe_shl", IR_OP_SHL, true},
+    {.name = "unsafe_add", .op = IR_OP_ADD},
+    {.name = "unsafe_sub", .op = IR_OP_SUB},
+    {.name = "unsafe_mul", .op = IR_OP_MUL},
+    {.name = "unsafe_shl", .op = IR_OP_SHL, .shift = true},
+    {.name = "unsafe_shr", .op = IR_OP_SHR, .shift = true},
+    {.name = "unsafe_and", .op = IR_OP_AND},
+    {.name = "unsafe_or", .op = IR_OP_OR},
+    {.name = "unsafe_xor", .op = IR_OP_XOR},
+    {.name = "unsafe_not", .op = IR_OP_NOT, .unary = true},
 };
 
 static bool
 register_builtin_unsafe_arithmetic(parse_symtab_t *symtab, th_ctx *types,
-                                   core_arena_t *arena, th_type *nil_type)
+                                   th_type *nil_type)
 {
     th_type *uint_type = th_name(types, "uint");
     for (size_t i = 0;
          i < sizeof(unsafe_arithmetic) / sizeof(unsafe_arithmetic[0]); i++) {
         n00bb_unsafe_arithmetic_t *entry = &unsafe_arithmetic[i];
-        th_type *value = integer_type_variable(types, arena);
+        th_type *value = th_var(types);
         th_param parameters[] = {
             {.mode = TH_IN, .type = value},
             {.mode = TH_IN, .type = entry->shift ? uint_type : value},
         };
         th_type *signature = value && uint_type && nil_type
-            ? th_func_with_error(types, value, nil_type, parameters, 2,
-                                 nullptr, nullptr, 0) : nullptr;
+            ? th_func_with_error(types, value, nil_type, parameters,
+                                 entry->unary ? 1 : 2, nullptr, nullptr, 0)
+            : nullptr;
         th_type *contract = signature
             ? th_env_signature_contract(types, signature, nil_type) : nullptr;
         parse_sym_entry_t *symbol = contract ? parse_symtab_add(symtab,
@@ -922,7 +917,7 @@ register_builtin_symbols(parse_annot_result_t *annotations,
     bool gc_builtins_registered = register_builtin_gc_symbols(symtab, types,
                                                                nil_type);
     bool unsafe_arithmetic_registered = register_builtin_unsafe_arithmetic(
-        symtab, types, &state->semantic_values, nil_type);
+        symtab, types, nil_type);
     bool bit_counts_registered = register_builtin_bit_counts(symtab, types,
                                                               nil_type);
     th_type *array_length_item = th_var(types);
@@ -1053,7 +1048,8 @@ n00bb_register_operator_function(th_env *environment, th_ctx *types,
                                  const char *trait, const char *method,
                                  const char *owner, th_type *self,
                                  th_type *other, th_type *result,
-                                 const char *module, const char *package)
+                                 const char *module, const char *package,
+                                 th_env_visibility_t visibility)
 {
     th_param parameters[] = {
         {.mode = TH_IN, .type = self},
@@ -1066,8 +1062,7 @@ n00bb_register_operator_function(th_env *environment, th_ctx *types,
                        method);
     bool registered = signature && qualified.data
         && th_env_register_function(environment, qualified.data, method,
-                                    module, package, TH_ENV_PUBLIC,
-                                    signature);
+                                    module, package, visibility, signature);
     core_buffer_release(&qualified);
     return registered;
 }
@@ -1090,21 +1085,21 @@ const n00bb_binary_operator_t n00bb_binary_operators[] = {
      .in_place = "__remainder_assign", .op = IR_OP_REM},
     {.spelling = "&", .assign_spelling = "&=", .trait = "Bit_And",
      .method = "__bit_and", .in_place_trait = "Bit_And_Assign",
-     .in_place = "__bit_and_assign", .op = IR_OP_AND, .integer_only = true},
+     .in_place = "__bit_and_assign", .op = IR_OP_AND, .unsigned_only = true},
     {.spelling = "|", .assign_spelling = "|=", .trait = "Bit_Or",
      .method = "__bit_or", .in_place_trait = "Bit_Or_Assign",
-     .in_place = "__bit_or_assign", .op = IR_OP_OR, .integer_only = true},
+     .in_place = "__bit_or_assign", .op = IR_OP_OR, .unsigned_only = true},
     {.spelling = "^", .assign_spelling = "^=", .trait = "Bit_Xor",
      .method = "__bit_xor", .in_place_trait = "Bit_Xor_Assign",
-     .in_place = "__bit_xor_assign", .op = IR_OP_XOR, .integer_only = true},
+     .in_place = "__bit_xor_assign", .op = IR_OP_XOR, .unsigned_only = true},
     {.spelling = "<<", .assign_spelling = "<<=", .trait = "Shift_Left",
      .method = "__shift_left", .in_place_trait = "Shift_Left_Assign",
      .in_place = "__shift_left_assign", .op = IR_OP_SHL,
-     .integer_only = true, .shift = true},
+     .unsigned_only = true, .shift = true},
     {.spelling = ">>", .assign_spelling = ">>=", .trait = "Shift_Right",
      .method = "__shift_right", .in_place_trait = "Shift_Right_Assign",
      .in_place = "__shift_right_assign", .op = IR_OP_SHR,
-     .integer_only = true, .shift = true},
+     .unsigned_only = true, .shift = true},
 };
 
 const size_t n00bb_binary_operator_count =
@@ -1159,7 +1154,8 @@ register_operator_trait(th_env *environment, th_ctx *types,
 }
 
 static bool
-register_builtin_binary_operators(th_env *environment, th_ctx *types)
+register_builtin_binary_operators(th_env *environment, th_ctx *types,
+                                  core_arena_t *arena)
 {
     const n00bb_binary_operator_t *operators = n00bb_binary_operators;
     static const char *const numeric_types[] = {
@@ -1174,12 +1170,15 @@ register_builtin_binary_operators(th_env *environment, th_ctx *types)
                 TH_INOUT, th_name(types, "nil"))) return false;
         for (size_t n = 0; n < sizeof(numeric_types) / sizeof(numeric_types[0]); n++) {
             const char *name = numeric_types[n];
-            if (operators[o].integer_only && (name[0] == 'f')) continue;
             th_type *self = th_name(types, name);
-            th_type *other = operators[o].shift ? th_name(types, "int") : self;
+            if (operators[o].unsigned_only && !n00bb_bitwise_type(self))
+                continue;
+            th_type *other = operators[o].shift
+                ? n00bb_array_index_type(types, arena) : self;
             if (!n00bb_register_operator_function(environment, types,
                     operators[o].trait, operators[o].method, name, self,
-                    other, self, "builtins", "default")) return false;
+                    other, self, "builtins", "default", TH_ENV_PUBLIC))
+                return false;
         }
     }
     return true;
@@ -1223,7 +1222,8 @@ register_builtin_unary_operators(th_env *environment, th_ctx *types)
             th_type *self = th_name(types, name);
             if (!n00bb_register_operator_function(environment, types,
                     operators[o].trait, operators[o].method, name, self,
-                    nullptr, self, "builtins", "default")) return false;
+                    nullptr, self, "builtins", "default", TH_ENV_PUBLIC))
+                return false;
         }
     }
     return true;
@@ -1371,7 +1371,8 @@ register_builtin_traits(th_env *environment, th_ctx *types,
         || !th_env_register_trait_contracts(environment, "Finalize",
             "builtins", "default", TH_ENV_PUBLIC, finalizer_contract))
         return false;
-    if (!register_builtin_binary_operators(environment, types)) return false;
+    if (!register_builtin_binary_operators(environment, types, arena))
+        return false;
     if (!register_builtin_unary_operators(environment, types)) return false;
     if (!register_builtin_comparison_operators(environment, types)) return false;
     th_type *source = th_var(types);

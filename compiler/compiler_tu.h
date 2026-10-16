@@ -133,13 +133,14 @@ typedef struct {
     const char *in_place_trait;
     const char *in_place;
     ir_op_t op;
-    bool integer_only;
+    bool unsigned_only;
     bool shift;
 } n00bb_binary_operator_t;
 typedef struct {
     const char *name;
     ir_op_t op;
     bool shift;
+    bool unary;
 } n00bb_unsafe_arithmetic_t;
 extern const n00bb_binary_operator_t n00bb_binary_operators[];
 extern const size_t n00bb_binary_operator_count;
@@ -257,7 +258,7 @@ typedef struct n00bb_static_value {
 } n00bb_static_value_t;
 bool n00bb_integer_type_promotes_to(th_type *source, th_type *target);
 uint64_t n00bb_shift_receiver_width(th_type *type);
-bool n00bb_unsigned_shift_type(th_type *type);
+bool n00bb_bitwise_type(th_type *type);
 bool n00bb_unsigned_shift_count_type(th_type *type);
 th_type *n00bb_shift_count_type(th_ctx *types, th_type *receiver);
 bool n00bb_integer_interval_type(th_type *type, int64_t *minimum,
@@ -791,7 +792,8 @@ bool n00bb_register_operator_function(th_env *environment, th_ctx *types,
                                       const char *trait, const char *method,
                                       const char *owner, th_type *self,
                                       th_type *other, th_type *result,
-                                      const char *module, const char *package);
+                                      const char *module, const char *package,
+                                      th_env_visibility_t visibility);
 bool register_builtin_traits(th_env *environment, th_ctx *types,
                              core_arena_t *arena);
 bool record_function_parameter_fact(parse_grammar_t *grammar,

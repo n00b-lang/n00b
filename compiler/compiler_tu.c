@@ -3252,7 +3252,8 @@ n00bb_literal_candidate_scalar(const ir_profile_t *profile, size_t index)
 static bool
 n00bb_constrain_literal_fit(parse_grammar_t *grammar,
                            n00bb_tu_state_t *state, parse_tree_t *origin,
-                           parse_tree_t *node, th_type *type)
+                           parse_tree_t *node, th_type *type,
+                           bool unsigned_only)
 {
     const ir_profile_t *profile = n00bb_type_profile();
     if (!origin || !node || !type || th_kind_of(th_resolve(type)) != TH_VAR)
@@ -3276,6 +3277,7 @@ n00bb_constrain_literal_fit(parse_grammar_t *grammar,
     size_t count = 0;
     for (size_t i = 0; i < scalar_count; i++) {
         if (!n00bb_literal_candidate_scalar(profile, i)
+            || (unsigned_only && profile->scalars[i].class != IR_CLASS_UINT)
             || !n00bb_literal_fits_scalar(literal.mag, negative,
                                           &profile->scalars[i])) continue;
         th_type *candidate = th_name(state->types,
@@ -3283,7 +3285,8 @@ n00bb_constrain_literal_fit(parse_grammar_t *grammar,
         if (candidate) alternatives[count++] = candidate;
     }
     for (uint64_t width = 1; width <= N00BB_MAX_SIZED_BITS; width++) {
-        for (size_t flavor = 0; flavor < 2; flavor++) {
+        for (size_t flavor = 0; flavor < (unsigned_only ? 1u : 2u);
+             flavor++) {
             ir_scalar_t scalar = {
                 .class = flavor ? IR_CLASS_SINT : IR_CLASS_UINT,
                 .width = width,
@@ -3360,27 +3363,40 @@ n00bb_cache_contextual_integer(parse_grammar_t *grammar,
         }
         return true;
     }
-    if (core_tree_num_children(node) == 3) {
-        core_string_t trait = {0}, method = {0};
-        if (binary_operator_dispatch_for_node(grammar, node, &trait, &method)
-            && !core_string_eq(trait, CORE_STRING_STATIC("Equal"))
-            && !core_string_eq(trait, CORE_STRING_STATIC("Comparable"))) {
-            parse_tree_t *receiver = core_tree_child(node, 0);
-            parse_tree_t *argument = core_tree_child(node, 2);
-            th_type *receiver_type = core_tree_node_value(receiver).type;
-            parse_tree_t *argument_origin =
-                core_tree_node_value(argument).integer_literal_origin;
-            if (receiver_type && argument_origin
-                && th_kind_of(th_resolve(receiver_type)) == TH_VAR) {
-                th_type *literal_type = th_var(state->types);
-                if (!literal_type || !n00bb_constrain_literal_fit(grammar,
-                        state, argument_origin, argument, literal_type))
-                    return false;
-                for (parse_tree_t *at = argument_origin; at;
-                     at = core_tree_node_value(at).parent) {
-                    core_tree_node_value(at).type = literal_type;
-                    if (at == argument) break;
-                }
+    core_string_t trait = {0}, method = {0};
+    if (core_tree_num_children(node) == 3
+        && !nt_is(grammar, node, "binop-assign-stmt")
+        && binary_operator_dispatch_for_node(grammar, node, &trait, &method)
+        && !core_string_eq(trait, CORE_STRING_STATIC("Equal"))) {
+        const n00bb_binary_operator_t *operator =
+            n00bb_binary_operator_method(method);
+        for (size_t side = 0; side < 2; side++) {
+            parse_tree_t *operand = core_tree_child(node, side ? 2 : 0);
+            parse_tree_t *other = core_tree_child(node, side ? 0 : 2);
+            parse_tree_t *operand_origin =
+                core_tree_node_value(operand).integer_literal_origin;
+            th_type *other_type = core_tree_node_value(other).type;
+            bool unsigned_only = operator && operator->unsigned_only
+                && !(operator->shift && side == 1);
+            bool other_open = other_type
+                && th_kind_of(th_resolve(other_type)) == TH_VAR;
+            if (!operand_origin
+                || core_tree_node_value(other).integer_literal_origin)
+                continue;
+            if (!other_open) {
+                if (unsigned_only && other_type)
+                    (void)n00bb_contextual_integer_literal(state, operand,
+                                                           other_type);
+                continue;
+            }
+            th_type *literal_type = th_var(state->types);
+            if (!literal_type || !n00bb_constrain_literal_fit(grammar, state,
+                    operand_origin, operand, literal_type, unsigned_only))
+                return false;
+            for (parse_tree_t *at = operand_origin; at;
+                 at = core_tree_node_value(at).parent) {
+                core_tree_node_value(at).type = literal_type;
+                if (at == operand) break;
             }
         }
     }
@@ -3434,7 +3450,8 @@ n00bb_cache_contextual_integer(parse_grammar_t *grammar,
     if (origin && nt_is(grammar, node, "expression")
         && type && th_kind_of(type) == TH_VAR
         && n00bb_contextual_method_argument(grammar, node))
-        return n00bb_constrain_literal_fit(grammar, state, origin, node, type);
+        return n00bb_constrain_literal_fit(grammar, state, origin, node, type,
+                                           false);
 
     return true;
 }
@@ -3443,7 +3460,8 @@ th_type *
 n00bb_integer_literal_context(parse_grammar_t *grammar,
                               n00bb_tu_state_t *state, parse_tree_t *literal)
 {
-    bool shift_receiver = false;
+    bool unsigned_operand = false;
+    th_type *unsigned_default = th_name(state->types, "uint");
     parse_tree_t *child = literal;
     for (parse_tree_t *parent = core_tree_node_value(child).parent;
          parent;
@@ -3451,14 +3469,14 @@ n00bb_integer_literal_context(parse_grammar_t *grammar,
         if (nt_is(grammar, parent, "sym-decl")) {
             parse_tree_t *spec = child_nt(grammar, parent, "type-spec");
             th_type *expected = spec ? core_tree_node_value(spec).type : nullptr;
-            return shift_receiver && !n00bb_unsigned_shift_type(expected)
-                ? th_name(state->types, "uint") : expected;
+            return unsigned_operand && !n00bb_bitwise_type(expected)
+                ? unsigned_default : expected;
         }
         if (nt_is(grammar, parent, "assign-stmt")) {
             th_type *expected = core_tree_node_value(
                 core_tree_child(parent, 0)).type;
-            return shift_receiver && !n00bb_unsigned_shift_type(expected)
-                ? th_name(state->types, "uint") : expected;
+            return unsigned_operand && !n00bb_bitwise_type(expected)
+                ? unsigned_default : expected;
         }
         if (nt_is(grammar, parent, "binop-assign-stmt")
             && child == core_tree_child(parent, 2)) {
@@ -3474,22 +3492,28 @@ n00bb_integer_literal_context(parse_grammar_t *grammar,
             if (child != core_tree_child(parent, 0))
                 return n00bb_shift_count_type(state->types,
                     core_tree_node_value(core_tree_child(parent, 0)).type);
-            shift_receiver = true;
+            unsigned_operand = true;
+            continue;
+        }
+        if (nt_is(grammar, parent, "bitand-expr")
+            || nt_is(grammar, parent, "bitxor-expr")
+            || nt_is(grammar, parent, "bitor-expr")) {
+            unsigned_operand |= core_tree_num_children(parent) == 3;
             continue;
         }
         if (nt_is(grammar, parent, "add-expr")
-            || nt_is(grammar, parent, "mul-expr")
-            || nt_is(grammar, parent, "bitand-expr")
-            || nt_is(grammar, parent, "bitxor-expr")
-            || nt_is(grammar, parent, "bitor-expr"))
+            || nt_is(grammar, parent, "mul-expr"))
             continue;
         if (nt_is(grammar, parent, "unary-expr")) {
             core_string_t op = first_token_text(parent);
+            if (core_string_eq(op, CORE_STRING_STATIC("~"))) {
+                unsigned_operand = true;
+                continue;
+            }
             if (core_string_eq(op, CORE_STRING_STATIC("-"))
-                || core_string_eq(op, CORE_STRING_STATIC("+"))
-                || core_string_eq(op, CORE_STRING_STATIC("~"))) continue;
+                || core_string_eq(op, CORE_STRING_STATIC("+"))) continue;
             if (core_tree_num_children(parent) == 1) continue;
-            return shift_receiver ? th_name(state->types, "uint") : nullptr;
+            return unsigned_operand ? unsigned_default : nullptr;
         }
         if (n00bb_integer_range_wrapper(grammar, parent)) {
             if (core_tree_num_children(parent) == 1
@@ -3497,9 +3521,9 @@ n00bb_integer_literal_context(parse_grammar_t *grammar,
                     && core_tree_num_children(parent) == 3
                     && child == core_tree_child(parent, 1))) continue;
         }
-        return shift_receiver ? th_name(state->types, "uint") : nullptr;
+        return unsigned_operand ? unsigned_default : nullptr;
     }
-    return shift_receiver ? th_name(state->types, "uint") : nullptr;
+    return unsigned_operand ? unsigned_default : nullptr;
 }
 
 bool
@@ -9772,7 +9796,7 @@ n00bb_shift_receiver_width(th_type *type)
 }
 
 bool
-n00bb_unsigned_shift_type(th_type *type)
+n00bb_bitwise_type(th_type *type)
 {
     return n00bb_shift_receiver_width(type) != 0;
 }
@@ -9790,7 +9814,13 @@ n00bb_unsigned_shift_count_type(th_type *type)
 th_type *
 n00bb_shift_count_type(th_ctx *types, th_type *receiver)
 {
-    uint64_t width = n00bb_shift_receiver_width(receiver);
+    uint64_t width = 0;
+    bool is_signed = false;
+    th_type *resolved = receiver ? th_resolve(receiver) : nullptr;
+    th_bitint_flavor flavor = TH_BITINT_UNSIGNED;
+    if (!resolved || (!th_bitint_info(resolved, &width, &flavor)
+            && !n00bb_integer_representation(resolved, &width, &is_signed)))
+        return nullptr;
     if (!types || !width) return nullptr;
     uint64_t bits = 0;
     for (uint64_t maximum = width - 1; maximum; maximum >>= 1) bits++;
@@ -10082,8 +10112,8 @@ primitive_operator_site(n00bb_tu_state_t *state, n00bb_link_use_site_t *site)
     const n00bb_binary_operator_t *operator =
         n00bb_binary_operator_method(site->dispatch_method);
     if (!operator) return false;
-    return is_integer_type(receiver_type)
-        || (!operator->integer_only && is_float_type(receiver_type));
+    if (operator->unsigned_only) return n00bb_bitwise_type(receiver_type);
+    return is_integer_type(receiver_type) || is_float_type(receiver_type);
 }
 
 bool
@@ -10117,11 +10147,18 @@ n00bb_flagset_operator_site(parse_grammar_t *grammar,
         ? core_tree_node_value(receiver).type : nullptr;
     parse_sym_entry_t *receiver_symbol = attached_symbol(grammar, unit,
                                                           receiver);
+    parse_tree_t *inner = receiver;
+    while (inner && !core_tree_is_leaf(inner)
+           && core_tree_num_children(inner) == 1)
+        inner = core_tree_child(inner, 0);
     bool receiver_is_flagset = n00bb_flagset_member(receiver_symbol)
         || (receiver_symbol && n00bb_flagset_type(unit, state,
                                                   receiver_symbol->type,
                                                   nullptr))
-        || n00bb_flagset_type(unit, state, type, nullptr);
+        || n00bb_flagset_type(unit, state, type, nullptr)
+        || (inner && inner != node && !core_tree_is_leaf(inner)
+            && core_tree_num_children(inner) > 1
+            && n00bb_flagset_operator_site(grammar, unit, state, inner));
     if (!receiver_is_flagset) return false;
     return core_string_eq(trait, CORE_STRING_STATIC("Add"))
         || core_string_eq(trait, CORE_STRING_STATIC("Subtract"))
@@ -10240,7 +10277,7 @@ refine_intrinsic_binary_result(parse_grammar_t *grammar,
     const n00bb_binary_operator_t *operator =
         n00bb_binary_operator_method(method);
     bool shift = operator && operator->shift;
-    if (shift && !n00bb_unsigned_shift_type(left_type)) {
+    if (shift && !n00bb_bitwise_type(left_type)) {
         core_diagnostics_report_at(core_translation_unit_diagnostics(unit),
             unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0001"),
             CORE_STRING_STATIC(

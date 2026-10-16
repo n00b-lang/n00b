@@ -1453,6 +1453,17 @@ materialize_interface_type_members(n00bb_interface_context_t *loader,
     if (ok && declaration->type_shape_kind == TH_ENV_TYPE_SHAPE_ENUM)
         ok = n00bb_bind_enum_range(state->types, &state->semantic_values,
                              type_symbol, range);
+    const n00bb_flagset_info_t *flagset_info = ok
+        && declaration->type_shape_kind == TH_ENV_TYPE_SHAPE_BITSET
+        ? parse_sym_binding(type_symbol,
+              CORE_STRING_STATIC("n00bb.flagset-info")) : nullptr;
+    if (flagset_info && flagset_info->atomic_count
+        && flagset_info->atomic_count <= 128) {
+        th_type *representation = th_bitint(state->types,
+            flagset_info->atomic_count, false);
+        ok = representation && th_type_define(state->types,
+            type_symbol->type, representation);
+    }
     parse_symtab_pop_scope_all(symtab);
     return ok;
 }
@@ -1728,6 +1739,8 @@ materialize_interface_module_symbols(n00bb_interface_context_t *loader,
                         TH_ENV_TYPE_SHAPE_ALIAS &&
                     declaration.type_shape_kind !=
                         TH_ENV_TYPE_SHAPE_ENUM &&
+                    declaration.type_shape_kind !=
+                        TH_ENV_TYPE_SHAPE_BITSET &&
                     !th_type_define(state->types, symbol->type,
                                     declaration.type_shape)) {
                     if (failure) *failure =

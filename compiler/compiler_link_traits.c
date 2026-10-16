@@ -271,13 +271,14 @@ plan_closed_trait_dispatch(core_link_unit_t *link,
     size_t required = receiver_types.len;
     bool direct = true;
     bool resolved = entries != nullptr;
+    size_t kept = 0;
     for (size_t i = 0; resolved && i < required; i++) {
         th_type *receiver = receiver_types.data[i];
-        entries[i].receiver_type = receiver;
+        entries[kept].receiver_type = receiver;
         if (i < closed_count) {
-            resolved = th_env_method_resolve(state->types, receiver,
-                trait_name, method_name, &entries[i].method)
-                == TH_ENV_METHOD_FOUND;
+            if (th_env_method_resolve(state->types, receiver, trait_name,
+                    method_name, &entries[kept].method)
+                != TH_ENV_METHOD_FOUND) continue;
         } else {
             const th_env_method_t *selected = nullptr;
             for (size_t j = 0; j < method_count; j++) {
@@ -289,12 +290,14 @@ plan_closed_trait_dispatch(core_link_unit_t *link,
                 selected = &methods[j];
             }
             if (!selected) resolved = false;
-            else entries[i].method = *selected;
+            else entries[kept].method = *selected;
         }
-        if (i && resolved && strcmp(entries[0].method.qualified_name,
-                                  entries[i].method.qualified_name))
+        if (kept && resolved && strcmp(entries[0].method.qualified_name,
+                                       entries[kept].method.qualified_name))
             direct = false;
+        if (resolved) kept++;
     }
+    required = kept;
     core_free(methods);
     if (!resolved) {
         core_free(entries);
@@ -801,10 +804,13 @@ diagnose_unused_link_symbols(parse_grammar_t *grammar,
         if (core_diagnostics_failed(core_translation_unit_diagnostics(
                 analysis->units.data[i]))) return true;
 
+    core_translation_unit_t *root = analysis->units.len
+        ? analysis->units.data[0] : nullptr;
     for (size_t i = 0; i < analysis->units.len; i++) {
         core_translation_unit_t *unit = analysis->units.data[i];
         n00bb_tu_state_t *state = tu_state(unit);
         if (!state || !state->annotations) return false;
+        if (!root || !n00bb_same_package(unit, root)) continue;
         for (parse_scope_t *scope = state->annotations->symtab->all_scopes;
              scope; scope = scope->all_next) {
             for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;

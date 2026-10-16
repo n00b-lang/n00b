@@ -17,7 +17,7 @@ package builtin {
     export containers.array.copy_items to sys.abi
     export containers.array.compare_items to sys.abi
     export containers.list.list_with_length to sys.abi
-    export string.core.__string_from_utf8
+    export string.core
     export ffi.Ffi_Bytes
     export ffi.ffi
     export ffi.__ffi_callback_register

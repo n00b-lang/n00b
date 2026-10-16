@@ -237,6 +237,11 @@ build_import_environment(parse_grammar_t *grammar,
             else {
                 core_buffer_puts(&message,
                     "trait constraint is not satisfied in the loaded module graph");
+                if (has_detail && detail.message)
+                    core_buffer_printf(&message, ": %s", detail.message);
+                if (has_detail && detail.got)
+                    core_buffer_printf(&message, " (for %s)",
+                        n00bb_print_type(state->types, detail.got));
             }
             if (failure_site)
                 core_diagnostics_report_at(

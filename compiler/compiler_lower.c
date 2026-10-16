@@ -1164,7 +1164,8 @@ n00bb_emit_binary_ir_with(ir_lower_context_t *context, ir_op_t op,
         || result_class == IR_CLASS_UINT || operand_class == IR_CLASS_SINT
         || operand_class == IR_CLASS_UINT;
     if (wrapping)
-        return integer_operation && ir_instr_add_mod(instruction, "wrap")
+        return integer_operation && (!ir_op_accepts_mod(op, "wrap")
+                || ir_instr_add_mod(instruction, "wrap"))
             ? instruction->dest : nullptr;
     if (integer_operation
         && ir_op_accepts_mod(op, "trap")) {
@@ -4653,7 +4654,7 @@ n00bb_lower_binary(ir_lower_context_t *context, parse_visit_t *visit,
             if (coerced) left = coerced;
         }
     }
-    if (shift && !n00bb_unsigned_shift_type(left->type))
+    if (shift && !n00bb_bitwise_type(left->type))
         return lower_error(context, IR_DIAG_TYPE_CLASS, span,
             "built-in shifts require an unsigned or bit left operand");
     if (shift) {
@@ -5119,9 +5120,10 @@ n00bb_lower_complement(ir_lower_context_t *context,
                            "~ requires a flagset or integer operand");
     bool flagset = n00bb_flagset_type(lower->unit, caller,
                                      operands[0]->type, nullptr);
-    if (!flagset && !is_integer_type(operands[0]->type))
+    if (!flagset && !n00bb_bitwise_type(operands[0]->type))
         return lower_error(context, IR_DIAG_TYPE_CLASS, span,
-                           "~ requires a flagset or integer operand");
+            "~ requires a flagset or unsigned integer operand; use "
+            "unsafe_not for signed integers");
     ir_instr_t *instruction = ir_lower_emit_instruction(context, flagset
         ? IR_OP_BITSET_COMPLEMENT : IR_OP_NOT, span);
     if (!instruction || !ir_lower_set_temp_dest(context, instruction,
@@ -11352,6 +11354,23 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                                          : IR_DIAG_TYPE_MISMATCH,
                 span, "byte difference requires two byte references");
     }
+    if (unsafe_arithmetic && unsafe_arithmetic->unary) {
+        bool valid = values.len == 1 && !copyouts.len
+            && is_integer_type(call_result_type)
+            && ir_type_eq(context->module, values.data[0]->type,
+                          call_result_type);
+        ir_value_t *result = valid
+            ? n00bb_emit_wrapping(context, unsafe_arithmetic->op,
+                                  values.data[0], call_result_type, span)
+            : nullptr;
+        core_list_free(values);
+        core_list_free(copyouts);
+        return result
+            ? (ir_lower_result_t){IR_LOWER_VALUE, result}
+            : lower_error(context, valid ? IR_DIAG_INTERNAL
+                                         : IR_DIAG_TYPE_MISMATCH,
+                span, "unsafe_not requires one integer operand");
+    }
     if (unsafe_arithmetic) {
         bool valid = values.len == 2 && !copyouts.len
             && is_integer_type(call_result_type)
@@ -15276,6 +15295,17 @@ initialize_static_global(parse_grammar_t *grammar,
 }
 
 static bool
+n00bb_unit_defines_global(n00bb_link_analysis_t *analysis,
+                          core_translation_unit_t *unit,
+                          parse_sym_entry_t *symbol)
+{
+    core_link_declaration_t *declaration =
+        link_declaration_for_symbol(analysis, symbol);
+    return !declaration || core_string_eq(
+        core_link_declaration_module(declaration), unit->module.identifier);
+}
+
+static bool
 register_module_globals(parse_grammar_t *grammar,
                         core_translation_unit_t *source,
                         core_translation_unit_t *destination_unit,
@@ -15302,7 +15332,9 @@ register_module_globals(parse_grammar_t *grammar,
                 || context_symbol(grammar, symbol)
                 || (!symbol_binding_node(symbol)
                     && !source_state->interface_module)
-                || !symbol->type) continue;
+                || !symbol->type
+                || !n00bb_unit_defines_global(analysis, source, symbol))
+                continue;
             if (source != destination_unit) {
                 core_link_declaration_t *declaration =
                     link_declaration_for_symbol(analysis, symbol);
@@ -15468,6 +15500,7 @@ bind_module_global_identities(ir_ctx_t *ir_context,
             for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
                  ok && symbol; symbol = symbol->next_in_scope) {
                 if (symbol->kind != PARSE_SYM_VARIABLE
+                    || !n00bb_unit_defines_global(analysis, source, symbol)
                     || !is_module_global_symbol(analysis->grammar, symbol))
                     continue;
                 ir_global_t *canonical = link_ir_global_for_symbol(analysis,

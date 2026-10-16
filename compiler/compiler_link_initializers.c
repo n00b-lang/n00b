@@ -91,23 +91,7 @@ publish_link_initializer_uses(core_link_unit_t *link,
             if (is_type_reference_node(analysis->grammar, site->node))
                 continue;
             parse_sym_entry_t *symbol = canonical_symbol(site->symbol);
-            if (n00bb_builtin_array_read_function(symbol)
-                || n00bb_builtin_array_write_function(symbol)
-                || n00bb_builtin_reference_function(symbol)
-                || n00bb_builtin_byte_offset_function(symbol)
-                || n00bb_builtin_byte_diff_function(symbol)
-                || n00bb_builtin_unsafe_arithmetic(symbol)
-                || n00bb_builtin_bit_count_function(symbol)
-                || n00bb_builtin_gc_memory_function(symbol)
-                || n00bb_builtin_volatile_load_function(symbol)
-                || n00bb_builtin_signal_fence_function(symbol)
-                || n00bb_builtin_prefetch_function(symbol)
-                || n00bb_builtin_atomic_rmw_function(symbol)
-                || n00bb_builtin_atomic_cas_function(symbol)
-                || n00bb_builtin_atomic_access_function(symbol)
-                || n00bb_builtin_fd_write_function(symbol)
-                || n00bb_builtin_repr_default_function(symbol)
-                || n00bb_builtin_native_function(symbol)) continue;
+            if (n00bb_builtin_function(symbol)) continue;
             if (symbol && (symbol->kind == PARSE_SYM_MODULE
                     || symbol->kind == PARSE_SYM_ENUM_CONST
                     || symbol->kind == PARSE_SYM_TYPEDEF
@@ -165,18 +149,7 @@ publish_link_initializer_uses(core_link_unit_t *link,
             analysis, &call);
         if (call.state == CORE_LINK_DEPENDENCY_EXTERNAL
             && (link_dependency_reference_builtin(&call, nullptr)
-                || n00bb_builtin_native_function(callee)
-                || n00bb_builtin_byte_offset_function(callee)
-                || n00bb_builtin_byte_diff_function(callee)
-                || n00bb_builtin_unsafe_arithmetic(callee)
-                || n00bb_builtin_bit_count_function(callee)
-                || n00bb_builtin_gc_memory_function(callee)
-                || n00bb_builtin_volatile_load_function(callee)
-                || n00bb_builtin_signal_fence_function(callee)
-                || n00bb_builtin_prefetch_function(callee)
-                || n00bb_builtin_atomic_rmw_function(callee)
-                || n00bb_builtin_atomic_cas_function(callee)
-                || n00bb_builtin_atomic_access_function(callee)
+                || n00bb_builtin_function(callee)
                 || (call.to
                     && core_string_eq(core_link_declaration_module(call.to),
                         CORE_STRING_STATIC("builtins"))
