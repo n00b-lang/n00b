@@ -7,7 +7,7 @@ allocator kvheap alloc kv_malloc release kv_free
 
 opaque kv_db
 opaque kv_iter
-handle Db   = *kv_db   release kv_close
+handle Db   = *kv_db   release kv_close  thread_affine
 handle Iter = *kv_iter release kv_iter_free
 
 enum kv_status : c_int { KV_OK = 0, KV_NOTFOUND = 1, KV_ERR = 2 }

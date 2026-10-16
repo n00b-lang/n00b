@@ -10,6 +10,7 @@ library trip
 
 fn trip(depth: c_int) -> c_int
   symbol "trip_entry"
+  thread main
 
 binding export {
     provide trip = "trip_serve.trip"

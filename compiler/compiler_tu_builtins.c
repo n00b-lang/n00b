@@ -201,6 +201,8 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
         && register_builtin_native_function(symtab, types, nil_type,
             "__os_thread_id", "n00b_os_thread_id", uint, nullptr, 0)
         && register_builtin_native_function(symtab, types, nil_type,
+            "__os_thread_is_main", "n00b_os_thread_is_main", uint, nullptr, 0)
+        && register_builtin_native_function(symtab, types, nil_type,
             "__os_thread_stack_high_self", "n00b_os_thread_stack_high_self",
             optional_reference, nullptr, 0)
         && register_builtin_native_function(symtab, types, nil_type,

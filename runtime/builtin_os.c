@@ -56,6 +56,12 @@ static uint64_t os_thread_id(void)
     return (uint64_t)n00b_linux_syscall6(__NR_gettid, 0, 0, 0, 0, 0, 0);
 }
 
+static bool os_thread_is_main(void)
+{
+    return n00b_linux_syscall6(__NR_gettid, 0, 0, 0, 0, 0, 0)
+        == n00b_linux_syscall6(__NR_getpid, 0, 0, 0, 0, 0, 0);
+}
+
 static bool maps_hex(char **cursor, char *end, uintptr_t *value)
 {
     uintptr_t result = 0;
@@ -180,6 +186,11 @@ static uint64_t os_thread_id(void)
     return pthread_threadid_np(NULL, &id) == 0 ? id : 0;
 }
 
+static bool os_thread_is_main(void)
+{
+    return pthread_main_np() == 1;
+}
+
 static uintptr_t os_thread_stack_high_self(void)
 {
     return (uintptr_t)pthread_get_stackaddr_np(pthread_self());
@@ -229,6 +240,11 @@ static void os_thread_yield(void)
 static uint64_t os_thread_id(void)
 {
     return (uint64_t)GetCurrentThreadId();
+}
+
+static bool os_thread_is_main(void)
+{
+    return false;
 }
 
 static uintptr_t os_thread_stack_high_self(void)
@@ -300,6 +316,11 @@ void n00b_os_thread_yield(void)
 void n00b_os_thread_fence(void)
 {
     atomic_thread_fence(memory_order_seq_cst);
+}
+
+uint64_t n00b_os_thread_is_main(void)
+{
+    return os_thread_is_main() ? 1 : 0;
 }
 
 uint64_t n00b_os_thread_id(void)

@@ -24,6 +24,7 @@ package builtin {
     export ffi.__ffi_table_insert
     export ffi.__ffi_table_get
     export ffi.__ffi_table_free
+    export ffi.__ffi_table_owner
     export ffi.__ffi_hold_group
     export ffi.__ffi_hold
     export ffi.__ffi_event

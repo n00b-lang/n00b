@@ -1,0 +1,16 @@
+func trip(depth: i32) -> i32 {
+    return depth
+}
+
+const tripx = [-
+library trip
+
+fn trip_open(depth: c_int) -> c_int
+fn trip(depth: c_int) -> c_int
+  thread same_as trip_open(depth)
+
+binding export {
+    provide trip_open = "export_same_as.trip"
+    provide trip = "export_same_as.trip"
+}
+-]'ffi

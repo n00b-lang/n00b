@@ -78,6 +78,7 @@ if "$tmp/trip_serve" 2>"$tmp/trip_serve.err"; then
 fi
 grep -q 'panic: tripped' "$tmp/trip_serve.err"
 fails_with provide_mismatch 'provide_mismatch.n00b:11:5'
+fails_with export_same_as 'export_same_as.n00b:14:5'
 if grep -q 'LANTERN-L00' "$tmp/provide_mismatch.log"; then
     cat "$tmp/provide_mismatch.log" >&2
     exit 1
