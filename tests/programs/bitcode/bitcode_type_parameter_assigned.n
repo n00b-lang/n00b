@@ -1,0 +1,9 @@
+func reset(modify value: `T) -> nil {
+    value = 0
+}
+
+func start() -> nil {
+    var count: int = 5
+    reset(count)
+    require count == 0
+}

@@ -1,0 +1,20 @@
+trait Measured {
+    func size(self: `T) -> int
+}
+
+record Handle {
+    fd: int
+}
+
+func size(self: Handle) -> int {
+    return self.fd
+}
+
+func measure(value: `T) -> int where `T: Measured {
+    return size(value)
+}
+
+func start() -> nil {
+    let handle: Handle = (fd = 3)
+    require measure(handle) == 3
+}

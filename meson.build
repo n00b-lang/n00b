@@ -1107,6 +1107,27 @@ test(
 )
 
 test(
+    'type-parameter-fixed-rejected-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_type_parameter_fixed.n',
+           'is fixed to bitcode_type_parameter_fixed.Handle by the function\'s own body'],
+    suite: 'slow',
+)
+
+test(
+    'type-parameter-assigned-rejected-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_type_parameter_assigned.n',
+           'cannot assign int to a value of type parameter `T'],
+)
+
+test(
     'script-comptime-rejected-n00b',
     find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',

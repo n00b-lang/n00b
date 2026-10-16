@@ -19563,6 +19563,51 @@ n00bb_dump_ir(const n00bb_link_analysis_t *analysis)
     return analysis != nullptr;
 }
 
+static bool
+rigid_type_parameters_hold(core_list_t(core_translation_unit_ptr_t) *units)
+{
+    bool ok = true;
+    for (size_t u = 0; u < units->len; u++) {
+        core_translation_unit_t *unit = units->data[u];
+        n00bb_tu_state_t *state = tu_state(unit);
+        parse_symtab_t *symtab = state && state->annotations
+            ? state->annotations->symtab : nullptr;
+        for (parse_scope_t *scope = symtab ? symtab->all_scopes : nullptr;
+             scope; scope = scope->all_next)
+            for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
+                 symbol = symbol->next_in_scope) {
+                n00bb_body_typevar_map_t *map =
+                    symbol->kind == PARSE_SYM_FUNCTION
+                    ? parse_sym_binding(symbol, N00BB_BODY_TYPEVAR_MAP_KEY)
+                    : nullptr;
+                n00bb_signature_typevars_t *declared = map
+                    ? parse_sym_binding(symbol, N00BB_SIGNATURE_TYPEVARS_KEY)
+                    : nullptr;
+                for (size_t i = 0; map && declared && i < map->count; i++) {
+                    bool parameter = false;
+                    for (size_t k = 0; !parameter && k < declared->len; k++)
+                        parameter = declared->data[k].type
+                            == map->declaration[i];
+                    th_type *bound = th_resolve(map->body[i]);
+                    if (!parameter || th_kind_of(bound) == TH_VAR) continue;
+                    core_buffer_t message = {0};
+                    core_buffer_printf(&message,
+                        "a type parameter of '%.*s' is fixed to %s by the function's own body; a declared type parameter stays generic",
+                        (int)symbol->name.u8_bytes, symbol->name.data,
+                        n00bb_print_type(state->types, bound));
+                    core_diagnostics_report_at(
+                        core_translation_unit_diagnostics(unit), unit,
+                        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0036"),
+                        core_string_borrow(message.data, message.byte_len),
+                        link_source_location(symbol->decl_node));
+                    core_buffer_release(&message);
+                    ok = false;
+                }
+            }
+    }
+    return ok;
+}
+
 bool
 lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
                      n00bb_link_analysis_t *analysis,
@@ -19592,7 +19637,7 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
          && i < core_link_unit_translation_unit_count(link); i++)
         core_list_push(units,
             core_link_unit_translation_unit(link, i));
-    ok = ok && units.len;
+    ok = ok && units.len && rigid_type_parameters_hold(&units);
     for (size_t i = 0; ok && i < units.len; i++) {
         n00bb_tu_state_t *state = tu_state(units.data[i]);
         if (!state) ok = false;

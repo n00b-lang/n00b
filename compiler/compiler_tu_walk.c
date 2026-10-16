@@ -396,6 +396,27 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             parse_tree_t *value = core_tree_child(node, 2);
             n00bb_contextual_integer_literal(state, value,
                 core_tree_node_value(target).type);
+            th_type *target_type = core_tree_node_value(target).type
+                ? th_resolve(core_tree_node_value(target).type) : nullptr;
+            th_type *value_type = core_tree_node_value(value).type
+                ? th_resolve(core_tree_node_value(value).type) : nullptr;
+            if (target_type && value_type
+                && th_kind_of(target_type) == TH_VAR
+                && th_var_name(target_type)
+                && th_kind_of(value_type) != TH_VAR
+                && th_is_closed(state->types, value_type)) {
+                core_buffer_t message = {0};
+                core_buffer_printf(&message,
+                    "cannot assign %s to a value of type parameter `%s; a declared type parameter stays generic",
+                    n00bb_print_type(state->types, value_type),
+                    th_var_name(target_type));
+                core_diagnostics_report_at(
+                    core_translation_unit_diagnostics(unit), unit,
+                    CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0036"),
+                    core_string_borrow(message.data, message.byte_len),
+                    link_source_location(node));
+                core_buffer_release(&message);
+            }
         }
         cache_wrapped_symbol_resolution(grammar, unit, node);
         if (nt_is(grammar, node, "unary-expr")
