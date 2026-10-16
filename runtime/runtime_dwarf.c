@@ -347,6 +347,7 @@ search_unit(cursor_t unit, uint64_t target, n00bb_source_line_t *result)
     cursor_t files = unit;
     uint64_t address = 0, file = 1, previous_address = 0, previous_file = 1;
     int64_t line = 1, previous_line = 1;
+    uint64_t column = 0, previous_column = 0;
     bool have_previous = false;
     (void)default_is_stmt;
     while (!program.failed && program.at < program.end) {
@@ -380,7 +381,8 @@ search_unit(cursor_t unit, uint64_t target, n00bb_source_line_t *result)
             address += (uint64_t)((255 - opcode_base) / line_range)
                 * minimum_length;
         else if (opcode == 9) address += take_bytes(&program, 2);
-        else if (opcode == 5 || opcode == 12) take_uleb(&program);
+        else if (opcode == 5) column = take_uleb(&program);
+        else if (opcode == 12) take_uleb(&program);
         else if (opcode != 6 && opcode != 7 && opcode != 10 && opcode != 11)
             for (uint8_t i = 0; i < standard_lengths[opcode - 1]; i++)
                 take_uleb(&program);
@@ -388,16 +390,19 @@ search_unit(cursor_t unit, uint64_t target, n00bb_source_line_t *result)
         if (have_previous && previous_address <= target && target < address
             && previous_line > 0) {
             result->line = (uint32_t)previous_line;
+            result->column = (uint32_t)previous_column;
             return file_entry(directories, files, previous_file, result);
         }
         have_previous = !end_sequence;
         previous_address = address;
         previous_file = file;
         previous_line = line;
+        previous_column = column;
         if (end_sequence) {
             address = 0;
             file = 1;
             line = 1;
+            column = 0;
         }
     }
     return false;

@@ -33,13 +33,11 @@ func run(input: State) -> int fail: string {
     return counter.call(2)!
 }
 
-comptime {} else {
-    var initial: State
-    initial.count = 0
-    try {
-        require run(initial)! == 2
-    } else err {
-        require false
-    }
-    __fd_write(2, "ok")
+var initial: State
+initial.count = 0
+try {
+    require run(initial)! == 2
+} else err {
+    require false
 }
+__fd_write(2, "ok")

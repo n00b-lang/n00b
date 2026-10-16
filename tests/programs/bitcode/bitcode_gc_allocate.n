@@ -1,24 +1,22 @@
 import sys.gc.core
 import sys.gc.alloc
 
-comptime {} else {
-    let sample: byte = 0
-    let type_index: u32 = cast[u32](typeof(sample))
-    let result: Ref[byte]? = sys.gc.alloc.allocate_runtime(
-        type_index, 8, cast[u32](sys.gc.core.granule_bytes), nil)
-    if result != nil {
-        let header: Ref[sys.gc.core.Object_Header] = sys.gc.core.header_of(result.get())
-        require header.type_index == type_index
-        require sys.gc.core.meta_payload_bytes(header.meta) == 8
-        let over_alignment: u32 = cast[u32](sys.gc.core.granule_bytes * 2)
-        let over_aligned: Ref[byte]? = sys.gc.alloc.allocate_runtime(
-            type_index, 8, over_alignment, nil)
-        if over_aligned != nil {
-            require __abi_ref_address(over_aligned.get()) % cast[uint](over_alignment) == 0
-            let over_header: Ref[sys.gc.core.Object_Header] = sys.gc.core.header_of(
-                over_aligned.get())
-            require (over_header.meta & sys.gc.core.obj_large) != 0
-        } else { require false }
-        __fd_write(2, "ok")
+let sample: byte = 0
+let type_index: u32 = cast[u32](typeof(sample))
+let result: Ref[byte]? = sys.gc.alloc.allocate_runtime(
+    type_index, 8, cast[u32](sys.gc.core.granule_bytes), nil)
+if result != nil {
+    let header: Ref[sys.gc.core.Object_Header] = sys.gc.core.header_of(result.get())
+    require header.type_index == type_index
+    require sys.gc.core.meta_payload_bytes(header.meta) == 8
+    let over_alignment: u32 = cast[u32](sys.gc.core.granule_bytes * 2)
+    let over_aligned: Ref[byte]? = sys.gc.alloc.allocate_runtime(
+        type_index, 8, over_alignment, nil)
+    if over_aligned != nil {
+        require __abi_ref_address(over_aligned.get()) % cast[uint](over_alignment) == 0
+        let over_header: Ref[sys.gc.core.Object_Header] = sys.gc.core.header_of(
+            over_aligned.get())
+        require (over_header.meta & sys.gc.core.obj_large) != 0
     } else { require false }
-}
+    __fd_write(2, "ok")
+} else { require false }

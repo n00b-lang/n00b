@@ -11,11 +11,9 @@ func make_item(value: int) -> Ref[Item] {
     return ref item
 }
 
-comptime {} else {
-    let first: Ref[Item] = make_item(7)
-    let second: Ref[Item] = make_item(9)
-    let values = [first, second]'array
-    require values[0].value == 7
-    require values[1].value == 9
-    __fd_write(2, "ok")
-}
+let first: Ref[Item] = make_item(7)
+let second: Ref[Item] = make_item(9)
+let values = [first, second]'array
+require values[0].value == 7
+require values[1].value == 9
+__fd_write(2, "ok")

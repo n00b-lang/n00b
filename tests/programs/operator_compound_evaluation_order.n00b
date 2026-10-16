@@ -11,7 +11,5 @@ func compound() -> int {
     return value
 }
 
-comptime {} else {
-    require compound() == 3
-    require operator_compound_global_order.compound() == 3
-}
+require compound() == 3
+require operator_compound_global_order.compound() == 3

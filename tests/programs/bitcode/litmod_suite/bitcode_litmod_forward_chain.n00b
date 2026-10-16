@@ -10,7 +10,7 @@ litmod<quotes> make_inner, inner(raw: string) -> int fail: string {
     return 42
 }
 
-comptime {
+when comptime() {
     require value() == 42
 }
 

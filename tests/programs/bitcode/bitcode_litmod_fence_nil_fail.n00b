@@ -2,7 +2,4 @@ litmod<fence> fail_fence, noop(contents: string) -> nil fail: string {
     fail "fence failed"
 }
 
-comptime {
-} else {
-    [- body -]'noop
-}
+[- body -]'noop

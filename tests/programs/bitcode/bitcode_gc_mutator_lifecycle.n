@@ -5,114 +5,112 @@ import sys.gc.heap
 import sys.gc.mutator
 import sys.threads
 
-comptime {} else {
-    let created: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(nil)
-    if created != nil {
-        let heap: Ref[sys.gc.core.Heap] = created.get()
-        let first: Ref[sys.gc.core.Mutator]? = sys.gc.mutator.create(heap)
-        if first != nil {
-            let second: Ref[sys.gc.core.Mutator]? = sys.gc.mutator.create(heap)
-            if second != nil {
-                let primary: Ref[sys.gc.core.Mutator] = first.get()
-                let other: Ref[sys.gc.core.Mutator] = second.get()
-                assert heap.nmutators == 2
-                assert heap.threads.n == 1
-                assert primary.thread_primary
-                assert !other.thread_primary
-                assert primary.thread_id == sys.threads.thread_id()
-                assert primary.thread_control == sys.threads.thread_control_self()
-                let primary_stack_hi: Ref[byte]? = primary.stack_hi
-                let current_stack_hi: Ref[byte]? = sys.threads.thread_stack_high_self()
+let created: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(nil)
+if created != nil {
+    let heap: Ref[sys.gc.core.Heap] = created.get()
+    let first: Ref[sys.gc.core.Mutator]? = sys.gc.mutator.create(heap)
+    if first != nil {
+        let second: Ref[sys.gc.core.Mutator]? = sys.gc.mutator.create(heap)
+        if second != nil {
+            let primary: Ref[sys.gc.core.Mutator] = first.get()
+            let other: Ref[sys.gc.core.Mutator] = second.get()
+            assert heap.nmutators == 2
+            assert heap.threads.n == 1
+            assert primary.thread_primary
+            assert !other.thread_primary
+            assert primary.thread_id == sys.threads.thread_id()
+            assert primary.thread_control == sys.threads.thread_control_self()
+            let primary_stack_hi: Ref[byte]? = primary.stack_hi
+            let current_stack_hi: Ref[byte]? = sys.threads.thread_stack_high_self()
+            if primary_stack_hi != nil {
+                if current_stack_hi != nil {
+                    assert __abi_ref_address(primary_stack_hi.get()) == __abi_ref_address(current_stack_hi.get())
+                } else { require false }
+            } else { require false }
+            assert other.thread_id == primary.thread_id
+            let other_stack_hi: Ref[byte]? = other.stack_hi
+            if other_stack_hi != nil {
                 if primary_stack_hi != nil {
-                    if current_stack_hi != nil {
-                        assert __abi_ref_address(primary_stack_hi.get()) == __abi_ref_address(current_stack_hi.get())
-                    } else { require false }
+                    assert __abi_ref_address(other_stack_hi.get()) == __abi_ref_address(primary_stack_hi.get())
                 } else { require false }
-                assert other.thread_id == primary.thread_id
-                let other_stack_hi: Ref[byte]? = other.stack_hi
-                if other_stack_hi != nil {
-                    if primary_stack_hi != nil {
-                        assert __abi_ref_address(other_stack_hi.get()) == __abi_ref_address(primary_stack_hi.get())
-                    } else { require false }
+            } else { require false }
+            sys.gc.collect.stop_world(heap)
+            assert __atomic_load(ref heap.stw)
+            assert !primary.ctx_valid
+            sys.gc.collect.start_world(heap)
+            assert !__atomic_load(ref heap.stw)
+            assert heap.pauses == 1
+            let primary_next: Ref[sys.gc.core.Mutator]? = primary.thread_next
+            if primary_next != nil { assert primary_next.get() == other }
+            else { require false }
+            let other_next: Ref[sys.gc.core.Mutator]? = other.thread_next
+            if other_next != nil { assert other_next.get() == primary }
+            else { require false }
+            heap.hs_active = true
+            __atomic_store(ref heap.hs_kind,
+                cast[u32](sys.gc.core.Handshake_Kind.on))
+            let third: Ref[sys.gc.core.Mutator]? = sys.gc.mutator.create(heap)
+            if third != nil {
+                let survivor: Ref[sys.gc.core.Mutator] = third.get()
+                assert heap.nmutators == 3
+                assert heap.threads.n == 1
+                assert __atomic_load(ref heap.hs_pending) == 1
+                assert __atomic_load(ref survivor.hs_state) == cast[u32](sys.gc.core.Handshake_State.requested)
+                let next_after_primary: Ref[sys.gc.core.Mutator]? = primary.thread_next
+                if next_after_primary != nil {
+                    assert next_after_primary.get() == survivor
                 } else { require false }
-                sys.gc.collect.stop_world(heap)
-                assert __atomic_load(ref heap.stw)
-                assert !primary.ctx_valid
-                sys.gc.collect.start_world(heap)
-                assert !__atomic_load(ref heap.stw)
-                assert heap.pauses == 1
-                let primary_next: Ref[sys.gc.core.Mutator]? = primary.thread_next
-                if primary_next != nil { assert primary_next.get() == other }
+                sys.gc.mutator.destroy(other)
+                assert heap.nmutators == 2
+                let next_after_unlink: Ref[sys.gc.core.Mutator]? = survivor.thread_next
+                if next_after_unlink != nil { assert next_after_unlink.get() == primary }
                 else { require false }
-                let other_next: Ref[sys.gc.core.Mutator]? = other.thread_next
-                if other_next != nil { assert other_next.get() == primary }
+                sys.gc.mutator.park(survivor)
+                assert __atomic_load(ref heap.hs_pending) == 0
+                assert __atomic_load(ref survivor.hs_state) == cast[u32](sys.gc.core.Handshake_State.done)
+                heap.hs_active = false
+                sys.gc.mutator.destroy(primary)
+                assert heap.nmutators == 1
+                assert heap.threads.n == 1
+                assert survivor.thread_primary
+                let remaining_next: Ref[sys.gc.core.Mutator]? = survivor.thread_next
+                if remaining_next != nil { assert remaining_next.get() == survivor }
                 else { require false }
-                heap.hs_active = true
-                __atomic_store(ref heap.hs_kind,
-                    cast[u32](sys.gc.core.Handshake_Kind.on))
-                let third: Ref[sys.gc.core.Mutator]? = sys.gc.mutator.create(heap)
-                if third != nil {
-                    let survivor: Ref[sys.gc.core.Mutator] = third.get()
-                    assert heap.nmutators == 3
-                    assert heap.threads.n == 1
-                    assert __atomic_load(ref heap.hs_pending) == 1
-                    assert __atomic_load(ref survivor.hs_state) == cast[u32](sys.gc.core.Handshake_State.requested)
-                    let next_after_primary: Ref[sys.gc.core.Mutator]? = primary.thread_next
-                    if next_after_primary != nil {
-                        assert next_after_primary.get() == survivor
-                    } else { require false }
-                    sys.gc.mutator.destroy(other)
-                    assert heap.nmutators == 2
-                    let next_after_unlink: Ref[sys.gc.core.Mutator]? = survivor.thread_next
-                    if next_after_unlink != nil { assert next_after_unlink.get() == primary }
-                    else { require false }
-                    sys.gc.mutator.park(survivor)
-                    assert __atomic_load(ref heap.hs_pending) == 0
-                    assert __atomic_load(ref survivor.hs_state) == cast[u32](sys.gc.core.Handshake_State.done)
-                    heap.hs_active = false
-                    sys.gc.mutator.destroy(primary)
-                    assert heap.nmutators == 1
-                    assert heap.threads.n == 1
-                    assert survivor.thread_primary
-                    let remaining_next: Ref[sys.gc.core.Mutator]? = survivor.thread_next
-                    if remaining_next != nil { assert remaining_next.get() == survivor }
-                    else { require false }
-                    let indexed: Ref[byte]? = sys.gc.hash.tab_lookup(
-                        ref heap.threads, survivor.thread_id)
-                    if indexed != nil {
-                        assert indexed.get() == unsafe_cast[Ref[byte]] survivor
-                    } else { require false }
-                    let buffered: Ref[byte] = unsafe_cast[Ref[byte]] heap
-                    survivor.write_buffer_epoch = heap.mark_epoch
-                    ref_write(ref survivor.write_buffer [0], buffered)
-                    survivor.write_buffer_count = 1
-                    survivor.objects_allocated = 3
-                    survivor.bytes_allocated = 64
-                    survivor.refills = 2
-                    survivor.locked_refills = 1
-                    __atomic_store(ref survivor.hs_state,
-                        cast[u32](sys.gc.core.Handshake_State.requested))
-                    __atomic_store(ref heap.hs_pending, cast[u32](1))
-                    sys.gc.mutator.destroy(survivor)
-                    assert heap.nmutators == 0
-                    assert heap.threads.n == 0
-                    assert __atomic_load(ref heap.hs_pending) == 0
-                    assert heap.retired_objects == 3
-                    assert heap.retired_bytes == 64
-                    assert heap.retired_refills == 2
-                    assert heap.retired_locked_refills == 1
-                    assert heap.barrier_queue_count == 1
-                    let queue: Ref[byte]? = heap.barrier_queue
-                    if queue != nil {
-                        let slot: Ref[Atomic[Ref[byte]?]] = unsafe_cast[Ref[Atomic[Ref[byte]?]]] queue.get()
-                        let value: Ref[byte]? = __atomic_load(slot)
-                        if value != nil { assert value.get() == buffered }
-                        else { require false }
-                    } else { require false }
-                    sys.gc.heap.destroy(heap)
-                    __fd_write(2, "ok")
+                let indexed: Ref[byte]? = sys.gc.hash.tab_lookup(
+                    ref heap.threads, survivor.thread_id)
+                if indexed != nil {
+                    assert indexed.get() == unsafe_cast[Ref[byte]] survivor
                 } else { require false }
+                let buffered: Ref[byte] = unsafe_cast[Ref[byte]] heap
+                survivor.write_buffer_epoch = heap.mark_epoch
+                ref_write(ref survivor.write_buffer [0], buffered)
+                survivor.write_buffer_count = 1
+                survivor.objects_allocated = 3
+                survivor.bytes_allocated = 64
+                survivor.refills = 2
+                survivor.locked_refills = 1
+                __atomic_store(ref survivor.hs_state,
+                    cast[u32](sys.gc.core.Handshake_State.requested))
+                __atomic_store(ref heap.hs_pending, cast[u32](1))
+                sys.gc.mutator.destroy(survivor)
+                assert heap.nmutators == 0
+                assert heap.threads.n == 0
+                assert __atomic_load(ref heap.hs_pending) == 0
+                assert heap.retired_objects == 3
+                assert heap.retired_bytes == 64
+                assert heap.retired_refills == 2
+                assert heap.retired_locked_refills == 1
+                assert heap.barrier_queue_count == 1
+                let queue: Ref[byte]? = heap.barrier_queue
+                if queue != nil {
+                    let slot: Ref[Atomic[Ref[byte]?]] = unsafe_cast[Ref[Atomic[Ref[byte]?]]] queue.get()
+                    let value: Ref[byte]? = __atomic_load(slot)
+                    if value != nil { assert value.get() == buffered }
+                    else { require false }
+                } else { require false }
+                sys.gc.heap.destroy(heap)
+                __fd_write(2, "ok")
             } else { require false }
         } else { require false }
     } else { require false }
-}
+} else { require false }

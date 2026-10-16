@@ -1,0 +1,5 @@
+import internal.marshal
+
+package sys.marshal {
+    export internal.marshal
+}

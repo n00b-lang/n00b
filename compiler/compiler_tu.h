@@ -216,7 +216,8 @@ bool n00bb_bind_option_condition_shadows(parse_grammar_t *grammar,
                                          parse_scope_t *scope,
                                          parse_tree_t *condition, bool truth,
                                          parse_tree_t *region,
-                                         parse_tree_t *after);
+                                         parse_tree_t *after,
+                                         bool paths_only);
 bool n00bb_bind_option_branch_shadow(parse_grammar_t *grammar,
                                      core_translation_unit_t *unit,
                                      parse_tree_t *body, parse_tree_t *branch);
@@ -450,6 +451,7 @@ typedef struct {
     bool intrinsic_operator;
     bool semantic_dispatch;
     bool secondary_dispatch;
+    bool optional_dispatch;
     bool in_module_initializer;
 } n00bb_link_use_site_t;
 core_list_decl(n00bb_link_use_site_t);
@@ -500,10 +502,17 @@ typedef struct {
 core_list_decl(n00bb_option_path_t);
 
 typedef struct {
+    ir_func_t *producer;
+    ir_global_t *global;
+} n00bb_literal_constant_t;
+core_list_decl(n00bb_literal_constant_t);
+
+typedef struct {
     core_translation_unit_t *unit;
     n00bb_lex_result_t *lex;
     parse_annot_result_t *annotations;
     core_list_t(parse_tree_ptr_t) module_top_level_statements;
+    core_list_t(n00bb_literal_constant_t) literal_constants;
     core_list_t(parse_tree_ptr_t) array_type_nodes;
     core_list_t(n00bb_user_litmod_t) literal_modifiers;
     core_list_t(n00bb_package_declaration_t) package_declarations;
@@ -514,10 +523,10 @@ typedef struct {
     core_list_t(parse_tree_ptr_t) literal_site_nodes;
     core_dict_t flagset_values;
     core_link_unit_t *link;
+    core_diag_location_t build_time_use;
     n00bb_link_analysis_t *link_analysis;
     th_ctx *types;
     ir_module_t *ir_module;
-    ir_module_t *comptime_ir_module;
     core_arena_t semantic_values;
     core_csp_store_t *integer_range_store;
     parse_tree_t *integer_range_root;
@@ -921,6 +930,9 @@ bool semantic_annotate_closure(parse_grammar_t *grammar, th_ctx *types,
     void *context);
 bool is_reference_symbol(parse_sym_entry_t *symbol);
 bool is_integer_type(th_type *type);
+bool n00bb_static_integer_expression(parse_grammar_t *grammar,
+                                     parse_tree_t *expression, th_type *type,
+                                     uint64_t *value);
 bool validate_cached_array_dimensions(parse_grammar_t *grammar,
     core_translation_unit_t *unit, n00bb_tu_state_t *state);
 bool select_storage_classes(core_list_t(core_translation_unit_ptr_t) *units);
@@ -967,9 +979,8 @@ bool scope_in_value_namespace(parse_scope_t *scope);
 bool is_named_type_declaration(parse_grammar_t *grammar,
                                parse_sym_entry_t *symbol);
 bool field_record_declaration(parse_grammar_t *grammar, parse_tree_t *node);
-parse_sym_phase_t lexical_execution_phase(parse_grammar_t *grammar,
-                                          parse_tree_t *node);
-bool declared_in_comptime(parse_grammar_t *grammar, parse_tree_t *node);
+void n00bb_set_build_time(bool build_time);
+parse_sym_phase_t n00bb_compile_phase(void);
 bool scope_is_within_function(parse_scope_t *scope);
 bool scope_is_within(parse_scope_t *scope, parse_scope_t *ancestor);
 bool scope_has_lexical_lifetime(parse_scope_t *scope);
@@ -1009,9 +1020,6 @@ ir_shape_t *array_shape_from_declaration(parse_grammar_t *grammar,
     parse_sym_entry_t *symbol, th_type *semantic_type, bool *complete);
 bool populate_unit_symbol_shapes(parse_grammar_t *grammar,
     ir_ctx_t *ir_context, core_translation_unit_t *unit);
-uint32_t initializer_phase_for_site(parse_grammar_t *grammar,
-    core_translation_unit_t *unit, parse_tree_t *site,
-    parse_sym_entry_t *initializer_owner);
 void signature_typevars_for_symbol(parse_sym_entry_t *symbol,
     core_list_t(n00bb_typevar_binding_t) *out);
 th_type *type_variable_for_signature(th_ctx *types,
@@ -1095,6 +1103,8 @@ bool package_tree_syntax_index(parse_grammar_t *grammar, parse_tree_t *tree,
                                core_buffer_t *names);
 bool n00bb_tu_remember_selected_when_body(void *opaque,
     core_translation_unit_t *unit, parse_tree_t *body);
+bool n00bb_tu_remember_build_time_use(void *opaque,
+    core_translation_unit_t *unit, parse_tree_t *node);
 void finalize_module_inference(core_translation_unit_t *unit);
 void propagate_tree_type_to_wrappers(parse_tree_t *node, th_ctx *types,
                                      th_type *previous, th_type *type);

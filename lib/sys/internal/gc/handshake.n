@@ -85,7 +85,7 @@ func sweep_stopped_blocks(heap: Ref[internal.gc.core.Heap],
 func respond(heap: Ref[internal.gc.core.Heap], mutator: Ref[internal.gc.core.Mutator],
              kind: u32, mode: Response_Mode) {
     var marker: internal.gc.core.Marker
-    internal.gc.mark.marker_init(ref marker, heap, false)
+    internal.gc.mark.marker_init(marker, heap, false)
     let stopped: bool = mode == Response_Mode.stopped
 
     if kind == cast[u32](internal.gc.core.Handshake_Kind.on) {
@@ -339,7 +339,7 @@ func handshake(heap: Ref[internal.gc.core.Heap], kind: internal.gc.core.Handshak
 
 func help_until_quiescent(heap: Ref[internal.gc.core.Heap]) {
     var marker: internal.gc.core.Marker
-    internal.gc.mark.marker_init(ref marker, heap, false)
+    internal.gc.mark.marker_init(marker, heap, false)
     internal.gc.mark.drain_to_termination(ref marker)
     internal.gc.mark.marker_stats(ref marker)
 }
@@ -367,7 +367,7 @@ func run_handshake_cycle(heap: Ref[internal.gc.core.Heap]) {
 
     handshake(heap, internal.gc.core.Handshake_Kind.on)
     var marker: internal.gc.core.Marker
-    internal.gc.mark.marker_init(ref marker, heap, false)
+    internal.gc.mark.marker_init(marker, heap, false)
     internal.gc.sync.ticket_lock(ref heap.lock)
     internal.gc.collect.mark_global_roots(ref marker)
     internal.gc.finalize.mark_locked(ref marker)
@@ -390,7 +390,7 @@ func run_handshake_cycle(heap: Ref[internal.gc.core.Heap]) {
         __atomic_store(ref heap.round_dirty, false)
         handshake(heap, internal.gc.core.Handshake_Kind.scan)
 
-        internal.gc.mark.marker_init(ref marker, heap, false)
+        internal.gc.mark.marker_init(marker, heap, false)
         internal.gc.sync.ticket_lock(ref heap.lock)
         internal.gc.collect.mark_global_roots(ref marker)
         internal.gc.mark.barrier_queue_drain(ref marker)
@@ -409,7 +409,7 @@ func run_handshake_cycle(heap: Ref[internal.gc.core.Heap]) {
         round += 1
     }
 
-    internal.gc.mark.marker_init(ref marker, heap, false)
+    internal.gc.mark.marker_init(marker, heap, false)
     internal.gc.sync.ticket_lock(ref heap.lock)
     internal.gc.finalize.find_dead_locked(ref marker)
     internal.gc.heap.unlock(heap)

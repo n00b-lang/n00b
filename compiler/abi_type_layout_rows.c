@@ -1,3 +1,4 @@
+#include "abi_trace_leaf.h"
 #include "abi_type_layout_rows.h"
 
 #include <limits.h>
@@ -98,18 +99,12 @@ trace_need(trace_source_t *source, uint32_t type_index)
         return TRACE_UNKNOWN;
     }
     trace_need_t result = TRACE_NONE;
-    switch (type->kind) {
-    case N00B_ABI_TYPE_REFERENCE:
-    case N00B_ABI_TYPE_ARRAY:
-    case N00B_ABI_TYPE_VIEW:
-    case N00B_ABI_TYPE_STRING:
-    case N00B_ABI_TYPE_BOX:
-    case N00B_ABI_TYPE_CALLBACK:
-    case N00B_ABI_TYPE_TRAIT:
-    case N00B_ABI_TYPE_UNION:
-        result = type->size_bits && type->alignment_bytes
+    if (n00bb_abi_traced_leaf(type)) {
+        source->need[type_index] = type->size_bits && type->alignment_bytes
             ? TRACE_PRESENT : TRACE_UNKNOWN;
-        break;
+        return source->need[type_index];
+    }
+    switch (type->kind) {
     case N00B_ABI_TYPE_RECORD:
     case N00B_ABI_TYPE_TUPLE:
     case N00B_ABI_TYPE_VARIANT: {
@@ -375,82 +370,6 @@ append_traces(trace_source_t *source,
 }
 
 static bool
-same_name(const char *left, const char *right)
-{
-    return left == right || (left && right && !strcmp(left, right));
-}
-
-static bool
-same_runs(const ir_layout_bit_run_t *left, const ir_layout_bit_run_t *right,
-          size_t count)
-{
-    if (count && (!left || !right)) return false;
-    for (size_t i = 0; i < count; i++)
-        if (left[i].offset != right[i].offset
-            || left[i].width != right[i].width) return false;
-    return true;
-}
-
-static bool
-same_accesses(const ir_layout_access_t *left,
-              const ir_layout_access_t *right, size_t count)
-{
-    if (count && (!left || !right)) return false;
-    for (size_t i = 0; i < count; i++)
-        if (left[i].unit_bit_offset != right[i].unit_bit_offset
-            || left[i].unit_width_bits != right[i].unit_width_bits
-            || left[i].lsb != right[i].lsb
-            || left[i].value_width_bits != right[i].value_width_bits)
-            return false;
-    return true;
-}
-
-static bool
-same_layout(ir_module_t *module, const ir_final_layout_t *left,
-            const ir_final_layout_t *right)
-{
-    if (!left || !right) return left == right;
-    if (left->intrinsic_bits != right->intrinsic_bits
-        || left->alignment_bytes != right->alignment_bytes
-        || left->n_occupied != right->n_occupied
-        || left->n_reserved != right->n_reserved
-        || left->n_members != right->n_members
-        || left->has_discriminant != right->has_discriminant
-        || left->discriminant_is_niche != right->discriminant_is_niche
-        || !same_runs(left->occupied, right->occupied, left->n_occupied)
-        || !same_runs(left->reserved, right->reserved, left->n_reserved)
-        || left->member_overlap_region.offset
-            != right->member_overlap_region.offset
-        || left->member_overlap_region.width
-            != right->member_overlap_region.width
-        || !same_accesses(&left->discriminant, &right->discriminant, 1))
-        return false;
-    if (left->n_members && (!left->members || !right->members)) return false;
-    for (size_t i = 0; i < left->n_members; i++) {
-        const ir_final_member_layout_t *a = &left->members[i];
-        const ir_final_member_layout_t *b = &right->members[i];
-        if (!same_name(a->name, b->name) || a->ordinal != b->ordinal
-            || a->bit_offset != b->bit_offset
-            || a->inline_element_count != b->inline_element_count
-            || a->inline_element_stride_bits
-                != b->inline_element_stride_bits
-            || a->n_occupied != b->n_occupied
-            || a->n_accesses != b->n_accesses
-            || !same_runs(a->occupied, b->occupied, a->n_occupied)
-            || !same_accesses(a->accesses, b->accesses, a->n_accesses)
-            || (a->inline_element_type != b->inline_element_type
-                && (!a->inline_element_type || !b->inline_element_type
-                    || ir_type_id(module, a->inline_element_type)
-                        != ir_type_id(module, b->inline_element_type)))
-            || (a->type != b->type
-                && (!a->type || !b->type
-                    || ir_type_id(module, a->type)
-                        != ir_type_id(module, b->type)))) return false;
-    }
-    return true;
-}
-
-static bool
 append_runs(const ir_layout_bit_run_t *source, size_t count,
             uint64_t extent_bits, uint32_t stream_base,
             core_list_t(n00b_abi_physical_run_v1) *runs,
@@ -674,9 +593,8 @@ append_members(n00bb_abi_type_index_t *index,
 
 bool
 n00bb_abi_type_layout_rows_build(
-    n00bb_abi_type_index_t *index, ir_module_t *comptime,
-    ir_module_t *runtime, bool include_external_definitions,
-    uint32_t stream_base,
+    n00bb_abi_type_index_t *index, ir_module_t *runtime,
+    bool include_external_definitions, uint32_t stream_base,
     const n00bb_abi_decl_index_t *declarations,
     n00bb_abi_name_pool_t *names,
     n00bb_abi_type_identity_rows_t *types,
@@ -685,11 +603,7 @@ n00bb_abi_type_layout_rows_build(
     if (failed_type_index) *failed_type_index = UINT32_MAX;
     if (!index || !runtime || !ir_module_target(runtime) || !types
         || !types->rows || !out
-        || types->count != n00bb_abi_type_index_count(index)
-        || (comptime && (ir_module_types(comptime)
-                != ir_module_types(runtime)
-            || !ir_module_target(comptime)
-            || strcmp(ir_module_target(comptime), ir_module_target(runtime)))))
+        || types->count != n00bb_abi_type_index_count(index))
         return false;
     core_list_t(n00b_abi_layout_v1) layouts = {0};
     core_list_t(n00b_abi_physical_run_v1) runs = {0};
@@ -719,27 +633,17 @@ n00bb_abi_type_layout_rows_build(
             type);
         const ir_final_layout_t *final = ir_layout_final(
             runtime, type, ir_module_target(runtime));
-        const ir_final_layout_t *compile_layout = comptime
-            ? ir_layout_final(comptime, type, ir_module_target(runtime))
-            : nullptr;
         size_t named_arguments = 0;
         bool specialization = th_named_info(th_resolve(type), nullptr,
             nullptr, nullptr, &named_arguments) && named_arguments != 0;
         if (!include_external_definitions
             && (!types->owners || !types->owners[i])
             && definition_owner && definition_owner != runtime
-            && definition_owner != comptime
             && types->rows[i].kind != N00B_ABI_TYPE_ATOMIC
-            && (!specialization || (!final && !compile_layout))) {
+            && (!specialization || !final)) {
             types->rows[i].flags &= ~N00B_ABI_TYPE_FLAG_PACKABLE;
             continue;
         }
-        if (final && compile_layout
-            && !same_layout(runtime, final, compile_layout)) {
-            valid = false;
-            break;
-        }
-        if (!final) final = compile_layout;
         if (!final) {
             if (types->rows[i].flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE)
                 continue;

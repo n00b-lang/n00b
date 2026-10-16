@@ -10,8 +10,6 @@ func value(x: string) -> Array[string] {
     return ["static"'raw_nested, x]'bundle_nested
 }
 
-comptime {
-}
 
 func run_test() {
     value("dynamic")

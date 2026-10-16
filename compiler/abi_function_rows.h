@@ -14,8 +14,7 @@ typedef struct {
     size_t function_count;
     uint32_t *stream_indexes;
     size_t stream_index_count;
-    uint32_t comptime_initializer_index;
-    uint32_t runtime_initializer_index;
+    uint32_t initializer_index;
 } n00bb_abi_function_rows_t;
 
 bool n00bb_abi_function_rows_build(
@@ -24,8 +23,7 @@ bool n00bb_abi_function_rows_build(
     const n00bb_abi_type_identity_rows_t *types,
     const n00bb_abi_type_signatures_t *signatures,
     uint32_t signature_stream_base, uint32_t stream_base,
-    ir_module_t *comptime, ir_module_t *runtime,
-    n00bb_abi_name_pool_t *names,
+    ir_module_t *module, n00bb_abi_name_pool_t *names,
     n00bb_abi_declaration_lookup_fn lookup, void *lookup_context,
     n00bb_abi_function_rows_t *out);
 void n00bb_abi_function_rows_release(n00bb_abi_function_rows_t *rows);

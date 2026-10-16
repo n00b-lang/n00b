@@ -6,7 +6,7 @@ litmod<quotes> is_no, no(raw: string) -> bool fail: string {
     return false
 }
 
-comptime {
+when comptime() {
     require "yes"'yes
     require "no"'no == false
 }

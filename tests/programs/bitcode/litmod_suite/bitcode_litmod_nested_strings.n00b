@@ -15,7 +15,7 @@ func observe(items: Array[Array[string]]) {
     require true
 }
 
-comptime {
+when comptime() {
     observe([["a comptime long string payload", "five"]'array,
                    ["six"]'array]'bundle_nested_strings)
 }

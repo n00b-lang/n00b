@@ -1,6 +1,8 @@
-comptime {
+func comptime_start() -> nil {
     var compile_count: i32 = __fd_write(1, "compile")
-} else {
+}
+
+func start() -> nil {
     var runtime_count: i32 = __fd_write(1, "runtime")
     var long_count: i32 = __fd_write(1, "0123456789abcdef0123456789abcdef")
 }

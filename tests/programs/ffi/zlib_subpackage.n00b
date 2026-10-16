@@ -1,13 +1,11 @@
 import archive
 
-comptime {} else {
-    let text: Array[u8] = [97, 98, 99, 97, 98, 99, 97, 98, 99]
-    try {
-        let packed = archive.zlib.compress(text, 9)!
-        let unpacked = archive.zlib.uncompress(32, packed)!
-        require __array_length(unpacked) == 9
-        require unpacked[8] == 99
-    } else failure {
-        require false
-    }
+let text: Array[u8] = [97, 98, 99, 97, 98, 99, 97, 98, 99]
+try {
+    let packed = archive.zlib.compress(text, 9)!
+    let unpacked = archive.zlib.uncompress(32, packed)!
+    require __array_length(unpacked) == 9
+    require unpacked[8] == 99
+} else failure {
+    require false
 }

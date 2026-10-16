@@ -18,20 +18,18 @@ func pick(v: int) fail: string {
     return v + 1
 }
 
-comptime {} else {
-    var failed = false
-    try {
-        check(1)!
-        check_return(1)!
-        check(-1)!
-        require false
-    } else e {
-        failed = e == "negative"
-    }
-    require failed
-    try {
-        require pick(4)! == 5
-    } else e {
-        require false
-    }
+var failed = false
+try {
+    check(1)!
+    check_return(1)!
+    check(-1)!
+    require false
+} else e {
+    failed = e == "negative"
+}
+require failed
+try {
+    require pick(4)! == 5
+} else e {
+    require false
 }

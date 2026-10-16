@@ -13,7 +13,7 @@ fn iter_next(iter: Iter) -> c_int
 fn iter_close(iter: consume ?Iter)
 -]'ffi
 
-func start(seed: i32) -> cursor.Iter {
+func open_iter(seed: i32) -> cursor.Iter {
     let db = cursor.db_open(seed)
     return cursor.iter_new(db)
 }
@@ -27,18 +27,16 @@ func churn() {
     }
 }
 
-comptime {} else {
-    var k: i32 = 0
-    while k < 100 {
-        var iter = start(k)
-        churn()
-        require cursor.iter_next(iter) == k
-        require cursor.iter_next(iter) == k + 1
-        try {
-            cursor.close(iter)!
-        } else failure {
-            require false
-        }
-        k = k + 1
+var k: i32 = 0
+while k < 100 {
+    var iter = open_iter(k)
+    churn()
+    require cursor.iter_next(iter) == k
+    require cursor.iter_next(iter) == k + 1
+    try {
+        cursor.close(iter)!
+    } else failure {
+        require false
     }
+    k = k + 1
 }

@@ -1085,6 +1085,7 @@ eval_builtin(pp_context_t *ctx, parse_tree_t *call, pp_value_t *out)
             kind = PP_STRING;
         else if (core_string_eq(name, CORE_STRING_STATIC("target_is_little_endian"))
                  || core_string_eq(name, CORE_STRING_STATIC("debug_enabled"))
+                 || core_string_eq(name, CORE_STRING_STATIC("comptime"))
                  || core_string_eq(name, CORE_STRING_STATIC("preproc_env_defines"))
                  || core_string_eq(name, CORE_STRING_STATIC("preproc_defines")))
             kind = PP_BOOL;
@@ -1171,6 +1172,17 @@ eval_builtin(pp_context_t *ctx, parse_tree_t *call, pp_value_t *out)
     if (core_string_eq(name, CORE_STRING_STATIC("debug_enabled"))) {
         *out = (pp_value_t){.kind = PP_BOOL,
             .as.boolean = !ctx->options || !ctx->options->release_mode};
+        return true;
+    }
+    if (core_string_eq(name, CORE_STRING_STATIC("comptime"))) {
+        if (ctx->options && ctx->options->build_time_use
+            && !ctx->options->build_time_use(
+                ctx->options->selected_body_context, ctx->unit, call)) {
+            pp_error(ctx, call, "cannot record the comptime() use");
+            return false;
+        }
+        *out = (pp_value_t){.kind = PP_BOOL,
+            .as.boolean = ctx->options && ctx->options->build_time};
         return true;
     }
     if (core_string_eq(name, CORE_STRING_STATIC("preproc_utc_year"))) PP_INT(ctx->utc_time.tm_year + 1900);
@@ -1616,7 +1628,7 @@ n00bb_preprocessor_builtin_name(core_string_t name)
     static const char *names[] = {
         "target_os", "target_os_major", "target_os_minor", "target_os_patch",
         "target_arch", "target_alu", "target_is_little_endian",
-        "debug_enabled",
+        "debug_enabled", "comptime",
         "preproc_utc_year", "preproc_utc_month", "preproc_utc_day",
         "preproc_utc_hour", "preproc_utc_minute", "preproc_utc_second",
         "n00b_major", "n00b_minor", "n00b_patch", "n00b_impl",
@@ -1936,6 +1948,10 @@ replace_builtin(pp_context_t *ctx, parse_visit_t *visit)
         || core_string_eq(name, CORE_STRING_STATIC("compile_warning"))
         || core_string_eq(name, CORE_STRING_STATIC("compile_error")))
         return false;
+    if (core_string_eq(name, CORE_STRING_STATIC("comptime"))) {
+        pp_error(ctx, node, "comptime() may only be used in a when condition");
+        return false;
+    }
     pp_value_t value;
     if (!eval_builtin(ctx, node, &value)) return false;
     parse_tree_t *primary = make_value_literal(ctx, value);
@@ -2206,6 +2222,20 @@ preprocess_prepare(parse_visit_t *visit)
         || is_name(ctx->grammar, node, "try-body");
     frame->binding_mark = ctx->bindings.len;
 
+    if (is_name(ctx->grammar, node, "func-def") && !frame->current_body
+        && !(ctx->options && ctx->options->build_time)
+        && core_tree_num_children(node) > 1
+        && core_string_eq(leaf_text(ctx, core_tree_child(node, 1)),
+                          CORE_STRING_STATIC("comptime_start"))) {
+        if (ctx->options->build_time_use
+            && !ctx->options->build_time_use(
+                ctx->options->selected_body_context, ctx->unit, node)) {
+            pp_error(ctx, node, "cannot record the comptime_start() use");
+            return PARSE_VISIT_ERROR;
+        }
+        visit->remove = true;
+        return PARSE_VISIT_CONTINUE;
+    }
     if (is_name(ctx->grammar, node, "func-def")
         && !register_litmod_declaration(ctx, node)) return PARSE_VISIT_ERROR;
     if (is_name(ctx->grammar, node, "import-stmt")) {

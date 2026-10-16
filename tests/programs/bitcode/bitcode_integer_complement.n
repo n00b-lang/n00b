@@ -1,10 +1,7 @@
-comptime {
-} else {
-    let word: u32 = 0x80000000
-    assert ~word == 0x7fffffff
-    let narrow: bits:5 = cast[bits:5] 5
-    assert ~narrow == cast[bits:5] 26
-    let signed: i:5 = cast[i:5] 0
-    assert unsafe_not(signed) == cast[i:5] -1
-    __fd_write(2, "ok")
-}
+let word: u32 = 0x80000000
+assert ~word == 0x7fffffff
+let narrow: bits:5 = cast[bits:5] 5
+assert ~narrow == cast[bits:5] 26
+let signed: i:5 = cast[i:5] 0
+assert unsafe_not(signed) == cast[i:5] -1
+__fd_write(2, "ok")

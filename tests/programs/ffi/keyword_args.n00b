@@ -43,24 +43,22 @@ binding {
 }
 -]'ffi
 
-comptime {} else {
-    try {
-        var defaults = kw.db_open("defaults")!
-        require kw.db_present(defaults) == 0
-        require kw.db_timeout(defaults) == 30000
-        var tuned = kw.db_open("tuned", timeout_ms = 5, cache_kb = 64)!
-        require kw.db_present(tuned) == 5
-        require kw.db_timeout(tuned) == 5
-        require kw.db_cache(tuned) == 64
-        require kw.db_flags(tuned) == 804
-        require kw.db_flags(tuned, flags = 9) == 809
-        require kw.db_depth(tuned) == 3
-        require kw.db_depth(tuned, depth = 7) == 7
-        let limits: kw.Db_Limit_Options = (max_rows = 50, min_rows = nil)
-        require kw.db_limit(tuned, limits) == 49999
-        kw.close(defaults)!
-        kw.close(tuned)!
-    } else failure {
-        require false
-    }
+try {
+    var defaults = kw.db_open("defaults")!
+    require kw.db_present(defaults) == 0
+    require kw.db_timeout(defaults) == 30000
+    var tuned = kw.db_open("tuned", timeout_ms = 5, cache_kb = 64)!
+    require kw.db_present(tuned) == 5
+    require kw.db_timeout(tuned) == 5
+    require kw.db_cache(tuned) == 64
+    require kw.db_flags(tuned) == 804
+    require kw.db_flags(tuned, flags = 9) == 809
+    require kw.db_depth(tuned) == 3
+    require kw.db_depth(tuned, depth = 7) == 7
+    let limits: kw.Db_Limit_Options = (max_rows = 50, min_rows = nil)
+    require kw.db_limit(tuned, limits) == 49999
+    kw.close(defaults)!
+    kw.close(tuned)!
+} else failure {
+    require false
 }

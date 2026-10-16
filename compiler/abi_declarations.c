@@ -219,13 +219,7 @@ symbol_attributes(const parse_sym_entry_t *symbol, n00b_abi_symbol_v1 *row)
             : N00B_ABI_VISIBILITY_PRIVATE;
     if (exported)
         row->flags |= N00B_ABI_SYMBOL_FLAG_EXPORTED;
-    row->phase_mask = (uint32_t)symbol->phases;
-    row->mutable_phase_mask = (uint32_t)symbol->mutable_phases;
-    row->initializer_phase_mask = (uint32_t)symbol->initializer_phases;
     row->storage_duration = (uint32_t)symbol->storage_duration;
-    uint32_t valid_phases = N00B_ABI_PHASE_COMPTIME | N00B_ABI_PHASE_RUNTIME;
-    if ((row->phase_mask | row->mutable_phase_mask
-         | row->initializer_phase_mask) & ~valid_phases) return false;
     switch (symbol->mutability) {
     case PARSE_SYM_MUTABLE:
     case PARSE_SYM_GLOBAL:

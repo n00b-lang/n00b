@@ -1,27 +1,24 @@
 import sys.abi
 
-comptime {
+let maybe_row: Ref[sys.abi.Type_Record]? = sys.abi.type_at(0)
+if maybe_row != nil {
+    let row: Ref[sys.abi.Type_Record] = maybe_row.get()
+    assert __abi_ref_address(row) != 0
+    let bits: Ref[u64] = ref row.size_bits
+    assert __abi_ref_address(bits) != 0
+    let zero: u64 = 0
+    assert row.size_bits == zero
+    assert sys.abi.range_index(row.components, 0) == sys.abi.range_index(row.components, 1)
 } else {
-    let maybe_row: Ref[sys.abi.Type_Record]? = sys.abi.type_at(0)
-    if maybe_row != nil {
-        let row: Ref[sys.abi.Type_Record] = maybe_row.get()
-        assert __abi_ref_address(row) != 0
-        let bits: Ref[u64] = ref row.size_bits
-        assert __abi_ref_address(bits) != 0
-        let zero: u64 = 0
-        assert row.size_bits == zero
-        assert sys.abi.range_index(row.components, 0) == sys.abi.range_index(row.components, 1)
-    } else {
-        assert false
-    }
-    let array_probe: Ref[sys.abi.Array_Descriptor_Header]? = nil
-    let array_row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(typeof(array_probe))
-    if array_row != nil {
-        let expected_size: uint = 24
-        assert sys.abi.size_bytes(array_row.get()) == expected_size
-    } else {
-        require false
-    }
-    assert sys.abi.frame_layout_at(0xffffffff) == nil
-    assert __abi_bytes(0, 0xffffffff) == nil
+    assert false
 }
+let array_probe: Ref[sys.abi.Array_Descriptor_Header]? = nil
+let array_row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(typeof(array_probe))
+if array_row != nil {
+    let expected_size: uint = 24
+    assert sys.abi.size_bytes(array_row.get()) == expected_size
+} else {
+    require false
+}
+assert sys.abi.frame_layout_at(0xffffffff) == nil
+assert __abi_bytes(0, 0xffffffff) == nil

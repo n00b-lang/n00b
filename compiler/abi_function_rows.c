@@ -96,22 +96,20 @@ n00bb_abi_function_rows_build(
     const n00bb_abi_type_identity_rows_t *types,
     const n00bb_abi_type_signatures_t *signatures,
     uint32_t signature_stream_base, uint32_t stream_base,
-    ir_module_t *comptime, ir_module_t *runtime,
-    n00bb_abi_name_pool_t *names,
+    ir_module_t *module, n00bb_abi_name_pool_t *names,
     n00bb_abi_declaration_lookup_fn lookup, void *lookup_context,
     n00bb_abi_function_rows_t *out)
 {
     if (!index || !declarations || !types || !types->rows || !signatures
         || !signatures->signatures || !signatures->parameters
-        || !comptime || !runtime || !names || !out) return false;
+        || !module || !names || !out) return false;
     core_list_t(n00b_abi_function_v1) rows = {0};
     core_list_t(ir_func_ptr_t) bindings = {0};
     core_list_t(uint32_t) stream = {0};
     core_list_push(rows, ((n00b_abi_function_v1){0}));
     core_list_push(bindings, nullptr);
     bool valid = true;
-    uint32_t comptime_initializer_index = 0;
-    uint32_t runtime_initializer_index = 0;
+    uint32_t initializer_index = 0;
     for (size_t i = 1; valid && i < n00bb_abi_decl_symbol_count(declarations);
          i++) {
         parse_sym_entry_t *symbol = n00bb_abi_decl_symbol_at(declarations,
@@ -132,18 +130,14 @@ n00bb_abi_function_rows_build(
             ? lookup(lookup_context, symbol) : nullptr;
         ir_func_t *function = declaration ? core_link_declaration_binding(
             declaration, CORE_STRING_STATIC("n00bb.ir.function")) : nullptr;
-        ir_func_t *compile_function = declaration
-            ? core_link_declaration_binding(declaration,
-                CORE_STRING_STATIC("n00bb.ir.comptime.function")) : nullptr;
         uint32_t type_index = 0, scope_index = 0;
         uint64_t ir_signature_hash = function && function->type
-            ? th_hash(ir_module_types(runtime), function->type) : 0;
+            ? th_hash(ir_module_types(module), function->type) : 0;
         uint64_t source_signature_hash = symbol->type
-            ? th_hash(ir_module_types(runtime), symbol->type) : 0;
-        if (!function || function->owner != runtime
+            ? th_hash(ir_module_types(module), symbol->type) : 0;
+        if (!function || function->owner != module
             || !ir_signature_hash
             || ir_signature_hash != source_signature_hash
-            || (compile_function && compile_function->owner != comptime)
             || !n00bb_abi_type_index_find(index, symbol->type, &type_index)
             || type_index >= types->count
             || types->rows[type_index].kind != N00B_ABI_TYPE_FUNCTION
@@ -213,15 +207,12 @@ n00bb_abi_function_rows_build(
         }
     }
     if (valid) valid = append_module_initializer(index, types, declarations,
-        comptime, names, &rows, &bindings, &comptime_initializer_index)
-        && append_module_initializer(index, types, declarations, runtime,
-            names, &rows, &bindings, &runtime_initializer_index);
+        module, names, &rows, &bindings, &initializer_index);
     if (valid) *out = (n00bb_abi_function_rows_t){
         .functions = rows.data, .ir_functions = bindings.data,
         .function_count = rows.len,
         .stream_indexes = stream.data, .stream_index_count = stream.len,
-        .comptime_initializer_index = comptime_initializer_index,
-        .runtime_initializer_index = runtime_initializer_index,
+        .initializer_index = initializer_index,
     };
     else {
         core_list_free(rows);

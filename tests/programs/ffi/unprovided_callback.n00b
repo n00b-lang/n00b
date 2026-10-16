@@ -16,13 +16,11 @@ func descending(a: uint, b: uint) -> i32 {
     return cast[i32]sorter.byte_at_raw(b) - cast[i32]sorter.byte_at_raw(a)
 }
 
-comptime {} else {
-    let items: Array[u8] = [3, 9, 1, 7]
-    try {
-        require sorter.nth_sorted(items, 0)! == 9
-        require sorter.nth_sorted(items, 1)! == 7
-        require sorter.nth_sorted(items, 3)! == 1
-    } else failure {
-        require false
-    }
+let items: Array[u8] = [3, 9, 1, 7]
+try {
+    require sorter.nth_sorted(items, 0)! == 9
+    require sorter.nth_sorted(items, 1)! == 7
+    require sorter.nth_sorted(items, 3)! == 1
+} else failure {
+    require false
 }

@@ -14,8 +14,6 @@ func empty_set() -> Array[int] {
     return {}'mirror
 }
 
-comptime {
-}
 
 func run_test() {
     static_set()

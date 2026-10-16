@@ -407,6 +407,25 @@ func array_flat_element(type_index: u32, flat_rank: u32)
     return internal.abi.type_at(index)
 }
 
+func array_descriptor_bytes(shape: Ref[internal.abi.Array_Descriptor_Header]
+                           ) -> uint {
+    let shape_row: Ref[internal.abi.Type_Record]?
+    shape_row = internal.abi.reference_target(typeof(shape))
+
+    if shape_row == nil {
+        return 0
+    }
+
+    let maximum:      uint = ~cast[uint](0)
+    let header_bytes: uint = internal.abi.size_bytes(shape_row.get())
+
+    if cast[uint](shape.rank) > (maximum - header_bytes) / 8 {
+        return 0
+    }
+
+    return header_bytes + cast[uint](shape.rank) * 8
+}
+
 func array_backing_offset(type_index: u32,
                           shape     : Ref[internal.abi.Array_Descriptor_Header]
                          ) -> uint {
@@ -427,22 +446,14 @@ func array_backing_offset(type_index: u32,
         return 0
     }
 
-    let shape_row: Ref[internal.abi.Type_Record]?
-    shape_row = internal.abi.reference_target(typeof(shape))
+    let maximum:          uint = ~cast[uint](0)
+    let descriptor_bytes: uint = array_descriptor_bytes(shape)
 
-    if shape_row == nil {
+    if descriptor_bytes == 0 {
         return 0
     }
 
-    let maximum:      uint = ~cast[uint](0)
-    let header_bytes: uint = internal.abi.size_bytes(shape_row.get())
-
-    if cast[uint](shape.rank) > (maximum - header_bytes) / 8 {
-        return 0
-    }
-
-    let descriptor_bytes: uint = header_bytes + cast[uint](shape.rank) * 8
-    var data_alignment:   uint = alignment
+    var data_alignment: uint = alignment
 
     if data_alignment < 8 {
         data_alignment = 8
@@ -531,11 +542,7 @@ func resolve_layout() {
     block_header_line_count = resolve_header_lines()
 }
 
-comptime {
-    /* nada, runtime init only */
-} else {
-    resolve_layout()
-}
+resolve_layout()
 
 inline func object_header_bytes() -> uint {
     return object_header_size

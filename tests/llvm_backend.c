@@ -41,8 +41,6 @@ main(void)
         .name = "llvm-test", .scalars = scalars, .n_scalars = 5,
     };
     const char *target = "x86_64-unknown-linux-gnu";
-    ir_module_t *comptime = ir_module_new(context, "probe$comptime",
-                                         &profile, target);
     ir_module_t *runtime = ir_module_new(context, "probe", &profile, target);
     ir_func_t *function = ir_func_add(runtime, "entry",
         ir_type_parse(runtime, "() -> nil"), IR_LINK_INTERNAL);
@@ -172,23 +170,6 @@ main(void)
         && ir_instr_set_dest(index_load, "array.item", unsigned_type)
         && ir_instr_operand_value(index_load, index_address->dest)
         && ir_instr_operand_value(index_return, index_load->dest));
-    ir_func_t *cached_function = ir_func_add(runtime, "cached_array",
-        ir_type_parse(runtime, "() -> array[uint]"), IR_LINK_INTERNAL);
-    ir_block_t *cached_entry = cached_function
-        ? ir_block_add(cached_function, "entry") : nullptr;
-    ir_instr_t *cached_value = cached_entry
-        ? ir_instr_add(cached_entry, IR_OP_PHASE_RESULT) : nullptr;
-    ir_instr_t *cached_return = cached_entry
-        ? ir_instr_add(cached_entry, IR_OP_RETURN) : nullptr;
-    assert(cached_value && ir_instr_set_dest(cached_value, "cached", array_type)
-        && ir_instr_set_phase_result(context, cached_value, "sample:array")
-        && cached_return && ir_instr_operand_value(cached_return,
-                                                    cached_value->dest));
-    const uint8_t cached_bytes[16] = {[0] = 5, [8] = 6};
-    const n00bb_llvm_phase_array_t phase_array = {
-        .identifier = "sample:array", .bytes = cached_bytes,
-        .count = 2, .element_stride = 8,
-    };
     th_type *string_type = ir_type_parse(runtime, "string");
     ir_func_t *binary_function = ir_func_add(runtime, "binary_literal",
         ir_type_parse(runtime, "() -> string"), IR_LINK_INTERNAL);
@@ -208,19 +189,6 @@ main(void)
         })
         && binary_return
         && ir_instr_operand_value(binary_return, binary_value->dest));
-    ir_func_t *string_function = ir_func_add(runtime, "cached_string",
-        ir_type_parse(runtime, "() -> string"), IR_LINK_INTERNAL);
-    ir_block_t *string_entry = string_function
-        ? ir_block_add(string_function, "entry") : nullptr;
-    ir_instr_t *string_value = string_entry
-        ? ir_instr_add(string_entry, IR_OP_PHASE_RESULT) : nullptr;
-    ir_instr_t *string_return = string_entry
-        ? ir_instr_add(string_entry, IR_OP_RETURN) : nullptr;
-    assert(string_type && string_value
-        && ir_instr_set_dest(string_value, "cached.string", string_type)
-        && ir_instr_set_phase_result(context, string_value, "sample:string")
-        && string_return
-        && ir_instr_operand_value(string_return, string_value->dest));
     th_type *reference_type = ir_type_parse(runtime, "ref[uint]");
     ir_func_t *ref_address_builtin = ir_func_add(runtime, "ref_address_builtin",
         ir_type_parse(runtime, "(ref[uint]) -> uint"), IR_LINK_EXTERN);
@@ -677,19 +645,9 @@ main(void)
             && (!casts[i].checked || ir_instr_add_mod(conversion, "trap"))
             && ir_instr_operand_value(return_value, conversion->dest));
     }
-    static const uint8_t cached_string[] = "a longer static string";
-    const n00bb_llvm_phase_array_t phase_string = {
-        .identifier = "sample:string", .bytes = cached_string,
-        .count = sizeof(cached_string) - 1,
-        .kind = N00BB_LLVM_LITERAL_STRING,
-        .string_encoding = N00B_ABI_STRING_BINARY,
-    };
-    const n00bb_llvm_phase_array_t phase_values[] = {
-        phase_array, phase_string,
-    };
     core_diagnostics_t *diagnostics = core_diagnostics_new();
     n00bb_llvm_backend_t *backend = n00bb_llvm_backend_prepare(
-        comptime, runtime, true, false, diagnostics);
+        runtime, true, false, diagnostics);
     assert(backend);
     n00bb_llvm_type_index_t type_indices[] = {
         {.typehash = th_hash(ir_module_types(runtime), unsigned_type),
@@ -700,496 +658,418 @@ main(void)
          .index = 9},
     };
     assert(n00bb_llvm_backend_bind_type_indices(backend, type_indices, 3));
-    assert(n00bb_llvm_backend_bind_phase_arrays(backend, phase_values, 2));
     assert(core_diagnostics_count(diagnostics) == 0);
 
-    for (int phase = 0; phase < 2; phase++) {
-        core_buffer_t bytes = {0};
-        bool is_comptime = phase == 0;
-        bool wrote = n00bb_llvm_backend_write_bitcode(
-            backend, is_comptime, &bytes, diagnostics);
-        if (!wrote)
-            for (size_t i = 0; i < core_diagnostics_count(diagnostics); i++) {
-                const core_diagnostic_t *diagnostic =
-                    core_diagnostics_at(diagnostics, i);
-                fprintf(stderr, "%s\n", diagnostic->message.data);
-            }
-        assert(wrote);
-        assert(bytes.byte_len > 0);
-        LLVMMemoryBufferRef source = LLVMCreateMemoryBufferWithMemoryRangeCopy(
-            bytes.data, bytes.byte_len, "probe");
-        assert(source);
-        LLVMContextRef reader = LLVMContextCreate();
-        assert(reader);
-        LLVMModuleRef parsed = nullptr;
-        assert(!LLVMParseBitcodeInContext2(reader, source, &parsed));
-        assert(parsed);
-        assert(strcmp(LLVMGetTarget(parsed), target) == 0);
-        LLVMValueRef lowered_thread = LLVMGetNamedGlobal(parsed,
-            "thread_counter");
-        assert((!is_comptime && lowered_thread
-                && LLVMIsThreadLocal(lowered_thread))
-            || (is_comptime && !lowered_thread));
-        if (!is_comptime) {
-            for (size_t i = 0; i < 2; i++) {
-                const char *flag_names[] = {
-                    "__n00bb_initialized.static_global",
-                    "__n00bb_initialized.dynamic_global",
-                };
-                const char *function_names[] = {
-                    "probe.read_static", "probe.read_dynamic",
-                };
-                LLVMValueRef flag = LLVMGetNamedGlobal(parsed, flag_names[i]);
-                LLVMValueRef reader = LLVMGetNamedFunction(parsed,
-                                                           function_names[i]);
-                assert(flag && reader
-                    && LLVMConstIntGetZExtValue(LLVMGetInitializer(flag))
-                        == (i == 0));
-                bool guarded = false;
-                for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(reader);
-                     bb; bb = LLVMGetNextBasicBlock(bb))
-                    for (LLVMValueRef instruction = LLVMGetFirstInstruction(bb);
-                         instruction;
-                         instruction = LLVMGetNextInstruction(instruction))
-                        if (LLVMGetInstructionOpcode(instruction) == LLVMLoad
-                            && LLVMGetOperand(instruction, 0) == flag)
-                            guarded = true;
-                assert(guarded == (i == 1));
-            }
+    core_buffer_t bytes = {0};
+    bool wrote = n00bb_llvm_backend_write_bitcode(backend, &bytes,
+                                                  diagnostics);
+    if (!wrote)
+        for (size_t i = 0; i < core_diagnostics_count(diagnostics); i++) {
+            const core_diagnostic_t *diagnostic =
+                core_diagnostics_at(diagnostics, i);
+            fprintf(stderr, "%s\n", diagnostic->message.data);
         }
-        LLVMValueRef lowered = LLVMGetNamedFunction(parsed, "probe.entry");
-        assert((!is_comptime && lowered) || (is_comptime && !lowered));
-        LLVMValueRef lowered_helper = LLVMGetNamedFunction(parsed,
-            "probe.helper");
-        assert((!is_comptime && lowered_helper)
-            || (is_comptime && !lowered_helper));
-        if (lowered_helper)
-            assert(LLVMCountParams(lowered_helper) == 1
-                && LLVMCountBasicBlocks(lowered_helper) == 1);
-        LLVMValueRef lowered_ref_address = LLVMGetNamedFunction(parsed,
-            "probe.ref_address");
-        assert((!is_comptime && lowered_ref_address)
-            || (is_comptime && !lowered_ref_address));
-        if (lowered_ref_address) {
-            bool converted = false;
-            for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(lowered_ref_address);
-                 bb; bb = LLVMGetNextBasicBlock(bb))
-                for (LLVMValueRef instruction = LLVMGetFirstInstruction(bb);
-                     instruction; instruction = LLVMGetNextInstruction(instruction))
-                    if (LLVMGetInstructionOpcode(instruction) == LLVMPtrToInt)
-                        converted = true;
-            assert(converted);
-            assert(!LLVMGetNamedFunction(parsed,
-                "n00b_builtin_abi_ref_address"));
-        }
-        LLVMValueRef lowered_barrier = LLVMGetNamedFunction(parsed,
-            "probe.barrier_store");
-        assert((!is_comptime && lowered_barrier)
-            || (is_comptime && !lowered_barrier));
-        if (lowered_barrier) {
-            LLVMValueRef barrier = LLVMGetNamedFunction(parsed,
-                "sys.internal.gc.alloc.barrier_pointer_runtime");
-            bool found_barrier = false;
-            bool found_store = false;
-            for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(lowered_barrier);
-                 bb; bb = LLVMGetNextBasicBlock(bb))
-                for (LLVMValueRef instruction = LLVMGetFirstInstruction(bb);
-                     instruction; instruction = LLVMGetNextInstruction(instruction)) {
-                    if (LLVMGetInstructionOpcode(instruction) == LLVMCall
-                        && LLVMGetCalledValue(instruction) == barrier)
-                        found_barrier = true;
-                    if (LLVMGetInstructionOpcode(instruction) == LLVMStore)
-                        found_store = true;
-                }
-            assert(!found_barrier && found_store);
-        }
-        LLVMValueRef lowered_heap_store = LLVMGetNamedFunction(parsed,
-            "probe.barrier_heap_store");
-        assert((!is_comptime && lowered_heap_store)
-            || (is_comptime && !lowered_heap_store));
-        if (lowered_heap_store) {
-            LLVMValueRef barrier = LLVMGetNamedFunction(parsed,
-                "sys.internal.gc.alloc.barrier_pointer_runtime");
-            bool found_barrier = false;
-            bool stored_after_barrier = false;
-            for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(lowered_heap_store);
-                 bb; bb = LLVMGetNextBasicBlock(bb))
-                for (LLVMValueRef instruction = LLVMGetFirstInstruction(bb);
-                     instruction; instruction = LLVMGetNextInstruction(instruction)) {
-                    if (LLVMGetInstructionOpcode(instruction) == LLVMCall
-                        && LLVMGetCalledValue(instruction) == barrier)
-                        found_barrier = true;
-                    else if (found_barrier
-                        && LLVMGetInstructionOpcode(instruction) == LLVMStore)
-                        stored_after_barrier = true;
-                }
-            assert(barrier && found_barrier && stored_after_barrier);
-        }
-        const char *untracked_store_names[] = {
-            "probe.capture_address", "probe.capture_thread_root",
-            "probe.stack_promoted_store",
+    assert(wrote);
+    assert(bytes.byte_len > 0);
+    LLVMMemoryBufferRef source = LLVMCreateMemoryBufferWithMemoryRangeCopy(
+        bytes.data, bytes.byte_len, "probe");
+    assert(source);
+    LLVMContextRef reader = LLVMContextCreate();
+    assert(reader);
+    LLVMModuleRef parsed = nullptr;
+    assert(!LLVMParseBitcodeInContext2(reader, source, &parsed));
+    assert(parsed);
+    assert(strcmp(LLVMGetTarget(parsed), target) == 0);
+    LLVMValueRef lowered_thread = LLVMGetNamedGlobal(parsed,
+        "thread_counter");
+    assert(lowered_thread && LLVMIsThreadLocal(lowered_thread));
+    for (size_t i = 0; i < 2; i++) {
+        const char *flag_names[] = {
+            "__n00bb_initialized.static_global",
+            "__n00bb_initialized.dynamic_global",
         };
-        for (size_t i = 0; i < sizeof(untracked_store_names) / sizeof(untracked_store_names[0]); i++) {
-            LLVMValueRef root_store = LLVMGetNamedFunction(parsed,
-                untracked_store_names[i]);
-            assert((!is_comptime && root_store)
-                || (is_comptime && !root_store));
-            if (!root_store) continue;
-            LLVMValueRef barrier = LLVMGetNamedFunction(parsed,
-                "sys.internal.gc.alloc.barrier_pointer_runtime");
-            for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(root_store);
-                 bb; bb = LLVMGetNextBasicBlock(bb))
-                for (LLVMValueRef instruction = LLVMGetFirstInstruction(bb);
-                     instruction; instruction = LLVMGetNextInstruction(instruction))
-                    assert(LLVMGetInstructionOpcode(instruction) != LLVMCall
-                        || LLVMGetCalledValue(instruction) != barrier);
-        }
-        LLVMValueRef lowered_array = LLVMGetNamedFunction(parsed,
-            "probe.array_literal");
-        assert((!is_comptime && lowered_array)
-            || (is_comptime && !lowered_array));
-        LLVMValueRef lowered_index = LLVMGetNamedFunction(parsed,
-            "probe.array_index");
-        assert((!is_comptime && lowered_index)
-            || (is_comptime && !lowered_index));
-        if (lowered_array)
-            assert(LLVMGetNamedGlobal(parsed,
-                "n00bb.literal.array.descriptor"));
-        LLVMValueRef cached_global = LLVMGetNamedGlobal(parsed,
-            "n00bb.literal.array.cached");
-        assert((!is_comptime && cached_global)
-            || (is_comptime && !cached_global));
-        if (cached_global) {
-            size_t length = 0;
-            const char *bytes = LLVMGetAsString(
-                LLVMGetInitializer(cached_global), &length);
-            assert(bytes && length == sizeof(cached_bytes)
-                && (uint8_t)bytes[0] == 5 && (uint8_t)bytes[8] == 6);
-        }
-        LLVMValueRef string_global = LLVMGetNamedGlobal(parsed,
-            "n00bb.literal.string.data");
-        assert((!is_comptime && string_global)
-            || (is_comptime && !string_global));
-        if (string_global) {
-            size_t length = 0;
-            const char *data = LLVMGetAsString(
-                LLVMGetInitializer(string_global), &length);
-            assert(data && length == sizeof(cached_string) - 1
-                && !memcmp(data, cached_string, length));
-        }
-        LLVMValueRef cached_string_function = LLVMGetNamedFunction(parsed,
-            "probe.cached_string");
-        assert((!is_comptime && cached_string_function)
-            || (is_comptime && !cached_string_function));
-        if (cached_string_function) {
-            LLVMValueRef returned = LLVMGetBasicBlockTerminator(
-                LLVMGetFirstBasicBlock(cached_string_function));
-            LLVMValueRef value = returned ? LLVMGetOperand(returned, 0)
-                                          : nullptr;
-            uint64_t expected = sizeof(cached_string) - 1
-                | ((uint64_t)N00B_ABI_STRING_BINARY
-                    << N00B_ABI_STRING_ENCODING_SHIFT)
-                | ((uint64_t)N00B_ABI_STRING_LONG
-                    << N00B_ABI_STRING_TAG_SHIFT);
-            assert(value && LLVMGetNumOperands(value) == 2
-                && LLVMConstIntGetZExtValue(LLVMGetOperand(value, 1))
-                    == expected);
-        }
-        LLVMValueRef binary = LLVMGetNamedFunction(parsed,
-            "probe.binary_literal");
-        assert((!is_comptime && binary) || (is_comptime && !binary));
-        if (binary) {
-            LLVMValueRef returned = LLVMGetBasicBlockTerminator(
-                LLVMGetFirstBasicBlock(binary));
-            LLVMValueRef value = returned ? LLVMGetOperand(returned, 0)
-                                          : nullptr;
-            n00b_abi_string_v1 expected = {0};
-            memcpy(expected.short_value.bytes, "abc", 3);
-            expected.short_value.selector = 3
-                | (N00B_ABI_STRING_BINARY << 4)
-                | (N00B_ABI_STRING_SHORT << 6);
-            assert(value && LLVMGetNumOperands(value) == 2
-                && LLVMConstIntGetZExtValue(LLVMGetOperand(value, 0))
-                    == expected.words[0]
-                && LLVMConstIntGetZExtValue(LLVMGetOperand(value, 1))
-                    == expected.words[1]);
-        }
-        if (lowered) {
-            assert(LLVMCountBasicBlocks(lowered) == 3);
-            LLVMValueRef terminator = LLVMGetBasicBlockTerminator(
-                LLVMGetLastBasicBlock(lowered));
-            assert(terminator && LLVMGetInstructionOpcode(terminator)
-                == LLVMRet);
-            assert(LLVMGetNamedFunction(parsed,
-                "llvm.uadd.with.overflow.i64"));
-        }
-        LLVMValueRef lowered_allocation = LLVMGetNamedFunction(parsed,
-            "probe.heap_ref");
-        assert((!is_comptime && lowered_allocation)
-            || (is_comptime && !lowered_allocation));
-        if (lowered_allocation) {
-            LLVMValueRef wrapper = lowered_allocation;
-            LLVMValueRef private_entry = LLVMGetNamedFunction(parsed,
-                "probe.heap_ref$gc_mutator");
-            assert(private_entry && LLVMCountParams(private_entry)
-                == LLVMCountParams(lowered_allocation) + 1);
-            lowered_allocation = private_entry;
-            LLVMValueRef allocator = LLVMGetNamedFunction(parsed,
-                "sys.internal.gc.alloc.allocate_runtime_known_on_mutator$gc_mutator");
-            LLVMValueRef getter = LLVMGetNamedFunction(parsed,
-                "sys.internal.gc.alloc.mutator_for_native");
-            bool found = false;
-            bool found_getter = false;
-            for (LLVMBasicBlockRef block = LLVMGetFirstBasicBlock(wrapper);
-                 block; block = LLVMGetNextBasicBlock(block))
-            for (LLVMValueRef value = LLVMGetFirstInstruction(block); value;
-                 value = LLVMGetNextInstruction(value))
-                if (LLVMGetInstructionOpcode(value) == LLVMCall
-                    && LLVMGetCalledValue(value) == getter)
-                    found_getter = true;
-            for (LLVMBasicBlockRef block = LLVMGetFirstBasicBlock(
-                     lowered_allocation); block;
-                 block = LLVMGetNextBasicBlock(block))
-            for (LLVMValueRef value = LLVMGetFirstInstruction(block); value;
-                 value = LLVMGetNextInstruction(value)) {
-                if (LLVMGetInstructionOpcode(value) == LLVMCall)
-                    assert(LLVMGetCalledValue(value) != getter);
-                if (LLVMGetInstructionOpcode(value) != LLVMCall
-                    || LLVMGetCalledValue(value) != allocator) continue;
-                assert(LLVMGetTypeKind(LLVMTypeOf(LLVMGetArgOperand(value, 0)))
-                    == LLVMPointerTypeKind);
-                assert(LLVMConstIntGetZExtValue(LLVMGetArgOperand(value, 1))
-                    == type_indices[0].index);
-                assert(LLVMConstIntGetZExtValue(LLVMGetArgOperand(value, 2))
-                    == 8);
-                assert(LLVMConstIntGetZExtValue(LLVMGetArgOperand(value, 3))
-                    == 8);
-                assert(LLVMConstIntGetZExtValue(LLVMGetArgOperand(value, 4))
-                    == 1);
-                assert(LLVMIsNull(LLVMGetArgOperand(value, 5)));
-                assert(LLVMGetArgOperand(value, 6)
-                    == LLVMGetArgOperand(value, 0));
-                found = true;
-            }
-            assert(found && found_getter);
-        }
-        LLVMValueRef lowered_stack_call = LLVMGetNamedFunction(parsed,
-            "probe.stack_call");
-        assert((!is_comptime && lowered_stack_call)
-            || (is_comptime && !lowered_stack_call));
-        if (lowered_stack_call) {
-            bool found_stack_storage = false;
-            for (LLVMValueRef value = LLVMGetFirstInstruction(
-                     LLVMGetFirstBasicBlock(lowered_stack_call)); value;
-                 value = LLVMGetNextInstruction(value)) {
-                if (LLVMGetInstructionOpcode(value) == LLVMAlloca)
-                    found_stack_storage = true;
-                if (LLVMGetInstructionOpcode(value) == LLVMCall)
-                    assert(LLVMGetCalledValue(value) != LLVMGetNamedFunction(
-                        parsed,
-                        "sys.internal.gc.alloc.allocate_runtime_known_on_mutator$gc_mutator"));
-            }
-            assert(found_stack_storage);
-        }
-        LLVMValueRef lowered_escaping_call = LLVMGetNamedFunction(parsed,
-            "probe.escaping_call");
-        assert((!is_comptime && lowered_escaping_call)
-            || (is_comptime && !lowered_escaping_call));
-        if (lowered_escaping_call) {
-            LLVMValueRef private_entry = LLVMGetNamedFunction(parsed,
-                "probe.escaping_call$gc_mutator");
-            assert(private_entry);
-            lowered_escaping_call = private_entry;
-            bool found_dynamic_storage = false;
-            for (LLVMBasicBlockRef block = LLVMGetFirstBasicBlock(
-                     lowered_escaping_call); block;
-                 block = LLVMGetNextBasicBlock(block))
-            for (LLVMValueRef value = LLVMGetFirstInstruction(block); value;
-                 value = LLVMGetNextInstruction(value))
-                if (LLVMGetInstructionOpcode(value) == LLVMCall
-                    && LLVMGetCalledValue(value) == LLVMGetNamedFunction(
-                        parsed,
-                        "sys.internal.gc.alloc.allocate_runtime_known_on_mutator$gc_mutator"))
-                    found_dynamic_storage = true;
-            assert(found_dynamic_storage);
-        }
-        LLVMValueRef lowered_field = LLVMGetNamedFunction(parsed,
-            "probe.record_field");
-        assert((!is_comptime && lowered_field)
-            || (is_comptime && !lowered_field));
-        if (lowered_field) {
-            bool found_address = false;
-            bool found_extract = false;
-            bool found_stack_storage = false;
-            for (LLVMValueRef value = LLVMGetFirstInstruction(
-                     LLVMGetFirstBasicBlock(lowered_field)); value;
-                 value = LLVMGetNextInstruction(value)) {
-                if (LLVMGetInstructionOpcode(value) == LLVMAlloca)
-                    found_stack_storage = true;
-                if (LLVMGetInstructionOpcode(value) == LLVMCall)
-                    assert(LLVMGetCalledValue(value) != LLVMGetNamedFunction(
-                        parsed,
-                        "sys.internal.gc.alloc.allocate_runtime_known_on_mutator$gc_mutator"));
-                if (LLVMGetInstructionOpcode(value) == LLVMGetElementPtr)
-                    found_address = true;
-                if (LLVMGetInstructionOpcode(value) == LLVMExtractValue)
-                    found_extract = true;
-            }
-            assert(found_stack_storage && found_address && found_extract);
-        }
-        LLVMValueRef lowered_offset = LLVMGetNamedFunction(parsed,
-            "probe.offset_load");
-        assert((!is_comptime && lowered_offset)
-            || (is_comptime && !lowered_offset));
-        if (lowered_offset) {
-            bool found_offset = false;
-            bool found_load = false;
-            for (LLVMValueRef value = LLVMGetFirstInstruction(
-                     LLVMGetFirstBasicBlock(lowered_offset)); value;
-                 value = LLVMGetNextInstruction(value)) {
-                if (LLVMGetInstructionOpcode(value) == LLVMGetElementPtr)
-                    found_offset = true;
-                if (LLVMGetInstructionOpcode(value) == LLVMLoad)
-                    found_load = true;
-            }
-            assert(found_offset && found_load);
-        }
-        LLVMValueRef lowered_atomic = LLVMGetNamedFunction(parsed,
-            "probe.atomic_round_trip");
-        assert((!is_comptime && lowered_atomic)
-            || (is_comptime && !lowered_atomic));
-        if (lowered_atomic) {
-            bool found_atomic_load = false;
-            bool found_atomic_store = false;
-            bool found_atomic_load_relaxed = false;
-            bool found_atomic_load_acquire = false;
-            bool found_atomic_store_relaxed = false;
-            bool found_atomic_store_release = false;
-            bool found_atomic_or = false;
-            bool found_atomic_or_release = false;
-            bool found_atomic_or_relaxed = false;
-            for (LLVMValueRef value = LLVMGetFirstInstruction(
-                     LLVMGetFirstBasicBlock(lowered_atomic)); value;
-                 value = LLVMGetNextInstruction(value)) {
-                LLVMOpcode op = LLVMGetInstructionOpcode(value);
-                if (op == LLVMLoad) {
-                    LLVMAtomicOrdering order = LLVMGetOrdering(value);
-                    if (order == LLVMAtomicOrderingMonotonic)
-                        found_atomic_load_relaxed = true;
-                    else if (order == LLVMAtomicOrderingAcquire)
-                        found_atomic_load_acquire = true;
-                    else {
-                        assert(order == LLVMAtomicOrderingSequentiallyConsistent);
-                        found_atomic_load = true;
-                    }
-                }
-                if (op == LLVMStore) {
-                    LLVMAtomicOrdering order = LLVMGetOrdering(value);
-                    if (order == LLVMAtomicOrderingMonotonic)
-                        found_atomic_store_relaxed = true;
-                    else if (order == LLVMAtomicOrderingRelease)
-                        found_atomic_store_release = true;
-                    else {
-                        assert(order == LLVMAtomicOrderingSequentiallyConsistent);
-                        found_atomic_store = true;
-                    }
-                }
-                if (op == LLVMAtomicRMW) {
-                    assert(LLVMGetAtomicRMWBinOp(value)
-                        == LLVMAtomicRMWBinOpOr);
-                    if (LLVMGetOrdering(value)
-                        == LLVMAtomicOrderingRelease)
-                        found_atomic_or_release = true;
-                    else if (LLVMGetOrdering(value)
-                             == LLVMAtomicOrderingMonotonic)
-                        found_atomic_or_relaxed = true;
-                    else {
-                        assert(LLVMGetOrdering(value)
-                            == LLVMAtomicOrderingSequentiallyConsistent);
-                        found_atomic_or = true;
-                    }
-                }
-            }
-            assert(found_atomic_load && found_atomic_store && found_atomic_or
-                && found_atomic_load_relaxed && found_atomic_load_acquire
-                && found_atomic_store_relaxed && found_atomic_store_release
-                && found_atomic_or_release && found_atomic_or_relaxed);
-        }
-        LLVMValueRef lowered_arithmetic = LLVMGetNamedFunction(parsed,
-            "probe.arithmetic");
-        assert((!is_comptime && lowered_arithmetic)
-            || (is_comptime && !lowered_arithmetic));
-        if (lowered_arithmetic) {
-            assert(LLVMGetNamedFunction(parsed,
-                "llvm.usub.with.overflow.i64"));
-            assert(LLVMGetNamedFunction(parsed,
-                "llvm.umul.with.overflow.i64"));
-            bool found_division = false;
-            bool found_remainder = false;
-            bool found_cast = false;
-            bool found_comparison = false;
-            for (LLVMBasicBlockRef block = LLVMGetFirstBasicBlock(
-                     lowered_arithmetic); block; block = LLVMGetNextBasicBlock(block))
-                for (LLVMValueRef value = LLVMGetFirstInstruction(block);
-                     value; value = LLVMGetNextInstruction(value)) {
-                    LLVMOpcode op = LLVMGetInstructionOpcode(value);
-                    found_division |= op == LLVMUDiv;
-                    found_remainder |= op == LLVMURem;
-                    found_cast |= op == LLVMTrunc;
-                    found_comparison |= op == LLVMICmp;
-                }
-            assert(found_division && found_remainder && found_cast
-                && found_comparison);
-        }
-        const char *cast_names[] = {
-            "probe.uint_to_float", "probe.signed_to_float",
-            "probe.float_to_uint", "probe.float_to_signed",
+        const char *function_names[] = {
+            "probe.read_static", "probe.read_dynamic",
         };
-        const LLVMOpcode cast_ops[] = {
-            LLVMUIToFP, LLVMSIToFP, LLVMFPToUI, LLVMFPToSI,
-        };
-        for (size_t i = 0; i < sizeof(cast_names) / sizeof(cast_names[0]); i++) {
-            LLVMValueRef cast_function = LLVMGetNamedFunction(parsed,
-                cast_names[i]);
-            assert((!is_comptime && cast_function)
-                || (is_comptime && !cast_function));
-            if (!cast_function) continue;
-            bool found_conversion = false;
-            unsigned range_checks = 0;
-            for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(cast_function);
-                 bb; bb = LLVMGetNextBasicBlock(bb))
-                for (LLVMValueRef value = LLVMGetFirstInstruction(bb);
-                     value; value = LLVMGetNextInstruction(value)) {
-                    LLVMOpcode op = LLVMGetInstructionOpcode(value);
-                    found_conversion |= op == cast_ops[i];
-                    range_checks += op == LLVMFCmp;
-                }
-            assert(found_conversion && (i < 2 || range_checks == 2));
-        }
-        LLVMDisposeModule(parsed);
-        LLVMContextDispose(reader);
-        LLVMDisposeMemoryBuffer(source);
-        core_buffer_release(&bytes);
+        LLVMValueRef flag = LLVMGetNamedGlobal(parsed, flag_names[i]);
+        LLVMValueRef reader = LLVMGetNamedFunction(parsed,
+                                                   function_names[i]);
+        assert(flag && reader
+            && LLVMConstIntGetZExtValue(LLVMGetInitializer(flag))
+                == (i == 0));
+        bool guarded = false;
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(reader);
+             bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef instruction = LLVMGetFirstInstruction(bb);
+                 instruction;
+                 instruction = LLVMGetNextInstruction(instruction))
+                if (LLVMGetInstructionOpcode(instruction) == LLVMLoad
+                    && LLVMGetOperand(instruction, 0) == flag)
+                    guarded = true;
+        assert(guarded == (i == 1));
     }
+    LLVMValueRef lowered = LLVMGetNamedFunction(parsed, "probe.entry");
+    assert(lowered);
+    LLVMValueRef lowered_helper = LLVMGetNamedFunction(parsed,
+        "probe.helper");
+    assert(lowered_helper);
+    if (lowered_helper)
+        assert(LLVMCountParams(lowered_helper) == 1
+            && LLVMCountBasicBlocks(lowered_helper) == 1);
+    LLVMValueRef lowered_ref_address = LLVMGetNamedFunction(parsed,
+        "probe.ref_address");
+    assert(lowered_ref_address);
+    if (lowered_ref_address) {
+        bool converted = false;
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(lowered_ref_address);
+             bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef instruction = LLVMGetFirstInstruction(bb);
+                 instruction; instruction = LLVMGetNextInstruction(instruction))
+                if (LLVMGetInstructionOpcode(instruction) == LLVMPtrToInt)
+                    converted = true;
+        assert(converted);
+        assert(!LLVMGetNamedFunction(parsed,
+            "n00b_builtin_abi_ref_address"));
+    }
+    LLVMValueRef lowered_barrier = LLVMGetNamedFunction(parsed,
+        "probe.barrier_store");
+    assert(lowered_barrier);
+    if (lowered_barrier) {
+        LLVMValueRef barrier = LLVMGetNamedFunction(parsed,
+            "sys.internal.gc.alloc.barrier_pointer_runtime");
+        bool found_barrier = false;
+        bool found_store = false;
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(lowered_barrier);
+             bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef instruction = LLVMGetFirstInstruction(bb);
+                 instruction; instruction = LLVMGetNextInstruction(instruction)) {
+                if (LLVMGetInstructionOpcode(instruction) == LLVMCall
+                    && LLVMGetCalledValue(instruction) == barrier)
+                    found_barrier = true;
+                if (LLVMGetInstructionOpcode(instruction) == LLVMStore)
+                    found_store = true;
+            }
+        assert(!found_barrier && found_store);
+    }
+    LLVMValueRef lowered_heap_store = LLVMGetNamedFunction(parsed,
+        "probe.barrier_heap_store");
+    assert(lowered_heap_store);
+    if (lowered_heap_store) {
+        LLVMValueRef barrier = LLVMGetNamedFunction(parsed,
+            "sys.internal.gc.alloc.barrier_pointer_runtime");
+        bool found_barrier = false;
+        bool stored_after_barrier = false;
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(lowered_heap_store);
+             bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef instruction = LLVMGetFirstInstruction(bb);
+                 instruction; instruction = LLVMGetNextInstruction(instruction)) {
+                if (LLVMGetInstructionOpcode(instruction) == LLVMCall
+                    && LLVMGetCalledValue(instruction) == barrier)
+                    found_barrier = true;
+                else if (found_barrier
+                    && LLVMGetInstructionOpcode(instruction) == LLVMStore)
+                    stored_after_barrier = true;
+            }
+        assert(barrier && found_barrier && stored_after_barrier);
+    }
+    const char *untracked_store_names[] = {
+        "probe.capture_address", "probe.capture_thread_root",
+        "probe.stack_promoted_store",
+    };
+    for (size_t i = 0; i < sizeof(untracked_store_names) / sizeof(untracked_store_names[0]); i++) {
+        LLVMValueRef root_store = LLVMGetNamedFunction(parsed,
+            untracked_store_names[i]);
+        assert(root_store);
+        if (!root_store) continue;
+        LLVMValueRef barrier = LLVMGetNamedFunction(parsed,
+            "sys.internal.gc.alloc.barrier_pointer_runtime");
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(root_store);
+             bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef instruction = LLVMGetFirstInstruction(bb);
+                 instruction; instruction = LLVMGetNextInstruction(instruction))
+                assert(LLVMGetInstructionOpcode(instruction) != LLVMCall
+                    || LLVMGetCalledValue(instruction) != barrier);
+    }
+    LLVMValueRef lowered_array = LLVMGetNamedFunction(parsed,
+        "probe.array_literal");
+    assert(lowered_array);
+    LLVMValueRef lowered_index = LLVMGetNamedFunction(parsed,
+        "probe.array_index");
+    assert(lowered_index);
+    if (lowered_array)
+        assert(LLVMGetNamedGlobal(parsed,
+            "n00bb.literal.array.descriptor"));
+    LLVMValueRef binary = LLVMGetNamedFunction(parsed,
+        "probe.binary_literal");
+    assert(binary);
+    if (binary) {
+        LLVMValueRef returned = LLVMGetBasicBlockTerminator(
+            LLVMGetFirstBasicBlock(binary));
+        LLVMValueRef value = returned ? LLVMGetOperand(returned, 0)
+                                      : nullptr;
+        n00b_abi_string_v1 expected = {0};
+        memcpy(expected.short_value.bytes, "abc", 3);
+        expected.short_value.selector = 3
+            | (N00B_ABI_STRING_BINARY << 4)
+            | (N00B_ABI_STRING_SHORT << 6);
+        assert(value && LLVMGetNumOperands(value) == 2
+            && LLVMConstIntGetZExtValue(LLVMGetOperand(value, 0))
+                == expected.words[0]
+            && LLVMConstIntGetZExtValue(LLVMGetOperand(value, 1))
+                == expected.words[1]);
+    }
+    if (lowered) {
+        assert(LLVMCountBasicBlocks(lowered) == 3);
+        LLVMValueRef terminator = LLVMGetBasicBlockTerminator(
+            LLVMGetLastBasicBlock(lowered));
+        assert(terminator && LLVMGetInstructionOpcode(terminator)
+            == LLVMRet);
+        assert(LLVMGetNamedFunction(parsed,
+            "llvm.uadd.with.overflow.i64"));
+    }
+    LLVMValueRef lowered_allocation = LLVMGetNamedFunction(parsed,
+        "probe.heap_ref");
+    assert(lowered_allocation);
+    if (lowered_allocation) {
+        LLVMValueRef wrapper = lowered_allocation;
+        LLVMValueRef private_entry = LLVMGetNamedFunction(parsed,
+            "probe.heap_ref$gc_mutator");
+        assert(private_entry && LLVMCountParams(private_entry)
+            == LLVMCountParams(lowered_allocation) + 1);
+        lowered_allocation = private_entry;
+        LLVMValueRef allocator = LLVMGetNamedFunction(parsed,
+            "sys.internal.gc.alloc.allocate_runtime_known_on_mutator$gc_mutator");
+        LLVMValueRef getter = LLVMGetNamedFunction(parsed,
+            "sys.internal.gc.alloc.mutator_for_native");
+        bool found = false;
+        bool found_getter = false;
+        for (LLVMBasicBlockRef block = LLVMGetFirstBasicBlock(wrapper);
+             block; block = LLVMGetNextBasicBlock(block))
+        for (LLVMValueRef value = LLVMGetFirstInstruction(block); value;
+             value = LLVMGetNextInstruction(value))
+            if (LLVMGetInstructionOpcode(value) == LLVMCall
+                && LLVMGetCalledValue(value) == getter)
+                found_getter = true;
+        for (LLVMBasicBlockRef block = LLVMGetFirstBasicBlock(
+                 lowered_allocation); block;
+             block = LLVMGetNextBasicBlock(block))
+        for (LLVMValueRef value = LLVMGetFirstInstruction(block); value;
+             value = LLVMGetNextInstruction(value)) {
+            if (LLVMGetInstructionOpcode(value) == LLVMCall)
+                assert(LLVMGetCalledValue(value) != getter);
+            if (LLVMGetInstructionOpcode(value) != LLVMCall
+                || LLVMGetCalledValue(value) != allocator) continue;
+            assert(LLVMGetTypeKind(LLVMTypeOf(LLVMGetArgOperand(value, 0)))
+                == LLVMPointerTypeKind);
+            assert(LLVMConstIntGetZExtValue(LLVMGetArgOperand(value, 1))
+                == type_indices[0].index);
+            assert(LLVMConstIntGetZExtValue(LLVMGetArgOperand(value, 2))
+                == 8);
+            assert(LLVMConstIntGetZExtValue(LLVMGetArgOperand(value, 3))
+                == 8);
+            assert(LLVMConstIntGetZExtValue(LLVMGetArgOperand(value, 4))
+                == 1);
+            assert(LLVMIsNull(LLVMGetArgOperand(value, 5)));
+            assert(LLVMGetArgOperand(value, 6)
+                == LLVMGetArgOperand(value, 0));
+            found = true;
+        }
+        assert(found && found_getter);
+    }
+    LLVMValueRef lowered_stack_call = LLVMGetNamedFunction(parsed,
+        "probe.stack_call");
+    assert(lowered_stack_call);
+    if (lowered_stack_call) {
+        bool found_stack_storage = false;
+        for (LLVMValueRef value = LLVMGetFirstInstruction(
+                 LLVMGetFirstBasicBlock(lowered_stack_call)); value;
+             value = LLVMGetNextInstruction(value)) {
+            if (LLVMGetInstructionOpcode(value) == LLVMAlloca)
+                found_stack_storage = true;
+            if (LLVMGetInstructionOpcode(value) == LLVMCall)
+                assert(LLVMGetCalledValue(value) != LLVMGetNamedFunction(
+                    parsed,
+                    "sys.internal.gc.alloc.allocate_runtime_known_on_mutator$gc_mutator"));
+        }
+        assert(found_stack_storage);
+    }
+    LLVMValueRef lowered_escaping_call = LLVMGetNamedFunction(parsed,
+        "probe.escaping_call");
+    assert(lowered_escaping_call);
+    if (lowered_escaping_call) {
+        LLVMValueRef private_entry = LLVMGetNamedFunction(parsed,
+            "probe.escaping_call$gc_mutator");
+        assert(private_entry);
+        lowered_escaping_call = private_entry;
+        bool found_dynamic_storage = false;
+        for (LLVMBasicBlockRef block = LLVMGetFirstBasicBlock(
+                 lowered_escaping_call); block;
+             block = LLVMGetNextBasicBlock(block))
+        for (LLVMValueRef value = LLVMGetFirstInstruction(block); value;
+             value = LLVMGetNextInstruction(value))
+            if (LLVMGetInstructionOpcode(value) == LLVMCall
+                && LLVMGetCalledValue(value) == LLVMGetNamedFunction(
+                    parsed,
+                    "sys.internal.gc.alloc.allocate_runtime_known_on_mutator$gc_mutator"))
+                found_dynamic_storage = true;
+        assert(found_dynamic_storage);
+    }
+    LLVMValueRef lowered_field = LLVMGetNamedFunction(parsed,
+        "probe.record_field");
+    assert(lowered_field);
+    if (lowered_field) {
+        bool found_address = false;
+        bool found_extract = false;
+        bool found_stack_storage = false;
+        for (LLVMValueRef value = LLVMGetFirstInstruction(
+                 LLVMGetFirstBasicBlock(lowered_field)); value;
+             value = LLVMGetNextInstruction(value)) {
+            if (LLVMGetInstructionOpcode(value) == LLVMAlloca)
+                found_stack_storage = true;
+            if (LLVMGetInstructionOpcode(value) == LLVMCall)
+                assert(LLVMGetCalledValue(value) != LLVMGetNamedFunction(
+                    parsed,
+                    "sys.internal.gc.alloc.allocate_runtime_known_on_mutator$gc_mutator"));
+            if (LLVMGetInstructionOpcode(value) == LLVMGetElementPtr)
+                found_address = true;
+            if (LLVMGetInstructionOpcode(value) == LLVMExtractValue)
+                found_extract = true;
+        }
+        assert(found_stack_storage && found_address && found_extract);
+    }
+    LLVMValueRef lowered_offset = LLVMGetNamedFunction(parsed,
+        "probe.offset_load");
+    assert(lowered_offset);
+    if (lowered_offset) {
+        bool found_offset = false;
+        bool found_load = false;
+        for (LLVMValueRef value = LLVMGetFirstInstruction(
+                 LLVMGetFirstBasicBlock(lowered_offset)); value;
+             value = LLVMGetNextInstruction(value)) {
+            if (LLVMGetInstructionOpcode(value) == LLVMGetElementPtr)
+                found_offset = true;
+            if (LLVMGetInstructionOpcode(value) == LLVMLoad)
+                found_load = true;
+        }
+        assert(found_offset && found_load);
+    }
+    LLVMValueRef lowered_atomic = LLVMGetNamedFunction(parsed,
+        "probe.atomic_round_trip");
+    assert(lowered_atomic);
+    if (lowered_atomic) {
+        bool found_atomic_load = false;
+        bool found_atomic_store = false;
+        bool found_atomic_load_relaxed = false;
+        bool found_atomic_load_acquire = false;
+        bool found_atomic_store_relaxed = false;
+        bool found_atomic_store_release = false;
+        bool found_atomic_or = false;
+        bool found_atomic_or_release = false;
+        bool found_atomic_or_relaxed = false;
+        for (LLVMValueRef value = LLVMGetFirstInstruction(
+                 LLVMGetFirstBasicBlock(lowered_atomic)); value;
+             value = LLVMGetNextInstruction(value)) {
+            LLVMOpcode op = LLVMGetInstructionOpcode(value);
+            if (op == LLVMLoad) {
+                LLVMAtomicOrdering order = LLVMGetOrdering(value);
+                if (order == LLVMAtomicOrderingMonotonic)
+                    found_atomic_load_relaxed = true;
+                else if (order == LLVMAtomicOrderingAcquire)
+                    found_atomic_load_acquire = true;
+                else {
+                    assert(order == LLVMAtomicOrderingSequentiallyConsistent);
+                    found_atomic_load = true;
+                }
+            }
+            if (op == LLVMStore) {
+                LLVMAtomicOrdering order = LLVMGetOrdering(value);
+                if (order == LLVMAtomicOrderingMonotonic)
+                    found_atomic_store_relaxed = true;
+                else if (order == LLVMAtomicOrderingRelease)
+                    found_atomic_store_release = true;
+                else {
+                    assert(order == LLVMAtomicOrderingSequentiallyConsistent);
+                    found_atomic_store = true;
+                }
+            }
+            if (op == LLVMAtomicRMW) {
+                assert(LLVMGetAtomicRMWBinOp(value)
+                    == LLVMAtomicRMWBinOpOr);
+                if (LLVMGetOrdering(value)
+                    == LLVMAtomicOrderingRelease)
+                    found_atomic_or_release = true;
+                else if (LLVMGetOrdering(value)
+                         == LLVMAtomicOrderingMonotonic)
+                    found_atomic_or_relaxed = true;
+                else {
+                    assert(LLVMGetOrdering(value)
+                        == LLVMAtomicOrderingSequentiallyConsistent);
+                    found_atomic_or = true;
+                }
+            }
+        }
+        assert(found_atomic_load && found_atomic_store && found_atomic_or
+            && found_atomic_load_relaxed && found_atomic_load_acquire
+            && found_atomic_store_relaxed && found_atomic_store_release
+            && found_atomic_or_release && found_atomic_or_relaxed);
+    }
+    LLVMValueRef lowered_arithmetic = LLVMGetNamedFunction(parsed,
+        "probe.arithmetic");
+    assert(lowered_arithmetic);
+    if (lowered_arithmetic) {
+        assert(LLVMGetNamedFunction(parsed,
+            "llvm.usub.with.overflow.i64"));
+        assert(LLVMGetNamedFunction(parsed,
+            "llvm.umul.with.overflow.i64"));
+        bool found_division = false;
+        bool found_remainder = false;
+        bool found_cast = false;
+        bool found_comparison = false;
+        for (LLVMBasicBlockRef block = LLVMGetFirstBasicBlock(
+                 lowered_arithmetic); block; block = LLVMGetNextBasicBlock(block))
+            for (LLVMValueRef value = LLVMGetFirstInstruction(block);
+                 value; value = LLVMGetNextInstruction(value)) {
+                LLVMOpcode op = LLVMGetInstructionOpcode(value);
+                found_division |= op == LLVMUDiv;
+                found_remainder |= op == LLVMURem;
+                found_cast |= op == LLVMTrunc;
+                found_comparison |= op == LLVMICmp;
+            }
+        assert(found_division && found_remainder && found_cast
+            && found_comparison);
+    }
+    const char *cast_names[] = {
+        "probe.uint_to_float", "probe.signed_to_float",
+        "probe.float_to_uint", "probe.float_to_signed",
+    };
+    const LLVMOpcode cast_ops[] = {
+        LLVMUIToFP, LLVMSIToFP, LLVMFPToUI, LLVMFPToSI,
+    };
+    for (size_t i = 0; i < sizeof(cast_names) / sizeof(cast_names[0]); i++) {
+        LLVMValueRef cast_function = LLVMGetNamedFunction(parsed,
+            cast_names[i]);
+        assert(cast_function);
+        if (!cast_function) continue;
+        bool found_conversion = false;
+        unsigned range_checks = 0;
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(cast_function);
+             bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef value = LLVMGetFirstInstruction(bb);
+                 value; value = LLVMGetNextInstruction(value)) {
+                LLVMOpcode op = LLVMGetInstructionOpcode(value);
+                found_conversion |= op == cast_ops[i];
+                range_checks += op == LLVMFCmp;
+            }
+        assert(found_conversion && (i < 2 || range_checks == 2));
+    }
+    LLVMDisposeModule(parsed);
+    LLVMContextDispose(reader);
+    LLVMDisposeMemoryBuffer(source);
+    core_buffer_release(&bytes);
 
     assert(core_diagnostics_count(diagnostics) == 0);
     n00bb_llvm_backend_free(backend);
 
-    assert(ir_global_add(runtime, "unsupported.runtime.global",
-        unsigned_type));
-    backend = n00bb_llvm_backend_prepare(comptime, runtime, true, false,
-        diagnostics);
-    assert(backend);
-    core_buffer_t comptime_bytes = {0};
-    assert(n00bb_llvm_backend_write_bitcode(backend, true,
-        &comptime_bytes, diagnostics));
-    assert(comptime_bytes.byte_len > 0);
-    assert(core_diagnostics_count(diagnostics) == 0);
-    core_buffer_release(&comptime_bytes);
-    n00bb_llvm_backend_free(backend);
-
-    ir_module_t *native_comptime = ir_module_new(context,
-        "sys.internal.gc.alloc$comptime", &profile, target);
     ir_module_t *native_runtime = ir_module_new(context,
         "sys.internal.gc.alloc", &profile, target);
     ir_func_t *native_function = ir_func_add(native_runtime,
@@ -1202,17 +1082,17 @@ main(void)
             "() -> nil"), IR_LINK_INTERNAL);
     ir_block_t *native_mutator_entry = native_mutator
         ? ir_block_add(native_mutator, "entry") : nullptr;
-    assert(native_comptime && native_entry
+    assert(native_entry
         && native_mutator_entry
         && ir_instr_add(native_entry, IR_OP_RETURN)
         && ir_instr_add(native_mutator_entry, IR_OP_RETURN));
-    backend = n00bb_llvm_backend_prepare(native_comptime, native_runtime,
+    backend = n00bb_llvm_backend_prepare(native_runtime,
         true, true, diagnostics);
     ir_func_t *native_roots[] = {native_function, native_mutator};
     assert(backend && n00bb_llvm_backend_bind_reachable_functions(
-        backend, false, native_roots, 2));
+        backend, native_roots, 2));
     core_buffer_t native_bytes = {0};
-    assert(n00bb_llvm_backend_write_bitcode(backend, false,
+    assert(n00bb_llvm_backend_write_bitcode(backend,
         &native_bytes, diagnostics));
     LLVMMemoryBufferRef native_source =
         LLVMCreateMemoryBufferWithMemoryRangeCopy(native_bytes.data,

@@ -6,7 +6,4 @@ func uncaught(x: int) -> Array[int] {
     return [1, x]'fault
 }
 
-comptime {
-} else {
-    uncaught(2)
-}
+uncaught(2)

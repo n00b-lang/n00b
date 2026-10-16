@@ -39,16 +39,13 @@ func first_bytes_after_elif(first_index: u32, second_index: u32) -> uint {
     }
 }
 
-comptime {
-} else {
-    let sample: byte = 0
-    assert rounded_bytes(cast[u32](typeof(sample))) == 1
-    let wider: u32 = 0
-    assert combined_bytes(cast[u32](typeof(sample)),
-        cast[u32](typeof(wider))) == 5
-    assert combined_bytes_else(cast[u32](typeof(sample)),
-        cast[u32](typeof(wider))) == 5
-    assert first_bytes_after_elif(cast[u32](typeof(sample)),
-        cast[u32](typeof(wider))) == 1
-    __fd_write(2, "ok")
-}
+let sample: byte = 0
+assert rounded_bytes(cast[u32](typeof(sample))) == 1
+let wider: u32 = 0
+assert combined_bytes(cast[u32](typeof(sample)),
+    cast[u32](typeof(wider))) == 5
+assert combined_bytes_else(cast[u32](typeof(sample)),
+    cast[u32](typeof(wider))) == 5
+assert first_bytes_after_elif(cast[u32](typeof(sample)),
+    cast[u32](typeof(wider))) == 1
+__fd_write(2, "ok")

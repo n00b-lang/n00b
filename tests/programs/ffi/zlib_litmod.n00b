@@ -1,0 +1,17 @@
+import zlib
+
+litmod<array> checksum_bytes, crc(items: Array[u8]) -> u64 fail: string {
+    var sum: u64 = 0
+    try {
+        sum = zlib.crc32(0, items)!
+    } else failure {
+        fail "crc32 failed"
+    }
+    return sum
+}
+
+const hello: u64 = [104, 101, 108, 108, 111]'crc
+
+func start() -> nil {
+    require hello == 907060870
+}

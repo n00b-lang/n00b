@@ -2,8 +2,6 @@ func letters() -> Array[char] {
     return "abc"'u32
 }
 
-comptime {
-}
 
 func run_test() {
     letters()

@@ -2,8 +2,6 @@ func read_at(values: Array[`T], index: uint) -> `T {
     return values[index]
 }
 
-comptime {} else {
-    let values: Array[int] = new[Array[int]](1)
-    let index: uint = 9223372036854775808
-    _ = read_at(values, index)
-}
+let values: Array[int] = new[Array[int]](1)
+let index: uint = 9223372036854775808
+_ = read_at(values, index)

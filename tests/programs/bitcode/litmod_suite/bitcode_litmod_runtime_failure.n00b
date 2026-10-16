@@ -11,8 +11,6 @@ func caught(x: int) -> int {
     }
 }
 
-comptime {
-}
 
 func run_test() {
     require caught(2) == 1

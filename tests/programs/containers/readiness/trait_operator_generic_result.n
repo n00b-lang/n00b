@@ -20,15 +20,13 @@ func combine(left: `T, right: `T) -> `T where `T: Add {
     return left + right
 }
 
-comptime {} else {
-    let a: Meter = (value = 2)
-    let b: Meter = (value = 3)
-    let c: Counter = (value = 11)
-    let d: Counter = (value = 13)
-    let meter: Meter = combine(a, b)
-    let counter: Counter = combine(c, d)
-    let integer: int = combine(3, 4)
-    require meter.value == 5
-    require counter.value == 24
-    require integer == 7
-}
+let a: Meter = (value = 2)
+let b: Meter = (value = 3)
+let c: Counter = (value = 11)
+let d: Counter = (value = 13)
+let meter: Meter = combine(a, b)
+let counter: Counter = combine(c, d)
+let integer: int = combine(3, 4)
+require meter.value == 5
+require counter.value == 24
+require integer == 7

@@ -23,11 +23,9 @@ func make_counter(initial: Counter_State) -> Counter {
     return callback[Counter](ref handle, ref state)
 }
 
-comptime {} else {
-    var initial: Counter_State
-    initial.count = 0
-    let counter = make_counter(initial)
-    require counter.call(2) == 2
-    require counter.call(3) == 5
-    __fd_write(2, "ok")
-}
+var initial: Counter_State
+initial.count = 0
+let counter = make_counter(initial)
+require counter.call(2) == 2
+require counter.call(3) == 5
+__fd_write(2, "ok")

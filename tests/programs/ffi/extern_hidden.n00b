@@ -6,6 +6,4 @@ binding {
 }
 -]'ffi
 
-comptime {} else {
-    require c.__abs_raw(-5) == 5
-}
+require c.__abs_raw(-5) == 5

@@ -97,8 +97,8 @@ struct n00b_abi_snapshot_v1 {
     size_t named_type_capacity;
     uint32_t *module_name_slots;
     size_t module_name_capacity;
-    n00bb_abi_directory_entry_t tables[N00B_ABI_TABLE_CALL_SHAPE + 1];
-    const uint8_t *table_bytes[N00B_ABI_TABLE_CALL_SHAPE + 1];
+    n00bb_abi_directory_entry_t tables[N00B_ABI_TABLE_BAKED_NODE + 1];
+    const uint8_t *table_bytes[N00B_ABI_TABLE_BAKED_NODE + 1];
 };
 
 static _Atomic(const n00b_abi_snapshot_v1 *) current_snapshot;
@@ -192,14 +192,14 @@ header_valid(const n00b_abi_header_v1 *header, uint64_t bytes)
         && header->total_extent <= bytes
         && header->directory_offset >= sizeof(*header)
         && header->directory_offset <= header->total_extent
-        && header->directory_count <= N00B_ABI_TABLE_CALL_SHAPE;
+        && header->directory_count <= N00B_ABI_TABLE_BAKED_NODE;
 }
 
 static const n00bb_abi_directory_entry_t *
 table_for(const n00b_abi_snapshot_v1 *snapshot, uint32_t kind)
 {
     if (!snapshot || kind < N00B_ABI_TABLE_PACKAGE
-        || kind > N00B_ABI_TABLE_CALL_SHAPE) return nullptr;
+        || kind > N00B_ABI_TABLE_BAKED_NODE) return nullptr;
     const n00bb_abi_directory_entry_t *table = &snapshot->tables[kind];
     return table->kind ? table : nullptr;
 }
@@ -232,7 +232,7 @@ metadata_references_valid(const n00b_abi_snapshot_v1 *snapshot,
                           n00b_abi_error_v1 *error)
 {
     for (uint32_t kind = N00B_ABI_TABLE_PACKAGE;
-         kind <= N00B_ABI_TABLE_CALL_SHAPE; kind++) {
+         kind <= N00B_ABI_TABLE_BAKED_NODE; kind++) {
         const n00bb_abi_directory_entry_t *table = table_for(snapshot, kind);
         if (!table) continue;
         if (kind == N00B_ABI_TABLE_REQUIREMENT
@@ -674,8 +674,7 @@ metadata_owned_rows_valid(const n00b_abi_snapshot_v1 *snapshot,
 
 static bool
 module_initializer_valid(const n00b_abi_snapshot_v1 *snapshot,
-                         uint32_t module_index, uint32_t function_index,
-                         uint32_t phase)
+                         uint32_t module_index, uint32_t function_index)
 {
     if (!function_index) return true;
     const n00b_abi_function_v1 *function = n00b_abi_v1_function(snapshot,
@@ -688,8 +687,7 @@ module_initializer_valid(const n00b_abi_snapshot_v1 *snapshot,
                                 &range_index) != 1) return false;
         const n00b_abi_code_range_v1 *range = n00b_abi_v1_code_range(snapshot,
                                                                       range_index);
-        if (!range || range->function_index != function_index
-            || range->phase_mask != phase) return false;
+        if (!range || range->function_index != function_index) return false;
     }
     return true;
 }
@@ -701,13 +699,8 @@ metadata_module_initializers_valid(const n00b_abi_snapshot_v1 *snapshot,
     uint32_t count = n00b_abi_v1_table_count(snapshot, N00B_ABI_TABLE_MODULE);
     for (uint32_t i = 1; i < count; i++) {
         const n00b_abi_module_v1 *module = n00b_abi_v1_module(snapshot, i);
-        if (!module || (module->comptime_initializer
-                        && module->comptime_initializer
-                           == module->runtime_initializer)
-            || !module_initializer_valid(snapshot, i,
-                module->comptime_initializer, N00B_ABI_PHASE_COMPTIME)
-            || !module_initializer_valid(snapshot, i,
-                module->runtime_initializer, N00B_ABI_PHASE_RUNTIME))
+        if (!module
+            || !module_initializer_valid(snapshot, i, module->initializer))
             return invalid_record(error, N00B_ABI_TABLE_MODULE, i, 0);
     }
     return true;
@@ -1708,13 +1701,8 @@ metadata_code_ranges_valid(const n00b_abi_snapshot_v1 *snapshot,
                 && code->start && code->byte_length
                 && code->byte_length <= UINTPTR_MAX
                 && (uintptr_t)code->start <= UINTPTR_MAX - code->byte_length
-                && code->phase_mask
-                && !(code->phase_mask
-                    & ~(N00B_ABI_PHASE_COMPTIME | N00B_ABI_PHASE_RUNTIME))
                 && (!function->symbol_index
-                    || (symbol && symbol->kind == N00B_ABI_SYMBOL_FUNCTION
-                        && (code->phase_mask & symbol->phase_mask)
-                            == code->phase_mask));
+                    || (symbol && symbol->kind == N00B_ABI_SYMBOL_FUNCTION));
             if (valid) seen[code_index] = 1;
             else invalid_record(error, N00B_ABI_TABLE_CODE_RANGE,
                                 code_index, 0);
@@ -1788,6 +1776,29 @@ metadata_frame_layouts_valid(const n00b_abi_snapshot_v1 *snapshot,
             N00B_ABI_TABLE_FRAME_LAYOUT, i, 0);
     snapshot_free(seen, frame_count);
     return valid;
+}
+
+static bool
+metadata_baked_nodes_valid(const n00b_abi_snapshot_v1 *snapshot,
+                           n00b_abi_error_v1 *error)
+{
+    uint32_t count = n00b_abi_v1_table_count(snapshot,
+        N00B_ABI_TABLE_BAKED_NODE);
+    uint32_t known = N00B_ABI_BAKED_NODE_IMMUTABLE
+        | N00B_ABI_BAKED_NODE_ARRAY_BACKING;
+    for (uint32_t i = 1; i < count; i++) {
+        const n00b_abi_baked_node_v1 *node = n00b_abi_v1_baked_node(snapshot,
+                                                                    i);
+        if (!node || node->reserved_zero || (node->flags & ~known)
+            || !node->segment_index || !node->byte_length
+            || (node->segment_kind != N00B_ABI_STORAGE_READ_ONLY
+                && node->segment_kind != N00B_ABI_STORAGE_WRITABLE)
+            || node->byte_offset > UINT64_MAX - node->byte_length
+            || (!node->type_index
+                && !(node->flags & N00B_ABI_BAKED_NODE_IMMUTABLE)))
+            return invalid_record(error, N00B_ABI_TABLE_BAKED_NODE, i, 0);
+    }
+    return true;
 }
 
 static bool
@@ -2457,6 +2468,7 @@ snapshot_contents_valid(n00b_abi_snapshot_v1 *candidate,
         && metadata_call_shapes_valid(candidate, error)
         && metadata_frame_layouts_valid(candidate, error)
         && metadata_storage_valid(candidate, error)
+        && metadata_baked_nodes_valid(candidate, error)
         && metadata_dispatch_valid(candidate, error)
         && metadata_name_slots_valid(candidate, error)
         && specialization_graph_valid(candidate)
@@ -2491,14 +2503,14 @@ prepare_image(const n00b_abi_image_descriptor_v1 *image,
     size_t schema_count = 0;
     const n00bb_abi_table_schema_t *schemas =
         n00bb_abi_v1_table_schemas(&schema_count);
-    n00bb_abi_directory_entry_t directory[N00B_ABI_TABLE_CALL_SHAPE];
+    n00bb_abi_directory_entry_t directory[N00B_ABI_TABLE_BAKED_NODE];
     bool valid = n00bb_abi_directory_validate(candidate->metadata,
         (size_t)candidate->metadata_bytes, sizeof(*header),
         header->directory_offset, header->directory_count,
         header->total_extent, schemas, schema_count, false, directory);
     for (uint32_t i = 0; valid && i < header->directory_count; i++) {
         const n00bb_abi_directory_entry_t *entry = &directory[i];
-        if (entry->kind > N00B_ABI_TABLE_CALL_SHAPE
+        if (entry->kind > N00B_ABI_TABLE_BAKED_NODE
             || candidate->tables[entry->kind].kind) valid = false;
         else {
             n00bb_abi_directory_entry_t *target =
@@ -2709,6 +2721,7 @@ TYPED_GETTER(code_range, CODE_RANGE, code_range)
 TYPED_GETTER(frame_layout, FRAME_LAYOUT, frame_layout)
 TYPED_GETTER(trace, TRACE, trace)
 TYPED_GETTER(storage, STORAGE, storage)
+TYPED_GETTER(baked_node, BAKED_NODE, baked_node)
 
 #undef TYPED_GETTER
 
@@ -2742,8 +2755,7 @@ n00b_abi_v1_runtime_function_address(uint32_t function_index)
                                 &range_index) != 1) return nullptr;
         const n00b_abi_code_range_v1 *range = n00b_abi_v1_code_range(
             snapshot, range_index);
-        if (range && (range->phase_mask & N00B_ABI_PHASE_RUNTIME)
-            && range->start) return range->start;
+        if (range && range->start) return range->start;
     }
     const void *const *addresses = atomic_load_explicit(
         &runtime_function_addresses, memory_order_acquire);

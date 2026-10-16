@@ -39,7 +39,7 @@ main(void)
                                       &infallible_index));
     n00bb_abi_name_pool_t *names = n00bb_abi_name_pool_new();
     n00bb_abi_type_identity_rows_t types_rows = {0};
-    assert(names && n00bb_abi_type_identity_rows_build(index, nullptr,
+    assert(names && n00bb_abi_type_identity_rows_build(index,
         module, false, nullptr, nullptr, nullptr, names, &types_rows));
     n00bb_abi_type_signatures_t rows = {0};
     assert(n00bb_abi_type_signatures_build(index, &types_rows, names, 7,
@@ -136,7 +136,7 @@ main(void)
     names = n00bb_abi_name_pool_new();
     types_rows = (n00bb_abi_type_identity_rows_t){0};
     rows = (n00bb_abi_type_signatures_t){0};
-    assert(n00bb_abi_type_identity_rows_build(invalid, nullptr,
+    assert(n00bb_abi_type_identity_rows_build(invalid,
         module, false, nullptr, nullptr, nullptr, names, &types_rows));
     assert(!n00bb_abi_type_signatures_build(invalid, &types_rows,
                                             names, 7, &rows));

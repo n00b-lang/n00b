@@ -1,6 +1,7 @@
 #include <string.h>
 
 #include "compiler_link.h"
+#include "compiler_baked.h"
 #include "compiler_tu.h"
 #include "preprocessor.h"
 
@@ -1847,14 +1848,11 @@ link_payload_add_initializer(parse_grammar_t *grammar,
     if (!value) return true;
     for (size_t i = 0; i < payload->initializers.len; i++)
         if (payload->initializers.data[i].value == value) return true;
-    uint32_t phase = initializer_phase_for_site(grammar, unit, value,
-                                                 payload->symbol);
     core_list_push(payload->initializers,
-        ((n00bb_phase_initializer_fact_t){
+        ((n00bb_initializer_fact_t){
             .site = definition,
             .value = value,
             .type = core_tree_node_value(value).type,
-            .phase = phase,
             .location = link_source_location(definition),
             .provenance = core_source_file_path(&unit->source),
         }));
@@ -2077,7 +2075,6 @@ free_initializer_order(void *opaque)
 n00bb_initializer_order_t *
 build_initializer_order(core_link_unit_t *link,
                          n00bb_link_analysis_t *analysis,
-                         uint32_t phase,
                          core_link_contribution_state_t *state_out)
 {
     *state_out = CORE_LINK_CONTRIBUTION_COMPLETE;
@@ -2087,7 +2084,6 @@ build_initializer_order(core_link_unit_t *link,
     order->units = unit_count
         ? core_alloc_array(core_translation_unit_t *, unit_count) : nullptr;
     order->count = 0;
-    uint32_t edge_kind = initializer_dependency_kind(phase);
     bool incomplete = false;
     bool valid = true;
     bool *selected = nullptr;
@@ -2121,7 +2117,8 @@ build_initializer_order(core_link_unit_t *link,
                         valid = false;
                         goto finish;
                     }
-                    if (edge.kind != edge_kind) continue;
+                    if (edge.kind != N00BB_LINK_DEPENDENCY_INITIALIZER_ORDER)
+                        continue;
                     if (edge.state != CORE_LINK_DEPENDENCY_RESOLVED) {
                         incomplete = true;
                         continue;
@@ -2133,7 +2130,7 @@ build_initializer_order(core_link_unit_t *link,
                         ? core_link_declaration_owner(edge.to) : nullptr;
                     if (source != candidate_unit || !target) continue;
                     if (!dynamic_initializer_declaration(
-                            analysis->grammar, edge.to, phase)) continue;
+                            analysis->grammar, edge.to)) continue;
                     if (target == source) {
                         parse_sym_entry_t *target_symbol =
                             initializer_declaration_symbol(edge.to);
@@ -2212,14 +2209,6 @@ finish:
     return order;
 }
 
-uint32_t
-initializer_dependency_kind(uint32_t phase)
-{
-    return phase == PARSE_SYM_PHASE_COMPTIME
-        ? N00BB_LINK_DEPENDENCY_COMPTIME_INITIALIZER_USE
-        : N00BB_LINK_DEPENDENCY_RUNTIME_INITIALIZER_USE;
-}
-
 parse_sym_entry_t *
 initializer_declaration_symbol(core_link_declaration_t *declaration)
 {
@@ -2241,13 +2230,15 @@ static_literal_global_initializer(parse_grammar_t *grammar,
     if (!initializer) return false;
     n00bb_static_literal_probe_t probe = find_static_literal(grammar,
                                                               initializer);
-    return probe.valid && nt_is(grammar, probe.literal, "simple-lit");
+    uint64_t folded = 0;
+    return (probe.valid && nt_is(grammar, probe.literal, "simple-lit"))
+        || (!probe.valid && n00bb_static_integer_expression(grammar,
+                initializer, symbol->type, &folded));
 }
 
 bool
 dynamic_initializer_declaration(parse_grammar_t *grammar,
-                                core_link_declaration_t *declaration,
-                                uint32_t phase)
+                                core_link_declaration_t *declaration)
 {
     parse_sym_entry_t *symbol = initializer_declaration_symbol(declaration);
     parse_tree_t *initializer_node = symbol ? symbol->decl_node : nullptr;
@@ -2259,23 +2250,16 @@ dynamic_initializer_declaration(parse_grammar_t *grammar,
     }
     if (!is_module_global_symbol(grammar, symbol) || !expression)
         return false;
-    bool has_variable_declaration = false;
     for (parse_tree_t *at = initializer_node; at;
          at = core_tree_node_value(at).parent) {
         if (!nt_is(grammar, at, "variable-decl")) continue;
-        has_variable_declaration = true;
         parse_tree_t *prefix = child_nt(grammar, at, "declaration-prefix");
-        bool compile_time = core_string_eq(first_token_text(child_nt(grammar,
-                prefix, "binding-kind")), CORE_STRING_STATIC("const"))
-            || child_nt(grammar, prefix, "storage-class");
-        if (phase == PARSE_SYM_PHASE_COMPTIME && !compile_time) return false;
-        if (phase == PARSE_SYM_PHASE_RUNTIME && compile_time) return false;
+        if (child_nt(grammar, prefix, "storage-class")) return false;
+        if (core_string_eq(first_token_text(child_nt(grammar, prefix,
+                "binding-kind")), CORE_STRING_STATIC("const"))
+            && n00bb_compile_phase() != PARSE_SYM_PHASE_COMPTIME)
+            return false;
         break;
-    }
-    if (!has_variable_declaration) {
-        bool compile_time = declared_in_comptime(grammar, initializer_node);
-        if (phase == PARSE_SYM_PHASE_COMPTIME && !compile_time) return false;
-        if (phase == PARSE_SYM_PHASE_RUNTIME && compile_time) return false;
     }
     return !static_literal_global_initializer(grammar, symbol);
 }
@@ -2316,17 +2300,6 @@ link_ir_function_for_symbol(n00bb_link_analysis_t *analysis,
         link_declaration_for_symbol(analysis, symbol);
     return declaration ? core_link_declaration_binding(declaration,
         CORE_STRING_STATIC("n00bb.ir.function")) : nullptr;
-}
-
-ir_func_t *
-link_ir_function_for_phase(n00bb_link_analysis_t *analysis,
-                           parse_sym_entry_t *symbol, bool comptime)
-{
-    if (!comptime) return link_ir_function_for_symbol(analysis, symbol);
-    core_link_declaration_t *declaration =
-        link_declaration_for_symbol(analysis, symbol);
-    return declaration ? core_link_declaration_binding(declaration,
-        CORE_STRING_STATIC("n00bb.ir.comptime.function")) : nullptr;
 }
 
 ir_global_t *
@@ -4106,13 +4079,8 @@ n00bb_link_analysis_new(parse_grammar_t *grammar, ir_ctx_t *ir_context,
         .units = core_list_new(core_translation_unit_ptr_t),
         .trait_specializations =
             core_list_new(n00bb_trait_specialization_ptr_t),
-        .comptime_functions = core_list_new(parse_sym_entry_ptr_t),
-        .literal_producers = core_list_new(n00bb_ir_func_ptr_t),
-        .comptime_reachable_functions = core_list_new(n00bb_ir_func_ptr_t),
-        .runtime_reachable_functions = core_list_new(n00bb_ir_func_ptr_t),
-        .array_bound_work = core_list_new(n00bb_array_bound_work_t),
-        .phase_results = core_list_new(n00bb_phase_result_binding_t),
-        .global_results = core_list_new(n00bb_global_result_binding_t),
+        .reachable_functions = core_list_new(n00bb_ir_func_ptr_t),
+        .baked_roots = core_list_new(n00bb_baked_root_t),
         .linked_interfaces = linked_interfaces,
         .linked_interface_count = linked_interface_count,
         .native_roots = native_roots,
@@ -4121,6 +4089,10 @@ n00bb_link_analysis_new(parse_grammar_t *grammar, ir_ctx_t *ir_context,
         .resolver = resolver,
     };
     core_dict_init(&analysis->declarations_by_symbol, nullptr, nullptr);
+    if (!n00bb_baked_graph_load(analysis)) {
+        n00bb_link_analysis_free(analysis);
+        return nullptr;
+    }
     return analysis;
 }
 
@@ -4133,22 +4105,7 @@ n00bb_link_analysis_free(n00bb_link_analysis_t *analysis)
     for (size_t i = 0; i < analysis->trait_specializations.len; i++)
         core_free(analysis->trait_specializations.data[i]);
     core_list_free(analysis->trait_specializations);
-    core_list_free(analysis->comptime_functions);
-    core_list_free(analysis->literal_producers);
-    core_list_free(analysis->comptime_reachable_functions);
-    core_list_free(analysis->runtime_reachable_functions);
-    for (size_t i = 0; i < analysis->array_bound_work.len; i++)
-        core_list_free(analysis->array_bound_work.data[i].initializer_extents);
-    core_list_free(analysis->array_bound_work);
-    for (size_t i = 0; i < analysis->phase_results.len; i++) {
-        n00bb_phase_result_binding_t *binding =
-            &analysis->phase_results.data[i];
-        if (binding->owns_materialized) {
-            core_free(binding->materialized_bytes);
-            core_free(binding->materialized_string_offsets);
-        }
-    }
-    core_list_free(analysis->phase_results);
+    core_list_free(analysis->reachable_functions);
     for (size_t i = 0; i < analysis->static_graph_nodes.len; i++) {
         n00bb_static_graph_node_t *node =
             &analysis->static_graph_nodes.data[i].node;
@@ -4157,10 +4114,18 @@ n00bb_link_analysis_free(n00bb_link_analysis_t *analysis)
         for (size_t a = 0; a < node->alias_count; a++)
             core_free((void *)node->aliases[a]);
         core_free((void *)node->aliases);
+        core_free(analysis->static_graph_nodes.data[i].type_name);
     }
     core_list_free(analysis->static_graph_nodes);
     core_list_free(analysis->static_graph_edges);
-    core_list_free(analysis->global_results);
+    for (size_t i = 0; i < analysis->baked_roots.len; i++)
+        core_free(analysis->baked_roots.data[i].identifier);
+    core_list_free(analysis->baked_roots);
+    for (size_t i = 0; i < analysis->static_graph_slots.len; i++) {
+        core_free(analysis->static_graph_slots.data[i].module);
+        core_free(analysis->static_graph_slots.data[i].name);
+    }
+    core_list_free(analysis->static_graph_slots);
     core_list_free(analysis->units);
     core_dict_free(&analysis->declarations_by_symbol);
     core_free(analysis);

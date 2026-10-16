@@ -36,20 +36,6 @@ bool n00bb_abi_pack_tables(const core_target_desc_t *target,
                            n00bb_abi_packed_tables_t *out);
 void n00bb_abi_packed_tables_release(n00bb_abi_packed_tables_t *packed);
 
-typedef struct {
-    uint64_t typehash;
-    uint32_t index;
-} n00bb_abi_comptime_type_t;
-
-bool n00bb_abi_emit_comptime_catalog(
-    ir_ctx_t *context, ir_module_t *module,
-    ir_func_t *const *functions, size_t function_count,
-    const core_target_desc_t *target,
-    n00bb_abi_type_owner_lookup_fn type_owner, void *type_owner_context,
-    n00bb_abi_comptime_type_t **out_types, size_t *out_type_count,
-    uint8_t **out_object, size_t *out_object_bytes,
-    size_t *out_metadata_bytes, const char **out_failure_stage);
-
 /* `extra_sections` follow the metadata section, which is section 1 in
  * `symbols` and `relocations`. The object and packed tables have separate
  * ownership. */
@@ -61,14 +47,12 @@ bool n00bb_abi_write_object(
     const core_object_emit_absolute64_t *relocations,
     size_t relocation_count, uint8_t **out_image, size_t *out_size);
 
-/* Emits one finalized TU. Nontrivial initializer bodies require phase code;
- * the comptime phase must have completed before emission. The caller owns outputs. */
+/* Emits one finalized TU. The caller owns outputs. */
 bool n00bb_abi_emit_unit(
     core_link_unit_t *link, core_translation_unit_t *unit,
     core_string_t package_id,
     const parse_symtab_t *symbols, parse_token_stream_t *tokens,
-    const ir_module_t *comptime_ir, const ir_module_t *runtime_ir,
-    bool phase_code_present,
+    const ir_module_t *runtime_ir,
     const core_target_desc_t *target, uint64_t artifact_capabilities,
     n00bb_abi_declaration_lookup_fn lookup, void *lookup_context,
     n00bb_abi_node_source_fn node_source, void *source_context,

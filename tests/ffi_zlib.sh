@@ -25,6 +25,17 @@ builds_and_runs zlib_round_trip
 builds_and_runs zlib_round_trip --lto
 builds_and_runs zlib_subpackage
 builds_and_runs zlib_subpackage --lto
+builds_and_runs zlib_const
+nm "$tmp/zlib_const" | grep -q 'zlib\.__ffi___init_zlib\.uncompress$'
+if nm "$tmp/zlib_const" | grep -q 'zlib\.__ffi___init_zlib\.compress$'; then
+    echo "zlib_const shipped the build-time compress call" >&2
+    exit 1
+fi
+builds_and_runs zlib_litmod
+if nm "$tmp/zlib_litmod" | grep -qE 'n00b_ffi_[0-9]+_| U _?(crc32|compress2|inflate|deflate)$'; then
+    echo "zlib_litmod linked zlib without using it at run time" >&2
+    exit 1
+fi
 builds_and_runs zlib_two_modules
 if grep -q 'duplicate libraries' "$tmp/zlib_two_modules.log"; then
     cat "$tmp/zlib_two_modules.log" >&2

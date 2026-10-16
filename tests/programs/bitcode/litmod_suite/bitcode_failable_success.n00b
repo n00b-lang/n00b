@@ -6,6 +6,11 @@ func caller() -> int fail: string {
     return always(7)!
 }
 
-comptime {
-    require caller()! == 7
+when comptime() {
+    let value = try {
+        = caller()!
+    } else e {
+        = 0
+    }
+    require value == 7
 }

@@ -1,21 +1,18 @@
 import sys.memory
 
-comptime {
+let mapped: Ref[byte]? = sys.memory.map_zeroed(4096, 4096)
+if mapped != nil {
+    let base: Ref[byte] = mapped.get()
+    let state: Ref[Atomic[u32]] = unsafe_cast[Ref[Atomic[u32]]] base
+    let initial: u32 = 0xff
+    let low: u32 = 0x0f
+    let high: u32 = 0x10
+    __atomic_store(state, initial)
+    assert __atomic_fetch_and(state, low) == initial
+    assert __atomic_fetch_or(state, high) == low
+    assert __atomic_load(state) == low | high
+    sys.memory.unmap(base, 4096)
+    __fd_write(2, "ok")
 } else {
-    let mapped: Ref[byte]? = sys.memory.map_zeroed(4096, 4096)
-    if mapped != nil {
-        let base: Ref[byte] = mapped.get()
-        let state: Ref[Atomic[u32]] = unsafe_cast[Ref[Atomic[u32]]] base
-        let initial: u32 = 0xff
-        let low: u32 = 0x0f
-        let high: u32 = 0x10
-        __atomic_store(state, initial)
-        assert __atomic_fetch_and(state, low) == initial
-        assert __atomic_fetch_or(state, high) == low
-        assert __atomic_load(state) == low | high
-        sys.memory.unmap(base, 4096)
-        __fd_write(2, "ok")
-    } else {
-        assert false
-    }
+    assert false
 }

@@ -7,7 +7,7 @@ func values() -> Array[Tuple[bool, string]] {
                   (false, "a long second string")]'bundle
 }
 
-comptime {
+when comptime() {
     values()
 }
 

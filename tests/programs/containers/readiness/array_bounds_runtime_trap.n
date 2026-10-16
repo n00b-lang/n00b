@@ -1,5 +1,3 @@
-comptime {} else {
-    let values = [11, 29]'array
-    let bad: uint = __array_length(values)
-    require values[bad] == 29
-}
+let values = [11, 29]'array
+let bad: uint = __array_length(values)
+require values[bad] == 29

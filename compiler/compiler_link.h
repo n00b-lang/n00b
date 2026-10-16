@@ -65,9 +65,6 @@ bool register_unit_environment(parse_grammar_t *grammar,
     th_env *environment, core_translation_unit_t *unit);
 th_env *build_import_environment(parse_grammar_t *grammar,
     core_link_unit_t *link, n00bb_link_analysis_t *analysis);
-bool interface_requires_comptime_ir(n00bb_link_analysis_t *analysis);
-bool register_unit_comptime_ir_metadata(n00bb_link_analysis_t *analysis,
-    core_link_unit_t *link);
 void report_call_type_error(core_translation_unit_t *unit,
     parse_tree_t *call, th_ctx *types, th_type *actual, th_type *expected);
 bool unify_call_node_type(core_translation_unit_t *unit,
@@ -106,8 +103,7 @@ bool n00bb_module_initializer_writes(n00bb_link_analysis_t *analysis,
                                      parse_sym_entry_t *symbol);
 bool n00bb_function_writes_global(core_link_unit_t *link,
                                   n00bb_link_analysis_t *analysis,
-                                  parse_sym_entry_t *symbol,
-                                  bool comptime_only);
+                                  parse_sym_entry_t *symbol);
 bool n00bb_next_call_within(core_translation_unit_t *unit, parse_tree_t *node,
                             size_t *cursor, core_link_dependency_view_t *call,
                             th_type **signature);
@@ -144,8 +140,7 @@ parse_sym_entry_t *trait_method_requirement_symbol(
     core_string_t method_name);
 parse_sym_entry_t *linkable_trait_requirement(
     n00bb_link_analysis_t *analysis, core_translation_unit_t *unit,
-    n00bb_link_use_site_t *site, parse_sym_entry_t *symbol,
-    bool comptime_phase);
+    n00bb_link_use_site_t *site, parse_sym_entry_t *symbol);
 bool diagnose_unused_link_symbols(parse_grammar_t *grammar,
     n00bb_link_analysis_t *analysis);
 bool resolve_inferred_trait_references(parse_grammar_t *grammar,
@@ -165,11 +160,10 @@ typedef struct {
     parse_tree_t *site;
     parse_tree_t *value;
     th_type *type;
-    uint32_t phase;
     core_diag_location_t location;
     core_string_t provenance;
-} n00bb_phase_initializer_fact_t;
-core_list_decl(n00bb_phase_initializer_fact_t);
+} n00bb_initializer_fact_t;
+core_list_decl(n00bb_initializer_fact_t);
 
 typedef enum {
     N00BB_CLEANUP_RELEASE_NONE,
@@ -248,7 +242,7 @@ typedef struct {
     size_t cfg_liveness_incomplete_blocks;
     size_t cfg_liveness_owner_mismatches;
     size_t cfg_liveness_empty_functions;
-    core_list_t(n00bb_phase_initializer_fact_t) initializers;
+    core_list_t(n00bb_initializer_fact_t) initializers;
     core_list_t(n00bb_cleanup_fact_t) cleanup_facts;
 } n00bb_link_payload_t;
 
@@ -294,8 +288,6 @@ bool register_package_interfaces(n00bb_link_analysis_t *analysis,
 void bind_return_call_sources(n00bb_link_analysis_t *analysis);
 ir_func_t *link_ir_function_for_symbol(n00bb_link_analysis_t *analysis,
     parse_sym_entry_t *symbol);
-ir_func_t *link_ir_function_for_phase(n00bb_link_analysis_t *analysis,
-    parse_sym_entry_t *symbol, bool comptime);
 ir_global_t *link_ir_global_for_symbol(n00bb_link_analysis_t *analysis,
     parse_sym_entry_t *symbol);
 core_link_declaration_t *link_declaration_for_symbol(
@@ -334,61 +326,32 @@ typedef n00bb_trait_specialization_t *n00bb_trait_specialization_ptr_t;
 core_list_decl(n00bb_trait_specialization_ptr_t);
 
 typedef struct {
-    const char *identifier;
-    ir_func_t *producer;
-    ir_func_t *consumer;
-    ir_instr_t *instruction;
-    ir_span_t span;
-    uint8_t *materialized_bytes;
-    size_t materialized_byte_len;
-    uint32_t *materialized_string_offsets;
-    size_t materialized_string_offset_count;
-    uint64_t materialized_count;
-    uint32_t materialized_stride;
-    uint32_t materialized_inner_stride;
-    n00bb_llvm_literal_kind_t materialized_kind;
-    uint8_t materialized_encoding;
-    size_t graph_root_index;
-    bool owns_materialized;
-} n00bb_phase_result_binding_t;
-core_list_decl(n00bb_phase_result_binding_t);
-
-typedef struct {
     n00bb_static_graph_node_t node;
     uint64_t address;
     uint64_t typehash;
+    char *type_name;
     bool immutable;
+    bool array_backing;
 } n00bb_captured_graph_node_t;
 core_list_decl(n00bb_captured_graph_node_t);
 core_list_decl(n00bb_static_graph_edge_t);
 
 typedef struct {
-    uint32_t dimension;
-    uint64_t extent;
-    parse_tree_t *literal;
-} n00bb_array_initializer_extent_t;
-core_list_decl(n00bb_array_initializer_extent_t);
+    char *identifier;
+    size_t root_index;
+} n00bb_baked_root_t;
+core_list_decl(n00bb_baked_root_t);
 
 typedef struct {
-    parse_tree_t *expression;
-    ir_func_t *producer;
-    ir_global_t *result_global;
-    ir_func_t *product_producer;
-    core_list_t(n00bb_array_initializer_extent_t) initializer_extents;
-    core_translation_unit_t *unit;
-} n00bb_array_bound_work_t;
-core_list_decl(n00bb_array_bound_work_t);
-
-typedef struct {
-    const char *identifier;
-    ir_func_t *producer;
-    ir_module_t *source_module;
-    ir_global_t *source_global;
-    ir_module_t *target_module;
-    ir_global_t *target_global;
-    bool declared_static;
-} n00bb_global_result_binding_t;
-core_list_decl(n00bb_global_result_binding_t);
+    size_t node;
+    size_t offset;
+    uint32_t table;
+    uint32_t kind;
+    uint64_t typehash;
+    char *module;
+    char *name;
+} n00bb_static_graph_slot_t;
+core_list_decl(n00bb_static_graph_slot_t);
 
 enum {
     N00BB_LINK_STAGE_INPUTS = 1,
@@ -415,8 +378,7 @@ enum {
     N00BB_LINK_DEPENDENCY_CONTEXT_CALL = 11,
     N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_ALIAS = 12,
     N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_ALIAS_SUMMARY = 13,
-    N00BB_LINK_DEPENDENCY_COMPTIME_INITIALIZER_USE = 14,
-    N00BB_LINK_DEPENDENCY_RUNTIME_INITIALIZER_USE = 15,
+    N00BB_LINK_DEPENDENCY_INITIALIZER_ORDER = 15,
     N00BB_LINK_DEPENDENCY_TRAIT_SPECIALIZATION = 16,
 };
 
@@ -426,20 +388,15 @@ typedef struct n00bb_link_analysis_t {
     core_target_desc_t target;
     core_list_t(core_translation_unit_ptr_t) units;
     core_list_t(n00bb_trait_specialization_ptr_t) trait_specializations;
-    core_list_t(parse_sym_entry_ptr_t) comptime_functions;
-    core_list_t(n00bb_ir_func_ptr_t) literal_producers;
-    core_list_t(n00bb_ir_func_ptr_t) comptime_reachable_functions;
-    core_list_t(n00bb_ir_func_ptr_t) runtime_reachable_functions;
-    core_list_t(n00bb_array_bound_work_t) array_bound_work;
-    core_list_t(n00bb_phase_result_binding_t) phase_results;
+    core_list_t(n00bb_ir_func_ptr_t) reachable_functions;
     core_list_t(n00bb_captured_graph_node_t) static_graph_nodes;
     core_list_t(n00bb_static_graph_edge_t) static_graph_edges;
-    core_list_t(n00bb_global_result_binding_t) global_results;
-    bool layout_deferred;
+    core_list_t(n00bb_baked_root_t) baked_roots;
+    core_list_t(n00bb_static_graph_slot_t) static_graph_slots;
+    bool build_time_capture;
     core_dict_t declarations_by_symbol;
     ir_exec_graph_t *execution_graph;
     th_env *environment;
-    uint64_t next_array_product_id;
     th_env *export_environment;
     th_env *interface_environment;
     const th_env *const *linked_interfaces;
@@ -452,9 +409,9 @@ typedef struct n00bb_link_analysis_t {
 } n00bb_link_analysis_t;
 
 static inline bool
-n00bb_open_dispatch(const n00bb_link_analysis_t *analysis, bool comptime_phase)
+n00bb_open_dispatch(const n00bb_link_analysis_t *analysis)
 {
-    return analysis && analysis->may_link_further && !comptime_phase;
+    return analysis && analysis->may_link_further;
 }
 
 parse_sym_entry_t *n00bb_enum_type_symbol(n00bb_link_analysis_t *analysis,
@@ -467,16 +424,16 @@ typedef struct {
     size_t count;
 } n00bb_initializer_order_t;
 n00bb_initializer_order_t *build_initializer_order(
-    core_link_unit_t *link, n00bb_link_analysis_t *analysis, uint32_t phase,
+    core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     core_link_contribution_state_t *state_out);
+#define N00BB_INITIALIZER_ORDER_DOMAIN "n00bb.module-initializer-order"
 bool n00bb_collect_initializer_order(core_link_unit_t *link,
-    const char *domain, core_list_t(core_translation_unit_ptr_t) *order);
+    core_list_t(core_translation_unit_ptr_t) *order);
 void free_initializer_order(void *opaque);
-uint32_t initializer_dependency_kind(uint32_t phase);
 parse_sym_entry_t *initializer_declaration_symbol(
     core_link_declaration_t *declaration);
 bool dynamic_initializer_declaration(parse_grammar_t *grammar,
-    core_link_declaration_t *declaration, uint32_t phase);
+    core_link_declaration_t *declaration);
 parse_tree_t *link_initializer_value(parse_grammar_t *grammar,
     parse_tree_t *definition);
 bool populate_link_declaration_facts(parse_grammar_t *grammar,

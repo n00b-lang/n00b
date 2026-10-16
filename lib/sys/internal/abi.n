@@ -158,6 +158,73 @@ record Storage_Record layout(c) {
     tls_relocations:      Range
 }
 
+record Symbol_Record layout(c) {
+    name:                       String_Bits
+    kind:                       u32
+    type_index:                 u32
+    module_index:               u32
+    scope_index:                u32
+    visibility:                 u32
+    flags:                      u32
+    binding_kind:               u32
+    storage_duration:           u32
+    storage_class_name:         String_Bits
+    declaration_location_index: u32
+    native_binding_index:       u32
+    definitions:                Range
+    uses:                       Range
+}
+
+record Module_Record layout(c) {
+    full_path:            String_Bits
+    package_index:        u32
+    scc_index:            u32
+    initializer:          u32
+    imports:              Range
+    static_storage:       Range
+    tls_storage:          Range
+    runtime_config_index: u32
+    source_file_index:    u32
+}
+
+record Function_Record layout(c) {
+    name:                String_Bits
+    module_index:        u32
+    scope_index:         u32
+    symbol_index:        u32
+    success_type_index:  u32
+    failure_type_index:  u32
+    parameters:          Range
+    keywords:            Range
+    constraints:         Range
+    code_ranges:         Range
+    frame_layouts:       Range
+    flags:               u32
+    variadic_type_index: u32
+    reserved_zero:       u32
+    valid_keyword_bits:  u64
+}
+
+record Baked_Node_Record layout(c) {
+    module_index:  u32
+    type_index:    u32
+    segment_kind:  u32
+    segment_index: u32
+    flags:         u32
+    reserved_zero: u32
+    byte_offset:   u64
+    byte_length:   u64
+}
+
+public const type_flag_type_index: u32 = 1 << 6
+public const table_type:          u32 = 4
+public const table_function:      u32 = 14
+public const patch_index:         u32 = 1
+public const patch_box_type:      u32 = 2
+public const binding_const:       u32 = 3
+public const baked_immutable:     u32 = 1
+public const baked_array_backing: u32 = 2
+
 func type_at(index: u32) -> Ref[Type_Record]? {
     return __abi_type(index)
 }
@@ -206,6 +273,30 @@ func storage_count() -> u32 {
 
 func storage_at(index: u32) -> Ref[Storage_Record]? {
     return __abi_storage(index)
+}
+
+func symbol_at(index: u32) -> Ref[Symbol_Record]? {
+    return __abi_symbol(index)
+}
+
+func module_at(index: u32) -> Ref[Module_Record]? {
+    return __abi_module(index)
+}
+
+func function_at(index: u32) -> Ref[Function_Record]? {
+    return __abi_function(index)
+}
+
+func baked_node_count() -> u32 {
+    return __abi_baked_node_count()
+}
+
+func baked_node_at(index: u32) -> Ref[Baked_Node_Record]? {
+    return __abi_baked_node(index)
+}
+
+func baked_node_address(index: u32) -> Ref[byte]? {
+    return __abi_baked_node_address(index)
 }
 
 func storage_address(index: u32) -> Ref[byte]? {

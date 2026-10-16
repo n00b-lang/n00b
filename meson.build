@@ -51,7 +51,6 @@ runtime_abi_sources = ['runtime/runtime_abi.c', 'runtime/runtime_allocate.c', 'r
      'runtime/runtime_panic.c', 'runtime/runtime_dwarf.c', 'runtime/runtime_ffi.c',
      'runtime/runtime_unwind.c',
      'runtime/runtime_abi_box.c', 'runtime/runtime_abi_hash.c',
-     'runtime/runtime_literal_graph.c',
      'runtime/runtime_abi_storage.c', 'runtime/native_frame_runtime.c', 'runtime/builtin_os.c',
      'runtime/builtin_os_stw.c',
      'runtime/builtin_abi.c', 'abi/abi_directory.c', 'abi/abi_string.c']
@@ -79,36 +78,20 @@ runtime_abi_bitcode = custom_target(
     install_dir: get_option('libdir'),
 )
 
-comptime_allocate_support = static_library(
-    'n00b-comptime-allocate', ['compiler/comptime_allocate.c', 'compiler/comptime_graph.c'],
-    dependencies: runtime_abi_headers,
-)
-
-comptime_allocate_test = executable(
-    'comptime-allocate-test', 'tests/comptime_allocate.c',
-    link_with: [comptime_allocate_support, runtime_abi_support],
-)
-
-test('comptime-allocate', comptime_allocate_test)
-
 abi_static_graph_test = executable(
     'abi-static-graph-test',
     ['tests/abi_static_graph.c', 'compiler/abi_static_graph.c'],
     dependencies: lantern,
 )
 
+add_test_setup('default', timeout_multiplier: 2, is_default: true)
+
 test('abi-static-graph', abi_static_graph_test)
 
-runtime_literal_graph_test = executable(
-    'runtime-literal-graph-test',
-    ['tests/runtime_literal_graph.c', 'runtime/runtime_literal_graph.c'],
-    dependencies: runtime_abi_headers,
-)
-test('runtime-literal-graph', runtime_literal_graph_test)
 
 n00bb_exe = executable(
     'n00bb',
-    ['compiler/main.c', 'compiler/compiler_driver.c', 'compiler/compiler_lower.c', 'compiler/compiler_layout.c', 'compiler/compiler_phases.c', 'compiler/compiler_abi_driver.c', 'compiler/compiler_object_io.c', 'compiler/compiler_cli.c', 'compiler/compiler_tu.c', 'compiler/builtin_types.c',
+    ['compiler/main.c', 'compiler/compiler_driver.c', 'compiler/compiler_lower.c', 'compiler/compiler_layout.c', 'compiler/compiler_baked.c', 'compiler/compiler_abi_driver.c', 'compiler/compiler_object_io.c', 'compiler/compiler_cli.c', 'compiler/compiler_tu.c', 'compiler/builtin_types.c',
      'compiler/compiler_tu_range.c', 'compiler/compiler_tu_builtins.c',
      'compiler/compiler_tu_alias.c', 'compiler/compiler_tu_walk.c',
      'compiler/compiler_tu_interface.c',
@@ -1057,6 +1040,46 @@ test(
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_uninitialized_local.n',
            'is read on a path that does not assign it'],
+)
+
+test(
+    'comptime-statement-rejected-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_comptime_statement.n',
+           'write \'if comptime() { } else { }\''],
+)
+
+test(
+    'script-comptime-rejected-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_script_comptime.n',
+           'N00BB-B0028'],
+)
+
+test(
+    'script-const-reads-var-rejected-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_script_const_reads_var.n',
+           'N00BB-B0029'],
+)
+
+test(
+    'start-signature-rejected-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_start_signature.n',
+           'N00BB-B0030'],
 )
 
 test(

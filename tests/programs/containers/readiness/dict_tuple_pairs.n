@@ -8,7 +8,5 @@ func count_pairs(pairs: Array[Tuple[int, string]]) -> int {
     return count
 }
 
-comptime {} else {
-    let pairs: Array[Tuple[int, string]] = [(1, "one"), (2, "two")]
-    require count_pairs(pairs) == 2
-}
+let pairs: Array[Tuple[int, string]] = [(1, "one"), (2, "two")]
+require count_pairs(pairs) == 2

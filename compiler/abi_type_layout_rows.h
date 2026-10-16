@@ -35,7 +35,7 @@ typedef struct {
  * reserves earlier U32-stream entries. Record fields use the same finalized
  * layout and the TU's indexed symbol declarations. */
 bool n00bb_abi_type_layout_rows_build(
-    n00bb_abi_type_index_t *index, ir_module_t *comptime,
+    n00bb_abi_type_index_t *index,
     ir_module_t *runtime, bool include_external_definitions,
     uint32_t stream_base,
     const n00bb_abi_decl_index_t *declarations,

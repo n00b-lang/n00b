@@ -2,9 +2,6 @@ func checked(value: f64) -> uint {
     return cast[uint] value
 }
 
-comptime {
-} else {
-    __fd_write(2, "before")
-    let invalid: uint = checked(18446744073709551616.0)
-    __fd_write(2, "after")
-}
+__fd_write(2, "before")
+let invalid: uint = checked(18446744073709551616.0)
+__fd_write(2, "after")

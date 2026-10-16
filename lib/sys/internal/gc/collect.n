@@ -683,7 +683,7 @@ func finish_cycle(heap: Ref[internal.gc.core.Heap], fresh: bool) {
     stop_world(heap)
 
     var marker: internal.gc.core.Marker
-    internal.gc.mark.marker_init(ref marker, heap, false)
+    internal.gc.mark.marker_init(marker, heap, false)
     reclaim_caches(heap)
     drain_barrier_buffers(ref marker)
     reserve_bumps(ref marker)
@@ -722,7 +722,7 @@ func start_marking_locked(heap: Ref[internal.gc.core.Heap]) {
     stop_world(heap)
 
     var marker: internal.gc.core.Marker
-    internal.gc.mark.marker_init(ref marker, heap, false)
+    internal.gc.mark.marker_init(marker, heap, false)
     mark_roots(ref marker)
     internal.gc.mark.marker_flush(ref marker)
     internal.gc.mark.marker_stats(ref marker)
@@ -784,7 +784,7 @@ func collect_step(heap: Ref[internal.gc.core.Heap], max_objects: uint) -> bool {
         return false
     }
     var marker: internal.gc.core.Marker
-    internal.gc.mark.marker_init(ref marker, heap, false)
+    internal.gc.mark.marker_init(marker, heap, false)
     internal.gc.mark.barrier_queue_drain(ref marker)
     internal.gc.mark.marker_drain(ref marker, max_objects)
     internal.gc.mark.marker_flush(ref marker)
@@ -831,7 +831,7 @@ func maybe_collect(heap: Ref[internal.gc.core.Heap], request: uint) -> bool {
 
 func worker(heap: Ref[internal.gc.core.Heap]) {
     var marker: internal.gc.core.Marker
-    internal.gc.mark.marker_init(ref marker, heap, true)
+    internal.gc.mark.marker_init(marker, heap, true)
     __atomic_fetch_add(ref heap.nworkers, 1)
 
     while !__atomic_load(ref heap.shutdown) {

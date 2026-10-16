@@ -45,6 +45,7 @@ double n00bb_profile_seconds(void);
 #include "storage_selection.h"
 #include "specialize.h"
 #include "compiler_ffi.h"
+#include "compiler_baked.h"
 #include "lib/alloc.h"
 #include "lib/arena.h"
 #include "lib/buffer.h"
@@ -782,16 +783,8 @@ dump_link_unit(core_link_unit_t *link)
                                                    : "incomplete");
                 }
             }
-            if (facts->initializers.len) {
-                printf(" initializer-phases=[");
-                for (size_t p = 0; p < facts->initializers.len; p++) {
-                    if (p) printf(",");
-                    printf("%s", symbol_phase_name(
-                        (parse_sym_phase_t)facts->initializers.data[p]
-                            .phase));
-                }
-                printf("]");
-            }
+            if (facts->initializers.len)
+                printf(" initializers=%zu", facts->initializers.len);
             dump_static_value(facts->static_value);
         }
         ir_shape_t *array_shape = core_link_declaration_binding(
@@ -897,10 +890,8 @@ dump_link_unit(core_link_unit_t *link)
             ? "context-call"
             : edge.kind == N00BB_LINK_DEPENDENCY_INITIALIZER_USE
             ? "initializer-use"
-            : edge.kind == N00BB_LINK_DEPENDENCY_COMPTIME_INITIALIZER_USE
-            ? "comptime-initializer-use"
-            : edge.kind == N00BB_LINK_DEPENDENCY_RUNTIME_INITIALIZER_USE
-            ? "runtime-initializer-use"
+            : edge.kind == N00BB_LINK_DEPENDENCY_INITIALIZER_ORDER
+            ? "initializer-order"
             : edge.kind == N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_READ
             ? "function-global-read"
             : edge.kind == N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_WRITE
@@ -1144,6 +1135,16 @@ process_locate_job(locate_worker_context_t *context, core_work_job_t *job)
                         else core_buffer_printf(&message,
                                 "syntax error at line %u, column %u near token",
                                 error_token->line, error_token->column);
+                        parse_token_info_t *previous = error_pos > 0
+                            ? scan_stream_get(result->tokens, error_pos - 1)
+                            : nullptr;
+                        if (error_token->tid == '{' && previous
+                            && core_option_is_set(previous->value)
+                            && core_string_eq(
+                                core_option_get(previous->value),
+                                CORE_STRING_STATIC("comptime")))
+                            core_buffer_printf(&message,
+                                "; write 'if comptime() { } else { }'");
                     }
                     else
                         core_buffer_printf(&message,
@@ -2086,6 +2087,7 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
     active_options.import_context = &import_driver;
     active_options.prepare_import = prepare_import;
     active_options.selected_body = n00bb_tu_remember_selected_when_body;
+    active_options.build_time_use = n00bb_tu_remember_build_time_use;
     active_options.selected_body_context = nullptr;
     active_options.register_litmod = register_user_litmod;
     active_options.litmod_context = nullptr;
@@ -2192,7 +2194,9 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
                         grammar, unit, tree);
                 if (job_ok && native_build && !runtime_support_loaded) {
                     job_ok = load_implicit_builtin(&import_driver, grammar,
-                        unit, CORE_STRING_STATIC("sys.gc.alloc"));
+                            unit, CORE_STRING_STATIC("sys.gc.alloc"))
+                        && load_implicit_builtin(&import_driver, grammar,
+                            unit, CORE_STRING_STATIC("sys.marshal"));
                     runtime_support_loaded = job_ok;
                 }
                 if (job_ok) job_ok = !core_diagnostics_failed(
@@ -3346,22 +3350,147 @@ n00bb_format_units(parse_grammar_t *grammar, core_work_queue_t *queue,
     return ok;
 }
 
+extern char **environ;
+
 static bool
-specialize_phase_calls(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
-                       bool comptime, core_diagnostics_t *diagnostics)
+build_time_failure(core_diagnostics_t *diagnostics, const char *message)
+{
+    core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
+        CORE_STRING_STATIC("N00BB-B0027"), core_string_from_cstr(message));
+    return false;
+}
+
+static bool
+wait_for_child(pid_t child)
+{
+    int status = 0;
+    return waitpid(child, &status, 0) == child && WIFEXITED(status)
+        && WEXITSTATUS(status) == 0;
+}
+
+static bool
+compile_build_time_program(int argc, char **argv, const char *executable)
+{
+    char *compiler = n00bb_executable_path(argv[0]);
+    char **arguments = calloc((size_t)argc + 5, sizeof(*arguments));
+    bool ok = compiler && arguments;
+    size_t count = 0;
+    if (ok) {
+        arguments[count++] = compiler;
+        arguments[count++] = "build";
+    }
+    for (int i = 1; ok && i < argc; i++) {
+        if (!strcmp(argv[i], "--output") || !strcmp(argv[i], "-o")) {
+            i++;
+            continue;
+        }
+        if ((i == 1 && (!strcmp(argv[i], "build")
+                        || !strcmp(argv[i], "lower")))
+            || !strncmp(argv[i], "--dump-", 7)) continue;
+        arguments[count++] = argv[i];
+    }
+    char log_path[] = "/tmp/n00bb-build-time-log-XXXXXX";
+    int log_fd = ok ? mkstemp(log_path) : -1;
+    if (log_fd >= 0) unlink(log_path);
+    posix_spawn_file_actions_t actions;
+    bool actions_ready = log_fd >= 0
+        && !posix_spawn_file_actions_init(&actions);
+    pid_t child = 0;
+    if (actions_ready) {
+        arguments[count++] = "--build-time";
+        arguments[count++] = "--output";
+        arguments[count++] = (char *)executable;
+        ok = !posix_spawn_file_actions_adddup2(&actions, log_fd, 1)
+            && !posix_spawn_file_actions_adddup2(&actions, log_fd, 2)
+            && !posix_spawn(&child, compiler, &actions, nullptr, arguments,
+                            environ) && wait_for_child(child);
+        posix_spawn_file_actions_destroy(&actions);
+    }
+    else ok = false;
+    if (!ok && log_fd >= 0 && lseek(log_fd, 0, SEEK_SET) == 0) {
+        char chunk[4096];
+        ssize_t got;
+        while ((got = read(log_fd, chunk, sizeof(chunk))) > 0)
+            fwrite(chunk, 1, (size_t)got, stderr);
+    }
+    if (log_fd >= 0) close(log_fd);
+    free(arguments);
+    core_free(compiler);
+    return ok;
+}
+
+static bool
+run_build_time_program(const char *executable, int capture_fd)
+{
+    char *arguments[] = {(char *)executable, nullptr};
+    posix_spawn_file_actions_t actions;
+    if (posix_spawn_file_actions_init(&actions)) return false;
+    pid_t child = 0;
+    bool ok = !posix_spawn_file_actions_adddup2(&actions, capture_fd, 3)
+        && !posix_spawn(&child, executable, &actions, nullptr, arguments,
+                        environ)
+        && wait_for_child(child);
+    posix_spawn_file_actions_destroy(&actions);
+    return ok;
+}
+
+static bool
+read_capture(int capture_fd)
+{
+    core_buffer_t capture = {0};
+    char chunk[65536];
+    bool ok = lseek(capture_fd, 0, SEEK_SET) == 0;
+    ssize_t got;
+    while (ok && (got = read(capture_fd, chunk, sizeof(chunk))) > 0)
+        core_buffer_append(&capture, chunk, (size_t)got);
+    if (ok) n00bb_set_baked_capture((const uint8_t *)capture.data,
+                                    capture.byte_len);
+    core_buffer_release(&capture);
+    return ok;
+}
+
+static bool
+run_build_time_stage(int argc, char **argv, core_diagnostics_t *diagnostics)
+{
+    char executable[] = "/tmp/n00bb-build-time-XXXXXX";
+    int executable_fd = mkstemp(executable);
+    if (executable_fd < 0)
+        return build_time_failure(diagnostics,
+            "could not create the build-time executable path");
+    close(executable_fd);
+    char capture_path[] = "/tmp/n00bb-build-time-capture-XXXXXX";
+    int capture_fd = mkstemp(capture_path);
+    if (capture_fd >= 0) unlink(capture_path);
+    bool ok = capture_fd >= 0;
+    if (!ok) build_time_failure(diagnostics,
+        "could not create the build-time capture file");
+    if (ok && !compile_build_time_program(argc, argv, executable))
+        ok = build_time_failure(diagnostics,
+            "the build-time compile failed");
+    struct stat program = {0};
+    bool needed = ok && !stat(executable, &program) && program.st_size;
+    if (ok && needed && !run_build_time_program(executable, capture_fd))
+        ok = build_time_failure(diagnostics, "the build-time run failed");
+    if (ok && !read_capture(capture_fd))
+        ok = build_time_failure(diagnostics,
+            "could not read the build-time capture");
+    if (capture_fd >= 0) close(capture_fd);
+    unlink(executable);
+    return ok;
+}
+
+static bool
+specialize_calls(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
+                 core_diagnostics_t *diagnostics)
 {
     core_buffer_t failure = {0};
-    bool ok = n00bb_specialize_calls(comptime
-        ? &analysis->comptime_reachable_functions
-        : &analysis->runtime_reachable_functions, &failure);
+    bool ok = n00bb_specialize_calls(&analysis->reachable_functions,
+                                     &failure);
     if (ok) {
         core_list_t(core_translation_unit_ptr_t) order =
             core_list_new(core_translation_unit_ptr_t);
-        ok = n00bb_collect_initializer_order(link, comptime
-                ? "n00bb.comptime-module-initializer-order"
-                : "n00bb.runtime-module-initializer-order", &order)
-            && build_phase_reachable_functions(analysis, &order, comptime,
-                                               diagnostics);
+        ok = n00bb_collect_initializer_order(link, &order)
+            && build_reachable_functions(analysis, &order, diagnostics);
         core_list_free(order);
     }
     if (ok) ok = publish_declared_aggregate_layouts(analysis)
@@ -3369,8 +3498,7 @@ specialize_phase_calls(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     if (!ok) core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
         CORE_STRING_STATIC("N00BB-B0012"),
         core_string_from_cstr(failure.data ? failure.data
-            : comptime ? "could not specialize compile-time calls"
-                       : "could not specialize runtime calls"));
+                                           : "could not specialize calls"));
     core_buffer_release(&failure);
     return ok;
 }
@@ -3503,6 +3631,12 @@ n00bb_compiler_main(int argc, char **argv)
             CORE_STRING_STATIC("--lto is only valid with the build command"));
         options_valid = false;
     }
+    bool build_time = parse_cmdr_flag_present(args,
+        CORE_STRING_STATIC("--build-time"));
+    n00bb_set_build_time(build_time);
+    if (options_valid && (build_command || lower_command) && !build_time
+        && !run_build_time_stage(argc, argv, cli_diagnostics))
+        options_valid = false;
     int32_t native_root_count = parse_cmdr_flag_value_count(args,
         CORE_STRING_STATIC("--native-root"));
     core_string_t *native_roots = native_root_count
@@ -3601,6 +3735,7 @@ n00bb_compiler_main(int argc, char **argv)
         .definition_count = (size_t)define_count,
         .release_mode = parse_cmdr_flag_present(
             args, CORE_STRING_STATIC("--release")),
+        .build_time = build_time,
         .module_modifiers = module_modifiers,
         .module_modifier_count = 1,
         .module_literal_context = &generators,
@@ -3673,12 +3808,9 @@ n00bb_compiler_main(int argc, char **argv)
         fprintf(stderr, "PROFILE jobs %.3f\n", now - profile_tick);
         profile_tick = now;
     }
-    bool interface_closure_only = library_command && emit_interface
-        && interface_requires_comptime_ir(link_analysis);
     if (located && (lower_command || build_command || compile_command
                     || (library_command && (!emit_interface
-                                            || interface_ir_dump
-                                            || interface_closure_only))))
+                                            || interface_ir_dump))))
         located = lower_requests_to_ir(grammar, link,
             link_analysis, ir_context, cli_diagnostics,
             parse_cmdr_flag_present(args, CORE_STRING_STATIC("--dump-ir"))
@@ -3689,8 +3821,7 @@ n00bb_compiler_main(int argc, char **argv)
             parse_cmdr_flag_present(args,
                 CORE_STRING_STATIC("--dump-control-flow")),
             parse_cmdr_flag_present(args, CORE_STRING_STATIC("--dump-pdg")),
-            parse_cmdr_flag_present(args, CORE_STRING_STATIC("--dump-layout")),
-            interface_closure_only);
+            parse_cmdr_flag_present(args, CORE_STRING_STATIC("--dump-layout")));
     core_string_t header_output = parse_cmdr_flag_str(args,
         CORE_STRING_STATIC("--output"));
     if (located && header_output.data
@@ -3706,8 +3837,7 @@ n00bb_compiler_main(int argc, char **argv)
     }
     if (located && library_command && emit_interface && link_analysis) {
         th_env *interface_environment = link_analysis->interface_environment;
-        located = register_unit_comptime_ir_metadata(link_analysis, link)
-            && interface_environment
+        located = interface_environment
             && th_env_freeze(interface_environment);
         if (!located)
             core_diagnostics_report(cli_diagnostics, nullptr, CORE_DIAG_ERROR,
@@ -3739,39 +3869,21 @@ n00bb_compiler_main(int argc, char **argv)
     bool abi_emitted = false;
     bool specialize = !parse_cmdr_flag_present(args,
         CORE_STRING_STATIC("--no-specialize"));
-    if (located && (build_command || compile_command
-                    || (library_command && !emit_interface))) {
+    bool emit_program = located && build_command
+        && (n00bb_compile_phase() == PARSE_SYM_PHASE_RUNTIME
+            || n00bb_build_time_run_needed(link_analysis));
+    if (emit_program) {
         if (specialize)
-            located = specialize_phase_calls(link, link_analysis, true,
-                                             cli_diagnostics);
-        if (located) located = n00bb_execute_comptime(link, link_analysis,
-            !preprocessor_options.release_mode, native_cpu, argv[0],
-            cli_diagnostics);
-        if (profile_compile) {
-            double now = n00bb_profile_seconds();
-            fprintf(stderr, "PROFILE comptime %.3f\n", now - profile_tick);
-            profile_tick = now;
-        }
-        if (located && !n00bb_finalize_comptime_layout(link_analysis)) {
-            core_diagnostics_report(cli_diagnostics, nullptr,
-                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-B0013"),
-                CORE_STRING_STATIC("could not finalize layout from compile-time results"));
-            located = false;
-        }
-    }
-    if (located && build_command) {
-        if (specialize)
-            located = specialize_phase_calls(link, link_analysis, false,
-                                             cli_diagnostics);
+            located = specialize_calls(link, link_analysis, cli_diagnostics);
         if (profile_compile) {
             double now = n00bb_profile_seconds();
             fprintf(stderr, "PROFILE specialize %.3f\n", now - profile_tick);
             profile_tick = now;
         }
     }
-    if (located && build_command) {
+    if (located && emit_program) {
         located = n00bb_emit_abi_artifacts(link, link_analysis,
-            !preprocessor_options.release_mode, true, false);
+            !preprocessor_options.release_mode, false);
         if (profile_compile) {
             double now = n00bb_profile_seconds();
             fprintf(stderr, "PROFILE abi %.3f\n", now - profile_tick);
@@ -3781,6 +3893,18 @@ n00bb_compiler_main(int argc, char **argv)
             core_list_new(core_buffer_t);
         char *compiler_executable = located
             ? n00bb_executable_path(argv[0]) : nullptr;
+        if (located) {
+            core_list_t(n00bb_ir_func_ptr_t) *reachable =
+                &link_analysis->reachable_functions;
+            const char **externs = core_alloc_array(const char *,
+                reachable->len + 1);
+            size_t extern_count = 0;
+            for (size_t i = 0; externs && i < reachable->len; i++)
+                if (!reachable->data[i]->n_blocks && reachable->data[i]->name)
+                    externs[extern_count++] = reachable->data[i]->name;
+            n00bb_ffi_select(ffi, externs, extern_count);
+            core_free(externs);
+        }
         if (located && n00bb_ffi_shim_count(ffi))
             located = n00bb_ffi_compile_shims(ffi,
                 link_analysis->target.triple, compiler_executable,
@@ -3830,7 +3954,7 @@ n00bb_compiler_main(int argc, char **argv)
     }
     if (located && compile_command) {
         located = n00bb_emit_abi_artifacts(link, link_analysis,
-            !preprocessor_options.release_mode, false, true);
+            !preprocessor_options.release_mode, true);
         if (located)
             abi_emitted = located = n00bb_write_compile_abi_artifact(
                 link, args, cli_diagnostics);
@@ -3838,7 +3962,7 @@ n00bb_compiler_main(int argc, char **argv)
     if (located && library_command && !emit_interface
         && parse_cmdr_flag_present(args, CORE_STRING_STATIC("--output"))) {
         located = n00bb_emit_abi_artifacts(link, link_analysis,
-            !preprocessor_options.release_mode, false, false);
+            !preprocessor_options.release_mode, false);
         if (located)
             abi_emitted = located = n00bb_write_library_abi_artifact(link,
                 link_analysis, &link_analysis->target, args, cli_diagnostics);

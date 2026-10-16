@@ -1,3 +1,4 @@
+#include "abi_trace_leaf.h"
 #include "abi_link.h"
 #include "abi_member_facts.h"
 #include "abi_parameter_contract.h"
@@ -2083,8 +2084,7 @@ range_owns_row_once(const n00bb_abi_object_view_t *view,
 
 static bool
 module_initializer_valid(const n00bb_abi_object_view_t *view,
-                         uint32_t module_index, uint32_t function_index,
-                         uint32_t phase)
+                         uint32_t module_index, uint32_t function_index)
 {
     if (!function_index) return true;
     const n00b_abi_function_v1 *function = n00bb_abi_object_row(view,
@@ -2096,8 +2096,7 @@ module_initializer_valid(const n00bb_abi_object_view_t *view,
     for (uint32_t i = 0; i < function->code_ranges.count; i++) {
         const n00b_abi_code_range_v1 *range = indexed_range_row(view,
             function->code_ranges, i, N00B_ABI_TABLE_CODE_RANGE);
-        if (!range || range->function_index != function_index
-            || range->phase_mask != phase) return false;
+        if (!range || range->function_index != function_index) return false;
     }
     return true;
 }
@@ -2174,14 +2173,8 @@ row_owner_valid(const n00bb_abi_object_view_t *view, uint32_t kind,
     }
     if (kind == N00B_ABI_TABLE_MODULE) {
         const n00b_abi_module_v1 *module = row;
-        if (module->comptime_initializer
-                 && module->comptime_initializer
-                    == module->runtime_initializer)
-            return false;
         if (!module_initializer_valid(view, local_index,
-                module->comptime_initializer, N00B_ABI_PHASE_COMPTIME)
-            || !module_initializer_valid(view, local_index,
-                module->runtime_initializer, N00B_ABI_PHASE_RUNTIME))
+                module->initializer))
             return false;
         n00b_abi_range_v1 ranges[] = {module->static_storage,
                                        module->tls_storage};
@@ -3072,14 +3065,7 @@ merged_trace_complete(link_trace_build_t *build, uint32_t type_index)
     build->states[type_index] = LINK_TRACE_ACTIVE;
     n00b_abi_trace_v1 trace = {.type_index = type_index};
     state = LINK_TRACE_NONE;
-    if (type->kind == N00B_ABI_TYPE_REFERENCE
-        || type->kind == N00B_ABI_TYPE_ARRAY
-        || type->kind == N00B_ABI_TYPE_VIEW
-        || type->kind == N00B_ABI_TYPE_STRING
-        || type->kind == N00B_ABI_TYPE_BOX
-        || type->kind == N00B_ABI_TYPE_CALLBACK
-        || type->kind == N00B_ABI_TYPE_TRAIT
-        || type->kind == N00B_ABI_TYPE_UNION)
+    if (n00bb_abi_traced_leaf(type))
         state = LINK_TRACE_PRESENT;
     else if (type->kind == N00B_ABI_TYPE_OPTION
         || type->kind == N00B_ABI_TYPE_WRAPPER
@@ -3577,6 +3563,34 @@ typedef struct {
     int64_t binding_offset;
 } abi_native_rebase_t;
 
+static size_t
+rebased_row_bytes(uint32_t kind)
+{
+    return kind == N00B_ABI_TABLE_STORAGE ? sizeof(n00b_abi_storage_v1)
+        : kind == N00B_ABI_TABLE_BAKED_NODE ? sizeof(n00b_abi_baked_node_v1)
+        : kind == N00B_ABI_TABLE_NATIVE_BINDING
+            ? sizeof(n00b_abi_native_binding_v1) : 0;
+}
+
+static uint32_t *
+rebased_section(uint32_t kind, void *row)
+{
+    return kind == N00B_ABI_TABLE_STORAGE
+        ? &((n00b_abi_storage_v1 *)row)->segment_index
+        : kind == N00B_ABI_TABLE_BAKED_NODE
+            ? &((n00b_abi_baked_node_v1 *)row)->segment_index
+            : &((n00b_abi_native_binding_v1 *)row)->section_index;
+}
+
+static uint64_t *
+rebased_offset(uint32_t kind, void *row)
+{
+    return kind == N00B_ABI_TABLE_STORAGE
+        ? &((n00b_abi_storage_v1 *)row)->byte_offset
+        : kind == N00B_ABI_TABLE_BAKED_NODE
+            ? &((n00b_abi_baked_node_v1 *)row)->byte_offset : nullptr;
+}
+
 bool
 n00bb_abi_rebase_native_references(
     n00bb_abi_merged_rows_t *merged,
@@ -3589,21 +3603,16 @@ n00bb_abi_rebase_native_references(
     size_t capacity = 0;
     for (size_t ti = 0; ti < merged->table_count; ti++) {
         const n00bb_abi_merged_table_t *table = &merged->tables[ti];
-        if (table->kind != N00B_ABI_TABLE_STORAGE
-            && table->kind != N00B_ABI_TABLE_NATIVE_BINDING) continue;
+        size_t row_bytes = rebased_row_bytes(table->kind);
+        if (!row_bytes) continue;
         if ((table->record_count && (!table->records || !table->origins))
-            || table->record_bytes != (table->kind == N00B_ABI_TABLE_STORAGE
-                ? sizeof(n00b_abi_storage_v1)
-                : sizeof(n00b_abi_native_binding_v1))
+            || table->record_bytes != row_bytes
             || table->record_count > SIZE_MAX - capacity) {
             if (failure) *failure = (n00bb_abi_native_rebase_failure_t){
                 .table_kind = table->kind,
                 .reason = !table->records ? "missing merged row bytes"
                     : !table->origins ? "missing merged row origins"
-                    : table->record_bytes !=
-                        (table->kind == N00B_ABI_TABLE_STORAGE
-                            ? sizeof(n00b_abi_storage_v1)
-                            : sizeof(n00b_abi_native_binding_v1))
+                    : table->record_bytes != row_bytes
                         ? "merged row width mismatch"
                         : "merged row count overflow",
             };
@@ -3617,8 +3626,7 @@ n00bb_abi_rebase_native_references(
     bool valid = true;
     for (size_t ti = 0; valid && ti < merged->table_count; ti++) {
         n00bb_abi_merged_table_t *table = &merged->tables[ti];
-        if (table->kind != N00B_ABI_TABLE_STORAGE
-            && table->kind != N00B_ABI_TABLE_NATIVE_BINDING) continue;
+        if (!rebased_row_bytes(table->kind)) continue;
         for (uint32_t row_index = 1; valid
              && row_index < table->record_count; row_index++) {
             void *row = table->records
@@ -3628,9 +3636,7 @@ n00bb_abi_rebase_native_references(
             if (table->kind == N00B_ABI_TABLE_NATIVE_BINDING
                 && ((n00b_abi_native_binding_v1 *)row)->kind
                     == N00B_ABI_NATIVE_EXTERNAL_NAME) continue;
-            uint32_t local_section = table->kind == N00B_ABI_TABLE_STORAGE
-                ? ((n00b_abi_storage_v1 *)row)->segment_index
-                : ((n00b_abi_native_binding_v1 *)row)->section_index;
+            uint32_t local_section = *rebased_section(table->kind, row);
             const n00bb_abi_native_section_map_t *match = nullptr;
             valid = origin->present && local_section != 0;
             const char *reason = valid ? "no matching native section"
@@ -3712,8 +3718,9 @@ n00bb_abi_rebase_native_references(
                 .row = row, .kind = table->kind,
                 .section_index = match->final_section_index,
             };
-            if (table->kind == N00B_ABI_TABLE_STORAGE) {
-                uint64_t offset = ((n00b_abi_storage_v1 *)row)->byte_offset;
+            uint64_t *storage_offset = rebased_offset(table->kind, row);
+            if (storage_offset) {
+                uint64_t offset = *storage_offset;
                 valid = match->base_offset <= UINT64_MAX - offset;
                 if (valid) change.storage_offset = offset + match->base_offset;
             }
@@ -3738,16 +3745,12 @@ n00bb_abi_rebase_native_references(
     if (valid) {
         for (size_t i = 0; i < change_count; i++) {
             const abi_native_rebase_t *change = &changes[i];
-            if (change->kind == N00B_ABI_TABLE_STORAGE) {
-                n00b_abi_storage_v1 *row = change->row;
-                row->segment_index = change->section_index;
-                row->byte_offset = change->storage_offset;
-            }
-            else {
-                n00b_abi_native_binding_v1 *row = change->row;
-                row->section_index = change->section_index;
-                row->offset = change->binding_offset;
-            }
+            *rebased_section(change->kind, change->row) =
+                change->section_index;
+            uint64_t *offset = rebased_offset(change->kind, change->row);
+            if (offset) *offset = change->storage_offset;
+            else ((n00b_abi_native_binding_v1 *)change->row)->offset =
+                change->binding_offset;
         }
     }
     core_free(changes);
@@ -4117,8 +4120,7 @@ n00bb_abi_merge_rows(const n00bb_abi_selected_objects_t *selected,
     if (valid) valid = complete_merged_traces(&built);
     core_free(scratch);
     for (size_t i = 0; i < schema_count; i++) {
-        if (built.tables[i].kind == N00B_ABI_TABLE_STORAGE
-            || built.tables[i].kind == N00B_ABI_TABLE_NATIVE_BINDING)
+        if (rebased_row_bytes(built.tables[i].kind))
             built.tables[i].origins = origins[i];
         else core_free(origins[i]);
     }

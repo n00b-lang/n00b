@@ -28,6 +28,4 @@ binding {
 }
 -]'ffi
 
-comptime {} else {
-    require client.trip_client_run_raw() == 0
-}
+require client.trip_client_run_raw() == 0

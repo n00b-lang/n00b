@@ -4,6 +4,4 @@ link "n00bb_absent_library"
 const LIMIT: c_int = 40
 -]'ffi
 
-comptime {} else {
-    require absent.LIMIT == 40
-}
+require absent.LIMIT == 40

@@ -10,19 +10,17 @@ func maybe(n: int) -> int? {
     return nil
 }
 
-comptime {} else {
-    let items: Array[u8]? = [1, 2]
-    require items != nil
-    var later: Array[u8]? = nil
-    later = [3, 4]
-    require later != nil
-    let point: Point? = (x = 1, y = 2)
-    require point != nil
-    let counts: Array[int?] = [1, nil, maybe(3)]
-    require counts[1] == nil
-    require counts[2] != nil
-    let points: Array[Point?] = [(x = 5, y = 6), nil]
-    let first = points[0]
-    require first != nil
-    require first.get().y == 6
-}
+let items: Array[u8]? = [1, 2]
+require items != nil
+var later: Array[u8]? = nil
+later = [3, 4]
+require later != nil
+let point: Point? = (x = 1, y = 2)
+require point != nil
+let counts: Array[int?] = [1, nil, maybe(3)]
+require counts[1] == nil
+require counts[2] != nil
+let points: Array[Point?] = [(x = 5, y = 6), nil]
+let first = points[0]
+require first != nil
+require first.get().y == 6

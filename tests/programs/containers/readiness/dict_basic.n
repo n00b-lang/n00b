@@ -1,21 +1,19 @@
-comptime {} else {
-    var values: Dict[int, int] = new[Dict[int, int]]()
-    require values.len() == 0
-    require values.get(7) == nil
-    require !values.replace(7, 99)
-    require values.add(7, 11)
-    require !values.add(7, 99)
-    require values.replace(7, 12)
-    let replaced: int? = values.get(7)
-    if replaced != nil { require replaced.get() == 12 } else { require false }
-    require values.len() == 1
-    let first: int? = values.get(7)
-    if first != nil { require first.get() == 12 } else { require false }
-    let prior: int? = values.put(7, 13)
-    if prior != nil { require prior.get() == 12 } else { require false }
-    let updated: int? = values.get(7)
-    if updated != nil { require updated.get() == 13 } else { require false }
-    require values.remove(7)
-    require values.get(7) == nil
-    require values.len() == 0
-}
+var values: Dict[int, int] = new[Dict[int, int]]()
+require values.len() == 0
+require values.get(7) == nil
+require !values.replace(7, 99)
+require values.add(7, 11)
+require !values.add(7, 99)
+require values.replace(7, 12)
+let replaced: int? = values.get(7)
+if replaced != nil { require replaced.get() == 12 } else { require false }
+require values.len() == 1
+let first: int? = values.get(7)
+if first != nil { require first.get() == 12 } else { require false }
+let prior: int? = values.put(7, 13)
+if prior != nil { require prior.get() == 12 } else { require false }
+let updated: int? = values.get(7)
+if updated != nil { require updated.get() == 13 } else { require false }
+require values.remove(7)
+require values.get(7) == nil
+require values.len() == 0

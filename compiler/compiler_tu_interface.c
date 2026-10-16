@@ -136,15 +136,6 @@ materialize_interface_export_origin(n00bb_interface_context_t *loader,
     }
     return true;
 }
-static const char *
-interface_semantic_owner(parse_sym_entry_t *symbol, const char *fallback)
-{
-    n00bb_export_origin_t *origin = symbol ? parse_sym_binding(symbol,
-        CORE_STRING_STATIC("n00bb.export-origin")) : nullptr;
-    return origin && origin->declaration.data
-        ? origin->declaration.data : fallback;
-}
-
 
 static th_type *
 interface_callback_contract(n00bb_interface_context_t *loader,
@@ -410,7 +401,7 @@ interface_type_member_array_shape_metadata(n00bb_interface_context_t *loader,
     if (size) *size = 0;
     const uint8_t *result = key.data
         ? interface_owned_metadata(loader, TH_ENV_METADATA_TYPE,
-            qualified_name, key.data, 1, size) : nullptr;
+            qualified_name, key.data, 2, size) : nullptr;
     core_buffer_release(&key);
     return result;
 }
@@ -493,41 +484,23 @@ decode_interface_array_shape(n00bb_interface_context_t *loader,
     uint32_t known_prefix = 0;
     bool saw_unresolved = false;
     for (uint32_t i = 0; i < rank; i++) {
-        if (size - offset < 16) return false;
+        if (size - offset < 12) return false;
         ir_shape_extent_kind_t kind =
             (ir_shape_extent_kind_t)read_u32_le(data + offset);
         offset += 4;
         uint64_t static_value = read_u64_le(data + offset);
         offset += 8;
-        uint32_t name_size = read_u32_le(data + offset);
-        offset += 4;
-        if (name_size > size - offset || kind > IR_SHAPE_EXTENT_RUNTIME)
+        if (kind == IR_SHAPE_EXTENT_COMPTIME || kind > IR_SHAPE_EXTENT_RUNTIME)
             return false;
-        const char *producer = nullptr;
-        if (name_size) {
-            char *copy = core_arena_alloc(&state->semantic_values,
-                                           (size_t)name_size + 1);
-            if (!copy) return false;
-            memcpy(copy, data + offset, name_size);
-            copy[name_size] = 0;
-            producer = copy;
-        }
-        offset += name_size;
         ir_shape_extent_t extent = {.kind = kind};
         if (kind == IR_SHAPE_EXTENT_STATIC) {
-            if (!static_value || name_size) return false;
+            if (!static_value) return false;
             extent.static_value = static_value;
         }
-        else if (kind == IR_SHAPE_EXTENT_COMPTIME) {
-            if (static_value || !producer) return false;
-            extent.producer_identifier = producer;
-        }
-        else if (kind == IR_SHAPE_EXTENT_UNRESOLVED) {
-            if (static_value || name_size) return false;
-            saw_unresolved = true;
-        }
-        else if (static_value || name_size)
+        else if (static_value)
             return false;
+        else if (kind == IR_SHAPE_EXTENT_UNRESOLVED)
+            saw_unresolved = true;
         if (kind != IR_SHAPE_EXTENT_UNRESOLVED) {
             if (saw_unresolved) return false;
             known_prefix++;
@@ -554,135 +527,6 @@ restore_interface_array_shape_data(n00bb_interface_context_t *loader,
 }
 
 static bool
-interface_comptime_producer_available(n00bb_interface_context_t *loader,
-                                      const char *owner_name,
-                                      const char *producer)
-{
-    if (!loader || !owner_name || !producer || !*producer) return false;
-    core_buffer_t key = {0};
-    core_buffer_printf(&key, "n00b.comptime-producer.%s", producer);
-    bool found = false;
-    for (size_t e = 0; !found && e < loader->linked_interface_count; e++) {
-        const th_env *environment = loader->linked_interfaces[e];
-        for (size_t i = 0; i < th_env_metadata_count(environment); i++) {
-            th_env_metadata_view_t metadata = {0};
-            if (th_env_metadata_at(environment, i, &metadata)
-                && !strcmp(metadata.owner_name, owner_name)
-                && !strcmp(metadata.key, key.data)
-                && metadata.version == 1
-                && metadata.size == strlen(producer)
-                && !memcmp(metadata.data, producer, metadata.size)) {
-                found = true;
-                break;
-            }
-        }
-    }
-    core_buffer_release(&key);
-    return found;
-}
-
-static bool
-interface_comptime_dependency_available(n00bb_interface_context_t *loader,
-                                        const char *module_name,
-                                        const char *function_name)
-{
-    for (size_t e = 0; loader && e < loader->linked_interface_count; e++) {
-        const th_env *environment = loader->linked_interfaces[e];
-        for (size_t i = 0; i < th_env_declaration_count(environment); i++) {
-            th_env_declaration_view_t declaration = {0};
-            if (th_env_declaration_at(environment, i, &declaration)
-                && declaration.kind == TH_ENV_DECLARATION_FUNCTION
-                && declaration.module && declaration.root_name
-                && !strcmp(declaration.module, module_name)
-                && !strcmp(declaration.root_name, function_name))
-                return true;
-        }
-    }
-    return false;
-}
-
-static bool
-interface_comptime_dependencies_available(n00bb_interface_context_t *loader,
-                                          const char *owner_name,
-                                          const char *producer)
-{
-    if (!loader || !owner_name || !producer) return false;
-    core_buffer_t key = {0};
-    core_buffer_printf(&key, "n00b.comptime-dependencies.%s", producer);
-    const uint8_t *data = nullptr;
-    size_t size = 0;
-    for (size_t e = 0; !data && e < loader->linked_interface_count; e++) {
-        const th_env *environment = loader->linked_interfaces[e];
-        for (size_t i = 0; i < th_env_metadata_count(environment); i++) {
-            th_env_metadata_view_t metadata = {0};
-            if (th_env_metadata_at(environment, i, &metadata)
-                && !strcmp(metadata.owner_name, owner_name)
-                && !strcmp(metadata.key, key.data)
-                && metadata.version == 1) {
-                data = metadata.data;
-                size = metadata.size;
-                break;
-            }
-        }
-    }
-    core_buffer_release(&key);
-    if (!data || size < 8 || memcmp(data, "N0CD", 4) != 0) return false;
-    uint32_t count = read_u32_le(data + 4);
-    size_t offset = 8;
-    if (count > (size - offset) / 12) return false;
-    for (uint32_t i = 0; i < count; i++) {
-        if (size - offset < 12) return false;
-        uint32_t module_size = read_u32_le(data + offset);
-        uint32_t declaration_size = read_u32_le(data + offset + 4);
-        uint32_t name_size = read_u32_le(data + offset + 8);
-        offset += 12;
-        if (!module_size || !declaration_size || !name_size
-            || module_size > size - offset) return false;
-        const char *module = (const char *)data + offset;
-        offset += module_size;
-        if (declaration_size > size - offset) return false;
-        offset += declaration_size;
-        if (name_size > size - offset) return false;
-        char *module_copy = core_strndup(module, module_size);
-        char *function_name = core_strndup(
-            (const char *)data + offset, name_size);
-        if (!function_name || !module_copy) {
-            core_free(function_name);
-            core_free(module_copy);
-            return false;
-        }
-        offset += name_size;
-        bool available = interface_comptime_dependency_available(
-            loader, module_copy, function_name);
-        core_free(function_name);
-        core_free(module_copy);
-        if (!available)
-            return false;
-    }
-    return offset == size;
-}
-
-static bool
-interface_shape_producers_available(n00bb_interface_context_t *loader,
-                                    const char *owner_name,
-                                    ir_shape_t *shape)
-{
-    for (uint32_t i = 0; shape && i < ir_shape_rank(shape); i++) {
-        ir_shape_extent_t extent = {0};
-        if (!ir_shape_extent(shape, i, &extent)) return false;
-        if (extent.kind != IR_SHAPE_EXTENT_COMPTIME) continue;
-        const char *producer = extent.producer
-            ? extent.producer->name : extent.producer_identifier;
-        if (!interface_comptime_producer_available(loader, owner_name,
-                                                       producer)
-            || !interface_comptime_dependencies_available(loader, owner_name,
-                                                            producer))
-            return false;
-    }
-    return true;
-}
-
-static bool
 restore_interface_array_shape(n00bb_interface_context_t *loader,
                               n00bb_tu_state_t *state,
                               parse_sym_entry_t *symbol,
@@ -690,13 +534,9 @@ restore_interface_array_shape(n00bb_interface_context_t *loader,
 {
     size_t size = 0;
     const uint8_t *data = interface_owned_metadata(loader,
-        TH_ENV_METADATA_VALUE, qualified_name, "n00b.array-shape", 1, &size);
-    if (!restore_interface_array_shape_data(loader, state, symbol,
-                                             data, size)) return false;
-    ir_shape_t *shape = parse_sym_binding(symbol,
-        CORE_STRING_STATIC("ir.array-shape"));
-    return interface_shape_producers_available(loader,
-        interface_semantic_owner(symbol, qualified_name), shape);
+        TH_ENV_METADATA_VALUE, qualified_name, "n00b.array-shape", 2, &size);
+    return restore_interface_array_shape_data(loader, state, symbol,
+                                              data, size);
 }
 
 
@@ -710,7 +550,7 @@ restore_interface_function_shapes(n00bb_interface_context_t *loader,
     size_t size = 0;
     const uint8_t *data = interface_owned_metadata(loader,
         TH_ENV_METADATA_FUNCTION, qualified_name,
-        "n00b.function-array-shapes", 1, &size);
+        "n00b.function-array-shapes", 2, &size);
     if (!data) return true;
     if (!state || !symbol || size < 12 || memcmp(data, "N0FS", 4))
         return false;
@@ -752,14 +592,6 @@ restore_interface_function_shapes(n00bb_interface_context_t *loader,
     }
     shapes->parameter_count = count;
     shapes->parameters = parameters;
-    const char *semantic_owner = interface_semantic_owner(symbol,
-                                                           qualified_name);
-    for (uint32_t i = 0; i < count; i++)
-        if (!interface_shape_producers_available(loader, semantic_owner,
-                                                  parameters[i])) return false;
-    if (!interface_shape_producers_available(loader, semantic_owner,
-            parse_sym_binding(symbol, CORE_STRING_STATIC("ir.return-shape"))))
-        return false;
     return parse_sym_set_binding(symbol,
         CORE_STRING_STATIC("ir.parameter-shapes"), shapes);
 }
@@ -1341,8 +1173,6 @@ materialize_interface_type_members(n00bb_interface_context_t *loader,
             read_u32_le(metadata));
     }
 
-    const char *semantic_owner = interface_semantic_owner(
-        type_symbol, declaration->qualified_name);
     bool ok = true;
     n00bb_enum_range_t range = {0};
     for (size_t i = 0; i < th_record_len(declaration->type_shape); i++) {
@@ -1373,16 +1203,6 @@ materialize_interface_type_members(n00bb_interface_context_t *loader,
             if (failure) *failure = interface_metadata_failure(state,
                 declaration->qualified_name, member->name,
                 "interface field has invalid array-shape metadata");
-            ok = false;
-            break;
-        }
-        if (shape_data
-            && !interface_shape_producers_available(loader,
-                semantic_owner, parse_sym_binding(entry,
-                    CORE_STRING_STATIC("ir.array-shape")))) {
-            if (failure) *failure = interface_metadata_failure(state,
-                declaration->qualified_name, member->name,
-                "interface field is missing its compile-time IR closure");
             ok = false;
             break;
         }
@@ -1769,22 +1589,13 @@ materialize_interface_module_symbols(n00bb_interface_context_t *loader,
                     const uint8_t *shape_data =
                         interface_owned_metadata(loader,
                             TH_ENV_METADATA_TYPE, declaration.qualified_name,
-                            "n00b.array-shape", 1, &shape_size);
+                            "n00b.array-shape", 2, &shape_size);
                     if (shape_data && !restore_interface_array_shape_data(
                             loader, state, symbol, shape_data, shape_size)) {
                         if (failure) *failure =
                             interface_metadata_failure(state,
                                 declaration.qualified_name, nullptr,
                                 "interface type has invalid array-shape metadata");
-                        return false;
-                    }
-                    if (shape_data
-                        && !interface_shape_producers_available(loader,
-                            interface_semantic_owner(symbol,
-                                declaration.qualified_name), parse_sym_binding(
-                                symbol, CORE_STRING_STATIC("ir.array-shape")))) {
-                        if (failure) *failure =
-                            "interface type is missing its compile-time IR closure";
                         return false;
                     }
                 }

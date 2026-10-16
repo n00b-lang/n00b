@@ -1,0 +1,8 @@
+func twice(value: int) -> int {
+    return value * 2
+}
+
+const answer: int = twice(21)
+
+require answer == 42
+var written: i32 = __fd_write(1, "top")

@@ -73,6 +73,7 @@ static const n00bb_abi_table_schema_t v1_schemas[] = {
     SCHEMA(SPECIALIZATION_LINK, n00b_abi_specialization_link_v1),
     SCHEMA(TYPE_ARGUMENT, n00b_abi_type_argument_v1),
     SCHEMA(CALL_SHAPE, n00b_abi_call_shape_v1),
+    SCHEMA(BAKED_NODE, n00b_abi_baked_node_v1),
 };
 
 const n00bb_abi_table_schema_t *

@@ -6,7 +6,7 @@ func values() -> string {
     return "ignored"'binary_result
 }
 
-comptime {
+when comptime() {
     values()
 }
 

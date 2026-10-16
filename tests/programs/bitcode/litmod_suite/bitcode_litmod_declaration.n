@@ -38,8 +38,6 @@ func alias_float() -> string {
     return 1.5'ft
 }
 
-comptime {
-}
 
 func run_test() {
     raw_debug(alias_quote())

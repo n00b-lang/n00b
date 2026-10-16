@@ -13,7 +13,5 @@ func run(entry: Entry) -> int {
     return twice(entry.value)
 }
 
-comptime {} else {
-    let entry: Entry = (value = 4)
-    require run(entry) == 0
-}
+let entry: Entry = (value = 4)
+require run(entry) == 0

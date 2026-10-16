@@ -2,7 +2,7 @@ litmod<quotes> read_number, number_scalar(raw: string) -> int fail: string {
     return 7
 }
 
-comptime {
+when comptime() {
     require "seven"'number_scalar == 7
 }
 

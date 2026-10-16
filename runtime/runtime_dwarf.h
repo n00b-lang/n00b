@@ -9,6 +9,7 @@ typedef struct {
     const char *file;
     uint64_t file_length;
     uint32_t line;
+    uint32_t column;
 } n00bb_source_line_t;
 
 bool n00bb_runtime_source_line(uintptr_t address, n00bb_source_line_t *result);

@@ -1,4 +1,2 @@
-comptime {} else {
-    let values: Array[int] = new[Array[int]](1)
-    _ = values["0"]
-}
+let values: Array[int] = new[Array[int]](1)
+_ = values["0"]

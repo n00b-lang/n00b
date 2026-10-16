@@ -44,7 +44,7 @@ func dynamic_array(value: string) -> int {
     return [1, value, "b", true]'json
 }
 
-comptime {
+when comptime() {
     require [1, "a", "b", true]'json == 2
     require {"k": 1, "j": "x"}'json == 1
     require (1, "a")'json == 1

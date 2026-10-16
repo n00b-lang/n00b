@@ -35,7 +35,7 @@ inline func active_mutator() -> Ref[internal.gc.core.Mutator]? {
     var heap: Ref[internal.gc.core.Heap]? = __atomic_load(ref runtime_heap)
     if heap == nil {
         var config: internal.gc.core.Config
-        internal.gc.heap.config_default(ref config)
+        internal.gc.heap.config_default(config)
         config.scan_stacks = true
         heap = internal.gc.heap.create(ref config)
         __atomic_store(ref runtime_heap, heap)

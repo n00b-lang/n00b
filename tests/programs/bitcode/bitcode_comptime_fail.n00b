@@ -1,5 +1,7 @@
-comptime {
+func comptime_start() -> nil {
     require 2 + 3 == 6
-} else {
+}
+
+func start() -> nil {
     require 7 == 7
 }

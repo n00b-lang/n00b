@@ -116,8 +116,6 @@ main(void)
         .name = "frame-root-test", .scalars = scalars, .n_scalars = 3,
     };
     char *target = LLVMGetDefaultTargetTriple();
-    ir_module_t *comptime = ir_module_new(context, "probe$comptime",
-                                         &profile, target);
     ir_module_t *runtime = ir_module_new(context, "probe", &profile, target);
     th_type *point = ir_type_parse(runtime, "Point");
     th_type *point_definition = ir_type_parse(runtime, "(x: uint, y: uint)");
@@ -177,7 +175,7 @@ main(void)
     ir_instr_t *field_cast = entry
         ? ir_instr_add(entry, IR_OP_BITCAST) : nullptr;
     ir_instr_t *result = entry ? ir_instr_add(entry, IR_OP_RETURN) : nullptr;
-    CHECK(comptime && runtime && parameter && scalar_local
+    CHECK(runtime && parameter && scalar_local
         && copy && bitcast && copy_chain
         && field && field_cast && result
         && ir_instr_set_dest(copy, "copied", parameter->type)
@@ -344,12 +342,12 @@ main(void)
     CHECK(origin);
     core_diagnostics_t *diagnostics = core_diagnostics_new();
     n00bb_llvm_backend_t *backend = n00bb_llvm_backend_prepare(
-        comptime, runtime, true, false, diagnostics);
+        runtime, true, false, diagnostics);
     CHECK(backend && n00bb_llvm_backend_bind_storage_origin(backend, origin)
         && n00bb_llvm_backend_enable_frame_maps(backend));
     core_buffer_t object = {0};
-    CHECK(n00bb_llvm_backend_emit_object(backend, false, nullptr, 0,
-        nullptr, 0, 0, &object, diagnostics));
+    CHECK(n00bb_llvm_backend_emit_object(backend, nullptr, 0, 0, &object,
+        diagnostics));
 #if defined(__APPLE__)
     core_target_object_format_t format = CORE_TARGET_OBJECT_MACH_O;
 #elif defined(_WIN32)

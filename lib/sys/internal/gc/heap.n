@@ -81,20 +81,15 @@ func heap_record() -> Ref[internal.abi.Type_Record] {
     require false
 }
 
-func config_default(config: Ref[internal.gc.core.Config]) {
-    config.initial_heap_bytes = initial_heap_bytes
-    config.growth_factor = 2.0
-    config.max_heap_bytes = 0
-    config.poison_free = false
-    config.handshake_timeout_us = default_handshake_timeout_us
-    config.scan_stacks = false
-    config.world_timeout_ms = default_world_timeout_ms
-    config.finalizer_backlog_limit = 64
-    config.finalizer_assist = true
-    config.on_pause = nil
-    config.on_cycle = nil
-    config.finalizers_ready = nil
-    config.telemetry_user = nil
+func config_default(out config: internal.gc.core.Config) {
+    config = (initial_heap_bytes = initial_heap_bytes, growth_factor = 2.0,
+              max_heap_bytes = 0, poison_free = false,
+              handshake_timeout_us = default_handshake_timeout_us,
+              scan_stacks = false,
+              world_timeout_ms = default_world_timeout_ms,
+              finalizer_backlog_limit = 64, finalizer_assist = true,
+              on_pause = nil, on_cycle = nil, finalizers_ready = nil,
+              telemetry_user = nil)
 }
 
 func unlock(heap: Ref[internal.gc.core.Heap]) {
@@ -169,7 +164,7 @@ func create(config: Ref[internal.gc.core.Config]?) -> Ref[internal.gc.core.Heap]
         if config != nil {
             heap.cfg = ref_read(config.get())
         } else {
-            config_default(ref heap.cfg)
+            config_default(heap.cfg)
         }
         if !(heap.cfg.growth_factor >= 1.0) {
             heap.cfg.growth_factor = 1.0

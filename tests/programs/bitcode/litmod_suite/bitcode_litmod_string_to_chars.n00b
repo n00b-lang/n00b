@@ -6,7 +6,7 @@ func values() -> Array[char] {
     return "ignored"'chars
 }
 
-comptime {
+when comptime() {
     values()
 }
 

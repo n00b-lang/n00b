@@ -5,40 +5,38 @@ import sys.gc.los
 import sys.gc.mutator
 import sys.gc.roots
 
-comptime {} else {
-    var config: sys.gc.core.Config
-    sys.gc.heap.config_default(ref config)
-    config.initial_heap_bytes = 4 * sys.gc.core.block_bytes
-    let created: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(ref config)
-    if created != nil {
-        let heap: Ref[sys.gc.core.Heap] = created.get()
-        let attached: Ref[sys.gc.core.Mutator]? = sys.gc.mutator.create(heap)
-        if attached != nil {
-            let mutator: Ref[sys.gc.core.Mutator] = attached.get()
-            let sample: byte = 0
-            let type_index: u32 = cast[u32](typeof(sample))
-            let bytes: uint = 2 * sys.gc.los.los_threshold
-            let first: Ref[byte]? = sys.gc.alloc.allocate_large(
-                mutator, type_index, bytes, sys.gc.core.granule_bytes, false)
-            if first != nil {
-                ref_write(first.get(), cast[byte](0x5a))
-                var root: Ref[byte]? = first
-                require sys.gc.roots.push(mutator, ref root)
-                var index: uint = 0
-                while index < config.initial_heap_bytes / bytes * 3 {
-                    let allocated: Ref[byte]? = sys.gc.alloc.allocate_large(
-                        mutator, type_index, bytes, sys.gc.core.granule_bytes,
-                        false)
-                    require allocated != nil
-                    index += 1
-                }
-                require heap.collections != 0
-                require ref_read(first.get()) == cast[byte](0x5a)
-                sys.gc.roots.pop(mutator, 0)
-            } else { require false }
-            sys.gc.mutator.destroy(mutator)
+var config: sys.gc.core.Config
+sys.gc.heap.config_default(config)
+config.initial_heap_bytes = 4 * sys.gc.core.block_bytes
+let created: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(ref config)
+if created != nil {
+    let heap: Ref[sys.gc.core.Heap] = created.get()
+    let attached: Ref[sys.gc.core.Mutator]? = sys.gc.mutator.create(heap)
+    if attached != nil {
+        let mutator: Ref[sys.gc.core.Mutator] = attached.get()
+        let sample: byte = 0
+        let type_index: u32 = cast[u32](typeof(sample))
+        let bytes: uint = 2 * sys.gc.los.los_threshold
+        let first: Ref[byte]? = sys.gc.alloc.allocate_large(
+            mutator, type_index, bytes, sys.gc.core.granule_bytes, false)
+        if first != nil {
+            ref_write(first.get(), cast[byte](0x5a))
+            var root: Ref[byte]? = first
+            require sys.gc.roots.push(mutator, ref root)
+            var index: uint = 0
+            while index < config.initial_heap_bytes / bytes * 3 {
+                let allocated: Ref[byte]? = sys.gc.alloc.allocate_large(
+                    mutator, type_index, bytes, sys.gc.core.granule_bytes,
+                    false)
+                require allocated != nil
+                index += 1
+            }
+            require heap.collections != 0
+            require ref_read(first.get()) == cast[byte](0x5a)
+            sys.gc.roots.pop(mutator, 0)
         } else { require false }
-        sys.gc.heap.destroy(heap)
-        __fd_write(2, "ok")
+        sys.gc.mutator.destroy(mutator)
     } else { require false }
-}
+    sys.gc.heap.destroy(heap)
+    __fd_write(2, "ok")
+} else { require false }

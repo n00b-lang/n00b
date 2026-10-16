@@ -9,7 +9,5 @@ func check_type_only_probe() {
     } else { require false }
 }
 
-comptime {} else {
-    check_type_only_probe()
-    __fd_write(2, "ok")
-}
+check_type_only_probe()
+__fd_write(2, "ok")

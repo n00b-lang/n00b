@@ -13,40 +13,38 @@ func prepend(value: int, next: Ref[Chain_Node]?) -> Ref[Chain_Node] {
     return ref node
 }
 
-comptime {} else {
-    var head: Ref[Chain_Node]? = nil
-    var index: int = 0
-    while index < 128 {
-        head = prepend(index, head)
-        index = index + 1
-    }
-    var current: Ref[Chain_Node]? = head
-    var expected: int = 127
-    while current != nil {
-        let node: Ref[Chain_Node] = current.get()
-        require node.value == expected
-        expected = expected - 1
-        current = node.next
-    }
-    require expected == -1
-
-    var iteration: int = 0
-    var recent: Ref[Chain_Node]? = nil
-    while iteration < 100000 {
-        recent = prepend(iteration, recent)
-        if iteration % 64 == 63 {
-            var cursor: Ref[Chain_Node]? = recent
-            var value: int = iteration
-            while cursor != nil {
-                let node: Ref[Chain_Node] = cursor.get()
-                require node.value == value
-                value -= 1
-                cursor = node.next
-            }
-            require value == iteration - 64
-            recent = nil
-        }
-        iteration += 1
-    }
-    __fd_write(2, "ok")
+var head: Ref[Chain_Node]? = nil
+var index: int = 0
+while index < 128 {
+    head = prepend(index, head)
+    index = index + 1
 }
+var current: Ref[Chain_Node]? = head
+var expected: int = 127
+while current != nil {
+    let node: Ref[Chain_Node] = current.get()
+    require node.value == expected
+    expected = expected - 1
+    current = node.next
+}
+require expected == -1
+
+var iteration: int = 0
+var recent: Ref[Chain_Node]? = nil
+while iteration < 100000 {
+    recent = prepend(iteration, recent)
+    if iteration % 64 == 63 {
+        var cursor: Ref[Chain_Node]? = recent
+        var value: int = iteration
+        while cursor != nil {
+            let node: Ref[Chain_Node] = cursor.get()
+            require node.value == value
+            value -= 1
+            cursor = node.next
+        }
+        require value == iteration - 64
+        recent = nil
+    }
+    iteration += 1
+}
+__fd_write(2, "ok")

@@ -6,8 +6,6 @@ func value() -> string {
     return [- body -]'raw
 }
 
-comptime {
-}
 
 func run_test() {
     value()

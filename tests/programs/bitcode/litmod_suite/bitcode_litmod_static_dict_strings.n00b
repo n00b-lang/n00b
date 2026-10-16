@@ -22,7 +22,7 @@ func observe(items: Array[Tuple[string, int]]) {
     require true
 }
 
-comptime {
+when comptime() {
     observe({"compile-time": 4}'string_mirror)
 }
 

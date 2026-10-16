@@ -1,0 +1,25 @@
+import zlib
+
+func pack(text: Array[u8]) -> Array[u8] {
+    var packed: Array[u8] = text
+    try {
+        packed = zlib.compress(text, 9)!
+    } else failure {
+        require false
+    }
+    return packed
+}
+
+const text: Array[u8] = [104, 101, 108, 108, 111, 104, 101, 108, 108, 111]
+const packed: Array[u8] = pack(text)
+
+func start() -> nil {
+    try {
+        let unpacked = zlib.uncompress(64, packed)!
+        require __array_length(unpacked) == __array_length(text)
+        require unpacked[0] == 104
+        require unpacked[9] == 111
+    } else failure {
+        require false
+    }
+}

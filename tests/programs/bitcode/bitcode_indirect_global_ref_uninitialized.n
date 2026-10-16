@@ -4,8 +4,6 @@ func read_value() -> int {
     return ref_read(ref value)
 }
 
-comptime {} else {
-    let reader: Ref[() -> int] = ref read_value
-    reader.call()
-    value = 7
-}
+let reader: Ref[() -> int] = ref read_value
+reader.call()
+value = 7

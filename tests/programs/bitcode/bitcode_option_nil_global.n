@@ -1,8 +1,6 @@
 var module_slot: Ref[byte]? = nil
 thread var thread_slot: Ref[byte]? = nil
 
-comptime {} else {
-    assert module_slot == nil
-    assert thread_slot == nil
-    __fd_write(2, "ok")
-}
+assert module_slot == nil
+assert thread_slot == nil
+__fd_write(2, "ok")

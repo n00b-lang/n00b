@@ -1,66 +1,63 @@
 import sys.gc.hash
 import sys.memory
 
-comptime {
-} else {
-    var table: sys.gc.hash.Hash_Tab
-    table.slots = nil
-    table.bits = 0
-    table.n = 0
-    let mapped: Ref[byte]? = sys.memory.map_zeroed(16, 0)
-    if mapped != nil {
-        let first: Ref[byte] = mapped.get()
-        let second: Ref[byte] = __gc_byte_offset(first, 1)
-        require sys.gc.hash.tab_reserve(ref table, 3)
-        sys.gc.hash.tab_insert(ref table, 17, first)
-        sys.gc.hash.tab_insert(ref table, 29, second)
-        sys.gc.hash.tab_insert(ref table, 17, second)
-        assert table.n == 3
-        let found: Ref[byte]? = sys.gc.hash.tab_lookup(ref table, 17)
-        if found != nil { assert found.get() == first } else { assert false }
-        sys.gc.hash.tab_delete(ref table, 17, second)
-        assert table.n == 2
-        sys.gc.hash.tab_delete(ref table, 17, first)
-        assert sys.gc.hash.tab_lookup(ref table, 17) == nil
-        let remaining: Ref[byte]? = sys.gc.hash.tab_lookup(ref table, 29)
-        if remaining != nil { assert remaining.get() == second } else { assert false }
-        sys.gc.hash.tab_free(ref table)
+var table: sys.gc.hash.Hash_Tab
+table.slots = nil
+table.bits = 0
+table.n = 0
+let mapped: Ref[byte]? = sys.memory.map_zeroed(16, 0)
+if mapped != nil {
+    let first: Ref[byte] = mapped.get()
+    let second: Ref[byte] = __gc_byte_offset(first, 1)
+    require sys.gc.hash.tab_reserve(ref table, 3)
+    sys.gc.hash.tab_insert(ref table, 17, first)
+    sys.gc.hash.tab_insert(ref table, 29, second)
+    sys.gc.hash.tab_insert(ref table, 17, second)
+    assert table.n == 3
+    let found: Ref[byte]? = sys.gc.hash.tab_lookup(ref table, 17)
+    if found != nil { assert found.get() == first } else { assert false }
+    sys.gc.hash.tab_delete(ref table, 17, second)
+    assert table.n == 2
+    sys.gc.hash.tab_delete(ref table, 17, first)
+    assert sys.gc.hash.tab_lookup(ref table, 17) == nil
+    let remaining: Ref[byte]? = sys.gc.hash.tab_lookup(ref table, 29)
+    if remaining != nil { assert remaining.get() == second } else { assert false }
+    sys.gc.hash.tab_free(ref table)
 
-        var indexes: sys.gc.hash.Index_Tab
-        indexes.slots = nil
-        indexes.bits = 0
-        indexes.n = 0
-        var key: uint = 0
-        while key < 513 {
-            require sys.gc.hash.index_tab_reserve(ref indexes, 1)
-            sys.gc.hash.index_tab_insert(ref indexes, key, key + 1)
-            key += 1
+    var indexes: sys.gc.hash.Index_Tab
+    indexes.slots = nil
+    indexes.bits = 0
+    indexes.n = 0
+    var key: uint = 0
+    while key < 513 {
+        require sys.gc.hash.index_tab_reserve(ref indexes, 1)
+        sys.gc.hash.index_tab_insert(ref indexes, key, key + 1)
+        key += 1
+    }
+    require indexes.bits > 10
+    key = 0
+    while key < 513 {
+        require sys.gc.hash.index_tab_lookup(ref indexes, key) == key + 1
+        key += 1
+    }
+    sys.gc.hash.index_tab_insert(ref indexes, 17, 1001)
+    sys.gc.hash.index_tab_insert(ref indexes, 17, 1002)
+    sys.gc.hash.index_tab_find(ref indexes, 17, 1002).val = 2002
+    sys.gc.hash.index_tab_delete(ref indexes, 17, 18)
+    require sys.gc.hash.index_tab_lookup(ref indexes, 17) == 1001
+    sys.gc.hash.index_tab_delete(ref indexes, 17, 1001)
+    require sys.gc.hash.index_tab_lookup(ref indexes, 17) == 2002
+    sys.gc.hash.index_tab_delete(ref indexes, 17, 2002)
+    require sys.gc.hash.index_tab_lookup(ref indexes, 17) == 0
+    key = 0
+    while key < 513 {
+        if key != 17 {
+            sys.gc.hash.index_tab_delete(ref indexes, key, key + 1)
         }
-        require indexes.bits > 10
-        key = 0
-        while key < 513 {
-            require sys.gc.hash.index_tab_lookup(ref indexes, key) == key + 1
-            key += 1
-        }
-        sys.gc.hash.index_tab_insert(ref indexes, 17, 1001)
-        sys.gc.hash.index_tab_insert(ref indexes, 17, 1002)
-        sys.gc.hash.index_tab_find(ref indexes, 17, 1002).val = 2002
-        sys.gc.hash.index_tab_delete(ref indexes, 17, 18)
-        require sys.gc.hash.index_tab_lookup(ref indexes, 17) == 1001
-        sys.gc.hash.index_tab_delete(ref indexes, 17, 1001)
-        require sys.gc.hash.index_tab_lookup(ref indexes, 17) == 2002
-        sys.gc.hash.index_tab_delete(ref indexes, 17, 2002)
-        require sys.gc.hash.index_tab_lookup(ref indexes, 17) == 0
-        key = 0
-        while key < 513 {
-            if key != 17 {
-                sys.gc.hash.index_tab_delete(ref indexes, key, key + 1)
-            }
-            key += 1
-        }
-        require indexes.n == 0
-        sys.gc.hash.index_tab_free(ref indexes)
-        sys.memory.unmap(first, 16)
-        __fd_write(2, "ok")
-    } else { assert false }
-}
+        key += 1
+    }
+    require indexes.n == 0
+    sys.gc.hash.index_tab_free(ref indexes)
+    sys.memory.unmap(first, 16)
+    __fd_write(2, "ok")
+} else { assert false }

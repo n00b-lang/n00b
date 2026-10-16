@@ -1,4 +1,4 @@
-comptime {
+when comptime() {
     var answer: int = 2 + 3
     require answer == 5
 }

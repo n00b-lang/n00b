@@ -19,69 +19,66 @@ func place_object(base: Ref[byte], offset: uint, payload_bytes: u64,
     return header
 }
 
-comptime {
-} else {
-    let created: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(nil)
-    if created != nil {
-        let heap: Ref[sys.gc.core.Heap] = created.get()
-        let mapped: Ref[byte]? = sys.memory.map_zeroed(
-            sys.gc.core.block_bytes, sys.gc.core.block_bytes)
-        if mapped != nil {
-            let base: Ref[byte] = mapped.get()
-            let end: Ref[byte] = __gc_byte_offset(base, sys.gc.core.block_bytes)
-            assert sys.gc.registry.region_add(heap, base, end)
-            let block: Ref[sys.gc.core.Block_Metadata] = sys.gc.core.block_metadata_at(base)
-            sys.gc.core.block_init(heap, block)
+let created: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(nil)
+if created != nil {
+    let heap: Ref[sys.gc.core.Heap] = created.get()
+    let mapped: Ref[byte]? = sys.memory.map_zeroed(
+        sys.gc.core.block_bytes, sys.gc.core.block_bytes)
+    if mapped != nil {
+        let base: Ref[byte] = mapped.get()
+        let end: Ref[byte] = __gc_byte_offset(base, sys.gc.core.block_bytes)
+        assert sys.gc.registry.region_add(heap, base, end)
+        let block: Ref[sys.gc.core.Block_Metadata] = sys.gc.core.block_metadata_at(base)
+        sys.gc.core.block_init(heap, block)
 
-            let first: uint = sys.gc.core.header_lines() * sys.gc.core.line_bytes
-            let dead: uint = first + 64
-            let black: uint = first + 128
-            place_object(base, first, 32, true)
-            place_object(base, dead, 16, false)
-            place_object(base, black, 144, true)
-            let epoch: u32 = heap.epoch
-            __atomic_store(ref block.black_epoch, epoch)
-            block.sweep_epoch = epoch - 1
-            __atomic_store(ref heap.nunswept, 1)
+        let first: uint = sys.gc.core.header_lines() * sys.gc.core.line_bytes
+        let dead: uint = first + 64
+        let black: uint = first + 128
+        place_object(base, first, 32, true)
+        place_object(base, dead, 16, false)
+        place_object(base, black, 144, true)
+        let epoch: u32 = heap.epoch
+        __atomic_store(ref block.black_epoch, epoch)
+        block.sweep_epoch = epoch - 1
+        __atomic_store(ref heap.nunswept, 1)
 
-            sys.gc.collect.sweep_block(heap, block, epoch)
-            assert sys.gc.core.object_started(base, first)
-            assert !sys.gc.core.object_started(base, dead)
-            assert sys.gc.core.object_started(base, black)
-            let usable: uint = sys.gc.core.block_bytes / sys.gc.core.line_bytes - sys.gc.core.header_lines()
-            assert cast[uint](block.free_lines) == usable - 4
-            assert __atomic_load(ref heap.nunswept) == 0
-            assert block.sweep_epoch == epoch
+        sys.gc.collect.sweep_block(heap, block, epoch)
+        assert sys.gc.core.object_started(base, first)
+        assert !sys.gc.core.object_started(base, dead)
+        assert sys.gc.core.object_started(base, black)
+        let usable: uint = sys.gc.core.block_bytes / sys.gc.core.line_bytes - sys.gc.core.header_lines()
+        assert cast[uint](block.free_lines) == usable - 4
+        assert __atomic_load(ref heap.nunswept) == 0
+        assert block.sweep_epoch == epoch
 
-            heap.cfg.poison_free = true
-            heap.epoch = epoch + 1
-            __atomic_store(ref heap.nunswept, 1)
-            sys.gc.collect.sweep_block(heap, block, heap.epoch)
-            assert !sys.gc.core.object_started(base, first)
-            assert !sys.gc.core.object_started(base, black)
-            assert cast[uint](block.free_lines) == usable
-            assert __atomic_load(ref heap.nunswept) == 0
-            assert ref_read(__gc_byte_offset(base, first)) == cast[byte](0xdb)
+        heap.cfg.poison_free = true
+        heap.epoch = epoch + 1
+        __atomic_store(ref heap.nunswept, 1)
+        sys.gc.collect.sweep_block(heap, block, heap.epoch)
+        assert !sys.gc.core.object_started(base, first)
+        assert !sys.gc.core.object_started(base, black)
+        assert cast[uint](block.free_lines) == usable
+        assert __atomic_load(ref heap.nunswept) == 0
+        assert ref_read(__gc_byte_offset(base, first)) == cast[byte](0xdb)
 
-            heap.cfg.poison_free = false
-            heap.epoch += 1
-            heap.sweep_cursor = block
-            heap.keep_bytes = sys.gc.core.committed_bytes(heap)
-            __atomic_store(ref heap.nunswept, 1)
-            __atomic_store(ref heap.phase, cast[u32](sys.gc.core.Phase.sweeping))
-            assert sys.gc.collect.sweep_some(heap, 1)
-            assert __atomic_load(ref heap.phase) == cast[u32](sys.gc.core.Phase.idle)
-            assert block.state == cast[u8](sys.gc.core.Block_State.free)
-            assert heap.nfree == 1
-            assert cast[uint](block.free_lines) == usable
-            assert __atomic_load(ref heap.nunswept) == 0
-            sys.gc.collect.sweep_all(heap)
+        heap.cfg.poison_free = false
+        heap.epoch += 1
+        heap.sweep_cursor = block
+        heap.keep_bytes = sys.gc.core.committed_bytes(heap)
+        __atomic_store(ref heap.nunswept, 1)
+        __atomic_store(ref heap.phase, cast[u32](sys.gc.core.Phase.sweeping))
+        assert sys.gc.collect.sweep_some(heap, 1)
+        assert __atomic_load(ref heap.phase) == cast[u32](sys.gc.core.Phase.idle)
+        assert block.state == cast[u8](sys.gc.core.Block_State.free)
+        assert heap.nfree == 1
+        assert cast[uint](block.free_lines) == usable
+        assert __atomic_load(ref heap.nunswept) == 0
+        sys.gc.collect.sweep_all(heap)
 
-            heap.free_blocks = nil
-            heap.nfree = 0
-            sys.gc.alloc.block_release(heap, block)
-        } else { require false }
-        sys.gc.heap.destroy(heap)
-        __fd_write(2, "ok")
+        heap.free_blocks = nil
+        heap.nfree = 0
+        sys.gc.alloc.block_release(heap, block)
     } else { require false }
-}
+    sys.gc.heap.destroy(heap)
+    __fd_write(2, "ok")
+} else { require false }

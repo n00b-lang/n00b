@@ -29,7 +29,7 @@ static const n00bb_abi_value_column_t n00bb_abi_value_columns[] = {
     ABI_BITS(TYPE, type, flags, N00B_ABI_TYPE_FLAG_SIGNED
         | N00B_ABI_TYPE_FLAG_OPAQUE | N00B_ABI_TYPE_FLAG_PACKABLE
         | N00B_ABI_TYPE_FLAG_NON_CONCRETE | N00B_ABI_TYPE_FLAG_BITS
-        | N00B_ABI_TYPE_FLAG_PLAIN_REF),
+        | N00B_ABI_TYPE_FLAG_PLAIN_REF | N00B_ABI_TYPE_FLAG_TYPE_INDEX),
     ABI_BITS(ENUM_ITEM, enum_item, flags, N00B_ABI_ENUM_ITEM_FLAG_PRIMITIVE),
     ABI_VALUE(CONSTRAINT, constraint, kind,
         N00B_ABI_CONSTRAINT_UNIFIES, N00B_ABI_CONSTRAINT_TYPE_FAMILY),
@@ -50,8 +50,6 @@ static const n00bb_abi_value_column_t n00bb_abi_value_columns[] = {
         N00B_ABI_PASS_IN, N00B_ABI_PASS_CONSUME),
     ABI_BITS(PARAMETER, parameter, flags,
         N00B_ABI_PARAMETER_FLAG_VARIADIC),
-    ABI_BITS(CODE_RANGE, code_range, phase_mask,
-        N00B_ABI_PHASE_COMPTIME | N00B_ABI_PHASE_RUNTIME),
     ABI_VALUE(SYMBOL, symbol, kind,
         N00B_ABI_SYMBOL_VARIABLE, N00B_ABI_SYMBOL_FIELD),
     ABI_VALUE(SYMBOL, symbol, visibility,
@@ -59,12 +57,6 @@ static const n00bb_abi_value_column_t n00bb_abi_value_columns[] = {
     ABI_BITS(SYMBOL, symbol, flags, N00B_ABI_SYMBOL_FLAG_EXPORTED),
     ABI_VALUE(SYMBOL, symbol, binding_kind,
         N00B_ABI_BINDING_NOT_APPLICABLE, N00B_ABI_BINDING_CONST),
-    ABI_BITS(SYMBOL, symbol, phase_mask,
-        N00B_ABI_PHASE_COMPTIME | N00B_ABI_PHASE_RUNTIME),
-    ABI_BITS(SYMBOL, symbol, mutable_phase_mask,
-        N00B_ABI_PHASE_COMPTIME | N00B_ABI_PHASE_RUNTIME),
-    ABI_BITS(SYMBOL, symbol, initializer_phase_mask,
-        N00B_ABI_PHASE_COMPTIME | N00B_ABI_PHASE_RUNTIME),
     ABI_VALUE(SYMBOL, symbol, storage_duration,
         N00B_ABI_DURATION_UNSPECIFIED, N00B_ABI_DURATION_DYNAMIC),
     ABI_VALUE(NATIVE_BINDING, native_binding, kind,
@@ -75,8 +67,9 @@ static const n00bb_abi_value_column_t n00bb_abi_value_columns[] = {
         N00B_ABI_STORAGE_READ_ONLY, N00B_ABI_STORAGE_TLS),
     ABI_VALUE(REQUIREMENT, requirement, symbol_kind,
         N00B_ABI_SYMBOL_VARIABLE, N00B_ABI_SYMBOL_FIELD),
-    ABI_BITS(REQUIREMENT, requirement, required_phase_mask,
-        N00B_ABI_PHASE_COMPTIME | N00B_ABI_PHASE_RUNTIME),
+    ABI_BITS(REQUIREMENT, requirement, flags,
+        N00B_ABI_REQUIREMENT_FLAG_BAKED),
+    ABI_VALUE(REQUIREMENT, requirement, reserved_zero, 0, 0),
     ABI_VALUE(INDEX_PATCH, index_patch, patch_kind,
         N00B_ABI_PATCH_INDEX, N00B_ABI_PATCH_BOX_TYPE),
 };
@@ -115,8 +108,10 @@ n00bb_abi_row_values_valid(uint32_t kind, const void *row,
             + offsetof(n00b_abi_type_v1, flags));
         uint32_t type_kind = core_le_load_u32(bytes
             + offsetof(n00b_abi_type_v1, kind));
-        if ((flags & N00B_ABI_TYPE_FLAG_PLAIN_REF)
-            && type_kind != N00B_ABI_TYPE_REFERENCE) {
+        if (((flags & N00B_ABI_TYPE_FLAG_PLAIN_REF)
+             && type_kind != N00B_ABI_TYPE_REFERENCE)
+            || ((flags & N00B_ABI_TYPE_FLAG_TYPE_INDEX)
+                && type_kind != N00B_ABI_TYPE_PRIMITIVE)) {
             if (invalid_offset) *invalid_offset = offsetof(
                 n00b_abi_type_v1, flags);
             return false;

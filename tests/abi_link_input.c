@@ -852,8 +852,7 @@ test_imported_record_selection(const char **paths, size_t object_count)
     assert(type_requirement
         && type_requirement->symbol_kind == N00B_ABI_SYMBOL_TYPE
         && type_requirement->contract_type_index == root_type
-        && type_requirement->requesting_module_index == 1
-        && type_requirement->required_phase_mask);
+        && type_requirement->requesting_module_index == 1);
     n00bb_abi_index_plan_t *plan = n00bb_abi_index_plan_build(&selected);
     uint32_t from_root, from_dep, dep_module;
     assert(plan && n00bb_abi_index_plan_map(plan, root_input,
@@ -1205,7 +1204,6 @@ test_imported_function_requirement(const char **paths, size_t object_count)
     assert(function_requirement
         && function_requirement->symbol_kind == N00B_ABI_SYMBOL_FUNCTION
         && function_requirement->requesting_module_index == 1
-        && function_requirement->required_phase_mask
         && n00bb_abi_object_string(views[0],
             &function_requirement->full_path, &path)
         && path.length == strlen("shared_link_dep.impl.shared_link_value")
@@ -1254,7 +1252,6 @@ test_imported_value_requirement(const char **paths, size_t object_count)
         && value_requirement->symbol_kind == N00B_ABI_SYMBOL_VARIABLE
         && value_requirement->requesting_module_index == 1
         && value_requirement->required_layout_index
-        && value_requirement->required_phase_mask & N00B_ABI_PHASE_RUNTIME
         && n00bb_abi_object_string(root_view,
             &value_requirement->full_path, &path)
         && path.length == strlen("abi_value_dep.value")
@@ -2110,11 +2107,10 @@ test_module_initializer_remap(void)
         metadata.modules[i].runtime_config_index = 1;
         metadata.modules[i].source_file_index = 1;
     }
-    metadata.modules[1].runtime_initializer = 1;
+    metadata.modules[1].initializer = 1;
     metadata.functions[1].module_index = 1;
     metadata.functions[1].code_ranges = (n00b_abi_range_v1){1, 1};
     metadata.code[1].function_index = 1;
-    metadata.code[1].phase_mask = N00B_ABI_PHASE_RUNTIME;
     metadata.indexes[1] = 1;
     n00bb_abi_directory_entry_t directory[] = {
         {.kind = N00B_ABI_TABLE_TYPE,
@@ -2158,17 +2154,10 @@ test_module_initializer_remap(void)
     assert(!n00bb_abi_remap_row(&selected, plan, 0, N00B_ABI_TABLE_MODULE,
         1, &module, sizeof(module), nullptr));
     metadata.functions[1].module_index = 1;
-    metadata.code[1].phase_mask = N00B_ABI_PHASE_COMPTIME;
-    assert(!n00bb_abi_remap_row(&selected, plan, 0, N00B_ABI_TABLE_MODULE,
-        1, &module, sizeof(module), nullptr));
-    metadata.code[1].phase_mask = N00B_ABI_PHASE_RUNTIME;
     metadata.functions[1].failure_type_index = 1;
     assert(!n00bb_abi_remap_row(&selected, plan, 0, N00B_ABI_TABLE_MODULE,
         1, &module, sizeof(module), nullptr));
     metadata.functions[1].failure_type_index = 0;
-    metadata.modules[1].comptime_initializer = 1;
-    assert(!n00bb_abi_remap_row(&selected, plan, 0, N00B_ABI_TABLE_MODULE,
-        1, &module, sizeof(module), nullptr));
     n00bb_abi_index_plan_free(plan);
 }
 

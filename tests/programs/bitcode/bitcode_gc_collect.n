@@ -41,128 +41,126 @@ func report_cycle(info: sys.gc.core.Cycle_Info, user: Ref[byte]?) {
     cycle_count += 1
 }
 
-comptime {} else {
-    let frame: Ref[sys.abi.Frame_Layout_Record]? = sys.abi.frame_layout_at(1)
-    require frame != nil
-    require frame.get().function_index != 0
-    require frame.get().frame_byte_extent >= cast[u64](sys.abi.frame_root_offset)
-    var frame_index: u32 = 1
-    var found_typed_frame: bool = false
-    var found_rootless_frame: bool = false
-    var candidate: Ref[sys.abi.Frame_Layout_Record]? =
-        sys.abi.frame_layout_at(frame_index)
-    while candidate != nil {
-        let layout: Ref[sys.abi.Frame_Layout_Record] =
-            candidate.get()
-        if layout.shadow_frame_type_index != 0 {
-            found_typed_frame = true
-        }
-        if layout.frame_byte_extent == cast[u64](sys.abi.frame_root_offset) {
-            found_rootless_frame = true
-        }
-        frame_index += 1
-        candidate = sys.abi.frame_layout_at(frame_index)
+let frame: Ref[sys.abi.Frame_Layout_Record]? = sys.abi.frame_layout_at(1)
+require frame != nil
+require frame.get().function_index != 0
+require frame.get().frame_byte_extent >= cast[u64](sys.abi.frame_root_offset)
+var frame_index: u32 = 1
+var found_typed_frame: bool = false
+var found_rootless_frame: bool = false
+var candidate: Ref[sys.abi.Frame_Layout_Record]? =
+    sys.abi.frame_layout_at(frame_index)
+while candidate != nil {
+    let layout: Ref[sys.abi.Frame_Layout_Record] =
+        candidate.get()
+    if layout.shadow_frame_type_index != 0 {
+        found_typed_frame = true
     }
-    require found_typed_frame
-    require found_rootless_frame
-    var config: sys.gc.core.Config
-    sys.gc.heap.config_default(ref config)
-    config.on_pause = ref report_pause
-    config.on_cycle = ref report_cycle
-    let created: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(ref config)
-    if created != nil {
-        let heap: Ref[sys.gc.core.Heap] = created.get()
-        let mapped: Ref[byte]? = sys.memory.map_zeroed(
-            sys.gc.core.block_bytes, sys.gc.core.block_bytes)
-        if mapped != nil {
-            let base: Ref[byte] = mapped.get()
-            let end: Ref[byte] = __gc_byte_offset(base, sys.gc.core.block_bytes)
-            require sys.gc.registry.region_add(heap, base, end)
-            let block: Ref[sys.gc.core.Block_Metadata] = sys.gc.core.block_metadata_at(base)
-            sys.gc.core.block_init(heap, block)
-            let attached: Ref[sys.gc.core.Mutator]? = sys.gc.mutator.create(heap)
-            if attached != nil {
-                let mutator: Ref[sys.gc.core.Mutator] = attached.get()
-                var saw_tls_slot: bool = false
-                var tls_index: uint = 0
-                while tls_index < mutator.ntls_roots {
-                    let entry: Ref[sys.gc.roots.TLS_Root_Entry] = sys.gc.roots.tls_root_at(mutator, tls_index)
-                    if __abi_ref_address(entry.address) == __abi_ref_address(ref tls_slot) {
-                        saw_tls_slot = true
-                    }
-                    tls_index += 1
-                }
-                require saw_tls_slot
-                var owned: Ref[sys.gc.core.Block_Metadata]? = nil
-                sys.gc.core.own(heap, mutator, block, ref owned)
-                let assigned: Ref[sys.gc.core.Block_Metadata]? = block
-                sys.gc.core.bump_attach(mutator, ref mutator.small, assigned)
-                require sys.gc.core.bump_next_hole(ref mutator.small, 48)
-                let probe: byte = 0
-                let type_index: u32 = cast[u32](typeof(probe))
-                let first: Ref[byte]? = sys.gc.alloc.allocate_reserved(
-                    mutator, ref mutator.small, type_index, 8,
-                    sys.gc.core.granule_bytes, false)
-                let second: Ref[byte]? = sys.gc.alloc.allocate_reserved(
-                    mutator, ref mutator.small, type_index, 8,
-                    sys.gc.core.granule_bytes, false)
-                let third: Ref[byte]? = sys.gc.alloc.allocate_reserved(
-                    mutator, ref mutator.small, type_index, 8,
-                    sys.gc.core.granule_bytes, false)
-                if first != nil and second != nil and third != nil {
-                    var slot: Ref[byte]? = first
-                    require sys.gc.roots.push(mutator, ref slot)
-                    tls_slot = third
-                    let first_offset: uint = __abi_ref_address(
-                        sys.gc.core.header_of(first.get())) - __abi_ref_address(base)
-                    let second_offset: uint = __abi_ref_address(
-                        sys.gc.core.header_of(second.get())) - __abi_ref_address(base)
-                    let third_offset: uint = __abi_ref_address(
-                        sys.gc.core.header_of(third.get())) - __abi_ref_address(base)
-                    sys.gc.collect.collect(heap)
-                    assert heap.collections == 1
-                    let stats: sys.gc.core.Stats = sys.gc.heap.get_stats(heap)
-                    assert stats.collections == 1
-                    assert stats.objects_allocated >= 2
-                    assert stats.blocks_total == heap.nblocks
-                    assert stats.pauses == heap.pauses
-                    assert stats.last_pause_ns == heap.last_pause_ns
-                    assert stats.max_pause_ns >= stats.last_pause_ns
-                    assert stats.total_pause_ns >= stats.last_pause_ns
-                    assert stats.finalizers_pending == 0
-                    assert sys.gc.core.object_started(base, first_offset)
-                    assert !sys.gc.core.object_started(base, second_offset)
-                    assert sys.gc.core.object_started(base, third_offset)
-                    tls_slot = nil
-                    sys.gc.roots.pop(mutator, 0)
-                    sys.gc.collect.collect_start(heap)
-                    while sys.gc.collect.collect_step(heap, 1) {}
-                    sys.gc.collect.collect_finish(heap)
-                    assert heap.collections == 2
-                    assert pause_count >= 2
-                    assert cycle_count == 2
-                } else { require false }
-                sys.gc.mutator.destroy(mutator)
-            } else { require false }
-            sys.gc.heap.destroy(heap)
-        } else { require false }
-        config.scan_stacks = true
-        let stack_heap: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(ref config)
-        if stack_heap != nil {
-            let scanning: Ref[sys.gc.core.Heap] = stack_heap.get()
-            let attached: Ref[sys.gc.core.Mutator]? = sys.gc.mutator.create(scanning)
-            if attached != nil {
-                let cell: Stack_Cell = make_stack_cell(attached.get())
-                sys.gc.collect.collect(scanning)
-                let rooted: Ref[byte]? = cell.child
-                require rooted != nil
-                require sys.gc.mark.is_marked(scanning, rooted.get())
-                let stats: sys.gc.core.Stats = sys.gc.heap.get_stats(scanning)
-                assert stats.last_stack_words != 0
-                sys.gc.mutator.destroy(attached.get())
-            } else { require false }
-            sys.gc.heap.destroy(scanning)
-        } else { require false }
-        __fd_write(2, "ok")
-    } else { require false }
+    if layout.frame_byte_extent == cast[u64](sys.abi.frame_root_offset) {
+        found_rootless_frame = true
+    }
+    frame_index += 1
+    candidate = sys.abi.frame_layout_at(frame_index)
 }
+require found_typed_frame
+require found_rootless_frame
+var config: sys.gc.core.Config
+sys.gc.heap.config_default(config)
+config.on_pause = ref report_pause
+config.on_cycle = ref report_cycle
+let created: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(ref config)
+if created != nil {
+    let heap: Ref[sys.gc.core.Heap] = created.get()
+    let mapped: Ref[byte]? = sys.memory.map_zeroed(
+        sys.gc.core.block_bytes, sys.gc.core.block_bytes)
+    if mapped != nil {
+        let base: Ref[byte] = mapped.get()
+        let end: Ref[byte] = __gc_byte_offset(base, sys.gc.core.block_bytes)
+        require sys.gc.registry.region_add(heap, base, end)
+        let block: Ref[sys.gc.core.Block_Metadata] = sys.gc.core.block_metadata_at(base)
+        sys.gc.core.block_init(heap, block)
+        let attached: Ref[sys.gc.core.Mutator]? = sys.gc.mutator.create(heap)
+        if attached != nil {
+            let mutator: Ref[sys.gc.core.Mutator] = attached.get()
+            var saw_tls_slot: bool = false
+            var tls_index: uint = 0
+            while tls_index < mutator.ntls_roots {
+                let entry: Ref[sys.gc.roots.TLS_Root_Entry] = sys.gc.roots.tls_root_at(mutator, tls_index)
+                if __abi_ref_address(entry.address) == __abi_ref_address(ref tls_slot) {
+                    saw_tls_slot = true
+                }
+                tls_index += 1
+            }
+            require saw_tls_slot
+            var owned: Ref[sys.gc.core.Block_Metadata]? = nil
+            sys.gc.core.own(heap, mutator, block, ref owned)
+            let assigned: Ref[sys.gc.core.Block_Metadata]? = block
+            sys.gc.core.bump_attach(mutator, ref mutator.small, assigned)
+            require sys.gc.core.bump_next_hole(ref mutator.small, 48)
+            let probe: byte = 0
+            let type_index: u32 = cast[u32](typeof(probe))
+            let first: Ref[byte]? = sys.gc.alloc.allocate_reserved(
+                mutator, ref mutator.small, type_index, 8,
+                sys.gc.core.granule_bytes, false)
+            let second: Ref[byte]? = sys.gc.alloc.allocate_reserved(
+                mutator, ref mutator.small, type_index, 8,
+                sys.gc.core.granule_bytes, false)
+            let third: Ref[byte]? = sys.gc.alloc.allocate_reserved(
+                mutator, ref mutator.small, type_index, 8,
+                sys.gc.core.granule_bytes, false)
+            if first != nil and second != nil and third != nil {
+                var slot: Ref[byte]? = first
+                require sys.gc.roots.push(mutator, ref slot)
+                tls_slot = third
+                let first_offset: uint = __abi_ref_address(
+                    sys.gc.core.header_of(first.get())) - __abi_ref_address(base)
+                let second_offset: uint = __abi_ref_address(
+                    sys.gc.core.header_of(second.get())) - __abi_ref_address(base)
+                let third_offset: uint = __abi_ref_address(
+                    sys.gc.core.header_of(third.get())) - __abi_ref_address(base)
+                sys.gc.collect.collect(heap)
+                assert heap.collections == 1
+                let stats: sys.gc.core.Stats = sys.gc.heap.get_stats(heap)
+                assert stats.collections == 1
+                assert stats.objects_allocated >= 2
+                assert stats.blocks_total == heap.nblocks
+                assert stats.pauses == heap.pauses
+                assert stats.last_pause_ns == heap.last_pause_ns
+                assert stats.max_pause_ns >= stats.last_pause_ns
+                assert stats.total_pause_ns >= stats.last_pause_ns
+                assert stats.finalizers_pending == 0
+                assert sys.gc.core.object_started(base, first_offset)
+                assert !sys.gc.core.object_started(base, second_offset)
+                assert sys.gc.core.object_started(base, third_offset)
+                tls_slot = nil
+                sys.gc.roots.pop(mutator, 0)
+                sys.gc.collect.collect_start(heap)
+                while sys.gc.collect.collect_step(heap, 1) {}
+                sys.gc.collect.collect_finish(heap)
+                assert heap.collections == 2
+                assert pause_count >= 2
+                assert cycle_count == 2
+            } else { require false }
+            sys.gc.mutator.destroy(mutator)
+        } else { require false }
+        sys.gc.heap.destroy(heap)
+    } else { require false }
+    config.scan_stacks = true
+    let stack_heap: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(ref config)
+    if stack_heap != nil {
+        let scanning: Ref[sys.gc.core.Heap] = stack_heap.get()
+        let attached: Ref[sys.gc.core.Mutator]? = sys.gc.mutator.create(scanning)
+        if attached != nil {
+            let cell: Stack_Cell = make_stack_cell(attached.get())
+            sys.gc.collect.collect(scanning)
+            let rooted: Ref[byte]? = cell.child
+            require rooted != nil
+            require sys.gc.mark.is_marked(scanning, rooted.get())
+            let stats: sys.gc.core.Stats = sys.gc.heap.get_stats(scanning)
+            assert stats.last_stack_words != 0
+            sys.gc.mutator.destroy(attached.get())
+        } else { require false }
+        sys.gc.heap.destroy(scanning)
+    } else { require false }
+    __fd_write(2, "ok")
+} else { require false }

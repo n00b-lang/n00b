@@ -12,8 +12,6 @@ func present(index: int) -> bool {
     return true
 }
 
-comptime {} else {
-    let e: Entry = (value = 3)
-    entries.append(e)
-    require present(0)
-}
+let e: Entry = (value = 3)
+entries.append(e)
+require present(0)

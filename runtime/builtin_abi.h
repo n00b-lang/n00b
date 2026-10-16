@@ -13,7 +13,13 @@ const n00b_abi_tag_extractor_v1 *n00b_builtin_abi_tag_extractor(uint32_t index);
 const n00b_abi_frame_layout_v1 *n00b_builtin_abi_frame_layout(uint32_t index);
 uint32_t n00b_builtin_abi_storage_count(void);
 const n00b_abi_storage_v1 *n00b_builtin_abi_storage(uint32_t index);
+const n00b_abi_symbol_v1 *n00b_builtin_abi_symbol(uint32_t index);
+const n00b_abi_module_v1 *n00b_builtin_abi_module(uint32_t index);
+const n00b_abi_function_v1 *n00b_builtin_abi_function(uint32_t index);
 const uint8_t *n00b_builtin_abi_storage_address(uint32_t index);
+uint32_t n00b_builtin_abi_baked_node_count(void);
+const n00b_abi_baked_node_v1 *n00b_builtin_abi_baked_node(uint32_t index);
+const uint8_t *n00b_builtin_abi_baked_node_address(uint32_t index);
 const uint8_t *n00b_builtin_abi_string_backing_at(const void *address);
 const uint8_t *n00b_builtin_abi_bytes(uint32_t first, uint32_t count);
 int64_t n00b_builtin_abi_range_index(uint32_t first, uint32_t count,

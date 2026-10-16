@@ -674,17 +674,11 @@ func mark_quiescent(heap: Ref[internal.gc.core.Heap]) -> bool {
     return quiescent
 }
 
-func marker_init(marker: Ref[internal.gc.core.Marker], heap: Ref[internal.gc.core.Heap], worker: bool)
-                {
-    let probe: Ref[internal.gc.core.Marker]?       = nil
-    let row:   Ref[internal.abi.Type_Record]? = internal.abi.optional_reference_target(typeof(probe))
-    if row != nil {
-        __gc_memset(marker, 0, internal.abi.size_bytes(row.get()))
-        marker.heap = heap
-        marker.worker = worker
-        return
-    }
-    require false
+func marker_init(out marker: internal.gc.core.Marker,
+                 heap: Ref[internal.gc.core.Heap], worker: bool) {
+    marker = (heap = heap, input = nil, output = nil, holding = false,
+              worker = worker, marked = 0, objects = 0, bytes = 0,
+              stack_words = 0, frame_slots = 0, hits = 0)
 }
 
 func marker_stats(marker: Ref[internal.gc.core.Marker]) {

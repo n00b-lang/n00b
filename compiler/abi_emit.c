@@ -557,188 +557,6 @@ publish_catalog_record_specializations(n00bb_abi_type_index_t *index,
     n00bb_abi_type_owner_lookup_fn type_owner, void *type_owner_context);
 
 bool
-n00bb_abi_emit_comptime_catalog(
-    ir_ctx_t *context, ir_module_t *module,
-    ir_func_t *const *functions, size_t function_count,
-    const core_target_desc_t *target,
-    n00bb_abi_type_owner_lookup_fn type_owner, void *type_owner_context,
-    n00bb_abi_comptime_type_t **out_types, size_t *out_type_count,
-    uint8_t **out_object, size_t *out_object_bytes,
-    size_t *out_metadata_bytes, const char **out_failure_stage)
-{
-    if (out_failure_stage) *out_failure_stage = nullptr;
-    if (!context || !module || !target || !out_types || !out_type_count || !out_object
-        || !out_object_bytes || !out_metadata_bytes) return false;
-    ir_module_t *catalog = ir_module_new(context,
-        "__n00bb_comptime_catalog", ir_module_profile(module),
-        ir_module_target(module));
-    n00bb_abi_name_pool_t *names = n00bb_abi_name_pool_new();
-    n00bb_abi_type_index_t *index = n00bb_abi_type_index_new(catalog);
-    n00bb_abi_type_identity_rows_t types = {0};
-    n00bb_abi_type_components_t components = {0};
-    n00bb_abi_type_layout_rows_t layouts = {0};
-    n00bb_abi_packed_tables_t packed = {0};
-    n00bb_abi_comptime_type_t *bindings = nullptr;
-    uint8_t *object = nullptr;
-    size_t object_bytes = 0;
-    const char *stage = "comptime type collection";
-    bool valid = catalog && names && index
-        && n00bb_abi_type_index_collect_comptime_functions(index,
-            functions, function_count);
-    ir_module_t **owners = valid
-        ? core_alloc_array(ir_module_t *, function_count + 1) : nullptr;
-    size_t owner_count = 0;
-    valid = valid && owners != nullptr;
-    for (size_t f = 0; valid && f < function_count; f++) {
-        ir_module_t *owner = functions[f] ? functions[f]->owner : nullptr;
-        if (!owner) { valid = false; break; }
-        bool seen = owner == catalog;
-        for (size_t p = 0; p < owner_count; p++)
-            seen |= owners[p] == owner;
-        if (!seen) owners[owner_count++] = owner;
-    }
-    if (valid) stage = "comptime type layouts";
-    for (uint32_t i = 0; valid && i < n00bb_abi_type_index_count(index); i++) {
-        bool handled = false;
-        th_type *type = n00bb_abi_type_index_at(index, i);
-        valid = n00bb_abi_publish_direct_layout(catalog, type, target,
-                                                &handled);
-        for (size_t f = 0; valid && f < owner_count; f++)
-            valid = n00bb_abi_publish_direct_layout(owners[f], type, target,
-                                                    &handled);
-        if (!valid || ir_layout_final(catalog, type, target->triple))
-            continue;
-        for (size_t f = 0; valid && f < owner_count; f++) {
-            const ir_final_layout_t *source = ir_layout_final(
-                owners[f], type, target->triple);
-            if (!source) continue;
-            valid = ir_layout_publish_final(catalog, type,
-                                            target->triple, source);
-            break;
-        }
-    }
-    core_free(owners);
-    if (valid) valid = publish_catalog_record_specializations(index,
-        catalog, target, type_owner, type_owner_context);
-    if (valid) stage = "comptime type identity rows";
-    if (valid) valid = n00bb_abi_type_identity_rows_build(index,
-        catalog, catalog, true, nullptr, type_owner, type_owner_context,
-        names, &types);
-    if (valid) stage = "comptime type components";
-    if (valid) valid = n00bb_abi_type_components_build(index, catalog, 1,
-        &types, &components);
-    if (valid) stage = "comptime type layout rows";
-    if (valid) valid = n00bb_abi_type_layout_rows_build(index,
-        catalog, catalog, true, 1 + (uint32_t)components.count, nullptr, names,
-        &types, &layouts, nullptr);
-    size_t stream_count = 1 + components.count + layouts.stream_index_count;
-    uint32_t *stream = valid ? core_alloc_array(uint32_t, stream_count)
-                             : nullptr;
-    valid = valid && stream != nullptr;
-    n00bb_abi_table_rows_t rows[] = {
-        {N00B_ABI_TABLE_TYPE, types.rows, types.count},
-        {N00B_ABI_TABLE_TYPE_ARGUMENT, types.arguments,
-         types.argument_count},
-        {N00B_ABI_TABLE_LAYOUT, layouts.layouts, layouts.layout_count},
-        {N00B_ABI_TABLE_PHYSICAL_RUN, layouts.runs, layouts.run_count},
-        {N00B_ABI_TABLE_PACKED_RUN, layouts.packed_runs,
-         layouts.packed_run_count},
-        {N00B_ABI_TABLE_FIELD, layouts.fields, layouts.field_count},
-        {N00B_ABI_TABLE_ARM, layouts.arms, layouts.arm_count},
-        {N00B_ABI_TABLE_TAG_EXTRACTOR, layouts.tag_extractors,
-         layouts.tag_extractor_count},
-        {N00B_ABI_TABLE_TRACE, layouts.traces, layouts.trace_count},
-        {N00B_ABI_TABLE_TRACE_CHILD, layouts.trace_children,
-         layouts.trace_child_count},
-        {N00B_ABI_TABLE_TRACE_ARM, layouts.trace_arms,
-         layouts.trace_arm_count},
-        {N00B_ABI_TABLE_U32_STREAM, stream, stream_count},
-    };
-    size_t table_count = sizeof(rows) / sizeof(*rows);
-    if (valid) stage = "comptime table packing";
-    if (valid) {
-        if (components.count)
-            memcpy(stream + 1, components.indexes,
-                   components.count * sizeof(*stream));
-        if (layouts.stream_index_count)
-            memcpy(stream + 1 + components.count, layouts.stream_indexes,
-                   layouts.stream_index_count * sizeof(*stream));
-        valid = n00bb_abi_pack_tables(target, 0, rows, table_count,
-                                      &packed);
-    }
-    core_free(stream);
-    size_t row_count = n00bb_abi_type_index_count(index);
-    if (valid) {
-        bindings = core_alloc_array(n00bb_abi_comptime_type_t, row_count);
-        valid = bindings != nullptr;
-        for (uint32_t i = 0; valid && i < row_count; i++)
-            bindings[i] = (n00bb_abi_comptime_type_t){
-                .typehash = types.rows[i].typehash, .index = i,
-            };
-    }
-    n00bb_abi_image_key_t key;
-    n00bb_abi_image_header_t header;
-    n00bb_abi_directory_entry_t *entries = valid
-        ? core_alloc_array(n00bb_abi_directory_entry_t, table_count)
-        : nullptr;
-    size_t schema_count = 0;
-    const n00bb_abi_table_schema_t *schemas =
-        n00bb_abi_v1_table_schemas(&schema_count);
-    if (valid) valid = entries
-        && n00bb_abi_image_key_for_target(target, &key)
-        && n00bb_abi_container_read(packed.bytes, packed.byte_count,
-            &key, schemas, schema_count, false, &header, entries,
-            table_count);
-    core_object_emit_absolute64_t *relocations = nullptr;
-    size_t relocation_count = 0;
-    if (valid) valid = n00bb_abi_name_pool_relocations(names, entries,
-        table_count, &relocations,
-        &relocation_count);
-    size_t pool_size = n00bb_abi_name_pool_size(names);
-    core_object_emit_section_t section = {
-        .name = target->object_format == CORE_TARGET_OBJECT_MACH_O
-            ? "__n00b_strings"
-            : target->object_format == CORE_TARGET_OBJECT_COFF
-                ? ".rdata$S" : ".rodata.n00b_strings",
-        .segment = target->object_format == CORE_TARGET_OBJECT_MACH_O
-            ? "__TEXT" : nullptr,
-        .bytes = n00bb_abi_name_pool_bytes(names),
-        .size = pool_size, .alignment = 1,
-    };
-    core_object_emit_symbol_t symbols[] = {
-        {.name = "n00b_string_pool", .section_index = 2},
-        {.name = target->object_format == CORE_TARGET_OBJECT_MACH_O
-            ? "_n00b_abi_metadata" : "n00b_abi_metadata", .section_index = 1,
-         .exported = true},
-    };
-    if (valid) stage = "comptime catalog object";
-    if (valid) valid = n00bb_abi_write_object(target, &packed,
-        pool_size ? &section : nullptr, pool_size != 0,
-        pool_size ? symbols : &symbols[1], pool_size ? 2 : 1,
-        relocations, relocation_count, &object, &object_bytes);
-    core_free(relocations);
-    core_free(entries);
-    n00bb_abi_packed_tables_release(&packed);
-    n00bb_abi_type_layout_rows_release(&layouts);
-    n00bb_abi_type_components_release(&components);
-    n00bb_abi_type_identity_rows_release(&types);
-    n00bb_abi_type_index_free(index);
-    n00bb_abi_name_pool_free(names);
-    if (!valid) {
-        if (out_failure_stage) *out_failure_stage = stage;
-        core_free(bindings);
-        core_free(object);
-        return false;
-    }
-    *out_types = bindings;
-    *out_type_count = row_count;
-    *out_object = object;
-    *out_object_bytes = object_bytes;
-    *out_metadata_bytes = header.total_extent;
-    return true;
-}
-
-bool
 n00bb_abi_write_object(
     const core_target_desc_t *target,
     const n00bb_abi_packed_tables_t *packed,
@@ -1010,46 +828,25 @@ append_storage_section(const core_target_desc_t *target, uint32_t kind,
 }
 
 static bool
-phase_has_only_trivial_initializer(const ir_module_t *module)
-{
-    for (size_t i = 0; i < ir_func_count(module); i++) {
-        ir_func_t *function = ir_func_at((ir_module_t *)module, i);
-        if (!function) return false;
-        if (!ir_func_is_initializer(function)) continue;
-        if (function->n_params || function->n_locals
-            || function->n_blocks != 1 || !function->blocks[0]
-            || function->blocks[0]->n_instrs != 1) return false;
-        ir_instr_t *instruction = function->blocks[0]->instrs[0];
-        if (!instruction || instruction->op != IR_OP_RETURN
-            || instruction->n_operands) return false;
-    }
-    return true;
-}
-
-static bool
 publish_catalog_direct_layouts(core_translation_unit_t *unit,
                                n00bb_abi_type_index_t *index,
-                               ir_module_t *comptime, ir_module_t *runtime,
+                               ir_module_t *module,
                                const core_target_desc_t *target)
 {
-    ir_module_t *modules[] = {comptime, runtime};
-    for (size_t m = 0; m < sizeof(modules) / sizeof(*modules); m++)
-        for (size_t i = 0; i < n00bb_abi_type_index_count(index); i++) {
-            th_type *type = n00bb_abi_type_index_at(index, (uint32_t)i);
-            bool handled = false;
-            if (!type || !n00bb_abi_publish_direct_layout(modules[m], type,
-                    target, &handled)) {
-                core_buffer_t message = {0};
-                core_buffer_printf(&message,
-                    "could not publish ABI layout for %s in %s",
-                    type ? th_print(ir_module_types(modules[m]), type)
-                         : "<missing type>",
-                    m ? "runtime" : "comptime");
-                bool result = abi_unit_error(unit, message.data);
-                core_buffer_release(&message);
-                return result;
-            }
+    for (size_t i = 0; i < n00bb_abi_type_index_count(index); i++) {
+        th_type *type = n00bb_abi_type_index_at(index, (uint32_t)i);
+        bool handled = false;
+        if (!type || !n00bb_abi_publish_direct_layout(module, type,
+                target, &handled)) {
+            core_buffer_t message = {0};
+            core_buffer_printf(&message, "could not publish ABI layout for %s",
+                type ? th_print(ir_module_types(module), type)
+                     : "<missing type>");
+            bool result = abi_unit_error(unit, message.data);
+            core_buffer_release(&message);
+            return result;
         }
+    }
     return true;
 }
 
@@ -1228,7 +1025,6 @@ append_imported_type_requirements(
             .symbol_kind = N00B_ABI_SYMBOL_TYPE,
             .contract_type_index = i,
             .required_layout_index = type->layout_index,
-            .required_phase_mask = (uint32_t)owner->phases,
             .requesting_module_index = 1,
         };
         bool valid = n00bb_abi_name_pool_encode(pool,
@@ -1462,7 +1258,6 @@ append_imported_symbol_requirements(core_link_unit_t *link,
             .contract_type_index = type_index,
             .required_layout_index = kind == N00B_ABI_SYMBOL_VARIABLE
                 ? types->rows[type_index].layout_index : 0,
-            .required_phase_mask = (uint32_t)symbol->phases,
             .requesting_module_index = 1,
         };
         valid = n00bb_abi_name_pool_encode(pool,
@@ -1619,8 +1414,7 @@ n00bb_abi_emit_unit(
     core_link_unit_t *link, core_translation_unit_t *unit,
     core_string_t package_id,
     const parse_symtab_t *symbols, parse_token_stream_t *tokens,
-    const ir_module_t *comptime_ir, const ir_module_t *runtime_ir,
-    bool phase_code_present,
+    const ir_module_t *runtime_ir,
     const core_target_desc_t *target, uint64_t artifact_capabilities,
     n00bb_abi_declaration_lookup_fn lookup, void *lookup_context,
     n00bb_abi_node_source_fn node_source, void *source_context,
@@ -1629,7 +1423,7 @@ n00bb_abi_emit_unit(
     n00bb_abi_packed_tables_t *out_tables,
     uint8_t **out_object, size_t *out_object_bytes)
 {
-    if (!unit || !symbols || !tokens || !comptime_ir || !runtime_ir || !target
+    if (!unit || !symbols || !tokens || !runtime_ir || !target
         || !target->triple || !unit->module.identifier.data
         || !out_tables || !out_object || !out_object_bytes
         || !package_id.data || core_translation_unit_has_fatal_diagnostics(unit))
@@ -1716,13 +1510,10 @@ n00bb_abi_emit_unit(
             return result;
         }
     }
-    if (!core_translation_unit_imports_finalized(unit)
-        || (!phase_code_present
-            && (!phase_has_only_trivial_initializer(comptime_ir)
-                || !phase_has_only_trivial_initializer(runtime_ir)))) {
+    if (!core_translation_unit_imports_finalized(unit)) {
         n00bb_abi_decl_index_free(declarations);
         return abi_unit_error(unit,
-            "ABI emission requires code for executable initializer bodies");
+            "ABI emission requires finalized imports");
     }
     size_t import_count = core_translation_unit_import_count(unit);
     if (import_count && (!link || !core_link_unit_graph_is_finalized(link)
@@ -1744,9 +1535,8 @@ n00bb_abi_emit_unit(
     if (!runtime_name || strlen(runtime_name) != unit->module.identifier.u8_bytes
         || memcmp(runtime_name, unit->module.identifier.data,
                   unit->module.identifier.u8_bytes)
-        || !ir_module_target(runtime_ir) || !ir_module_target(comptime_ir)
-        || strcmp(ir_module_target(runtime_ir), target->triple)
-        || strcmp(ir_module_target(comptime_ir), target->triple)) {
+        || !ir_module_target(runtime_ir)
+        || strcmp(ir_module_target(runtime_ir), target->triple)) {
         n00bb_abi_decl_index_free(declarations);
         return abi_unit_error(unit,
             "ABI unit identity or target does not match its IR modules");
@@ -1791,6 +1581,7 @@ n00bb_abi_emit_unit(
     n00bb_abi_trait_method_rows_t trait_method_rows = {0};
     n00bb_abi_constraint_rows_t constraint_rows = {0};
     n00bb_abi_storage_rows_t storage_rows = {0};
+    n00bb_abi_baked_functions_t baked_functions = {0};
     abi_tls_metadata_t tls_metadata = {0};
     abi_native_bindings_t native_bindings = {0};
     n00bb_abi_packed_tables_t packed = {0};
@@ -1824,10 +1615,7 @@ n00bb_abi_emit_unit(
     };
 #define ABI_STAGE(name, call) ((call) || ((failed_stage = name), false))
     bool valid = pool && type_index && requirement_capacity_valid
-        && ABI_STAGE("comptime type collection",
-            n00bb_abi_type_index_collect_module_types(type_index,
-                (ir_module_t *)comptime_ir))
-        && ABI_STAGE("runtime type collection",
+        && ABI_STAGE("module type collection",
             n00bb_abi_type_index_collect_module_types(type_index,
                 (ir_module_t *)runtime_ir))
         && ABI_STAGE("symbol type collection",
@@ -1843,8 +1631,7 @@ n00bb_abi_emit_unit(
                 type_owner_context))
         && ABI_STAGE("direct type layouts",
             publish_catalog_direct_layouts(unit, type_index,
-                (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir,
-                target))
+                (ir_module_t *)runtime_ir, target))
         && ABI_STAGE("imported record specialization layouts",
             publish_catalog_record_specializations(type_index,
                 (ir_module_t *)runtime_ir, target, type_owner,
@@ -1852,15 +1639,23 @@ n00bb_abi_emit_unit(
         && ABI_STAGE("frame payload type collection",
             collect_frame_payload_types(unit, type_index,
                 (ir_module_t *)runtime_ir, target))
+        && ABI_STAGE("baked graph type collection",
+            !graphs || n00bb_abi_graph_types_collect(type_index,
+                declarations, (ir_module_t *)runtime_ir, lookup,
+                lookup_context, graphs))
         && ABI_STAGE("type identity rows",
             n00bb_abi_type_identity_rows_build(type_index,
-                (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir,
-                false, symbols, type_owner, type_owner_context, pool,
+                (ir_module_t *)runtime_ir, false, symbols, type_owner, type_owner_context, pool,
                 &type_rows))
         && ABI_STAGE("imported function requirements",
             append_imported_symbol_requirements(link, unit, type_index,
                 ir_module_types((ir_module_t *)runtime_ir), &type_rows, pool,
                 requirements, &requirement_count, N00B_ABI_SYMBOL_FUNCTION))
+        && ABI_STAGE("baked function requirements",
+            n00bb_abi_graph_function_requirements(type_index, &type_rows,
+                declarations, (ir_module_t *)runtime_ir, lookup,
+                lookup_context, graphs, pool, &requirements,
+                &requirement_count, &baked_functions))
         && ABI_STAGE(typevar_failure ? typevar_failure : "type variable binding",
             n00bb_abi_type_variables_bind(type_index,
                 ir_module_types((ir_module_t *)runtime_ir), declarations,
@@ -1873,8 +1668,7 @@ n00bb_abi_emit_unit(
             abi_stream_advance(&stream_base, components.count))
         && ABI_STAGE("type layouts",
             n00bb_abi_type_layout_rows_build(type_index,
-                (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir,
-                false, (uint32_t)stream_base,
+                (ir_module_t *)runtime_ir, false, (uint32_t)stream_base,
                 declarations, pool, &type_rows, &layout_rows,
                 &failed_layout_type))
         && ABI_STAGE("layout stream indexes",
@@ -1905,8 +1699,8 @@ n00bb_abi_emit_unit(
                 &type_rows, &signature_rows,
                 (uint32_t)signature_stream_base,
                 (uint32_t)function_stream_base,
-                (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir,
-                pool, lookup, lookup_context, &function_rows))
+                (ir_module_t *)runtime_ir, pool, lookup, lookup_context,
+                &function_rows))
         && ABI_STAGE("function stream indexes",
             abi_stream_advance(&stream_base,
                 function_rows.stream_index_count))
@@ -1919,15 +1713,16 @@ n00bb_abi_emit_unit(
                     (ir_module_t *)runtime_ir)), &trait_method_rows));
     if (valid) {
         failed_stage = "imported type requirements";
-        valid = type_rows.count <= UINT32_MAX - import_count - 1
-            && reference_count <= UINT32_MAX - import_count - type_rows.count - 1
+        valid = type_rows.count <= UINT32_MAX - requirement_count - 1
+            && reference_count
+                <= UINT32_MAX - requirement_count - type_rows.count - 1
             && type_rows.count <= (SIZE_MAX / sizeof(*requirements))
-                - import_count - 1
+                - requirement_count - 1
             && reference_count <= (SIZE_MAX / sizeof(*requirements))
-                - import_count - type_rows.count - 1;
+                - requirement_count - type_rows.count - 1;
         if (valid) {
             requirements = core_realloc(requirements,
-                (import_count + type_rows.count + reference_count + 1)
+                (requirement_count + type_rows.count + reference_count + 1)
                     * sizeof(*requirements));
             valid = append_imported_type_requirements(type_index,
                 ir_module_types((ir_module_t *)runtime_ir), &type_rows,
@@ -1946,15 +1741,12 @@ n00bb_abi_emit_unit(
                 constraint_rows.stream_index_count))
         && ABI_STAGE("static storage",
             n00bb_abi_storage_rows_build(type_index, declarations,
-                &type_rows, (ir_module_t *)runtime_ir, pool,
-                (uint32_t)stream_base,
+                &type_rows, &function_rows, &baked_functions,
+                (ir_module_t *)runtime_ir, pool, (uint32_t)stream_base,
                 lookup, lookup_context, graphs, &storage_rows));
 #undef ABI_STAGE
     if (valid) {
-        modules[1].comptime_initializer =
-            function_rows.comptime_initializer_index;
-        modules[1].runtime_initializer =
-            function_rows.runtime_initializer_index;
+        modules[1].initializer = function_rows.initializer_index;
     }
     if (valid) {
         failed_stage = "trait method membership";
@@ -2024,22 +1816,6 @@ n00bb_abi_emit_unit(
             if (spelling) core_buffer_printf(&message, " for %s", spelling);
             if (type_rows.failed_reason)
                 core_buffer_printf(&message, ": %s", type_rows.failed_reason);
-            if (failed_type && type_rows.failed_reason
-                && !strcmp(type_rows.failed_reason, "conflicting phase layouts")) {
-                const char *target_name = ir_module_target((ir_module_t *)runtime_ir);
-                const ir_final_layout_t *runtime_layout = ir_layout_final(
-                    (ir_module_t *)runtime_ir, failed_type, target_name);
-                const ir_final_layout_t *comptime_layout = comptime_ir
-                    ? ir_layout_final((ir_module_t *)comptime_ir,
-                                      failed_type, target_name) : nullptr;
-                if (runtime_layout && comptime_layout)
-                    core_buffer_printf(&message,
-                        " (runtime %llu bits/%llu-byte alignment, comptime %llu bits/%llu-byte alignment)",
-                        (unsigned long long)runtime_layout->intrinsic_bits,
-                        (unsigned long long)runtime_layout->alignment_bytes,
-                        (unsigned long long)comptime_layout->intrinsic_bits,
-                        (unsigned long long)comptime_layout->alignment_bytes);
-            }
         }
         if (!strcmp(failed_stage, "type layouts")
             && failed_layout_type != UINT32_MAX) {
@@ -2200,6 +1976,13 @@ n00bb_abi_emit_unit(
             native_bindings.rows[i].section_index = row->segment_index;
         }
     }
+    for (size_t i = 1; valid && i < storage_rows.baked_node_count; i++) {
+        n00b_abi_baked_node_v1 *row = &storage_rows.baked_nodes[i];
+        uint32_t input = row->segment_kind <= N00B_ABI_STORAGE_TLS
+            ? storage_input_indexes[row->segment_kind] : 0;
+        valid = input && core_object_emit_native_section_index(target,
+            1 + extra_sections.len, input, &row->segment_index);
+    }
     for (uint32_t i = 0; valid && i < tls_metadata.string_storage_count; i++)
         valid = has_pool && core_object_emit_native_section_index(target,
             1 + extra_sections.len, 2,
@@ -2225,10 +2008,10 @@ n00bb_abi_emit_unit(
                 1 + extra_sections.len, input, &native);
             if (valid) index_patches[i + 1] = (n00b_abi_index_patch_v1){
                 .target_section_index = native,
-                .referenced_table_kind = N00B_ABI_TABLE_TYPE,
+                .referenced_table_kind = source->table_kind,
                 .target_byte_offset = source->byte_offset,
-                .local_index = source->type_index,
-                .patch_kind = N00B_ABI_PATCH_INDEX,
+                .local_index = source->local_index,
+                .patch_kind = source->patch_kind,
             };
         }
     }
@@ -2306,6 +2089,8 @@ n00bb_abi_emit_unit(
          storage_rows.row_count},
         {N00B_ABI_TABLE_TLS_RELOCATION, tls_metadata.rows,
          tls_metadata.row_count},
+        {N00B_ABI_TABLE_BAKED_NODE, storage_rows.baked_nodes,
+         storage_rows.baked_node_count},
         {N00B_ABI_TABLE_SHAPE, storage_rows.shapes,
          storage_rows.shape_count},
         {N00B_ABI_TABLE_U64_STREAM, storage_rows.extents,
@@ -2529,6 +2314,7 @@ cleanup:
     native_bindings_release(&native_bindings);
     tls_metadata_release(&tls_metadata);
     n00bb_abi_storage_rows_release(&storage_rows);
+    n00bb_abi_baked_functions_release(&baked_functions);
     n00bb_abi_trait_method_rows_release(&trait_method_rows);
     n00bb_abi_constraint_rows_release(&constraint_rows);
     frame_rows_release(&frame_rows);

@@ -82,9 +82,7 @@ check_type_descriptor_storage(void)
     const ir_profile_t profile = {.name = "n00b"};
     ir_module_t *runtime = ir_module_new(context, "example", &profile,
                                         "x86_64-linux");
-    ir_module_t *comptime = ir_module_new(context, "example$comptime",
-                                         &profile, "x86_64-linux");
-    assert(runtime && comptime);
+    assert(runtime);
     th_ctx *types = ir_ctx_types(context);
     th_type *typespec = th_name(types, "typespec");
     th_type *referred = th_bitint(types, 32, true);
@@ -142,7 +140,7 @@ check_type_descriptor_storage(void)
     }
     n00bb_abi_name_pool_t *names = n00bb_abi_name_pool_new();
     n00bb_abi_type_identity_rows_t types_rows = {0};
-    assert(names && n00bb_abi_type_identity_rows_build(index, nullptr,
+    assert(names && n00bb_abi_type_identity_rows_build(index,
         runtime, false, symbols, nullptr, nullptr, names, &types_rows));
     n00bb_abi_decl_index_t *declarations = n00bb_abi_decl_index_new(symbols);
     assert(declarations && n00bb_abi_decl_symbol_count(declarations) == 2);
@@ -158,12 +156,14 @@ check_type_descriptor_storage(void)
         && types_rows.rows[type_index].alignment_bytes == 4);
     n00bb_abi_storage_rows_t rows = {0};
     assert(n00bb_abi_storage_rows_build(index, declarations, &types_rows,
-        runtime, names, 0, selected_type_declaration, declaration,
-        nullptr, &rows));
+        nullptr, nullptr, runtime, names, 0, selected_type_declaration,
+        declaration, nullptr, &rows));
     assert(rows.row_count == 2 && rows.index_patch_count == 1);
     const n00bb_abi_storage_index_patch_t *patch = &rows.index_patches[0];
     const n00b_abi_storage_v1 *storage = &rows.rows[1];
-    assert(patch->type_index == referred_index
+    assert(patch->local_index == referred_index
+        && patch->table_kind == N00B_ABI_TABLE_TYPE
+        && patch->patch_kind == N00B_ABI_PATCH_INDEX
         && patch->source_kind == storage->segment_kind
         && patch->byte_offset == storage->byte_offset
         && storage->byte_length == sizeof(uint32_t));
@@ -177,7 +177,7 @@ check_type_descriptor_storage(void)
     uint8_t *object = nullptr;
     size_t object_bytes = 0;
     assert(n00bb_abi_emit_unit(link, &unit, CORE_STRING_STATIC("default"),
-        symbols, tokens, comptime, runtime, false, &target, N00B_ABI_CAP_DEBUG,
+        symbols, tokens, runtime, &target, N00B_ABI_CAP_DEBUG,
         selected_type_declaration, declaration,
         descriptor_node_source, &source_owner, nullptr, nullptr, nullptr,
         &packed, &object, &object_bytes));
@@ -220,9 +220,7 @@ check_type_descriptor_storage(void)
     assert(core_translation_unit_finalize_imports(&prior_unit));
     ir_module_t *prior_runtime = ir_module_new(context, "prior", &profile,
                                                target.triple);
-    ir_module_t *prior_comptime = ir_module_new(context, "prior$comptime",
-                                                &profile, target.triple);
-    assert(prior_runtime && prior_comptime
+    assert(prior_runtime
         && ir_type_intern(prior_runtime, th_bitint(types, 16, true)));
     parse_symtab_t *prior_symbols = parse_symtab_new();
     parse_token_stream_t *prior_tokens = scan_token_stream_from_array(
@@ -233,7 +231,7 @@ check_type_descriptor_storage(void)
     assert(prior_symbols && prior_tokens
         && n00bb_abi_emit_unit(nullptr, &prior_unit,
             CORE_STRING_STATIC("default"), prior_symbols, prior_tokens,
-            prior_comptime, prior_runtime, false, &target, N00B_ABI_CAP_DEBUG,
+            prior_runtime, &target, N00B_ABI_CAP_DEBUG,
             nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
             &prior_packed, &prior_object, &prior_object_bytes));
     core_link_unit_t *combined = core_link_unit_new();
@@ -321,9 +319,7 @@ check_empty_unit(const char *triple, uint32_t target_id,
     const ir_profile_t profile = {.name = "n00b"};
     ir_module_t *runtime = ir_module_new(context, module_name,
                                         &profile, target.triple);
-    ir_module_t *comptime = ir_module_new(context,
-        "default.long_identity_module_name$comptime", &profile, target.triple);
-    assert(runtime && comptime);
+    assert(runtime);
     parse_symtab_t *symbols = parse_symtab_new();
     assert(symbols);
     parse_token_stream_t *tokens = scan_token_stream_from_array(nullptr, 0);
@@ -333,7 +329,7 @@ check_empty_unit(const char *triple, uint32_t target_id,
     size_t object_bytes = 0;
     assert(n00bb_abi_emit_unit(nullptr, &unit,
         CORE_STRING_STATIC("default"),
-        symbols, tokens, comptime, runtime, false,
+        symbols, tokens, runtime,
         &target, N00B_ABI_CAP_DEBUG, nullptr, nullptr, nullptr, nullptr,
         nullptr, nullptr, nullptr,
         &packed, &object, &object_bytes));
@@ -470,7 +466,7 @@ check_empty_unit(const char *triple, uint32_t target_id,
     size_t rejected_bytes = 0;
     assert(!n00bb_abi_emit_unit(nullptr, &unit,
         CORE_STRING_STATIC("default"),
-        symbols, tokens, comptime, runtime, false, &target, N00B_ABI_CAP_DEBUG,
+        symbols, tokens, runtime, &target, N00B_ABI_CAP_DEBUG,
         nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
         &rejected, &rejected_object, &rejected_bytes));
     assert(!rejected.bytes && !rejected_object && !rejected_bytes);

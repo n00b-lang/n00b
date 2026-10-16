@@ -87,6 +87,8 @@ type_category(ir_module_t *module, th_type *type,
                  || builtin == TH_BUILTIN_TYPESPEC) {
             row->kind = N00B_ABI_TYPE_PRIMITIVE;
             row->semantic_width_bits = 32;
+            if (builtin == TH_BUILTIN_TYPESPEC)
+                row->flags |= N00B_ABI_TYPE_FLAG_TYPE_INDEX;
         }
         else if (builtin == TH_BUILTIN_TUPLE)
             row->kind = N00B_ABI_TYPE_TUPLE;
@@ -154,17 +156,13 @@ type_category(ir_module_t *module, th_type *type,
 
 bool
 n00bb_abi_type_identity_rows_build(
-    n00bb_abi_type_index_t *index, ir_module_t *comptime,
-    ir_module_t *runtime, bool include_external_definitions,
-    const parse_symtab_t *symbols,
+    n00bb_abi_type_index_t *index, ir_module_t *runtime,
+    bool include_external_definitions, const parse_symtab_t *symbols,
     n00bb_abi_type_owner_lookup_fn lookup, void *lookup_context,
     n00bb_abi_name_pool_t *names, n00bb_abi_type_identity_rows_t *out)
 {
-    if (!index || !runtime || !ir_module_target(runtime) || !names || !out
-        || (comptime && (ir_module_types(comptime) != ir_module_types(runtime)
-                         || !ir_module_target(comptime)
-                         || strcmp(ir_module_target(comptime),
-                                   ir_module_target(runtime))))) return false;
+    if (!index || !runtime || !ir_module_target(runtime) || !names || !out)
+        return false;
     size_t count = n00bb_abi_type_index_count(index);
     if (!count || count > (UINT32_MAX >> 1)) return false;
     n00b_abi_type_v1 *rows = core_alloc_array(n00b_abi_type_v1, count);
@@ -316,25 +314,10 @@ n00bb_abi_type_identity_rows_build(
             nullptr, nullptr, &named_arguments) && named_arguments != 0;
         bool external = !include_external_definitions && !owner
             && definition_owner && definition_owner != runtime
-            && definition_owner != comptime
             && row->kind != N00B_ABI_TYPE_ATOMIC;
         const ir_final_layout_t *final = ir_layout_final(runtime, type,
             ir_module_target(runtime));
-        const ir_final_layout_t *compile_layout = comptime
-            ? ir_layout_final(comptime, type, ir_module_target(runtime))
-            : nullptr;
-        if (external && (!specialization || (!final && !compile_layout))) {
-            final = nullptr;
-            compile_layout = nullptr;
-        }
-        if (final && compile_layout
-            && (final->intrinsic_bits != compile_layout->intrinsic_bits
-                || final->alignment_bytes != compile_layout->alignment_bytes)) {
-            failed_reason = "conflicting phase layouts";
-            valid = false;
-            break;
-        }
-        if (!final) final = compile_layout;
+        if (external && !specialization) final = nullptr;
         if (final) {
             row->size_bits = final->intrinsic_bits;
             row->alignment_bytes = final->alignment_bytes;

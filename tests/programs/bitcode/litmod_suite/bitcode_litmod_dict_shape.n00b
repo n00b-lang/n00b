@@ -14,8 +14,6 @@ func empty_dict() -> Array[Tuple[int, int]] {
     return {}'mirror
 }
 
-comptime {
-}
 
 func run_test() {
     static_dict()

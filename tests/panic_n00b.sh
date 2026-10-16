@@ -18,7 +18,7 @@ test "$status" -eq 133
 test ! -s "$tmp/stdout"
 test "$(sed -n 1,3p "$tmp/stderr")" = \
     "$(printf 'opened\npanic: negative balance\nbacktrace:')"
-grep -q '^  at bitcode_panic.__n00bb_runtime_init (.*bitcode_panic.n:7)$' \
+grep -q '^  at bitcode_panic.__n00bb_module_init (.*bitcode_panic.n:7:9)$' \
     "$tmp/stderr"
 test "$(tail -n 1 "$tmp/stderr")" = '  at main'
 

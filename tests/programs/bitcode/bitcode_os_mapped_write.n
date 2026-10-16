@@ -1,21 +1,18 @@
 const stderr_fd: i32 = 2
 
-comptime {
-} else {
-    let page: uint = __os_page_size()
-    let mapped: Ref[byte]? = __os_map_zeroed(page, page)
-    if mapped != nil {
-        let base: Ref[byte] = mapped.get()
-        let cell: Ref[byte] = __gc_byte_offset(base, 3)
-        let expected: byte = 42
-        ref_write(cell, 42)
-        if ref_read(cell) == expected {
-            __fd_write(stderr_fd, "ok\n")
-        } else {
-            __fd_write(stderr_fd, "bad value\n")
-        }
-        __os_unmap(base, page)
+let page: uint = __os_page_size()
+let mapped: Ref[byte]? = __os_map_zeroed(page, page)
+if mapped != nil {
+    let base: Ref[byte] = mapped.get()
+    let cell: Ref[byte] = __gc_byte_offset(base, 3)
+    let expected: byte = 42
+    ref_write(cell, 42)
+    if ref_read(cell) == expected {
+        __fd_write(stderr_fd, "ok\n")
     } else {
-        __fd_write(stderr_fd, "map failed\n")
+        __fd_write(stderr_fd, "bad value\n")
     }
+    __os_unmap(base, page)
+} else {
+    __fd_write(stderr_fd, "map failed\n")
 }

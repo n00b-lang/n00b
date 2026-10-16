@@ -28,11 +28,8 @@ publish_known_scalar_layouts(n00bb_link_analysis_t *analysis)
         n00bb_tu_state_t *state = tu_state(unit);
         parse_symtab_t *symtab = state && state->annotations
             ? state->annotations->symtab : nullptr;
-        ir_module_t *modules[] = {
-            state ? state->comptime_ir_module : nullptr,
-            state ? state->ir_module : nullptr,
-        };
-        if (!symtab || !modules[0] || !modules[1]) return false;
+        ir_module_t *module = state ? state->ir_module : nullptr;
+        if (!symtab || !module) return false;
         for (parse_scope_t *scope = symtab->all_scopes; scope;
              scope = scope->all_next) {
             for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
@@ -49,57 +46,52 @@ publish_known_scalar_layouts(n00bb_link_analysis_t *analysis)
                 if (enum_range && !enum_bits) enum_bits = 1;
                 const n00bb_flagset_info_t *flagset_info = parse_sym_binding(
                     symbol, CORE_STRING_STATIC("n00bb.flagset-info"));
-                for (size_t m = 0; m < sizeof(modules) / sizeof(modules[0]);
-                     m++) {
-                    th_type *type = th_apply_subst(
-                        ir_module_types(modules[m]), symbol->type);
-                    bool handled = false;
-                    bool layout_ok = type && n00bb_abi_publish_direct_layout(
-                        modules[m], type, &analysis->target, &handled);
-                    if (layout_ok && enum_bits)
-                        layout_ok = enum_bits <= UINT32_MAX
-                            && n00bb_abi_publish_integer_like_layout(
-                                modules[m], type, &analysis->target,
-                                (uint32_t)enum_bits);
-                    if (layout_ok && flagset_info && flagset_info->atomic_count)
-                        layout_ok = n00bb_abi_publish_integer_like_layout(
-                            modules[m], type, &analysis->target,
-                            flagset_info->atomic_count);
-                    if (layout_ok) continue;
-                    core_buffer_t message = {0};
-                    core_buffer_printf(&message,
-                        "could not finalize ABI layout for type '%s'",
-                        n00bb_print_type(ir_module_types(modules[m]),
-                                         type ? type : symbol->type));
-                    core_diagnostics_report_at(
-                        core_translation_unit_diagnostics(unit), unit,
-                        CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0067"),
-                        core_string_from_cstr(message.data),
-                        symbol->decl_node
-                            ? link_source_location(symbol->decl_node)
-                            : (core_diag_location_t){0});
-                    core_buffer_release(&message);
-                    return false;
-                }
+                th_type *type = th_apply_subst(ir_module_types(module),
+                                               symbol->type);
+                bool handled = false;
+                bool layout_ok = type && n00bb_abi_publish_direct_layout(
+                    module, type, &analysis->target, &handled);
+                if (layout_ok && enum_bits)
+                    layout_ok = enum_bits <= UINT32_MAX
+                        && n00bb_abi_publish_integer_like_layout(
+                            module, type, &analysis->target,
+                            (uint32_t)enum_bits);
+                if (layout_ok && flagset_info && flagset_info->atomic_count)
+                    layout_ok = n00bb_abi_publish_integer_like_layout(
+                        module, type, &analysis->target,
+                        flagset_info->atomic_count);
+                if (layout_ok) continue;
+                core_buffer_t message = {0};
+                core_buffer_printf(&message,
+                    "could not finalize ABI layout for type '%s'",
+                    n00bb_print_type(ir_module_types(module),
+                                     type ? type : symbol->type));
+                core_diagnostics_report_at(
+                    core_translation_unit_diagnostics(unit), unit,
+                    CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0067"),
+                    core_string_from_cstr(message.data),
+                    symbol->decl_node
+                        ? link_source_location(symbol->decl_node)
+                        : (core_diag_location_t){0});
+                core_buffer_release(&message);
+                return false;
             }
         }
-        for (size_t m = 0; m < sizeof(modules) / sizeof(modules[0]); m++) {
-            th_type *failed_type = nullptr;
-            if (n00bb_abi_publish_interned_direct_layouts(
-                    modules[m], &analysis->target, &failed_type)) continue;
-            core_buffer_t message = {0};
-            core_buffer_printf(&message,
-                "could not finalize ABI layout for IR type '%s'",
-                failed_type ? n00bb_print_type(ir_module_types(modules[m]),
-                                                failed_type) : "unknown");
-            core_diagnostics_report_at(
-                core_translation_unit_diagnostics(unit), unit,
-                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0067"),
-                core_string_from_cstr(message.data),
-                (core_diag_location_t){0});
-            core_buffer_release(&message);
-            return false;
-        }
+        th_type *failed_type = nullptr;
+        if (n00bb_abi_publish_interned_direct_layouts(
+                module, &analysis->target, &failed_type)) continue;
+        core_buffer_t message = {0};
+        core_buffer_printf(&message,
+            "could not finalize ABI layout for IR type '%s'",
+            failed_type ? n00bb_print_type(ir_module_types(module),
+                                            failed_type) : "unknown");
+        core_diagnostics_report_at(
+            core_translation_unit_diagnostics(unit), unit,
+            CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0067"),
+            core_string_from_cstr(message.data),
+            (core_diag_location_t){0});
+        core_buffer_release(&message);
+        return false;
     }
     return true;
 }
@@ -447,48 +439,8 @@ publish_c_record_symbol(n00bb_link_analysis_t *analysis,
     return valid;
 }
 
-static bool
-symbol_has_comptime_shape(parse_sym_entry_t *symbol)
-{
-    const char *keys[] = {"ir.array-shape", "ir.return-shape"};
-    for (size_t k = 0; k < sizeof(keys) / sizeof(*keys); k++) {
-        ir_shape_t *shape = parse_sym_binding(symbol,
-            core_string_borrow(keys[k], strlen(keys[k])));
-        ir_shape_storage_t storage;
-        if (!shape || !ir_shape_storage(shape, &storage)) continue;
-        for (uint32_t d = 0; d < storage.flat_prefix_rank; d++) {
-            ir_shape_extent_t extent;
-            if (ir_shape_extent(shape, d, &extent)
-                && extent.kind == IR_SHAPE_EXTENT_COMPTIME) return true;
-        }
-    }
-    return false;
-}
-
-static bool
-c_record_has_comptime_shape(n00bb_link_analysis_t *analysis,
-                            parse_sym_entry_t *record,
-                            core_list_t(parse_sym_entry_ptr_t) *seen)
-{
-    for (size_t i = 0; i < seen->len; i++)
-        if (seen->data[i] == record) return false;
-    core_list_push(*seen, record);
-    for (parse_sym_entry_t *field = record->member_scope
-            ? record->member_scope->first_in_scope : nullptr;
-         field; field = field->next_in_scope) {
-        if (symbol_has_comptime_shape(field)) return true;
-        parse_sym_entry_t *child = field->type
-            ? requested_record_symbol_for_type(analysis, field->type,
-                N00BB_RECORD_C, nullptr) : nullptr;
-        if (child && c_record_has_comptime_shape(analysis, child, seen))
-            return true;
-    }
-    return false;
-}
-
 bool
-publish_requested_c_record_layouts(n00bb_link_analysis_t *analysis,
-                                   bool known_only)
+publish_requested_c_record_layouts(n00bb_link_analysis_t *analysis)
 {
     for (size_t u = 0; u < analysis->units.len; u++) {
         core_translation_unit_t *owner = analysis->units.data[u];
@@ -505,14 +457,6 @@ publish_requested_c_record_layouts(n00bb_link_analysis_t *analysis,
                         "n00bb.record-layout-request"));
                 if (!request || request->policy != N00BB_RECORD_C
                     || request->alignment_expression) continue;
-                if (known_only) {
-                    core_list_t(parse_sym_entry_ptr_t) seen =
-                        core_list_new(parse_sym_entry_ptr_t);
-                    bool pending = c_record_has_comptime_shape(analysis,
-                        symbol, &seen);
-                    core_list_free(seen);
-                    if (pending) continue;
-                }
                 for (size_t d = 0; d < analysis->units.len; d++) {
                     core_translation_unit_t *importer =
                         analysis->units.data[d];
@@ -520,15 +464,10 @@ publish_requested_c_record_layouts(n00bb_link_analysis_t *analysis,
                         && !n00bb_unit_reaches_import(importer, owner)) continue;
                     n00bb_tu_state_t *destination = tu_state(
                         importer);
-                    ir_module_t *modules[] = {
-                        destination->comptime_ir_module,
-                        destination->ir_module,
-                    };
-                    for (size_t m = 0;
-                         m < sizeof(modules) / sizeof(modules[0]); m++) {
-                        if (!modules[m] || !publish_c_record_symbol(analysis,
-                                owner, symbol, modules[m])) return false;
-                    }
+                    if (!destination->ir_module
+                        || !publish_c_record_symbol(analysis, owner, symbol,
+                                                    destination->ir_module))
+                        return false;
                 }
             }
         }
@@ -557,23 +496,11 @@ reject_unlowered_record_layout_requests(n00bb_link_analysis_t *analysis)
                     if (request->policy == N00BB_RECORD_C) continue;
                     if (request->policy == N00BB_RECORD_ORDERED
                         && symbol->type) {
-                        ir_module_t *modules[] = {
-                            state->comptime_ir_module, state->ir_module,
-                        };
-                        bool finalized = true;
-                        for (size_t m = 0; m < sizeof(modules)
-                                / sizeof(*modules); m++) {
-                            ir_module_t *module = modules[m];
-                            th_type *type = module ? th_apply_subst(
-                                ir_module_types(module), symbol->type)
-                                : nullptr;
-                            if (!type || !ir_layout_final(module, type,
-                                    analysis->target.triple)) {
-                                finalized = false;
-                                break;
-                            }
-                        }
-                        if (finalized) continue;
+                        ir_module_t *module = state->ir_module;
+                        th_type *type = module ? th_apply_subst(
+                            ir_module_types(module), symbol->type) : nullptr;
+                        if (type && ir_layout_final(module, type,
+                                analysis->target.triple)) continue;
                     }
                 }
                 core_diagnostics_report_at(
@@ -596,131 +523,126 @@ publish_declared_aggregate_layouts(n00bb_link_analysis_t *analysis)
     bool valid = true;
     for (size_t u = 0; valid && u < analysis->units.len; u++) {
         n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
-        ir_module_t *modules[] = {state->comptime_ir_module,
-                                  state->ir_module};
-        for (size_t m = 0; valid && m < sizeof(modules) / sizeof(*modules);
-             m++) {
-            ir_module_t *module = modules[m];
-            if (!module) { valid = false; break; }
-            for (size_t f = 0; valid && f < ir_func_count(module); f++) {
-                ir_func_t *function = ir_func_at(module, f);
-                th_type *signature = function ? function->type : nullptr;
-                if (!signature || th_kind_of(signature) != TH_FUNCTION)
-                    continue;
-                th_type *result = th_func_ret(signature);
-                if (result && th_kind_of(th_resolve(result)) == TH_NAMED
-                    && ir_type_definition(module, result))
-                    valid = ir_layout_ensure(module, result,
+        ir_module_t *module = state->ir_module;
+        if (!module) { valid = false; break; }
+        for (size_t f = 0; valid && f < ir_func_count(module); f++) {
+            ir_func_t *function = ir_func_at(module, f);
+            th_type *signature = function ? function->type : nullptr;
+            if (!signature || th_kind_of(signature) != TH_FUNCTION)
+                continue;
+            th_type *result = th_func_ret(signature);
+            if (result && th_kind_of(th_resolve(result)) == TH_NAMED
+                && ir_type_definition(module, result))
+                valid = ir_layout_ensure(module, result,
+                    analysis->target.triple) != nullptr;
+            for (size_t p = 0; valid && p < th_func_nparams(signature);
+                 p++) {
+                const th_param *parameter = th_func_param(signature, p);
+                th_type *type = parameter ? parameter->type : nullptr;
+                if (type && th_kind_of(th_resolve(type)) == TH_NAMED
+                    && ir_type_definition(module, type))
+                    valid = ir_layout_ensure(module, type,
                         analysis->target.triple) != nullptr;
-                for (size_t p = 0; valid && p < th_func_nparams(signature);
-                     p++) {
-                    const th_param *parameter = th_func_param(signature, p);
-                    th_type *type = parameter ? parameter->type : nullptr;
-                    if (type && th_kind_of(th_resolve(type)) == TH_NAMED
-                        && ir_type_definition(module, type))
-                        valid = ir_layout_ensure(module, type,
-                            analysis->target.triple) != nullptr;
-                }
             }
-            bool progress;
-            do {
-                progress = false;
-                for (size_t i = 0; valid && i < ir_type_count(module); i++) {
-                    th_type *registered = ir_type_at(module, i);
-                    if (!registered
-                        || th_kind_of(th_resolve(registered)) != TH_NAMED)
-                        continue;
-                    th_type *type = th_apply_subst(ir_module_types(module),
-                                                   registered);
-                    if (!type) { valid = false; break; }
-                    if (ir_layout_final(module, type, analysis->target.triple))
-                        continue;
-                    th_type *definition = ir_type_definition(module, type);
-                    if (!definition || th_kind_of(definition) != TH_RECORD)
-                        continue;
-                    if (requested_record_symbol_for_type(analysis, type,
-                            N00BB_RECORD_C, nullptr)) continue;
-                    size_t count = th_record_len(definition);
-                    if (count > UINT32_MAX) { valid = false; break; }
-                    bool variant = false;
-                    th_named_info(type, nullptr, nullptr, &variant, nullptr);
-                    n00bb_abi_record_member_t *members = count
-                        ? core_alloc_array(n00bb_abi_record_member_t, count)
-                        : nullptr;
-                    n00bb_abi_variant_arm_t *arms = variant && count
-                        ? core_alloc_array(n00bb_abi_variant_arm_t, count)
-                        : nullptr;
-                    bool ready = (!count || members != nullptr)
-                        && (!variant || !count || arms != nullptr);
-                    parse_scope_t *member_scope = record_scope_for_type(
-                        analysis->grammar, &analysis->units, type, nullptr);
-                    for (size_t j = 0; ready && j < count; j++) {
-                        const th_member *member = th_record_member(definition,
-                                                                    j);
-                        th_type *child_type = member && member->type
-                            ? th_apply_subst(ir_module_types(module),
-                                             member->type) : nullptr;
-                        parse_sym_entry_t *field = member && member_scope
-                            ? parse_symtab_lookup_in(member_scope,
-                                core_string_from_cstr(member->name))
-                            : nullptr;
-                        th_type *inline_element = nullptr;
-                        uint64_t inline_count = 0;
-                        if (child_type && field && !variant)
-                            (void)inline_array_member_storage(field,
-                                child_type, &inline_element, &inline_count);
-                        th_type *physical = inline_element
-                            ? inline_element : child_type;
-                        bool handled = false;
-                        if (physical && !n00bb_abi_publish_direct_layout(
-                                module, physical, &analysis->target,
-                                &handled)) {
-                            valid = false;
-                            break;
-                        }
-                        const ir_final_layout_t *child = physical
-                            ? ir_layout_final(module, physical,
-                                              analysis->target.triple) : nullptr;
-                        if (!member || !member->name || !child) {
-                            ready = false;
-                            break;
-                        }
-                        bool packable = child->n_occupied == 1
-                            && child->occupied[0].offset == 0
-                            && child->occupied[0].width < child->intrinsic_bits
-                            && !child->n_reserved;
-                        members[j] = (n00bb_abi_record_member_t){
-                            .name = member->name,
-                            .type = child_type,
-                            .ordinal = (uint32_t)j,
-                            .packed = packable,
-                            .inline_element_type = inline_element,
-                            .inline_element_count = inline_count,
-                        };
-                        if (variant) arms[j] = (n00bb_abi_variant_arm_t){
-                            .name = member->name,
-                            .type = child_type,
-                            .ordinal = (uint32_t)j,
-                        };
-                    }
-                    if (ready) {
-                        n00bb_record_policy_t policy =
-                            requested_record_symbol_for_type(analysis, type,
-                                N00BB_RECORD_ORDERED, nullptr)
-                            ? N00BB_RECORD_ORDERED : N00BB_RECORD_DEFAULT;
-                        valid = variant
-                            ? n00bb_abi_publish_variant_layout(module, type,
-                                &analysis->target, arms, count)
-                            : n00bb_abi_publish_record_layout(module,
-                                type, &analysis->target, policy,
-                                false, members, count);
-                        progress = valid;
-                    }
-                    core_free(arms);
-                    core_free(members);
-                }
-            } while (valid && progress);
         }
+        bool progress;
+        do {
+            progress = false;
+            for (size_t i = 0; valid && i < ir_type_count(module); i++) {
+                th_type *registered = ir_type_at(module, i);
+                if (!registered
+                    || th_kind_of(th_resolve(registered)) != TH_NAMED)
+                    continue;
+                th_type *type = th_apply_subst(ir_module_types(module),
+                                               registered);
+                if (!type) { valid = false; break; }
+                if (ir_layout_final(module, type, analysis->target.triple))
+                    continue;
+                th_type *definition = ir_type_definition(module, type);
+                if (!definition || th_kind_of(definition) != TH_RECORD)
+                    continue;
+                if (requested_record_symbol_for_type(analysis, type,
+                        N00BB_RECORD_C, nullptr)) continue;
+                size_t count = th_record_len(definition);
+                if (count > UINT32_MAX) { valid = false; break; }
+                bool variant = false;
+                th_named_info(type, nullptr, nullptr, &variant, nullptr);
+                n00bb_abi_record_member_t *members = count
+                    ? core_alloc_array(n00bb_abi_record_member_t, count)
+                    : nullptr;
+                n00bb_abi_variant_arm_t *arms = variant && count
+                    ? core_alloc_array(n00bb_abi_variant_arm_t, count)
+                    : nullptr;
+                bool ready = (!count || members != nullptr)
+                    && (!variant || !count || arms != nullptr);
+                parse_scope_t *member_scope = record_scope_for_type(
+                    analysis->grammar, &analysis->units, type, nullptr);
+                for (size_t j = 0; ready && j < count; j++) {
+                    const th_member *member = th_record_member(definition,
+                                                                j);
+                    th_type *child_type = member && member->type
+                        ? th_apply_subst(ir_module_types(module),
+                                         member->type) : nullptr;
+                    parse_sym_entry_t *field = member && member_scope
+                        ? parse_symtab_lookup_in(member_scope,
+                            core_string_from_cstr(member->name))
+                        : nullptr;
+                    th_type *inline_element = nullptr;
+                    uint64_t inline_count = 0;
+                    if (child_type && field && !variant)
+                        (void)inline_array_member_storage(field,
+                            child_type, &inline_element, &inline_count);
+                    th_type *physical = inline_element
+                        ? inline_element : child_type;
+                    bool handled = false;
+                    if (physical && !n00bb_abi_publish_direct_layout(
+                            module, physical, &analysis->target,
+                            &handled)) {
+                        valid = false;
+                        break;
+                    }
+                    const ir_final_layout_t *child = physical
+                        ? ir_layout_final(module, physical,
+                                          analysis->target.triple) : nullptr;
+                    if (!member || !member->name || !child) {
+                        ready = false;
+                        break;
+                    }
+                    bool packable = child->n_occupied == 1
+                        && child->occupied[0].offset == 0
+                        && child->occupied[0].width < child->intrinsic_bits
+                        && !child->n_reserved;
+                    members[j] = (n00bb_abi_record_member_t){
+                        .name = member->name,
+                        .type = child_type,
+                        .ordinal = (uint32_t)j,
+                        .packed = packable,
+                        .inline_element_type = inline_element,
+                        .inline_element_count = inline_count,
+                    };
+                    if (variant) arms[j] = (n00bb_abi_variant_arm_t){
+                        .name = member->name,
+                        .type = child_type,
+                        .ordinal = (uint32_t)j,
+                    };
+                }
+                if (ready) {
+                    n00bb_record_policy_t policy =
+                        requested_record_symbol_for_type(analysis, type,
+                            N00BB_RECORD_ORDERED, nullptr)
+                        ? N00BB_RECORD_ORDERED : N00BB_RECORD_DEFAULT;
+                    valid = variant
+                        ? n00bb_abi_publish_variant_layout(module, type,
+                            &analysis->target, arms, count)
+                        : n00bb_abi_publish_record_layout(module,
+                            type, &analysis->target, policy,
+                            false, members, count);
+                    progress = valid;
+                }
+                core_free(arms);
+                core_free(members);
+            }
+        } while (valid && progress);
     }
     return valid;
 }
@@ -730,90 +652,86 @@ publish_interned_variant_layouts(n00bb_link_analysis_t *analysis)
 {
     for (size_t u = 0; u < analysis->units.len; u++) {
         n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
-        ir_module_t *modules[] = {state->comptime_ir_module,
-                                  state->ir_module};
-        for (size_t m = 0; m < sizeof(modules) / sizeof(*modules); m++) {
-            ir_module_t *module = modules[m];
-            for (size_t f = 0; f < ir_func_count(module); f++) {
-                ir_func_t *function = ir_func_at(module, f);
-                th_type *channels[] = {
-                    th_func_ret(function->type),
-                    th_func_error(function->type),
-                };
-                for (size_t c = 0; c < sizeof(channels) / sizeof(*channels);
-                     c++) {
-                    if (!channels[c] || !th_is_closed(ir_module_types(module),
-                                                     channels[c])) continue;
+        ir_module_t *module = state->ir_module;
+        for (size_t f = 0; f < ir_func_count(module); f++) {
+            ir_func_t *function = ir_func_at(module, f);
+            th_type *channels[] = {
+                th_func_ret(function->type),
+                th_func_error(function->type),
+            };
+            for (size_t c = 0; c < sizeof(channels) / sizeof(*channels);
+                 c++) {
+                if (!channels[c] || !th_is_closed(ir_module_types(module),
+                                                 channels[c])) continue;
+                bool handled = false;
+                if (!n00bb_abi_publish_direct_layout(module,
+                        channels[c], &analysis->target, &handled))
+                    return false;
+            }
+            for (size_t b = 0; b < function->n_blocks; b++) {
+                ir_block_t *block = function->blocks[b];
+                for (size_t x = 0; x < block->n_instrs; x++) {
+                    ir_instr_t *instruction = block->instrs[x];
+                    th_type *type = instruction->dest
+                        ? instruction->dest->type : nullptr;
+                    if (!type || !th_is_closed(ir_module_types(module),
+                                               type)) continue;
                     bool handled = false;
-                    if (!n00bb_abi_publish_direct_layout(module,
-                            channels[c], &analysis->target, &handled))
-                        return false;
-                }
-                for (size_t b = 0; b < function->n_blocks; b++) {
-                    ir_block_t *block = function->blocks[b];
-                    for (size_t x = 0; x < block->n_instrs; x++) {
-                        ir_instr_t *instruction = block->instrs[x];
-                        th_type *type = instruction->dest
-                            ? instruction->dest->type : nullptr;
-                        if (!type || !th_is_closed(ir_module_types(module),
-                                                   type)) continue;
-                        bool handled = false;
-                        if (!n00bb_abi_publish_direct_layout(module, type,
-                                &analysis->target, &handled)) return false;
-                    }
+                    if (!n00bb_abi_publish_direct_layout(module, type,
+                            &analysis->target, &handled)) return false;
                 }
             }
-            th_type *failed_type = nullptr;
-            if (!n00bb_abi_publish_interned_direct_layouts(module,
-                    &analysis->target, &failed_type)) return false;
-            bool progress;
-            do {
-                progress = false;
-                for (size_t i = 0; i < ir_type_count(module); i++) {
-                    th_type *type = ir_type_at(module, i);
-                    bool variant = false;
-                    if (!th_named_info(type, nullptr, nullptr, &variant,
-                                       nullptr) || !variant
-                        || ir_layout_final(module, type,
-                                           analysis->target.triple)) continue;
-                    th_type *definition = ir_type_definition(module, type);
-                    if (!definition || th_kind_of(definition) != TH_RECORD)
-                        continue;
-                    size_t count = th_record_len(definition);
-                    if (!count || count >= UINT32_MAX) continue;
-                    n00bb_abi_variant_arm_t *arms = core_alloc_array(
-                        n00bb_abi_variant_arm_t, count);
-                    if (!arms) return false;
-                    bool ready = true;
-                    for (size_t j = 0; ready && j < count; j++) {
-                        const th_member *member = th_record_member(
-                            definition, j);
-                        th_type *child = member && member->type
-                            ? th_apply_subst(ir_module_types(module),
-                                             member->type) : nullptr;
-                        bool handled = false;
-                        ready = member && member->name && child
-                            && n00bb_abi_publish_direct_layout(module,
-                                child, &analysis->target, &handled)
-                            && ir_layout_final(module, child,
-                                               analysis->target.triple);
-                        if (ready) arms[j] = (n00bb_abi_variant_arm_t){
-                            .name = member->name,
-                            .type = child,
-                            .ordinal = (uint32_t)j,
-                        };
-                    }
-                    if (ready) {
-                        bool published = n00bb_abi_publish_variant_layout(
-                            module, type, &analysis->target, arms, count);
-                        core_free(arms);
-                        if (!published) return false;
-                        progress = true;
-                    }
-                    else core_free(arms);
-                }
-            } while (progress);
         }
+        th_type *failed_type = nullptr;
+        if (!n00bb_abi_publish_interned_direct_layouts(module,
+                &analysis->target, &failed_type)) return false;
+        bool progress;
+        do {
+            progress = false;
+            for (size_t i = 0; i < ir_type_count(module); i++) {
+                th_type *type = ir_type_at(module, i);
+                bool variant = false;
+                if (!th_named_info(type, nullptr, nullptr, &variant,
+                                   nullptr) || !variant
+                    || ir_layout_final(module, type,
+                                       analysis->target.triple)) continue;
+                th_type *definition = ir_type_definition(module, type);
+                if (!definition || th_kind_of(definition) != TH_RECORD)
+                    continue;
+                size_t count = th_record_len(definition);
+                if (!count || count >= UINT32_MAX) continue;
+                n00bb_abi_variant_arm_t *arms = core_alloc_array(
+                    n00bb_abi_variant_arm_t, count);
+                if (!arms) return false;
+                bool ready = true;
+                for (size_t j = 0; ready && j < count; j++) {
+                    const th_member *member = th_record_member(
+                        definition, j);
+                    th_type *child = member && member->type
+                        ? th_apply_subst(ir_module_types(module),
+                                         member->type) : nullptr;
+                    bool handled = false;
+                    ready = member && member->name && child
+                        && n00bb_abi_publish_direct_layout(module,
+                            child, &analysis->target, &handled)
+                        && ir_layout_final(module, child,
+                                           analysis->target.triple);
+                    if (ready) arms[j] = (n00bb_abi_variant_arm_t){
+                        .name = member->name,
+                        .type = child,
+                        .ordinal = (uint32_t)j,
+                    };
+                }
+                if (ready) {
+                    bool published = n00bb_abi_publish_variant_layout(
+                        module, type, &analysis->target, arms, count);
+                    core_free(arms);
+                    if (!published) return false;
+                    progress = true;
+                }
+                else core_free(arms);
+            }
+        } while (progress);
     }
     return true;
 }
@@ -824,41 +742,35 @@ finalize_atomic_aggregate_layouts(n00bb_link_analysis_t *analysis)
     for (size_t i = 0; i < analysis->units.len; i++) {
         core_translation_unit_t *unit = analysis->units.data[i];
         n00bb_tu_state_t *state = tu_state(unit);
-        ir_module_t *modules[] = {
-            state ? state->comptime_ir_module : nullptr,
-            state ? state->ir_module : nullptr,
-        };
-        for (size_t m = 0; m < sizeof(modules) / sizeof(*modules); m++) {
-            ir_module_t *module = modules[m];
-            if (!module) return false;
-            for (size_t j = 0; j < ir_type_count(module); j++) {
-                th_type *type = ir_type_at(module, j);
-                if (!n00bb_atomic_element_type(type)
-                    || ir_layout_final(module, type,
-                                       analysis->target.triple)) continue;
-                if (n00bb_atomic_native_support(module, type,
-                                                &analysis->target)) continue;
-                core_diag_location_t location = {0};
-                parse_symtab_t *symbols = state->annotations
-                    ? state->annotations->symtab : nullptr;
-                for (parse_scope_t *scope = symbols
-                        ? symbols->all_scopes : nullptr;
-                     scope && !location.line; scope = scope->all_next)
-                    for (parse_sym_entry_t *symbol = scope->first_in_scope;
-                         symbol; symbol = symbol->next_in_scope)
-                        if (symbol->type && symbol->decl_node
-                            && ir_type_eq(module, symbol->type, type)) {
-                            location = link_source_location(symbol->decl_node);
-                            break;
-                        }
-                core_diagnostics_report_at(
-                    core_translation_unit_diagnostics(unit), unit,
-                    CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0018"),
-                    CORE_STRING_STATIC(
-                        "atomic type is not supported by the selected target"),
-                    location);
-                return false;
-            }
+        ir_module_t *module = state ? state->ir_module : nullptr;
+        if (!module) return false;
+        for (size_t j = 0; j < ir_type_count(module); j++) {
+            th_type *type = ir_type_at(module, j);
+            if (!n00bb_atomic_element_type(type)
+                || ir_layout_final(module, type,
+                                   analysis->target.triple)) continue;
+            if (n00bb_atomic_native_support(module, type,
+                                            &analysis->target)) continue;
+            core_diag_location_t location = {0};
+            parse_symtab_t *symbols = state->annotations
+                ? state->annotations->symtab : nullptr;
+            for (parse_scope_t *scope = symbols
+                    ? symbols->all_scopes : nullptr;
+                 scope && !location.line; scope = scope->all_next)
+                for (parse_sym_entry_t *symbol = scope->first_in_scope;
+                     symbol; symbol = symbol->next_in_scope)
+                    if (symbol->type && symbol->decl_node
+                        && ir_type_eq(module, symbol->type, type)) {
+                        location = link_source_location(symbol->decl_node);
+                        break;
+                    }
+            core_diagnostics_report_at(
+                core_translation_unit_diagnostics(unit), unit,
+                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0018"),
+                CORE_STRING_STATIC(
+                    "atomic type is not supported by the selected target"),
+                location);
+            return false;
         }
     }
     return true;
@@ -869,7 +781,7 @@ select_storage_placement(n00bb_link_analysis_t *analysis)
 {
     if (!analysis || !validate_inline_layout_cycles(analysis)
         || !publish_known_scalar_layouts(analysis)
-        || !publish_requested_c_record_layouts(analysis, false)
+        || !publish_requested_c_record_layouts(analysis)
         || !publish_declared_aggregate_layouts(analysis)
         || !finalize_atomic_aggregate_layouts(analysis)
         || !reject_unlowered_record_layout_requests(analysis)) return false;
@@ -950,39 +862,3 @@ select_storage_placement(n00bb_link_analysis_t *analysis)
     }
     return true;
 }
-
-bool
-n00bb_has_deferred_shape_layout(n00bb_link_analysis_t *analysis,
-                                bool report_unresolved)
-{
-    for (size_t u = 0; u < analysis->units.len; u++) {
-        n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
-        parse_symtab_t *table = state && state->annotations
-            ? state->annotations->symtab : nullptr;
-        for (parse_scope_t *scope = table ? table->all_scopes : nullptr;
-             scope; scope = scope->all_next)
-            for (parse_sym_entry_t *symbol = scope->first_in_scope;
-                 symbol; symbol = symbol->next_in_scope)
-                if (symbol_has_comptime_shape(symbol)) {
-                    if (report_unresolved) {
-                        core_buffer_t message = {0};
-                        core_buffer_printf(&message,
-                            "compile-time array extent remains unresolved for '%.*s'",
-                            (int)symbol->name.u8_bytes, symbol->name.data);
-                        core_diagnostics_report_at(
-                            core_translation_unit_diagnostics(
-                                analysis->units.data[u]),
-                            analysis->units.data[u], CORE_DIAG_FATAL,
-                            CORE_STRING_STATIC("N00BB-B0013"),
-                            core_string_from_cstr(message.data),
-                            link_source_location(symbol->decl_node));
-                        core_buffer_release(&message);
-                    }
-                    return true;
-                }
-    }
-    return false;
-}
-
-
-

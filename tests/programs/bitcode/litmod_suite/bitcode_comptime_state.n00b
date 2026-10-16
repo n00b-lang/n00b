@@ -1,9 +1,9 @@
-var static_value: int = 0
-var second_value: int = 0
-comptime {
-    static_value = 9
-    second_value = 13
+func doubled_plus(value: int, extra: int) -> int {
+    return value * 2 + extra
 }
+
+const static_value: int = doubled_plus(4, 1)
+const second_value: int = doubled_plus(6, 1)
 
 func run_test() {
     require static_value == 9

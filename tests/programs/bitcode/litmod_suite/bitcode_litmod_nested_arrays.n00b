@@ -14,7 +14,7 @@ func observe(items: Array[Array[int]]) {
     require true
 }
 
-comptime {
+when comptime() {
     observe([[4, 5]'array, [6]'array]'bundle_nested_arrays)
 }
 

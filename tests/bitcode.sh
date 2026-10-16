@@ -22,6 +22,10 @@ test "$(cat "$tmp/bootstrap_io_compile")" = "compile"
 "$tmp/bootstrap_io" >"$tmp/bootstrap_io_runtime"
 test "$(cat "$tmp/bootstrap_io_runtime")" = \
     "runtime0123456789abcdef0123456789abcdef"
+"$compiler" build --output "$tmp/script_once" \
+    "$program_dir/bitcode_script_once.n00b" >"$tmp/script_once_compile"
+test ! -s "$tmp/script_once_compile"
+test "$("$tmp/script_once")" = "top"
 N00B_PATH="$program_dir:$program_dir/.." \
     "$compiler" build --output "$tmp/litmod_suite" \
     "$program_dir/bitcode_litmod_suite.n00b"
@@ -40,7 +44,10 @@ if "$compiler" build --output "$tmp/litmod_comptime_fail" \
     echo 'failing comptime literal prelude unexpectedly built' >&2
     exit 1
 fi
-grep -q 'fatal\[N00BB-B0014\]: prelude failed' \
+grep -q '^panic: prelude failed' "$tmp/litmod_comptime_fail.out"
+grep -q 'bitcode_litmod_comptime_fail.n00b:6:5' \
+    "$tmp/litmod_comptime_fail.out"
+grep -q 'fatal\[N00BB-B0027\]: the build-time run failed' \
     "$tmp/litmod_comptime_fail.out"
 test ! -e "$tmp/litmod_comptime_fail"
 if "$compiler" build --output "$tmp/litmod_fence_nil_fail" \
@@ -49,9 +56,8 @@ if "$compiler" build --output "$tmp/litmod_fence_nil_fail" \
     echo 'failing effect-only literal handler unexpectedly built' >&2
     exit 1
 fi
-grep -q 'fatal\[N00BB-B0014\]: fence failed' \
-    "$tmp/litmod_fence_nil_fail.out"
-grep -q 'bitcode_litmod_fence_nil_fail.n00b:7:5' \
+grep -q '^panic: fence failed' "$tmp/litmod_fence_nil_fail.out"
+grep -q 'bitcode_litmod_fence_nil_fail.n00b:5:1' \
     "$tmp/litmod_fence_nil_fail.out"
 test ! -e "$tmp/litmod_fence_nil_fail"
 if "$compiler" build --output "$tmp/litmod_string_fail" \
@@ -60,8 +66,7 @@ if "$compiler" build --output "$tmp/litmod_string_fail" \
     echo 'failing static literal handler unexpectedly built' >&2
     exit 1
 fi
-grep -q 'fatal\[N00BB-B0014\]: bad literal' \
-    "$tmp/litmod_string_fail.out"
+grep -q '^panic: bad literal' "$tmp/litmod_string_fail.out"
 grep -q 'bitcode_litmod_string_fail.n00b:6:12' \
     "$tmp/litmod_string_fail.out"
 test ! -e "$tmp/litmod_string_fail"
@@ -71,8 +76,8 @@ if "$compiler" build --output "$tmp/comptime_failed" \
     echo 'failing comptime initializer unexpectedly built' >&2
     exit 1
 fi
-grep -q 'fatal\[N00BB-B0014\]: compile-time execution' \
-    "$tmp/comptime.out"
+grep -q 'check failed at .*bitcode_comptime_fail.n00b:2:5' "$tmp/comptime.out"
+grep -q 'fatal\[N00BB-B0027\]: the build-time run failed' "$tmp/comptime.out"
 test ! -e "$tmp/comptime_failed"
 "$compiler" build --output "$tmp/trap" "$program_dir/bitcode_runtime_trap.n00b"
 if (ulimit -c 0; "$tmp/trap") >/dev/null 2>&1; then
@@ -86,3 +91,6 @@ if (ulimit -c 0; "$tmp/importer") >/dev/null 2>&1; then
     echo 'imported initializer was not executed' >&2
     exit 1
 fi
+N00B_PATH="$program_dir" "$compiler" build --output "$tmp/baked_slots" \
+    "$program_dir/bitcode_baked_slots.n"
+"$tmp/baked_slots"

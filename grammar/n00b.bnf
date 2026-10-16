@@ -23,7 +23,6 @@
                    | <func-def>
                    | <context-def>
                    | <with-stmt>
-                   | <comptime-stmt>
                    | <variable-decl>
                    | <labeled-for>
                    | <labeled-while>
@@ -308,9 +307,6 @@
 <sym-decl> @declares($0) ::= %IDENTIFIER
 
 <assign-op> ::= %"=" <operator-continuation>?
-
-<comptime-stmt> ::= %"comptime" <body> <comptime-else>?
-<comptime-else> ::= <eos>* %"else" <body>
 
 <func-def> @scope("function", $1) @declares($1, "function") @nospace($2) @align($2) ::=
     <func-prelude> %IDENTIFIER <func-type-signature> <body>

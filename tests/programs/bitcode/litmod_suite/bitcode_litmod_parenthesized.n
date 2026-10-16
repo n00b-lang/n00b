@@ -46,7 +46,7 @@ func dynamic_mixed_record(value: string) -> int {
     return (first: int = 1, second: string = value)'mixed_record_count
 }
 
-comptime {
+when comptime() {
     require true'flip_bool == false
     require false'flip_bool
     require nil'nil_number == 7

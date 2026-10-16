@@ -1,5 +1,2 @@
-comptime {
-} else {
-    var total: int = 2 + 3
-    require total == 6
-}
+var total: int = 2 + 3
+require total == 6

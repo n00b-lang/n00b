@@ -12,15 +12,13 @@ func check_rejected(cp: char) {
     require byte_len(from_char(cp)) == 0
 }
 
-comptime {} else {
-    check_encode('A', "A")
-    check_encode(cast[char] 0xe9, "é")
-    check_encode(cast[char] 0x20ac, "€")
-    check_encode(cast[char] 0x1f4a9, "\U0001f4a9")
-    require encoding(from_char('A')) == Str_Encoding.ascii
-    require encoding(from_char(cast[char] 0xe9)) == Str_Encoding.utf8
-    check_rejected(cast[char] 0xd800)
-    check_rejected(cast[char] 0xdfff)
-    check_rejected(cast[char] 0x110000)
-    __fd_write(2, "ok")
-}
+check_encode('A', "A")
+check_encode(cast[char] 0xe9, "é")
+check_encode(cast[char] 0x20ac, "€")
+check_encode(cast[char] 0x1f4a9, "\U0001f4a9")
+require encoding(from_char('A')) == Str_Encoding.ascii
+require encoding(from_char(cast[char] 0xe9)) == Str_Encoding.utf8
+check_rejected(cast[char] 0xd800)
+check_rejected(cast[char] 0xdfff)
+check_rejected(cast[char] 0x110000)
+__fd_write(2, "ok")

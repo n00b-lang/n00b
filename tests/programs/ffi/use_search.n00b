@@ -2,6 +2,4 @@ const limits = [-
 use <limits.writ>
 -]'ffi
 
-comptime {} else {
-    require limits.LIMIT == 40
-}
+require limits.LIMIT == 40

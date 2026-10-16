@@ -13,30 +13,28 @@ func construct(payload: int) -> Constructed_Record {
     return new[Constructed_Record](payload)
 }
 
-comptime {} else {
-    let value: Constructed_Record = construct(42)
-    assert value.payload == 42
-    let second: Constructed_Record = construct(7)
-    assert second.payload == 7
-    let type_index: u32 = cast[u32](typeof(value))
-    let type_row: Ref[sys.abi.Type_Record]? = sys.abi.type_at(type_index)
-    if type_row != nil {
-        var slot: Ref[byte]? = nil
-        let allocated: Ref[byte]? = sys.gc.alloc.allocate_runtime_into(
-            type_index, cast[u64](sys.abi.size_bytes(type_row.get())),
-            cast[u32](sys.abi.alignment_bytes(type_row.get())), nil,
-            ref slot)
-        if allocated != nil {
-            if slot != nil {
-                assert slot.get() == allocated.get()
-            } else { require false }
-            let rejected: Ref[byte]? = sys.gc.alloc.allocate_runtime_into(
-                0, 0, 1, nil, ref slot)
-            assert rejected == nil
-            if slot != nil {
-                assert slot.get() == allocated.get()
-            } else { require false }
+let value: Constructed_Record = construct(42)
+assert value.payload == 42
+let second: Constructed_Record = construct(7)
+assert second.payload == 7
+let type_index: u32 = cast[u32](typeof(value))
+let type_row: Ref[sys.abi.Type_Record]? = sys.abi.type_at(type_index)
+if type_row != nil {
+    var slot: Ref[byte]? = nil
+    let allocated: Ref[byte]? = sys.gc.alloc.allocate_runtime_into(
+        type_index, cast[u64](sys.abi.size_bytes(type_row.get())),
+        cast[u32](sys.abi.alignment_bytes(type_row.get())), nil,
+        ref slot)
+    if allocated != nil {
+        if slot != nil {
+            assert slot.get() == allocated.get()
+        } else { require false }
+        let rejected: Ref[byte]? = sys.gc.alloc.allocate_runtime_into(
+            0, 0, 1, nil, ref slot)
+        assert rejected == nil
+        if slot != nil {
+            assert slot.get() == allocated.get()
         } else { require false }
     } else { require false }
-    __fd_write(2, "ok")
-}
+} else { require false }
+__fd_write(2, "ok")

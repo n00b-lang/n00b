@@ -25,11 +25,9 @@ func count_up(limit: uint) -> int {
 func byte_zero(value: byte) -> byte { return value }
 func signed_alias(value: i64) -> int { return value }
 
-comptime {} else {
-    require delayed(7) == 7
-    require either(true) == 1
-    require either(false) == 2
-    require count_up(3) == 3
-    require byte_zero(0) == 0
-    require signed_alias(7) == 7
-}
+require delayed(7) == 7
+require either(true) == 1
+require either(false) == 2
+require count_up(3) == 3
+require byte_zero(0) == 0
+require signed_alias(7) == 7

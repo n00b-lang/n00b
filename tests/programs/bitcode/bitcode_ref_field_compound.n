@@ -6,10 +6,7 @@ func increment(counter: Ref[Counter]) {
     counter.value += 1
 }
 
-comptime {
-} else {
-    var counter: Counter
-    counter.value = 1
-    increment(ref counter)
-    require counter.value == 2
-}
+var counter: Counter
+counter.value = 1
+increment(ref counter)
+require counter.value == 2

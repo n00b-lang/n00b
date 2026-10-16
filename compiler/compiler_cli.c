@@ -7,6 +7,8 @@ static const parse_cmdr_flag_t FLAGS[] = {
      PARSE_CMDR_TYPE_BOOL, false, CORE_STRING_STATIC("show this help")},
     {CORE_STRING_STATIC("--output"), CORE_STRING_STATIC("-o"),
      PARSE_CMDR_TYPE_WORD, true, CORE_STRING_STATIC("output file")},
+    {CORE_STRING_STATIC("--build-time"), {0}, PARSE_CMDR_TYPE_BOOL, false,
+     CORE_STRING_STATIC("compile the program that computes consts")},
     {CORE_STRING_STATIC("--check"), {0}, PARSE_CMDR_TYPE_BOOL, false,
      CORE_STRING_STATIC("check formatting without writing files")},
     {CORE_STRING_STATIC("--normalize"), {0}, PARSE_CMDR_TYPE_BOOL, false,

@@ -216,55 +216,6 @@ check_flagset(const core_object_section_t *metadata,
 }
 
 static void
-check_initializers(const core_object_section_t *metadata,
-                   const n00bb_abi_directory_entry_t *entries, size_t count,
-                   bool has_comptime)
-{
-    const n00bb_abi_directory_entry_t *modules = entry_for(entries, count,
-        N00B_ABI_TABLE_MODULE);
-    const n00bb_abi_directory_entry_t *functions = entry_for(entries, count,
-        N00B_ABI_TABLE_FUNCTION);
-    const n00bb_abi_directory_entry_t *scopes = entry_for(entries, count,
-        N00B_ABI_TABLE_SCOPE);
-    assert(modules && modules->record_count >= 2 && functions && scopes);
-    uint32_t module_index = 0;
-    const n00b_abi_module_v1 *module = nullptr;
-    const char *module_name = has_comptime ? "initializers" : "empty";
-    for (uint32_t i = 1; i < modules->record_count; i++) {
-        const n00b_abi_module_v1 *candidate = row_at(metadata, modules, i);
-        if (!short_name_is(&candidate->full_path, module_name)) continue;
-        assert(!module_index);
-        module_index = i;
-        module = candidate;
-    }
-    assert(module_index && module);
-    assert(module->runtime_initializer
-        && module->runtime_initializer < functions->record_count
-        && !!module->comptime_initializer == has_comptime);
-    uint32_t initializers[] = {
-        module->comptime_initializer, module->runtime_initializer,
-    };
-    for (size_t i = 0; i < sizeof(initializers) / sizeof(*initializers); i++) {
-        uint32_t index = initializers[i];
-        if (!index) continue;
-        assert(index < functions->record_count);
-        const n00b_abi_function_v1 *function = row_at(metadata, functions,
-            index);
-        assert(function->module_index == module_index && function->scope_index
-            && function->scope_index < scopes->record_count
-            && !function->symbol_index && !function->success_type_index
-            && !function->failure_type_index && !function->parameters.count
-            && !function->keywords.count && !function->code_ranges.count
-            && function->variadic_type_index == N00B_ABI_V1_NO_TYPE_INDEX);
-        const n00b_abi_scope_v1 *scope = row_at(metadata, scopes,
-            function->scope_index);
-        assert(scope->module_index == module_index);
-    }
-    assert(!has_comptime
-        || module->comptime_initializer != module->runtime_initializer);
-}
-
-static void
 check_function(const core_object_section_t *metadata,
                const n00bb_abi_directory_entry_t *entries, size_t count)
 {
@@ -418,7 +369,6 @@ check_imported_record(const core_object_section_t *metadata,
     }
     assert(type_requirement
         && type_requirement->contract_type_index == imported_index
-        && type_requirement->required_phase_mask
         && type_requirement->requesting_module_index == 1);
     bool found_reader = false;
     for (uint32_t i = 1; i < functions->record_count; i++) {
@@ -499,7 +449,6 @@ check_imported_enum(const core_object_section_t *metadata,
     }
     assert(type_requirement
         && type_requirement->contract_type_index == imported_index
-        && type_requirement->required_phase_mask
         && type_requirement->requesting_module_index == 1);
     th_ctx_free(type_context);
 }
@@ -538,8 +487,7 @@ check_imported_flagset(const core_object_section_t *metadata,
             requirements, i);
         if (requirement->symbol_kind != N00B_ABI_SYMBOL_TYPE
             || requirement->contract_type_index != type_index) continue;
-        assert(!found && requirement->required_phase_mask
-            && requirement->requesting_module_index == 1);
+        assert(!found && requirement->requesting_module_index == 1);
         found = true;
     }
     assert(found);
@@ -1632,8 +1580,7 @@ check_generic_record(const core_object_section_t *metadata,
                 requirements, i);
             if (request->symbol_kind != N00B_ABI_SYMBOL_TYPE
                 || request->contract_type_index != bare_index) continue;
-            assert(!request->required_layout_index
-                && request->required_phase_mask);
+            assert(!request->required_layout_index);
             matches++;
         }
         assert(matches == 1);
@@ -2685,8 +2632,6 @@ main(int argc, char **argv)
     bool cycle_mode = argc >= 3 && !strcmp(argv[2], "cycle");
     assert(argc == 2 || cycle_mode || (argc == 3
         && (!strcmp(argv[2], "enum") || !strcmp(argv[2], "function")
-            || !strcmp(argv[2], "initializers")
-            || !strcmp(argv[2], "runtime-initializer")
             || !strcmp(argv[2], "import")
             || !strcmp(argv[2], "import-record")
             || !strcmp(argv[2], "import-enum")
@@ -2826,14 +2771,6 @@ main(int argc, char **argv)
         return 0;
     }
 
-    if (argc == 3 && (!strcmp(argv[2], "initializers")
-                      || !strcmp(argv[2], "runtime-initializer"))) {
-        check_initializers(&metadata, entries, header.directory_count,
-            !strcmp(argv[2], "initializers"));
-        free(entries);
-        free(object);
-        return 0;
-    }
 
     if (argc == 3 && !strcmp(argv[2], "function")) {
         check_function(&metadata, entries, header.directory_count);

@@ -1,0 +1,5 @@
+comptime {
+    var x = 1
+} else {
+    var y = 2
+}

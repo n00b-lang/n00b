@@ -6,7 +6,7 @@ func value() -> Tuple[bool, string] {
     return "a long string that needs a relocation"'pair
 }
 
-comptime {
+when comptime() {
     value()
 }
 

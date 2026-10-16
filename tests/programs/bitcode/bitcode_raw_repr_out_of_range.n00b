@@ -1,5 +1,2 @@
 
-comptime {
-} else {
-    "string\n".raw_repr(2147483648)
-}
+"string\n".raw_repr(2147483648)

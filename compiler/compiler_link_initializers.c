@@ -2,12 +2,12 @@
 
 bool
 n00bb_collect_initializer_order(
-    core_link_unit_t *link, const char *domain,
-    core_list_t(core_translation_unit_ptr_t) *order)
+    core_link_unit_t *link, core_list_t(core_translation_unit_ptr_t) *order)
 {
     core_link_contribution_view_t contribution;
     if (!core_link_unit_require_contribution(link, (core_string_t){0},
-            core_string_from_cstr(domain), 1, &contribution)) return false;
+            CORE_STRING_STATIC(N00BB_INITIALIZER_ORDER_DOMAIN), 1,
+            &contribution)) return false;
     const n00bb_initializer_order_t *initializer_order =
         contribution.payload;
     if (!initializer_order) return false;
@@ -26,19 +26,16 @@ add_initializer_use_facts(core_link_unit_t *link, uint32_t producer_stage,
                           parse_tree_t *site,
                           core_diag_location_t location,
                           core_string_t provenance,
-                          uint32_t provenance_version,
-                          uint32_t phase)
+                          uint32_t provenance_version)
 {
-    if (!core_link_unit_add_dependency(link,
+    return core_link_unit_add_dependency(link,
             N00BB_LINK_DEPENDENCY_INITIALIZER_USE, producer_stage, state,
             source, target, unit, site, location, provenance,
-            provenance_version, nullptr)) return false;
-    uint32_t kind = phase == PARSE_SYM_PHASE_COMPTIME
-        ? N00BB_LINK_DEPENDENCY_COMPTIME_INITIALIZER_USE
-        : N00BB_LINK_DEPENDENCY_RUNTIME_INITIALIZER_USE;
-    return core_link_unit_add_dependency(link, kind, producer_stage, state,
-        source, target, unit, site, location, provenance,
-        provenance_version, nullptr);
+            provenance_version, nullptr)
+        && core_link_unit_add_dependency(link,
+            N00BB_LINK_DEPENDENCY_INITIALIZER_ORDER, producer_stage, state,
+            source, target, unit, site, location, provenance,
+            provenance_version, nullptr);
 }
 
 bool
@@ -80,10 +77,6 @@ publish_link_initializer_uses(core_link_unit_t *link,
                 continue;
             if (n00bb_assignment_target(analysis->grammar, site->node,
                                        nullptr)) continue;
-            if (declared_in_comptime(analysis->grammar, site->node)
-                && initializer_node_is_reference_operand(analysis->grammar,
-                                                          site->node))
-                continue;
             if (initializer_node_is_out_argument(analysis->grammar, unit,
                                                  site->node)) continue;
             if (initializer_node_is_reference_store_target(analysis->grammar,
@@ -115,10 +108,7 @@ publish_link_initializer_uses(core_link_unit_t *link,
                 initializer_owner = module_variable_initializer_owner(
                     analysis->grammar, state->annotations->symtab,
                     site->node);
-            uint32_t phase = initializer_phase_for_site(analysis->grammar,
-                unit, site->node, initializer_owner);
-            if (site->callback_call && phase == PARSE_SYM_PHASE_RUNTIME)
-                continue;
+            if (site->callback_call) continue;
             core_link_declaration_t *source = initializer_owner
                 ? link_declaration_for_symbol(analysis, initializer_owner)
                 : nullptr;
@@ -132,7 +122,7 @@ publish_link_initializer_uses(core_link_unit_t *link,
             if (!add_initializer_use_facts(link, producer_stage,
                     dependency_state, source, resolved ? target : nullptr,
                     unit, site->node, link_source_location(site->node),
-                    core_source_file_path(&unit->source), 1, phase))
+                    core_source_file_path(&unit->source), 1))
                 return false;
         }
     }
@@ -172,10 +162,7 @@ publish_link_initializer_uses(core_link_unit_t *link,
         bool resolved = (call.state == CORE_LINK_DEPENDENCY_RESOLVED
                 || external)
             && call.to && (!owner_symbol || source);
-        uint32_t phase = initializer_phase_for_site(analysis->grammar,
-            call.source_unit, site, owner_symbol);
-        if (phase == PARSE_SYM_PHASE_RUNTIME
-            && n00bb_builtin_callback_function(
+        if (n00bb_builtin_callback_function(
                 link_dependency_callee_symbol(analysis, &call)))
             continue;
         if (!resolved) complete = false;
@@ -185,7 +172,7 @@ publish_link_initializer_uses(core_link_unit_t *link,
                            : CORE_LINK_DEPENDENCY_UNAVAILABLE,
                 source, resolved ? call.to : nullptr, call.source_unit, site,
                 call.source_location, call.provenance,
-                call.provenance_version, phase))
+                call.provenance_version))
             return false;
         for (size_t e = 0; e < call_dependency_count; e++) {
             core_link_dependency_view_t effect;
@@ -203,20 +190,17 @@ publish_link_initializer_uses(core_link_unit_t *link,
                 || effect.kind
                     == N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_WRITE_SUMMARY)
                 continue;
-            if (phase == PARSE_SYM_PHASE_RUNTIME
-                && effect.kind
-                    == N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_UNKNOWN)
+            if (effect.kind == N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_UNKNOWN)
                 continue;
             bool effect_resolved = effect.state == CORE_LINK_DEPENDENCY_RESOLVED
-                && effect.to
-                && effect.kind != N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_UNKNOWN;
+                && effect.to;
             if (!effect_resolved) complete = false;
             if (!add_initializer_use_facts(link, producer_stage,
                     effect_resolved ? CORE_LINK_DEPENDENCY_RESOLVED
                                     : CORE_LINK_DEPENDENCY_UNAVAILABLE,
                     source, effect.to, call.source_unit,
                     (parse_tree_t *)call.source_site, call.source_location,
-                    call.provenance, call.provenance_version, phase))
+                    call.provenance, call.provenance_version))
                 return false;
         }
     }
@@ -237,7 +221,7 @@ has_initializer_write_candidate(core_link_unit_t *link,
                                 parse_sym_entry_t *symbol)
 {
     return n00bb_module_initializer_writes(analysis, symbol)
-        || n00bb_function_writes_global(link, analysis, symbol, false);
+        || n00bb_function_writes_global(link, analysis, symbol);
 }
 
 static core_translation_unit_t *
@@ -251,26 +235,10 @@ unit_owning_node(n00bb_link_analysis_t *analysis, parse_tree_t *node)
     return nullptr;
 }
 
-static bool
-comptime_reachable_declaration(n00bb_link_analysis_t *analysis,
-                               core_link_declaration_t *declaration)
-{
-    n00bb_link_payload_t *payload = declaration
-        ? core_link_declaration_payload(declaration) : nullptr;
-    ir_func_t *function = payload && payload->symbol
-        ? link_ir_function_for_phase(analysis, payload->symbol, true)
-        : nullptr;
-    for (size_t i = 0; function
-         && i < analysis->comptime_reachable_functions.len; i++)
-        if (analysis->comptime_reachable_functions.data[i] == function)
-            return true;
-    return !function;
-}
-
 bool
 n00bb_function_writes_global(core_link_unit_t *link,
                              n00bb_link_analysis_t *analysis,
-                             parse_sym_entry_t *symbol, bool comptime_only)
+                             parse_sym_entry_t *symbol)
 {
     core_link_declaration_t *target =
         link_declaration_for_symbol(analysis, symbol);
@@ -286,10 +254,7 @@ n00bb_function_writes_global(core_link_unit_t *link,
                 == N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_READ_WRITE_SUMMARY
             || edge.kind
                 == N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_ALIAS_SUMMARY;
-        if (writes && edge.to == target
-            && (!comptime_only
-                || comptime_reachable_declaration(analysis, edge.from)))
-            return true;
+        if (writes && edge.to == target) return true;
     }
     return false;
 }
@@ -323,76 +288,13 @@ n00bb_module_initializer_writes(n00bb_link_analysis_t *analysis,
 }
 
 static bool
-validate_cycle_initializer_reads(core_link_unit_t *link,
-                                 n00bb_link_analysis_t *analysis,
-                                 bool *complete, bool *failed)
-{
-    for (size_t i = 0; i < core_link_unit_dependency_count(link); i++) {
-        core_link_dependency_view_t edge;
-        if (!core_link_unit_dependency_at(link, i, &edge)) return false;
-        if ((edge.kind != N00BB_LINK_DEPENDENCY_COMPTIME_INITIALIZER_USE
-                && edge.kind != N00BB_LINK_DEPENDENCY_RUNTIME_INITIALIZER_USE)
-            || edge.state != CORE_LINK_DEPENDENCY_RESOLVED || !edge.to)
-            continue;
-        if (edge.kind == N00BB_LINK_DEPENDENCY_RUNTIME_INITIALIZER_USE)
-            continue;
-        parse_sym_entry_t *target =
-            initializer_declaration_symbol(edge.to);
-        if (!target || target->kind != PARSE_SYM_VARIABLE
-            || !is_module_global_symbol(analysis->grammar, target)
-            || global_has_explicit_initializer(analysis->grammar, target))
-            continue;
-        core_translation_unit_t *target_unit =
-            core_link_declaration_owner(edge.to);
-        core_translation_unit_t *source_unit = edge.from
-            ? core_link_declaration_owner(edge.from) : edge.source_unit;
-        if (source_unit && edge.source_site
-            && declared_in_comptime(analysis->grammar,
-                (parse_tree_t *)edge.source_site)
-            && initializer_node_is_reference_operand(analysis->grammar,
-                (parse_tree_t *)edge.source_site)) continue;
-        bool write_candidate = has_initializer_write_candidate(
-            link, analysis, target);
-        if (write_candidate) continue;
-        if (!source_unit) {
-            *complete = false;
-            continue;
-        }
-        bool same_cycle = initializer_units_share_cycle(
-            link, source_unit, target_unit);
-        const char *detail = same_cycle
-            ? write_candidate
-                ? "initialization in an import cycle reads a global without a guaranteed compile-time initialization"
-                : "initialization in an import cycle reads a global without an explicit initializer"
-            : write_candidate
-                ? "initializer reads a global without a guaranteed compile-time initialization"
-                : "initializer reads a global without an explicit initializer";
-        core_buffer_t message = {0};
-        core_buffer_printf(&message, "%s: '%.*s' (%s use)", detail,
-            (int)target->name.u8_bytes, target->name.data,
-            edge.kind == N00BB_LINK_DEPENDENCY_COMPTIME_INITIALIZER_USE
-                ? "compile-time" : "runtime");
-        core_diagnostics_report_at(
-            core_translation_unit_diagnostics(source_unit), source_unit,
-            CORE_DIAG_ERROR,
-            same_cycle ? CORE_STRING_STATIC("N00BB-L0041")
-                       : CORE_STRING_STATIC("N00BB-L0044"),
-            core_string_borrow(message.data, message.byte_len),
-            edge.source_location);
-        core_buffer_release(&message);
-        *failed = true;
-    }
-    return true;
-}
-
-static bool
 initializer_graph_add_node(
     parse_grammar_t *grammar,
     core_list_t(n00bb_initializer_graph_node_t) *nodes,
     core_dict_t *positions,
-    core_link_declaration_t *declaration, uint32_t phase)
+    core_link_declaration_t *declaration)
 {
-    if (!dynamic_initializer_declaration(grammar, declaration, phase)
+    if (!dynamic_initializer_declaration(grammar, declaration)
         || core_dict_contains(positions, declaration))
         return true;
     core_list_push(*nodes, ((n00bb_initializer_graph_node_t){
@@ -407,19 +309,18 @@ initializer_graph_cycle_visit(core_link_unit_t *link,
     n00bb_link_analysis_t *analysis,
     core_list_t(n00bb_initializer_graph_node_t) *nodes,
     core_dict_t *positions,
-    size_t node_index, uint32_t phase, bool *reported)
+    size_t node_index, bool *reported)
 {
     nodes->data[node_index].color = 1;
     core_link_declaration_t *source = nodes->data[node_index].declaration;
-    uint32_t edge_kind = initializer_dependency_kind(phase);
     for (size_t i = 0; i < core_link_unit_dependency_count(link); i++) {
         core_link_dependency_view_t edge;
         if (!core_link_unit_dependency_at(link, i, &edge)) return false;
-        if (edge.kind != edge_kind
+        if (edge.kind != N00BB_LINK_DEPENDENCY_INITIALIZER_ORDER
             || edge.state != CORE_LINK_DEPENDENCY_RESOLVED
             || edge.from != source || !edge.to
-            || !dynamic_initializer_declaration(analysis->grammar,
-                                                 edge.to, phase)) continue;
+            || !dynamic_initializer_declaration(analysis->grammar, edge.to))
+            continue;
         size_t target = (size_t)(uintptr_t)core_dict_get(
             positions, edge.to, nullptr);
         if (!target) continue;
@@ -427,25 +328,18 @@ initializer_graph_cycle_visit(core_link_unit_t *link,
         uint8_t color = nodes->data[target].color;
         if (color == 1) {
             if (!*reported && edge.source_unit) {
-                const char *phase_name = phase == PARSE_SYM_PHASE_COMPTIME
-                    ? "compile-time" : "runtime";
-                core_buffer_t message = {0};
-                core_buffer_printf(&message,
-                    "%s initializer dependency cycle requires reading an uninitialized global",
-                    phase_name);
                 core_diagnostics_report_at(
                     core_translation_unit_diagnostics(edge.source_unit),
                     edge.source_unit, CORE_DIAG_ERROR,
                     CORE_STRING_STATIC("N00BB-L0040"),
-                    core_string_borrow(message.data, message.byte_len),
+                    CORE_STRING_STATIC("initializer dependency cycle requires reading an uninitialized global"),
                     edge.source_location);
-                core_buffer_release(&message);
                 *reported = true;
             }
             continue;
         }
         if (!color && !initializer_graph_cycle_visit(link, analysis, nodes,
-                positions, target, phase, reported)) return false;
+                positions, target, reported)) return false;
     }
     nodes->data[node_index].color = 2;
     return true;
@@ -459,56 +353,34 @@ validate_initializer_cycles(core_link_unit_t *link,
     bool complete = true;
     bool failed = false;
     core_link_dependency_view_t unavailable = {0};
-    const uint32_t phases[] = {
-        PARSE_SYM_PHASE_COMPTIME, PARSE_SYM_PHASE_RUNTIME,
-    };
-    for (size_t p = 0; p < sizeof(phases) / sizeof(phases[0]); p++) {
-        uint32_t phase = phases[p];
-        uint32_t kind = initializer_dependency_kind(phase);
-        core_list_t(n00bb_initializer_graph_node_t) nodes =
-            core_list_new(n00bb_initializer_graph_node_t);
-        core_dict_t positions;
-        core_dict_init(&positions, nullptr, nullptr);
-        for (size_t i = 0; i < core_link_unit_dependency_count(link); i++) {
-            core_link_dependency_view_t edge;
-            if (!core_link_unit_dependency_at(link, i, &edge)) {
-                core_dict_free(&positions);
-                core_list_free(nodes);
-                return false;
-            }
-            if (edge.kind != kind) continue;
-            if (edge.state != CORE_LINK_DEPENDENCY_RESOLVED) {
-                complete = false;
-                if (!unavailable.kind) unavailable = edge;
-            }
-            if (!initializer_graph_add_node(analysis->grammar, &nodes,
-                    &positions,
-                    edge.from, phase)
-                || !initializer_graph_add_node(analysis->grammar, &nodes,
-                    &positions,
-                    edge.to, phase)) {
-                core_dict_free(&positions);
-                core_list_free(nodes);
-                return false;
-            }
+    core_list_t(n00bb_initializer_graph_node_t) nodes =
+        core_list_new(n00bb_initializer_graph_node_t);
+    core_dict_t positions;
+    core_dict_init(&positions, nullptr, nullptr);
+    bool ok = true;
+    for (size_t i = 0; ok && i < core_link_unit_dependency_count(link); i++) {
+        core_link_dependency_view_t edge;
+        ok = core_link_unit_dependency_at(link, i, &edge);
+        if (!ok || edge.kind != N00BB_LINK_DEPENDENCY_INITIALIZER_ORDER)
+            continue;
+        if (edge.state != CORE_LINK_DEPENDENCY_RESOLVED) {
+            complete = false;
+            if (!unavailable.kind) unavailable = edge;
         }
-        bool reported = false;
-        for (size_t i = 0; i < nodes.len; i++) {
-            if (!nodes.data[i].color
-                && !initializer_graph_cycle_visit(link, analysis, &nodes,
-                    &positions, i, phase, &reported)) {
-                core_dict_free(&positions);
-                core_list_free(nodes);
-                return false;
-            }
-        }
-        failed |= reported;
-        core_dict_free(&positions);
-        core_list_free(nodes);
+        ok = initializer_graph_add_node(analysis->grammar, &nodes,
+                                        &positions, edge.from)
+            && initializer_graph_add_node(analysis->grammar, &nodes,
+                                          &positions, edge.to);
     }
-    if (!validate_cycle_initializer_reads(link, analysis, &complete,
-                                          &failed))
-        return false;
+    bool reported = false;
+    for (size_t i = 0; ok && i < nodes.len; i++)
+        if (!nodes.data[i].color)
+            ok = initializer_graph_cycle_visit(link, analysis, &nodes,
+                                               &positions, i, &reported);
+    failed |= reported;
+    core_dict_free(&positions);
+    core_list_free(nodes);
+    if (!ok) return false;
     if (!complete && !failed && unavailable.kind) {
         core_string_t source = unavailable.from
             ? core_link_declaration_key(unavailable.from)

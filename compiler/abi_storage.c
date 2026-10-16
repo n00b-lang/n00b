@@ -13,6 +13,7 @@
 #include "lib/list.h"
 
 core_list_decl(n00b_abi_storage_v1);
+core_list_decl(n00b_abi_baked_node_v1);
 core_list_decl(uint32_t);
 core_list_decl(n00bb_abi_storage_relocation_t);
 
@@ -217,7 +218,9 @@ record_type_index(array_writer_t *writer, uint32_t source_kind,
         ((n00bb_abi_storage_index_patch_t){
             .source_kind = source_kind,
             .byte_offset = byte_offset,
-            .type_index = type_index,
+            .table_kind = N00B_ABI_TABLE_TYPE,
+            .patch_kind = N00B_ABI_PATCH_INDEX,
+            .local_index = type_index,
         }));
     return true;
 }
@@ -659,6 +662,32 @@ done:
     return valid;
 }
 
+static ir_global_t *
+storage_global(parse_sym_entry_t *symbol,
+               n00bb_abi_declaration_lookup_fn lookup, void *lookup_context)
+{
+    ir_global_t *global = parse_sym_binding(symbol,
+        CORE_STRING_STATIC("n00bb.generated-literal"));
+    if (global) return global;
+    core_link_declaration_t *declaration = lookup(lookup_context, symbol);
+    return declaration ? core_link_declaration_binding(declaration,
+        CORE_STRING_STATIC("n00bb.ir.global")) : nullptr;
+}
+
+static bool
+graph_type_index(const n00bb_abi_type_identity_rows_t *types,
+                 uint64_t typehash, uint32_t *out)
+{
+    *out = 0;
+    if (!typehash) return true;
+    for (size_t i = 1; i < types->count; i++)
+        if (types->rows[i].typehash == typehash) {
+            *out = (uint32_t)i;
+            return true;
+        }
+    return false;
+}
+
 static bool
 graph_placement_plan(const n00bb_abi_graph_source_t *graphs,
     const n00bb_abi_decl_index_t *declarations, ir_module_t *runtime,
@@ -711,9 +740,7 @@ graph_placement_plan(const n00bb_abi_graph_source_t *graphs,
         parse_sym_entry_t *symbol = n00bb_abi_decl_symbol_at(declarations,
             (uint32_t)i);
         if (!symbol || symbol->kind != PARSE_SYM_VARIABLE) continue;
-        core_link_declaration_t *declaration = lookup(lookup_context, symbol);
-        ir_global_t *global = declaration ? core_link_declaration_binding(
-            declaration, CORE_STRING_STATIC("n00bb.ir.global")) : nullptr;
+        ir_global_t *global = storage_global(symbol, lookup, lookup_context);
         if (!global || global->owner != runtime || global->is_extern
             || !ir_global_can_read(global, IR_PHASE_RUNTIME)
             || !global->has_static_initializer
@@ -759,11 +786,217 @@ graph_placement_plan(const n00bb_abi_graph_source_t *graphs,
     return true;
 }
 
+static bool
+graph_type_add(n00bb_abi_type_index_t *index, ir_module_t *runtime,
+               const char *name, uint64_t typehash)
+{
+    if (!name) return !typehash;
+    th_type *type = ir_type_parse(runtime, name);
+    return type && th_hash(ir_module_types(runtime), type) == typehash
+        && n00bb_abi_type_index_add(index, type, nullptr);
+}
+
+bool
+n00bb_abi_graph_types_collect(
+    n00bb_abi_type_index_t *index,
+    const n00bb_abi_decl_index_t *declarations, ir_module_t *runtime,
+    n00bb_abi_declaration_lookup_fn lookup, void *lookup_context,
+    const n00bb_abi_graph_source_t *graphs)
+{
+    graph_place_t *places = nullptr;
+    graph_edge_t *edges = nullptr;
+    if (!graph_placement_plan(graphs, declarations, runtime, lookup,
+            lookup_context, &places, &edges)) return false;
+    bool valid = true;
+    for (size_t i = 0; valid && places && i < graphs->node_count; i++) {
+        if (!(places[i].reachability & 1)) continue;
+        const uint8_t *bytes = nullptr;
+        size_t size = 0;
+        uint32_t alignment = 0;
+        uint64_t typehash = 0;
+        valid = graphs->node(graphs->context, i, &bytes, &size, &alignment,
+                &typehash)
+            && graph_type_add(index, runtime,
+                graphs->type_name(graphs->context, i), typehash);
+    }
+    for (size_t i = 0; valid && places && i < graphs->slot_count; i++) {
+        n00bb_abi_graph_slot_t slot;
+        valid = graphs->slot(graphs->context, i, &slot)
+            && slot.node < graphs->node_count;
+        if (!valid || !(places[slot.node].reachability & 1)) continue;
+        if (slot.table == N00B_ABI_TABLE_TYPE)
+            valid = graph_type_add(index, runtime, slot.type_name,
+                                   slot.typehash);
+        else if (strcmp(slot.module, ir_module_name(runtime)))
+            valid = slot.function_type
+                && n00bb_abi_type_index_add(index, slot.function_type,
+                                            nullptr);
+    }
+    core_free(places);
+    core_free(edges);
+    return valid;
+}
+
+static char *
+graph_function_path(const n00bb_abi_graph_slot_t *slot)
+{
+    core_buffer_t path = {0};
+    core_buffer_printf(&path, "%s.%s", slot->module, slot->function);
+    return path.data;
+}
+
+static bool
+baked_function_row(const n00bb_abi_baked_functions_t *baked,
+                   const n00bb_abi_graph_slot_t *slot, uint32_t *out)
+{
+    char *path = baked ? graph_function_path(slot) : nullptr;
+    bool found = false;
+    for (size_t i = 0; path && i < baked->count && !found; i++)
+        if (!strcmp(baked->paths[i], path)) {
+            *out = baked->first_requirement + (uint32_t)i;
+            found = true;
+        }
+    core_free(path);
+    return found;
+}
+
+bool
+n00bb_abi_graph_function_requirements(
+    n00bb_abi_type_index_t *index,
+    const n00bb_abi_type_identity_rows_t *types,
+    const n00bb_abi_decl_index_t *declarations, ir_module_t *runtime,
+    n00bb_abi_declaration_lookup_fn lookup, void *lookup_context,
+    const n00bb_abi_graph_source_t *graphs, n00bb_abi_name_pool_t *pool,
+    n00b_abi_requirement_v1 **requirements, size_t *requirement_count,
+    n00bb_abi_baked_functions_t *out)
+{
+    *out = (n00bb_abi_baked_functions_t){
+        .first_requirement = (uint32_t)*requirement_count + 1,
+    };
+    if (!graphs) return true;
+    graph_place_t *places = nullptr;
+    graph_edge_t *edges = nullptr;
+    if (!graph_placement_plan(graphs, declarations, runtime, lookup,
+            lookup_context, &places, &edges)) return false;
+    bool valid = true;
+    for (size_t i = 0; valid && places && i < graphs->slot_count; i++) {
+        n00bb_abi_graph_slot_t slot;
+        uint32_t existing = 0;
+        valid = graphs->slot(graphs->context, i, &slot)
+            && slot.node < graphs->node_count;
+        if (!valid || !(places[slot.node].reachability & 1)
+            || slot.table != N00B_ABI_TABLE_FUNCTION
+            || !strcmp(slot.module, ir_module_name(runtime))
+            || baked_function_row(out, &slot, &existing)) continue;
+        uint32_t type_index = 0;
+        char *path = graph_function_path(&slot);
+        valid = path && slot.function_type
+            && n00bb_abi_type_index_find(index, slot.function_type,
+                                         &type_index)
+            && type_index < types->count
+            && types->rows[type_index].kind == N00B_ABI_TYPE_FUNCTION
+            && *requirement_count < UINT32_MAX - 1;
+        n00b_abi_requirement_v1 *grown = valid
+            ? core_realloc(*requirements,
+                (*requirement_count + 2) * sizeof(**requirements))
+            : nullptr;
+        char **paths = grown
+            ? core_realloc(out->paths, (out->count + 1) * sizeof(char *))
+            : nullptr;
+        if (grown) *requirements = grown;
+        if (paths) out->paths = paths;
+        valid = grown && paths;
+        if (!valid) {
+            core_free(path);
+            break;
+        }
+        size_t next = ++*requirement_count;
+        grown[next] = (n00b_abi_requirement_v1){
+            .symbol_kind = N00B_ABI_SYMBOL_FUNCTION,
+            .contract_type_index = type_index,
+            .requesting_module_index = 1,
+            .flags = N00B_ABI_REQUIREMENT_FLAG_BAKED,
+        };
+        out->paths[out->count++] = path;
+        valid = n00bb_abi_name_pool_encode(pool,
+            core_string_borrow(path, strlen(path)),
+            N00B_ABI_TABLE_REQUIREMENT, (uint32_t)next,
+            offsetof(n00b_abi_requirement_v1, full_path),
+            &grown[next].full_path);
+    }
+    core_free(places);
+    core_free(edges);
+    return valid;
+}
+
+void
+n00bb_abi_baked_functions_release(n00bb_abi_baked_functions_t *baked)
+{
+    for (size_t i = 0; baked && i < baked->count; i++)
+        core_free(baked->paths[i]);
+    if (baked) core_free(baked->paths);
+    if (baked) *baked = (n00bb_abi_baked_functions_t){0};
+}
+
+static bool
+graph_slot_index(const n00bb_abi_type_identity_rows_t *types,
+                 const n00bb_abi_function_rows_t *functions,
+                 const n00bb_abi_baked_functions_t *baked,
+                 const n00bb_abi_graph_slot_t *slot, uint32_t *table,
+                 uint32_t *out)
+{
+    *table = slot->table;
+    if (slot->table == N00B_ABI_TABLE_TYPE)
+        return graph_type_index(types, slot->typehash, out) && *out;
+    for (size_t i = 1; functions && i < functions->function_count; i++) {
+        ir_func_t *function = functions->ir_functions[i];
+        if (function && function->name && function->owner
+            && !strcmp(function->name, slot->function)
+            && !strcmp(ir_module_name(function->owner), slot->module)) {
+            *out = (uint32_t)i;
+            return true;
+        }
+    }
+    *table = N00B_ABI_TABLE_REQUIREMENT;
+    return baked_function_row(baked, slot, out);
+}
+
+static bool
+graph_slot_patch(n00bb_abi_storage_rows_t *built,
+                 const graph_place_t *place, const n00bb_abi_graph_slot_t *slot,
+                 uint32_t table, uint32_t local_index,
+                 core_list_t(n00bb_abi_storage_index_patch_t) *patches)
+{
+    uint32_t *unused_alignment = nullptr;
+    core_buffer_t *buffer = graph_segment(built, place->kind,
+                                          &unused_alignment);
+    uint64_t offset = place->offset + slot->offset;
+    if (!buffer || offset % sizeof(uint32_t) || local_index > INT32_MAX
+        || offset > buffer->byte_len
+        || buffer->byte_len - offset < sizeof(uint32_t)) return false;
+    uint8_t *address = (uint8_t *)buffer->data + offset;
+    uint32_t value = local_index;
+    if (slot->kind == N00B_ABI_PATCH_BOX_TYPE)
+        value |= core_le_load_u32(address) & UINT32_C(0x80000000);
+    else if (slot->kind != N00B_ABI_PATCH_INDEX) return false;
+    core_le_store_u32(address, value);
+    core_list_push(*patches, ((n00bb_abi_storage_index_patch_t){
+        .source_kind = place->kind,
+        .byte_offset = offset,
+        .table_kind = table,
+        .patch_kind = slot->kind,
+        .local_index = local_index,
+    }));
+    return true;
+}
+
 bool
 n00bb_abi_storage_rows_build(
     n00bb_abi_type_index_t *index,
     const n00bb_abi_decl_index_t *declarations,
     const n00bb_abi_type_identity_rows_t *types,
+    const n00bb_abi_function_rows_t *functions,
+    const n00bb_abi_baked_functions_t *baked_functions,
     ir_module_t *runtime, n00bb_abi_name_pool_t *pool,
     uint32_t stream_base,
     n00bb_abi_declaration_lookup_fn lookup, void *lookup_context,
@@ -795,9 +1028,7 @@ n00bb_abi_storage_rows_build(
             valid = false;
             break;
         }
-        core_link_declaration_t *declaration = lookup(lookup_context, symbol);
-        ir_global_t *global = declaration ? core_link_declaration_binding(
-            declaration, CORE_STRING_STATIC("n00bb.ir.global")) : nullptr;
+        ir_global_t *global = storage_global(symbol, lookup, lookup_context);
         if (!global || global->owner != runtime || global->is_extern
             || !ir_global_can_read(global, IR_PHASE_RUNTIME)) continue;
         ir_storage_duration_t duration = ir_global_storage_duration(global);
@@ -821,8 +1052,11 @@ n00bb_abi_storage_rows_build(
             break;
         }
         const n00b_abi_type_v1 *type_row = &types->rows[type_index];
-        uint32_t alignment = type_row->alignment_bytes;
-        uint64_t bits = type_row->size_bits;
+        const ir_final_layout_t *layout = ir_layout_final(runtime,
+            global->type, ir_module_target(runtime));
+        uint32_t alignment = layout ? layout->alignment_bytes
+                                    : type_row->alignment_bytes;
+        uint64_t bits = layout ? layout->intrinsic_bits : type_row->size_bits;
         uint8_t bytes[16] = {0};
         uint32_t descriptor_index = UINT32_MAX;
         size_t pool_offset = 0;
@@ -866,11 +1100,12 @@ n00bb_abi_storage_rows_build(
         bool uninitialized = !initializer;
         if (!alignment || (alignment & (alignment - 1))
             || bits > SIZE_MAX - 7
-            || (is_string
+            || (phase_graph ? false
+                : is_string
                 ? (bits != 128 || alignment != 8
                     || !encode_string(pool, initializer, bytes, &pool_offset))
                 : is_array ? (bits != 128 || alignment != 8)
-                : phase_graph || uninitialized ? false
+                : uninitialized ? false
                 : (is_record || is_variant || is_tuple) ? false
                 : zero_option ? false
                 : !encode_scalar(runtime, index, global->type, initializer,
@@ -883,8 +1118,9 @@ n00bb_abi_storage_rows_build(
             : global->mutability == IR_MUT_CONST
                 ? N00B_ABI_STORAGE_READ_ONLY
                 : N00B_ABI_STORAGE_WRITABLE;
-        bool long_string = is_string && global->has_static_initializer
-            && global->static_initializer->string.length
+        bool long_string = is_string && initializer
+            && initializer->kind == IR_GLOBAL_INIT_STRING
+            && initializer->string.length
                 > N00BB_ABI_STRING_SHORT_CAPACITY;
         core_buffer_t *buffer = kind == N00B_ABI_STORAGE_TLS
             ? &built.tls : kind == N00B_ABI_STORAGE_READ_ONLY
@@ -1003,6 +1239,41 @@ n00bb_abi_storage_rows_build(
         if (*section_alignment < alignment)
             *section_alignment = alignment;
     }
+    core_list_t(n00b_abi_baked_node_v1) baked = {0};
+    core_list_push(baked, ((n00b_abi_baked_node_v1){0}));
+    for (size_t i = 0; valid && graph_places && i < graphs->node_count; i++) {
+        graph_place_t *place = &graph_places[i];
+        if (!place->placed) continue;
+        const uint8_t *bytes = nullptr;
+        size_t size = 0;
+        uint32_t alignment = 0, type_index = 0;
+        uint64_t typehash = 0;
+        valid = graphs->node(graphs->context, i, &bytes, &size, &alignment,
+                &typehash)
+            && graph_type_index(types, typehash, &type_index);
+        uint32_t flags = valid ? graphs->flags(graphs->context, i) : 0;
+        if (!typehash) flags |= N00B_ABI_BAKED_NODE_IMMUTABLE;
+        if (valid) core_list_push(baked, ((n00b_abi_baked_node_v1){
+            .module_index = 1,
+            .type_index = type_index,
+            .segment_kind = place->kind,
+            .flags = flags,
+            .byte_offset = place->offset,
+            .byte_length = size,
+        }));
+    }
+    for (size_t i = 0; valid && graph_places && i < graphs->slot_count; i++) {
+        n00bb_abi_graph_slot_t slot;
+        uint32_t local_index = 0;
+        valid = graphs->slot(graphs->context, i, &slot)
+            && slot.node < graphs->node_count;
+        if (!valid || !graph_places[slot.node].placed) continue;
+        uint32_t table = 0;
+        valid = graph_slot_index(types, functions, baked_functions, &slot,
+                                 &table, &local_index)
+            && graph_slot_patch(&built, &graph_places[slot.node], &slot,
+                                table, local_index, &index_patches);
+    }
     for (size_t i = 0; valid && graph_places && i < graphs->edge_count; i++) {
         graph_edge_t *edge = &graph_edges[i];
         if (edge->duplicate) continue;
@@ -1077,9 +1348,12 @@ n00bb_abi_storage_rows_build(
         built.relocation_count = relocations.len;
         built.index_patches = index_patches.data;
         built.index_patch_count = index_patches.len;
+        built.baked_nodes = baked.data;
+        built.baked_node_count = baked.len;
         *out = built;
     }
     else {
+        core_list_free(baked);
         core_list_free(rows);
         core_list_free(relocations);
         core_list_free(index_patches);
@@ -1100,6 +1374,7 @@ n00bb_abi_storage_rows_release(n00bb_abi_storage_rows_t *rows)
     core_free(rows->stream_indexes);
     core_free(rows->relocations);
     core_free(rows->index_patches);
+    core_free(rows->baked_nodes);
     core_free(rows->shapes);
     core_free(rows->extents);
     core_buffer_release(&rows->read_only);

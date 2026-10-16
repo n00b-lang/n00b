@@ -184,17 +184,12 @@ struct n00bb_llvm_backend_t {
     LLVMContextRef context;
     core_dict_t native_types;
     bool native_types_ready;
-    LLVMModuleRef comptime;
-    LLVMModuleRef runtime;
-    const ir_module_t *comptime_source;
-    const ir_module_t *runtime_source;
-    bool comptime_lowered;
-    bool runtime_lowered;
+    LLVMModuleRef module;
+    const ir_module_t *source;
+    bool lowered;
     bool debug_enabled;
     char *cpu_name;
     char *cpu_features;
-    const n00bb_llvm_phase_array_t *phase_arrays;
-    size_t phase_array_count;
     const n00bb_llvm_type_index_t *type_indices;
     size_t type_index_count;
     const n00bb_llvm_function_binding_t *function_indices;
@@ -203,12 +198,9 @@ struct n00bb_llvm_backend_t {
     size_t global_binding_count;
     const n00bb_llvm_finalizer_binding_t *finalizers;
     size_t finalizer_count;
-    ir_func_t *const *comptime_reachable;
-    size_t comptime_reachable_count;
-    bool comptime_reachable_bound;
-    ir_func_t *const *runtime_reachable;
-    size_t runtime_reachable_count;
-    bool runtime_reachable_bound;
+    ir_func_t *const *reachable;
+    size_t reachable_count;
+    bool reachable_bound;
     ir_storage_origin_t *storage_origin;
     bool emit_frame_maps;
     n00bb_native_cache_t *native_cache;
@@ -296,8 +288,6 @@ typedef struct {
     size_t value_capacity;
     core_list_t(lowered_call_output_t) call_outputs;
     core_diagnostics_t *diagnostics;
-    const n00bb_llvm_phase_array_t *phase_arrays;
-    size_t phase_array_count;
     const n00bb_llvm_type_index_t *type_indices;
     size_t type_index_count;
     const n00bb_llvm_function_binding_t *function_indices;
@@ -309,6 +299,7 @@ typedef struct {
     core_indexed_table_t *frame_roots;
     LLVMValueRef *frame_slots;
     size_t frame_slot_count;
+    bool conservative_frame;
     core_list_t(layout_match_t) *layout_matches;
     core_list_t(member_match_t) *member_matches;
     const core_list_t(callback_binding_t) *callback_bindings;
@@ -1131,8 +1122,7 @@ static bool
 guard_global_read(lower_state_t *state, const ir_global_t *global)
 {
     const ir_global_t *identity = ir_global_identity((ir_global_t *)global);
-    if (ir_func_execution_phase(state->function) != IR_PHASE_RUNTIME
-        || !identity || identity->is_extern
+    if (!identity || identity->is_extern
         || identity->has_static_initializer) return true;
     LLVMValueRef flag = global_initialized_ref(state->module, global,
         state->global_bindings, state->global_binding_count);
@@ -1150,8 +1140,7 @@ static bool
 mark_global_initialized(lower_state_t *state, const ir_global_t *global)
 {
     const ir_global_t *identity = ir_global_identity((ir_global_t *)global);
-    if (ir_func_execution_phase(state->function) != IR_PHASE_RUNTIME
-        || !identity || identity->is_extern) return true;
+    if (!identity || identity->is_extern) return true;
     LLVMValueRef flag = global_initialized_ref(state->module, global,
         state->global_bindings, state->global_binding_count);
     if (!flag) return false;
@@ -1256,8 +1245,7 @@ static LLVMValueRef
 frozen_scalar_global(lower_state_t *state, const ir_global_t *global)
 {
     const ir_global_t *identity = ir_global_identity((ir_global_t *)global);
-    if (ir_func_execution_phase(state->function) != IR_PHASE_RUNTIME
-        || !identity || identity->is_extern
+    if (!identity || identity->is_extern
         || identity->mutability != IR_MUT_CONST
         || ir_global_storage_duration(identity) == IR_STORAGE_DURATION_THREAD
         || ir_global_can_write(identity, IR_PHASE_RUNTIME)
@@ -1473,6 +1461,24 @@ frame_root_pointer(lower_state_t *state, LLVMValueRef value, th_type *type)
         ? value : nullptr;
 }
 
+static LLVMValueRef entry_alloca(lower_state_t *state, LLVMTypeRef type);
+
+static bool
+spill_conservative_root(lower_state_t *state, th_type *type,
+                        LLVMValueRef value)
+{
+    if (!state->conservative_frame || !value || LLVMIsUndef(value)
+        || LLVMIsPoison(value) || !type
+        || (!n00bb_frame_native_pointer(state->function->owner, type)
+            && !n00bb_frame_traced_value(state->function, type)))
+        return true;
+    LLVMValueRef slot = entry_alloca(state, LLVMTypeOf(value));
+    LLVMValueRef write = slot
+        ? LLVMBuildStore(state->builder, value, slot) : nullptr;
+    if (write) LLVMSetVolatile(write, true);
+    return write != nullptr;
+}
+
 static bool
 save_result(lower_state_t *state, const ir_instr_t *instruction,
             LLVMValueRef value)
@@ -1505,6 +1511,9 @@ save_result(lower_state_t *state, const ir_instr_t *instruction,
     state->values[state->value_count++] = (lowered_value_t){
         .source = instruction->dest, .target = value,
     };
+    if (instruction->op != IR_OP_PHI
+        && !spill_conservative_root(state, instruction->dest->type, value))
+        return false;
     if (state->frame_roots && instruction->op != IR_OP_PHI) {
         const core_indexed_entry_t *root = core_indexed_table_find(
             state->frame_roots, instruction->dest);
@@ -1559,6 +1568,19 @@ store_phi_frame_roots(lower_state_t *state, const ir_block_t *block,
 }
 
 static bool
+spill_conservative_phis(lower_state_t *state, const ir_block_t *block,
+                        uint32_t last_phi)
+{
+    for (uint32_t i = 0; i <= last_phi; i++) {
+        ir_instr_t *instruction = block->instrs[i];
+        if (instruction->op != IR_OP_PHI || !instruction->dest) continue;
+        if (!spill_conservative_root(state, instruction->dest->type,
+                lowered_value(state, instruction->dest))) return false;
+    }
+    return true;
+}
+
+static bool
 save_call_output(lower_state_t *state, const ir_instr_t *call,
                  uint32_t ordinal, LLVMValueRef storage, th_type *type)
 {
@@ -1577,8 +1599,7 @@ trap_function(lower_state_t *state)
 static void
 emit_trap_reason(lower_state_t *state, const char *reason)
 {
-    if (!reason || ir_func_execution_phase(state->function)
-            == IR_PHASE_COMPTIME) {
+    if (!reason) {
         LLVMValueRef function = trap_function(state);
         LLVMBuildCall2(state->builder, LLVMGlobalGetValueType(function),
                        function, nullptr, 0, "");
@@ -2394,8 +2415,7 @@ new_boxed_aggregate_slot(lower_state_t *state, th_type *type)
     LLVMTypeRef allocator_params[] = {i32, i32, i64, i32, pointer};
     LLVMTypeRef allocator_type = LLVMFunctionType(pointer,
         allocator_params, 5, false);
-    const char *allocator_name = ir_func_execution_phase(state->function)
-        == IR_PHASE_COMPTIME ? "n00b_comptime_allocate" : "n00b_allocate";
+    const char *allocator_name = "n00b_allocate";
     LLVMValueRef allocator = LLVMGetNamedFunction(state->module,
         allocator_name);
     if (!allocator) allocator = LLVMAddFunction(state->module,
@@ -2907,59 +2927,6 @@ array_requires_flat_storage(const ir_instr_t *instruction)
 }
 
 static LLVMValueRef
-cached_array_value(lower_state_t *state, ir_module_t *source, th_type *element,
-                   const n00bb_llvm_phase_array_t *array)
-{
-    const ir_final_layout_t *layout = element
-        ? ir_layout_final(source, element, ir_module_target(source)) : nullptr;
-    LLVMContextRef context = LLVMGetModuleContext(state->module);
-    LLVMTypeRef element_type = element
-        ? value_type(source, element, context) : nullptr;
-    uint64_t stride_bits = 0;
-    if (!array || !element || !layout || !layout->alignment_bytes
-        || !ir_layout_final_stride_bits(layout, &stride_bits)
-        || !literal_element_layout_matches(source, element,
-            element_type, LLVMGetModuleDataLayout(state->module)))
-        return nullptr;
-    uint64_t alignment = layout->alignment_bytes;
-    uint64_t stride = stride_bits / 8;
-    if (!stride || stride > UINT32_MAX) return nullptr;
-    if (array->element_stride != stride || array->count > UINT32_MAX
-        || array->count > UINT32_MAX / stride || !array->bytes)
-        return nullptr;
-    unsigned byte_count = (unsigned)(array->count * stride);
-    LLVMValueRef contents = LLVMConstStringInContext(context,
-        byte_count ? (const char *)array->bytes : "\0",
-        byte_count ? byte_count : 1, true);
-    LLVMValueRef data = LLVMAddGlobal(state->module,
-        LLVMTypeOf(contents), "n00bb.literal.array.cached");
-    LLVMSetInitializer(data, contents);
-    LLVMSetAlignment(data, (unsigned)alignment);
-    LLVMSetGlobalConstant(data, true);
-    LLVMSetLinkage(data, LLVMPrivateLinkage);
-    return array_value_with_descriptor(state, data, array->count);
-}
-
-static LLVMValueRef
-materialized_array(lower_state_t *state, ir_instr_t *instruction)
-{
-    const char *identifier = ir_instr_phase_result(instruction);
-    th_type *type = instruction->dest
-        ? th_resolve(instruction->dest->type) : nullptr;
-    th_type *element = type && th_kind_of(type) == TH_SEQUENCE
-        ? th_seq_elem(type) : nullptr;
-    if (!identifier || !element) return nullptr;
-    for (size_t i = 0; i < state->phase_array_count; i++) {
-        const n00bb_llvm_phase_array_t *array = &state->phase_arrays[i];
-        if (array->kind == N00BB_LLVM_LITERAL_ARRAY
-            && array->identifier && !strcmp(identifier, array->identifier))
-            return cached_array_value(state, state->function->owner,
-                                      element, array);
-    }
-    return nullptr;
-}
-
-static LLVMValueRef
 generic_array_new(lower_state_t *state, th_type *type,
                   LLVMValueRef count, uint32_t rank, uint32_t flat_rank,
                   LLVMValueRef extents)
@@ -2973,8 +2940,7 @@ generic_array_new(lower_state_t *state, th_type *type,
     if (!type_index || !count || LLVMTypeOf(count) != i64 || !extents
         || LLVMGetTypeKind(LLVMTypeOf(extents)) != LLVMPointerTypeKind)
         return nullptr;
-    const char *allocator_name = ir_func_execution_phase(state->function)
-        == IR_PHASE_COMPTIME ? "n00b_comptime_allocate" : "n00b_allocate";
+    const char *allocator_name = "n00b_allocate";
     LLVMTypeRef allocator_params[] = {i32, i32, i64, i32, pointer};
     LLVMTypeRef allocator_type = LLVMFunctionType(pointer,
         allocator_params, 5, false);
@@ -3076,8 +3042,7 @@ dynamic_array(lower_state_t *state, ir_instr_t *instruction)
     LLVMTypeRef allocator_params[] = {i32, i32, i64, i32, pointer};
     LLVMTypeRef allocator_type = LLVMFunctionType(pointer,
         allocator_params, 5, false);
-    const char *allocator_name = ir_func_execution_phase(state->function)
-        == IR_PHASE_COMPTIME ? "n00b_comptime_allocate" : "n00b_allocate";
+    const char *allocator_name = "n00b_allocate";
     LLVMValueRef allocator = LLVMGetNamedFunction(state->module,
         allocator_name);
     if (!allocator)
@@ -3280,8 +3245,7 @@ new_array(lower_state_t *state, ir_instr_t *instruction)
         "array.new.total.bytes");
     LLVMTypeRef parameters[] = {i32, i32, i64, i32, pointer};
     LLVMTypeRef signature = LLVMFunctionType(pointer, parameters, 5, false);
-    const char *allocator_name = ir_func_execution_phase(state->function)
-        == IR_PHASE_COMPTIME ? "n00b_comptime_allocate" : "n00b_allocate";
+    const char *allocator_name = "n00b_allocate";
     LLVMValueRef allocator = LLVMGetNamedFunction(state->module,
         allocator_name);
     if (!allocator) allocator = LLVMAddFunction(state->module,
@@ -3445,8 +3409,7 @@ rectangular_suffix_address(lower_state_t *state, LLVMValueRef data,
     uint64_t value_bytes = sizeof(n00b_abi_array_value_v1);
     LLVMTypeRef parameters[] = {i32, i32, i64, i32, pointer};
     LLVMTypeRef signature = LLVMFunctionType(pointer, parameters, 5, false);
-    const char *allocator_name = ir_func_execution_phase(state->function)
-        == IR_PHASE_COMPTIME ? "n00b_comptime_allocate" : "n00b_allocate";
+    const char *allocator_name = "n00b_allocate";
     LLVMValueRef allocator = LLVMGetNamedFunction(state->module,
         allocator_name);
     if (!allocator) allocator = LLVMAddFunction(state->module,
@@ -3512,8 +3475,7 @@ sequence_value_transfers_storage(ir_value_t *source)
     if (source->def->op == IR_OP_AGGREGATE
         || source->def->op == IR_OP_ARRAY_NEW
         || source->def->op == IR_OP_CONSUME
-        || source->def->op == IR_OP_CALL
-        || source->def->op == IR_OP_PHASE_RESULT) return true;
+        || source->def->op == IR_OP_CALL) return true;
     return false;
 }
 
@@ -3529,8 +3491,6 @@ return_value_transfers_storage(ir_func_t *function, ir_value_t *source)
 
 static LLVMValueRef copy_boxed_array(lower_state_t *state,
                                      LLVMValueRef value);
-static LLVMValueRef copy_literal_value(lower_state_t *state,
-                                       LLVMValueRef value, th_type *type);
 
 static LLVMValueRef
 copy_sequence_value(lower_state_t *state, LLVMValueRef value, th_type *type)
@@ -3654,8 +3614,7 @@ copy_sequence_value(lower_state_t *state, LLVMValueRef value, th_type *type)
             "array.copy.allocated.bytes"), "array.copy.total.bytes");
     LLVMTypeRef parameters[] = {i32, i32, i64, i32, pointer};
     LLVMTypeRef signature = LLVMFunctionType(pointer, parameters, 5, false);
-    const char *allocator_name = ir_func_execution_phase(state->function)
-        == IR_PHASE_COMPTIME ? "n00b_comptime_allocate" : "n00b_allocate";
+    const char *allocator_name = "n00b_allocate";
     LLVMValueRef allocator = LLVMGetNamedFunction(state->module,
                                                    allocator_name);
     if (!allocator) allocator = LLVMAddFunction(state->module,
@@ -3680,40 +3639,6 @@ copy_sequence_value(lower_state_t *state, LLVMValueRef value, th_type *type)
         0, "array.copy.with.data");
     return LLVMBuildInsertValue(state->builder, copied, storage, 1,
                                 "array.copy.with.descriptor");
-}
-
-static LLVMValueRef
-copy_literal_value(lower_state_t *state, LLVMValueRef value, th_type *type)
-{
-    if (!value || !type) return nullptr;
-    ir_module_t *module = state->function->owner;
-    th_type *resolved = th_resolve(type);
-    if (th_kind_of(resolved) == TH_SEQUENCE)
-        return copy_sequence_value(state, value, type);
-    th_type *definition = th_kind_of(resolved) == TH_NAMED
-        ? ir_type_definition(module, resolved) : resolved;
-    if (!definition || th_kind_of(definition) != TH_RECORD)
-        return value;
-    record_shape_t shape;
-    if (LLVMGetTypeKind(LLVMTypeOf(value)) != LLVMStructTypeKind
-        || !record_shape_build(module, type,
-                               LLVMGetModuleContext(state->module), &shape))
-        return nullptr;
-    LLVMValueRef copied = value;
-    for (size_t i = 0; copied && i < shape.layout->n_members; i++) {
-        const record_slot_t *slot = &shape.slots[i];
-        if (slot->packed) continue;
-        LLVMValueRef field = LLVMBuildExtractValue(state->builder, copied,
-            slot->element, "literal.field");
-        LLVMValueRef new_field = copy_literal_value(state, field,
-            shape.layout->members[i].type);
-        if (!new_field) copied = nullptr;
-        else if (new_field != field)
-            copied = LLVMBuildInsertValue(state->builder, copied, new_field,
-                slot->element, "literal.field.copy");
-    }
-    record_shape_release(&shape);
-    return copied;
 }
 
 static bool
@@ -3903,284 +3828,6 @@ constant_string(lower_state_t *state, ir_instr_t *instruction)
         ? N00B_ABI_STRING_BINARY
         : default_string_encoding((const char *)bytes, length);
     return string_value(state->module, bytes, length, encoding);
-}
-
-static LLVMValueRef
-materialized_string(lower_state_t *state, ir_instr_t *instruction)
-{
-    const char *identifier = ir_instr_phase_result(instruction);
-    if (!identifier || !instruction->dest
-        || !is_string_type(instruction->dest->type)) return nullptr;
-    for (size_t i = 0; i < state->phase_array_count; i++) {
-        const n00bb_llvm_phase_array_t *value = &state->phase_arrays[i];
-        if (value->kind == N00BB_LLVM_LITERAL_STRING
-            && value->identifier && !strcmp(identifier, value->identifier))
-            return string_value(state->module, value->bytes, value->count,
-                                value->string_encoding);
-    }
-    return nullptr;
-}
-
-static LLVMValueRef
-cached_reloc_element(lower_state_t *state,
-                     const n00bb_llvm_phase_array_t *cached,
-                     size_t *position)
-{
-    if (!cached || !position || *position > cached->byte_len
-        || cached->element_stride > cached->byte_len - *position
-        || !cached->string_offsets || !cached->string_offset_count
-        || cached->string_offset_count > (UINT32_MAX - 1) / 2)
-        return nullptr;
-    LLVMContextRef context = LLVMGetModuleContext(state->module);
-    const uint8_t *raw = cached->bytes + *position;
-    *position += cached->element_stride;
-    LLVMValueRef *fields = calloc(2 * cached->string_offset_count + 1,
-                                   sizeof(*fields));
-    if (!fields) return nullptr;
-    unsigned n_fields = 0;
-    uint32_t cursor = 0;
-    bool valid = true;
-    for (size_t f = 0; valid && f < cached->string_offset_count; f++) {
-        uint32_t at = cached->string_offsets[f];
-        if (at < cursor || at > cached->element_stride
-            || sizeof(n00b_abi_string_v1)
-                > cached->element_stride - at
-            || cached->byte_len - *position
-                < sizeof(uint64_t) + sizeof(uint8_t)) {
-            valid = false;
-            break;
-        }
-        if (at > cursor)
-            fields[n_fields++] = LLVMConstStringInContext(context,
-                (const char *)raw + cursor, at - cursor, true);
-        uint64_t length;
-        memcpy(&length, cached->bytes + *position, sizeof(length));
-        *position += sizeof(length);
-        uint8_t encoding = cached->bytes[(*position)++];
-        valid = encoding <= N00B_ABI_STRING_UTF8
-            && length <= cached->byte_len - *position;
-        if (!valid) break;
-        fields[n_fields] = string_value(state->module, cached->bytes + *position,
-                                        (size_t)length, encoding);
-        valid = fields[n_fields] != nullptr;
-        n_fields++;
-        *position += (size_t)length;
-        cursor = at + sizeof(n00b_abi_string_v1);
-    }
-    if (valid && cursor < cached->element_stride)
-        fields[n_fields++] = LLVMConstStringInContext(context,
-            (const char *)raw + cursor, cached->element_stride - cursor,
-            true);
-    LLVMValueRef value = valid
-        ? LLVMConstStructInContext(context, fields, n_fields, true) : nullptr;
-    free(fields);
-    return value && LLVMABISizeOfType(
-        LLVMGetModuleDataLayout(state->module), LLVMTypeOf(value))
-        == cached->element_stride ? value : nullptr;
-}
-
-static LLVMValueRef
-cached_reloc_array_value(lower_state_t *state, ir_module_t *source,
-                         th_type *element,
-                         const n00bb_llvm_phase_array_t *cached)
-{
-    LLVMContextRef context = LLVMGetModuleContext(state->module);
-    LLVMTargetDataRef target = LLVMGetModuleDataLayout(state->module);
-    LLVMTypeRef native = element
-        ? value_type(source, element, context) : nullptr;
-    const ir_final_layout_t *layout = element
-        ? ir_layout_final(source, element, ir_module_target(source)) : nullptr;
-    if (!cached || !native || !layout || !layout->alignment_bytes
-        || !literal_element_layout_matches(source,
-            element, native, target)) return nullptr;
-    if (!cached->bytes || !cached->element_stride
-        || !cached->string_offsets || !cached->string_offset_count
-        || cached->string_offset_count > (UINT32_MAX - 1) / 2
-        || cached->count > UINT32_MAX
-        || LLVMABISizeOfType(target, native) != cached->element_stride)
-        return nullptr;
-    unsigned count = (unsigned)cached->count;
-    LLVMValueRef *items = calloc(count ? count : 1, sizeof(*items));
-    if (!items) return nullptr;
-    size_t position = 0;
-    bool valid = true;
-    for (unsigned j = 0; valid && j < count; j++)
-        valid = (items[j] = cached_reloc_element(state, cached,
-                                                 &position)) != nullptr;
-    valid = valid && position == cached->byte_len;
-    if (!valid) {
-        free(items);
-        return nullptr;
-    }
-    LLVMTypeRef storage_type = count ? LLVMTypeOf(items[0]) : native;
-    if (!count) items[0] = LLVMConstNull(native);
-    LLVMValueRef values = LLVMConstArray(storage_type, items,
-                                          count ? count : 1);
-    free(items);
-    LLVMValueRef data = LLVMAddGlobal(state->module,
-        LLVMTypeOf(values), "n00bb.literal.reloc.array.cached");
-    LLVMSetInitializer(data, values);
-    LLVMSetAlignment(data, (unsigned)layout->alignment_bytes);
-    LLVMSetGlobalConstant(data, true);
-    LLVMSetLinkage(data, LLVMPrivateLinkage);
-    return array_value_with_descriptor(state, data, count);
-}
-
-static LLVMValueRef
-materialized_reloc_array(lower_state_t *state, ir_instr_t *instruction)
-{
-    const char *identifier = ir_instr_phase_result(instruction);
-    th_type *type = instruction->dest
-        ? th_resolve(instruction->dest->type) : nullptr;
-    th_type *element = type && th_kind_of(type) == TH_SEQUENCE
-        ? th_seq_elem(type) : nullptr;
-    if (!identifier || !element) return nullptr;
-    for (size_t i = 0; i < state->phase_array_count; i++) {
-        const n00bb_llvm_phase_array_t *cached = &state->phase_arrays[i];
-        if (cached->kind == N00BB_LLVM_LITERAL_RELOC
-            && cached->identifier
-            && !strcmp(identifier, cached->identifier))
-            return cached_reloc_array_value(state, state->function->owner,
-                                            element, cached);
-    }
-    return nullptr;
-}
-
-static LLVMValueRef
-cached_record_fields_array_value(lower_state_t *state, ir_module_t *source,
-                                 const ir_final_layout_t *layout,
-                                 LLVMTypeRef native,
-                                 const n00bb_llvm_phase_array_t *cached)
-{
-    if (!layout || !native || !cached || !cached->bytes
-        || !cached->element_stride
-        || layout->n_members < 2
-        || LLVMGetTypeKind(native) != LLVMStructTypeKind
-        || LLVMCountStructElementTypes(native) != layout->n_members)
-        return nullptr;
-    uint64_t stride_bits = 0;
-    if (!ir_layout_final_stride_bits(layout, &stride_bits)
-        || stride_bits % 8 || stride_bits / 8 > cached->byte_len)
-        return nullptr;
-    size_t record_size = (size_t)(stride_bits / 8);
-    bool reloc = cached->kind == N00BB_LLVM_LITERAL_RECORD_FIELDS_RELOC;
-    n00bb_llvm_phase_array_t array = *cached;
-    array.bytes += record_size;
-    array.byte_len -= record_size;
-    array.kind = reloc ? N00BB_LLVM_LITERAL_RELOC
-                       : N00BB_LLVM_LITERAL_ARRAY;
-    if (!reloc && (cached->count > SIZE_MAX / cached->element_stride
-        || array.byte_len != cached->count * cached->element_stride))
-        return nullptr;
-    LLVMTargetDataRef target = LLVMGetModuleDataLayout(state->module);
-    LLVMContextRef context = LLVMGetModuleContext(state->module);
-    size_t *order = calloc(layout->n_members, sizeof(*order));
-    LLVMValueRef *fields = calloc(layout->n_members, sizeof(*fields));
-    if (!order || !fields) {
-        free(order);
-        free(fields);
-        return nullptr;
-    }
-    record_layout_order(layout, order);
-    bool valid = true;
-    size_t arrays = 0;
-    for (size_t i = 0; valid && i < layout->n_members; i++) {
-        const ir_final_member_layout_t *member = &layout->members[order[i]];
-        LLVMTypeRef field_type = LLVMStructGetTypeAtIndex(native,
-                                                          (unsigned)i);
-        th_type *field = member->type ? th_resolve(member->type) : nullptr;
-        if (!field || member->bit_offset % 8
-            || LLVMOffsetOfElement(target, native, (unsigned)i)
-                != member->bit_offset / 8) {
-            valid = false;
-            break;
-        }
-        size_t offset = (size_t)(member->bit_offset / 8);
-        uint64_t field_bytes = LLVMABISizeOfType(target, field_type);
-        if (offset > record_size || field_bytes > record_size - offset) {
-            valid = false;
-            break;
-        }
-        if (th_kind_of(field) == TH_SEQUENCE) {
-            arrays++;
-            th_type *element = th_seq_elem(field);
-            fields[i] = reloc
-                ? cached_reloc_array_value(state, source, element, &array)
-                : cached_array_value(state, source, element, &array);
-            valid = fields[i] && LLVMTypeOf(fields[i]) == field_type;
-            continue;
-        }
-        if (LLVMGetTypeKind(field_type) == LLVMIntegerTypeKind) {
-            unsigned width = LLVMGetIntTypeWidth(field_type);
-            if (!width || width > 128 || field_bytes > 16) {
-                valid = false;
-                break;
-            }
-            uint64_t words[2] = {0};
-            for (size_t b = 0; b < field_bytes; b++)
-                words[b / 8] |= (uint64_t)cached->bytes[offset + b]
-                    << ((b % 8) * 8);
-            fields[i] = width <= 64
-                ? LLVMConstInt(field_type, words[0], false)
-                : LLVMConstIntOfArbitraryPrecision(field_type, 2, words);
-        } else if (LLVMGetTypeKind(field_type) == LLVMDoubleTypeKind
-                   && field_bytes == 8) {
-            uint64_t bits = 0;
-            memcpy(&bits, cached->bytes + offset, 8);
-            fields[i] = LLVMConstBitCast(LLVMConstInt(
-                LLVMInt64TypeInContext(context), bits, false), field_type);
-        } else if (LLVMGetTypeKind(field_type) == LLVMFloatTypeKind
-                   && field_bytes == 4) {
-            uint32_t bits = 0;
-            memcpy(&bits, cached->bytes + offset, 4);
-            fields[i] = LLVMConstBitCast(LLVMConstInt(
-                LLVMInt32TypeInContext(context), bits, false), field_type);
-        } else valid = false;
-    }
-    LLVMValueRef record = valid && arrays == 1
-        ? LLVMConstStructInContext(context, fields,
-            (unsigned)layout->n_members, false) : nullptr;
-    free(fields);
-    free(order);
-    return record && LLVMTypeOf(record) == native ? record : nullptr;
-}
-
-static LLVMValueRef
-cached_record_array_value(lower_state_t *state, ir_module_t *source,
-                          th_type *type, const char *identifier)
-{
-    const ir_final_layout_t *layout = type
-        ? ir_layout_final(source, type, ir_module_target(source)) : nullptr;
-    LLVMContextRef context = LLVMGetModuleContext(state->module);
-    LLVMTypeRef native = type ? value_type(source, type, context) : nullptr;
-    th_type *field = layout && layout->n_members == 1
-        ? th_resolve(layout->members[0].type) : nullptr;
-    th_type *element = field && th_kind_of(field) == TH_SEQUENCE
-        ? th_seq_elem(field) : nullptr;
-    if (!identifier || !native || !layout)
-        return nullptr;
-    for (size_t i = 0; i < state->phase_array_count; i++) {
-        const n00bb_llvm_phase_array_t *cached = &state->phase_arrays[i];
-        if (!cached->identifier || strcmp(identifier, cached->identifier))
-            continue;
-        if (cached->kind == N00BB_LLVM_LITERAL_RECORD_FIELDS_ARRAY
-            || cached->kind == N00BB_LLVM_LITERAL_RECORD_FIELDS_RELOC)
-            return cached_record_fields_array_value(state, source,
-                                                    layout, native, cached);
-        if (!element || layout->members[0].bit_offset
-            || layout->intrinsic_bits
-                != sizeof(n00b_abi_array_value_v1) * 8)
-            return nullptr;
-        LLVMValueRef array = cached->kind == N00BB_LLVM_LITERAL_RECORD_ARRAY
-            ? cached_array_value(state, source, element, cached)
-            : cached->kind == N00BB_LLVM_LITERAL_RECORD_RELOC
-                ? cached_reloc_array_value(state, source, element, cached)
-                : nullptr;
-        LLVMValueRef record = array
-            ? LLVMConstStructInContext(context, &array, 1, false) : nullptr;
-        return record && LLVMTypeOf(record) == native ? record : nullptr;
-    }
-    return nullptr;
 }
 
 typedef enum : uint8_t {
@@ -4652,390 +4299,6 @@ static_init_value(lower_state_t *state, ir_module_t *source, th_type *type,
 }
 
 static LLVMValueRef
-materialized_record_array(lower_state_t *state, ir_instr_t *instruction)
-{
-    const char *identifier = ir_instr_phase_result(instruction);
-    th_type *type = instruction->dest
-        ? th_resolve(instruction->dest->type) : nullptr;
-    return cached_record_array_value(state, state->function->owner, type,
-                                     identifier);
-}
-
-static LLVMValueRef
-materialized_reloc_value(lower_state_t *state, ir_instr_t *instruction)
-{
-    const char *identifier = ir_instr_phase_result(instruction);
-    th_type *type = instruction->dest
-        ? th_resolve(instruction->dest->type) : nullptr;
-    if (!identifier || !type || th_kind_of(type) == TH_SEQUENCE)
-        return nullptr;
-    ir_module_t *source = state->function->owner;
-    const ir_final_layout_t *layout = ir_layout_final(source, type,
-        ir_module_target(source));
-    LLVMContextRef context = LLVMGetModuleContext(state->module);
-    LLVMTypeRef native = value_type(source, type, context);
-    LLVMTargetDataRef target = LLVMGetModuleDataLayout(state->module);
-    if (!layout || !layout->alignment_bytes || !native
-        || !literal_element_layout_matches(source, type, native, target))
-        return nullptr;
-    for (size_t i = 0; i < state->phase_array_count; i++) {
-        const n00bb_llvm_phase_array_t *cached = &state->phase_arrays[i];
-        if (cached->kind != N00BB_LLVM_LITERAL_RELOC
-            || !cached->identifier || strcmp(identifier, cached->identifier)
-            || !cached->bytes || cached->count != 1
-            || cached->element_stride != LLVMABISizeOfType(target, native))
-            continue;
-        size_t position = 0;
-        LLVMValueRef value = cached_reloc_element(state, cached, &position);
-        if (!value || position != cached->byte_len) return nullptr;
-        LLVMValueRef storage = LLVMAddGlobal(state->module,
-            LLVMTypeOf(value), "n00bb.literal.reloc.value.cached");
-        LLVMSetInitializer(storage, value);
-        LLVMSetAlignment(storage, layout->alignment_bytes);
-        LLVMSetGlobalConstant(storage, true);
-        LLVMSetLinkage(storage, LLVMPrivateLinkage);
-        return LLVMBuildLoad2(state->builder, native, storage,
-                              "literal.cached");
-    }
-    return nullptr;
-}
-
-static LLVMValueRef
-materialized_nested_array(lower_state_t *state, ir_instr_t *instruction)
-{
-    const char *identifier = ir_instr_phase_result(instruction);
-    th_type *type = instruction->dest
-        ? th_resolve(instruction->dest->type) : nullptr;
-    th_type *inner = type && th_kind_of(type) == TH_SEQUENCE
-        ? th_seq_elem(type) : nullptr;
-    th_type *element = inner && th_kind_of(th_resolve(inner)) == TH_SEQUENCE
-        ? th_seq_elem(inner) : nullptr;
-    ir_module_t *source = state->function->owner;
-    const char *target_name = ir_module_target(source);
-    const ir_final_layout_t *outer_layout = inner
-        ? ir_layout_final(source, inner, target_name) : nullptr;
-    const ir_final_layout_t *inner_layout = element
-        ? ir_layout_final(source, element, target_name) : nullptr;
-    LLVMContextRef context = LLVMGetModuleContext(state->module);
-    LLVMTargetDataRef target = LLVMGetModuleDataLayout(state->module);
-    LLVMTypeRef outer_native = inner ? value_type(source, inner, context)
-                                     : nullptr;
-    LLVMTypeRef inner_native = element
-        ? value_type(source, element, context) : nullptr;
-    uint64_t inner_stride_bits = 0;
-    if (!identifier || !outer_layout || !outer_layout->alignment_bytes
-        || !inner_layout || !inner_layout->alignment_bytes
-        || !literal_element_layout_matches(source, inner, outer_native,
-                                           target)
-        || !literal_element_layout_matches(source, element, inner_native,
-                                           target)
-        || !ir_layout_final_stride_bits(inner_layout, &inner_stride_bits)
-        || inner_stride_bits % 8 || !inner_stride_bits
-        || inner_stride_bits / 8 > UINT32_MAX) return nullptr;
-    uint32_t inner_stride = (uint32_t)(inner_stride_bits / 8);
-    for (size_t i = 0; i < state->phase_array_count; i++) {
-        const n00bb_llvm_phase_array_t *cached = &state->phase_arrays[i];
-        bool reloc = cached->kind == N00BB_LLVM_LITERAL_NESTED_RELOC;
-        if ((cached->kind != N00BB_LLVM_LITERAL_NESTED_ARRAY && !reloc)
-            || !cached->identifier || strcmp(identifier, cached->identifier)
-            || !cached->bytes || cached->count > UINT32_MAX
-            || cached->element_stride != sizeof(n00b_abi_array_value_v1)
-            || cached->inner_stride != inner_stride
-            || (reloc && (!cached->string_offsets
-                || !cached->string_offset_count))) continue;
-        unsigned count = (unsigned)cached->count;
-        LLVMValueRef *items = calloc(count ? count : 1, sizeof(*items));
-        if (!items) return nullptr;
-        size_t position = 0;
-        bool valid = true;
-        for (unsigned j = 0; valid && j < count; j++) {
-            uint64_t child_count;
-            if (position > cached->byte_len
-                || cached->byte_len - position < sizeof(child_count)) {
-                valid = false;
-                break;
-            }
-            memcpy(&child_count, cached->bytes + position,
-                   sizeof(child_count));
-            position += sizeof(child_count);
-            if (child_count > UINT32_MAX / inner_stride
-                || child_count * inner_stride
-                    > cached->byte_len - position) {
-                valid = false;
-                break;
-            }
-            unsigned byte_count = (unsigned)(child_count * inner_stride);
-            LLVMValueRef contents = nullptr;
-            if (reloc) {
-                n00bb_llvm_phase_array_t inner = *cached;
-                inner.element_stride = inner_stride;
-                LLVMValueRef *elements = calloc(child_count
-                    ? (size_t)child_count : 1, sizeof(*elements));
-                valid = elements != nullptr;
-                for (uint64_t k = 0; valid && k < child_count; k++)
-                    valid = (elements[k] = cached_reloc_element(state,
-                        &inner, &position)) != nullptr;
-                if (valid && !child_count)
-                    elements[0] = LLVMConstNull(inner_native);
-                if (valid) contents = LLVMConstArray(child_count
-                    ? LLVMTypeOf(elements[0]) : inner_native,
-                    elements, child_count ? (unsigned)child_count : 1);
-                free(elements);
-            }
-            else {
-                contents = LLVMConstStringInContext(context,
-                    byte_count ? (const char *)cached->bytes + position : "\0",
-                    byte_count ? byte_count : 1, true);
-                position += byte_count;
-            }
-            if (!valid || !contents) break;
-            LLVMValueRef data = LLVMAddGlobal(state->module,
-                LLVMTypeOf(contents), "n00bb.literal.nested.data.cached");
-            LLVMSetInitializer(data, contents);
-            LLVMSetAlignment(data, inner_layout->alignment_bytes);
-            LLVMSetGlobalConstant(data, true);
-            LLVMSetLinkage(data, LLVMPrivateLinkage);
-            items[j] = array_value_with_descriptor(state, data, child_count);
-            valid = items[j] && LLVMTypeOf(items[j]) == outer_native;
-        }
-        valid = valid && position == cached->byte_len;
-        if (valid && !count) items[0] = LLVMConstNull(outer_native);
-        LLVMValueRef values = valid
-            ? LLVMConstArray(outer_native, items, count ? count : 1)
-            : nullptr;
-        free(items);
-        if (!values) return nullptr;
-        LLVMValueRef data = LLVMAddGlobal(state->module,
-            LLVMTypeOf(values), "n00bb.literal.nested.array.cached");
-        LLVMSetInitializer(data, values);
-        LLVMSetAlignment(data, outer_layout->alignment_bytes);
-        LLVMSetGlobalConstant(data, true);
-        LLVMSetLinkage(data, LLVMPrivateLinkage);
-        return array_value_with_descriptor(state, data, count);
-    }
-    return nullptr;
-}
-
-static LLVMValueRef
-materialized_raw_value(lower_state_t *state, ir_instr_t *instruction)
-{
-    const char *identifier = ir_instr_phase_result(instruction);
-    th_type *type = instruction->dest
-        ? th_resolve(instruction->dest->type) : nullptr;
-    const ir_final_layout_t *layout = type
-        ? ir_layout_final(state->function->owner, type,
-            ir_module_target(state->function->owner)) : nullptr;
-    LLVMContextRef context = LLVMGetModuleContext(state->module);
-    LLVMTypeRef value = type
-        ? value_type(state->function->owner, type, context) : nullptr;
-    LLVMTargetDataRef target = LLVMGetModuleDataLayout(state->module);
-    bool bool_value = type && value
-        && ir_machine_of(state->function->owner, type).class == IR_CLASS_BOOL
-        && LLVMGetTypeKind(value) == LLVMIntegerTypeKind
-        && LLVMGetIntTypeWidth(value) == 1;
-    if (!identifier || !layout || !layout->alignment_bytes || !value
-        || (!bool_value && !literal_element_layout_matches(
-            state->function->owner, type, value, target))) return nullptr;
-    for (size_t i = 0; i < state->phase_array_count; i++) {
-        const n00bb_llvm_phase_array_t *cached = &state->phase_arrays[i];
-        if (cached->kind != N00BB_LLVM_LITERAL_RAW_VALUE
-            || !cached->identifier
-            || strcmp(identifier, cached->identifier)
-            || cached->count != 1 || !cached->bytes
-            || LLVMABISizeOfType(target, value) != cached->element_stride)
-            continue;
-        LLVMValueRef bytes = LLVMConstStringInContext(context,
-            (const char *)cached->bytes, cached->element_stride, true);
-        LLVMValueRef storage = LLVMAddGlobal(state->module,
-            LLVMTypeOf(bytes), "n00bb.literal.value.cached");
-        LLVMSetInitializer(storage, bytes);
-        LLVMSetAlignment(storage, (unsigned)layout->alignment_bytes);
-        LLVMSetGlobalConstant(storage, true);
-        LLVMSetLinkage(storage, LLVMPrivateLinkage);
-        return LLVMBuildLoad2(state->builder, value, storage,
-                              "literal.cached");
-    }
-    return nullptr;
-}
-
-static LLVMValueRef
-phase_cache_global(LLVMModuleRef module, const char *identifier,
-                   LLVMTypeRef type, bool define)
-{
-    if (!identifier || !type) return nullptr;
-    uint64_t hash = core_xxh3_64bits_raw(identifier, strlen(identifier));
-    core_buffer_t name = {0};
-    core_buffer_printf(&name, "__n00bb_comptime_literal_%016llx",
-                       (unsigned long long)hash);
-    LLVMValueRef global = name.data
-        ? LLVMGetNamedGlobal(module, name.data) : nullptr;
-    if (!global && name.data)
-        global = LLVMAddGlobal(module, type, name.data);
-    core_buffer_release(&name);
-    if (!global || LLVMGlobalGetValueType(global) != type)
-        return nullptr;
-    LLVMSetVisibility(global, LLVMHiddenVisibility);
-    if (define && !LLVMGetInitializer(global))
-        LLVMSetInitializer(global, LLVMConstNull(type));
-    return global;
-}
-
-static LLVMValueRef
-materialized_graph_value(lower_state_t *state, ir_instr_t *instruction)
-{
-    const char *identifier = ir_instr_phase_result(instruction);
-    if (!identifier || !instruction->dest) return nullptr;
-    for (size_t i = 0; i < state->phase_array_count; i++) {
-        const n00bb_llvm_phase_array_t *cached = &state->phase_arrays[i];
-        if (cached->kind != N00BB_LLVM_LITERAL_GRAPH
-            || !cached->identifier
-            || strcmp(identifier, cached->identifier)) continue;
-        size_t count = cached->graph_node_count;
-        if (!cached->graph_nodes || !count || count > UINT32_MAX
-            || cached->graph_edge_count > UINT32_MAX
-            || (cached->graph_edge_count && !cached->graph_edges)
-            || cached->graph_root_index >= count) return nullptr;
-        size_t *order = calloc(count, sizeof(*order));
-        size_t *local = calloc(count, sizeof(*local));
-        if (!order || !local) {
-            free(order);
-            free(local);
-            return nullptr;
-        }
-        for (size_t n = 0; n < count; n++) local[n] = SIZE_MAX;
-        size_t used = 1;
-        order[0] = cached->graph_root_index;
-        local[order[0]] = 0;
-        for (size_t read = 0; read < used; read++)
-            for (size_t e = 0; e < cached->graph_edge_count; e++) {
-                const n00bb_static_graph_edge_t *edge =
-                    &cached->graph_edges[e];
-                if (edge->source >= count || edge->target >= count) {
-                    used = 0;
-                    break;
-                }
-                if (edge->source == order[read]
-                    && local[edge->target] == SIZE_MAX) {
-                    local[edge->target] = used;
-                    order[used++] = edge->target;
-                }
-            }
-        LLVMContextRef context = LLVMGetModuleContext(state->module);
-        LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
-        LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
-        LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
-        LLVMTypeRef node_fields[] = {pointer, i64, i32, i32, i32, i32};
-        LLVMTypeRef edge_fields[] = {i32, i32, i64, i64};
-        LLVMTypeRef node_type = LLVMStructTypeInContext(context,
-            node_fields, 6, false);
-        LLVMTypeRef edge_type = LLVMStructTypeInContext(context,
-            edge_fields, 4, false);
-        LLVMValueRef *nodes = used
-            ? calloc(used, sizeof(*nodes)) : nullptr;
-        LLVMValueRef *edges = cached->graph_edge_count
-            ? calloc(cached->graph_edge_count, sizeof(*edges)) : nullptr;
-        bool valid = used && nodes
-            && (!cached->graph_edge_count || edges);
-        for (size_t n = 0; valid && n < used; n++) {
-            const n00bb_llvm_graph_node_t *node =
-                &cached->graph_nodes[order[n]];
-            const n00bb_llvm_type_index_t *type_index = nullptr;
-            for (size_t t = 0; t < state->type_index_count; t++)
-                if (state->type_indices[t].typehash == node->typehash) {
-                    type_index = &state->type_indices[t];
-                    break;
-                }
-            LLVMValueRef source = node->symbol
-                ? LLVMGetNamedGlobal(state->module, node->symbol) : nullptr;
-            if (!source && node->symbol)
-                source = LLVMAddGlobal(state->module,
-                    LLVMInt8TypeInContext(context), node->symbol);
-            valid = source && (node->immutable
-                || (type_index && type_index->index))
-                && node->size && node->alignment;
-            if (!valid) break;
-            LLVMValueRef fields[] = {
-                source,
-                LLVMConstInt(i64, node->size, false),
-                LLVMConstInt(i32, type_index ? type_index->index : 0, false),
-                LLVMConstInt(i32, node->alignment, false),
-                LLVMConstInt(i32,
-                    node->allocation && type_index
-                        && type_index->array_type, false),
-                LLVMConstInt(i32, node->immutable, false),
-            };
-            nodes[n] = LLVMConstStructInContext(context, fields, 6, false);
-        }
-        size_t edge_count = 0;
-        for (size_t e = 0; valid && e < cached->graph_edge_count; e++) {
-            const n00bb_static_graph_edge_t *edge =
-                &cached->graph_edges[e];
-            if (local[edge->source] == SIZE_MAX) continue;
-            if (local[edge->target] == SIZE_MAX) {
-                valid = false;
-                break;
-            }
-            LLVMValueRef fields[] = {
-                LLVMConstInt(i32, local[edge->source], false),
-                LLVMConstInt(i32, local[edge->target], false),
-                LLVMConstInt(i64, edge->source_offset, false),
-                LLVMConstInt(i64, edge->target_offset, false),
-            };
-            edges[edge_count++] = LLVMConstStructInContext(context,
-                fields, 4, false);
-        }
-        LLVMValueRef result = nullptr;
-        if (valid) {
-            LLVMValueRef node_values = LLVMConstArray(node_type, nodes,
-                (unsigned)used);
-            LLVMValueRef node_global = LLVMAddGlobal(state->module,
-                LLVMTypeOf(node_values), "literal.graph.nodes");
-            LLVMSetInitializer(node_global, node_values);
-            LLVMSetGlobalConstant(node_global, true);
-            LLVMSetLinkage(node_global, LLVMPrivateLinkage);
-            LLVMValueRef edge_global = LLVMConstNull(pointer);
-            if (edge_count) {
-                LLVMValueRef edge_values = LLVMConstArray(edge_type, edges,
-                    (unsigned)edge_count);
-                edge_global = LLVMAddGlobal(state->module,
-                    LLVMTypeOf(edge_values), "literal.graph.edges");
-                LLVMSetInitializer(edge_global, edge_values);
-                LLVMSetGlobalConstant(edge_global, true);
-                LLVMSetLinkage(edge_global, LLVMPrivateLinkage);
-            }
-            LLVMTypeRef parameters[] = {pointer, i32, pointer, i32, i32};
-            LLVMTypeRef signature = LLVMFunctionType(pointer,
-                parameters, 5, false);
-            LLVMValueRef clone = LLVMGetNamedFunction(state->module,
-                "n00bb_literal_graph_clone");
-            if (!clone) clone = LLVMAddFunction(state->module,
-                "n00bb_literal_graph_clone", signature);
-            LLVMTypeRef value = value_type(state->function->owner,
-                instruction->dest->type, context);
-            if (clone && value) {
-                LLVMValueRef arguments[] = {
-                    node_global,
-                    LLVMConstInt(i32, used, false),
-                    edge_global,
-                    LLVMConstInt(i32, edge_count, false),
-                    LLVMConstNull(i32),
-                };
-                LLVMValueRef copied = LLVMBuildCall2(state->builder,
-                    signature, clone, arguments, 5, "literal.graph.copy");
-                result = LLVMBuildLoad2(state->builder, value, copied,
-                    "literal.graph");
-            }
-        }
-        free(edges);
-        free(nodes);
-        free(local);
-        free(order);
-        return result;
-    }
-    return nullptr;
-}
-
-static LLVMValueRef
 entry_alloca(lower_state_t *state, LLVMTypeRef type)
 {
     LLVMBasicBlockRef current = LLVMGetInsertBlock(state->builder);
@@ -5083,36 +4346,6 @@ mutator_allocation(lower_state_t *state, uint32_t type_index, uint64_t bytes,
     };
     LLVMValueRef result = LLVMBuildCall2(state->builder, allocator_type,
                                          allocator, args, 7, "storage");
-    emit_trap_if(state, LLVMBuildIsNull(state->builder, result,
-                                        "allocation.failed"));
-    return result;
-}
-
-static LLVMValueRef
-comptime_allocation(lower_state_t *state, uint32_t type_index, uint64_t bytes,
-                    uint32_t alignment)
-{
-    LLVMContextRef context = LLVMGetModuleContext(state->module);
-    LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
-    LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
-    LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
-    LLVMTypeRef params[] = {i32, i32, i64, i32, pointer};
-    LLVMTypeRef allocator_type = LLVMFunctionType(pointer, params, 5, false);
-    LLVMValueRef allocator = LLVMGetNamedFunction(state->module,
-        "n00b_comptime_allocate");
-    if (!allocator) allocator = LLVMAddFunction(state->module,
-        "n00b_comptime_allocate", allocator_type);
-    if (!allocator || LLVMGlobalGetValueType(allocator) != allocator_type)
-        return nullptr;
-    LLVMValueRef args[] = {
-        LLVMConstInt(i32, N00B_ABI_ALLOCATOR_GC, false),
-        LLVMConstInt(i32, type_index, false),
-        LLVMConstInt(i64, bytes, false),
-        LLVMConstInt(i32, alignment, false),
-        LLVMConstNull(pointer),
-    };
-    LLVMValueRef result = LLVMBuildCall2(state->builder, allocator_type,
-                                         allocator, args, 5, "storage");
     emit_trap_if(state, LLVMBuildIsNull(state->builder, result,
                                         "allocation.failed"));
     return result;
@@ -5231,8 +4464,11 @@ variable_from_inputs(lower_state_t *state, th_type *variable)
         if (th_mode_produces_output(formal->mode))
             input = LLVMBuildLoad2(state->builder, box, input,
                                    "generic.input.box");
-        LLVMValueRef actual = LLVMBuildExtractValue(state->builder, input, 2,
-                                                     "generic.input.type");
+        LLVMValueRef field = LLVMBuildExtractValue(state->builder, input, 2,
+                                                    "generic.input.field");
+        LLVMValueRef actual = LLVMBuildAnd(state->builder, field,
+            LLVMConstInt(LLVMTypeOf(field), UINT32_C(0x7fffffff), false),
+            "generic.input.type");
         return variable_from_pattern(state, formal->type, variable, actual);
     }
     return nullptr;
@@ -5337,8 +4573,6 @@ native_call_outcome(ir_module_t *module, const ir_value_t *value)
 static bool
 store_gc_barrier(lower_state_t *state, LLVMValueRef value, th_type *type)
 {
-    if (ir_func_execution_phase(state->function) == IR_PHASE_COMPTIME)
-        return true;
     if (!type) return backend_error(state->diagnostics,
         "GC barrier store has no value type");
     th_type *atomic_element = atomic_element_type(type);
@@ -5444,6 +4678,33 @@ store_gc_barrier(lower_state_t *state, LLVMValueRef value, th_type *type)
     LLVMValueRef args[] = {slot, LLVMConstInt(i32, index, false)};
     return LLVMBuildCall2(state->builder, signature, barrier, args, 2,
                           "") != nullptr;
+}
+
+static LLVMValueRef
+copy_literal_value(lower_state_t *state, LLVMValueRef value, th_type *type)
+{
+    uint32_t index = runtime_type_index(state, type);
+    if (!index) return nullptr;
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
+    LLVMTypeRef params[] = {pointer, pointer, i32};
+    LLVMTypeRef signature = LLVMFunctionType(LLVMVoidTypeInContext(context),
+                                             params, 3, false);
+    LLVMValueRef copier = LLVMGetNamedFunction(state->module,
+        "sys.internal.marshal.copy_literal");
+    if (!copier) copier = LLVMAddFunction(state->module,
+        "sys.internal.marshal.copy_literal", signature);
+    LLVMValueRef source = entry_alloca(state, LLVMTypeOf(value));
+    LLVMValueRef destination = entry_alloca(state, LLVMTypeOf(value));
+    if (!source || !destination) return nullptr;
+    LLVMBuildStore(state->builder, value, source);
+    LLVMValueRef args[] = {source, destination,
+                           LLVMConstInt(i32, index, false)};
+    if (!LLVMBuildCall2(state->builder, signature, copier, args, 3, ""))
+        return nullptr;
+    return LLVMBuildLoad2(state->builder, LLVMTypeOf(value), destination,
+                          "literal.copy");
 }
 
 static LLVMValueRef
@@ -5577,9 +4838,7 @@ box_value(lower_state_t *state, LLVMValueRef value, th_type *type)
         LLVMTypeRef parameters[] = {i32, i32, word_type, i32, pointer};
         LLVMTypeRef signature = LLVMFunctionType(pointer, parameters,
                                                   5, false);
-        const char *allocator_name = ir_func_execution_phase(state->function)
-            == IR_PHASE_COMPTIME ? "n00b_comptime_allocate"
-                                 : "n00b_allocate";
+        const char *allocator_name = "n00b_allocate";
         LLVMValueRef allocator = LLVMGetNamedFunction(state->module,
                                                       allocator_name);
         if (!allocator)
@@ -5704,8 +4963,7 @@ copy_boxed_array(lower_state_t *state, LLVMValueRef value)
     LLVMTypeRef allocator_params[] = {i32, i32, i64, i32, pointer};
     LLVMTypeRef allocator_type = LLVMFunctionType(pointer, allocator_params,
                                                    5, false);
-    const char *allocator_name = ir_func_execution_phase(state->function)
-        == IR_PHASE_COMPTIME ? "n00b_comptime_allocate" : "n00b_allocate";
+    const char *allocator_name = "n00b_allocate";
     LLVMValueRef allocator = LLVMGetNamedFunction(state->module,
                                                   allocator_name);
     if (!allocator) allocator = LLVMAddFunction(state->module,
@@ -5742,8 +5000,7 @@ dynamic_field_box(lower_state_t *state, LLVMValueRef box_address,
     LLVMTypeRef allocator_params[] = {i32, i32, i64, i32, pointer};
     LLVMTypeRef allocator_type = LLVMFunctionType(pointer,
         allocator_params, 5, false);
-    const char *allocator_name = ir_func_execution_phase(state->function)
-        == IR_PHASE_COMPTIME ? "n00b_comptime_allocate" : "n00b_allocate";
+    const char *allocator_name = "n00b_allocate";
     LLVMValueRef allocator = LLVMGetNamedFunction(state->module,
         allocator_name);
     if (!allocator) allocator = LLVMAddFunction(state->module,
@@ -6909,6 +6166,10 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
     case IR_OP_COPY:
         if (count != 1 || operands[0].kind != IR_OPD_VALUE) break;
         result = lowered_value(state, operands[0].value);
+        if (result && instruction->dest
+            && ir_annot_get(&instruction->annots, "n00bb.literal_copy"))
+            result = copy_literal_value(state, result,
+                                        instruction->dest->type);
         ir_annot_t *promoted_write = ir_annot_get(&instruction->annots,
             "ir.promoted_local_write");
         th_type *copy_type = instruction->dest_kind == IR_DEST_LOCAL
@@ -7475,9 +6736,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                     pointer};
                 LLVMTypeRef allocator_type = LLVMFunctionType(pointer,
                     allocator_params, 5, false);
-                const char *allocator_name = ir_func_execution_phase(
-                    state->function) == IR_PHASE_COMPTIME
-                    ? "n00b_comptime_allocate" : "n00b_allocate";
+                const char *allocator_name = "n00b_allocate";
                 LLVMValueRef allocator = LLVMGetNamedFunction(state->module,
                     allocator_name);
                 if (!allocator) allocator = LLVMAddFunction(state->module,
@@ -8161,9 +7420,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             LLVMTypeRef allocator_params[] = {i32, i32, i64, i32, pointer};
             LLVMTypeRef allocator_type = LLVMFunctionType(pointer,
                 allocator_params, 5, false);
-            const char *allocator_name = ir_func_execution_phase(
-                state->function) == IR_PHASE_COMPTIME
-                ? "n00b_comptime_allocate" : "n00b_allocate";
+            const char *allocator_name = "n00b_allocate";
             LLVMValueRef allocator = LLVMGetNamedFunction(state->module,
                 allocator_name);
             if (!allocator) allocator = LLVMAddFunction(state->module,
@@ -8231,13 +7488,9 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                 core_buffer_release(&message);
                 return reported;
             }
-            result = ir_func_execution_phase(state->function)
-                    == IR_PHASE_COMPTIME
-                ? comptime_allocation(state, type_index, bytes,
-                                      layout->alignment_bytes)
-                : mutator_allocation(state, type_index, bytes,
-                                     layout->alignment_bytes,
-                                     binding->finalizable);
+            result = mutator_allocation(state, type_index, bytes,
+                                        layout->alignment_bytes,
+                                        binding->finalizable);
             if (!result) break;
         }
         if (result && uses_bitptr(state->function->owner,
@@ -8284,9 +7537,8 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             || ir_instr_has_mod(instruction, "release"))
             break;
         global_load_guard_t guard = {.state = state, .valid = true};
-        if (ir_func_execution_phase(state->function) == IR_PHASE_RUNTIME)
-            ir_value_visit_store_origins(operands[0].value,
-                guard_global_load_origin, &guard);
+        ir_value_visit_store_origins(operands[0].value,
+            guard_global_load_origin, &guard);
         if (!guard.valid) {
             state->failure_detail = "load is blocked by a global read guard";
             return false;
@@ -8981,33 +8233,6 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         }
         return true;
     }
-    case IR_OP_PHASE_RESULT:
-        if (ir_func_execution_phase(state->function)
-                == IR_PHASE_COMPTIME) {
-            LLVMTypeRef type = instruction->dest
-                ? value_type(state->function->owner,
-                    instruction->dest->type,
-                    LLVMGetModuleContext(state->module)) : nullptr;
-            LLVMValueRef global = phase_cache_global(state->module,
-                ir_instr_phase_result(instruction), type, true);
-            result = global ? LLVMBuildLoad2(state->builder, type, global,
-                                             "literal.cached") : nullptr;
-        } else {
-            result = materialized_graph_value(state, instruction);
-            bool cloned_graph = result != nullptr;
-            if (!result) result = materialized_array(state, instruction);
-            if (!result) result = materialized_string(state, instruction);
-            if (!result) result = materialized_reloc_array(state, instruction);
-            if (!result) result = materialized_record_array(state, instruction);
-            if (!result) result = materialized_reloc_value(state, instruction);
-            if (!result) result = materialized_nested_array(state, instruction);
-            if (!result) result = materialized_raw_value(state, instruction);
-            if (result && instruction->dest && !cloned_graph)
-                result = copy_literal_value(state, result,
-                                            instruction->dest->type);
-        }
-        return result ? save_result(state, instruction, result)
-                      : unsupported(state, instruction);
     case IR_OP_NEG: {
         if (count != 1 || operands[0].kind != IR_OPD_VALUE
             || instruction->n_mods > 1
@@ -10190,9 +9415,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             LLVMTypeRef allocator_params[] = {i32, i32, i64, i32, pointer};
             LLVMTypeRef allocator_type = LLVMFunctionType(pointer,
                 allocator_params, 5, false);
-            const char *allocator_name = ir_func_execution_phase(
-                state->function) == IR_PHASE_COMPTIME
-                ? "n00b_comptime_allocate" : "n00b_allocate";
+            const char *allocator_name = "n00b_allocate";
             LLVMValueRef allocator = LLVMGetNamedFunction(state->module,
                                                           allocator_name);
             if (!allocator) allocator = LLVMAddFunction(state->module,
@@ -10811,26 +10034,26 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             LLVMValueRef message = lowered_value(state, operands[0].value);
             if (!message) break;
             LLVMContextRef context = LLVMGetModuleContext(state->module);
-            LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
             LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
-            LLVMTypeRef parameters[] = {i32, i64, i64};
-            LLVMTypeRef writer_type = LLVMFunctionType(i32, parameters,
-                3, false);
-            LLVMValueRef writer = LLVMGetNamedFunction(state->module,
-                "n00bb_comptime_emit_failure");
-            if (!writer)
-                writer = LLVMAddFunction(state->module,
-                    "n00bb_comptime_emit_failure", writer_type);
+            LLVMTypeRef parameters[] = {i64, i64};
+            LLVMTypeRef trap_type = LLVMFunctionType(
+                LLVMVoidTypeInContext(context), parameters, 2, false);
+            LLVMValueRef trap = LLVMGetNamedFunction(state->module,
+                "n00bb_runtime_trap_string");
+            if (!trap)
+                trap = LLVMAddFunction(state->module,
+                    "n00bb_runtime_trap_string", trap_type);
             LLVMValueRef arguments[] = {
-                LLVMConstInt(i32, N00BB_COMPTIME_RESULT_FD, false),
                 LLVMBuildExtractValue(state->builder, message, 0,
                                       "failure.low"),
                 LLVMBuildExtractValue(state->builder, message, 1,
                                       "failure.high"),
             };
-            LLVMBuildCall2(state->builder, writer_type, writer, arguments,
-                3, "failure.write");
-        } else if (count != 0) break;
+            LLVMBuildCall2(state->builder, trap_type, trap, arguments, 2, "");
+            LLVMBuildUnreachable(state->builder);
+            return true;
+        }
+        if (count != 0) break;
         {
             const char *path = instruction->span.file >= 0
                 ? ir_file_path(state->function->owner, instruction->span.file)
@@ -11178,9 +10401,9 @@ frame_root_slot(void *opaque, n00bb_frame_root_kind_t kind,
                 ir_instr_t *instruction)
 {
     (void)local;
-    (void)instruction;
     lower_state_t *state = opaque;
-    if (!frame_root_needs_slot(state, kind, value, local)) return true;
+    if (frame_root_unreachable_narrow(state, kind, value, instruction)
+        || !frame_root_needs_slot(state, kind, value, local)) return true;
     index = state->frame_slot_count++;
     LLVMContextRef context = LLVMGetModuleContext(state->module);
     LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
@@ -11212,6 +10435,12 @@ frame_root_slot(void *opaque, n00bb_frame_root_kind_t kind,
 static bool
 mark_conservative_frame(lower_state_t *state)
 {
+    state->conservative_frame = true;
+    for (uint32_t i = 0; i < state->function->n_params; i++) {
+        ir_value_t *parameter = state->function->params[i];
+        if (parameter && !spill_conservative_root(state, parameter->type,
+                lowered_value(state, parameter))) return false;
+    }
     LLVMContextRef context = LLVMGetModuleContext(state->module);
     LLVMTypeRef parameters[] = {LLVMInt64TypeInContext(context),
                                 LLVMInt32TypeInContext(context)};
@@ -11348,8 +10577,6 @@ lower_function(LLVMModuleRef target, const ir_module_t *source,
                bool with_mutator,
                bool emit_frame_maps,
                const core_list_t(inline_function_ptr_t) *mutator_functions,
-               const n00bb_llvm_phase_array_t *phase_arrays,
-               size_t phase_array_count,
                const n00bb_llvm_type_index_t *type_indices,
                size_t type_index_count,
                const n00bb_llvm_function_binding_t *function_indices,
@@ -11404,8 +10631,6 @@ lower_function(LLVMModuleRef target, const ir_module_t *source,
         .source_module = source,
         .target_function = target_function, .with_mutator = with_mutator,
         .diagnostics = diagnostics,
-        .phase_arrays = phase_arrays,
-        .phase_array_count = phase_array_count,
         .type_indices = type_indices,
         .type_index_count = type_index_count,
         .function_indices = function_indices,
@@ -11483,6 +10708,11 @@ lower_function(LLVMModuleRef target, const ir_module_t *source,
             debug_location(state.builder, subprogram, function,
                            debug_file_id, instruction->span);
             ok = lower_instruction(&state, instruction);
+            if (ok && state.conservative_frame
+                && instruction->op == IR_OP_PHI
+                && (j + 1 == block->n_instrs
+                    || block->instrs[j + 1]->op != IR_OP_PHI))
+                ok = spill_conservative_phis(&state, block, j);
             if (ok && state.frame_roots && instruction->op == IR_OP_PHI
                 && (j + 1 == block->n_instrs
                     || block->instrs[j + 1]->op != IR_OP_PHI))
@@ -11682,8 +10912,7 @@ select_mutator_functions(
 {
     for (size_t f = 0; f < candidates->len; f++) {
         ir_func_t *function = candidates->data[f];
-        if (ir_func_execution_phase(function) != IR_PHASE_COMPTIME
-            && has_dynamic_allocation(function))
+        if (has_dynamic_allocation(function))
             core_list_push(*selected, function);
     }
     bool changed;
@@ -11691,8 +10920,7 @@ select_mutator_functions(
         changed = false;
         for (size_t f = 0; f < candidates->len; f++) {
             ir_func_t *function = candidates->data[f];
-            if (ir_func_execution_phase(function) == IR_PHASE_COMPTIME
-                || inline_list_contains(selected, function)) continue;
+            if (inline_list_contains(selected, function)) continue;
             for (uint32_t b = 0; b < function->n_blocks; b++) {
                 ir_block_t *block = function->blocks[b];
                 for (uint32_t i = 0; i < block->n_instrs; i++) {
@@ -11720,8 +10948,6 @@ mark_always_inline(LLVMContextRef context, LLVMValueRef function)
 static bool
 lower_module(LLVMModuleRef target, const ir_module_t *source,
              bool emit_frame_maps,
-             const n00bb_llvm_phase_array_t *phase_arrays,
-             size_t phase_array_count,
              const n00bb_llvm_type_index_t *type_indices,
              size_t type_index_count,
              const n00bb_llvm_function_binding_t *function_indices,
@@ -11812,26 +11038,9 @@ lower_module(LLVMModuleRef target, const ir_module_t *source,
                     (const uint8_t *)init->string.bytes, init->string.length,
                     default_string_encoding(init->string.bytes,
                                             init->string.length));
-            else if (init->kind == IR_GLOBAL_INIT_RECORD) {
-                ir_annot_t *result_id = ir_annot_get(&global->annots,
-                    "n00bb.comptime.global_result");
-                lower_state_t cache = {
-                    .module = target,
-                    .phase_arrays = phase_arrays,
-                    .phase_array_count = phase_array_count,
-                };
-                if (result_id && result_id->kind == IR_ANNOT_STR)
-                    value = cached_record_array_value(&cache,
-                    (ir_module_t *)source, global->type,
-                    result_id->s);
-                else value = static_init_value(&cache, (ir_module_t *)source,
-                    global->type, init, global->mutability == IR_MUT_CONST);
-            } else if (init->kind == IR_GLOBAL_INIT_SEQUENCE) {
-                lower_state_t cache = {
-                    .module = target,
-                    .phase_arrays = phase_arrays,
-                    .phase_array_count = phase_array_count,
-                };
+            else if (init->kind == IR_GLOBAL_INIT_RECORD
+                     || init->kind == IR_GLOBAL_INIT_SEQUENCE) {
+                lower_state_t cache = {.module = target};
                 value = static_init_value(&cache, (ir_module_t *)source,
                     global->type, init, global->mutability == IR_MUT_CONST);
             }
@@ -11993,8 +11202,8 @@ lower_module(LLVMModuleRef target, const ir_module_t *source,
                                                      diagnostics))
                 || !lower_function(target, source, function, selected,
                                emit_frame_maps,
-                               &mutator_functions, phase_arrays,
-                               phase_array_count, type_indices,
+                               &mutator_functions,
+                               type_indices,
                                type_index_count, function_indices,
                                function_index_count, global_bindings,
                                global_binding_count, storage_origin,
@@ -12017,8 +11226,8 @@ lower_module(LLVMModuleRef target, const ir_module_t *source,
                                                 diagnostics))
             || !lower_function(target, source, function, selected,
                             emit_frame_maps,
-                            &mutator_functions, phase_arrays,
-                            phase_array_count, type_indices,
+                            &mutator_functions,
+                            type_indices,
                             type_index_count, function_indices,
                             function_index_count, global_bindings,
                             global_binding_count, storage_origin,
@@ -12083,15 +11292,11 @@ set_native_layout(LLVMModuleRef module, const char *cpu,
 }
 
 n00bb_llvm_backend_t *
-n00bb_llvm_backend_prepare(const ir_module_t *comptime_ir,
-                           const ir_module_t *runtime_ir,
-                           bool debug_enabled, bool native_cpu,
-                           core_diagnostics_t *diagnostics)
+n00bb_llvm_backend_prepare(const ir_module_t *ir, bool debug_enabled,
+                           bool native_cpu, core_diagnostics_t *diagnostics)
 {
-    if (!comptime_ir || !runtime_ir
-        || !ir_module_name(comptime_ir) || !ir_module_name(runtime_ir)
-        || !ir_module_target(comptime_ir) || !ir_module_target(runtime_ir)) {
-        backend_error(diagnostics, "LLVM backend needs both targeted phase modules");
+    if (!ir || !ir_module_name(ir) || !ir_module_target(ir)) {
+        backend_error(diagnostics, "LLVM backend needs a targeted module");
         return nullptr;
     }
     n00bb_llvm_backend_t *backend = core_alloc(n00bb_llvm_backend_t);
@@ -12109,27 +11314,22 @@ n00bb_llvm_backend_prepare(const ir_module_t *comptime_ir,
         if (!backend->cpu_name || !backend->cpu_name[0]
             || !backend->cpu_features) goto fail;
     }
-    backend->comptime_source = comptime_ir;
-    backend->runtime_source = runtime_ir;
+    backend->source = ir;
     backend->context = LLVMContextCreate();
     if (!backend->context) goto fail;
-    backend->comptime = LLVMModuleCreateWithNameInContext(
-        ir_module_name(comptime_ir), backend->context);
-    backend->runtime = LLVMModuleCreateWithNameInContext(
-        ir_module_name(runtime_ir), backend->context);
-    if (!backend->comptime || !backend->runtime) goto fail;
-    LLVMSetTarget(backend->comptime, ir_module_target(comptime_ir));
-    LLVMSetTarget(backend->runtime, ir_module_target(runtime_ir));
-    const char *cpu = native_cpu ? backend->cpu_name : "generic";
-    const char *features = native_cpu ? backend->cpu_features : "";
-    if (!set_native_layout(backend->comptime, cpu, features)
-        || !set_native_layout(backend->runtime, cpu, features)) goto fail;
+    backend->module = LLVMModuleCreateWithNameInContext(ir_module_name(ir),
+                                                        backend->context);
+    if (!backend->module) goto fail;
+    LLVMSetTarget(backend->module, ir_module_target(ir));
+    if (!set_native_layout(backend->module,
+            native_cpu ? backend->cpu_name : "generic",
+            native_cpu ? backend->cpu_features : "")) goto fail;
     return backend;
 
 fail:
     n00bb_llvm_backend_free(backend);
     if (!diagnostics || !core_diagnostics_failed(diagnostics))
-        backend_error(diagnostics, "could not initialize LLVM phase modules");
+        backend_error(diagnostics, "could not initialize the LLVM module");
     return nullptr;
 }
 
@@ -12143,8 +11343,7 @@ n00bb_llvm_backend_free(n00bb_llvm_backend_t *backend)
         core_dict_free(&backend->native_types);
     }
     core_list_free(backend->callback_bindings);
-    if (backend->comptime) LLVMDisposeModule(backend->comptime);
-    if (backend->runtime) LLVMDisposeModule(backend->runtime);
+    if (backend->module) LLVMDisposeModule(backend->module);
     if (backend->context) LLVMContextDispose(backend->context);
     if (backend->cpu_name) LLVMDisposeMessage(backend->cpu_name);
     if (backend->cpu_features) LLVMDisposeMessage(backend->cpu_features);
@@ -12152,23 +11351,11 @@ n00bb_llvm_backend_free(n00bb_llvm_backend_t *backend)
 }
 
 bool
-n00bb_llvm_backend_bind_phase_arrays(
-    n00bb_llvm_backend_t *backend, const n00bb_llvm_phase_array_t *arrays,
-    size_t count)
-{
-    if (!backend || backend->runtime_lowered || (count && !arrays))
-        return false;
-    backend->phase_arrays = arrays;
-    backend->phase_array_count = count;
-    return true;
-}
-
-bool
 n00bb_llvm_backend_bind_type_indices(
     n00bb_llvm_backend_t *backend, const n00bb_llvm_type_index_t *types,
     size_t count)
 {
-    if (!backend || backend->runtime_lowered || (count && !types))
+    if (!backend || backend->lowered || (count && !types))
         return false;
     backend->type_indices = types;
     backend->type_index_count = count;
@@ -12180,7 +11367,7 @@ n00bb_llvm_backend_bind_function_indices(
     n00bb_llvm_backend_t *backend,
     const n00bb_llvm_function_binding_t *functions, size_t count)
 {
-    if (!backend || backend->runtime_lowered || (count && !functions))
+    if (!backend || backend->lowered || (count && !functions))
         return false;
     backend->function_indices = functions;
     backend->function_index_count = count;
@@ -12192,7 +11379,7 @@ n00bb_llvm_backend_bind_globals(
     n00bb_llvm_backend_t *backend,
     const n00bb_llvm_global_binding_t *globals, size_t count)
 {
-    if (!backend || (count && !globals) || backend->runtime_lowered)
+    if (!backend || (count && !globals) || backend->lowered)
         return false;
     backend->global_bindings = globals;
     backend->global_binding_count = count;
@@ -12204,7 +11391,7 @@ n00bb_llvm_backend_bind_finalizers(
     n00bb_llvm_backend_t *backend,
     const n00bb_llvm_finalizer_binding_t *finalizers, size_t count)
 {
-    if (!backend || (count && !finalizers) || backend->runtime_lowered)
+    if (!backend || (count && !finalizers) || backend->lowered)
         return false;
     backend->finalizers = finalizers;
     backend->finalizer_count = count;
@@ -12213,48 +11400,39 @@ n00bb_llvm_backend_bind_finalizers(
 
 bool
 n00bb_llvm_backend_bind_reachable_functions(
-    n00bb_llvm_backend_t *backend, bool comptime,
-    ir_func_t *const *functions, size_t count)
+    n00bb_llvm_backend_t *backend, ir_func_t *const *functions, size_t count)
 {
-    if (!backend || (count && !functions)
-        || (comptime ? backend->comptime_lowered : backend->runtime_lowered))
-        return false;
-    if (comptime) {
-        backend->comptime_reachable = functions;
-        backend->comptime_reachable_count = count;
-        backend->comptime_reachable_bound = true;
-    } else {
-        backend->runtime_reachable = functions;
-        backend->runtime_reachable_count = count;
-        backend->runtime_reachable_bound = true;
-        core_list_free(backend->callback_bindings);
-        backend->callback_bindings = core_list_new(callback_binding_t);
-        for (size_t i = 0; i < count; i++) {
-            ir_func_t *function = functions[i];
-            for (uint32_t b = 0; function && b < function->n_blocks; b++) {
-                ir_block_t *block = function->blocks[b];
-                for (uint32_t j = 0; block && j < block->n_instrs; j++) {
-                    ir_instr_t *creation = block->instrs[j];
-                    if (!creation || creation->op != IR_OP_CALLBACK_CREATE
-                        || !creation->dest || !creation->n_operands
-                        || creation->operands[0].kind != IR_OPD_VALUE)
-                        continue;
-                    ir_value_t *reference = creation->operands[0].value;
-                    const ir_instr_t *retained = reference
-                        ? reference->def : nullptr;
-                    ir_value_t *handler = retained
-                        && retained->op == IR_OP_RETAIN_REF
-                        && retained->n_operands == 1
-                        && retained->operands[0].kind == IR_OPD_VALUE
-                        ? retained->operands[0].value : nullptr;
-                    th_type *signature = nullptr;
-                    if (!handler || handler->kind != IR_VAL_FUNC
-                        || !ir_instr_callback_contract(creation, nullptr,
-                            &signature, nullptr)) continue;
-                    core_list_push(backend->callback_bindings,
-                        ((callback_binding_t){handler->owner,
-                            creation->dest->type, signature}));
-                }
+    if (!backend || (count && !functions) || backend->lowered) return false;
+    backend->reachable = functions;
+    backend->reachable_count = count;
+    backend->reachable_bound = true;
+    core_list_free(backend->callback_bindings);
+    backend->callback_bindings = core_list_new(callback_binding_t);
+    for (size_t i = 0; i < count; i++) {
+        ir_func_t *function = functions[i];
+        for (uint32_t b = 0; function && b < function->n_blocks; b++) {
+            ir_block_t *block = function->blocks[b];
+            for (uint32_t j = 0; block && j < block->n_instrs; j++) {
+                ir_instr_t *creation = block->instrs[j];
+                if (!creation || creation->op != IR_OP_CALLBACK_CREATE
+                    || !creation->dest || !creation->n_operands
+                    || creation->operands[0].kind != IR_OPD_VALUE)
+                    continue;
+                ir_value_t *reference = creation->operands[0].value;
+                const ir_instr_t *retained = reference
+                    ? reference->def : nullptr;
+                ir_value_t *handler = retained
+                    && retained->op == IR_OP_RETAIN_REF
+                    && retained->n_operands == 1
+                    && retained->operands[0].kind == IR_OPD_VALUE
+                    ? retained->operands[0].value : nullptr;
+                th_type *signature = nullptr;
+                if (!handler || handler->kind != IR_VAL_FUNC
+                    || !ir_instr_callback_contract(creation, nullptr,
+                        &signature, nullptr)) continue;
+                core_list_push(backend->callback_bindings,
+                    ((callback_binding_t){handler->owner,
+                        creation->dest->type, signature}));
             }
         }
     }
@@ -12265,7 +11443,7 @@ bool
 n00bb_llvm_backend_bind_storage_origin(
     n00bb_llvm_backend_t *backend, ir_storage_origin_t *origin)
 {
-    if (!backend || backend->runtime_lowered) return false;
+    if (!backend || backend->lowered) return false;
     backend->storage_origin = origin;
     return true;
 }
@@ -12273,7 +11451,7 @@ n00bb_llvm_backend_bind_storage_origin(
 bool
 n00bb_llvm_backend_enable_frame_maps(n00bb_llvm_backend_t *backend)
 {
-    if (!backend || backend->runtime_lowered) return false;
+    if (!backend || backend->lowered) return false;
     backend->emit_frame_maps = true;
     return true;
 }
@@ -12286,18 +11464,15 @@ n00bb_llvm_backend_bind_native_cache(n00bb_llvm_backend_t *backend,
 }
 
 static bool
-lower_phase(n00bb_llvm_backend_t *backend, bool comptime,
-            core_diagnostics_t *diagnostics)
+lower_backend(n00bb_llvm_backend_t *backend, core_diagnostics_t *diagnostics)
 {
-    bool *lowered = comptime ? &backend->comptime_lowered
-                             : &backend->runtime_lowered;
-    if (*lowered) return true;
+    if (backend->lowered) return true;
     core_dict_t *previous_native_types = active_native_types;
     active_native_types = &backend->native_types;
     debug_info_t debug = {0};
-    bool with_debug = !comptime && backend->debug_enabled;
-    if (with_debug && !debug_info_begin(&debug, backend->runtime,
-                                        backend->runtime_source)) {
+    bool with_debug = backend->debug_enabled;
+    if (with_debug && !debug_info_begin(&debug, backend->module,
+                                        backend->source)) {
         debug_info_end(&debug);
         active_native_types = previous_native_types;
         return backend_error(diagnostics,
@@ -12305,58 +11480,42 @@ lower_phase(n00bb_llvm_backend_t *backend, bool comptime,
     }
     debug_info_t *previous_debug = active_debug;
     active_debug = with_debug ? &debug : nullptr;
-    bool module_lowered = lower_module(
-                      comptime ? backend->comptime : backend->runtime,
-                      comptime ? backend->comptime_source
-                               : backend->runtime_source,
-                      !comptime && backend->emit_frame_maps,
-                      comptime ? nullptr : backend->phase_arrays,
-                      comptime ? 0 : backend->phase_array_count,
-                      backend->type_indices,
-                      backend->type_index_count,
-                      comptime ? nullptr : backend->function_indices,
-                      comptime ? 0 : backend->function_index_count,
-                      comptime ? nullptr : backend->global_bindings,
-                      comptime ? 0 : backend->global_binding_count,
-                      comptime ? nullptr : backend->storage_origin,
-                      comptime ? backend->comptime_reachable
-                               : backend->runtime_reachable,
-                      comptime ? backend->comptime_reachable_count
-                               : backend->runtime_reachable_count,
-                      comptime ? backend->comptime_reachable_bound
-                               : backend->runtime_reachable_bound,
-                      comptime ? nullptr : &backend->callback_bindings,
-                      diagnostics);
+    bool module_lowered = lower_module(backend->module, backend->source,
+        backend->emit_frame_maps, backend->type_indices,
+        backend->type_index_count, backend->function_indices,
+        backend->function_index_count, backend->global_bindings,
+        backend->global_binding_count, backend->storage_origin,
+        backend->reachable, backend->reachable_count,
+        backend->reachable_bound, &backend->callback_bindings, diagnostics);
     active_debug = previous_debug;
     if (with_debug) debug_info_end(&debug);
     active_native_types = previous_native_types;
     if (!module_lowered) return false;
-    if (!comptime) {
-        LLVMPassBuilderOptionsRef options = LLVMCreatePassBuilderOptions();
-        LLVMErrorRef error = LLVMRunPasses(backend->runtime, "always-inline",
-                                           nullptr, options);
-        LLVMDisposePassBuilderOptions(options);
-        if (error) {
-            char *message = LLVMGetErrorMessage(error);
-            backend_error(diagnostics, message ? message
-                : "LLVM always-inline pass failed");
-            LLVMDisposeErrorMessage(message);
-            return false;
-        }
+    LLVMPassBuilderOptionsRef options = LLVMCreatePassBuilderOptions();
+    LLVMErrorRef error = LLVMRunPasses(backend->module, "always-inline",
+                                       nullptr, options);
+    LLVMDisposePassBuilderOptions(options);
+    if (error) {
+        char *message = LLVMGetErrorMessage(error);
+        backend_error(diagnostics, message ? message
+            : "LLVM always-inline pass failed");
+        LLVMDisposeErrorMessage(message);
+        return false;
     }
-    *lowered = true;
+
+    backend->lowered = true;
     return true;
 }
 
 bool
 n00bb_llvm_backend_write_bitcode(n00bb_llvm_backend_t *backend,
-                                  bool comptime, core_buffer_t *out,
+                                  core_buffer_t *out,
                                   core_diagnostics_t *diagnostics)
 {
     if (!backend || !out)
         return backend_error(diagnostics, "invalid LLVM bitcode probe arguments");
-    if (!lower_phase(backend, comptime, diagnostics)) return false;
-    LLVMModuleRef module = comptime ? backend->comptime : backend->runtime;
+    if (!lower_backend(backend, diagnostics)) return false;
+    LLVMModuleRef module = backend->module;
     char *error = nullptr;
     if (LLVMVerifyModule(module, LLVMReturnStatusAction, &error)) {
         backend_error(diagnostics, error ? error : "LLVM module verification failed");
@@ -12376,7 +11535,7 @@ static bool
 emit_finalizer_bridge(n00bb_llvm_backend_t *backend,
                       core_diagnostics_t *diagnostics)
 {
-    LLVMModuleRef module = backend->runtime;
+    LLVMModuleRef module = backend->module;
     LLVMContextRef context = backend->context;
     LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
     LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
@@ -12452,7 +11611,7 @@ static bool
 emit_tls_address_resolver(n00bb_llvm_backend_t *backend,
                           core_diagnostics_t *diagnostics)
 {
-    LLVMModuleRef module = backend->runtime;
+    LLVMModuleRef module = backend->module;
     LLVMContextRef context = backend->context;
     LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
     LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
@@ -12497,12 +11656,31 @@ emit_tls_address_resolver(n00bb_llvm_backend_t *backend,
         "could not bind a TLS storage address");
 }
 
+static void
+keep_entry_frames(LLVMModuleRef module)
+{
+    LLVMValueRef entry = LLVMGetNamedFunction(module, "main");
+    if (!entry) return;
+    unsigned kind = LLVMGetEnumAttributeKindForName("noinline",
+                                                    sizeof("noinline") - 1);
+    LLVMContextRef context = LLVMGetModuleContext(module);
+    for (LLVMBasicBlockRef block = LLVMGetFirstBasicBlock(entry); block;
+         block = LLVMGetNextBasicBlock(block))
+        for (LLVMValueRef instruction = LLVMGetFirstInstruction(block);
+             instruction; instruction = LLVMGetNextInstruction(instruction)) {
+            LLVMValueRef callee = LLVMIsACallInst(instruction)
+                ? LLVMGetCalledValue(instruction) : nullptr;
+            if (!callee || !LLVMIsAFunction(callee)
+                || LLVMGetIntrinsicID(callee)) continue;
+            LLVMAddAttributeAtIndex(callee, LLVMAttributeFunctionIndex,
+                LLVMCreateEnumAttribute(context, kind, 0));
+        }
+}
+
 static bool
 emit_entry_initializers(LLVMModuleRef module, LLVMContextRef context,
-                        LLVMValueRef entry, LLVMBuilderRef builder,
-                        LLVMTypeRef result, bool comptime,
-                        const char *const *names, size_t count,
-                        core_diagnostics_t *diagnostics)
+                        LLVMBuilderRef builder, const char *const *names,
+                        size_t count, core_diagnostics_t *diagnostics)
 {
     LLVMTypeRef initializer_type = LLVMFunctionType(
         LLVMVoidTypeInContext(context), nullptr, 0, false);
@@ -12511,34 +11689,13 @@ emit_entry_initializers(LLVMModuleRef module, LLVMContextRef context,
         if (!initializer)
             initializer = LLVMAddFunction(module, names[i],
                 initializer_type);
-        LLVMTypeRef initializer_result = LLVMGetReturnType(
-            LLVMGlobalGetValueType(initializer));
-        bool failable = comptime
-            && LLVMGetTypeKind(initializer_result) == LLVMStructTypeKind
-            && LLVMCountStructElementTypes(initializer_result) == 2;
         if (LLVMCountParams(initializer)
-            || (!failable && initializer_result
-                != LLVMVoidTypeInContext(context)))
+            || LLVMGetReturnType(LLVMGlobalGetValueType(initializer))
+                != LLVMVoidTypeInContext(context))
             return backend_error(diagnostics,
-                "phase initializer signature is invalid");
-        LLVMValueRef outcome = LLVMBuildCall2(builder,
-            LLVMGlobalGetValueType(initializer), initializer,
-            nullptr, 0, "");
-        if (failable) {
-            LLVMValueRef tag = LLVMBuildExtractValue(builder, outcome,
-                1, "initializer.failure.tag");
-            LLVMValueRef failed = LLVMBuildICmp(builder, LLVMIntNE, tag,
-                LLVMConstInt(LLVMTypeOf(tag), 0, false),
-                "initializer.failed");
-            LLVMBasicBlockRef failure = LLVMAppendBasicBlockInContext(
-                context, entry, "initializer.failure");
-            LLVMBasicBlockRef next = LLVMAppendBasicBlockInContext(
-                context, entry, "initializer.next");
-            LLVMBuildCondBr(builder, failed, failure, next);
-            LLVMPositionBuilderAtEnd(builder, failure);
-            LLVMBuildRet(builder, LLVMConstInt(result, 1, false));
-            LLVMPositionBuilderAtEnd(builder, next);
-        }
+                "module initializer signature is invalid");
+        LLVMBuildCall2(builder, LLVMGlobalGetValueType(initializer),
+                       initializer, nullptr, 0, "");
     }
     return true;
 }
@@ -13141,7 +12298,7 @@ static LLVMValueRef
 runtime_function_address_table(n00bb_llvm_backend_t *backend,
                                uint32_t *count_out)
 {
-    LLVMModuleRef module = backend->runtime;
+    LLVMModuleRef module = backend->module;
     LLVMTypeRef pointer = LLVMPointerTypeInContext(backend->context, 0);
     uint32_t count = 1;
     for (size_t i = 0; i < backend->function_index_count; i++) {
@@ -13155,10 +12312,10 @@ runtime_function_address_table(n00bb_llvm_backend_t *backend,
         addresses[i] = LLVMConstNull(pointer);
     for (size_t i = 0; i < backend->function_index_count; i++) {
         ir_func_t *function = backend->function_indices[i].function;
-        bool emitted = !backend->runtime_reachable_bound;
-        for (size_t j = 0; !emitted && j < backend->runtime_reachable_count;
+        bool emitted = !backend->reachable_bound;
+        for (size_t j = 0; !emitted && j < backend->reachable_count;
              j++)
-            emitted = backend->runtime_reachable[j] == function;
+            emitted = backend->reachable[j] == function;
         if (!emitted) continue;
         LLVMTypeRef signature = function_type(module, function);
         core_buffer_t name = {0};
@@ -13189,39 +12346,33 @@ runtime_function_address_table(n00bb_llvm_backend_t *backend,
 }
 
 static bool emit_native_module(n00bb_llvm_backend_t *backend,
-    LLVMModuleRef module, bool comptime, core_buffer_t *out,
+    LLVMModuleRef module, core_buffer_t *out,
     core_diagnostics_t *diagnostics);
 
 static bool
-emit_phase_image(n00bb_llvm_backend_t *backend,
-                               bool comptime,
-                               const char *const *entry_initializers,
-                               size_t initializer_count,
-                               const n00bb_llvm_array_producer_t *array_producers,
-                               size_t array_producer_count,
-                               size_t metadata_bytes, bool bitcode,
-                               core_buffer_t *out,
-                               core_diagnostics_t *diagnostics)
+emit_image(n00bb_llvm_backend_t *backend,
+           const char *const *entry_initializers, size_t initializer_count,
+           size_t metadata_bytes, bool bitcode, core_buffer_t *out,
+           core_diagnostics_t *diagnostics)
 {
     if (!backend || !out || (initializer_count && !entry_initializers)
-        || (array_producer_count && (!comptime || !array_producers))
-        || (!comptime && initializer_count && !metadata_bytes))
+        || (initializer_count && !metadata_bytes))
         return backend_error(diagnostics, "invalid LLVM object arguments");
-    if (!lower_phase(backend, comptime, diagnostics)) return false;
-    LLVMModuleRef module = comptime ? backend->comptime : backend->runtime;
+    if (!lower_backend(backend, diagnostics)) return false;
+    LLVMModuleRef module = backend->module;
     LLVMContextRef context = backend->context;
     uint32_t function_address_count = 0;
-    LLVMValueRef function_addresses = !comptime && initializer_count
+    LLVMValueRef function_addresses = initializer_count
         ? runtime_function_address_table(backend, &function_address_count)
         : nullptr;
-    if (!comptime && initializer_count && !function_addresses)
+    if (initializer_count && !function_addresses)
         return backend_error(diagnostics,
             "could not emit indexed runtime function addresses");
-    if (!comptime && initializer_count
+    if (initializer_count
         && !emit_tls_address_resolver(backend, diagnostics)) return false;
-    if (!comptime && initializer_count
+    if (initializer_count
         && !emit_finalizer_bridge(backend, diagnostics)) return false;
-    if (initializer_count || array_producer_count) {
+    if (initializer_count) {
         LLVMTypeRef result = LLVMInt32TypeInContext(context);
         LLVMTypeRef signature = LLVMFunctionType(result, nullptr, 0, false);
         LLVMValueRef entry = LLVMAddFunction(module, "main", signature);
@@ -13263,18 +12414,16 @@ emit_phase_image(n00bb_llvm_backend_t *backend,
                                                       2, false);
             LLVMValueRef failed = LLVMBuildICmp(builder, LLVMIntNE, status,
                 LLVMConstInt(result, 0, false), "registration.failed");
-            if (!comptime) {
-                LLVMValueRef bind = LLVMAddFunction(module,
-                    "n00b_abi_v1_bind_runtime_function_addresses", bind_type);
-                LLVMValueRef bind_args[] = {function_addresses,
-                    LLVMConstInt(result, function_address_count, false)};
-                LLVMValueRef bound = LLVMBuildCall2(builder, bind_type, bind,
-                    bind_args, 2, "function.addresses");
-                LLVMValueRef bind_failed = LLVMBuildICmp(builder, LLVMIntNE,
-                    bound, LLVMConstNull(result), "function.addresses.failed");
-                failed = LLVMBuildOr(builder, failed, bind_failed,
-                                     "initialization.failed");
-            }
+            LLVMValueRef bind = LLVMAddFunction(module,
+                "n00b_abi_v1_bind_runtime_function_addresses", bind_type);
+            LLVMValueRef bind_args[] = {function_addresses,
+                LLVMConstInt(result, function_address_count, false)};
+            LLVMValueRef bound = LLVMBuildCall2(builder, bind_type, bind,
+                bind_args, 2, "function.addresses");
+            LLVMValueRef bind_failed = LLVMBuildICmp(builder, LLVMIntNE,
+                bound, LLVMConstNull(result), "function.addresses.failed");
+            failed = LLVMBuildOr(builder, failed, bind_failed,
+                                 "initialization.failed");
             LLVMBasicBlockRef rejected = LLVMAppendBasicBlockInContext(context,
                 entry, "metadata.invalid");
             LLVMBasicBlockRef ready = LLVMAppendBasicBlockInContext(context,
@@ -13289,459 +12438,14 @@ emit_phase_image(n00bb_llvm_backend_t *backend,
             LLVMBuildUnreachable(builder);
             LLVMPositionBuilderAtEnd(builder, ready);
         }
-        if (array_producer_count) {
-            LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
-            LLVMTypeRef array_fields[] = {pointer, pointer};
-            LLVMTypeRef array_type = LLVMStructTypeInContext(context,
-                array_fields, 2, false);
-            LLVMTypeRef writer_parameters[] = {result, pointer, pointer,
-                                                result};
-            LLVMTypeRef writer_type = LLVMFunctionType(result,
-                writer_parameters, 4, false);
-            LLVMValueRef writer = LLVMAddFunction(module,
-                "n00bb_comptime_emit_array", writer_type);
-            LLVMTypeRef nested_writer_parameters[] = {
-                result, pointer, pointer, result, pointer,
-            };
-            LLVMTypeRef nested_writer_type = LLVMFunctionType(result,
-                nested_writer_parameters, 5, false);
-            LLVMValueRef nested_writer = LLVMAddFunction(module,
-                "n00bb_comptime_emit_nested_array", nested_writer_type);
-            LLVMTypeRef reloc_writer_parameters[] = {
-                result, pointer, pointer, result, pointer, result, pointer,
-            };
-            LLVMTypeRef reloc_writer_type = LLVMFunctionType(result,
-                reloc_writer_parameters, 7, false);
-            LLVMValueRef reloc_writer = LLVMAddFunction(module,
-                "n00bb_comptime_emit_reloc_array", reloc_writer_type);
-            LLVMValueRef nested_reloc_writer = LLVMAddFunction(module,
-                "n00bb_comptime_emit_nested_reloc_array",
-                reloc_writer_type);
-            LLVMTypeRef reloc_value_parameters[] = {
-                result, pointer, result, pointer, result, pointer,
-            };
-            LLVMTypeRef reloc_value_type = LLVMFunctionType(result,
-                reloc_value_parameters, 6, false);
-            LLVMValueRef reloc_value_writer = LLVMAddFunction(module,
-                "n00bb_comptime_emit_reloc_value", reloc_value_type);
-            LLVMTypeRef record_writer_parameters[] = {
-                result, pointer, result, result, pointer, pointer, result,
-                pointer, result, pointer,
-            };
-            LLVMTypeRef record_writer_type = LLVMFunctionType(result,
-                record_writer_parameters, 10, false);
-            LLVMValueRef record_writer = LLVMAddFunction(module,
-                "n00bb_comptime_emit_record_array", record_writer_type);
-            LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
-            LLVMTypeRef string_fields[] = {i64, i64};
-            LLVMTypeRef string_type = LLVMStructTypeInContext(context,
-                string_fields, 2, false);
-            LLVMTypeRef string_writer_parameters[] = {result, i64, i64};
-            LLVMTypeRef string_writer_type = LLVMFunctionType(result,
-                string_writer_parameters, 3, false);
-            LLVMValueRef string_writer = LLVMAddFunction(module,
-                "n00bb_comptime_emit_string", string_writer_type);
-            LLVMTypeRef effect_writer_parameters[] = {result};
-            LLVMTypeRef effect_writer_type = LLVMFunctionType(result,
-                effect_writer_parameters, 1, false);
-            LLVMValueRef effect_writer = LLVMAddFunction(module,
-                "n00bb_comptime_emit_effect", effect_writer_type);
-            LLVMTypeRef value_writer_parameters[] = {result, pointer,
-                                                       result};
-            LLVMTypeRef value_writer_type = LLVMFunctionType(result,
-                value_writer_parameters, 3, false);
-            LLVMValueRef value_writer = LLVMAddFunction(module,
-                "n00bb_comptime_emit_value", value_writer_type);
-            LLVMValueRef graph_writer = LLVMAddFunction(module,
-                "n00bb_comptime_emit_graph", value_writer_type);
-            bool initializers_run = false;
-            for (size_t i = 0; i < array_producer_count; i++) {
-                const n00bb_llvm_array_producer_t *spec = &array_producers[i];
-                if (spec->after_initializers && !initializers_run) {
-                    if (!emit_entry_initializers(module, context, entry,
-                            builder, result, comptime, entry_initializers,
-                            initializer_count, diagnostics)) {
-                        LLVMDisposeBuilder(builder);
-                        return false;
-                    }
-                    initializers_run = true;
-                }
-                th_type *producer_result = spec->function
-                    ? th_func_ret(spec->function->type) : nullptr;
-                bool reloc_array = spec->kind == N00BB_LLVM_LITERAL_RELOC
-                    && producer_result
-                    && th_kind_of(th_resolve(producer_result)) == TH_SEQUENCE;
-                bool record_array = spec->kind
-                    == N00BB_LLVM_LITERAL_RECORD_ARRAY
-                    || spec->kind == N00BB_LLVM_LITERAL_RECORD_RELOC;
-                bool record_fields = spec->kind
-                    == N00BB_LLVM_LITERAL_RECORD_FIELDS_ARRAY
-                    || spec->kind == N00BB_LLVM_LITERAL_RECORD_FIELDS_RELOC;
-                LLVMTypeRef expected = spec->kind == N00BB_LLVM_LITERAL_EFFECT
-                    ? LLVMVoidTypeInContext(context)
-                    : spec->kind == N00BB_LLVM_LITERAL_STRING
-                        ? string_type
-                    : (spec->kind == N00BB_LLVM_LITERAL_ARRAY
-                        || reloc_array
-                        || spec->kind == N00BB_LLVM_LITERAL_NESTED_ARRAY
-                        || spec->kind == N00BB_LLVM_LITERAL_NESTED_RELOC)
-                        ? array_type
-                    : (spec->kind == N00BB_LLVM_LITERAL_RAW_VALUE
-                        || spec->kind == N00BB_LLVM_LITERAL_GRAPH
-                        || spec->kind == N00BB_LLVM_LITERAL_RELOC
-                        || record_array || record_fields)
-                        && spec->function
-                        ? value_type(spec->function->owner,
-                            producer_result, context)
-                        : nullptr;
-                LLVMValueRef producer = spec->symbol
-                    ? LLVMGetNamedFunction(module, spec->symbol) : nullptr;
-                if (!producer && spec->symbol && expected)
-                    producer = LLVMAddFunction(module, spec->symbol,
-                        LLVMFunctionType(expected, nullptr, 0, false));
-                if (!producer || ((spec->kind == N00BB_LLVM_LITERAL_ARRAY
-                        || spec->kind == N00BB_LLVM_LITERAL_RECORD_ARRAY)
-                        && !spec->element_stride)
-                    || ((spec->kind == N00BB_LLVM_LITERAL_RELOC
-                            || spec->kind == N00BB_LLVM_LITERAL_RECORD_RELOC)
-                        && (!spec->element_stride || !spec->string_offsets
-                            || !spec->byte_mask
-                            || !spec->string_offset_count
-                            || spec->string_offset_count > UINT32_MAX
-                            || (!reloc_array && !record_array && (!expected
-                                || LLVMABISizeOfType(
-                                    LLVMGetModuleDataLayout(module), expected)
-                                    != spec->element_stride))))
-                    || ((spec->kind == N00BB_LLVM_LITERAL_NESTED_ARRAY
-                        || spec->kind == N00BB_LLVM_LITERAL_NESTED_RELOC)
-                        && (spec->element_stride
-                            != sizeof(n00b_abi_array_value_v1)
-                            || !spec->inner_stride || !spec->byte_mask
-                            || (spec->kind == N00BB_LLVM_LITERAL_NESTED_RELOC
-                                && (!spec->string_offsets
-                                    || !spec->string_offset_count))))
-                    || ((spec->kind == N00BB_LLVM_LITERAL_RAW_VALUE
-                            || spec->kind == N00BB_LLVM_LITERAL_GRAPH)
-                        && (!spec->element_stride || !expected
-                            || LLVMABISizeOfType(
-                                LLVMGetModuleDataLayout(module), expected)
-                                != spec->element_stride))
-                    || (record_fields
-                        && (!expected || !spec->record_size
-                            || spec->array_field_offset > spec->record_size
-                            || spec->record_size
-                                - spec->array_field_offset
-                                < sizeof(n00b_abi_array_value_v1)
-                            || LLVMGetTypeKind(expected)
-                                != LLVMStructTypeKind
-                            || spec->array_field_index
-                                >= LLVMCountStructElementTypes(expected)
-                            || LLVMStructGetTypeAtIndex(expected,
-                                spec->array_field_index) != array_type
-                            || LLVMABISizeOfType(
-                                LLVMGetModuleDataLayout(module), expected)
-                                != spec->record_size))
-                    || LLVMCountParams(producer)
-                    || LLVMGetReturnType(LLVMGlobalGetValueType(producer))
-                        != expected) {
-                    LLVMDisposeBuilder(builder);
-                    return backend_error(diagnostics,
-                        "compile-time literal producer signature is invalid");
-                }
-                LLVMValueRef value = LLVMBuildCall2(builder,
-                    LLVMGlobalGetValueType(producer), producer,
-                    nullptr, 0, spec->kind == N00BB_LLVM_LITERAL_EFFECT
-                        ? "" : "literal.result");
-                if (spec->comptime_consumer
-                    && spec->kind != N00BB_LLVM_LITERAL_EFFECT) {
-                    LLVMValueRef global = phase_cache_global(module,
-                        spec->identifier, expected, false);
-                    if (!global) {
-                        LLVMDisposeBuilder(builder);
-                        return backend_error(diagnostics,
-                            "compile-time literal cache binding is invalid");
-                    }
-                    LLVMBuildStore(builder, value, global);
-                }
-                LLVMValueRef status = nullptr;
-                if (spec->kind == N00BB_LLVM_LITERAL_EFFECT) {
-                    LLVMValueRef arguments[] = {
-                        LLVMConstInt(result, N00BB_COMPTIME_RESULT_FD,
-                                     false),
-                    };
-                    status = LLVMBuildCall2(builder, effect_writer_type,
-                        effect_writer, arguments, 1, "literal.write");
-                } else if (spec->kind == N00BB_LLVM_LITERAL_STRING) {
-                    LLVMValueRef arguments[] = {
-                        LLVMConstInt(result, N00BB_COMPTIME_RESULT_FD,
-                                     false),
-                        LLVMBuildExtractValue(builder, value, 0,
-                                              "string.low"),
-                        LLVMBuildExtractValue(builder, value, 1,
-                                              "string.high"),
-                    };
-                    status = LLVMBuildCall2(builder, string_writer_type,
-                        string_writer, arguments, 3, "literal.write");
-                } else if (spec->kind == N00BB_LLVM_LITERAL_RAW_VALUE) {
-                    LLVMValueRef storage = LLVMBuildAlloca(builder, expected,
-                        "literal.value.storage");
-                    LLVMBuildStore(builder, value, storage);
-                    LLVMValueRef arguments[] = {
-                        LLVMConstInt(result, N00BB_COMPTIME_RESULT_FD,
-                                     false),
-                        storage,
-                        LLVMConstInt(result, spec->element_stride, false),
-                    };
-                    status = LLVMBuildCall2(builder, value_writer_type,
-                        value_writer, arguments, 3, "literal.write");
-                } else if (spec->kind == N00BB_LLVM_LITERAL_GRAPH) {
-                    uint64_t typehash = th_hash(ir_module_types(
-                        spec->function->owner), producer_result);
-                    uint32_t type_index = 0;
-                    for (size_t t = 0; t < backend->type_index_count; t++)
-                        if (backend->type_indices[t].typehash == typehash) {
-                            type_index = backend->type_indices[t].index;
-                            break;
-                        }
-                    if (!type_index) {
-                        LLVMDisposeBuilder(builder);
-                        return backend_error(diagnostics,
-                            "compile-time literal type has no ABI index");
-                    }
-                    LLVMValueRef storage = LLVMBuildAlloca(builder, expected,
-                        "literal.graph.storage");
-                    LLVMBuildStore(builder, value, storage);
-                    LLVMValueRef arguments[] = {
-                        LLVMConstInt(result, N00BB_COMPTIME_RESULT_FD, false),
-                        storage,
-                        LLVMConstInt(result, type_index, false),
-                    };
-                    status = LLVMBuildCall2(builder, value_writer_type,
-                        graph_writer, arguments, 3, "literal.write");
-                } else if (record_fields) {
-                    bool reloc = spec->kind
-                        == N00BB_LLVM_LITERAL_RECORD_FIELDS_RELOC;
-                    LLVMValueRef offsets_data = LLVMConstNull(pointer);
-                    LLVMValueRef mask_data = LLVMConstNull(pointer);
-                    if (reloc) {
-                        LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
-                        LLVMValueRef *offsets = calloc(
-                            spec->string_offset_count, sizeof(*offsets));
-                        if (!offsets || !spec->string_offsets
-                            || !spec->byte_mask) {
-                            free(offsets);
-                            LLVMDisposeBuilder(builder);
-                            return backend_error(diagnostics,
-                                "record literal relocations are unavailable");
-                        }
-                        for (size_t f = 0; f < spec->string_offset_count; f++)
-                            offsets[f] = LLVMConstInt(i32,
-                                spec->string_offsets[f], false);
-                        LLVMValueRef offset_values = LLVMConstArray(i32,
-                            offsets, (unsigned)spec->string_offset_count);
-                        free(offsets);
-                        offsets_data = LLVMAddGlobal(module,
-                            LLVMTypeOf(offset_values),
-                            "n00bb.literal.record.offsets");
-                        LLVMSetInitializer(offsets_data, offset_values);
-                        LLVMSetGlobalConstant(offsets_data, true);
-                        LLVMSetLinkage(offsets_data, LLVMPrivateLinkage);
-                        LLVMValueRef mask_values = LLVMConstStringInContext(
-                            context, (const char *)spec->byte_mask,
-                            spec->element_stride, true);
-                        mask_data = LLVMAddGlobal(module,
-                            LLVMTypeOf(mask_values),
-                            "n00bb.literal.record.mask");
-                        LLVMSetInitializer(mask_data, mask_values);
-                        LLVMSetGlobalConstant(mask_data, true);
-                        LLVMSetLinkage(mask_data, LLVMPrivateLinkage);
-                    }
-                    LLVMValueRef storage = LLVMBuildAlloca(builder, expected,
-                        "literal.record.storage");
-                    LLVMBuildStore(builder, value, storage);
-                    LLVMValueRef array = LLVMBuildExtractValue(builder, value,
-                        spec->array_field_index, "literal.record.array");
-                    LLVMValueRef arguments[] = {
-                        LLVMConstInt(result, N00BB_COMPTIME_RESULT_FD,
-                                     false),
-                        storage,
-                        LLVMConstInt(result, spec->record_size, false),
-                        LLVMConstInt(result, spec->array_field_offset,
-                                     false),
-                        LLVMBuildExtractValue(builder, array, 0,
-                                              "array.data"),
-                        LLVMBuildExtractValue(builder, array, 1,
-                                              "array.descriptor"),
-                        LLVMConstInt(result, spec->element_stride, false),
-                        offsets_data,
-                        LLVMConstInt(result, spec->string_offset_count,
-                                     false),
-                        mask_data,
-                    };
-                    status = LLVMBuildCall2(builder, record_writer_type,
-                        record_writer, arguments, 10, "literal.write");
-                } else if (spec->kind == N00BB_LLVM_LITERAL_RELOC
-                    || spec->kind == N00BB_LLVM_LITERAL_RECORD_RELOC) {
-                    LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
-                    LLVMValueRef *offsets = calloc(spec->string_offset_count,
-                                                    sizeof(*offsets));
-                    if (!offsets) {
-                        LLVMDisposeBuilder(builder);
-                        return backend_error(diagnostics,
-                            "literal relocation offsets are unavailable");
-                    }
-                    for (size_t f = 0; f < spec->string_offset_count; f++)
-                        offsets[f] = LLVMConstInt(i32,
-                            spec->string_offsets[f], false);
-                    LLVMValueRef offset_values = LLVMConstArray(i32, offsets,
-                        (unsigned)spec->string_offset_count);
-                    free(offsets);
-                    LLVMValueRef offset_data = LLVMAddGlobal(module,
-                        LLVMTypeOf(offset_values),
-                        "n00bb.literal.string.offsets");
-                    LLVMSetInitializer(offset_data, offset_values);
-                    LLVMSetGlobalConstant(offset_data, true);
-                    LLVMSetLinkage(offset_data, LLVMPrivateLinkage);
-                    LLVMValueRef mask_values = LLVMConstStringInContext(
-                        context, (const char *)spec->byte_mask,
-                        spec->element_stride, true);
-                    LLVMValueRef mask_data = LLVMAddGlobal(module,
-                        LLVMTypeOf(mask_values), "n00bb.literal.byte.mask");
-                    LLVMSetInitializer(mask_data, mask_values);
-                    LLVMSetGlobalConstant(mask_data, true);
-                    LLVMSetLinkage(mask_data, LLVMPrivateLinkage);
-                    if (reloc_array || record_array) {
-                        LLVMValueRef array = record_array
-                            ? LLVMBuildExtractValue(builder, value, 0,
-                                "literal.record.array") : value;
-                        LLVMValueRef arguments[] = {
-                            LLVMConstInt(result, N00BB_COMPTIME_RESULT_FD,
-                                         false),
-                            LLVMBuildExtractValue(builder, array, 0,
-                                                  "array.data"),
-                            LLVMBuildExtractValue(builder, array, 1,
-                                                  "array.descriptor"),
-                            LLVMConstInt(result, spec->element_stride,
-                                         false),
-                            offset_data,
-                            LLVMConstInt(result, spec->string_offset_count,
-                                         false),
-                            mask_data,
-                        };
-                        status = LLVMBuildCall2(builder, reloc_writer_type,
-                            reloc_writer, arguments, 7, "literal.write");
-                    } else {
-                        LLVMValueRef storage = LLVMBuildAlloca(builder,
-                            expected, "literal.reloc.storage");
-                        LLVMBuildStore(builder, value, storage);
-                        LLVMValueRef arguments[] = {
-                            LLVMConstInt(result, N00BB_COMPTIME_RESULT_FD,
-                                         false),
-                            storage,
-                            LLVMConstInt(result, spec->element_stride,
-                                         false),
-                            offset_data,
-                            LLVMConstInt(result, spec->string_offset_count,
-                                         false),
-                            mask_data,
-                        };
-                        status = LLVMBuildCall2(builder, reloc_value_type,
-                            reloc_value_writer, arguments, 6,
-                            "literal.write");
-                    }
-                } else if (spec->kind == N00BB_LLVM_LITERAL_NESTED_ARRAY
-                    || spec->kind == N00BB_LLVM_LITERAL_NESTED_RELOC) {
-                    LLVMValueRef mask_values = LLVMConstStringInContext(
-                        context, (const char *)spec->byte_mask,
-                        spec->inner_stride, true);
-                    LLVMValueRef mask_data = LLVMAddGlobal(module,
-                        LLVMTypeOf(mask_values), "n00bb.literal.inner.mask");
-                    LLVMSetInitializer(mask_data, mask_values);
-                    LLVMSetGlobalConstant(mask_data, true);
-                    LLVMSetLinkage(mask_data, LLVMPrivateLinkage);
-                    LLVMValueRef arguments[] = {
-                        LLVMConstInt(result, N00BB_COMPTIME_RESULT_FD,
-                                     false),
-                        LLVMBuildExtractValue(builder, value, 0,
-                                              "array.data"),
-                        LLVMBuildExtractValue(builder, value, 1,
-                                              "array.descriptor"),
-                        LLVMConstInt(result, spec->inner_stride, false),
-                        mask_data,
-                    };
-                    if (spec->kind == N00BB_LLVM_LITERAL_NESTED_RELOC) {
-                        LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
-                        LLVMValueRef *offsets = calloc(
-                            spec->string_offset_count, sizeof(*offsets));
-                        if (!offsets) {
-                            LLVMDisposeBuilder(builder);
-                            return backend_error(diagnostics,
-                                "could not build nested string offsets");
-                        }
-                        for (size_t j = 0; j < spec->string_offset_count; j++)
-                            offsets[j] = LLVMConstInt(i32,
-                                spec->string_offsets[j], false);
-                        LLVMValueRef offset_values = LLVMConstArray(i32,
-                            offsets, (unsigned)spec->string_offset_count);
-                        free(offsets);
-                        LLVMValueRef offset_data = LLVMAddGlobal(module,
-                            LLVMTypeOf(offset_values),
-                            "n00bb.literal.nested.offsets");
-                        LLVMSetInitializer(offset_data, offset_values);
-                        LLVMSetGlobalConstant(offset_data, true);
-                        LLVMSetLinkage(offset_data, LLVMPrivateLinkage);
-                        LLVMValueRef reloc_arguments[] = {
-                            arguments[0], arguments[1], arguments[2],
-                            arguments[3], offset_data,
-                            LLVMConstInt(result,
-                                spec->string_offset_count, false),
-                            mask_data,
-                        };
-                        status = LLVMBuildCall2(builder, reloc_writer_type,
-                            nested_reloc_writer, reloc_arguments, 7,
-                            "literal.write");
-                    }
-                    else status = LLVMBuildCall2(builder,
-                        nested_writer_type, nested_writer, arguments, 5,
-                        "literal.write");
-                } else {
-                    LLVMValueRef array = record_array
-                        ? LLVMBuildExtractValue(builder, value, 0,
-                            "literal.record.array") : value;
-                    LLVMValueRef arguments[] = {
-                        LLVMConstInt(result, N00BB_COMPTIME_RESULT_FD,
-                                     false),
-                        LLVMBuildExtractValue(builder, array, 0,
-                                              "array.data"),
-                        LLVMBuildExtractValue(builder, array, 1,
-                                              "array.descriptor"),
-                        LLVMConstInt(result, spec->element_stride, false),
-                    };
-                    status = LLVMBuildCall2(builder, writer_type,
-                        writer, arguments, 4, "literal.write");
-                }
-                LLVMValueRef failed = LLVMBuildICmp(builder, LLVMIntNE,
-                    status, LLVMConstNull(result), "literal.write.failed");
-                LLVMBasicBlockRef failure = LLVMAppendBasicBlockInContext(
-                    context, entry, "literal.write.failure");
-                LLVMBasicBlockRef next = LLVMAppendBasicBlockInContext(
-                    context, entry, "literal.write.next");
-                LLVMBuildCondBr(builder, failed, failure, next);
-                LLVMPositionBuilderAtEnd(builder, failure);
-                LLVMBuildRet(builder, LLVMConstInt(result, 1, false));
-                LLVMPositionBuilderAtEnd(builder, next);
-            }
+        if (!emit_entry_initializers(module, context, builder,
+                entry_initializers, initializer_count, diagnostics)) {
+            LLVMDisposeBuilder(builder);
+            return false;
         }
-        if (!comptime || !array_producer_count
-            || !array_producers[array_producer_count - 1].after_initializers)
-            if (!emit_entry_initializers(module, context, entry, builder,
-                    result, comptime, entry_initializers,
-                    initializer_count, diagnostics)) {
-                LLVMDisposeBuilder(builder);
-                return false;
-            }
         LLVMBuildRet(builder, LLVMConstInt(result, 0, false));
         LLVMDisposeBuilder(builder);
+        keep_entry_frames(module);
     }
 
     LLVMAttributeRef frame_pointer = LLVMCreateStringAttribute(context,
@@ -13771,7 +12475,7 @@ emit_phase_image(n00bb_llvm_backend_t *backend,
         LLVMDisposeMemoryBuffer(serialized);
         return true;
     }
-    return emit_native_module(backend, module, comptime, out, diagnostics);
+    return emit_native_module(backend, module, out, diagnostics);
 }
 
 static bool
@@ -13838,8 +12542,7 @@ emit_code_map(LLVMModuleRef module, core_diagnostics_t *diagnostics)
 
 static bool
 emit_native_module(n00bb_llvm_backend_t *backend, LLVMModuleRef module,
-                   bool comptime, core_buffer_t *out,
-                   core_diagnostics_t *diagnostics)
+                   core_buffer_t *out, core_diagnostics_t *diagnostics)
 {
     char *message = nullptr;
     if (LLVMInitializeNativeTarget() || LLVMInitializeNativeAsmPrinter()
@@ -13847,7 +12550,7 @@ emit_native_module(n00bb_llvm_backend_t *backend, LLVMModuleRef module,
         return backend_error(diagnostics, "LLVM native target is unavailable");
     char *triple = LLVMGetDefaultTargetTriple();
     core_uint128_t cache_key = 0;
-    if (!comptime && backend->native_cache && triple) {
+    if (backend->native_cache && triple) {
         LLVMMemoryBufferRef preopt = LLVMWriteBitcodeToMemoryBuffer(module);
         if (preopt) {
             cache_key = n00bb_native_cache_key(backend->native_cache,
@@ -13859,7 +12562,7 @@ emit_native_module(n00bb_llvm_backend_t *backend, LLVMModuleRef module,
                     out)) {
                 if (getenv("N00BB_PROFILE_COMPILE"))
                     fprintf(stderr, "PROFILE llvm-cache-hit %s\n",
-                        ir_module_name(backend->runtime_source));
+                        ir_module_name(backend->source));
                 LLVMDisposeMessage(triple);
                 return true;
             }
@@ -13904,16 +12607,16 @@ emit_native_module(n00bb_llvm_backend_t *backend, LLVMModuleRef module,
         LLVMDisposeTargetMachine(machine);
         return false;
     }
-    if (!comptime && backend->emit_frame_maps
+    if (backend->emit_frame_maps
         && !emit_frame_sentinels(module, diagnostics)) {
         LLVMDisposeTargetMachine(machine);
         return false;
     }
-    if (!comptime && !emit_code_map(module, diagnostics)) {
+    if (!emit_code_map(module, diagnostics)) {
         LLVMDisposeTargetMachine(machine);
         return false;
     }
-    if (!comptime && backend->emit_frame_maps
+    if (backend->emit_frame_maps
         && LLVMVerifyModule(module, LLVMReturnStatusAction, &message)) {
         backend_error(diagnostics, message ? message
             : "invalid LLVM frame map module");
@@ -13945,17 +12648,13 @@ emit_native_module(n00bb_llvm_backend_t *backend, LLVMModuleRef module,
 
 bool
 n00bb_llvm_backend_emit_object(n00bb_llvm_backend_t *backend,
-                               bool comptime,
                                const char *const *entry_initializers,
                                size_t initializer_count,
-                               const n00bb_llvm_array_producer_t *array_producers,
-                               size_t array_producer_count,
                                size_t metadata_bytes,
                                core_buffer_t *out,
                                core_diagnostics_t *diagnostics)
 {
-    return emit_phase_image(backend, comptime, entry_initializers,
-        initializer_count, array_producers, array_producer_count,
+    return emit_image(backend, entry_initializers, initializer_count,
         metadata_bytes, false, out, diagnostics);
 }
 
@@ -13965,8 +12664,8 @@ n00bb_llvm_backend_emit_linkable_bitcode(n00bb_llvm_backend_t *backend,
     size_t metadata_bytes, core_buffer_t *out,
     core_diagnostics_t *diagnostics)
 {
-    return emit_phase_image(backend, false, entry_initializers,
-        initializer_count, nullptr, 0, metadata_bytes, true, out, diagnostics);
+    return emit_image(backend, entry_initializers, initializer_count,
+        metadata_bytes, true, out, diagnostics);
 }
 
 bool
@@ -14030,6 +12729,7 @@ n00bb_llvm_backend_link_bitcode(const n00bb_llvm_bitcode_input_t *inputs,
         }
     }
     if (ok) {
+        keep_entry_frames(linked);
         char *message = nullptr;
         if (LLVMVerifyModule(linked, LLVMReturnStatusAction, &message))
             ok = backend_error(diagnostics, message
@@ -14104,7 +12804,7 @@ n00bb_llvm_backend_link_bitcode(const n00bb_llvm_bitcode_input_t *inputs,
             backend.cpu_features = LLVMGetHostCPUFeatures();
             ok = backend.cpu_name && backend.cpu_features;
         }
-        if (ok) ok = emit_native_module(&backend, linked, false, out,
+        if (ok) ok = emit_native_module(&backend, linked, out,
                                         diagnostics);
         else backend_error(diagnostics, "could not determine LTO target CPU");
         if (backend.cpu_name) LLVMDisposeMessage(backend.cpu_name);

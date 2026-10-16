@@ -31,12 +31,10 @@ func with_keyword(input: State) -> Counter {
     return callback[Counter](ref handle, ref state, priority = 5)
 }
 
-comptime {} else {
-    var initial: State
-    initial.count = 0
-    let defaulted = with_default(initial)
-    let named = with_keyword(initial)
-    require defaulted.call(2) == 3
-    require named.call(2) == 7
-    __fd_write(2, "ok")
-}
+var initial: State
+initial.count = 0
+let defaulted = with_default(initial)
+let named = with_keyword(initial)
+require defaulted.call(2) == 3
+require named.call(2) == 7
+__fd_write(2, "ok")

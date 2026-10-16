@@ -6,7 +6,7 @@ litmod<quotes> make_number, number(raw: string) -> int fail: string {
     return 42
 }
 
-comptime {
+when comptime() {
     require value() == 42
 }
 

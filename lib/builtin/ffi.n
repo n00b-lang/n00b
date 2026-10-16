@@ -6,6 +6,10 @@ type Ffi_Bytes layout(c) {
     public length: uint
 }
 
+trait Fixup {
+    func fixup(modify self: `T) -> nil fail: string
+}
+
 record Ffi_Table {
     public slots: List[`T?]
     public free: List[int]

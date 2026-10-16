@@ -391,39 +391,27 @@ n00bb_link_stage_contributions(core_link_unit_t *link, uint32_t stage_kind,
         return CORE_LINK_STAGE_RESULT_FAILED;
     if (initializer_cycle_state == CORE_LINK_CONTRIBUTION_FAILED)
         return CORE_LINK_STAGE_RESULT_FAILED;
-    const char *order_domains[] = {
-        "n00bb.comptime-module-initializer-order",
-        "n00bb.runtime-module-initializer-order",
-    };
-    const uint32_t order_phases[] = {
-        PARSE_SYM_PHASE_COMPTIME, PARSE_SYM_PHASE_RUNTIME,
-    };
-    bool initializer_orders_complete = true;
-    for (size_t i = 0; i < sizeof(order_domains) / sizeof(order_domains[0]);
-         i++) {
-        core_link_contribution_state_t order_state = initializer_cycle_state;
-        n00bb_initializer_order_t *order = initializer_cycle_state
-                == CORE_LINK_CONTRIBUTION_COMPLETE
-            ? build_initializer_order(link, analysis, order_phases[i],
-                                      &order_state)
-            : nullptr;
-        if (!order && order_state == CORE_LINK_CONTRIBUTION_COMPLETE)
-            return CORE_LINK_STAGE_RESULT_FAILED;
-        if (!core_link_unit_set_contribution(link, (core_string_t){0},
-                core_string_from_cstr(order_domains[i]), 1, stage_kind,
-                order_state,
-                CORE_STRING_STATIC("n00bb.link-unit-scc-order"), 1,
-                order, order ? CORE_LINK_PAYLOAD_OWNED
-                             : CORE_LINK_PAYLOAD_BORROWED,
-                order ? free_initializer_order : nullptr)) {
-            if (order) free_initializer_order(order);
-            return CORE_LINK_STAGE_RESULT_FAILED;
-        }
-        initializer_orders_complete &=
-            order_state == CORE_LINK_CONTRIBUTION_COMPLETE;
-        if (order_state == CORE_LINK_CONTRIBUTION_FAILED)
-            return CORE_LINK_STAGE_RESULT_FAILED;
+    core_link_contribution_state_t order_state = initializer_cycle_state;
+    n00bb_initializer_order_t *order = initializer_cycle_state
+            == CORE_LINK_CONTRIBUTION_COMPLETE
+        ? build_initializer_order(link, analysis, &order_state)
+        : nullptr;
+    if (!order && order_state == CORE_LINK_CONTRIBUTION_COMPLETE)
+        return CORE_LINK_STAGE_RESULT_FAILED;
+    if (!core_link_unit_set_contribution(link, (core_string_t){0},
+            CORE_STRING_STATIC(N00BB_INITIALIZER_ORDER_DOMAIN), 1,
+            stage_kind, order_state,
+            CORE_STRING_STATIC("n00bb.link-unit-scc-order"), 1,
+            order, order ? CORE_LINK_PAYLOAD_OWNED
+                         : CORE_LINK_PAYLOAD_BORROWED,
+            order ? free_initializer_order : nullptr)) {
+        if (order) free_initializer_order(order);
+        return CORE_LINK_STAGE_RESULT_FAILED;
     }
+    if (order_state == CORE_LINK_CONTRIBUTION_FAILED)
+        return CORE_LINK_STAGE_RESULT_FAILED;
+    bool initializer_orders_complete =
+        order_state == CORE_LINK_CONTRIBUTION_COMPLETE;
     core_link_contribution_state_t initializer_dependencies_state =
         direct_initializer_state == CORE_LINK_CONTRIBUTION_COMPLETE
             && initializer_cycle_state == CORE_LINK_CONTRIBUTION_COMPLETE

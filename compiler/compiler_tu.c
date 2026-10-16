@@ -22,6 +22,7 @@ core_list_decl(th_type_ptr_t);
 typedef struct {
     th_type *slot;
     core_list_t(th_type_ptr_t) items;
+    core_list_t(parse_tree_ptr_t) nodes;
 } literal_item_group_t;
 
 static bool unify_literal_items(th_ctx *types, literal_item_group_t *group,
@@ -1598,6 +1599,15 @@ semantic_static_value_from_expression(parse_grammar_t *grammar,
         return ok;
     }
 
+    uint64_t folded = 0;
+    if (!literal && n00bb_static_integer_expression(grammar, expression,
+                                                    type, &folded)) {
+        *out = (n00bb_static_value_t){
+            .kind = N00BB_STATIC_VALUE_INT,
+            .as.integer = (__int128)folded,
+        };
+        return true;
+    }
     return literal && nt_is(grammar, literal, "simple-lit")
         && semantic_static_scalar_value(grammar, literal, expression,
                                         state, out);
@@ -1989,6 +1999,7 @@ infer_user_literal_type(parse_grammar_t *grammar,
             groups[g] = (literal_item_group_t){
                 .slot = th_var(state->types),
                 .items = core_list_new(th_type_ptr_t),
+                .nodes = core_list_new(parse_tree_ptr_t),
             };
         core_list_t(parse_tree_ptr_t) expressions =
             core_list_new(parse_tree_ptr_t);
@@ -1996,8 +2007,12 @@ infer_user_literal_type(parse_grammar_t *grammar,
         ok = ok && (!dictionary || !(expressions.len & 1u));
         for (size_t i = 0; ok && i < expressions.len; i++) {
             th_type *type = core_tree_node_value(expressions.data[i]).type;
+            literal_item_group_t *group = &groups[dictionary ? i & 1u : 0];
             if (!type) ok = false;
-            else core_list_push(groups[dictionary ? i & 1u : 0].items, type);
+            else {
+                core_list_push(group->items, type);
+                core_list_push(group->nodes, expressions.data[i]);
+            }
         }
         core_list_free(expressions);
         th_type *element = groups[0].slot;
@@ -2048,12 +2063,19 @@ infer_user_literal_type(parse_grammar_t *grammar,
     else if (ok && aggregate) groups[0].slot = element;
     th_type *conflict = nullptr;
     for (size_t g = 0; g < group_count; g++) {
+        th_type *slot = ok ? th_resolve(groups[g].slot) : nullptr;
+        for (size_t i = 0; slot && is_integer_type(slot)
+             && i < groups[g].nodes.len; i++)
+            if (n00bb_contextual_integer_literal(state,
+                    groups[g].nodes.data[i], slot))
+                groups[g].items.data[i] = slot;
         if (ok && !unify_literal_items(state->types, &groups[g], &conflict)) {
             report_literal_item_conflict(unit, state, node, &groups[g],
                                          conflict);
             ok = false;
         }
         core_list_free(groups[g].items);
+        core_list_free(groups[g].nodes);
     }
     if (!ok) return false;
     th_type *result = specialized ? th_func_ret(specialized) : nullptr;
@@ -2623,6 +2645,23 @@ call_keyword_name(parse_tree_t *argument)
                                            : (core_string_t){0};
 }
 
+static bool
+index_is_method_receiver(parse_grammar_t *grammar,
+                         core_translation_unit_t *unit,
+                         parse_tree_t *index_node)
+{
+    parse_tree_t *member = core_tree_node_value(index_node).parent;
+    parse_tree_t *call = member ? core_tree_node_value(member).parent
+                                : nullptr;
+    const parse_rule_t *rule = call ? parse_tree_rule(grammar, call)
+                                    : nullptr;
+    return rule && member_access_node(grammar, member) == member
+        && core_tree_child(member, 0) == index_node
+        && core_tree_child(call, 0) == member
+        && parse_rule_find_annot(grammar, rule, PARSE_ANNOT_CALL)
+        && !call_receiver_is_module(grammar, unit, index_node);
+}
+
 bool
 index_is_copyout_argument(parse_grammar_t *grammar,
                           core_translation_unit_t *unit,
@@ -2823,11 +2862,15 @@ remember_link_use_site(parse_grammar_t *grammar,
             link_source_location(node));
         return;
     }
-    if (index_dispatch
+    bool copyout = index_dispatch
         && (index_is_compound_target(grammar, node)
-            || index_is_copyout_argument(grammar, unit, node))
+            || index_is_copyout_argument(grammar, unit, node));
+    bool receiver = index_dispatch && !copyout
+        && index_is_method_receiver(grammar, unit, node);
+    if ((copyout || receiver)
         && core_string_eq(dispatch_trait,
                           CORE_STRING_STATIC("Index_Read"))) {
+        use_site.optional_dispatch = receiver;
         use_site.symbol = nullptr;
         use_site.reference = nullptr;
         use_site.dispatch_trait = CORE_STRING_STATIC("Index_Write");
@@ -4618,7 +4661,8 @@ n00bb_bind_option_condition_shadows(parse_grammar_t *grammar,
                                     parse_symtab_t *symtab,
                                     parse_scope_t *scope,
                                     parse_tree_t *condition, bool truth,
-                                    parse_tree_t *region, parse_tree_t *after)
+                                    parse_tree_t *region, parse_tree_t *after,
+                                    bool paths_only)
 {
     while (condition && !core_tree_is_leaf(condition)) {
         size_t count = core_tree_num_children(condition);
@@ -4641,15 +4685,18 @@ n00bb_bind_option_condition_shadows(parse_grammar_t *grammar,
         && ((truth && nt_is(grammar, condition, "and-expr"))
             || (!truth && nt_is(grammar, condition, "or-expr"))))
         return n00bb_bind_option_condition_shadows(grammar, unit, symtab,
-                   scope, core_tree_child(condition, 0), truth, region, after)
+                   scope, core_tree_child(condition, 0), truth, region, after,
+                   paths_only)
             && n00bb_bind_option_condition_shadows(grammar, unit, symtab,
-                   scope, core_tree_child(condition, 2), truth, region, after);
+                   scope, core_tree_child(condition, 2), truth, region, after,
+                   paths_only);
     parse_tree_t *value = n00bb_non_nil_operand(grammar, condition, truth);
     if (!value) return true;
     parse_sym_entry_t *source = nullptr;
     th_type *element = nullptr;
-    if (n00bb_option_condition_refinement(grammar, unit, value,
-                                          &source, &element))
+    if (!paths_only && n00bb_option_condition_refinement(grammar, unit,
+                                                         value, &source,
+                                                         &element))
         return n00bb_bind_option_shadow(symtab, scope, source, element);
     return n00bb_record_option_path(grammar, unit, value, region, after);
 }
@@ -4671,13 +4718,14 @@ n00bb_bind_option_branch_shadow(parse_grammar_t *grammar,
     parse_scope_t *scope = parse_symtab_scope_in_namespace(
         symtab, lexical_scope, CORE_STRING_STATIC(""));
     return scope && n00bb_bind_option_condition_shadows(grammar, unit,
-        symtab, scope, condition, truth, body, nullptr);
+        symtab, scope, condition, truth, body, nullptr, false);
 }
 
 parse_tree_t *
 n00bb_exiting_guard_condition(parse_grammar_t *grammar, parse_tree_t *statement)
 {
     parse_tree_t *branch = nt_is(grammar, statement, "body-stmt")
+            || nt_is(grammar, statement, "top-level-stmt")
         ? child_nt(grammar, statement, "if-stmt") : nullptr;
     parse_tree_t *chain = branch
         ? child_nt(grammar, branch, "elif-chain") : nullptr;
@@ -5034,33 +5082,6 @@ prepare_initial_symbols(core_translation_unit_t *unit, th_ctx *types)
     return true;
 }
 
-uint32_t
-initializer_phase_for_site(parse_grammar_t *grammar,
-                           core_translation_unit_t *unit,
-                           parse_tree_t *site,
-                           parse_sym_entry_t *initializer_owner)
-{
-    if (declared_in_comptime(grammar, site))
-        return PARSE_SYM_PHASE_COMPTIME;
-    if (initializer_owner && initializer_owner->decl_node) {
-        for (parse_tree_t *at = initializer_owner->decl_node; at;
-             at = core_tree_node_value(at).parent) {
-            if (!nt_is(grammar, at, "variable-decl")) continue;
-            parse_tree_t *prefix = child_nt(grammar, at,
-                                            "declaration-prefix");
-            if (core_string_eq(first_token_text(child_nt(grammar, prefix,
-                    "binding-kind")), CORE_STRING_STATIC("const")))
-                return PARSE_SYM_PHASE_COMPTIME;
-            if (child_nt(grammar, prefix, "storage-class"))
-                return initializer_owner->has_comptime_value
-                    ? PARSE_SYM_PHASE_COMPTIME : PARSE_SYM_PHASE_RUNTIME;
-            break;
-        }
-    }
-    (void)unit;
-    return PARSE_SYM_PHASE_RUNTIME;
-}
-
 bool
 collect_array_dimension_nodes(parse_grammar_t *grammar,
                               n00bb_tu_state_t *state, parse_tree_t *node,
@@ -5128,24 +5149,99 @@ collect_declared_array_dimensions(parse_grammar_t *grammar,
     return collect_array_dimension_nodes(grammar, state, base, dimensions);
 }
 
+static bool
+fold_static_operation(core_string_t operator, uint64_t left, uint64_t right,
+                      uint64_t *value)
+{
+    if (core_string_eq(operator, CORE_STRING_STATIC("+")))
+        return !__builtin_add_overflow(left, right, value);
+    if (core_string_eq(operator, CORE_STRING_STATIC("-")))
+        return !__builtin_sub_overflow(left, right, value);
+    if (core_string_eq(operator, CORE_STRING_STATIC("*")))
+        return !__builtin_mul_overflow(left, right, value);
+    if (core_string_eq(operator, CORE_STRING_STATIC("/")))
+        return right && ((*value = left / right), true);
+    if (core_string_eq(operator, CORE_STRING_STATIC("%")))
+        return right && ((*value = left % right), true);
+    if (core_string_eq(operator, CORE_STRING_STATIC("<<")))
+        return right < 64 && !(left >> (63 - right) >> 1)
+            && ((*value = left << right), true);
+    if (core_string_eq(operator, CORE_STRING_STATIC(">>")))
+        return right < 64 && ((*value = left >> right), true);
+    if (core_string_eq(operator, CORE_STRING_STATIC("&")))
+        return (*value = left & right), true;
+    if (core_string_eq(operator, CORE_STRING_STATIC("|")))
+        return (*value = left | right), true;
+    if (core_string_eq(operator, CORE_STRING_STATIC("^")))
+        return (*value = left ^ right), true;
+    return false;
+}
+
+static bool
+fold_static_extent(parse_grammar_t *grammar, parse_tree_t *expression,
+                   uint32_t depth, uint64_t *value)
+{
+    if (!expression || core_tree_is_leaf(expression) || depth > 64)
+        return false;
+    int64_t literal = 0;
+    if (n00bb_range_simple_integer_literal(grammar, expression, &literal)) {
+        *value = (uint64_t)literal;
+        return literal >= 0;
+    }
+    parse_node_resolution_t resolution = parse_tree_resolution(expression);
+    parse_sym_entry_t *symbol = resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
+        ? resolution.target.symbol : nullptr;
+    if (symbol && symbol->kind == PARSE_SYM_VARIABLE) {
+        parse_tree_t *initializer = symbol->mutability == PARSE_SYM_CONST
+                && symbol->decl_node
+            ? child_nt(grammar, symbol->decl_node, "expression") : nullptr;
+        return fold_static_extent(grammar, initializer, depth + 1, value);
+    }
+    size_t children = core_tree_num_children(expression);
+    if (children == 1)
+        return fold_static_extent(grammar, core_tree_child(expression, 0),
+                                  depth + 1, value);
+    if (nt_is(grammar, expression, "tuple-or-paren") && children == 3)
+        return fold_static_extent(grammar, core_tree_child(expression, 1),
+                                  depth + 1, value);
+    if (nt_is(grammar, expression, "unary-expr") && children == 5
+        && core_string_eq(first_token_text(expression),
+                          CORE_STRING_STATIC("cast")))
+        return fold_static_extent(grammar, core_tree_child(expression, 4),
+                                  depth + 1, value);
+    uint64_t left = 0, right = 0;
+    return children == 3
+        && fold_static_extent(grammar, core_tree_child(expression, 0),
+                              depth + 1, &left)
+        && fold_static_extent(grammar, core_tree_child(expression, 2),
+                              depth + 1, &right)
+        && fold_static_operation(
+            first_token_text(core_tree_child(expression, 1)), left, right,
+            value);
+}
+
+bool
+n00bb_static_integer_expression(parse_grammar_t *grammar,
+                                parse_tree_t *expression, th_type *type,
+                                uint64_t *value)
+{
+    return is_integer_type(type)
+        && fold_static_extent(grammar, expression, 0, value);
+}
+
 ir_shape_extent_t
 array_dimension_extent(parse_grammar_t *grammar, parse_tree_t *expression)
 {
-    int64_t literal = 0;
-    if (n00bb_range_simple_integer_literal(grammar, expression, &literal))
+    uint64_t value = 0;
+    if (fold_static_extent(grammar, expression, 0, &value))
         return (ir_shape_extent_t){
             .kind = IR_SHAPE_EXTENT_STATIC,
-            .static_value = (uint64_t)literal,
+            .static_value = value,
         };
     parse_scope_t *scope = core_tree_node_value(expression).scope;
-    if (scope_is_within_function(scope)
-        && !declared_in_comptime(grammar, expression))
-        return (ir_shape_extent_t){
-            .kind = IR_SHAPE_EXTENT_RUNTIME,
-            .expression = expression,
-        };
     return (ir_shape_extent_t){
-        .kind = IR_SHAPE_EXTENT_COMPTIME,
+        .kind = scope_is_within_function(scope) ? IR_SHAPE_EXTENT_RUNTIME
+                                                : IR_SHAPE_EXTENT_UNRESOLVED,
         .expression = expression,
     };
 }
@@ -7281,9 +7377,12 @@ n00bb_member_path(parse_grammar_t *grammar, core_translation_unit_t *unit,
                   core_buffer_t *path)
 {
     parse_tree_t *access = member_access_node(grammar, node);
-    parse_sym_entry_t *root = n00bb_member_chain_root(grammar, unit, node);
-    if (!access || !root || (root->kind != PARSE_SYM_VARIABLE
-                             && root->kind != PARSE_SYM_PARAM)) return false;
+    parse_tree_t *bare = access ? nullptr : n00bb_simple_lvalue(node);
+    parse_sym_entry_t *root = access
+        ? n00bb_member_chain_root(grammar, unit, node)
+        : bare ? attached_symbol(grammar, unit, bare) : nullptr;
+    if (!root || (root->kind != PARSE_SYM_VARIABLE
+                  && root->kind != PARSE_SYM_PARAM)) return false;
     core_list_t(parse_tree_ptr_t) steps = core_list_new(parse_tree_ptr_t);
     for (; access; access = member_access_node(grammar,
                                 core_tree_child(access, 0)))
@@ -8749,26 +8848,19 @@ simple_identifier_expression(parse_grammar_t *grammar, parse_tree_t *node,
     return true;
 }
 
-parse_sym_phase_t
-lexical_execution_phase(parse_grammar_t *grammar, parse_tree_t *node)
+static bool compiling_build_time;
+
+void
+n00bb_set_build_time(bool build_time)
 {
-    for (parse_tree_t *at = node; at;) {
-        parse_tree_t *parent = core_tree_node_value(at).parent;
-        if (nt_is(grammar, parent, "comptime-stmt")) {
-            return core_tree_num_children(parent) > 1
-                && at == core_tree_child(parent, 1)
-                ? PARSE_SYM_PHASE_COMPTIME : PARSE_SYM_PHASE_RUNTIME;
-        }
-        at = parent;
-    }
-    return PARSE_SYM_PHASE_RUNTIME;
+    compiling_build_time = build_time;
 }
 
-bool
-declared_in_comptime(parse_grammar_t *grammar, parse_tree_t *node)
+parse_sym_phase_t
+n00bb_compile_phase(void)
 {
-    return lexical_execution_phase(grammar, node)
-        == PARSE_SYM_PHASE_COMPTIME;
+    return compiling_build_time ? PARSE_SYM_PHASE_COMPTIME
+                                : PARSE_SYM_PHASE_RUNTIME;
 }
 
 bool
@@ -8833,47 +8925,16 @@ apply_decl_binding(parse_grammar_t *grammar, parse_tree_t *node,
     if (!symbol) return;
     symbol->mutability = mutability;
     symbol->is_thread_local = threaded;
-    bool comptime_only = declared_in_comptime(grammar, node);
     bool function_local = scope_is_within_function(symbol->scope);
     parse_sym_set_storage_duration(symbol, threaded
         ? PARSE_SYM_STORAGE_THREAD
-        : comptime_only ? PARSE_SYM_STORAGE_COMPTIME
         : function_local ? PARSE_SYM_STORAGE_AUTOMATIC
                          : PARSE_SYM_STORAGE_MODULE);
-    if (threaded) {
-        parse_sym_set_phases(symbol, PARSE_SYM_PHASE_RUNTIME,
-            mutability == PARSE_SYM_CONST
-                ? PARSE_SYM_PHASE_COMPTIME
-                : PARSE_SYM_PHASE_RUNTIME,
-            PARSE_SYM_PHASE_COMPTIME | PARSE_SYM_PHASE_RUNTIME);
-    }
-    else if (mutability == PARSE_SYM_CONST) {
-        parse_sym_set_phases(symbol,
-            comptime_only ? PARSE_SYM_PHASE_COMPTIME
-                          : PARSE_SYM_PHASE_BOTH,
-            PARSE_SYM_PHASE_COMPTIME,
-            PARSE_SYM_PHASE_COMPTIME);
-    }
-    else if (comptime_only) {
-        parse_sym_set_phases(symbol, PARSE_SYM_PHASE_COMPTIME,
-            mutability == PARSE_SYM_MUTABLE
-                ? PARSE_SYM_PHASE_COMPTIME : PARSE_SYM_PHASE_NONE,
-            PARSE_SYM_PHASE_COMPTIME);
-    }
-    else if (function_local) {
-        parse_sym_set_phases(symbol, PARSE_SYM_PHASE_BOTH,
-            mutability == PARSE_SYM_MUTABLE
-                ? PARSE_SYM_PHASE_BOTH : PARSE_SYM_PHASE_NONE,
-            PARSE_SYM_PHASE_BOTH);
-    }
-    else {
-        parse_sym_phase_t mutable_in =
-            mutability == PARSE_SYM_MUTABLE
-                ? PARSE_SYM_PHASE_BOTH : PARSE_SYM_PHASE_NONE;
-        parse_sym_set_phases(symbol, PARSE_SYM_PHASE_BOTH,
-            mutable_in,
-            PARSE_SYM_PHASE_COMPTIME | PARSE_SYM_PHASE_RUNTIME);
-    }
+    parse_sym_set_phases(symbol, PARSE_SYM_PHASE_BOTH,
+        mutability == PARSE_SYM_MUTABLE ? PARSE_SYM_PHASE_BOTH
+        : mutability == PARSE_SYM_CONST ? PARSE_SYM_PHASE_COMPTIME
+                                        : PARSE_SYM_PHASE_NONE,
+        PARSE_SYM_PHASE_BOTH);
     if (!child_nt(grammar, node, "type-spec"))
         parse_sym_mark_type_inferred(symbol);
 }
@@ -9020,15 +9081,8 @@ initial_symbol_node(parse_visit_t *visit, bool entering, void *context)
     }
     else if (nt_is(visit->grammar, visit->node, "context-manager")
              && visit->pn->sym) {
-        parse_sym_entry_t *symbol = visit->pn->sym;
-        bool comptime_only = declared_in_comptime(visit->grammar,
-                                                   visit->node);
-        bool function_local = scope_is_within_function(symbol->scope);
-        parse_sym_phase_t phases = comptime_only
-            ? PARSE_SYM_PHASE_COMPTIME
-            : function_local ? PARSE_SYM_PHASE_BOTH
-                             : PARSE_SYM_PHASE_RUNTIME;
-        parse_sym_set_phases(symbol, phases, PARSE_SYM_PHASE_NONE, phases);
+        parse_sym_set_phases(visit->pn->sym, PARSE_SYM_PHASE_BOTH,
+                             PARSE_SYM_PHASE_NONE, PARSE_SYM_PHASE_BOTH);
     }
     else if ((nt_is(visit->grammar, visit->node, "for-binding")
               || nt_is(visit->grammar, visit->node, "try-error-binding"))
@@ -9036,21 +9090,12 @@ initial_symbol_node(parse_visit_t *visit, bool entering, void *context)
         parse_sym_entry_t *symbol = visit->pn->sym;
         if (nt_is(visit->grammar, visit->node, "for-binding"))
             symbol->mutability = PARSE_SYM_IMMUTABLE;
-        bool comptime_only = declared_in_comptime(visit->grammar,
-                                                   visit->node);
-        bool function_local = scope_is_within_function(symbol->scope);
-        parse_sym_phase_t phases = comptime_only
-            ? PARSE_SYM_PHASE_COMPTIME
-            : function_local ? PARSE_SYM_PHASE_BOTH
-                             : PARSE_SYM_PHASE_RUNTIME;
-        parse_sym_phase_t mutable_in =
-            symbol->mutability == PARSE_SYM_MUTABLE
-                ? phases : PARSE_SYM_PHASE_NONE;
-        parse_sym_set_phases(symbol, phases, mutable_in,
-                             PARSE_SYM_PHASE_NONE);
-        if (nt_is(visit->grammar, visit->node, "for-binding")) {
-            parse_sym_set_phases(symbol, phases, PARSE_SYM_PHASE_NONE,
-                                 phases);
+        bool for_binding = nt_is(visit->grammar, visit->node, "for-binding");
+        parse_sym_set_phases(symbol, PARSE_SYM_PHASE_BOTH,
+            !for_binding && symbol->mutability == PARSE_SYM_MUTABLE
+                ? PARSE_SYM_PHASE_BOTH : PARSE_SYM_PHASE_NONE,
+            for_binding ? PARSE_SYM_PHASE_BOTH : PARSE_SYM_PHASE_NONE);
+        if (for_binding) {
             parse_sym_set_storage_duration(symbol,
                                            PARSE_SYM_STORAGE_AUTOMATIC);
             if (!child_nt(visit->grammar, visit->node, "type-spec"))
@@ -9110,23 +9155,11 @@ initial_symbol_node(parse_visit_t *visit, bool entering, void *context)
         if (symbol) {
             if (!parse_sym_add_definition(symbol, visit->node)) return;
             symbol->mutability = PARSE_SYM_MUTABLE;
-            bool comptime_only = declared_in_comptime(visit->grammar,
-                                                       visit->node);
-            bool function_local = scope_is_within_function(current);
-            parse_sym_set_storage_duration(symbol, comptime_only
-                ? PARSE_SYM_STORAGE_COMPTIME
-                : function_local ? PARSE_SYM_STORAGE_AUTOMATIC
-                                 : PARSE_SYM_STORAGE_MODULE);
-            parse_sym_set_phases(symbol,
-                comptime_only ? PARSE_SYM_PHASE_COMPTIME
-                              : function_local ? PARSE_SYM_PHASE_BOTH
-                                               : PARSE_SYM_PHASE_RUNTIME,
-                comptime_only ? PARSE_SYM_PHASE_COMPTIME
-                              : function_local ? PARSE_SYM_PHASE_BOTH
-                                               : PARSE_SYM_PHASE_RUNTIME,
-                comptime_only ? PARSE_SYM_PHASE_COMPTIME
-                              : function_local ? PARSE_SYM_PHASE_BOTH
-                                               : PARSE_SYM_PHASE_BOTH);
+            parse_sym_set_storage_duration(symbol,
+                scope_is_within_function(current)
+                    ? PARSE_SYM_STORAGE_AUTOMATIC : PARSE_SYM_STORAGE_MODULE);
+            parse_sym_set_phases(symbol, PARSE_SYM_PHASE_BOTH,
+                PARSE_SYM_PHASE_BOTH, PARSE_SYM_PHASE_BOTH);
             parse_tree_t *value = core_tree_child(visit->node, 2);
             if (value && !core_tree_is_leaf(value))
                 symbol->type = core_tree_node_value(value).type;
@@ -9194,6 +9227,7 @@ free_tu_state(void *data)
         core_free(state->option_paths.data[i].path.data);
     core_list_free(state->option_paths);
     core_list_free(state->module_top_level_statements);
+    core_list_free(state->literal_constants);
     core_list_free(state->array_type_nodes);
     for (size_t i = 0; i < state->literal_modifiers.len; i++) {
         core_free(state->literal_modifiers.data[i].modifier.data);
@@ -9230,6 +9264,7 @@ n00bb_tu_state_new(core_translation_unit_t *unit, n00bb_lex_result_t *lex,
     state->link_use_sites = core_list_new(n00bb_link_use_site_t);
     state->option_paths = core_list_new(n00bb_option_path_t);
     state->module_top_level_statements = core_list_new(parse_tree_ptr_t);
+    state->literal_constants = core_list_new(n00bb_literal_constant_t);
     state->array_type_nodes = core_list_new(parse_tree_ptr_t);
     state->literal_modifiers = core_list_new(n00bb_user_litmod_t);
     state->package_declarations = core_list_new(n00bb_package_declaration_t);
@@ -9615,6 +9650,18 @@ n00bb_tu_remember_selected_when_body(void *opaque,
     n00bb_node_facts_t *facts = n00bb_ensure_node_facts(state, body);
     if (!facts) return false;
     facts->selected_when_body = true;
+    return true;
+}
+
+bool
+n00bb_tu_remember_build_time_use(void *opaque,
+    core_translation_unit_t *unit, parse_tree_t *node)
+{
+    (void)opaque;
+    n00bb_tu_state_t *state = tu_state(unit);
+    if (!state || !node) return false;
+    if (!state->build_time_use.has_location)
+        state->build_time_use = link_source_location(node);
     return true;
 }
 

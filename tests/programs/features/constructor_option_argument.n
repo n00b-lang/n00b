@@ -22,17 +22,15 @@ func limit_of(failure: Failure) -> u32 {
     return limit.get()
 }
 
-comptime {} else {
-    let plain = new[Failure](cast[i64]1, "named", 7)
-    require plain.text != nil
-    require limit_of(plain) == 7
-    let empty = new[Failure](cast[i64]2, nil, limit = 9)
-    require empty.text == nil
-    require limit_of(empty) == 9
-    try {
-        risky(3)!
-    } else failure {
-        require failure.code == 3
-        require limit_of(failure) == 0
-    }
+let plain = new[Failure](cast[i64]1, "named", 7)
+require plain.text != nil
+require limit_of(plain) == 7
+let empty = new[Failure](cast[i64]2, nil, limit = 9)
+require empty.text == nil
+require limit_of(empty) == 9
+try {
+    risky(3)!
+} else failure {
+    require failure.code == 3
+    require limit_of(failure) == 0
 }

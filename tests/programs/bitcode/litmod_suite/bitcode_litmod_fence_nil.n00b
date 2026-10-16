@@ -2,8 +2,6 @@ litmod<fence> do_nothing, noop(contents: string) -> nil fail: string {
     return
 }
 
-comptime {
-}
 
 func run_test() {
     [- body -]'noop

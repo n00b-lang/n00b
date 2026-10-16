@@ -6,7 +6,7 @@ func value() -> Tuple[bool, int] {
     return "ignored"'pair_bool_tuple
 }
 
-comptime {
+when comptime() {
     value()
 }
 

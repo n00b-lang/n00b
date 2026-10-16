@@ -1,5 +1,3 @@
 import cross_dep
 
-comptime {} else {
-    require cross_dep.twice(7) == 14
-}
+require cross_dep.twice(7) == 14

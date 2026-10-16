@@ -14,9 +14,7 @@ main(void)
     const ir_profile_t profile = {.name = "n00b"};
     ir_module_t *runtime = ir_module_new(context, "example", &profile,
                                           "x86_64-linux");
-    ir_module_t *comptime = ir_module_new(context, "example$comptime",
-                                           &profile, "x86_64-linux");
-    assert(runtime && comptime);
+    assert(runtime);
     th_ctx *types = ir_ctx_types(context);
     th_type *i3 = th_bitint(types, 3, true);
     ir_layout_bit_run_t occupied = {.offset = 0, .width = 3};
@@ -27,18 +25,17 @@ main(void)
         .reserved = &reserved, .n_reserved = 1,
     };
     assert(i3 && ir_layout_publish_final(runtime, i3, "x86_64-linux",
-                                          &final)
-        && ir_layout_publish_final(comptime, i3, "x86_64-linux", &final));
+                                          &final));
     n00bb_abi_type_index_t *index = n00bb_abi_type_index_new(runtime);
     uint32_t i3_index = 0;
     assert(index && n00bb_abi_type_index_add(index, i3, &i3_index));
     n00bb_abi_name_pool_t *names = n00bb_abi_name_pool_new();
     n00bb_abi_type_identity_rows_t identities = {0};
-    assert(n00bb_abi_type_identity_rows_build(index, comptime, runtime,
+    assert(n00bb_abi_type_identity_rows_build(index, runtime,
                                                false, nullptr, nullptr, nullptr,
                                                names, &identities));
     n00bb_abi_type_layout_rows_t layouts = {0};
-    assert(n00bb_abi_type_layout_rows_build(index, comptime, runtime, false, 1,
+    assert(n00bb_abi_type_layout_rows_build(index, runtime, false, 1,
                                              nullptr, names, &identities,
                                              &layouts, nullptr));
     assert(layouts.layout_count == 2 && layouts.run_count == 3
@@ -87,11 +84,8 @@ main(void)
     };
     assert(th_type_define(types, template, template_record)
         && ir_type_define(runtime, template, template_record)
-        && ir_type_define(comptime, template, template_record)
         && ir_type_definition(runtime, concrete)
         && ir_layout_publish_final(runtime, concrete, "x86_64-linux",
-                                   &concrete_layout)
-        && ir_layout_publish_final(comptime, concrete, "x86_64-linux",
                                    &concrete_layout));
     parse_symtab_t *generic_symbols = parse_symtab_new();
     parse_tree_t generic_node = {0};
@@ -120,10 +114,10 @@ main(void)
         generic_owner->type, &bare_index));
     names = n00bb_abi_name_pool_new();
     identities = (n00bb_abi_type_identity_rows_t){0};
-    assert(n00bb_abi_type_identity_rows_build(index, comptime, runtime,
+    assert(n00bb_abi_type_identity_rows_build(index, runtime,
         false, generic_symbols, nullptr, nullptr, names, &identities));
     layouts = (n00bb_abi_type_layout_rows_t){0};
-    assert(n00bb_abi_type_layout_rows_build(index, comptime, runtime, false, 1,
+    assert(n00bb_abi_type_layout_rows_build(index, runtime, false, 1,
         nullptr, names, &identities, &layouts, nullptr));
     assert((identities.rows[template_index].flags
             & N00B_ABI_TYPE_FLAG_NON_CONCRETE)
@@ -137,31 +131,6 @@ main(void)
     n00bb_abi_name_pool_free(names);
     n00bb_abi_type_index_free(index);
     parse_symtab_free(generic_symbols);
-
-    th_type *u3 = th_bitint(types, 3, false);
-    ir_layout_bit_run_t different_occupied = {.offset = 0, .width = 4};
-    ir_layout_bit_run_t different_reserved = {.offset = 4, .width = 4};
-    ir_final_layout_t different = final;
-    different.occupied = &different_occupied;
-    different.reserved = &different_reserved;
-    assert(ir_layout_publish_final(runtime, u3, "x86_64-linux", &final)
-        && ir_layout_publish_final(comptime, u3, "x86_64-linux",
-                                    &different));
-    index = n00bb_abi_type_index_new(runtime);
-    assert(index && n00bb_abi_type_index_add(index, u3, nullptr));
-    names = n00bb_abi_name_pool_new();
-    identities = (n00bb_abi_type_identity_rows_t){0};
-    assert(n00bb_abi_type_identity_rows_build(index, comptime, runtime,
-                                               false, nullptr, nullptr, nullptr,
-                                               names, &identities));
-    layouts = (n00bb_abi_type_layout_rows_t){0};
-    assert(!n00bb_abi_type_layout_rows_build(index, comptime, runtime, false, 1,
-                                              nullptr, names, &identities,
-                                              &layouts, nullptr));
-    assert(!layouts.layouts && !layouts.runs && !layouts.stream_indexes);
-    n00bb_abi_type_identity_rows_release(&identities);
-    n00bb_abi_name_pool_free(names);
-    n00bb_abi_type_index_free(index);
 
     th_type *large = th_record(types, nullptr, 0);
     ir_layout_bit_run_t large_run = {
@@ -179,11 +148,11 @@ main(void)
     assert(index && n00bb_abi_type_index_add(index, large, nullptr));
     names = n00bb_abi_name_pool_new();
     identities = (n00bb_abi_type_identity_rows_t){0};
-    assert(n00bb_abi_type_identity_rows_build(index, comptime, runtime,
+    assert(n00bb_abi_type_identity_rows_build(index, runtime,
                                                false, nullptr, nullptr, nullptr,
                                                names, &identities));
     layouts = (n00bb_abi_type_layout_rows_t){0};
-    assert(n00bb_abi_type_layout_rows_build(index, comptime, runtime, false, 1,
+    assert(n00bb_abi_type_layout_rows_build(index, runtime, false, 1,
                                              nullptr, names, &identities,
                                              &layouts, nullptr));
     assert(layouts.run_count == 3 && layouts.stream_index_count == 2
@@ -247,13 +216,13 @@ main(void)
         nullptr));
     names = n00bb_abi_name_pool_new();
     identities = (n00bb_abi_type_identity_rows_t){0};
-    assert(n00bb_abi_type_identity_rows_build(index, comptime, runtime,
+    assert(n00bb_abi_type_identity_rows_build(index, runtime,
         false, symbols, nullptr, nullptr, names, &identities));
     n00bb_abi_decl_index_t *declarations =
         n00bb_abi_decl_index_new(symbols);
     layouts = (n00bb_abi_type_layout_rows_t){0};
     assert(declarations && n00bb_abi_type_layout_rows_build(index,
-        comptime, runtime, false, 1, declarations, names, &identities, &layouts,
+        runtime, false, 1, declarations, names, &identities, &layouts,
         nullptr));
     uint32_t field_symbol_index = 0, child_type_index = 0;
     assert(n00bb_abi_decl_find_symbol(declarations, field,

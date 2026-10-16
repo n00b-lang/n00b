@@ -7,7 +7,5 @@ func first(value: Pair[int, string]) -> int {
     return value.left
 }
 
-comptime {} else {
-    let pair: Pair[int, string] = (left = 7, right = "seven")
-    require first(pair) == 7
-}
+let pair: Pair[int, string] = (left = 7, right = "seven")
+require first(pair) == 7

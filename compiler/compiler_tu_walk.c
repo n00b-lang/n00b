@@ -1360,14 +1360,27 @@ semantic_walk_child_complete(parse_visit_t *visit)
                                                node, child))
         return PARSE_VISIT_ERROR;
     bool body_statement_sequence = nt_is(context->grammar, node,
-        "body-stmt-list") || (core_tree_node_value(node).group_top
-        && visit->parent && nt_is(context->grammar, visit->parent,
-                                  "body-stmt-list"));
-    if (body_statement_sequence && nt_is(context->grammar, child,
-                                          "body-stmt")) {
-        bool condition_truth = false;
-        parse_tree_t *condition = n00bb_exiting_guard_condition(
-            context->grammar, child);
+            "body-stmt-list")
+        || nt_is(context->grammar, node, "other-top-stmts")
+        || (core_tree_node_value(node).group_top && visit->parent
+            && (nt_is(context->grammar, visit->parent, "body-stmt-list")
+                || nt_is(context->grammar, visit->parent,
+                         "other-top-stmts")));
+    bool top_level = nt_is(context->grammar, node, "other-top-stmts")
+        || (core_tree_node_value(node).group_top && visit->parent
+            && nt_is(context->grammar, visit->parent, "other-top-stmts"));
+    bool short_circuit = core_tree_num_children(node) == 3
+        && core_tree_child(node, 0) == child
+        && (nt_is(context->grammar, node, "and-expr")
+            || nt_is(context->grammar, node, "or-expr"));
+    if (short_circuit || (body_statement_sequence
+                          && (nt_is(context->grammar, child, "body-stmt")
+                              || nt_is(context->grammar, child,
+                                       "top-level-stmt")))) {
+        bool condition_truth = short_circuit
+            && nt_is(context->grammar, node, "and-expr");
+        parse_tree_t *condition = short_circuit ? child
+            : n00bb_exiting_guard_condition(context->grammar, child);
         if (!condition) {
             parse_tree_t *assertion = child_nt(context->grammar, child,
                                                "assert-stmt");
@@ -1379,7 +1392,12 @@ semantic_walk_child_complete(parse_visit_t *visit)
                 condition_truth = true;
             }
         }
-        if (condition) {
+        if (condition && top_level && !short_circuit) {
+            if (!n00bb_bind_option_condition_shadows(context->grammar, unit,
+                    symtab, nullptr, condition, condition_truth, node, child,
+                    true)) return PARSE_VISIT_ERROR;
+        }
+        else if (condition) {
             parse_scope_t *saved = parse_symtab_current_scope(symtab,
                 CORE_STRING_STATIC(""));
             if (frame->flow_scope)
@@ -1390,7 +1408,7 @@ semantic_walk_child_complete(parse_visit_t *visit)
             bool bound = new_scope
                 && n00bb_bind_option_condition_shadows(context->grammar,
                     unit, symtab, new_scope, condition, condition_truth,
-                    node, child);
+                    node, child, false);
             parse_symtab_enter_scope_all(symtab, saved);
             if (!bound) {
                 core_diagnostics_report_at(

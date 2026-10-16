@@ -231,6 +231,173 @@ link_only_inputs_resolved(const n00bb_abi_selected_objects_t *selected,
     return true;
 }
 
+typedef struct {
+    size_t provider;
+    uint32_t symbol;
+    uint32_t function;
+} requirement_match_t;
+
+static int
+requirement_target(const n00bb_abi_selected_objects_t *selected,
+                   const n00bb_abi_index_plan_t *plan, size_t input,
+                   uint32_t row, n00bb_abi_string_view_t *wanted,
+                   requirement_match_t *found, const char **mismatch)
+{
+    const n00bb_abi_object_view_t *requester = &selected->views[input];
+    const n00b_abi_module_v1 *requesting_module =
+        n00bb_abi_object_row(requester, N00B_ABI_TABLE_MODULE, 1);
+    const n00b_abi_requirement_v1 *request = n00bb_abi_object_row(requester,
+        N00B_ABI_TABLE_REQUIREMENT, row);
+    uint32_t requesting_package;
+    if (!requesting_module || !request
+        || !n00bb_abi_index_plan_map(plan, input, N00B_ABI_TABLE_PACKAGE,
+            requesting_module->package_index, &requesting_package))
+        return -1;
+    bool baked = (request->flags & N00B_ABI_REQUIREMENT_FLAG_BAKED) != 0;
+    if ((request->symbol_kind != N00B_ABI_SYMBOL_TYPE
+            && request->symbol_kind != N00B_ABI_SYMBOL_FUNCTION
+            && request->symbol_kind != N00B_ABI_SYMBOL_VARIABLE)
+        || (baked && request->symbol_kind != N00B_ABI_SYMBOL_FUNCTION)
+        || request->requesting_module_index != 1
+        || request->contract_type_index == N00B_ABI_V1_NO_TYPE_INDEX
+        || (request->symbol_kind == N00B_ABI_SYMBOL_FUNCTION
+            && request->required_layout_index)) return -1;
+    if (!n00bb_abi_object_string(requester, &request->full_path, wanted))
+        return -1;
+    uint32_t contract_index;
+    if (!n00bb_abi_index_plan_map(plan, input, N00B_ABI_TABLE_TYPE,
+            request->contract_type_index, &contract_index)) return -1;
+    const n00b_abi_type_v1 *contract = n00bb_abi_object_row(requester,
+        N00B_ABI_TABLE_TYPE, request->contract_type_index);
+    if (!contract || !contract->typehash) return -1;
+    int matches = 0;
+    for (size_t provider_input = 0; provider_input < selected->count;
+         provider_input++) {
+        const n00bb_abi_object_view_t *provider =
+            &selected->views[provider_input];
+        const n00b_abi_module_v1 *module = n00bb_abi_object_row(provider,
+            N00B_ABI_TABLE_MODULE, 1);
+        n00bb_abi_string_view_t module_name;
+        if (!module || !n00bb_abi_object_string(provider, &module->full_path,
+                &module_name)) return -1;
+        uint32_t provider_package;
+        if (!n00bb_abi_index_plan_map(plan, provider_input,
+                N00B_ABI_TABLE_PACKAGE, module->package_index,
+                &provider_package)) return -1;
+        if (wanted->length <= module_name.length + 1
+            || memcmp(wanted->bytes, module_name.bytes, module_name.length)
+            || wanted->bytes[module_name.length] != '.') continue;
+        const n00bb_abi_directory_entry_t *symbols =
+            n00bb_abi_object_table(provider, N00B_ABI_TABLE_SYMBOL);
+        if (!symbols) return -1;
+        for (uint32_t j = 1; j < symbols->record_count; j++) {
+            const n00b_abi_symbol_v1 *symbol = n00bb_abi_object_row(provider,
+                N00B_ABI_TABLE_SYMBOL, j);
+            if (!symbol || symbol->kind != request->symbol_kind
+                || symbol->module_index != 1) continue;
+            const n00b_abi_scope_v1 *scope = n00bb_abi_object_row(provider,
+                N00B_ABI_TABLE_SCOPE, symbol->scope_index);
+            if (!scope || scope->parent_scope_index
+                || scope->module_index != 1) continue;
+            if (!baked && request->symbol_kind != N00B_ABI_SYMBOL_TYPE
+                && ((symbol->visibility == N00B_ABI_VISIBILITY_PRIVATE
+                     && provider_input != input)
+                    || (symbol->visibility == N00B_ABI_VISIBILITY_PACKAGE
+                        && provider_package != requesting_package)))
+                continue;
+            n00bb_abi_string_view_t name;
+            if (!n00bb_abi_object_string(provider, &symbol->name, &name))
+                return -1;
+            size_t suffix = module_name.length + 1;
+            if (name.length != wanted->length - suffix
+                || memcmp(name.bytes, wanted->bytes + suffix, name.length))
+                continue;
+            const n00b_abi_type_v1 *definition = n00bb_abi_object_row(
+                provider, N00B_ABI_TABLE_TYPE, symbol->type_index);
+            uint32_t definition_index;
+            if (!definition
+                || (request->symbol_kind == N00B_ABI_SYMBOL_TYPE
+                    && definition->owner_module_index != 1)
+                || (request->symbol_kind == N00B_ABI_SYMBOL_FUNCTION
+                    && definition->kind != N00B_ABI_TYPE_FUNCTION))
+                return -1;
+            if (definition->kind != contract->kind
+                || definition->typehash != contract->typehash) {
+                *mismatch = "typed requirement signature mismatch";
+                continue;
+            }
+            if ((provider->header.artifact_capabilities
+                    & request->required_capabilities)
+                    != request->required_capabilities) {
+                *mismatch = "typed requirement capability mismatch";
+                continue;
+            }
+            if (!n00bb_abi_index_plan_map(plan, provider_input,
+                    N00B_ABI_TABLE_TYPE, symbol->type_index,
+                    &definition_index)) return -1;
+            if (definition_index != contract_index) {
+                *mismatch = ((definition->flags ^ contract->flags)
+                    & N00B_ABI_TYPE_FLAG_NON_CONCRETE)
+                    ? "typed requirement non-concrete classification mismatch"
+                    : definition->components.count
+                        != contract->components.count
+                        ? "typed requirement component count mismatch"
+                    : !!definition->call_signature_index
+                        != !!contract->call_signature_index
+                        ? "typed requirement call-signature presence mismatch"
+                    : definition->named_arguments.count
+                        != contract->named_arguments.count
+                        ? "typed requirement generic argument count mismatch"
+                    : "typed requirement type-variable origin mismatch";
+                continue;
+            }
+            uint32_t function_row = 0;
+            if (request->symbol_kind == N00B_ABI_SYMBOL_FUNCTION) {
+                const n00bb_abi_directory_entry_t *functions =
+                    n00bb_abi_object_table(provider, N00B_ABI_TABLE_FUNCTION);
+                if (!functions) return -1;
+                for (uint32_t k = 1; k < functions->record_count; k++) {
+                    const n00b_abi_function_v1 *function =
+                        n00bb_abi_object_row(provider,
+                            N00B_ABI_TABLE_FUNCTION, k);
+                    if (function && function->symbol_index == j)
+                        function_row = k;
+                }
+                if (!function_row) {
+                    *mismatch = "typed requirement has no function body";
+                    continue;
+                }
+            }
+            if (request->symbol_kind == N00B_ABI_SYMBOL_VARIABLE) {
+                const n00bb_abi_directory_entry_t *storages =
+                    n00bb_abi_object_table(provider, N00B_ABI_TABLE_STORAGE);
+                bool defined = false;
+                if (!storages) return -1;
+                for (uint32_t k = 1; k < storages->record_count; k++) {
+                    const n00b_abi_storage_v1 *storage =
+                        n00bb_abi_object_row(provider,
+                            N00B_ABI_TABLE_STORAGE, k);
+                    if (storage && storage->symbol_index == j
+                        && storage->module_index == 1
+                        && storage->type_index == symbol->type_index)
+                        defined = true;
+                }
+                if (!defined) continue;
+            }
+            if (request->required_layout_index
+                && (request->required_layout_index != contract->layout_index
+                    || !definition->layout_index)) return -1;
+            *found = (requirement_match_t){
+                .provider = provider_input,
+                .symbol = j,
+                .function = function_row,
+            };
+            matches++;
+        }
+    }
+    return matches;
+}
+
 static bool
 typed_requirements_resolved(const n00bb_abi_selected_objects_t *selected,
                             const n00bb_abi_index_plan_t *plan,
@@ -241,180 +408,18 @@ typed_requirements_resolved(const n00bb_abi_selected_objects_t *selected,
         const n00bb_abi_directory_entry_t *requirements =
             n00bb_abi_object_table(requester, N00B_ABI_TABLE_REQUIREMENT);
         if (!requirements) continue;
-        const n00b_abi_module_v1 *requesting_module =
-            n00bb_abi_object_row(requester, N00B_ABI_TABLE_MODULE, 1);
-        uint32_t requesting_package;
-        if (!requesting_module
-            || !n00bb_abi_index_plan_map(plan, input,
-                N00B_ABI_TABLE_PACKAGE, requesting_module->package_index,
-                &requesting_package)) return false;
         for (uint32_t i = 1; i < requirements->record_count; i++) {
             const n00b_abi_requirement_v1 *request =
                 n00bb_abi_object_row(requester,
                     N00B_ABI_TABLE_REQUIREMENT, i);
             if (!request) return false;
             if (request->symbol_kind == N00B_ABI_SYMBOL_MODULE) continue;
-            if ((request->symbol_kind != N00B_ABI_SYMBOL_TYPE
-                    && request->symbol_kind != N00B_ABI_SYMBOL_FUNCTION
-                    && request->symbol_kind != N00B_ABI_SYMBOL_VARIABLE)
-                || request->requesting_module_index != 1
-                || !request->required_phase_mask
-                || (request->required_phase_mask
-                    & ~(N00B_ABI_PHASE_COMPTIME | N00B_ABI_PHASE_RUNTIME))
-                || request->contract_type_index
-                    == N00B_ABI_V1_NO_TYPE_INDEX
-                || request->reserved_zero
-                || (request->symbol_kind == N00B_ABI_SYMBOL_FUNCTION
-                    && request->required_layout_index)) return false;
-            n00bb_abi_string_view_t wanted;
-            if (!n00bb_abi_object_string(requester, &request->full_path,
-                    &wanted)) return false;
-            uint32_t contract_index;
-            if (!n00bb_abi_index_plan_map(plan, input,
-                    N00B_ABI_TABLE_TYPE, request->contract_type_index,
-                    &contract_index)) return false;
-            const n00b_abi_type_v1 *contract = n00bb_abi_object_row(
-                requester, N00B_ABI_TABLE_TYPE,
-                request->contract_type_index);
-            if (!contract || !contract->typehash) return false;
-            size_t matches = 0;
+            n00bb_abi_string_view_t wanted = {0};
+            requirement_match_t found;
             const char *mismatch = nullptr;
-            for (size_t provider_input = 0;
-                 provider_input < selected->count; provider_input++) {
-                const n00bb_abi_object_view_t *provider =
-                    &selected->views[provider_input];
-                const n00b_abi_module_v1 *module = n00bb_abi_object_row(
-                    provider, N00B_ABI_TABLE_MODULE, 1);
-                n00bb_abi_string_view_t module_name;
-                if (!module || !n00bb_abi_object_string(provider,
-                        &module->full_path, &module_name)) return false;
-                uint32_t provider_package;
-                if (!n00bb_abi_index_plan_map(plan, provider_input,
-                        N00B_ABI_TABLE_PACKAGE, module->package_index,
-                        &provider_package)) return false;
-                if (wanted.length <= module_name.length + 1
-                    || memcmp(wanted.bytes, module_name.bytes,
-                        module_name.length)
-                    || wanted.bytes[module_name.length] != '.') continue;
-                const n00bb_abi_directory_entry_t *symbols =
-                    n00bb_abi_object_table(provider,
-                        N00B_ABI_TABLE_SYMBOL);
-                if (!symbols) return false;
-                for (uint32_t j = 1; j < symbols->record_count; j++) {
-                    const n00b_abi_symbol_v1 *symbol =
-                        n00bb_abi_object_row(provider,
-                            N00B_ABI_TABLE_SYMBOL, j);
-                    if (!symbol || symbol->kind != request->symbol_kind
-                        || symbol->module_index != 1) continue;
-                    const n00b_abi_scope_v1 *scope = n00bb_abi_object_row(
-                        provider, N00B_ABI_TABLE_SCOPE, symbol->scope_index);
-                    if (!scope || scope->parent_scope_index
-                        || scope->module_index != 1) continue;
-                    if (request->symbol_kind != N00B_ABI_SYMBOL_TYPE
-                        && ((symbol->visibility == N00B_ABI_VISIBILITY_PRIVATE
-                             && provider_input != input)
-                            || (symbol->visibility == N00B_ABI_VISIBILITY_PACKAGE
-                                && provider_package != requesting_package)))
-                        continue;
-                    n00bb_abi_string_view_t name;
-                    if (!n00bb_abi_object_string(provider, &symbol->name,
-                            &name)) return false;
-                    size_t suffix = module_name.length + 1;
-                    if (name.length != wanted.length - suffix
-                        || memcmp(name.bytes, wanted.bytes + suffix,
-                            name.length)) continue;
-                    const n00b_abi_type_v1 *definition =
-                        n00bb_abi_object_row(provider,
-                            N00B_ABI_TABLE_TYPE, symbol->type_index);
-                    uint32_t definition_index;
-                    if (!definition
-                        || (request->symbol_kind == N00B_ABI_SYMBOL_TYPE
-                            && definition->owner_module_index != 1)
-                        || (request->symbol_kind == N00B_ABI_SYMBOL_FUNCTION
-                            && definition->kind != N00B_ABI_TYPE_FUNCTION))
-                        return false;
-                    if (definition->kind != contract->kind
-                        || definition->typehash != contract->typehash) {
-                        mismatch = "typed requirement signature mismatch";
-                        continue;
-                    }
-                    if ((symbol->phase_mask
-                            & request->required_phase_mask)
-                            != request->required_phase_mask) {
-                        mismatch = "typed requirement phase mismatch";
-                        continue;
-                    }
-                    if ((provider->header.artifact_capabilities
-                            & request->required_capabilities)
-                            != request->required_capabilities) {
-                        mismatch = "typed requirement capability mismatch";
-                        continue;
-                    }
-                    if (!n00bb_abi_index_plan_map(plan, provider_input,
-                            N00B_ABI_TABLE_TYPE, symbol->type_index,
-                            &definition_index)) return false;
-                    if (definition_index != contract_index) {
-                        mismatch = ((definition->flags ^ contract->flags)
-                            & N00B_ABI_TYPE_FLAG_NON_CONCRETE)
-                            ? "typed requirement non-concrete classification mismatch"
-                            : definition->components.count
-                                != contract->components.count
-                                ? "typed requirement component count mismatch"
-                            : !!definition->call_signature_index
-                                != !!contract->call_signature_index
-                                ? "typed requirement call-signature presence mismatch"
-                            : definition->named_arguments.count
-                                != contract->named_arguments.count
-                                ? "typed requirement generic argument count mismatch"
-                            : "typed requirement type-variable origin mismatch";
-                        continue;
-                    }
-                    if (request->symbol_kind == N00B_ABI_SYMBOL_FUNCTION) {
-                        const n00bb_abi_directory_entry_t *functions =
-                            n00bb_abi_object_table(provider,
-                                N00B_ABI_TABLE_FUNCTION);
-                        bool defined = false;
-                        if (!functions) return false;
-                        for (uint32_t k = 1; k < functions->record_count; k++) {
-                            const n00b_abi_function_v1 *function =
-                                n00bb_abi_object_row(provider,
-                                    N00B_ABI_TABLE_FUNCTION, k);
-                            if (function && function->symbol_index == j)
-                                defined = true;
-                        }
-                        if (!defined) {
-                            mismatch = "typed requirement has no function body";
-                            continue;
-                        }
-                    }
-                    if (request->symbol_kind == N00B_ABI_SYMBOL_VARIABLE
-                        && (request->required_phase_mask
-                            & N00B_ABI_PHASE_RUNTIME)) {
-                        const n00bb_abi_directory_entry_t *storages =
-                            n00bb_abi_object_table(provider,
-                                N00B_ABI_TABLE_STORAGE);
-                        bool defined = false;
-                        if (!storages) return false;
-                        for (uint32_t k = 1; k < storages->record_count; k++) {
-                            const n00b_abi_storage_v1 *storage =
-                                n00bb_abi_object_row(provider,
-                                    N00B_ABI_TABLE_STORAGE, k);
-                            if (storage && storage->symbol_index == j
-                                && storage->module_index == 1
-                                && storage->type_index == symbol->type_index)
-                                defined = true;
-                        }
-                        if (!defined) continue;
-                    }
-                    if (request->required_layout_index) {
-                        if (request->required_layout_index
-                                != contract->layout_index
-                            || !definition->layout_index)
-                            return false;
-                    }
-                    matches++;
-                }
-            }
+            int matches = requirement_target(selected, plan, input, i,
+                                             &wanted, &found, &mismatch);
+            if (matches < 0) return false;
             if (matches != 1) {
                 if (failure) *failure = (n00bb_abi_index_plan_failure_t){
                     .input = input,
@@ -427,6 +432,44 @@ typed_requirements_resolved(const n00bb_abi_selected_objects_t *selected,
                 return false;
             }
         }
+    }
+    return true;
+}
+
+static bool
+baked_requirement_remap(const n00bb_abi_selected_objects_t *selected,
+                        const n00bb_abi_index_plan_t *plan,
+                        const n00bb_abi_merged_rows_t *merged, size_t input,
+                        core_index_remap_t **out)
+{
+    *out = nullptr;
+    const n00bb_abi_object_view_t *view = &selected->views[input];
+    const n00bb_abi_directory_entry_t *requirements =
+        n00bb_abi_object_table(view, N00B_ABI_TABLE_REQUIREMENT);
+    const n00bb_abi_merged_table_t *functions = n00bb_abi_merged_table(
+        merged, N00B_ABI_TABLE_FUNCTION);
+    for (uint32_t i = 1; requirements && i < requirements->record_count;
+         i++) {
+        const n00b_abi_requirement_v1 *request = n00bb_abi_object_row(view,
+            N00B_ABI_TABLE_REQUIREMENT, i);
+        if (!request) return false;
+        if (!(request->flags & N00B_ABI_REQUIREMENT_FLAG_BAKED)) continue;
+        if (!*out) {
+            *out = functions && functions->record_count
+                ? core_index_remap_new(requirements->record_count,
+                                       functions->record_count - 1)
+                : nullptr;
+            if (!*out || !core_index_remap_set(*out, 0, 0)) return false;
+        }
+        n00bb_abi_string_view_t wanted = {0};
+        requirement_match_t found;
+        const char *mismatch = nullptr;
+        uint32_t final_index;
+        if (requirement_target(selected, plan, input, i, &wanted, &found,
+                &mismatch) != 1
+            || !n00bb_abi_index_plan_map(plan, found.provider,
+                N00B_ABI_TABLE_FUNCTION, found.function, &final_index)
+            || !core_index_remap_set(*out, i, final_index)) return false;
     }
     return true;
 }
@@ -649,7 +692,15 @@ n00bb_abi_apply_link_patches(
         n00bb_abi_patch_section_t *patch_sections = core_alloc_array(
             n00bb_abi_patch_section_t, sections->count);
         n00bb_abi_patch_table_t *patch_tables = core_alloc_array(
-            n00bb_abi_patch_table_t, merged->table_count);
+            n00bb_abi_patch_table_t, merged->table_count + 1);
+        core_index_remap_t *requirement_remap = nullptr;
+        if (!baked_requirement_remap(selected, plan, merged, input,
+                &requirement_remap)) {
+            core_index_remap_free(requirement_remap);
+            core_free(patch_sections);
+            core_free(patch_tables);
+            return false;
+        }
         core_index_remap_t *specialization_remap =
             n00bb_abi_object_table(view,
                 N00B_ABI_TABLE_SPECIALIZATION_LINK)
@@ -658,6 +709,7 @@ n00bb_abi_apply_link_patches(
         if (n00bb_abi_object_table(view,
                 N00B_ABI_TABLE_SPECIALIZATION_LINK)
             && !specialization_remap) {
+            core_index_remap_free(requirement_remap);
             core_free(patch_sections);
             core_free(patch_tables);
             return false;
@@ -691,6 +743,14 @@ n00bb_abi_apply_link_patches(
                     .final_row_count = table->record_count,
                 };
         }
+        const n00bb_abi_merged_table_t *functions = n00bb_abi_merged_table(
+            merged, N00B_ABI_TABLE_FUNCTION);
+        if (requirement_remap && functions)
+            patch_tables[patch_table_count++] = (n00bb_abi_patch_table_t){
+                .kind = N00B_ABI_TABLE_REQUIREMENT,
+                .remap = requirement_remap,
+                .final_row_count = functions->record_count,
+            };
         const uint8_t *patch_bytes = view->metadata.bytes
             + patch_table->file_offset + patch_table->record_bytes;
         size_t patch_byte_count = (size_t)(patch_table->record_count - 1)
@@ -702,6 +762,7 @@ n00bb_abi_apply_link_patches(
         core_free(patch_sections);
         core_free(patch_tables);
         core_index_remap_free(specialization_remap);
+        core_index_remap_free(requirement_remap);
         if (!valid) return false;
     }
     return true;

@@ -529,50 +529,6 @@ collect_call_specializations(n00bb_abi_type_index_t *index,
     return valid;
 }
 
-bool
-n00bb_abi_type_index_collect_comptime_functions(
-    n00bb_abi_type_index_t *index, ir_func_t *const *functions,
-    size_t function_count)
-{
-    if (!index || (function_count && !functions)) return false;
-    for (size_t i = 0; i < function_count; i++) {
-        ir_func_t *function = functions[i];
-        if (!function || !function->owner
-            || ir_module_types(function->owner)
-                != ir_module_types(index->module)
-            || !add_closed_type(index, function->type)) return false;
-        for (uint32_t p = 0; p < function->n_params; p++)
-            if (!function->params[p]
-                || !add_closed_type(index, function->params[p]->type))
-                return false;
-        for (uint32_t l = 0; l < function->n_locals; l++)
-            if (!function->locals[l]
-                || !add_closed_type(index, function->locals[l]->type))
-                return false;
-        for (uint32_t b = 0; b < function->n_blocks; b++) {
-            ir_block_t *block = function->blocks[b];
-            if (!block) return false;
-            for (uint32_t j = 0; j < block->n_instrs; j++) {
-                ir_instr_t *instruction = block->instrs[j];
-                if (!instruction || (instruction->dest
-                    && !add_closed_type(index, instruction->dest->type)))
-                    return false;
-                for (uint32_t o = 0; o < instruction->n_operands; o++) {
-                    ir_operand_t *operand = &instruction->operands[o];
-                    ir_value_t *value = ir_operand_value(operand);
-                    if ((value && !add_closed_type(index, value->type))
-                        || (operand->kind == IR_OPD_TYPE
-                            && !add_closed_type(index, operand->type)))
-                        return false;
-                }
-            }
-        }
-    }
-    return collect_call_specializations(index, nullptr, functions,
-                                        function_count)
-        && add_string_backing(index);
-}
-
 static th_type *
 declaration_type(n00bb_abi_type_index_t *index,
                  const parse_sym_entry_t *symbol, th_type *type)

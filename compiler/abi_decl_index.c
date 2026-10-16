@@ -58,7 +58,9 @@ n00bb_abi_decl_generated_symbol(const parse_sym_entry_t *symbol)
     return parse_sym_binding(symbol,
             CORE_STRING_STATIC("n00bb.generated-value-method"))
         || parse_sym_binding(symbol,
-            CORE_STRING_STATIC("n00bb.generated-extern"));
+            CORE_STRING_STATIC("n00bb.generated-extern"))
+        || parse_sym_binding(symbol,
+            CORE_STRING_STATIC("n00bb.generated-literal"));
 }
 
 bool

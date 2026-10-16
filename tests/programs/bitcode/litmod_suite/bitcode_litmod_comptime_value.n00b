@@ -6,7 +6,7 @@ func observe(value: string) {
     require true
 }
 
-comptime {
+when comptime() {
     observe("hello"'raw)
 }
 

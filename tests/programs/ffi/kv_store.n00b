@@ -56,36 +56,34 @@ binding {
 }
 -]'ffi
 
-comptime {} else {
-    try {
-        let db = kv.db_open("store")!
-        kv.put(db, [97, 49], [111, 110, 101])!
-        kv.put(db, [97, 50], [116, 119, 111])!
-        kv.put(db, [98, 49], [120])!
-        let found = kv.get(db, [97, 50])!
-        require found != nil
-        if found != nil {
-            require found.len() == 3
-            require found[0] == 116
-        }
-        require kv.get(db, [122])! == nil
-        require kv.live_raw() == 0
-        let iter = kv.iter(db, [97])!
-        var keys = 0
-        var more = true
-        while more {
-            let entry = kv.next(iter)!
-            if entry != nil {
-                require entry.key.len() == 2
-                require entry.val.len() == 3
-                require entry.key[0] == 97
-                keys = keys + 1
-            } else {
-                more = false
-            }
-        }
-        require keys == 2
-    } else failure {
-        require false
+try {
+    let db = kv.db_open("store")!
+    kv.put(db, [97, 49], [111, 110, 101])!
+    kv.put(db, [97, 50], [116, 119, 111])!
+    kv.put(db, [98, 49], [120])!
+    let found = kv.get(db, [97, 50])!
+    require found != nil
+    if found != nil {
+        require found.len() == 3
+        require found[0] == 116
     }
+    require kv.get(db, [122])! == nil
+    require kv.live_raw() == 0
+    let iter = kv.iter(db, [97])!
+    var keys = 0
+    var more = true
+    while more {
+        let entry = kv.next(iter)!
+        if entry != nil {
+            require entry.key.len() == 2
+            require entry.val.len() == 3
+            require entry.key[0] == 97
+            keys = keys + 1
+        } else {
+            more = false
+        }
+    }
+    require keys == 2
+} else failure {
+    require false
 }

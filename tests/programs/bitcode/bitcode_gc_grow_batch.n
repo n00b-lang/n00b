@@ -11,27 +11,24 @@ func mutator_record() -> Ref[sys.abi.Type_Record] {
     require false
 }
 
-comptime {
-} else {
-    let created: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(nil)
-    if created != nil {
-        let heap: Ref[sys.gc.core.Heap] = created.get()
-        let row: Ref[sys.abi.Type_Record] = mutator_record()
-        let mapped: Ref[byte]? = sys.memory.map_zeroed(
-            sys.abi.size_bytes(row), sys.abi.alignment_bytes(row))
-        if mapped != nil {
-            let mutator: Ref[sys.gc.core.Mutator] = unsafe_cast[Ref[sys.gc.core.Mutator]] mapped.get()
-            mutator.heap = heap
-            let first: Ref[sys.gc.core.Block_Metadata]? = sys.gc.alloc.grow_batch(heap, mutator)
-            assert first != nil
-            assert heap.nblocks > 0
-            assert heap.nfree > 0
-            assert __atomic_load(ref heap.nowned) > 0
-            assert heap.nfree + __atomic_load(ref heap.nowned) == heap.nblocks
-            assert heap.blocks.n == heap.nblocks
-            sys.gc.heap.destroy(heap)
-            sys.memory.unmap(mutator, sys.abi.size_bytes(row))
-            __fd_write(2, "ok")
-        } else { require false }
+let created: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(nil)
+if created != nil {
+    let heap: Ref[sys.gc.core.Heap] = created.get()
+    let row: Ref[sys.abi.Type_Record] = mutator_record()
+    let mapped: Ref[byte]? = sys.memory.map_zeroed(
+        sys.abi.size_bytes(row), sys.abi.alignment_bytes(row))
+    if mapped != nil {
+        let mutator: Ref[sys.gc.core.Mutator] = unsafe_cast[Ref[sys.gc.core.Mutator]] mapped.get()
+        mutator.heap = heap
+        let first: Ref[sys.gc.core.Block_Metadata]? = sys.gc.alloc.grow_batch(heap, mutator)
+        assert first != nil
+        assert heap.nblocks > 0
+        assert heap.nfree > 0
+        assert __atomic_load(ref heap.nowned) > 0
+        assert heap.nfree + __atomic_load(ref heap.nowned) == heap.nblocks
+        assert heap.blocks.n == heap.nblocks
+        sys.gc.heap.destroy(heap)
+        sys.memory.unmap(mutator, sys.abi.size_bytes(row))
+        __fd_write(2, "ok")
     } else { require false }
-}
+} else { require false }

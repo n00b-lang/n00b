@@ -10,7 +10,7 @@ func dynamic_values(value: char) -> Array[char] {
     return ['a', value]'wrap
 }
 
-comptime {
+when comptime() {
     static_values()
 }
 

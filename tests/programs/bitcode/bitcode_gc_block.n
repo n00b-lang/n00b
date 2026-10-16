@@ -26,154 +26,151 @@ func unmap_heap(heap: Ref[sys.gc.core.Heap]) {
     require false
 }
 
-comptime {
-} else {
-    let block_bytes: uint = 32768
-    let mapped: Ref[byte]? = sys.memory.map_zeroed(block_bytes, block_bytes)
-    if mapped != nil {
-        let base: Ref[byte] = mapped.get()
-        let heap: Ref[sys.gc.core.Heap] = mapped_heap()
-        let heap_type: Ref[sys.abi.Type_Record]? = sys.abi.reference_target(typeof(heap))
-        if heap_type != nil {
-            assert heap_type.get().kind == cast[u32](sys.abi.Type_Kind.record_type)
-            let trace: Ref[sys.abi.Trace_Record]? = sys.abi.trace_at(heap_type.get().tracing_index)
-            if trace != nil {
-                var found_cache: bool = false
-                var ordinal: u32 = 0
-                while ordinal < trace.get().fixed_children.count {
-                    let index: i64 = sys.abi.range_index(
-                        trace.get().fixed_children, ordinal)
-                    assert index > 0
-                    let child: Ref[sys.abi.Trace_Child_Record]? = sys.abi.trace_child_at(cast[u32] index)
-                    if child != nil {
-                        if child.get().repeat_count == cast[u64](sys.gc.core.los_classes) {
-                            let element: Ref[sys.abi.Type_Record]? = sys.abi.type_at(child.get().child_type_index)
-                            if element != nil {
-                                assert element.get().kind == cast[u32](sys.abi.Type_Kind.option_type)
-                                assert child.get().stride_bits == element.get().size_bits
-                                found_cache = true
-                            } else {
-                                require false
-                            }
+let block_bytes: uint = 32768
+let mapped: Ref[byte]? = sys.memory.map_zeroed(block_bytes, block_bytes)
+if mapped != nil {
+    let base: Ref[byte] = mapped.get()
+    let heap: Ref[sys.gc.core.Heap] = mapped_heap()
+    let heap_type: Ref[sys.abi.Type_Record]? = sys.abi.reference_target(typeof(heap))
+    if heap_type != nil {
+        assert heap_type.get().kind == cast[u32](sys.abi.Type_Kind.record_type)
+        let trace: Ref[sys.abi.Trace_Record]? = sys.abi.trace_at(heap_type.get().tracing_index)
+        if trace != nil {
+            var found_cache: bool = false
+            var ordinal: u32 = 0
+            while ordinal < trace.get().fixed_children.count {
+                let index: i64 = sys.abi.range_index(
+                    trace.get().fixed_children, ordinal)
+                assert index > 0
+                let child: Ref[sys.abi.Trace_Child_Record]? = sys.abi.trace_child_at(cast[u32] index)
+                if child != nil {
+                    if child.get().repeat_count == cast[u64](sys.gc.core.los_classes) {
+                        let element: Ref[sys.abi.Type_Record]? = sys.abi.type_at(child.get().child_type_index)
+                        if element != nil {
+                            assert element.get().kind == cast[u32](sys.abi.Type_Kind.option_type)
+                            assert child.get().stride_bits == element.get().size_bits
+                            found_cache = true
+                        } else {
+                            require false
                         }
-                    } else {
-                        require false
                     }
-                    ordinal += 1
+                } else {
+                    require false
                 }
-                assert found_cache
-            } else {
-                require false
+                ordinal += 1
             }
+            assert found_cache
         } else {
             require false
         }
-        let epoch: u32 = 1
-        heap.cfg.poison_free = false
-        heap.epoch = epoch
+    } else {
+        require false
+    }
+    let epoch: u32 = 1
+    heap.cfg.poison_free = false
+    heap.epoch = epoch
+    heap.mark_epoch = epoch
+    heap.all_blocks = nil
+    heap.nblocks = 0
+    heap.los_bytes = 0
+    heap.los_cache_bytes = 0
+    heap.cfg.max_heap_bytes = 0
+    assert sys.gc.los.cache_take(heap, 10 * 1024) == nil
+    sys.gc.los.cache_drain(heap)
+    let metadata: Ref[sys.gc.core.Block_Metadata] = sys.gc.core.block_metadata_at(base)
+    sys.gc.core.block_init(heap, metadata)
+    assert heap.nblocks == 1
+    assert sys.gc.core.committed_bytes(heap) == block_bytes
+    assert !sys.gc.core.over_max(heap, 1)
+    heap.cfg.max_heap_bytes = block_bytes
+    assert sys.gc.core.over_max(heap, 1)
+    assert sys.gc.core.over_max(heap, ~cast[uint](0))
+    let linked: Ref[sys.gc.core.Block_Metadata]? = heap.all_blocks
+    if linked != nil {
+        assert linked.get() == metadata
+    } else {
+        require false
+    }
+    assert metadata.magic == 0x6d616e69
+    assert cast[u8] metadata.state == cast[u8] sys.gc.core.Block_State.retired
+    assert metadata.free_lines == 249
+    assert metadata.sweep_epoch == epoch
+    assert sys.gc.core.read_epoch(metadata) == epoch
+    let marked: u32 = __atomic_load(ref metadata.mark_epoch)
+    let black: u32 = __atomic_load(ref metadata.black_epoch)
+    assert marked == epoch
+    assert black == 0
+    sys.gc.core.raise_black(metadata, 2)
+    assert __atomic_load(ref metadata.black_epoch) == 2
+    sys.gc.core.raise_black(metadata, 1)
+    assert __atomic_load(ref metadata.black_epoch) == 2
+    assert !__atomic_load(ref metadata.in_final)
+    __atomic_store(ref metadata.in_final, true)
+    assert __atomic_load(ref metadata.in_final)
+    __atomic_store(ref metadata.in_final, false)
+    __gc_signal_fence()
+    var bump: sys.gc.core.Bump
+    var mutator: sys.gc.core.Mutator
+    mutator.heap = heap
+    mutator.black = false
+    let attached: Ref[sys.gc.core.Block_Metadata]? = metadata
+    sys.gc.core.bump_attach(ref mutator, ref bump, attached)
+    let empty_cache: Ref[sys.gc.core.Block_Metadata]? = nil
+    __atomic_store(ref bump.cache, empty_cache)
+    assert sys.gc.core.bump_room(ref bump) == 0
+    let found: bool = sys.gc.core.bump_next_hole(ref bump, 32)
+    assert found
+    assert sys.gc.core.bump_room(ref bump) == block_bytes - 896
+    let cursor: Ref[byte]? = bump.cursor
+    if cursor != nil {
+        let expected: byte = 42
+        ref_write(cursor.get(), 42)
+        let cell: Ref[byte] = __gc_byte_offset(base, 896)
+        assert __gc_byte_diff(cell, base) == 896
+        assert __gc_byte_diff(base, cell) == -896
+        assert ref_read(cell) == expected
+        let header: Ref[sys.gc.core.Object_Header] = unsafe_cast[Ref[sys.gc.core.Object_Header]] cell
+        header.meta = sys.gc.core.meta_make(32, 0)
+        assert sys.gc.core.meta_payload_bytes(header.meta) == 32
+        assert sys.gc.core.object_bytes(header) == 48
+        assert sys.gc.core.block_of(header) == metadata
+        let payload: Ref[byte] = sys.gc.core.payload_of(header)
+        assert !sys.gc.mark.is_marked(heap, payload)
+        let granule: uint = 896 / sys.gc.core.granule_bytes
+        let word: Ref[Atomic[u64]] = sys.gc.core.mark_word_at(
+            base, granule / sys.gc.core.word_bits)
+        let mask: u64 = cast[u64](1) << (granule % sys.gc.core.word_bits)
+        __atomic_fetch_or(word, mask)
+        assert sys.gc.mark.is_marked(heap, payload)
+        heap.mark_epoch = epoch + 1
+        assert !sys.gc.mark.is_marked(heap, payload)
         heap.mark_epoch = epoch
-        heap.all_blocks = nil
-        heap.nblocks = 0
-        heap.los_bytes = 0
-        heap.los_cache_bytes = 0
-        heap.cfg.max_heap_bytes = 0
-        assert sys.gc.los.cache_take(heap, 10 * 1024) == nil
-        sys.gc.los.cache_drain(heap)
-        let metadata: Ref[sys.gc.core.Block_Metadata] = sys.gc.core.block_metadata_at(base)
-        sys.gc.core.block_init(heap, metadata)
-        assert heap.nblocks == 1
-        assert sys.gc.core.committed_bytes(heap) == block_bytes
-        assert !sys.gc.core.over_max(heap, 1)
-        heap.cfg.max_heap_bytes = block_bytes
-        assert sys.gc.core.over_max(heap, 1)
-        assert sys.gc.core.over_max(heap, ~cast[uint](0))
-        let linked: Ref[sys.gc.core.Block_Metadata]? = heap.all_blocks
-        if linked != nil {
-            assert linked.get() == metadata
-        } else {
-            require false
-        }
-        assert metadata.magic == 0x6d616e69
-        assert cast[u8] metadata.state == cast[u8] sys.gc.core.Block_State.retired
-        assert metadata.free_lines == 249
-        assert metadata.sweep_epoch == epoch
-        assert sys.gc.core.read_epoch(metadata) == epoch
-        let marked: u32 = __atomic_load(ref metadata.mark_epoch)
-        let black: u32 = __atomic_load(ref metadata.black_epoch)
-        assert marked == epoch
-        assert black == 0
-        sys.gc.core.raise_black(metadata, 2)
-        assert __atomic_load(ref metadata.black_epoch) == 2
-        sys.gc.core.raise_black(metadata, 1)
-        assert __atomic_load(ref metadata.black_epoch) == 2
-        assert !__atomic_load(ref metadata.in_final)
-        __atomic_store(ref metadata.in_final, true)
-        assert __atomic_load(ref metadata.in_final)
-        __atomic_store(ref metadata.in_final, false)
-        __gc_signal_fence()
-        var bump: sys.gc.core.Bump
-        var mutator: sys.gc.core.Mutator
-        mutator.heap = heap
-        mutator.black = false
-        let attached: Ref[sys.gc.core.Block_Metadata]? = metadata
-        sys.gc.core.bump_attach(ref mutator, ref bump, attached)
-        let empty_cache: Ref[sys.gc.core.Block_Metadata]? = nil
-        __atomic_store(ref bump.cache, empty_cache)
-        assert sys.gc.core.bump_room(ref bump) == 0
-        let found: bool = sys.gc.core.bump_next_hole(ref bump, 32)
-        assert found
-        assert sys.gc.core.bump_room(ref bump) == block_bytes - 896
-        let cursor: Ref[byte]? = bump.cursor
-        if cursor != nil {
-            let expected: byte = 42
-            ref_write(cursor.get(), 42)
-            let cell: Ref[byte] = __gc_byte_offset(base, 896)
-            assert __gc_byte_diff(cell, base) == 896
-            assert __gc_byte_diff(base, cell) == -896
-            assert ref_read(cell) == expected
-            let header: Ref[sys.gc.core.Object_Header] = unsafe_cast[Ref[sys.gc.core.Object_Header]] cell
-            header.meta = sys.gc.core.meta_make(32, 0)
-            assert sys.gc.core.meta_payload_bytes(header.meta) == 32
-            assert sys.gc.core.object_bytes(header) == 48
-            assert sys.gc.core.block_of(header) == metadata
-            let payload: Ref[byte] = sys.gc.core.payload_of(header)
-            assert !sys.gc.mark.is_marked(heap, payload)
-            let granule: uint = 896 / sys.gc.core.granule_bytes
-            let word: Ref[Atomic[u64]] = sys.gc.core.mark_word_at(
-                base, granule / sys.gc.core.word_bits)
-            let mask: u64 = cast[u64](1) << (granule % sys.gc.core.word_bits)
-            __atomic_fetch_or(word, mask)
-            assert sys.gc.mark.is_marked(heap, payload)
-            heap.mark_epoch = epoch + 1
-            assert !sys.gc.mark.is_marked(heap, payload)
-            heap.mark_epoch = epoch
-        } else {
-            assert false
-        }
-        let protected_end: Ref[byte] = __gc_byte_offset(base, 1024)
-        bump.limit = protected_end
-        sys.gc.handshake.reserve_own_hole(ref bump, epoch)
-        assert __atomic_load(ref metadata.line_marks[7]) == cast[u8](epoch)
-        assert __gc_byte_diff(ref metadata.line_marks[8],
-            ref metadata.line_marks[7]) == 1
-        assert __atomic_load(ref metadata.line_marks[8]) != cast[u8](epoch)
-        bump.cursor = __gc_byte_offset(base, 1000)
-        bump.limit = __gc_byte_offset(base, 1200)
-        sys.gc.handshake.reserve_own_hole(ref bump, epoch)
-        assert __atomic_load(ref metadata.line_marks[8]) == cast[u8](epoch)
-        assert __atomic_load(ref metadata.line_marks[9]) == cast[u8](epoch)
-        assert __atomic_load(ref metadata.line_marks[10]) != cast[u8](epoch)
-        let exhausted: bool = sys.gc.core.bump_next_hole(ref bump, block_bytes)
-        assert !exhausted
-        let cached: Ref[sys.gc.core.Block_Metadata]? = metadata
-        __atomic_store(ref bump.cache, cached)
-        let popped: Ref[sys.gc.core.Block_Metadata]? = sys.gc.core.cache_pop(ref bump)
-        assert popped != nil
-        assert __atomic_load(ref bump.cache) == nil
-        unmap_heap(heap)
-        sys.memory.unmap(base, block_bytes)
-        __fd_write(2, "ok")
     } else {
         assert false
     }
+    let protected_end: Ref[byte] = __gc_byte_offset(base, 1024)
+    bump.limit = protected_end
+    sys.gc.handshake.reserve_own_hole(ref bump, epoch)
+    assert __atomic_load(ref metadata.line_marks[7]) == cast[u8](epoch)
+    assert __gc_byte_diff(ref metadata.line_marks[8],
+        ref metadata.line_marks[7]) == 1
+    assert __atomic_load(ref metadata.line_marks[8]) != cast[u8](epoch)
+    bump.cursor = __gc_byte_offset(base, 1000)
+    bump.limit = __gc_byte_offset(base, 1200)
+    sys.gc.handshake.reserve_own_hole(ref bump, epoch)
+    assert __atomic_load(ref metadata.line_marks[8]) == cast[u8](epoch)
+    assert __atomic_load(ref metadata.line_marks[9]) == cast[u8](epoch)
+    assert __atomic_load(ref metadata.line_marks[10]) != cast[u8](epoch)
+    let exhausted: bool = sys.gc.core.bump_next_hole(ref bump, block_bytes)
+    assert !exhausted
+    let cached: Ref[sys.gc.core.Block_Metadata]? = metadata
+    __atomic_store(ref bump.cache, cached)
+    let popped: Ref[sys.gc.core.Block_Metadata]? = sys.gc.core.cache_pop(ref bump)
+    assert popped != nil
+    assert __atomic_load(ref bump.cache) == nil
+    unmap_heap(heap)
+    sys.memory.unmap(base, block_bytes)
+    __fd_write(2, "ok")
+} else {
+    assert false
 }

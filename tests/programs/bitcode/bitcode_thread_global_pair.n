@@ -4,32 +4,30 @@ thread var active: bool = false
 thread var current: Ref[byte]? = nil
 thread var marker: byte = 0
 
-comptime {} else {
-    var found_active: bool = false
-    var found_current: bool = false
-    var index: u32 = 1
-    while index < sys.abi.storage_count() {
-        let row: Ref[sys.abi.Storage_Record]? = sys.abi.storage_at(index)
-        if row != nil {
-            if row.get().segment_kind == 3 {
-                let address: Ref[byte]? = sys.abi.storage_address(index)
-                if address != nil {
-                    let actual: uint = __abi_ref_address(address.get())
-                    if actual == __abi_ref_address(ref active) { found_active = true }
-                    if actual == __abi_ref_address(ref current) { found_current = true }
-                } else { require false }
-            }
+var found_active: bool = false
+var found_current: bool = false
+var index: u32 = 1
+while index < sys.abi.storage_count() {
+    let row: Ref[sys.abi.Storage_Record]? = sys.abi.storage_at(index)
+    if row != nil {
+        if row.get().segment_kind == 3 {
+            let address: Ref[byte]? = sys.abi.storage_address(index)
+            if address != nil {
+                let actual: uint = __abi_ref_address(address.get())
+                if actual == __abi_ref_address(ref active) { found_active = true }
+                if actual == __abi_ref_address(ref current) { found_current = true }
+            } else { require false }
         }
-        index += 1
     }
-    require found_active and found_current
-    assert current == nil
-    active = true
-    assert active
-    assert current == nil
-    current = ref marker
-    if current != nil {
-        require __abi_ref_address(current.get()) == __abi_ref_address(ref marker)
-    } else { require false }
-    __fd_write(2, "ok")
+    index += 1
 }
+require found_active and found_current
+assert current == nil
+active = true
+assert active
+assert current == nil
+current = ref marker
+if current != nil {
+    require __abi_ref_address(current.get()) == __abi_ref_address(ref marker)
+} else { require false }
+__fd_write(2, "ok")

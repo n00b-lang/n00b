@@ -10,12 +10,6 @@
 #define N00BB_NATIVE_LINKER "clang"
 #endif
 
-bool n00bb_finalize_comptime_layout(n00bb_link_analysis_t *analysis);
-bool n00bb_execute_comptime(core_link_unit_t *link,
-                            n00bb_link_analysis_t *analysis,
-                            bool debug_enabled, bool native_cpu,
-                            const char *compiler_path,
-                            core_diagnostics_t *diagnostics);
 typedef struct {
     const core_buffer_t *bitcode;
     size_t bitcode_count;
@@ -29,6 +23,7 @@ typedef struct {
     size_t search_path_count;
 } n00bb_native_inputs_t;
 
+bool n00bb_build_time_run_needed(const n00bb_link_analysis_t *analysis);
 bool n00bb_build_executable(core_link_unit_t *link,
                             n00bb_link_analysis_t *analysis,
                             parse_cmdr_result_t *args,

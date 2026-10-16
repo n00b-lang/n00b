@@ -2,14 +2,12 @@ import sys.gc.core
 import sys.gc.collect
 import sys.gc.heap
 
-comptime {} else {
-    let created: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(nil)
-    if created != nil {
-        let heap: Ref[sys.gc.core.Heap] = created.get()
-        __atomic_store(ref heap.shutdown, true)
-        sys.gc.collect.worker(heap)
-        require __atomic_load(ref heap.nworkers) == 0
-        sys.gc.heap.destroy(heap)
-        __fd_write(2, "ok")
-    } else { require false }
-}
+let created: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(nil)
+if created != nil {
+    let heap: Ref[sys.gc.core.Heap] = created.get()
+    __atomic_store(ref heap.shutdown, true)
+    sys.gc.collect.worker(heap)
+    require __atomic_load(ref heap.nworkers) == 0
+    sys.gc.heap.destroy(heap)
+    __fd_write(2, "ok")
+} else { require false }

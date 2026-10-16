@@ -9,9 +9,7 @@ func is_string(value: (int | string)) -> bool {
     }
 }
 
-comptime {} else {
-    require echo("hello") == "hello"
-    require echo(7) == 7
-    require is_string("hello")
-    require !is_string(7)
-}
+require echo("hello") == "hello"
+require echo(7) == 7
+require is_string("hello")
+require !is_string(7)

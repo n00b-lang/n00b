@@ -249,6 +249,18 @@ build_import_environment(parse_grammar_t *grammar,
                     CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0003"),
                     core_string_borrow(message.data, message.byte_len),
                     link_source_location(failure_site));
+            else if (has_detail && detail.span.start_line)
+                core_diagnostics_report_at(
+                    core_translation_unit_diagnostics(unit), unit,
+                    CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0003"),
+                    core_string_borrow(message.data, message.byte_len),
+                    (core_diag_location_t){
+                        .line = detail.span.start_line,
+                        .column = detail.span.start_col,
+                        .end_line = detail.span.end_line,
+                        .end_column = detail.span.end_col,
+                        .has_location = true,
+                    });
             else
                 core_diagnostics_report(
                     core_translation_unit_diagnostics(unit), unit,

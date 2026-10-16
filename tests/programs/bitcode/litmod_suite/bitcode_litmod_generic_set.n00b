@@ -10,8 +10,6 @@ func dynamic_values(x: int) -> Array[int] {
     return {x, 2}'wrap
 }
 
-comptime {
-}
 
 func run_test() {
     static_values()

@@ -10,7 +10,7 @@ public func value() -> int {
     return "dependency"'stamp
 }
 
-comptime {
+when comptime() {
     require value() == 42
     require ((1, 2), "three")'count_pair == 2
 } else {

@@ -190,8 +190,12 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
     th_type *suspend_args[] = {uint, thread_context_ref, u64};
     th_type *resume_args[] = {uint, thread_context_ref};
     th_type *capture_args[] = {thread_context_ref};
+    th_type *write_args[] = {i32, byte_reference, u32};
     return register_builtin_native_function(symtab, types, nil_type,
             "__os_page_size", "n00b_os_page_size", uint, nullptr, 0)
+        && register_builtin_native_function(symtab, types, nil_type,
+            "__write_bytes", "n00bb_runtime_write_bytes", i32,
+            write_args, 3)
         && register_builtin_native_function(symtab, types, nil_type,
             "__os_thread_yield", "n00b_os_thread_yield", nil_type,
             nullptr, 0)
@@ -255,12 +259,17 @@ register_builtin_abi_symbols(parse_symtab_t *symtab, th_ctx *types,
         "sys.internal.abi.Tag_Extractor_Record",
         "sys.internal.abi.Frame_Layout_Record",
         "sys.internal.abi.Storage_Record",
+        "sys.internal.abi.Symbol_Record",
+        "sys.internal.abi.Module_Record",
+        "sys.internal.abi.Baked_Node_Record",
+        "sys.internal.abi.Function_Record",
     };
     const char *names[] = {
         "__abi_type", "__abi_field", "__abi_trace", "__abi_trace_child",
         "__abi_trace_arm", "__abi_tag_extractor",
         "__abi_frame_layout",
-        "__abi_storage",
+        "__abi_storage", "__abi_symbol", "__abi_module",
+        "__abi_baked_node", "__abi_function",
     };
     const char *native_names[] = {
         "n00b_builtin_abi_type", "n00b_builtin_abi_field",
@@ -268,7 +277,9 @@ register_builtin_abi_symbols(parse_symtab_t *symtab, th_ctx *types,
         "n00b_builtin_abi_trace_child",
         "n00b_builtin_abi_trace_arm", "n00b_builtin_abi_tag_extractor",
         "n00b_builtin_abi_frame_layout",
-        "n00b_builtin_abi_storage",
+        "n00b_builtin_abi_storage", "n00b_builtin_abi_symbol",
+        "n00b_builtin_abi_module", "n00b_builtin_abi_baked_node",
+        "n00b_builtin_abi_function",
     };
     for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
         th_type *record = th_name(types, record_names[i]);
@@ -316,6 +327,13 @@ register_builtin_abi_symbols(parse_symtab_t *symtab, th_ctx *types,
         && register_builtin_native_function(symtab, types, nil_type,
             "__abi_storage_address", "n00b_builtin_abi_storage_address",
             bytes_result, storage_args, 1)
+        && register_builtin_native_function(symtab, types, nil_type,
+            "__abi_baked_node_count", "n00b_builtin_abi_baked_node_count",
+            u32, nullptr, 0)
+        && register_builtin_native_function(symtab, types, nil_type,
+            "__abi_baked_node_address",
+            "n00b_builtin_abi_baked_node_address", bytes_result,
+            storage_args, 1)
         && register_builtin_native_function(symtab, types, nil_type,
             "__abi_string_backing_at", "n00b_builtin_abi_string_backing_at",
             bytes_result, &byte_reference, 1)

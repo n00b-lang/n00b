@@ -684,10 +684,10 @@ parse_sym_entry_t *
 linkable_trait_requirement(n00bb_link_analysis_t *analysis,
                            core_translation_unit_t *unit,
                            n00bb_link_use_site_t *site,
-                           parse_sym_entry_t *symbol, bool comptime_phase)
+                           parse_sym_entry_t *symbol)
 {
     if (!analysis || !unit || !symbol) return nullptr;
-    if (!n00bb_open_dispatch(analysis, comptime_phase) || (symbol->scope
+    if (!n00bb_open_dispatch(analysis) || (symbol->scope
         && core_string_eq(symbol->scope->scope_tag,
                           CORE_STRING_STATIC("trait")))) return symbol;
     if (!site || !site->resolved_trait_name) return nullptr;
@@ -901,6 +901,11 @@ diagnose_unused_link_symbols(parse_grammar_t *grammar,
                     || symbol->use_count) continue;
                 if (core_string_eq(symbol->name,
                                    CORE_STRING_STATIC("__finalize"))) continue;
+                if (state->link && unit == core_link_unit_root(state->link, 0)
+                    && (core_string_eq(symbol->name,
+                            CORE_STRING_STATIC("start"))
+                        || core_string_eq(symbol->name,
+                            CORE_STRING_STATIC("comptime_start")))) continue;
                 if (core_string_eq(unit->module.identifier,
                         CORE_STRING_STATIC("builtin.io.raw"))
                     && core_string_eq(symbol->name,
@@ -1191,13 +1196,13 @@ constructor_arguments_match(parse_grammar_t *grammar,
         parse_tree_t *argument = child_nt(grammar, keyword_nodes.data[i],
                                            "expression");
         size_t index = 0;
-        parse_sym_entry_t *formal = formal_symbol_named(grammar, formal_node,
-                                                        name, &index);
+        bool named = function_parameter_named(grammar, symbol, formal_node,
+                                              name, &index);
         th_type *argument_type = argument && !core_tree_is_leaf(argument)
             ? core_tree_node_value(argument).type : nullptr;
         const th_param *parameter = index < parameter_count
             ? th_func_param(signature, index) : nullptr;
-        if (!formal || index == 0 || !parameter || !argument_type
+        if (!named || index == 0 || !parameter || !argument_type
             || provided[index]
             || !constructor_argument_fits(state, argument, parameter->type,
                                           argument_type)) {
@@ -1209,9 +1214,11 @@ constructor_arguments_match(parse_grammar_t *grammar,
     core_list_free(keyword_nodes);
 
     for (size_t i = 1; valid && i < parameter_count; i++) {
+        uint8_t flags = 0;
         if (provided[i]) continue;
-        parse_sym_entry_t *formal = i < formals.len ? formals.data[i] : nullptr;
-        if (!formal || !formal->is_optional) valid = false;
+        if (!function_parameter_info(grammar, symbol, formal_node, i, nullptr,
+                nullptr, nullptr, &flags, nullptr) || !(flags & 1))
+            valid = false;
     }
     if (valid && rest && !th_func_rest(signature)) valid = false;
     core_free(provided);
@@ -1252,7 +1259,9 @@ resolve_constructor_use_site(parse_grammar_t *grammar, core_link_unit_t *link,
                 if (symbol->kind != PARSE_SYM_FUNCTION
                     || !core_string_eq(symbol->name,
                                        CORE_STRING_STATIC("__init"))
-                    || !symbol->type || !symbol->decl_node
+                    || !symbol->type
+                    || (!symbol->decl_node
+                        && !candidate_state->interface_module)
                     || !symbol_is_public_declaration(symbol)) continue;
                 th_type *pattern_signature = constructor_signature_instance(
                     state->types, symbol);
@@ -1793,6 +1802,7 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
                             N00BB_LINK_STAGE_IR_BINDINGS)) return false;
                     continue;
                 }
+                else if (site->optional_dispatch) continue;
                 else {
                     core_buffer_t message = {0};
                     core_buffer_printf(&message,

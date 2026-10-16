@@ -3,29 +3,6 @@
 #include <assert.h>
 #include <string.h>
 
-int32_t n00bb_comptime_emit_reloc_array(
-    int32_t fd, const void *data,
-    const n00b_abi_array_descriptor_header_v1 *descriptor,
-    uint32_t stride, const uint32_t *string_offsets, uint32_t offset_count,
-    const uint8_t *byte_mask);
-
-int32_t n00bb_comptime_emit_reloc_value(
-    int32_t fd, const void *data, uint32_t stride,
-    const uint32_t *string_offsets, uint32_t offset_count,
-    const uint8_t *byte_mask);
-
-int32_t n00bb_comptime_emit_nested_array(
-    int32_t fd, const n00b_abi_array_value_v1 *data,
-    const n00b_abi_array_descriptor_header_v1 *descriptor,
-    uint32_t inner_stride, const uint8_t *byte_mask);
-
-int32_t n00bb_comptime_emit_record_array(
-    int32_t fd, const void *record, uint32_t record_size,
-    uint32_t array_offset, const void *data,
-    const n00b_abi_array_descriptor_header_v1 *descriptor,
-    uint32_t stride, const uint32_t *string_offsets, uint32_t offset_count,
-    const uint8_t *byte_mask);
-
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -131,107 +108,6 @@ int main(void)
     assert(n00b_abi_v1_raw_fd_write(fds[1], span_value) == 5);
     assert(read(fds[0], actual, 5) == 5);
     assert(memcmp(actual, long_bytes + 2, 5) == 0);
-    struct {
-        n00b_abi_array_descriptor_header_v1 header;
-        uint64_t extent;
-    } descriptor = {
-        .header = {.total_count = 1, .rank = 1, .flat_rank = 1},
-        .extent = 1,
-    };
-    uint64_t item = 17;
-    struct {
-        n00b_abi_array_value_v1 items;
-        uint64_t count;
-    } record = {{&item, &descriptor.header}, 1};
-    assert(n00bb_comptime_emit_record_array(fds[1], &record,
-        sizeof(record), 0, &item, &descriptor.header, sizeof(item),
-        NULL, 0, NULL) == 0);
-    uint8_t serialized_record[sizeof(uint64_t) + sizeof(record)
-                              + sizeof(uint64_t) + sizeof(item)];
-    assert(read(fds[0], serialized_record, sizeof(serialized_record))
-        == sizeof(serialized_record));
-    uint64_t record_word = 0;
-    memcpy(&record_word, serialized_record, sizeof(record_word));
-    assert(record_word == 1);
-    for (size_t i = sizeof(uint64_t);
-         i < sizeof(uint64_t) + sizeof(n00b_abi_array_value_v1); i++)
-        assert(serialized_record[i] == 0);
-    memcpy(&record_word, serialized_record + sizeof(uint64_t)
-        + sizeof(n00b_abi_array_value_v1), sizeof(record_word));
-    assert(record_word == 1);
-    memcpy(&record_word, serialized_record + sizeof(uint64_t)
-        + sizeof(record), sizeof(record_word));
-    assert(record_word == 1);
-    memcpy(&record_word, serialized_record + sizeof(uint64_t)
-        + sizeof(record) + sizeof(uint64_t), sizeof(record_word));
-    assert(record_word == item);
-    uint8_t element[48];
-    uint8_t mask[sizeof(element)] = {0};
-    memset(element, 0xa5, sizeof(element));
-    n00b_abi_string_v1 left = short_string((const uint8_t *)"left", 4);
-    n00b_abi_string_v1 right = short_string((const uint8_t *)"right", 5);
-    memcpy(element, &left, sizeof(left));
-    memcpy(element + 32, &right, sizeof(right));
-    memset(mask, UINT8_MAX, sizeof(left));
-    memset(mask + 20, UINT8_MAX, 4);
-    mask[20] = 0x0f;
-    memset(mask + 32, UINT8_MAX, sizeof(right));
-    uint32_t offsets[] = {0, 32};
-    assert(n00bb_comptime_emit_reloc_array(fds[1], element,
-        &descriptor.header, sizeof(element), offsets, 2, mask) == 0);
-    uint8_t serialized[8 + sizeof(element) + 9 + 4 + 9 + 5];
-    assert(read(fds[0], serialized, sizeof(serialized))
-        == sizeof(serialized));
-    uint64_t count;
-    memcpy(&count, serialized, sizeof(count));
-    assert(count == 1);
-    for (size_t i = 0; i < sizeof(element); i++) {
-        uint8_t expected = i == 20 ? 0x05
-            : i > 20 && i < 24 ? 0xa5 : 0;
-        assert(serialized[8 + i] == expected);
-    }
-    size_t pos = 8 + sizeof(element);
-    uint64_t length;
-    memcpy(&length, serialized + pos, sizeof(length));
-    assert(length == 4);
-    pos += sizeof(length) + 1;
-    assert(memcmp(serialized + pos, "left", 4) == 0);
-    pos += 4;
-    memcpy(&length, serialized + pos, sizeof(length));
-    assert(length == 5);
-    pos += sizeof(length) + 1;
-    assert(memcmp(serialized + pos, "right", 5) == 0);
-    assert(n00bb_comptime_emit_reloc_value(fds[1], element,
-        sizeof(element), offsets, 2, mask) == 0);
-    uint8_t serialized_value[sizeof(serialized)];
-    assert(read(fds[0], serialized_value, sizeof(serialized_value))
-        == sizeof(serialized_value));
-    assert(memcmp(serialized_value, serialized,
-                  sizeof(serialized)) == 0);
-    struct {
-        n00b_abi_array_descriptor_header_v1 header;
-        uint64_t extent;
-    } shapes[] = {
-        {{.total_count = 2, .rank = 1, .flat_rank = 1}, 2},
-        {{.total_count = 1, .rank = 1, .flat_rank = 1}, 1},
-        {{.total_count = 2, .rank = 1, .flat_rank = 1}, 2},
-    };
-    uint64_t first[] = {11, UINT64_MAX, 12, UINT64_MAX};
-    uint64_t second[] = {13, UINT64_MAX};
-    uint8_t inner_mask[16] = {0};
-    memset(inner_mask, UINT8_MAX, 8);
-    n00b_abi_array_value_v1 children[] = {
-        {first, &shapes[0].header},
-        {second, &shapes[1].header},
-    };
-    assert(n00bb_comptime_emit_nested_array(fds[1], children,
-        &shapes[2].header, sizeof(inner_mask), inner_mask) == 0);
-    uint64_t expected_nested[] = {2, 2, 11, 0, 12, 0, 1, 13, 0};
-    uint64_t actual_nested[sizeof(expected_nested) / sizeof(uint64_t)];
-    assert(read(fds[0], actual_nested, sizeof(actual_nested))
-        == sizeof(actual_nested));
-    assert(memcmp(actual_nested, expected_nested,
-                  sizeof(expected_nested)) == 0);
     close(fds[0]);
     close(fds[1]);
 #endif

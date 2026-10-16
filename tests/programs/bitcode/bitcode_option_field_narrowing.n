@@ -72,17 +72,15 @@ func promoted(entry: Entry?, items: Array[int]?) -> int {
         cast[int]items.len() + items[1] + 1 + entry.value.get()
 }
 
-comptime {} else {
-    let inner: Inner = (value = 5)
-    var entry: Entry = (value = 4, inner = inner)
-    entries.append(entry)
-    require guarded(entry) == 4
-    require early(entry) == 9
-    require local_copy(entry) == 4
-    require modified(entry) == 4
-    require indexed(0) == 9
-    require argument(entry) == 8
-    let items: Array[int] = [10, 20]
-    require promoted(entry, items) == 8 + 5 + 2 + 20 + 1 + 4
-    __fd_write(2, "ok")
-}
+let inner: Inner = (value = 5)
+var entry: Entry = (value = 4, inner = inner)
+entries.append(entry)
+require guarded(entry) == 4
+require early(entry) == 9
+require local_copy(entry) == 4
+require modified(entry) == 4
+require indexed(0) == 9
+require argument(entry) == 8
+let items: Array[int] = [10, 20]
+require promoted(entry, items) == 8 + 5 + 2 + 20 + 1 + 4
+__fd_write(2, "ok")

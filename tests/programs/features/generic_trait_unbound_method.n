@@ -25,19 +25,17 @@ func put_in_unconstrained(modify values: `L, value: `T) {
     values.append(value)
 }
 
-comptime {} else {
-    var box: Box = (value = 0)
-    put_in(box, 9)
-    require box.value == 9
-    put_in_typecase(box, 11)
-    require box.value == 11
-    put_in_unconstrained(box, 13)
-    require box.value == 13
-    var other: OtherBox = (value = 0)
-    put_in(other, 9)
-    require other.value == 10
-    put_in_typecase(other, 11)
-    require other.value == 12
-    put_in_unconstrained(other, 13)
-    require other.value == 14
-}
+var box: Box = (value = 0)
+put_in(box, 9)
+require box.value == 9
+put_in_typecase(box, 11)
+require box.value == 11
+put_in_unconstrained(box, 13)
+require box.value == 13
+var other: OtherBox = (value = 0)
+put_in(other, 9)
+require other.value == 10
+put_in_typecase(other, 11)
+require other.value == 12
+put_in_unconstrained(other, 13)
+require other.value == 14

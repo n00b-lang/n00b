@@ -31,29 +31,27 @@ func bind(statement: kept.Stmt) fail: kept.Error {
     kept.bind_text(statement, text)!
 }
 
-comptime {} else {
-    try {
-        var statement = kept.stmt_open()
-        bind(statement)!
-        var i = 0
-        var junk: string = ""
-        while i < 2000 {
-            junk = junk + "x"
-            i = i + 1
-        }
-        require kept.stmt_byte(statement, 0) == 107
-        require kept.stmt_byte(statement, 5) == 116
-        kept.close(statement)!
-    } else failure {
-        require false
+try {
+    var statement = kept.stmt_open()
+    bind(statement)!
+    var i = 0
+    var junk: string = ""
+    while i < 2000 {
+        junk = junk + "x"
+        i = i + 1
     }
-    try {
-        var closed = kept.stmt_open()
-        kept.close(closed)!
-        bind(closed)!
-        require false
-    } else failure {
-        require failure.code == -1
-        require failure.fn == "bind_text"
-    }
+    require kept.stmt_byte(statement, 0) == 107
+    require kept.stmt_byte(statement, 5) == 116
+    kept.close(statement)!
+} else failure {
+    require false
+}
+try {
+    var closed = kept.stmt_open()
+    kept.close(closed)!
+    bind(closed)!
+    require false
+} else failure {
+    require failure.code == -1
+    require failure.fn == "bind_text"
 }

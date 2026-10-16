@@ -46,11 +46,13 @@ typedef struct {
     const char *const *definitions;
     size_t definition_count;
     bool release_mode;
+    bool build_time;
     n00bb_preprocessor_import_fn load_import;
     n00bb_preprocessor_implicit_import_fn load_implicit_import;
     void *import_context;
     n00bb_preprocessor_prepare_import_fn prepare_import;
     n00bb_preprocessor_selected_body_fn selected_body;
+    n00bb_preprocessor_selected_body_fn build_time_use;
     void *selected_body_context;
     n00bb_preprocessor_litmod_fn register_litmod;
     void *litmod_context;

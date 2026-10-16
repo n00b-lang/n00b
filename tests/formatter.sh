@@ -79,7 +79,7 @@ func comment_layout(flag: bool) -> int {
     return 0
 }
 
-comptime {
+when comptime() {
     /* empty body */
 } else {
     require comment_layout(true) == 1

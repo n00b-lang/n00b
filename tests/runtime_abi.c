@@ -174,13 +174,11 @@ main(int argc, char **argv)
     image.functions[3].scope_index = 1;
     image.code_ranges[1] = (n00b_abi_code_range_v1){
         .function_index = 1,
-        .phase_mask = N00B_ABI_PHASE_RUNTIME,
         .byte_length = 1,
         .start = (const void *)(uintptr_t)main,
     };
     image.code_ranges[2] = (n00b_abi_code_range_v1){
         .function_index = 2,
-        .phase_mask = N00B_ABI_PHASE_RUNTIME,
         .byte_length = 1,
         .start = (const void *)(uintptr_t)main,
     };
@@ -438,25 +436,11 @@ main(int argc, char **argv)
         && error.table_kind == N00B_ABI_TABLE_CODE_RANGE
         && !n00b_abi_v1_current_snapshot());
     image.code_ranges[1].byte_length = 1;
-    image.code_ranges[1].phase_mask = 0;
-    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
-        == N00B_ABI_BAD_METADATA
-        && error.table_kind == N00B_ABI_TABLE_CODE_RANGE
-        && !n00b_abi_v1_current_snapshot());
-    image.code_ranges[1].phase_mask = N00B_ABI_PHASE_RUNTIME;
     image.functions[1].symbol_index = 1;
     assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
         == N00B_ABI_BAD_METADATA
         && error.table_kind == N00B_ABI_TABLE_CODE_RANGE
         && !n00b_abi_v1_current_snapshot());
-    image.symbols[1].kind = N00B_ABI_SYMBOL_FUNCTION;
-    image.symbols[1].phase_mask = N00B_ABI_PHASE_COMPTIME;
-    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
-        == N00B_ABI_BAD_METADATA
-        && error.table_kind == N00B_ABI_TABLE_CODE_RANGE
-        && !n00b_abi_v1_current_snapshot());
-    image.symbols[1].kind = N00B_ABI_SYMBOL_VARIABLE;
-    image.symbols[1].phase_mask = 0;
     image.functions[1].symbol_index = 0;
     image.code_ranges[2].function_index = 1;
     assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
@@ -672,25 +656,13 @@ main(int argc, char **argv)
         && error.table_kind == N00B_ABI_TABLE_PACKAGE
         && !n00b_abi_v1_current_snapshot());
     image.packages[1].modules.count = 1;
-    image.modules[1].runtime_initializer = 1;
-    image.code_ranges[1].phase_mask = N00B_ABI_PHASE_COMPTIME;
-    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
-        == N00B_ABI_BAD_METADATA
-        && error.table_kind == N00B_ABI_TABLE_MODULE
-        && !n00b_abi_v1_current_snapshot());
-    image.code_ranges[1].phase_mask = N00B_ABI_PHASE_RUNTIME;
+    image.modules[1].initializer = 1;
     image.functions[1].failure_type_index = 1;
     assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
         == N00B_ABI_BAD_METADATA
         && error.table_kind == N00B_ABI_TABLE_MODULE
         && !n00b_abi_v1_current_snapshot());
     image.functions[1].failure_type_index = 0;
-    image.modules[1].comptime_initializer = 1;
-    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
-        == N00B_ABI_BAD_METADATA
-        && error.table_kind == N00B_ABI_TABLE_MODULE
-        && !n00b_abi_v1_current_snapshot());
-    image.modules[1].comptime_initializer = 0;
     image.functions[3].symbol_index = 1;
     assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
         == N00B_ABI_BAD_METADATA

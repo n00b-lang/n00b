@@ -9,10 +9,8 @@ func required(x: Ref[byte]?) -> uint {
     return __abi_ref_address(x.get())
 }
 
-comptime {} else {
-    require guard(nil) == 0
-    var value: byte = 1
-    let pointer: Ref[byte]? = ref value
-    require required(pointer) == __abi_ref_address(ref value)
-    __fd_write(2, "ok")
-}
+require guard(nil) == 0
+var value: byte = 1
+let pointer: Ref[byte]? = ref value
+require required(pointer) == __abi_ref_address(ref value)
+__fd_write(2, "ok")

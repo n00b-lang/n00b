@@ -6,6 +6,4 @@ func second(value: uint) -> uint {
     return first(value)
 }
 
-comptime {} else {
-    require first(1) == 1
-}
+require first(1) == 1

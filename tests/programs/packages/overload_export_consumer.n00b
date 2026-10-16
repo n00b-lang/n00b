@@ -3,26 +3,20 @@ import overloads
 require overloads.measure(4) == 5
 require overloads.measure(4, 3) == 12
 
-comptime {} else {
-    var second = overloads.second()
-    overloads.shut(second)
-    require second.raw == 2
-    var first = overloads.first()
-    overloads.shut(first)
-    require first.raw == 1
-    overloads.poke(second)
-    require second.raw == 3
-}
+var second = overloads.second()
+overloads.shut(second)
+require second.raw == 2
+var first = overloads.first()
+overloads.shut(first)
+require first.raw == 1
+overloads.poke(second)
+require second.raw == 3
 
-comptime {} else {
-    let opts: overloads.Opts = (a = 50, b = nil)
-    require opts.a != nil
-    require opts.b == nil
-}
+let opts: overloads.Opts = (a = 50, b = nil)
+require opts.a != nil
+require opts.b == nil
 
-comptime {} else {
-    let found = overloads.find_first(5)
-    if found != nil {
-        require found.get().raw == 5
-    }
+let found = overloads.find_first(5)
+if found != nil {
+    require found.get().raw == 5
 }

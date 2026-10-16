@@ -158,6 +158,7 @@ typedef enum {
     N00B_ABI_TABLE_SPECIALIZATION_LINK,
     N00B_ABI_TABLE_TYPE_ARGUMENT,
     N00B_ABI_TABLE_CALL_SHAPE,
+    N00B_ABI_TABLE_BAKED_NODE,
 } n00b_abi_table_kind_v1;
 
 typedef enum {
@@ -198,6 +199,7 @@ typedef enum {
     N00B_ABI_TYPE_FLAG_NON_CONCRETE = 1u << 3,
     N00B_ABI_TYPE_FLAG_BITS = 1u << 4,
     N00B_ABI_TYPE_FLAG_PLAIN_REF = 1u << 5,
+    N00B_ABI_TYPE_FLAG_TYPE_INDEX = 1u << 6,
 } n00b_abi_type_flag_v1;
 
 typedef enum {
@@ -280,11 +282,6 @@ typedef enum {
 } n00b_abi_binding_kind_v1;
 
 typedef enum {
-    N00B_ABI_PHASE_COMPTIME = 1u << 0,
-    N00B_ABI_PHASE_RUNTIME = 1u << 1,
-} n00b_abi_phase_v1;
-
-typedef enum {
     N00B_ABI_DURATION_UNSPECIFIED = 0,
     N00B_ABI_DURATION_COMPTIME = 1,
     N00B_ABI_DURATION_AUTOMATIC = 2,
@@ -314,6 +311,15 @@ typedef enum {
     N00B_ABI_STORAGE_WRITABLE = 2,
     N00B_ABI_STORAGE_TLS = 3,
 } n00b_abi_storage_kind_v1;
+
+typedef enum {
+    N00B_ABI_REQUIREMENT_FLAG_BAKED = 1u << 0,
+} n00b_abi_requirement_flag_v1;
+
+typedef enum {
+    N00B_ABI_BAKED_NODE_IMMUTABLE = 1u << 0,
+    N00B_ABI_BAKED_NODE_ARRAY_BACKING = 1u << 1,
+} n00b_abi_baked_node_flag_v1;
 
 typedef struct {
     uint8_t magic[8];
@@ -354,8 +360,7 @@ typedef struct {
     n00b_abi_string_v1 full_path;
     uint32_t package_index;
     uint32_t scc_index;
-    uint32_t comptime_initializer;
-    uint32_t runtime_initializer;
+    uint32_t initializer;
     n00b_abi_range_v1 imports;
     n00b_abi_range_v1 static_storage;
     n00b_abi_range_v1 tls_storage;
@@ -584,8 +589,6 @@ typedef struct {
 typedef struct {
     uint32_t function_index;
     uint32_t generation;
-    uint32_t phase_mask;
-    uint32_t reserved_zero;
     uint64_t byte_length;
     const void *start; /* Native relocation; never a serialized process VA. */
 } n00b_abi_code_range_v1;
@@ -611,11 +614,7 @@ typedef struct {
     uint32_t visibility;
     uint32_t flags;
     uint32_t binding_kind;
-    uint32_t phase_mask;
-    uint32_t mutable_phase_mask;
-    uint32_t initializer_phase_mask;
     uint32_t storage_duration;
-    uint32_t reserved_zero;
     n00b_abi_string_v1 storage_class_name;
     uint32_t declaration_location_index;
     uint32_t native_binding_index;
@@ -690,6 +689,17 @@ typedef struct {
 } n00b_abi_storage_v1;
 
 typedef struct {
+    uint32_t module_index;
+    uint32_t type_index;
+    uint32_t segment_kind;
+    uint32_t segment_index;
+    uint32_t flags;
+    uint32_t reserved_zero;
+    uint64_t byte_offset;
+    uint64_t byte_length;
+} n00b_abi_baked_node_v1;
+
+typedef struct {
     uint32_t template_storage_index;
     uint32_t referenced_storage_index;
     uint64_t write_byte_offset;
@@ -718,10 +728,10 @@ typedef struct {
     uint32_t symbol_kind;
     uint32_t contract_type_index;
     uint32_t required_layout_index;
-    uint32_t required_phase_mask;
     uint32_t requesting_module_index;
-    uint32_t reserved_zero;
     uint64_t required_capabilities;
+    uint32_t flags;
+    uint32_t reserved_zero;
 } n00b_abi_requirement_v1;
 
 typedef struct {
@@ -870,6 +880,8 @@ const n00b_abi_trace_v1 *n00b_abi_v1_trace(
     const n00b_abi_snapshot_v1 *snapshot, uint32_t trace_index);
 const n00b_abi_storage_v1 *n00b_abi_v1_storage(
     const n00b_abi_snapshot_v1 *snapshot, uint32_t storage_index);
+const n00b_abi_baked_node_v1 *n00b_abi_v1_baked_node(
+    const n00b_abi_snapshot_v1 *snapshot, uint32_t node_index);
 
 /* Returns only concrete type rows; non-concrete shape hashes are not unique. */
 int32_t n00b_abi_v1_find_typehash(const n00b_abi_snapshot_v1 *snapshot,
@@ -939,7 +951,7 @@ _Static_assert(sizeof(n00b_abi_header_v1) == 88, "header width");
 _Static_assert(sizeof(n00b_abi_directory_v1) == 32, "directory width");
 _Static_assert(sizeof(n00b_abi_package_v1) == 40, "package width");
 _Static_assert(sizeof(n00b_abi_module_v1) == 64, "module width");
-_Static_assert(offsetof(n00b_abi_module_v1, source_file_index) == 60,
+_Static_assert(offsetof(n00b_abi_module_v1, source_file_index) == 56,
                "module source-file offset");
 _Static_assert(sizeof(n00b_abi_scc_v1) == 32, "SCC width");
 _Static_assert(sizeof(n00b_abi_type_v1) == 144, "type width");
@@ -980,9 +992,9 @@ _Static_assert(sizeof(n00b_abi_trace_child_v1) == 32, "trace child width");
 _Static_assert(sizeof(n00b_abi_trace_arm_v1) == 16, "trace arm width");
 _Static_assert(sizeof(n00b_abi_function_v1) == 96, "function width");
 _Static_assert(sizeof(n00b_abi_parameter_v1) == 40, "parameter width");
-_Static_assert(sizeof(n00b_abi_code_range_v1) == 32, "code range width");
+_Static_assert(sizeof(n00b_abi_code_range_v1) == 24, "code range width");
 _Static_assert(sizeof(n00b_abi_scope_v1) == 56, "scope width");
-_Static_assert(sizeof(n00b_abi_symbol_v1) == 104, "symbol width");
+_Static_assert(sizeof(n00b_abi_symbol_v1) == 88, "symbol width");
 _Static_assert(sizeof(n00b_abi_native_binding_v1) == 40, "binding width");
 _Static_assert(sizeof(n00b_abi_trait_method_v1) == 16, "method width");
 _Static_assert(sizeof(n00b_abi_dispatch_v1) == 24, "dispatch width");
@@ -1007,11 +1019,9 @@ _Static_assert(offsetof(n00b_abi_header_v1, artifact_capabilities) == 32,
                "artifact capability offset");
 _Static_assert(offsetof(n00b_abi_header_v1, payload_checksum) == 80,
                "header checksum offset");
-_Static_assert(offsetof(n00b_abi_requirement_v1, required_capabilities) == 40,
+_Static_assert(offsetof(n00b_abi_requirement_v1, required_capabilities) == 32,
                "requirement capability offset");
-_Static_assert(offsetof(n00b_abi_requirement_v1, required_phase_mask) == 28,
-               "requirement phase offset");
-_Static_assert(offsetof(n00b_abi_requirement_v1, requesting_module_index) == 32,
+_Static_assert(offsetof(n00b_abi_requirement_v1, requesting_module_index) == 28,
                "requirement requester offset");
 _Static_assert(offsetof(n00b_abi_index_patch_v1, target_byte_offset) == 8,
                "patch target offset");
@@ -1021,11 +1031,7 @@ _Static_assert(offsetof(n00b_abi_function_v1, symbol_index) == 24,
                "function symbol offset");
 _Static_assert(offsetof(n00b_abi_function_v1, valid_keyword_bits) == 88,
                "function keyword offset");
-_Static_assert(offsetof(n00b_abi_code_range_v1, phase_mask) == 8,
-               "code phase offset");
-_Static_assert(offsetof(n00b_abi_symbol_v1, phase_mask) == 44,
-               "symbol phase offset");
-_Static_assert(offsetof(n00b_abi_symbol_v1, storage_class_name) == 64,
+_Static_assert(offsetof(n00b_abi_symbol_v1, storage_class_name) == 48,
                "symbol storage class offset");
 _Static_assert(offsetof(n00b_abi_constraint_v1, kind) == 48,
                "constraint kind offset");
@@ -1033,7 +1039,7 @@ _Static_assert(offsetof(n00b_abi_constraint_v1, parameter_index) == 80,
                "constraint parameter offset");
 _Static_assert(offsetof(n00b_abi_scope_v1, children) == 40,
                "scope children offset");
-_Static_assert(offsetof(n00b_abi_module_v1, runtime_config_index) == 56,
+_Static_assert(offsetof(n00b_abi_module_v1, runtime_config_index) == 52,
                "module runtime config offset");
 _Static_assert(offsetof(n00b_abi_frame_layout_v1, frame_byte_extent) == 16,
                "frame extent offset");

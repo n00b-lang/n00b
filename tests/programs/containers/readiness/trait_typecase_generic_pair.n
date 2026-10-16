@@ -30,8 +30,6 @@ func pair_cmp(left: Comparable_Item, right: Comparable_Item) -> int {
     return left.value - right.value
 }
 
-comptime {} else {
-    let a: Comparable_Item = (value = 3)
-    let b: Comparable_Item = (value = 2)
-    require compare_self(a) == 0
-}
+let a: Comparable_Item = (value = 3)
+let b: Comparable_Item = (value = 2)
+require compare_self(a) == 0

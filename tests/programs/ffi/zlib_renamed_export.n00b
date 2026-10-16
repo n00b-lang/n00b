@@ -1,5 +1,3 @@
 import zlib_renamed
 
-comptime {} else {
-    require zlib_renamed.deflate.Z_OK == 0
-}
+require zlib_renamed.deflate.Z_OK == 0

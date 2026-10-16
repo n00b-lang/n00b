@@ -366,101 +366,6 @@ n00bb_unmanaged_os_mapping(const ir_value_t *value, void *context)
 }
 
 static bool
-n00bb_emit_runtime_literal_graph(n00bb_link_analysis_t *analysis,
-    uint8_t **object, size_t *object_bytes, bool *has_graph)
-{
-    *object = nullptr;
-    *object_bytes = 0;
-    *has_graph = false;
-    size_t node_count = analysis->static_graph_nodes.len;
-    if (!node_count) return true;
-    bool *selected = calloc(node_count, sizeof(*selected));
-    size_t *queue = calloc(node_count, sizeof(*queue));
-    size_t *indexes = calloc(node_count, sizeof(*indexes));
-    size_t *heads = calloc(node_count, sizeof(*heads));
-    size_t edge_count = analysis->static_graph_edges.len;
-    size_t *next = calloc(edge_count ? edge_count : 1, sizeof(*next));
-    bool valid = selected && queue && indexes && heads && next;
-    size_t queued = 0;
-    if (valid) {
-        for (size_t i = 0; i < node_count; i++) heads[i] = SIZE_MAX;
-        for (size_t i = 0; i < edge_count; i++) {
-            const n00bb_static_graph_edge_t *edge =
-                &analysis->static_graph_edges.data[i];
-            if (edge->source >= node_count || edge->target >= node_count) {
-                valid = false;
-                break;
-            }
-            next[i] = heads[edge->source];
-            heads[edge->source] = i;
-        }
-    }
-    for (size_t i = 0; valid && i < analysis->phase_results.len; i++) {
-        const n00bb_phase_result_binding_t *binding =
-            &analysis->phase_results.data[i];
-        if (binding->materialized_kind != N00BB_LLVM_LITERAL_GRAPH
-            || !binding->instruction || !binding->consumer) continue;
-        bool reachable = false;
-        for (size_t f = 0; f < analysis->runtime_reachable_functions.len; f++)
-            if (analysis->runtime_reachable_functions.data[f]
-                == binding->consumer) {
-                reachable = true;
-                break;
-            }
-        if (!reachable) continue;
-        size_t root = binding->graph_root_index;
-        if (root >= node_count) { valid = false; break; }
-        if (!selected[root]) {
-            selected[root] = true;
-            queue[queued++] = root;
-        }
-    }
-    for (size_t read = 0; valid && read < queued; read++) {
-        size_t source = queue[read];
-        for (size_t i = heads[source]; i != SIZE_MAX; i = next[i]) {
-            size_t target = analysis->static_graph_edges.data[i].target;
-            if (!selected[target]) {
-                selected[target] = true;
-                queue[queued++] = target;
-            }
-        }
-    }
-    if (valid && queued) {
-        n00bb_static_graph_node_t *nodes = calloc(queued, sizeof(*nodes));
-        n00bb_static_graph_edge_t *edges = calloc(edge_count ? edge_count : 1,
-            sizeof(*edges));
-        valid = nodes && edges;
-        size_t copied = 0, copied_edges = 0;
-        for (size_t i = 0; valid && i < node_count; i++)
-            if (selected[i]) {
-                indexes[i] = copied;
-                nodes[copied++] = analysis->static_graph_nodes.data[i].node;
-            }
-        for (size_t i = 0; valid && i < edge_count; i++) {
-            n00bb_static_graph_edge_t edge =
-                analysis->static_graph_edges.data[i];
-            if (!selected[edge.source]) continue;
-            if (!selected[edge.target]) { valid = false; break; }
-            edge.source = indexes[edge.source];
-            edge.target = indexes[edge.target];
-            edges[copied_edges++] = edge;
-        }
-        if (valid) valid = copied == queued
-            && n00bb_static_graph_emit(&analysis->target, nodes, copied,
-                edges, copied_edges, object, object_bytes);
-        free(nodes);
-        free(edges);
-        if (valid) *has_graph = true;
-    }
-    free(selected);
-    free(queue);
-    free(indexes);
-    free(heads);
-    free(next);
-    return valid;
-}
-
-static bool
 n00bb_validate_executable_completeness(core_link_unit_t *link,
                                         n00bb_link_analysis_t *analysis,
                                         core_diagnostics_t *diagnostics)
@@ -470,7 +375,7 @@ n00bb_validate_executable_completeness(core_link_unit_t *link,
         "n00bb.semantic-ready",
         "n00bb.bootstrap-pipeline-ran",
         "n00bb.initializer-dependencies",
-        "n00bb.runtime-module-initializer-order",
+        N00BB_INITIALIZER_ORDER_DOMAIN,
     };
     for (size_t i = 0; i < sizeof(required) / sizeof(required[0]); i++) {
         if (core_link_unit_require_contribution(link, (core_string_t){0},
@@ -486,8 +391,8 @@ n00bb_validate_executable_completeness(core_link_unit_t *link,
         return false;
     }
 
-    for (size_t i = 0; i < analysis->runtime_reachable_functions.len; i++) {
-        ir_func_t *function = analysis->runtime_reachable_functions.data[i];
+    for (size_t i = 0; i < analysis->reachable_functions.len; i++) {
+        ir_func_t *function = analysis->reachable_functions.data[i];
         if (function && function->linkage == IR_LINK_EXTERN
             && !function->n_blocks) continue;
         bool valid = function && function->owner && function->type;
@@ -543,6 +448,13 @@ n00bb_flag_argument(const char *prefix, core_string_t value)
 }
 
 bool
+n00bb_build_time_run_needed(const n00bb_link_analysis_t *analysis)
+{
+    return analysis && (analysis->build_time_capture
+        || n00bb_root_entry(analysis, N00BB_COMPTIME_START_NAME));
+}
+
+bool
 n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
                        parse_cmdr_result_t *args, bool debug_enabled,
                        bool native_cpu,
@@ -550,14 +462,24 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
                        const n00bb_native_inputs_t *native,
                        core_diagnostics_t *diagnostics)
 {
+    ir_func_t *start = analysis
+        ? n00bb_root_entry(analysis, N00BB_START_NAME) : nullptr;
+    th_type *start_type = start ? th_resolve(start->type) : nullptr;
+    if (start_type && (th_func_nparams(start_type)
+                       || !th_is_nil(th_func_ret(start_type)))) {
+        core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
+            CORE_STRING_STATIC("N00BB-B0030"),
+            CORE_STRING_STATIC(
+                "the root module's start must be 'func start() -> nil'"));
+        return false;
+    }
     const n00bb_native_inputs_t no_native = {0};
     if (!native) native = &no_native;
     core_list_t(core_translation_unit_ptr_t) order =
         core_list_new(core_translation_unit_ptr_t);
     bool ok = link && analysis
         && core_link_unit_root_count(link) == 1
-        && n00bb_collect_initializer_order(link,
-            "n00bb.runtime-module-initializer-order", &order);
+        && n00bb_collect_initializer_order(link, &order);
     if (!ok) {
         core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
             CORE_STRING_STATIC("N00BB-B0010"),
@@ -572,63 +494,11 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     }
     size_t count = order.len;
     bool lto = parse_cmdr_flag_present(args, CORE_STRING_STATIC("--lto"));
-    char **names = calloc(count, sizeof(*names));
+    char **names = calloc(2 * count + 2, sizeof(*names));
     char **objects = calloc(count + 4, sizeof(*objects));
     core_buffer_t *lto_modules = lto
         ? calloc(count + 1, sizeof(*lto_modules)) : nullptr;
-    size_t phase_capacity = analysis->phase_results.len;
-    size_t phase_count = 0;
-    n00bb_llvm_phase_array_t *phase_arrays = phase_capacity
-        ? calloc(phase_capacity, sizeof(*phase_arrays)) : nullptr;
-    size_t graph_node_count = analysis->static_graph_nodes.len;
-    n00bb_llvm_graph_node_t *graph_nodes = graph_node_count
-        ? calloc(graph_node_count, sizeof(*graph_nodes)) : nullptr;
-    ok = names && objects && (!lto || lto_modules)
-        && (!phase_capacity || phase_arrays)
-        && (!graph_node_count || graph_nodes);
-    for (size_t i = 0; ok && i < graph_node_count; i++) {
-        const n00bb_captured_graph_node_t *node =
-            &analysis->static_graph_nodes.data[i];
-        ok = node->node.alias_count && node->node.aliases
-            && node->node.aliases[0];
-        if (ok) graph_nodes[i] = (n00bb_llvm_graph_node_t){
-            .symbol = node->node.aliases[0],
-            .typehash = node->typehash,
-            .size = node->node.size,
-            .alignment = node->node.alignment,
-            .allocation = node->address != 0,
-            .immutable = node->immutable,
-        };
-    }
-    for (size_t i = 0; ok && i < phase_capacity; i++) {
-        const n00bb_phase_result_binding_t *binding =
-            &analysis->phase_results.data[i];
-        if (!binding->instruction) continue;
-        phase_arrays[phase_count] = (n00bb_llvm_phase_array_t){
-            .identifier = binding->identifier,
-            .bytes = binding->materialized_bytes,
-            .byte_len = binding->materialized_byte_len,
-            .count = binding->materialized_count,
-            .kind = binding->materialized_kind,
-            .string_encoding = binding->materialized_encoding,
-            .element_stride = binding->materialized_stride,
-            .inner_stride = binding->materialized_inner_stride,
-            .string_offsets = binding->materialized_string_offsets,
-            .string_offset_count = binding->materialized_string_offset_count,
-            .graph_nodes = graph_nodes,
-            .graph_node_count = graph_node_count,
-            .graph_edges = analysis->static_graph_edges.data,
-            .graph_edge_count = analysis->static_graph_edges.len,
-            .graph_root_index = binding->graph_root_index,
-        };
-        ok = phase_arrays[phase_count].identifier
-            && phase_arrays[phase_count].bytes
-            && (phase_arrays[phase_count].kind == N00BB_LLVM_LITERAL_STRING
-                || phase_arrays[phase_count].kind
-                    == N00BB_LLVM_LITERAL_RELOC
-                || phase_arrays[phase_count].element_stride);
-        phase_count++;
-    }
+    ok = names && objects && (!lto || lto_modules);
     uint8_t *linked_abi = nullptr;
     size_t linked_abi_bytes = 0;
     n00bb_llvm_type_index_t *type_indices = nullptr;
@@ -712,21 +582,49 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         linked_abi, linked_abi_bytes);
     ok = ok && objects[count];
     core_free(linked_abi);
+    size_t initializer_count = 0;
+    const char *initializers[] = {
+        N00BB_LITERAL_INIT_NAME, N00BB_MODULE_INIT_NAME,
+    };
     for (size_t i = 0; ok && i < count; i++) {
         n00bb_tu_state_t *state = tu_state(order.data[i]);
-        if (!state || !state->comptime_ir_module || !state->ir_module) {
+        if (!state || !state->ir_module) {
             core_diagnostics_report(diagnostics, order.data[i],
                 CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-B0012"),
-                CORE_STRING_STATIC("native build is missing a phase module"));
+                CORE_STRING_STATIC("native build is missing a module"));
             ok = false;
             break;
         }
+        for (size_t k = 0; ok && k < 2; k++) {
+            if (!ir_func_find(state->ir_module, initializers[k])) continue;
+            core_buffer_t name = {0};
+            core_buffer_printf(&name, "%s.%s",
+                ir_module_name(state->ir_module), initializers[k]);
+            names[initializer_count] = core_strndup(name.data,
+                                                    name.byte_len);
+            core_buffer_release(&name);
+            ok = names[initializer_count++] != nullptr;
+        }
+    }
+    bool build_time = n00bb_compile_phase() == PARSE_SYM_PHASE_COMPTIME;
+    ir_func_t *entry = ok ? n00bb_root_entry(analysis, build_time
+        ? N00BB_COMPTIME_START_NAME : N00BB_START_NAME) : nullptr;
+    if (entry) {
         core_buffer_t name = {0};
-        core_buffer_printf(&name, "%s.__n00bb_runtime_init",
-            ir_module_name(state->ir_module));
-        names[i] = core_strndup(name.data, name.byte_len);
+        core_buffer_printf(&name, "%s.%s", ir_module_name(entry->owner),
+                           entry->name);
+        names[initializer_count] = core_strndup(name.data, name.byte_len);
         core_buffer_release(&name);
-        ok = names[i] != nullptr;
+        ok = names[initializer_count++] != nullptr;
+    }
+    for (size_t i = 0; ok && i < count && build_time; i++) {
+        n00bb_tu_state_t *state = tu_state(order.data[i]);
+        if (strcmp(ir_module_name(state->ir_module), N00BB_CAPTURE_MODULE)
+            || !ir_func_find(state->ir_module, N00BB_CAPTURE_FUNCTION))
+            continue;
+        names[initializer_count] = core_strdup(
+            N00BB_CAPTURE_MODULE "." N00BB_CAPTURE_FUNCTION);
+        ok = names[initializer_count++] != nullptr;
     }
     n00bb_storage_origin_context_t origin_context = {
         .has_user_native_objects = parse_cmdr_flag_value_count(args,
@@ -734,8 +632,8 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     };
     ir_storage_origin_t *storage_origin = ok
         ? ir_storage_origin_new(
-            analysis->runtime_reachable_functions.data,
-            analysis->runtime_reachable_functions.len,
+            analysis->reachable_functions.data,
+            analysis->reachable_functions.len,
             n00bb_unmanaged_os_mapping, n00bb_native_unmanaged_parameter,
             n00bb_closed_callers, false,
             &origin_context) : nullptr;
@@ -756,25 +654,22 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     for (size_t i = 0; ok && i < count; i++) {
         n00bb_tu_state_t *state = tu_state(order.data[i]);
         n00bb_llvm_backend_t *backend = n00bb_llvm_backend_prepare(
-            state->comptime_ir_module, state->ir_module,
-            debug_enabled, native_cpu,
+            state->ir_module, debug_enabled, native_cpu,
             core_translation_unit_diagnostics(order.data[i]));
         if (!backend) {
             ok = false;
             break;
         }
         n00bb_llvm_backend_bind_native_cache(backend, native_cache);
-        ok = n00bb_llvm_backend_bind_reachable_functions(backend, false,
-            analysis->runtime_reachable_functions.data,
-            analysis->runtime_reachable_functions.len)
+        ok = n00bb_llvm_backend_bind_reachable_functions(backend,
+            analysis->reachable_functions.data,
+            analysis->reachable_functions.len)
             && n00bb_llvm_backend_bind_storage_origin(backend,
                 storage_origin);
         if (ok && !parse_cmdr_flag_present(args,
                 CORE_STRING_STATIC("--gc-conservative-stacks")))
             ok = n00bb_llvm_backend_enable_frame_maps(backend);
-        if (ok && (!n00bb_llvm_backend_bind_phase_arrays(backend, phase_arrays,
-                                                  phase_count)
-            || !n00bb_llvm_backend_bind_type_indices(backend, type_indices,
+        if (ok && (!n00bb_llvm_backend_bind_type_indices(backend, type_indices,
                                                       type_index_count)
             || !n00bb_llvm_backend_bind_function_indices(backend,
                 function_indices, function_index_count)
@@ -792,14 +687,13 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         if (lto)
             ok = n00bb_llvm_backend_emit_linkable_bitcode(backend,
                 is_root ? (const char *const *)names : nullptr,
-                is_root ? count : 0, is_root ? metadata.size : 0,
-                &object, diagnostics);
+                is_root ? initializer_count : 0,
+                is_root ? metadata.size : 0, &object, diagnostics);
         else
-            ok = n00bb_llvm_backend_emit_object(backend, false,
+            ok = n00bb_llvm_backend_emit_object(backend,
                 is_root ? (const char *const *)names : nullptr,
-                is_root ? count : 0, nullptr, 0,
-                is_root ? metadata.size : 0,
-                &object, diagnostics);
+                is_root ? initializer_count : 0,
+                is_root ? metadata.size : 0, &object, diagnostics);
         n00bb_llvm_backend_free(backend);
         if (ok && lto) {
             lto_modules[i] = object;
@@ -878,20 +772,6 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             frame_object, frame_object_bytes);
         core_free(frame_object);
         ok = ok && objects[count + 1];
-    }
-    bool has_static_graph = false;
-    if (ok) build_stage = "emitting static literal graph";
-    if (ok) {
-        uint8_t *graph_object = nullptr;
-        size_t graph_object_bytes = 0;
-        ok = n00bb_emit_runtime_literal_graph(analysis, &graph_object,
-            &graph_object_bytes, &has_static_graph);
-        if (ok && has_static_graph) {
-            objects[count + 2] = n00bb_write_temporary_object(
-                graph_object, graph_object_bytes);
-            ok = objects[count + 2] != nullptr;
-        }
-        core_free(graph_object);
     }
     core_string_t requested = parse_cmdr_flag_str(args,
         CORE_STRING_STATIC("--output"));
@@ -1021,7 +901,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             core_free(objects[i]);
         }
     }
-    for (size_t i = 0; i < count; i++)
+    for (size_t i = 0; i < 2 * count + 1; i++)
         if (names) core_free(names[i]);
     free(objects);
     if (lto_modules) {
@@ -1030,8 +910,6 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         free(lto_modules);
     }
     free(names);
-    free(phase_arrays);
-    free(graph_nodes);
     free(type_indices);
     for (size_t i = 0; i < global_binding_count; i++)
         core_free((void *)global_bindings[i].native_name);
@@ -1144,34 +1022,6 @@ abi_collect_type_owners(core_link_unit_t *link,
     return true;
 }
 
-bool
-n00bb_emit_link_comptime_catalog(core_link_unit_t *link,
-    n00bb_link_analysis_t *analysis,
-    n00bb_abi_comptime_type_t **catalog_types,
-    size_t *catalog_type_count, uint8_t **catalog_object,
-    size_t *catalog_object_bytes, size_t *catalog_metadata_bytes,
-    const char **catalog_failure)
-{
-    core_translation_unit_t *root = core_link_unit_root(link, 0);
-    n00bb_tu_state_t *state = root ? tu_state(root) : nullptr;
-    n00bb_abi_source_context_t sources = {
-        .types = state && state->comptime_ir_module
-            ? ir_module_types(state->comptime_ir_module) : nullptr,
-    };
-    if (!sources.types) return false;
-    bool ok = abi_collect_type_owners(link, &sources);
-    if (ok) ok = n00bb_abi_emit_comptime_catalog(analysis->ir_context,
-        state->comptime_ir_module,
-        analysis->comptime_reachable_functions.data,
-        analysis->comptime_reachable_functions.len, &analysis->target,
-        abi_type_owner, &sources, catalog_types, catalog_type_count,
-        catalog_object, catalog_object_bytes, catalog_metadata_bytes,
-        catalog_failure);
-    core_dict_free(&sources.type_owners);
-    core_dict_free(&sources.callback_type_owners);
-    return ok;
-}
-
 static core_hash_value_t
 abi_scope_hash(void *value)
 {
@@ -1225,14 +1075,11 @@ abi_graph_root(void *context, const char *identifier, size_t *index)
 {
     n00bb_link_analysis_t *analysis = context;
     if (!analysis || !identifier || !index) return false;
-    for (size_t i = 0; i < analysis->phase_results.len; i++) {
-        const n00bb_phase_result_binding_t *result =
-            &analysis->phase_results.data[i];
-        if (result->materialized_kind == N00BB_LLVM_LITERAL_GRAPH
-            && result->owns_materialized && result->identifier
-            && !strcmp(result->identifier, identifier)
-            && result->graph_root_index < analysis->static_graph_nodes.len) {
-            *index = result->graph_root_index;
+    for (size_t i = 0; i < analysis->baked_roots.len; i++) {
+        const n00bb_baked_root_t *root = &analysis->baked_roots.data[i];
+        if (!strcmp(root->identifier, identifier)
+            && root->root_index < analysis->static_graph_nodes.len) {
+            *index = root->root_index;
             return true;
         }
     }
@@ -1272,10 +1119,52 @@ abi_graph_edge(void *context, size_t index, size_t *source,
     return true;
 }
 
+static const char *
+abi_graph_type_name(void *context, size_t index)
+{
+    n00bb_link_analysis_t *analysis = context;
+    return analysis->static_graph_nodes.data[index].type_name;
+}
+
+static bool
+abi_graph_slot(void *context, size_t index, n00bb_abi_graph_slot_t *out)
+{
+    n00bb_link_analysis_t *analysis = context;
+    if (index >= analysis->static_graph_slots.len) return false;
+    const n00bb_static_graph_slot_t *slot =
+        &analysis->static_graph_slots.data[index];
+    bool type = slot->table == N00B_ABI_TABLE_TYPE;
+    ir_func_t *function = type ? nullptr
+        : n00bb_baked_function(analysis, slot->module, slot->name);
+    if (!type && !function) return false;
+    *out = (n00bb_abi_graph_slot_t){
+        .node = slot->node,
+        .offset = slot->offset,
+        .table = slot->table,
+        .kind = slot->kind,
+        .typehash = slot->typehash,
+        .type_name = type ? slot->name : nullptr,
+        .module = type ? nullptr : slot->module,
+        .function = type ? nullptr : slot->name,
+        .function_type = function ? function->type : nullptr,
+    };
+    return true;
+}
+
+static uint32_t
+abi_graph_flags(void *context, size_t index)
+{
+    n00bb_link_analysis_t *analysis = context;
+    const n00bb_captured_graph_node_t *node =
+        &analysis->static_graph_nodes.data[index];
+    return (node->immutable ? N00B_ABI_BAKED_NODE_IMMUTABLE : 0)
+        | (node->array_backing ? N00B_ABI_BAKED_NODE_ARRAY_BACKING : 0);
+}
+
 bool
 n00bb_emit_abi_artifacts(core_link_unit_t *link,
                          n00bb_link_analysis_t *analysis,
-                         bool debug_enabled, bool phase_code_present,
+                         bool debug_enabled,
                          bool root_only)
 {
     if (!link || !analysis || !core_link_unit_graph_is_finalized(link)
@@ -1290,9 +1179,13 @@ n00bb_emit_abi_artifacts(core_link_unit_t *link,
         .context = analysis,
         .node_count = analysis->static_graph_nodes.len,
         .edge_count = analysis->static_graph_edges.len,
+        .slot_count = analysis->static_graph_slots.len,
         .root = abi_graph_root,
         .node = abi_graph_node,
         .edge = abi_graph_edge,
+        .flags = abi_graph_flags,
+        .type_name = abi_graph_type_name,
+        .slot = abi_graph_slot,
     };
     bool valid = sources.scopes != nullptr;
     size_t count = core_link_unit_translation_unit_count(link);
@@ -1324,7 +1217,7 @@ n00bb_emit_abi_artifacts(core_link_unit_t *link,
             i);
         if (root_only && unit != core_link_unit_root(link, 0)) continue;
         n00bb_tu_state_t *state = unit ? tu_state(unit) : nullptr;
-        if (!state || !state->ir_module || !state->comptime_ir_module) {
+        if (!state || !state->ir_module) {
             valid = false;
             break;
         }
@@ -1332,9 +1225,7 @@ n00bb_emit_abi_artifacts(core_link_unit_t *link,
         bool emitted = n00bb_abi_emit_unit(link, unit,
             n00bb_package_id(unit),
             state->annotations->symtab, state->lex->tokens,
-            state->comptime_ir_module, state->ir_module,
-            phase_code_present
-                || n00bb_module_initializers_baked(analysis->grammar, unit),
+            state->ir_module,
             &analysis->target,
             debug_enabled ? N00B_ABI_CAP_DEBUG : 0,
             abi_declaration_for_symbol, analysis,
@@ -1463,23 +1354,22 @@ n00bb_link_abi_artifact(core_link_unit_t *link,
     uint8_t *object = nullptr;
     size_t object_bytes = 0;
     const ir_module_t **modules = core_alloc_array(const ir_module_t *,
-                                                    count * 2);
+                                                    count);
     if (valid && !modules) valid = false;
     for (size_t i = 0; valid && i < count; i++) {
         core_translation_unit_t *unit = core_link_unit_translation_unit(link,
             i);
         n00bb_tu_state_t *state = unit ? tu_state(unit) : nullptr;
-        if (!state || !state->comptime_ir_module || !state->ir_module) {
+        if (!state || !state->ir_module) {
             valid = false;
             break;
         }
-        modules[2 * i] = state->comptime_ir_module;
-        modules[2 * i + 1] = state->ir_module;
+        modules[i] = state->ir_module;
     }
     n00bb_abi_semantics_t semantics = {
         .environment = analysis->environment,
         .modules = modules,
-        .module_count = 2 * count,
+        .module_count = count,
     };
     const char *failure_stage = nullptr;
     n00bb_abi_index_plan_failure_t plan_failure = {0};

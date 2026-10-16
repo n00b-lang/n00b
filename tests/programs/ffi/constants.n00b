@@ -5,7 +5,5 @@ enum color : c_int { RED = 1, GREEN = 2 }
 const LIMIT: c_int = 40
 -]'ffi
 
-comptime {} else {
-    require c.LIMIT == 40
-    require c.Color.GREEN != c.Color.RED
-}
+require c.LIMIT == 40
+require c.Color.GREEN != c.Color.RED

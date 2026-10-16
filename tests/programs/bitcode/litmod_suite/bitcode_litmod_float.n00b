@@ -22,7 +22,7 @@ func observe(value: float) {
     require true
 }
 
-comptime {
+when comptime() {
     observe("compile-time"'as_float)
     require "checked at comptime"'as_float == 3.5
 }

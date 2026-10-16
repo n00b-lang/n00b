@@ -9,8 +9,6 @@ func make(c: i32) -> Failure {
     return failure
 }
 
-comptime {} else {
-    let failure = make(3)
-    require failure.code == 3
-    require failure.text == nil
-}
+let failure = make(3)
+require failure.code == 3
+require failure.text == nil

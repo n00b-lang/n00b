@@ -73,6 +73,37 @@ n00b_builtin_abi_storage(uint32_t index)
     return n00b_abi_v1_storage(n00b_abi_v1_current_snapshot(), index);
 }
 
+uint32_t
+n00b_builtin_abi_baked_node_count(void)
+{
+    return n00b_abi_v1_table_count(n00b_abi_v1_current_snapshot(),
+                                    N00B_ABI_TABLE_BAKED_NODE);
+}
+
+const n00b_abi_baked_node_v1 *
+n00b_builtin_abi_baked_node(uint32_t index)
+{
+    return n00b_abi_v1_baked_node(n00b_abi_v1_current_snapshot(), index);
+}
+
+const n00b_abi_symbol_v1 *
+n00b_builtin_abi_symbol(uint32_t index)
+{
+    return n00b_abi_v1_symbol(n00b_abi_v1_current_snapshot(), index);
+}
+
+const n00b_abi_function_v1 *
+n00b_builtin_abi_function(uint32_t index)
+{
+    return n00b_abi_v1_function(n00b_abi_v1_current_snapshot(), index);
+}
+
+const n00b_abi_module_v1 *
+n00b_builtin_abi_module(uint32_t index)
+{
+    return n00b_abi_v1_module(n00b_abi_v1_current_snapshot(), index);
+}
+
 const uint8_t *
 n00b_builtin_abi_string_backing_at(const void *address)
 {

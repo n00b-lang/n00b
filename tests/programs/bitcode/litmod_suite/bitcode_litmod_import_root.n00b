@@ -9,7 +9,7 @@ func forwarded_value() -> int {
     return "root"'forwarded
 }
 
-comptime {
+when comptime() {
     require litmod_import_dep.value() == 42
     require forwarded_value() == 42
 }

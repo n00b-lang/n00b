@@ -2,6 +2,6 @@ func identity(value: int) -> int {
     return value
 }
 
-comptime {
+when comptime() {
     require identity(7) == 7
 }

@@ -457,12 +457,6 @@ n00bb_range_inside_function(parse_grammar_t *grammar, parse_tree_t *node)
     return false;
 }
 
-static parse_sym_phase_t
-n00bb_range_execution_phase(parse_grammar_t *grammar, parse_tree_t *node)
-{
-    return lexical_execution_phase(grammar, node);
-}
-
 static void
 n00bb_range_invalidate_symtab(n00bb_tu_state_t *state,
                               parse_symtab_t *symtab)
@@ -640,9 +634,9 @@ n00bb_range_update_symbol(parse_grammar_t *grammar, parse_tree_t *node,
     if (symbol->kind != PARSE_SYM_VARIABLE
         || !(declaration
             ? parse_sym_can_initialize(symbol,
-                n00bb_range_execution_phase(grammar, node))
+                n00bb_compile_phase())
             : parse_sym_can_write(symbol,
-                n00bb_range_execution_phase(grammar, node)))
+                n00bb_compile_phase()))
         || !is_integer_type(symbol->type) || compound) {
         n00bb_range_forget_symbol(state, symbol);
         return;
@@ -985,7 +979,7 @@ n00bb_range_after_annotation(parse_grammar_t *grammar,
     if (rule && parse_rule_find_annot(grammar, rule, PARSE_ANNOT_CALL)) {
         n00bb_range_invalidate_call_mutations(grammar, state);
         if (!n00bb_range_inside_function(grammar, node)
-            && n00bb_range_execution_phase(grammar, node)
+            && n00bb_compile_phase()
                 == PARSE_SYM_PHASE_COMPTIME)
             n00bb_range_invalidate_static_symbols(state);
     }

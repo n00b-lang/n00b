@@ -30,6 +30,20 @@ typedef struct {
 } ffi_output_t;
 
 core_list_decl(ffi_output_t);
+core_list_decl(size_t);
+
+typedef struct {
+    char                      *prefix;
+    core_list_t(size_t)        shims;
+    core_list_t(core_string_t) archives;
+    core_list_t(core_string_t) libraries;
+    core_list_t(core_string_t) frameworks;
+    core_list_t(core_string_t) search_paths;
+    bool                       exports;
+    bool                       used;
+} ffi_literal_t;
+
+core_list_decl(ffi_literal_t);
 
 struct n00bb_ffi {
     pthread_mutex_t                lock;
@@ -47,6 +61,8 @@ struct n00bb_ffi {
     core_list_t(core_string_t)     frameworks;
     core_list_t(core_string_t)     search_paths;
     size_t                         literals;
+    core_list_t(ffi_literal_t)     records;
+    core_list_t(size_t)            selected_shims;
 };
 
 static writ_str_t
@@ -108,6 +124,8 @@ n00bb_ffi_new(void)
         .transports    = core_list_new(core_string_t),
         .frameworks    = core_list_new(core_string_t),
         .search_paths  = core_list_new(core_string_t),
+        .records       = core_list_new(ffi_literal_t),
+        .selected_shims = core_list_new(size_t),
     };
     pthread_mutex_init(&ffi->lock, nullptr);
     return ffi;
@@ -135,6 +153,17 @@ n00bb_ffi_free(n00bb_ffi_t *ffi)
     free_strings(&ffi->transports);
     free_strings(&ffi->frameworks);
     free_strings(&ffi->search_paths);
+    for (size_t i = 0; i < ffi->records.len; i++) {
+        ffi_literal_t *record = &ffi->records.data[i];
+        core_free(record->prefix);
+        core_list_free(record->shims);
+        free_strings(&record->archives);
+        free_strings(&record->libraries);
+        free_strings(&record->frameworks);
+        free_strings(&record->search_paths);
+    }
+    core_list_free(ffi->records);
+    core_list_free(ffi->selected_shims);
     pthread_mutex_destroy(&ffi->lock);
     core_free(ffi);
 }
@@ -212,19 +241,76 @@ forward_diagnostics(n00bb_ffi_t *ffi, core_translation_unit_t *unit, size_t firs
 }
 
 static void
-keep_links(n00bb_ffi_t *ffi, const writ_link_requirements_t *links)
+keep_links(n00bb_ffi_t *ffi, ffi_literal_t *record, const writ_link_requirements_t *links)
 {
     for (size_t i = 0; i < links->libraries_count; i++) {
         if (!contains(&ffi->transports, as_core(links->libraries[i]))) {
-            push_unique(&ffi->libraries, links->libraries[i]);
+            push_unique(&record->libraries, links->libraries[i]);
         }
     }
     for (size_t i = 0; i < links->frameworks_count; i++) {
-        push_unique(&ffi->frameworks, links->frameworks[i]);
+        push_unique(&record->frameworks, links->frameworks[i]);
     }
     for (size_t i = 0; i < links->search_paths_count; i++) {
-        push_unique(&ffi->search_paths, links->search_paths[i]);
+        push_unique(&record->search_paths, links->search_paths[i]);
     }
+}
+
+static void
+push_all(core_list_t(core_string_t) *list, const core_list_t(core_string_t) *values)
+{
+    for (size_t i = 0; i < values->len; i++) {
+        push_unique(list, as_writ(values->data[i]));
+    }
+}
+
+static void
+clear_strings(core_list_t(core_string_t) *list)
+{
+    for (size_t i = 0; i < list->len; i++) {
+        core_free((void *)list->data[i].data);
+    }
+    list->len = 0;
+}
+
+static void
+refresh_selection(n00bb_ffi_t *ffi)
+{
+    clear_strings(&ffi->archives);
+    clear_strings(&ffi->libraries);
+    clear_strings(&ffi->frameworks);
+    clear_strings(&ffi->search_paths);
+    ffi->selected_shims.len = 0;
+    for (size_t i = 0; i < ffi->records.len; i++) {
+        const ffi_literal_t *record = &ffi->records.data[i];
+        if (!record->used) {
+            continue;
+        }
+        for (size_t j = 0; j < record->shims.len; j++) {
+            core_list_push(ffi->selected_shims, record->shims.data[j]);
+        }
+        push_all(&ffi->archives, &record->archives);
+        push_all(&ffi->libraries, &record->libraries);
+        push_all(&ffi->frameworks, &record->frameworks);
+        push_all(&ffi->search_paths, &record->search_paths);
+    }
+}
+
+void
+n00bb_ffi_select(n00bb_ffi_t *ffi, const char *const *symbols, size_t count)
+{
+    if (!ffi) {
+        return;
+    }
+    for (size_t i = 0; i < ffi->records.len; i++) {
+        ffi_literal_t *record = &ffi->records.data[i];
+        size_t length = strlen(record->prefix);
+        record->used = record->exports;
+        for (size_t j = 0; !record->used && j < count; j++) {
+            record->used = !strncmp(symbols[j], record->prefix, length) && symbols[j][length] == '_';
+        }
+    }
+    refresh_selection(ffi);
 }
 
 static bool
@@ -485,7 +571,7 @@ build_crate(const char *directory)
 }
 
 static bool
-keep_crate(n00bb_ffi_t *ffi, const char *directory)
+keep_crate(n00bb_ffi_t *ffi, ffi_literal_t *literal, const char *directory)
 {
     core_buffer_t path = {0}, record = {0};
     core_buffer_printf(&path, "%s/link", directory);
@@ -498,20 +584,20 @@ keep_crate(n00bb_ffi_t *ffi, const char *directory)
         *flags++ = '\0';
         core_buffer_t archive = {0};
         core_buffer_printf(&archive, "%s/target/release/%s", directory, record.data);
-        push_unique(&ffi->archives, (writ_str_t){archive.data, archive.byte_len});
+        push_unique(&literal->archives, (writ_str_t){archive.data, archive.byte_len});
         core_buffer_release(&archive);
         push_unique(&ffi->transports, (writ_str_t){record.data + 3, strlen(record.data) - 5});
         bool framework = false;
         for (char *token = strtok(flags, " \t\r\n"); token; token = strtok(nullptr, " \t\r\n")) {
             if (framework) {
-                push_unique(&ffi->frameworks, (writ_str_t){token, strlen(token)});
+                push_unique(&literal->frameworks, (writ_str_t){token, strlen(token)});
                 framework = false;
             } else if (!strcmp(token, "-framework")) {
                 framework = true;
             } else if (!strncmp(token, "-l", 2) && token[2]) {
-                push_unique(&ffi->libraries, (writ_str_t){token + 2, strlen(token + 2)});
+                push_unique(&literal->libraries, (writ_str_t){token + 2, strlen(token + 2)});
             } else if (!strncmp(token, "-L", 2) && token[2]) {
-                push_unique(&ffi->search_paths, (writ_str_t){token + 2, strlen(token + 2)});
+                push_unique(&literal->search_paths, (writ_str_t){token + 2, strlen(token + 2)});
             }
         }
     }
@@ -520,8 +606,8 @@ keep_crate(n00bb_ffi_t *ffi, const char *directory)
 }
 
 static bool
-keep_transport(n00bb_ffi_t *ffi, core_translation_unit_t *unit, n00bb_literal_origin_t origin,
-               const writ_model_t *model)
+keep_transport(n00bb_ffi_t *ffi, ffi_literal_t *record, core_translation_unit_t *unit,
+               n00bb_literal_origin_t origin, const writ_model_t *model)
 {
     capture_t crate = {core_list_new(ffi_output_t)};
     writ_gen_rust_request_t request = {.struct_size = sizeof(request)};
@@ -546,7 +632,7 @@ keep_transport(n00bb_ffi_t *ffi, core_translation_unit_t *unit, n00bb_literal_or
         core_buffer_printf(&directory, "%s/rust", root);
         ok = !mkdir(directory.data, 0700) || errno == EEXIST;
         core_buffer_printf(&directory, "/%016llx%016llx", (unsigned long long)(key >> 64), (unsigned long long)key);
-        if (ok && !keep_crate(ffi, directory.data)) {
+        if (ok && !keep_crate(ffi, record, directory.data)) {
             core_buffer_t staging = {0};
             core_buffer_printf(&staging, "%s.XXXXXX", directory.data);
             ok = mkdtemp(staging.data) && write_crate(staging.data, &crate);
@@ -561,7 +647,7 @@ keep_transport(n00bb_ffi_t *ffi, core_translation_unit_t *unit, n00bb_literal_or
                 report_error(unit, origin, "N00BB-F0004", message.data);
                 core_buffer_release(&message);
             }
-            ok = built && keep_crate(ffi, directory.data);
+            ok = built && keep_crate(ffi, record, directory.data);
             core_buffer_release(&staging);
         }
         core_buffer_release(&payload);
@@ -644,9 +730,18 @@ generate_locked(n00bb_ffi_t *ffi, core_translation_unit_t *unit, core_string_t n
     }
     capture_t capture = {core_list_new(ffi_output_t)};
     writ_link_requirements_t links = {0};
+    ffi_literal_t record = {
+        .shims        = core_list_new(size_t),
+        .archives     = core_list_new(core_string_t),
+        .libraries    = core_list_new(core_string_t),
+        .frameworks   = core_list_new(core_string_t),
+        .search_paths = core_list_new(core_string_t),
+        .used         = true,
+    };
     if (ok) {
         core_buffer_t prefix = {0};
         core_buffer_printf(&prefix, "n00b_ffi_%zu", ffi->literals++);
+        record.prefix = core_strndup(prefix.data, prefix.byte_len);
         writ_gen_n00b_request_t request = {.struct_size = sizeof(request), .binding = binding,
                                            .module_name = as_writ(name),
                                            .shim_prefix = (writ_str_t){prefix.data, prefix.byte_len},
@@ -655,6 +750,7 @@ generate_locked(n00bb_ffi_t *ffi, core_translation_unit_t *unit, core_string_t n
         writ_n00b_externs_t externs = {0};
         ok = writ_gen_n00b(&request, &output, &links, &externs) == WRIT_OK && keep_externs(&externs, natives)
           && register_exports(&externs, module);
+        record.exports = externs.exports_count != 0;
         if (ok && externs.header.length) {
             push_unique(&ffi->headers, externs.header);
         }
@@ -667,6 +763,7 @@ generate_locked(n00bb_ffi_t *ffi, core_translation_unit_t *unit, core_string_t n
         } else if (ends_with(file->name, ".map")) {
             ok = keep_origins(file->contents, origins);
         } else {
+            core_list_push(record.shims, ffi->shims.len);
             core_list_push(ffi->shims, *file);
             *file = (ffi_output_t){0};
         }
@@ -676,10 +773,20 @@ generate_locked(n00bb_ffi_t *ffi, core_translation_unit_t *unit, core_string_t n
         core_free((void *)capture.files.data[i].contents.data);
     }
     core_list_free(capture.files);
-    ok = ok && keep_transport(ffi, unit, origin, model);
+    ok = ok && keep_transport(ffi, &record, unit, origin, model);
     if (ok) {
-        keep_links(ffi, &links);
+        keep_links(ffi, &record, &links);
         ok = check_libraries(ffi, unit, origin, &links);
+    }
+    if (record.prefix) {
+        core_list_push(ffi->records, record);
+        refresh_selection(ffi);
+    } else {
+        core_list_free(record.shims);
+        free_strings(&record.archives);
+        free_strings(&record.libraries);
+        free_strings(&record.frameworks);
+        free_strings(&record.search_paths);
     }
     forward_diagnostics(ffi, unit, first, origin);
     return ok;
@@ -767,13 +874,14 @@ n00bb_ffi_write_headers(const n00bb_ffi_t *ffi, core_string_t output)
 size_t
 n00bb_ffi_shim_count(const n00bb_ffi_t *ffi)
 {
-    return ffi ? ffi->shims.len : 0;
+    return ffi ? ffi->selected_shims.len : 0;
 }
 
 n00bb_ffi_file_t
 n00bb_ffi_shim_at(const n00bb_ffi_t *ffi, size_t index)
 {
-    return (n00bb_ffi_file_t){ffi->shims.data[index].name, ffi->shims.data[index].contents};
+    const ffi_output_t *shim = &ffi->shims.data[ffi->selected_shims.data[index]];
+    return (n00bb_ffi_file_t){shim->name, shim->contents};
 }
 
 size_t
@@ -948,7 +1056,8 @@ n00bb_ffi_compile_shims(n00bb_ffi_t *ffi, const char *triple, const char *execut
                                     ? n00bb_native_cache_open(executable_path)
                                     : nullptr;
     bool ok = true;
-    for (size_t i = 0; ok && i < ffi->shims.len; i++) {
+    for (size_t selected = 0; ok && selected < ffi->selected_shims.len; selected++) {
+        size_t i = ffi->selected_shims.data[selected];
         if (!ends_with(ffi->shims.data[i].name, ".c")) {
             continue;
         }
