@@ -1163,15 +1163,21 @@ cf_notrivia(parse_visit_t *v)
 }
 
 static void
-annot_report_infer_failure(parse_visit_t *v, actx_t *a)
+annot_report_infer_failure(parse_visit_t *v, actx_t *a, size_t errors_before)
 {
     a->out->inference_failed = true;
     if (!a->out->diagnostics) return;
     parse_token_info_t *token = parse_tree_find_first_terminal(v->node);
+    th_error_t reason = {0};
+    size_t errors = th_error_count(a->types);
+    core_string_t message = errors > errors_before
+            && th_error_at(a->types, errors - 1, &reason) && reason.message
+        ? core_string_from_cstr(reason.message)
+        : CORE_STRING_STATIC("type inference failed");
     core_diagnostics_report_at(a->out->diagnostics,
         a->out->diagnostic_unit, CORE_DIAG_FATAL,
         CORE_STRING_STATIC("LANTERN-T0001"),
-        CORE_STRING_STATIC("type inference failed"),
+        message,
         token ? (core_diag_location_t){
             .line = token->line, .column = token->column,
             .end_line = token->endline,
@@ -1190,12 +1196,13 @@ annot_infer(parse_visit_t *v)
     }
 
     bool     ok = false;
+    size_t   errors_before = th_error_count(a->types);
     th_type *t = parse_infer_eval_with_type_node_resolver(an->infer_ast, v,
         a->types, a->out->symtab, a->out->type_node_resolver,
         a->out->type_node_resolver_context, &ok);
 
     if (!ok || !t) {
-        annot_report_infer_failure(v, a);
+        annot_report_infer_failure(v, a, errors_before);
         return true;
     }
 

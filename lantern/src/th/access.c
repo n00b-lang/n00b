@@ -497,6 +497,11 @@ th_type *th_auto_deref(th_ctx *ctx, th_type *type)
             ? th_type_definition(ctx, type) : nullptr;
         if (definition && th_kind_of(th_resolve(definition)) == TH_INDIRECTION)
             type = th_resolve(definition);
+        th_type *option_item = th_option_item(type);
+        if (option_item) {
+            type = th_resolve(option_item);
+            continue;
+        }
         if (th_kind_of(type) != TH_INDIRECTION) break;
         type = th_resolve(th_ind_referent(type));
     }

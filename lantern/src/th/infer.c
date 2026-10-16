@@ -909,9 +909,13 @@ static th_type *receiver_method_signature(th_ctx *ctx, th_type *bound_to,
     th_type *signature = resolve_constraint_method(ctx, bound_to, name,
                                                    status);
     th_type *resolved = th_resolve(bound_to);
-    if (signature || *status == TH_ENV_METHOD_AMBIGUOUS
-        || th_kind_of(resolved) != TH_INDIRECTION) return signature;
-    *receiver_type = th_ind_referent(resolved);
+    if (signature || *status == TH_ENV_METHOD_AMBIGUOUS) return signature;
+    th_type *inner = th_kind_of(resolved) == TH_INDIRECTION
+        ? th_ind_referent(resolved)
+        : ctx->method_argument_coercions & TH_COERCE_OPTION_UNWRAP
+            ? th_option_item(resolved) : nullptr;
+    if (!inner) return signature;
+    *receiver_type = inner;
     return resolve_constraint_method(ctx, *receiver_type, name, status);
 }
 
@@ -920,11 +924,15 @@ static th_type *dereferenced_argument(th_ctx *ctx, th_type *actual,
 {
     th_type *resolved_actual = th_resolve(actual);
     th_type *resolved_formal = th_resolve(formal);
-    if (mode != TH_IN || th_kind_of(resolved_actual) != TH_INDIRECTION
+    th_type *referent = th_kind_of(resolved_actual) == TH_INDIRECTION
+        ? th_ind_referent(resolved_actual)
+        : ctx->method_argument_coercions & TH_COERCE_OPTION_UNWRAP
+            && !th_option_item(resolved_formal)
+            ? th_option_item(resolved_actual) : nullptr;
+    if (mode != TH_IN || !referent
         || th_kind_of(resolved_formal) == TH_INDIRECTION
         || th_kind_of(resolved_formal) == TH_VAR
         || th_unify_probe(ctx, actual, formal)) return nullptr;
-    th_type *referent = th_ind_referent(resolved_actual);
     return th_unify_probe(ctx, referent, formal) ? referent : nullptr;
 }
 

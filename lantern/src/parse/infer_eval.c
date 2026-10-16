@@ -8,6 +8,7 @@
 #include "lib/list.h"
 #include "th/environment.h"
 #include "th/typehash.h"
+#include "private/th/internal.h"
 
 #include <string.h>
 
@@ -721,7 +722,13 @@ field_projection(ictx *c, th_type *receiver, core_string_t name,
                 .field = {.name = field_name, .type = result,
                           .auto_deref = auto_deref}});
     core_free(field_name);
-    if (!constrained) c->failed = true;
+    if (!constrained) {
+        c->failed = true;
+        th_err(c->tc, TH_ERR_NO_SUCH_FIELD, "has_field", nullptr, receiver,
+               resolved && th_option_item(resolved)
+                   ? "an option has no fields; unwrap its value before reading a field"
+                   : "this type has no field with that name");
+    }
     return result;
 }
 

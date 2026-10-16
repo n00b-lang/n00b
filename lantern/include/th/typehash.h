@@ -448,6 +448,7 @@ typedef enum : uint8_t {
     TH_COERCE_CUSTOM      = 1 << 3,
     TH_COERCE_NIL_OPTION  = 1 << 4,
     TH_COERCE_RECORD_CONSTRUCT = 1 << 5,
+    TH_COERCE_OPTION_UNWRAP = 1 << 6,
 } th_coerce_flag;
 
 void th_ctx_set_method_argument_coercions(th_ctx *ctx, uint8_t allowed);
