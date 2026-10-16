@@ -1836,6 +1836,10 @@ load_interface_imports(import_driver_t *driver, parse_grammar_t *grammar,
             TH_ENV_METADATA_ENVIRONMENT, module_name,
             "n00b.module-imports", 1, &size)
         : nullptr;
+    if (!data && module_name)
+        data = interface_owned_metadata(&driver->loader->interfaces,
+            TH_ENV_METADATA_ENVIRONMENT, module_name,
+            "n00b.package-imports", 1, &size);
     bool package_only = !data && module_name
         && !interface_owned_metadata(&driver->loader->interfaces,
             TH_ENV_METADATA_ENVIRONMENT, module_name,

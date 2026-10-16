@@ -2808,6 +2808,11 @@ link_declaration_scopes(n00bb_tu_state_t *state,
             || !core_string_eq(scope->scope_tag,
                                CORE_STRING_STATIC("package-interface")))
             continue;
+        bool export_scope = false;
+        for (size_t p = 0; !export_scope
+             && p < state->package_declarations.len; p++)
+            export_scope = state->package_declarations.data[p].scope == scope;
+        if (export_scope) continue;
         parse_scope_t *candidate = namespace_name.u8_bytes
             ? parse_symtab_scope_in_namespace(symtab, scope, namespace_name)
             : scope;
@@ -2988,7 +2993,7 @@ register_link_declarations(core_link_unit_t *link, parse_grammar_t *grammar,
     }
 
     static const char *builtin_names[] = {
-        "has_type", "ref_read", "ref_write", "__fd_write",
+        "has_type", "ref_read", "ref_write",
         "__repr_default", "__gc_byte_offset", "__gc_byte_diff",
         "__count_leading_zeros", "__count_trailing_zeros",
         "__gc_memset", "__gc_memcpy",
@@ -3019,8 +3024,6 @@ register_link_declarations(core_link_unit_t *link, parse_grammar_t *grammar,
             if (!n00bb_builtin_function(symbol) || !symbol->uses) continue;
             core_string_t name = symbol->name;
             bool selected = parse_sym_binding(symbol,
-                    CORE_STRING_STATIC("n00bb.abi.fd_write"))
-                || parse_sym_binding(symbol,
                     CORE_STRING_STATIC("n00bb.abi.repr_default"))
                 || parse_sym_binding(symbol,
                     CORE_STRING_STATIC("n00bb.abi.native"))

@@ -10434,7 +10434,6 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                 "builtin array read could not retain element shape");
         return (ir_lower_result_t){IR_LOWER_VALUE, read->dest};
     }
-    bool fd_write_builtin = n00bb_builtin_fd_write_function(symbol);
     bool repr_default_builtin = n00bb_builtin_repr_default_function(symbol);
     bool native_builtin = n00bb_builtin_native_function(symbol);
     bool reference_builtin = n00bb_builtin_reference_function(symbol);
@@ -10471,7 +10470,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
             "an option's value requires it to be proven non-nil by the "
             "active branch");
-    bool no_function_body = fd_write_builtin || repr_default_builtin
+    bool no_function_body = repr_default_builtin
         || native_builtin
         || reference_builtin || byte_offset_builtin || byte_diff_builtin
         || unsafe_arithmetic
@@ -10580,16 +10579,13 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
             return lower_error(context, IR_DIAG_INTERNAL, span,
                 "could not retain builtin trait method requirement");
     }
-    if (fd_write_builtin || repr_default_builtin || native_builtin) {
-        const char *key = fd_write_builtin ? "n00bb.abi.fd_write"
-            : repr_default_builtin ? "n00bb.abi.repr_default"
-                                   : "n00bb.abi.native";
+    if (repr_default_builtin || native_builtin) {
+        const char *key = repr_default_builtin ? "n00bb.abi.repr_default"
+                                               : "n00bb.abi.native";
         const char *native_name = parse_sym_binding(symbol,
             core_string_from_cstr(key));
-        const char *ir_name = fd_write_builtin
-            ? "__n00bb_bootstrap_fd_write"
-            : repr_default_builtin ? "__n00bb_bootstrap_repr_default"
-                                   : native_name;
+        const char *ir_name = repr_default_builtin
+            ? "__n00bb_bootstrap_repr_default" : native_name;
         ir_func_t *function = ir_func_find(context->module, ir_name);
         if (!function) {
             th_type *declaration = th_type_clone(

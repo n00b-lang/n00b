@@ -157,6 +157,45 @@ func text(self: string) -> string {
     return walked
 }
 
+private func text_bytes(base: Ref[string]) -> Ref[byte] {
+    let view: Ref[String_Words] = words(base)
+    if view.selector >> tag_shift == 0 {
+        return unsafe_cast[Ref[byte]] view
+    }
+    return view.data
+}
+
+private const fd_chunk_limit: uint = 0x7fffffff
+
+private func write_all(fd: i32, data: Ref[byte], len: uint) -> bool {
+    var done: uint = 0
+    while done < len {
+        var chunk: uint = len - done
+        if chunk > fd_chunk_limit {
+            chunk = fd_chunk_limit
+        }
+        let wrote: i32 = __write_bytes(fd,
+            __gc_byte_offset(data, cast[int] done), cast[u32] chunk)
+        if wrote <= 0 {
+            return false
+        }
+        done += cast[uint] wrote
+    }
+    return true
+}
+
+func __fd_write(fd: i32, s: string) -> i32 {
+    var base: string = text(s)
+    let len: uint = __string_byte_len(base)
+    if !write_all(fd, text_bytes(ref base), len) {
+        return -1
+    }
+    if len > fd_chunk_limit {
+        return cast[i32] fd_chunk_limit
+    }
+    return cast[i32] len
+}
+
 func encoding(self: string) -> Str_Encoding {
     return cast[Str_Encoding] __string_encoding_bits(text(self))
 }

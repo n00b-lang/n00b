@@ -805,18 +805,7 @@ register_builtin_symbols(parse_annot_result_t *annotations,
     th_type *option_get_or_else_contract = option_get_or_else_signature
         ? th_env_signature_contract(types, option_get_or_else_signature,
                                     nil_type) : nullptr;
-    th_type *string_type = th_name(types, "string");
     th_type *i32_type = th_name(types, "i32");
-    th_param fd_write_parameters[] = {
-        {.mode = TH_IN, .type = i32_type},
-        {.mode = TH_IN, .type = string_type},
-    };
-    th_type *fd_write_signature = i32_type && string_type
-        ? th_func_with_error(types, i32_type, nil_type,
-            fd_write_parameters, 2, nullptr, nullptr, 0) : nullptr;
-    th_type *fd_write_contract = fd_write_signature
-        ? th_env_signature_contract(types, fd_write_signature, nil_type)
-        : nullptr;
     th_type *repr_item = th_var(types);
     th_param repr_parameters[] = {
         {.mode = TH_IN, .type = repr_item},
@@ -870,7 +859,7 @@ register_builtin_symbols(parse_annot_result_t *annotations,
         || !option_get_signature || !option_get_or_else_signature
         || !option_is_nil_contract || !option_get_contract
         || !option_get_or_else_contract
-        || !fd_write_contract || !repr_contract || !array_read_contract
+        || !repr_contract || !array_read_contract
         || !array_write_contract)
         return false;
 
@@ -920,9 +909,6 @@ register_builtin_symbols(parse_annot_result_t *annotations,
         PARSE_SYM_FUNCTION, nullptr);
     parse_sym_entry_t *array_read_symbol = parse_symtab_add(symtab,
         CORE_STRING_STATIC("builtin"), CORE_STRING_STATIC("__array_read"),
-        PARSE_SYM_FUNCTION, nullptr);
-    parse_sym_entry_t *fd_write_symbol = parse_symtab_add(symtab,
-        CORE_STRING_STATIC("builtin"), CORE_STRING_STATIC("__fd_write"),
         PARSE_SYM_FUNCTION, nullptr);
     parse_sym_entry_t *repr_symbol = parse_symtab_add(symtab,
         CORE_STRING_STATIC("builtin"), CORE_STRING_STATIC("__repr_default"),
@@ -994,7 +980,7 @@ register_builtin_symbols(parse_annot_result_t *annotations,
     if (!symbol || !read_symbol || !write_symbol || !option_is_nil_symbol
         || !option_get_symbol || !option_get_or_else_symbol
         || !array_read_symbol || !array_write_symbol
-        || !fd_write_symbol || !repr_symbol
+        || !repr_symbol
         || !init_symbol || !init_contract
         || !os_builtins_registered || !abi_builtins_registered
         || !gc_builtins_registered || !unsafe_arithmetic_registered
@@ -1033,12 +1019,6 @@ register_builtin_symbols(parse_annot_result_t *annotations,
     if (!parse_sym_set_binding(array_write_symbol,
             CORE_STRING_STATIC("n00bb.array.write"),
             array_write_symbol)) return false;
-    fd_write_symbol->type = fd_write_signature;
-    fd_write_symbol->error_type = nil_type;
-    fd_write_symbol->callable_contract = fd_write_contract;
-    if (!parse_sym_set_binding(fd_write_symbol,
-            CORE_STRING_STATIC("n00bb.abi.fd_write"),
-            (void *)"n00bb_bootstrap_fd_write")) return false;
     repr_symbol->type = repr_signature;
     repr_symbol->error_type = nil_type;
     repr_symbol->callable_contract = repr_contract;
@@ -1058,7 +1038,6 @@ register_builtin_symbols(parse_annot_result_t *annotations,
         && option_get_or_else_symbol->callable_contract
         && array_read_symbol->callable_contract
         && array_write_symbol->callable_contract
-        && fd_write_symbol->callable_contract
         && repr_symbol->callable_contract
         && init_symbol->callable_contract;
 }
@@ -1628,8 +1607,7 @@ register_builtin_traits(th_env *environment, th_ctx *types,
 bool
 n00bb_builtin_function(parse_sym_entry_t *symbol)
 {
-    return n00bb_builtin_fd_write_function(symbol)
-        || n00bb_builtin_repr_default_function(symbol)
+    return n00bb_builtin_repr_default_function(symbol)
         || n00bb_builtin_native_function(symbol)
         || (symbol && symbol->kind == PARSE_SYM_FUNCTION
         && !symbol->decl_node && symbol->scope && !symbol->scope->parent
@@ -1656,15 +1634,6 @@ n00bb_builtin_function(parse_sym_entry_t *symbol)
             || n00bb_builtin_atomic_access_function(symbol)
             || n00bb_builtin_callback_function(symbol)
             || n00bb_builtin_init_function(symbol)));
-}
-
-bool
-n00bb_builtin_fd_write_function(parse_sym_entry_t *symbol)
-{
-    return symbol && symbol->kind == PARSE_SYM_FUNCTION
-        && !symbol->decl_node
-        && parse_sym_binding(symbol,
-            CORE_STRING_STATIC("n00bb.abi.fd_write"));
 }
 
 bool

@@ -1288,6 +1288,97 @@ materialize_interface_type_members(n00bb_interface_context_t *loader,
     return ok;
 }
 
+typedef struct {
+    core_string_t module;
+    core_string_t declaration;
+} archived_export_t;
+
+static bool
+interface_export_origin(n00bb_interface_context_t *loader,
+                        th_env_metadata_owner_t kind,
+                        const char *qualified_name, archived_export_t *out)
+{
+    size_t size = 0;
+    const uint8_t *data = interface_owned_metadata(loader, kind,
+        qualified_name, "n00b.export-origin", 1, &size);
+    if (!data || size < 12 || memcmp(data, "N0EO", 4)) return false;
+    size_t module_size = read_u32_le(data + 4);
+    size_t declaration_size = read_u32_le(data + 8);
+    if (!module_size || !declaration_size
+        || module_size + declaration_size != size - 12) return false;
+    out->module = core_string_borrow((const char *)data + 12, module_size);
+    out->declaration = core_string_borrow((const char *)data + 12
+                                              + module_size,
+                                          declaration_size);
+    return true;
+}
+
+static const char *
+interface_declaration_local_name(const th_env_declaration_view_t *declaration)
+{
+    if (declaration->kind == TH_ENV_DECLARATION_FUNCTION
+        || declaration->kind == TH_ENV_DECLARATION_VALUE)
+        return declaration->root_name;
+    const char *name = declaration->qualified_name
+        ? strrchr(declaration->qualified_name, '.') : nullptr;
+    return name ? name + 1 : nullptr;
+}
+
+static bool
+interface_declaration_named(n00bb_interface_context_t *loader,
+                            core_string_t qualified_name,
+                            th_env_declaration_view_t *out)
+{
+    for (size_t e = 0; e < loader->linked_interface_count; e++) {
+        const th_env *environment = loader->linked_interfaces[e];
+        for (size_t i = 0; i < th_env_declaration_count(environment); i++)
+            if (th_env_declaration_at(environment, i, out)
+                && out->qualified_name
+                && core_string_eq(core_string_from_cstr(out->qualified_name),
+                                  qualified_name))
+                return true;
+    }
+    return false;
+}
+
+static n00bb_package_declaration_t *
+interface_root_package(n00bb_interface_context_t *loader,
+                       n00bb_tu_state_t *state, parse_symtab_t *symtab,
+                       core_translation_unit_t *unit)
+{
+    core_string_t root = unit->module.identifier;
+    n00bb_package_declaration_t *existing =
+        find_package_declaration(unit, root);
+    if (existing) return existing;
+    bool archived = false;
+    for (size_t e = 0; !archived && e < loader->linked_interface_count; e++) {
+        const th_env *environment = loader->linked_interfaces[e];
+        for (size_t m = 0; !archived
+                && m < th_env_metadata_count(environment); m++) {
+            th_env_metadata_view_t metadata = {0};
+            archived = th_env_metadata_at(environment, m, &metadata)
+                && metadata.owner_kind == TH_ENV_METADATA_ENVIRONMENT
+                && !strcmp(metadata.key, "n00b.package-interface")
+                && metadata.version == 1
+                && core_string_eq(core_string_from_cstr(metadata.owner_name),
+                                  root);
+        }
+    }
+    if (!archived) return nullptr;
+    parse_symtab_enter_scope_all(symtab, module_scope(state));
+    parse_symtab_push_scope_all(symtab, root);
+    parse_scope_t *scope = parse_symtab_current_scope(
+        symtab, CORE_STRING_STATIC(""));
+    if (scope) scope->scope_tag = CORE_STRING_STATIC("package-interface");
+    parse_symtab_pop_scope_all(symtab);
+    parse_symtab_leave_scope_all(symtab);
+    if (!scope) return nullptr;
+    core_list_push(state->package_declarations,
+        ((n00bb_package_declaration_t){.name = root, .scope = scope}));
+    return &state->package_declarations.data[
+        state->package_declarations.len - 1];
+}
+
 static bool
 materialize_interface_module_symbols(n00bb_interface_context_t *loader,
                                      core_translation_unit_t *unit,
@@ -1309,6 +1400,8 @@ materialize_interface_module_symbols(n00bb_interface_context_t *loader,
         if (failure) *failure = "interface TU has no module namespace scopes";
         return false;
     }
+    n00bb_package_declaration_t *root_package = interface_root_package(
+        loader, state, symtab, unit);
     for (size_t e = 0; e < loader->linked_interface_count; e++) {
         const th_env *environment = loader->linked_interfaces[e];
         for (size_t m = 0; m < th_env_metadata_count(environment); m++) {
@@ -1351,6 +1444,17 @@ materialize_interface_module_symbols(n00bb_interface_context_t *loader,
                 continue;
             core_string_t declaration_module = core_string_from_cstr(
                 declaration.module);
+            bool is_value = declaration.kind == TH_ENV_DECLARATION_VALUE;
+            bool is_function = declaration.kind == TH_ENV_DECLARATION_FUNCTION;
+            th_env_metadata_owner_t metadata_kind = is_function
+                ? TH_ENV_METADATA_FUNCTION
+                : is_value ? TH_ENV_METADATA_VALUE
+                : declaration.kind == TH_ENV_DECLARATION_TRAIT
+                    ? TH_ENV_METADATA_TRAIT : TH_ENV_METADATA_TYPE;
+            archived_export_t archived = {0};
+            bool package_export = root_package
+                && interface_export_origin(loader, metadata_kind,
+                    declaration.qualified_name, &archived);
             parse_scope_t *package_values = ensure_interface_package_scope(
                 loader, state, symtab, unit, declaration_module);
             if (!package_values) continue;
@@ -1361,19 +1465,42 @@ materialize_interface_module_symbols(n00bb_interface_context_t *loader,
                     "interface package has no type namespace scope";
                 return false;
             }
-            bool is_value = declaration.kind == TH_ENV_DECLARATION_VALUE;
-            bool is_function = declaration.kind == TH_ENV_DECLARATION_FUNCTION;
             parse_scope_t *scope = is_function || is_value
                 ? package_values : package_types;
             core_string_t namespace_name = is_function || is_value
                 ? CORE_STRING_STATIC("") : CORE_STRING_STATIC("type");
-            const char *name = is_function || is_value
-                ? declaration.root_name : strrchr(declaration.qualified_name, '.');
-            if (!is_function && !is_value && name)
-                name++;
+            const char *name = interface_declaration_local_name(&declaration);
             if (!name || !*name) {
                 if (failure) *failure = "interface declaration has no local name";
                 return false;
+            }
+            if (package_export) {
+                bool own = core_string_eq(archived.module,
+                                          unit->module.identifier);
+                th_env_declaration_view_t source = {0};
+                const char *source_local = interface_declaration_named(loader,
+                        archived.declaration, &source)
+                    ? interface_declaration_local_name(&source) : nullptr;
+                if (!source_local || !*source_local) {
+                    if (failure) *failure =
+                        "archived package export has no origin declaration";
+                    return false;
+                }
+                core_buffer_t source_name = {0};
+                if (!own)
+                    core_buffer_printf(&source_name, "%.*s.",
+                        (int)archived.module.u8_bytes, archived.module.data);
+                core_buffer_printf(&source_name, "%s", source_local);
+                core_list_push(root_package->exports,
+                    ((n00bb_package_export_t){
+                        .source_name = store_semantic_string(state,
+                            core_string_borrow(source_name.data,
+                                               source_name.byte_len)),
+                        .export_name = store_semantic_string(state,
+                            core_string_from_cstr(name)),
+                    }));
+                core_buffer_release(&source_name);
+                if (!own) continue;
             }
             parse_sym_entry_t *existing = parse_symtab_lookup_in(
                 scope, core_string_borrow(name, strlen(name)));
@@ -1416,11 +1543,6 @@ materialize_interface_module_symbols(n00bb_interface_context_t *loader,
                     return false;
                 }
             }
-            th_env_metadata_owner_t metadata_kind = is_function
-                ? TH_ENV_METADATA_FUNCTION
-                : is_value ? TH_ENV_METADATA_VALUE
-                : declaration.kind == TH_ENV_DECLARATION_TRAIT
-                    ? TH_ENV_METADATA_TRAIT : TH_ENV_METADATA_TYPE;
             if (!materialize_interface_export_origin(loader, state, symbol,
                     metadata_kind, declaration.qualified_name,
                     declaration.module, failure))
@@ -1627,7 +1749,8 @@ finish_semantic_unit(void *context, core_translation_unit_t *unit)
         }
     }
     if (!initialize_unit_package_interfaces(unit)
-        || !populate_unit_package_interfaces(unit))
+        || (!state->interface_module
+            && !populate_unit_package_interfaces(unit)))
         return false;
     return true;
 }

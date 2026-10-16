@@ -143,10 +143,8 @@ publish_link_initializer_uses(core_link_unit_t *link,
                 || (call.to
                     && core_string_eq(core_link_declaration_module(call.to),
                         CORE_STRING_STATIC("builtins"))
-                    && (core_string_eq(core_link_declaration_key(call.to),
-                            CORE_STRING_STATIC("__fd_write"))
-                        || core_string_eq(core_link_declaration_key(call.to),
-                            CORE_STRING_STATIC("__repr_default")))))) continue;
+                    && core_string_eq(core_link_declaration_key(call.to),
+                            CORE_STRING_STATIC("__repr_default"))))) continue;
         parse_tree_t *site = (parse_tree_t *)call.source_site;
         n00bb_tu_state_t *source_state = tu_state(call.source_unit);
         parse_sym_entry_t *owner_symbol = module_variable_initializer_owner(

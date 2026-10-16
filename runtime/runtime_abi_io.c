@@ -132,13 +132,6 @@ int32_t n00bb_runtime_write_bytes(int32_t fd, const uint8_t *bytes,
     return count ? write_bytes(fd, bytes, count) : 0;
 }
 
-int32_t n00bb_bootstrap_fd_write(int32_t fd, uint64_t low, uint64_t high)
-{
-    n00b_abi_string_v1 text = {.words = {low, high}};
-    return n00b_abi_v1_raw_fd_write(fd, text);
-}
-
-
 static bool write_all(int32_t fd, const uint8_t *bytes, uint64_t count)
 {
     while (count) {
@@ -287,19 +280,6 @@ static int32_t repr_float(int32_t fd, uint64_t payload, uint32_t width)
     return repr_bytes(fd, buffer, (uint32_t)(end - buffer));
 }
 
-static int32_t repr_string(int32_t fd, const n00b_abi_string_v1 *text)
-{
-    n00bb_abi_string_header_t header;
-    if (!n00bb_abi_string_decode((const uint8_t *)text, sizeof(*text),
-                                 &header)
-        || header.tag == N00BB_ABI_STRING_RICH
-        || header.length > INT32_MAX) return -1;
-    const uint8_t *bytes = header.tag == N00BB_ABI_STRING_SHORT
-        ? text->short_value.bytes : text->long_value.data;
-    return bytes && write_all(fd, bytes, header.length)
-        ? (int32_t)header.length : header.length == 0 ? 0 : -1;
-}
-
 typedef int32_t (*repr_dispatch_t)(uint16_t array_extent,
                                    uint16_t byte_stride, uint32_t type_field,
                                    uint64_t payload, int32_t fd);
@@ -405,10 +385,10 @@ int32_t n00bb_bootstrap_repr_default(int32_t fd, uint16_t array_extent,
         return repr_pointer(fd, (uintptr_t)payload);
     if (type->kind == N00B_ABI_TYPE_PRIMITIVE && floating)
         return repr_float(fd, payload, type->semantic_width_bits);
-    if (type->kind == N00B_ABI_TYPE_STRING) {
-        if (!indirect || !payload) return -1;
-        return repr_string(fd, (const n00b_abi_string_v1 *)(uintptr_t)payload);
-    }
+    if (type->kind == N00B_ABI_TYPE_STRING)
+        return indirect && payload && dispatch
+            ? dispatch(array_extent, byte_stride, type_field, payload, fd)
+            : -1;
     if (type->kind == N00B_ABI_TYPE_ARRAY)
         return indirect ? repr_array(snapshot, fd, type, payload, dispatch)
                         : -1;

@@ -1305,11 +1305,23 @@ register_package_context_effect_metadata(n00bb_link_analysis_t *analysis)
                 registered = th_env_register_metadata(environment,
                     TH_ENV_METADATA_ENVIRONMENT, module_name,
                     "n00b.module-imports", 1, imports.data, imports.byte_len);
+            for (size_t p = 0; registered
+                 && p < state->package_declarations.len; p++) {
+                core_string_t package =
+                    state->package_declarations.data[p].name;
+                char *package_name = core_strndup(package.data,
+                                                  package.u8_bytes);
+                registered = package_name && th_env_register_metadata(
+                    environment, TH_ENV_METADATA_ENVIRONMENT, package_name,
+                    "n00b.package-imports", 1, imports.data, imports.byte_len);
+                core_free(package_name);
+            }
             core_buffer_release(&imports);
             core_free(module_name);
             if (!registered) return false;
         }
-        for (size_t p = 0; state && p < state->package_declarations.len; p++) {
+        for (size_t p = 0; state && !state->interface_module
+             && p < state->package_declarations.len; p++) {
             n00bb_package_declaration_t *package =
                 &state->package_declarations.data[p];
             parse_scope_t *scopes[] = {
@@ -1355,6 +1367,7 @@ register_package_interfaces(n00bb_link_analysis_t *analysis,
     for (size_t u = 0; u < analysis->units.len; u++) {
         core_translation_unit_t *unit = analysis->units.data[u];
         n00bb_tu_state_t *state = tu_state(unit);
+        if (state && state->interface_module) continue;
         for (size_t p = 0; state && p < state->package_declarations.len; p++) {
             n00bb_package_declaration_t *package =
                 &state->package_declarations.data[p];
@@ -1839,6 +1852,7 @@ populate_package_interfaces(n00bb_link_analysis_t *analysis)
     for (size_t u = 0; u < analysis->units.len; u++) {
         core_translation_unit_t *unit = analysis->units.data[u];
         n00bb_tu_state_t *state = tu_state(unit);
+        if (state && state->interface_module) continue;
         for (size_t p = 0; state && p < state->package_declarations.len; p++) {
             n00bb_package_declaration_t *package =
                 &state->package_declarations.data[p];
@@ -1913,37 +1927,16 @@ install_implicit_builtin_package(core_translation_unit_t *unit)
     parse_symtab_t *symtab = state && state->annotations
         ? state->annotations->symtab : nullptr;
     parse_scope_t *parent = module_scope(state);
-    parse_namespace_t *builtin_ns = symtab
-        ? parse_symtab_ns(symtab, CORE_STRING_STATIC("builtin")) : nullptr;
-    parse_sym_entry_t *writer = builtin_ns
-        ? parse_symtab_lookup_in(builtin_ns->root,
-            CORE_STRING_STATIC("__fd_write")) : nullptr;
-    if (!symtab || !parent || !writer) return false;
     parse_scope_t *builtin_scope = nullptr;
     parse_scope_t *io_scope = nullptr;
     parse_scope_t *types_scope = nullptr;
-    if (!add_implicit_package_scope(symtab, unit, parent,
+    return symtab && parent
+        && add_implicit_package_scope(symtab, unit, parent,
             CORE_STRING_STATIC("builtin"), &builtin_scope)
-        || !add_implicit_package_scope(symtab, unit, builtin_scope,
+        && add_implicit_package_scope(symtab, unit, builtin_scope,
             CORE_STRING_STATIC("io"), &io_scope)
-        || !add_implicit_package_scope(symtab, unit, builtin_scope,
-            CORE_STRING_STATIC("types"), &types_scope)) return false;
-    parse_sym_entry_t *function = parse_symtab_lookup_in(io_scope,
-        CORE_STRING_STATIC("__fd_write"));
-    if (!function) {
-        parse_symtab_enter_scope_all(symtab, io_scope);
-        function = parse_symtab_add(symtab, CORE_STRING_STATIC(""),
-            CORE_STRING_STATIC("__fd_write"), PARSE_SYM_FUNCTION, nullptr);
-        parse_symtab_leave_scope_all(symtab);
-    }
-    if (!function || !parse_sym_set_binding(function,
-            CORE_STRING_STATIC("n00bb.abi.fd_write"),
-            (void *)"n00bb_bootstrap_fd_write")) return false;
-    function->type = writer->type;
-    function->error_type = writer->error_type;
-    function->callable_contract = writer->callable_contract;
-    function->visibility = CORE_STRING_STATIC("public");
-    return true;
+        && add_implicit_package_scope(symtab, unit, builtin_scope,
+            CORE_STRING_STATIC("types"), &types_scope);
 }
 
 bool

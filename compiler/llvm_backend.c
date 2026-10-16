@@ -249,6 +249,7 @@ core_list_decl(inline_function_ptr_t);
 core_list_decl(LLVMValueRef);
 
 static const char gc_root_init_metadata[] = "n00bb.gc.root.init";
+static const char code_name_attribute[] = "n00bb-code-name";
 
 static bool
 inline_list_contains(const core_list_t(inline_function_ptr_t) *functions,
@@ -1045,6 +1046,7 @@ static LLVMTypeRef mutator_function_type(LLVMModuleRef target,
                                         ir_func_t *function);
 static LLVMValueRef mutator_function(LLVMModuleRef target,
                                     ir_func_t *function);
+static void mutator_symbol(core_buffer_t *name, ir_func_t *function);
 static LLVMTypeRef native_function_type(LLVMModuleRef target,
                                         ir_module_t *owner,
                                         th_type *signature,
@@ -9440,41 +9442,6 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             return result && save_result(state, instruction, result);
         }
         ir_annot_t *native = target
-            ? ir_annot_get(&target->annots, "n00bb.abi.fd_write") : nullptr;
-        if (native && native->kind == IR_ANNOT_STR && native->s) {
-            if (count != 3 || !instruction->dest
-                || operands[1].kind != IR_OPD_VALUE
-                || operands[2].kind != IR_OPD_VALUE) break;
-            LLVMValueRef fd = lowered_value(state, operands[1].value);
-            LLVMValueRef string = lowered_value(state, operands[2].value);
-            LLVMContextRef context = LLVMGetModuleContext(state->module);
-            LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
-            LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
-            if (!fd || !string || LLVMTypeOf(fd) != i32
-                || LLVMGetTypeKind(LLVMTypeOf(string)) != LLVMStructTypeKind
-                || LLVMCountStructElementTypes(LLVMTypeOf(string)) != 2)
-                break;
-            LLVMTypeRef parameters[] = {i32, i64, i64};
-            LLVMTypeRef signature = LLVMFunctionType(i32, parameters,
-                3, false);
-            LLVMValueRef writer = LLVMGetNamedFunction(state->module,
-                native->s);
-            if (!writer)
-                writer = LLVMAddFunction(state->module,
-                    native->s, signature);
-            if (!writer) break;
-            LLVMValueRef arguments[] = {
-                fd,
-                LLVMBuildExtractValue(state->builder, string, 0,
-                                      "fd_write.low"),
-                LLVMBuildExtractValue(state->builder, string, 1,
-                                      "fd_write.high"),
-            };
-            result = LLVMBuildCall2(state->builder, signature, writer,
-                arguments, 3, "fd_write");
-            return result && save_result(state, instruction, result);
-        }
-        native = target
             ? ir_annot_get(&target->annots, "n00bb.abi.repr_default") : nullptr;
         if (native && native->kind == IR_ANNOT_STR && native->s) {
             if (count != 3 || !instruction->dest
@@ -9551,8 +9518,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                 LLVMTypeRef type = mutator_function_type(state->module,
                                                          target);
                 core_buffer_t name = {0};
-                core_buffer_printf(&name, "%s.%s$gc_mutator",
-                    ir_module_name(target->owner), target->name);
+                mutator_symbol(&name, target);
                 if (type) callee = LLVMAddFunction(state->module,
                     name.data, type);
                 core_buffer_release(&name);
@@ -10203,12 +10169,18 @@ mutator_function_type(LLVMModuleRef target, ir_func_t *function)
     return result;
 }
 
+static void
+mutator_symbol(core_buffer_t *name, ir_func_t *function)
+{
+    core_buffer_printf(name, "%s.%s$gc_mutator",
+        ir_module_name(function->owner), function->name);
+}
+
 static LLVMValueRef
 mutator_function(LLVMModuleRef target, ir_func_t *function)
 {
     core_buffer_t name = {0};
-    core_buffer_printf(&name, "%s.%s$gc_mutator",
-        ir_module_name(function->owner), function->name);
+    mutator_symbol(&name, function);
     LLVMValueRef result = LLVMGetNamedFunction(target, name.data);
     core_buffer_release(&name);
     return result;
@@ -11170,13 +11142,23 @@ lower_module(LLVMModuleRef target, const ir_module_t *source,
         ir_func_t *function = mutator_functions.data[i];
         LLVMTypeRef signature = mutator_function_type(target, function);
         core_buffer_t name = {0};
-        core_buffer_printf(&name, "%s.%s$gc_mutator",
-            ir_module_name(function->owner), function->name);
+        mutator_symbol(&name, function);
         LLVMValueRef declared = signature
             ? LLVMGetNamedFunction(target, name.data) : nullptr;
         if (!declared && signature)
             declared = LLVMAddFunction(target, name.data, signature);
         core_buffer_release(&name);
+        if (declared) {
+            core_buffer_t source_name = {0};
+            core_buffer_printf(&source_name, "%s.%s",
+                ir_module_name(function->owner), function->name);
+            LLVMAddAttributeAtIndex(declared, LLVMAttributeFunctionIndex,
+                LLVMCreateStringAttribute(LLVMGetModuleContext(target),
+                    code_name_attribute,
+                    (unsigned)strlen(code_name_attribute),
+                    source_name.data, (unsigned)source_name.byte_len));
+            core_buffer_release(&source_name);
+        }
         if (!declared) {
             core_list_free(mutator_functions);
             core_list_free(inline_callees);
@@ -12500,6 +12482,14 @@ emit_code_map(LLVMModuleRef module, core_diagnostics_t *diagnostics)
             continue;
         size_t length = 0;
         const char *name = LLVMGetValueName2(function, &length);
+        LLVMAttributeRef code_name = LLVMGetStringAttributeAtIndex(function,
+            LLVMAttributeFunctionIndex, code_name_attribute,
+            (unsigned)strlen(code_name_attribute));
+        if (code_name) {
+            unsigned code_name_length = 0;
+            name = LLVMGetStringAttributeValue(code_name, &code_name_length);
+            length = code_name_length;
+        }
         if (!name || !length) continue;
         LLVMValueRef text = LLVMConstStringInContext2(context, name, length,
                                                       true);

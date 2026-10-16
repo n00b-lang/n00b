@@ -1,9 +1,11 @@
+import string.core
+
 trait Raw_Repr {
     func raw_repr(self: `T, fd: i32) -> i32
 }
 
 func raw_repr(self: string, fd: i32) -> i32 {
-    return __fd_write(fd, self)
+    return string.core.__fd_write(fd, self)
 }
 
 func raw_repr(self: `T, fd: i32) -> i32 {

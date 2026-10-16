@@ -1,6 +1,8 @@
+import string.core
+
 public func panic(message: string) {
-    __fd_write(2, "panic: ")
-    __fd_write(2, message)
-    __fd_write(2, "\n")
+    string.core.__fd_write(2, "panic: ")
+    string.core.__fd_write(2, message)
+    string.core.__fd_write(2, "\n")
     __panic_trace()
 }

@@ -2953,10 +2953,8 @@ function_parameter_info(parse_grammar_t *grammar, parse_sym_entry_t *symbol,
         if (signature)
             formals = child_nt(grammar, signature, "trait-param-decl");
     }
-    if (symbol && (parse_sym_binding(symbol,
-            CORE_STRING_STATIC("n00bb.abi.fd_write"))
-        || parse_sym_binding(symbol,
-            CORE_STRING_STATIC("n00bb.abi.repr_default")))) {
+    if (symbol && parse_sym_binding(symbol,
+            CORE_STRING_STATIC("n00bb.abi.repr_default"))) {
         th_type *signature = th_resolve(symbol->type);
         const th_param *parameter = signature
             && th_kind_of(signature) == TH_FUNCTION

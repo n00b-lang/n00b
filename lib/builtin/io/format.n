@@ -48,7 +48,7 @@ private func write_raw(fd: int, bytes: Array[u8], at: uint, n: uint)
     }
     let whole: string = string.core.from_raw(bytes, cast[int] (at + n), copy = false,
                                  encoding = string.core.Str_Encoding.binary)
-    let wrote: i32 = __fd_write(cast[i32] fd,
+    let wrote: i32 = string.core.__fd_write(cast[i32] fd,
         string.core.byte_slice(whole, cast[int] at, cast[int] (at + n)))
     if wrote < 0 {
         fail cast[int] wrote
