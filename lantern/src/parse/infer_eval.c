@@ -791,6 +791,8 @@ project(ictx *c, parse_infer_proj_t op, th_type *t,
             th_type *element = th_seq_elem(t);
             if (!element) {
                 c->failed = true;
+                th_err(c->tc, TH_ERR_CONSTRAINT, "element_address", nullptr, t,
+                       "only array elements have addresses; this container cannot be indexed by reference");
                 return result;
             }
             return element;
