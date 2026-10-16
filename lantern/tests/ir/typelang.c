@@ -306,6 +306,24 @@ static void test_bitslice_prefix_types(void)
     ir_ctx_free(ctx);
 }
 
+static void test_keyword_name_segments(void)
+{
+    ir_ctx_t   *ctx  = ir_ctx_new();
+    th_ctx     *th   = ir_ctx_types(ctx);
+    const char *name = "builtin.containers.set.Set[builtin.containers.dict.Dict[int, i64]]";
+    char       *err  = nullptr;
+    th_type    *t    = ir_typelang_parse(th, name, &err);
+
+    if (!t || strcmp(th_print(th, t), name)) {
+        printf("FAIL  %s does not read back (%s)\n", name,
+               t ? th_print(th, t) : err ? err : "no type");
+        fails++;
+    }
+
+    free(err);
+    ir_ctx_free(ctx);
+}
+
 static void test_nonsense_is_refused(void)
 {
     ir_ctx_t *ctx = ir_ctx_new();
@@ -368,6 +386,7 @@ int main(int argc, char **argv)
     test_bitslice_prefix_types();
     test_n00b_function_failure_channel();
     test_consume_parameter_mode();
+    test_keyword_name_segments();
     test_nonsense_is_refused();
     ir_typelang_shutdown();
 

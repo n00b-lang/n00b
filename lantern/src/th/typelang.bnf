@@ -20,9 +20,16 @@
 <named-type> @nospace($2) ::= %"variant"? <qualified-name> <type-app>?
 <type-app>   @nospace ::= %"[" <type-args> %"]"
 
-<qualified-name> @nospace ::= %IDENTIFIER (%"." %IDENTIFIER)*
-<qualified-name> @nospace ::= %"set" (%"." %IDENTIFIER)*
-<qualified-name> @nospace ::= %"dict" (%"." %IDENTIFIER)*
+<qualified-name> @nospace ::= %IDENTIFIER (%"." <name-segment>)*
+<qualified-name> @nospace ::= %"set" (%"." <name-segment>)*
+<qualified-name> @nospace ::= %"dict" (%"." <name-segment>)*
+
+<name-segment> ::= %IDENTIFIER | %"set" | %"dict" | %"variant" | %"forall"
+                 | %"bitint" | %"ubitint" | %"i" | %"u" | %"bits" | %"ptr"
+                 | %"ref" | %"mutref" | %"own" | %"gcref" | %"tmpref"
+                 | %"nullable" | %"reseatable" | %"indexable" | %"owning"
+                 | %"exclusive" | %"temporary" | %"array" | %"t" | %"fail"
+                 | %"where" | %"in" | %"out" | %"inout" | %"consume"
 
 <type-args> @nospace($1) ::= <type-arg> (%"," <type-arg>)*
 

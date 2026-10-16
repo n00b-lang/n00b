@@ -342,6 +342,21 @@ static void *r_qualified_name(parse_reduce_t *r)
     return n;
 }
 
+static void *r_name_segment(parse_reduce_t *r)
+{
+    bctx         *c    = r->thunk;
+    core_string_t text = parse_tree_leaf_text(core_tree_child(r->node, 0));
+
+    if (!text.data) {
+        return nullptr;
+    }
+
+    tl_node *n = node_new(c, TL_NAME);
+    n->name    = core_strndup(text.data, text.u8_bytes);
+
+    return n;
+}
+
 static void *r_type_arg(parse_reduce_t *r)
 {
     bctx    *c    = r->thunk;
@@ -1233,6 +1248,7 @@ static bool install(parse_tree_walk_t *w, parse_grammar_t *g, bctx *c)
     REG("isect-type", r_isect);
     REG("named-type", r_named_type);
     REG("qualified-name", r_qualified_name);
+    REG("name-segment", r_name_segment);
     REG("type-args", r_type_args);
     REG("type-arg", r_type_arg);
     REG("tvar", r_tvar);
