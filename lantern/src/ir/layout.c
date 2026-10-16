@@ -741,9 +741,11 @@ static bool lay_out_record(L *l, th_type *t, th_type *rec, ir_descriptor_t *d)
         most = algn > most ? algn : most;
 
         if (slot->bit_offset.state == IR_LAYOUT_PINNED) {
-            if (slot->bit_offset.value % 8 == 0) {
-                at = slot->bit_offset.value / 8 + size;
-            }
+            uint64_t width = slot->bit_width.state == IR_LAYOUT_PINNED
+                                 ? slot->bit_width.value
+                                 : size * 8;
+            uint64_t end   = (slot->bit_offset.value + width + 7) / 8;
+            at             = end > at ? end : at;
         }
         else {
             at             = round_up(at, algn);
