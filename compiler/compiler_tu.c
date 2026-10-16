@@ -2440,8 +2440,9 @@ contextualize_record_literal(parse_grammar_t *grammar,
             break;
         }
         th_type *actual_field = core_tree_node_value(value_node).type;
-        if (!n00bb_value_materializes(state, value_node, actual_field,
-                                      field_type)) {
+        bool converted = false;
+        if (!n00bb_type_materialize(grammar, state, value_node, actual_field,
+                                    field_type, &converted)) {
             valid = false;
             break;
         }
@@ -2583,9 +2584,10 @@ contextualize_record_fields_before_inference(parse_grammar_t *grammar,
         th_type *field_type = th_record_lookup(definition, name.data);
         th_type *value_type = core_tree_node_value(value).type;
         bool record_literal = n00bb_node_record_literal_origin(value);
+        bool converted = false;
         if (field_type && value_type && !record_literal
-            && n00bb_value_materializes(state, value, value_type,
-                                        field_type)) {
+            && n00bb_type_materialize(grammar, state, value, value_type,
+                                      field_type, &converted)) {
             core_tree_node_value(field).type = field_type;
             continue;
         }
@@ -3162,43 +3164,14 @@ record_function_exit_fact(parse_grammar_t *grammar,
             CORE_STRING_STATIC("n00bb.body-function-signature"));
         if (!signature) signature = symbol->type;
         th_type *expected = signature ? th_func_ret(signature) : nullptr;
-        th_type *actual_element = n00bb_atomic_element_type(observed);
-        th_type *expected_element = n00bb_atomic_element_type(expected);
-        bool unwrap_atomic = actual_element && !expected_element;
-        bool wrap_atomic = expected_element && !actual_element;
-        th_type *actual = unwrap_atomic ? actual_element : observed;
-        th_type *wanted = wrap_atomic ? expected_element : expected;
-        if (wanted) {
-            if (!unwrap_atomic && !wrap_atomic
-                && n00bb_contextual_integer_literal(state, value, wanted))
-                actual = core_tree_node_value(value).type;
-            int64_t minimum = 0, maximum = 0;
-            bool range_coercion = !unwrap_atomic && !wrap_atomic
-                && is_integer_type(actual) && is_integer_type(wanted)
-                && (n00bb_integer_type_promotes_to(actual, wanted)
-                    || n00bb_practical_unsigned_to_signed(grammar, state,
-                        value, actual, wanted)
-                    || (n00bb_current_integer_range(state, value,
-                                                    &minimum, &maximum)
-                        && n00bb_integer_interval_fits_type(wanted,
-                                                            minimum,
-                                                            maximum)));
-            th_type *option_element = nullptr;
-            bool option_value = n00bb_option_type_element(wanted,
-                                                         &option_element)
-                && (th_is_nil(actual)
-                    || (!n00bb_option_type_element(actual, nullptr)
-                        && th_unify_probe(state->types, actual,
-                                          option_element)));
-            bool dereference = n00bb_dereferences_to(state->types, actual,
-                                                     wanted);
-            th_type *unified = option_value || range_coercion || dereference
-                ? wanted : th_unify_in_place(state->types, actual, wanted);
-            if (!unified) facts->conflict = true;
+        if (expected) {
+            bool converted = false;
+            th_type *materialized = n00bb_type_materialize(grammar, state,
+                value, observed, expected, &converted);
+            if (!materialized) facts->conflict = true;
             else {
-                observed = wrap_atomic ? expected : unified;
-                if (!option_value && !range_coercion && !dereference)
-                    core_tree_node_value(value).type = observed;
+                observed = materialized;
+                if (!converted) core_tree_node_value(value).type = observed;
             }
         }
     }
@@ -7555,29 +7528,88 @@ n00bb_contextual_integer_literal(n00bb_tu_state_t *state,
     return true;
 }
 
-bool
-n00bb_value_materializes(n00bb_tu_state_t *state, parse_tree_t *node,
-                         th_type *actual, th_type *expected)
+static bool
+integer_value_promotes(parse_grammar_t *grammar, n00bb_tu_state_t *state,
+                       parse_tree_t *node, th_type *actual, th_type *expected)
 {
-    if (!state || !actual || !expected) return false;
-    th_ctx *types = state->types;
-    if (th_unify_probe(types, actual, expected)
-        || n00bb_contextual_integer_literal(state, node, expected)
-        || n00bb_dereference_target(types, actual, expected)) return true;
-    th_type *element = n00bb_atomic_element_type(expected);
-    if (element && !n00bb_atomic_element_type(actual))
-        return n00bb_value_materializes(state, node, actual, element);
-    if (n00bb_option_type_element(expected, &element))
-        return th_is_nil(actual)
-            || n00bb_value_materializes(state, node, actual, element);
-    if (th_builtin_kind(types, expected) == TH_BUILTIN_ANY) return true;
+    int64_t minimum = 0, maximum = 0;
+    return node && is_integer_type(actual) && is_integer_type(expected)
+        && (n00bb_integer_type_promotes_to(actual, expected)
+            || n00bb_practical_unsigned_to_signed(grammar, state, node,
+                                                  actual, expected)
+            || (n00bb_current_integer_range(state, node, &minimum, &maximum)
+                && n00bb_integer_interval_fits_type(expected, minimum,
+                                                    maximum)));
+}
+
+static th_type *
+record_literal_as_named(n00bb_tu_state_t *state, parse_tree_t *node,
+                        th_type *actual, th_type *expected)
+{
+    if (!node || core_tree_is_leaf(node)
+        || !n00bb_node_record_literal_origin(node)
+        || th_kind_of(th_resolve(actual)) != TH_RECORD
+        || th_kind_of(th_resolve(expected)) != TH_NAMED) return nullptr;
+    th_type *definition = th_type_definition(state->types, expected);
+    return definition && th_kind_of(th_resolve(definition)) == TH_RECORD
+        && th_unify_probe(state->types, actual, definition)
+        && th_unify_in_place(state->types, actual, definition)
+        ? expected : nullptr;
+}
+
+static th_type *
+union_arm_for(th_ctx *types, th_type *actual, th_type *expected)
+{
+    if (th_builtin_kind(types, expected) == TH_BUILTIN_ANY) return expected;
     th_comb comb;
     if (!th_sum_comb(th_resolve(expected), &comb) || comb != TH_UNION)
-        return false;
+        return nullptr;
     for (size_t i = 0; i < th_sum_len(expected); i++)
         if (th_unify_probe(types, actual, th_sum_arm(expected, i)))
-            return true;
-    return false;
+            return expected;
+    return nullptr;
+}
+
+th_type *
+n00bb_type_materialize(parse_grammar_t *grammar, n00bb_tu_state_t *state,
+                       parse_tree_t *node, th_type *actual, th_type *expected,
+                       bool *converted)
+{
+    *converted = false;
+    if (!state || !actual || !expected) return nullptr;
+    th_ctx *types = state->types;
+    th_type *element = n00bb_atomic_element_type(actual);
+    if (element && !n00bb_atomic_element_type(expected)) actual = element;
+    element = n00bb_atomic_element_type(expected);
+    if (element && !n00bb_atomic_element_type(actual)) {
+        bool inner = false;
+        th_type *materialized = n00bb_type_materialize(grammar, state, node,
+            actual, element, &inner);
+        *converted = materialized != nullptr;
+        return materialized ? expected : nullptr;
+    }
+    if (n00bb_contextual_integer_literal(state, node, expected))
+        return expected;
+    *converted = true;
+    if (integer_value_promotes(grammar, state, node, actual, expected)
+        || n00bb_dereferences_to(types, actual, expected)) return expected;
+    if (n00bb_option_type_element(expected, &element)
+        && !n00bb_option_type_element(actual, nullptr)
+        && (th_is_nil(actual) || th_unify_probe(types, actual, element)
+            || n00bb_contextual_integer_literal(state, node, element)))
+        return expected;
+    th_type *materialized = union_arm_for(types, actual, expected);
+    if (materialized && !th_unify_probe(types, actual, expected))
+        return materialized;
+    *converted = false;
+    materialized = record_literal_as_named(state, node, actual, expected);
+    if (materialized) return materialized;
+    th_type *option_element = nullptr;
+    if (n00bb_option_type_element(actual, &option_element)
+        && th_is_closed(types, expected)
+        && th_unify_in_place(types, option_element, expected))
+        return expected;
+    return th_unify_in_place(types, actual, expected);
 }
 
 bool

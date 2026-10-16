@@ -39,95 +39,19 @@ unify_call_node_type(core_translation_unit_t *unit,
                      th_type *expected)
 {
     if (!actual || !expected) return true;
-    th_type *actual_element = n00bb_atomic_element_type(actual);
-    th_type *expected_element = n00bb_atomic_element_type(expected);
-    bool unwrap_actual = actual_element && !expected_element;
-    bool wrap_expected = expected_element && !actual_element;
-    th_type *unification_actual = unwrap_actual ? actual_element : actual;
-    th_type *unification_expected = wrap_expected
-        ? expected_element : expected;
-    th_type *option_element = nullptr;
-    bool option_context = n00bb_option_type_element(unification_actual,
-        &option_element) && th_is_closed(state->types, unification_expected);
-    th_type *expected_option_element = nullptr;
-    bool into_option_context = n00bb_option_type_element(
-        unification_expected, &expected_option_element)
-        && th_is_closed(state->types, unification_actual)
-        && (th_is_nil(unification_actual)
-            || th_unify(state->types, unification_actual,
-                        expected_option_element));
-    th_type *unified = nullptr;
-    parse_tree_t *origin = typed_node && !wrap_expected && !unwrap_actual
-        ? core_tree_node_value(typed_node).integer_literal_origin : nullptr;
-    if (origin && n00bb_contextual_integer_literal(state, typed_node,
-                                                    expected)) {
-        unified = expected;
-    }
-    th_type *literal_element = nullptr;
-    if (!unified && origin
-        && n00bb_option_type_element(unification_expected, &literal_element)
-        && n00bb_contextual_integer_literal(state, typed_node,
-                                            literal_element)) {
-        unified = unification_expected;
-        unification_actual = literal_element;
-        into_option_context = true;
-    }
-    if (!unified && typed_node && !wrap_expected && !unwrap_actual
-        && is_integer_type(unification_actual)
-        && is_integer_type(unification_expected)) {
-        int64_t minimum = 0, maximum = 0;
-        if (n00bb_integer_type_promotes_to(unification_actual,
-                                            unification_expected)
-            || n00bb_practical_unsigned_to_signed(state->link_analysis
-                    ? state->link_analysis->grammar : nullptr,
-                state, typed_node, unification_actual,
-                unification_expected)
-            || (n00bb_current_integer_range(state, typed_node,
-                                            &minimum, &maximum)
-                && n00bb_integer_interval_fits_type(unification_expected,
-                                                    minimum, maximum)))
-            return true;
-    }
-    if (!unified && !wrap_expected && !unwrap_actual
-        && n00bb_dereferences_to(state->types, unification_actual,
-                                 unification_expected))
-        return true;
-    if (!unified && into_option_context) unified = unification_expected;
-    if (!unified && typed_node && !core_tree_is_leaf(typed_node)
-        && n00bb_node_record_literal_origin(typed_node)
-        && th_kind_of(th_resolve(unification_actual)) == TH_RECORD
-        && th_kind_of(th_resolve(unification_expected)) == TH_NAMED) {
-        th_type *definition = th_type_definition(state->types,
-                                                 unification_expected);
-        if (definition && th_kind_of(th_resolve(definition)) == TH_RECORD
-            && th_unify_probe(state->types, unification_actual, definition)
-            && th_unify_in_place(state->types, unification_actual, definition))
-            unified = unification_expected;
-    }
-    if (!unified && option_context
-        && th_unify_in_place(state->types, option_element,
-                             unification_expected))
-        unified = unification_expected;
-    if (!unified)
-        unified = th_unify_in_place(state->types, unification_actual,
-                                    unification_expected);
-    if (!unified) {
+    bool converted = false;
+    th_type *materialized = n00bb_type_materialize(state->link_analysis
+            ? state->link_analysis->grammar : nullptr,
+        state, typed_node, actual, expected, &converted);
+    if (!materialized) {
         report_call_type_error(unit, diagnostic_node, state->types, actual,
                                expected);
         return false;
     }
-    for (parse_tree_t *node = origin; node;
-         node = core_tree_node_value(node).parent) {
-        core_tree_node_value(node).type = into_option_context
-            ? unification_actual : unified;
-        if (node == typed_node) break;
-    }
-    if (typed_node && !core_tree_is_leaf(typed_node)) {
-        th_type *contextual_type = into_option_context
-            ? unification_actual : wrap_expected ? expected : unified;
-        core_tree_node_value(typed_node).type = contextual_type;
-        propagate_tree_type_to_wrappers(typed_node, state->types,
-                                        actual, contextual_type);
+    if (!converted && typed_node && !core_tree_is_leaf(typed_node)) {
+        core_tree_node_value(typed_node).type = materialized;
+        propagate_tree_type_to_wrappers(typed_node, state->types, actual,
+                                        materialized);
     }
     return true;
 }
