@@ -463,6 +463,7 @@ struct writ_plan_item_view {
     writ_str_t release;
     uint32_t with_item;
     bool nullable;
+    bool optional;
 };
 
 struct writ_plan_slot_view {

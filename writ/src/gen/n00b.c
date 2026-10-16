@@ -195,6 +195,8 @@ buffer_type(const n00b_t *g)
     return writ_str_format(g->session, "Array[%.*s]", S(prim(g, "u%u", 8)));
 }
 
+static bool is_result(const writ_plan_item_view_t *item);
+
 static bool
 optional_result(const writ_plan_item_view_t *item)
 {
@@ -241,6 +243,14 @@ item_type(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, uint32_t ind
     const writ_plan_item_view_t *item = &plan->items[index];
     writ_str_t repr = writ_binding_slot_repr(g->b, fn, item->name);
     const writ_type_view_t *element = item->type && item->type->target ? item->type->target : item->type;
+    if (item->optional && is_result(item)) {
+        writ_plan_item_view_t present = *item;
+        present.optional = false;
+        present.nullable = false;
+        writ_plan_view_t view = *plan;
+        view.items = &present;
+        return writ_str_format(g->session, "%.*s?", S(item_type(g, fn, &view, 0)));
+    }
     switch (item->shape) {
     case WRIT_SHAPE_BYTES:
         if (is_text_repr(repr)) {
@@ -1699,6 +1709,45 @@ success_count(const writ_plan_view_t *plan)
     return count;
 }
 
+static bool
+lifts_in(const writ_plan_view_t *plan, uint32_t outcome, uint32_t item)
+{
+    for (size_t i = 0; i < plan->steps_count; i++) {
+        const writ_plan_step_view_t *step = &plan->steps[i];
+        if (step->phase == WRIT_PHASE_OUTCOME && step->outcome == outcome && step->item == item) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static uint32_t
+optional_result_item(const writ_plan_view_t *plan)
+{
+    uint32_t found = WRIT_PLAN_NONE;
+    for (uint32_t i = 0; i < plan->items_count; i++) {
+        if (is_result(&plan->items[i])) {
+            if (found != WRIT_PLAN_NONE || !plan->items[i].optional) {
+                return WRIT_PLAN_NONE;
+            }
+            found = i;
+        }
+    }
+    size_t lifting = 0, absent = 0;
+    for (uint32_t o = 0; found != WRIT_PLAN_NONE && o < plan->outcomes_count; o++) {
+        if (plan->outcomes[o].kind == WRIT_OUTCOME_SUCCESS) {
+            lifts_in(plan, o, found) ? lifting++ : absent++;
+        }
+    }
+    return lifting == 1 && absent == 1 ? found : WRIT_PLAN_NONE;
+}
+
+static bool
+outcome_enum(const writ_plan_view_t *plan)
+{
+    return success_count(plan) > 1 && optional_result_item(plan) == WRIT_PLAN_NONE;
+}
+
 static writ_str_t
 result_type_name(const wrapper_t *w)
 {
@@ -1716,7 +1765,7 @@ outcome_type_name(const wrapper_t *w)
 static void
 emit_result_types(const wrapper_t *w, writ_emit_t *emit, const uint32_t *outs, size_t count)
 {
-    if (success_count(w->plan) > 1) {
+    if (outcome_enum(w->plan)) {
         writ_emit_line(emit, "");
         writ_emit_open(emit, "enum %.*s", S(outcome_type_name(w)));
         size_t emitted = 0;
@@ -1728,7 +1777,7 @@ emit_result_types(const wrapper_t *w, writ_emit_t *emit, const uint32_t *outs, s
         }
         writ_emit_close(emit, nullptr);
     }
-    bool multiple_success = success_count(w->plan) > 1;
+    bool multiple_success = outcome_enum(w->plan);
     if (count > 1 || (count && multiple_success)) {
         writ_emit_line(emit, "");
         writ_emit_open(emit, "type %.*s", S(result_type_name(w)));
@@ -2445,7 +2494,7 @@ emit_wrapper(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view
     bool first = true;
     emit_wrapper_params(&w, emit, keywords, options_record, &first);
     writ_emit_text(emit, ")");
-    bool multiple_success = success_count(plan) > 1;
+    bool multiple_success = outcome_enum(plan);
     if (multiple_success && out_count) {
         writ_emit_text(emit, " -> %.*s", S(result_type_name(&w)));
     } else if (multiple_success) {
@@ -2583,6 +2632,13 @@ emit_wrapper(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view
     } else if (!can_fail(&w) && out_count) {
         writ_emit_line(emit, "return result");
     } else if (out_count == 1) {
+        for (uint32_t o = 0; plan->items[outs[0]].optional && o < plan->outcomes_count; o++) {
+            if (plan->outcomes[o].kind == WRIT_OUTCOME_SUCCESS && !lifts_in(plan, o, outs[0])) {
+                writ_emit_open(emit, "if outcome == %u", o);
+                writ_emit_line(emit, "return nil");
+                writ_emit_close(emit, nullptr);
+            }
+        }
         for (size_t i = 0; i < params.len; i++) {
             if (params.data[i].kind == PARAM_OUT && params.data[i].item == outs[0]
                 && writ_str_eq(params.data[i].name, plan->items[outs[0]].name)) {
@@ -2652,7 +2708,7 @@ emit_policy_dispatch(const n00b_t *g, writ_emit_t *emit, size_t fn)
     w.receiver = find_receiver(&w);
     uint32_t *outs = writ_alloc(g->session, sizeof(uint32_t) * (plan->items_count + 1));
     size_t out_count = results(&w, outs);
-    if (out_count > 1 || success_count(plan) > 1) {
+    if (out_count > 1 || outcome_enum(plan)) {
         return;
     }
     const writ_slot_view_t *policy = &plan->fn->slots[plan->policy_slot];

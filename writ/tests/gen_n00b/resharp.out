@@ -1621,17 +1621,7 @@ func find_all(self: Regex, input: Array[u8]) -> Array[Match] fail: Error {
     return __ffi_take_array_Match(out_, out__length)
 }
 
-enum Find_Anchored_Outcome {
-    ok = 0,
-    none = 1
-}
-
-type Find_Anchored_Result {
-    public outcome: Find_Anchored_Outcome
-    public out_: Match
-}
-
-func find_anchored(self: Regex, input: Array[u8]) -> Find_Anchored_Result fail: Error {
+func find_anchored(self: Regex, input: Array[u8]) -> Match? fail: Error {
     var input_value = input
     var out_: Match = (start = 0, end = 0)
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
@@ -1653,12 +1643,10 @@ func find_anchored(self: Regex, input: Array[u8]) -> Find_Anchored_Result fail: 
         let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_find_anchored")
         fail failure
     }
-    var which: Find_Anchored_Outcome = Find_Anchored_Outcome.none
-    if outcome == 0 {
-        which = Find_Anchored_Outcome.ok
+    if outcome == 1 {
+        return nil
     }
-    let values: Find_Anchored_Result = (outcome = which, out_ = out_)
-    return values
+    return out_
 }
 
 func is_full_match(self: Regex, input: Array[u8]) -> bool fail: Error {
@@ -1686,17 +1674,7 @@ func is_full_match(self: Regex, input: Array[u8]) -> bool fail: Error {
     return out_
 }
 
-enum Capture_Index_For_Name_Outcome {
-    ok = 0,
-    none = 1
-}
-
-type Capture_Index_For_Name_Result {
-    public outcome: Capture_Index_For_Name_Outcome
-    public out_: u64
-}
-
-func capture_index_for_name(self: Regex, name: string) -> Capture_Index_For_Name_Result fail: Error {
+func capture_index_for_name(self: Regex, name: string) -> u64? fail: Error {
     var name_value = name
     var out_: u64 = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
@@ -1718,12 +1696,10 @@ func capture_index_for_name(self: Regex, name: string) -> Capture_Index_For_Name
         let failure: Error = (code = cast[i64]outcome, text = __ffi_take_string(ref panicked_detail), fn = "regex_capture_index_for_name")
         fail failure
     }
-    var which: Capture_Index_For_Name_Outcome = Capture_Index_For_Name_Outcome.none
-    if outcome == 0 {
-        which = Capture_Index_For_Name_Outcome.ok
+    if outcome == 1 {
+        return nil
     }
-    let values: Capture_Index_For_Name_Result = (outcome = which, out_ = out_)
-    return values
+    return out_
 }
 7	resharp.derived.writ:29:1	RegexOptions
 25	resharp.derived.writ:38:1	Regex
@@ -1746,9 +1722,9 @@ func capture_index_for_name(self: Regex, name: string) -> Capture_Index_For_Name
 372	resharp.derived.writ:163:1	regex_new
 401	resharp.derived.writ:174:1	regex_with_options
 434	resharp.derived.writ:186:1	regex_find_all
-470	resharp.derived.writ:201:1	regex_find_anchored
-500	resharp.derived.writ:215:1	regex_is_full_match
-535	resharp.derived.writ:227:5	regex_capture_index_for_name
+460	resharp.derived.writ:201:1	regex_find_anchored
+488	resharp.derived.writ:215:1	regex_is_full_match
+513	resharp.derived.writ:227:5	regex_capture_index_for_name
 library resharp_writ
 search_path target/release
 load static

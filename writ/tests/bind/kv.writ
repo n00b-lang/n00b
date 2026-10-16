@@ -29,11 +29,14 @@ fn kv_put(db: Db, key: *[u8; klen], klen: usize, val: *[u8; vlen], vlen: usize)
 
 # value is copied into a kv-heap buffer the caller owns
 fn kv_get(db: Db, key: *[u8; klen], klen: usize,
-          out_val: out *?[u8; *out_len] own release kv_free,
+          out_val: out **[u8; *out_len] own release kv_free,
           out_len: out *usize)
     -> c_int as kv_status
-  error ret == KV_ERR
-  on error out_val: unset                # KV_NOTFOUND is not an error, but sets nothing
+  outcome failed failure when ret == KV_ERR
+  outcome missing success when ret == KV_NOTFOUND
+  outcome found success
+  on failed out_val: unset
+  on missing out_val: unset
 
 fn kv_iter_new(db: Db, prefix: ?[u8; plen], plen: usize) -> own ?Iter with db
   error ret == null

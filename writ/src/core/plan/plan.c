@@ -938,6 +938,19 @@ builder_free(builder_t *b)
     core_list_free(b->finally);
 }
 
+static void
+mark_unset_results(builder_t *b)
+{
+    for (uint32_t item = 0; item < b->items.len; item++) {
+        writ_plan_item_view_t *view = &b->items.data[item];
+        for (uint32_t i = 0; view->role == WRIT_ROLE_RESULT && i < b->outcomes.len; i++) {
+            if (b->outcomes.data[i].kind == WRIT_OUTCOME_SUCCESS && unset_in(b, item, b->outcomes.data[i].name)) {
+                view->optional = true;
+            }
+        }
+    }
+}
+
 const writ_plan_view_t *
 writ_plan_build(writ_model_t *model, uint32_t fn, uint32_t arm)
 {
@@ -974,6 +987,7 @@ writ_plan_build(writ_model_t *model, uint32_t fn, uint32_t arm)
     plan_varargs(&b);
     plan_result(&b);
     plan_details(&b);
+    mark_unset_results(&b);
 
     step_list_t steps = core_list_new(writ_plan_step_view_t);
     append_block(&steps, &b.prepare, WRIT_PHASE_PREPARE, WRIT_PLAN_NONE);

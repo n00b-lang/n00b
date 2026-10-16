@@ -195,6 +195,7 @@ WRIT_FIELD(plan_item, uint32_t, contract_slot)
 WRIT_FIELD(plan_item, writ_str_t, release)
 WRIT_FIELD(plan_item, uint32_t, with_item)
 WRIT_FIELD(plan_item, bool, nullable)
+WRIT_FIELD(plan_item, bool, optional)
 WRIT_END(plan_item)
 
 WRIT_VIEW(plan_slot)

@@ -42,8 +42,9 @@ enum {
 int32_t kv_kv_put(kv_db *db, const uint8_t *key, size_t key_length, const uint8_t *val, size_t val_length);
 
 enum {
-    kv_kv_get_error = 0,
-    kv_kv_get_ok = 1,
+    kv_kv_get_failed = 0,
+    kv_kv_get_missing = 1,
+    kv_kv_get_found = 2,
 };
 int32_t kv_kv_get(kv_db *db, const uint8_t *key, size_t key_length, kv_bytes_t *out_val);
 
@@ -200,14 +201,21 @@ int32_t kv_kv_get(kv_db *db, const uint8_t *key, size_t key_length, kv_bytes_t *
     s4 = (size_t *)&l1;
     ret = kv_get(s0, s1, s2, s3, s4);
     if (((long long)ret) == KV_ERR) {
-        outcome = kv_kv_get_error;
+        outcome = kv_kv_get_failed;
+    }
+    else if (((long long)ret) == KV_NOTFOUND) {
+        outcome = kv_kv_get_missing;
     }
     else {
-        outcome = kv_kv_get_ok;
+        outcome = kv_kv_get_found;
     }
-    if (outcome == kv_kv_get_ok) {
+    if (outcome == kv_kv_get_found) {
         out_val->data = NULL;
         out_val->length = 0;
+        if (!l0) {
+            outcome = KV_CONTRACT_VIOLATION;
+            goto finish;
+        }
         if (l0) {
             size_t length = (size_t)(((long long)l1));
             out_val->data = malloc(length + 1);
@@ -501,14 +509,6 @@ func __ffi_take_bytes(bytes: Ref[Ffi_Bytes]) -> Array[u8] {
     return copied
 }
 
-func __ffi_take_optional_bytes(bytes: Ref[Ffi_Bytes]) -> Array[u8]? {
-    let value: Ffi_Bytes = ref_read(bytes)
-    if value.data == 0 {
-        return nil
-    }
-    return __ffi_take_bytes(bytes)
-}
-
 func __ffi_take_kv_entry(bytes: Ref[Ffi_Bytes]) -> Entry {
     let value: Ffi_Bytes = ref_read(bytes)
     var lifted: Entry = (key = new[Array[u8]](cast[int]__ffi_kv_entry_key_length(value.data)), val = new[Array[u8]](cast[int]__ffi_kv_entry_val_length(value.data)))
@@ -582,7 +582,10 @@ func get(self: Db, key: Array[u8]) -> Array[u8]? fail: Error {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "kv_get")
         fail failure
     }
-    return __ffi_take_optional_bytes(ref out_val)
+    if outcome == 1 {
+        return nil
+    }
+    return __ffi_take_bytes(ref out_val)
 }
 
 func iter(self: Db, prefix: Array[u8]) -> Iter fail: Error {
@@ -621,11 +624,11 @@ func next(self: Iter) -> Entry? fail: Error {
 18	tests/gen_n00b/../bind/kv.writ:11:1	Iter
 35	tests/gen_n00b/../bind/kv.writ:15:1	kv_entry
 40	tests/gen_n00b/../bind/kv.writ:13:1	kv_status
-77	tests/gen_n00b/../bind/kv.writ:22:1	kv_open
-101	tests/gen_n00b/../bind/kv.writ:26:1	kv_put
-119	tests/gen_n00b/../bind/kv.writ:31:1	kv_get
-138	tests/gen_n00b/../bind/kv.writ:38:1	kv_iter_new
-157	tests/gen_n00b/../bind/kv.writ:42:1	kv_iter_next
+69	tests/gen_n00b/../bind/kv.writ:22:1	kv_open
+93	tests/gen_n00b/../bind/kv.writ:26:1	kv_put
+111	tests/gen_n00b/../bind/kv.writ:31:1	kv_get
+133	tests/gen_n00b/../bind/kv.writ:41:1	kv_iter_new
+152	tests/gen_n00b/../bind/kv.writ:45:1	kv_iter_next
 library kv
 load static
 extern __kv_open kv_n00b_kv_open (ref[string], ref[uint], ref[int]) -> i32 fail: nil

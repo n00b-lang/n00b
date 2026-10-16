@@ -275,6 +275,7 @@ struct writ_plan_item_view_t @size(80) @align(8) {
     release: writ_str_t @56
     with_item: u32 @72
     nullable: bool @76
+    optional: bool @77
 }
 struct writ_plan_slot_view_t @size(32) @align(8) {
     struct_size: usize @0
