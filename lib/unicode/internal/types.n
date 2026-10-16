@@ -1,0 +1,102 @@
+record Rune_Pair {
+    lo: char
+    hi: char
+}
+
+enum Rune_Filter_Kind {
+    gc = 0, script, bidi, property, range, block, eaw, set
+}
+
+record Rune_Set {
+    ascii_lo: u64
+    ascii_hi: u64
+    ranges:   List[Rune_Pair]
+}
+
+record Rune_Filter {
+    kind: Rune_Filter_Kind
+    lo:   u32
+    hi:   u32
+    set:  Rune_Set?
+}
+
+alias Script = u16
+alias Block = u16
+alias Age = u8
+
+enum Gc {
+    lu = 0, ll, lt, lm, lo, mn, mc, me, nd, nl, no, pc, pd, ps, pe, pi, pf,
+    po, sm, sc, sk, so, zs, zl, zp, cc, cf, cs, co, cn
+}
+
+enum Bidi_Class {
+    l = 0, r, al, en, es, et, an, cs, nsm, bn, b, s, ws, on, lre, lro, rle,
+    rlo, pdf, lri, rli, fsi, pdi
+}
+
+enum Eaw {
+    n = 0, na, h, w, f, a
+}
+
+enum Joining_Type {
+    u = 0, c, d, l, r, t
+}
+
+enum Property {
+    white_space = 0, alphabetic, noncharacter_code_point,
+    default_ignorable_code_point, deprecated, logical_order_exception,
+    variation_selector, uppercase, lowercase, soft_dotted, case_ignorable,
+    cased, changes_when_lowercased, changes_when_uppercased,
+    changes_when_titlecased, changes_when_casefolded, changes_when_casemapped,
+    id_start, id_continue, xid_start, xid_continue, pattern_syntax,
+    pattern_white_space, dash, quotation_mark, terminal_punctuation,
+    sentence_terminal, diacritic, extender, grapheme_base, grapheme_extend,
+    grapheme_link, math, hex_digit, ascii_hex_digit, ideographic,
+    unified_ideograph, radical, ids_binary_operator, ids_trinary_operator,
+    join_control, emoji, emoji_presentation, emoji_modifier,
+    emoji_modifier_base, emoji_component, extended_pictographic
+}
+
+enum Gcb {
+    other = 0, cr, lf, control, extend, zwj, regional_indicator, prepend,
+    spacingmark, l, v, t, lv, lvt
+}
+
+enum Incb {
+    none = 0, consonant, extend, linker
+}
+
+enum Wb {
+    other = 0, cr, lf, newline, extend, zwj, regional_indicator, format,
+    katakana, hebrew_letter, aletter, single_quote, double_quote, midnumlet,
+    midletter, midnum, numeric, extendnumlet, wsegspace
+}
+
+enum Sb {
+    other = 0, cr, lf, extend, sep, format, sp, lower, upper, oletter, numeric,
+    aterm, sterm, close, scontinue
+}
+
+enum Break_Type {
+    grapheme = 0, word, sentence
+}
+
+record Break_Iter {
+    text:                string
+    kind:                Break_Type
+    byte_pos:            u32
+    ri_count:            u32
+    after_zwj:           bool
+    ep_before_zwj:       bool
+    incb_consonant_base: bool
+    incb_linker_seen:    bool
+    prev_wb:             Wb
+    prev_prev_wb:        Wb
+    prev_prev_sb:        Sb
+    sb_term_phase:       u8
+    sb_is_aterm:         bool
+}
+
+enum Lb_Action {
+    none = 0, allowed, mandatory
+}
