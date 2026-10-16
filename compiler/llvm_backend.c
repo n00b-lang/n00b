@@ -7548,6 +7548,15 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                 result, LLVMConstNull(target), "cast.to_signed_overflow"));
         return save_result(state, instruction, result);
     }
+    case IR_OP_ATOMIC_WRAP: {
+        if (count != 1 || operands[0].kind != IR_OPD_VALUE
+            || !operands[0].value || !instruction->dest) break;
+        LLVMValueRef source = lowered_value(state, operands[0].value);
+        LLVMTypeRef target = value_type(state->function->owner,
+            instruction->dest->type, LLVMGetModuleContext(state->module));
+        if (!source || !target || LLVMTypeOf(source) != target) break;
+        return save_result(state, instruction, source);
+    }
     case IR_OP_NOMINAL_CAST: {
         if (count != 1 || operands[0].kind != IR_OPD_VALUE
             || !operands[0].value || !instruction->dest) break;

@@ -2439,20 +2439,9 @@ contextualize_record_literal(parse_grammar_t *grammar,
             valid = false;
             break;
         }
-        bool nil_option = n00bb_is_nil_literal(grammar, value_node)
-            && n00bb_option_type_element(field_type, nullptr);
         th_type *actual_field = core_tree_node_value(value_node).type;
-        th_type *option_element = nullptr;
-        bool some_option = actual_field
-            && n00bb_option_type_element(field_type, &option_element)
-            && !n00bb_option_type_element(actual_field, nullptr)
-            && (th_unify_probe(state->types, actual_field, option_element)
-                || n00bb_contextual_integer_literal(state, value_node,
-                                                    option_element));
-        if (!actual_field || (!nil_option && !some_option
-            && !th_unify_probe(state->types, actual_field, field_type)
-            && !n00bb_contextual_integer_literal(state, value_node,
-                                                   field_type))) {
+        if (!n00bb_value_materializes(state, value_node, actual_field,
+                                      field_type)) {
             valid = false;
             break;
         }
@@ -2592,17 +2581,15 @@ contextualize_record_fields_before_inference(parse_grammar_t *grammar,
         if (!value || core_tree_is_leaf(value)) continue;
         core_string_t name = parse_tree_leaf_text(core_tree_child(field, 0));
         th_type *field_type = th_record_lookup(definition, name.data);
-        th_type *option_element = nullptr;
         th_type *value_type = core_tree_node_value(value).type;
-        if (field_type && value_type
-            && n00bb_option_type_element(field_type, &option_element)
-            && !n00bb_option_type_element(value_type, nullptr)
-            && (n00bb_contextual_integer_literal(state, value, option_element)
-                || th_unify_probe(state->types, value_type, option_element))) {
+        bool record_literal = n00bb_node_record_literal_origin(value);
+        if (field_type && value_type && !record_literal
+            && n00bb_value_materializes(state, value, value_type,
+                                        field_type)) {
             core_tree_node_value(field).type = field_type;
             continue;
         }
-        if (!n00bb_node_record_literal_origin(value)) continue;
+        if (!record_literal) continue;
         if (!field_type || !contextualize_record_literal(grammar, unit, state,
                                                           value, field_type))
             return false;
@@ -7566,6 +7553,31 @@ n00bb_contextual_integer_literal(n00bb_tu_state_t *state,
         if (current == node) break;
     }
     return true;
+}
+
+bool
+n00bb_value_materializes(n00bb_tu_state_t *state, parse_tree_t *node,
+                         th_type *actual, th_type *expected)
+{
+    if (!state || !actual || !expected) return false;
+    th_ctx *types = state->types;
+    if (th_unify_probe(types, actual, expected)
+        || n00bb_contextual_integer_literal(state, node, expected)
+        || n00bb_dereference_target(types, actual, expected)) return true;
+    th_type *element = n00bb_atomic_element_type(expected);
+    if (element && !n00bb_atomic_element_type(actual))
+        return n00bb_value_materializes(state, node, actual, element);
+    if (n00bb_option_type_element(expected, &element))
+        return th_is_nil(actual)
+            || n00bb_value_materializes(state, node, actual, element);
+    if (th_builtin_kind(types, expected) == TH_BUILTIN_ANY) return true;
+    th_comb comb;
+    if (!th_sum_comb(th_resolve(expected), &comb) || comb != TH_UNION)
+        return false;
+    for (size_t i = 0; i < th_sum_len(expected); i++)
+        if (th_unify_probe(types, actual, th_sum_arm(expected, i)))
+            return true;
+    return false;
 }
 
 bool

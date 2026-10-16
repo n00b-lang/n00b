@@ -765,6 +765,8 @@ bool n00bb_range_proven_above_int64(parse_grammar_t *grammar,
                                     parse_tree_t *node);
 bool n00bb_contextual_integer_literal(n00bb_tu_state_t *state,
                                       parse_tree_t *node, th_type *target);
+bool n00bb_value_materializes(n00bb_tu_state_t *state, parse_tree_t *node,
+                              th_type *actual, th_type *expected);
 bool n00bb_contextual_float_literal(parse_tree_t *node, th_type *target);
 bool n00bb_float_literal_adopts(parse_tree_t *node, th_type *operand);
 void cache_type_syntax_node(parse_grammar_t *grammar, parse_tree_t *node);

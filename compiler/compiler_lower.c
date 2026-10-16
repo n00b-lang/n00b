@@ -735,6 +735,12 @@ n00bb_branch_block(ir_lower_context_t *context, n00bb_lower_context_t *lower,
 static ir_value_t *n00bb_emit_indirect_read(
     ir_lower_context_t *context, ir_value_t *address, th_type *type,
     ir_span_t span);
+static ir_value_t *n00bb_materialize(
+    ir_lower_context_t *context, parse_tree_t *node, ir_value_t *value,
+    th_type *target, ir_span_t span);
+static ir_value_t *n00bb_emit_wrapping(
+    ir_lower_context_t *context, ir_op_t op, ir_value_t *payload,
+    th_type *target, ir_span_t span);
 static ir_value_t *n00bb_emit_atomic_wrap(
     ir_lower_context_t *context, ir_value_t *value, th_type *atomic_type,
     ir_span_t span);
@@ -4004,36 +4010,11 @@ n00bb_lower_return(ir_lower_context_t *context, parse_visit_t *visit,
         ? th_func_ret(lower->function_symbol->type) : nullptr;
     parse_tree_t *expression = visit
         ? child_nt(visit->grammar, visit->node, "expression") : nullptr;
-    if (value && expression && expected) {
-        value = n00bb_typed_integer_literal(context, expression, expected);
-        if (!value)
-            return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
-                "could not convert the returned integer value");
-    }
-    th_type *dereferenced = value && expected
-        ? n00bb_dereference_target(ir_module_types(context->module),
-                                   value->type, expected) : nullptr;
-    if (dereferenced) {
-        value = ir_lower_value_as(context, value, dereferenced, span);
+    if (value && expected) {
+        value = n00bb_materialize(context, expression, value, expected, span);
         if (!value)
             return lower_error(context, IR_DIAG_INTERNAL, span,
-                "could not read through the returned reference");
-    }
-    th_type *element = nullptr;
-    if (value && n00bb_option_type_element(expected, &element)
-        && !ir_type_eq(context->module, value->type, expected)) {
-        bool empty = th_is_nil(value->type);
-        if (!empty && !ir_type_eq(context->module, value->type, element))
-            return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
-                "returned value does not match the option element type");
-        ir_instr_t *option = ir_lower_emit_instruction(context,
-            empty ? IR_OP_OPTION_NONE : IR_OP_OPTION_SOME, span);
-        if (!option || !ir_lower_set_temp_dest(context, option,
-                                               "__n00bb_", expected)
-            || (!empty && !ir_instr_operand_value(option, value)))
-            return lower_error(context, IR_DIAG_INTERNAL, span,
-                "could not construct the returned option value");
-        value = option->dest;
+                "could not materialize the returned value");
     }
     if (!n00bb_emit_success_return(context, value,
             &lower->parameters_to_copy_out, span))
@@ -5665,41 +5646,15 @@ n00bb_lower_literal_element(ir_lower_context_t *context, ir_value_t *value,
     if (!value || !target)
         return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
                            "literal element has no value or target type");
-    if (ir_type_eq(context->module, value->type, target))
-        return (ir_lower_result_t){IR_LOWER_VALUE, value};
-    th_type *option_element = nullptr;
-    if (n00bb_option_type_element(target, &option_element)) {
-        bool empty = th_is_nil(value->type);
-        if (empty || ir_type_eq(context->module, value->type,
-                                option_element)) {
-            ir_instr_t *option = ir_lower_emit_instruction(context,
-                empty ? IR_OP_OPTION_NONE : IR_OP_OPTION_SOME, span);
-            if (!option || !ir_lower_set_temp_dest(context, option,
-                "__n00bb_litmod_element_", target)
-                || (!empty && !ir_instr_operand_value(option, value)))
-                return lower_error(context, IR_DIAG_INTERNAL, span,
-                    "could not promote literal element into an option");
-            return (ir_lower_result_t){IR_LOWER_VALUE, option->dest};
-        }
-    }
-    th_comb comb;
-    bool union_type = th_sum_comb(th_resolve(target), &comb)
-        && comb == TH_UNION;
-    bool arm = th_builtin_kind(ir_module_types(context->module), target)
-        == TH_BUILTIN_ANY;
-    for (size_t i = 0; union_type && i < th_sum_len(target); i++)
-        arm |= ir_type_eq(context->module, value->type,
-                          th_sum_arm(target, i));
-    if (!arm)
+    ir_value_t *materialized = n00bb_materialize(context, nullptr, value,
+                                                 target, span);
+    if (!materialized)
+        return lower_error(context, IR_DIAG_INTERNAL, span,
+                           "could not materialize the literal element");
+    if (!ir_type_eq(context->module, materialized->type, target))
         return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
                            "literal element does not match its target type");
-    ir_instr_t *box = ir_lower_emit_instruction(context, IR_OP_BOX, span);
-    if (!box || !ir_lower_set_temp_dest(context, box,
-        "__n00bb_litmod_element_", target)
-        || !ir_instr_operand_value(box, value))
-        return lower_error(context, IR_DIAG_INTERNAL, span,
-                           "could not promote literal element into its union");
-    return (ir_lower_result_t){IR_LOWER_VALUE, box->dest};
+    return (ir_lower_result_t){IR_LOWER_VALUE, materialized};
 }
 
 
@@ -9620,11 +9575,10 @@ n00bb_emit_closed_trait_arm(ir_lower_context_t *context,
     if (!emitted) return result;
     ir_instr_t *last = call;
     if (!ir_type_eq(context->module, call_result, result_type)) {
-        ir_instr_t *boxed = ir_lower_emit_instruction(context, IR_OP_BOX, span);
-        if (!boxed || !ir_lower_set_temp_dest(context, boxed, "__n00bb_",
-                                               result_type)
-            || !ir_instr_operand_value(boxed, call->dest)) return result;
-        last = boxed;
+        ir_value_t *boxed = n00bb_emit_wrapping(context, IR_OP_BOX,
+            call->dest, result_type, span);
+        if (!boxed) return result;
+        last = boxed->def;
     }
     result.call = call;
     result.result = last;
@@ -9742,13 +9696,9 @@ n00bb_emit_closed_trait_call(ir_lower_context_t *context,
             ir_value_t *output = projection ? projection->dest : nullptr;
             if (emitted && !ir_type_eq(context->module, formal->type,
                                         target_type)) {
-                ir_instr_t *boxed = ir_lower_emit_instruction(context,
-                    IR_OP_BOX, span);
-                emitted = boxed
-                    && ir_lower_set_temp_dest(context, boxed, "__n00bb_",
-                                              target_type)
-                    && ir_instr_operand_value(boxed, output);
-                if (emitted) output = boxed->dest;
+                output = n00bb_emit_wrapping(context, IR_OP_BOX, output,
+                                             target_type, span);
+                emitted = output != nullptr;
             }
             if (emitted) {
                 emitted = n00bb_emit_copyout_write(context, copyout,
@@ -10117,25 +10067,77 @@ n00bb_typed_integer_literal(ir_lower_context_t *context,
 }
 
 static ir_value_t *
-n00bb_option_argument(ir_lower_context_t *context, parse_tree_t *node,
-                      th_type *parameter, ir_span_t span)
+n00bb_emit_wrapping(ir_lower_context_t *context, ir_op_t op,
+                    ir_value_t *payload, th_type *target, ir_span_t span)
 {
-    th_type *element = nullptr;
-    bool option = n00bb_option_type_element(parameter, &element);
-    ir_value_t *value = n00bb_typed_integer_literal(context, node,
-        option ? element : parameter);
-    if (!value || !option
-        || ir_type_eq(context->module, value->type, parameter)) return value;
-    bool empty = th_is_nil(value->type);
-    if (!empty && !ir_type_eq(context->module, value->type, element))
-        return value;
-    ir_instr_t *wrapped = ir_lower_emit_instruction(context,
-        empty ? IR_OP_OPTION_NONE : IR_OP_OPTION_SOME, span);
-    if (!wrapped || !ir_lower_set_temp_dest(context, wrapped, "__n00bb_",
-                                            parameter)
-        || (!empty && !ir_instr_operand_value(wrapped, value)))
+    ir_instr_t *instruction = ir_lower_emit_instruction(context, op, span);
+    if (!instruction || !ir_lower_set_temp_dest(context, instruction,
+                                                "__n00bb_", target)
+        || (payload && !ir_instr_operand_value(instruction, payload)))
         return nullptr;
-    return wrapped->dest;
+    return instruction->dest;
+}
+
+static bool
+n00bb_union_admits(ir_module_t *module, th_type *target, th_type *value)
+{
+    if (th_builtin_kind(ir_module_types(module), target) == TH_BUILTIN_ANY)
+        return true;
+    th_comb comb;
+    if (!th_sum_comb(th_resolve(target), &comb) || comb != TH_UNION)
+        return false;
+    for (size_t i = 0; i < th_sum_len(target); i++)
+        if (ir_type_eq(module, value, th_sum_arm(target, i))) return true;
+    return false;
+}
+
+static ir_value_t *
+n00bb_materialize(ir_lower_context_t *context, parse_tree_t *node,
+                  ir_value_t *value, th_type *target, ir_span_t span)
+{
+    if (!value || !target || ir_type_eq(context->module, value->type, target))
+        return value;
+    th_ctx *types = ir_module_types(context->module);
+    th_type *referent = n00bb_dereference_target(types, value->type, target);
+    if (referent) {
+        ir_value_t *loaded = ir_lower_value_as(context, value, referent, span);
+        return loaded ? n00bb_materialize(context, node, loaded, target, span)
+                      : nullptr;
+    }
+    th_type *atomic_element = n00bb_atomic_element_type(target);
+    if (atomic_element && !n00bb_atomic_element_type(value->type)) {
+        ir_value_t *inner = n00bb_materialize(context, node, value,
+                                              atomic_element, span);
+        if (!inner || !ir_type_eq(context->module, inner->type,
+                                  atomic_element)) return inner;
+        return n00bb_emit_atomic_wrap(context, inner, target, span);
+    }
+    th_type *option_element = nullptr;
+    if (n00bb_option_type_element(target, &option_element)) {
+        if (th_is_nil(value->type))
+            return n00bb_emit_wrapping(context, IR_OP_OPTION_NONE, nullptr,
+                                       target, span);
+        ir_value_t *inner = n00bb_materialize(context, node, value,
+                                              option_element, span);
+        if (!inner || !ir_type_eq(context->module, inner->type,
+                                  option_element)) return inner;
+        return n00bb_emit_wrapping(context, IR_OP_OPTION_SOME, inner, target,
+                                   span);
+    }
+    ir_value_t *integer = n00bb_typed_integer_value(context, node, value,
+                                                    target);
+    if (integer != value) return integer;
+    if (n00bb_union_admits(context->module, target, value->type))
+        return n00bb_emit_wrapping(context, IR_OP_BOX, value, target, span);
+    return value;
+}
+
+static ir_value_t *
+n00bb_materialize_node(ir_lower_context_t *context, parse_tree_t *node,
+                       th_type *target, ir_span_t span)
+{
+    return n00bb_materialize(context, node, ir_lower_node_value(context, node),
+                             target, span);
 }
 
 static bool n00bb_nominal_value_as(ir_lower_context_t *context,
@@ -10770,61 +10772,13 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                 CORE_STRING_STATIC("ir.array-shape"))
             : function_parameter_shape(symbol, index);
         if (th_mode_is_input_only(mode)) {
-            th_type *literal_type = parameter->type;
-            th_type *literal_element = nullptr;
-            if (!option_builtin
-                && n00bb_option_type_element(literal_type, &literal_element))
-                literal_type = literal_element;
-            ir_value_t *value = n00bb_typed_integer_literal(context,
-                argument, literal_type);
-            if (value && !n00bb_nominal_value_as(context, visit,
-                                                  parameter->type, argument)) {
+            if (!n00bb_nominal_value_as(context, visit, parameter->type,
+                                        argument)) {
                 collected = false;
                 break;
             }
-            if (value) value = ir_lower_node_value(context, argument);
-            if (value) {
-                value = ir_lower_value_as(context, value, literal_type,
-                    lower_span_for_tree(context, argument));
-                if (!value) {
-                    lower_error(context, IR_DIAG_INTERNAL,
-                        lower_span_for_tree(context, argument),
-                        "could not read through the reference argument");
-                    collected = false;
-                    break;
-                }
-            }
-            th_type *option_element = nullptr;
-            if (value && !option_builtin
-                && n00bb_option_type_element(parameter->type,
-                                                   &option_element)
-                && !ir_type_eq(context->module, value->type,
-                               parameter->type)) {
-                bool empty = th_is_nil(value->type);
-                if (!empty && !ir_type_eq(context->module, value->type,
-                                          option_element)) {
-                    lower_error(context, IR_DIAG_TYPE_ARGS,
-                        lower_span_for_tree(context, argument),
-                        "argument does not match the option element type");
-                    collected = false;
-                    break;
-                }
-                ir_span_t argument_span = lower_span_for_tree(context,
-                                                              argument);
-                ir_instr_t *option = ir_lower_emit_instruction(context,
-                    empty ? IR_OP_OPTION_NONE : IR_OP_OPTION_SOME,
-                    argument_span);
-                if (!option || !ir_lower_set_temp_dest(context, option,
-                        "__n00bb_", parameter->type)
-                    || (!empty && !ir_instr_operand_value(option, value))) {
-                    lower_error(context, IR_DIAG_INTERNAL,
-                        lower_span_for_tree(context, argument),
-                        "could not construct the option argument");
-                    collected = false;
-                    break;
-                }
-                value = option->dest;
-            }
+            ir_value_t *value = n00bb_materialize_node(context, argument,
+                parameter->type, lower_span_for_tree(context, argument));
             th_type *argument_type = value
                 && ir_type_eq(context->module, value->type, parameter->type)
                 ? value->type
@@ -11935,7 +11889,7 @@ n00bb_lower_constructor_new(ir_lower_context_t *context, parse_visit_t *visit,
         ir_shape_t *required_shape = parse_sym_binding(formal,
             CORE_STRING_STATIC("ir.array-shape"));
         if (th_mode_is_input_only(mode)) {
-            ir_value_t *value = n00bb_option_argument(context, argument,
+            ir_value_t *value = n00bb_materialize_node(context, argument,
                 parameter->type, lower_span_for_tree(context, argument));
             if (!value || !th_unify_in_place(types, parameter->type,
                                              value->type)
@@ -12769,18 +12723,14 @@ static ir_value_t *
 n00bb_lower_slice_bound(ir_lower_context_t *context, parse_tree_t *node,
                         th_type *bound_type, ir_span_t span)
 {
-    th_type *integer = n00bb_ir_builtin_type(context->module, "int");
-    ir_value_t *value = node && integer
-        ? n00bb_typed_integer_literal(context, node, integer) : nullptr;
-    if (node && (!value || !ir_type_eq(context->module, value->type,
-                                      integer))) return nullptr;
-    ir_instr_t *option = ir_lower_emit_instruction(context,
-        node ? IR_OP_OPTION_SOME : IR_OP_OPTION_NONE, span);
-    if (!option || !bound_type
-        || !ir_lower_set_temp_dest(context, option,
-            "__n00bb_slice_bound_", bound_type)
-        || (node && !ir_instr_operand_value(option, value))) return nullptr;
-    return option->dest;
+    if (!bound_type) return nullptr;
+    if (!node)
+        return n00bb_emit_wrapping(context, IR_OP_OPTION_NONE, nullptr,
+                                   bound_type, span);
+    ir_value_t *value = n00bb_materialize_node(context, node, bound_type,
+                                               span);
+    return value && ir_type_eq(context->module, value->type, bound_type)
+        ? value : nullptr;
 }
 
 static bool
@@ -12823,35 +12773,15 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
         if (!source_value && source && element
             && !n00bb_nominal_value_as(context, &assignment, element,
                                        source)) return false;
-        ir_value_t *value = source_value ? source_value
-            : source ? n00bb_typed_integer_literal(context, source, element)
+        ir_value_t *value = source_value
+            ? n00bb_materialize(context, source, source_value, element, span)
+            : source ? n00bb_materialize_node(context, source, element, span)
                      : nullptr;
         if (!lower || !index_value || !value || !element
             || !is_integer_type(index_value->type)) {
             lower_error(context, IR_DIAG_TYPE_ARGS, span,
                 "array index or stored value has an incompatible type");
             return false;
-        }
-        th_type *option_element = nullptr;
-        if (n00bb_option_type_element(element, &option_element)
-            && !ir_type_eq(context->module, value->type, element)) {
-            bool empty = th_is_nil(value->type);
-            if (!empty && !ir_type_eq(context->module, value->type,
-                                      option_element)) {
-                lower_error(context, IR_DIAG_TYPE_ARGS, span,
-                    "array index or stored value has an incompatible type");
-                return false;
-            }
-            ir_instr_t *option = ir_lower_emit_instruction(context,
-                empty ? IR_OP_OPTION_NONE : IR_OP_OPTION_SOME, span);
-            if (!option || !ir_lower_set_temp_dest(context, option,
-                "__n00bb_", element)
-                || (!empty && !ir_instr_operand_value(option, value))) {
-                lower_error(context, IR_DIAG_INTERNAL, span,
-                    "could not construct the indexed option value");
-                return false;
-            }
-            value = option->dest;
         }
         if (!th_unify_in_place(ir_module_types(context->module),
                                element, value->type)) {
@@ -13124,40 +13054,13 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
                                      "trait-param-decl");
         function_parameter_info(grammar, symbol, formal_params, i,
                                 nullptr, nullptr, nullptr, nullptr, &mode);
-        if (!slice && i == argument_count - 1 && source && !source_value
-            && parameter && th_mode_is_input_only(mode)) {
-            arguments[i] = n00bb_typed_integer_literal(context, source,
-                                                       parameter->type);
+        if (i > 0 && parameter && th_mode_is_input_only(mode)) {
+            bool literal_source = !slice && i == argument_count - 1
+                && source && !source_value;
+            arguments[i] = n00bb_materialize(context,
+                literal_source ? source : nullptr, arguments[i],
+                parameter->type, lower_span_for_tree(context, site_node));
             if (!arguments[i]) return false;
-        }
-        th_type *option_element = nullptr;
-        if (i > 0 && parameter && th_mode_is_input_only(mode)
-            && n00bb_option_type_element(parameter->type, &option_element)
-            && !ir_type_eq(context->module, arguments[i]->type,
-                           parameter->type)) {
-            bool empty = th_is_nil(arguments[i]->type);
-            if (empty || ir_type_eq(context->module, arguments[i]->type,
-                                    option_element)) {
-                ir_span_t option_span = lower_span_for_tree(context,
-                                                            site_node);
-                ir_instr_t *option = ir_lower_emit_instruction(context,
-                    empty ? IR_OP_OPTION_NONE : IR_OP_OPTION_SOME,
-                    option_span);
-                char option_name[48];
-                snprintf(option_name, sizeof(option_name),
-                         "__n00bb_index_option_%llu",
-                         (unsigned long long)context->next_value_id++);
-                if (!option || !ir_instr_set_dest(option, option_name,
-                                                  parameter->type)
-                    || (!empty && !ir_instr_operand_value(option,
-                                                          arguments[i]))) {
-                    lower_error(context, IR_DIAG_INTERNAL,
-                        lower_span_for_tree(context, site_node),
-                        "could not construct the indexed option argument");
-                    return false;
-                }
-                arguments[i] = option->dest;
-            }
         }
         if (!parameter
             || (i == 0 ? mode != TH_INOUT : !th_mode_is_input_only(mode))
@@ -13383,52 +13286,45 @@ n00bb_lower_shaped_assignment(ir_lower_context_t *context,
 }
 
 static bool
-n00bb_option_assignment_value(ir_lower_context_t *context,
-                              parse_visit_t *visit, parse_tree_t *target,
-                              parse_tree_t *source, bool entering,
-                              bool *handled)
+n00bb_materialized_nil_source(parse_grammar_t *grammar, parse_tree_t *source,
+                              th_type *target)
 {
-    *handled = false;
-    n00bb_lower_context_t *lower = context->user;
-    parse_tree_t *lvalue = n00bb_simple_lvalue(target);
-    bool declaration = nt_is(visit->grammar, visit->node, "sym-decl");
-    parse_sym_entry_t *symbol = declaration
-        ? core_tree_node_value(visit->node).sym
-        : lvalue && lower
-            ? attached_symbol(visit->grammar, lower->unit, lvalue) : nullptr;
-    th_type *element = nullptr;
-    if (!symbol || !n00bb_option_type_element(symbol->type, &element))
-        return true;
-    bool is_nil = n00bb_is_nil_literal(visit->grammar, source);
-    th_type *source_type = source
-        ? core_tree_node_value(source).type : nullptr;
-    if (!is_nil && (!source_type
-        || !ir_type_eq(context->module, source_type, element))) return true;
-    *handled = true;
-    if (entering) {
-        if (is_nil && !ir_lower_skip_value(context, visit->node, source))
-            return false;
-        return true;
-    }
+    return source && target && !th_is_nil(target)
+        && n00bb_is_nil_literal(grammar, source);
+}
 
-    ir_value_t *payload = is_nil ? nullptr
-        : ir_lower_node_value(context, source);
-    ir_op_t op = is_nil ? IR_OP_OPTION_NONE : IR_OP_OPTION_SOME;
-    ir_span_t source_span = lower_span_for_tree(context, source);
-    ir_instr_t *instruction = ir_lower_emit_instruction(context, op,
-                                                        source_span);
-    bool emitted = instruction
-        && ir_lower_set_temp_dest(context, instruction, "__n00bb_",
-                                  symbol->type)
-        && (is_nil || (payload
-            && ir_instr_operand_value(instruction, payload)));
-    if (!emitted) {
+static ir_value_t *
+n00bb_materialize_source(ir_lower_context_t *context, parse_visit_t *visit,
+                         parse_tree_t *source, th_type *target)
+{
+    ir_span_t span = lower_span_for_tree(context, source);
+    ir_value_t *value = nullptr;
+    if (n00bb_materialized_nil_source(visit->grammar, source, target))
+        value = n00bb_emit_wrapping(context, IR_OP_NIL, nullptr,
+            th_nil(ir_module_types(context->module)), span);
+    else value = ir_lower_node_value(context, source);
+    value = n00bb_materialize(context, source, value, target, span);
+    return value && ir_lower_set_node_value(context, source, value)
+        ? value : nullptr;
+}
+
+static bool
+n00bb_materialize_assignment_source(ir_lower_context_t *context,
+                                    parse_visit_t *visit,
+                                    parse_tree_t *source, th_type *target,
+                                    bool entering)
+{
+    if (!source || !target) return true;
+    if (entering)
+        return !n00bb_materialized_nil_source(visit->grammar, source, target)
+            || ir_lower_skip_value(context, visit->node, source);
+    if (!n00bb_materialize_source(context, visit, source, target)) {
         lower_error(context, IR_DIAG_INTERNAL,
             lower_span_for_tree(context, visit->node),
-            "could not construct the assigned option value");
+            "could not materialize the assigned value");
         return false;
     }
-    return ir_lower_set_node_value(context, source, instruction->dest);
+    return true;
 }
 
 
@@ -13487,19 +13383,16 @@ n00bb_nominal_value_as(ir_lower_context_t *context, parse_visit_t *visit,
     return ir_lower_set_node_value(context, source, value);
 }
 
-static bool
-n00bb_nominal_assignment_value(ir_lower_context_t *context,
-                               parse_visit_t *visit, parse_tree_t *target,
-                               parse_tree_t *source)
+static parse_sym_entry_t *
+n00bb_assignment_symbol(ir_lower_context_t *context, parse_visit_t *visit,
+                        parse_tree_t *target)
 {
     n00bb_lower_context_t *lower = context->user;
+    if (nt_is(visit->grammar, visit->node, "sym-decl"))
+        return core_tree_node_value(visit->node).sym;
     parse_tree_t *lvalue = n00bb_simple_lvalue(target);
-    parse_sym_entry_t *symbol = nt_is(visit->grammar, visit->node, "sym-decl")
-        ? core_tree_node_value(visit->node).sym
-        : lvalue && lower
-            ? attached_symbol(visit->grammar, lower->unit, lvalue) : nullptr;
-    return n00bb_nominal_value_as(context, visit,
-                                  symbol ? symbol->type : nullptr, source);
+    return lvalue && lower
+        ? attached_symbol(visit->grammar, lower->unit, lvalue) : nullptr;
 }
 
 static bool
@@ -13509,42 +13402,22 @@ n00bb_atomic_assignment_value(ir_lower_context_t *context,
                               bool *handled)
 {
     *handled = false;
-    n00bb_lower_context_t *lower = context->user;
-    parse_tree_t *lvalue = n00bb_simple_lvalue(target);
-    bool declaration = nt_is(visit->grammar, visit->node, "sym-decl");
-    parse_sym_entry_t *symbol = declaration
-        ? core_tree_node_value(visit->node).sym
-        : lvalue && lower
-            ? attached_symbol(visit->grammar, lower->unit, lvalue) : nullptr;
+    parse_sym_entry_t *symbol = n00bb_assignment_symbol(context, visit,
+                                                         target);
     if (!symbol || !n00bb_atomic_element_type(symbol->type)) return true;
     *handled = true;
-    th_type *element_type = n00bb_atomic_element_type(symbol->type);
-    bool nil_option = element_type
-        && n00bb_option_type_element(element_type, nullptr)
-        && n00bb_is_nil_literal(visit->grammar, source);
-    if (entering) {
+    if (entering)
         return ir_lower_handle_assignment(context, visit->node)
             && ir_lower_skip_value(context, visit->node, target)
-            && (!nil_option
-                || ir_lower_skip_value(context, visit->node, source));
-    }
-
+            && n00bb_materialize_assignment_source(context, visit, source,
+                                                   symbol->type, true);
     ir_span_t span = lower_span_for_tree(context, visit->node);
-    ir_value_t *value = source ? ir_lower_node_value(context, source) : nullptr;
-    if (nil_option) {
-        ir_span_t source_span = lower_span_for_tree(context, source);
-        ir_instr_t *none = ir_lower_emit_instruction(context,
-            IR_OP_OPTION_NONE, source_span);
-        if (!none || !ir_lower_set_temp_dest(context, none, "__n00bb_",
-                                             element_type)) return false;
-        value = none->dest;
-    }
+    ir_value_t *value = source
+        ? n00bb_materialize_source(context, visit, source, symbol->type)
+        : nullptr;
     ir_value_t *address = n00bb_atomic_binding_address(context, symbol, span);
-    bool compatible_value = value
-        && (ir_type_eq(context->module, symbol->type, value->type)
-            || (element_type
-                && ir_type_eq(context->module, element_type, value->type)));
-    if (!compatible_value || !address) {
+    if (!value || !address
+        || !ir_type_eq(context->module, symbol->type, value->type)) {
         lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
             "atomic assignment requires a value of the same underlying type and writable storage");
         return false;
@@ -13841,7 +13714,8 @@ n00bb_lower_record_field_assignment(ir_lower_context_t *context,
     parse_sym_entry_t *field = member && lower
         ? attached_symbol(visit->grammar, lower->unit, member) : nullptr;
     if (!field || !field->is_field) return true;
-    bool is_nil = n00bb_is_nil_literal(visit->grammar, source);
+    bool is_nil = n00bb_materialized_nil_source(visit->grammar, source,
+                                                field->type);
     if (entering) {
         parse_tree_t *receiver = core_tree_child(member, 0);
         th_type *receiver_type = th_resolve(
@@ -13874,36 +13748,17 @@ n00bb_lower_record_field_assignment(ir_lower_context_t *context,
         lower->unit, target, span);
     th_type *resolved_field_type = address
         ? th_ind_referent(address->type) : field->type;
-    th_type *atomic_element = n00bb_atomic_element_type(resolved_field_type);
-    ir_value_t *value = source && !is_nil
-        ? n00bb_typed_integer_literal(context, source,
-            atomic_element ? atomic_element : resolved_field_type)
+    ir_value_t *value = source
+        ? n00bb_materialize_source(context, visit, source,
+                                   resolved_field_type)
         : nullptr;
-    th_type *option_element = nullptr;
-    if (n00bb_option_type_element(resolved_field_type, &option_element)
-        && (is_nil || (value && ir_type_eq(context->module, value->type,
-                                           option_element)))) {
-        ir_instr_t *option = ir_lower_emit_instruction(context,
-            is_nil ? IR_OP_OPTION_NONE : IR_OP_OPTION_SOME, span);
-        if (!option || !ir_lower_set_temp_dest(context, option,
-            "__n00bb_", resolved_field_type)
-            || (!is_nil && !ir_instr_operand_value(option, value))) {
-            lower_error(context, IR_DIAG_INTERNAL, span,
-                        "could not construct the assigned option value");
-            return false;
-        }
-        value = option->dest;
-    }
     if (!value || !address) {
         lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
             "record field assignment has no value or address");
         return false;
     }
     if (!th_unify_in_place(ir_module_types(context->module),
-                           th_ind_referent(address->type), value->type)
-        && (!atomic_element
-            || !th_unify_in_place(ir_module_types(context->module),
-                                  atomic_element, value->type))) {
+                           th_ind_referent(address->type), value->type)) {
         core_buffer_t message = {0};
         core_buffer_printf(&message,
             "record field assignment value does not match its resolved type "
@@ -14044,27 +13899,19 @@ n00bb_check_assignment(ir_lower_context_t *context, parse_visit_t *visit,
             visit->grammar, visit->node, visit->annot->name_ref);
         parse_tree_t *source = parse_tree_resolve_child_ref(
             visit->grammar, visit->node, visit->annot->value_ref);
-        if (!entering && source) {
-            parse_sym_entry_t *declared = core_tree_node_value(visit->node).sym;
-            th_type *expected = declared ? declared->type : nullptr;
-            th_type *atomic_element = n00bb_atomic_element_type(expected);
-            if (atomic_element) expected = atomic_element;
-            if (expected && !n00bb_typed_integer_literal(context, source,
-                                                          expected))
-                return false;
-            if (!n00bb_nominal_assignment_value(context, visit, target,
-                                                source)) return false;
-        }
+        parse_sym_entry_t *declared = core_tree_node_value(visit->node).sym;
+        th_type *expected = declared ? declared->type : nullptr;
+        if (!entering && source
+            && !n00bb_nominal_value_as(context, visit, expected, source))
+            return false;
         bool atomic_value = false;
         if (!n00bb_atomic_assignment_value(context, visit, target, source,
                                             entering, &atomic_value))
             return false;
         if (atomic_value) return true;
-        bool option_value = false;
-        if (!n00bb_option_assignment_value(context, visit, target, source,
-                                            entering, &option_value))
+        if (!n00bb_materialize_assignment_source(context, visit, source,
+                                                 expected, entering))
             return false;
-        if (option_value) return true;
         parse_tree_t *lvalue = n00bb_simple_lvalue(target);
         n00bb_lower_context_t *lower = context->user;
         parse_sym_entry_t *symbol = lvalue
@@ -14126,18 +13973,16 @@ n00bb_check_assignment(ir_lower_context_t *context, parse_visit_t *visit,
         }
         parse_tree_t *source = parse_tree_resolve_child_ref(
             visit->grammar, visit->node, visit->annot->value_ref);
-        th_type *target_type = target && !core_tree_is_leaf(target)
-            ? core_tree_node_value(target).type : nullptr;
-        if (!compound && source && target_type
-            && !n00bb_typed_integer_literal(context, source, target_type))
+        parse_sym_entry_t *assigned = n00bb_assignment_symbol(context, visit,
+                                                               target);
+        th_type *target_type = assigned ? assigned->type
+            : target && !core_tree_is_leaf(target)
+                ? core_tree_node_value(target).type : nullptr;
+        if (!compound
+            && (!n00bb_nominal_value_as(context, visit, target_type, source)
+                || !n00bb_materialize_assignment_source(context, visit,
+                       source, target_type, false)))
             return false;
-        if (!compound && !n00bb_nominal_assignment_value(context, visit,
-                                                          target, source))
-            return false;
-        bool option_value = false;
-        if (!compound && !n00bb_option_assignment_value(context, visit,
-                target, source, false, &option_value)) return false;
-        if (option_value) return true;
         if (n00bb_lower_shaped_assignment(context, visit, target, source))
             return true;
         if (ir_diags_failed(context->diagnostics)) return false;
@@ -14173,10 +14018,10 @@ n00bb_check_assignment(ir_lower_context_t *context, parse_visit_t *visit,
     if (!compound) {
         parse_tree_t *source = parse_tree_resolve_child_ref(
             visit->grammar, visit->node, visit->annot->value_ref);
-        bool option_value = false;
-        if (!n00bb_option_assignment_value(context, visit, target, source,
-                true, &option_value)) return false;
-        if (option_value) return true;
+        parse_sym_entry_t *assigned = n00bb_assignment_symbol(context, visit,
+                                                               target);
+        if (!n00bb_materialize_assignment_source(context, visit, source,
+                assigned ? assigned->type : nullptr, true)) return false;
     }
     parse_tree_t *lvalue = n00bb_simple_lvalue(target);
     parse_sym_entry_t *symbol = lvalue
@@ -16318,26 +16163,9 @@ n00bb_emit_default_param(ir_lowerer_t *lowerer,
     if (lower) lower->active_default_param = active_default;
     if (value.status == IR_LOWER_FAILED) return false;
     if (value.status == IR_LOWER_VALUE && value.value) {
-        // ir_lower_tree has finished its node-value map; use its returned value.
-        ir_value_t *resolved = n00bb_typed_integer_value(context,
-            parameter->expression, value.value, parameter->local->type);
+        ir_value_t *resolved = n00bb_materialize(context,
+            parameter->expression, value.value, parameter->local->type, span);
         if (!resolved) return false;
-        th_type *element = nullptr;
-        if (!ir_type_eq(context->module, parameter->local->type,
-                        resolved->type)
-            && n00bb_option_type_element(parameter->local->type, &element)) {
-            bool empty = th_is_nil(resolved->type);
-            if (empty || ir_type_eq(context->module, element,
-                                    resolved->type)) {
-                ir_instr_t *option = ir_lower_emit_instruction(context,
-                    empty ? IR_OP_OPTION_NONE : IR_OP_OPTION_SOME, span);
-                if (!option || !ir_lower_set_temp_dest(context, option,
-                        "__n00bb_", parameter->local->type)
-                    || (!empty && !ir_instr_operand_value(option, resolved)))
-                    return false;
-                resolved = option->dest;
-            }
-        }
         if (!ir_type_eq(context->module, parameter->local->type,
                         resolved->type)) {
             lower_error(context, IR_DIAG_TYPE_MISMATCH,
