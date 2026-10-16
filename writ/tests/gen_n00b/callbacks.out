@@ -208,7 +208,7 @@ type Event_Handler_Callback {
     public once: bool
 }
 
-var __event_handler_callbacks: Ffi_Table[Event_Handler_Callback] = (slots = new[List[Event_Handler_Callback?]](), free = new[List[int]]())
+var __event_handler_callbacks: Ffi_Table[Event_Handler_Callback] = (slots = new[List[Event_Handler_Callback?]](), free = new[List[int]](), owners = new[List[uint]]())
 
 func __event_handler_register(value: Event_Handler, once: bool) -> u64 {
     let entry: Event_Handler_Callback = (value = value, once = once)

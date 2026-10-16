@@ -1299,6 +1299,15 @@ callback_dispatch_symbol(const n00b_t *g, const writ_fn_view_t *callback)
 }
 
 static void
+emit_table(writ_emit_t *emit, writ_str_t table, writ_str_t element)
+{
+    writ_emit_line(emit,
+                   "var %.*s: Ffi_Table[%.*s] = (slots = new[List[%.*s?]](), free = new[List[int]](), owners = "
+                   "new[List[uint]]())",
+                   S(table), S(element), S(element));
+}
+
+static void
 emit_callback_invoker(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *callback, writ_str_t name,
                       uint32_t receiver, bool packed)
 {
@@ -1323,8 +1332,7 @@ emit_callback_invoker(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *
     writ_emit_line(emit, "public once: bool");
     writ_emit_close(emit, nullptr);
     writ_emit_line(emit, "");
-    writ_emit_line(emit, "var %.*s: Ffi_Table[%.*s] = (slots = new[List[%.*s?]](), free = new[List[int]]())", S(table),
-                   S(entry), S(entry));
+    emit_table(emit, table, entry);
     writ_emit_line(emit, "");
     writ_emit_open(emit, "func %.*s(value: %.*s, once: bool) -> u64", S(callback_table(g, name, "register")), S(name));
     writ_emit_line(emit, "let entry: %.*s = (value = value, once = once)", S(entry));
@@ -3031,9 +3039,28 @@ emit_export_failure(const n00b_t *g, writ_emit_t *emit, const writ_plan_view_t *
 }
 
 static void
+emit_export_thread_checks(const n00b_t *g, writ_emit_t *emit, const wrapper_t *w)
+{
+    const writ_plan_view_t *plan = w->plan;
+    if (plan->fn->thread == WRIT_THREAD_MAIN) {
+        writ_emit_line(emit, "assert __os_thread_is_main() != 0");
+    }
+    for (uint32_t i = 0; plan->fn->thread == WRIT_THREAD_UNSTATED && i < plan->items_count; i++) {
+        const writ_handle_view_t *handle = exposed_input(w, i) && is_handle(&plan->items[i])
+                                               ? writ_model_handle_named(g->model, plan->items[i].type->name)
+                                               : nullptr;
+        if (handle && handle->thread_rule == WRIT_THREAD_RULE_AFFINE) {
+            writ_emit_line(emit, "assert __ffi_table_owner(__handles_%.*s, cast[u64]%.*s) == __os_thread_id()",
+                           S(handle->name), S(export_slot_named(g, plan, i, WRIT_PART_WHOLE)));
+        }
+    }
+}
+
+static void
 emit_export_inputs(const n00b_t *g, writ_emit_t *emit, const wrapper_t *w)
 {
     const writ_plan_view_t *plan = w->plan;
+    emit_export_thread_checks(g, emit, w);
     for (uint32_t i = 0; i < plan->items_count; i++) {
         if (!exposed_input(w, i)) {
             continue;
@@ -3211,14 +3238,17 @@ emit_export_handles(const n00b_t *g, writ_emit_t *emit)
             continue;
         }
         writ_emit_line(emit, "");
-        writ_emit_line(emit, "var __handles_%.*s: Ffi_Table[%.*s] = (slots = new[List[%.*s?]](), free = new[List[int]]())",
-                       S(handle->name), S(implementation), S(implementation));
+        emit_table(emit, writ_str_format(g->session, "__handles_%.*s", S(handle->name)), implementation);
         writ_emit_line(emit, "");
         writ_emit_open(emit, "func __export_%.*s(handle: uint) -> %.*s?", S(handle->name), S(implementation));
         writ_emit_line(emit, "return __ffi_table_get(__handles_%.*s, cast[u64]handle)", S(handle->name));
         writ_emit_close(emit, nullptr);
         writ_emit_line(emit, "");
         writ_emit_open(emit, "func __export_release_%.*s(handle: uint)", S(handle->name));
+        if (handle->thread_rule == WRIT_THREAD_RULE_AFFINE) {
+            writ_emit_line(emit, "assert __ffi_table_owner(__handles_%.*s, cast[u64]handle) == __os_thread_id()",
+                           S(handle->name));
+        }
         writ_emit_line(emit, "__export_drop(%zu * 4294967296 + handle)", i + 1);
         writ_emit_line(emit, "__ffi_table_free(__handles_%.*s, cast[u64]handle)", S(handle->name));
         writ_emit_close(emit, nullptr);

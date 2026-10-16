@@ -10,7 +10,7 @@ typedef struct {
     choice_t   error;
     writ_str_t owner;
     writ_str_t  provide;
-    writ_span_t provided_at;
+    writ_loc_t  provided_at;
     bool        is_static;
     bool        hidden;
     bool        raw;
@@ -624,7 +624,7 @@ apply_item(writ_binding_t *b, uint32_t id)
                                                           child_text(b, id, WRIT_N_TEXT)}));
         } else {
             b->fns[fn].provide = child_text(b, id, WRIT_N_TEXT);
-            b->fns[fn].provided_at = writ_loc_span(b->session, at(b, id)->loc);
+            b->fns[fn].provided_at = at(b, id)->loc;
         }
         return;
     }
@@ -706,6 +706,12 @@ check_fns(writ_binding_t *b)
         }
         if (b->export_side && !d->provide.length) {
             writ_report(b->session, WRIT_D_BIND_PROVIDE, b->anchor, "`%.*s`", S(fn->contract_name));
+        }
+        if (b->export_side && d->provide.length
+            && (fn->thread == WRIT_THREAD_SAME || fn->thread == WRIT_THREAD_SAME_AS)) {
+            writ_report(b->session, WRIT_D_BIND_PROFILE, d->provided_at,
+                        "an exported function cannot check `thread same` or `thread same_as`: `%.*s`",
+                        S(fn->contract_name));
         }
         for (size_t s = 0; !b->export_side && !d->raw && s < fn->slots_count; s++) {
             const writ_slot_view_t *slot = &fn->slots[s];
@@ -967,7 +973,8 @@ writ_binding_fn(const writ_binding_t *b, size_t fn)
     const fn_decision_t *d = &b->fns[fn];
     return (writ_bound_fn_t){.bound = bound(d), .raw = d->raw, .is_static = d->is_static, .name = d->name.text,
                              .owner = d->owner, .error = d->error.text, .provide = d->provide,
-                             .provided_at = d->provided_at, .policy_arm = d->policy_arm};
+                             .provided_at = writ_loc_span(b->session, d->provided_at),
+                             .policy_arm  = d->policy_arm};
 }
 
 writ_str_t
