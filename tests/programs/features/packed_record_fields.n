@@ -87,3 +87,16 @@ let q: Packed = (name = "q", x = false, mode = Mode.a, small = 1,
                  perm = Perm.exec, maybe = true, count = 3,
                  inner = (on = false, mode = Mode.a), y = true)
 require q.y and !q.x and q.small == 1
+record Pair {
+    lo:   char
+    hi:   char
+    prev: Mode
+    last: Mode
+}
+const max_char: char = cast[char](0x10ffff)
+var pair: Pair = (lo = 'a', hi = max_char, prev = Mode.b, last = Mode.c)
+require pair.lo == 'a' and pair.hi == max_char
+require pair.prev == Mode.b and pair.last == Mode.c
+pair.last = Mode.a
+pair.hi = 'z'
+require pair.prev == Mode.b and pair.last == Mode.a and pair.hi == 'z'

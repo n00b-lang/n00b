@@ -270,6 +270,68 @@ publish_option_layout(ir_module_t *module, th_type *type,
 }
 
 static bool
+publish_from_definition(ir_module_t *module, th_type *type,
+                        th_type *definition, bool atomic,
+                        const core_target_desc_t *target, core_dict_t *seen,
+                        bool *handled)
+{
+    const ir_final_layout_t *base = atomic
+        ? ir_layout_final(module, definition, target->triple) : nullptr;
+    if (!base) {
+        if (th_kind_of(definition) == TH_RECORD) return true;
+        bool definition_handled = false;
+        if (!publish_direct_or_alias(module, definition, target, seen,
+                                     &definition_handled)) return false;
+        if (!definition_handled) return true;
+        base = ir_layout_final(module, definition, target->triple);
+    }
+    if (!base || base->intrinsic_bits > UINT32_MAX) return false;
+    if (atomic) {
+        *handled = true;
+        return publish_atomic_layout(module, type, target, base);
+    }
+    if (base->n_occupied > 1 || base->n_reserved > 1) {
+        *handled = true;
+        const ir_final_layout_t *existing = ir_layout_final(
+            module, type, target->triple);
+        if (existing) {
+            if (existing->intrinsic_bits != base->intrinsic_bits
+                || existing->alignment_bytes != base->alignment_bytes
+                || existing->n_occupied != base->n_occupied
+                || existing->n_reserved != base->n_reserved
+                || existing->n_members != base->n_members)
+                return false;
+            for (size_t i = 0; i < base->n_occupied; i++)
+                if (existing->occupied[i].offset != base->occupied[i].offset
+                    || existing->occupied[i].width != base->occupied[i].width)
+                    return false;
+            for (size_t i = 0; i < base->n_reserved; i++)
+                if (existing->reserved[i].offset != base->reserved[i].offset
+                    || existing->reserved[i].width != base->reserved[i].width)
+                    return false;
+            for (size_t i = 0; i < base->n_members; i++)
+                if (existing->members[i].bit_offset
+                        != base->members[i].bit_offset)
+                    return false;
+            return true;
+        }
+        return ir_layout_copy_final(module, type, definition,
+                                    target->triple);
+    }
+    if (base->n_occupied && base->occupied[0].offset) return false;
+    uint32_t semantic_bits = base->n_occupied
+        ? (uint32_t)base->occupied[0].width : 0;
+    if (base->n_reserved
+        && (base->reserved[0].offset != semantic_bits
+            || base->reserved[0].width
+                != base->intrinsic_bits - semantic_bits)) return false;
+    *handled = true;
+    return publish_layout(module, type, target, semantic_bits,
+                          (uint32_t)base->intrinsic_bits,
+                          base->alignment_bytes, base->n_reserved != 0);
+}
+
+static bool
 publish_direct_or_alias(ir_module_t *module, th_type *type,
                         const core_target_desc_t *target, core_dict_t *seen,
                         bool *handled)
@@ -427,60 +489,10 @@ publish_direct_or_alias(ir_module_t *module, th_type *type,
         core_dict_get(seen, type, &found);
         if (found) return false;
         core_dict_put(seen, type, type);
-        const ir_final_layout_t *base = atomic
-            ? ir_layout_final(module, definition, target->triple) : nullptr;
-        if (!base) {
-            if (th_kind_of(definition) == TH_RECORD) return true;
-            bool definition_handled = false;
-            if (!publish_direct_or_alias(module, definition, target, seen,
-                                         &definition_handled)) return false;
-            if (!definition_handled) return true;
-            base = ir_layout_final(module, definition, target->triple);
-        }
-        if (!base || base->intrinsic_bits > UINT32_MAX) return false;
-        if (atomic) {
-            *handled = true;
-            return publish_atomic_layout(module, type, target, base);
-        }
-        if (base->n_occupied > 1 || base->n_reserved > 1) {
-            *handled = true;
-            const ir_final_layout_t *existing = ir_layout_final(
-                module, type, target->triple);
-            if (existing) {
-                if (existing->intrinsic_bits != base->intrinsic_bits
-                    || existing->alignment_bytes != base->alignment_bytes
-                    || existing->n_occupied != base->n_occupied
-                    || existing->n_reserved != base->n_reserved
-                    || existing->n_members != base->n_members)
-                    return false;
-                for (size_t i = 0; i < base->n_occupied; i++)
-                    if (existing->occupied[i].offset != base->occupied[i].offset
-                        || existing->occupied[i].width != base->occupied[i].width)
-                        return false;
-                for (size_t i = 0; i < base->n_reserved; i++)
-                    if (existing->reserved[i].offset != base->reserved[i].offset
-                        || existing->reserved[i].width != base->reserved[i].width)
-                        return false;
-                for (size_t i = 0; i < base->n_members; i++)
-                    if (existing->members[i].bit_offset
-                            != base->members[i].bit_offset)
-                        return false;
-                return true;
-            }
-            return ir_layout_copy_final(module, type, definition,
-                                        target->triple);
-        }
-        if (base->n_occupied && base->occupied[0].offset) return false;
-        semantic_bits = base->n_occupied
-            ? (uint32_t)base->occupied[0].width : 0;
-        if (base->n_reserved
-            && (base->reserved[0].offset != semantic_bits
-                || base->reserved[0].width
-                    != base->intrinsic_bits - semantic_bits)) return false;
-        storage_bits = (uint32_t)base->intrinsic_bits;
-        alignment_bytes = base->alignment_bytes;
-        reserve_unused = base->n_reserved != 0;
-        *handled = true;
+        bool ok = publish_from_definition(module, type, definition, atomic,
+                                          target, seen, handled);
+        core_dict_remove(seen, type);
+        return ok;
     }
     else return true;
     return publish_layout(module, type, target, semantic_bits, storage_bits,
