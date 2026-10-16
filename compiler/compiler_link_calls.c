@@ -355,6 +355,9 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
                 && receiver_type
                 && !th_is_closed(state->types, caller_contract)
                 && !th_is_closed(state->types, receiver_type);
+            if (member_site && !member_site->callback_call
+                && n00bb_callback_function_type(grammar, unit, member)
+                && !n00bb_bind_callback_call(state, member_site)) continue;
             if (member_site && member_site->callback_call
                 && member_site->symbol) {
                 th_type *contract = member_site->symbol->callable_contract
@@ -528,9 +531,15 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
         }
         core_list_free(arguments);
         th_type *return_type = th_func_ret(signature);
-        if (return_type && !th_unify_in_place(state->types, result, return_type))
-            report_call_type_error(unit, label->self, state->types, result,
-                                   return_type);
+        if (return_type && result
+            && th_kind_of(th_resolve(result)) == TH_VAR) {
+            if (!th_unify_in_place(state->types, result, return_type))
+                report_call_type_error(unit, label->self, state->types,
+                                       result, return_type);
+        }
+        else if (return_type)
+            (void)unify_call_node_type(unit, state, label->self, label->self,
+                                       result, return_type);
         th_type *failure_type = th_func_error(signature);
         bool propagated = failure_type
             && n00bb_call_is_error_propagated(grammar, label->self);

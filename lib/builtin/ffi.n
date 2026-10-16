@@ -6,10 +6,9 @@ type Ffi_Bytes layout(c) {
     public length: uint
 }
 
-type Ffi_Callback_Entry {
-    value: Any?
-    invoke: Ref[(Any, uint, uint) -> nil]?
-    once: bool
+record Ffi_Table {
+    public slots: List[`T?]
+    public free: List[int]
 }
 
 type Ffi_Hold {
@@ -21,8 +20,6 @@ type Ffi_Hold {
     thread_id: uint
 }
 
-var ffi_callbacks: List[Ffi_Callback_Entry] = new[List[Ffi_Callback_Entry]]()
-var ffi_free_callbacks: List[int] = new[List[int]]()
 var ffi_holds: List[Ffi_Hold] = new[List[Ffi_Hold]]()
 var ffi_hold_groups: u64 = 0
 thread var ffi_unwind_top: uint = 0
@@ -48,31 +45,32 @@ func __ffi_panic_hook() {
     }
 }
 
-func __ffi_callback_register(value: Any, invoke: Ref[(Any, uint, uint) -> nil],
-                             once: bool) -> u64 {
-    let entry: Ffi_Callback_Entry = (value = value, invoke = invoke, once = once)
-    let reused = ffi_free_callbacks.pop()
+func __ffi_table_insert(modify table: Ffi_Table[`T], value: `T) -> u64 {
+    let reused = table.free.pop()
     if reused != nil {
         let index = reused.get()
-        ffi_callbacks[index] = entry
+        table.slots[index] = value
         return cast[u64](index + 1)
     }
-    ffi_callbacks.append(entry)
-    return cast[u64]ffi_callbacks.len()
+    table.slots.append(value)
+    return cast[u64]table.slots.len()
 }
 
-func __ffi_callback_free(handle: u64) {
+func __ffi_table_get(table: Ffi_Table[`T], handle: u64) -> `T? {
     let index = cast[int]handle - 1
-    if handle == 0 or index >= cast[int]ffi_callbacks.len() {
+    if handle == 0 or index >= cast[int]table.slots.len() {
+        return nil
+    }
+    return table.slots[index]
+}
+
+func __ffi_table_free(modify table: Ffi_Table[`T], handle: u64) {
+    let index = cast[int]handle - 1
+    if handle == 0 or index >= cast[int]table.slots.len() or table.slots[index] == nil {
         return
     }
-    let entry = ffi_callbacks[index]
-    if entry.value == nil {
-        return
-    }
-    let empty: Ffi_Callback_Entry = (value = nil, invoke = nil, once = false)
-    ffi_callbacks[index] = empty
-    ffi_free_callbacks.append(index)
+    table.slots[index] = nil
+    table.free.append(index)
 }
 
 func __ffi_hold_group() -> u64 {
@@ -129,21 +127,4 @@ func __ffi_event(event: string, keys: Array[u64], thread_id: uint) {
             position += 1
         }
     }
-}
-
-func __ffi_dispatch(handle: u64, arguments: uint, result: uint) -> i32 {
-    let index = cast[int]handle - 1
-    if handle == 0 or index >= cast[int]ffi_callbacks.len() {
-        return -1
-    }
-    let entry = ffi_callbacks[index]
-    if entry.value == nil or entry.invoke == nil {
-        return -1
-    }
-    let invoke: Ref[(Any, uint, uint) -> nil] = entry.invoke.get()
-    invoke.call(entry.value.get(), arguments, result)
-    if entry.once {
-        __ffi_callback_free(handle)
-    }
-    return 0
 }

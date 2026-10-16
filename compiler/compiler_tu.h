@@ -850,6 +850,8 @@ th_type *n00bb_specialize_callback_role(th_ctx *types,
 th_type *n00bb_callback_method_signature(
     th_ctx *types, th_type *receiver, const char *name, void *context);
 bool prepare_callback_call_symbols(core_translation_unit_t *unit);
+bool n00bb_bind_callback_call(n00bb_tu_state_t *state,
+                              n00bb_link_use_site_t *site);
 bool n00bb_builtin_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_fd_write_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_repr_default_function(parse_sym_entry_t *symbol);

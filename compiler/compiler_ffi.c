@@ -39,6 +39,7 @@ struct n00bb_ffi {
     core_list_t(core_string_t)     package_dirs;
     core_list_t(core_string_t)     inputs;
     core_list_t(ffi_output_t)      shims;
+    core_list_t(core_string_t)     headers;
     core_list_t(core_string_t)     archives;
     core_list_t(core_string_t)     libraries;
     core_list_t(core_string_t)     found_libraries;
@@ -100,6 +101,7 @@ n00bb_ffi_new(void)
         .package_dirs  = core_list_new(core_string_t),
         .inputs       = core_list_new(core_string_t),
         .shims         = core_list_new(ffi_output_t),
+        .headers       = core_list_new(core_string_t),
         .archives      = core_list_new(core_string_t),
         .libraries     = core_list_new(core_string_t),
         .found_libraries = core_list_new(core_string_t),
@@ -126,6 +128,7 @@ n00bb_ffi_free(n00bb_ffi_t *ffi)
         core_free((void *)ffi->shims.data[i].contents.data);
     }
     core_list_free(ffi->shims);
+    free_strings(&ffi->headers);
     free_strings(&ffi->archives);
     free_strings(&ffi->libraries);
     free_strings(&ffi->found_libraries);
@@ -254,13 +257,20 @@ keep_externs(const writ_n00b_externs_t *externs, n00bb_native_declarations_t *na
 }
 
 static bool
-register_exports(const writ_n00b_externs_t *externs)
+register_exports(const writ_n00b_externs_t *externs, core_string_t module)
 {
     for (size_t i = 0; i < externs->exports_count; i++) {
-        char *function = strndup(externs->exports[i].function.data, externs->exports[i].function.length);
+        writ_str_t name = externs->exports[i].function;
+        core_buffer_t function = {0};
+        if (memchr(name.data, '.', name.length)) {
+            core_buffer_printf(&function, "%.*s", (int)name.length, name.data);
+        } else {
+            core_buffer_printf(&function, "%.*s.%.*s", (int)module.u8_bytes, module.data, (int)name.length,
+                               name.data);
+        }
         char *symbol = strndup(externs->exports[i].symbol.data, externs->exports[i].symbol.length);
-        bool registered = function && symbol && n00bb_native_root_register(function, symbol);
-        free(function);
+        bool registered = function.data && symbol && n00bb_native_root_register(function.data, symbol);
+        core_buffer_release(&function);
         free(symbol);
         if (!registered) {
             return false;
@@ -602,7 +612,10 @@ generate_locked(n00bb_ffi_t *ffi, core_translation_unit_t *unit, core_string_t n
         writ_output_t output = {capture_file, &capture};
         writ_n00b_externs_t externs = {0};
         ok = writ_gen_n00b(&request, &output, &links, &externs) == WRIT_OK && keep_externs(&externs, natives)
-          && register_exports(&externs);
+          && register_exports(&externs, module);
+        if (ok && externs.header.length) {
+            push_unique(&ffi->headers, externs.header);
+        }
         core_buffer_release(&prefix);
     }
     for (size_t i = 0; ok && i < capture.files.len; i++) {
@@ -681,6 +694,30 @@ core_string_t
 n00bb_ffi_input_at(const n00bb_ffi_t *ffi, size_t index)
 {
     return ffi->inputs.data[index];
+}
+
+bool
+n00bb_ffi_write_headers(const n00bb_ffi_t *ffi, core_string_t output)
+{
+    size_t cut = output.u8_bytes;
+    while (cut && output.data[cut - 1] != '/') {
+        cut--;
+    }
+    bool ok = true;
+    for (size_t h = 0; ffi && ok && h < ffi->headers.len; h++) {
+        core_string_t header = ffi->headers.data[h];
+        for (size_t i = 0; i < ffi->shims.len; i++) {
+            if (!core_string_eq(ffi->shims.data[i].name, header)) {
+                continue;
+            }
+            core_buffer_t path = {0};
+            core_buffer_printf(&path, "%.*s%.*s", (int)cut, output.data, (int)header.u8_bytes, header.data);
+            ok = path.data && write_whole_file(path.data, ffi->shims.data[i].contents);
+            core_buffer_release(&path);
+            break;
+        }
+    }
+    return ok;
 }
 
 size_t

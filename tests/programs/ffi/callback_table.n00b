@@ -19,23 +19,23 @@ func twice(value: i32) -> i32 {
     return value * 2
 }
 
-func invoke_doubler(value: Any, arguments: uint, result: uint) -> nil {
-    typecase value {
-        case Doubler {
-            dispatch.write_int_raw(result, value.call(dispatch.read_int_raw(arguments)))
-        }
-        else {
-            panic("wrong callback type")
-        }
+var doublers: Ffi_Table[Doubler] = (slots = new[List[Doubler?]](), free = new[List[int]]())
+
+func dispatch_doubler(handle: u64, arguments: uint, result: uint) -> i32 {
+    let doubler = __ffi_table_get(doublers, handle)
+    if doubler == nil {
+        return -1
     }
+    dispatch.write_int_raw(result, doubler.call(dispatch.read_int_raw(arguments)))
+    return 0
 }
 
 comptime {} else {
-    let handle = __ffi_callback_register(cast[Any]callback[Doubler](ref twice), ref invoke_doubler, false)
+    let handle = __ffi_table_insert(doublers, callback[Doubler](ref twice))
     require dispatch.fire_raw(handle, 21) == 42
-    __ffi_callback_free(handle)
+    __ffi_table_free(doublers, handle)
     require dispatch.fire_raw(handle, 21) == -200
-    let again = __ffi_callback_register(cast[Any]callback[Doubler](ref twice), ref invoke_doubler, false)
+    let again = __ffi_table_insert(doublers, callback[Doubler](ref twice))
     require again == handle
     require dispatch.fire_raw(again, 5) == 10
     __fd_write(2, "ok\n")

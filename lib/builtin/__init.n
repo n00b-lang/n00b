@@ -20,8 +20,10 @@ package builtin {
     export string.core
     export ffi.Ffi_Bytes
     export ffi.ffi
-    export ffi.__ffi_callback_register
-    export ffi.__ffi_callback_free
+    export ffi.Ffi_Table
+    export ffi.__ffi_table_insert
+    export ffi.__ffi_table_get
+    export ffi.__ffi_table_free
     export ffi.__ffi_hold_group
     export ffi.__ffi_hold
     export ffi.__ffi_event

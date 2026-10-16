@@ -1,0 +1,74 @@
+import kvstore
+
+const kvx = [-
+library kv
+
+allocator kvheap alloc kv_malloc release kv_free
+
+opaque kv_db
+opaque kv_iter
+handle Db   = *kv_db   release kv_close
+handle Iter = *kv_iter release kv_iter_free
+
+enum kv_status : c_int { KV_OK = 0, KV_NOTFOUND = 1, KV_ERR = 2 }
+
+struct kv_entry @size(32) @align(8) {
+    key:     *[u8; key_len]   with self   @0
+    key_len: usize                        @8
+    val:     *[u8; val_len]   with self   @16
+    val_len: usize                        @24
+}
+
+fn kv_open(path: *cstr, out_db: out *Db) -> c_int as kv_status
+  error ret != KV_OK via kv_errstr(ret)
+  on error out_db: unset
+
+fn kv_put(db: Db, key: *[u8; klen], klen: usize, val: *[u8; vlen], vlen: usize)
+    -> c_int as kv_status
+  error ret != KV_OK
+
+fn kv_get(db: Db, key: *[u8; klen], klen: usize,
+          out_val: out **[u8; *out_len] own release kv_free,
+          out_len: out *usize)
+    -> c_int as kv_status
+  outcome failed failure when ret == KV_ERR
+  outcome missing success when ret == KV_NOTFOUND
+  outcome found success
+  on failed out_val: unset
+  on missing out_val: unset
+
+fn kv_iter_new(db: Db, prefix: ?[u8; plen], plen: usize) -> own ?Iter with db
+  error ret == null
+
+fn kv_iter_next(it: Iter) -> ?kv_entry until next kv_iter_next(it), release(it)
+
+fn kv_errstr(s: c_int) -> *cstr static
+
+binding export {
+    implement Db   = "kvstore.Store"
+    implement Iter = "kvstore.Cursor"
+    provide kv_open      = "kvstore.open"
+    provide kv_put       = "kvstore.put"
+    provide kv_get       = "kvstore.get"
+    provide kv_iter_new  = "kvstore.iter_new"
+    provide kv_iter_next = "kvstore.iter_next"
+    provide kv_errstr    = "kvstore.errstr"
+    on_panic error KV_ERR
+    allocator own -> kvheap
+    header "kv.h"
+}
+-]'ffi
+
+const client = [-
+library client
+
+fn kv_client_run() -> c_int
+
+binding {
+    raw "kv_client_run"
+}
+-]'ffi
+
+comptime {} else {
+    require client.kv_client_run_raw() == 0
+}

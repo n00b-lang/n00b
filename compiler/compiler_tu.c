@@ -4697,6 +4697,10 @@ n00bb_exiting_guard_condition(parse_grammar_t *grammar, parse_tree_t *statement)
     for (size_t i = 0; i < core_tree_num_children(list); i++) {
         parse_tree_t *child = core_tree_child(list, i);
         if (nt_is(grammar, child, "body-stmt")) last = child;
+        else if (!core_tree_is_leaf(child) && core_tree_node_value(child).group_top)
+            for (size_t j = 0; j < core_tree_num_children(child); j++)
+                if (nt_is(grammar, core_tree_child(child, j), "body-stmt"))
+                    last = core_tree_child(child, j);
     }
     parse_tree_t *exit = last && core_tree_num_children(last) == 1
         ? core_tree_child(last, 0) : nullptr;
@@ -8609,71 +8613,68 @@ n00bb_callback_method_signature(th_ctx *types, th_type *receiver,
 }
 
 bool
-prepare_callback_call_symbols(core_translation_unit_t *unit)
+n00bb_bind_callback_call(n00bb_tu_state_t *state, n00bb_link_use_site_t *site)
 {
-    n00bb_tu_state_t *state = tu_state(unit);
     parse_symtab_t *symtab = state && state->annotations
         ? state->annotations->symtab : nullptr;
     parse_namespace_t *builtins = symtab
         ? parse_symtab_ns(symtab, CORE_STRING_STATIC("builtin")) : nullptr;
     if (!symtab || !builtins || !builtins->root) return false;
+    th_type *receiver_type = site->receiver_node
+        ? core_tree_node_value(site->receiver_node).type : nullptr;
+    th_type *signature = n00bb_callback_method_signature(
+        state->types, receiver_type, "call", state);
+    if (!signature && receiver_type) {
+        receiver_type = n00bb_dereferenced_type(state->types, receiver_type);
+        signature = n00bb_callback_method_signature(state->types,
+            receiver_type, "call", state);
+    }
+    n00bb_callback_contract_t *callback_contract =
+        n00bb_callback_contract_for_type(state, receiver_type);
+    core_buffer_t name = {0};
+    core_buffer_printf(&name, "__callback_call_%zu",
+                       (size_t)(site - state->link_use_sites.data));
     parse_scope_t *saved = parse_symtab_current_scope(
         symtab, CORE_STRING_STATIC("builtin"));
+    parse_symtab_enter_scope(symtab, CORE_STRING_STATIC("builtin"),
+                             builtins->root);
+    parse_sym_entry_t *symbol = signature && name.data
+        ? parse_symtab_add(symtab, CORE_STRING_STATIC("builtin"),
+            core_string_from_cstr(name.data), PARSE_SYM_FUNCTION,
+            nullptr) : nullptr;
+    core_buffer_release(&name);
+    if (saved)
+        parse_symtab_enter_scope(symtab, CORE_STRING_STATIC("builtin"), saved);
+    if (!symbol || !parse_sym_set_binding(symbol,
+            CORE_STRING_STATIC("n00bb.callback-call"), symbol)) return false;
+    symbol->type = signature;
+    symbol->callable_contract = signature;
+    symbol->is_synthetic = true;
+    if (callback_contract && callback_contract->call) {
+        symbol->decl_node = callback_contract->call->decl_node;
+        if (!parse_sym_set_binding(symbol,
+                CORE_STRING_STATIC("n00bb.callback-public-signature"),
+                callback_contract->call->type)) return false;
+    }
+    symbol->visibility = CORE_STRING_STATIC("public");
+    parse_sym_set_phases(symbol, PARSE_SYM_PHASE_BOTH,
+                         PARSE_SYM_PHASE_NONE, PARSE_SYM_PHASE_NONE);
+    site->callback_call = true;
+    site->symbol = symbol;
+    return parse_tree_set_resolution_symbol(site->node, symbol)
+        && parse_sym_add_use(symbol, site->node);
+}
+
+bool
+prepare_callback_call_symbols(core_translation_unit_t *unit)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    if (!state) return false;
     for (size_t i = 0; i < state->link_use_sites.len; i++) {
         n00bb_link_use_site_t *site = &state->link_use_sites.data[i];
-        if (!site->callback_call) continue;
-        th_type *receiver_type = site->receiver_node
-            ? core_tree_node_value(site->receiver_node).type : nullptr;
-        th_type *signature = n00bb_callback_method_signature(
-            state->types, receiver_type, "call", state);
-        n00bb_callback_contract_t *callback_contract =
-            n00bb_callback_contract_for_type(state, receiver_type);
-        core_buffer_t name = {0};
-        core_buffer_printf(&name, "__callback_call_%zu", i);
-        parse_symtab_enter_scope(symtab, CORE_STRING_STATIC("builtin"),
-                                 builtins->root);
-        parse_sym_entry_t *symbol = signature && name.data
-            ? parse_symtab_add(symtab, CORE_STRING_STATIC("builtin"),
-                core_string_from_cstr(name.data), PARSE_SYM_FUNCTION,
-                nullptr) : nullptr;
-        core_buffer_release(&name);
-        if (!symbol
-            || !parse_sym_set_binding(symbol,
-                CORE_STRING_STATIC("n00bb.callback-call"), symbol)) {
-            if (saved)
-                parse_symtab_enter_scope(symtab,
-                    CORE_STRING_STATIC("builtin"), saved);
+        if (site->callback_call && !n00bb_bind_callback_call(state, site))
             return false;
-        }
-        symbol->type = signature;
-        symbol->callable_contract = signature;
-        symbol->is_synthetic = true;
-        if (callback_contract && callback_contract->call) {
-            symbol->decl_node = callback_contract->call->decl_node;
-            if (!parse_sym_set_binding(symbol,
-                    CORE_STRING_STATIC("n00bb.callback-public-signature"),
-                    callback_contract->call->type)) {
-                if (saved)
-                    parse_symtab_enter_scope(symtab,
-                        CORE_STRING_STATIC("builtin"), saved);
-                return false;
-            }
-        }
-        symbol->visibility = CORE_STRING_STATIC("public");
-        parse_sym_set_phases(symbol, PARSE_SYM_PHASE_BOTH,
-                             PARSE_SYM_PHASE_NONE, PARSE_SYM_PHASE_NONE);
-        site->symbol = symbol;
-        if (!parse_tree_set_resolution_symbol(site->node, symbol)
-            || !parse_sym_add_use(symbol, site->node)) {
-            if (saved)
-                parse_symtab_enter_scope(symtab,
-                    CORE_STRING_STATIC("builtin"), saved);
-            return false;
-        }
     }
-    if (saved)
-        parse_symtab_enter_scope(symtab, CORE_STRING_STATIC("builtin"),
-                                 saved);
     return true;
 }
 
@@ -10605,12 +10606,9 @@ n00bb_callback_function_type(parse_grammar_t *grammar,
     parse_tree_t *receiver = core_tree_child(member, 0);
     th_type *type = receiver && !core_tree_is_leaf(receiver)
         ? core_tree_node_value(receiver).type : nullptr;
-    type = type ? th_resolve(type) : nullptr;
-    if (type && th_kind_of(type) == TH_INDIRECTION) {
-        th_type *referent = th_resolve(th_ind_referent(type));
-        if (referent && th_kind_of(referent) == TH_FUNCTION) return referent;
-    }
     n00bb_tu_state_t *state = tu_state(unit);
+    type = type && state ? n00bb_dereferenced_type(state->types, type) : nullptr;
+    if (type && th_kind_of(type) == TH_FUNCTION) return type;
     n00bb_callback_contract_t *contract =
         n00bb_callback_contract_for_type(state, type);
     return contract && contract->call

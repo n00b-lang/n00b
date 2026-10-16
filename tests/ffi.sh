@@ -51,7 +51,8 @@ builds_and_runs keyword_args --link-object "$tmp/keywords.o"
 "${CC:-cc}" -c cursor/cursor.c -o "$tmp/cursor.o"
 builds_and_runs with_source --link-object "$tmp/cursor.o"
 "${CC:-cc}" -c dispatch/dispatch.c -o "$tmp/dispatch.o"
-builds_and_runs callback_table --link-object "$tmp/dispatch.o"
+builds_and_runs callback_table --link-object "$tmp/dispatch.o" \
+    --native-root callback_table.dispatch_doubler=n00b_callback_table_dispatch_doubler
 "${CC:-cc}" -c callbacks/hooks.c -o "$tmp/hooks.o"
 builds_and_runs hook_calls --link-object "$tmp/hooks.o"
 "${CC:-cc}" -c sorter/sorter.c -o "$tmp/sorter.o"
@@ -62,6 +63,10 @@ fails_with provided_missing "provided function 'provided_missing.missing'" --lin
 builds_and_runs guard_calls --link-object "$tmp/guard.o" 2>/dev/null
 "${CC:-cc}" -c kv/kv.c -o "$tmp/kv.o"
 builds_and_runs kv_store --link-object "$tmp/kv.o"
+"$compiler" lower --output "$tmp/kv_serve.ir" kv_serve.n00b >"$tmp/kv_serve.log" 2>&1 \
+    || { cat "$tmp/kv_serve.log" >&2; exit 1; }
+"${CC:-cc}" -I"$tmp" -c kv/kv_client.c -o "$tmp/kv_client.o"
+builds_and_runs kv_serve --link-object "$tmp/kv_client.o"
 
 for marker in marker-literal-5be1 marker-contract-5be1; do
     for binary in constants use_path use_search; do

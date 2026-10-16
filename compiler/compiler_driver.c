@@ -16,6 +16,7 @@ double n00bb_profile_seconds(void);
 
 #include "driver.h"
 #include "compiler_cli.h"
+#include "compiler_native_roots.h"
 #include "compiler_tu.h"
 #include "compiler_link.h"
 #include "compiler_link_lifetime.h"
@@ -3502,9 +3503,31 @@ n00bb_compiler_main(int argc, char **argv)
         CORE_STRING_STATIC("--native-root"));
     core_string_t *native_roots = native_root_count
         ? core_alloc_array(core_string_t, (size_t)native_root_count) : nullptr;
-    for (int32_t i = 0; i < native_root_count; i++)
-        native_roots[i] = parse_cmdr_flag_str_at(args,
+    int32_t named_root_count = 0;
+    for (int32_t i = 0; i < native_root_count; i++) {
+        core_string_t root = parse_cmdr_flag_str_at(args,
             CORE_STRING_STATIC("--native-root"), i);
+        const char *alias = root.data
+            ? memchr(root.data, '=', root.u8_bytes) : nullptr;
+        if (!alias) {
+            native_roots[named_root_count++] = root;
+            continue;
+        }
+        char *qualified = core_strndup(root.data,
+                                       (size_t)(alias - root.data));
+        char *symbol = core_strndup(alias + 1,
+            root.u8_bytes - (size_t)(alias - root.data) - 1);
+        if (!qualified || !symbol
+            || !n00bb_native_root_register(qualified, symbol)) {
+            core_diagnostics_report(cli_diagnostics, nullptr, CORE_DIAG_ERROR,
+                CORE_STRING_STATIC("N00BB-B0003"),
+                CORE_STRING_STATIC("--native-root NAME=SYMBOL could not register the alias"));
+            options_valid = false;
+        }
+        core_free(qualified);
+        core_free(symbol);
+    }
+    native_root_count = named_root_count;
     if (emit_interface && !library_command) {
         core_diagnostics_report(cli_diagnostics, nullptr, CORE_DIAG_ERROR,
             CORE_STRING_STATIC("N00BB-B0003"),
@@ -3664,6 +3687,14 @@ n00bb_compiler_main(int argc, char **argv)
             parse_cmdr_flag_present(args, CORE_STRING_STATIC("--dump-pdg")),
             parse_cmdr_flag_present(args, CORE_STRING_STATIC("--dump-layout")),
             interface_closure_only);
+    core_string_t header_output = parse_cmdr_flag_str(args,
+        CORE_STRING_STATIC("--output"));
+    if (located && header_output.data
+        && !n00bb_ffi_write_headers(ffi, header_output)) {
+        fprintf(stderr, "n00bb: could not write the generated header next to %.*s\n",
+                (int)header_output.u8_bytes, header_output.data);
+        located = false;
+    }
     if (profile_compile) {
         double now = n00bb_profile_seconds();
         fprintf(stderr, "PROFILE lower %.3f\n", now - profile_tick);

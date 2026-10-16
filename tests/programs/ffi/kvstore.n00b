@@ -1,0 +1,100 @@
+type Kv_Error {
+    public code: i64
+}
+
+type Store {
+    id: int
+}
+
+type Pair {
+    store: int
+    key: Array[u8]
+    val: Array[u8]
+}
+
+type Entry {
+    public key: Array[u8]
+    public val: Array[u8]
+}
+
+type Cursor {
+    store: int
+    id: int
+}
+
+var records: List[Pair] = new[List[Pair]]()
+var positions: List[int] = new[List[int]]()
+var stores: int = 0
+
+func same(left: Array[u8], right: Array[u8]) -> bool {
+    if left.len() != right.len() {
+        return false
+    }
+    var i: uint = 0
+    while i < left.len() {
+        if left[i] != right[i] {
+            return false
+        }
+        i += 1
+    }
+    return true
+}
+
+func open(path: string) -> Store fail: Kv_Error {
+    if path == "" {
+        let failure: Kv_Error = (code = 2)
+        fail failure
+    }
+    stores += 1
+    let store: Store = (id = stores)
+    return store
+}
+
+func put(store: Store, key: Array[u8], val: Array[u8]) fail: Kv_Error {
+    if key.len() == 0 {
+        let failure: Kv_Error = (code = 2)
+        fail failure
+    }
+    let item: Pair = (store = store.id, key = key, val = val)
+    records.append(item)
+}
+
+func get(store: Store, key: Array[u8]) -> Array[u8]? fail: Kv_Error {
+    var i = 0
+    while i < cast[int]records.len() {
+        let item = records[i]
+        if item.store == store.id and same(item.key, key) {
+            return item.val
+        }
+        i += 1
+    }
+    return nil
+}
+
+func iter_new(store: Store, prefix: Array[u8]) -> Cursor fail: Kv_Error {
+    positions.append(0)
+    let cursor: Cursor = (store = store.id, id = cast[int]positions.len() - 1)
+    return cursor
+}
+
+func iter_next(cursor: Cursor) -> Entry? {
+    var at = positions[cursor.id]
+    while at < cast[int]records.len() {
+        let item = records[at]
+        at += 1
+        if item.store == cursor.store {
+            positions[cursor.id] = at
+            let entry: Entry = (key = item.key, val = item.val)
+            return entry
+        }
+    }
+    positions[cursor.id] = at
+    return nil
+}
+
+func errstr(status: i32) -> string {
+    if status == 1 {
+        return "not found"
+    }
+    return "failed"
+}

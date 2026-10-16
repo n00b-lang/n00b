@@ -10366,12 +10366,15 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         ? attached_symbol(visit->grammar, lower->unit, callee) : nullptr;
     bool callback_call = member_call
         && n00bb_builtin_callback_function(symbol);
-    n00bb_callback_contract_t *nominal_callback = callback_call
-        && receiver_node && caller_state
-        ? n00bb_callback_contract_for_type(caller_state,
-            core_tree_node_value(receiver_node).type) : nullptr;
+    th_type *callback_type = callback_call && receiver_node && caller_state
+        ? n00bb_dereferenced_type(caller_state->types,
+                                  core_tree_node_value(receiver_node).type)
+        : nullptr;
+    n00bb_callback_contract_t *nominal_callback = callback_type
+        ? n00bb_callback_contract_for_type(caller_state, callback_type)
+        : nullptr;
     if (nominal_callback && !n00bb_register_callback_representation(
-            context->module, core_tree_node_value(receiver_node).type))
+            context->module, callback_type))
         return lower_error(context, IR_DIAG_TYPE_CLASS, span,
             "callback call has no registered value representation");
     bool trait_call = index_call || (member_call && !callback_call);
@@ -10546,7 +10549,8 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                                 symbol, callee_function, visit->grammar,
                                 lower->comptime_phase);
     ir_value_t *callee_value = callback_call && receiver_node
-        ? ir_lower_node_value(context, receiver_node)
+        ? n00bb_promoted_operand(context, receiver_node,
+              ir_lower_node_value(context, receiver_node), false, span)
         : callee_function
             ? ir_func_address(callee_function->owner, callee_function)
                         : nullptr;
@@ -14962,8 +14966,11 @@ register_nominal_types(parse_grammar_t *grammar,
                 };
                 th_type *representation = fields[2]
                     ? th_tuple(types, fields, 3) : nullptr;
-                if (!representation || !ir_type_define(module, symbol->type,
-                                                        representation))
+                if (!representation
+                    || (!th_type_definition(types, symbol->type)
+                        && !th_type_define(types, symbol->type,
+                                           representation))
+                    || !ir_type_define(module, symbol->type, representation))
                     return false;
                 continue;
             }

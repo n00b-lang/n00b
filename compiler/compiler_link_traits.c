@@ -142,6 +142,29 @@ resolve_in_place_method(core_link_unit_t *link,
     return resolve_linked_method(link, site, unit, &method);
 }
 
+static parse_sym_entry_t *
+environment_method(core_link_unit_t *link, core_translation_unit_t *unit,
+                   n00bb_tu_state_t *state, n00bb_link_use_site_t *site,
+                   th_type *receiver_type, core_string_t name)
+{
+    char *method_name = core_strndup(name.data, name.u8_bytes);
+    th_env_method_t method = {0};
+    const char *selected_trait = nullptr;
+    th_env_method_status_t status = method_name
+        ? th_env_method_resolve_by_name(state->types, receiver_type,
+              method_name, &method, &selected_trait)
+        : TH_ENV_METHOD_NOT_FOUND;
+    th_type *promoted = status == TH_ENV_METHOD_NOT_FOUND
+        ? n00bb_dereferenced_type(state->types, receiver_type) : nullptr;
+    if (promoted && promoted != th_resolve(receiver_type))
+        status = th_env_method_resolve_by_name(state->types, promoted,
+            method_name, &method, &selected_trait);
+    core_free(method_name);
+    if (status != TH_ENV_METHOD_FOUND) return nullptr;
+    site->resolved_trait_name = selected_trait;
+    return resolve_linked_method(link, site, unit, &method);
+}
+
 core_link_declaration_t *
 linked_method_declaration(core_link_unit_t *link,
                           const th_env_method_t *method)
@@ -177,6 +200,7 @@ same_semantic_type(th_ctx *types, th_type *left, th_type *right)
     right = right ? th_resolve(right) : nullptr;
     if (!left || !right) return false;
     if (left == right) return true;
+    if (th_kind_of(left) != th_kind_of(right)) return false;
     const char *left_name = nullptr, *right_name = nullptr;
     size_t left_length = 0, right_length = 0;
     size_t left_args = 0, right_args = 0;
@@ -310,7 +334,11 @@ plan_closed_trait_dispatch(core_link_unit_t *link,
                     ? th_func_param(methods[j].signature, 0) : nullptr;
                 if (!formal || !same_semantic_type(state->types,
                         formal->type, receiver)) continue;
-                if (selected) { resolved = false; break; }
+                if (selected && strcmp(selected->qualified_name,
+                                       methods[j].qualified_name)) {
+                    resolved = false;
+                    break;
+                }
                 selected = &methods[j];
             }
             if (!selected) resolved = false;
@@ -1374,6 +1402,32 @@ resolve_constructor_use_site(parse_grammar_t *grammar, core_link_unit_t *link,
     return ok;
 }
 
+static bool
+link_builtin_site(core_link_unit_t *link, n00bb_link_use_site_t *site,
+                  parse_sym_entry_t *builtin)
+{
+    if (!site->reference || !builtin) return false;
+    core_link_declaration_metadata_t metadata = {
+        .kind = PARSE_SYM_FUNCTION,
+        .visibility = 0,
+        .contract = builtin->callable_contract
+            ? builtin->callable_contract : builtin->type,
+    };
+    core_buffer_t key = {0};
+    core_buffer_printf(&key, "%u:%.*s", (unsigned)PARSE_SYM_FUNCTION,
+                       (int)builtin->name.u8_bytes, builtin->name.data);
+    core_string_t key_name = core_string_from_cstr(key.data);
+    core_link_declaration_t *declaration = core_link_unit_find_declaration(
+        link, CORE_STRING_STATIC("builtins"), key_name);
+    bool linked = key.data
+        && (declaration || core_link_unit_require_external(link,
+            CORE_STRING_STATIC("builtins"), key_name, &metadata, &declaration))
+        && core_link_unit_resolve_reference(link, site->reference,
+            CORE_STRING_STATIC("builtins"), key_name);
+    core_buffer_release(&key);
+    return linked;
+}
+
 static size_t
 tree_depth(parse_tree_t *node)
 {
@@ -1422,7 +1476,13 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
         if (state->link_use_sites.len && !order) return false;
         for (size_t s = 0; s < state->link_use_sites.len; s++) {
             n00bb_link_use_site_t *site = &state->link_use_sites.data[order[s]];
-            if (site->callback_call) continue;
+            if (site->callback_call) {
+                if (site->reference
+                    && core_link_reference_is_deferred(site->reference)
+                    && !link_builtin_site(link, site, site->symbol))
+                    return false;
+                continue;
+            }
             if (!site->symbol && site->member_name.data
                 && site->receiver_node
                 && n00bb_option_type_element(
@@ -1443,29 +1503,7 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
                     ? parse_symtab_lookup_in(builtins->root,
                         core_string_from_cstr(name)) : nullptr;
                 if (n00bb_builtin_option_function(builtin)) {
-                    core_link_reference_t *reference =
-                        site->reference;
-                    core_link_declaration_metadata_t metadata = {
-                        .kind = PARSE_SYM_FUNCTION,
-                        .visibility = 0,
-                        .contract = builtin->callable_contract
-                            ? builtin->callable_contract : builtin->type,
-                    };
-                    core_buffer_t key = {0};
-                    core_buffer_printf(&key, "%u:%s",
-                        (unsigned)PARSE_SYM_FUNCTION, name);
-                    core_string_t key_name = core_string_from_cstr(key.data);
-                    core_link_declaration_t *declaration =
-                        core_link_unit_find_declaration(link,
-                            CORE_STRING_STATIC("builtins"), key_name);
-                    bool linked = key.data && reference
-                        && (declaration || core_link_unit_require_external(
-                            link, CORE_STRING_STATIC("builtins"), key_name,
-                            &metadata, &declaration))
-                        && core_link_unit_resolve_reference(link, reference,
-                            CORE_STRING_STATIC("builtins"), key_name);
-                    core_buffer_release(&key);
-                    if (!linked) return false;
+                    if (!link_builtin_site(link, site, builtin)) return false;
                     site->symbol = builtin;
                     parse_sym_add_use(builtin, site->node);
                     if (!parse_tree_set_resolution_symbol(site->node,
@@ -1798,6 +1836,19 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
                 core_string_t method_name = core_tree_num_children(site->node) >= 3
                     ? first_token_text(core_tree_child(site->node, 2))
                     : (core_string_t){0};
+                parse_sym_entry_t *implementation = method_name.data
+                    && state->types && receiver_type
+                    ? environment_method(link, unit, state, site,
+                                         receiver_type, method_name)
+                    : nullptr;
+                if (implementation) {
+                    site->symbol = implementation;
+                    parse_sym_add_use(implementation, site->node);
+                    if (!parse_tree_set_resolution_symbol(site->node,
+                                                           implementation))
+                        return false;
+                    continue;
+                }
                 if (method_name.data && state->types) {
                     parse_sym_entry_t *requirement =
                         deferred_trait_method_requirement(grammar, analysis,

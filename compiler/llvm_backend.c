@@ -2231,11 +2231,27 @@ literal_element_layout_matches(ir_module_t *module, th_type *type,
         return layout->intrinsic_bits == 128
             && native == box_llvm_type(LLVMGetTypeContext(native));
 
+    if (definition && definition != type
+        && th_builtin_kind_of(definition) == TH_BUILTIN_TUPLE)
+        return literal_element_layout_matches(module, definition, native,
+                                              target);
     size_t count = 0;
     if (!th_named_info(th_resolve(type), nullptr, nullptr, nullptr, &count)
         && (!definition || th_kind_of(definition) != TH_RECORD))
         return false;
     th_builtin_kind_t builtin = th_builtin_kind_of(type);
+    if (builtin == TH_BUILTIN_TUPLE) {
+        if (LLVMGetTypeKind(native) != LLVMStructTypeKind
+            || LLVMCountStructElementTypes(native) != count) return false;
+        for (size_t i = 0; i < count; i++) {
+            const th_arg *argument = th_named_arg(th_resolve(type), i);
+            if (!argument || argument->kind != TH_ARG_TYPE
+                || !literal_element_layout_matches(module, argument->type,
+                    LLVMStructGetTypeAtIndex(native, (unsigned)i), target))
+                return false;
+        }
+        return true;
+    }
     if (builtin == TH_BUILTIN_ANY && !count)
         return layout->intrinsic_bits == 128
             && native == box_llvm_type(LLVMGetTypeContext(native));
@@ -3016,10 +3032,17 @@ dynamic_array(lower_state_t *state, ir_instr_t *instruction)
     uint64_t stride_bits = 0;
     uint64_t packed_width = packed_array_width(source, element);
     if (!layout || !layout->alignment_bytes || !element_type || !result_type
-        || !ir_layout_final_stride_bits(layout, &stride_bits)
-        || (!packed_width && !literal_element_layout_matches(source, element,
-            element_type, LLVMGetModuleDataLayout(state->module))))
+        || !ir_layout_final_stride_bits(layout, &stride_bits)) {
+        state->failure_detail = !layout || !layout->alignment_bytes
+            ? "array element type has no final layout"
+            : "array element or array type has no LLVM type";
         return nullptr;
+    }
+    if (!packed_width && !literal_element_layout_matches(source, element,
+            element_type, LLVMGetModuleDataLayout(state->module))) {
+        state->failure_detail = "array element layout does not match its LLVM type";
+        return nullptr;
+    }
     uint64_t element_align = layout->alignment_bytes;
     uint64_t stride = stride_bits / 8;
     uint64_t alignment = element_align > 8 ? element_align : 8;
