@@ -1,0 +1,32 @@
+func trip(depth: i32) -> i32 {
+    if depth > 0 {
+        panic("tripped")
+    }
+    return depth
+}
+
+const tripx = [-
+library trip
+
+fn trip(depth: c_int) -> c_int
+  symbol "trip_entry"
+
+binding export {
+    provide trip = "trip_serve.trip"
+    header "trip.h"
+}
+-]'ffi
+
+const client = [-
+library client
+
+fn trip_client_run() -> c_int
+
+binding {
+    raw "trip_client_run"
+}
+-]'ffi
+
+comptime {} else {
+    require client.trip_client_run_raw() == 0
+}

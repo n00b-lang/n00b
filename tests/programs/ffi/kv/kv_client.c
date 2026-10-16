@@ -68,6 +68,13 @@ kv_client_run(void)
     if (kv_put(db, key, 0, value, 3) != KV_ERR) {
         return 6;
     }
+    if (kv_put(db, key, 2, value, 0) != KV_ERR) {
+        return 12;
+    }
+    if (kv_get(db, key, 2, &found, &length) != KV_OK || length != 3) {
+        return 13;
+    }
+    kv_free(found);
     kv_iter *it = kv_iter_new(db, NULL, 0);
     if (!it) {
         return 8;

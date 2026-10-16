@@ -55,6 +55,9 @@ func put(store: Store, key: Array[u8], val: Array[u8]) fail: Kv_Error {
         let failure: Kv_Error = (code = 2)
         fail failure
     }
+    if val.len() == 0 {
+        panic("empty value")
+    }
     let item: Pair = (store = store.id, key = key, val = val)
     records.append(item)
 }
