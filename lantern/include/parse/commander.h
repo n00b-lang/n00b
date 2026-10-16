@@ -38,6 +38,7 @@ typedef struct {
     core_string_t           arg;
     int                    min_args;
     int                    max_args; /* Negative means unbounded. */
+    core_string_t           default_command;
 } parse_cmdr_spec_t;
 
 typedef struct parse_cmdr_t        parse_cmdr_t;

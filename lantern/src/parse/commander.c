@@ -89,6 +89,7 @@ struct parse_cmdr_t {
     bool               finalized;
     core_string_t       name;
     core_string_t       banner;
+    core_string_t       default_command;
     int64_t            tok_ids[PARSE_CMDR_TID_COUNT];
 };
 
@@ -200,6 +201,7 @@ parse_cmdr_new(const parse_cmdr_spec_t *spec)
     }
 
     c->banner = core_string_dup(spec->usage);
+    c->default_command = core_string_dup(spec->default_command);
 
     parse_cmdr_set_name(c, spec->tool);
     add_flags(c, (core_string_t){0}, spec->flags);
@@ -329,6 +331,7 @@ parse_cmdr_free(parse_cmdr_t *c)
 
     core_free(c->name.data);
     core_free(c->banner.data);
+    core_free(c->default_command.data);
     core_free(c);
 }
 
@@ -1334,15 +1337,29 @@ parse_cmdr_parse(parse_cmdr_t *c, int nargs, const char **args)
     int command_index = -1;
     parse_cmdr_command_t *scope = command_in_args(c, args, nargs,
                                                    &command_index);
+    const char **defaulted = nullptr;
+    if (scope == &c->root && c->default_command.data
+        && find_command(c, c->default_command) != &c->root) {
+        defaulted = core_alloc_array(const char *, nargs + 1);
+        defaulted[0] = c->default_command.data;
+        for (int i = 0; i < nargs; i++) {
+            defaulted[i + 1] = args[i];
+        }
+        args = defaulted;
+        nargs++;
+        scope = command_in_args(c, args, nargs, &command_index);
+    }
     const char **ordered = move_leading_flags_after_command(scope, c, args,
                                                              nargs,
                                                              command_index);
     const char **input = ordered ? ordered : args;
     if (cmdr_tokenize(input, nargs, c, scope, &tokens, &n_tokens) < 0) {
         core_free(ordered);
+        core_free(defaulted);
         return make_error_result("tokenization failed");
     }
     core_free(ordered);
+    core_free(defaulted);
 
     parse_token_stream_t *ts = scan_token_stream_from_array(tokens, n_tokens);
     parse_pwz_parser_t   *pp
@@ -1360,8 +1377,25 @@ parse_cmdr_parse(parse_cmdr_t *c, int nargs, const char **args)
         r->ok       = false;
         r->errors = core_list_new_cap(core_string_t, 1);
 
+        int32_t             at    = parse_pwz_error_pos(pp);
+        parse_token_info_t *token = at >= 0 && at < n_tokens ? tokens[at] : nullptr;
+        core_buffer_t       message = {0};
+        if (token && core_option_is_set(token->value)) {
+            core_string_t value = core_option_get(token->value);
+            core_buffer_printf(&message, "unexpected argument '%.*s'",
+                               (int)value.u8_bytes, value.data);
+            if (scope && scope->name.data) {
+                core_buffer_printf(&message, " for command '%.*s'",
+                                   (int)scope->name.u8_bytes, scope->name.data);
+            }
+        }
+        else {
+            core_buffer_printf(&message, "parse failed");
+        }
         core_list_push(r->errors,
-                      cmdr_intern(CORE_STRING_STATIC("parse failed")));
+                      cmdr_intern(core_string_borrow(message.data,
+                                                     message.byte_len)));
+        core_buffer_release(&message);
     }
     else {
         r->ok   = true;

@@ -268,6 +268,43 @@ static void test_repeatable_flags_preserve_all_values(void)
     parse_cmdr_free(c);
 }
 
+static void test_a_bare_invocation_runs_the_default_command(void)
+{
+    static const parse_cmdr_flag_t build_flags[] = {
+        {CORE_STRING_STATIC("--out"), CORE_STRING_STATIC("-o"),
+         PARSE_CMDR_TYPE_WORD, true, CORE_STRING_STATIC("o")},
+        {{0}, {0}, 0, false, {0}},
+    };
+    static const parse_cmdr_cmd_t commands[] = {
+        {CORE_STRING_STATIC("build"), CORE_STRING_STATIC("build it"),
+         build_flags, CORE_STRING_STATIC("file"), 1, 1},
+        {CORE_STRING_STATIC("clean"), CORE_STRING_STATIC("clean it"),
+         nullptr, {0}, 0, 0},
+        {{0}, {0}, nullptr, {0}, 0, 0},
+    };
+    static const parse_cmdr_spec_t spec = {
+        .tool = CORE_STRING_STATIC("tool"), .commands = commands,
+        .default_command = CORE_STRING_STATIC("build"),
+    };
+    parse_cmdr_t *c = parse_cmdr_new(&spec);
+    parse_cmdr_result_t *bare = parse_cmdr_parse(c, 3,
+        (const char *[]) {"-o", "x", "a.c"});
+    check("a bare invocation parses as the default command",
+          parse_cmdr_result_ok(bare)
+              && core_string_eq(parse_cmdr_result_command(bare),
+                                CORE_STRING_STATIC("build"))
+              && core_string_eq(parse_cmdr_flag_str(bare,
+                                    CORE_STRING_STATIC("--out")),
+                                CORE_STRING_STATIC("x")));
+    parse_cmdr_result_free(bare);
+    parse_cmdr_result_t *other = parse_cmdr_parse(c, 3,
+        (const char *[]) {"clean", "-o", "x"});
+    check("another command does not accept the default command's flags",
+          !parse_cmdr_result_ok(other));
+    parse_cmdr_result_free(other);
+    parse_cmdr_free(c);
+}
+
 int main(void)
 {
     test_a_command_and_its_arguments_come_back();
@@ -279,6 +316,7 @@ int main(void)
     test_global_flags_are_inherited_by_commands();
     test_flags_before_commands_and_command_scope_precedence();
     test_repeatable_flags_preserve_all_values();
+    test_a_bare_invocation_runs_the_default_command();
 
     return report("fe commander");
 }
