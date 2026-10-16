@@ -1151,6 +1151,21 @@ first_sets_by_scc(parse_grammar_t *g, bool *first_nullable)
     core_list_free(deps.edges);
 }
 
+static bool
+rule_is_identity_unit(parse_grammar_t *g, parse_rule_t *rule)
+{
+    if (rule->contents.len != 1 || rule->annotations.len != 1
+        || rule->contents.data[0].kind != PARSE_MATCH_NT) return false;
+    parse_nonterm_t    *child = parse_get_nonterm(g,
+                                                  rule->contents.data[0].nt_id);
+    parse_annotation_t *emit  = rule->annotations.data[0];
+    return child && !child->group_nt && emit && emit->kind == PARSE_ANNOT_EMIT
+        && core_string_eq(emit->emit_action, CORE_STRING_STATIC("identity"))
+        && emit->emit_operands.len == 1
+        && emit->emit_operands.data[0].kind == PARSE_ROLE_BY_INDEX
+        && emit->emit_operands.data[0].index == 0;
+}
+
 static void
 compute_all_first_sets(parse_grammar_t *g)
 {
@@ -1504,6 +1519,10 @@ parse_grammar_finalize(parse_grammar_t *g)
     }
 
     compute_all_first_sets(g);
+
+    for (size_t i = 0; i < g->rules.len; i++)
+        g->rules.data[i].identity_unit = rule_is_identity_unit(
+            g, &g->rules.data[i]);
 
     (void)scan_grammar_lex_compiled(g);
 

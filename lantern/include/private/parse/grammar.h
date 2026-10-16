@@ -56,6 +56,7 @@ struct parse_rule_t {
     bool                                  penalty_rule;
     bool                                  first_has_any;
     bool                                  nullable;
+    bool                                  identity_unit;
     void                                 *thunk;
 };
 

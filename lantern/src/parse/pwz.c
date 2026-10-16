@@ -1116,6 +1116,31 @@ add_child_flattening_same_group(parse_tree_t *parent,
     (void)core_tree_add_child(parent, child);
 }
 
+static bool
+tree_is_identity_unit(parse_grammar_t *g, parse_tree_t *t)
+{
+    if (!t || core_tree_is_leaf(t)) return false;
+    parse_nt_node_t  *node = &core_tree_node_value(t);
+    parse_nonterm_t  *nt   = node->group_top || node->id < 0
+        ? nullptr : parse_get_nonterm(g, node->id);
+    if (!nt || node->rule_index < 0
+        || (size_t)node->rule_index >= core_list_len(nt->rule_ids))
+        return false;
+    parse_rule_t *rule = parse_get_rule(g, nt->rule_ids.data[node->rule_index]);
+    return rule && rule->identity_unit;
+}
+
+static parse_tree_t *
+identity_chain_child(parse_grammar_t *g, parse_tree_t *tree,
+                     parse_tree_t *kid)
+{
+    if (!tree_is_identity_unit(g, tree) || !tree_is_identity_unit(g, kid)
+        || core_tree_num_children(kid) != 1) return kid;
+    parse_tree_t *inner = core_tree_child(kid, 0);
+    core_tree_free_node(kid);
+    return inner;
+}
+
 typedef struct {
     int32_t            pos;
     parse_pwz_parser_t *parser;
@@ -1632,6 +1657,8 @@ convert_exp_to_tree(parse_pwz_parser_t *p, pwz_exp_t *exp,
                      ? make_group_node(e->seq.name, start, end)
                      : make_nt_node(p->grammar, e->nt_id, e->rule_ix, start,
                                     end);
+            if (nch == 1)
+                kids[0] = identity_chain_child(p->grammar, tree, kids[0]);
         }
         else if (nch == 1) {
             frames.len--;
