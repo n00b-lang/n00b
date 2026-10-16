@@ -1,3 +1,5 @@
+import sys.gc
+
 type Kv_Error {
     public code: i64
 }
@@ -50,6 +52,23 @@ func open(path: string) -> Store fail: Kv_Error {
     return store
 }
 
+func collect() {
+    let mutator = sys.gc.alloc.mutator_for_native()
+    require mutator != nil
+    let heap = mutator.get().heap
+    let before = heap.collections
+    sys.gc.collect.collect(heap)
+    require heap.collections > before
+    var round = 0
+    while round < 64 {
+        var junk: Array[u8] = new[Array[u8]](3)
+        junk[0] = 122
+        junk[1] = 122
+        junk[2] = 122
+        round += 1
+    }
+}
+
 func put(store: Store, key: Array[u8], val: Array[u8]) fail: Kv_Error {
     if key.len() == 0 {
         let failure: Kv_Error = (code = 2)
@@ -58,6 +77,7 @@ func put(store: Store, key: Array[u8], val: Array[u8]) fail: Kv_Error {
     if val.len() == 0 {
         panic("empty value")
     }
+    collect()
     let item: Pair = (store = store.id, key = key, val = val)
     records.append(item)
 }
