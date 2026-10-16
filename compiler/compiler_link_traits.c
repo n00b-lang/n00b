@@ -102,6 +102,23 @@ resolve_linked_method(core_link_unit_t *link, n00bb_link_use_site_t *site,
     return symbol;
 }
 
+static parse_sym_entry_t *
+resolve_in_place_method(core_link_unit_t *link,
+                        core_translation_unit_t *unit,
+                        n00bb_tu_state_t *state, n00bb_link_use_site_t *site,
+                        th_type *receiver_type)
+{
+    const n00bb_binary_operator_t *operator =
+        n00bb_binary_operator_method(site->dispatch_method);
+    if (!operator || !state->types) return nullptr;
+    th_env_method_t method = {0};
+    const char *selected_trait = nullptr;
+    if (th_env_method_resolve_by_name(state->types, receiver_type,
+            operator->in_place, &method, &selected_trait)
+        != TH_ENV_METHOD_FOUND) return nullptr;
+    return resolve_linked_method(link, site, unit, &method);
+}
+
 core_link_declaration_t *
 linked_method_declaration(core_link_unit_t *link,
                           const th_env_method_t *method)
@@ -1563,6 +1580,15 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
                     ? site->dispatch_receiver_type
                     : receiver && !core_tree_is_leaf(receiver)
                         ? core_tree_node_value(receiver).type : nullptr;
+                parse_sym_entry_t *in_place = receiver_type
+                    && nt_is(grammar, site->node, "binop-assign-stmt")
+                    ? resolve_in_place_method(link, unit, state, site,
+                                              receiver_type)
+                    : nullptr;
+                if (in_place) {
+                    site->in_place_dispatch = true;
+                    continue;
+                }
                 const char *trait_name = site->resolved_trait_name
                     ? site->resolved_trait_name
                     : state->types

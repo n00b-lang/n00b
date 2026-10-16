@@ -733,6 +733,15 @@ test(
 )
 
 test(
+    'compound-in-place-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_compound_in_place.n'],
+)
+
+test(
     'comptime-c-record-deferred-array-n00b',
     find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',

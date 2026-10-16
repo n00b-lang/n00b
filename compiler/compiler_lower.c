@@ -4422,6 +4422,77 @@ n00bb_lower_operator_method(ir_lower_context_t *context,
     return (ir_lower_result_t){IR_LOWER_VALUE, result};
 }
 
+static ir_lower_result_t
+n00bb_lower_in_place_method(ir_lower_context_t *context, parse_visit_t *visit,
+                            n00bb_link_use_site_t *site,
+                            ir_value_t *const *operands, th_type *target_type,
+                            ir_span_t span)
+{
+    n00bb_lower_context_t *lower = context->user;
+    n00bb_tu_state_t *caller = tu_state(lower->unit);
+    n00bb_link_analysis_t *analysis = caller ? caller->link_analysis : nullptr;
+    parse_sym_entry_t *symbol = site->symbol;
+    core_translation_unit_t *owner = symbol
+        ? unit_for_symbol(visit->grammar, lower->units, symbol) : nullptr;
+    n00bb_tu_state_t *owner_state = owner ? tu_state(owner) : nullptr;
+    ir_func_t *function = owner_state
+        ? link_ir_function_for_phase(analysis, symbol, lower->comptime_phase)
+        : nullptr;
+    queue_comptime_function(analysis, symbol, function, visit->grammar,
+                            lower->comptime_phase);
+    ir_module_t *module = owner_state
+        ? module_for_phase(owner_state, lower->comptime_phase) : nullptr;
+    ir_value_t *callee = module && function
+        ? ir_func_address(module, function) : nullptr;
+    if (!callee)
+        return lower_error(context, IR_DIAG_UNDEFINED_SYMBOL, span,
+            "in-place assignment method has no function in this phase");
+    th_ctx *types = ir_module_types(context->module);
+    th_type *contract = symbol->callable_contract
+        ? symbol->callable_contract : symbol->type;
+    th_type *callable = th_type_clone(types, contract);
+    th_param parameters[2] = {
+        {.mode = TH_INOUT, .type = target_type},
+        {.mode = TH_IN, .type = operands[1]->type},
+    };
+    th_type *shape = callable
+        ? th_func_with_error(types, th_func_ret(callable),
+            th_func_error(callable), parameters, 2, nullptr, nullptr, 0)
+        : nullptr;
+    th_type *signature = shape ? th_unify(types, callable, shape) : nullptr;
+    if (signature) signature = th_unify_in_place(types, signature, shape);
+    if (!signature || th_func_nparams(signature) != 2)
+        return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
+            "operands do not match the in-place assignment method");
+    th_type *failure = th_func_error(signature);
+    bool can_fail = failure && !th_is_nil(failure);
+    th_type *call_type = can_fail
+        ? ir_call_outcome_type(context->module, signature)
+        : th_func_ret(signature);
+    ir_instr_t *call = call_type
+        ? ir_lower_emit_instruction(context, IR_OP_CALL, span) : nullptr;
+    if (!call || !ir_lower_set_temp_dest(context, call, "__n00bb_", call_type)
+        || !ir_instr_operand_value(call, callee)
+        || !ir_instr_operand_value(call, operands[0])
+        || !ir_instr_operand_value(call, operands[1])
+        || !ir_instr_set_call_signature(call, signature))
+        return lower_error(context, IR_DIAG_INTERNAL, span,
+            "could not emit the in-place assignment call");
+    ir_value_t *completed = call->dest;
+    if (can_fail && !n00bb_unwrap_call_outcome(context, visit, completed,
+                                               span, &completed, false))
+        return (ir_lower_result_t){IR_LOWER_FAILED, nullptr};
+    ir_instr_t *updated = ir_lower_emit_instruction(context,
+                                                    IR_OP_CALL_OUTPUT, span);
+    if (!updated || !ir_lower_set_temp_dest(context, updated, "__n00bb_",
+                                            target_type)
+        || !ir_instr_operand_value(updated, completed)
+        || !ir_instr_operand_uint(updated, 0))
+        return lower_error(context, IR_DIAG_INTERNAL, span,
+            "could not read the in-place assignment result");
+    return (ir_lower_result_t){IR_LOWER_VALUE, updated->dest};
+}
+
 static ir_value_t *
 n00bb_lower_shift_count(ir_lower_context_t *context, parse_tree_t *node,
                         ir_value_t *value, th_type *receiver,
@@ -14299,7 +14370,13 @@ n00bb_lower_compound_assignment(ir_lower_context_t *context,
     n00bb_link_use_site_t *site = caller
         ? link_use_site_for_node(caller, visit->node) : nullptr;
     ir_value_t *updated = nullptr;
-    if (site && site->operator_dispatch
+    if (site && site->in_place_dispatch) {
+        ir_lower_result_t result = n00bb_lower_in_place_method(context, visit,
+            site, operands, target_type, span);
+        if (result.status != IR_LOWER_VALUE) return result;
+        updated = result.value;
+    }
+    else if (site && site->operator_dispatch
         && !primitive_operator_site(caller, site)) {
         ir_lower_result_t result = n00bb_lower_operator_method(context, visit,
             operands, operand_count, target_type, span);

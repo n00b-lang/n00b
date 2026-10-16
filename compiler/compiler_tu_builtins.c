@@ -1073,16 +1073,38 @@ n00bb_register_operator_function(th_env *environment, th_ctx *types,
 }
 
 const n00bb_binary_operator_t n00bb_binary_operators[] = {
-    {"+", "+=", "Add", "__add", IR_OP_ADD, false, false},
-    {"-", "-=", "Subtract", "__subtract", IR_OP_SUB, false, false},
-    {"*", "*=", "Multiply", "__multiply", IR_OP_MUL, false, false},
-    {"/", "/=", "Divide", "__divide", IR_OP_DIV, false, false},
-    {"%", "%=", "Remainder", "__remainder", IR_OP_REM, false, false},
-    {"&", "&=", "Bit_And", "__bit_and", IR_OP_AND, true, false},
-    {"|", "|=", "Bit_Or", "__bit_or", IR_OP_OR, true, false},
-    {"^", "^=", "Bit_Xor", "__bit_xor", IR_OP_XOR, true, false},
-    {"<<", "<<=", "Shift_Left", "__shift_left", IR_OP_SHL, true, true},
-    {">>", ">>=", "Shift_Right", "__shift_right", IR_OP_SHR, true, true},
+    {.spelling = "+", .assign_spelling = "+=", .trait = "Add",
+     .method = "__add", .in_place_trait = "Add_Assign",
+     .in_place = "__add_assign", .op = IR_OP_ADD},
+    {.spelling = "-", .assign_spelling = "-=", .trait = "Subtract",
+     .method = "__subtract", .in_place_trait = "Subtract_Assign",
+     .in_place = "__subtract_assign", .op = IR_OP_SUB},
+    {.spelling = "*", .assign_spelling = "*=", .trait = "Multiply",
+     .method = "__multiply", .in_place_trait = "Multiply_Assign",
+     .in_place = "__multiply_assign", .op = IR_OP_MUL},
+    {.spelling = "/", .assign_spelling = "/=", .trait = "Divide",
+     .method = "__divide", .in_place_trait = "Divide_Assign",
+     .in_place = "__divide_assign", .op = IR_OP_DIV},
+    {.spelling = "%", .assign_spelling = "%=", .trait = "Remainder",
+     .method = "__remainder", .in_place_trait = "Remainder_Assign",
+     .in_place = "__remainder_assign", .op = IR_OP_REM},
+    {.spelling = "&", .assign_spelling = "&=", .trait = "Bit_And",
+     .method = "__bit_and", .in_place_trait = "Bit_And_Assign",
+     .in_place = "__bit_and_assign", .op = IR_OP_AND, .integer_only = true},
+    {.spelling = "|", .assign_spelling = "|=", .trait = "Bit_Or",
+     .method = "__bit_or", .in_place_trait = "Bit_Or_Assign",
+     .in_place = "__bit_or_assign", .op = IR_OP_OR, .integer_only = true},
+    {.spelling = "^", .assign_spelling = "^=", .trait = "Bit_Xor",
+     .method = "__bit_xor", .in_place_trait = "Bit_Xor_Assign",
+     .in_place = "__bit_xor_assign", .op = IR_OP_XOR, .integer_only = true},
+    {.spelling = "<<", .assign_spelling = "<<=", .trait = "Shift_Left",
+     .method = "__shift_left", .in_place_trait = "Shift_Left_Assign",
+     .in_place = "__shift_left_assign", .op = IR_OP_SHL,
+     .integer_only = true, .shift = true},
+    {.spelling = ">>", .assign_spelling = ">>=", .trait = "Shift_Right",
+     .method = "__shift_right", .in_place_trait = "Shift_Right_Assign",
+     .in_place = "__shift_right_assign", .op = IR_OP_SHR,
+     .integer_only = true, .shift = true},
 };
 
 const size_t n00bb_binary_operator_count =
@@ -1119,6 +1141,24 @@ n00bb_binary_operator_method(core_string_t method)
 }
 
 static bool
+register_operator_trait(th_env *environment, th_ctx *types,
+                        const char *trait, const char *method_name,
+                        th_mode receiver_mode, th_type *result)
+{
+    th_param parameters[] = {
+        {.mode = receiver_mode, .type = th_var(types)},
+        {.mode = TH_IN, .type = th_var(types)},
+    };
+    th_type *contract = result
+        ? th_func_with_error(types, result, th_var(types), parameters, 2,
+                             nullptr, nullptr, 0) : nullptr;
+    th_member method = {.name = method_name, .type = contract};
+    th_type *methods = contract ? th_record(types, &method, 1) : nullptr;
+    return methods && th_env_register_trait_contracts(environment, trait,
+        "builtins", "default", TH_ENV_PUBLIC, methods);
+}
+
+static bool
 register_builtin_binary_operators(th_env *environment, th_ctx *types)
 {
     const n00bb_binary_operator_t *operators = n00bb_binary_operators;
@@ -1127,23 +1167,11 @@ register_builtin_binary_operators(th_env *environment, th_ctx *types)
         "u8", "u16", "u32", "u128", "float", "f64", "f32",
     };
     for (size_t o = 0; o < n00bb_binary_operator_count; o++) {
-        th_type *receiver = th_var(types);
-        th_type *argument = th_var(types);
-        th_type *result = th_var(types);
-        th_param contract_params[] = {
-            {.mode = TH_IN, .type = receiver},
-            {.mode = TH_IN, .type = argument},
-        };
-        th_type *contract = th_func_with_error(types, result,
-            th_var(types), contract_params, 2, nullptr, nullptr, 0);
-        th_member method = {
-            .name = operators[o].method,
-            .type = contract,
-        };
-        th_type *methods = method.type ? th_record(types, &method, 1) : nullptr;
-        if (!methods || !th_env_register_trait_contracts(environment,
-                operators[o].trait, "builtins", "default", TH_ENV_PUBLIC,
-                methods)) return false;
+        if (!register_operator_trait(environment, types, operators[o].trait,
+                operators[o].method, TH_IN, th_var(types))
+            || !register_operator_trait(environment, types,
+                operators[o].in_place_trait, operators[o].in_place,
+                TH_INOUT, th_name(types, "nil"))) return false;
         for (size_t n = 0; n < sizeof(numeric_types) / sizeof(numeric_types[0]); n++) {
             const char *name = numeric_types[n];
             if (operators[o].integer_only && (name[0] == 'f')) continue;

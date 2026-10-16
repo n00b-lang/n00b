@@ -130,6 +130,8 @@ typedef struct {
     const char *assign_spelling;
     const char *trait;
     const char *method;
+    const char *in_place_trait;
+    const char *in_place;
     ir_op_t op;
     bool integer_only;
     bool shift;
@@ -443,6 +445,7 @@ typedef struct {
     bool callback_call;
     bool callback_setup;
     bool operator_dispatch;
+    bool in_place_dispatch;
     bool intrinsic_operator;
     bool semantic_dispatch;
     bool secondary_dispatch;
