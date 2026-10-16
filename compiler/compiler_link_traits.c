@@ -241,6 +241,7 @@ plan_closed_trait_dispatch(core_link_unit_t *link,
         th_env_declaration_view_t declaration = {0};
         if (!th_env_declaration_at(environment, i, &declaration)
             || declaration.kind != TH_ENV_DECLARATION_TYPE
+            || declaration.type_shape_kind == TH_ENV_TYPE_SHAPE_ALIAS
             || !declaration.qualified_name
             || !th_env_type_visible(state->types,
                                     declaration.qualified_name)) continue;

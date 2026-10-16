@@ -423,6 +423,12 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             && alias_declaration_is_transparent(node)) {
             parse_sym_entry_t *alias = core_tree_node_value(node).sym;
             if (alias && !alias->type) alias->type = th_var(state->types);
+            th_type *target = alias
+                ? declared_type_from_node(grammar, unit, node) : nullptr;
+            if (target && th_is_closed(state->types, th_resolve(target))
+                && th_unify_probe(state->types, alias->type, target))
+                alias->type = th_unify_in_place(state->types, alias->type,
+                                                target);
             if (alias) core_tree_node_value(node).type = alias->type;
         }
         else if (nt_is(grammar, node, "alias-stmt")) {

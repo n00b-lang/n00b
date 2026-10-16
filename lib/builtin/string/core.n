@@ -540,7 +540,8 @@ func to_hex(self: string) -> string {
                     encoding = Str_Encoding.ascii, unsafe = true)
 }
 
-func from_rune(cp: u32) -> string {
+func from_rune(c: char) -> string {
+    let cp: u32 = cast[u32] c
     if cp > 0x10ffff or (cp >= 0xd800 and cp <= 0xdfff) {
         return empty_string()
     }
