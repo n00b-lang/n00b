@@ -49,6 +49,10 @@ N00B_PATH="$script_dir/programs/link_records" "$compiler" compile \
     --output "$tmp/shared_link_impl_abi.n00bm" shared_link_dep.impl
 "$abi_link_input_test" --function-import "$tmp/shared_link_first_abi.n00bm" \
     "$tmp/shared_link_facade_abi.n00bm" "$tmp/shared_link_impl_abi.n00bm" "$@"
+(cd "$script_dir/programs" \
+    && N00B_PATH="$script_dir/programs/link_records" "$compiler" compile \
+        --output "$tmp/shared_link_nested_root.n00bm" shared_link_first)
+[ -s "$tmp/shared_link_nested_root.n00bm" ]
 N00B_PATH="$script_dir/programs/abi" "$compiler" compile \
     --output "$tmp/abi_value_root.n00bm" abi_value_root
 N00B_PATH="$script_dir/programs/abi" "$compiler" compile \

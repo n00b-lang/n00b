@@ -921,11 +921,25 @@ index_manifest_module(void *opaque, size_t root_index,
     core_buffer_release(&identifier);
     if (!initialized) return false;
     core_string_t path = core_source_snapshot_path(snapshot);
-    for (size_t i = 0; i < resolver->manifests.len; i++)
-        if (core_string_eq(resolver->manifests.data[i].path, path)) {
+    for (size_t i = 0; i < resolver->manifests.len; i++) {
+        n00bb_manifest_candidate_t *known = &resolver->manifests.data[i];
+        if (!core_string_eq(known->path, path)) continue;
+        if (relative.u8_bytes >= known->relative.u8_bytes) {
             core_module_spec_release(&module);
             return true;
         }
+        core_string_t nearer = core_string_dup(relative);
+        if (!nearer.data) {
+            core_module_spec_release(&module);
+            return false;
+        }
+        core_free(known->relative.data);
+        core_module_spec_release(&known->module);
+        known->relative = nearer;
+        known->root_index = root_index;
+        known->module = module;
+        return true;
+    }
     core_string_t owned_path = core_string_dup(path);
     core_string_t owned_relative = core_string_dup(relative);
     if (!owned_path.data || !owned_relative.data) {
