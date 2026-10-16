@@ -275,6 +275,7 @@ struct core_link_unit_t {
     bool collection_valid;
     bool graph_finalized;
     bool stages_started;
+    bool stage_failed;
     bool validated;
     bool validation_valid;
 };
@@ -436,6 +437,7 @@ invalidate_stages(core_link_unit_t *link)
     if (invalidated) remove_stage_dependencies(link, invalidated);
     core_free(invalidated);
     link->stages_started = false;
+    link->stage_failed = false;
 }
 
 static void
@@ -744,6 +746,17 @@ core_link_unit_has_fatal_diagnostics(core_link_unit_t *link)
     return false;
 }
 
+static bool
+link_has_failures(core_link_unit_t *link)
+{
+    if (core_diagnostics_failed(link->diagnostics)) return true;
+    for (size_t i = 0; i < link->unit_count; i++)
+        if (core_diagnostics_failed(
+                core_translation_unit_diagnostics(link->units[i])))
+            return true;
+    return false;
+}
+
 bool
 core_link_unit_add_root(core_link_unit_t *link, core_translation_unit_t *root)
 {
@@ -918,7 +931,8 @@ run_stage_at(core_link_unit_t *link, size_t index)
         if (!run_stage_at(link, prereq_index)) {
             stage->state = prereq->state == CORE_LINK_STAGE_UNAVAILABLE
                 ? CORE_LINK_STAGE_UNAVAILABLE : CORE_LINK_STAGE_FAILED;
-            if (stage->state == CORE_LINK_STAGE_FAILED)
+            if (stage->state == CORE_LINK_STAGE_FAILED
+                && !link_has_failures(link))
                 link_report(link, nullptr, "LANTERN-L0009",
                             "link-unit analysis stage prerequisite failed");
             return false;
@@ -931,7 +945,7 @@ run_stage_at(core_link_unit_t *link, size_t index)
                     "link-unit analysis stage requires a finalized import graph");
         return false;
     }
-    if (core_link_unit_has_fatal_diagnostics(link)) {
+    if (link->stage_failed || core_link_unit_has_fatal_diagnostics(link)) {
         stage->state = CORE_LINK_STAGE_FAILED;
         return false;
     }
@@ -978,8 +992,10 @@ run_stage_at(core_link_unit_t *link, size_t index)
                                    CORE_LINK_STAGE_RESULT_FAILED);
         remove_stage_artifacts(link, nullptr, kind);
         finish_stage_dependencies(link, kind);
-        link_report(link, nullptr, "LANTERN-L0011",
-                    "link-unit analysis stage failed without a fatal diagnostic");
+        link->stage_failed = true;
+        if (!link_has_failures(link))
+            link_report(link, nullptr, "LANTERN-L0011",
+                        "link-unit analysis stage failed without a diagnostic");
         return false;
     }
 }

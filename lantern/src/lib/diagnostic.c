@@ -115,6 +115,15 @@ core_diagnostic_set_path(core_diagnostics_t *d, size_t index,
 }
 
 bool
+core_diagnostic_set_location(core_diagnostics_t *d, size_t index,
+                             core_diag_location_t location)
+{
+    if (!d || index >= d->items.len) return false;
+    d->items.data[index].location = location;
+    return true;
+}
+
+bool
 core_diagnostics_merge(core_diagnostics_t *dst, const core_diagnostics_t *src)
 {
     if (!dst || !src) return false;
