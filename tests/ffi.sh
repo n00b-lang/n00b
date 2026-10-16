@@ -66,7 +66,8 @@ builds_and_runs kv_store --link-object "$tmp/kv.o"
 "$compiler" lower --output "$tmp/kv_serve.ir" kv_serve.n00b >"$tmp/kv_serve.log" 2>&1 \
     || { cat "$tmp/kv_serve.log" >&2; exit 1; }
 "${CC:-cc}" -I"$tmp" -c kv/kv_client.c -o "$tmp/kv_client.o"
-builds_and_runs kv_serve --link-object "$tmp/kv_client.o" 2>/dev/null
+"${CC:-cc}" -I"$tmp" -c kv/kv_thread.c -o "$tmp/kv_thread.o"
+builds_and_runs kv_serve --link-object "$tmp/kv_client.o" --link-object "$tmp/kv_thread.o" 2>/dev/null
 "$compiler" lower --output "$tmp/trip_serve.ir" trip_serve.n00b >"$tmp/trip_serve.log" 2>&1 \
     || { cat "$tmp/trip_serve.log" >&2; exit 1; }
 "${CC:-cc}" -I"$tmp" -c trip/trip_client.c -o "$tmp/trip_client.o"

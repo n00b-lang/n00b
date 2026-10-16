@@ -3,6 +3,8 @@
 
 #include "kv.h"
 
+int kv_thread_check(void);
+
 static uint8_t heap[4][64];
 static int     heap_used[4];
 
@@ -96,5 +98,6 @@ kv_client_run(void)
     if (kv_put(db, key, 2, value, 3) != KV_ERR) {
         return 7;
     }
-    return 0;
+    int threaded = kv_thread_check();
+    return threaded ? 20 + threaded : 0;
 }

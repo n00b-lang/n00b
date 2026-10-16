@@ -107,14 +107,16 @@ n00bb_make_cli(void)
         .max_args = 1,
     };
     parse_cmdr_t *cli = parse_cmdr_new(&spec);
-    parse_cmdr_flag_set_repeatable(cli, (core_string_t){0},
-                                   CORE_STRING_STATIC("--define"), true);
-    parse_cmdr_flag_set_repeatable(cli, (core_string_t){0},
-                                   CORE_STRING_STATIC("--link-interface"),
-                                   true);
-    parse_cmdr_flag_set_repeatable(cli, (core_string_t){0},
-                                   CORE_STRING_STATIC("--contract-dir"),
-                                   true);
+    const core_string_t repeatable[] = {
+        CORE_STRING_STATIC("--define"),
+        CORE_STRING_STATIC("--link-interface"),
+        CORE_STRING_STATIC("--contract-dir"),
+        CORE_STRING_STATIC("--link-object"),
+        CORE_STRING_STATIC("--native-root"),
+    };
+    for (size_t i = 0; i < sizeof(repeatable) / sizeof(repeatable[0]); i++)
+        parse_cmdr_flag_set_repeatable(cli, (core_string_t){0},
+                                       repeatable[i], true);
     return cli;
 }
 
