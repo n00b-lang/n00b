@@ -501,6 +501,10 @@ r_method_result(parse_reduce_t *r)
     e->rhs = kid_expr(r, 4);
     e->name = dup_text(kid_text(r, 6));
     if (!e->lhs || !e->rhs || !e->name.data) fail(r);
+    if (r->n_kids == 10) {
+        e->other_name = dup_text(kid_text(r, 8));
+        if (!e->other_name.data) fail(r);
+    }
     return wrap(r->thunk, e);
 }
 
@@ -834,6 +838,11 @@ print_one(sbuf *b, const parse_infer_expr_t *e)
         print_one(b, e->rhs);
         emit(b, ", ");
         core_buffer_append(b, e->name.data, e->name.u8_bytes);
+        if (e->other_name.data) {
+            emit(b, ", ");
+            core_buffer_append(b, e->other_name.data,
+                               e->other_name.u8_bytes);
+        }
         emit(b, ")");
         break;
 

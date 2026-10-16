@@ -98,6 +98,15 @@ static bool same_constraint_scope(const th_constraint *a,
                        b->scope_package ? b->scope_package : ""));
 }
 
+static bool same_method_names(const th_constraint *a, const th_constraint *b)
+{
+    if (!a->method.name || !b->method.name
+        || strcmp(a->method.name, b->method.name)) return false;
+    if (!a->method.in_place || !b->method.in_place)
+        return a->method.in_place == b->method.in_place;
+    return !strcmp(a->method.in_place, b->method.in_place);
+}
+
 static th_constraint *con_same_slot(th_type *var, th_constraint c)
 {
     for (size_t i = 0; i < var->var.cons.len; i++) {
@@ -122,8 +131,7 @@ static th_constraint *con_same_slot(th_type *var, th_constraint c)
             return e;
         }
 
-        if (c.kind == TH_CON_METHOD && e->method.name && c.method.name &&
-            !strcmp(e->method.name, c.method.name)
+        if (c.kind == TH_CON_METHOD && same_method_names(e, &c)
             && same_constraint_scope(e, &c)) {
             return e;
         }
@@ -327,10 +335,12 @@ static bool th_var_constrain_seen(th_ctx *ctx, th_type *var,
             c.has_scope = true;
         }
         c.method.name = th_strdup(ctx, c.method.name, strlen(c.method.name));
+        if (c.method.in_place)
+            c.method.in_place = th_strdup(ctx, c.method.in_place,
+                                          strlen(c.method.in_place));
         for (size_t i = 0; i < var->var.cons.len; i++) {
             th_constraint *slot = &var->var.cons.data[i];
-            if (slot->kind == TH_CON_METHOD
-                && !strcmp(slot->method.name, c.method.name)
+            if (slot->kind == TH_CON_METHOD && same_method_names(slot, &c)
                 && same_constraint_scope(slot, &c)
                 && same_method_obligation(ctx, slot, var, &c, var)) {
                 return merge_method_obligation(ctx, var, slot, &c, seen);
@@ -397,10 +407,12 @@ bool th_var_constrain(th_ctx *ctx, th_type *var, th_constraint c)
     return result;
 }
 
-bool th_require_method(th_ctx *ctx, th_type *receiver, const char *name,
-                       th_type *result, th_type *call)
+bool th_require_method_in_place(th_ctx *ctx, th_type *receiver,
+                                const char *name, const char *in_place,
+                                th_type *result, th_type *call)
 {
     if (!ctx || !receiver || !name || !*name || !result ||
+        (in_place && !*in_place) ||
         (call && th_kind_of(th_resolve(call)) != TH_FUNCTION))
         return false;
     th_type *resolved = th_resolve(receiver);
@@ -410,10 +422,18 @@ bool th_require_method(th_ctx *ctx, th_type *receiver, const char *name,
                           (th_constraint){.kind = TH_CON_METHOD,
                                           .method = {.name = name,
                                                      .result = result,
-                                                     .call = call}}))
+                                                     .call = call,
+                                                     .in_place = in_place}}))
         return false;
     return is_variable ||
            th_unify_in_place(ctx, obligation, receiver) != nullptr;
+}
+
+bool th_require_method(th_ctx *ctx, th_type *receiver, const char *name,
+                       th_type *result, th_type *call)
+{
+    return th_require_method_in_place(ctx, receiver, name, nullptr, result,
+                                      call);
 }
 
 bool th_method_obligation_set_error(th_ctx *ctx, th_type *receiver,
@@ -880,6 +900,21 @@ static th_type *resolve_constraint_method(th_ctx *ctx, th_type *receiver,
     return *status == TH_ENV_METHOD_FOUND ? method.signature : nullptr;
 }
 
+static th_type *receiver_method_signature(th_ctx *ctx, th_type *bound_to,
+                                          const char *name,
+                                          th_type **receiver_type,
+                                          th_env_method_status_t *status)
+{
+    *receiver_type = bound_to;
+    th_type *signature = resolve_constraint_method(ctx, bound_to, name,
+                                                   status);
+    th_type *resolved = th_resolve(bound_to);
+    if (signature || *status == TH_ENV_METHOD_AMBIGUOUS
+        || th_kind_of(resolved) != TH_INDIRECTION) return signature;
+    *receiver_type = th_ind_referent(resolved);
+    return resolve_constraint_method(ctx, *receiver_type, name, status);
+}
+
 static th_type *dereferenced_argument(th_ctx *ctx, th_type *actual,
                                       th_type *formal, th_mode mode)
 {
@@ -1010,8 +1045,7 @@ static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to,
                 for (size_t j = 0; j < bt->var.cons.len; j++) {
                     th_constraint *slot = &bt->var.cons.data[j];
                     if (slot->kind != TH_CON_METHOD
-                        || strcmp(slot->method.name,
-                                  constraint.method.name)
+                        || !same_method_names(slot, &constraint)
                         || !same_constraint_scope(slot, &constraint)
                         || !same_method_obligation(ctx, slot, bt,
                             &constraint, (th_type *)var)) continue;
@@ -1219,20 +1253,20 @@ static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to,
                                         bound_to);
             th_env_method_status_t status = TH_ENV_METHOD_NOT_FOUND;
             th_type *receiver_type = bound_to;
-            th_type *signature = resolve_constraint_method(ctx, receiver_type,
-                c->method.name, &status);
-            th_type *resolved_receiver = th_resolve(bound_to);
-            if (!signature && status != TH_ENV_METHOD_AMBIGUOUS
-                && th_kind_of(resolved_receiver) == TH_INDIRECTION) {
-                receiver_type = th_ind_referent(resolved_receiver);
-                signature = resolve_constraint_method(ctx, receiver_type,
-                    c->method.name, &status);
-            }
+            th_type *signature = c->method.in_place
+                ? receiver_method_signature(ctx, bound_to,
+                      c->method.in_place, &receiver_type, &status)
+                : nullptr;
+            bool in_place = signature != nullptr;
+            if (!signature && status != TH_ENV_METHOD_AMBIGUOUS)
+                signature = receiver_method_signature(ctx, bound_to,
+                    c->method.name, &receiver_type, &status);
             if (signature) signature = th_type_clone(ctx, signature);
             const th_param *receiver =
                 signature ? th_func_param(signature, 0) : nullptr;
-            th_type *method_result = signature ? th_func_ret(signature)
-                                               : nullptr;
+            th_type *method_result = !signature ? nullptr
+                : in_place && receiver ? receiver->type
+                : th_func_ret(signature);
             bool matches = receiver && method_result;
             size_t receiver_errors = ctx->errors.len;
             bool receiver_matches = false;

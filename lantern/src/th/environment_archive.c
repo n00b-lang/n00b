@@ -117,7 +117,8 @@ static bool save_constraint(core_object_writer_t *writer,
     return core_object_writer_string(writer, constraint->method.name) &&
            write_type_ref(writer, constraint->method.result) &&
            write_type_ref(writer, constraint->method.call) &&
-           save_constraint_scope(writer, constraint);
+           save_constraint_scope(writer, constraint) &&
+           core_object_writer_string(writer, constraint->method.in_place);
   }
   return false;
 }
@@ -176,7 +177,9 @@ static bool read_constraint(core_object_reader_t *reader,
            read_type_ref(reader, &constraint->method.result) &&
            constraint->method.result &&
            (version < 3 || read_type_ref(reader, &constraint->method.call)) &&
-           (version < 5 || read_constraint_scope(reader, constraint));
+           (version < 5 || read_constraint_scope(reader, constraint)) &&
+           (version < 7 || core_object_reader_string(reader,
+               (char **)&constraint->method.in_place));
   }
   return false;
 }
@@ -295,7 +298,7 @@ static bool save_type(core_object_writer_t *writer, const void *object,
 static void *type_allocate(core_persist_arena_t *arena, uint32_t version,
                            core_object_reader_t *payload, void *user_data) {
   (void)payload;
-  if (version < 1 || version > 6)
+  if (version < 1 || version > 7)
     return nullptr;
   /* Carry the record schema into restore_type without changing th_type. */
   th_type *type = core_persist_arena_alloc_transient(
@@ -846,7 +849,7 @@ static bool register_environment_codecs(
   for (uint32_t kind = 0; kind <= TH_TRAIT; kind++)
     if (!core_object_archive_register(registry, (core_object_archive_type_t){
             .type_id = type_archive_id((th_kind)kind),
-            .current_version = 6,
+            .current_version = 7,
             .oldest_supported_version = 1,
             .allocate = type_allocate,
             .save = save_type,

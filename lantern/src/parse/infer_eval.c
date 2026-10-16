@@ -1215,8 +1215,10 @@ eval(ictx *c, const parse_infer_expr_t *e)
             c->failed = true;
             return result;
         }
-        return infer_method_obligation(c, receiver, e->name.data,
-                                       result, call);
+        if (!th_require_method_in_place(c->tc, receiver, e->name.data,
+                                        e->other_name.data, result, call))
+            c->failed = true;
+        return result;
     }
 
     case PARSE_INFER_UNIFY: {

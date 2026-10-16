@@ -183,6 +183,7 @@ typedef struct {
             const char *name;
             th_type *result;
             th_type *call;
+            const char *in_place;
         } method;
     };
 } th_constraint;
@@ -420,6 +421,9 @@ bool   th_var_constrain(th_ctx *ctx, th_type *var, th_constraint c);
  * receiver; `result` is unified with the selected method's return type. */
 bool   th_require_method(th_ctx *ctx, th_type *receiver, const char *name,
                          th_type *result, th_type *call);
+bool   th_require_method_in_place(th_ctx *ctx, th_type *receiver,
+                                  const char *name, const char *in_place,
+                                  th_type *result, th_type *call);
 /* Connect an existing deferred method-call obligation to its enclosing
  * failure channel without adding a second method constraint. */
 bool   th_method_obligation_set_error(th_ctx *ctx, th_type *receiver,
