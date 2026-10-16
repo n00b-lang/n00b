@@ -18363,6 +18363,32 @@ build_phase_reachable_functions(
                 return false;
             }
         }
+        for (size_t r = 0; r < n00bb_native_root_registered_count(); r++) {
+            const char *name = n00bb_native_root_registered_at(r)->qualified_name;
+            bool found = false;
+            for (size_t i = 0; i < initializer_order->len && !found; i++) {
+                ir_module_t *module = module_for_phase(
+                    tu_state(initializer_order->data[i]), false);
+                const char *module_name = module
+                    ? ir_module_name(module) : nullptr;
+                size_t prefix = module_name ? strlen(module_name) : 0;
+                ir_func_t *function = prefix && !strncmp(name, module_name, prefix)
+                    && name[prefix] == '.'
+                    ? ir_func_find(module, name + prefix + 1) : nullptr;
+                found = function && function->n_blocks;
+            }
+            if (!found) {
+                core_buffer_t message = {0};
+                core_buffer_printf(&message,
+                    "provided function '%s' has no lowered function body", name);
+                core_diagnostics_report(diagnostics, nullptr,
+                    CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-B0019"),
+                    core_string_borrow(message.data, message.byte_len));
+                core_buffer_release(&message);
+                core_list_free(roots);
+                return false;
+            }
+        }
     }
     if (comptime) {
         for (size_t i = 0; i < analysis->array_bound_work.len; i++) {

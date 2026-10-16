@@ -13,6 +13,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "compiler_native_roots.h"
 #include "compiler_phases.h"
 #include "llvm_native_cache.h"
 #include "lib/alloc.h"
@@ -249,6 +250,22 @@ keep_externs(const writ_n00b_externs_t *externs, n00bb_native_declarations_t *na
         };
     }
     natives->count = externs->count;
+    return true;
+}
+
+static bool
+register_exports(const writ_n00b_externs_t *externs)
+{
+    for (size_t i = 0; i < externs->exports_count; i++) {
+        char *function = strndup(externs->exports[i].function.data, externs->exports[i].function.length);
+        char *symbol = strndup(externs->exports[i].symbol.data, externs->exports[i].symbol.length);
+        bool registered = function && symbol && n00bb_native_root_register(function, symbol);
+        free(function);
+        free(symbol);
+        if (!registered) {
+            return false;
+        }
+    }
     return true;
 }
 
@@ -584,7 +601,8 @@ generate_locked(n00bb_ffi_t *ffi, core_translation_unit_t *unit, core_string_t n
                                            .type_namespace = as_writ(module)};
         writ_output_t output = {capture_file, &capture};
         writ_n00b_externs_t externs = {0};
-        ok = writ_gen_n00b(&request, &output, &links, &externs) == WRIT_OK && keep_externs(&externs, natives);
+        ok = writ_gen_n00b(&request, &output, &links, &externs) == WRIT_OK && keep_externs(&externs, natives)
+          && register_exports(&externs);
         core_buffer_release(&prefix);
     }
     for (size_t i = 0; ok && i < capture.files.len; i++) {

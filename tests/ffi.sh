@@ -54,6 +54,10 @@ builds_and_runs with_source --link-object "$tmp/cursor.o"
 builds_and_runs callback_table --link-object "$tmp/dispatch.o"
 "${CC:-cc}" -c callbacks/hooks.c -o "$tmp/hooks.o"
 builds_and_runs hook_calls --link-object "$tmp/hooks.o"
+"${CC:-cc}" -c sorter/sorter.c -o "$tmp/sorter.o"
+builds_and_runs sort_calls --link-object "$tmp/sorter.o"
+fails_with unprovided_callback 'E0509' --link-object "$tmp/sorter.o"
+fails_with provided_missing "provided function 'provided_missing.missing'" --link-object "$tmp/sorter.o"
 
 for marker in marker-literal-5be1 marker-contract-5be1; do
     for binary in constants use_path use_search; do
