@@ -213,6 +213,60 @@ func __cmp(self: string, other: string) -> Comparison {
     return Comparison.equal
 }
 
+private func utf8_sequence(bytes: Array[u8], at: uint, remaining: uint)
+    -> uint {
+    let lead: u8 = bytes[at]
+    if lead < 0x80 {
+        return 1
+    }
+    var length: uint = 0
+    if lead >= 0xc2 and lead <= 0xdf {
+        length = 2
+    }
+    elif lead >= 0xe0 and lead <= 0xef {
+        length = 3
+    }
+    elif lead >= 0xf0 and lead <= 0xf4 {
+        length = 4
+    }
+    if length == 0 or length > remaining {
+        return 0
+    }
+    var i: uint = 1
+    while i < length {
+        if (bytes[at + i] & 0xc0) != 0x80 {
+            return 0
+        }
+        i += 1
+    }
+    let second: u8 = bytes[at + 1]
+    if (lead == 0xe0 and second < 0xa0) or (lead == 0xed and second > 0x9f) or
+        (lead == 0xf0 and second < 0x90) or (lead == 0xf4 and second > 0x8f) {
+        return 0
+    }
+    return length
+}
+
+func __string_from_utf8(bytes: Array[u8], result: Ref[string]) -> bool {
+    let length: uint = __array_length(bytes)
+    var ascii: bool = true
+    var at: uint = 0
+    while at < length {
+        let advance: uint = utf8_sequence(bytes, at, length - at)
+        if advance == 0 {
+            return false
+        }
+        ascii = ascii and advance == 1
+        at += advance
+    }
+    var encoding: u8 = 2
+    if ascii {
+        encoding = 1
+    }
+    ref_write(result, __string_make(bytes, 0, length, encoding, false))
+    return true
+}
+
 private func __string_storage(s: string) -> Array[u8]? {
     let view: Ref[String_Words] = words(ref s)
     if view.selector >> tag_shift != tag_long {
