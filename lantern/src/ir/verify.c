@@ -595,7 +595,7 @@ static bool store_target_reference_is_writable(const ir_value_t *value)
         || access == IR_INDIRECT_ACCESS_READ_WRITE;
 }
 
-static bool store_target_parameter_has_no_known_aliases(
+static bool store_target_root_has_no_known_aliases(
     const ir_value_t *value)
 {
     ir_annots_t *annots = ir_value_annots((ir_value_t *)value);
@@ -603,7 +603,8 @@ static bool store_target_parameter_has_no_known_aliases(
         ? ir_annot_get(annots, "ir.alias_count") : nullptr;
     ir_annot_t *complete = annots
         ? ir_annot_get(annots, "ir.alias_analysis_complete") : nullptr;
-    return value && value->kind == IR_VAL_PARAM
+    return value
+        && (value->kind == IR_VAL_PARAM || value->kind == IR_VAL_GLOBAL)
         && count && count->kind == IR_ANNOT_INT && !count->i.neg
         && !count->i.mag
         && complete && complete->kind == IR_ANNOT_BOOL;
@@ -632,7 +633,7 @@ static bool store_target_collect(store_target_set_t *set,
                 }
                 ir_annot_t *aliases = ir_annot_get(ir_value_annots(value),
                                                     "ir.alias_count");
-                if (aliases && store_target_parameter_has_no_known_aliases(
+                if (aliases && store_target_root_has_no_known_aliases(
                         value) && (store_target_reference_is_writable(value)
                                   || set->writable_projection))
                     set->external_writable = true;

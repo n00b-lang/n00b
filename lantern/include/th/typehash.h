@@ -162,6 +162,9 @@ typedef struct {
     const char *scope_module;
     const char *scope_package;
     bool has_scope;
+    /* The source span active when the constraint was authored, restored
+     * while a deferred check reports against it. */
+    th_span_t span;
     union {
         th_kind type_kind;
         th_type    *target;

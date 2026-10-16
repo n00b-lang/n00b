@@ -321,6 +321,7 @@ static bool th_var_constrain_seen(th_ctx *ctx, th_type *var,
     }
     if (c.kind == TH_CON_KIND && c.type_kind > TH_TRAIT) return false;
     if (same_repeated_constraint(ctx, var, &c)) return true;
+    if (ctx && !c.span.file && !c.span.start_line) c.span = ctx->span;
 
     if (c.kind == TH_CON_METHOD) {
         if (!ctx || !c.method.name || !*c.method.name || !c.method.result ||
@@ -1040,8 +1041,8 @@ static bool nullary_name(const th_type *t, const char **name)
     return true;
 }
 
-static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to,
-                      core_dict_t *seen)
+static bool con_check_constraints(th_ctx *ctx, const th_type *var,
+                                  th_type *bound_to, core_dict_t *seen)
 {
     th_type *bt = th_resolve(bound_to);
 
@@ -1075,6 +1076,7 @@ static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to,
 
     for (size_t i = 0; i < var->var.cons.len; i++) {
         const th_constraint *c = &var->var.cons.data[i];
+        if (c->span.file || c->span.start_line) ctx->span = c->span;
 
         switch (c->kind) {
         case TH_CON_KIND:
@@ -1335,6 +1337,15 @@ static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to,
     }
 
     return true;
+}
+
+static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to,
+                      core_dict_t *seen)
+{
+    th_span_t span = ctx ? ctx->span : (th_span_t){0};
+    bool valid = con_check_constraints(ctx, var, bound_to, seen);
+    if (ctx) ctx->span = span;
+    return valid;
 }
 
 bool th_ctx_validate_constraints(th_ctx *ctx)
