@@ -1143,9 +1143,9 @@ n00bb_bind_local(ir_lower_context_t *context, parse_sym_entry_t *symbol,
 }
 
 static ir_value_t *
-n00bb_emit_binary_ir(ir_lower_context_t *context, ir_op_t op,
-                     th_type *result_type, ir_value_t *left,
-                     ir_value_t *right, ir_span_t span)
+n00bb_emit_binary_ir_with(ir_lower_context_t *context, ir_op_t op,
+                          bool wrapping, th_type *result_type,
+                          ir_value_t *left, ir_value_t *right, ir_span_t span)
 {
     ir_instr_t *instruction = ir_lower_emit_instruction(context, op, span);
     if (!instruction || !ir_lower_set_temp_dest(context, instruction,
@@ -1157,6 +1157,9 @@ n00bb_emit_binary_ir(ir_lower_context_t *context, ir_op_t op,
     bool integer_operation = result_class == IR_CLASS_SINT
         || result_class == IR_CLASS_UINT || operand_class == IR_CLASS_SINT
         || operand_class == IR_CLASS_UINT;
+    if (wrapping)
+        return integer_operation && ir_instr_add_mod(instruction, "wrap")
+            ? instruction->dest : nullptr;
     if (integer_operation
         && ir_op_accepts_mod(op, "trap")) {
         if (!ir_instr_add_mod(instruction, "trap")) return nullptr;
@@ -1170,6 +1173,15 @@ n00bb_emit_binary_ir(ir_lower_context_t *context, ir_op_t op,
             || op == IR_OP_LE || op == IR_OP_GT || op == IR_OP_GE)
         && !ir_instr_add_mod(instruction, "ordered")) return nullptr;
     return instruction->dest;
+}
+
+static ir_value_t *
+n00bb_emit_binary_ir(ir_lower_context_t *context, ir_op_t op,
+                     th_type *result_type, ir_value_t *left,
+                     ir_value_t *right, ir_span_t span)
+{
+    return n00bb_emit_binary_ir_with(context, op, false, result_type, left,
+                                     right, span);
 }
 
 static th_type *
@@ -4478,6 +4490,8 @@ n00bb_lower_binary(ir_lower_context_t *context, parse_visit_t *visit,
     n00bb_tu_state_t *caller = lower ? tu_state(lower->unit) : nullptr;
     bool flagset = caller && n00bb_flagset_type(lower->unit, caller,
                                                 operands[0]->type, nullptr);
+    const n00bb_binary_operator_t *operator =
+        n00bb_binary_operator_spelled(spelling);
     ir_op_t op;
     if (flagset && core_string_eq(spelling, CORE_STRING_STATIC("+")))
         op = IR_OP_BITSET_UNION;
@@ -4489,16 +4503,7 @@ n00bb_lower_binary(ir_lower_context_t *context, parse_visit_t *visit,
         op = IR_OP_BITSET_UNION;
     else if (flagset && core_string_eq(spelling, CORE_STRING_STATIC("^")))
         op = IR_OP_BITSET_XOR;
-    else if (core_string_eq(spelling, CORE_STRING_STATIC("+"))) op = IR_OP_ADD;
-    else if (core_string_eq(spelling, CORE_STRING_STATIC("-"))) op = IR_OP_SUB;
-    else if (core_string_eq(spelling, CORE_STRING_STATIC("*"))) op = IR_OP_MUL;
-    else if (core_string_eq(spelling, CORE_STRING_STATIC("/"))) op = IR_OP_DIV;
-    else if (core_string_eq(spelling, CORE_STRING_STATIC("%"))) op = IR_OP_REM;
-    else if (core_string_eq(spelling, CORE_STRING_STATIC("&"))) op = IR_OP_AND;
-    else if (core_string_eq(spelling, CORE_STRING_STATIC("|"))) op = IR_OP_OR;
-    else if (core_string_eq(spelling, CORE_STRING_STATIC("^"))) op = IR_OP_XOR;
-    else if (core_string_eq(spelling, CORE_STRING_STATIC("<<"))) op = IR_OP_SHL;
-    else if (core_string_eq(spelling, CORE_STRING_STATIC(">>"))) op = IR_OP_SHR;
+    else if (operator) op = operator->op;
     else if (core_string_eq(spelling, CORE_STRING_STATIC("==")))
         op = IR_OP_EQ;
     else if (core_string_eq(spelling, CORE_STRING_STATIC("!=")))
@@ -4813,9 +4818,20 @@ n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
     bool plain_reference_cast = th_ind_attrs(from, &source_attrs)
         && th_ind_attrs(target, &target_attrs)
         && source_attrs == 0 && target_attrs == 0;
+    if (unsafe_cast && is_integer_type(from) && is_integer_type(target)) {
+        ir_instr_t *cast = ir_lower_emit_instruction(context, IR_OP_CAST,
+                                                     span);
+        if (!cast || !ir_lower_set_temp_dest(context, cast, "__n00bb_",
+                                             target)
+            || !ir_instr_operand_value(cast, operands[0])
+            || !ir_instr_add_mod(cast, "wrap"))
+            return lower_error(context, IR_DIAG_INTERNAL, span,
+                               "could not emit an unchecked integer cast");
+        return (ir_lower_result_t){IR_LOWER_VALUE, cast->dest};
+    }
     if (unsafe_cast && !plain_reference_cast)
         return lower_error(context, IR_DIAG_TYPE_CLASS, span,
-            "unsafe_cast requires plain references");
+            "unsafe_cast requires plain references or integers");
     n00bb_lower_context_t *lower = context->user;
     n00bb_tu_state_t *caller = lower ? tu_state(lower->unit) : nullptr;
     parse_sym_entry_t *from_flagset = nullptr;
@@ -9427,15 +9443,10 @@ n00bb_closed_builtin_operator(ir_lower_context_t *context,
     if (!parse_sym_binding(implementation,
             CORE_STRING_STATIC("n00bb.builtin-operator"))) return nullptr;
     const char *method = requirement->name.data;
+    const n00bb_binary_operator_t *operator =
+        n00bb_binary_operator_method(requirement->name);
     ir_op_t op;
-    if (!strcmp(method, "__add")) op = IR_OP_ADD;
-    else if (!strcmp(method, "__subtract")) op = IR_OP_SUB;
-    else if (!strcmp(method, "__multiply")) op = IR_OP_MUL;
-    else if (!strcmp(method, "__divide")) op = IR_OP_DIV;
-    else if (!strcmp(method, "__remainder")) op = IR_OP_REM;
-    else if (!strcmp(method, "__bit_and")) op = IR_OP_AND;
-    else if (!strcmp(method, "__bit_or")) op = IR_OP_OR;
-    else if (!strcmp(method, "__bit_xor")) op = IR_OP_XOR;
+    if (operator && !operator->shift) op = operator->op;
     else if (!strcmp(method, "__equal")) op = IR_OP_EQ;
     else if (!strcmp(method, "__cmp")) op = IR_OP_LT;
     else return nullptr;
@@ -10301,7 +10312,8 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     bool reference_builtin = n00bb_builtin_reference_function(symbol);
     bool byte_offset_builtin = n00bb_builtin_byte_offset_function(symbol);
     bool byte_diff_builtin = n00bb_builtin_byte_diff_function(symbol);
-    bool wrapping_mul_builtin = n00bb_builtin_wrapping_mul_function(symbol);
+    const n00bb_unsafe_arithmetic_t *unsafe_arithmetic =
+        n00bb_builtin_unsafe_arithmetic(symbol);
     bool bit_count_builtin = n00bb_builtin_bit_count_function(symbol);
     bool gc_memory_builtin = n00bb_builtin_gc_memory_function(symbol);
     bool volatile_load_builtin = n00bb_builtin_volatile_load_function(symbol);
@@ -10336,7 +10348,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     bool no_function_body = fd_write_builtin || repr_default_builtin
         || native_builtin
         || reference_builtin || byte_offset_builtin || byte_diff_builtin
-        || wrapping_mul_builtin
+        || unsafe_arithmetic
         || bit_count_builtin
         || gc_memory_builtin
         || volatile_load_builtin
@@ -10959,7 +10971,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         uint8_t flags = 0;
         th_mode mode = TH_IN;
         bool has_formal = builtin_trait_call || reference_builtin || byte_offset_builtin
-            || byte_diff_builtin || wrapping_mul_builtin || bit_count_builtin
+            || byte_diff_builtin || unsafe_arithmetic || bit_count_builtin
             || gc_memory_builtin
             || volatile_load_builtin
             || prefetch_builtin
@@ -11315,27 +11327,29 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                                          : IR_DIAG_TYPE_MISMATCH,
                 span, "byte difference requires two byte references");
     }
-    if (wrapping_mul_builtin) {
-        th_type *uint_type = th_name(ir_module_types(context->module), "uint");
-        bool valid = values.len == 2 && !copyouts.len && uint_type
-            && ir_type_eq(context->module, call_result_type, uint_type)
-            && ir_type_eq(context->module, values.data[0]->type, uint_type)
-            && ir_type_eq(context->module, values.data[1]->type, uint_type);
-        ir_instr_t *product = valid
-            ? ir_lower_emit_instruction(context, IR_OP_MUL, span) : nullptr;
-        bool emitted = product
-            && ir_lower_set_temp_dest(context, product, "__n00bb_",
-                                      call_result_type)
-            && ir_instr_operand_value(product, values.data[0])
-            && ir_instr_operand_value(product, values.data[1])
-            && ir_instr_add_mod(product, "wrap");
+    if (unsafe_arithmetic) {
+        bool valid = values.len == 2 && !copyouts.len
+            && is_integer_type(call_result_type)
+            && ir_type_eq(context->module, values.data[0]->type,
+                          call_result_type)
+            && (unsafe_arithmetic->shift
+                || ir_type_eq(context->module, values.data[1]->type,
+                              call_result_type));
+        ir_value_t *right = valid && unsafe_arithmetic->shift
+            ? n00bb_lower_shift_count(context, nullptr, values.data[1],
+                                      call_result_type, span)
+            : valid ? values.data[1] : nullptr;
+        ir_value_t *result = right
+            ? n00bb_emit_binary_ir_with(context, unsafe_arithmetic->op, true,
+                call_result_type, values.data[0], right, span)
+            : nullptr;
         core_list_free(values);
         core_list_free(copyouts);
-        return emitted
-            ? (ir_lower_result_t){IR_LOWER_VALUE, product->dest}
+        return result
+            ? (ir_lower_result_t){IR_LOWER_VALUE, result}
             : lower_error(context, valid ? IR_DIAG_INTERNAL
                                          : IR_DIAG_TYPE_MISMATCH,
-                span, "wrapping_mul requires two uint operands");
+                span, "unsafe arithmetic requires integer operands of one type");
     }
     if (bit_count_builtin) {
         th_type *uint_type = th_name(ir_module_types(context->module), "uint");
@@ -14429,22 +14443,12 @@ n00bb_lower_compound_assignment(ir_lower_context_t *context,
         return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
                            "compound assignment target has no resolved type");
 
-    parse_tree_t *operator = core_tree_num_children(visit->node) > 1
-        ? core_tree_child(visit->node, 1) : nullptr;
-    core_string_t spelling = first_token_text(operator);
-    ir_op_t op;
-    if (core_string_eq(spelling, CORE_STRING_STATIC("+="))) op = IR_OP_ADD;
-    else if (core_string_eq(spelling, CORE_STRING_STATIC("-="))) op = IR_OP_SUB;
-    else if (core_string_eq(spelling, CORE_STRING_STATIC("*="))) op = IR_OP_MUL;
-    else if (core_string_eq(spelling, CORE_STRING_STATIC("/="))) op = IR_OP_DIV;
-    else if (core_string_eq(spelling, CORE_STRING_STATIC("%="))) op = IR_OP_REM;
-    else if (core_string_eq(spelling, CORE_STRING_STATIC("&="))) op = IR_OP_AND;
-    else if (core_string_eq(spelling, CORE_STRING_STATIC("|="))) op = IR_OP_OR;
-    else if (core_string_eq(spelling, CORE_STRING_STATIC("^="))) op = IR_OP_XOR;
-    else if (core_string_eq(spelling, CORE_STRING_STATIC("<<="))) op = IR_OP_SHL;
-    else if (core_string_eq(spelling, CORE_STRING_STATIC(">>="))) op = IR_OP_SHR;
-    else return lower_error(context, IR_DIAG_TYPE_CLASS, span,
-                            "this compound assignment operator is not lowered");
+    const n00bb_binary_operator_t *operator = n00bb_binary_operator_assigned(
+        first_token_text(core_tree_num_children(visit->node) > 1
+            ? core_tree_child(visit->node, 1) : nullptr));
+    if (!operator)
+        return lower_error(context, IR_DIAG_TYPE_CLASS, span,
+                           "this compound assignment operator is not lowered");
 
     n00bb_tu_state_t *caller = lower ? tu_state(lower->unit) : nullptr;
     n00bb_link_use_site_t *site = caller
@@ -14458,16 +14462,15 @@ n00bb_lower_compound_assignment(ir_lower_context_t *context,
         updated = result.value;
     }
     else {
-        bool shift = op == IR_OP_SHL || op == IR_OP_SHR;
-        if (!shift && !ir_type_eq(context->module, target_type,
-                                  operands[1]->type))
+        if (!operator->shift && !ir_type_eq(context->module, target_type,
+                                            operands[1]->type))
             return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
                 "compound assignment operands do not match its operator");
-        ir_value_t *right = shift
+        ir_value_t *right = operator->shift
             ? n00bb_lower_shift_count(context, core_tree_child(visit->node, 2),
                 operands[1], target_type, span) : operands[1];
         if (!right) return (ir_lower_result_t){IR_LOWER_FAILED, nullptr};
-        updated = n00bb_emit_binary_ir(context, op, target_type,
+        updated = n00bb_emit_binary_ir(context, operator->op, target_type,
             operands[0], right, span);
     }
     bool stored = false;

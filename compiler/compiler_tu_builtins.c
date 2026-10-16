@@ -14,24 +14,42 @@ n00bb_builtin_reference_function(parse_sym_entry_t *symbol)
                               CORE_STRING_STATIC("ref_write")));
 }
 
+static th_type *
+one_of_named_types(th_ctx *types, core_arena_t *arena,
+                   const char *const *names, size_t n)
+{
+    th_type *variable = th_var(types);
+    th_type **choices = arena && variable
+        ? core_arena_alloc(arena, n * sizeof(*choices)) : nullptr;
+    if (!choices) return nullptr;
+    for (size_t i = 0; i < n; i++)
+        if (!(choices[i] = th_name(types, names[i]))) return nullptr;
+    if (!th_var_constrain(types, variable, (th_constraint){
+            .kind = TH_CON_ONE_OF,
+            .one_of = {.types = choices, .n = n},
+        })) return nullptr;
+    return variable;
+}
+
 th_type *
 n00bb_array_index_type(th_ctx *types, core_arena_t *arena)
 {
     static const char *const names[] = {
         "int", "uint", "u64", "u32", "u16", "u8",
     };
-    size_t n = sizeof(names) / sizeof(names[0]);
-    th_type *index = th_var(types);
-    th_type **choices = arena && index
-        ? core_arena_alloc(arena, n * sizeof(*choices)) : nullptr;
-    if (!choices) return nullptr;
-    for (size_t i = 0; i < n; i++)
-        if (!(choices[i] = th_name(types, names[i]))) return nullptr;
-    if (!th_var_constrain(types, index, (th_constraint){
-            .kind = TH_CON_ONE_OF,
-            .one_of = {.types = choices, .n = n},
-        })) return nullptr;
-    return index;
+    return one_of_named_types(types, arena, names,
+                              sizeof(names) / sizeof(names[0]));
+}
+
+static th_type *
+integer_type_variable(th_ctx *types, core_arena_t *arena)
+{
+    static const char *const names[] = {
+        "int", "uint", "i8", "i16", "i32", "i128",
+        "u8", "u16", "u32", "u128",
+    };
+    return one_of_named_types(types, arena, names,
+                              sizeof(names) / sizeof(names[0]));
 }
 
 
@@ -321,29 +339,41 @@ register_builtin_abi_symbols(parse_symtab_t *symtab, th_ctx *types,
             address_args, 1);
 }
 
+static n00bb_unsafe_arithmetic_t unsafe_arithmetic[] = {
+    {"unsafe_add", IR_OP_ADD, false},
+    {"unsafe_sub", IR_OP_SUB, false},
+    {"unsafe_mul", IR_OP_MUL, false},
+    {"unsafe_shl", IR_OP_SHL, true},
+};
+
 static bool
-register_builtin_wrapping_mul(parse_symtab_t *symtab, th_ctx *types,
-                              th_type *nil_type)
+register_builtin_unsafe_arithmetic(parse_symtab_t *symtab, th_ctx *types,
+                                   core_arena_t *arena, th_type *nil_type)
 {
     th_type *uint_type = th_name(types, "uint");
-    th_param parameters[] = {
-        {.mode = TH_IN, .type = uint_type},
-        {.mode = TH_IN, .type = uint_type},
-    };
-    th_type *signature = uint_type && nil_type
-        ? th_func_with_error(types, uint_type, nil_type, parameters, 2,
-                             nullptr, nullptr, 0) : nullptr;
-    th_type *contract = signature
-        ? th_env_signature_contract(types, signature, nil_type) : nullptr;
-    parse_sym_entry_t *symbol = contract ? parse_symtab_add(symtab,
-        CORE_STRING_STATIC("builtin"), CORE_STRING_STATIC("wrapping_mul"),
-        PARSE_SYM_FUNCTION, nullptr) : nullptr;
-    if (!symbol || !parse_sym_set_binding(symbol,
-            CORE_STRING_STATIC("n00bb.integer.wrapping_mul"), symbol))
-        return false;
-    symbol->type = signature;
-    symbol->error_type = nil_type;
-    symbol->callable_contract = contract;
+    for (size_t i = 0;
+         i < sizeof(unsafe_arithmetic) / sizeof(unsafe_arithmetic[0]); i++) {
+        n00bb_unsafe_arithmetic_t *entry = &unsafe_arithmetic[i];
+        th_type *value = integer_type_variable(types, arena);
+        th_param parameters[] = {
+            {.mode = TH_IN, .type = value},
+            {.mode = TH_IN, .type = entry->shift ? uint_type : value},
+        };
+        th_type *signature = value && uint_type && nil_type
+            ? th_func_with_error(types, value, nil_type, parameters, 2,
+                                 nullptr, nullptr, 0) : nullptr;
+        th_type *contract = signature
+            ? th_env_signature_contract(types, signature, nil_type) : nullptr;
+        parse_sym_entry_t *symbol = contract ? parse_symtab_add(symtab,
+            CORE_STRING_STATIC("builtin"), core_string_from_cstr(entry->name),
+            PARSE_SYM_FUNCTION, nullptr) : nullptr;
+        if (!symbol || !parse_sym_set_binding(symbol,
+                CORE_STRING_STATIC("n00bb.integer.unsafe"), entry))
+            return false;
+        symbol->type = signature;
+        symbol->error_type = nil_type;
+        symbol->callable_contract = contract;
+    }
     return true;
 }
 
@@ -891,8 +921,8 @@ register_builtin_symbols(parse_annot_result_t *annotations,
                                                                  nil_type);
     bool gc_builtins_registered = register_builtin_gc_symbols(symtab, types,
                                                                nil_type);
-    bool wrapping_mul_registered = register_builtin_wrapping_mul(symtab, types,
-                                                                  nil_type);
+    bool unsafe_arithmetic_registered = register_builtin_unsafe_arithmetic(
+        symtab, types, &state->semantic_values, nil_type);
     bool bit_counts_registered = register_builtin_bit_counts(symtab, types,
                                                               nil_type);
     th_type *array_length_item = th_var(types);
@@ -947,7 +977,7 @@ register_builtin_symbols(parse_annot_result_t *annotations,
         || !fd_write_symbol || !repr_symbol
         || !init_symbol || !init_contract
         || !os_builtins_registered || !abi_builtins_registered
-        || !gc_builtins_registered || !wrapping_mul_registered
+        || !gc_builtins_registered || !unsafe_arithmetic_registered
         || !bit_counts_registered || !array_length_registered
         || !array_prefix_registered || !array_clear_registered
         || !hash_registered || !scalar_hash_registered
@@ -1037,31 +1067,61 @@ n00bb_register_operator_function(th_env *environment, th_ctx *types,
     return registered;
 }
 
+const n00bb_binary_operator_t n00bb_binary_operators[] = {
+    {"+", "+=", "Add", "__add", IR_OP_ADD, false, false},
+    {"-", "-=", "Subtract", "__subtract", IR_OP_SUB, false, false},
+    {"*", "*=", "Multiply", "__multiply", IR_OP_MUL, false, false},
+    {"/", "/=", "Divide", "__divide", IR_OP_DIV, false, false},
+    {"%", "%=", "Remainder", "__remainder", IR_OP_REM, false, false},
+    {"&", "&=", "Bit_And", "__bit_and", IR_OP_AND, true, false},
+    {"|", "|=", "Bit_Or", "__bit_or", IR_OP_OR, true, false},
+    {"^", "^=", "Bit_Xor", "__bit_xor", IR_OP_XOR, true, false},
+    {"<<", "<<=", "Shift_Left", "__shift_left", IR_OP_SHL, true, true},
+    {">>", ">>=", "Shift_Right", "__shift_right", IR_OP_SHR, true, true},
+};
+
+const size_t n00bb_binary_operator_count =
+    sizeof(n00bb_binary_operators) / sizeof(n00bb_binary_operators[0]);
+
+const n00bb_binary_operator_t *
+n00bb_binary_operator_spelled(core_string_t spelling)
+{
+    for (size_t i = 0; i < n00bb_binary_operator_count; i++)
+        if (core_string_eq(spelling,
+                core_string_from_cstr(n00bb_binary_operators[i].spelling)))
+            return &n00bb_binary_operators[i];
+    return nullptr;
+}
+
+const n00bb_binary_operator_t *
+n00bb_binary_operator_assigned(core_string_t spelling)
+{
+    for (size_t i = 0; i < n00bb_binary_operator_count; i++)
+        if (core_string_eq(spelling, core_string_from_cstr(
+                n00bb_binary_operators[i].assign_spelling)))
+            return &n00bb_binary_operators[i];
+    return nullptr;
+}
+
+const n00bb_binary_operator_t *
+n00bb_binary_operator_method(core_string_t method)
+{
+    for (size_t i = 0; i < n00bb_binary_operator_count; i++)
+        if (core_string_eq(method,
+                core_string_from_cstr(n00bb_binary_operators[i].method)))
+            return &n00bb_binary_operators[i];
+    return nullptr;
+}
+
 static bool
 register_builtin_binary_operators(th_env *environment, th_ctx *types)
 {
-    static const struct {
-        const char *trait;
-        const char *method;
-        bool integer_only;
-        bool shift;
-    } operators[] = {
-        {"Add", "__add", false, false},
-        {"Subtract", "__subtract", false, false},
-        {"Multiply", "__multiply", false, false},
-        {"Divide", "__divide", false, false},
-        {"Remainder", "__remainder", false, false},
-        {"Bit_And", "__bit_and", true, false},
-        {"Bit_Or", "__bit_or", true, false},
-        {"Bit_Xor", "__bit_xor", true, false},
-        {"Shift_Left", "__shift_left", true, true},
-        {"Shift_Right", "__shift_right", true, true},
-    };
+    const n00bb_binary_operator_t *operators = n00bb_binary_operators;
     static const char *const numeric_types[] = {
         "int", "uint", "i8", "i16", "i32", "i128",
         "u8", "u16", "u32", "u128", "float", "f64", "f32",
     };
-    for (size_t o = 0; o < sizeof(operators) / sizeof(operators[0]); o++) {
+    for (size_t o = 0; o < n00bb_binary_operator_count; o++) {
         th_type *receiver = th_var(types);
         th_type *argument = th_var(types);
         th_type *result = th_var(types);
@@ -1531,7 +1591,7 @@ n00bb_builtin_function(parse_sym_entry_t *symbol)
             || n00bb_builtin_reference_function(symbol)
             || n00bb_builtin_byte_offset_function(symbol)
             || n00bb_builtin_byte_diff_function(symbol)
-            || n00bb_builtin_wrapping_mul_function(symbol)
+            || n00bb_builtin_unsafe_arithmetic(symbol)
             || n00bb_builtin_bit_count_function(symbol)
             || n00bb_builtin_gc_memory_function(symbol)
             || n00bb_builtin_volatile_load_function(symbol)
@@ -1609,12 +1669,12 @@ n00bb_builtin_byte_diff_function(parse_sym_entry_t *symbol)
             CORE_STRING_STATIC("n00bb.gc.byte_diff"));
 }
 
-bool
-n00bb_builtin_wrapping_mul_function(parse_sym_entry_t *symbol)
+const n00bb_unsafe_arithmetic_t *
+n00bb_builtin_unsafe_arithmetic(parse_sym_entry_t *symbol)
 {
-    return symbol && symbol->kind == PARSE_SYM_FUNCTION
-        && !symbol->decl_node && parse_sym_binding(symbol,
-            CORE_STRING_STATIC("n00bb.integer.wrapping_mul"));
+    return symbol && symbol->kind == PARSE_SYM_FUNCTION && !symbol->decl_node
+        ? parse_sym_binding(symbol, CORE_STRING_STATIC("n00bb.integer.unsafe"))
+        : nullptr;
 }
 
 bool

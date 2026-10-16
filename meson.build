@@ -1408,12 +1408,12 @@ test(
 )
 
 test(
-    'wrapping-mul-n00b',
+    'unsafe-arithmetic-n00b',
     find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
-               / 'bitcode_wrapping_mul.n'],
+               / 'bitcode_unsafe_arithmetic.n'],
 )
 
 test(

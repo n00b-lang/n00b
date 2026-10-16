@@ -18,7 +18,7 @@ grep -q 'shift count is outside the receiver width' "$tmp/static.err"
 grep -q 'ubitint\[6\] = cast wrap' "$tmp/proven.ir"
 
 "$compiler" lower --dump-ir \
-    "$programs/bitcode/bitcode_wrapping_mul.n" \
+    "$programs/bitcode/bitcode_unsafe_arithmetic.n" \
     >"$tmp/proven_uint.ir" 2>"$tmp/proven_uint.err"
 grep -q 'ubitint\[6\] = cast wrap' "$tmp/proven_uint.ir"
 

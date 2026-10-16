@@ -45,7 +45,7 @@ func tab_slots(tab: Ref[Hash_Tab]) -> Ref[Hash_Slot] {
 }
 
 inline func tab_home(tab: Ref[Hash_Tab], key: uint) -> uint {
-    let mixed: uint = wrapping_mul(key, 0x9e3779b97f4a7c15)
+    let mixed: uint = unsafe_mul(key, 0x9e3779b97f4a7c15)
     return mixed >> (64 - tab.bits)
 }
 
@@ -229,7 +229,7 @@ func index_tab_slots(tab: Ref[Index_Tab]) -> Ref[Index_Slot] {
 }
 
 func index_tab_home(tab: Ref[Index_Tab], key: uint) -> uint {
-    let mixed: uint = wrapping_mul(key, 0x9e3779b97f4a7c15)
+    let mixed: uint = unsafe_mul(key, 0x9e3779b97f4a7c15)
     return mixed >> (64 - tab.bits)
 }
 

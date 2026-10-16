@@ -8858,9 +8858,10 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
     }
     case IR_OP_SHL:
     case IR_OP_SHR: {
+        bool trapping = ir_instr_has_mod(instruction, "trap");
         if (count != 2 || instruction->n_mods > 1
-            || (instruction->n_mods
-                && !ir_instr_has_mod(instruction, "trap"))
+            || (instruction->n_mods && !trapping
+                && !ir_instr_has_mod(instruction, "wrap"))
             || operands[0].kind != IR_OPD_VALUE
             || operands[1].kind != IR_OPD_VALUE) break;
         LLVMValueRef left = lowered_value(state, operands[0].value);
@@ -8914,7 +8915,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             : value_machine.class == IR_CLASS_SINT
                 ? LLVMBuildAShr(state->builder, left, amount, "shift.right")
                 : LLVMBuildLShr(state->builder, left, amount, "shift.right");
-        if (instruction->op == IR_OP_SHL && instruction->n_mods) {
+        if (instruction->op == IR_OP_SHL && trapping) {
             LLVMValueRef restored = value_machine.class == IR_CLASS_SINT
                 ? LLVMBuildAShr(state->builder, result, amount,
                                 "shift.restored")
@@ -8925,7 +8926,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         }
         result = semantic_integer_result(state, result,
             operands[0].value->type,
-            instruction->op == IR_OP_SHL && instruction->n_mods);
+            instruction->op == IR_OP_SHL && trapping);
         return save_result(state, instruction, result);
     }
     case IR_OP_EQ:

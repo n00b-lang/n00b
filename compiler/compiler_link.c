@@ -3011,7 +3011,7 @@ register_link_declarations(core_link_unit_t *link, parse_grammar_t *grammar,
     static const char *builtin_names[] = {
         "has_type", "ref_read", "ref_write", "__fd_write",
         "__repr_default", "__gc_byte_offset", "__gc_byte_diff",
-        "wrapping_mul",
+        "unsafe_add", "unsafe_sub", "unsafe_mul", "unsafe_shl",
         "__count_leading_zeros", "__count_trailing_zeros",
         "__gc_memset", "__gc_memcpy",
         "__gc_invoke_finalizer",

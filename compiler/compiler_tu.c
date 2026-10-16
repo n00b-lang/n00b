@@ -3502,9 +3502,9 @@ n00bb_integer_literal_context(parse_grammar_t *grammar,
         }
         if (nt_is(grammar, parent, "binop-assign-stmt")
             && child == core_tree_child(parent, 2)) {
-            core_string_t op = first_token_text(core_tree_child(parent, 1));
-            if (core_string_eq(op, CORE_STRING_STATIC("<<="))
-                || core_string_eq(op, CORE_STRING_STATIC(">>=")))
+            const n00bb_binary_operator_t *op = n00bb_binary_operator_assigned(
+                first_token_text(core_tree_child(parent, 1)));
+            if (op && op->shift)
                 return n00bb_shift_count_type(state->types,
                     core_tree_node_value(core_tree_child(parent, 0)).type);
             return nullptr;
@@ -3563,89 +3563,19 @@ binary_operator_dispatch_for_node(parse_grammar_t *grammar,
         return true;
     }
     core_string_t spelling = first_token_text(core_tree_child(node, 1));
-    if (nt_is(grammar, node, "binop-assign-stmt")) {
-        static const struct {
-            const char *token;
-            const char *trait;
-            const char *method;
-        } operators[] = {
-            {"+=", "Add", "__add"},
-            {"-=", "Subtract", "__subtract"},
-            {"*=", "Multiply", "__multiply"},
-            {"/=", "Divide", "__divide"},
-            {"%=", "Remainder", "__remainder"},
-            {"&=", "Bit_And", "__bit_and"},
-            {"|=", "Bit_Or", "__bit_or"},
-            {"^=", "Bit_Xor", "__bit_xor"},
-            {"<<=", "Shift_Left", "__shift_left"},
-            {">>=", "Shift_Right", "__shift_right"},
-        };
-        for (size_t i = 0; i < sizeof(operators) / sizeof(operators[0]); i++) {
-            if (!core_string_eq(spelling,
-                    core_string_from_cstr(operators[i].token))) continue;
-            *trait = core_string_from_cstr(operators[i].trait);
-            *method = core_string_from_cstr(operators[i].method);
-            return true;
-        }
-        return false;
-    }
-    if (nt_is(grammar, node, "add-expr")) {
-        if (core_string_eq(spelling, CORE_STRING_STATIC("+"))) {
-            *trait = CORE_STRING_STATIC("Add");
-            *method = CORE_STRING_STATIC("__add");
-            return true;
-        }
-        if (core_string_eq(spelling, CORE_STRING_STATIC("-"))) {
-            *trait = CORE_STRING_STATIC("Subtract");
-            *method = CORE_STRING_STATIC("__subtract");
-            return true;
-        }
-    }
-    if (nt_is(grammar, node, "mul-expr")) {
-        if (core_string_eq(spelling, CORE_STRING_STATIC("*"))) {
-            *trait = CORE_STRING_STATIC("Multiply");
-            *method = CORE_STRING_STATIC("__multiply");
-            return true;
-        }
-        if (core_string_eq(spelling, CORE_STRING_STATIC("/"))) {
-            *trait = CORE_STRING_STATIC("Divide");
-            *method = CORE_STRING_STATIC("__divide");
-            return true;
-        }
-        if (core_string_eq(spelling, CORE_STRING_STATIC("%"))) {
-            *trait = CORE_STRING_STATIC("Remainder");
-            *method = CORE_STRING_STATIC("__remainder");
-            return true;
-        }
-    }
-    if (nt_is(grammar, node, "shift-expr")) {
-        if (core_string_eq(spelling, CORE_STRING_STATIC("<<"))) {
-            *trait = CORE_STRING_STATIC("Shift_Left");
-            *method = CORE_STRING_STATIC("__shift_left");
-            return true;
-        }
-        if (core_string_eq(spelling, CORE_STRING_STATIC(">>"))) {
-            *trait = CORE_STRING_STATIC("Shift_Right");
-            *method = CORE_STRING_STATIC("__shift_right");
-            return true;
-        }
-    }
-    if (nt_is(grammar, node, "bitand-expr")
-        && core_string_eq(spelling, CORE_STRING_STATIC("&"))) {
-        *trait = CORE_STRING_STATIC("Bit_And");
-        *method = CORE_STRING_STATIC("__bit_and");
-        return true;
-    }
-    if (nt_is(grammar, node, "bitxor-expr")
-        && core_string_eq(spelling, CORE_STRING_STATIC("^"))) {
-        *trait = CORE_STRING_STATIC("Bit_Xor");
-        *method = CORE_STRING_STATIC("__bit_xor");
-        return true;
-    }
-    if (nt_is(grammar, node, "bitor-expr")
-        && core_string_eq(spelling, CORE_STRING_STATIC("|"))) {
-        *trait = CORE_STRING_STATIC("Bit_Or");
-        *method = CORE_STRING_STATIC("__bit_or");
+    const n00bb_binary_operator_t *operator = nullptr;
+    if (nt_is(grammar, node, "binop-assign-stmt"))
+        operator = n00bb_binary_operator_assigned(spelling);
+    else if (nt_is(grammar, node, "add-expr")
+             || nt_is(grammar, node, "mul-expr")
+             || nt_is(grammar, node, "shift-expr")
+             || nt_is(grammar, node, "bitand-expr")
+             || nt_is(grammar, node, "bitxor-expr")
+             || nt_is(grammar, node, "bitor-expr"))
+        operator = n00bb_binary_operator_spelled(spelling);
+    if (operator) {
+        *trait = core_string_from_cstr(operator->trait);
+        *method = core_string_from_cstr(operator->method);
         return true;
     }
     return false;
@@ -10105,28 +10035,11 @@ primitive_operator_site(n00bb_tu_state_t *state, n00bb_link_use_site_t *site)
             && th_builtin_kind_of(core_tree_node_value(other).type)
                 == TH_BUILTIN_NIL;
     }
-    if (core_string_eq(site->dispatch_trait,
-                       CORE_STRING_STATIC("Bit_And"))
-        || core_string_eq(site->dispatch_trait,
-                          CORE_STRING_STATIC("Bit_Or"))
-        || core_string_eq(site->dispatch_trait,
-                          CORE_STRING_STATIC("Bit_Xor"))
-        || core_string_eq(site->dispatch_trait,
-                          CORE_STRING_STATIC("Shift_Left"))
-        || core_string_eq(site->dispatch_trait,
-                          CORE_STRING_STATIC("Shift_Right")))
-        return is_integer_type(receiver_type);
-    if (core_string_eq(site->dispatch_trait, CORE_STRING_STATIC("Add"))
-        || core_string_eq(site->dispatch_trait,
-                          CORE_STRING_STATIC("Subtract"))
-        || core_string_eq(site->dispatch_trait,
-                          CORE_STRING_STATIC("Multiply"))
-        || core_string_eq(site->dispatch_trait,
-                          CORE_STRING_STATIC("Divide"))
-        || core_string_eq(site->dispatch_trait,
-                          CORE_STRING_STATIC("Remainder")))
-        return is_integer_type(receiver_type) || is_float_type(receiver_type);
-    return false;
+    const n00bb_binary_operator_t *operator =
+        n00bb_binary_operator_method(site->dispatch_method);
+    if (!operator) return false;
+    return is_integer_type(receiver_type)
+        || (!operator->integer_only && is_float_type(receiver_type));
 }
 
 bool
@@ -10280,8 +10193,9 @@ refine_intrinsic_binary_result(parse_grammar_t *grammar,
         core_tree_node_value(node).type = left_type;
         result = left_type;
     }
-    bool shift = core_string_eq(trait, CORE_STRING_STATIC("Shift_Left"))
-        || core_string_eq(trait, CORE_STRING_STATIC("Shift_Right"));
+    const n00bb_binary_operator_t *operator =
+        n00bb_binary_operator_method(method);
+    bool shift = operator && operator->shift;
     if (shift && !n00bb_unsigned_shift_type(left_type)) {
         core_diagnostics_report_at(core_translation_unit_diagnostics(unit),
             unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0001"),

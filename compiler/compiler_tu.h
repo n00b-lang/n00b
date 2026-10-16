@@ -125,6 +125,28 @@ th_type *n00bb_dereference_target(th_ctx *types, th_type *actual,
 th_type *n00bb_operand_value_type(th_type *operand, th_type *other,
                                   bool comparison);
 enum { N00BB_MAX_SIZED_BITS = sizeof(ir_uint_t) * CHAR_BIT };
+typedef struct {
+    const char *spelling;
+    const char *assign_spelling;
+    const char *trait;
+    const char *method;
+    ir_op_t op;
+    bool integer_only;
+    bool shift;
+} n00bb_binary_operator_t;
+typedef struct {
+    const char *name;
+    ir_op_t op;
+    bool shift;
+} n00bb_unsafe_arithmetic_t;
+extern const n00bb_binary_operator_t n00bb_binary_operators[];
+extern const size_t n00bb_binary_operator_count;
+const n00bb_binary_operator_t *n00bb_binary_operator_spelled(
+    core_string_t spelling);
+const n00bb_binary_operator_t *n00bb_binary_operator_assigned(
+    core_string_t spelling);
+const n00bb_binary_operator_t *n00bb_binary_operator_method(
+    core_string_t method);
 bool binary_operator_dispatch_for_node(parse_grammar_t *grammar,
                                        parse_tree_t *node,
                                        core_string_t *trait,
@@ -828,7 +850,8 @@ bool n00bb_builtin_array_read_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_array_write_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_byte_offset_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_byte_diff_function(parse_sym_entry_t *symbol);
-bool n00bb_builtin_wrapping_mul_function(parse_sym_entry_t *symbol);
+const n00bb_unsafe_arithmetic_t *n00bb_builtin_unsafe_arithmetic(
+    parse_sym_entry_t *symbol);
 bool n00bb_builtin_bit_count_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_gc_memory_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_volatile_load_function(parse_sym_entry_t *symbol);
