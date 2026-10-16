@@ -374,11 +374,12 @@ struct writ_n00b_export_t @size(32) @align(8) {
     function: writ_str_t @0
     symbol: writ_str_t @16
 }
-struct writ_n00b_externs_t @size(32) @align(8) {
+struct writ_n00b_externs_t @size(48) @align(8) {
     count: usize @0
     items: ?writ_n00b_extern_t @8
     exports_count: usize @16
     exports: ?writ_n00b_export_t @24
+    header: writ_str_t @32
 }
 struct writ_link_requirements_t @size(56) @align(8) {
     libraries_count: usize @0

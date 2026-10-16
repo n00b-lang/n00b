@@ -62,6 +62,7 @@ typedef struct {
     const writ_n00b_extern_t *items;
     size_t                    exports_count;
     const writ_n00b_export_t *exports;
+    writ_str_t                header;
 } writ_n00b_externs_t;
 
 typedef struct {

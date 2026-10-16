@@ -155,15 +155,14 @@ void callbacks_take_bytes(callbacks_bytes_t *bytes, void *out) {
     callbacks_bytes_free(bytes);
 }
 
-int32_t n00b_ffi_dispatch(uint64_t handle, const void *arguments, void *result);
-
+int32_t callbacks___event_handler_dispatch(uint64_t handle, const void *arguments, void *result);
 typedef struct {
     const Event *event;
 } callbacks_Handler_arguments;
 
 void callbacks_Handler_trampoline(const void *context, const Event *event) {
     callbacks_Handler_arguments arguments = {event};
-    n00b_ffi_dispatch((uint64_t)(uintptr_t)context, &arguments, NULL);
+    callbacks___event_handler_dispatch((uint64_t)(uintptr_t)context, &arguments, NULL);
 }
 
 void callbacks_Handler_arguments_copy(const void *arguments, void *out) {
@@ -204,24 +203,43 @@ type Event_Handler_Arguments layout(c) {
     public event: uint
 }
 
-func __event_handler_invoke(value: Any, arguments: uint, result: uint) -> nil {
-    typecase value {
-        case Event_Handler {
-            var packed: Event_Handler_Arguments
-            __event_handler_arguments_copy(arguments, ref packed)
-            value.call(packed.event)
-        }
-        else {
-            panic("Event_Handler dispatched to a different callback type")
-        }
+type Event_Handler_Callback {
+    public value: Event_Handler
+    public once: bool
+}
+
+var __event_handler_callbacks: Ffi_Table[Event_Handler_Callback] = (slots = new[List[Event_Handler_Callback?]](), free = new[List[int]]())
+
+func __event_handler_register(value: Event_Handler, once: bool) -> u64 {
+    let entry: Event_Handler_Callback = (value = value, once = once)
+    return __ffi_table_insert(__event_handler_callbacks, entry)
+}
+
+func __event_handler_free(handle: u64) {
+    __ffi_table_free(__event_handler_callbacks, handle)
+}
+
+func __event_handler_dispatch(handle: u64, arguments: uint, result: uint) -> i32 {
+    let entry = __ffi_table_get(__event_handler_callbacks, handle)
+    if entry == nil {
+        return -1
     }
+    let value = entry.value
+    let once = entry.once
+    var packed: Event_Handler_Arguments
+    __event_handler_arguments_copy(arguments, ref packed)
+    value.call(packed.event)
+    if once {
+        __event_handler_free(handle)
+    }
+    return 0
 }
 
 func bus_subscribe(handler: Event_Handler) -> u64 {
-    let handler_handle = __ffi_callback_register(cast[Any]handler, ref __event_handler_invoke, false)
+    let handler_handle = __event_handler_register(handler, false)
     let result = __bus_subscribe(handler_handle)
     let handler_group = __ffi_hold_group()
-    __ffi_hold(handler_group, cast[u64](handler_handle), ref __ffi_callback_free, "callbacks:bus_unsubscribe", [cast[u64](result)]'array, 0)
+    __ffi_hold(handler_group, cast[u64](handler_handle), ref __event_handler_free, "callbacks:bus_unsubscribe", [cast[u64](result)]'array, 0)
     return result
 }
 
@@ -243,9 +261,9 @@ func bus_unsubscribe(id: u64) fail: Error {
 }
 7	tests/gen_n00b/../callbacks/callbacks.writ:7:1	Event
 11	tests/gen_n00b/../callbacks/callbacks.writ:9:1	Handler
-33	tests/gen_n00b/../callbacks/callbacks.writ:14:1	bus_subscribe
-41	tests/gen_n00b/../callbacks/callbacks.writ:16:1	bus_publish
-49	tests/gen_n00b/../callbacks/callbacks.writ:18:1	bus_unsubscribe
+52	tests/gen_n00b/../callbacks/callbacks.writ:14:1	bus_subscribe
+60	tests/gen_n00b/../callbacks/callbacks.writ:16:1	bus_publish
+68	tests/gen_n00b/../callbacks/callbacks.writ:18:1	bus_unsubscribe
 load static
 extern __event_handler_arguments_copy callbacks_Handler_arguments_copy (uint, ref[Event_Handler_Arguments]) -> nil fail: nil
 extern __bus_subscribe callbacks_n00b_bus_subscribe (uint) -> uint fail: nil

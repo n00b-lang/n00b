@@ -129,3 +129,5 @@ void       writ_c_emit_real_prototype(const writ_c_context_t *c, writ_emit_t *em
                                       writ_str_t name, bool variadic_tail, const char *terminator);
 writ_str_t writ_c_callee(const writ_c_context_t *c, const writ_fn_view_t *fn);
 writ_status_t writ_gen_conformance(const writ_c_context_t *c, const writ_output_t *output);
+bool       writ_c_find_outcome(const writ_model_t *model, const writ_plan_view_t *plan, uint32_t wanted,
+                                int64_t *ret, int64_t *channel);

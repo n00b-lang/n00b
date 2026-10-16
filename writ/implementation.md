@@ -920,9 +920,9 @@ hand-written C (no tests, no generated files):
 | `core/lower` | 800 |
 | `clang/` | 3,000 |
 | `toolchain/` | 3,000 |
-| `gen/`: profiles and bindings, conformance, C, Rust transport, n00b | 6,000 |
+| `gen/`: profiles and bindings, conformance, C, Rust transport, n00b | 7,000 |
 | `cli/` | 600 |
-| **Total** | **23,400** |
+| **Total** | **24,400** |
 
 - `tools/loc_budget.py` prints every component's size against its budget
   in `./build.sh test`. A component more than 20% over budget fails the

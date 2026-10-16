@@ -1,6 +1,8 @@
 use "../bind/kv.writ"
 
 binding export {
+    implement Db         = "kvstore.Store"
+    implement Iter       = "kvstore.Cursor"
     provide kv_open      = "kvstore.open"
     provide kv_put       = "kvstore.put"
     provide kv_get       = "kvstore.get"

@@ -63,8 +63,8 @@ outcome_for(const writ_model_t *model, const writ_plan_view_t *plan, int64_t ret
     return WRIT_PLAN_NONE;
 }
 
-static bool
-find_outcome(const writ_model_t *model, const writ_plan_view_t *plan, uint32_t wanted, int64_t *ret, int64_t *channel)
+bool
+writ_c_find_outcome(const writ_model_t *model, const writ_plan_view_t *plan, uint32_t wanted, int64_t *ret, int64_t *channel)
 {
     static const int64_t channels[] = {0, 22, 34};
     int64_t candidates[96] = {1, 0, -1, 2, -3, 5, 22};
@@ -815,7 +815,7 @@ emit_driver_plan(const writ_c_context_t *c, writ_emit_t *emit, uint32_t index, c
     for (uint32_t o = 0; is_mocked(c->model, fn) && o < plan->outcomes_count; o++) {
         int64_t ret = SCALAR_INPUT + PURE_OFFSET;
         int64_t channel = 0;
-        if (!writ_c_returns_directly(c, plan) && !find_outcome(c->model, plan, o, &ret, &channel)) {
+        if (!writ_c_returns_directly(c, plan) && !writ_c_find_outcome(c->model, plan, o, &ret, &channel)) {
             continue;
         }
         if (fn->sizing == WRIT_SIZING_QUERY) {
