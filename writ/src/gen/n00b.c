@@ -195,6 +195,46 @@ buffer_type(const n00b_t *g)
     return writ_str_format(g->session, "Array[%.*s]", S(prim(g, "u%u", 8)));
 }
 
+static bool
+optional_result(const writ_plan_item_view_t *item)
+{
+    return item->nullable && item->role == WRIT_ROLE_RESULT;
+}
+
+static bool
+counted_field(const writ_model_t *model, const writ_record_view_t *record, writ_str_t name)
+{
+    for (size_t f = 0; f < record->fields_count; f++) {
+        if (writ_str_eq(writ_c_count_field(model, &record->fields[f]), name)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool
+liftable_record(const writ_model_t *model, const writ_record_view_t *record)
+{
+    bool arrays = false;
+    for (size_t f = 0; record && f < record->fields_count; f++) {
+        const writ_slot_view_t *field = &record->fields[f];
+        bool counted_array = writ_c_count_field(model, field).length && field->type->target
+                          && field->type->target->kind == WRIT_TYPE_INT;
+        if (!counted_array && !counted_field(model, record, field->name)) {
+            return false;
+        }
+        arrays = arrays || counted_array;
+    }
+    return arrays;
+}
+
+static const writ_record_view_t *
+lifted_record(const n00b_t *g, const writ_type_view_t *type)
+{
+    const writ_record_view_t *record = type ? writ_model_record_named(g->model, type->name) : nullptr;
+    return liftable_record(g->model, record) ? record : nullptr;
+}
+
 static writ_str_t
 item_type(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, uint32_t index)
 {
@@ -203,7 +243,10 @@ item_type(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, uint32_t ind
     const writ_type_view_t *element = item->type && item->type->target ? item->type->target : item->type;
     switch (item->shape) {
     case WRIT_SHAPE_BYTES:
-        return is_text_repr(repr) ? writ_cstr("string") : buffer_type(g);
+        if (is_text_repr(repr)) {
+            return writ_cstr("string");
+        }
+        return optional_result(item) ? writ_str_format(g->session, "%.*s?", S(buffer_type(g))) : buffer_type(g);
     case WRIT_SHAPE_TEXT:
         return repr.length && !is_text_repr(repr) ? buffer_type(g) : writ_cstr("string");
     case WRIT_SHAPE_ARRAY:
@@ -216,6 +259,9 @@ item_type(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, uint32_t ind
     case WRIT_SHAPE_CALLBACK:
         return writ_binding_type(g->b, item->type->name);
     default:
+        if (record_target(item) && lifted_record(g, record_target(item)) && optional_result(item)) {
+            return writ_str_format(g->session, "%.*s?", S(scalar_type(g, record_target(item))));
+        }
         return scalar_type(g, record_target(item) ? record_target(item) : item->type);
     }
 }
@@ -509,6 +555,22 @@ kept_param(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, const core_
     (void)fn;
     (void)params;
     return keeps_until(plan, param);
+}
+
+static bool
+optional_bytes_param(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, const core_list_t(shim_param_t) *params,
+                     const shim_param_t *param)
+{
+    (void)params;
+    return param->kind == PARAM_OUT && ends_with(param->n00b_type, "Ffi_Bytes]")
+        && optional_result(&plan->items[param->item]) && !record_target(&plan->items[param->item])
+        && !text_result(g, fn, plan, param);
+}
+
+static bool
+takes_optional_bytes(const n00b_t *g)
+{
+    return any_param(g, optional_bytes_param, nullptr);
 }
 
 static bool
@@ -863,6 +925,122 @@ emit_n00b_array_takers(const n00b_t *g, writ_emit_t *emit)
     core_list_free(elements);
 }
 
+static size_t
+counted_fields(const n00b_t *g, const writ_record_view_t *record, const writ_slot_view_t **out)
+{
+    size_t count = 0;
+    for (size_t f = 0; liftable_record(g->model, record) && f < record->fields_count && count < WRIT_C_MAX_ARITY; f++) {
+        if (writ_c_count_field(g->model, &record->fields[f]).length) {
+            out[count++] = &record->fields[f];
+        }
+    }
+    return count;
+}
+
+static writ_str_t
+field_symbol(const n00b_t *g, const writ_record_view_t *record, writ_str_t field, const char *suffix)
+{
+    return writ_str_format(g->session, "%.*s_%.*s_%.*s%s", S(g->shim), S(record->name), S(field), suffix);
+}
+
+static void
+emit_c_record_taker(const n00b_t *g, writ_emit_t *emit, const writ_record_view_t *record,
+                    const writ_slot_view_t **fields, size_t count)
+{
+    writ_str_t type = writ_c_type(&g->c, record->type, false);
+    for (size_t f = 0; f < count; f++) {
+        writ_emit_open(emit, "uint64_t %.*s(uint64_t block)", S(field_symbol(g, record, fields[f]->name, "_length")));
+        writ_emit_line(emit, "return block ? (uint64_t)((const %.*s *)(uintptr_t)block)->%.*s : 0;", S(type),
+                       S(writ_c_count_field(g->model, fields[f])));
+        writ_emit_close(emit, nullptr);
+        writ_emit_line(emit, "");
+    }
+    writ_emit_text(emit, "void %.*s(%.*s_bytes_t *bytes", S(field_symbol(g, record, writ_cstr("take"), "")),
+                   S(g->c.prefix));
+    for (size_t f = 0; f < count; f++) {
+        writ_emit_text(emit, ", void *%.*s", S(fields[f]->name));
+    }
+    writ_emit_open(emit, ")");
+    writ_emit_line(emit, "const %.*s *record = (const %.*s *)bytes->data;", S(type), S(type));
+    writ_emit_line(emit, "size_t capacity = 0;");
+    for (size_t f = 0; f < count; f++) {
+        writ_str_t name = fields[f]->name;
+        writ_emit_line(emit, "uint8_t *%.*s_items = n00b_ffi_borrow(%.*s, &capacity, %d);", S(name), S(name),
+                       N00B_FFI_WRITE);
+        writ_emit_open(emit, "if (%.*s_items && record && record->%.*s)", S(name), S(name));
+        writ_emit_line(emit, "memcpy(%.*s_items, record->%.*s, capacity * sizeof(%.*s));", S(name), S(name),
+                       S(writ_c_type(&g->c, fields[f]->type->target, false)));
+        writ_emit_close(emit, nullptr);
+        writ_emit_line(emit, "n00b_ffi_release(%.*s);", S(name));
+    }
+    writ_emit_line(emit, "%.*s_bytes_free(bytes);", S(g->c.prefix));
+    writ_emit_close(emit, nullptr);
+    writ_emit_line(emit, "");
+}
+
+static void
+emit_optional_taker(writ_emit_t *emit, writ_str_t name, writ_str_t type)
+{
+    writ_emit_line(emit, "");
+    writ_emit_open(emit, "func __ffi_take_optional_%.*s(bytes: Ref[Ffi_Bytes]) -> %.*s?", S(name), S(type));
+    writ_emit_line(emit, "let value: Ffi_Bytes = ref_read(bytes)");
+    writ_emit_open(emit, "if value.data == 0");
+    writ_emit_line(emit, "return nil");
+    writ_emit_close(emit, nullptr);
+    writ_emit_line(emit, "return __ffi_take_%.*s(bytes)", S(name));
+    writ_emit_close(emit, nullptr);
+}
+
+static void
+emit_n00b_record_taker(const n00b_t *g, writ_emit_t *emit, const writ_record_view_t *record,
+                       const writ_slot_view_t **fields, size_t count)
+{
+    writ_str_t type = writ_binding_type(g->b, record->name);
+    writ_str_t take_params[WRIT_C_MAX_ARITY + 1] = {writ_cstr("Ref[Ffi_Bytes]")};
+    writ_emit_line(emit, "");
+    writ_emit_open(emit, "func __ffi_take_%.*s(bytes: Ref[Ffi_Bytes]) -> %.*s", S(record->name), S(type));
+    writ_emit_line(emit, "let value: Ffi_Bytes = ref_read(bytes)");
+    writ_emit_text(emit, "var lifted: %.*s = (", S(type));
+    for (size_t f = 0; f < count; f++) {
+        writ_str_t length = writ_str_format(g->session, "__ffi_%.*s_%.*s_length", S(record->name),
+                                            S(fields[f]->name));
+        writ_str_t length_params[] = {writ_cstr("uint")};
+        add_extern(g, length, field_symbol(g, record, fields[f]->name, "_length"), length_params, 1,
+                   writ_cstr("uint"));
+        writ_str_t array = writ_str_format(g->session, "Array[%.*s]", S(scalar_type(g, fields[f]->type->target)));
+        take_params[f + 1] = writ_str_format(g->session, "Ref[%.*s]", S(array));
+        writ_emit_text(emit, "%s%.*s = new[%.*s](cast[int]%.*s(value.data))", f ? ", " : "",
+                       S(writ_profile_name(g->profile, WRIT_NAMING_FIELD, fields[f]->name)), S(array), S(length));
+    }
+    writ_emit_line(emit, ")");
+    add_extern(g, writ_str_format(g->session, "__ffi_%.*s_take", S(record->name)),
+               field_symbol(g, record, writ_cstr("take"), ""), take_params, count + 1, writ_cstr("nil"));
+    writ_emit_text(emit, "__ffi_%.*s_take(bytes", S(record->name));
+    for (size_t f = 0; f < count; f++) {
+        writ_emit_text(emit, ", ref lifted.%.*s", S(writ_profile_name(g->profile, WRIT_NAMING_FIELD, fields[f]->name)));
+    }
+    writ_emit_line(emit, ")");
+    writ_emit_line(emit, "return lifted");
+    writ_emit_close(emit, nullptr);
+    emit_optional_taker(emit, record->name, type);
+}
+
+typedef void (*record_taker_fn)(const n00b_t *g, writ_emit_t *emit, const writ_record_view_t *record,
+                                const writ_slot_view_t **fields, size_t count);
+
+static void
+emit_record_takers(const n00b_t *g, writ_emit_t *emit, record_taker_fn taker)
+{
+    for (size_t i = 0; i < writ_model_record_count(g->model); i++) {
+        const writ_record_view_t *record = writ_model_record_at(g->model, i);
+        const writ_slot_view_t *fields[WRIT_C_MAX_ARITY];
+        size_t count = counted_fields(g, record, fields);
+        if (count) {
+            taker(g, emit, record, fields, count);
+        }
+    }
+}
+
 static writ_str_t
 shim_c_text(const n00b_t *g, const writ_plan_view_t *const *plans)
 {
@@ -893,6 +1071,7 @@ shim_c_text(const n00b_t *g, const writ_plan_view_t *const *plans)
     writ_emit_close(&emit, nullptr);
     writ_emit_line(&emit, "");
     emit_c_array_takers(g, &emit);
+    emit_record_takers(g, &emit, emit_c_record_taker);
     if (copies_cstr(g)) {
         writ_emit_open(&emit, "uint64_t %.*s_cstr_length(uint64_t address)", S(g->shim));
         writ_emit_line(&emit, "return address ? strlen((const char *)(uintptr_t)address) : 0;");
@@ -1299,6 +1478,19 @@ emit_types(const n00b_t *g, writ_emit_t *emit)
         const writ_record_view_t *record = writ_model_record_at(model, i);
         writ_emit_line(emit, "");
         mark(g, emit, record->declared_at, record->name);
+        if (liftable_record(model, record)) {
+            writ_emit_open(emit, "type %.*s", S(writ_binding_type(g->b, record->name)));
+            for (size_t f = 0; f < record->fields_count; f++) {
+                const writ_slot_view_t *field = &record->fields[f];
+                if (writ_c_count_field(model, field).length) {
+                    writ_emit_line(emit, "public %.*s: Array[%.*s]",
+                                   S(writ_profile_name(g->profile, WRIT_NAMING_FIELD, field->name)),
+                                   S(scalar_type(g, field->type->target)));
+                }
+            }
+            writ_emit_close(emit, nullptr);
+            continue;
+        }
         if (!expressible(record)) {
             emit_opaque_record(g, emit, record);
             continue;
@@ -1611,9 +1803,15 @@ lifted(const wrapper_t *w, const shim_param_t *param)
     writ_str_t name = local_name(w, param->item);
     writ_session_t *session = w->g->session;
     if (ends_with(param->n00b_type, "Ffi_Bytes]")) {
-        return writ_str_format(session,
-                               text_result(w->g, w->fn, w->plan, param) ? "%.*s_text" : "__ffi_take_bytes(ref %.*s)",
-                               S(name));
+        const writ_record_view_t *record = lifted_record(w->g, record_target(item));
+        if (record) {
+            return writ_str_format(session, "__ffi_take_%s%.*s(ref %.*s)", optional_result(item) ? "optional_" : "",
+                                   S(record->name), S(name));
+        }
+        const char *format = text_result(w->g, w->fn, w->plan, param) ? "%.*s_text"
+                           : optional_result(item)                   ? "__ffi_take_optional_bytes(ref %.*s)"
+                                                                     : "__ffi_take_bytes(ref %.*s)";
+        return writ_str_format(session, format, S(name));
     }
     if (item->shape == WRIT_SHAPE_HANDLE || (item->type && item->type->kind == WRIT_TYPE_HANDLE)) {
         return construct_handle(w, param->item, name);
@@ -2550,6 +2748,9 @@ n00b_text(const n00b_t *g)
         writ_emit_line(&emit, "    return copied");
         writ_emit_line(&emit, "}");
     }
+    if (takes_bytes && takes_optional_bytes(g)) {
+        emit_optional_taker(&emit, writ_cstr("bytes"), writ_cstr("Array[u8]"));
+    }
     if (takes_bytes && takes_text(g)) {
         writ_emit_line(&emit, "");
         writ_emit_open(&emit, "func __ffi_take_text(bytes: Ref[Ffi_Bytes], text: Ref[string]) -> bool");
@@ -2582,6 +2783,7 @@ n00b_text(const n00b_t *g)
         writ_emit_close(&emit, nullptr);
     }
     emit_n00b_array_takers(g, &emit);
+    emit_record_takers(g, &emit, emit_n00b_record_taker);
     for (size_t i = 0; i < count; i++) {
         writ_bound_fn_t bound = writ_binding_fn(g->b, i);
         for (size_t k = 0; bound.bound && !bound.raw && bound_plan(g, i, k); k++) {

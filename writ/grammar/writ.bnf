@@ -269,7 +269,7 @@
 <direction> ::= %"import" | %"export"
 <embedded-binding> ::= %"binding" <export-mark>? %"{" <binding-item>* %"}"
 <export-mark> ::= %"export"
-<binding-item> ::= <module-item> | <strip-prefix-item> | <name-item> | <type-as-item> | <method-item> | <repr-item> | <keywords-item> | <error-map-item> | <borrow-item> | <policy-item> | <callback-as-item> | <label-map-item> | <hide-item> | <raw-item> | <load-item> | <library-item> | <search-path-item> | <header-item> | <provide-item> | <on-panic-item> | <allocator-own-item>
+<binding-item> ::= <module-item> | <strip-prefix-item> | <name-item> | <type-as-item> | <method-item> | <repr-item> | <keywords-item> | <error-map-item> | <borrow-item> | <policy-item> | <callback-as-item> | <label-map-item> | <hide-item> | <raw-item> | <load-item> | <library-item> | <search-path-item> | <header-item> | <provide-item> | <implement-item> | <on-panic-item> | <allocator-own-item>
 <target> ::= %IDENTIFIER (%"::" %IDENTIFIER)? (%"." %IDENTIFIER)?
 <module-item> ::= %"module" %STRING
 <strip-prefix-item> ::= %"strip_prefix" %STRING
@@ -294,6 +294,7 @@
 <search-path-item> ::= %"search_path" <text>
 <header-item> ::= %"header" <text>
 <provide-item> ::= %"provide" <target> %"=" <text>
+<implement-item> ::= %"implement" <ref> %"=" <text>
 <on-panic-item> ::= %"on_panic" <panic-action>
 <panic-action> ::= <panic-abort> | <panic-error>
 <panic-abort> ::= %"abort"

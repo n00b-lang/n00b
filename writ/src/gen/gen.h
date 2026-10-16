@@ -85,6 +85,7 @@ writ_str_t            writ_binding_allocator(const writ_binding_t *b);
 writ_bound_fn_t       writ_binding_fn(const writ_binding_t *b, size_t fn);
 writ_str_t            writ_binding_slot_repr(const writ_binding_t *b, size_t fn, writ_str_t slot);
 writ_str_t            writ_binding_slot_provide(const writ_binding_t *b, size_t fn, writ_str_t slot);
+writ_str_t            writ_binding_implementation(const writ_binding_t *b, writ_str_t handle);
 writ_str_t            writ_binding_type(const writ_binding_t *b, writ_str_t contract);
 size_t                writ_binding_library_count(const writ_binding_t *b);
 writ_str_t            writ_binding_library_at(const writ_binding_t *b, size_t index);
@@ -111,6 +112,7 @@ typedef struct {
 
 writ_str_t writ_c_type(const writ_c_context_t *c, const writ_type_view_t *type, bool constant);
 bool       writ_c_is_text(const writ_type_view_t *type);
+writ_str_t writ_c_count_field(const writ_model_t *model, const writ_slot_view_t *field);
 bool       writ_c_returns_directly(const writ_c_context_t *c, const writ_plan_view_t *plan);
 writ_step_kind_t writ_c_lift_kind(const writ_plan_view_t *plan, uint32_t item);
 bool       writ_c_offset_result(const writ_plan_view_t *plan, uint32_t item);

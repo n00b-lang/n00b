@@ -45,7 +45,7 @@ enum {
     kv_kv_get_error = 0,
     kv_kv_get_ok = 1,
 };
-int32_t kv_kv_get(kv_db *db, const uint8_t *key, size_t key_length, uint8_t **out_val, size_t *out_len);
+int32_t kv_kv_get(kv_db *db, const uint8_t *key, size_t key_length, kv_bytes_t *out_val);
 
 enum {
     kv_kv_iter_new_error = 0,
@@ -179,7 +179,7 @@ finish:
     return outcome;
 }
 
-int32_t kv_kv_get(kv_db *db, const uint8_t *key, size_t key_length, uint8_t **out_val, size_t *out_len) {
+int32_t kv_kv_get(kv_db *db, const uint8_t *key, size_t key_length, kv_bytes_t *out_val) {
     kv_db *s0 = 0;
     const uint8_t *s1 = 0;
     size_t s2 = 0;
@@ -206,8 +206,21 @@ int32_t kv_kv_get(kv_db *db, const uint8_t *key, size_t key_length, uint8_t **ou
         outcome = kv_kv_get_ok;
     }
     if (outcome == kv_kv_get_ok) {
-        *out_val = l0;
-        *out_len = l1;
+        out_val->data = NULL;
+        out_val->length = 0;
+        if (l0) {
+            size_t length = (size_t)(((long long)l1));
+            out_val->data = malloc(length + 1);
+            if (out_val->data) {
+                memcpy(out_val->data, l0, length);
+                out_val->length = length;
+            }
+            kv_free((void *)l0);
+            if (!out_val->data) {
+                outcome = KV_OUT_OF_MEMORY;
+                goto finish;
+            }
+        }
     }
 finish:
     return outcome;
@@ -314,6 +327,30 @@ void kv_take_bytes(kv_bytes_t *bytes, void *out) {
     kv_bytes_free(bytes);
 }
 
+uint64_t kv_kv_entry_key_length(uint64_t block) {
+    return block ? (uint64_t)((const kv_entry *)(uintptr_t)block)->key_len : 0;
+}
+
+uint64_t kv_kv_entry_val_length(uint64_t block) {
+    return block ? (uint64_t)((const kv_entry *)(uintptr_t)block)->val_len : 0;
+}
+
+void kv_kv_entry_take(kv_bytes_t *bytes, void *key, void *val) {
+    const kv_entry *record = (const kv_entry *)bytes->data;
+    size_t capacity = 0;
+    uint8_t *key_items = n00b_ffi_borrow(key, &capacity, 1);
+    if (key_items && record && record->key) {
+        memcpy(key_items, record->key, capacity * sizeof(uint8_t));
+    }
+    n00b_ffi_release(key);
+    uint8_t *val_items = n00b_ffi_borrow(val, &capacity, 1);
+    if (val_items && record && record->val) {
+        memcpy(val_items, record->val, capacity * sizeof(uint8_t));
+    }
+    n00b_ffi_release(val);
+    kv_bytes_free(bytes);
+}
+
 int32_t kv_n00b_kv_open(const void *path, void *out_db, void *detail) {
     size_t path_length = 0;
     const void *path_borrowed = n00b_ffi_borrow((void *)path, &path_length, 2);
@@ -366,7 +403,7 @@ int32_t kv_n00b_kv_put(uint64_t db, const void *key, const void *val) {
     return writ_n00b_value;
 }
 
-int32_t kv_n00b_kv_get(uint64_t db, const void *key, void *out_val, void *out_len) {
+int32_t kv_n00b_kv_get(uint64_t db, const void *key, void *out_val) {
     size_t key_length = 0;
     const void *key_borrowed = n00b_ffi_borrow((void *)key, &key_length, 0);
     uint8_t *key_data = malloc(key_length + 1);
@@ -381,7 +418,7 @@ int32_t kv_n00b_kv_get(uint64_t db, const void *key, void *out_val, void *out_le
         free(key_data);
         return KV_OUT_OF_MEMORY;
     }
-    int32_t writ_n00b_value = kv_kv_get((kv_db *)(uintptr_t)db, (const uint8_t *)key_data, key_length, (uint8_t **)out_val, (size_t *)out_len);
+    int32_t writ_n00b_value = kv_kv_get((kv_db *)(uintptr_t)db, (const uint8_t *)key_data, key_length, (kv_bytes_t *)out_val);
     free(key_data);
     return writ_n00b_value;
 }
@@ -445,11 +482,9 @@ func __iter_cell_with_db(raw: uint, keep: Db) -> Iter {
     return ref cell
 }
 
-type Entry layout(c) {
-    public key: uint
-    public key_len: u64
-    public val: uint
-    public val_len: u64
+type Entry {
+    public key: Array[u8]
+    public val: Array[u8]
 }
 
 enum Status {
@@ -464,6 +499,29 @@ func __ffi_take_bytes(bytes: Ref[Ffi_Bytes]) -> Array[u8] {
     var copied: Array[u8] = new[Array[u8]](cast[int]value.length)
     __ffi_bytes_take(bytes, ref copied)
     return copied
+}
+
+func __ffi_take_optional_bytes(bytes: Ref[Ffi_Bytes]) -> Array[u8]? {
+    let value: Ffi_Bytes = ref_read(bytes)
+    if value.data == 0 {
+        return nil
+    }
+    return __ffi_take_bytes(bytes)
+}
+
+func __ffi_take_kv_entry(bytes: Ref[Ffi_Bytes]) -> Entry {
+    let value: Ffi_Bytes = ref_read(bytes)
+    var lifted: Entry = (key = new[Array[u8]](cast[int]__ffi_kv_entry_key_length(value.data)), val = new[Array[u8]](cast[int]__ffi_kv_entry_val_length(value.data)))
+    __ffi_kv_entry_take(bytes, ref lifted.key, ref lifted.val)
+    return lifted
+}
+
+func __ffi_take_optional_kv_entry(bytes: Ref[Ffi_Bytes]) -> Entry? {
+    let value: Ffi_Bytes = ref_read(bytes)
+    if value.data == 0 {
+        return nil
+    }
+    return __ffi_take_kv_entry(bytes)
 }
 
 func db_open(path: string) -> Db fail: Error {
@@ -508,20 +566,14 @@ func put(self: Db, key: Array[u8], val: Array[u8]) fail: Error {
     }
 }
 
-type Get_Result {
-    public out_val: uint
-    public out_len: u64
-}
-
-func get(self: Db, key: Array[u8]) -> Get_Result fail: Error {
+func get(self: Db, key: Array[u8]) -> Array[u8]? fail: Error {
     var key_value = key
-    var out_val: uint = 0
-    var out_len: u64 = 0
+    var out_val: Ffi_Bytes = (data = 0, length = 0)
     if self.raw == 0 {
         let failure: Error = (code = -1, text = "handle is closed", fn = "kv_get")
         fail failure
     }
-    let outcome = __kv_get(self.raw, ref key_value, ref out_val, ref out_len)
+    let outcome = __kv_get(self.raw, ref key_value, ref out_val)
     if outcome < 0 {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "kv_get")
         fail failure
@@ -530,8 +582,7 @@ func get(self: Db, key: Array[u8]) -> Get_Result fail: Error {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "kv_get")
         fail failure
     }
-    let values: Get_Result = (out_val = out_val, out_len = out_len)
-    return values
+    return __ffi_take_optional_bytes(ref out_val)
 }
 
 func iter(self: Db, prefix: Array[u8]) -> Iter fail: Error {
@@ -553,7 +604,7 @@ func iter(self: Db, prefix: Array[u8]) -> Iter fail: Error {
     return __iter_cell_with_db(result, self)
 }
 
-func next(self: Iter) -> Entry fail: Error {
+func next(self: Iter) -> Entry? fail: Error {
     var result: Ffi_Bytes = (data = 0, length = 0)
     if self.raw == 0 {
         let failure: Error = (code = -1, text = "handle is closed", fn = "kv_iter_next")
@@ -564,22 +615,25 @@ func next(self: Iter) -> Entry fail: Error {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "kv_iter_next")
         fail failure
     }
-    return __ffi_take_bytes(ref result)
+    return __ffi_take_optional_kv_entry(ref result)
 }
 7	tests/gen_n00b/../bind/kv.writ:10:1	Db
 18	tests/gen_n00b/../bind/kv.writ:11:1	Iter
 35	tests/gen_n00b/../bind/kv.writ:15:1	kv_entry
-42	tests/gen_n00b/../bind/kv.writ:13:1	kv_status
-56	tests/gen_n00b/../bind/kv.writ:22:1	kv_open
-80	tests/gen_n00b/../bind/kv.writ:26:1	kv_put
-103	tests/gen_n00b/../bind/kv.writ:31:1	kv_get
-124	tests/gen_n00b/../bind/kv.writ:38:1	kv_iter_new
-143	tests/gen_n00b/../bind/kv.writ:42:1	kv_iter_next
+40	tests/gen_n00b/../bind/kv.writ:13:1	kv_status
+77	tests/gen_n00b/../bind/kv.writ:22:1	kv_open
+101	tests/gen_n00b/../bind/kv.writ:26:1	kv_put
+119	tests/gen_n00b/../bind/kv.writ:31:1	kv_get
+138	tests/gen_n00b/../bind/kv.writ:38:1	kv_iter_new
+157	tests/gen_n00b/../bind/kv.writ:42:1	kv_iter_next
 library kv
 load static
 extern __kv_open kv_n00b_kv_open (ref[string], ref[uint], ref[int]) -> i32 fail: nil
 extern __kv_put kv_n00b_kv_put (uint, ref[array[u8]], ref[array[u8]]) -> i32 fail: nil
-extern __kv_get kv_n00b_kv_get (uint, ref[array[u8]], ref[uint], ref[uint]) -> i32 fail: nil
+extern __kv_get kv_n00b_kv_get (uint, ref[array[u8]], ref[builtin.ffi.Ffi_Bytes]) -> i32 fail: nil
 extern __kv_iter_new kv_n00b_kv_iter_new (uint, ref[array[u8]], ref[uint]) -> i32 fail: nil
 extern __kv_iter_next kv_n00b_kv_iter_next (uint, ref[builtin.ffi.Ffi_Bytes]) -> i32 fail: nil
 extern __ffi_bytes_take kv_take_bytes (ref[builtin.ffi.Ffi_Bytes], ref[array[u8]]) -> nil fail: nil
+extern __ffi_kv_entry_key_length kv_kv_entry_key_length (uint) -> uint fail: nil
+extern __ffi_kv_entry_val_length kv_kv_entry_val_length (uint) -> uint fail: nil
+extern __ffi_kv_entry_take kv_kv_entry_take (ref[builtin.ffi.Ffi_Bytes], ref[array[u8]], ref[array[u8]]) -> nil fail: nil

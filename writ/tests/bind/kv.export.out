@@ -18,6 +18,7 @@ fn kv_get: kv_get (default)
     provided by kvstore.get
     error Error (default)
     key: bytes as buffer (default)
+    out_val: bytes as buffer (default)
 fn kv_iter_new: kv_iter_new (default)
     provided by kvstore.iter_new
     error Error (default)

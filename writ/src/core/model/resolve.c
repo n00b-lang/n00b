@@ -642,7 +642,7 @@ resolve_type_in(resolver_t *r, uint32_t id, writ_slot_rec_t *slot, bool handle_b
     case WRIT_N_TYPE_NAMED:
         return named_type(r, id, handle_base);
     case WRIT_N_TYPE_POINTER: {
-        writ_type_id target = resolve_type_in(r, child(model, id, 0), nullptr, handle_base);
+        writ_type_id target = resolve_type_in(r, child(model, id, 0), slot, handle_base);
         bool nullable = writ_is_text(model, node->payload, "?");
         return target ? pointer_to(r, id, target, nullable) : 0;
     }

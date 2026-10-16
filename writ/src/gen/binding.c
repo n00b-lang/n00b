@@ -46,6 +46,12 @@ typedef struct {
 } slot_provide_t;
 core_list_decl(slot_provide_t);
 
+typedef struct {
+    writ_str_t handle;
+    writ_str_t type;
+} handle_implementation_t;
+core_list_decl(handle_implementation_t);
+
 struct writ_binding {
     const writ_model_t           *model;
     const writ_profile_t         *profile;
@@ -67,6 +73,7 @@ struct writ_binding {
     core_list_t(slot_decision_t)  slots;
     core_list_t(type_decision_t)  types;
     core_list_t(slot_provide_t)   provides;
+    core_list_t(handle_implementation_t) implementations;
 };
 
 static const char *const form_names[] = {"cstr", "utf8", "bytes", "rest pack", "keyword pack"};
@@ -590,6 +597,17 @@ apply_item(writ_binding_t *b, uint32_t id)
             b->header = (choice_t){child_text(b, id, WRIT_N_TEXT), true};
         }
         return;
+    case WRIT_N_IMPLEMENT:
+        if (for_side(b, id, true)) {
+            writ_str_t handle = text_of(b, at(b, writ_node_child(b->unit, id, 0))->name);
+            if (!writ_model_handle_named(b->model, handle)) {
+                writ_report(b->session, WRIT_D_BIND_TARGET, item->loc, "no handle `%.*s`", S(handle));
+                return;
+            }
+            core_list_push(b->implementations,
+                           ((handle_implementation_t){handle, child_text(b, id, WRIT_N_TEXT)}));
+        }
+        return;
     case WRIT_N_PROVIDE: {
         writ_str_t name = text_of(b, at(b, writ_node_child(b->unit, id, 0))->name);
         target_t target = split(name);
@@ -767,6 +785,7 @@ binding_release(void *object)
     core_list_free(b->slots);
     core_list_free(b->types);
     core_list_free(b->provides);
+    core_list_free(b->implementations);
 }
 
 writ_status_t
@@ -781,7 +800,8 @@ writ_bind(const writ_model_t *model, const writ_bind_request_t *request, const w
     *b = (writ_binding_t){.model = model, .session = session, .unit = request->binding,
                           .prefixes = core_list_new(writ_sym_t), .libraries = core_list_new(writ_sym_t),
                           .search_paths = core_list_new(writ_sym_t), .slots = core_list_new(slot_decision_t),
-                          .types = core_list_new(type_decision_t), .provides = core_list_new(slot_provide_t)};
+                          .types = core_list_new(type_decision_t), .provides = core_list_new(slot_provide_t),
+                          .implementations = core_list_new(handle_implementation_t)};
     writ_on_session_free(session, binding_release, b);
     writ_str_t library = writ_model_library(model)->name;
     if (find_block(b, request, library)) {
@@ -946,6 +966,17 @@ writ_binding_fn(const writ_binding_t *b, size_t fn)
     return (writ_bound_fn_t){.bound = bound(d), .raw = d->raw, .is_static = d->is_static, .name = d->name.text,
                              .owner = d->owner, .error = d->error.text, .provide = d->provide,
                              .policy_arm = d->policy_arm};
+}
+
+writ_str_t
+writ_binding_implementation(const writ_binding_t *b, writ_str_t handle)
+{
+    for (size_t i = 0; i < b->implementations.len; i++) {
+        if (writ_str_eq(b->implementations.data[i].handle, handle)) {
+            return b->implementations.data[i].type;
+        }
+    }
+    return (writ_str_t){0};
 }
 
 writ_str_t

@@ -441,10 +441,50 @@ lift_pointer_result(builder_t *b, const writ_slot_rec_t *slot, uint32_t item, wr
 }
 
 static void
+plan_out_sized(builder_t *b, uint32_t index)
+{
+    const writ_slot_rec_t *slot = contract_slot(b, index);
+    writ_type_id target = physical(b, slot->type)->key.target;
+    writ_ref_t count = writ_expr_ref(b->model, slot->count_expr);
+    uint32_t length = param_index(b, count);
+    if (length == WRIT_NONE || count.phase == WRIT_REF_VALUE || contract_slot(b, length)->mode != WRIT_MODE_OUT) {
+        unsupported(b, slot, "output array extents that are not a single output parameter");
+        return;
+    }
+    if (!slot->own) {
+        unsupported(b, slot, "output arrays returned through a pointer that are not `own`");
+        return;
+    }
+    uint32_t item = add_item(b, slot->name, WRIT_ROLE_RESULT, array_shape(b, target), WRIT_AFTER_CALLER_OWNS, target,
+                             index);
+    b->items.data[item].nullable = physical(b, target)->key.nullable;
+    b->items.data[item].release = writ_sym_str(b->model->session, slot->release);
+    bind_slot(b, index, item, WRIT_PART_POINTER);
+    bind_slot(b, length, item, WRIT_PART_LENGTH);
+    writ_plan_step_view_t bind = step(WRIT_STEP_BIND_OUT);
+    bind.local = add_local(b, WRIT_LOCAL_CELL, target, item);
+    bind.slot = index;
+    emit_to(&b->attempt, bind);
+    writ_plan_step_view_t total = step(WRIT_STEP_BIND_OUT);
+    total.local = add_local(b, WRIT_LOCAL_CELL, physical(b, contract_slot(b, length)->type)->key.target, item);
+    total.slot = length;
+    emit_to(&b->attempt, total);
+    writ_plan_step_view_t lift = step(WRIT_STEP_COPY_BORROWED);
+    lift.local = bind.local;
+    lift.item = item;
+    lift.expr = slot->count_expr;
+    emit_outcomes(b, true, false, lift);
+}
+
+static void
 plan_out_pointer(builder_t *b, uint32_t index)
 {
     const writ_slot_rec_t *slot = contract_slot(b, index);
     writ_type_id target = physical(b, slot->type)->key.target;
+    if (physical(b, target)->key.kind == WRIT_TYPE_ARRAY && slot->extent_kind == WRIT_EXTENT_COUNT) {
+        plan_out_sized(b, index);
+        return;
+    }
     uint32_t item = add_item(b, slot->name, WRIT_ROLE_RESULT, value_shape(b, target), WRIT_AFTER_NONE, target, index);
     bind_slot(b, index, item, WRIT_PART_WHOLE);
     uint32_t cell = add_local(b, WRIT_LOCAL_CELL, target, item);

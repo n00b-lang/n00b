@@ -619,8 +619,8 @@ emit_expand(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_step_v
     (void)step;
 }
 
-static writ_str_t
-count_field(const writ_model_t *model, const writ_slot_view_t *field)
+writ_str_t
+writ_c_count_field(const writ_model_t *model, const writ_slot_view_t *field)
 {
     if (field->extent_kind != WRIT_EXTENT_COUNT || !field->count_expr) {
         return (writ_str_t){0};
@@ -645,7 +645,7 @@ emit_copy_record(const writ_c_context_t *c, writ_emit_t *emit, writ_str_t source
     writ_emit_close(emit, nullptr);
     writ_emit_line(emit, "size_t total = sizeof(%.*s);", S(type));
     for (size_t f = 0; record && f < record->fields_count; f++) {
-        writ_str_t count = count_field(model, &record->fields[f]);
+        writ_str_t count = writ_c_count_field(model, &record->fields[f]);
         if (count.length) {
             writ_str_t element = writ_c_type(c, record->fields[f].type->target, false);
             writ_emit_line(emit, "total = (total + _Alignof(%.*s) - 1) & ~(_Alignof(%.*s) - 1);", S(element),
@@ -661,7 +661,7 @@ emit_copy_record(const writ_c_context_t *c, writ_emit_t *emit, writ_str_t source
     writ_emit_line(emit, "*copy = *%.*s;", S(source));
     writ_emit_line(emit, "size_t at = sizeof(%.*s);", S(type));
     for (size_t f = 0; record && f < record->fields_count; f++) {
-        writ_str_t count = count_field(model, &record->fields[f]);
+        writ_str_t count = writ_c_count_field(model, &record->fields[f]);
         if (!count.length) {
             continue;
         }
@@ -678,6 +678,35 @@ emit_copy_record(const writ_c_context_t *c, writ_emit_t *emit, writ_str_t source
 }
 
 static void
+emit_copy_sized(shim_env_t *env, writ_emit_t *emit, writ_str_t source, const writ_plan_step_view_t *step,
+                const writ_plan_item_view_t *item)
+{
+    const writ_c_context_t *c = env->c;
+    writ_str_t length = expr_text(env, step->expr);
+    writ_emit_line(emit, "%.*s->data = NULL;", S(item->name));
+    writ_emit_line(emit, "%.*s->length = 0;", S(item->name));
+    if (!item->nullable) {
+        writ_emit_open(emit, "if (!%.*s)", S(source));
+        fail(c, emit, "CONTRACT_VIOLATION");
+        writ_emit_close(emit, nullptr);
+    }
+    writ_emit_open(emit, "if (%.*s)", S(source));
+    writ_emit_line(emit, "size_t length = (size_t)(%.*s);", S(length));
+    writ_emit_line(emit, "%.*s->data = malloc(length + 1);", S(item->name));
+    writ_emit_open(emit, "if (%.*s->data)", S(item->name));
+    writ_emit_line(emit, "memcpy(%.*s->data, %.*s, length);", S(item->name), S(source));
+    writ_emit_line(emit, "%.*s->length = length;", S(item->name));
+    writ_emit_close(emit, nullptr);
+    if (item->release.length) {
+        writ_emit_line(emit, "%.*s((void *)%.*s);", S(item->release), S(source));
+    }
+    writ_emit_open(emit, "if (!%.*s->data)", S(item->name));
+    fail(c, emit, "OUT_OF_MEMORY");
+    writ_emit_close(emit, nullptr);
+    writ_emit_close(emit, nullptr);
+}
+
+static void
 emit_lift(shim_env_t *env, writ_emit_t *emit, const writ_plan_step_view_t *step, const writ_plan_item_view_t *item)
 {
     const writ_c_context_t *c = env->c;
@@ -690,6 +719,10 @@ emit_lift(shim_env_t *env, writ_emit_t *emit, const writ_plan_step_view_t *step,
         return;
     }
     if (step->kind == WRIT_STEP_COPY_BORROWED) {
+        if (step->expr) {
+            emit_copy_sized(env, emit, source, step, item);
+            return;
+        }
         if (!writ_c_is_text(item->type)) {
             emit_copy_record(c, emit, source, item);
             return;
@@ -1223,6 +1256,32 @@ emit_copy_helper(const writ_c_context_t *c, writ_emit_t *emit)
     writ_emit_close(emit, nullptr);
 }
 
+static void
+emit_release_prototypes(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_view_t *const *plans,
+                        size_t count)
+{
+    core_list_t(writ_sym_t) declared = core_list_new(writ_sym_t);
+    for (size_t i = 0; i < count; i++) {
+        for (size_t t = 0; t < plans[i]->items_count; t++) {
+            const writ_plan_item_view_t *item = &plans[i]->items[t];
+            if (!item->release.length || writ_c_lift_kind(plans[i], (uint32_t)t) != WRIT_STEP_COPY_BORROWED
+                || writ_model_fn_named(c->model, item->release)) {
+                continue;
+            }
+            writ_sym_t release = writ_intern_str(c->model->session, item->release);
+            bool seen = false;
+            for (size_t d = 0; !seen && d < declared.len; d++) {
+                seen = declared.data[d] == release;
+            }
+            if (!seen) {
+                writ_emit_line(emit, "void %.*s(void *data);", S(item->release));
+                core_list_push(declared, release);
+            }
+        }
+    }
+    core_list_free(declared);
+}
+
 static writ_str_t
 shim_text(const writ_c_context_t *c, const writ_plan_view_t *const *plans, size_t count)
 {
@@ -1238,6 +1297,7 @@ shim_text(const writ_c_context_t *c, const writ_plan_view_t *const *plans, size_
             const writ_fn_view_t *fn = writ_model_fn_at(c->model, i);
             writ_c_emit_real_prototype(c, &emit, fn, fn->link_symbol, false, ";");
         }
+        emit_release_prototypes(c, &emit, plans, count);
         writ_emit_line(&emit, "");
     }
     emit_helpers(c, &emit, plans, count);

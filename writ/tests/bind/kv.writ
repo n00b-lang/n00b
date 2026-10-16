@@ -29,7 +29,7 @@ fn kv_put(db: Db, key: *[u8; klen], klen: usize, val: *[u8; vlen], vlen: usize)
 
 # value is copied into a kv-heap buffer the caller owns
 fn kv_get(db: Db, key: *[u8; klen], klen: usize,
-          out_val: out **[u8; *out_len] own release kv_free,
+          out_val: out *?[u8; *out_len] own release kv_free,
           out_len: out *usize)
     -> c_int as kv_status
   error ret == KV_ERR
