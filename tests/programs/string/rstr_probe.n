@@ -1,0 +1,137 @@
+record String_Words layout(c) {
+    data:     Ref[byte]?
+    selector: u64
+}
+
+func check(s: string, bytes: uint) {
+    require byte_len(s) == bytes
+}
+
+func c_length(bytes: Array[u8]) -> uint {
+    var n: uint = 0
+    while n < __array_length(bytes) and bytes[n] != 0 {
+        n += 1
+    }
+    return n
+}
+
+func cstring_of(s: string) -> Array[u8] {
+    let empty: Array[u8] = new[Array[u8]](0)
+    let result = try {
+        = to_cstring(s)!
+    } else e {
+        = empty
+    }
+    return result
+}
+
+func embedded_nul_rejected(s: string) -> bool {
+    var rejected = false
+    try {
+        to_cstring(s)!
+    } else e {
+        rejected = e == String_Error.embedded_nul
+    }
+    return rejected
+}
+
+func run_cstring_checks() {
+    let shortish: string = "inline"
+    let longish: string = "a string well past the inline capacity"
+    require c_length(cstring_of(shortish)) == byte_len(shortish)
+    let long_bytes: Array[u8] = cstring_of(longish)
+    require __array_length(long_bytes) >= byte_len(longish)
+    var i: uint = 0
+    while i < byte_len(longish) {
+        require long_bytes[i] == byte_at(longish, i)
+        i += 1
+    }
+    var raw: Array[u8] = new[Array[u8]](3)
+    raw[0] = 0x61
+    raw[1] = 0
+    raw[2] = 0x62
+    require embedded_nul_rejected(from_raw(raw, 3))
+    var buf: Array[u8] = new[Array[u8]](64)
+    let copied = try {
+        = to_cstring(shortish, copy = true, buf = buf)!
+    } else e {
+        = new[Array[u8]](0)
+    }
+    require c_length(copied) == byte_len(shortish)
+    var j: uint = 0
+    while j < byte_len(shortish) {
+        require copied[j] == byte_at(shortish, j)
+        j += 1
+    }
+}
+
+func raw_long(selector: u64) -> string {
+    var words: String_Words = (data = nil, selector = selector)
+    let view: Ref[string] = unsafe_cast[Ref[string]] ref words
+    let s: string = view
+    return s
+}
+
+func check_length_width() {
+    let wide: u64 = (3 << 58) | 12345
+    let s: string = raw_long((1 << 62) | wide)
+    require tag(s) == 1
+    require byte_len(s) == cast[uint] wide
+    let maximal: u64 = (1 << 60) - 1
+    let m: string = raw_long((1 << 62) | maximal)
+    require tag(m) == 1
+    require byte_len(m) == cast[uint] maximal
+}
+
+func check_ascii_flag() {
+    let plain: string = "short"
+    let wide: string = "héllo"
+    require encoding(plain) == Str_Encoding.ascii
+    require encoding(wide) == Str_Encoding.utf8
+    var broken: Array[u8] = new[Array[u8]](6)
+    broken[0] = 0x68
+    broken[1] = 0xc3
+    broken[2] = 0x28
+    broken[3] = 0x6c
+    broken[4] = 0x6c
+    broken[5] = 0x6f
+    require encoding(from_raw(broken, 6)) == Str_Encoding.binary
+    var plain_bytes: Array[u8] = new[Array[u8]](cast[int] byte_len(plain))
+    var i: uint = 0
+    while i < byte_len(plain) {
+        plain_bytes[i] = byte_at(plain, i)
+        i += 1
+    }
+    var wide_bytes: Array[u8] = new[Array[u8]](cast[int] byte_len(wide))
+    var k: uint = 0
+    while k < byte_len(wide) {
+        wide_bytes[k] = byte_at(wide, k)
+        k += 1
+    }
+    require encoding(from_raw(plain_bytes, cast[int] byte_len(plain))) ==
+        Str_Encoding.ascii
+    require encoding(from_raw(wide_bytes, cast[int] byte_len(wide))) ==
+        Str_Encoding.utf8
+    let maximal: u64 = (1 << 60) - 1
+    let s: string = raw_long((1 << 62) | (1 << 60) | maximal)
+    require tag(s) == 1
+    require byte_len(s) == cast[uint] maximal
+    require style_ref(plain) == 0
+}
+
+comptime {} else {
+    check("", 0)
+    check("hello", 5)
+    check("héllo", 6)
+    check("\U0001f4a9", 4)
+    check("a€b", 5)
+    let a: string = "distinct"
+    let b: string = "distinct"
+    let c: string = "different"
+    require a == b
+    require a != c
+    run_cstring_checks()
+    check_length_width()
+    check_ascii_flag()
+    __fd_write(2, "ok")
+}

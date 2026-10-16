@@ -1,0 +1,96 @@
+func bytes_of(s: string) -> Array[u8] {
+    var out: Array[u8] = new[Array[u8]](cast[int] byte_len(s))
+    var i: uint = 0
+    while i < byte_len(s) {
+        out[i] = byte_at(s, i)
+        i += 1
+    }
+    return out
+}
+
+func filled(n: int) -> Array[u8] {
+    var out: Array[u8] = new[Array[u8]](n)
+    var i: int = 0
+    while i < n {
+        out[i] = 0x61
+        i += 1
+    }
+    return out
+}
+
+func as_text_fails(s: string) -> bool {
+    var failed = false
+    try {
+        as_text(s)!
+    } else e {
+        failed = e == String_Error.bad_encoding
+    }
+    return failed
+}
+
+func as_text_encoding(s: string) -> Str_Encoding {
+    let revealed = try {
+        = encoding(as_text(s)!)
+    } else e {
+        = Str_Encoding.binary
+    }
+    return revealed
+}
+
+comptime {} else {
+    let long_ascii: string = "abcdefghijklmnopqrstuvwxyz0123456789" +
+        "abcdefghijklmnopqrstuvwxyz0123456789"
+    require encoding_of(long_ascii) == Str_Encoding.ascii
+
+    let pair: string = "世界"
+    let long_utf8: string = pair + pair + pair + pair + pair + pair + pair +
+        pair
+    require encoding_of(long_utf8) == Str_Encoding.utf8
+
+    var long_bad: Array[u8] = filled(40)
+    long_bad[37] = 0xed
+    long_bad[38] = 0xa0
+    long_bad[39] = 0x80
+    require encoding_of(from_raw(long_bad, 40)) == Str_Encoding.binary
+
+    var straddle: Array[u8] = filled(40)
+    straddle[15] = 0xf0
+    straddle[16] = 0x9f
+    straddle[17] = 0x98
+    straddle[18] = 0x80
+    require encoding_of(from_raw(straddle, 40)) == Str_Encoding.utf8
+
+    let ascii_lit: string = "plain ascii"
+    let narrowed: string = from_raw(bytes_of(ascii_lit), 11,
+                                    encoding = Str_Encoding.utf8)
+    require encoding(narrowed) == Str_Encoding.ascii
+
+    let utf8_lit: string = "世"
+    let kept: string = from_raw(bytes_of(utf8_lit), 3,
+                                encoding = Str_Encoding.utf8)
+    require encoding(kept) == Str_Encoding.utf8
+
+    var bad_bytes: Array[u8] = new[Array[u8]](3)
+    bad_bytes[0] = 0xed
+    bad_bytes[1] = 0xa0
+    bad_bytes[2] = 0x80
+    let as_bin: string = from_raw(bad_bytes, 3,
+                                  encoding = Str_Encoding.binary)
+    require encoding(as_bin) == Str_Encoding.binary
+    require as_text_fails(as_bin)
+
+    let hidden: string = from_raw(bytes_of(utf8_lit), 3,
+                                  encoding = Str_Encoding.binary)
+    require as_text_encoding(hidden) == Str_Encoding.utf8
+
+    let forced: string = from_raw(bytes_of(utf8_lit), 3,
+                                  encoding = Str_Encoding.ascii,
+                                  unsafe = true)
+    require encoding(forced) == Str_Encoding.ascii
+
+    require encoding(from_char('a')) == Str_Encoding.ascii
+    require encoding(from_char(cast[char] 0x4e16)) == Str_Encoding.utf8
+
+    require encoding(empty_string()) == Str_Encoding.ascii
+    __fd_write(2, "ok")
+}

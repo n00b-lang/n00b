@@ -540,7 +540,7 @@ func to_hex(self: string) -> string {
                     encoding = Str_Encoding.ascii, unsafe = true)
 }
 
-func from_rune(c: char) -> string {
+func from_char(c: char) -> string {
     let cp: u32 = cast[u32] c
     if cp > 0x10ffff or (cp >= 0xd800 and cp <= 0xdfff) {
         return empty_string()
@@ -639,6 +639,10 @@ func join(items: List[string], joiner: string) -> string {
 
 func style_ref(self: string) -> u32 {
     return 0
+}
+
+litmod<fence> string(contents: string) -> string fail: string {
+    return contents
 }
 
 private flagset Utf8_Check {

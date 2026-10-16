@@ -11098,7 +11098,6 @@ imported_user_litmod(n00bb_tu_state_t *state, core_string_t modifier,
 core_string_t
 literal_modifier(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    (void)grammar;
     if (!node) return (core_string_t){0};
     parse_tree_t *last = node;
     while (last && !core_tree_is_leaf(last)) {
@@ -11106,8 +11105,10 @@ literal_modifier(parse_grammar_t *grammar, parse_tree_t *node)
         last = count ? core_tree_child(last, count - 1) : nullptr;
     }
     parse_token_info_t *token = parse_node_token(last);
-    return token && core_option_is_set(token->postfix_modifier)
-        ? core_option_get(token->postfix_modifier) : (core_string_t){0};
+    if (token && core_option_is_set(token->postfix_modifier))
+        return core_option_get(token->postfix_modifier);
+    return nt_is(grammar, node, "embed-lit") ? CORE_STRING_STATIC("string")
+                                             : (core_string_t){0};
 }
 
 bool

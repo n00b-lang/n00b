@@ -752,10 +752,19 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
                 || dotted_symbol_path_node(grammar, reference)) continue;
             parse_node_resolution_t resolution =
                 parse_tree_resolution(reference);
-            if (resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
-                && resolution.target.symbol->kind != PARSE_SYM_MODULE) {
-                if (is_named_type_symbol(grammar,
-                        resolution.target.symbol)) continue;
+            bool value_reference = resolution.kind
+                    == PARSE_NODE_RESOLUTION_SYMBOL
+                && resolution.target.symbol->kind != PARSE_SYM_MODULE;
+            if (value_reference
+                && is_named_type_symbol(grammar, resolution.target.symbol))
+                continue;
+            n00bb_link_use_site_t *site = &state->link_use_sites.data[site_ix];
+            parse_scope_t *scope = site->scope;
+            core_string_t name = site->member_name;
+            parse_sym_entry_t *symbol = lookup_named_type_reference(grammar,
+                state, symtab, scope, name);
+            if (!symbol && value_reference
+                && !(name.data && builtin_type_name(name.data))) {
                 core_diagnostics_report_at(
                     core_translation_unit_diagnostics(unit), unit,
                     CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0007"),
@@ -764,11 +773,6 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
                     link_source_location(reference));
                 return false;
             }
-            n00bb_link_use_site_t *site = &state->link_use_sites.data[site_ix];
-            parse_scope_t *scope = site->scope;
-            core_string_t name = site->member_name;
-            parse_sym_entry_t *symbol = lookup_named_type_reference(grammar,
-                state, symtab, scope, name);
             if (!symbol) {
                 if (!name.data || !builtin_type_name(name.data)) {
                     core_buffer_t message = {0};

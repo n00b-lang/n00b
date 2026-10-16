@@ -741,6 +741,18 @@ test(
                / 'bitcode_compound_in_place.n'],
 )
 
+foreach string_probe : ['core_probe', 'rstr_probe', 'raw_literal_probe',
+                        'encoding_probe']
+    test(
+        'string-' + string_probe.replace('_', '-'),
+        find_program('sh'),
+        args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+               n00bb_exe.full_path(),
+               meson.current_source_dir() / 'tests' / 'programs' / 'string'
+                   / string_probe + '.n'],
+    )
+endforeach
+
 test(
     'comptime-c-record-deferred-array-n00b',
     find_program('sh'),
