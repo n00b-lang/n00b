@@ -6,6 +6,7 @@
 #include "ir/shape.h"
 #include "ir/typelang.h"
 #include "th/environment.h"
+#include "abi_layout.h"
 #include "abi_string.h"
 #include "frame_roots.h"
 #include "llvm_stack_maps.h"
@@ -236,10 +237,17 @@ typedef struct {
 core_list_decl(layout_match_t);
 
 typedef struct {
+    unsigned element;
+    uint64_t shift;
+    uint64_t width;
+    bool packed;
+} record_slot_t;
+
+typedef struct {
     th_type *type;
     const char *name;
     LLVMTypeRef native;
-    unsigned index;
+    record_slot_t slot;
     bool found;
 } member_match_t;
 core_list_decl(member_match_t);
@@ -438,18 +446,38 @@ enum {
 };
 
 static uint64_t
-packed_array_width(ir_module_t *module, th_type *type)
+packed_value_width(ir_module_t *module, th_type *type)
 {
-    if (!type) return 0;
-    if (ir_machine_of(module, type).class == IR_CLASS_BOOL) return 1;
+    if (!type || th_builtin_kind_of(th_resolve(type)) == TH_BUILTIN_ATOMIC)
+        return 0;
     th_type *definition = ir_type_definition(module, type);
     if (!definition) definition = th_resolve(type);
     uint64_t width = 0;
     th_bitint_flavor flavor = TH_BITINT_UNSIGNED;
-    return definition && th_kind_of(definition) == TH_BITINT
+    if (definition && th_kind_of(definition) == TH_BITINT
         && th_bitint_info(definition, &width, &flavor)
-        && flavor == TH_BITINT_BITS && width
-        && width <= N00BB_PACKED_MAX_BITS ? width : 0;
+        && flavor == TH_BITINT_BITS)
+        return width && width <= N00BB_PACKED_MAX_BITS ? width : 0;
+    const ir_final_layout_t *layout = ir_layout_final_visible(module, type,
+        ir_module_target(module));
+    return n00bb_abi_layout_packable(layout)
+        && layout->occupied[0].width <= N00BB_PACKED_MAX_BITS
+        ? layout->occupied[0].width : 0;
+}
+
+static uint64_t
+packed_array_width(ir_module_t *module, th_type *type)
+{
+    uint64_t width = packed_value_width(module, type);
+    if (!width || ir_machine_of(module, type).class == IR_CLASS_BOOL)
+        return width;
+    th_type *definition = ir_type_definition(module, type);
+    if (!definition) definition = th_resolve(type);
+    uint64_t bits = 0;
+    th_bitint_flavor flavor = TH_BITINT_UNSIGNED;
+    return definition && th_kind_of(definition) == TH_BITINT
+        && th_bitint_info(definition, &bits, &flavor)
+        && flavor == TH_BITINT_BITS ? width : 0;
 }
 
 static th_type *
@@ -500,6 +528,202 @@ record_layout_order(const ir_final_layout_t *layout, size_t *order)
         }
         order[j] = member;
     }
+}
+
+typedef struct {
+    const ir_final_layout_t *layout;
+    th_type *definition;
+    record_slot_t *slots;
+    LLVMTypeRef *elements;
+    uint64_t *offsets;
+    bool *byte_runs;
+    unsigned n_elements;
+} record_shape_t;
+
+static void
+record_shape_release(record_shape_t *shape)
+{
+    free(shape->slots);
+    free(shape->elements);
+    free(shape->offsets);
+    free(shape->byte_runs);
+    *shape = (record_shape_t){0};
+}
+
+static th_type *
+record_member_type(const record_shape_t *shape,
+                   const ir_final_member_layout_t *member)
+{
+    th_type *field = member->name && shape->definition
+        ? th_record_lookup(shape->definition, member->name) : nullptr;
+    return field ? field : member->type;
+}
+
+static bool
+record_member_extent(ir_module_t *module,
+                     const ir_final_member_layout_t *member,
+                     uint64_t *bytes, uint32_t *alignment)
+{
+    th_type *storage = member->inline_element_count
+        ? member->inline_element_type : member->type;
+    const ir_final_layout_t *child = storage
+        ? ir_layout_final_visible(module, storage, ir_module_target(module))
+        : nullptr;
+    uint64_t stride = 0;
+    if (!child || !ir_layout_final_stride_bits(child, &stride)
+        || !child->alignment_bytes) return false;
+    uint64_t bits = member->inline_element_count
+        ? member->inline_element_stride_bits * member->inline_element_count
+        : stride;
+    if (bits % 8) return false;
+    *bytes = bits / 8;
+    *alignment = child->alignment_bytes;
+    return true;
+}
+
+static bool
+record_shape_push(record_shape_t *shape, size_t capacity, LLVMTypeRef type,
+                  uint64_t offset, bool byte_run)
+{
+    if (!type || shape->n_elements >= capacity
+        || shape->n_elements >= UINT32_MAX) return false;
+    shape->elements[shape->n_elements] = type;
+    shape->offsets[shape->n_elements] = offset;
+    shape->byte_runs[shape->n_elements] = byte_run;
+    shape->n_elements++;
+    return true;
+}
+
+static bool
+record_shape_pad(record_shape_t *shape, size_t capacity,
+                 LLVMContextRef context, uint64_t *cursor, uint64_t offset,
+                 uint32_t alignment)
+{
+    uint64_t aligned = (*cursor + alignment - 1) / alignment * alignment;
+    if (offset < *cursor) return false;
+    if (offset != aligned && (offset - *cursor > UINT32_MAX
+        || !record_shape_push(shape, capacity, LLVMArrayType(
+            LLVMInt8TypeInContext(context), (unsigned)(offset - *cursor)),
+            *cursor, true))) return false;
+    *cursor = offset;
+    return true;
+}
+
+static bool
+record_shape_build(ir_module_t *module, th_type *type,
+                   LLVMContextRef context, record_shape_t *shape)
+{
+    *shape = (record_shape_t){0};
+    th_type *definition = type ? ir_type_definition(module, type) : nullptr;
+    if (type && !definition && th_kind_of(th_resolve(type)) == TH_RECORD)
+        definition = th_resolve(type);
+    const ir_final_layout_t *layout = type ? ir_layout_final_visible(module,
+        type, ir_module_target(module)) : nullptr;
+    size_t count = layout ? layout->n_members : 0;
+    uint64_t stride_bits = 0;
+    if (!definition || th_kind_of(definition) != TH_RECORD || !layout
+        || count != th_record_len(definition) || count > UINT32_MAX
+        || !ir_layout_final_stride_bits(layout, &stride_bits)
+        || stride_bits % 8) return false;
+    size_t capacity = 2 * count + 1;
+    shape->layout = layout;
+    shape->definition = definition;
+    shape->slots = calloc(count ? count : 1, sizeof(*shape->slots));
+    shape->elements = calloc(capacity, sizeof(*shape->elements));
+    shape->offsets = calloc(capacity, sizeof(*shape->offsets));
+    shape->byte_runs = calloc(capacity, sizeof(*shape->byte_runs));
+    size_t *order = calloc(count ? count : 1, sizeof(*order));
+    bool ok = shape->slots && shape->elements && shape->offsets
+        && shape->byte_runs && order;
+    if (ok) record_layout_order(layout, order);
+    uint64_t cursor = 0;
+    uint32_t record_alignment = 1;
+    for (size_t i = 0; ok && i < count;) {
+        const ir_final_member_layout_t *member = &layout->members[order[i]];
+        uint64_t width = member->inline_element_count ? 0
+            : packed_value_width(module, record_member_type(shape, member));
+        uint64_t bytes = 0;
+        uint32_t alignment = 1;
+        bool sized = record_member_extent(module, member, &bytes,
+                                          &alignment);
+        uint64_t first = member->bit_offset / 8;
+        uint64_t last = width ? (member->bit_offset + width + 7) / 8
+                              : first + bytes;
+        if (!width && (!sized || member->bit_offset % 8)) {
+            ok = false;
+            break;
+        }
+        size_t j = i + 1;
+        for (; j < count; j++) {
+            const ir_final_member_layout_t *next = &layout->members[order[j]];
+            if (next->bit_offset / 8 >= last) break;
+            uint64_t next_width = next->inline_element_count ? 0
+                : packed_value_width(module, record_member_type(shape, next));
+            if (!width || !next_width) {
+                ok = false;
+                break;
+            }
+            uint64_t next_last = (next->bit_offset + next_width + 7) / 8;
+            if (next_last > last) last = next_last;
+        }
+        if (!ok) break;
+        uint64_t bound = j < count
+            ? layout->members[order[j]].bit_offset / 8 : stride_bits / 8;
+        bool natural = j == i + 1 && !(member->bit_offset % 8) && sized
+            && first + bytes <= bound;
+        if (natural) {
+            th_type *field = record_member_type(shape, member);
+            LLVMTypeRef element = member->inline_element_count
+                ? inline_member_type(module, member, context)
+                : ir_machine_of(module, field).class == IR_CLASS_BOOL
+                    ? LLVMInt8TypeInContext(context)
+                    : value_type(module, field, context);
+            ok = element && LLVMGetTypeKind(element) != LLVMVoidTypeKind
+                && record_shape_pad(shape, capacity, context, &cursor, first,
+                                    alignment)
+                && record_shape_push(shape, capacity, element, first, false);
+            if (!ok) break;
+            shape->slots[order[i]] = (record_slot_t){
+                .element = shape->n_elements - 1,
+            };
+            if (alignment > record_alignment) record_alignment = alignment;
+            cursor = first + bytes;
+        }
+        else {
+            ok = last - first <= UINT32_MAX
+                && record_shape_pad(shape, capacity, context, &cursor, first,
+                                    1)
+                && record_shape_push(shape, capacity, LLVMArrayType(
+                    LLVMInt8TypeInContext(context), (unsigned)(last - first)),
+                    first, true);
+            for (size_t k = i; ok && k < j; k++) {
+                const ir_final_member_layout_t *packed =
+                    &layout->members[order[k]];
+                shape->slots[order[k]] = (record_slot_t){
+                    .element = shape->n_elements - 1,
+                    .shift = packed->bit_offset - first * 8,
+                    .width = packed_value_width(module,
+                        record_member_type(shape, packed)),
+                    .packed = true,
+                };
+            }
+            cursor = last;
+        }
+        i = j;
+    }
+    uint64_t stride = stride_bits / 8;
+    uint64_t natural_end = (cursor + record_alignment - 1) / record_alignment
+        * record_alignment;
+    if (ok && (cursor > stride || record_alignment != layout->alignment_bytes))
+        ok = false;
+    if (ok && natural_end != stride)
+        ok = stride - cursor <= UINT32_MAX
+            && record_shape_push(shape, capacity, LLVMArrayType(
+                LLVMInt8TypeInContext(context), (unsigned)(stride - cursor)),
+                cursor, true);
+    free(order);
+    if (!ok) record_shape_release(shape);
+    return ok;
 }
 
 static LLVMTypeRef
@@ -683,15 +907,6 @@ value_type_uncached(ir_module_t *module, th_type *type,
         && th_kind_of(definition) == TH_RECORD
         && !th_is_closed(ir_module_types(module), type))
         return box_llvm_type(context);
-    if (definition && th_kind_of(definition) == TH_RECORD) {
-        const ir_final_layout_t *layout = ir_layout_final_visible(module, type,
-            ir_module_target(module));
-        if (layout) {
-            for (size_t i = 0; i < layout->n_members; i++)
-                if (layout->members[i].bit_offset & 7)
-                    return box_llvm_type(context);
-        }
-    }
     if (definition && th_kind_of(definition) == TH_BITINT) {
         const ir_final_layout_t *layout = ir_layout_final_visible(module, type,
             ir_module_target(module));
@@ -776,58 +991,12 @@ value_type_uncached(ir_module_t *module, th_type *type,
         return LLVMStructTypeInContext(context, fields, 2, false);
     }
     if (definition && th_kind_of(definition) == TH_RECORD) {
-        size_t count = th_record_len(definition);
-        const ir_final_layout_t *layout = ir_layout_final_visible(module, type,
-            ir_module_target(module));
-        if (!layout || count != layout->n_members || count > UINT32_MAX)
-            return nullptr;
-        LLVMTypeRef *fields = count
-            ? calloc(count, sizeof(*fields)) : nullptr;
-        size_t *order = count ? calloc(count, sizeof(*order)) : nullptr;
-        if (count && (!fields || !order)) {
-            free(fields);
-            free(order);
-            return nullptr;
-        }
-        record_layout_order(layout, order);
-        bool valid = true;
-        for (size_t i = 0; valid && i < count; i++) {
-            const ir_final_member_layout_t *member =
-                &layout->members[order[i]];
-            th_type *field = member->name
-                ? th_record_lookup(definition, member->name) : nullptr;
-            fields[i] = member->inline_element_count
-                ? inline_member_type(module, member, context)
-                : field ? value_type(module, field, context) : nullptr;
-            if (field && !(member->bit_offset & 7)
-                && layout->intrinsic_bits - member->bit_offset >= 8
-                && ir_machine_of(module, field).class == IR_CLASS_BOOL) {
-                bool shared_byte = false;
-                for (size_t j = 0; j < count && !shared_byte; j++) {
-                    if (i == j) continue;
-                    const ir_final_member_layout_t *other =
-                        &layout->members[j];
-                    for (size_t k = 0; k < other->n_occupied; k++) {
-                        const ir_layout_bit_run_t *run =
-                            &other->occupied[k];
-                        if (run->offset < member->bit_offset + 8
-                            && run->offset + run->width
-                                > member->bit_offset) {
-                            shared_byte = true;
-                            break;
-                        }
-                    }
-                }
-                if (!shared_byte) fields[i] = LLVMInt8TypeInContext(context);
-            }
-            valid = fields[i]
-                && LLVMGetTypeKind(fields[i]) != LLVMVoidTypeKind;
-        }
-        LLVMTypeRef record = valid
-            ? LLVMStructTypeInContext(context, fields, (unsigned)count,
-                                      false) : nullptr;
-        free(order);
-        free(fields);
+        record_shape_t shape;
+        LLVMTypeRef record = record_shape_build(module, type, context, &shape)
+            ? LLVMStructTypeInContext(context, shape.elements,
+                                      shape.n_elements, false)
+            : nullptr;
+        record_shape_release(&shape);
         return record;
     }
     return nullptr;
@@ -1580,7 +1749,7 @@ make_packed_bitptr(lower_state_t *state, LLVMValueRef data,
     LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
     LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
     uint32_t type_index = runtime_type_index(state, element);
-    uint64_t width = packed_array_width(state->function->owner, element);
+    uint64_t width = packed_value_width(state->function->owner, element);
     if (!type_index || !width) {
         backend_error(state->diagnostics,
             "packed element has no runtime type index or semantic width");
@@ -1670,6 +1839,58 @@ store_bool_bitptr(lower_state_t *state, LLVMValueRef bitptr,
     return LLVMBuildStore(state->builder, updated, base) != nullptr;
 }
 
+static LLVMValueRef
+packed_value_from_bits(lower_state_t *state, LLVMValueRef bits,
+                       uint64_t width, th_type *type)
+{
+    ir_module_t *module = state->function->owner;
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMTypeRef native = value_type(module, type, context);
+    if (!bits || !native || !width
+        || LLVMGetTypeKind(LLVMTypeOf(bits)) != LLVMIntegerTypeKind)
+        return nullptr;
+    LLVMValueRef narrow = LLVMBuildIntCast2(state->builder, bits,
+        LLVMIntTypeInContext(context, (unsigned)width), false,
+        "packed.narrow");
+    bool sign = ir_machine_of(module, type).class == IR_CLASS_SINT;
+    if (LLVMGetTypeKind(native) == LLVMIntegerTypeKind)
+        return LLVMBuildIntCast2(state->builder, narrow, native, sign,
+                                 "packed.value");
+    LLVMTargetDataRef target = LLVMGetModuleDataLayout(state->module);
+    uint64_t bytes = LLVMABISizeOfType(target, native);
+    LLVMValueRef slot = entry_alloca(state, native);
+    if (!slot || !bytes || bytes > 16) return nullptr;
+    LLVMBuildStore(state->builder, LLVMBuildIntCast2(state->builder, narrow,
+        LLVMIntTypeInContext(context, (unsigned)(bytes * 8)), sign,
+        "packed.storage"), slot);
+    return LLVMBuildLoad2(state->builder, native, slot, "packed.value");
+}
+
+static LLVMValueRef
+packed_bits_from_value(lower_state_t *state, LLVMValueRef value,
+                       uint64_t width, LLVMTypeRef wide)
+{
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    if (!value || !width) return nullptr;
+    LLVMTypeRef native = LLVMTypeOf(value);
+    LLVMValueRef integer = value;
+    if (LLVMGetTypeKind(native) != LLVMIntegerTypeKind) {
+        LLVMTargetDataRef target = LLVMGetModuleDataLayout(state->module);
+        uint64_t bytes = LLVMABISizeOfType(target, native);
+        LLVMValueRef slot = entry_alloca(state, native);
+        if (!slot || !bytes || bytes > 16) return nullptr;
+        LLVMBuildStore(state->builder, value, slot);
+        integer = LLVMBuildLoad2(state->builder,
+            LLVMIntTypeInContext(context, (unsigned)(bytes * 8)), slot,
+            "packed.storage");
+    }
+    LLVMValueRef narrow = LLVMBuildIntCast2(state->builder, integer,
+        LLVMIntTypeInContext(context, (unsigned)width), false,
+        "packed.narrow");
+    return LLVMBuildIntCast2(state->builder, narrow, wide, false,
+                             "packed.bits");
+}
+
 typedef struct {
     LLVMValueRef base;
     LLVMValueRef scratch;
@@ -1722,37 +1943,26 @@ static LLVMValueRef
 load_packed_bitptr(lower_state_t *state, LLVMValueRef bitptr,
                    th_type *element)
 {
-    uint64_t width = packed_array_width(state->function->owner, element);
+    uint64_t width = packed_value_width(state->function->owner, element);
     if (width == 1) return load_bool_bitptr(state, bitptr);
     if (!width) return nullptr;
     packed_bitptr_io_t io = {0};
     if (!packed_bitptr_prepare(state, bitptr, width, &io)) return nullptr;
-    LLVMContextRef context = LLVMGetModuleContext(state->module);
-    LLVMTypeRef narrow = LLVMIntTypeInContext(context, (unsigned)width);
-    LLVMTypeRef native = value_type(state->function->owner, element, context);
-    if (!native || LLVMGetTypeKind(native) != LLVMIntegerTypeKind
-        || LLVMGetIntTypeWidth(native) < width) return nullptr;
     LLVMValueRef bits = LLVMBuildLShr(state->builder,
         LLVMBuildLoad2(state->builder, io.wide, io.scratch,
             "bitptr.load.bits"),
         LLVMBuildZExt(state->builder, io.start, io.wide,
             "bitptr.load.shift"), "bitptr.load.shifted");
-    LLVMValueRef value = LLVMBuildTrunc(state->builder, bits, narrow,
-        "bitptr.load.narrow");
-    return native == narrow ? value
-        : LLVMBuildZExt(state->builder, value, native,
-            "bitptr.load.value");
+    return packed_value_from_bits(state, bits, width, element);
 }
 
 static bool
 store_packed_bitptr(lower_state_t *state, LLVMValueRef bitptr,
                     LLVMValueRef value, th_type *element)
 {
-    uint64_t width = packed_array_width(state->function->owner, element);
+    uint64_t width = packed_value_width(state->function->owner, element);
     if (width == 1) return store_bool_bitptr(state, bitptr, value);
-    if (!width || !value
-        || LLVMGetTypeKind(LLVMTypeOf(value)) != LLVMIntegerTypeKind
-        || LLVMGetIntTypeWidth(LLVMTypeOf(value)) < width) return false;
+    if (!width || !value) return false;
     packed_bitptr_io_t io = {0};
     if (!packed_bitptr_prepare(state, bitptr, width, &io)) return false;
     LLVMValueRef one = LLVMConstInt(io.wide, 1, false);
@@ -1766,10 +1976,9 @@ store_packed_bitptr(lower_state_t *state, LLVMValueRef bitptr,
         "bitptr.store.mask");
     LLVMValueRef previous = LLVMBuildLoad2(state->builder, io.wide,
         io.scratch, "bitptr.store.previous");
-    LLVMValueRef narrowed = LLVMBuildAnd(state->builder,
-        LLVMBuildIntCast2(state->builder, value, io.wide, false,
-            "bitptr.store.value.wide"),
-        low_mask, "bitptr.store.narrowed");
+    LLVMValueRef narrowed = packed_bits_from_value(state, value, width,
+        io.wide);
+    if (!narrowed) return false;
     LLVMValueRef updated = LLVMBuildOr(state->builder,
         LLVMBuildAnd(state->builder, previous,
             LLVMBuildNot(state->builder, mask, "bitptr.store.inverse"),
@@ -1971,8 +2180,11 @@ literal_element_layout_matches(ir_module_t *module, th_type *type,
                 (unsigned)(stride_bits / unit_bits));
     }
     ir_machine_t machine = ir_machine_of(module, type);
+    if (machine.class == IR_CLASS_BOOL)
+        return literal_boolean_field_matches(module, type, native, target);
     th_type *definition = ir_type_definition(module, type);
-    if (!definition && th_kind_of(th_resolve(type)) == TH_RECORD)
+    if (!definition && (th_kind_of(th_resolve(type)) == TH_RECORD
+                        || th_kind_of(th_resolve(type)) == TH_BITINT))
         definition = th_resolve(type);
     if (definition && th_kind_of(definition) == TH_BITINT) {
         uint64_t semantic_bits = 0;
@@ -1980,7 +2192,10 @@ literal_element_layout_matches(ir_module_t *module, th_type *type,
             && semantic_bits && semantic_bits <= layout->intrinsic_bits
             && layout->intrinsic_bits <= 128
             && LLVMGetTypeKind(native) == LLVMIntegerTypeKind
-            && LLVMGetIntTypeWidth(native) == layout->intrinsic_bits;
+            && (LLVMGetIntTypeWidth(native) == layout->intrinsic_bits
+                || (LLVMGetIntTypeWidth(native) == semantic_bits
+                    && LLVMABISizeOfType(target, native) * 8
+                        == stride_bits));
     }
     if (machine.class == IR_CLASS_SINT || machine.class == IR_CLASS_UINT) {
         bool padded_char = machine.class == IR_CLASS_UINT
@@ -2027,10 +2242,8 @@ literal_element_layout_matches(ir_module_t *module, th_type *type,
     if (builtin == TH_BUILTIN_ATOMIC && count == 1) {
         const th_arg *argument = th_named_arg(th_resolve(type), 0);
         return argument && argument->kind == TH_ARG_TYPE
-            && (literal_boolean_field_matches(module, argument->type,
-                                              native, target)
-                || literal_element_layout_matches(module, argument->type,
-                                                  native, target));
+            && literal_element_layout_matches(module, argument->type,
+                                              native, target);
     }
     if (n00bb_frame_pointer_option(type))
         return LLVMGetTypeKind(native) == LLVMPointerTypeKind
@@ -2075,22 +2288,22 @@ literal_element_layout_matches(ir_module_t *module, th_type *type,
                 == LLVMIntegerTypeKind
             && LLVMGetIntTypeWidth(LLVMStructGetTypeAtIndex(native, 1)) == 64;
     if (definition && th_kind_of(definition) == TH_RECORD) {
-        size_t fields = th_record_len(definition);
+        record_shape_t shape;
         if (LLVMGetTypeKind(native) != LLVMStructTypeKind
-            || fields != layout->n_members
-            || fields != LLVMCountStructElementTypes(native)) return false;
-        size_t *order = fields ? calloc(fields, sizeof(*order)) : nullptr;
-        if (fields && !order) return false;
-        record_layout_order(layout, order);
-        bool valid = true;
-        for (size_t i = 0; valid && i < fields; i++) {
-            const ir_final_member_layout_t *member =
-                &layout->members[order[i]];
+            || !record_shape_build(module, type, LLVMGetTypeContext(native),
+                                   &shape)) return false;
+        bool valid = shape.n_elements == LLVMCountStructElementTypes(native);
+        for (unsigned e = 0; valid && e < shape.n_elements; e++)
+            valid = LLVMStructGetTypeAtIndex(native, e) == shape.elements[e]
+                && LLVMOffsetOfElement(target, native, e)
+                    == shape.offsets[e];
+        for (size_t i = 0; valid && i < layout->n_members; i++) {
+            const ir_final_member_layout_t *member = &layout->members[i];
+            const record_slot_t *slot = &shape.slots[i];
+            if (slot->packed) continue;
             th_type *field = member->name
                 ? th_record_lookup(definition, member->name) : nullptr;
-            LLVMTypeRef child = LLVMStructGetTypeAtIndex(native, (unsigned)i);
-            uint64_t offset = LLVMOffsetOfElement(target, native,
-                                                   (unsigned)i);
+            LLVMTypeRef child = shape.elements[slot->element];
             bool inline_match = member->inline_element_count
                 && child == inline_member_type(module, member,
                     LLVMGetTypeContext(native))
@@ -2099,15 +2312,13 @@ literal_element_layout_matches(ir_module_t *module, th_type *type,
                 && literal_element_layout_matches(module,
                     member->inline_element_type,
                     LLVMGetElementType(child), target);
-            if (!field || offset > UINT64_MAX / 8
-                || member->bit_offset != offset * 8
-                || (!inline_match
-                    && !literal_boolean_field_matches(module, field,
-                        child, target)
-                    && !literal_element_layout_matches(module, field,
-                        child, target))) valid = false;
+            valid = field
+                && member->bit_offset == shape.offsets[slot->element] * 8
+                && (inline_match
+                    || literal_element_layout_matches(module, field, child,
+                                                      target));
         }
-        free(order);
+        record_shape_release(&shape);
         return valid;
     }
     if (builtin != TH_BUILTIN_TUPLE
@@ -2120,10 +2331,8 @@ literal_element_layout_matches(ir_module_t *module, th_type *type,
         if (!argument || argument->kind != TH_ARG_TYPE
             || offset > UINT64_MAX / 8
             || layout->members[i].bit_offset != offset * 8
-            || (!literal_boolean_field_matches(module, argument->type,
-                LLVMStructGetTypeAtIndex(native, (unsigned)i), target)
-                && !literal_element_layout_matches(module, argument->type,
-                    LLVMStructGetTypeAtIndex(native, (unsigned)i), target)))
+            || !literal_element_layout_matches(module, argument->type,
+                LLVMStructGetTypeAtIndex(native, (unsigned)i), target))
             return false;
     }
     return true;
@@ -2221,6 +2430,108 @@ write_boxed_record_field(lower_state_t *state, LLVMValueRef record_slot,
     LLVMValueRef args[] = {field_slot, value_slot};
     return LLVMBuildCall2(state->builder, signature, write, args, 2, "")
         != nullptr;
+}
+
+static LLVMValueRef
+record_byte_run_bits(lower_state_t *state, LLVMValueRef run)
+{
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    unsigned bytes = LLVMGetArrayLength(LLVMTypeOf(run));
+    LLVMTypeRef wide = LLVMIntTypeInContext(context, bytes * 8);
+    LLVMValueRef bits = LLVMConstNull(wide);
+    for (unsigned k = 0; k < bytes; k++) {
+        LLVMValueRef byte = LLVMBuildZExt(state->builder,
+            LLVMBuildExtractValue(state->builder, run, k, "record.run.byte"),
+            wide, "record.run.wide");
+        bits = LLVMBuildOr(state->builder, bits, LLVMBuildShl(state->builder,
+            byte, LLVMConstInt(wide, 8 * (uint64_t)k, false),
+            "record.run.shift"), "record.run.bits");
+    }
+    return bits;
+}
+
+static LLVMValueRef
+record_byte_run_from_bits(lower_state_t *state, LLVMValueRef bits,
+                          LLVMTypeRef run_type)
+{
+    LLVMTypeRef i8 = LLVMInt8TypeInContext(
+        LLVMGetModuleContext(state->module));
+    LLVMTypeRef wide = LLVMTypeOf(bits);
+    LLVMValueRef run = LLVMConstNull(run_type);
+    for (unsigned k = 0; k < LLVMGetArrayLength(run_type); k++)
+        run = LLVMBuildInsertValue(state->builder, run,
+            LLVMBuildTrunc(state->builder, LLVMBuildLShr(state->builder,
+                bits, LLVMConstInt(wide, 8 * (uint64_t)k, false),
+                "record.run.byte.shift"), i8, "record.run.byte"),
+            k, "record.run.insert");
+    return run;
+}
+
+static LLVMValueRef
+record_value_get(lower_state_t *state, LLVMValueRef record,
+                 const record_slot_t *slot, th_type *type)
+{
+    LLVMValueRef element = LLVMBuildExtractValue(state->builder, record,
+        slot->element, "record.field");
+    if (!element) return nullptr;
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    if (!slot->packed)
+        return ir_machine_of(state->function->owner, type).class
+                == IR_CLASS_BOOL
+            && LLVMTypeOf(element) == LLVMInt8TypeInContext(context)
+            ? LLVMBuildTrunc(state->builder, element,
+                LLVMInt1TypeInContext(context), "record.field.bool")
+            : element;
+    LLVMValueRef bits = record_byte_run_bits(state, element);
+    if (slot->shift)
+        bits = LLVMBuildLShr(state->builder, bits,
+            LLVMConstInt(LLVMTypeOf(bits), slot->shift, false),
+            "record.field.shift");
+    return packed_value_from_bits(state, bits, slot->width, type);
+}
+
+static LLVMValueRef
+record_value_set(lower_state_t *state, LLVMValueRef record,
+                 const record_slot_t *slot, LLVMValueRef value)
+{
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    if (!record || !value
+        || LLVMGetTypeKind(LLVMTypeOf(record)) != LLVMStructTypeKind
+        || slot->element >= LLVMCountStructElementTypes(LLVMTypeOf(record)))
+        return nullptr;
+    LLVMTypeRef storage = LLVMStructGetTypeAtIndex(LLVMTypeOf(record),
+                                                   slot->element);
+    if (!slot->packed) {
+        if (storage == LLVMInt8TypeInContext(context)
+            && LLVMTypeOf(value) == LLVMInt1TypeInContext(context))
+            value = LLVMBuildZExt(state->builder, value, storage,
+                                  "record.field.bool");
+        return LLVMTypeOf(value) == storage
+            ? LLVMBuildInsertValue(state->builder, record, value,
+                slot->element, "record.field.set")
+            : nullptr;
+    }
+    LLVMValueRef bits = record_byte_run_bits(state,
+        LLVMBuildExtractValue(state->builder, record, slot->element,
+                              "record.run"));
+    LLVMTypeRef wide = LLVMTypeOf(bits);
+    LLVMValueRef field = packed_bits_from_value(state, value, slot->width,
+                                                wide);
+    if (!field) return nullptr;
+    LLVMValueRef shift = LLVMConstInt(wide, slot->shift, false);
+    LLVMValueRef mask = LLVMBuildShl(state->builder,
+        LLVMBuildZExt(state->builder, LLVMConstAllOnes(LLVMIntTypeInContext(
+            context, (unsigned)slot->width)), wide, "record.field.ones"),
+        shift, "record.field.mask");
+    bits = LLVMBuildOr(state->builder,
+        LLVMBuildAnd(state->builder, bits,
+            LLVMBuildNot(state->builder, mask, "record.field.keep"),
+            "record.field.cleared"),
+        LLVMBuildShl(state->builder, field, shift, "record.field.placed"),
+        "record.field.merged");
+    return LLVMBuildInsertValue(state->builder, record,
+        record_byte_run_from_bits(state, bits, storage), slot->element,
+        "record.run.set");
 }
 
 static LLVMValueRef
@@ -2346,73 +2657,38 @@ record_aggregate(lower_state_t *state, ir_instr_t *instruction)
         return LLVMBuildLoad2(state->builder, native, result_slot,
             "record.literal.box");
     }
-    if (!layout || !native || LLVMGetTypeKind(native) != LLVMStructTypeKind
-        || LLVMCountStructElementTypes(native) != count
+    record_shape_t shape;
+    bool shaped = layout && native
+        && record_shape_build(module, type, context, &shape);
+    if (!shaped || native != LLVMStructTypeInContext(context, shape.elements,
+            shape.n_elements, false)
         || !cached_literal_element_layout_matches(state, type, native)) {
         state->failure_detail = !layout
             ? "record has no finalized layout"
             : !native ? "record has no LLVM value type"
-            : LLVMGetTypeKind(native) != LLVMStructTypeKind
-                ? "record LLVM value type is not a struct"
-            : LLVMCountStructElementTypes(native) != count
-                ? "record LLVM field count differs from its definition"
+            : !shaped ? "record layout has no native shape"
             : "record LLVM fields differ from finalized layout";
+        if (shaped) record_shape_release(&shape);
         return nullptr;
     }
-    size_t *order = count ? calloc(count, sizeof(*order)) : nullptr;
-    LLVMValueRef *fields = count ? calloc(count, sizeof(*fields)) : nullptr;
-    if (count && (!order || !fields)) {
-        free(order);
-        free(fields);
-        return nullptr;
-    }
-    record_layout_order(layout, order);
-    bool constant = true;
-    bool valid = true;
-    for (size_t i = 0; valid && i < count; i++) {
-        uint32_t ordinal = layout->members[order[i]].ordinal;
+    LLVMValueRef result = LLVMConstNull(native);
+    for (size_t i = 0; result && i < count; i++) {
+        uint32_t ordinal = layout->members[i].ordinal;
         ir_operand_t *operand = ordinal < count
             ? &instruction->operands[ordinal] : nullptr;
-        fields[i] = aggregate_operand_value(state, operand);
-        LLVMTypeRef storage = LLVMStructGetTypeAtIndex(native,
-            (unsigned)i);
-        if (fields[i] && operand && operand->kind == IR_OPD_VALUE
-            && operand->value
-            && ir_machine_of(module, operand->value->type).class
-                == IR_CLASS_BOOL
-            && LLVMTypeOf(fields[i]) == LLVMInt1TypeInContext(context)
-            && storage == LLVMInt8TypeInContext(context))
-            fields[i] = LLVMGetValueKind(fields[i])
-                == LLVMConstantIntValueKind
-                ? LLVMConstInt(storage,
-                    LLVMConstIntGetZExtValue(fields[i]), false)
-                : LLVMBuildZExt(state->builder, fields[i], storage,
-                    "record.bool.storage");
-        valid = fields[i] && LLVMTypeOf(fields[i])
-            == storage;
-        constant = constant && valid && LLVMIsConstant(fields[i]);
+        result = record_value_set(state, result, &shape.slots[i],
+            aggregate_operand_value(state, operand));
     }
-    LLVMValueRef result = nullptr;
-    if (valid && constant)
-        result = LLVMConstStructInContext(context, fields, (unsigned)count,
-                                          false);
-    else if (valid) {
-        result = LLVMGetUndef(native);
-        for (size_t i = 0; i < count; i++)
-            result = LLVMBuildInsertValue(state->builder, result, fields[i],
-                (unsigned)i, "record.field");
-    }
-    free(order);
-    free(fields);
+    record_shape_release(&shape);
     if (!result)
         state->failure_detail = "record field values do not match storage types";
     return result;
 }
 
 static bool
-record_member_index(lower_state_t *state, th_type *record_type,
-                    const char *name, LLVMTypeRef *native_out,
-                    unsigned *index_out)
+record_member_slot(lower_state_t *state, th_type *record_type,
+                   const char *name, LLVMTypeRef *native_out,
+                   record_slot_t *slot_out)
 {
     record_type = th_resolve(record_type);
     if (!record_type) return false;
@@ -2422,43 +2698,38 @@ record_member_index(lower_state_t *state, th_type *record_type,
         if (match->type != record_type || strcmp(match->name, name)) continue;
         if (match->found) {
             *native_out = match->native;
-            *index_out = match->index;
+            *slot_out = match->slot;
         }
         return match->found;
     }
     ir_module_t *module = state->function->owner;
-    th_type *definition = ir_type_definition(module, record_type);
-    if (!definition && th_kind_of(th_resolve(record_type)) == TH_RECORD)
-        definition = th_resolve(record_type);
-    const ir_final_layout_t *layout = ir_layout_final(module, record_type,
-        ir_module_target(module));
-    LLVMTypeRef native = value_type(module, record_type,
-        LLVMGetModuleContext(state->module));
-    LLVMTargetDataRef target = LLVMGetModuleDataLayout(state->module);
-    bool valid = definition && th_kind_of(definition) == TH_RECORD
-        && layout && native && target;
-    if (valid && !cached_literal_element_layout_matches(state, record_type,
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMTypeRef native = value_type(module, record_type, context);
+    record_shape_t shape;
+    bool shaped = native && record_shape_build(module, record_type, context,
+                                               &shape);
+    if (shaped && !cached_literal_element_layout_matches(state, record_type,
                                                           native)) {
         state->failure_detail = "record ABI layout differs from LLVM type";
-        valid = false;
+        record_shape_release(&shape);
+        shaped = false;
     }
-    if (valid) for (size_t i = 0; i < layout->n_members; i++) {
-        const ir_final_member_layout_t *field = &layout->members[i];
+    member_match_t match = {record_type, name, nullptr, {0}, false};
+    for (size_t i = 0; shaped && i < shape.layout->n_members; i++) {
+        const ir_final_member_layout_t *field = &shape.layout->members[i];
         if (!field->name || strcmp(field->name, name)) continue;
-        size_t physical_index = 0;
-        for (size_t j = 0; j < layout->n_members; j++)
-            if (layout->members[j].bit_offset < field->bit_offset
-                || (layout->members[j].bit_offset == field->bit_offset
-                    && j < i)) physical_index++;
-        *native_out = native;
-        *index_out = (unsigned)physical_index;
-        if (cache) core_list_push(*cache, ((member_match_t){
-            record_type, name, native, (unsigned)physical_index, true}));
-        return true;
+        match.native = native;
+        match.slot = shape.slots[i];
+        match.found = true;
+        break;
     }
-    if (cache) core_list_push(*cache, ((member_match_t){
-        record_type, name, nullptr, 0, false}));
-    return false;
+    if (shaped) record_shape_release(&shape);
+    if (cache) core_list_push(*cache, match);
+    if (match.found) {
+        *native_out = match.native;
+        *slot_out = match.slot;
+    }
+    return match.found;
 }
 
 static uint32_t
@@ -2531,7 +2802,7 @@ nominal_record_value(lower_state_t *state, LLVMValueRef source,
             th_type *source_field = member && member->name
                 ? th_record_lookup(source_shape, member->name) : nullptr;
             LLVMTypeRef source_native = nullptr;
-            unsigned source_index = 0;
+            record_slot_t source_slot_info = {0};
             if (!source_field || !ir_type_eq(state->function->owner,
                     source_field, member->type)) return nullptr;
             LLVMValueRef field = nullptr;
@@ -2540,11 +2811,11 @@ nominal_record_value(lower_state_t *state, LLVMValueRef source,
                     record_member_ordinal(state->function->owner, source_type,
                                           member->name), true);
             else {
-                if (!record_member_index(state, source_type, member->name,
-                        &source_native, &source_index)
+                if (!record_member_slot(state, source_type, member->name,
+                        &source_native, &source_slot_info)
                     || source_native != LLVMTypeOf(source)) return nullptr;
-                field = LLVMBuildExtractValue(state->builder, source,
-                    source_index, "nominal.field");
+                field = record_value_get(state, source, &source_slot_info,
+                                         source_field);
             }
             if (!write_boxed_record_field(state, slot, member->name,
                     field, source_field)) return nullptr;
@@ -2554,32 +2825,24 @@ nominal_record_value(lower_state_t *state, LLVMValueRef source,
     }
     if (count != th_record_len(source_shape) || count > UINT32_MAX
         || LLVMGetTypeKind(LLVMTypeOf(source)) != LLVMStructTypeKind
-        || LLVMGetTypeKind(target) != LLVMStructTypeKind
-        || LLVMCountStructElementTypes(LLVMTypeOf(source)) != count
-        || LLVMCountStructElementTypes(target) != count) return nullptr;
-    LLVMValueRef result = LLVMGetUndef(target);
-    for (size_t i = 0; i < count; i++) {
+        || LLVMGetTypeKind(target) != LLVMStructTypeKind) return nullptr;
+    LLVMValueRef result = LLVMConstNull(target);
+    for (size_t i = 0; result && i < count; i++) {
         const th_member *member = th_record_member(target_shape, i);
         th_type *source_field = member && member->name
             ? th_record_lookup(source_shape, member->name) : nullptr;
         LLVMTypeRef source_native = nullptr, target_native = nullptr;
-        unsigned source_index = 0, target_index = 0;
+        record_slot_t source_slot = {0}, target_slot = {0};
         if (!source_field || !ir_type_eq(state->function->owner,
                 source_field, member->type)
-            || !record_member_index(state, source_type, member->name,
-                &source_native, &source_index)
-            || !record_member_index(state, target_type, member->name,
-                &target_native, &target_index)
+            || !record_member_slot(state, source_type, member->name,
+                &source_native, &source_slot)
+            || !record_member_slot(state, target_type, member->name,
+                &target_native, &target_slot)
             || source_native != LLVMTypeOf(source)
             || target_native != target) return nullptr;
-        LLVMValueRef field = LLVMBuildExtractValue(state->builder, source,
-            source_index, "nominal.field");
-        if (!field || LLVMTypeOf(field)
-                != LLVMStructGetTypeAtIndex(target, target_index))
-            return nullptr;
-        result = LLVMBuildInsertValue(state->builder, result, field,
-            target_index, "nominal.value");
-        if (!result) return nullptr;
+        result = record_value_set(state, result, &target_slot,
+            record_value_get(state, source, &source_slot, source_field));
     }
     return result;
 }
@@ -3408,31 +3671,25 @@ copy_literal_value(lower_state_t *state, LLVMValueRef value, th_type *type)
         ? ir_type_definition(module, resolved) : resolved;
     if (!definition || th_kind_of(definition) != TH_RECORD)
         return value;
-    const ir_final_layout_t *layout = ir_layout_final(module, type,
-        ir_module_target(module));
-    LLVMTypeRef native = LLVMTypeOf(value);
-    if (!layout || LLVMGetTypeKind(native) != LLVMStructTypeKind
-        || LLVMCountStructElementTypes(native) != layout->n_members)
+    record_shape_t shape;
+    if (LLVMGetTypeKind(LLVMTypeOf(value)) != LLVMStructTypeKind
+        || !record_shape_build(module, type,
+                               LLVMGetModuleContext(state->module), &shape))
         return nullptr;
-    size_t *order = calloc(layout->n_members ? layout->n_members : 1,
-                           sizeof(*order));
-    if (!order) return nullptr;
-    record_layout_order(layout, order);
     LLVMValueRef copied = value;
-    for (size_t i = 0; i < layout->n_members; i++) {
-        th_type *field_type = layout->members[order[i]].type;
+    for (size_t i = 0; copied && i < shape.layout->n_members; i++) {
+        const record_slot_t *slot = &shape.slots[i];
+        if (slot->packed) continue;
         LLVMValueRef field = LLVMBuildExtractValue(state->builder, copied,
-            (unsigned)i, "literal.field");
-        LLVMValueRef new_field = copy_literal_value(state, field, field_type);
-        if (!new_field) {
-            copied = nullptr;
-            break;
-        }
-        if (new_field != field)
+            slot->element, "literal.field");
+        LLVMValueRef new_field = copy_literal_value(state, field,
+            shape.layout->members[i].type);
+        if (!new_field) copied = nullptr;
+        else if (new_field != field)
             copied = LLVMBuildInsertValue(state->builder, copied, new_field,
-                (unsigned)i, "literal.field.copy");
+                slot->element, "literal.field.copy");
     }
-    free(order);
+    record_shape_release(&shape);
     return copied;
 }
 
@@ -4175,48 +4432,114 @@ static_inline_array_value(lower_state_t *state, ir_module_t *source,
     return value;
 }
 
+static bool
+constant_bytes(LLVMTargetDataRef target, LLVMValueRef value, uint8_t *bytes,
+               uint64_t length)
+{
+    if (!value) return false;
+    if (LLVMIsNull(value) || LLVMIsUndef(value)) return true;
+    LLVMTypeRef type = LLVMTypeOf(value);
+    if (LLVMIsAConstantInt(value)) {
+        unsigned width = LLVMGetIntTypeWidth(type);
+        if (width > 64) return false;
+        uint64_t bits = LLVMConstIntGetZExtValue(value);
+        for (uint64_t b = 0; b < (width + 7) / 8 && b < length; b++)
+            bytes[b] = (uint8_t)(bits >> (8 * b));
+        return true;
+    }
+    bool record = LLVMGetTypeKind(type) == LLVMStructTypeKind;
+    if (!record && LLVMGetTypeKind(type) != LLVMArrayTypeKind) return false;
+    unsigned count = record ? LLVMCountStructElementTypes(type)
+                            : LLVMGetArrayLength(type);
+    uint64_t stride = record ? 0
+        : LLVMABISizeOfType(target, LLVMGetElementType(type));
+    for (unsigned i = 0; i < count; i++) {
+        uint64_t offset = record ? LLVMOffsetOfElement(target, type, i)
+                                 : stride * i;
+        if (offset > length || !constant_bytes(target,
+                LLVMGetAggregateElement(value, i), bytes + offset,
+                length - offset)) return false;
+    }
+    return true;
+}
+
+static bool
+static_packed_field(LLVMTargetDataRef target, LLVMValueRef value,
+                    const record_slot_t *slot, uint8_t *run)
+{
+    uint64_t size = value ? LLVMABISizeOfType(target, LLVMTypeOf(value)) : 0;
+    uint8_t *bits = size ? calloc(size, 1) : nullptr;
+    bool valid = bits && slot->width <= size * 8
+        && constant_bytes(target, value, bits, size);
+    for (uint64_t b = 0; valid && b < slot->width; b++)
+        if ((bits[b >> 3] >> (b & 7)) & 1) {
+            uint64_t at = slot->shift + b;
+            run[at >> 3] |= (uint8_t)(1u << (at & 7));
+        }
+    free(bits);
+    return valid;
+}
+
 static LLVMValueRef
 static_record_value(lower_state_t *state, ir_module_t *source, th_type *type,
                     LLVMTypeRef native, const ir_global_init_value_t *init,
                     bool constant)
 {
-    const ir_final_layout_t *layout = ir_layout_final(source, type,
-        ir_module_target(source));
-    if (!layout || LLVMGetTypeKind(native) != LLVMStructTypeKind
-        || LLVMCountStructElementTypes(native) != layout->n_members)
-        return nullptr;
-    size_t *order = calloc(layout->n_members ? layout->n_members : 1,
-                           sizeof(*order));
-    LLVMValueRef *fields = calloc(layout->n_members ? layout->n_members : 1,
-                                  sizeof(*fields));
-    bool valid = order && fields;
-    if (valid) record_layout_order(layout, order);
-    for (size_t i = 0; valid && i < layout->n_members; i++) {
-        const ir_final_member_layout_t *member = &layout->members[order[i]];
-        LLVMTypeRef field_type = LLVMStructGetTypeAtIndex(native,
-                                                          (unsigned)i);
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMTargetDataRef target = LLVMGetModuleDataLayout(state->module);
+    record_shape_t shape;
+    if (LLVMGetTypeKind(native) != LLVMStructTypeKind
+        || !record_shape_build(source, type, context, &shape)) return nullptr;
+    unsigned count = shape.n_elements;
+    LLVMValueRef *fields = calloc(count ? count : 1, sizeof(*fields));
+    uint8_t **runs = calloc(count ? count : 1, sizeof(*runs));
+    bool valid = fields && runs
+        && count == LLVMCountStructElementTypes(native);
+    for (unsigned e = 0; valid && e < count; e++)
+        if (shape.byte_runs[e]) {
+            unsigned length = LLVMGetArrayLength(shape.elements[e]);
+            runs[e] = calloc(length ? length : 1, 1);
+            valid = runs[e] != nullptr;
+        }
+    for (size_t i = 0; valid && i < shape.layout->n_members; i++) {
+        const ir_final_member_layout_t *member = &shape.layout->members[i];
+        const record_slot_t *slot = &shape.slots[i];
         const ir_global_init_value_t *item = static_record_item(init,
                                                                 member->name);
-        if (!item) {
-            fields[i] = LLVMConstNull(field_type);
+        if (!item) continue;
+        if (slot->packed) {
+            valid = static_packed_field(target, static_init_value(state,
+                source, record_member_type(&shape, member), item, constant),
+                slot, runs[slot->element]);
             continue;
         }
-        fields[i] = member->inline_element_count
+        LLVMTypeRef field_type = shape.elements[slot->element];
+        LLVMValueRef value = member->inline_element_count
             ? static_inline_array_value(state, source, member->type,
                                         field_type, item, constant)
             : static_init_value(state, source, member->type, item, constant);
-        if (fields[i] && LLVMTypeOf(fields[i]) != field_type
+        if (value && LLVMTypeOf(value) != field_type
             && LLVMGetTypeKind(field_type) == LLVMIntegerTypeKind
-            && LLVMGetTypeKind(LLVMTypeOf(fields[i])) == LLVMIntegerTypeKind
-            && LLVMGetIntTypeWidth(LLVMTypeOf(fields[i])) == 1)
-            fields[i] = LLVMConstInt(field_type,
-                LLVMConstIntGetZExtValue(fields[i]), false);
-        valid = fields[i] && LLVMTypeOf(fields[i]) == field_type;
+            && LLVMGetTypeKind(LLVMTypeOf(value)) == LLVMIntegerTypeKind
+            && LLVMGetIntTypeWidth(LLVMTypeOf(value)) == 1)
+            value = LLVMConstInt(field_type, LLVMConstIntGetZExtValue(value),
+                                 false);
+        valid = value && LLVMTypeOf(value) == field_type;
+        fields[slot->element] = value;
     }
-    LLVMValueRef record = valid ? constant_struct_like(native, fields,
-        (unsigned)layout->n_members) : nullptr;
-    free(order);
+    for (unsigned e = 0; valid && e < count; e++) {
+        if (runs[e])
+            fields[e] = LLVMConstStringInContext(context, (const char *)runs[e],
+                LLVMGetArrayLength(shape.elements[e]), true);
+        else if (!fields[e]) fields[e] = LLVMConstNull(shape.elements[e]);
+        valid = fields[e] && LLVMTypeOf(fields[e]) == shape.elements[e];
+    }
+    LLVMValueRef record = valid ? constant_struct_like(native, fields, count)
+                                : nullptr;
+    for (unsigned e = 0; runs && e < count; e++) free(runs[e]);
+    free(runs);
     free(fields);
+    record_shape_release(&shape);
     return record;
 }
 
@@ -5047,42 +5370,30 @@ store_gc_barrier(lower_state_t *state, LLVMValueRef value, th_type *type)
     if (!variant && definition
         && th_kind_of(definition) == TH_RECORD
         && LLVMGetTypeKind(LLVMTypeOf(value)) == LLVMStructTypeKind) {
-        size_t count = th_record_len(definition);
-        const ir_final_layout_t *layout = ir_layout_final(
-            state->function->owner, type,
-            ir_module_target(state->function->owner));
-        if (layout && count == layout->n_members
-            && count == LLVMCountStructElementTypes(LLVMTypeOf(value))) {
-            size_t *order = count ? calloc(count, sizeof(*order)) : nullptr;
-            if (count && !order) return false;
-            record_layout_order(layout, order);
+        record_shape_t shape;
+        if (record_shape_build(state->function->owner, type, context,
+                               &shape)) {
             bool supported = true;
-            for (size_t i = 0; i < count; i++) {
+            for (size_t i = 0; supported && i < shape.layout->n_members; i++) {
                 const ir_final_member_layout_t *member =
-                    &layout->members[order[i]];
-                if (!member->name || member->inline_element_count
-                    || !th_record_lookup(definition, member->name)) {
-                    supported = false;
-                    break;
+                    &shape.layout->members[i];
+                supported = member->name && !member->inline_element_count
+                    && th_record_lookup(definition, member->name);
+            }
+            for (size_t i = 0; supported && i < shape.layout->n_members;
+                 i++) {
+                if (shape.slots[i].packed) continue;
+                LLVMValueRef part = LLVMBuildExtractValue(state->builder,
+                    value, shape.slots[i].element, "barrier.field");
+                if (!part || !store_gc_barrier(state, part,
+                        th_record_lookup(definition,
+                            shape.layout->members[i].name))) {
+                    record_shape_release(&shape);
+                    return false;
                 }
             }
-            if (supported) {
-                for (size_t i = 0; i < count; i++) {
-                    const ir_final_member_layout_t *member =
-                        &layout->members[order[i]];
-                    th_type *field = th_record_lookup(definition,
-                        member->name);
-                    LLVMValueRef part = LLVMBuildExtractValue(state->builder,
-                        value, (unsigned)i, "barrier.field");
-                    if (!part || !store_gc_barrier(state, part, field)) {
-                        free(order);
-                        return false;
-                    }
-                }
-                free(order);
-                return true;
-            }
-            free(order);
+            record_shape_release(&shape);
+            if (supported) return true;
         }
     }
     uint32_t index = runtime_type_index(state, type);
@@ -5150,31 +5461,26 @@ gc_references_equal(lower_state_t *state, LLVMValueRef old_value,
     th_named_info(th_resolve(type), nullptr, nullptr, &variant, nullptr);
     if (variant || !definition || th_kind_of(definition) != TH_RECORD
         || LLVMGetTypeKind(native) != LLVMStructTypeKind) return nullptr;
-    size_t count = th_record_len(definition);
-    const ir_final_layout_t *layout = ir_layout_final(
-        state->function->owner, type,
-        ir_module_target(state->function->owner));
-    if (!layout || count != layout->n_members
-        || count != LLVMCountStructElementTypes(native)) return nullptr;
-    size_t *order = count ? calloc(count, sizeof(*order)) : nullptr;
-    if (count && !order) return nullptr;
-    record_layout_order(layout, order);
+    record_shape_t shape;
+    if (!record_shape_build(state->function->owner, type, context, &shape))
+        return nullptr;
     LLVMValueRef same = LLVMConstInt(LLVMInt1TypeInContext(context), 1,
                                      false);
-    for (size_t i = 0; i < count; i++) {
-        const ir_final_member_layout_t *member = &layout->members[order[i]];
+    for (size_t i = 0; i < shape.layout->n_members; i++) {
+        const ir_final_member_layout_t *member = &shape.layout->members[i];
         th_type *field = member->name && !member->inline_element_count
             ? th_record_lookup(definition, member->name) : nullptr;
         if (!field) { same = nullptr; break; }
         ir_class_t category = ir_machine_of(state->function->owner,
                                              field).class;
-        if (category == IR_CLASS_VOID || category == IR_CLASS_BOOL
-            || category == IR_CLASS_SINT || category == IR_CLASS_UINT
-            || category == IR_CLASS_FLOAT) continue;
+        if (shape.slots[i].packed || category == IR_CLASS_VOID
+            || category == IR_CLASS_BOOL || category == IR_CLASS_SINT
+            || category == IR_CLASS_UINT || category == IR_CLASS_FLOAT)
+            continue;
         LLVMValueRef old_field = LLVMBuildExtractValue(state->builder,
-            old_value, (unsigned)i, "gc.old.field");
+            old_value, shape.slots[i].element, "gc.old.field");
         LLVMValueRef new_field = LLVMBuildExtractValue(state->builder,
-            new_value, (unsigned)i, "gc.new.field");
+            new_value, shape.slots[i].element, "gc.new.field");
         LLVMValueRef field_same = old_field && new_field
             ? gc_references_equal(state, old_field, new_field, field)
             : nullptr;
@@ -5182,7 +5488,7 @@ gc_references_equal(lower_state_t *state, LLVMValueRef old_value,
         same = LLVMBuildAnd(state->builder, same, field_same,
                             "gc.same.references");
     }
-    free(order);
+    record_shape_release(&shape);
     return same;
 }
 
@@ -6809,7 +7115,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         th_type *record_type = operands[0].value
             ? th_ind_referent(operands[0].value->type) : nullptr;
         LLVMTypeRef native = nullptr;
-        unsigned member_index = 0;
+        record_slot_t member_slot = {0};
         LLVMValueRef address = lowered_value(state, operands[0].value);
         if (!record_type || !address) break;
         if (value_type(state->function->owner, record_type,
@@ -6879,8 +7185,8 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                     instruction->dest->type) : nullptr;
             return result && save_result(state, instruction, result);
         }
-        if (!record_member_index(state, record_type, operands[1].name,
-                &native, &member_index)) {
+        if (!record_member_slot(state, record_type, operands[1].name,
+                &native, &member_slot)) {
             core_buffer_t message = {0};
             ir_module_t *source = state->function->owner;
             const ir_final_layout_t *layout = ir_layout_final(source,
@@ -6904,12 +7210,18 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             return false;
         }
         result = LLVMBuildStructGEP2(state->builder, native, address,
-                                     member_index, "field.address");
-        if (uses_bitptr(state->function->owner,
-                        instruction->dest->type)) {
+                                     member_slot.element, "field.address");
+        bool bit_reference = uses_bitptr(state->function->owner,
+                                         instruction->dest->type);
+        if (member_slot.packed && !bit_reference) {
+            state->failure_detail = "packed record field needs a bit reference";
+            break;
+        }
+        if (bit_reference) {
             result = make_packed_bitptr(state, result,
-                LLVMConstNull(LLVMInt64TypeInContext(
-                    LLVMGetModuleContext(state->module))),
+                LLVMConstInt(LLVMInt64TypeInContext(
+                    LLVMGetModuleContext(state->module)),
+                    member_slot.shift, false),
                 th_ind_referent(instruction->dest->type));
             if (!result) break;
         }
@@ -7354,6 +7666,14 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             result = LLVMBuildInBoundsGEP2(state->builder, array, base,
                 &position, 1, "index.address");
         }
+        if (!value_read && !packed_width && result
+            && LLVMGetTypeKind(LLVMTypeOf(result)) == LLVMPointerTypeKind
+            && uses_bitptr(state->function->owner, instruction->dest->type)) {
+            result = make_packed_bitptr(state, result,
+                LLVMConstNull(LLVMInt64TypeInContext(context)),
+                th_ind_referent(instruction->dest->type));
+            if (!result) break;
+        }
         if (value_read) {
             LLVMTypeRef native_result = value_type(state->function->owner,
                 instruction->dest->type, context);
@@ -7705,7 +8025,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             || !instruction->dest || !operands[0].value) break;
         th_type *record_type = th_resolve(operands[0].value->type);
         LLVMTypeRef native = nullptr;
-        unsigned member_index = 0;
+        record_slot_t member_slot = {0};
         LLVMValueRef value = lowered_value(state, operands[0].value);
         LLVMContextRef context = LLVMGetModuleContext(state->module);
         if (value && LLVMTypeOf(value) == box_llvm_type(context)) {
@@ -7763,8 +8083,8 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             state->failure_detail = "record source has no lowered value";
             break;
         }
-        if (!record_member_index(state, record_type, operands[1].name,
-                                 &native, &member_index)) {
+        if (!record_member_slot(state, record_type, operands[1].name,
+                                &native, &member_slot)) {
             th_type *definition = ir_type_definition(
                 state->function->owner, record_type);
             const ir_final_layout_t *layout = ir_layout_final(
@@ -7780,18 +8100,8 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             state->failure_detail = "record source differs from its layout type";
             break;
         }
-        result = LLVMBuildExtractValue(state->builder, value, member_index,
-                                       "field.value");
-        LLVMTypeRef semantic = value_type(state->function->owner,
-            instruction->dest->type, context);
-        if (result && semantic
-            && ir_machine_of(state->function->owner,
-                instruction->dest->type).class == IR_CLASS_BOOL
-            && LLVMGetTypeKind(LLVMTypeOf(result)) == LLVMIntegerTypeKind
-            && LLVMGetIntTypeWidth(LLVMTypeOf(result)) == 8
-            && LLVMGetIntTypeWidth(semantic) == 1)
-            result = LLVMBuildTrunc(state->builder, result, semantic,
-                "field.bool.value");
+        result = record_value_get(state, value, &member_slot,
+                                  instruction->dest->type);
         if (!result || LLVMTypeOf(result) != value_type(
                 state->function->owner, instruction->dest->type,
                 LLVMGetModuleContext(state->module))) {
@@ -8042,7 +8352,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         if (uses_bitptr(state->function->owner,
                         operands[0].value->type)) {
             if (instruction->n_mods || !storage
-                || !packed_array_width(state->function->owner, storage)) break;
+                || !packed_value_width(state->function->owner, storage)) break;
             if (LLVMTypeOf(address) != bitptr_llvm_type(
                     LLVMGetModuleContext(state->module))) {
                 const ir_instr_t *source = operands[0].value->def;
@@ -8165,7 +8475,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         if (uses_bitptr(state->function->owner,
                         operands[0].value->type)) {
             if (instruction->n_mods || !storage
-                || !packed_array_width(state->function->owner, storage)
+                || !packed_value_width(state->function->owner, storage)
                 || LLVMTypeOf(address) != bitptr_llvm_type(
                     LLVMGetModuleContext(state->module)))
             {
@@ -8176,7 +8486,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                     state->function->name,
                     th_print(ir_module_types(state->function->owner),
                         operands[0].value->type),
-                    (unsigned long long)packed_array_width(
+                    (unsigned long long)packed_value_width(
                         state->function->owner, storage),
                     (int)LLVMGetTypeKind(LLVMTypeOf(address)),
                     operands[0].value->def
