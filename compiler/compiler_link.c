@@ -269,8 +269,9 @@ resolve_inferred_field_references(core_link_unit_t *link,
             bool resolved_to_receiver = existing.kind
                     == PARSE_NODE_RESOLUTION_SYMBOL
                 && existing.target.symbol
-                && existing.target.symbol->kind == PARSE_SYM_VARIABLE
-                && !existing.target.symbol->is_field
+                && (existing.target.symbol->kind == PARSE_SYM_TYPEDEF
+                    || (existing.target.symbol->kind == PARSE_SYM_VARIABLE
+                        && !existing.target.symbol->is_field))
                 && attached_symbol(analysis->grammar, unit,
                        core_tree_child(node, 0)) == existing.target.symbol;
             if (existing.kind == PARSE_NODE_RESOLUTION_SYMBOL

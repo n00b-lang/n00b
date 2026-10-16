@@ -4257,6 +4257,12 @@ builtin_package_type(parse_grammar_t *grammar, n00bb_tu_state_t *state,
         ? find_package_declaration(builtin, package_name) : nullptr;
     for (size_t i = 0; package && i < package->exports.len; i++) {
         n00bb_package_export_t *export = &package->exports.data[i];
+        if (export->symbol && core_string_eq(export->export_name, name)) {
+            parse_sym_entry_t *exported = canonical_symbol(export->symbol);
+            if (is_named_type_symbol(grammar, exported)
+                && !is_trait_type_symbol(grammar, exported)) return exported;
+            continue;
+        }
         core_string_t source = export->source_name;
         size_t leaf = source.u8_bytes;
         while (leaf && source.data[leaf - 1] != '.') leaf--;
