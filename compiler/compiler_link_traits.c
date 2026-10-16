@@ -102,6 +102,29 @@ resolve_linked_method(core_link_unit_t *link, n00bb_link_use_site_t *site,
     return symbol;
 }
 
+static bool trait_name_matches(const char *qualified,
+                               core_string_t short_name);
+
+static th_env_method_status_t
+resolve_site_method(n00bb_tu_state_t *state, n00bb_link_use_site_t *site,
+                    th_type *receiver_type, const char **trait_name,
+                    th_env_method_t *method)
+{
+    if (!receiver_type) return TH_ENV_METHOD_NOT_FOUND;
+    if (*trait_name)
+        return th_env_method_resolve(state->types, receiver_type, *trait_name,
+                                     site->dispatch_method.data, method);
+    const char *selected_trait = nullptr;
+    th_env_method_status_t status = th_env_method_resolve_by_name(
+        state->types, receiver_type, site->dispatch_method.data, method,
+        &selected_trait);
+    if (status != TH_ENV_METHOD_FOUND || !selected_trait
+        || !trait_name_matches(selected_trait, site->dispatch_trait))
+        return TH_ENV_METHOD_NOT_FOUND;
+    *trait_name = selected_trait;
+    return status;
+}
+
 static parse_sym_entry_t *
 resolve_in_place_method(core_link_unit_t *link,
                         core_translation_unit_t *unit,
@@ -962,6 +985,15 @@ validate_index_dispatch_result(parse_grammar_t *grammar,
 }
 
 static bool
+operand_unifies(th_ctx *types, th_type *parameter, th_type *operand)
+{
+    if (th_unify_probe(types, parameter, operand))
+        return th_unify_in_place(types, parameter, operand) != nullptr;
+    th_type *promoted = n00bb_dereferenced_type(types, operand);
+    return promoted && th_unify_in_place(types, parameter, promoted);
+}
+
+static bool
 validate_operator_dispatch_result(parse_grammar_t *grammar,
                                   core_translation_unit_t *unit,
                                   n00bb_tu_state_t *state,
@@ -993,8 +1025,8 @@ validate_operator_dispatch_result(parse_grammar_t *grammar,
         && th_mode_is_input_only(self->mode)
         && (unary || th_mode_is_input_only(other->mode))
         && receiver && (unary || argument) && result
-        && th_unify_in_place(state->types, self->type, receiver)
-        && (unary || th_unify_in_place(state->types, other->type, argument))
+        && operand_unifies(state->types, self->type, receiver)
+        && (unary || operand_unifies(state->types, other->type, argument))
         && th_unify_in_place(state->types, th_func_ret(signature), result);
     if (valid)
         return validate_enclosing_return_type(grammar, unit, state, site);
@@ -1602,20 +1634,16 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
                             site->dispatch_trait, site->dispatch_method)
                         : nullptr;
                 th_env_method_t method = {0};
-                th_env_method_status_t status = trait_name && receiver_type
-                    ? th_env_method_resolve(state->types, receiver_type,
-                        trait_name, site->dispatch_method.data, &method)
-                    : TH_ENV_METHOD_NOT_FOUND;
-                if (!trait_name && receiver_type) {
-                    const char *selected_trait = nullptr;
-                    status = th_env_method_resolve_by_name(state->types,
-                        receiver_type, site->dispatch_method.data, &method,
-                        &selected_trait);
-                    if (status == TH_ENV_METHOD_FOUND && selected_trait
-                        && trait_name_matches(selected_trait,
-                                              site->dispatch_trait))
-                        trait_name = selected_trait;
-                    else status = TH_ENV_METHOD_NOT_FOUND;
+                th_env_method_status_t status = resolve_site_method(state,
+                    site, receiver_type, &trait_name, &method);
+                th_type *promoted = status == TH_ENV_METHOD_NOT_FOUND
+                    && receiver_type
+                    ? n00bb_dereferenced_type(state->types, receiver_type)
+                    : nullptr;
+                if (promoted && promoted != th_resolve(receiver_type)) {
+                    status = resolve_site_method(state, site, promoted,
+                                                 &trait_name, &method);
+                    if (status == TH_ENV_METHOD_FOUND) receiver_type = promoted;
                 }
                 if (status == TH_ENV_METHOD_NOT_FOUND
                     && core_string_eq(site->dispatch_trait,

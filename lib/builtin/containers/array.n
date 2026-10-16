@@ -1,3 +1,7 @@
+func len(self: Array[`T]) -> uint {
+    return __array_length(self)
+}
+
 func copy_items(modify dst: Array[`T], dst_at: uint, src: Array[`T],
                 src_at: uint, n: uint) {
     if n == 0 {

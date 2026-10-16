@@ -43,17 +43,10 @@ unify_call_node_type(core_translation_unit_t *unit,
     th_type *materialized = n00bb_type_materialize(state->link_analysis
             ? state->link_analysis->grammar : nullptr,
         state, typed_node, actual, expected, &converted);
-    if (!materialized) {
+    if (!materialized)
         report_call_type_error(unit, diagnostic_node, state->types, actual,
                                expected);
-        return false;
-    }
-    if (!converted && typed_node && !core_tree_is_leaf(typed_node)) {
-        core_tree_node_value(typed_node).type = materialized;
-        propagate_tree_type_to_wrappers(typed_node, state->types, actual,
-                                        materialized);
-    }
-    return true;
+    return materialized != nullptr;
 }
 
 
@@ -434,6 +427,16 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
                 th_env_method_status_t method_status =
                     th_env_method_resolve_by_name(state->types,
                         receiver_type, method_name, &method, &trait_name);
+                th_type *promoted = method_status == TH_ENV_METHOD_NOT_FOUND
+                    ? n00bb_dereferenced_type(state->types, receiver_type)
+                    : nullptr;
+                if (promoted && promoted != th_resolve(receiver_type)) {
+                    method_status = th_env_method_resolve_by_name(
+                        state->types, promoted, method_name, &method,
+                        &trait_name);
+                    if (method_status == TH_ENV_METHOD_FOUND)
+                        receiver_type = promoted;
+                }
                 if (method_status == TH_ENV_METHOD_FOUND) {
                     signature = call_site_signature(call_sites, label,
                         state->types, method.signature);
@@ -497,41 +500,6 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
         }
         parse_tree_t *positional = child_nt(grammar, label->then_body,
                                             "positional-args");
-        size_t positional_capacity = positional
-            ? core_tree_num_children(positional) : 0;
-        const th_type **argument_sources = positional_capacity
-            ? core_alloc_array(const th_type *, positional_capacity) : nullptr;
-        th_type **argument_copies = positional_capacity
-            ? core_alloc_array(th_type *, positional_capacity) : nullptr;
-        if (positional_capacity && (!argument_sources || !argument_copies)) {
-            core_diagnostics_report(core_translation_unit_diagnostics(unit),
-                unit, CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0002"),
-                CORE_STRING_STATIC("could not allocate call argument types"));
-            core_free(argument_sources);
-            core_free(argument_copies);
-            continue;
-        }
-        size_t argument_source_count = 0;
-        for (size_t i = 0; positional && i < positional_capacity; i++) {
-            parse_tree_t *argument = core_tree_child(positional, i);
-            if (!nt_is(grammar, argument, "expression")) continue;
-            th_type *actual = core_tree_is_leaf(argument) ? nullptr
-                : core_tree_node_value(argument).type;
-            bool open = actual && !th_is_closed(state->types, actual)
-                && !core_tree_node_value(argument).integer_literal_origin
-                && !n00bb_node_record_literal_origin(argument);
-            argument_sources[argument_source_count++] = open ? actual : nullptr;
-        }
-        bool arguments_copied = th_type_clone_many(state->types,
-            argument_sources, argument_copies, argument_source_count);
-        if (!arguments_copied) {
-            core_diagnostics_report(core_translation_unit_diagnostics(unit),
-                unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0002"),
-                CORE_STRING_STATIC("could not copy call argument type context"));
-            core_free(argument_sources);
-            core_free(argument_copies);
-            continue;
-        }
         size_t parameter_count = th_func_nparams(signature);
         size_t argument_index = 0;
         size_t parameter_offset = member_call ? 1 : 0;
@@ -542,11 +510,8 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
                 && !core_tree_is_leaf(receiver_node)
                 ? core_tree_node_value(receiver_node).type : nullptr;
             if (!receiver || !unify_call_node_type(unit, state, label->self,
-                    receiver_node, receiver_type, receiver->type)) {
-                core_free(argument_sources);
-                core_free(argument_copies);
+                    receiver_node, receiver_type, receiver->type))
                 continue;
-            }
         }
         for (size_t i = 0; positional
              && i < core_tree_num_children(positional); i++) {
@@ -557,13 +522,9 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
                                                        parameter_index);
             if (!parameter && parameter_index >= parameter_count)
                 parameter = th_func_rest(signature);
-            if (parameter && !core_tree_is_leaf(argument)) {
-                th_type *actual = core_tree_node_value(argument).type;
-                th_type *copy = argument_copies[argument_index];
-                (void)unify_call_node_type(unit, state, label->self,
-                    copy ? nullptr : argument, copy ? copy : actual,
-                    parameter->type);
-            }
+            if (parameter && !core_tree_is_leaf(argument))
+                (void)unify_call_node_type(unit, state, label->self, argument,
+                    core_tree_node_value(argument).type, parameter->type);
             argument_index++;
         }
         core_list_t(n00bb_tree_ptr_t) arguments =
@@ -579,8 +540,6 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
                                                      parameter->type);
         }
         core_list_free(arguments);
-        core_free(argument_sources);
-        core_free(argument_copies);
         th_type *return_type = th_func_ret(signature);
         if (return_type)
             (void)unify_call_node_type(unit, state, label->self, label->self,

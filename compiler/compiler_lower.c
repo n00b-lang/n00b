@@ -4190,6 +4190,10 @@ n00bb_lower_comparison(ir_lower_context_t *context, parse_visit_t *visit,
     return (ir_lower_result_t){IR_LOWER_VALUE, either->dest};
 }
 
+static ir_value_t *n00bb_promoted_operand(ir_lower_context_t *context,
+                                          parse_tree_t *node,
+                                          ir_value_t *value, bool comparison,
+                                          ir_span_t span);
 static bool n00bb_attach_call_return_alias(ir_lower_context_t *context,
     n00bb_lower_context_t *lower, n00bb_link_analysis_t *analysis,
     parse_sym_entry_t *function, ir_value_t *const *arguments,
@@ -4621,6 +4625,14 @@ n00bb_lower_binary(ir_lower_context_t *context, parse_visit_t *visit,
                                "could not lower nil equality");
         return (ir_lower_result_t){IR_LOWER_VALUE, same->dest};
     }
+    ir_value_t *promoted[2] = {
+        n00bb_promoted_operand(context, core_tree_child(visit->node, 0),
+                               operands[0], comparison, span),
+        n00bb_promoted_operand(context, core_tree_child(visit->node, 2),
+                               operands[1], comparison, span),
+    };
+    if (!promoted[0] || !promoted[1])
+        return (ir_lower_result_t){IR_LOWER_FAILED, nullptr};
     n00bb_link_use_site_t *site = caller
         ? link_use_site_for_node(caller, visit->node) : nullptr;
     if (site && site->operator_dispatch
@@ -4628,11 +4640,11 @@ n00bb_lower_binary(ir_lower_context_t *context, parse_visit_t *visit,
         return comparison
             ? n00bb_lower_comparison(context, visit, operands,
                                      result_type, span, spelling)
-            : n00bb_lower_operator_method(context, visit, operands, 2,
+            : n00bb_lower_operator_method(context, visit, promoted, 2,
                                           result_type, span);
 
-    ir_value_t *left = operands[0];
-    ir_value_t *right = operands[1];
+    ir_value_t *left = promoted[0];
+    ir_value_t *right = promoted[1];
     th_type *left_value = n00bb_operand_value_type(left->type, right->type,
                                                    comparison);
     th_type *right_value = n00bb_operand_value_type(right->type, left->type,
@@ -8751,6 +8763,10 @@ n00bb_mark_constructor_lvalues(ir_lower_context_t *context,
     return ok;
 }
 
+static ir_value_t *n00bb_promote_option(ir_lower_context_t *context,
+                                        parse_tree_t *node, ir_value_t *value,
+                                        th_type *item, ir_span_t span);
+
 static ir_lower_result_t
 n00bb_lower_module_member(ir_lower_context_t *context, parse_visit_t *visit,
                           ir_value_t *const *operands, size_t operand_count,
@@ -8859,6 +8875,12 @@ n00bb_lower_module_member(ir_lower_context_t *context, parse_visit_t *visit,
             base = ir_lower_bound_value(context, base_symbol);
         if (!base || !n00bb_check_phase_read(context, visit, true, nullptr))
             return (ir_lower_result_t){IR_LOWER_FAILED, nullptr};
+        th_type *option_item = nullptr;
+        if (n00bb_option_type_element(base->type, &option_item)) {
+            base = n00bb_promote_option(context, base_node, base, option_item,
+                                        span);
+            if (!base) return (ir_lower_result_t){IR_LOWER_FAILED, nullptr};
+        }
         if (th_kind_of(th_resolve(base->type)) == TH_INDIRECTION
             || n00bb_reference_definition(ir_module_types(context->module),
                                           base->type)) {
@@ -10164,6 +10186,51 @@ n00bb_union_admits(ir_module_t *module, th_type *target, th_type *value)
     return false;
 }
 
+static bool n00bb_option_path_proven(n00bb_lower_context_t *lower,
+                                     parse_grammar_t *grammar,
+                                     parse_tree_t *receiver);
+
+static bool
+n00bb_option_value_proven(n00bb_lower_context_t *lower,
+                          parse_grammar_t *grammar, parse_tree_t *value)
+{
+    if (!lower || !grammar || !value) return false;
+    parse_sym_entry_t *symbol = call_receiver_symbol(grammar, lower->unit,
+                                                     value);
+    return parse_sym_binding(symbol,
+               CORE_STRING_STATIC("n00bb.option-set-element"))
+        || n00bb_option_path_proven(lower, grammar, value);
+}
+
+static ir_value_t *
+n00bb_promote_option(ir_lower_context_t *context, parse_tree_t *node,
+                     ir_value_t *value, th_type *item, ir_span_t span)
+{
+    n00bb_lower_context_t *lower = context->user;
+    if (!n00bb_option_value_proven(lower, lower ? lower->grammar : nullptr,
+                                   node)) {
+        lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
+            "an option's value requires it to be proven non-nil by the "
+            "active branch");
+        return nullptr;
+    }
+    ir_value_t *promoted = n00bb_emit_wrapping(context, IR_OP_OPTION_GET,
+                                               value, item, span);
+    return promoted && n00bb_set_reference_access(lower->ir_context,
+                                                  promoted, item)
+        ? promoted : nullptr;
+}
+
+static ir_value_t *
+n00bb_promoted_operand(ir_lower_context_t *context, parse_tree_t *node,
+                       ir_value_t *value, bool comparison, ir_span_t span)
+{
+    th_type *item = nullptr;
+    if (comparison || !value || !n00bb_option_type_element(value->type, &item))
+        return value;
+    return n00bb_promote_option(context, node, value, item, span);
+}
+
 static ir_value_t *
 n00bb_materialize(ir_lower_context_t *context, parse_tree_t *node,
                   ir_value_t *value, th_type *target, ir_span_t span)
@@ -10176,6 +10243,16 @@ n00bb_materialize(ir_lower_context_t *context, parse_tree_t *node,
         ir_value_t *loaded = ir_lower_value_as(context, value, referent, span);
         return loaded ? n00bb_materialize(context, node, loaded, target, span)
                       : nullptr;
+    }
+    th_type *option_item = nullptr;
+    if (n00bb_option_type_element(value->type, &option_item)
+        && !n00bb_option_type_element(target, nullptr)
+        && !n00bb_union_admits(context->module, target, value->type)) {
+        ir_value_t *promoted = n00bb_promote_option(context, node, value,
+                                                    option_item, span);
+        return promoted ? n00bb_materialize(context, node, promoted, target,
+                                            span)
+                        : nullptr;
     }
     th_type *atomic_element = n00bb_atomic_element_type(target);
     if (atomic_element && !n00bb_atomic_element_type(value->type)) {
@@ -10271,9 +10348,6 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
             ? core_tree_child(call_node, 0) : nullptr)
         : member && core_tree_num_children(member)
             ? core_tree_child(member, 0) : nullptr;
-    parse_sym_entry_t *receiver_symbol = receiver_node && lower
-        ? call_receiver_symbol(visit->grammar, lower->unit, receiver_node)
-        : nullptr;
     bool member_call = member
         && !call_receiver_is_module(visit->grammar, lower->unit,
                                     receiver_node);
@@ -10329,7 +10403,8 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         parse_tree_t *subscript = child_nt(visit->grammar, contents,
                                            "expression");
         th_type *receiver_type = receiver_node
-            ? th_resolve(core_tree_node_value(receiver_node).type) : nullptr;
+            ? n00bb_dereferenced_type(ir_module_types(context->module),
+                core_tree_node_value(receiver_node).type) : nullptr;
         th_type *element = receiver_type
             && th_kind_of(receiver_type) == TH_SEQUENCE
             ? th_seq_elem(receiver_type) : nullptr;
@@ -10360,6 +10435,8 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                 ? n00bb_emit_indirect_read(context, receiver_address,
                     receiver_type, span) : nullptr;
         }
+        receiver = n00bb_materialize(context, receiver_node, receiver,
+                                     receiver_type, span);
         ir_value_t *index = subscript
             ? ir_lower_node_value(context, subscript) : nullptr;
         if (!receiver || !index || !element
@@ -10415,11 +10492,10 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         symbol, CORE_STRING_STATIC("n00bb.builtin-trait-method"));
     if (option_builtin
         && core_string_eq(symbol->name, CORE_STRING_STATIC("__option_get"))
-        && !parse_sym_binding(receiver_symbol,
-            CORE_STRING_STATIC("n00bb.option-set-element"))
-        && !n00bb_option_path_proven(lower, visit->grammar, receiver_node))
+        && !n00bb_option_value_proven(lower, visit->grammar, receiver_node))
         return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
-            "option.get requires a value proven non-nil by the active branch");
+            "an option's value requires it to be proven non-nil by the "
+            "active branch");
     bool no_function_body = fd_write_builtin || repr_default_builtin
         || native_builtin
         || reference_builtin || byte_offset_builtin || byte_diff_builtin
@@ -12854,7 +12930,8 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
         ir_value_t *index_value = index_arg
             ? ir_lower_node_value(context, index_arg) : nullptr;
         th_type *receiver_type = receiver_node
-            ? th_resolve(core_tree_node_value(receiver_node).type) : nullptr;
+            ? n00bb_dereferenced_type(ir_module_types(context->module),
+                core_tree_node_value(receiver_node).type) : nullptr;
         th_type *element = receiver_type
             && th_kind_of(receiver_type) == TH_SEQUENCE
             ? th_seq_elem(receiver_type) : nullptr;
@@ -17468,7 +17545,9 @@ n00bb_option_path_stable(n00bb_lower_context_t *lower,
                               core_tree_child(access, 0))) {
         th_type *base = th_resolve(core_tree_node_value(
             core_tree_child(access, 0)).type);
-        if (!base || n00bb_dereferenced_type(state->types, base) != base)
+        th_type *definition = n00bb_reference_definition(state->types, base);
+        if (!base || th_kind_of(definition ? definition : base)
+                         == TH_INDIRECTION)
             return false;
     }
     parse_sym_entry_t *root = path->root;
