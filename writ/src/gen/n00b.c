@@ -3140,6 +3140,9 @@ emit_export_outputs(const n00b_t *g, writ_emit_t *emit, const wrapper_t *w, cons
             }
             writ_emit_line(emit, ")");
             return;
+        } else if (item->shape == WRIT_SHAPE_SCALAR && !whole.length) {
+            writ_emit_line(emit, optional != WRIT_PLAN_NONE ? "return cast[i64]result.get()" : "return cast[i64]result");
+            return;
         } else if (item->shape == WRIT_SHAPE_BYTES) {
             writ_emit_line(emit, optional != WRIT_PLAN_NONE ? "var bytes: Array[u8] = result.get()"
                                                             : "var bytes: Array[u8] = result");
