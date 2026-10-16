@@ -748,7 +748,7 @@ test(
 )
 
 foreach string_probe : ['core_probe', 'rstr_probe', 'raw_literal_probe',
-                        'encoding_probe']
+                        'encoding_probe', 'span_gc_probe']
     test(
         'string-' + string_probe.replace('_', '-'),
         find_program('sh'),

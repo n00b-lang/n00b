@@ -140,6 +140,9 @@ func scan_stack(marker: Ref[internal.gc.core.Marker], sp: Ref[byte],
                                            frame_info.get())
             }
         }
+        if mapped {
+            scan_callee_saved_spills(marker, start, frame.get())
+        }
         if !mapped {
             scan_words(marker, start, frame.get())
         }
@@ -153,6 +156,20 @@ func scan_stack(marker: Ref[internal.gc.core.Marker], sp: Ref[byte],
     }
     if limit > __abi_ref_address(start) {
         scan_words(marker, start, high)
+    }
+}
+
+const callee_saved_spill_words: uint = 18
+
+func scan_callee_saved_spills(marker: Ref[internal.gc.core.Marker],
+                              low: Ref[byte], fp: Ref[byte]) {
+    let window: uint = callee_saved_spill_words * stack_word_width()
+    let span:   uint = __abi_ref_address(fp) - __abi_ref_address(low)
+    if span <= window {
+        scan_words(marker, low, fp)
+    }
+    else {
+        scan_words(marker, __gc_byte_offset(fp, -cast[i128](window)), fp)
     }
 }
 
