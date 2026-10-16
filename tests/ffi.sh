@@ -77,6 +77,11 @@ if "$tmp/trip_serve" 2>"$tmp/trip_serve.err"; then
     exit 1
 fi
 grep -q 'panic: tripped' "$tmp/trip_serve.err"
+fails_with provide_mismatch 'provide_mismatch.n00b:11:5'
+if grep -q 'LANTERN-L00' "$tmp/provide_mismatch.log"; then
+    cat "$tmp/provide_mismatch.log" >&2
+    exit 1
+fi
 
 for marker in marker-literal-5be1 marker-contract-5be1; do
     for binary in constants use_path use_search; do

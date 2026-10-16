@@ -1,0 +1,13 @@
+func trip(depth: string) -> i32 {
+    return 0
+}
+
+const tripx = [-
+library trip
+
+fn trip(depth: c_int) -> c_int
+
+binding export {
+    provide trip = "provide_mismatch.trip"
+}
+-]'ffi

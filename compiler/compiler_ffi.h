@@ -18,7 +18,8 @@ void             n00bb_ffi_free(n00bb_ffi_t *ffi);
 bool             n00bb_ffi_add_contract_dir(n00bb_ffi_t *ffi, core_string_t dir);
 bool             n00bb_ffi_generate(void *ffi, core_translation_unit_t *unit, core_string_t name,
                                     core_string_t module, n00bb_literal_origin_t origin, core_string_t text,
-                                    core_buffer_t *source, n00bb_native_declarations_t *natives);
+                                    core_buffer_t *source, n00bb_native_declarations_t *natives,
+                                    n00bb_line_origins_t *origins);
 size_t           n00bb_ffi_input_count(const n00bb_ffi_t *ffi);
 core_string_t    n00bb_ffi_input_at(const n00bb_ffi_t *ffi, size_t index);
 bool             n00bb_ffi_write_headers(const n00bb_ffi_t *ffi, core_string_t output);

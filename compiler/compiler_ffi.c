@@ -576,10 +576,52 @@ keep_transport(n00bb_ffi_t *ffi, core_translation_unit_t *unit, n00bb_literal_or
     return ok;
 }
 
+static const char *
+last_of(const char *start, const char *stop, char wanted)
+{
+    while (stop > start && stop[-1] != wanted) {
+        stop--;
+    }
+    return stop > start ? stop - 1 : nullptr;
+}
+
+static bool
+keep_origins(core_string_t map, n00bb_line_origins_t *origins)
+{
+    size_t lines = 0;
+    for (size_t i = 0; i < map.u8_bytes; i++) {
+        lines += map.data[i] == '\n';
+    }
+    origins->items = lines ? core_alloc_array(n00bb_line_origin_t, lines) : nullptr;
+    if (lines && !origins->items) {
+        return false;
+    }
+    const char *cursor = map.data;
+    const char *end = map.data + map.u8_bytes;
+    while (cursor < end) {
+        const char *newline = memchr(cursor, '\n', (size_t)(end - cursor));
+        const char *stop = newline ? newline : end;
+        const char *place = memchr(cursor, '\t', (size_t)(stop - cursor));
+        const char *name = place ? last_of(place + 1, stop, '\t') : nullptr;
+        const char *column = name ? last_of(place + 1, name, ':') : nullptr;
+        const char *line = column ? last_of(place + 1, column, ':') : nullptr;
+        if (line) {
+            origins->items[origins->count++] = (n00bb_line_origin_t){
+                .line          = (uint32_t)strtoul(cursor, nullptr, 10),
+                .path          = core_string_dup(core_string_borrow(place + 1, (size_t)(line - place - 1))),
+                .origin_line   = (uint32_t)strtoul(line + 1, nullptr, 10),
+                .origin_column = (uint32_t)strtoul(column + 1, nullptr, 10),
+            };
+        }
+        cursor = stop + 1;
+    }
+    return true;
+}
+
 static bool
 generate_locked(n00bb_ffi_t *ffi, core_translation_unit_t *unit, core_string_t name, core_string_t module,
                 n00bb_literal_origin_t origin, core_string_t text, core_buffer_t *source,
-                n00bb_native_declarations_t *natives)
+                n00bb_native_declarations_t *natives, n00bb_line_origins_t *origins)
 {
     size_t first = writ_diag_count(ffi->session);
     writ_unit_t *literal = writ_unit_new(ffi->session);
@@ -622,7 +664,9 @@ generate_locked(n00bb_ffi_t *ffi, core_translation_unit_t *unit, core_string_t n
         ffi_output_t *file = &capture.files.data[i];
         if (ends_with(file->name, ".n")) {
             core_buffer_append(source, file->contents.data, file->contents.u8_bytes);
-        } else if (!ends_with(file->name, ".map")) {
+        } else if (ends_with(file->name, ".map")) {
+            ok = keep_origins(file->contents, origins);
+        } else {
             core_list_push(ffi->shims, *file);
             *file = (ffi_output_t){0};
         }
@@ -668,17 +712,17 @@ add_package_contracts(n00bb_ffi_t *ffi, core_translation_unit_t *unit)
 bool
 n00bb_ffi_generate(void *context, core_translation_unit_t *unit, core_string_t name, core_string_t module,
                    n00bb_literal_origin_t origin, core_string_t text, core_buffer_t *source,
-                   n00bb_native_declarations_t *natives)
+                   n00bb_native_declarations_t *natives, n00bb_line_origins_t *origins)
 {
     n00bb_ffi_t *ffi = context;
-    if (!ffi || !unit || !source || !natives) {
+    if (!ffi || !unit || !source || !natives || !origins) {
         return false;
     }
     pthread_mutex_lock(&ffi->lock);
     bool ok = open_session(ffi);
     if (ok) {
         add_package_contracts(ffi, unit);
-        ok = generate_locked(ffi, unit, name, module, origin, text, source, natives);
+        ok = generate_locked(ffi, unit, name, module, origin, text, source, natives, origins);
     }
     pthread_mutex_unlock(&ffi->lock);
     return ok;

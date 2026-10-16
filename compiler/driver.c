@@ -28,6 +28,7 @@
 
 #include "lib/alloc.h"
 #include "lib/buffer.h"
+#include "lib/diagnostic.h"
 #include "lib/hash.h"
 #include "lib/list.h"
 #include "lib/snapshot_inventory.h"
@@ -61,6 +62,7 @@ typedef struct {
     core_string_t package_namespace;
     bool is_default_package;
     n00bb_native_declarations_t natives;
+    n00bb_line_origins_t origins;
 } n00bb_generated_module_t;
 core_list_decl(n00bb_generated_module_t);
 
@@ -426,6 +428,7 @@ n00bb_resolver_free(n00bb_resolver_t *resolver)
         core_free(resolver->generated.data[i].package.data);
         core_free(resolver->generated.data[i].package_namespace.data);
         n00bb_native_declarations_release(&resolver->generated.data[i].natives);
+        n00bb_line_origins_release(&resolver->generated.data[i].origins);
     }
     core_list_free(resolver->generated);
     pthread_mutex_destroy(&resolver->generated_lock);
@@ -435,12 +438,14 @@ n00bb_resolver_free(n00bb_resolver_t *resolver)
 bool
 n00bb_resolver_add_generated(n00bb_resolver_t *resolver, core_string_t identifier, core_string_t text,
                              const core_translation_unit_t *owner,
-                             n00bb_native_declarations_t natives)
+                             n00bb_native_declarations_t natives,
+                             n00bb_line_origins_t origins)
 {
     const n00bb_source_origin_t *origin = owner
         ? core_source_file_user_data(&owner->source) : nullptr;
     if (!resolver || !identifier.u8_bytes || !origin) {
         n00bb_native_declarations_release(&natives);
+        n00bb_line_origins_release(&origins);
         return false;
     }
     pthread_mutex_lock(&resolver->generated_lock);
@@ -451,6 +456,7 @@ n00bb_resolver_add_generated(n00bb_resolver_t *resolver, core_string_t identifie
         .package_namespace = core_string_dup(origin->package_namespace),
         .is_default_package = origin->is_default_package,
         .natives = natives,
+        .origins = origins,
     }));
     pthread_mutex_unlock(&resolver->generated_lock);
     return true;
@@ -467,6 +473,56 @@ n00bb_native_declarations_release(n00bb_native_declarations_t *declarations)
     }
     core_free(declarations->items);
     *declarations = (n00bb_native_declarations_t){0};
+}
+
+void
+n00bb_line_origins_release(n00bb_line_origins_t *origins)
+{
+    if (!origins) return;
+    for (size_t i = 0; i < origins->count; i++)
+        core_free(origins->items[i].path.data);
+    core_free(origins->items);
+    *origins = (n00bb_line_origins_t){0};
+}
+
+static const n00bb_line_origin_t *
+generated_origin(const n00bb_generated_module_t *module, core_string_t path,
+                 uint32_t line)
+{
+    size_t prefix = strlen("<generated:");
+    if (path.u8_bytes != prefix + module->identifier.u8_bytes + 1
+        || memcmp(path.data, "<generated:", prefix)
+        || memcmp(path.data + prefix, module->identifier.data,
+                  module->identifier.u8_bytes)) return nullptr;
+    const n00bb_line_origin_t *nearest = nullptr;
+    for (size_t i = 0; i < module->origins.count; i++)
+        if (module->origins.items[i].line <= line
+            && (!nearest || module->origins.items[i].line > nearest->line))
+            nearest = &module->origins.items[i];
+    return nearest;
+}
+
+void
+n00bb_resolver_remap_diagnostics(n00bb_resolver_t *resolver,
+                                 core_diagnostics_t *diagnostics)
+{
+    if (!resolver || !diagnostics) return;
+    pthread_mutex_lock(&resolver->generated_lock);
+    for (size_t d = 0; d < core_diagnostics_count(diagnostics); d++) {
+        const core_diagnostic_t *diagnostic =
+            core_diagnostics_at(diagnostics, d);
+        if (!diagnostic->location.has_location) continue;
+        const n00bb_line_origin_t *origin = nullptr;
+        for (size_t m = 0; !origin && m < resolver->generated.len; m++)
+            origin = generated_origin(&resolver->generated.data[m],
+                diagnostic->path, diagnostic->location.line);
+        if (!origin) continue;
+        core_diagnostic_set_path(diagnostics, d, origin->path);
+        core_diagnostic_set_location(diagnostics, d, (core_diag_location_t){
+            origin->origin_line, origin->origin_column,
+            origin->origin_line, origin->origin_column, true});
+    }
+    pthread_mutex_unlock(&resolver->generated_lock);
 }
 
 bool

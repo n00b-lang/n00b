@@ -1949,9 +1949,12 @@ load_module_literal(void *opaque, parse_grammar_t *grammar,
     core_string_t id = core_string_borrow(identifier.data, identifier.byte_len);
     core_buffer_t source = {0};
     n00bb_native_declarations_t natives = {0};
+    n00bb_line_origins_t origins = {0};
     if (!generator->generate(generator->context, importer, name, id,
-            literal_origin(importer, token), text, &source, &natives)) {
+            literal_origin(importer, token), text, &source, &natives,
+            &origins)) {
         n00bb_native_declarations_release(&natives);
+        n00bb_line_origins_release(&origins);
         core_buffer_release(&source);
         core_buffer_release(&identifier);
         return false;
@@ -1959,7 +1962,7 @@ load_module_literal(void *opaque, parse_grammar_t *grammar,
     core_module_spec_t module = {0};
     bool ok = n00bb_resolver_add_generated(driver->resolver, id,
                   core_string_borrow(source.data ? source.data : "", source.byte_len),
-                  importer, natives)
+                  importer, natives, origins)
         && core_module_spec_init(&module, id)
         && load_import_module(driver, grammar, literal, importer, &module,
                identifier.data, nullptr, module_out, tree_out)
@@ -2340,6 +2343,7 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
         && analysis_out && *analysis_out;
     if (!diagnostics_have_outer_owner && core_diagnostics_count(diags)) {
         fflush(stdout);
+        n00bb_resolver_remap_diagnostics(resolver, diags);
         char *text = core_diagnostics_render_text(diags);
         if (text) { fputs(text, stderr); core_free(text); }
     }
@@ -3875,6 +3879,7 @@ n00bb_compiler_main(int argc, char **argv)
     core_free(linked_interfaces);
     core_free(native_roots);
     if (core_diagnostics_count(cli_diagnostics)) {
+        n00bb_resolver_remap_diagnostics(resolver, cli_diagnostics);
         char *text = core_diagnostics_render_text(cli_diagnostics);
         if (text) { fputs(text, stderr); core_free(text); }
     }
