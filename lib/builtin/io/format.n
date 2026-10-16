@@ -1,0 +1,319 @@
+import hex
+import string.core
+
+record Repr_Options {
+    min_width:  i16
+    precision:  i16
+    left_align: bool
+    zero_pad:   bool
+    pad:        bool
+    all_caps:   bool
+    title_case: bool
+    literal:    bool
+}
+
+enum Format_Num_Sep {
+    none = 0, commas = 1, uscore = 2
+}
+
+enum Format_Plus {
+    never = 0, plus = 1, as_pad = 2
+}
+
+record Int_Format {
+    common:      Repr_Options
+    sep_policy:  Format_Num_Sep
+    plus_policy: Format_Plus
+    is_signed:   bool
+    hex:         bool
+    add_prefix:  bool
+}
+
+record String_Repr {
+    common: Repr_Options
+    hex:    bool
+}
+
+public const default_repr_options: Repr_Options = (
+    min_width = -1, precision = -1, left_align = false, zero_pad = false,
+    pad = false, all_caps = false, title_case = true, literal = false)
+
+private const intbuf_len: uint = 54
+private const hexbuf_len: uint = 36
+
+private func write_raw(fd: int, bytes: Array[u8], at: uint, n: uint)
+    -> uint fail: int {
+    if n == 0 {
+        return 0
+    }
+    let whole: string = string.core.from_raw(bytes, cast[int] (at + n), copy = false,
+                                 encoding = string.core.Str_Encoding.binary)
+    let wrote: i32 = __fd_write(cast[i32] fd,
+        string.core.byte_slice(whole, cast[int] at, cast[int] (at + n)))
+    if wrote < 0 {
+        fail cast[int] wrote
+    }
+    return n
+}
+
+private func push_front(modify buf: Array[u8], modify p: uint, b: u8) {
+    p -= 1
+    buf[p] = b
+}
+
+private func buffer_len(base: uint, spec: Int_Format) -> uint {
+    if spec.common.min_width > 0 {
+        return base + 2 * cast[uint] spec.common.min_width
+    }
+    return base
+}
+
+private func string_bytes(s: string) -> Array[u8] {
+    let n: uint = string.core.byte_len(s)
+    var bytes: Array[u8] = new[Array[u8]](cast[int] n)
+    var i: uint = 0
+    while i < n {
+        bytes[i] = string.core.byte_at(s, i)
+        i += 1
+    }
+    return bytes
+}
+
+func format_byte(fd: int, c: u8) -> uint fail: int {
+    var buf: Array[u8] = new[Array[u8]](1)
+    buf[0] = c
+    write_raw(fd, buf, 0, 1)!
+    return 1
+}
+
+private func write_escape(fd: int, c: u8) -> uint fail: int {
+    var out: uint = 0
+    out += format_byte(fd, 0x5c)!
+    out += format_byte(fd, c)!
+    return out
+}
+
+private func write_byte_hex(fd: int, c: u8, escaped: bool) -> uint fail: int {
+    var buf: Array[u8] = new[Array[u8]](4)
+    var len: uint = 0
+    if escaped {
+        buf[len] = 0x5c
+        len += 1
+        buf[len] = 0x78
+        len += 1
+    }
+    let map: Array[u8] = hex.hex_map_lower()
+    buf[len] = map[c >> 4]
+    len += 1
+    buf[len] = map[c & 0x0f]
+    len += 1
+    write_raw(fd, buf, 0, len)!
+    return len
+}
+
+func format_bytes(fd: int, bytes: Array[u8], len: uint,
+                  common: Repr_Options? = nil, byte_literal: bool = false,
+                  force_hex: bool = false) -> uint fail: int {
+    let fmt: Repr_Options = common.get_or_else(default_repr_options)
+    var out: uint = 0
+    if !fmt.literal and !force_hex {
+        write_raw(fd, bytes, 0, len)!
+        return len
+    }
+    if !fmt.literal and force_hex {
+        var h: uint = 0
+        while h < len {
+            out += write_byte_hex(fd, bytes[h], false)!
+            h += 1
+        }
+        return out
+    }
+    if byte_literal {
+        out += format_byte(fd, 0x62)!
+    }
+    out += format_byte(fd, 0x22)!
+    var i: uint = 0
+    while i < len {
+        let c: u8 = bytes[i]
+        switch c {
+            case 0x5c, 0x22 {
+                out += write_escape(fd, c)!
+            }
+            case 0x0a {
+                out += write_escape(fd, 0x6e)!
+            }
+            case 0x0d {
+                out += write_escape(fd, 0x72)!
+            }
+            case 0x09 {
+                out += write_escape(fd, 0x74)!
+            }
+            else {
+                if force_hex or c < 0x20 or (byte_literal and c > 0x7e) {
+                    out += write_byte_hex(fd, c, true)!
+                }
+                else {
+                    out += format_byte(fd, c)!
+                }
+            }
+        }
+        i += 1
+    }
+    out += format_byte(fd, 0x22)!
+    return out
+}
+
+func format_string(fd: int, s: string, common: Repr_Options? = nil)
+    -> uint fail: int {
+    return format_bytes(fd, string_bytes(s), string.core.byte_len(s), common)!
+}
+
+private func format_hex(n: u128, spec: Int_Format, fd: int, neg: bool,
+                        ptr_style: bool) -> uint fail: int {
+    var value: u128 = n
+    let size: uint = buffer_len(hexbuf_len, spec)
+    var hbuf: Array[u8] = new[Array[u8]](cast[int] size)
+    let end: uint = size - 1
+    var p: uint = end
+    var map: Array[u8] = hex.hex_map_lower()
+    if spec.common.all_caps {
+        map = hex.hex_map_upper()
+    }
+    var w: uint = 0
+    if value == 0 {
+        push_front(hbuf, p, 0x30)
+        push_front(hbuf, p, 0x30)
+        w = 2
+    }
+    while value != 0 {
+        let c: u8 = cast[u8] (value & 0x0f)
+        value = value >> 4
+        push_front(hbuf, p, map[c])
+        w += 1
+    }
+    if spec.add_prefix {
+        if ptr_style {
+            w += 1
+        }
+        else {
+            w += 2
+        }
+    }
+    if neg or spec.plus_policy != Format_Plus.never {
+        w += 1
+    }
+    if spec.common.min_width > 0 and w < cast[uint] spec.common.min_width {
+        var pad: u8 = 0x20
+        if spec.common.zero_pad {
+            pad = 0x30
+        }
+        let diff: int = cast[int] spec.common.min_width - cast[int] w
+        var i: int = 0
+        while i < diff {
+            push_front(hbuf, p, pad)
+            i += 1
+        }
+    }
+    if spec.add_prefix {
+        if ptr_style {
+            push_front(hbuf, p, 0x40)
+        }
+        else {
+            if spec.common.all_caps {
+                push_front(hbuf, p, 0x58)
+            }
+            else {
+                push_front(hbuf, p, 0x78)
+            }
+            push_front(hbuf, p, 0x30)
+        }
+    }
+    if neg or spec.plus_policy != Format_Plus.never {
+        if neg {
+            push_front(hbuf, p, 0x2d)
+        }
+        elif spec.plus_policy == Format_Plus.as_pad {
+            push_front(hbuf, p, 0x20)
+        }
+        else {
+            push_front(hbuf, p, 0x2b)
+        }
+    }
+    write_raw(fd, hbuf, p, end - p)!
+    return w
+}
+
+private func u128_divmod10(n: u128, out rem_out: u8) -> u128 {
+    var q: u128 = 0
+    var r: u8 = 0
+    var i: uint = 128
+    while i > 0 {
+        i -= 1
+        r = (r << 1) | cast[u8] ((n >> i) & 1)
+        if r >= 10 {
+            r -= 10
+            q = q | (cast[u128] 1 << i)
+        }
+    }
+    rem_out = r
+    return q
+}
+
+private func format_dec(n: u128, spec: Int_Format, fd: int, neg: bool)
+    -> uint fail: int {
+    var value: u128 = n
+    let size: uint = buffer_len(intbuf_len, spec)
+    var buf: Array[u8] = new[Array[u8]](cast[int] size)
+    let end: uint = size - 1
+    var p: uint = end
+    var w: int = 0
+    if value == 0 {
+        push_front(buf, p, 0x30)
+        w = 1
+    }
+    if neg or spec.plus_policy != Format_Plus.never {
+        w += 1
+    }
+    while value != 0 or w < cast[int] spec.common.min_width {
+        if w != 0 and w % 3 == 0 {
+            switch spec.sep_policy {
+                case Format_Num_Sep.commas {
+                    push_front(buf, p, 0x2c)
+                }
+                case Format_Num_Sep.uscore {
+                    push_front(buf, p, 0x5f)
+                }
+                else {
+                }
+            }
+        }
+        var rem: u8 = 0
+        value = u128_divmod10(value, rem)
+        push_front(buf, p, 0x30 + rem)
+        w += 1
+    }
+    if neg {
+        push_front(buf, p, 0x2d)
+    }
+    else {
+        switch spec.plus_policy {
+            case Format_Plus.plus {
+                push_front(buf, p, 0x2b)
+            }
+            case Format_Plus.as_pad {
+                push_front(buf, p, 0x20)
+            }
+            else {
+            }
+        }
+    }
+    write_raw(fd, buf, p, end - p)!
+    return cast[uint] w
+}
+
+func format_uint(n: u128, spec: Int_Format, fd: int) -> uint fail: int {
+    if spec.hex {
+        return format_hex(n, spec, fd, false, false)!
+    }
+    return format_dec(n, spec, fd, false)!
+}

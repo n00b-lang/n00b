@@ -1,4 +1,5 @@
 import containers.list
+import hex
 
 private record String_Words layout(c) {
     data:     Ref[byte]
@@ -513,26 +514,19 @@ func find_bytes(self: string, sub: string, start: uint? = 0,
     return nil
 }
 
-private func hex_map_lower() -> Array[u8] {
-    let table: Array[u8] = [
-    0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37,
-    0x38, 0x39, 0x61, 0x62, 0x63, 0x64, 0x65, 0x66,
-]'array
-    return table
-}
 
 func to_hex(self: string) -> string {
     let base: string = text(self)
     let len: uint = __string_byte_len(base)
     let hex_len: uint = len * 2
     var data: Array[u8] = new[Array[u8]](cast[int] hex_len)
-    let hex: Array[u8] = hex_map_lower()
+    let map: Array[u8] = hex.hex_map_lower()
     var p: uint = 0
     var i: uint = 0
     while i < len {
         let c: u8 = __string_byte(base, i)
-        data[p] = hex[c >> 4]
-        data[p + 1] = hex[c & 0x0f]
+        data[p] = map[c >> 4]
+        data[p + 1] = map[c & 0x0f]
         p += 2
         i += 1
     }
