@@ -968,6 +968,11 @@ register_builtin_symbols(parse_annot_result_t *annotations,
         && register_builtin_native_function(symtab, types, nil_type,
             "__ffi_release", "n00b_ffi_release", nil_type,
             release_arguments, 1);
+    th_type *unwind_arguments[] = {th_name(types, "uint")};
+    borrow_registered = borrow_registered
+        && register_builtin_native_function(symtab, types, nil_type,
+            "__ffi_unwind_jump", "n00b_ffi_unwind_jump", nil_type,
+            unwind_arguments, 1);
     if (saved)
         parse_symtab_enter_scope(symtab, CORE_STRING_STATIC("builtin"),
                                  saved);

@@ -25,9 +25,27 @@ var ffi_callbacks: List[Ffi_Callback_Entry] = new[List[Ffi_Callback_Entry]]()
 var ffi_free_callbacks: List[int] = new[List[int]]()
 var ffi_holds: List[Ffi_Hold] = new[List[Ffi_Hold]]()
 var ffi_hold_groups: u64 = 0
+thread var ffi_unwind_top: uint = 0
 
 litmod<fence> ffi(source: string) -> nil fail: string {
     fail "an 'ffi literal is bound by the compiler"
+}
+
+func __ffi_enter(buffer: uint) -> uint {
+    let previous = ffi_unwind_top
+    ffi_unwind_top = buffer
+    return previous
+}
+
+func __ffi_leave(previous: uint) {
+    ffi_unwind_top = previous
+}
+
+func __ffi_panic_hook() {
+    let target = ffi_unwind_top
+    if target != 0 {
+        __ffi_unwind_jump(target)
+    }
 }
 
 func __ffi_callback_register(value: Any, invoke: Ref[(Any, uint, uint) -> nil],
