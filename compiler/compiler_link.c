@@ -751,7 +751,8 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
                 || dotted_symbol_path_node(grammar, reference)) continue;
             parse_node_resolution_t resolution =
                 parse_tree_resolution(reference);
-            if (resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL) {
+            if (resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
+                && resolution.target.symbol->kind != PARSE_SYM_MODULE) {
                 if (is_named_type_symbol(grammar,
                         resolution.target.symbol)) continue;
                 core_diagnostics_report_at(

@@ -24,7 +24,7 @@ N00B_PATH="$script_dir/programs/link_records" "$compiler" compile \
 "$abi_link_input_test" --field "$tmp/record_dep_abi.n00bm"
 set --
 for module in builtin.__init builtin.io.debug builtin.io.raw builtin.ffi \
-    builtin.panic \
+    builtin.panic builtin.string.core builtin.containers.array \
     builtin.containers.list builtin.containers.traits \
     builtin.containers.view builtin.cursor builtin.containers.dict \
     builtin.hash builtin.containers.hash_index builtin.sort \

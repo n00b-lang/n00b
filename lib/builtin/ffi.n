@@ -1,4 +1,5 @@
 import containers.list
+import string.core
 
 type Ffi_Bytes layout(c) {
     public data: uint
