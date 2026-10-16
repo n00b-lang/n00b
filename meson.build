@@ -246,6 +246,7 @@ test(
     n00bb_exe,
     args: ['lower', meson.current_source_dir() / 'tests' / 'programs'
         / 'unsigned_literal_context.n'],
+    suite: 'slow',
 )
 
 test(
@@ -253,6 +254,7 @@ test(
     n00bb_exe,
     args: ['lower', meson.current_source_dir() / 'tests' / 'programs'
         / 'unsafe_ref_cast.n'],
+    suite: 'slow',
 )
 
 abi_record_layout_test = executable(
@@ -463,6 +465,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs'
                / 'features' / 'public_literal_handler.n'],
+    suite: 'slow',
 )
 
 test(
@@ -472,6 +475,7 @@ test(
            meson.current_source_dir() / 'tests' / 'programs'
                / 'operator_compound_evaluation_order.n00b'],
     env: ['N00B_PATH=' + (meson.current_source_dir() / 'tests' / 'programs')],
+    suite: 'slow',
 )
 
 test(
@@ -480,6 +484,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs'
                / 'containers' / 'readiness' / 'dict_tuple_pairs.n'],
+    suite: 'slow',
 )
 
 test(
@@ -497,6 +502,7 @@ test(
            meson.current_source_dir() / 'tests' / 'programs'
                / 'containers' / 'readiness'
                / 'trait_typecase_generic_pair.n'],
+    suite: 'slow',
 )
 
 test(
@@ -506,6 +512,7 @@ test(
            meson.current_source_dir() / 'tests' / 'programs'
                / 'containers' / 'readiness'
                / 'trait_operator_generic_result.n'],
+    suite: 'slow',
 )
 
 test(
@@ -514,6 +521,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs'
                / 'bitcode' / 'bitcode_ref_field_compound.n'],
+    suite: 'slow',
 )
 
 test(
@@ -522,6 +530,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs'
                / 'features' / 'let_integer_runtime.n'],
+    suite: 'slow',
 )
 
 test(
@@ -530,6 +539,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs'
                / 'features' / 'generic_trait_unbound_method.n'],
+    suite: 'slow',
 )
 
 test(
@@ -538,6 +548,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs'
                / 'features' / 'generic_union_parameter.n'],
+    suite: 'slow',
 )
 
 test(
@@ -546,6 +557,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs'
                / 'features' / 'typecase_array_index.n'],
+    suite: 'slow',
 )
 
 test(
@@ -554,6 +566,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs'
                / 'features' / 'default_integer_keywords.n'],
+    suite: 'slow',
 )
 
 test(
@@ -562,6 +575,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs'
                / 'features' / 'byte_literal_trait_arguments.n'],
+    suite: 'slow',
 )
 
 test(
@@ -573,6 +587,7 @@ test(
                / 'option_type_spelling_rejected.n',
            '(string vs u32?)'],
     timeout: 120,
+    suite: 'slow',
 )
 
 foreach feature : ['fallible_without_result', 'try_error_binding',
@@ -587,6 +602,7 @@ foreach feature : ['fallible_without_result', 'try_error_binding',
                meson.current_source_dir() / 'tests' / 'programs'
                    / 'features' / feature + '.n'],
         timeout: 120,
+        suite: 'slow',
     )
 endforeach
 
@@ -666,6 +682,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_builtin_os.n'],
+    suite: 'slow',
 )
 
 test(
@@ -675,6 +692,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_thread_global.n'],
+    suite: 'slow',
 )
 
 test(
@@ -696,6 +714,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_f32.n'],
+    suite: 'slow',
 )
 
 test(
@@ -705,6 +724,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_thread_global_pair.n'],
+    suite: 'slow',
 )
 
 test(
@@ -714,6 +734,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_atomic_global.n'],
+    suite: 'slow',
 )
 
 test(
@@ -723,6 +744,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_compound_in_place.n'],
+    suite: 'slow',
 )
 
 foreach string_probe : ['core_probe', 'rstr_probe', 'raw_literal_probe',
@@ -734,6 +756,7 @@ foreach string_probe : ['core_probe', 'rstr_probe', 'raw_literal_probe',
                n00bb_exe.full_path(),
                meson.current_source_dir() / 'tests' / 'programs' / 'string'
                    / string_probe + '.n'],
+        suite: 'slow',
     )
 endforeach
 
@@ -744,6 +767,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_comptime_c_record_deferred_array.n'],
+    suite: 'slow',
 )
 
 test(
@@ -753,6 +777,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_byte_offset.n'],
+    suite: 'slow',
 )
 
 test(
@@ -762,6 +787,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_memcpy.n'],
+    suite: 'slow',
 )
 
 test(
@@ -771,6 +797,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_block.n'],
+    suite: 'slow',
 )
 
 test(
@@ -780,6 +807,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_sweep.n'],
+    suite: 'slow',
 )
 
 test(
@@ -789,6 +817,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_handshake_sweep.n'],
+    suite: 'slow',
 )
 
 test(
@@ -798,6 +827,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_epoch.n'],
+    suite: 'slow',
 )
 
 test(
@@ -807,6 +837,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_los.n'],
+    suite: 'slow',
 )
 
 test(
@@ -816,6 +847,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_los_allocate.n'],
+    suite: 'slow',
 )
 
 test(
@@ -825,6 +857,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_los_pacing.n'],
+    suite: 'slow',
 )
 
 test(
@@ -834,6 +867,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_small_allocate.n'],
+    suite: 'slow',
 )
 
 test(
@@ -843,6 +877,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_mutator_lifecycle.n'],
+    suite: 'slow',
 )
 
 test(
@@ -852,6 +887,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_option_get_field_arith.n'],
+    suite: 'slow',
 )
 
 test(
@@ -861,6 +897,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_mark_pool.n'],
+    suite: 'slow',
 )
 
 test(
@@ -870,6 +907,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_finalize.n'],
+    suite: 'slow',
 )
 
 test(
@@ -879,6 +917,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_array_backing.n'],
+    suite: 'slow',
 )
 
 test(
@@ -888,6 +927,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_finalizer_cycle.n'],
+    suite: 'slow',
 )
 
 test(
@@ -908,6 +948,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_operator_newlines.n'],
+    suite: 'slow',
 )
 
 test(
@@ -917,6 +958,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_empty_array_backing.n'],
+    suite: 'slow',
 )
 
 test(
@@ -926,6 +968,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_typeof_storage.n'],
+    suite: 'slow',
 )
 
 test(
@@ -935,6 +978,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_typeof_storage.n'],
+    suite: 'slow',
 )
 
 test(
@@ -944,6 +988,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_heap.n'],
+    suite: 'slow',
 )
 
 test(
@@ -953,6 +998,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_roots.n'],
+    suite: 'slow',
 )
 
 test(
@@ -964,6 +1010,7 @@ test(
                / 'bitcode_gc_global_mark.n'],
     env: ['N00B_PATH=' + (meson.current_source_dir() / 'tests'
         / 'programs' / 'bitcode')],
+    suite: 'slow',
 )
 
 test(
@@ -982,6 +1029,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_allocate.n'],
+    suite: 'slow',
 )
 
 test(
@@ -991,6 +1039,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_new_record.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1000,6 +1049,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_known_finalizer.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1009,6 +1059,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_escaped_record.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1021,6 +1072,7 @@ test(
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_escaped_record.n'],
     env: ['N00B_PATH=' + meson.current_source_dir() / 'lib'],
+    suite: 'slow',
 )
 
 test(
@@ -1030,6 +1082,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_trace_record.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1040,6 +1093,7 @@ test(
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_uninitialized_local.n',
            'is read on a path that does not assign it'],
+    suite: 'slow',
 )
 
 test(
@@ -1060,6 +1114,7 @@ test(
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_script_comptime.n',
            'N00BB-B0028'],
+    suite: 'slow',
 )
 
 test(
@@ -1070,6 +1125,7 @@ test(
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_script_const_reads_var.n',
            'N00BB-B0029'],
+    suite: 'slow',
 )
 
 test(
@@ -1080,6 +1136,7 @@ test(
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_start_signature.n',
            'N00BB-B0030'],
+    suite: 'slow',
 )
 
 test(
@@ -1090,6 +1147,7 @@ test(
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_finalize_signature_rejected.n',
            'N00BB-T0031', 'N00BB-T0032', 'N00BB-T0033'],
+    suite: 'slow',
 )
 
 test(
@@ -1099,6 +1157,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_finalize_ref.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1126,6 +1185,7 @@ test(
     n00bb_exe,
     args: ['lower', meson.current_source_dir() / 'tests' / 'programs'
         / 'bitcode' / 'trait_consume_private.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1136,6 +1196,7 @@ test(
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_uninitialized_global.n',
            'N00BB-L0044'],
+    suite: 'slow',
 )
 
 test(
@@ -1145,6 +1206,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'],
     timeout: 120,
+    suite: 'slow',
 )
 
 test(
@@ -1154,6 +1216,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_new_pruned.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1163,6 +1226,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_handshake_stack.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1172,6 +1236,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_worker_shutdown.n'],
+    suite: 'slow',
 )
 
 if host_machine.system() == 'darwin'
@@ -1192,6 +1257,7 @@ if host_machine.system() == 'darwin'
                    / 'bitcode_gc_worker_live.n',
                gc_worker_thread_object.full_path(),
                'sys.internal.gc.collect.worker'],
+        suite: 'slow',
     )
 endif
 
@@ -1202,6 +1268,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_option_guard_flow.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1211,6 +1278,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_option_nil_global.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1220,6 +1288,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_array_index_write.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1229,6 +1298,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'],
     timeout: 120,
+    suite: 'slow',
 )
 
 test(
@@ -1238,6 +1308,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_array_value_index.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1247,6 +1318,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_variant_array_literal.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1256,6 +1328,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_index_read_variant_override.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1265,6 +1338,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs'],
     timeout: 120,
+    suite: 'slow',
 )
 
 test(
@@ -1275,6 +1349,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs'
                / 'option_not_through_index.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1284,6 +1359,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_los_registry.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1293,6 +1369,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_block_registry.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1302,6 +1379,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_grow_batch.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1311,6 +1389,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_reclaim_caches.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1320,6 +1399,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_pacing.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1329,6 +1409,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs'
                / 'reference_read_escape.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1338,6 +1419,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_integer_complement.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1359,6 +1441,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_nominal_cast.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1368,6 +1451,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_bit_count.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1387,6 +1471,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_overloads.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1396,6 +1481,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_option_record_fields.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1405,6 +1491,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_option_field_narrowing.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1423,6 +1510,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_named_reference.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1432,6 +1520,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_builtin_operand.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1442,6 +1531,7 @@ test(
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_native_frame_scan.n'],
     timeout: 120,
+    suite: 'slow',
 )
 
 test(
@@ -1451,6 +1541,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_ffi_borrow.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1460,6 +1551,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_unsafe_arithmetic.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1469,6 +1561,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_hash.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1478,6 +1571,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_registry.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1487,6 +1581,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_block.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1496,6 +1591,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_logical_continuation.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1505,6 +1601,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_option_get_field.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1514,6 +1611,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_plain_ref_cast_rejected.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1523,6 +1621,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs'
                / 'inline_array_record_layout.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1532,6 +1631,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs'
                / 'array_runtime_sized_declaration.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1541,6 +1641,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_atomic.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1550,6 +1651,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_atomic_rmw_u32.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1559,6 +1661,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_recycle.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1568,6 +1671,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_copyout.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1577,6 +1681,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_os_mapped_write.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1586,6 +1691,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_os_mapped_write_wrapper.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1595,6 +1701,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_builtin_abi.n'],
+    suite: 'slow',
 )
 
 test(
@@ -1604,6 +1711,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_builtin_debug.n00b'],
+    suite: 'slow',
 )
 
 test(
@@ -1646,6 +1754,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'inline'],
     timeout: 120,
+    suite: 'slow',
 )
 
 test(
@@ -1665,6 +1774,7 @@ test(
     args: [meson.current_source_dir() / 'tests' / 'formatter.sh',
            n00bb_exe.full_path()],
     timeout: 30,
+    suite: 'slow',
 )
 
 foreach fixture : [
@@ -1685,5 +1795,6 @@ foreach fixture : [
                n00bb_exe.full_path(),
                meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                    / fixture],
+        suite: 'slow',
     )
 endforeach
