@@ -3926,6 +3926,25 @@ member_access_node(parse_grammar_t *grammar, parse_tree_t *node)
     return nullptr;
 }
 
+static parse_tree_t *
+index_assignment_statement(parse_grammar_t *grammar, parse_tree_t *node,
+                           bool *through_receiver)
+{
+    *through_receiver = false;
+    parse_tree_t *at = node;
+    for (parse_tree_t *parent = core_tree_node_value(at).parent; parent;
+         at = parent, parent = core_tree_node_value(at).parent) {
+        if ((nt_is(grammar, parent, "assign-stmt")
+             || nt_is(grammar, parent, "binop-assign-stmt"))
+            && core_tree_child(parent, 0) == at) return parent;
+        if (nt_is(grammar, parent, "postfix-expr")
+            && core_tree_child(parent, 0) == at)
+            *through_receiver = true;
+        else if (core_tree_num_children(parent) != 1) return nullptr;
+    }
+    return nullptr;
+}
+
 bool
 index_dispatch_for_node(parse_grammar_t *grammar, parse_tree_t *node,
                         core_string_t *trait, core_string_t *method)
@@ -3943,15 +3962,10 @@ index_dispatch_for_node(parse_grammar_t *grammar, parse_tree_t *node,
         *method = CORE_STRING_STATIC("__read");
     }
 
-    for (parse_tree_t *at = node; at; at = core_tree_node_value(at).parent) {
-        parse_tree_t *parent = core_tree_node_value(at).parent;
-        if (!parent) break;
-        if (nt_is(grammar, parent, "postfix-expr")
-            && core_tree_child(parent, 0) == at) return true;
-        if (!nt_is(grammar, parent, "assign-stmt")) continue;
-        parse_tree_t *target = core_tree_num_children(parent)
-            ? core_tree_child(parent, 0) : nullptr;
-        if (!node_is_within(node, target)) break;
+    bool through_receiver = false;
+    parse_tree_t *statement = index_assignment_statement(grammar, node,
+                                                         &through_receiver);
+    if (!through_receiver && nt_is(grammar, statement, "assign-stmt")) {
         bool slice_write = nt_is(grammar, core_tree_child(node, 2),
                                  "slice-contents");
         *trait = slice_write ? CORE_STRING_STATIC("Index_Slice_Write")
@@ -10660,16 +10674,10 @@ refine_intrinsic_unary_result(parse_grammar_t *grammar,
 bool
 index_is_compound_target(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    for (parse_tree_t *at = node; at;
-         at = core_tree_node_value(at).parent) {
-        parse_tree_t *parent = core_tree_node_value(at).parent;
-        if (!parent) return false;
-        if (!nt_is(grammar, parent, "binop-assign-stmt")) continue;
-        parse_tree_t *target = core_tree_num_children(parent)
-            ? core_tree_child(parent, 0) : nullptr;
-        return target && node_is_within(node, target);
-    }
-    return false;
+    bool through_receiver = false;
+    return nt_is(grammar, index_assignment_statement(grammar, node,
+                                                     &through_receiver),
+                 "binop-assign-stmt");
 }
 
 th_type *
