@@ -382,6 +382,13 @@ func hash(self: string) -> u128 {
     }
     return xxh3_128_at(string.core.__text_bytes(ref base), len)
 }
+func hash(self: Array[u64]) -> u128 {
+    let len: uint = __array_length(self) * 8
+    if len == 0 {
+        return len_0()
+    }
+    return xxh3_128_at(unsafe_cast[Ref[byte]] ref self[0], len)
+}
 inline func hash(self: Ref[`T]) -> u128 {
     return hash_value(__abi_ref_address(self))
 }
