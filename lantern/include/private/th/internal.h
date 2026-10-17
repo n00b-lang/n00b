@@ -234,6 +234,7 @@ struct th_ctx {
   core_list_t(th_type_ptr_t) pending_environment_constraints;
   core_list_t(th_active_constraint_t) active_environment_constraints;
   th_coerce_fn custom;
+  th_coerce_target_fn custom_target;
   void *custom_user;
   uint8_t method_argument_coercions;
   th_span_t span;

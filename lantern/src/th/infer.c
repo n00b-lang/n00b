@@ -858,6 +858,27 @@ void th_register_coercion(th_ctx *ctx, th_coerce_fn fn, void *user)
     }
 }
 
+void th_register_coercion_target(th_ctx *ctx, th_coerce_target_fn fn)
+{
+    if (ctx) ctx->custom_target = fn;
+}
+
+static bool custom_coerces(th_ctx *ctx, th_type *from, th_type *to)
+{
+    return (ctx->method_argument_coercions & TH_COERCE_CUSTOM) && ctx->custom
+        && from && to && th_is_closed(ctx, from) && th_is_closed(ctx, to)
+        && ctx->custom(ctx, from, to, ctx->custom_user);
+}
+
+bool th_custom_coerces(th_ctx *ctx, th_type *from, th_type *to)
+{
+    from = from ? th_resolve(from) : nullptr;
+    to = to ? th_resolve(to) : nullptr;
+    return ctx && ctx->custom && from && to && th_is_closed(ctx, from)
+        && th_is_closed(ctx, to) && ctx->custom(ctx, from, to,
+                                                ctx->custom_user);
+}
+
 size_t th_coercion_count(const th_ctx *ctx)
 {
     return ctx ? core_list_len(ctx->coercions) : 0;
@@ -915,6 +936,9 @@ static th_type *receiver_method_signature(th_ctx *ctx, th_type *bound_to,
         ? th_ind_referent(resolved)
         : ctx->method_argument_coercions & TH_COERCE_OPTION_UNWRAP
             ? th_option_item(resolved) : nullptr;
+    if (!inner && (ctx->method_argument_coercions & TH_COERCE_CUSTOM)
+        && ctx->custom_target && th_is_closed(ctx, resolved))
+        inner = ctx->custom_target(ctx, resolved, ctx->custom_user);
     if (!inner) return signature;
     *receiver_type = inner;
     return resolve_constraint_method(ctx, *receiver_type, name, status);
@@ -946,10 +970,15 @@ static bool method_argument_unifies(th_ctx *ctx, th_type *actual,
     if (referent) return uni(ctx, referent, formal, seen);
     if (!(ctx->method_argument_coercions
           & (TH_COERCE_OPTION_WRAP | TH_COERCE_NIL_OPTION
-             | TH_COERCE_RECORD_CONSTRUCT)))
+             | TH_COERCE_RECORD_CONSTRUCT | TH_COERCE_CUSTOM)))
         return uni(ctx, actual, formal, seen);
     if (th_unify_probe(ctx, actual, formal))
         return uni(ctx, actual, formal, seen);
+    if (mode == TH_IN && custom_coerces(ctx, th_resolve(actual),
+                                        th_resolve(formal))) {
+        record_coercion(ctx, TH_COERCE_CUSTOM, actual, formal);
+        return true;
+    }
     th_type *resolved_actual = th_resolve(actual);
     th_type *resolved_formal = th_resolve(formal);
     if (mode == TH_IN

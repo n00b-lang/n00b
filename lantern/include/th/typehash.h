@@ -470,10 +470,14 @@ typedef struct {
 
 typedef bool (*th_coerce_fn)(th_ctx *ctx, th_type *from, th_type *to,
                              void *user);
+typedef th_type *(*th_coerce_target_fn)(th_ctx *ctx, th_type *from,
+                                        void *user);
 
 th_type *th_coerce(th_ctx *ctx, th_type *from, th_coerce_policy policy);
 
 void   th_register_coercion(th_ctx *ctx, th_coerce_fn fn, void *user);
+void   th_register_coercion_target(th_ctx *ctx, th_coerce_target_fn fn);
+bool   th_custom_coerces(th_ctx *ctx, th_type *from, th_type *to);
 size_t th_coercion_count(const th_ctx *ctx);
 bool   th_coercion_at(const th_ctx *ctx, size_t i, th_coercion_t *out);
 void   th_coercions_clear(th_ctx *ctx);

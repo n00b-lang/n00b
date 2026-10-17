@@ -1174,7 +1174,8 @@ eval(ictx *c, const parse_infer_expr_t *e)
             return th_name(c->tc, "bool");
         }
         if (builtin_comparable(left)) {
-            if (!th_unify_in_place(c->tc, left, right)) c->failed = true;
+            if (!th_custom_coerces(c->tc, right, left)
+                && !th_unify_in_place(c->tc, left, right)) c->failed = true;
             return th_name(c->tc, "bool");
         }
         th_type *comparison = nullptr;
@@ -1231,6 +1232,8 @@ eval(ictx *c, const parse_infer_expr_t *e)
             return l;
         }
 
+        if (th_custom_coerces(c->tc, l, r)) return r;
+        if (th_custom_coerces(c->tc, r, l)) return l;
         return th_unify_in_place(c->tc, l, r);
     }
 
