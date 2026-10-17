@@ -1,0 +1,65 @@
+import sys.abi
+import internal.encoding
+
+record Rune_Buf {
+    data: Array[char]
+    len:  u32
+    cap:  u32
+}
+
+func __init(modify self: Rune_Buf, cap: u32) {
+    self.len = 0
+    self.cap = cap
+    if self.cap == 0 {
+        self.cap = 16
+    }
+    self.data = new[Array[char]](cast[int] self.cap)
+}
+
+func push(modify self: Rune_Buf, cp: char) {
+    if self.len == self.cap {
+        let ncap: u32 = self.cap * 2
+        var nd: Array[char] = new[Array[char]](cast[int] ncap)
+
+        sys.abi.copy_items(nd, 0, self.data, 0, cast[uint] self.len)
+
+        self.data = nd
+        self.cap = ncap
+    }
+
+    self.data[self.len] = cp
+    self.len += 1
+}
+
+func to_string(self: Rune_Buf) -> string {
+    if self.len == 0 {
+        return empty_string()
+    }
+
+    var out: Array[u8] = new[Array[u8]](cast[int] self.len * 4 + 1)
+    var pos: uint = 0
+    var wide: bool = false
+
+    var i: u32 = 0
+    while i < self.len {
+        let n: i32 = internal.encoding.utf8_encode(self.data[i], out, pos)
+
+        if n != 0 {
+            pos += cast[uint] n
+
+            if n > 1 {
+                wide = true
+            }
+        }
+        i += 1
+    }
+
+    out[pos] = 0
+
+    var declared: Str_Encoding = Str_Encoding.ascii
+    if wide {
+        declared = Str_Encoding.utf8
+    }
+    return from_raw(out, cast[int] pos, copy = false, encoding = declared,
+                    unsafe = true)
+}

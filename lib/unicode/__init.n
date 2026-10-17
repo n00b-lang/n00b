@@ -1,8 +1,10 @@
 import internal.types
 import internal.encoding
+import internal.runebuf
 
 package unicode {
     export internal.types
     export internal.encoding
+    export internal.runebuf
     export builtin.encoding_of
 }
