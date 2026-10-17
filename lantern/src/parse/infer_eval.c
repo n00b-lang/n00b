@@ -779,7 +779,10 @@ project(ictx *c, parse_infer_proj_t op, th_type *t,
         parse_tree_t *result_node = c->v->node;
         th_type *result = node_type(c, result_node);
         if (core_tree_node_value(result_node).index_address_access) {
-            th_type *element = th_seq_elem(t);
+            th_type *container = th_resolve(t);
+            if (container && th_kind_of(container) == TH_INDIRECTION)
+                container = th_resolve(th_ind_referent(container));
+            th_type *element = th_seq_elem(container);
             if (!element) {
                 c->failed = true;
                 th_err(c->tc, TH_ERR_CONSTRAINT, "element_address", nullptr, t,
