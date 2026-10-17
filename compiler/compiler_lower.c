@@ -5371,6 +5371,116 @@ static ir_lower_result_t
 n00bb_lower_literal_element(ir_lower_context_t *context, ir_value_t *value,
                             th_type *target, ir_span_t span);
 
+static ir_value_t *
+n00bb_union_filler(ir_lower_context_t *context, th_type *type, ir_span_t span)
+{
+    th_ctx *types = ir_module_types(context->module);
+    th_type *resolved = th_resolve(type);
+    if (n00bb_option_type_element(resolved, nullptr))
+        return n00bb_emit_wrapping(context, IR_OP_OPTION_NONE, nullptr, type,
+                                   span);
+    ir_machine_t machine = ir_machine_of(context->module, resolved);
+    if (machine.class == IR_CLASS_SINT || machine.class == IR_CLASS_UINT) {
+        ir_instr_t *zero = ir_lower_emit_instruction(context, IR_OP_CONST,
+                                                     span);
+        return zero && ir_lower_set_temp_dest(context, zero, "__n00bb_", type)
+            && ir_instr_operand_int_lit(zero, ir_lit_of(0))
+            ? zero->dest : nullptr;
+    }
+    th_type *definition = th_kind_of(resolved) == TH_RECORD ? resolved
+        : th_type_definition(types, type);
+    if (!definition || th_kind_of(th_resolve(definition)) != TH_RECORD)
+        return nullptr;
+    definition = th_resolve(definition);
+    size_t count = th_record_len(definition);
+    ir_value_t **members = count
+        ? core_alloc_array(ir_value_t *, count) : nullptr;
+    bool ok = !count || members;
+    for (size_t i = 0; ok && i < count; i++) {
+        const th_member *member = th_record_member(definition, i);
+        members[i] = member
+            ? n00bb_union_filler(context, member->type, span) : nullptr;
+        ok = members[i] != nullptr;
+    }
+    ir_instr_t *aggregate = ok
+        ? ir_lower_emit_instruction(context, IR_OP_AGGREGATE, span) : nullptr;
+    ok = aggregate && ir_lower_set_temp_dest(context, aggregate, "__n00bb_",
+                                             type);
+    for (size_t i = 0; ok && i < count; i++)
+        ok = ir_instr_operand_value(aggregate, members[i]);
+    core_free(members);
+    return ok ? aggregate->dest : nullptr;
+}
+
+static bool
+n00bb_lower_union_record_literal(ir_lower_context_t *context,
+                                 parse_visit_t *visit,
+                                 n00bb_tuple_parts_t *parts,
+                                 th_type *definition, th_type *type,
+                                 uint64_t record_hash, ir_span_t span)
+{
+    n00bb_lower_context_t *lower = context->user;
+    size_t count = th_record_len(definition);
+    ir_instr_t *aggregate = ir_lower_emit_instruction(context,
+                                                       IR_OP_AGGREGATE, span);
+    bool ok = aggregate && ir_lower_set_temp_dest(context, aggregate,
+                                                   "__n00bb_", type);
+    ir_value_t **operands = count
+        ? core_alloc_array(ir_value_t *, count) : nullptr;
+    ok = ok && (!count || operands);
+    core_buffer_t absent = {0};
+    for (size_t j = 0; ok && j < count; j++) {
+        const th_member *member = th_record_member(definition, j);
+        for (size_t i = 0; member && !operands[j]
+             && i < parts->values.len; i++) {
+            parse_tree_t *field = core_tree_node_value(
+                parts->expressions.data[i]).parent;
+            core_string_t name = field ? first_token_text(field)
+                                       : (core_string_t){0};
+            if (name.data && core_string_eq(name,
+                    core_string_from_cstr(member->name)))
+                operands[j] = parts->values.data[i];
+        }
+        if (operands[j] || !member) continue;
+        if (!n00bb_union_arm_group(record_hash,
+                core_string_from_cstr(member->name))) {
+            ok = false;
+            break;
+        }
+        operands[j] = n00bb_union_filler(context, member->type, span);
+        if (!operands[j]) {
+            core_buffer_t message = {0};
+            core_buffer_printf(&message,
+                "union arm '%s' cannot be left out of this literal",
+                member->name);
+            lower_error(context, IR_DIAG_TYPE_LITERAL, span, message.data);
+            core_buffer_release(&message);
+            core_free(operands);
+            core_buffer_release(&absent);
+            return false;
+        }
+        core_buffer_printf(&absent, "%s%zu", absent.byte_len ? "," : "", j);
+    }
+    for (size_t j = 0; ok && j < count; j++)
+        ok = ir_instr_operand_value(aggregate, operands[j]);
+    core_free(operands);
+    char *absent_text = ok && absent.byte_len
+        ? ir_strdup(lower->ir_context, absent.data) : nullptr;
+    if (ok && absent.byte_len)
+        ok = absent_text && ir_annot_set(lower->ir_context,
+            &aggregate->annots, (ir_annot_t){
+                .key = "n00bb.union_absent", .kind = IR_ANNOT_STR,
+                .s = absent_text,
+            });
+    core_buffer_release(&absent);
+    if (!ok)
+        return lower_error(context, IR_DIAG_INTERNAL,
+            lower_span_for_tree(context, visit->node),
+            "could not emit a record literal with a union")
+            .status != IR_LOWER_FAILED;
+    return ir_lower_set_node_value(context, visit->node, aggregate->dest);
+}
+
 static bool
 n00bb_lower_tuple_literal(ir_lower_context_t *context, parse_visit_t *visit,
                           bool entering, void *state)
@@ -5454,6 +5564,18 @@ n00bb_lower_tuple_literal(ir_lower_context_t *context, parse_visit_t *visit,
                 return false;
             parts->values.data[i] = promoted.value;
         }
+        uint64_t record_hash = th_hash(ir_module_types(context->module),
+                                       type);
+        bool unions = false;
+        for (size_t j = 0; definition && j < th_record_len(definition); j++) {
+            const th_member *member = th_record_member(definition, j);
+            unions = unions || (member && member->name
+                && n00bb_union_arm_group(record_hash,
+                    core_string_from_cstr(member->name)));
+        }
+        if (unions)
+            return n00bb_lower_union_record_literal(context, visit, parts,
+                definition, type, record_hash, span);
         ir_instr_t *aggregate = ir_lower_emit_instruction(context,
                                                            IR_OP_AGGREGATE,
                                                            span);
@@ -15923,9 +16045,10 @@ static bool
 ir_initialization_error(core_translation_unit_t *unit, const char *code,
                         const char *message)
 {
-    core_diagnostics_report(core_translation_unit_diagnostics(unit), unit,
-        CORE_DIAG_FATAL, core_string_from_cstr(code),
-        core_string_from_cstr(message));
+    if (!core_diagnostics_failed(core_translation_unit_diagnostics(unit)))
+        core_diagnostics_report(core_translation_unit_diagnostics(unit), unit,
+            CORE_DIAG_FATAL, core_string_from_cstr(code),
+            core_string_from_cstr(message));
     return false;
 }
 

@@ -1,0 +1,74 @@
+record Item layout(c) {
+    key: i32
+    value: i32
+    label: Foreign[i8]? until 0
+}
+
+record Root layout(c) {
+    early: Foreign[Item]?
+    items: Foreign[Item]? count total
+    total: u64
+    codes: Foreign[i32]? until 0
+    kind: i32
+    v: union by kind {
+        1 => number: i64
+        2 => text: Foreign[i8]? until 0
+    }
+    other: Foreign[i8]? until 0
+}
+
+var anchors: List[Array[u8]] = new[List[Array[u8]]]()
+var item_anchors: List[Array[Item]] = new[List[Array[Item]]]()
+var code_anchors: List[Array[i32]] = new[List[Array[i32]]]()
+
+func c_text(bytes: Array[u8]) -> Foreign[i8]? {
+    anchors.append(bytes)
+    return unsafe_cast[Foreign[i8]?] __abi_ref_address(ref bytes[0])
+}
+
+func make() -> Root {
+    let even: Foreign[i8]? = c_text([101, 118, 101, 110, 0])
+    let odd: Foreign[i8]? = c_text([111, 100, 100, 0])
+    var items: Array[Item] = [(key = 1, value = 10, label = even),
+                              (key = 2, value = 20, label = odd),
+                              (key = 3, value = 30, label = even),
+                              (key = 4, value = 40, label = odd)]
+    item_anchors.append(items)
+    var codes: Array[i32] = [3, 5, 7, 0]
+    code_anchors.append(codes)
+    let base: uint = __abi_ref_address(ref items[0])
+    return (early = unsafe_cast[Foreign[Item]?] __abi_ref_address(ref items[2]),
+            items = unsafe_cast[Foreign[Item]?] base, total = 4,
+            codes = unsafe_cast[Foreign[i32]?] __abi_ref_address(ref codes[0]),
+            kind = 2, text = c_text([119, 111, 114, 100, 0]), other = even)
+}
+
+const root: Root = make()
+
+func item_at(index: uint) -> Item {
+    let base: Ref[byte] = unsafe_cast[Ref[byte]] root.items
+    let item: Ref[Item] = unsafe_cast[Ref[Item]] __gc_byte_offset(base, index * 16)
+    return item
+}
+
+func start() -> nil {
+    let items: uint = unsafe_cast[uint] root.items
+    require __abi_baked_address(items)
+    require root.total == 4
+    require item_at(0).key == 1
+    require item_at(3).value == 40
+    require unsafe_cast[uint] root.early == items + 32
+    let codes: Ref[byte] = unsafe_cast[Ref[byte]] root.codes
+    let third: Ref[i32] = unsafe_cast[Ref[i32]] __gc_byte_offset(codes, 8)
+    let last: Ref[i32] = unsafe_cast[Ref[i32]] __gc_byte_offset(codes, 12)
+    require third == 7
+    require last == 0
+    require unsafe_cast[uint] item_at(0).label == unsafe_cast[uint] root.other
+    require unsafe_cast[uint] item_at(2).label == unsafe_cast[uint] root.other
+    require __abi_baked_address(unsafe_cast[uint] root.other)
+    let label: string? = foreign_text(item_at(1).label)
+    require label != nil and label.get() == "odd"
+    let text: string? = foreign_text(root.text)
+    require text != nil and text.get() == "word"
+    __fd_write(2, "ok")
+}

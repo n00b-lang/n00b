@@ -2222,7 +2222,7 @@ literal_element_layout_matches(ir_module_t *module, th_type *type,
                                LLVMTypeRef native, LLVMTargetDataRef target)
 {
     type = th_resolve(type);
-    const ir_final_layout_t *layout = ir_layout_final(module, type,
+    const ir_final_layout_t *layout = ir_layout_final_visible(module, type,
         ir_module_target(module));
     uint64_t stride_bits = 0;
     if (!layout || !native || !target
@@ -2714,6 +2714,19 @@ tuple_aggregate(lower_state_t *state, ir_instr_t *instruction)
     return result;
 }
 
+static bool
+union_member_absent(const char *list, uint32_t ordinal)
+{
+    for (const char *at = list; at && *at;) {
+        char *end = nullptr;
+        unsigned long value = strtoul(at, &end, 10);
+        if (end == at) return false;
+        if (value == ordinal) return true;
+        at = *end == ',' ? end + 1 : end;
+    }
+    return false;
+}
+
 static LLVMValueRef
 record_aggregate(lower_state_t *state, ir_instr_t *instruction)
 {
@@ -2787,8 +2800,12 @@ record_aggregate(lower_state_t *state, ir_instr_t *instruction)
         return nullptr;
     }
     LLVMValueRef result = LLVMConstNull(native);
+    ir_annot_t *absent = ir_annot_get(&instruction->annots,
+                                      "n00bb.union_absent");
     for (size_t i = 0; result && i < count; i++) {
         uint32_t ordinal = layout->members[i].ordinal;
+        if (absent && absent->kind == IR_ANNOT_STR
+            && union_member_absent(absent->s, ordinal)) continue;
         ir_operand_t *operand = ordinal < count
             ? &instruction->operands[ordinal] : nullptr;
         result = record_value_set(state, result, &shape.slots[i],
@@ -3368,7 +3385,7 @@ array_flat_item_stride(lower_state_t *state, th_type *type,
         element = th_resolve(th_seq_elem(element));
         depth++;
         if (depth < first_depth) continue;
-        const ir_final_layout_t *layout = ir_layout_final(module,
+        const ir_final_layout_t *layout = ir_layout_final_visible(module,
             element, ir_module_target(module));
         uint64_t bits = 0;
         if (packed_array_width(module, element)) {

@@ -429,7 +429,11 @@ func visit_foreign(graph: Ref[Graph], source: u32, parent: Ref[byte],
     let pointer: Ref[byte] = found.get()
     let element_index: i64 = internal.abi.range_index(
         type_row(foreign_index).components, 0)
-    require element_index > 0
+    if element_index <= 0 {
+        fail_capture(graph, source, slot,
+            "points to memory that has no description")
+        return
+    }
     let element: Ref[internal.abi.Type_Record] = type_row(cast[u32]element_index)
     if element.kind == cast[u32](internal.abi.Type_Kind.function_type) {
         let name: Ref[byte]? = __native_symbol_name(__abi_ref_address(pointer))

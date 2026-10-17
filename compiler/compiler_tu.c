@@ -2284,6 +2284,39 @@ member_field_named(parse_scope_t *scope, core_string_t name)
     return nullptr;
 }
 
+typedef struct {
+    uint64_t record_hash;
+    char *field;
+    uint32_t group;
+} union_arm_entry_t;
+core_list_decl(union_arm_entry_t);
+
+static core_list_t(union_arm_entry_t) union_arms;
+
+bool
+n00bb_union_arm_register(uint64_t record_hash, core_string_t field,
+                         uint32_t group)
+{
+    if (n00bb_union_arm_group(record_hash, field)) return true;
+    char *name = core_strndup(field.data, field.u8_bytes);
+    if (!name) return false;
+    core_list_push(union_arms, ((union_arm_entry_t){
+        .record_hash = record_hash, .field = name, .group = group,
+    }));
+    return true;
+}
+
+uint32_t
+n00bb_union_arm_group(uint64_t record_hash, core_string_t field)
+{
+    for (size_t i = 0; i < union_arms.len; i++)
+        if (union_arms.data[i].record_hash == record_hash
+            && strlen(union_arms.data[i].field) == field.u8_bytes
+            && !memcmp(union_arms.data[i].field, field.data, field.u8_bytes))
+            return union_arms.data[i].group;
+    return 0;
+}
+
 static bool
 union_tag_taken(parse_scope_t *scope, parse_sym_entry_t *field, uint64_t tag)
 {
@@ -2406,7 +2439,10 @@ cache_record_field_extents(parse_grammar_t *grammar,
             ok = false;
             break;
         }
-        ok = parse_sym_set_binding(field, N00BB_FIELD_UNION_KEY, member);
+        ok = parse_sym_set_binding(field, N00BB_FIELD_UNION_KEY, member)
+            && (!record->type || n00bb_union_arm_register(
+                th_hash(state->types, record->type), field->name,
+                member->group));
     }
     core_list_free(groups);
     return ok;
@@ -2559,6 +2595,9 @@ infer_anonymous_record(parse_grammar_t *grammar, parse_tree_t *node,
     return true;
 }
 
+static th_type *literal_union_shape(th_ctx *types, uint64_t record_hash,
+                                    th_type *literal, th_type *definition);
+
 bool
 contextualize_record_literal(parse_grammar_t *grammar,
                              core_translation_unit_t *unit,
@@ -2578,6 +2617,26 @@ contextualize_record_literal(parse_grammar_t *grammar,
     (void)th_named_info(th_resolve(expected), nullptr, nullptr, &variant,
                         nullptr);
     n00bb_ordered_nodes_t *ordered = n00bb_node_ordered_nodes(fields);
+    if (!variant && ordered) {
+        th_member *named = ordered->count
+            ? core_alloc_array(th_member, ordered->count) : nullptr;
+        for (size_t i = 0; named && i < ordered->count; i++) {
+            parse_tree_t *field = ordered->nodes[i];
+            named[i] = (th_member){
+                .name = field && core_tree_num_children(field)
+                    ? parse_tree_leaf_text(core_tree_child(field, 0)).data
+                    : "",
+                .type = th_name(state->types, "nil"),
+            };
+        }
+        th_type *names = named || !ordered->count
+            ? th_record(state->types, named, ordered->count) : nullptr;
+        core_free(named);
+        definition = names ? literal_union_shape(state->types,
+            th_hash(state->types, expected), names, th_resolve(definition))
+            : nullptr;
+        if (!definition) return false;
+    }
     if (!ordered || ordered->count != (variant ? 1 : th_record_len(definition)))
         return false;
     core_list_t(th_member) members = core_list_new(th_member);
@@ -7847,19 +7906,71 @@ integer_value_promotes(parse_grammar_t *grammar, n00bb_tu_state_t *state,
                                                     maximum)));
 }
 
+static bool
+record_has_member(th_type *record, const char *name)
+{
+    for (size_t i = 0; i < th_record_len(record); i++) {
+        const th_member *member = th_record_member(record, i);
+        if (member && member->name && !strcmp(member->name, name))
+            return true;
+    }
+    return false;
+}
+
+static th_type *
+literal_union_shape(th_ctx *types, uint64_t record_hash, th_type *literal,
+                    th_type *definition)
+{
+    size_t count = th_record_len(definition);
+    th_member *kept = count ? core_alloc_array(th_member, count) : nullptr;
+    if (count && !kept) return nullptr;
+    size_t used = 0;
+    bool unions = false, valid = true;
+    for (size_t i = 0; valid && i < count; i++) {
+        const th_member *member = th_record_member(definition, i);
+        uint32_t group = member && member->name
+            ? n00bb_union_arm_group(record_hash,
+                core_string_from_cstr(member->name)) : 0;
+        if (group) {
+            unions = true;
+            if (!record_has_member(literal, member->name)) continue;
+            for (size_t j = 0; valid && j < used; j++)
+                valid = n00bb_union_arm_group(record_hash,
+                    core_string_from_cstr(kept[j].name)) != group;
+        }
+        if (valid) kept[used++] = *member;
+    }
+    th_type *shape = !valid ? nullptr
+        : unions ? th_record(types, kept, used) : definition;
+    core_free(kept);
+    return shape;
+}
+
 static th_type *
 record_literal_as_named(n00bb_tu_state_t *state, parse_tree_t *node,
                         th_type *actual, th_type *expected)
 {
     if (!node || core_tree_is_leaf(node)
-        || !n00bb_node_record_literal_origin(node)
         || th_kind_of(th_resolve(actual)) != TH_RECORD
         || th_kind_of(th_resolve(expected)) != TH_NAMED) return nullptr;
     th_type *definition = th_type_definition(state->types, expected);
-    return definition && th_kind_of(th_resolve(definition)) == TH_RECORD
-        && th_unify_probe(state->types, actual, definition)
-        && th_unify_in_place(state->types, actual, definition)
-        ? expected : nullptr;
+    if (!definition || th_kind_of(th_resolve(definition)) != TH_RECORD)
+        return nullptr;
+    th_type *shape = literal_union_shape(state->types,
+        th_hash(state->types, expected), th_resolve(actual),
+        th_resolve(definition));
+    if (shape == th_resolve(definition)
+        && !n00bb_node_record_literal_origin(node)) return nullptr;
+    bool reduced = shape && shape != th_resolve(definition);
+    if (!shape || (!reduced && !th_unify_probe(state->types, actual, shape))
+        || !th_unify_in_place(state->types, actual, shape)) return nullptr;
+    if (reduced)
+        for (parse_tree_t *current = n00bb_node_record_literal_origin(node);
+             current; current = core_tree_node_value(current).parent) {
+            core_tree_node_value(current).type = expected;
+            if (current == node) break;
+        }
+    return expected;
 }
 
 static parse_tree_t *

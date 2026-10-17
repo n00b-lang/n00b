@@ -26,3 +26,7 @@ typedef struct {
     uint64_t tag;
     parse_tree_t *node;
 } n00bb_field_union_t;
+
+bool n00bb_union_arm_register(uint64_t record_hash, core_string_t field,
+                              uint32_t group);
+uint32_t n00bb_union_arm_group(uint64_t record_hash, core_string_t field);
