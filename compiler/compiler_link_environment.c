@@ -186,11 +186,16 @@ build_import_environment(parse_grammar_t *grammar,
             bool has_detail = error_count &&
                 th_error_at(state->types, error_count - 1, &detail);
             parse_tree_t *failure_site = nullptr;
+            core_translation_unit_t *failure_unit = nullptr;
             parse_tree_t *open_site = nullptr;
-            if (has_detail && detail.constraint && detail.got)
-                for (size_t s = 0; s < state->link_use_sites.len; s++) {
+            core_translation_unit_t *open_unit = nullptr;
+            for (size_t u = 0; has_detail && detail.constraint && detail.got
+                 && !failure_site && u < units->len; u++) {
+                n00bb_tu_state_t *owner = tu_state(units->data[u]);
+                for (size_t s = 0; owner && s < owner->link_use_sites.len;
+                     s++) {
                     n00bb_link_use_site_t *site =
-                        &state->link_use_sites.data[s];
+                        &owner->link_use_sites.data[s];
                     if (!core_string_eq(site->dispatch_method,
                             core_string_from_cstr(detail.constraint)))
                         continue;
@@ -204,13 +209,29 @@ build_import_environment(parse_grammar_t *grammar,
                     if (receiver_type && th_unify_probe(state->types,
                             receiver_type, detail.got)) {
                         failure_site = site->node;
+                        failure_unit = units->data[u];
                         break;
                     }
                     if (!open_site && receiver_type
-                        && th_kind_of(th_resolve(receiver_type)) == TH_VAR)
+                        && th_kind_of(th_resolve(receiver_type)) == TH_VAR) {
                         open_site = site->node;
+                        open_unit = units->data[u];
+                    }
                 }
-            if (!failure_site) failure_site = open_site;
+            }
+            if (!failure_site) {
+                failure_site = open_site;
+                failure_unit = open_unit;
+            }
+            for (size_t u = 0; !failure_unit && has_detail
+                 && detail.span.file && u < units->len; u++) {
+                core_string_t path = core_source_file_path(
+                    &units->data[u]->source);
+                if (core_string_eq(path,
+                        core_string_from_cstr(detail.span.file)))
+                    failure_unit = units->data[u];
+            }
+            if (failure_unit) unit = failure_unit;
             core_buffer_t message = {0};
             if (has_detail && detail.constraint) {
                 core_buffer_printf(&message,

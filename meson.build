@@ -620,6 +620,41 @@ test(
     suite: 'slow',
 )
 
+foreach static_case : ['static_enum', 'static_option', 'static_nested_import']
+    test(
+        static_case.replace('_', '-') + '-n00b', find_program('sh'),
+        args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
+               n00bb_exe.full_path(),
+               meson.current_source_dir() / 'tests' / 'programs'
+                   / 'static_encoding' / static_case + '.n'],
+        env: ['N00B_PATH=' + (meson.current_source_dir() / 'tests'
+            / 'programs' / 'static_encoding')],
+        timeout: 120,
+        suite: 'slow',
+    )
+    test(
+        static_case.replace('_', '-') + '-baked-n00b', find_program('sh'),
+        args: [meson.current_source_dir() / 'tests' / 'no_build_time_run.sh',
+               n00bb_exe.full_path(),
+               meson.current_source_dir() / 'tests' / 'programs'
+                   / 'static_encoding' / static_case + '.n'],
+        env: ['N00B_PATH=' + (meson.current_source_dir() / 'tests'
+            / 'programs' / 'static_encoding')],
+        timeout: 120,
+        suite: 'slow',
+    )
+endforeach
+
+test(
+    'hello-no-build-time-run-n00b', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'no_build_time_run.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'static_encoding' / 'hello.n'],
+    timeout: 120,
+    suite: 'slow',
+)
+
 test(
     'untyped-consts-n00b',
     find_program('sh'),
@@ -757,6 +792,43 @@ test(
 )
 
 test(
+    'import-name-clash-n00b', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'import_names' / 'import_name_clash.n',
+           '\'util\' cannot be declared here because this module imports module \'util\' (line 1)',
+           'import_name_clash.n:8:1',
+           '\'shape\' cannot be declared here',
+           'import_name_clash.n:12:1',
+           '\'limit\' cannot be declared here',
+           'import_name_clash.n:16:7',
+           '\'counter\' cannot be declared here',
+           'import_name_clash.n:18:5',
+           '\'lit\' cannot be declared here',
+           '\'verbatim\' cannot be declared here'],
+    env: ['N00B_PATH=' + (meson.current_source_dir() / 'tests'
+        / 'programs' / 'import_names')],
+    timeout: 120,
+    suite: 'slow',
+)
+
+test(
+    'import-name-clash-module-n00b', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'import_names' / 'import_name_nested.n',
+           'N00BB-M0012',
+           'module wrapper',
+           'wrapper.n:3:1'],
+    env: ['N00B_PATH=' + (meson.current_source_dir() / 'tests'
+        / 'programs' / 'import_names')],
+    timeout: 120,
+    suite: 'slow',
+)
+
+test(
     'litmod-duplicates', find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'litmod_duplicates.sh',
            n00bb_exe.full_path(),
@@ -880,7 +952,8 @@ test(
 )
 
 foreach string_probe : ['core_probe', 'rstr_probe', 'raw_literal_probe',
-                        'encoding_probe', 'span_gc_probe', 'raw_offset_probe']
+                        'encoding_probe', 'span_gc_probe', 'raw_offset_probe',
+                        'rich_literal_probe']
     test(
         'string-' + string_probe.replace('_', '-'),
         find_program('sh'),

@@ -1,0 +1,24 @@
+import util
+import shape
+import limit
+import counter
+import lit
+import verbatim
+
+func util(text: string) -> int {
+    return 0
+}
+
+type shape {
+    side: int
+}
+
+const limit: int = 3
+
+var counter: int = 0
+
+litmod<quotes> lit, verbatim(text: string) -> string fail: string {
+    return text
+}
+
+require util.util_value() == 1

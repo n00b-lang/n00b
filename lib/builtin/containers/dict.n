@@ -1,4 +1,4 @@
-import hash
+import hashing
 import containers.hash_index
 import containers.view
 import cursor
@@ -35,7 +35,7 @@ func __init(modify self: Dict_State[`K, `V]) {
     self.next_ordinal = 0
 }
 
-func key_hash(key: `K) -> u128 where ` K : hash . Hash {
+func key_hash(key: `K) -> u128 where ` K : hashing . Hash {
     return key.hash()
 }
 
@@ -63,7 +63,7 @@ func ensure_entries(modify self: Dict[`K, `V], needed: uint) {
 
 func __init(modify self: Dict[`K, `V],
                    pairs : Array[Tuple[`K, `V]] = [])
-           where ` K : hash . Hash {
+           where ` K : hashing . Hash {
     var state: Dict_State[`K, `V] = new[Dict_State[`K, `V]]()
     self.state = ref state
     for key, value in pairs {
@@ -80,14 +80,14 @@ func __equal(self: Dict[`K, `V], other: Dict[`K, `V]) -> bool {
 }
 
 private func state_hash(self: Dict[`K, `V]) -> u128 {
-    return hash.hash_value(__abi_ref_address(self.state))
+    return hashing.hash_value(__abi_ref_address(self.state))
 }
 
 func hash(self: Dict[`K, `V]) -> u128 {
     return state_hash(self)
 }
 
-inline func get(self: Dict[`K, `V], key: `K) -> `V? where ` K : hash . Hash {
+inline func get(self: Dict[`K, `V], key: `K) -> `V? where ` K : hashing . Hash {
     let state: Ref[Dict_State[`K, `V]]                       = self.state
     let index: Ref[containers.hash_index.Hash_Index] = ref state.index
     let slot:  uint?                                         = containers.hash_index.find_slot(index, key_hash(key))
@@ -99,7 +99,7 @@ inline func get(self: Dict[`K, `V], key: `K) -> `V? where ` K : hash . Hash {
     return state.entries[cell.entry - 1].value
 }
 
-func contains(self: Dict[`K, `V], key: `K) -> bool where ` K : hash . Hash {
+func contains(self: Dict[`K, `V], key: `K) -> bool where ` K : hashing . Hash {
     return containers.hash_index.find_slot(ref self.state.index, key_hash(key)) != nil
 }
 
@@ -125,7 +125,7 @@ func replace_at(modify self: Dict[`K, `V], slot: uint, value: `V) -> `V {
 }
 
 func put(modify self: Dict[`K, `V], key: `K, value: `V)
-        -> `V? where ` K : hash . Hash {
+        -> `V? where ` K : hashing . Hash {
     let hash:  u128  = key_hash(key)
     let found: uint? = containers.hash_index.find_slot(ref self.state.index, hash)
     if found != nil {
@@ -136,7 +136,7 @@ func put(modify self: Dict[`K, `V], key: `K, value: `V)
 }
 
 inline func add(modify self: Dict[`K, `V], key: `K, value: `V)
-               -> bool where ` K : hash . Hash {
+               -> bool where ` K : hashing . Hash {
     let hash:  u128                    = key_hash(key)
     let state: Ref[Dict_State[`K, `V]] = self.state
     if state.count < __array_length(state.entries) and
@@ -160,7 +160,7 @@ inline func add(modify self: Dict[`K, `V], key: `K, value: `V)
 }
 
 func replace(modify self: Dict[`K, `V], key: `K, value: `V)
-            -> bool where ` K : hash . Hash {
+            -> bool where ` K : hashing . Hash {
     let found: uint? = containers.hash_index.find_slot(ref self.state.index, key_hash(key))
     if found == nil {
         return false
@@ -170,7 +170,7 @@ func replace(modify self: Dict[`K, `V], key: `K, value: `V)
 }
 
 inline func remove(modify self: Dict[`K, `V], key: `K)
-                  -> bool where ` K : hash . Hash {
+                  -> bool where ` K : hashing . Hash {
     let hash:  u128  = key_hash(key)
     let found: uint? = containers.hash_index.find_slot(ref self.state.index, hash)
     if found == nil {
@@ -199,12 +199,12 @@ func clear(modify self: Dict[`K, `V]) {
     self.state.next_ordinal = 0
 }
 
-func __read(self: Dict[`K, `V], key: `K) -> `V? where ` K : hash . Hash {
+func __read(self: Dict[`K, `V], key: `K) -> `V? where ` K : hashing . Hash {
     return get(self, key)
 }
 
 func __write(modify self: Dict[`K, `V], key: `K, value: `V)
-            where ` K : hash . Hash {
+            where ` K : hashing . Hash {
     _ = put(self, key, value)
 }
 
