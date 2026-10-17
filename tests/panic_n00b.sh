@@ -14,13 +14,13 @@ fi
 status=0
 (ulimit -c 0; exec "$tmp/program" >"$tmp/stdout" 2>"$tmp/stderr") \
     2>/dev/null || status=$?
-test "$status" -eq 133
+test "$status" -eq 133 || test "$status" -eq 132
 test ! -s "$tmp/stdout"
 test "$(sed -n 1,3p "$tmp/stderr")" = \
     "$(printf 'opened\npanic: negative balance\nbacktrace:')"
 grep -q '^  at bitcode_panic.__n00bb_module_init (.*bitcode_panic.n:7:9)$' \
     "$tmp/stderr"
-test "$(tail -n 1 "$tmp/stderr")" = '  at main'
+test "$(grep -v "^qemu: " "$tmp/stderr" | tail -n 1)" = '  at main'
 
 checked=$3
 if ! "$compiler" build --output "$tmp/checked" "$checked" \
@@ -31,6 +31,6 @@ fi
 status=0
 (ulimit -c 0; exec "$tmp/checked" >"$tmp/stdout" 2>"$tmp/stderr") \
     2>/dev/null || status=$?
-test "$status" -eq 133
+test "$status" -eq 133 || test "$status" -eq 132
 test "$(sed -n 1p "$tmp/stderr")" = "panic: check failed at $checked:2:5"
-test "$(tail -n 1 "$tmp/stderr")" = '  at main'
+test "$(grep -v "^qemu: " "$tmp/stderr" | tail -n 1)" = '  at main'

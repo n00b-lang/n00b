@@ -17,7 +17,7 @@ test "$(cat "$tmp/stderr")" = ok
     >"$tmp/compile.out" 2>"$tmp/compile.err"
 status=0
 (ulimit -c 0; "$tmp/invalid") >"$tmp/stdout" 2>"$tmp/stderr" || status=$?
-test "$status" -eq 133
+test "$status" -eq 133 || test "$status" -eq 132
 test ! -s "$tmp/stdout"
 grep -q '^before' "$tmp/stderr"
 if grep -q 'after' "$tmp/stderr"; then
