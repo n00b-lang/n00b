@@ -1315,7 +1315,9 @@ static bool con_check_constraints(th_ctx *ctx, const th_type *var,
                 receiver_errors = ctx->errors.len;
                 bool self_result = c->method.result == var
                     && method_result == receiver->type;
-                if (matches && !self_result)
+                if (matches && !self_result
+                    && !custom_coerces(ctx, th_resolve(method_result),
+                                       th_resolve(c->method.result)))
                     matches = uni(ctx, c->method.result, method_result, seen);
             }
             th_type *call = c->method.call;
