@@ -734,6 +734,22 @@ external_definition_kind(core_string_t raw)
 }
 
 static bool
+parse_float_text(core_string_t text, double *value)
+{
+    char *digits = core_alloc_array(char, text.u8_bytes + 1);
+    size_t length = 0;
+    for (size_t i = 0; i < text.u8_bytes; i++)
+        if (text.data[i] != '_') digits[length++] = text.data[i];
+    digits[length] = 0;
+    char *end = nullptr;
+    errno = 0;
+    *value = strtod(digits, &end);
+    bool valid = end && *end == '\0' && end != digits && errno != ERANGE;
+    core_free(digits);
+    return valid;
+}
+
+static bool
 parse_literal(pp_context_t *ctx, parse_tree_t *node, pp_value_t *out)
 {
     if (is_name(ctx->grammar, node, "simple-lit")) {
@@ -758,13 +774,8 @@ parse_literal(pp_context_t *ctx, parse_tree_t *node, pp_value_t *out)
             return false;
         }
         if (core_string_eq(terminal, CORE_STRING_STATIC("FLOAT_LIT"))) {
-            char *copy = core_strndup(text.data, text.u8_bytes);
-            char *end = nullptr;
-            errno = 0;
-            double value = strtod(copy, &end);
-            bool valid = end && *end == '\0' && end != copy && errno != ERANGE;
-            core_free(copy);
-            if (valid) {
+            double value = 0.0;
+            if (parse_float_text(text, &value)) {
                 *out = (pp_value_t){.kind = PP_FLOAT, .as.real = value};
                 return true;
             }
@@ -811,13 +822,8 @@ parse_literal(pp_context_t *ctx, parse_tree_t *node, pp_value_t *out)
     }
     if (is_name(ctx->grammar, node, "float-lit")) {
         core_string_t text = first_leaf_text(ctx, node);
-        char *copy = core_strndup(text.data, text.u8_bytes);
-        char *end = nullptr;
-        errno = 0;
-        double value = strtod(copy, &end);
-        bool valid = end && *end == '\0' && end != copy && errno != ERANGE;
-        core_free(copy);
-        if (valid) {
+        double value = 0.0;
+        if (parse_float_text(text, &value)) {
             *out = (pp_value_t){.kind = PP_FLOAT, .as.real = value};
             return true;
         }

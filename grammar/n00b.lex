@@ -17,11 +17,13 @@
 @lex-string("'", "'", escape('\\'), use_escapes("n00b"), scalar, as("CHAR_LIT"))
 @lex-sigil("'", before_string, unless_closed, attach_previous)
 @lex-number(digits("0123456789"),
+	    sep("_"),
 	    point("leading"),
 	    exp("eE"),
 	    int("INT_LIT"),
 	    float("FLOAT_LIT"))
-@lex-number(prefix("0x"), digits("0123456789abcdefABCDEF"), int("HEX_LIT"))
+@lex-number(prefix("0x"), digits("0123456789abcdefABCDEF"), sep("_"),
+	    int("HEX_LIT"))
 @lex-soft-keywords("i", "u", "bits", "call", "handler", "setup",
                    "layout", "align", "step", "out", "inline", "typeof",
                    "provides", "enter", "exit", "ensure", "as", "thread",
