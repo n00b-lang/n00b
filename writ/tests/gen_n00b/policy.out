@@ -206,7 +206,7 @@ void policy_take_bytes(policy_bytes_t *bytes, void *out) {
 
 int32_t policy_n00b_bind_text_text_static(uint64_t stmt, const void *text, void *result, uint64_t *text_kept) {
     size_t text_length = 0;
-    const void *text_borrowed = n00b_ffi_borrow((void *)text, &text_length, 2);
+    const void *text_borrowed = n00b_ffi_borrow((void *)text, &text_length, 0);
     uint8_t *text_data = malloc(text_length + 1);
     if (text_data && text_length) {
         memcpy(text_data, text_borrowed, text_length);
@@ -226,7 +226,7 @@ int32_t policy_n00b_bind_text_text_static(uint64_t stmt, const void *text, void 
 
 int32_t policy_n00b_bind_text_text_transient(uint64_t stmt, const void *text, void *result) {
     size_t text_length = 0;
-    const void *text_borrowed = n00b_ffi_borrow((void *)text, &text_length, 2);
+    const void *text_borrowed = n00b_ffi_borrow((void *)text, &text_length, 0);
     uint8_t *text_data = malloc(text_length + 1);
     if (text_data && text_length) {
         memcpy(text_data, text_borrowed, text_length);
@@ -250,7 +250,7 @@ void policy_n00b_bind_text_with_dtor_free(const void *p) {
 
 int32_t policy_n00b_bind_text_with_dtor(uint64_t stmt, const void *text, void *result) {
     size_t text_length = 0;
-    const void *text_borrowed = n00b_ffi_borrow((void *)text, &text_length, 2);
+    const void *text_borrowed = n00b_ffi_borrow((void *)text, &text_length, 0);
     uint8_t *text_data = malloc(text_length + 1);
     if (text_data && text_length) {
         memcpy(text_data, text_borrowed, text_length);
@@ -303,7 +303,7 @@ func __ffi_kept_free(kept: u64) {
 }
 
 func bind_text_text_static(stmt: Stmt, text: string) -> i32 fail: Error {
-    var text_value = text
+    var text_value: Array[u8] = __text_byte_array(text)
     var result: i32 = 0
     if stmt.raw == 0 {
         let failure: Error = (code = -1, text = "handle is closed", fn = "bind_text")
@@ -322,7 +322,7 @@ func bind_text_text_static(stmt: Stmt, text: string) -> i32 fail: Error {
 }
 
 func bind_text_text_transient(stmt: Stmt, text: string) -> i32 fail: Error {
-    var text_value = text
+    var text_value: Array[u8] = __text_byte_array(text)
     var result: i32 = 0
     if stmt.raw == 0 {
         let failure: Error = (code = -1, text = "handle is closed", fn = "bind_text")
@@ -337,7 +337,7 @@ func bind_text_text_transient(stmt: Stmt, text: string) -> i32 fail: Error {
 }
 
 func bind_text_owned(stmt: Stmt, text: string) -> i32 fail: Error {
-    var text_value = text
+    var text_value: Array[u8] = __text_byte_array(text)
     var result: i32 = 0
     if stmt.raw == 0 {
         let failure: Error = (code = -1, text = "handle is closed", fn = "bind_text")
@@ -382,8 +382,8 @@ func close(modify self: Stmt) fail: Error {
 65	tests/gen_n00b/../policy/policy.writ:11:1	bind_text
 96	tests/gen_n00b/../policy/policy.writ:22:1	stmt_release
 load static
-extern __bind_text_text_static policy_n00b_bind_text_text_static (uint, ref[string], ref[i32], ref[uint]) -> i32 fail: nil
-extern __bind_text_text_transient policy_n00b_bind_text_text_transient (uint, ref[string], ref[i32]) -> i32 fail: nil
-extern __bind_text_with_dtor policy_n00b_bind_text_with_dtor (uint, ref[string], ref[i32]) -> i32 fail: nil
+extern __bind_text_text_static policy_n00b_bind_text_text_static (uint, ref[array[u8]], ref[i32], ref[uint]) -> i32 fail: nil
+extern __bind_text_text_transient policy_n00b_bind_text_text_transient (uint, ref[array[u8]], ref[i32]) -> i32 fail: nil
+extern __bind_text_with_dtor policy_n00b_bind_text_with_dtor (uint, ref[array[u8]], ref[i32]) -> i32 fail: nil
 extern __stmt_release policy_n00b_stmt_release (uint) -> i32 fail: nil
 extern __ffi_kept_release policy_kept_free (uint) -> nil fail: nil
