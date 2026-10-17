@@ -1,0 +1,977 @@
+import internal.types
+import internal.encoding
+import internal.runebuf
+import internal.properties
+import internal.normalization
+import generated.idna
+
+const idna_valid: u8 = 0
+const idna_ignored: u8 = 1
+const idna_mapped: u8 = 2
+const idna_deviation: u8 = 3
+const idna_disallowed: u8 = 4
+const idna_std3_valid: u8 = 5
+const idna_std3_mapped: u8 = 6
+const puny_base: i32 = 36
+const puny_tmin: i32 = 1
+const puny_tmax: i32 = 26
+const puny_skew: i32 = 38
+const puny_damp: i32 = 700
+const puny_initial_bias: i32 = 72
+const puny_initial_n: i32 = 128
+const puny_max: i32 = 0x7fffffff
+const idna_ccc_virama: u8 = 9
+const idna_max_domain: u32 = 253
+const idna_max_label: u32 = 63
+
+enum Idna_Error {
+    ok = 0, disallowed, empty_label, label_too_long, punycode_error,
+    leading_combining, hyphen_error, processing_error, contextj_error,
+    bidi_error, domain_too_long
+}
+
+func idna_status(cp: char) -> u8 {
+    let v: u32 = cast[u32] cp
+
+    if v >= internal.properties.max_cp {
+        return idna_disallowed
+    }
+
+    return generated.idna.idna_status_stage2[
+        cast[u32] generated.idna.idna_status_stage1[v >> 8] * 256 +
+        (v & 0xff)]
+}
+
+private func idna_map_lookup(cp: char) -> u32? {
+    let v: u32 = cast[u32] cp
+    var lo: u32 = 0
+    var hi: u32 = generated.idna.idna_map_index_len
+
+    while lo < hi {
+        let mid: u32 = lo + (hi - lo) / 2
+
+        if generated.idna.idna_map_index[mid][0] < v {
+            lo = mid + 1
+        }
+        else {
+            if generated.idna.idna_map_index[mid][0] > v {
+                hi = mid
+            }
+            else {
+                return generated.idna.idna_map_index[mid][1]
+            }
+        }
+    }
+
+    return nil
+}
+
+private func puny_digit(d: i32) -> u8 {
+    var c: i32 = cast[i32] cast[u32] '0' + d - 26
+    if d < 26 {
+        c = cast[i32] cast[u32] 'a' + d
+    }
+    return cast[u8] c
+}
+
+private func puny_decode_digit(c: i32) -> i32 {
+    if c >= cast[i32] cast[u32] '0' and c <= cast[i32] cast[u32] '9' {
+        return c - cast[i32] cast[u32] '0' + 26
+    }
+
+    if c >= cast[i32] cast[u32] 'a' and c <= cast[i32] cast[u32] 'z' {
+        return c - cast[i32] cast[u32] 'a'
+    }
+
+    if c >= cast[i32] cast[u32] 'A' and c <= cast[i32] cast[u32] 'Z' {
+        return c - cast[i32] cast[u32] 'A'
+    }
+
+    return -1
+}
+
+private func puny_adapt(delta: i32, numpoints: i32, firsttime: bool) -> i32 {
+    var d: i32 = delta / 2
+    if firsttime {
+        d = delta / puny_damp
+    }
+
+    d += d / numpoints
+
+    var k: i32 = 0
+
+    while d > ((puny_base - puny_tmin) * puny_tmax) / 2 {
+        d /= puny_base - puny_tmin
+        k += puny_base
+    }
+
+    return k + (puny_base - puny_tmin + 1) * d / (d + puny_skew)
+}
+
+private func puny_threshold(k: i32, bias: i32) -> i32 {
+    if k <= bias {
+        return puny_tmin
+    }
+
+    if k >= bias + puny_tmax {
+        return puny_tmax
+    }
+
+    return k - bias
+}
+
+private func puny_encode(input: Array[char], input_len: u32) -> string? {
+    var out: internal.runebuf.Char_Buf =
+        new[internal.runebuf.Char_Buf](input_len * 2 + 8)
+
+    var b: u32 = 0
+
+    var i: u32 = 0
+    while i < input_len {
+        if cast[u32] input[i] < 128 {
+            internal.runebuf.push(out, input[i])
+            b += 1
+        }
+        i += 1
+    }
+
+    var h: u32 = b
+
+    if b != 0 {
+        internal.runebuf.push(out, '-')
+    }
+
+    var n: i32 = puny_initial_n
+    var delta: i32 = 0
+    var bias: i32 = puny_initial_bias
+
+    while h < input_len {
+        var m: i32 = cast[i32] internal.properties.max_cp
+
+        var i: u32 = 0
+        while i < input_len {
+            if cast[i32] cast[u32] input[i] >= n and
+                cast[i32] cast[u32] input[i] < m {
+                m = cast[i32] cast[u32] input[i]
+            }
+            i += 1
+        }
+
+        if m - n > (puny_max - delta) / cast[i32] (h + 1) {
+            return nil
+        }
+
+        delta += (m - n) * cast[i32] (h + 1)
+        n = m
+
+        i = 0
+        while i < input_len {
+            if cast[i32] cast[u32] input[i] < n {
+                if delta == puny_max {
+                    return nil
+                }
+
+                delta += 1
+            }
+
+            if cast[i32] cast[u32] input[i] == n {
+                var q: i32 = delta
+                var k: i32 = puny_base
+                var going: bool = true
+
+                while going {
+                    let t: i32 = puny_threshold(k, bias)
+
+                    if q < t {
+                        going = false
+
+                        continue
+                    }
+
+                    internal.runebuf.push(out,
+                        cast[char] puny_digit(t + (q - t) % (puny_base - t)))
+                    q = (q - t) / (puny_base - t)
+                    k += puny_base
+                }
+
+                internal.runebuf.push(out, cast[char] puny_digit(q))
+                bias = puny_adapt(delta, cast[i32] (h + 1), h == b)
+                delta = 0
+                h += 1
+            }
+            i += 1
+        }
+
+        delta += 1
+        n += 1
+    }
+
+    return internal.runebuf.to_string(out)
+}
+
+private func puny_decode(input: Array[u8], input_at: uint, input_len: u32,
+                         modify out: Array[char], out_cap: u32) -> i32 {
+    var n: i32 = puny_initial_n
+    var i: i32 = 0
+    var bias: i32 = puny_initial_bias
+    var in_pos: u32 = 0
+    var op: u32 = 0
+
+    var last_delim: u32 = 0
+    var have_delim: bool = false
+    var k: u32 = input_len
+
+    while k > 0 and !have_delim {
+        if input[input_at + cast[uint] (k - 1)] == 0x2d {
+            last_delim = k - 1
+            have_delim = true
+        }
+
+        k -= 1
+    }
+
+    if have_delim {
+        var j: u32 = 0
+        while j < last_delim {
+            let c: u8 = input[input_at + cast[uint] j]
+
+            if c >= 0x80 or op >= out_cap {
+                return -1
+            }
+
+            out[op] = cast[char] c
+            op += 1
+            j += 1
+        }
+
+        in_pos = last_delim + 1
+    }
+
+    while in_pos < input_len {
+        let oldi: i32 = i
+        var w: i32 = 1
+        var kk: i32 = puny_base
+        var going: bool = true
+
+        while going {
+            if in_pos >= input_len {
+                return -1
+            }
+
+            let digit: i32 = puny_decode_digit(
+                cast[i32] input[input_at + cast[uint] in_pos])
+
+            in_pos += 1
+
+            if digit < 0 {
+                return -1
+            }
+
+            if digit > (puny_max - i) / w {
+                return -1
+            }
+
+            i += digit * w
+
+            let t: i32 = puny_threshold(kk, bias)
+
+            if digit < t {
+                going = false
+
+                continue
+            }
+
+            if w > puny_max / (puny_base - t) {
+                return -1
+            }
+
+            w *= puny_base - t
+            kk += puny_base
+        }
+
+        bias = puny_adapt(i - oldi, cast[i32] op + 1, oldi == 0)
+
+        if i / (cast[i32] op + 1) > puny_max - n {
+            return -1
+        }
+
+        n += i / (cast[i32] op + 1)
+        i %= cast[i32] op + 1
+
+        if n > 0x10ffff or (n >= 0xd800 and n <= 0xdfff) {
+            return -1
+        }
+
+        if op >= out_cap {
+            return -1
+        }
+
+        var j: u32 = op
+        while j > cast[u32] i {
+            out[j] = out[j - 1]
+            j -= 1
+        }
+
+        out[cast[uint] i] = cast[char] cast[u32] n
+        op += 1
+        i += 1
+    }
+
+    return cast[i32] op
+}
+
+private func is_combining_mark(cp: char) -> bool {
+    let gc: internal.types.Gc = internal.properties.general_category(cp)
+
+    return gc == internal.types.Gc.mn or gc == internal.types.Gc.mc or
+        gc == internal.types.Gc.me
+}
+
+private func hyphens_ok(label: Array[char], n: u32) -> bool {
+    if n == 0 {
+        return true
+    }
+
+    if label[0] == '-' or label[n - 1] == '-' {
+        return false
+    }
+
+    if n >= 4 and label[2] == '-' and label[3] == '-' {
+        return false
+    }
+
+    return true
+}
+
+private func contextj_ok(label: Array[char], n: u32) -> bool {
+    var i: u32 = 0
+    while i < n {
+        if cast[u32] label[i] != 0x200c and cast[u32] label[i] != 0x200d {
+            i += 1
+
+            continue
+        }
+
+        if i == 0 {
+            return false
+        }
+
+        if internal.properties.combining_class(label[i - 1]) ==
+            idna_ccc_virama {
+            i += 1
+
+            continue
+        }
+
+        if cast[u32] label[i] == 0x200d {
+            return false
+        }
+
+        var j: i64 = cast[i64] i - 1
+
+        while j >= 0 and internal.properties.joining_type(
+            label[cast[uint] j]) == internal.types.Joining_Type.t {
+            j -= 1
+        }
+
+        if j < 0 {
+            return false
+        }
+
+        let before: internal.types.Joining_Type =
+            internal.properties.joining_type(label[cast[uint] j])
+
+        if before != internal.types.Joining_Type.l and
+            before != internal.types.Joining_Type.d {
+            return false
+        }
+
+        var k: u32 = i + 1
+
+        while k < n and internal.properties.joining_type(label[k]) ==
+            internal.types.Joining_Type.t {
+            k += 1
+        }
+
+        if k >= n {
+            return false
+        }
+
+        let after: internal.types.Joining_Type =
+            internal.properties.joining_type(label[k])
+
+        if after != internal.types.Joining_Type.r and
+            after != internal.types.Joining_Type.d {
+            return false
+        }
+        i += 1
+    }
+
+    return true
+}
+
+private func label_is_rtl(label: Array[char], n: u32) -> bool {
+    var i: u32 = 0
+    while i < n {
+        let b: internal.types.Bidi_Class =
+            internal.properties.bidi_class(label[i])
+
+        if b == internal.types.Bidi_Class.r or
+            b == internal.types.Bidi_Class.al or
+            b == internal.types.Bidi_Class.an {
+            return true
+        }
+        i += 1
+    }
+
+    return false
+}
+
+private func bidi_label_ok(label: Array[char], n: u32) -> bool {
+    if n == 0 {
+        return true
+    }
+
+    let first: internal.types.Bidi_Class =
+        internal.properties.bidi_class(label[0])
+    let rtl: bool = first == internal.types.Bidi_Class.r or
+        first == internal.types.Bidi_Class.al
+
+    if !rtl and first != internal.types.Bidi_Class.l {
+        return false
+    }
+
+    var saw_en: bool = false
+    var saw_an: bool = false
+
+    var i: u32 = 0
+    while i < n {
+        let b: internal.types.Bidi_Class =
+            internal.properties.bidi_class(label[i])
+
+        if rtl {
+            if b != internal.types.Bidi_Class.r and
+                b != internal.types.Bidi_Class.al and
+                b != internal.types.Bidi_Class.an and
+                b != internal.types.Bidi_Class.en and
+                b != internal.types.Bidi_Class.es and
+                b != internal.types.Bidi_Class.cs and
+                b != internal.types.Bidi_Class.et and
+                b != internal.types.Bidi_Class.on and
+                b != internal.types.Bidi_Class.bn and
+                b != internal.types.Bidi_Class.nsm {
+                return false
+            }
+        }
+        else {
+            if b != internal.types.Bidi_Class.l and
+                b != internal.types.Bidi_Class.en and
+                b != internal.types.Bidi_Class.es and
+                b != internal.types.Bidi_Class.cs and
+                b != internal.types.Bidi_Class.et and
+                b != internal.types.Bidi_Class.on and
+                b != internal.types.Bidi_Class.bn and
+                b != internal.types.Bidi_Class.nsm {
+                return false
+            }
+        }
+
+        if b == internal.types.Bidi_Class.en {
+            saw_en = true
+        }
+
+        if b == internal.types.Bidi_Class.an {
+            saw_an = true
+        }
+        i += 1
+    }
+
+    if rtl and saw_en and saw_an {
+        return false
+    }
+
+    var last: i64 = cast[i64] n - 1
+
+    while last >= 0 and internal.properties.bidi_class(
+        label[cast[uint] last]) == internal.types.Bidi_Class.nsm {
+        last -= 1
+    }
+
+    if last < 0 {
+        return false
+    }
+
+    let tail: internal.types.Bidi_Class =
+        internal.properties.bidi_class(label[cast[uint] last])
+
+    if rtl {
+        return tail == internal.types.Bidi_Class.r or
+            tail == internal.types.Bidi_Class.al or
+            tail == internal.types.Bidi_Class.en or
+            tail == internal.types.Bidi_Class.an
+    }
+
+    return tail == internal.types.Bidi_Class.l or
+        tail == internal.types.Bidi_Class.en
+}
+
+func idna_map(consume s: string) -> string fail: Idna_Error {
+    let len: uint = byte_len(s)
+
+    if len == 0 {
+        return s
+    }
+
+    if !is_text(s) {
+        fail Idna_Error.processing_error
+    }
+
+    var out: internal.runebuf.Char_Buf =
+        new[internal.runebuf.Char_Buf](cast[u32] len)
+
+    var pos: u32 = 0
+
+    while cast[uint] pos < len {
+        var cp: char = cast[char] 0
+
+        try {
+            cp = internal.encoding.utf8_decode(s, pos)!
+        } else failure {
+            fail Idna_Error.processing_error
+        }
+
+        let status: u8 = idna_status(cp)
+
+        if status == idna_valid or status == idna_deviation or
+            status == idna_std3_valid {
+            internal.runebuf.push(out, cp)
+
+            continue
+        }
+
+        if status == idna_ignored {
+            continue
+        }
+
+        if status == idna_mapped or status == idna_std3_mapped {
+            let off: u32? = idna_map_lookup(cp)
+
+            if off != nil {
+                let at: u32 = off.get()
+                let count: u32 = generated.idna.idna_map_data[at]
+
+                var i: u32 = 0
+                while i < count {
+                    internal.runebuf.push(out,
+                        cast[char] generated.idna.idna_map_data[at + 1 + i])
+                    i += 1
+                }
+
+                continue
+            }
+
+            if status == idna_mapped {
+                fail Idna_Error.disallowed
+            }
+
+            continue
+        }
+
+        fail Idna_Error.disallowed
+    }
+
+    return internal.normalization.nfc(internal.runebuf.to_string(out))
+}
+
+private func label_is_alabel(label: Array[char], n: u32) -> bool {
+    return n >= 4 and label[0] == 'x' and label[1] == 'n' and
+        label[2] == '-' and label[3] == '-'
+}
+
+private func resolve_label(label: Array[char], n: u32,
+                           modify decoded: Array[char],
+                           modify ascii: Array[u8], cap: u32) -> i32 {
+    if !label_is_alabel(label, n) {
+        var i: u32 = 0
+        while i < n {
+            decoded[i] = label[i]
+            i += 1
+        }
+
+        return cast[i32] n
+    }
+
+    var i: u32 = 0
+    while i < n {
+        if cast[u32] label[i] >= 128 {
+            return -1
+        }
+        i += 1
+    }
+
+    i = 0
+    while i + 4 < n {
+        ascii[i] = cast[u8] cast[u32] label[i + 4]
+        i += 1
+    }
+
+    let nd: i32 = puny_decode(ascii, 0, n - 4, decoded, cap)
+
+    if nd <= 0 {
+        return -1
+    }
+
+    var any_wide: bool = false
+
+    var j: i32 = 0
+    while j < nd {
+        if cast[u32] decoded[cast[uint] j] >= 128 {
+            any_wide = true
+        }
+        j += 1
+    }
+
+    var out: i32 = -1
+    if any_wide {
+        out = nd
+    }
+    return out
+}
+
+private func domain_is_bidi(norm: string, len: uint) -> bool {
+    let cap: u32 = cast[u32] len + 1
+
+    var label: Array[char] = new[Array[char]](cast[int] cap)
+    var dec: Array[char] = new[Array[char]](cast[int] cap)
+    var ascii: Array[u8] = new[Array[u8]](cast[int] cap)
+
+    var pos: u32 = 0
+    var done: bool = false
+
+    while !done {
+        var nlab: u32 = 0
+        var endlab: bool = false
+
+        while !endlab {
+            if cast[uint] pos >= len {
+                endlab = true
+                done = true
+
+                continue
+            }
+
+            var cp: char = cast[char] 0
+
+            try {
+                cp = internal.encoding.utf8_decode(norm, pos)!
+            } else failure {
+                return false
+            }
+
+            if cp == '.' {
+                endlab = true
+
+                continue
+            }
+
+            label[nlab] = cp
+            nlab += 1
+        }
+
+        let nd: i32 = resolve_label(label, nlab, dec, ascii, cap)
+
+        if nd > 0 and label_is_rtl(dec, cast[u32] nd) {
+            return true
+        }
+    }
+
+    return false
+}
+
+func idna_to_ascii(consume domain: string, check_hyphens: bool = true,
+                   check_bidi: bool = true, check_joiners: bool = true,
+                   verify_dns_length: bool = true)
+    -> string fail: Idna_Error {
+    var norm: string = empty_string()
+
+    try {
+        norm = idna_map(domain)!
+    } else e: Idna_Error {
+        fail e
+    }
+
+    let len: uint = byte_len(norm)
+
+    if len == 0 {
+        if verify_dns_length {
+            fail Idna_Error.empty_label
+        }
+
+        return norm
+    }
+
+    let bidi_domain: bool = check_bidi and domain_is_bidi(norm, len)
+
+    var out: internal.runebuf.Char_Buf =
+        new[internal.runebuf.Char_Buf](cast[u32] len)
+
+    var pos: u32 = 0
+    var done: bool = false
+
+    var label: Array[char] = new[Array[char]](cast[int] len + 1)
+
+    let vcap: u32 = cast[u32] len + 1
+
+    var vbuf: Array[char] = new[Array[char]](cast[int] vcap)
+    var vasc: Array[u8] = new[Array[u8]](cast[int] vcap)
+
+    while !done {
+        var nlab: u32 = 0
+        var endlab: bool = false
+
+        while !endlab {
+            if cast[uint] pos >= len {
+                endlab = true
+                done = true
+
+                continue
+            }
+
+            var cp: char = cast[char] 0
+
+            try {
+                cp = internal.encoding.utf8_decode(norm, pos)!
+            } else failure {
+                fail Idna_Error.processing_error
+            }
+
+            if cp == '.' {
+                endlab = true
+
+                continue
+            }
+
+            label[nlab] = cp
+            nlab += 1
+        }
+
+        let nd: i32 = resolve_label(label, nlab, vbuf, vasc, vcap)
+
+        if nd < 0 {
+            fail Idna_Error.punycode_error
+        }
+
+        let vn: u32 = cast[u32] nd
+
+        var i: u32 = 0
+        while i < vn {
+            let st: u8 = idna_status(vbuf[i])
+
+            if st != idna_valid and st != idna_deviation and
+                st != idna_std3_valid {
+                fail Idna_Error.disallowed
+            }
+            i += 1
+        }
+
+        if label_is_alabel(label, nlab) {
+            var nb_cap: u32 = 1
+            if vn != 0 {
+                nb_cap = vn
+            }
+            var nb: internal.runebuf.Char_Buf =
+                new[internal.runebuf.Char_Buf](nb_cap)
+
+            var i: u32 = 0
+            while i < vn {
+                internal.runebuf.push(nb, vbuf[i])
+                i += 1
+            }
+
+            if !internal.normalization.is_nfc(internal.runebuf.to_string(nb)) {
+                fail Idna_Error.processing_error
+            }
+        }
+
+        if vn != 0 and is_combining_mark(vbuf[0]) {
+            fail Idna_Error.leading_combining
+        }
+
+        if check_hyphens and !hyphens_ok(vbuf, vn) {
+            fail Idna_Error.hyphen_error
+        }
+
+        if check_joiners and !contextj_ok(vbuf, vn) {
+            fail Idna_Error.contextj_error
+        }
+
+        if bidi_domain and !bidi_label_ok(vbuf, vn) {
+            fail Idna_Error.bidi_error
+        }
+
+        if verify_dns_length and nlab == 0 {
+            fail Idna_Error.empty_label
+        }
+
+        let before_label: u32 = out.len
+
+        var non_ascii: bool = false
+
+        i = 0
+        while i < nlab {
+            if cast[u32] label[i] >= 128 {
+                non_ascii = true
+            }
+            i += 1
+        }
+
+        if !non_ascii {
+            i = 0
+            while i < nlab {
+                internal.runebuf.push(out, label[i])
+                i += 1
+            }
+        }
+        else {
+            let enc: string? = puny_encode(label, nlab)
+
+            if enc == nil {
+                fail Idna_Error.punycode_error
+            }
+
+            let e: string = enc.get()
+
+            internal.runebuf.push(out, 'x')
+            internal.runebuf.push(out, 'n')
+            internal.runebuf.push(out, '-')
+            internal.runebuf.push(out, '-')
+
+            var j: uint = 0
+            while j < byte_len(e) {
+                internal.runebuf.push(out, cast[char] cast[u32] byte_at(e, j))
+                j += 1
+            }
+        }
+
+        if verify_dns_length and out.len - before_label > idna_max_label {
+            fail Idna_Error.label_too_long
+        }
+
+        if !done {
+            internal.runebuf.push(out, '.')
+        }
+    }
+
+    if verify_dns_length {
+        var total: u32 = out.len
+
+        if total != 0 and out.data[total - 1] == '.' {
+            total -= 1
+        }
+
+        if total == 0 or total > idna_max_domain {
+            fail Idna_Error.domain_too_long
+        }
+    }
+
+    return internal.runebuf.to_string(out)
+}
+
+func idna_to_unicode(consume domain: string) -> string fail: Idna_Error {
+    var norm: string = empty_string()
+
+    try {
+        norm = idna_map(domain)!
+    } else e: Idna_Error {
+        fail e
+    }
+
+    let len: uint = byte_len(norm)
+
+    if len == 0 {
+        return norm
+    }
+
+    var out: internal.runebuf.Char_Buf =
+        new[internal.runebuf.Char_Buf](cast[u32] len)
+
+    var label: Array[char] = new[Array[char]](cast[int] len + 1)
+    var ascii: Array[u8] = new[Array[u8]](cast[int] len + 1)
+    var decoded: Array[char] = new[Array[char]](cast[int] len + 1)
+
+    var pos: u32 = 0
+    var done: bool = false
+
+    while !done {
+        var nlab: u32 = 0
+        var endlab: bool = false
+        var non_ascii: bool = false
+
+        while !endlab {
+            if cast[uint] pos >= len {
+                endlab = true
+                done = true
+
+                continue
+            }
+
+            var cp: char = cast[char] 0
+
+            try {
+                cp = internal.encoding.utf8_decode(norm, pos)!
+            } else failure {
+                fail Idna_Error.processing_error
+            }
+
+            if cp == '.' {
+                endlab = true
+
+                continue
+            }
+
+            if cast[u32] cp >= 128 {
+                non_ascii = true
+            }
+
+            label[nlab] = cp
+            nlab += 1
+        }
+
+        let is_puny: bool = !non_ascii and nlab > 4 and label[0] == 'x' and
+            label[1] == 'n' and label[2] == '-' and label[3] == '-'
+
+        if !is_puny {
+            var i: u32 = 0
+            while i < nlab {
+                internal.runebuf.push(out, label[i])
+                i += 1
+            }
+        }
+        else {
+            var i: u32 = 4
+            while i < nlab {
+                ascii[i - 4] = cast[u8] cast[u32] label[i]
+                i += 1
+            }
+
+            let n: i32 = puny_decode(ascii, 0, nlab - 4, decoded,
+                cast[u32] len + 1)
+
+            if n < 0 {
+                fail Idna_Error.punycode_error
+            }
+
+            var j: i32 = 0
+            while j < n {
+                internal.runebuf.push(out, decoded[cast[uint] j])
+                j += 1
+            }
+        }
+
+        if !done {
+            internal.runebuf.push(out, '.')
+        }
+    }
+
+    return internal.runebuf.to_string(out)
+}

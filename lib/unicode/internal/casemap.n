@@ -4,7 +4,7 @@ import internal.properties
 import internal.types
 import generated.casemap
 
-const cp_capital_sigma: u32 = 0x03a3
+const cp_capital_sigma = 0x03a3
 
 private func sparse_lookup(index: Array[Array[u32]], index_len: u32,
                            cp: char) -> u32? {
@@ -163,7 +163,8 @@ private func map_final_sigma(cp: char, after_cased: bool, s: string,
     return true
 }
 
-private func full_case_map(s: string, full_index: Array[Array[u32]],
+private func full_case_map(consume s: string,
+                           full_index: Array[Array[u32]],
                            full_index_len: u32, full_data: Array[u32],
                            simple_index: Array[Array[u32]],
                            simple_index_len: u32, simple_data: Array[u32],
@@ -203,7 +204,7 @@ private func full_case_map(s: string, full_index: Array[Array[u32]],
     return internal.runebuf.to_string(out)
 }
 
-func toupper(s: string) -> string {
+func toupper(consume s: string) -> string {
     return full_case_map(s, generated.casemap.full_upper_index,
         generated.casemap.full_upper_index_len,
         generated.casemap.full_upper_data,
@@ -212,7 +213,7 @@ func toupper(s: string) -> string {
         generated.casemap.simple_upper_data, false)
 }
 
-func tolower(s: string) -> string {
+func tolower(consume s: string) -> string {
     return full_case_map(s, generated.casemap.full_lower_index,
         generated.casemap.full_lower_index_len,
         generated.casemap.full_lower_data,
@@ -221,7 +222,7 @@ func tolower(s: string) -> string {
         generated.casemap.simple_lower_data, true)
 }
 
-func casefold(s: string) -> string {
+func casefold(consume s: string) -> string {
     return full_case_map(s, generated.casemap.casefold_full_index,
         generated.casemap.casefold_full_index_len,
         generated.casemap.casefold_full_data,
@@ -230,7 +231,7 @@ func casefold(s: string) -> string {
         generated.casemap.casefold_simple_data, false)
 }
 
-func totitle(s: string) -> string {
+func totitle(consume s: string) -> string {
     let len: uint = byte_len(s)
 
     if len == 0 or !is_text(s) {

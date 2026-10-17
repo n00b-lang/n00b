@@ -1,0 +1,398 @@
+import internal.types
+import internal.encoding
+import internal.runebuf
+import internal.properties
+import internal.normalization
+import internal.identifiers
+import internal.query
+import generated.confusables
+import generated.scripts
+
+const max_script_ext = 32
+
+enum Restriction {
+    ascii_only = 0, single_script, highly_restrictive, moderately_restrictive,
+    minimally_restrictive, unrestricted
+}
+
+private record Script_Ids {
+    common:    internal.types.Script
+    inherited: internal.types.Script
+    latin:     internal.types.Script
+    han:       internal.types.Script
+    hiragana:  internal.types.Script
+    katakana:  internal.types.Script
+    hangul:    internal.types.Script
+    bopomofo:  internal.types.Script
+    cyrillic:  internal.types.Script
+    greek:     internal.types.Script
+}
+
+private func id_or_none(name: string, fallback: internal.types.Script)
+    -> internal.types.Script {
+    let id: internal.types.Script? = internal.query.script_by_name(name)
+
+    var out: internal.types.Script = fallback
+    if id != nil {
+        out = id.get()
+    }
+    return out
+}
+
+private func resolve_script_ids(out ids: Script_Ids) {
+    let n: u32 = generated.scripts.script_count
+    let none: internal.types.Script = cast[internal.types.Script] n
+
+    ids.common = id_or_none("Common", none)
+    ids.inherited = id_or_none("Inherited", none)
+    ids.latin = id_or_none("Latin", none)
+    ids.han = id_or_none("Han", none)
+    ids.hiragana = id_or_none("Hiragana", none)
+    ids.katakana = id_or_none("Katakana", none)
+    ids.hangul = id_or_none("Hangul", none)
+    ids.bopomofo = id_or_none("Bopomofo", none)
+    ids.cyrillic = id_or_none("Cyrillic", none)
+    ids.greek = id_or_none("Greek", none)
+}
+
+private func confusable_lookup(cp: char) -> u32? {
+    let v: u32 = cast[u32] cp
+    var lo: u32 = 0
+    var hi: u32 = generated.confusables.confusable_index_len
+
+    while lo < hi {
+        let mid: u32 = lo + (hi - lo) / 2
+
+        if generated.confusables.confusable_index[mid][0] < v {
+            lo = mid + 1
+        }
+        else {
+            if generated.confusables.confusable_index[mid][0] > v {
+                hi = mid
+            }
+            else {
+                return generated.confusables.confusable_index[mid][1]
+            }
+        }
+    }
+
+    return nil
+}
+
+func skeleton(consume s: string) -> string {
+    let nfd: string = internal.normalization.nfd(s)
+    let len: uint = byte_len(nfd)
+
+    if len == 0 {
+        return nfd
+    }
+
+    var out: internal.runebuf.Char_Buf =
+        new[internal.runebuf.Char_Buf](cast[u32] len)
+
+    var pos: u32 = 0
+
+    while cast[uint] pos < len {
+        var cp: char = cast[char] 0
+
+        try {
+            cp = internal.encoding.utf8_decode(nfd, pos)!
+        } else failure {
+            pos = cast[u32] len
+
+            continue
+        }
+
+        let off: u32? = confusable_lookup(cp)
+
+        if off == nil {
+            internal.runebuf.push(out, cp)
+
+            continue
+        }
+
+        let at: u32 = off.get()
+        let count: u32 = generated.confusables.confusable_data[at]
+
+        var i: u32 = 0
+        while i < count {
+            internal.runebuf.push(out,
+                cast[char] generated.confusables.confusable_data[at + 1 + i])
+            i += 1
+        }
+    }
+
+    return internal.normalization.nfd(internal.runebuf.to_string(out))
+}
+
+func is_confusable(a: string, b: string) -> bool {
+    return skeleton(a) == skeleton(b)
+}
+
+private func augmented_script_set(cp: char,
+                                  modify out: Array[internal.types.Script],
+                                  max: i32, ids: Script_Ids) -> i32 {
+    var ext: Array[internal.types.Script][max_script_ext] =
+        new[Array[internal.types.Script][max_script_ext]]()
+    let n: i32 = internal.properties.script_extensions(cp, ext, max_script_ext)
+    var k: i32 = 0
+    var hanb: bool = false
+    var jpan: bool = false
+    var kore: bool = false
+
+    var i: i32 = 0
+    while i < n and k < max {
+        let sc: internal.types.Script = ext[cast[uint] i]
+
+        if sc == ids.common or sc == ids.inherited {
+            i += 1
+
+            continue
+        }
+
+        out[cast[uint] k] = sc
+        k += 1
+
+        if sc == ids.han {
+            hanb = true
+            jpan = true
+            kore = true
+        }
+
+        if sc == ids.hiragana or sc == ids.katakana {
+            jpan = true
+        }
+
+        if sc == ids.hangul {
+            kore = true
+        }
+
+        if sc == ids.bopomofo {
+            hanb = true
+        }
+        i += 1
+    }
+
+    let base: u32 = generated.scripts.script_count
+
+    if hanb and k < max {
+        out[cast[uint] k] = cast[internal.types.Script] base
+        k += 1
+    }
+
+    if jpan and k < max {
+        out[cast[uint] k] = cast[internal.types.Script] (base + 1)
+        k += 1
+    }
+
+    if kore and k < max {
+        out[cast[uint] k] = cast[internal.types.Script] (base + 2)
+        k += 1
+    }
+
+    return k
+}
+
+private func combo_allows(seen: Array[bool], nscripts: u32, ids: Script_Ids,
+                          extra1: internal.types.Script,
+                          extra2: internal.types.Script) -> bool {
+    var s: u32 = 0
+    while s < nscripts {
+        if !seen[s] {
+            s += 1
+
+            continue
+        }
+
+        let sc: internal.types.Script = cast[internal.types.Script] s
+
+        if sc == ids.common or sc == ids.inherited or sc == ids.latin or
+            sc == ids.han or sc == extra1 or sc == extra2 {
+            s += 1
+
+            continue
+        }
+
+        return false
+    }
+
+    return true
+}
+
+func script_restriction(s: string) -> Restriction {
+    let len: uint = byte_len(s)
+
+    if len == 0 or !is_text(s) {
+        return Restriction.ascii_only
+    }
+
+    var ids: Script_Ids
+
+    resolve_script_ids(ids)
+
+    let nscripts: u32 = generated.scripts.script_count
+    let nslots: u32 = generated.scripts.script_count + 3
+    var resolved: Array[bool] = new[Array[bool]](cast[int] nslots)
+    var uni: Array[bool] = new[Array[bool]](cast[int] nslots)
+
+    var i: u32 = 0
+    while i < nslots {
+        resolved[i] = false
+        uni[i] = false
+        i += 1
+    }
+
+    var all_scripts: bool = true
+    var ascii_only: bool = true
+    var all_id_allowed: bool = true
+    var any_char: bool = false
+    var pos: u32 = 0
+
+    while cast[uint] pos < len {
+        var cp: char = cast[char] 0
+
+        try {
+            cp = internal.encoding.utf8_decode(s, pos)!
+        } else failure {
+            pos = cast[u32] len
+
+            continue
+        }
+
+        any_char = true
+
+        if cast[u32] cp > 0x7f {
+            ascii_only = false
+        }
+
+        if all_id_allowed and
+            !internal.identifiers.is_identifier_allowed(cp) {
+            all_id_allowed = false
+        }
+
+        var aug: Array[internal.types.Script][max_script_ext] =
+            new[Array[internal.types.Script][max_script_ext]]()
+        let n: i32 = augmented_script_set(cp, aug, max_script_ext, ids)
+
+        var i: i32 = 0
+        while i < n {
+            if cast[u32] aug[cast[uint] i] < nslots {
+                uni[aug[cast[uint] i]] = true
+            }
+            i += 1
+        }
+
+        if n == 0 {
+            continue
+        }
+
+        if all_scripts {
+            var i: i32 = 0
+            while i < n {
+                if cast[u32] aug[cast[uint] i] < nslots {
+                    resolved[aug[cast[uint] i]] = true
+                }
+                i += 1
+            }
+
+            all_scripts = false
+
+            continue
+        }
+
+        var k: u32 = 0
+        while k < nslots {
+            if !resolved[k] {
+                k += 1
+
+                continue
+            }
+
+            var present: bool = false
+
+            var i: i32 = 0
+            while i < n {
+                if cast[u32] aug[cast[uint] i] == k {
+                    present = true
+                }
+                i += 1
+            }
+
+            if !present {
+                resolved[k] = false
+            }
+            k += 1
+        }
+    }
+
+    if !any_char or ascii_only {
+        return Restriction.ascii_only
+    }
+
+    var resolved_count: u32 = 0
+
+    if !all_scripts {
+        var k: u32 = 0
+        while k < nslots {
+            if resolved[k] {
+                resolved_count += 1
+            }
+            k += 1
+        }
+    }
+
+    if all_scripts or resolved_count > 0 {
+        return Restriction.single_script
+    }
+
+    if combo_allows(uni, nscripts, ids, ids.hiragana, ids.katakana) or
+        combo_allows(uni, nscripts, ids, ids.bopomofo, ids.bopomofo) or
+        combo_allows(uni, nscripts, ids, ids.hangul, ids.hangul) {
+        return Restriction.highly_restrictive
+    }
+
+    if cast[u32] ids.latin < nscripts and uni[ids.latin] {
+        var others: u32 = 0
+        var all_rec: bool = true
+
+        var k: u32 = 0
+        while k < nscripts {
+            if !uni[k] {
+                k += 1
+
+                continue
+            }
+
+            let sc: internal.types.Script = cast[internal.types.Script] k
+
+            if sc == ids.common or sc == ids.inherited or sc == ids.latin {
+                k += 1
+
+                continue
+            }
+
+            others += 1
+
+            if generated.scripts.script_recommended[k] == 0 or
+                sc == ids.cyrillic or sc == ids.greek {
+                all_rec = false
+            }
+            k += 1
+        }
+
+        if others == 1 and all_rec {
+            return Restriction.moderately_restrictive
+        }
+    }
+
+    if all_id_allowed {
+        return Restriction.minimally_restrictive
+    }
+
+    return Restriction.unrestricted
+}
+
+func has_mixed_scripts(s: string) -> bool {
+    return cast[u32] script_restriction(s) >
+        cast[u32] Restriction.single_script
+}

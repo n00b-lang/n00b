@@ -2,14 +2,14 @@ import internal.encoding
 import internal.properties
 import internal.types
 
-const cp_vs16: u32 = 0xfe0f
-const cp_keycap: u32 = 0x20e3
-const cp_zwj: u32 = 0x200d
-const cp_ri_first: u32 = 0x1f1e6
-const cp_ri_last: u32 = 0x1f1ff
-const cp_tag_low: u32 = 0xe0020
-const cp_tag_high: u32 = 0xe007e
-const cp_tag_end: u32 = 0xe007f
+const cp_vs16 = 0xfe0f
+const cp_keycap = 0x20e3
+const cp_zwj = 0x200d
+const cp_ri_first = 0x1f1e6
+const cp_ri_last = 0x1f1ff
+const cp_tag_low = 0xe0020
+const cp_tag_high = 0xe007e
+const cp_tag_end = 0xe007f
 
 enum Emoji_Type {
     none = 0, basic, presentation_seq, keycap, modifier_seq, flag, tag_seq,

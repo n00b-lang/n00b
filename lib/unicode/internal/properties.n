@@ -11,7 +11,7 @@ import generated.proplist
 import generated.age
 import generated.script_extensions
 
-public const max_cp: u32 = 0x110000
+public const max_cp = 0x110000
 
 private inline func stage_ix(stage1: Array[u16], cp: char) -> u32 {
     let v: u32 = cast[u32] cp
