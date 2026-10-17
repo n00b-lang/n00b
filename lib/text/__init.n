@@ -1,6 +1,7 @@
 import internal.color
 import internal.capability
 import internal.theme
+import internal.border
 
 package text {
     export builtin.index_extends
@@ -19,4 +20,5 @@ package text {
     export internal.color
     export internal.capability
     export internal.theme
+    export internal.border
 }

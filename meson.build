@@ -996,7 +996,8 @@ foreach string_probe : ['core_probe', 'rstr_probe', 'raw_literal_probe',
     )
 endforeach
 
-foreach text_probe : ['color_probe', 'capability_probe', 'theme_probe']
+foreach text_probe : ['color_probe', 'capability_probe', 'theme_probe',
+                      'border_probe']
     test(
         'text-' + text_probe.replace('_', '-'),
         find_program('sh'),
