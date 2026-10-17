@@ -1,4 +1,5 @@
 import string.core
+import string.style
 import bitptr
 import abi
 import hex
@@ -10,7 +11,11 @@ trait Raw_Repr {
 private const signed_flag: u32 = 1
 
 func raw_repr(self: string, fd: i32) -> i32 {
-    return string.core.__fd_write(fd, self)
+    try {
+        return cast[i32] string.style.raw_repr_string(self, cast[int] fd, nil)!
+    } else err: int {
+        return cast[i32] err
+    }
 }
 
 func raw_repr(self: `T, fd: i32) -> i32 {

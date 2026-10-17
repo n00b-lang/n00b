@@ -1563,10 +1563,10 @@ report_imported_module_name(core_translation_unit_t *unit,
     core_buffer_release(&message);
 }
 
-static bool
-declares_litmod(n00bb_tu_state_t *state, parse_sym_entry_t *symbol)
+bool
+n00bb_declares_litmod(n00bb_tu_state_t *state, parse_sym_entry_t *symbol)
 {
-    for (size_t m = 0; m < state->literal_modifiers.len; m++) {
+    for (size_t m = 0; state && m < state->literal_modifiers.len; m++) {
         parse_tree_t *declaration = state->literal_modifiers.data[m]
             .declaration;
         if (declaration && !core_tree_is_leaf(declaration)
@@ -1595,7 +1595,7 @@ reject_imported_module_names(parse_grammar_t *grammar,
                  symbol; symbol = symbol->next_in_scope) {
                 if (symbol->kind == PARSE_SYM_MODULE || !symbol->decl_node
                     || !core_string_eq(symbol->name, name)
-                    || declares_litmod(state, symbol)) continue;
+                    || n00bb_declares_litmod(state, symbol)) continue;
                 report_imported_module_name(unit, name, imports.data[i],
                     link_source_location(symbol->decl_node));
                 distinct = false;

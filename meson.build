@@ -595,6 +595,19 @@ test(
 )
 
 test(
+    'try-without-failure-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'features'
+               / 'try_without_failure.n',
+           'this `try` has no failure path',
+           'try_without_failure.n:2:21'],
+    timeout: 120,
+    suite: 'slow',
+)
+
+test(
     'let-array-reassign-n00b',
     find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
@@ -840,6 +853,18 @@ test(
            'import_name_clash.n:18:5'],
     env: ['N00B_PATH=' + (meson.current_source_dir() / 'tests'
         / 'programs' / 'import_names')],
+    timeout: 120,
+    suite: 'slow',
+)
+
+test(
+    'implicit-package-name-n00b', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'import_names' / 'implicit_package_name.n',
+           '\'builtin\' cannot be declared here because it names a package this module uses',
+           'implicit_package_name.n:1:1'],
     timeout: 120,
     suite: 'slow',
 )

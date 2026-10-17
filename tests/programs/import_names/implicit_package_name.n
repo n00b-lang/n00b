@@ -1,0 +1,5 @@
+func builtin() -> int {
+    return 1
+}
+
+require builtin() == 1

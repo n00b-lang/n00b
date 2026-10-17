@@ -1,5 +1,6 @@
 import containers.list
 import hex
+import string.style
 
 private record String_Words layout(c) {
     data:     Ref[byte]
@@ -258,7 +259,15 @@ func __add(self: string, other: string) -> string {
                                                          encoding(right)))
 }
 
+private func either_rich(left: string, right: string) -> bool {
+    let rich: u8 = cast[u8] str_tag_rich
+    return __string_tag(left) == rich or __string_tag(right) == rich
+}
+
 func __equal(self: string, other: string) -> bool {
+    if either_rich(self, other) {
+        return string.style.cmp_string_value(self, other) == 0
+    }
     let left: string = text(self)
     let right: string = text(other)
     let n: uint = __string_byte_len(left)
@@ -276,6 +285,16 @@ func __equal(self: string, other: string) -> bool {
 }
 
 func __cmp(self: string, other: string) -> Comparison {
+    if either_rich(self, other) {
+        let order: int = string.style.cmp_string_value(self, other)
+        if order < 0 {
+            return Comparison.less
+        }
+        if order > 0 {
+            return Comparison.greater
+        }
+        return Comparison.equal
+    }
     let left: string = text(self)
     let right: string = text(other)
     let left_length: uint = __string_byte_len(left)
