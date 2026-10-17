@@ -392,6 +392,7 @@ typedef struct n00bb_link_analysis_t {
     core_list_t(core_translation_unit_ptr_t) units;
     core_list_t(n00bb_trait_specialization_ptr_t) trait_specializations;
     core_list_t(n00bb_ir_func_ptr_t) reachable_functions;
+    core_list_t(n00bb_ir_func_ptr_t) emitted_functions;
     core_list_t(n00bb_captured_graph_node_t) static_graph_nodes;
     core_list_t(n00bb_static_graph_edge_t) static_graph_edges;
     core_list_t(n00bb_baked_root_t) baked_roots;

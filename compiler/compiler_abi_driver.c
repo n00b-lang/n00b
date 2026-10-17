@@ -392,8 +392,8 @@ n00bb_validate_executable_completeness(core_link_unit_t *link,
         return false;
     }
 
-    for (size_t i = 0; i < analysis->reachable_functions.len; i++) {
-        ir_func_t *function = analysis->reachable_functions.data[i];
+    for (size_t i = 0; i < analysis->emitted_functions.len; i++) {
+        ir_func_t *function = analysis->emitted_functions.data[i];
         if (function && function->linkage == IR_LINK_EXTERN
             && !function->n_blocks) continue;
         bool valid = function && function->owner && function->type;
@@ -633,8 +633,8 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     };
     ir_storage_origin_t *storage_origin = ok
         ? ir_storage_origin_new(
-            analysis->reachable_functions.data,
-            analysis->reachable_functions.len,
+            analysis->emitted_functions.data,
+            analysis->emitted_functions.len,
             n00bb_unmanaged_os_mapping, n00bb_native_unmanaged_parameter,
             n00bb_closed_callers, false,
             &origin_context) : nullptr;
@@ -689,8 +689,8 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             break;
         }
         ok = n00bb_llvm_backend_bind_reachable_functions(backend,
-            analysis->reachable_functions.data,
-            analysis->reachable_functions.len)
+            analysis->emitted_functions.data,
+            analysis->emitted_functions.len)
             && n00bb_llvm_backend_bind_storage_origin(backend,
                 storage_origin);
         if (ok && !parse_cmdr_flag_present(args,

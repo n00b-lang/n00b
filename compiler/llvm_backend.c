@@ -7719,7 +7719,12 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             || LLVMGetTypeKind(target) == LLVMVoidTypeKind) break;
         LLVMTypeKind source_kind = LLVMGetTypeKind(LLVMTypeOf(source));
         LLVMTypeKind target_kind = LLVMGetTypeKind(target);
+        LLVMTypeRef box = box_llvm_type(LLVMGetModuleContext(state->module));
         result = LLVMTypeOf(source) == target ? source
+            : target == box
+            ? box_value(state, source, operands[0].value->type)
+            : LLVMTypeOf(source) == box
+            ? unbox_value(state, source, instruction->dest->type)
             : source_kind == LLVMPointerTypeKind
                 && target_kind == LLVMIntegerTypeKind
             ? LLVMBuildPtrToInt(state->builder, source, target, "address")
@@ -7727,7 +7732,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                 && target_kind == LLVMPointerTypeKind
             ? LLVMBuildIntToPtr(state->builder, source, target, "pointer")
             : LLVMBuildBitCast(state->builder, source, target, "bitcast");
-        return save_result(state, instruction, result);
+        return result && save_result(state, instruction, result);
     }
     case IR_OP_EXTRACT_INDEX: {
         if (count != 2 || operands[0].kind != IR_OPD_VALUE
@@ -11267,6 +11272,17 @@ mark_always_inline(LLVMContextRef context, LLVMValueRef function)
 }
 
 static bool
+function_body_emitted(const ir_func_t *function,
+                      ir_func_t *const *reachable, size_t reachable_count,
+                      bool reachable_bound)
+{
+    if (!reachable_bound) return true;
+    for (size_t j = 0; j < reachable_count; j++)
+        if (reachable[j] == function) return true;
+    return false;
+}
+
+static bool
 lower_module(LLVMModuleRef target, const ir_module_t *source,
              bool emit_frame_maps,
              const n00bb_llvm_type_index_t *type_indices,
@@ -11408,9 +11424,8 @@ lower_module(LLVMModuleRef target, const ir_module_t *source,
     bool inline_ok = true;
     for (size_t i = 0; inline_ok && i < ir_func_count(source); i++) {
         ir_func_t *function = ir_func_at((ir_module_t *)source, i);
-        bool emit_body = !reachable_bound;
-        for (size_t j = 0; !emit_body && j < reachable_count; j++)
-            emit_body = reachable[j] == function;
+        bool emit_body = function_body_emitted(function,
+            reachable, reachable_count, reachable_bound);
         if (!function->n_blocks || !emit_body) continue;
         if (ir_func_is_always_inline(function)) {
             core_list_t(inline_function_ptr_t) visited =
@@ -11426,9 +11441,8 @@ lower_module(LLVMModuleRef target, const ir_module_t *source,
     bool needs_allocation_callee = false;
     for (size_t i = 0; i < ir_func_count(source); i++) {
         ir_func_t *function = ir_func_at((ir_module_t *)source, i);
-        bool emit_body = !reachable_bound;
-        for (size_t j = 0; !emit_body && j < reachable_count; j++)
-            emit_body = reachable[j] == function;
+        bool emit_body = function_body_emitted(function,
+            reachable, reachable_count, reachable_bound);
         if (emit_body && has_dynamic_allocation(function))
             needs_allocation_callee = true;
     }
@@ -11526,9 +11540,8 @@ lower_module(LLVMModuleRef target, const ir_module_t *source,
     index_slots_t index_slots = {.binding = index_table};
     for (size_t i = 0; i < ir_func_count(source); i++) {
         ir_func_t *function = ir_func_at((ir_module_t *)source, i);
-        bool emit_body = !reachable_bound;
-        for (size_t j = 0; !emit_body && j < reachable_count; j++)
-            emit_body = reachable[j] == function;
+        bool emit_body = function_body_emitted(function,
+            reachable, reachable_count, reachable_bound);
         bool selected = inline_list_contains(&mutator_functions, function);
         if (function->n_blocks && emit_body
             && ((selected && !lower_mutator_wrapper(target, function,
@@ -12658,11 +12671,9 @@ runtime_function_address_table(n00bb_llvm_backend_t *backend,
         addresses[i] = LLVMConstNull(pointer);
     for (size_t i = 0; i < backend->function_index_count; i++) {
         ir_func_t *function = backend->function_indices[i].function;
-        bool emitted = !backend->reachable_bound;
-        for (size_t j = 0; !emitted && j < backend->reachable_count;
-             j++)
-            emitted = backend->reachable[j] == function;
-        if (!emitted) continue;
+        if (!function_body_emitted(function,
+                backend->reachable, backend->reachable_count,
+                backend->reachable_bound)) continue;
         LLVMTypeRef signature = function_type(module, function);
         core_buffer_t name = {0};
         core_buffer_printf(&name, "%s.%s", ir_module_name(function->owner),
@@ -12806,7 +12817,20 @@ emit_image(n00bb_llvm_backend_t *backend,
 
     char *message = nullptr;
     if (LLVMVerifyModule(module, LLVMReturnStatusAction, &message)) {
-        backend_error(diagnostics, message ? message : "invalid LLVM module");
+        core_buffer_t detail = {0};
+        core_buffer_printf(&detail, "%s", message ? message
+                                                  : "invalid LLVM module");
+        for (LLVMValueRef function = LLVMGetFirstFunction(module); function;
+             function = LLVMGetNextFunction(function))
+            if (LLVMCountBasicBlocks(function)
+                && LLVMVerifyFunction(function, LLVMReturnStatusAction)) {
+                size_t length = 0;
+                const char *name = LLVMGetValueName2(function, &length);
+                core_buffer_printf(&detail, "in function %.*s\n",
+                                   (int)length, name);
+            }
+        backend_error(diagnostics, detail.data);
+        core_buffer_release(&detail);
         if (message) LLVMDisposeMessage(message);
         return false;
     }

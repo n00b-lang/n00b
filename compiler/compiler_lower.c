@@ -18193,6 +18193,30 @@ build_reachable_functions(
     bool ok = ir_walk_reachable_functions(roots.data, roots.len,
         collect_phase_reachable_function, reachable);
     core_list_free(roots);
+    return ok && build_emitted_functions(analysis);
+}
+
+bool
+build_emitted_functions(n00bb_link_analysis_t *analysis)
+{
+    core_list_t(n00bb_ir_func_ptr_t) roots =
+        core_list_new(n00bb_ir_func_ptr_t);
+    for (size_t i = 0; i < analysis->reachable_functions.len; i++)
+        core_list_push(roots, analysis->reachable_functions.data[i]);
+    for (size_t i = 0; i < analysis->units.len; i++) {
+        ir_module_t *module = unit_module(tu_state(analysis->units.data[i]));
+        for (size_t j = 0; module && j < ir_func_count(module); j++) {
+            ir_func_t *function = ir_func_at(module, j);
+            if (function && function->n_blocks
+                && th_is_closed(ir_module_types(module), function->type))
+                core_list_push(roots, function);
+        }
+    }
+    core_list_t(n00bb_ir_func_ptr_t) *emitted = &analysis->emitted_functions;
+    emitted->len = 0;
+    bool ok = ir_walk_reachable_functions(roots.data, roots.len,
+        collect_phase_reachable_function, emitted);
+    core_list_free(roots);
     return ok;
 }
 

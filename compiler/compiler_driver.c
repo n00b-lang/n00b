@@ -3487,7 +3487,7 @@ specialize_calls(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
                  core_diagnostics_t *diagnostics)
 {
     core_buffer_t failure = {0};
-    bool ok = n00bb_specialize_calls(&analysis->reachable_functions,
+    bool ok = n00bb_specialize_calls(&analysis->emitted_functions,
                                      &failure);
     if (ok) {
         core_list_t(core_translation_unit_ptr_t) order =
@@ -3870,7 +3870,7 @@ n00bb_compiler_main(int argc, char **argv)
             ? n00bb_executable_path(argv[0]) : nullptr;
         if (located) {
             core_list_t(n00bb_ir_func_ptr_t) *reachable =
-                &link_analysis->reachable_functions;
+                &link_analysis->emitted_functions;
             const char **externs = core_alloc_array(const char *,
                 reachable->len + 1);
             size_t extern_count = 0;

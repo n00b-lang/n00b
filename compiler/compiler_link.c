@@ -4154,6 +4154,7 @@ n00bb_link_analysis_new(parse_grammar_t *grammar, ir_ctx_t *ir_context,
         .trait_specializations =
             core_list_new(n00bb_trait_specialization_ptr_t),
         .reachable_functions = core_list_new(n00bb_ir_func_ptr_t),
+        .emitted_functions = core_list_new(n00bb_ir_func_ptr_t),
         .baked_roots = core_list_new(n00bb_baked_root_t),
         .linked_interfaces = linked_interfaces,
         .linked_interface_count = linked_interface_count,
@@ -4180,6 +4181,7 @@ n00bb_link_analysis_free(n00bb_link_analysis_t *analysis)
         core_free(analysis->trait_specializations.data[i]);
     core_list_free(analysis->trait_specializations);
     core_list_free(analysis->reachable_functions);
+    core_list_free(analysis->emitted_functions);
     for (size_t i = 0; i < analysis->static_graph_nodes.len; i++) {
         n00bb_static_graph_node_t *node =
             &analysis->static_graph_nodes.data[i].node;
