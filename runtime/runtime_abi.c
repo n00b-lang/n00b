@@ -1088,15 +1088,12 @@ trace_child_valid(const n00b_abi_snapshot_v1 *snapshot,
 }
 
 static bool
-trace_fields_complete(const n00b_abi_snapshot_v1 *snapshot,
-                      const n00b_abi_type_v1 *parent,
-                      n00b_abi_range_v1 children,
-                      n00b_abi_error_v1 *error)
+trace_children_claim(const n00b_abi_snapshot_v1 *snapshot,
+                     const n00b_abi_type_v1 *parent,
+                     n00b_abi_range_v1 children, uint8_t *seen,
+                     n00b_abi_error_v1 *error)
 {
     uint32_t member_count = parent->fields_or_arms.count;
-    if (!member_count) return children.count == 0;
-    uint8_t *seen = snapshot_alloc(member_count);
-    if (!seen) return false;
     bool valid = true;
     for (uint32_t i = 0; valid && i < children.count; i++) {
         uint32_t child_index = 0;
@@ -1107,26 +1104,53 @@ trace_fields_complete(const n00b_abi_snapshot_v1 *snapshot,
                 child_index, nullptr) : nullptr;
         valid = child != nullptr;
         uint32_t match = member_count;
-        for (uint32_t j = 0; valid && j < member_count; j++) {
+        for (uint32_t j = 0; valid && match == member_count
+             && j < member_count; j++) {
             const n00b_abi_field_v1 *field = trace_member_at(snapshot,
                 parent, j);
             valid = field != nullptr;
             uint32_t expected_type = valid && field->inline_element_count
                 ? field->inline_element_type_index
                 : valid ? field->child_type_index : 0;
-            if (valid && expected_type == child->child_type_index
+            if (valid && !seen[j]
+                && expected_type == child->child_type_index
                 && field->logical_bit_offset / 8 == child->byte_offset
                 && field->logical_bit_offset % 8 == 0
                 && field->inline_element_count == child->repeat_count
-                && field->inline_element_stride_bits == child->stride_bits) {
-                if (match != member_count) valid = false;
-                else match = j;
-            }
+                && field->inline_element_stride_bits == child->stride_bits)
+                match = j;
         }
-        if (valid) valid = match != member_count && !seen[match];
+        if (valid) valid = match != member_count;
         if (valid) seen[match] = 1;
         else invalid_record(error, N00B_ABI_TABLE_TRACE_CHILD,
                             child_index, 0);
+    }
+    return valid;
+}
+
+static bool
+trace_fields_complete(const n00b_abi_snapshot_v1 *snapshot,
+                      const n00b_abi_type_v1 *parent,
+                      const n00b_abi_trace_v1 *trace,
+                      n00b_abi_error_v1 *error)
+{
+    uint32_t member_count = parent->fields_or_arms.count;
+    if (!member_count)
+        return !trace->fixed_children.count && !trace->arms.count;
+    uint8_t *seen = snapshot_alloc(member_count);
+    if (!seen) return false;
+    bool valid = trace_children_claim(snapshot, parent,
+                                      trace->fixed_children, seen, error);
+    for (uint32_t i = 0; valid && i < trace->arms.count; i++) {
+        uint32_t arm_index = 0;
+        valid = n00b_abi_v1_index_at(snapshot, trace->arms, i,
+            &arm_index) == 1 && arm_index;
+        const n00b_abi_trace_arm_v1 *arm = valid
+            ? n00b_abi_v1_record(snapshot, N00B_ABI_TABLE_TRACE_ARM,
+                arm_index, nullptr) : nullptr;
+        valid = arm && !arm->child_trace_index
+            && trace_children_claim(snapshot, parent, arm->children, seen,
+                                    error);
     }
     for (uint32_t j = 0; valid && j < member_count; j++) {
         const n00b_abi_field_v1 *field = trace_member_at(snapshot,
@@ -1390,6 +1414,47 @@ unary_trace_metadata_valid(const n00b_abi_snapshot_v1 *snapshot,
 }
 
 static bool
+record_union_arms_valid(const n00b_abi_snapshot_v1 *snapshot,
+                        const n00b_abi_type_v1 *type,
+                        const n00b_abi_layout_v1 *layout,
+                        const n00b_abi_trace_v1 *trace,
+                        n00b_abi_error_v1 *error)
+{
+    if (!trace->tag_extractor_index) return !trace->arms.count;
+    const n00b_abi_tag_extractor_v1 *tag = n00b_abi_v1_record(snapshot,
+        N00B_ABI_TABLE_TAG_EXTRACTOR, trace->tag_extractor_index, nullptr);
+    uint64_t tag_start = 0, tag_end = 0;
+    if (type->kind != N00B_ABI_TYPE_RECORD || layout->tag_extractor_index
+        || !trace->arms.count
+        || !variant_tag_valid(type, tag, 0, &tag_start, &tag_end))
+        return false;
+    for (uint32_t i = 0; i < trace->arms.count; i++) {
+        uint32_t arm_index = 0;
+        const n00b_abi_trace_arm_v1 *arm = n00b_abi_v1_index_at(snapshot,
+                trace->arms, i, &arm_index) == 1 && arm_index
+            ? n00b_abi_v1_record(snapshot, N00B_ABI_TABLE_TRACE_ARM,
+                arm_index, nullptr) : nullptr;
+        if (!arm || arm->child_trace_index || !arm->children.count
+            || arm->tag_value > tag->mask
+            || !trace_children_valid(snapshot, type, layout->occupied_runs,
+                                     arm->children, error))
+            return invalid_record(error, N00B_ABI_TABLE_TRACE_ARM,
+                                  arm_index, 0);
+        for (uint32_t j = 0; j < i; j++) {
+            uint32_t other_index = 0;
+            const n00b_abi_trace_arm_v1 *other = n00b_abi_v1_index_at(
+                    snapshot, trace->arms, j, &other_index) == 1
+                ? n00b_abi_v1_record(snapshot, N00B_ABI_TABLE_TRACE_ARM,
+                    other_index, nullptr) : nullptr;
+            if (!other || other->tag_value == arm->tag_value)
+                return invalid_record(error, N00B_ABI_TABLE_TRACE_ARM,
+                                      arm_index, 0);
+        }
+    }
+    return true;
+}
+
+static bool
 metadata_traces_valid(const n00b_abi_snapshot_v1 *snapshot,
                       n00b_abi_error_v1 *error)
 {
@@ -1455,12 +1520,12 @@ metadata_traces_valid(const n00b_abi_snapshot_v1 *snapshot,
         if (valid && (type->kind == N00B_ABI_TYPE_RECORD
                       || type->kind == N00B_ABI_TYPE_TUPLE))
             valid = !trace->child_trace_index
-                && !trace->tag_extractor_index && !trace->arms.count
                 && !trace->option_bit_offset
+                && record_union_arms_valid(snapshot, type, layout, trace,
+                                           error)
                 && trace_children_valid(snapshot, type,
                     layout->occupied_runs, trace->fixed_children, error)
-                && trace_fields_complete(snapshot, type,
-                    trace->fixed_children, error);
+                && trace_fields_complete(snapshot, type, trace, error);
         else if (valid && type->kind == N00B_ABI_TYPE_VARIANT) {
             const n00b_abi_tag_extractor_v1 *tag =
                 n00b_abi_v1_record(snapshot, N00B_ABI_TABLE_TAG_EXTRACTOR,

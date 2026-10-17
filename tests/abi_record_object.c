@@ -1479,6 +1479,141 @@ record_field_named(const core_object_section_t *metadata,
     return nullptr;
 }
 
+static const n00b_abi_type_v1 *
+component_type(const core_object_section_t *metadata,
+               const n00bb_abi_directory_entry_t *entries, size_t count,
+               const n00b_abi_type_v1 *type)
+{
+    const n00bb_abi_directory_entry_t *types = entry_for(entries, count,
+        N00B_ABI_TABLE_TYPE);
+    const n00bb_abi_directory_entry_t *stream = entry_for(entries, count,
+        N00B_ABI_TABLE_U32_STREAM);
+    assert(types && stream && type->components.count == 1
+        && type->components.first < stream->record_count);
+    uint32_t index = core_le_load_u32(row_at(metadata, stream,
+        type->components.first));
+    assert(index && index < types->record_count);
+    return row_at(metadata, types, index);
+}
+
+static const n00b_abi_type_v1 *
+foreign_target(const core_object_section_t *metadata,
+               const n00bb_abi_directory_entry_t *entries, size_t count,
+               const n00b_abi_field_v1 *field)
+{
+    const n00bb_abi_directory_entry_t *types = entry_for(entries, count,
+        N00B_ABI_TABLE_TYPE);
+    const n00b_abi_type_v1 *type = row_at(metadata, types,
+        field->child_type_index);
+    assert(type->kind == N00B_ABI_TYPE_OPTION);
+    const n00b_abi_type_v1 *foreign = component_type(metadata, entries,
+        count, type);
+    assert(foreign->kind == N00B_ABI_TYPE_FOREIGN
+        && foreign->size_bits == 64);
+    return component_type(metadata, entries, count, foreign);
+}
+
+static const n00b_abi_trace_v1 *
+trace_for_type(const core_object_section_t *metadata,
+               const n00bb_abi_directory_entry_t *entries, size_t count,
+               uint32_t type_index);
+static const n00b_abi_trace_child_v1 *
+trace_child_at(const core_object_section_t *metadata,
+               const n00bb_abi_directory_entry_t *entries, size_t count,
+               n00b_abi_range_v1 range, uint32_t ordinal);
+
+static void
+check_c_foreign(const core_object_section_t *metadata,
+                const n00bb_abi_directory_entry_t *entries, size_t count)
+{
+    const n00bb_abi_directory_entry_t *types = entry_for(entries, count,
+        N00B_ABI_TABLE_TYPE);
+    const n00bb_abi_directory_entry_t *extractors = entry_for(entries, count,
+        N00B_ABI_TABLE_TAG_EXTRACTOR);
+    const n00bb_abi_directory_entry_t *trace_arms = entry_for(entries,
+        count, N00B_ABI_TABLE_TRACE_ARM);
+    const n00bb_abi_directory_entry_t *stream = entry_for(entries, count,
+        N00B_ABI_TABLE_U32_STREAM);
+    assert(types && extractors && trace_arms && stream);
+    th_ctx *context = th_ctx_new();
+    assert(context);
+    uint64_t holder_hash = th_hash(context,
+                                   th_name(context, "c_foreign.Holder"));
+    uint64_t item_hash = th_hash(context, th_name(context, "c_foreign.Item"));
+    th_ctx_free(context);
+    uint32_t holder_index = 0;
+    for (uint32_t i = 1; i < types->record_count; i++)
+        if (((const n00b_abi_type_v1 *)row_at(metadata, types,
+                i))->typehash == holder_hash) holder_index = i;
+    assert(holder_index);
+    const n00b_abi_field_v1 *items = record_field_named(metadata, entries,
+        count, holder_index, "items");
+    const n00b_abi_field_v1 *total = record_field_named(metadata, entries,
+        count, holder_index, "total");
+    const n00b_abi_field_v1 *name = record_field_named(metadata, entries,
+        count, holder_index, "name");
+    const n00b_abi_field_v1 *op = record_field_named(metadata, entries,
+        count, holder_index, "op");
+    const n00b_abi_field_v1 *kind = record_field_named(metadata, entries,
+        count, holder_index, "kind");
+    const n00b_abi_field_v1 *number = record_field_named(metadata, entries,
+        count, holder_index, "number");
+    const n00b_abi_field_v1 *text = record_field_named(metadata, entries,
+        count, holder_index, "text");
+    assert(foreign_target(metadata, entries, count, items)->typehash
+        == item_hash);
+    assert(foreign_target(metadata, entries, count, name)->kind
+        == N00B_ABI_TYPE_PRIMITIVE);
+    assert(foreign_target(metadata, entries, count, op)->kind
+        == N00B_ABI_TYPE_FUNCTION);
+    assert(number->logical_bit_offset == text->logical_bit_offset
+        && number->logical_bit_offset == 320);
+    const n00b_abi_trace_v1 *trace = trace_for_type(metadata, entries,
+        count, holder_index);
+    assert(trace->fixed_children.count == 3 && trace->arms.count == 1
+        && trace->tag_extractor_index
+        && trace->tag_extractor_index < extractors->record_count);
+    bool counted = false, sentinel = false, function = false;
+    for (uint32_t i = 0; i < trace->fixed_children.count; i++) {
+        const n00b_abi_trace_child_v1 *child = trace_child_at(metadata,
+            entries, count, trace->fixed_children, i);
+        if (child->byte_offset == items->logical_bit_offset / 8) {
+            assert(child->extent_form == N00B_ABI_EXTENT_COUNT_FIELD
+                && child->count_field_offset
+                    == total->logical_bit_offset / 8
+                && child->count_field_bits == 64);
+            counted = true;
+        }
+        if (child->byte_offset == name->logical_bit_offset / 8) {
+            assert(child->extent_form == N00B_ABI_EXTENT_SENTINEL
+                && !child->sentinel);
+            sentinel = true;
+        }
+        if (child->byte_offset == op->logical_bit_offset / 8) {
+            assert(child->extent_form == N00B_ABI_EXTENT_NONE);
+            function = true;
+        }
+    }
+    assert(counted && sentinel && function);
+    const n00b_abi_tag_extractor_v1 *tag = row_at(metadata, extractors,
+        trace->tag_extractor_index);
+    assert(tag->kind == N00B_ABI_TAG_DIRECT_BITS
+        && tag->unit_byte_offset == kind->logical_bit_offset / 8
+        && tag->unit_width_bits == 32 && tag->tag_width_bits == 32
+        && tag->mask == UINT32_MAX);
+    uint32_t arm_index = core_le_load_u32(row_at(metadata, stream,
+        trace->arms.first));
+    assert(arm_index && arm_index < trace_arms->record_count);
+    const n00b_abi_trace_arm_v1 *arm = row_at(metadata, trace_arms,
+        arm_index);
+    assert(arm->tag_value == 2 && arm->children.count == 1
+        && !arm->child_trace_index);
+    const n00b_abi_trace_child_v1 *arm_child = trace_child_at(metadata,
+        entries, count, arm->children, 0);
+    assert(arm_child->byte_offset == text->logical_bit_offset / 8
+        && arm_child->extent_form == N00B_ABI_EXTENT_SENTINEL);
+}
+
 static const n00b_abi_trace_v1 *
 trace_for_type(const core_object_section_t *metadata,
                const n00bb_abi_directory_entry_t *entries, size_t count,
@@ -2637,6 +2772,7 @@ main(int argc, char **argv)
             || !strcmp(argv[2], "import-enum")
             || !strcmp(argv[2], "import-flagset")
             || !strcmp(argv[2], "variant")
+            || !strcmp(argv[2], "c-foreign")
             || !strcmp(argv[2], "constraint")
             || !strcmp(argv[2], "trait-methods")
             || !strcmp(argv[2], "trait-dispatch")
@@ -2906,6 +3042,12 @@ main(int argc, char **argv)
     }
     if (argc == 3 && !strcmp(argv[2], "import-flagset")) {
         check_imported_flagset(&metadata, entries, header.directory_count);
+        free(entries);
+        free(object);
+        return 0;
+    }
+    if (argc == 3 && !strcmp(argv[2], "c-foreign")) {
+        check_c_foreign(&metadata, entries, header.directory_count);
         free(entries);
         free(object);
         return 0;

@@ -319,10 +319,87 @@ linked_unary_trace(trace_source_t *source, uint32_t type_index)
         && external_untraced(source, child_index);
 }
 
+static const n00bb_field_union_t *
+trace_field_union(const trace_source_t *source,
+                  const n00b_abi_field_v1 *field)
+{
+    parse_sym_entry_t *symbol = field->symbol_index && source->declarations
+        ? n00bb_abi_decl_symbol_at(source->declarations, field->symbol_index)
+        : nullptr;
+    return symbol ? parse_sym_binding(symbol, N00BB_FIELD_UNION_KEY)
+                  : nullptr;
+}
+
+static bool
+union_tag_extractor(const trace_source_t *source, uint32_t type_index,
+                    const n00bb_field_union_t *member,
+                    core_list_t(n00b_abi_tag_extractor_v1) *tags,
+                    uint32_t *tag_index)
+{
+    for (uint32_t i = 0; i < source->members[type_index].count; i++) {
+        const n00b_abi_field_v1 *field = trace_member(source, type_index, i);
+        parse_sym_entry_t *symbol = field && field->symbol_index
+            ? n00bb_abi_decl_symbol_at(source->declarations,
+                                       field->symbol_index) : nullptr;
+        if (!field || symbol != member->discriminant) continue;
+        const n00b_abi_type_v1 *type =
+            &source->types->rows[field->child_type_index];
+        if (type->kind != N00B_ABI_TYPE_PRIMITIVE
+            || field->logical_bit_offset % 8
+            || (type->size_bits != 8 && type->size_bits != 16
+                && type->size_bits != 32)
+            || tags->len >= UINT32_MAX) return false;
+        *tag_index = (uint32_t)tags->len;
+        core_list_push(*tags, ((n00b_abi_tag_extractor_v1){
+            .unit_byte_offset = field->logical_bit_offset / 8,
+            .mask = (UINT64_C(1) << type->size_bits) - 1,
+            .unit_width_bits = (uint32_t)type->size_bits,
+            .tag_width_bits = (uint32_t)type->size_bits,
+            .kind = N00B_ABI_TAG_DIRECT_BITS,
+        }));
+        return true;
+    }
+    return false;
+}
+
+static bool
+append_union_arms(trace_source_t *source, uint32_t type_index,
+                  n00b_abi_trace_v1 *trace, uint32_t stream_base,
+                  core_list_t(n00b_abi_tag_extractor_v1) *tags,
+                  core_list_t(n00b_abi_trace_child_v1) *children,
+                  core_list_t(n00b_abi_trace_arm_v1) *arms,
+                  core_list_t(uint32_t) *indexes)
+{
+    uint32_t first = (uint32_t)arms->len;
+    for (uint32_t i = 0; i < source->members[type_index].count; i++) {
+        const n00b_abi_field_v1 *field = trace_member(source, type_index, i);
+        const n00bb_field_union_t *member = trace_field_union(source, field);
+        if (!member
+            || trace_need(source, trace_member_type(field)) != TRACE_PRESENT)
+            continue;
+        if (!trace->tag_extractor_index
+            && !union_tag_extractor(source, type_index, member, tags,
+                                    &trace->tag_extractor_index))
+            return false;
+        uint64_t mask = tags->data[trace->tag_extractor_index].mask;
+        n00b_abi_trace_arm_v1 arm = {.tag_value = (uint32_t)(member->tag
+                                                             & mask)};
+        if (arms->len >= UINT32_MAX
+            || !trace_child_append(source, type_index, field, stream_base,
+                                   children, indexes, &arm.children))
+            return false;
+        core_list_push(*arms, arm);
+    }
+    for (uint32_t i = first; i < arms->len; i++)
+        if (!trace_index_append(stream_base, indexes, i, &trace->arms))
+            return false;
+    return true;
+}
+
 static bool
 append_traces(trace_source_t *source,
               const core_list_t(n00b_abi_layout_v1) *layouts,
-              const core_list_t(n00b_abi_tag_extractor_v1) *tags,
+              core_list_t(n00b_abi_tag_extractor_v1) *tags,
               uint32_t stream_base,
               core_list_t(n00b_abi_trace_v1) *traces,
               core_list_t(n00b_abi_trace_child_v1) *children,
@@ -394,6 +471,7 @@ append_traces(trace_source_t *source,
             const n00b_abi_field_v1 *field = trace_member(source,
                 type_index, i);
             if (!field) return false;
+            if (!variant && trace_field_union(source, field)) continue;
             n00b_abi_range_v1 *range = &trace->fixed_children;
             n00b_abi_trace_arm_v1 arm = {0};
             if (variant) range = &arm.children;
@@ -418,6 +496,9 @@ append_traces(trace_source_t *source,
                 if (!trace_index_append(stream_base, indexes, i,
                         &trace->arms)) return false;
         }
+        else if (!append_union_arms(source, type_index, trace, stream_base,
+                                    tags, children, arms, indexes))
+            return false;
     }
     return true;
 }

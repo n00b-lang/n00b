@@ -2284,6 +2284,18 @@ member_field_named(parse_scope_t *scope, core_string_t name)
     return nullptr;
 }
 
+static bool
+union_tag_taken(parse_scope_t *scope, parse_sym_entry_t *field, uint64_t tag)
+{
+    for (parse_sym_entry_t *other = scope->first_in_scope;
+         other && other != field; other = other->next_in_scope) {
+        n00bb_field_union_t *member = parse_sym_binding(other,
+                                                        N00BB_FIELD_UNION_KEY);
+        if (member && member->tag == tag) return true;
+    }
+    return false;
+}
+
 bool
 cache_record_field_extents(parse_grammar_t *grammar,
                            core_translation_unit_t *unit,
@@ -2352,6 +2364,19 @@ cache_record_field_extents(parse_grammar_t *grammar,
         size_t group = 0;
         while (group < groups.len && groups.data[group] != owner) group++;
         if (group == groups.len) core_list_push(groups, owner);
+        n00bb_record_layout_request_t *request = parse_sym_binding(record,
+            CORE_STRING_STATIC("n00bb.record-layout-request"));
+        const char *shape = !request || request->policy != N00BB_RECORD_C
+            ? "a union needs a layout(c) record"
+            : groups.len > 1 ? "a record holds at most one union" : nullptr;
+        if (shape) {
+            core_diagnostics_report_at(
+                core_translation_unit_diagnostics(unit), unit,
+                CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0037"),
+                core_string_from_cstr(shape), link_source_location(owner));
+            ok = false;
+            break;
+        }
         core_string_t name = first_token_text(core_tree_child(owner, 2));
         n00bb_field_union_t *member = core_arena_alloc(
             &state->semantic_values, sizeof(*member));
@@ -2370,7 +2395,9 @@ cache_record_field_extents(parse_grammar_t *grammar,
             : !n00bb_static_integer_expression(grammar,
                 child_nt(grammar, arm, "expression"),
                 th_name(state->types, "int"), &member->tag)
-            ? "a union arm's value must be a constant integer" : nullptr;
+            ? "a union arm's value must be a constant integer"
+            : union_tag_taken(scope, field, member->tag)
+            ? "two union arms have the same value" : nullptr;
         if (problem) {
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit), unit,

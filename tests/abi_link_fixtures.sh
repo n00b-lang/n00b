@@ -14,6 +14,9 @@ N00B_PATH="$script_dir/programs/abi" "$compiler" compile \
     --output "$tmp/import_abi.n00bm" import_root
 [ -s "$tmp/import_abi.n00bm" ]
 "$abi_record_object_test" "$tmp/import_abi.n00bm" import
+N00B_PATH="$script_dir/programs/abi" "$compiler" compile \
+    --output "$tmp/c_foreign_abi.n00bm" c_foreign
+"$abi_record_object_test" "$tmp/c_foreign_abi.n00bm" c-foreign
 N00B_PATH="$script_dir/programs/link_records" "$compiler" compile \
     --output "$tmp/import_record_abi.n00bm" record_root
 [ -s "$tmp/import_record_abi.n00bm" ]

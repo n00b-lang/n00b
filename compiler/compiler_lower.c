@@ -19589,6 +19589,22 @@ field_extents_hold(core_list_t(core_translation_unit_ptr_t) *units)
              scope; scope = scope->all_next)
             for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
                  symbol = symbol->next_in_scope) {
+                n00bb_field_union_t *member = symbol->is_field
+                    ? parse_sym_binding(symbol, N00BB_FIELD_UNION_KEY)
+                    : nullptr;
+                uint64_t width = 0;
+                bool is_signed = false;
+                if (member && (!n00bb_integer_representation(
+                        th_resolve(member->discriminant->type), &width,
+                        &is_signed)
+                    || (width != 8 && width != 16 && width != 32))) {
+                    core_diagnostics_report_at(
+                        core_translation_unit_diagnostics(unit), unit,
+                        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0037"),
+                        CORE_STRING_STATIC("a union discriminant must be an 8, 16 or 32 bit integer"),
+                        link_source_location(member->node));
+                    ok = false;
+                }
                 n00bb_field_extent_t *extent = symbol->is_field
                     ? parse_sym_binding(symbol, N00BB_FIELD_EXTENT_KEY)
                     : nullptr;

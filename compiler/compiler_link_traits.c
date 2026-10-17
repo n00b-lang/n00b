@@ -4,6 +4,7 @@
 #include "compiler_tu.h"
 #include "parse/tree_util.h"
 #include "compiler_native_roots.h"
+#include "record_layout_request.h"
 
 typedef th_type *th_type_ptr_t;
 core_list_decl(th_type_ptr_t);
@@ -848,6 +849,18 @@ field_use_is_write(parse_grammar_t *grammar, parse_sym_entry_t *field,
     return false;
 }
 
+static bool
+field_shared_outside(parse_sym_entry_t *field)
+{
+    if (core_string_eq(field->visibility, CORE_STRING_STATIC("public")))
+        return true;
+    n00bb_record_layout_request_t *request = field->owner_type
+        ? parse_sym_binding(field->owner_type,
+                            CORE_STRING_STATIC("n00bb.record-layout-request"))
+        : nullptr;
+    return request && request->policy == N00BB_RECORD_C;
+}
+
 bool
 diagnose_unused_link_symbols(parse_grammar_t *grammar,
                              n00bb_link_analysis_t *analysis)
@@ -867,6 +880,8 @@ diagnose_unused_link_symbols(parse_grammar_t *grammar,
              scope; scope = scope->all_next) {
             for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
                  symbol = symbol->next_in_scope) {
+                if (symbol->is_field && field_shared_outside(symbol))
+                    continue;
                 if (symbol->is_field && symbol->decl_node
                     && nt_is(grammar, symbol->decl_node, "type-decl-one")) {
                     size_t writes = symbol->definition_count, reads = 0;
