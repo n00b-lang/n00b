@@ -590,13 +590,12 @@ func to_hex(self: string) -> string {
     let len: uint = __string_byte_len(base)
     let hex_len: uint = len * 2
     var data: Array[u8] = new[Array[u8]](cast[int] hex_len)
-    let map: Array[u8] = hex.hex_map_lower()
     var p: uint = 0
     var i: uint = 0
     while i < len {
         let c: u8 = __string_byte(base, i)
-        data[p] = map[c >> 4]
-        data[p + 1] = map[c & 0x0f]
+        data[p] = hex.hex_map_lower[c >> 4]
+        data[p + 1] = hex.hex_map_lower[c & 0x0f]
         p += 2
         i += 1
     }
@@ -724,8 +723,7 @@ private record V16u8 {
     lanes: Array[u8][16]
 }
 
-private func utf8_tab1() -> Array[u8] {
-    let table: Array[u8] = [
+private const utf8_tab1: V16u8 = (lanes = [
     cast[u8](Utf8_Check.too_long),
     cast[u8](Utf8_Check.too_long),
     cast[u8](Utf8_Check.too_long),
@@ -742,12 +740,9 @@ private func utf8_tab1() -> Array[u8] {
     cast[u8](Utf8_Check.too_short),
     cast[u8](Utf8_Check.lead_3),
     cast[u8](Utf8_Check.lead_4),
-]'array
-    return table
-}
+])
 
-private func utf8_tab2() -> Array[u8] {
-    let table: Array[u8] = [
+private const utf8_tab2: V16u8 = (lanes = [
     cast[u8](Utf8_Check.carry | Utf8_Check.overlong_3 | Utf8_Check.overlong_2 | Utf8_Check.too_large_1000_or_overlong_4),
     cast[u8](Utf8_Check.carry | Utf8_Check.overlong_2),
     cast[u8](Utf8_Check.carry),
@@ -764,12 +759,9 @@ private func utf8_tab2() -> Array[u8] {
     cast[u8](Utf8_Check.big | Utf8_Check.surrogate),
     cast[u8](Utf8_Check.big),
     cast[u8](Utf8_Check.big),
-]'array
-    return table
-}
+])
 
-private func utf8_tab3() -> Array[u8] {
-    let table: Array[u8] = [
+private const utf8_tab3: V16u8 = (lanes = [
     cast[u8](Utf8_Check.too_short),
     cast[u8](Utf8_Check.too_short),
     cast[u8](Utf8_Check.too_short),
@@ -786,22 +778,38 @@ private func utf8_tab3() -> Array[u8] {
     cast[u8](Utf8_Check.too_short),
     cast[u8](Utf8_Check.too_short),
     cast[u8](Utf8_Check.too_short),
-]'array
-    return table
-}
+])
 
-private func splat(value: u8) -> V16u8 {
-    var r: V16u8
-    var i: uint = 0
-    while i < 16 {
-        r.lanes[i] = value
-        i += 1
-    }
-    return r
-}
+private const v_zero: V16u8 = (lanes = [
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+])
+
+private const v_four: V16u8 = (lanes = [
+    4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+])
+
+private const v_e0_thr: V16u8 = (lanes = [
+    0x60, 0x60, 0x60, 0x60, 0x60, 0x60, 0x60, 0x60,
+    0x60, 0x60, 0x60, 0x60, 0x60, 0x60, 0x60, 0x60,
+])
+
+private const v_f0_thr: V16u8 = (lanes = [
+    0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
+    0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
+])
+
+private const v_bit7: V16u8 = (lanes = [
+    0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,
+    0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,
+])
+
+private const v_lonib: V16u8 = (lanes = [
+    0x0f, 0x0f, 0x0f, 0x0f, 0x0f, 0x0f, 0x0f, 0x0f,
+    0x0f, 0x0f, 0x0f, 0x0f, 0x0f, 0x0f, 0x0f, 0x0f,
+])
 
 private func v_shr(a: V16u8, b: V16u8) -> V16u8 {
-    var r: V16u8 = splat(0)
+    var r: V16u8 = v_zero
     var i: uint = 0
     while i < 16 {
         r.lanes[i] = a.lanes[i] >> b.lanes[i]
@@ -811,7 +819,7 @@ private func v_shr(a: V16u8, b: V16u8) -> V16u8 {
 }
 
 private func v_and(a: V16u8, b: V16u8) -> V16u8 {
-    var r: V16u8 = splat(0)
+    var r: V16u8 = v_zero
     var i: uint = 0
     while i < 16 {
         r.lanes[i] = a.lanes[i] & b.lanes[i]
@@ -821,7 +829,7 @@ private func v_and(a: V16u8, b: V16u8) -> V16u8 {
 }
 
 private func v_or(a: V16u8, b: V16u8) -> V16u8 {
-    var r: V16u8 = splat(0)
+    var r: V16u8 = v_zero
     var i: uint = 0
     while i < 16 {
         r.lanes[i] = a.lanes[i] | b.lanes[i]
@@ -831,7 +839,7 @@ private func v_or(a: V16u8, b: V16u8) -> V16u8 {
 }
 
 private func v_xor(a: V16u8, b: V16u8) -> V16u8 {
-    var r: V16u8 = splat(0)
+    var r: V16u8 = v_zero
     var i: uint = 0
     while i < 16 {
         r.lanes[i] = a.lanes[i] ^ b.lanes[i]
@@ -943,18 +951,18 @@ private func scan_scalar(s: string, p: uint, end: uint, ascii: bool)
     return Str_Encoding.utf8
 }
 
-private inline func v_lookup(table: Array[u8], indices: V16u8) -> V16u8 {
-    var r: V16u8 = splat(0)
+private inline func v_lookup(table: V16u8, indices: V16u8) -> V16u8 {
+    var r: V16u8 = v_zero
     var i: uint = 0
     while i < 16 {
-        r.lanes[i] = table[indices.lanes[i] & 0x0f]
+        r.lanes[i] = table.lanes[indices.lanes[i] & 0x0f]
         i += 1
     }
     return r
 }
 
 private inline func v_prev(cur: V16u8, prev: V16u8, n: uint) -> V16u8 {
-    var r: V16u8 = splat(0)
+    var r: V16u8 = v_zero
     var i: uint = 0
     while i < n {
         r.lanes[i] = prev.lanes[16 - n + i]
@@ -969,7 +977,7 @@ private inline func v_prev(cur: V16u8, prev: V16u8, n: uint) -> V16u8 {
 }
 
 private inline func v_sat_sub(a: V16u8, b: V16u8) -> V16u8 {
-    var r: V16u8 = splat(0)
+    var r: V16u8 = v_zero
     var i: uint = 0
     while i < 16 {
         if a.lanes[i] > b.lanes[i] {
@@ -992,30 +1000,21 @@ private inline func v_any_nonzero(v: V16u8) -> bool {
 }
 
 private func scan_simd(s: string, len: uint) -> Str_Encoding {
-    let v_four: V16u8 = splat(4)
-    let v_e0_thr: V16u8 = splat(0x60)
-    let v_f0_thr: V16u8 = splat(0x70)
-    let v_bit7: V16u8 = splat(0x80)
-    let v_lonib: V16u8 = splat(0x0f)
-    let zero: V16u8 = splat(0)
-    let tab1: Array[u8] = utf8_tab1()
-    let tab2: Array[u8] = utf8_tab2()
-    let tab3: Array[u8] = utf8_tab3()
-    var prev: V16u8 = zero
-    var errors: V16u8 = zero
-    var high: V16u8 = zero
+    var prev: V16u8 = v_zero
+    var errors: V16u8 = v_zero
+    var high: V16u8 = v_zero
     var i: uint = 0
     while i + 16 <= len {
-        var input: V16u8 = splat(0)
+        var input: V16u8 = v_zero
         var lane: uint = 0
         while lane < 16 {
             input.lanes[lane] = __string_byte(s, i + lane)
             lane += 1
         }
         let prev1: V16u8 = v_prev(input, prev, 1)
-        let hi_prev: V16u8 = v_lookup(tab1, v_shr(prev1, v_four))
-        let lo_prev: V16u8 = v_lookup(tab2, v_and(prev1, v_lonib))
-        let hi_cur: V16u8 = v_lookup(tab3, v_shr(input, v_four))
+        let hi_prev: V16u8 = v_lookup(utf8_tab1, v_shr(prev1, v_four))
+        let lo_prev: V16u8 = v_lookup(utf8_tab2, v_and(prev1, v_lonib))
+        let hi_cur: V16u8 = v_lookup(utf8_tab3, v_shr(input, v_four))
         let sc: V16u8 = v_and(v_and(hi_prev, lo_prev), hi_cur)
         let is_third: V16u8 = v_sat_sub(v_prev(input, prev, 2), v_e0_thr)
         let is_fourth: V16u8 = v_sat_sub(v_prev(input, prev, 3), v_f0_thr)

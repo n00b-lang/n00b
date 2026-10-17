@@ -5175,6 +5175,22 @@ fold_static_extent(parse_grammar_t *grammar, parse_tree_t *expression,
     parse_node_resolution_t resolution = parse_tree_resolution(expression);
     parse_sym_entry_t *symbol = resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
         ? resolution.target.symbol : nullptr;
+    if (symbol && symbol->kind == PARSE_SYM_ENUM_CONST) {
+        if (!symbol->has_comptime_value || !symbol->comptime_value)
+            return false;
+        ir_uint_t bits = 0;
+        if (n00bb_flagset_member(symbol))
+            bits = ((const n00bb_flagset_value_t *)
+                        symbol->comptime_value)->mask;
+        else {
+            const n00bb_enum_value_t *member = symbol->comptime_value;
+            if (member->negative) return false;
+            bits = member->magnitude;
+        }
+        if (bits > UINT64_MAX) return false;
+        *value = (uint64_t)bits;
+        return true;
+    }
     if (symbol && symbol->kind == PARSE_SYM_VARIABLE) {
         parse_tree_t *initializer = symbol->mutability == PARSE_SYM_CONST
                 && symbol->decl_node

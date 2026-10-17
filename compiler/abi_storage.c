@@ -312,6 +312,55 @@ encode_aggregate(array_writer_t *writer, th_type *type,
                  uint8_t *bytes, size_t byte_count, size_t depth);
 
 static bool
+encode_inline_array_member(array_writer_t *writer,
+                           const ir_final_member_layout_t *member,
+                           const ir_global_init_value_t *item,
+                           uint32_t source_kind, uint64_t source_bit_offset,
+                           uint8_t *bytes, size_t depth)
+{
+    uint32_t element_index;
+    th_type *element = member->inline_element_type;
+    if (!element || item->kind != IR_GLOBAL_INIT_SEQUENCE
+        || item->aggregate.count != member->inline_element_count
+        || (item->aggregate.count && !item->aggregate.items)
+        || !n00bb_abi_type_index_find(writer->index, element, &element_index)
+        || element_index >= writer->types->count) return false;
+    const n00b_abi_type_v1 *element_type = &writer->types->rows[element_index];
+    uint64_t element_bits = element_type->size_bits;
+    uint64_t stride = member->inline_element_stride_bits;
+    if (element_bits > stride || element_bits > SIZE_MAX - 7
+        || element_type->kind == N00B_ABI_TYPE_ARRAY
+        || element_type->kind == N00B_ABI_TYPE_STRING) return false;
+    size_t element_bytes = (size_t)((element_bits + 7) / 8);
+    size_t buffer_bytes = element_bytes < 16 ? 16 : element_bytes;
+    uint8_t *buffer = core_alloc_array(uint8_t, buffer_bytes);
+    bool aggregate = element_type->kind == N00B_ABI_TYPE_RECORD
+        || element_type->kind == N00B_ABI_TYPE_VARIANT
+        || element_type->kind == N00B_ABI_TYPE_TUPLE;
+    bool valid = true;
+    for (size_t i = 0; valid && i < item->aggregate.count; i++) {
+        const ir_global_init_value_t *value = &item->aggregate.items[i];
+        uint64_t at = member->bit_offset + stride * i;
+        uint32_t descriptor_index = UINT32_MAX;
+        memset(buffer, 0, buffer_bytes);
+        valid = aggregate
+            ? encode_aggregate(writer, element, value, source_kind,
+                source_bit_offset + at, buffer, element_bytes, depth + 1)
+            : encode_scalar(writer->runtime, writer->index, element, value,
+                element_bits, buffer, &descriptor_index);
+        if (valid && descriptor_index != UINT32_MAX)
+            valid = (source_bit_offset + at) % 8 == 0
+                && record_type_index(writer, source_kind,
+                    (source_bit_offset + at) / 8, descriptor_index);
+        for (uint64_t bit = 0; valid && bit < element_bits; bit++)
+            if (buffer[bit / 8] & (1u << (bit % 8)))
+                bytes[(at + bit) / 8] |= (uint8_t)(1u << ((at + bit) % 8));
+    }
+    core_free(buffer);
+    return valid;
+}
+
+static bool
 encode_aggregate_member(array_writer_t *writer,
                         const ir_final_layout_t *layout,
                         const ir_final_member_layout_t *member,
@@ -319,6 +368,9 @@ encode_aggregate_member(array_writer_t *writer,
                         uint32_t source_kind, uint64_t source_bit_offset,
                         uint8_t *bytes, size_t depth)
 {
+    if (member->inline_element_count)
+        return encode_inline_array_member(writer, member, item, source_kind,
+                                          source_bit_offset, bytes, depth);
     uint32_t child_index;
     if (!member->type || !n00bb_abi_type_index_find(writer->index,
             member->type, &child_index)

@@ -102,10 +102,9 @@ private func write_byte_hex(fd: int, c: u8, escaped: bool) -> uint fail: int {
         buf[len] = 0x78
         len += 1
     }
-    let map: Array[u8] = hex.hex_map_lower()
-    buf[len] = map[c >> 4]
+    buf[len] = hex.hex_map_lower[c >> 4]
     len += 1
-    buf[len] = map[c & 0x0f]
+    buf[len] = hex.hex_map_lower[c & 0x0f]
     len += 1
     write_raw(fd, buf, 0, len)!
     return len
@@ -175,9 +174,9 @@ private func format_hex(n: u128, spec: Int_Format, fd: int, neg: bool,
     var hbuf: Array[u8] = new[Array[u8]](cast[int] size)
     let end: uint = size - 1
     var p: uint = end
-    var map: Array[u8] = hex.hex_map_lower()
+    var map: Array[u8] = hex.hex_map_lower
     if spec.common.all_caps {
-        map = hex.hex_map_upper()
+        map = hex.hex_map_upper
     }
     var w: uint = 0
     if value == 0 {

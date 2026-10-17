@@ -1764,6 +1764,8 @@ static LLVMValueRef entry_alloca(lower_state_t *state, LLVMTypeRef type);
 static LLVMValueRef runtime_type_component(lower_state_t *state,
                                            LLVMValueRef type_index,
                                            uint32_t ordinal);
+static LLVMValueRef load_array_extent(lower_state_t *state,
+                                      LLVMValueRef address, const char *name);
 
 static LLVMValueRef
 make_packed_bitptr(lower_state_t *state, LLVMValueRef data,
@@ -2668,6 +2670,32 @@ record_value_get(lower_state_t *state, LLVMValueRef record,
 }
 
 static LLVMValueRef
+inline_array_from_value(lower_state_t *state, LLVMValueRef array,
+                        LLVMTypeRef storage)
+{
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
+    LLVMTypeRef source = LLVMTypeOf(array);
+    if (LLVMGetTypeKind(source) != LLVMStructTypeKind
+        || LLVMCountStructElementTypes(source) != 2
+        || LLVMStructGetTypeAtIndex(source, 0) != pointer
+        || LLVMStructGetTypeAtIndex(source, 1) != pointer) return nullptr;
+    LLVMValueRef data = LLVMBuildExtractValue(state->builder, array, 0,
+                                              "inline.source.data");
+    LLVMValueRef descriptor = LLVMBuildExtractValue(state->builder, array, 1,
+                                                    "inline.source.descriptor");
+    LLVMValueRef length = load_array_extent(state,
+        LLVMBuildStructGEP2(state->builder, array_descriptor_type(context),
+                            descriptor, 5, "inline.source.length.address"),
+        "inline.source.length");
+    emit_trap_if(state, LLVMBuildICmp(state->builder, LLVMIntNE, length,
+        LLVMConstInt(LLVMInt64TypeInContext(context),
+                     LLVMGetArrayLength(storage), false),
+        "inline.source.mismatch"));
+    return LLVMBuildLoad2(state->builder, storage, data, "inline.source");
+}
+
+static LLVMValueRef
 record_value_set(lower_state_t *state, LLVMValueRef record,
                  const record_slot_t *slot, LLVMValueRef value)
 {
@@ -2683,7 +2711,10 @@ record_value_set(lower_state_t *state, LLVMValueRef record,
             && LLVMTypeOf(value) == LLVMInt1TypeInContext(context))
             value = LLVMBuildZExt(state->builder, value, storage,
                                   "record.field.bool");
-        return LLVMTypeOf(value) == storage
+        if (LLVMGetTypeKind(storage) == LLVMArrayTypeKind
+            && LLVMTypeOf(value) != storage)
+            value = inline_array_from_value(state, value, storage);
+        return value && LLVMTypeOf(value) == storage
             ? LLVMBuildInsertValue(state->builder, record, value,
                 slot->element, "record.field.set")
             : nullptr;

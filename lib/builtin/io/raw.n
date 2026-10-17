@@ -1,16 +1,13 @@
 import string.core
 import bitptr
 import abi
+import hex
 
 trait Raw_Repr {
     func raw_repr(self: `T, fd: i32) -> i32
 }
 
 private const signed_flag: u32 = 1
-private const hex_digits: Array[u8] = [
-    0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37,
-    0x38, 0x39, 0x61, 0x62, 0x63, 0x64, 0x65, 0x66,
-]'array
 
 func raw_repr(self: string, fd: i32) -> i32 {
     return string.core.__fd_write(fd, self)
@@ -167,7 +164,7 @@ private func emit_address(fd: i32, address: u64) -> i32 {
     var i: uint = 16
     while i > 0 {
         i -= 1
-        buf[i] = hex_digits[rest & 15]
+        buf[i] = hex.hex_map_lower[rest & 15]
         rest = rest >> 4
     }
     return string.core.__fd_write_bytes(fd, buf, 0, 16)
