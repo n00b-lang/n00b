@@ -7782,6 +7782,25 @@ union_arm_for(th_ctx *types, th_type *actual, th_type *expected)
     return nullptr;
 }
 
+bool
+n00bb_value_coerces(th_ctx *types, th_type *from, th_type *to)
+{
+    from = from ? th_resolve(from) : nullptr;
+    to = to ? th_resolve(to) : nullptr;
+    if (!types || !from || !to || th_kind_of(from) != TH_NAMED
+        || th_kind_of(to) != TH_NAMED || !th_is_closed(types, from)
+        || !th_is_closed(types, to)
+        || th_hash(types, from) == th_hash(types, to)) return false;
+    const char *from_name = nullptr, *to_name = nullptr;
+    size_t from_length = 0, to_length = 0, from_args = 0, to_args = 0;
+    return th_named_info(from, &from_name, &from_length, nullptr, &from_args)
+        && th_named_info(to, &to_name, &to_length, nullptr, &to_args)
+        && !from_args && !to_args
+        && from_length == sizeof(n00bb_buffer_type_name) - 1
+        && !memcmp(from_name, n00bb_buffer_type_name, from_length)
+        && to_length == 6 && !memcmp(to_name, "string", 6);
+}
+
 th_type *
 n00bb_type_materialize(parse_grammar_t *grammar, n00bb_tu_state_t *state,
                        parse_tree_t *node, th_type *actual, th_type *expected,
@@ -7803,6 +7822,7 @@ n00bb_type_materialize(parse_grammar_t *grammar, n00bb_tu_state_t *state,
     if (n00bb_contextual_integer_literal(state, node, expected))
         return expected;
     *converted = true;
+    if (n00bb_value_coerces(types, actual, expected)) return expected;
     if (integer_value_promotes(grammar, state, node, actual, expected)
         || n00bb_dereferences_to(types, actual, expected)) return expected;
     if (n00bb_option_type_element(expected, &element)

@@ -778,6 +778,9 @@ bool n00bb_range_proven_above_int64(parse_grammar_t *grammar,
                                     parse_tree_t *node);
 bool n00bb_contextual_integer_literal(n00bb_tu_state_t *state,
                                       parse_tree_t *node, th_type *target);
+static constexpr char n00bb_buffer_type_name[] =
+    "builtin.containers.buffer.Buffer";
+bool n00bb_value_coerces(th_ctx *types, th_type *from, th_type *to);
 th_type *n00bb_type_materialize(parse_grammar_t *grammar,
                                 n00bb_tu_state_t *state, parse_tree_t *node,
                                 th_type *actual, th_type *expected,

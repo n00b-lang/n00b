@@ -19,6 +19,7 @@ double n00bb_profile_seconds(void);
 #include "compiler_tu.h"
 #include "compiler_link.h"
 #include "compiler_link_lifetime.h"
+#include "compiler_buffer_borrow.h"
 #include "compiler_ir_setup.h"
 #include "compiler_lower.h"
 #include "compiler_layout.h"
@@ -10142,6 +10143,13 @@ n00bb_materialize(ir_lower_context_t *context, parse_tree_t *node,
     if (!value || !target || ir_type_eq(context->module, value->type, target))
         return value;
     th_ctx *types = ir_module_types(context->module);
+    if (n00bb_value_coerces(types, value->type, target)) {
+        n00bb_lower_context_t *lower = context->user;
+        ir_value_t *view = n00bb_emit_wrapping(context,
+            IR_OP_BUFFER_AS_STRING, value, target, span);
+        return view && lower && ir_value_set_alias_targets(lower->ir_context,
+            view, nullptr, 0, true) ? view : nullptr;
+    }
     th_type *referent = n00bb_dereference_target(types, value->type, target);
     if (referent) {
         ir_value_t *loaded = ir_lower_value_as(context, value, referent, span);
@@ -19858,6 +19866,7 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         ir_diags_t *diagnostics = ir_diags_new_attached(
             ir_context, nullptr,
             core_translation_unit_diagnostics(unit), unit);
+        ok = n00bb_buffer_borrow_pass(module, diagnostics);
         for (size_t p = 0; ok
              && p < sizeof(lowering_passes) / sizeof(lowering_passes[0]);
              p++) {

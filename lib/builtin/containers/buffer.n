@@ -515,3 +515,28 @@ func free(self: Buffer) {
     state.byte_len = 0
     state.alloc_len = 0
 }
+
+func buffer_borrow_begin(self: Buffer) -> string {
+    let state: Ref[Buffer_State] = self.state
+    read_lock(state)
+    when debug_enabled() {
+        if borrowed_top < 8 {
+            borrowed_buffers[borrowed_top] = state
+        }
+        borrowed_top += 1
+    }
+    return string.core.from_raw(state.store, cast[int] state.byte_len,
+                                copy = false)
+}
+
+func buffer_borrow_end(self: Buffer) {
+    let state: Ref[Buffer_State] = self.state
+    when debug_enabled() {
+        require borrowed_top > 0
+        borrowed_top -= 1
+        if borrowed_top < 8 {
+            borrowed_buffers[borrowed_top] = nil
+        }
+    }
+    read_unlock(state)
+}

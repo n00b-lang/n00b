@@ -8205,6 +8205,34 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             : nullptr;
         return result && save_result(state, instruction, result);
     }
+    case IR_OP_BUFFER_AS_STRING:
+    case IR_OP_BUFFER_BORROW_END: {
+        bool begin = instruction->op == IR_OP_BUFFER_AS_STRING;
+        if (count != 1 || operands[0].kind != IR_OPD_VALUE
+            || begin != (instruction->dest != nullptr)) break;
+        const char *name = begin
+            ? "builtin.containers.buffer.buffer_borrow_begin"
+            : "builtin.containers.buffer.buffer_borrow_end";
+        LLVMValueRef buffer = lowered_value(state, operands[0].value);
+        LLVMContextRef context = LLVMGetModuleContext(state->module);
+        LLVMTypeRef view = begin ? value_type(state->function->owner,
+            instruction->dest->type, context)
+            : LLVMVoidTypeInContext(context);
+        if (!buffer || !view) break;
+        LLVMTypeRef parameter = LLVMTypeOf(buffer);
+        LLVMTypeRef expected = LLVMFunctionType(view, &parameter, 1, false);
+        LLVMValueRef helper = LLVMGetNamedFunction(state->module, name);
+        if (!helper) helper = LLVMAddFunction(state->module, name, expected);
+        LLVMTypeRef signature = LLVMGlobalGetValueType(helper);
+        if (signature != expected) {
+            state->failure_detail = "buffer borrow helper signature differs";
+            break;
+        }
+        result = LLVMBuildCall2(state->builder, signature, helper, &buffer,
+                                1, begin ? "buffer.borrow" : "");
+        if (!result) break;
+        return !begin || save_result(state, instruction, result);
+    }
     case IR_OP_SIGNAL_FENCE:
         if (count || instruction->dest || instruction->n_mods) break;
         return LLVMBuildFence(state->builder,
@@ -10453,6 +10481,9 @@ may_collect(ir_func_t *function,
     for (uint32_t b = 0; b < function->n_blocks; b++) {
         ir_block_t *block = function->blocks[b];
         for (uint32_t i = 0; i < block->n_instrs; i++) {
+            if (block->instrs[i]->op == IR_OP_BUFFER_AS_STRING
+                || block->instrs[i]->op == IR_OP_BUFFER_BORROW_END)
+                return true;
             if (block->instrs[i]->op != IR_OP_CALL) continue;
             ir_func_t *callee = direct_call_target(block->instrs[i]);
             if (!callee || may_collect(callee, visiting)) return true;
