@@ -1,10 +1,13 @@
+import text
+
 record String_Words layout(c) {
     data:     Ref[byte]?
     selector: u64
 }
 
-func check(s: string, bytes: uint) {
+func check(s: string, bytes: uint, cps: uint) {
     require byte_len(s) == bytes
+    require text.len(s, unit = text.Index_Unit.char) == cps
 }
 
 func c_length(bytes: Array[u8]) -> uint {
@@ -119,11 +122,11 @@ func check_ascii_flag() {
     require style_ref(plain) == 0
 }
 
-check("", 0)
-check("hello", 5)
-check("héllo", 6)
-check("\U0001f4a9", 4)
-check("a€b", 5)
+check("", 0, 0)
+check("hello", 5, 5)
+check("héllo", 6, 5)
+check("\U0001f4a9", 4, 1)
+check("a€b", 5, 3)
 let a: string = "distinct"
 let b: string = "distinct"
 let c: string = "different"
