@@ -700,10 +700,10 @@ record Stream layout(c) {
     public avail_out: u32
     public total_out: u64
     public msg: Foreign[i8]?
-    public state: uint
+    public state: Foreign[nil]?
     public zalloc: Foreign_Fn[(uint, u32, u32) -> uint]?
     public zfree: Foreign_Fn[(uint, uint) -> nil]?
-    public opaque: uint
+    public opaque: Foreign[nil]?
     public data_type: i32
     public adler: u64
     public reserved: u64

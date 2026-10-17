@@ -43,6 +43,11 @@ int64_t writ_bake_bake_query(bake_root_t *root, int32_t key);
 int32_t writ_bake_bake_reopen(bake_root_t *root);
 
 enum {
+    writ_bake_bake_open_ok = 0,
+};
+int32_t writ_bake_bake_open(const char *path, size_t path_length, int32_t *result);
+
+enum {
     writ_bake_bake_free_ok = 0,
 };
 int32_t writ_bake_bake_free(bake_root_t *root);
@@ -147,6 +152,35 @@ int32_t writ_bake_bake_reopen(bake_root_t *root) {
     return ret;
 }
 
+int32_t writ_bake_bake_open(const char *path, size_t path_length, int32_t *result) {
+    const char *s0 = 0;
+    int32_t ret = 0;
+    char *l0 = NULL;
+    int32_t outcome = 0;
+    if (path) {
+        int32_t status = writ_bake_encode(path, path_length, &l0);
+        if (status) {
+            outcome = status;
+            goto finish;
+        }
+    }
+    else {
+        outcome = WRIT_BAKE_ARGUMENT_ERROR;
+        goto finish;
+    }
+    s0 = l0;
+    ret = bake_open(s0);
+    {
+        outcome = writ_bake_bake_open_ok;
+    }
+    if (outcome == writ_bake_bake_open_ok) {
+        *result = ret;
+    }
+finish:
+    free(l0);
+    return outcome;
+}
+
 int32_t writ_bake_bake_free(bake_root_t *root) {
     bake_root_t *s0 = 0;
     int32_t outcome = 0;
@@ -217,6 +251,26 @@ int64_t writ_bake_n00b_bake_query(uint64_t root, int32_t key) {
 
 int32_t writ_bake_n00b_bake_reopen(uint64_t root) {
     int32_t writ_n00b_value = writ_bake_bake_reopen((bake_root_t *)(uintptr_t)root);
+    return writ_n00b_value;
+}
+
+int32_t writ_bake_n00b_bake_open(const void *path, void *result) {
+    size_t path_length = 0;
+    const void *path_borrowed = n00b_ffi_borrow((void *)path, &path_length, 2);
+    uint8_t *path_data = malloc(path_length + 1);
+    if (path_data && path_length) {
+        memcpy(path_data, path_borrowed, path_length);
+    }
+    if (path_data) {
+        path_data[path_length] = 0;
+    }
+    n00b_ffi_release((void *)path);
+    if (!path_data) {
+        free(path_data);
+        return WRIT_BAKE_OUT_OF_MEMORY;
+    }
+    int32_t writ_n00b_value = writ_bake_bake_open((const char *)path_data, path_length, (int32_t *)result);
+    free(path_data);
     return writ_n00b_value;
 }
 
@@ -335,6 +389,10 @@ func bake_query(root: Bake_Root, key: i32) -> i64 {
     if root.raw == nil {
         panic("bake_query: handle is closed")
     }
+    let __fixup_root: string? = __ffi_fixup(root.raw)
+    if __fixup_root != nil {
+        panic(__fixup_root.get())
+    }
     let result = __bake_query(unsafe_cast[uint] root.raw, key)
     return result
 }
@@ -343,7 +401,22 @@ func bake_reopen(root: Bake_Root) -> i32 {
     if root.raw == nil {
         panic("bake_reopen: handle is closed")
     }
+    let __fixup_root: string? = __ffi_fixup(root.raw)
+    if __fixup_root != nil {
+        panic(__fixup_root.get())
+    }
     let result = __bake_reopen(unsafe_cast[uint] root.raw)
+    return result
+}
+
+func bake_open(path: string) -> i32 fail: Error {
+    var path_value = path
+    var result: i32 = 0
+    let outcome = __bake_open(ref path_value, ref result)
+    if outcome < 0 {
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "bake_open")
+        fail failure
+    }
     return result
 }
 
@@ -385,12 +458,14 @@ func close(modify self: Bake_Root) fail: Error {
 91	tests/gen_n00b/bake.writ:65:1	bake_multiply
 96	tests/gen_n00b/bake.writ:66:1	bake_build
 107	tests/gen_n00b/bake.writ:67:1	bake_query
-115	tests/gen_n00b/bake.writ:68:1	bake_reopen
-123	tests/gen_n00b/bake.writ:69:1	bake_free
+119	tests/gen_n00b/bake.writ:68:1	bake_reopen
+131	tests/gen_n00b/bake.writ:69:1	bake_open
+142	tests/gen_n00b/bake.writ:70:1	bake_free
 load static
 extern __bake_add writ_bake_n00b_bake_add (int, int) -> int fail: nil
 extern __bake_multiply writ_bake_n00b_bake_multiply (int, int) -> int fail: nil
 extern __bake_build writ_bake_n00b_bake_build (ref[string], ref[uint]) -> i32 fail: nil
 extern __bake_query writ_bake_n00b_bake_query (uint, i32) -> int fail: nil
 extern __bake_reopen writ_bake_n00b_bake_reopen (uint) -> i32 fail: nil
+extern __bake_open writ_bake_n00b_bake_open (ref[string], ref[i32]) -> i32 fail: nil
 extern __bake_free writ_bake_n00b_bake_free (uint) -> i32 fail: nil

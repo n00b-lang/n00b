@@ -1366,12 +1366,22 @@ foreign_clause(const n00b_t *g, const writ_record_view_t *record, const writ_slo
 }
 
 static writ_str_t
+foreign_pointee(const n00b_t *g, const writ_type_view_t *target)
+{
+    if (target && (target->kind == WRIT_TYPE_POINTER || target->kind == WRIT_TYPE_ARRAY)) {
+        writ_str_t inner = foreign_pointee(g, target->target);
+        return writ_str_format(g->session, "Foreign[%.*s]?", S(inner.length ? inner : writ_cstr("nil")));
+    }
+    return foreign_element(g, target);
+}
+
+static writ_str_t
 foreign_pointer(const n00b_t *g, const writ_record_view_t *record, const writ_slot_view_t *field)
 {
-    writ_str_t element = foreign_element(g, field->type->target);
+    writ_str_t element = record ? foreign_pointee(g, field->type->target) : foreign_element(g, field->type->target);
     writ_str_t clause = {0};
     if (!element.length || (record && !foreign_clause(g, record, field, &clause))) {
-        return writ_cstr("uint");
+        return writ_cstr(record ? "Foreign[nil]?" : "uint");
     }
     return writ_str_format(g->session, "Foreign[%.*s]?%.*s", S(element), S(clause));
 }
@@ -2312,29 +2322,47 @@ emit_text_check(const wrapper_t *w, writ_emit_t *emit, writ_str_t name, bool byt
 }
 
 static void
+emit_fixup(const wrapper_t *w, writ_emit_t *emit, writ_str_t name)
+{
+    writ_str_t problem = writ_str_format(w->g->session, "__fixup_%.*s", S(name));
+    writ_emit_line(emit, "let %.*s: string? = __ffi_fixup(%.*s.raw)", S(problem), S(name));
+    writ_emit_open(emit, "if %.*s != nil", S(problem));
+    if (declares_failure(w)) {
+        emit_fail(w, emit, writ_str_format(w->g->session, "%d", WRIT_C_ARGUMENT_ERROR), problem);
+    } else {
+        writ_emit_line(emit, "panic(%.*s.get())", S(problem));
+    }
+    writ_emit_close(emit, nullptr);
+}
+
+static void
 emit_closed_checks(const wrapper_t *w, writ_emit_t *emit, const core_list_t(shim_param_t) *params)
 {
     for (size_t i = 0; i < params->len; i++) {
         const shim_param_t *p = &params->data[i];
         const writ_plan_item_view_t *item = &w->plan->items[p->item];
         bool guarded = p->item == w->receiver && guards_release(w);
-        if (p->kind != PARAM_ADDRESS || !is_handle(item) || (item->type && item->type->nullable && !guarded)) {
+        if (p->kind != PARAM_ADDRESS || !is_handle(item)) {
             continue;
         }
-        writ_emit_open(emit, "if %.*s.raw == %s", S(local_name(w, p->item)), raw_empty(w->g, item->type));
-        if (declares_failure(w)) {
-            emit_fail(w, emit, writ_str_format(w->g->session, "%d", WRIT_C_ARGUMENT_ERROR),
-                      writ_cstr("\"handle is closed\""));
-        } else {
-            writ_emit_line(emit, "panic(\"%.*s: handle is closed\")", S(w->plan->fn->contract_name));
+        writ_str_t name = local_name(w, p->item);
+        if (!item->type || !item->type->nullable || guarded) {
+            writ_emit_open(emit, "if %.*s.raw == %s", S(name), raw_empty(w->g, item->type));
+            if (declares_failure(w)) {
+                emit_fail(w, emit, writ_str_format(w->g->session, "%d", WRIT_C_ARGUMENT_ERROR),
+                          writ_cstr("\"handle is closed\""));
+            } else {
+                writ_emit_line(emit, "panic(\"%.*s: handle is closed\")", S(w->plan->fn->contract_name));
+            }
+            writ_emit_close(emit, nullptr);
         }
-        writ_emit_close(emit, nullptr);
         if (guarded) {
-            writ_emit_open(emit, "if __abi_baked_address(%.*s)",
-                           S(raw_of(w->g, item->type, local_name(w, p->item))));
+            writ_emit_open(emit, "if __abi_baked_address(%.*s)", S(raw_of(w->g, item->type, name)));
             emit_fail(w, emit, writ_str_format(w->g->session, "%d", WRIT_C_ARGUMENT_ERROR),
                       writ_cstr("\"a baked object cannot be released\""));
             writ_emit_close(emit, nullptr);
+        } else if (typed_handle(w->g, item->type)) {
+            emit_fixup(w, emit, name);
         }
     }
 }

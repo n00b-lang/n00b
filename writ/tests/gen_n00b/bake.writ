@@ -66,4 +66,5 @@ fn bake_multiply(left: i64, right: i64) -> i64
 fn bake_build(spec: *cstr) -> own ?bake_root_t release bake_free
 fn bake_query(root: *bake_root_t, key: i32) -> i64
 fn bake_reopen(root: *bake_root_t) -> i32
+fn bake_open(path: *cstr) -> i32
 fn bake_free(root: consume ?bake_root_t)
