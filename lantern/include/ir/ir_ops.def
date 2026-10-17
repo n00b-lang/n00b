@@ -69,6 +69,8 @@ IR_OP(PREFETCH,        "prefetch",        1, 1,  NONE,        "v",   0,         
 IR_OP(TYPE_TEST,       "type.test",       2, 2,  BOOL,        "vt",  0,                              HASRESULT)
 IR_OP(TYPE_NARROW,     "type.narrow",     2, 2,  ANNOTATED,   "vt",  0,                              HASRESULT)
 IR_OP(TYPE_OF,         "type.of",         1, 1,  ANNOTATED,   "v",   0,                              HASRESULT)
+IR_OP(BUFFER_AS_STRING, "buffer.as_string", 1, 1, ANNOTATED,  "v",   0,                              HASRESULT | SIDEEFFECT)
+IR_OP(BUFFER_BORROW_END, "buffer.borrow_end", 1, 1, NONE,     "v",   0,                              SIDEEFFECT)
 
 IR_OP(ADD,             "add",             2, 2,  OPERAND0,    "vv",  IR_MOD_OVERFLOW,                HASRESULT)
 IR_OP(SUB,             "sub",             2, 2,  OPERAND0,    "vv",  IR_MOD_OVERFLOW,                HASRESULT)
