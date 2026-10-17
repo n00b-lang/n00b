@@ -1204,7 +1204,7 @@ func __finalize(consume self: Ref[Regex_Cell]) {
     }
 }
 
-type Match layout(c) {
+record Match layout(c) {
     public start: u64
     public end: u64
 }

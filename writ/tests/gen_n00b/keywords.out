@@ -260,24 +260,24 @@ func __finalize(consume self: Ref[Db_Cell]) {
     }
 }
 
-type Open_Opts layout(c) {
+record Open_Opts layout(c) {
     public present: u32
     public timeout_ms: u32
     public readonly: bool
     public cache_kb: u32
 }
 
-type Limits layout(c) {
+record Limits layout(c) {
     public max_rows: i64
     public min_rows: i64
 }
 
-type Sized layout(c) {
+record Sized layout(c) {
     public size: u32
     public flags: u32
 }
 
-type Plain layout(c) {
+record Plain layout(c) {
     public depth: i32
 }
 

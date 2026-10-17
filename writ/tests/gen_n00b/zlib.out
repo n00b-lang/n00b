@@ -692,17 +692,17 @@ type Error {
     public fn: string
 }
 
-type Stream layout(c) {
-    public next_in: uint
+record Stream layout(c) {
+    public next_in: Foreign[u8]?
     public avail_in: u32
     public total_in: u64
-    public next_out: uint
+    public next_out: Foreign[u8]?
     public avail_out: u32
     public total_out: u64
-    public msg: uint
+    public msg: Foreign[i8]?
     public state: uint
-    public zalloc: uint
-    public zfree: uint
+    public zalloc: Foreign_Fn[(uint, u32, u32) -> uint]?
+    public zfree: Foreign_Fn[(uint, uint) -> nil]?
     public opaque: uint
     public data_type: i32
     public adler: u64

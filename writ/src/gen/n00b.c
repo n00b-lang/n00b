@@ -138,13 +138,13 @@ typedef struct {
 core_list_decl(shim_param_t);
 
 static const writ_type_view_t *record_target(const writ_plan_item_view_t *item);
-static bool expressible(const writ_model_t *model, const writ_record_view_t *record);
+static bool expressible(const n00b_t *g, const writ_record_view_t *record);
 
 static bool
 opaque_record(const n00b_t *g, const writ_type_view_t *type)
 {
     const writ_record_view_t *record = type ? writ_model_record_named(g->model, type->name) : nullptr;
-    return record && !expressible(g->model, record);
+    return record && !expressible(g, record);
 }
 
 static writ_str_t
@@ -1145,42 +1145,198 @@ shim_c_text(const n00b_t *g, const writ_plan_view_t *const *plans)
     return writ_emit_finish(&emit, g->session);
 }
 
-static bool
-expressible_field(const writ_model_t *model, const writ_type_view_t *type)
+static writ_str_t field_spec(const n00b_t *g, const writ_record_view_t *record, const writ_slot_view_t *field);
+
+static writ_str_t
+foreign_element(const n00b_t *g, const writ_type_view_t *type)
 {
+    const writ_model_t *model = g->model;
     switch (type ? type->kind : WRIT_TYPE_VOID) {
     case WRIT_TYPE_BOOL:
     case WRIT_TYPE_INT:
-    case WRIT_TYPE_POINTER:
-    case WRIT_TYPE_ARRAY:
-    case WRIT_TYPE_CALLBACK:
     case WRIT_TYPE_ENUM:
-    case WRIT_TYPE_HANDLE:
-    case WRIT_TYPE_CSTR:
-        return true;
-    case WRIT_TYPE_RECORD:
-        return expressible(model, writ_model_record_at(model, type->decl));
+        return scalar_type(g, type);
     case WRIT_TYPE_FLOAT:
-        return type->size == 8;
-    case WRIT_TYPE_VIEW:
-        return expressible_field(model, type->target);
+        return type->size == 8 ? scalar_type(g, type) : (writ_str_t){0};
+    case WRIT_TYPE_CSTR:
+        return prim(g, "i%u", 8);
+    case WRIT_TYPE_RECORD: {
+        const writ_record_view_t *record = writ_model_record_at(model, type->decl);
+        return expressible(g, record) && !liftable_record(model, record) ? writ_binding_type(g->b, type->name)
+                                                                         : (writ_str_t){0};
+    }
+    default:
+        return (writ_str_t){0};
+    }
+}
+
+static bool
+sibling_field(const n00b_t *g, const writ_record_view_t *record, uint32_t expr, writ_str_t *name)
+{
+    const writ_model_t *model = g->model;
+    writ_ref_t ref = writ_expr_ref(model, expr);
+    if (ref.kind != WRIT_REF_SLOT || ref.phase != WRIT_REF_VALUE || ref.index >= model->slots.len) {
+        return false;
+    }
+    writ_str_t wanted = writ_sym_str(model->session, model->slots.data[ref.index].name);
+    for (size_t f = 0; f < record->fields_count; f++) {
+        if (writ_str_eq(record->fields[f].name, wanted)) {
+            *name = writ_profile_name(g->profile, WRIT_NAMING_FIELD, wanted);
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool
+foreign_clause(const n00b_t *g, const writ_record_view_t *record, const writ_slot_view_t *field, writ_str_t *clause)
+{
+    const writ_type_view_t *type = field->type;
+    writ_str_t name = {0};
+    int64_t sentinel = 0;
+    *clause = writ_cstr("");
+    if (type->kind == WRIT_TYPE_POINTER) {
+        *clause = type->target->kind == WRIT_TYPE_CSTR ? writ_cstr(" until 0") : *clause;
+        return true;
+    }
+    switch (field->extent_kind) {
+    case WRIT_EXTENT_NONE:
+        return true;
+    case WRIT_EXTENT_COUNT:
+    case WRIT_EXTENT_BOUNDED:
+        if (!sibling_field(g, record, field->extent_kind == WRIT_EXTENT_COUNT ? field->count_expr : field->len_expr,
+                           &name)) {
+            return false;
+        }
+        *clause = writ_str_format(g->session, " count %.*s", S(name));
+        return true;
+    case WRIT_EXTENT_UNTIL:
+        if (!writ_expr_eval(g->model, field->count_expr, nullptr, &sentinel)) {
+            return false;
+        }
+        *clause = writ_str_format(g->session, " until %lld", (long long)sentinel);
+        return true;
     default:
         return false;
     }
 }
 
+static writ_str_t
+foreign_pointer(const n00b_t *g, const writ_record_view_t *record, const writ_slot_view_t *field)
+{
+    writ_str_t element = foreign_element(g, field->type->target);
+    writ_str_t clause = {0};
+    if (!element.length || (record && !foreign_clause(g, record, field, &clause))) {
+        return writ_cstr("uint");
+    }
+    return writ_str_format(g->session, "Foreign[%.*s]?%.*s", S(element), S(clause));
+}
+
+static writ_str_t
+foreign_callback(const n00b_t *g, const writ_type_view_t *type)
+{
+    const writ_fn_view_t *fn = writ_model_callback_named(g->model, type->name);
+    if (!fn) {
+        return writ_cstr("uint");
+    }
+    writ_emit_t emit;
+    writ_emit_init(&emit);
+    for (size_t s = 0; s < fn->slots_count; s++) {
+        writ_str_t param = field_spec(g, nullptr, &fn->slots[s]);
+        if (!param.length || writ_str_eq(param, writ_cstr("union"))) {
+            writ_emit_discard(&emit);
+            return writ_cstr("uint");
+        }
+        writ_emit_text(&emit, "%s%.*s", s ? ", " : "", S(param));
+    }
+    writ_str_t result = fn->result ? field_spec(g, nullptr, fn->result) : writ_cstr("nil");
+    writ_str_t params = writ_emit_finish(&emit, g->session);
+    return result.length ? writ_str_format(g->session, "Foreign_Fn[(%.*s) -> %.*s]?", S(params), S(result))
+                         : writ_cstr("uint");
+}
+
 static bool
-expressible(const writ_model_t *model, const writ_record_view_t *record)
+union_expressible(const n00b_t *g, const writ_record_view_t *tagged)
+{
+    for (size_t f = 0; f < tagged->fields_count; f++) {
+        writ_str_t spec = field_spec(g, tagged, &tagged->fields[f]);
+        if (!spec.length || writ_str_eq(spec, writ_cstr("union"))) {
+            return false;
+        }
+    }
+    return tagged->arms_count != 0;
+}
+
+static writ_str_t
+field_spec(const n00b_t *g, const writ_record_view_t *record, const writ_slot_view_t *field)
+{
+    const writ_type_view_t *type = field->type;
+    switch (type ? type->kind : WRIT_TYPE_VOID) {
+    case WRIT_TYPE_BOOL:
+    case WRIT_TYPE_INT:
+    case WRIT_TYPE_ENUM:
+    case WRIT_TYPE_HANDLE:
+        return scalar_type(g, type);
+    case WRIT_TYPE_FLOAT:
+        return type->size == 8 ? scalar_type(g, type) : (writ_str_t){0};
+    case WRIT_TYPE_VIEW: {
+        writ_slot_view_t inner = *field;
+        inner.type = type->target;
+        return field_spec(g, record, &inner);
+    }
+    case WRIT_TYPE_POINTER:
+    case WRIT_TYPE_ARRAY:
+        return foreign_pointer(g, record, field);
+    case WRIT_TYPE_CALLBACK:
+        return foreign_callback(g, type);
+    case WRIT_TYPE_RECORD:
+        return foreign_element(g, type);
+    case WRIT_TYPE_UNION:
+        return record && union_expressible(g, writ_model_record_at(g->model, type->decl)) ? writ_cstr("union")
+                                                                                          : (writ_str_t){0};
+    default:
+        return (writ_str_t){0};
+    }
+}
+
+static bool
+expressible(const n00b_t *g, const writ_record_view_t *record)
 {
     if (record->type->kind == WRIT_TYPE_UNION) {
         return false;
     }
     for (size_t f = 0; f < record->fields_count; f++) {
-        if (!expressible_field(model, record->fields[f].type)) {
+        if (!field_spec(g, record, &record->fields[f]).length) {
             return false;
         }
     }
     return true;
+}
+
+static void
+emit_layout_field(const n00b_t *g, writ_emit_t *emit, const writ_record_view_t *record, const writ_slot_view_t *field)
+{
+    writ_str_t name = writ_profile_name(g->profile, WRIT_NAMING_FIELD, field->name);
+    writ_str_t spec = field_spec(g, record, field);
+    if (field->type->kind != WRIT_TYPE_UNION) {
+        writ_emit_line(emit, "public %.*s: %.*s", S(name), S(spec));
+        return;
+    }
+    const writ_record_view_t *tagged = writ_model_record_at(g->model, field->type->decl);
+    writ_emit_open(emit, "public %.*s: union by %.*s", S(name),
+                   S(writ_profile_name(g->profile, WRIT_NAMING_FIELD, record->fields[field->tag_field].name)));
+    for (size_t a = 0; a < tagged->arms_count; a++) {
+        const writ_union_arm_view_t *arm = &tagged->arms[a];
+        if (arm->field == WRIT_PLAN_NONE) {
+            writ_emit_line(emit, "%lld => _", (long long)arm->value);
+            continue;
+        }
+        const writ_slot_view_t *member = &tagged->fields[arm->field];
+        writ_emit_line(emit, "%lld => %.*s: %.*s", (long long)arm->value,
+                       S(writ_profile_name(g->profile, WRIT_NAMING_FIELD, member->name)),
+                       S(field_spec(g, tagged, member)));
+    }
+    writ_emit_close(emit, nullptr);
 }
 
 static void
@@ -1576,15 +1732,13 @@ emit_types(const n00b_t *g, writ_emit_t *emit, bool handles)
             writ_emit_close(emit, nullptr);
             continue;
         }
-        if (!expressible(model, record)) {
+        if (!expressible(g, record)) {
             emit_opaque_record(g, emit, record);
             continue;
         }
-        writ_emit_open(emit, "type %.*s layout(c)", S(writ_binding_type(g->b, record->name)));
+        writ_emit_open(emit, "record %.*s layout(c)", S(writ_binding_type(g->b, record->name)));
         for (size_t f = 0; f < record->fields_count; f++) {
-            const writ_slot_view_t *field = &record->fields[f];
-            writ_str_t name = writ_profile_name(g->profile, WRIT_NAMING_FIELD, field->name);
-            writ_emit_line(emit, "public %.*s: %.*s", S(name), S(scalar_type(g, field->type)));
+            emit_layout_field(g, emit, record, &record->fields[f]);
         }
         writ_emit_close(emit, nullptr);
     }
@@ -3855,7 +4009,7 @@ writ_gen_n00b(const writ_gen_n00b_request_t *request, const writ_output_t *outpu
     const writ_binding_t *b = request->binding;
     const writ_model_t *model = writ_binding_model(b);
     writ_session_t *session = model->session;
-    writ_str_t prefix = request->shim_prefix.length ? request->shim_prefix : writ_model_library(model)->name;
+    writ_str_t prefix = request->shim_prefix.length ? request->shim_prefix : writ_c_default_prefix(model);
     writ_str_t module = request->module_name.length ? request->module_name : writ_model_library(model)->name;
     core_list_t(writ_n00b_extern_t) extern_list = core_list_new(writ_n00b_extern_t);
     n00b_t g = {.b = b, .model = model, .profile = writ_binding_profile(b), .session = session, .shim = prefix,

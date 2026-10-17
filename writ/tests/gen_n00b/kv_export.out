@@ -1,5 +1,5 @@
-#ifndef KV_N00B_EXPORT_H
-#define KV_N00B_EXPORT_H
+#ifndef WRIT_KV_N00B_EXPORT_H
+#define WRIT_KV_N00B_EXPORT_H
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -43,11 +43,11 @@ void *n00b_ffi_borrow(void *object, size_t *length, uint32_t access);
 void n00b_ffi_release(void *object);
 void *kv_malloc(size_t size);
 
-uint64_t kv_cstr_length(uint64_t address) {
+uint64_t writ_kv_cstr_length(uint64_t address) {
     return address ? strlen((const char *)(uintptr_t)address) : 0;
 }
 
-void kv_cstr_copy(uint64_t address, void *out) {
+void writ_kv_cstr_copy(uint64_t address, void *out) {
     size_t length = 0;
     uint8_t *data = n00b_ffi_borrow(out, &length, 1);
     if (data && address && length) {
@@ -56,13 +56,13 @@ void kv_cstr_copy(uint64_t address, void *out) {
     n00b_ffi_release(out);
 }
 
-uint64_t kv_export_text_length(void *text) {
+uint64_t writ_kv_export_text_length(void *text) {
     size_t length = 0;
     n00b_ffi_borrow(text, &length, 2);
     return length;
 }
 
-void kv_export_text_copy(void *text, void *out) {
+void writ_kv_export_text_copy(void *text, void *out) {
     size_t length = 0, capacity = 0;
     const uint8_t *data = n00b_ffi_borrow(text, &length, 2);
     uint8_t *bytes = n00b_ffi_borrow(out, &capacity, 1);
@@ -74,16 +74,16 @@ void kv_export_text_copy(void *text, void *out) {
     }
 }
 
-uint64_t kv_export_address(void *array) {
+uint64_t writ_kv_export_address(void *array) {
     size_t length = 0;
     return (uint64_t)(uintptr_t)n00b_ffi_borrow(array, &length, 0);
 }
 
-void kv_export_failed(uint64_t address, uint64_t kind) {
+void writ_kv_export_failed(uint64_t address, uint64_t kind) {
     *(int *)(uintptr_t)address = (int)kind;
 }
 
-void kv_export_copy_in(uint64_t data, void *out) {
+void writ_kv_export_copy_in(uint64_t data, void *out) {
     size_t length = 0;
     uint8_t *items = n00b_ffi_borrow(out, &length, 1);
     if (items && data && length) {
@@ -92,13 +92,13 @@ void kv_export_copy_in(uint64_t data, void *out) {
     n00b_ffi_release(out);
 }
 
-void kv_export_store(uint64_t address, uint64_t value) {
+void writ_kv_export_store(uint64_t address, uint64_t value) {
     if (address) {
         *(void **)(uintptr_t)address = (void *)(uintptr_t)value;
     }
 }
 
-void kv_export_own_bytes(void *bytes, uint64_t data_out, uint64_t length_out) {
+void writ_kv_export_own_bytes(void *bytes, uint64_t data_out, uint64_t length_out) {
     size_t length = 0;
     const uint8_t *data = n00b_ffi_borrow(bytes, &length, 0);
     uint8_t *copy = kv_malloc(length ? length : 1);
@@ -110,7 +110,7 @@ void kv_export_own_bytes(void *bytes, uint64_t data_out, uint64_t length_out) {
     *(size_t *)(uintptr_t)length_out = length;
 }
 
-void kv_export_kv_entry_fill(void *storage, void *key, void *val) {
+void writ_kv_export_kv_entry_fill(void *storage, void *key, void *val) {
     size_t length = 0;
     kv_entry *record = n00b_ffi_borrow(storage, &length, 1);
     record->key = n00b_ffi_borrow(key, &length, 0);
@@ -119,7 +119,7 @@ void kv_export_kv_entry_fill(void *storage, void *key, void *val) {
     record->val_len = length;
 }
 
-int64_t kv___export_kv_open(uint64_t, uint64_t, uint64_t failed);
+int64_t writ_kv___export_kv_open(uint64_t, uint64_t, uint64_t failed);
 int kv_open(const char *path, kv_db * *out_db)
 {
     uint64_t buffer[24];
@@ -129,7 +129,7 @@ int kv_open(const char *path, kv_db * *out_db)
         return KV_ERR;
     }
     int failed = 0;
-    int64_t value = kv___export_kv_open((uint64_t)(uintptr_t)path, (uint64_t)(uintptr_t)out_db, (uint64_t)(uintptr_t)&failed);
+    int64_t value = writ_kv___export_kv_open((uint64_t)(uintptr_t)path, (uint64_t)(uintptr_t)out_db, (uint64_t)(uintptr_t)&failed);
     n00b_ffi_leave(previous);
     if (failed == 2 || (failed && !(0 || ((value != KV_OK)))))
     {
@@ -138,7 +138,7 @@ int kv_open(const char *path, kv_db * *out_db)
     return (int)value;
 }
 
-int64_t kv___export_kv_put(uint64_t, uint64_t, size_t, uint64_t, size_t, uint64_t failed);
+int64_t writ_kv___export_kv_put(uint64_t, uint64_t, size_t, uint64_t, size_t, uint64_t failed);
 int kv_put(kv_db *db, const uint8_t *key, size_t klen, const uint8_t *val, size_t vlen)
 {
     uint64_t buffer[24];
@@ -148,7 +148,7 @@ int kv_put(kv_db *db, const uint8_t *key, size_t klen, const uint8_t *val, size_
         return KV_ERR;
     }
     int failed = 0;
-    int64_t value = kv___export_kv_put((uint64_t)(uintptr_t)db, (uint64_t)(uintptr_t)key, klen, (uint64_t)(uintptr_t)val, vlen, (uint64_t)(uintptr_t)&failed);
+    int64_t value = writ_kv___export_kv_put((uint64_t)(uintptr_t)db, (uint64_t)(uintptr_t)key, klen, (uint64_t)(uintptr_t)val, vlen, (uint64_t)(uintptr_t)&failed);
     n00b_ffi_leave(previous);
     if (failed == 2 || (failed && !(0 || ((value != KV_OK)))))
     {
@@ -157,7 +157,7 @@ int kv_put(kv_db *db, const uint8_t *key, size_t klen, const uint8_t *val, size_
     return (int)value;
 }
 
-int64_t kv___export_kv_get(uint64_t, uint64_t, size_t, uint64_t, uint64_t, uint64_t failed);
+int64_t writ_kv___export_kv_get(uint64_t, uint64_t, size_t, uint64_t, uint64_t, uint64_t failed);
 int kv_get(kv_db *db, const uint8_t *key, size_t klen, uint8_t * *out_val, size_t *out_len)
 {
     uint64_t buffer[24];
@@ -167,7 +167,7 @@ int kv_get(kv_db *db, const uint8_t *key, size_t klen, uint8_t * *out_val, size_
         return KV_ERR;
     }
     int failed = 0;
-    int64_t value = kv___export_kv_get((uint64_t)(uintptr_t)db, (uint64_t)(uintptr_t)key, klen, (uint64_t)(uintptr_t)out_val, (uint64_t)(uintptr_t)out_len, (uint64_t)(uintptr_t)&failed);
+    int64_t value = writ_kv___export_kv_get((uint64_t)(uintptr_t)db, (uint64_t)(uintptr_t)key, klen, (uint64_t)(uintptr_t)out_val, (uint64_t)(uintptr_t)out_len, (uint64_t)(uintptr_t)&failed);
     n00b_ffi_leave(previous);
     if (failed == 2 || (failed && !(0 || ((value == KV_ERR)))))
     {
@@ -176,7 +176,7 @@ int kv_get(kv_db *db, const uint8_t *key, size_t klen, uint8_t * *out_val, size_
     return (int)value;
 }
 
-uint64_t kv___export_kv_iter_new(uint64_t, uint64_t, size_t, uint64_t failed);
+uint64_t writ_kv___export_kv_iter_new(uint64_t, uint64_t, size_t, uint64_t failed);
 kv_iter * kv_iter_new(kv_db *db, const uint8_t *prefix, size_t plen)
 {
     uint64_t buffer[24];
@@ -186,12 +186,12 @@ kv_iter * kv_iter_new(kv_db *db, const uint8_t *prefix, size_t plen)
         return 0;
     }
     int failed = 0;
-    uint64_t value = kv___export_kv_iter_new((uint64_t)(uintptr_t)db, (uint64_t)(uintptr_t)prefix, plen, (uint64_t)(uintptr_t)&failed);
+    uint64_t value = writ_kv___export_kv_iter_new((uint64_t)(uintptr_t)db, (uint64_t)(uintptr_t)prefix, plen, (uint64_t)(uintptr_t)&failed);
     n00b_ffi_leave(previous);
     return (kv_iter *)(uintptr_t)value;
 }
 
-uint64_t kv___export_kv_iter_next(uint64_t, uint64_t failed);
+uint64_t writ_kv___export_kv_iter_next(uint64_t, uint64_t failed);
 kv_entry * kv_iter_next(kv_iter *it)
 {
     uint64_t buffer[24];
@@ -201,12 +201,12 @@ kv_entry * kv_iter_next(kv_iter *it)
         return 0;
     }
     int failed = 0;
-    uint64_t value = kv___export_kv_iter_next((uint64_t)(uintptr_t)it, (uint64_t)(uintptr_t)&failed);
+    uint64_t value = writ_kv___export_kv_iter_next((uint64_t)(uintptr_t)it, (uint64_t)(uintptr_t)&failed);
     n00b_ffi_leave(previous);
     return (kv_entry *)(uintptr_t)value;
 }
 
-uint64_t kv___export_kv_errstr(int, uint64_t failed);
+uint64_t writ_kv___export_kv_errstr(int, uint64_t failed);
 const char * kv_errstr(int s)
 {
     uint64_t buffer[24];
@@ -216,7 +216,7 @@ const char * kv_errstr(int s)
         return 0;
     }
     int failed = 0;
-    uint64_t value = kv___export_kv_errstr(s, (uint64_t)(uintptr_t)&failed);
+    uint64_t value = writ_kv___export_kv_errstr(s, (uint64_t)(uintptr_t)&failed);
     n00b_ffi_leave(previous);
     return (const char *)(uintptr_t)value;
 }
@@ -424,13 +424,13 @@ func __export_kv_errstr(c_s: i32, failed: uint) -> uint {
 185	tests/gen_n00b/kv_export.writ:9:5	kvstore.errstr
 library kv
 load static
-extern __export_failed kv_export_failed (uint, uint) -> nil fail: nil
-extern __export_copy_in kv_export_copy_in (uint, ref[array[u8]]) -> nil fail: nil
-extern __export_store kv_export_store (uint, uint) -> nil fail: nil
-extern __export_own_bytes kv_export_own_bytes (ref[array[u8]], uint, uint) -> nil fail: nil
-extern __ffi_cstr_length kv_cstr_length (uint) -> uint fail: nil
-extern __ffi_cstr_copy kv_cstr_copy (uint, ref[array[u8]]) -> nil fail: nil
-extern __export_address kv_export_address (ref[array[u8]]) -> uint fail: nil
-extern __export_text_length kv_export_text_length (ref[string]) -> uint fail: nil
-extern __export_text_copy kv_export_text_copy (ref[string], ref[array[u8]]) -> nil fail: nil
-extern __export_kv_entry_fill kv_export_kv_entry_fill (ref[array[u8]], ref[array[u8]], ref[array[u8]]) -> nil fail: nil
+extern __export_failed writ_kv_export_failed (uint, uint) -> nil fail: nil
+extern __export_copy_in writ_kv_export_copy_in (uint, ref[array[u8]]) -> nil fail: nil
+extern __export_store writ_kv_export_store (uint, uint) -> nil fail: nil
+extern __export_own_bytes writ_kv_export_own_bytes (ref[array[u8]], uint, uint) -> nil fail: nil
+extern __ffi_cstr_length writ_kv_cstr_length (uint) -> uint fail: nil
+extern __ffi_cstr_copy writ_kv_cstr_copy (uint, ref[array[u8]]) -> nil fail: nil
+extern __export_address writ_kv_export_address (ref[array[u8]]) -> uint fail: nil
+extern __export_text_length writ_kv_export_text_length (ref[string]) -> uint fail: nil
+extern __export_text_copy writ_kv_export_text_copy (ref[string], ref[array[u8]]) -> nil fail: nil
+extern __export_kv_entry_fill writ_kv_export_kv_entry_fill (ref[array[u8]], ref[array[u8]], ref[array[u8]]) -> nil fail: nil

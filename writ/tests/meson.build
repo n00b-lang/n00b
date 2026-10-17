@@ -398,7 +398,7 @@ test(
 )
 
 foreach case : ['zlib', 'resharp', 'kv', 'kv_export', 'float_record', 'callbacks', 'keywords', 'policy',
-                'policy_fixed', 'unions']
+                'policy_fixed', 'unions', 'bake']
     test(
         'gen-n00b-' + case,
         python,

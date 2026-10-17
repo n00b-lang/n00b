@@ -1,0 +1,69 @@
+library bake
+header <bake.h>
+
+enum bake_kind : i32 { BAKE_NUMBER = 1, BAKE_TEXT = 2 } closed
+
+struct bake_item_t @size(24) @align(8) {
+    key: i32 @0
+    value: i32 @4
+    hash: u64 @8
+    label: *cstr @16
+}
+
+struct bake_items_t @size(24) @align(8) {
+    data: *[bake_item_t; cap cap, len len] @0
+    len: usize @8
+    cap: usize @16
+}
+
+struct bake_variant_t @size(16) @align(8) {
+    kind: i32 as bake_kind @0
+    v: union by kind @8 {
+        BAKE_NUMBER => number: i64
+        BAKE_TEXT => text: *cstr
+    }
+}
+
+callback bake_op_t = fn(left: i64, right: i64) -> i64
+
+struct bake_slot_t @size(24) @align(8) {
+    key: *bake_item_t @0
+    hash: u64 @8
+    value: i32 @16
+}
+
+struct bake_table_t @size(16) @align(8) {
+    slots: *[bake_slot_t; len] @0
+    len: usize @8
+}
+
+struct bake_root_t @size(112) @align(8) {
+    name: *cstr @0
+    items: bake_items_t @8
+    codes: *[i32; until 0] @32
+    variant: bake_variant_t @40
+    middle: *bake_item_t @56
+    op: bake_op_t @64
+    table: bake_table_t @72
+    cache: i64 @88
+    fd: i32 @96
+    path: *cstr @104
+}
+
+const BAKE_QUERY_NAME: c_int = 0
+const BAKE_QUERY_ITEMS: c_int = 1
+const BAKE_QUERY_CODES: c_int = 2
+const BAKE_QUERY_VARIANT: c_int = 3
+const BAKE_QUERY_SHARED: c_int = 4
+const BAKE_QUERY_MIDDLE: c_int = 5
+const BAKE_QUERY_OP: c_int = 6
+const BAKE_QUERY_HASH: c_int = 7
+const BAKE_QUERY_CACHE: c_int = 8
+const BAKE_QUERY_FD: c_int = 9
+
+fn bake_add(left: i64, right: i64) -> i64
+fn bake_multiply(left: i64, right: i64) -> i64
+fn bake_build(spec: *cstr) -> own ?bake_root_t release bake_free
+fn bake_query(root: *bake_root_t, key: i32) -> i64
+fn bake_reopen(root: *bake_root_t) -> i32
+fn bake_free(root: consume ?bake_root_t)

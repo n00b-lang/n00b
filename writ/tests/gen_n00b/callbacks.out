@@ -190,7 +190,7 @@ type Error {
     public fn: string
 }
 
-type Event layout(c) {
+record Event layout(c) {
     public code: i32
 }
 

@@ -1352,6 +1352,61 @@ upper(writ_session_t *session, writ_str_t text)
     return copy;
 }
 
+static bool
+claims_prefix(writ_str_t name, writ_str_t prefix)
+{
+    return name.length > prefix.length && !memcmp(name.data, prefix.data, prefix.length) && name.data[prefix.length] == '_';
+}
+
+static bool
+prefix_taken(const writ_model_t *model, writ_str_t prefix)
+{
+    for (size_t i = 0; i < writ_model_fn_count(model); i++) {
+        const writ_fn_view_t *fn = writ_model_fn_at(model, i);
+        if (claims_prefix(fn->contract_name, prefix) || claims_prefix(fn->link_symbol, prefix)
+            || claims_prefix(fn->source_name, prefix)) {
+            return true;
+        }
+    }
+    for (size_t i = 0; i < writ_model_callback_count(model); i++) {
+        if (claims_prefix(writ_model_callback_at(model, i)->contract_name, prefix)) {
+            return true;
+        }
+    }
+    for (size_t i = 0; i < writ_model_const_count(model); i++) {
+        if (claims_prefix(writ_model_const_at(model, i)->name, prefix)) {
+            return true;
+        }
+    }
+    for (size_t i = 0; i < writ_model_record_count(model); i++) {
+        const writ_record_view_t *record = writ_model_record_at(model, i);
+        if (claims_prefix(record->name, prefix) || claims_prefix(record->type->c_spelling, prefix)) {
+            return true;
+        }
+    }
+    for (size_t i = 0; i < writ_model_enum_count(model); i++) {
+        if (claims_prefix(writ_model_enum_at(model, i)->name, prefix)) {
+            return true;
+        }
+    }
+    for (size_t i = 0; i < writ_model_handle_count(model); i++) {
+        if (claims_prefix(writ_model_handle_at(model, i)->name, prefix)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+writ_str_t
+writ_c_default_prefix(const writ_model_t *model)
+{
+    writ_str_t prefix = writ_model_library(model)->name;
+    while (prefix_taken(model, prefix)) {
+        prefix = writ_str_format(model->session, "writ_%.*s", S(prefix));
+    }
+    return prefix;
+}
+
 writ_status_t
 writ_gen_c(const writ_model_t *model, const writ_gen_c_request_t *request, const writ_output_t *output)
 {
@@ -1359,7 +1414,7 @@ writ_gen_c(const writ_model_t *model, const writ_gen_c_request_t *request, const
         return WRIT_INVALID_ARGUMENT;
     }
     writ_session_t *session = model->session;
-    writ_str_t prefix = request->prefix.length ? request->prefix : writ_model_library(model)->name;
+    writ_str_t prefix = request->prefix.length ? request->prefix : writ_c_default_prefix(model);
     writ_c_context_t c = {model, writ_str_copy(session, prefix.data, prefix.length), upper(session, prefix),
                           request->struct_size >= sizeof(writ_gen_c_request_t) && request->pointer_normalized};
     size_t total = writ_model_fn_count(model);

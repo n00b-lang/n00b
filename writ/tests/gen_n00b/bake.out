@@ -1,0 +1,362 @@
+#ifndef WRIT_BAKE_WRIT_H
+#define WRIT_BAKE_WRIT_H
+
+#include <stdarg.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <bake.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define WRIT_BAKE_ARGUMENT_ERROR (-1)
+#define WRIT_BAKE_OUT_OF_MEMORY (-2)
+#define WRIT_BAKE_CONTRACT_VIOLATION (-3)
+
+typedef struct {
+    uint8_t *data;
+    size_t length;
+} writ_bake_bytes_t;
+
+typedef struct {
+    const char *data;
+    size_t length;
+} writ_bake_str_t;
+
+void writ_bake_bytes_free(writ_bake_bytes_t *bytes);
+void writ_bake_free(void *data);
+
+
+int64_t writ_bake_bake_add(int64_t left, int64_t right);
+
+int64_t writ_bake_bake_multiply(int64_t left, int64_t right);
+
+enum {
+    writ_bake_bake_build_ok = 0,
+};
+int32_t writ_bake_bake_build(const char *spec, size_t spec_length, bake_root_t **result);
+
+int64_t writ_bake_bake_query(bake_root_t *root, int32_t key);
+
+int32_t writ_bake_bake_reopen(bake_root_t *root);
+
+enum {
+    writ_bake_bake_free_ok = 0,
+};
+int32_t writ_bake_bake_free(bake_root_t *root);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
+#include "writ_bake_writ.h"
+
+#include <stdlib.h>
+#include <string.h>
+
+void writ_bake_bytes_free(writ_bake_bytes_t *bytes) {
+    free(bytes->data);
+    bytes->data = NULL;
+    bytes->length = 0;
+}
+
+void writ_bake_free(void *data) {
+    free(data);
+}
+
+static int32_t writ_bake_encode(const char *text, size_t length, char **out) {
+    if (memchr(text, 0, length)) {
+        return WRIT_BAKE_ARGUMENT_ERROR;
+    }
+    *out = malloc(length + 1);
+    if (!*out) {
+        return WRIT_BAKE_OUT_OF_MEMORY;
+    }
+    memcpy(*out, text, length);
+    (*out)[length] = 0;
+    return 0;
+}
+
+int64_t writ_bake_bake_add(int64_t left, int64_t right) {
+    int64_t s0 = 0;
+    int64_t s1 = 0;
+    int64_t ret = 0;
+    s0 = left;
+    s1 = right;
+    ret = bake_add(s0, s1);
+    return ret;
+}
+
+int64_t writ_bake_bake_multiply(int64_t left, int64_t right) {
+    int64_t s0 = 0;
+    int64_t s1 = 0;
+    int64_t ret = 0;
+    s0 = left;
+    s1 = right;
+    ret = bake_multiply(s0, s1);
+    return ret;
+}
+
+int32_t writ_bake_bake_build(const char *spec, size_t spec_length, bake_root_t **result) {
+    const char *s0 = 0;
+    bake_root_t *ret = 0;
+    char *l0 = NULL;
+    int32_t outcome = 0;
+    if (spec) {
+        int32_t status = writ_bake_encode(spec, spec_length, &l0);
+        if (status) {
+            outcome = status;
+            goto finish;
+        }
+    }
+    else {
+        outcome = WRIT_BAKE_ARGUMENT_ERROR;
+        goto finish;
+    }
+    s0 = l0;
+    ret = bake_build(s0);
+    {
+        outcome = writ_bake_bake_build_ok;
+    }
+    if (outcome == writ_bake_bake_build_ok) {
+        *result = ret;
+    }
+finish:
+    free(l0);
+    return outcome;
+}
+
+int64_t writ_bake_bake_query(bake_root_t *root, int32_t key) {
+    const bake_root_t *s0 = 0;
+    int32_t s1 = 0;
+    int64_t ret = 0;
+    s0 = root;
+    s1 = key;
+    ret = bake_query(s0, s1);
+    return ret;
+}
+
+int32_t writ_bake_bake_reopen(bake_root_t *root) {
+    const bake_root_t *s0 = 0;
+    int32_t ret = 0;
+    s0 = root;
+    ret = bake_reopen(s0);
+    return ret;
+}
+
+int32_t writ_bake_bake_free(bake_root_t *root) {
+    bake_root_t *s0 = 0;
+    int32_t outcome = 0;
+    s0 = root;
+    bake_free(s0);
+    {
+        outcome = writ_bake_bake_free_ok;
+    }
+    if (outcome == writ_bake_bake_free_ok) {
+    }
+    return outcome;
+}
+#include <stdint.h>
+#include <stddef.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "writ_bake_writ.h"
+
+void *n00b_ffi_borrow(void *object, size_t *length, uint32_t access);
+void n00b_ffi_release(void *object);
+void n00bb_runtime_trap(const char *reason, uint64_t length);
+
+void writ_bake_take_bytes(writ_bake_bytes_t *bytes, void *out) {
+    size_t length = 0;
+    uint8_t *data = n00b_ffi_borrow(out, &length, 1);
+    if (data && bytes->data) {
+        memcpy(data, bytes->data, length < bytes->length ? length : bytes->length);
+    }
+    n00b_ffi_release(out);
+    writ_bake_bytes_free(bytes);
+}
+
+int64_t writ_bake_n00b_bake_add(int64_t left, int64_t right) {
+    int64_t writ_n00b_value = writ_bake_bake_add(left, right);
+    return writ_n00b_value;
+}
+
+int64_t writ_bake_n00b_bake_multiply(int64_t left, int64_t right) {
+    int64_t writ_n00b_value = writ_bake_bake_multiply(left, right);
+    return writ_n00b_value;
+}
+
+int32_t writ_bake_n00b_bake_build(const void *spec, void *result) {
+    size_t spec_length = 0;
+    const void *spec_borrowed = n00b_ffi_borrow((void *)spec, &spec_length, 2);
+    uint8_t *spec_data = malloc(spec_length + 1);
+    if (spec_data && spec_length) {
+        memcpy(spec_data, spec_borrowed, spec_length);
+    }
+    if (spec_data) {
+        spec_data[spec_length] = 0;
+    }
+    n00b_ffi_release((void *)spec);
+    if (!spec_data) {
+        free(spec_data);
+        return WRIT_BAKE_OUT_OF_MEMORY;
+    }
+    int32_t writ_n00b_value = writ_bake_bake_build((const char *)spec_data, spec_length, (bake_root_t **)result);
+    free(spec_data);
+    return writ_n00b_value;
+}
+
+int64_t writ_bake_n00b_bake_query(const void *root, int32_t key) {
+    int64_t writ_n00b_value = writ_bake_bake_query((bake_root_t *)root, key);
+    return writ_n00b_value;
+}
+
+int32_t writ_bake_n00b_bake_reopen(const void *root) {
+    int32_t writ_n00b_value = writ_bake_bake_reopen((bake_root_t *)root);
+    return writ_n00b_value;
+}
+
+int32_t writ_bake_n00b_bake_free(const void *root) {
+    int32_t writ_n00b_value = writ_bake_bake_free((bake_root_t *)root);
+    return writ_n00b_value;
+}
+
+type Error {
+    public code: i64
+    public text: string?
+    public fn: string
+}
+
+record Bake_Item_T layout(c) {
+    public key: i32
+    public value: i32
+    public hash: u64
+    public label: Foreign[i8]? until 0
+}
+
+record Bake_Items_T layout(c) {
+    public data: Foreign[Bake_Item_T]? count len
+    public len: u64
+    public cap: u64
+}
+
+record Bake_Variant_T layout(c) {
+    public kind: i32
+    public v: union by kind {
+        1 => number: i64
+        2 => text: Foreign[i8]? until 0
+    }
+}
+
+record Bake_Slot_T layout(c) {
+    public key: Foreign[Bake_Item_T]?
+    public hash: u64
+    public value: i32
+}
+
+record Bake_Table_T layout(c) {
+    public slots: Foreign[Bake_Slot_T]? count len
+    public len: u64
+}
+
+record Bake_Root_T layout(c) {
+    public name: Foreign[i8]? until 0
+    public items: Bake_Items_T
+    public codes: Foreign[i32]? until 0
+    public variant_: Bake_Variant_T
+    public middle: Foreign[Bake_Item_T]?
+    public op: Foreign_Fn[(i64, i64) -> i64]?
+    public table: Bake_Table_T
+    public cache: i64
+    public fd: i32
+    public path: Foreign[i8]? until 0
+}
+
+enum Bake_Kind {
+    BAKE_NUMBER = 1,
+    BAKE_TEXT = 2
+}
+
+public const BAKE_QUERY_NAME: i32 = 0
+public const BAKE_QUERY_ITEMS: i32 = 1
+public const BAKE_QUERY_CODES: i32 = 2
+public const BAKE_QUERY_VARIANT: i32 = 3
+public const BAKE_QUERY_SHARED: i32 = 4
+public const BAKE_QUERY_MIDDLE: i32 = 5
+public const BAKE_QUERY_OP: i32 = 6
+public const BAKE_QUERY_HASH: i32 = 7
+public const BAKE_QUERY_CACHE: i32 = 8
+public const BAKE_QUERY_FD: i32 = 9
+
+func bake_add(left: i64, right: i64) -> i64 {
+    let result = __bake_add(left, right)
+    return result
+}
+
+func bake_multiply(left: i64, right: i64) -> i64 {
+    let result = __bake_multiply(left, right)
+    return result
+}
+
+func bake_build(spec: string) -> Bake_Root_T fail: Error {
+    var spec_value = spec
+    var result: uint = 0
+    let outcome = __bake_build(ref spec_value, ref result)
+    if outcome < 0 {
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "bake_build")
+        fail failure
+    }
+    return result
+}
+
+func bake_query(root: Bake_Root_T, key: i32) -> i64 {
+    let result = __bake_query(ref root, key)
+    return result
+}
+
+func bake_reopen(root: Bake_Root_T) -> i32 {
+    let result = __bake_reopen(ref root)
+    return result
+}
+
+func bake_free(root: Bake_Root_T) fail: Error {
+    let outcome = __bake_free(ref root)
+    if outcome < 0 {
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "bake_free")
+        fail failure
+    }
+}
+7	tests/gen_n00b/bake.writ:6:1	bake_item_t
+14	tests/gen_n00b/bake.writ:13:1	bake_items_t
+20	tests/gen_n00b/bake.writ:19:1	bake_variant_t
+28	tests/gen_n00b/bake.writ:29:1	bake_slot_t
+34	tests/gen_n00b/bake.writ:35:1	bake_table_t
+39	tests/gen_n00b/bake.writ:40:1	bake_root_t
+52	tests/gen_n00b/bake.writ:4:1	bake_kind
+57	tests/gen_n00b/bake.writ:53:1	BAKE_QUERY_NAME
+58	tests/gen_n00b/bake.writ:54:1	BAKE_QUERY_ITEMS
+59	tests/gen_n00b/bake.writ:55:1	BAKE_QUERY_CODES
+60	tests/gen_n00b/bake.writ:56:1	BAKE_QUERY_VARIANT
+61	tests/gen_n00b/bake.writ:57:1	BAKE_QUERY_SHARED
+62	tests/gen_n00b/bake.writ:58:1	BAKE_QUERY_MIDDLE
+63	tests/gen_n00b/bake.writ:59:1	BAKE_QUERY_OP
+64	tests/gen_n00b/bake.writ:60:1	BAKE_QUERY_HASH
+65	tests/gen_n00b/bake.writ:61:1	BAKE_QUERY_CACHE
+66	tests/gen_n00b/bake.writ:62:1	BAKE_QUERY_FD
+68	tests/gen_n00b/bake.writ:64:1	bake_add
+73	tests/gen_n00b/bake.writ:65:1	bake_multiply
+78	tests/gen_n00b/bake.writ:66:1	bake_build
+89	tests/gen_n00b/bake.writ:67:1	bake_query
+94	tests/gen_n00b/bake.writ:68:1	bake_reopen
+99	tests/gen_n00b/bake.writ:69:1	bake_free
+load static
+extern __bake_add writ_bake_n00b_bake_add (int, int) -> int fail: nil
+extern __bake_multiply writ_bake_n00b_bake_multiply (int, int) -> int fail: nil
+extern __bake_build writ_bake_n00b_bake_build (ref[string], ref[uint]) -> i32 fail: nil
+extern __bake_query writ_bake_n00b_bake_query (ref[Bake_Root_T], i32) -> int fail: nil
+extern __bake_reopen writ_bake_n00b_bake_reopen (ref[Bake_Root_T]) -> i32 fail: nil
+extern __bake_free writ_bake_n00b_bake_free (ref[Bake_Root_T]) -> i32 fail: nil
