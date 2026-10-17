@@ -584,6 +584,9 @@ apply_item(writ_binding_t *b, uint32_t id)
     case WRIT_N_LOAD:
         if (for_side(b, id, false)) {
             b->load = (choice_t){text_of(b, item->payload), true};
+            if (writ_str_eq(b->load.text, writ_cstr("dynamic"))) {
+                writ_report(b->session, WRIT_D_UNSUPPORTED, item->loc, "`load dynamic`");
+            }
         }
         return;
     case WRIT_N_LIBRARY_FILE:

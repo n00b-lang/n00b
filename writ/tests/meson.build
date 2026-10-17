@@ -354,6 +354,7 @@ foreach case : [
     ['e0511', 'tests/zlib/zlib.writ', 'e0511', n00b_profile, true],
     ['e0512', 'tests/zlib/zlib.writ', 'zlib.n00b', ['--profile', 'tests/bind/e0512.profile.writ'], true],
     ['e0513', 'tests/zlib/zlib.writ', 'e0513', n00b_profile, true],
+    ['load_dynamic', 'contracts/resharp.writ', 'load_dynamic', n00b_profile, true],
     ['callback_as', 'tests/callbacks/callbacks.writ', 'callback_as', n00b_profile, true],
 ]
     test(

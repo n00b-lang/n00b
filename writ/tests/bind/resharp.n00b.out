@@ -1,6 +1,6 @@
 binding resharp for n00b import
 module resharp (chosen)
-load dynamic (chosen)
+load static (chosen)
 type RegexOptions: Regex_Options (default)
 type Regex: Regex (default)
 type Match: Match (default)

@@ -1,6 +1,6 @@
 binding resharp for n00b import {
     module "resharp"
-    load dynamic
+    load static
     search_path "target/release"
     string Regex::is_match.input as string
     buffer Regex::find_all.input as borrow
