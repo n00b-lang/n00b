@@ -697,6 +697,81 @@ native_global_name(core_string_t package, core_string_t module,
     return name;
 }
 
+void
+n00bb_abi_index_table_release(n00bb_abi_index_table_t *table)
+{
+    if (!table) return;
+    core_free(table->symbol);
+    core_free(table->type_hashes);
+    core_free(table->functions);
+    *table = (n00bb_abi_index_table_t){0};
+}
+
+static bool
+append_index_entry(n00bb_abi_storage_rows_t *storage, uint32_t table,
+                   uint32_t local_index)
+{
+    uint64_t offset = storage->read_only.byte_len;
+    uint8_t bytes[4];
+    core_le_store_u32(bytes, local_index);
+    core_buffer_append(&storage->read_only, (const char *)bytes, 4);
+    storage->index_patches = core_realloc(storage->index_patches,
+        (storage->index_patch_count + 1) * sizeof(*storage->index_patches));
+    storage->index_patches[storage->index_patch_count++] =
+        (n00bb_abi_storage_index_patch_t){
+            .source_kind = N00B_ABI_STORAGE_READ_ONLY,
+            .byte_offset = offset,
+            .table_kind = table,
+            .patch_kind = N00B_ABI_PATCH_INDEX,
+            .local_index = local_index,
+        };
+    return true;
+}
+
+static bool
+append_index_table(n00bb_abi_storage_rows_t *storage,
+                   const n00bb_abi_type_identity_rows_t *types,
+                   const n00bb_abi_function_rows_t *functions,
+                   uint64_t *offset, n00bb_abi_index_table_t *out)
+{
+    while (storage->read_only.byte_len % 4)
+        core_buffer_append(&storage->read_only, "\0", 1);
+    if (storage->read_only_alignment < 4) storage->read_only_alignment = 4;
+    *offset = storage->read_only.byte_len;
+    size_t type_count = types->count ? types->count - 1 : 0;
+    size_t function_count = functions->function_count
+        ? functions->function_count - 1 : 0;
+    out->type_hashes = core_alloc_array(uint64_t, type_count + 1);
+    out->functions = core_alloc_array(ir_func_t *, function_count + 1);
+    out->type_count = type_count;
+    out->function_count = function_count;
+    bool valid = out->type_hashes && out->functions;
+    for (size_t i = 1; valid && i <= type_count; i++) {
+        out->type_hashes[i - 1] = types->rows[i].typehash;
+        valid = append_index_entry(storage, N00B_ABI_TABLE_TYPE, (uint32_t)i);
+    }
+    for (size_t i = 1; valid && i <= function_count; i++) {
+        out->functions[i - 1] = functions->ir_functions[i];
+        valid = append_index_entry(storage, N00B_ABI_TABLE_FUNCTION,
+                                   (uint32_t)i);
+    }
+    if (!type_count && !function_count)
+        core_buffer_append(&storage->read_only, "\0\0\0\0", 4);
+    return valid;
+}
+
+static char *
+index_table_symbol(core_string_t module, core_target_object_format_t format)
+{
+    core_buffer_t name = {0};
+    core_buffer_printf(&name, "%s__n00b_index_table$",
+        format == CORE_TARGET_OBJECT_MACH_O ? "_" : "");
+    for (size_t i = 0; i < module.u8_bytes; i++)
+        core_buffer_printf(&name, "%c",
+            module.data[i] == '.' ? '$' : module.data[i]);
+    return name.data;
+}
+
 static bool
 build_native_bindings(const n00bb_abi_storage_rows_t *storage,
                       const n00bb_abi_decl_index_t *declarations,
@@ -1421,6 +1496,7 @@ n00bb_abi_emit_unit(
     n00bb_abi_type_owner_lookup_fn type_owner, void *type_owner_context,
     const n00bb_abi_graph_source_t *graphs,
     n00bb_abi_packed_tables_t *out_tables,
+    n00bb_abi_index_table_t *out_index_table,
     uint8_t **out_object, size_t *out_object_bytes)
 {
     if (!unit || !symbols || !tokens || !runtime_ir || !target
@@ -1428,6 +1504,8 @@ n00bb_abi_emit_unit(
         || !out_tables || !out_object || !out_object_bytes
         || !package_id.data || core_translation_unit_has_fatal_diagnostics(unit))
         return false;
+    uint64_t index_table_offset = 0;
+    n00bb_abi_index_table_t index_table = {0};
     if (link && !node_source)
         return abi_unit_error(unit,
             "linked ABI emission requires source ownership for syntax nodes");
@@ -1749,6 +1827,13 @@ n00bb_abi_emit_unit(
         modules[1].initializer = function_rows.initializer_index;
     }
     if (valid) {
+        failed_stage = "index table";
+        index_table.symbol = index_table_symbol(unit->module.identifier,
+                                                target->object_format);
+        valid = index_table.symbol && append_index_table(&storage_rows,
+            &type_rows, &function_rows, &index_table_offset, &index_table);
+    }
+    if (valid) {
         failed_stage = "trait method membership";
         valid = abi_stream_advance(&stream_base, storage_rows.stream_count)
             && n00bb_abi_trait_method_rows_attach(&type_rows,
@@ -1794,6 +1879,27 @@ n00bb_abi_emit_unit(
         valid = build_native_bindings(&storage_rows, declarations,
             &declaration_rows, pool, package_id, unit->module.identifier,
             target->object_format, &native_bindings);
+    }
+    size_t index_binding = 0;
+    if (valid) {
+        failed_stage = "index table binding";
+        index_binding = native_bindings.count++;
+        native_bindings.rows = core_realloc(native_bindings.rows,
+            native_bindings.count * sizeof(*native_bindings.rows));
+        native_bindings.names = core_realloc(native_bindings.names,
+            native_bindings.count * sizeof(*native_bindings.names));
+        native_bindings.rows[index_binding] = (n00b_abi_native_binding_v1){
+            .kind = N00B_ABI_NATIVE_SECTION_OFFSET,
+            .offset = (int64_t)index_table_offset,
+        };
+        native_bindings.names[index_binding] =
+            core_strdup(index_table.symbol);
+        valid = native_bindings.names[index_binding]
+            && n00bb_abi_name_pool_encode(pool,
+                core_string_from_cstr(native_bindings.names[index_binding]),
+                N00B_ABI_TABLE_NATIVE_BINDING, (uint32_t)index_binding,
+                offsetof(n00b_abi_native_binding_v1, native_name),
+                &native_bindings.rows[index_binding].native_name);
     }
     if (valid) {
         failed_stage = "TLS metadata";
@@ -1976,6 +2082,12 @@ n00bb_abi_emit_unit(
             native_bindings.rows[i].section_index = row->segment_index;
         }
     }
+    if (valid && index_binding)
+        valid = storage_input_indexes[N00B_ABI_STORAGE_READ_ONLY]
+            && core_object_emit_native_section_index(target,
+                1 + extra_sections.len,
+                storage_input_indexes[N00B_ABI_STORAGE_READ_ONLY],
+                &native_bindings.rows[index_binding].section_index);
     for (size_t i = 1; valid && i < storage_rows.baked_node_count; i++) {
         n00b_abi_baked_node_v1 *row = &storage_rows.baked_nodes[i];
         uint32_t input = row->segment_kind <= N00B_ABI_STORAGE_TLS
@@ -2359,6 +2471,8 @@ cleanup:
     core_free(relocations);
     core_free(requirements);
     native_bindings_release(&native_bindings);
+    if (valid && out_index_table) *out_index_table = index_table;
+    else n00bb_abi_index_table_release(&index_table);
     tls_metadata_release(&tls_metadata);
     n00bb_abi_storage_rows_release(&storage_rows);
     n00bb_abi_baked_functions_release(&baked_functions);

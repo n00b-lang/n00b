@@ -43,6 +43,7 @@ extern char **environ;
 
 typedef struct {
     n00bb_abi_packed_tables_t packed;
+    n00bb_abi_index_table_t index_table;
     uint8_t *object;
     size_t object_bytes;
 } n00bb_abi_artifact_t;
@@ -661,6 +662,32 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             break;
         }
         n00bb_llvm_backend_bind_native_cache(backend, native_cache);
+        core_link_artifact_view_t artifact_view = {0};
+        const n00bb_abi_artifact_t *artifact =
+            core_link_unit_require_artifact(link,
+                order.data[i]->module.identifier,
+                CORE_STRING_STATIC("n00bb.abi.object"), 1, &artifact_view)
+            ? artifact_view.payload : nullptr;
+        const char *table_symbol = artifact
+            ? artifact->index_table.symbol : nullptr;
+        if (table_symbol && table_symbol[0] == '_'
+            && analysis->target.object_format == CORE_TARGET_OBJECT_MACH_O)
+            table_symbol++;
+        n00bb_llvm_index_table_t index_table = {
+            .symbol = table_symbol,
+            .type_hashes = artifact ? artifact->index_table.type_hashes
+                                    : nullptr,
+            .type_count = artifact ? artifact->index_table.type_count : 0,
+            .functions = artifact ? artifact->index_table.functions : nullptr,
+            .function_count = artifact
+                ? artifact->index_table.function_count : 0,
+        };
+        if (table_symbol
+            && !n00bb_llvm_backend_bind_index_table(backend, &index_table)) {
+            n00bb_llvm_backend_free(backend);
+            ok = false;
+            break;
+        }
         ok = n00bb_llvm_backend_bind_reachable_functions(backend,
             analysis->reachable_functions.data,
             analysis->reachable_functions.len)
@@ -699,16 +726,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             lto_modules[i] = object;
             object = (core_buffer_t){0};
         } else if (ok) {
-            const char *patch_failure = nullptr;
-            ok = n00bb_llvm_patch_index_tables((uint8_t *)object.data,
-                object.byte_len, analysis->target.object_format,
-                type_indices, type_index_count, function_indices,
-                function_index_count, &patch_failure);
-            if (!ok)
-                core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_ERROR,
-                    CORE_STRING_STATIC("N00BB-B0011"),
-                    core_string_from_cstr(patch_failure));
-            ok = ok && n00bb_native_frames_add(native_frames,
+            ok = n00bb_native_frames_add(native_frames,
                 object.data, object.byte_len);
             if (ok) objects[i] = n00bb_write_temporary_object(
                 object.data, object.byte_len);
@@ -1079,6 +1097,7 @@ free_abi_artifact(void *payload)
     n00bb_abi_artifact_t *artifact = payload;
     if (!artifact) return;
     n00bb_abi_packed_tables_release(&artifact->packed);
+    n00bb_abi_index_table_release(&artifact->index_table);
     core_free(artifact->object);
     core_free(artifact);
 }
@@ -1253,7 +1272,7 @@ n00bb_emit_abi_artifacts(core_link_unit_t *link,
             debug_enabled ? N00B_ABI_CAP_DEBUG : 0,
             abi_declaration_for_symbol, analysis,
             abi_source_of_node, &sources, abi_type_owner, &sources, &graphs,
-            &artifact->packed,
+            &artifact->packed, &artifact->index_table,
             &artifact->object, &artifact->object_bytes);
         if (!emitted) {
             free_abi_artifact(artifact);

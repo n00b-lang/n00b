@@ -180,7 +180,7 @@ check_type_descriptor_storage(void)
         symbols, tokens, runtime, &target, N00B_ABI_CAP_DEBUG,
         selected_type_declaration, declaration,
         descriptor_node_source, &source_owner, nullptr, nullptr, nullptr,
-        &packed, &object, &object_bytes));
+        &packed, nullptr, &object, &object_bytes));
     core_object_section_t metadata;
     assert(core_object_section_find(object, object_bytes,
         target.object_format, nullptr, ".data.rel.ro.n00b_meta", &metadata));
@@ -199,10 +199,15 @@ check_type_descriptor_storage(void)
         schemas, schema_count, false, &header, entries, schema_count));
     const n00bb_abi_directory_entry_t *patch_entry = find_entry(entries,
         header.directory_count, N00B_ABI_TABLE_INDEX_PATCH);
-    assert(patch_entry && patch_entry->record_count == 2);
-    const n00b_abi_index_patch_v1 *emitted = (const void *)(metadata.bytes
-        + patch_entry->file_offset + patch_entry->record_bytes);
-    assert(emitted->referenced_table_kind == N00B_ABI_TABLE_TYPE
+    assert(patch_entry && patch_entry->record_count >= 2);
+    const n00b_abi_index_patch_v1 *emitted = nullptr;
+    for (uint32_t i = 1; !emitted && i < patch_entry->record_count; i++) {
+        const n00b_abi_index_patch_v1 *row = (const void *)(metadata.bytes
+            + patch_entry->file_offset
+            + (size_t)i * patch_entry->record_bytes);
+        if (row->target_byte_offset == patch->byte_offset) emitted = row;
+    }
+    assert(emitted && emitted->referenced_table_kind == N00B_ABI_TABLE_TYPE
         && emitted->local_index == referred_index
         && emitted->target_byte_offset == patch->byte_offset
         && emitted->patch_kind == N00B_ABI_PATCH_INDEX
@@ -233,7 +238,7 @@ check_type_descriptor_storage(void)
             CORE_STRING_STATIC("default"), prior_symbols, prior_tokens,
             prior_runtime, &target, N00B_ABI_CAP_DEBUG,
             nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
-            &prior_packed, &prior_object, &prior_object_bytes));
+            &prior_packed, nullptr, &prior_object, &prior_object_bytes));
     core_link_unit_t *combined = core_link_unit_new();
     assert(combined && core_link_unit_add_root(combined, &prior_unit)
         && core_link_unit_add_root(combined, &unit)
@@ -332,7 +337,7 @@ check_empty_unit(const char *triple, uint32_t target_id,
         symbols, tokens, runtime,
         &target, N00B_ABI_CAP_DEBUG, nullptr, nullptr, nullptr, nullptr,
         nullptr, nullptr, nullptr,
-        &packed, &object, &object_bytes));
+        &packed, nullptr, &object, &object_bytes));
     assert(!core_translation_unit_has_fatal_diagnostics(&unit));
 
     core_object_section_t metadata;
@@ -433,12 +438,18 @@ check_empty_unit(const char *triple, uint32_t target_id,
         sizeof(file->path), &decoded));
     assert(decoded.tag == N00BB_ABI_STRING_LONG
         && decoded.length == sizeof(source_path) - 1);
-    assert(metadata.relocation_count == 2);
+    assert(metadata.relocation_count == 3);
 
+    static const char table_name[] =
+        "__n00b_index_table$default$long_identity_module_name";
     core_object_section_t pool;
     assert(core_object_section_find(object, object_bytes,
         target.object_format, pool_segment, pool_name, &pool));
-    assert(pool.size == sizeof(module_name) - 1 + sizeof(source_path) - 1);
+    assert(pool.size == sizeof(module_name) - 1 + sizeof(source_path) - 1
+        + sizeof(table_name) - 1
+        + (target.object_format == CORE_TARGET_OBJECT_MACH_O));
+    assert(contains_bytes(pool.bytes, pool.size,
+        table_name, sizeof(table_name) - 1));
     assert(contains_bytes(pool.bytes, pool.size,
         module_name, sizeof(module_name) - 1));
     assert(contains_bytes(pool.bytes, pool.size,
@@ -468,7 +479,7 @@ check_empty_unit(const char *triple, uint32_t target_id,
         CORE_STRING_STATIC("default"),
         symbols, tokens, runtime, &target, N00B_ABI_CAP_DEBUG,
         nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
-        &rejected, &rejected_object, &rejected_bytes));
+        &rejected, nullptr, &rejected_object, &rejected_bytes));
     assert(!rejected.bytes && !rejected_object && !rejected_bytes);
     assert(core_translation_unit_has_fatal_diagnostics(&unit));
 

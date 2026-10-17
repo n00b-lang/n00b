@@ -196,6 +196,7 @@ struct n00bb_llvm_backend_t {
     size_t type_index_count;
     const n00bb_llvm_function_binding_t *function_indices;
     size_t function_index_count;
+    const n00bb_llvm_index_table_t *index_table;
     const n00bb_llvm_global_binding_t *global_bindings;
     size_t global_binding_count;
     const n00bb_llvm_finalizer_binding_t *finalizers;
@@ -276,14 +277,7 @@ direct_call_target(const ir_instr_t *instruction)
 }
 
 typedef struct {
-    uint32_t kind;
-    uint32_t value;
-    uint64_t key;
-} index_slot_t;
-core_list_decl(index_slot_t);
-
-typedef struct {
-    core_list_t(index_slot_t) slots;
+    const n00bb_llvm_index_table_t *binding;
     LLVMValueRef table;
 } index_slots_t;
 
@@ -310,6 +304,7 @@ typedef struct {
     size_t type_index_count;
     const n00bb_llvm_function_binding_t *function_indices;
     size_t function_index_count;
+    const n00bb_llvm_index_table_t *index_table;
     const n00bb_llvm_global_binding_t *global_bindings;
     size_t global_binding_count;
     ir_storage_origin_t *storage_origin;
@@ -4661,44 +4656,27 @@ runtime_type_index(lower_state_t *state, th_type *type)
     return 0;
 }
 
-enum {
-    INDEX_SLOT_TYPE = 1,
-    INDEX_SLOT_FUNCTION = 2,
-};
-
-uint64_t
-n00bb_llvm_function_index_key(const ir_func_t *function)
-{
-    const char *module = function && function->owner
-        ? ir_module_name(function->owner) : "";
-    const char *name = function && function->name ? function->name : "";
-    uint64_t parts[] = {
-        core_xxh3_64bits_raw(module, strlen(module)),
-        core_xxh3_64bits_raw(name, strlen(name)),
-    };
-    return core_xxh3_64bits_raw(parts, sizeof(parts));
-}
-
 static LLVMValueRef
-index_slot_value(lower_state_t *state, uint32_t kind, uint64_t key,
+index_slot_value(lower_state_t *state, bool found, size_t slot,
                  uint32_t value)
 {
     LLVMContextRef context = LLVMGetModuleContext(state->module);
     LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
     if (!value) return nullptr;
     index_slots_t *slots = state->index_slots;
-    if (!slots) return LLVMConstInt(i32, value, false);
-    size_t slot = 0;
-    while (slot < slots->slots.len && (slots->slots.data[slot].kind != kind
-           || slots->slots.data[slot].key != key)) slot++;
-    if (slot == slots->slots.len)
-        core_list_push(slots->slots, ((index_slot_t){
-            .kind = kind, .value = value, .key = key,
-        }));
+    if (!slots || !slots->binding) return LLVMConstInt(i32, value, false);
+    if (!found) {
+        state->failure_detail = "a value needs an index the module's index "
+                                "table does not hold";
+        return nullptr;
+    }
     if (!slots->table) {
-        slots->table = LLVMAddGlobal(state->module, LLVMArrayType(i32, 0),
-                                     "__n00b_index_values");
-        LLVMSetLinkage(slots->table, LLVMInternalLinkage);
+        slots->table = LLVMGetNamedGlobal(state->module,
+                                          slots->binding->symbol);
+        if (!slots->table)
+            slots->table = LLVMAddGlobal(state->module,
+                LLVMArrayType(i32, 0), slots->binding->symbol);
+        LLVMSetGlobalConstant(slots->table, true);
     }
     LLVMValueRef offset = LLVMConstInt(LLVMInt64TypeInContext(context), slot,
                                        false);
@@ -4716,17 +4694,27 @@ index_slot_value(lower_state_t *state, uint32_t kind, uint64_t key,
 static LLVMValueRef
 runtime_type_index_value(lower_state_t *state, th_type *type)
 {
-    return index_slot_value(state, INDEX_SLOT_TYPE,
-        th_hash(ir_module_types(state->function->owner), type),
-        runtime_type_index(state, type));
+    const n00bb_llvm_index_table_t *table = state->index_slots
+        ? state->index_slots->binding : nullptr;
+    uint64_t hash = th_hash(ir_module_types(state->function->owner), type);
+    size_t slot = 0;
+    while (table && slot < table->type_count
+           && table->type_hashes[slot] != hash) slot++;
+    return index_slot_value(state, table && slot < table->type_count, slot,
+                            runtime_type_index(state, type));
 }
 
 static LLVMValueRef
 runtime_function_index_value(lower_state_t *state, const ir_func_t *function)
 {
-    return index_slot_value(state, INDEX_SLOT_FUNCTION,
-        n00bb_llvm_function_index_key(function),
-        runtime_function_index(state, function));
+    const n00bb_llvm_index_table_t *table = state->index_slots
+        ? state->index_slots->binding : nullptr;
+    size_t slot = 0;
+    while (table && slot < table->function_count
+           && table->functions[slot] != function) slot++;
+    return index_slot_value(state, table && slot < table->function_count,
+                            table ? table->type_count + slot : 0,
+                            runtime_function_index(state, function));
 }
 
 static th_type *
@@ -10870,57 +10858,6 @@ prepare_parameter_addresses(lower_state_t *state)
     return true;
 }
 
-bool
-n00bb_llvm_patch_index_tables(uint8_t *object, size_t object_bytes,
-    core_target_object_format_t format,
-    const n00bb_llvm_type_index_t *type_indices, size_t type_index_count,
-    const n00bb_llvm_function_binding_t *function_indices,
-    size_t function_index_count, const char **failure)
-{
-    bool mach_o = format == CORE_TARGET_OBJECT_MACH_O;
-    core_object_section_t keys = {0}, values = {0};
-    bool has_keys = core_object_section_find(object, object_bytes, format,
-        mach_o ? "__DATA" : nullptr, mach_o ? "__n00b_ixkey" : ".n00b_ixkey",
-        &keys);
-    bool has_values = core_object_section_find(object, object_bytes, format,
-        mach_o ? "__DATA" : nullptr, mach_o ? "__n00b_ixval" : ".n00b_ixval",
-        &values);
-    if (!has_keys && !has_values) return true;
-    if (!has_keys || !has_values || keys.size % 16
-        || values.size < keys.size / 16 * 4
-        || values.bytes < object || values.bytes + values.size
-            > object + object_bytes) {
-        *failure = "module index table sections are malformed";
-        return false;
-    }
-    uint8_t *slots = object + (values.bytes - object);
-    for (size_t i = 0; i < keys.size / 16; i++) {
-        const uint8_t *entry = keys.bytes + i * 16;
-        uint32_t kind = 0, slot = 0;
-        uint64_t key = 0;
-        memcpy(&kind, entry, 4);
-        memcpy(&slot, entry + 4, 4);
-        memcpy(&key, entry + 8, 8);
-        uint32_t value = 0;
-        if (kind == INDEX_SLOT_TYPE)
-            for (size_t j = 0; !value && j < type_index_count; j++)
-                if (type_indices[j].typehash == key)
-                    value = type_indices[j].index;
-        if (kind == INDEX_SLOT_FUNCTION)
-            for (size_t j = 0; !value && j < function_index_count; j++)
-                if (n00bb_llvm_function_index_key(
-                        function_indices[j].function) == key)
-                    value = function_indices[j].index;
-        if (!value || (size_t)slot * 4 + 4 > values.size) {
-            *failure = "a module index slot names no type or function in "
-                       "the program";
-            return false;
-        }
-        memcpy(slots + (size_t)slot * 4, &value, 4);
-    }
-    return true;
-}
-
 static void
 append_used_global(LLVMModuleRef module, LLVMValueRef global)
 {
@@ -10942,63 +10879,6 @@ append_used_global(LLVMModuleRef module, LLVMValueRef global)
     LLVMSetLinkage(used, LLVMAppendingLinkage);
     LLVMSetSection(used, "llvm.metadata");
     core_free(items);
-}
-
-static bool
-index_slots_finish(LLVMModuleRef module, index_slots_t *slots)
-{
-    if (!slots->table) return true;
-    LLVMContextRef context = LLVMGetModuleContext(module);
-    LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
-    LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
-    size_t count = slots->slots.len;
-    LLVMValueRef *values = core_alloc_array(LLVMValueRef, count);
-    LLVMValueRef *keys = core_alloc_array(LLVMValueRef, count);
-    LLVMTypeRef key_fields[] = {i32, i32, i64};
-    LLVMTypeRef key_type = LLVMStructTypeInContext(context, key_fields, 3,
-                                                   false);
-    for (size_t i = 0; i < count; i++) {
-        const index_slot_t *slot = &slots->slots.data[i];
-        values[i] = LLVMConstInt(i32, slot->value, false);
-        LLVMValueRef fields[] = {
-            LLVMConstInt(i32, slot->kind, false),
-            LLVMConstInt(i32, i, false),
-            LLVMConstInt(i64, slot->key, false),
-        };
-        keys[i] = LLVMConstStructInContext(context, fields, 3, false);
-    }
-    const char *module_triple = LLVMGetTarget(module);
-    char *host_triple = module_triple && *module_triple ? nullptr
-        : LLVMGetDefaultTargetTriple();
-    const char *triple = host_triple ? host_triple : module_triple;
-    bool mach_o = triple && (strstr(triple, "apple") || strstr(triple,
-                                                              "darwin")
-                             || strstr(triple, "macos"));
-    if (host_triple) LLVMDisposeMessage(host_triple);
-    LLVMValueRef value_array = LLVMConstArray2(i32, values, count);
-    LLVMValueRef table = LLVMAddGlobal(module, LLVMTypeOf(value_array),
-                                       "__n00b_index_values.table");
-    LLVMSetInitializer(table, value_array);
-    LLVMSetLinkage(table, LLVMInternalLinkage);
-    LLVMSetAlignment(table, 8);
-    LLVMSetSection(table, mach_o ? "__DATA,__n00b_ixval" : ".n00b_ixval");
-    LLVMReplaceAllUsesWith(slots->table, table);
-    LLVMDeleteGlobal(slots->table);
-    slots->table = table;
-    LLVMValueRef key_array = LLVMConstArray2(key_type, keys, count);
-    LLVMValueRef key_table = LLVMAddGlobal(module, LLVMTypeOf(key_array),
-                                           "__n00b_index_keys");
-    LLVMSetInitializer(key_table, key_array);
-    LLVMSetLinkage(key_table, LLVMInternalLinkage);
-    LLVMSetGlobalConstant(key_table, true);
-    LLVMSetAlignment(key_table, 8);
-    LLVMSetSection(key_table, mach_o ? "__DATA,__n00b_ixkey"
-                                     : ".n00b_ixkey");
-    append_used_global(module, table);
-    append_used_global(module, key_table);
-    core_free(values);
-    core_free(keys);
-    return true;
 }
 
 static bool
@@ -11390,6 +11270,7 @@ lower_module(LLVMModuleRef target, const ir_module_t *source,
              ir_func_t *const *reachable, size_t reachable_count,
              bool reachable_bound,
              const core_list_t(callback_binding_t) *callback_bindings,
+             const n00bb_llvm_index_table_t *index_table,
              core_diagnostics_t *diagnostics)
 {
     for (size_t i = 0; i < ir_global_count(source); i++) {
@@ -11633,7 +11514,7 @@ lower_module(LLVMModuleRef target, const ir_module_t *source,
     }
     core_list_t(layout_match_t) layout_matches = {0};
     core_list_t(member_match_t) member_matches = {0};
-    index_slots_t index_slots = {0};
+    index_slots_t index_slots = {.binding = index_table};
     for (size_t i = 0; i < ir_func_count(source); i++) {
         ir_func_t *function = ir_func_at((ir_module_t *)source, i);
         bool emit_body = !reachable_bound;
@@ -11690,11 +11571,6 @@ lower_module(LLVMModuleRef target, const ir_module_t *source,
     core_list_free(inline_callees);
     core_list_free(layout_matches);
     core_list_free(member_matches);
-    bool slots_finished = index_slots_finish(target, &index_slots);
-    core_list_free(index_slots.slots);
-    if (!slots_finished)
-        return backend_error(diagnostics,
-            "LLVM backend could not emit the module's index table");
     const char *module_name = ir_module_name(source);
     size_t prefix = strlen(module_name);
     size_t cursor = 0;
@@ -11809,6 +11685,16 @@ n00bb_llvm_backend_bind_type_indices(
         return false;
     backend->type_indices = types;
     backend->type_index_count = count;
+    return true;
+}
+
+bool
+n00bb_llvm_backend_bind_index_table(n00bb_llvm_backend_t *backend,
+                                    const n00bb_llvm_index_table_t *table)
+{
+    if (!backend || backend->lowered || !table || !table->symbol)
+        return false;
+    backend->index_table = table;
     return true;
 }
 
@@ -11936,7 +11822,8 @@ lower_backend(n00bb_llvm_backend_t *backend, core_diagnostics_t *diagnostics)
         backend->function_index_count, backend->global_bindings,
         backend->global_binding_count, backend->storage_origin,
         backend->reachable, backend->reachable_count,
-        backend->reachable_bound, &backend->callback_bindings, diagnostics);
+        backend->reachable_bound, &backend->callback_bindings,
+        backend->index_table, diagnostics);
     active_debug = previous_debug;
     if (with_debug) debug_info_end(&debug);
     active_native_types = previous_native_types;

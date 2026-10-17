@@ -48,6 +48,16 @@ bool n00bb_abi_write_object(
     size_t relocation_count, uint8_t **out_image, size_t *out_size);
 
 /* Emits one finalized TU. The caller owns outputs. */
+typedef struct {
+    char *symbol;
+    uint64_t *type_hashes;
+    size_t type_count;
+    ir_func_t **functions;
+    size_t function_count;
+} n00bb_abi_index_table_t;
+
+void n00bb_abi_index_table_release(n00bb_abi_index_table_t *table);
+
 bool n00bb_abi_emit_unit(
     core_link_unit_t *link, core_translation_unit_t *unit,
     core_string_t package_id,
@@ -59,4 +69,5 @@ bool n00bb_abi_emit_unit(
     n00bb_abi_type_owner_lookup_fn type_owner, void *type_owner_context,
     const n00bb_abi_graph_source_t *graphs,
     n00bb_abi_packed_tables_t *out_tables,
+    n00bb_abi_index_table_t *out_index_table,
     uint8_t **out_object, size_t *out_object_bytes);

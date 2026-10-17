@@ -35,6 +35,14 @@ typedef struct {
     uint32_t index;
 } n00bb_llvm_function_binding_t;
 
+typedef struct {
+    const char *symbol;
+    const uint64_t *type_hashes;
+    size_t type_count;
+    ir_func_t *const *functions;
+    size_t function_count;
+} n00bb_llvm_index_table_t;
+
 n00bb_llvm_backend_t *n00bb_llvm_backend_prepare(const ir_module_t *ir,
     bool debug_enabled, bool native_cpu, core_diagnostics_t *diagnostics);
 void n00bb_llvm_backend_free(n00bb_llvm_backend_t *backend);
@@ -61,12 +69,8 @@ void n00bb_llvm_backend_bind_native_cache(n00bb_llvm_backend_t *backend,
 bool n00bb_llvm_backend_write_bitcode(
     n00bb_llvm_backend_t *backend, core_buffer_t *out,
     core_diagnostics_t *diagnostics);
-uint64_t n00bb_llvm_function_index_key(const ir_func_t *function);
-bool n00bb_llvm_patch_index_tables(uint8_t *object, size_t object_bytes,
-    core_target_object_format_t format,
-    const n00bb_llvm_type_index_t *type_indices, size_t type_index_count,
-    const n00bb_llvm_function_binding_t *function_indices,
-    size_t function_index_count, const char **failure);
+bool n00bb_llvm_backend_bind_index_table(n00bb_llvm_backend_t *backend,
+    const n00bb_llvm_index_table_t *table);
 bool n00bb_llvm_backend_emit_object(
     n00bb_llvm_backend_t *backend,
     const char *const *entry_initializers, size_t initializer_count,
