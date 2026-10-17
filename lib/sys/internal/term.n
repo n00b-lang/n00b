@@ -1,0 +1,18 @@
+func fd_is_tty(fd: int) -> bool fail: int {
+    let result: int = __os_fd_is_tty(fd)
+    if result < 0 {
+        fail result
+    }
+    return result == 1
+}
+
+func terminal_size(fd: int, out rows: u16, out cols: u16) -> nil fail: int {
+    var height: u16 = 0
+    var width: u16 = 0
+    let result: int = __os_terminal_size(fd, ref height, ref width)
+    rows = height
+    cols = width
+    if result < 0 {
+        fail result
+    }
+}

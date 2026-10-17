@@ -1,0 +1,6 @@
+func f() -> int {
+    let y: int = y + 1
+    return y
+}
+
+require f() == 1

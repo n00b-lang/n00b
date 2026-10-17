@@ -50,7 +50,7 @@ func run_cstring_checks() {
     raw[0] = 0x61
     raw[1] = 0
     raw[2] = 0x62
-    require embedded_nul_rejected(from_raw(raw, 3))
+    require embedded_nul_rejected(from_raw(ref raw, 3))
     var buf: Array[u8] = new[Array[u8]](64)
     let copied = try {
         = to_cstring(shortish, copy = true, buf = buf)!
@@ -95,7 +95,7 @@ func check_ascii_flag() {
     broken[3] = 0x6c
     broken[4] = 0x6c
     broken[5] = 0x6f
-    require encoding(from_raw(broken, 6)) == Str_Encoding.binary
+    require encoding(from_raw(ref broken, 6)) == Str_Encoding.binary
     var plain_bytes: Array[u8] = new[Array[u8]](cast[int] byte_len(plain))
     var i: uint = 0
     while i < byte_len(plain) {
@@ -108,9 +108,9 @@ func check_ascii_flag() {
         wide_bytes[k] = byte_at(wide, k)
         k += 1
     }
-    require encoding(from_raw(plain_bytes, cast[int] byte_len(plain))) ==
+    require encoding(from_raw(ref plain_bytes, cast[int] byte_len(plain))) ==
         Str_Encoding.ascii
-    require encoding(from_raw(wide_bytes, cast[int] byte_len(wide))) ==
+    require encoding(from_raw(ref wide_bytes, cast[int] byte_len(wide))) ==
         Str_Encoding.utf8
     let maximal: u64 = (1 << 60) - 1
     let s: string = raw_long((1 << 62) | (1 << 60) | maximal)

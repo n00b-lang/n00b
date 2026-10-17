@@ -1,0 +1,5 @@
+import internal.fs
+
+package sys.fs {
+    export internal.fs
+}

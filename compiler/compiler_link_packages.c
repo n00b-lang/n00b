@@ -1305,11 +1305,23 @@ register_package_context_effect_metadata(n00bb_link_analysis_t *analysis)
                 registered = th_env_register_metadata(environment,
                     TH_ENV_METADATA_ENVIRONMENT, module_name,
                     "n00b.module-imports", 1, imports.data, imports.byte_len);
+            for (size_t p = 0; registered
+                 && p < state->package_declarations.len; p++) {
+                core_string_t package =
+                    state->package_declarations.data[p].name;
+                char *package_name = core_strndup(package.data,
+                                                  package.u8_bytes);
+                registered = package_name && th_env_register_metadata(
+                    environment, TH_ENV_METADATA_ENVIRONMENT, package_name,
+                    "n00b.package-imports", 1, imports.data, imports.byte_len);
+                core_free(package_name);
+            }
             core_buffer_release(&imports);
             core_free(module_name);
             if (!registered) return false;
         }
-        for (size_t p = 0; state && p < state->package_declarations.len; p++) {
+        for (size_t p = 0; state && !state->interface_module
+             && p < state->package_declarations.len; p++) {
             n00bb_package_declaration_t *package =
                 &state->package_declarations.data[p];
             parse_scope_t *scopes[] = {
@@ -1348,6 +1360,49 @@ register_package_context_effect_metadata(n00bb_link_analysis_t *analysis)
     return true;
 }
 
+static bool
+append_grant_string(core_buffer_t *payload, core_string_t text)
+{
+    if (text.u8_bytes > UINT32_MAX
+        || !append_u32_le(payload, (uint32_t)text.u8_bytes)) return false;
+    core_buffer_append(payload, text.data, text.u8_bytes);
+    return true;
+}
+
+static bool
+register_package_grants(n00bb_link_analysis_t *analysis, th_env *environment,
+                        n00bb_package_declaration_t *package)
+{
+    uint32_t count = 0;
+    core_buffer_t entries = {0};
+    bool ok = true;
+    for (size_t e = 0; ok && e < package->exports.len; e++) {
+        n00bb_package_export_t *export = &package->exports.data[e];
+        if (!export->grantee.data || !export->symbol) continue;
+        parse_sym_entry_t *source = canonical_symbol(export->symbol);
+        core_translation_unit_t *source_unit = source
+            ? unit_for_symbol(analysis->grammar, &analysis->units, source)
+            : nullptr;
+        ok = source_unit
+            && append_grant_string(&entries, export->export_name)
+            && append_grant_string(&entries, export->grantee)
+            && append_grant_string(&entries, source_unit->module.identifier)
+            && append_grant_string(&entries, source->name);
+        count++;
+    }
+    core_buffer_t payload = {0};
+    if (ok && count) {
+        ok = append_u32_le(&payload, count);
+        if (ok) core_buffer_append(&payload, entries.data, entries.byte_len);
+        if (ok) ok = th_env_register_metadata(environment,
+            TH_ENV_METADATA_ENVIRONMENT, package->name.data,
+            "n00b.package-grants", 1, payload.data, payload.byte_len);
+    }
+    core_buffer_release(&payload);
+    core_buffer_release(&entries);
+    return ok;
+}
+
 bool
 register_package_interfaces(n00bb_link_analysis_t *analysis,
                             th_env *environment)
@@ -1355,6 +1410,7 @@ register_package_interfaces(n00bb_link_analysis_t *analysis,
     for (size_t u = 0; u < analysis->units.len; u++) {
         core_translation_unit_t *unit = analysis->units.data[u];
         n00bb_tu_state_t *state = tu_state(unit);
+        if (state && state->interface_module) continue;
         for (size_t p = 0; state && p < state->package_declarations.len; p++) {
             n00bb_package_declaration_t *package =
                 &state->package_declarations.data[p];
@@ -1363,6 +1419,8 @@ register_package_interfaces(n00bb_link_analysis_t *analysis,
                     TH_ENV_METADATA_ENVIRONMENT,
                     package->name.data, "n00b.package-interface", 1,
                     package_id.data, package_id.u8_bytes + 1)) return false;
+            if (!register_package_grants(analysis, environment, package))
+                return false;
             parse_scope_t *scopes[] = {
                 package->scope,
                 parse_symtab_scope_in_namespace(state->annotations->symtab,
@@ -1654,7 +1712,11 @@ lookup_export_symbol_in_scope(parse_symtab_t *symtab, parse_scope_t *scope,
     return value ? value : type;
 }
 
-static parse_sym_entry_t *
+static int resolve_one_package_export(core_translation_unit_t *unit,
+                                      n00bb_package_declaration_t *package,
+                                      n00bb_package_export_t *export);
+
+parse_sym_entry_t *
 granted_export_symbol(core_translation_unit_t *provider, core_string_t name,
                       core_string_t grantee)
 {
@@ -1664,10 +1726,12 @@ granted_export_symbol(core_translation_unit_t *provider, core_string_t name,
             &state->package_declarations.data[p];
         for (size_t e = 0; e < package->exports.len; e++) {
             n00bb_package_export_t *export = &package->exports.data[e];
-            if (export->symbol && export->grantee.data
-                && core_string_eq(export->grantee, grantee)
-                && core_string_eq(export->export_name, name))
-                return export->symbol;
+            if (!export->grantee.data
+                || !core_string_eq(export->grantee, grantee)
+                || !core_string_eq(export->export_name, name)) continue;
+            if (!export->symbol && export->source_name.data)
+                (void)resolve_one_package_export(provider, package, export);
+            if (export->symbol) return export->symbol;
         }
     }
     return nullptr;
@@ -1839,6 +1903,7 @@ populate_package_interfaces(n00bb_link_analysis_t *analysis)
     for (size_t u = 0; u < analysis->units.len; u++) {
         core_translation_unit_t *unit = analysis->units.data[u];
         n00bb_tu_state_t *state = tu_state(unit);
+        if (state && state->interface_module) continue;
         for (size_t p = 0; state && p < state->package_declarations.len; p++) {
             n00bb_package_declaration_t *package =
                 &state->package_declarations.data[p];
@@ -1876,10 +1941,10 @@ add_implicit_package_scope(parse_symtab_t *symtab,
 {
     parse_sym_entry_t *existing = parse_symtab_lookup_in(parent, name);
     if (existing) {
-        if (existing->kind != PARSE_SYM_MODULE
-            || !parse_sym_binding(existing,
-                CORE_STRING_STATIC("n00bb.implicit-package"))) return false;
-        *out = existing->exposed_scope;
+        *out = existing->kind == PARSE_SYM_MODULE
+            ? parse_sym_binding(existing,
+                CORE_STRING_STATIC("n00bb.implicit-package"))
+            : nullptr;
         return *out != nullptr;
     }
     parse_symtab_enter_scope_all(symtab, parent);
@@ -1897,7 +1962,7 @@ add_implicit_package_scope(parse_symtab_t *symtab,
         CORE_STRING_STATIC(""), name, PARSE_SYM_MODULE, nullptr);
     parse_symtab_leave_scope_all(symtab);
     if (!module || !parse_sym_set_binding(module,
-            CORE_STRING_STATIC("n00bb.implicit-package"), unit)
+            CORE_STRING_STATIC("n00bb.implicit-package"), scope)
         || !parse_sym_set_binding(module,
             CORE_STRING_STATIC("n00bb.package-unit"), unit)) return false;
     module->exposed_scope = scope;
@@ -1913,37 +1978,16 @@ install_implicit_builtin_package(core_translation_unit_t *unit)
     parse_symtab_t *symtab = state && state->annotations
         ? state->annotations->symtab : nullptr;
     parse_scope_t *parent = module_scope(state);
-    parse_namespace_t *builtin_ns = symtab
-        ? parse_symtab_ns(symtab, CORE_STRING_STATIC("builtin")) : nullptr;
-    parse_sym_entry_t *writer = builtin_ns
-        ? parse_symtab_lookup_in(builtin_ns->root,
-            CORE_STRING_STATIC("__fd_write")) : nullptr;
-    if (!symtab || !parent || !writer) return false;
     parse_scope_t *builtin_scope = nullptr;
     parse_scope_t *io_scope = nullptr;
     parse_scope_t *types_scope = nullptr;
-    if (!add_implicit_package_scope(symtab, unit, parent,
+    return symtab && parent
+        && add_implicit_package_scope(symtab, unit, parent,
             CORE_STRING_STATIC("builtin"), &builtin_scope)
-        || !add_implicit_package_scope(symtab, unit, builtin_scope,
+        && add_implicit_package_scope(symtab, unit, builtin_scope,
             CORE_STRING_STATIC("io"), &io_scope)
-        || !add_implicit_package_scope(symtab, unit, builtin_scope,
-            CORE_STRING_STATIC("types"), &types_scope)) return false;
-    parse_sym_entry_t *function = parse_symtab_lookup_in(io_scope,
-        CORE_STRING_STATIC("__fd_write"));
-    if (!function) {
-        parse_symtab_enter_scope_all(symtab, io_scope);
-        function = parse_symtab_add(symtab, CORE_STRING_STATIC(""),
-            CORE_STRING_STATIC("__fd_write"), PARSE_SYM_FUNCTION, nullptr);
-        parse_symtab_leave_scope_all(symtab);
-    }
-    if (!function || !parse_sym_set_binding(function,
-            CORE_STRING_STATIC("n00bb.abi.fd_write"),
-            (void *)"n00bb_bootstrap_fd_write")) return false;
-    function->type = writer->type;
-    function->error_type = writer->error_type;
-    function->callable_contract = writer->callable_contract;
-    function->visibility = CORE_STRING_STATIC("public");
-    return true;
+        && add_implicit_package_scope(symtab, unit, builtin_scope,
+            CORE_STRING_STATIC("types"), &types_scope);
 }
 
 bool

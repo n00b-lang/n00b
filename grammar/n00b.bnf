@@ -1,4 +1,5 @@
 @lexer("n00b.lex")
+@declaration_point("after_initializer")
 
 <module> @scope("module") ::= <other-top-stmts>? <eos>*
 

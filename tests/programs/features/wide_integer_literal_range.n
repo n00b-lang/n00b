@@ -1,0 +1,4 @@
+func big() -> u64 {
+    return 5
+}
+require big() != 0x10000000000000000

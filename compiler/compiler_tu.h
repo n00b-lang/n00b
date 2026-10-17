@@ -104,7 +104,6 @@ typedef enum {
     N00BB_LITERAL_DICT,
     N00BB_LITERAL_SET,
     N00BB_LITERAL_BINARY,
-    N00BB_LITERAL_RICH,
     N00BB_LITERAL_U32,
 } n00bb_literal_handler_t;
 
@@ -761,6 +760,11 @@ bool n00bb_constrain_integer_fit(n00bb_tu_state_t *state, th_type *type,
 bool n00bb_cache_contextual_integer(parse_grammar_t *grammar,
                                     n00bb_tu_state_t *state,
                                     parse_tree_t *node);
+bool n00bb_untyped_integer_const(parse_grammar_t *grammar,
+                                 parse_sym_entry_t *symbol,
+                                 int64_t *minimum, int64_t *maximum);
+bool n00bb_integer_constant_reference(parse_grammar_t *grammar,
+                                      parse_tree_t *node, int64_t *value);
 th_type *n00bb_integer_literal_context(parse_grammar_t *grammar,
                                        n00bb_tu_state_t *state,
                                        parse_tree_t *literal);
@@ -781,6 +785,15 @@ bool n00bb_range_proven_above_int64(parse_grammar_t *grammar,
                                     parse_tree_t *node);
 bool n00bb_contextual_integer_literal(n00bb_tu_state_t *state,
                                       parse_tree_t *node, th_type *target);
+static constexpr char n00bb_string_to_buffer_text[] =
+    "a string is immutable and does not convert to Buffer; use "
+    "buffer_from_string(s)";
+static constexpr char n00bb_buffer_type_name[] =
+    "builtin.containers.buffer.Buffer";
+bool n00bb_value_coerces(th_ctx *types, th_type *from, th_type *to);
+void n00bb_register_value_coercions(th_ctx *types);
+th_type *n00bb_value_coercion_target(th_ctx *types, th_type *from);
+bool n00bb_blanket_receiver(th_type *contract);
 th_type *n00bb_type_materialize(parse_grammar_t *grammar,
                                 n00bb_tu_state_t *state, parse_tree_t *node,
                                 th_type *actual, th_type *expected,
@@ -865,8 +878,6 @@ bool prepare_callback_call_symbols(core_translation_unit_t *unit);
 bool n00bb_bind_callback_call(n00bb_tu_state_t *state,
                               n00bb_link_use_site_t *site);
 bool n00bb_builtin_function(parse_sym_entry_t *symbol);
-bool n00bb_builtin_fd_write_function(parse_sym_entry_t *symbol);
-bool n00bb_builtin_repr_default_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_native_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_init_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_array_read_function(parse_sym_entry_t *symbol);

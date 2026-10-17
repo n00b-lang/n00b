@@ -1,0 +1,329 @@
+import internal.encoding
+import internal.runebuf
+import internal.properties
+import internal.types
+import generated.casemap
+
+const cp_capital_sigma: u32 = 0x03a3
+
+private func sparse_lookup(index: Array[Array[u32]], index_len: u32,
+                           cp: char) -> u32? {
+    let v: u32 = cast[u32] cp
+    var lo: u32 = 0
+    var hi: u32 = index_len
+
+    while lo < hi {
+        let mid: u32 = lo + (hi - lo) / 2
+
+        if index[mid][0] < v {
+            lo = mid + 1
+        }
+        else {
+            if index[mid][0] > v {
+                hi = mid
+            }
+            else {
+                return index[mid][1]
+            }
+        }
+    }
+
+    return nil
+}
+
+private func simple_map(cp: char, index: Array[Array[u32]], index_len: u32,
+                        data: Array[u32]) -> char {
+    let off: u32? = sparse_lookup(index, index_len, cp)
+
+    if off == nil {
+        return cp
+    }
+
+    let at: u32 = off.get()
+
+    if data[at] >= 1 {
+        return cast[char] data[at + 1]
+    }
+
+    return cp
+}
+
+func toupper_char(cp: char) -> char {
+    return simple_map(cp, generated.casemap.simple_upper_index,
+        generated.casemap.simple_upper_index_len,
+        generated.casemap.simple_upper_data)
+}
+
+func tolower_char(cp: char) -> char {
+    return simple_map(cp, generated.casemap.simple_lower_index,
+        generated.casemap.simple_lower_index_len,
+        generated.casemap.simple_lower_data)
+}
+
+func totitle_char(cp: char) -> char {
+    return simple_map(cp, generated.casemap.simple_title_index,
+        generated.casemap.simple_title_index_len,
+        generated.casemap.simple_title_data)
+}
+
+func casefold_char(cp: char) -> char {
+    return simple_map(cp, generated.casemap.casefold_simple_index,
+        generated.casemap.casefold_simple_index_len,
+        generated.casemap.casefold_simple_data)
+}
+
+private func full_map_char(cp: char, full_index: Array[Array[u32]],
+                           full_index_len: u32, full_data: Array[u32],
+                           simple_index: Array[Array[u32]],
+                           simple_index_len: u32, simple_data: Array[u32],
+                           modify out: internal.runebuf.Char_Buf) {
+    let off: u32? = sparse_lookup(full_index, full_index_len, cp)
+
+    if off != nil {
+        let at: u32 = off.get()
+        let count: u32 = full_data[at]
+
+        var i: u32 = 0
+        while i < count {
+            internal.runebuf.push(out, cast[char] full_data[at + 1 + i])
+            i += 1
+        }
+
+        return
+    }
+
+    internal.runebuf.push(out,
+        simple_map(cp, simple_index, simple_index_len, simple_data))
+}
+
+private func next_after_cased(cp: char, after_cased: bool) -> bool {
+    if internal.properties.has_property(cp, internal.types.Property.cased) {
+        return true
+    }
+
+    if internal.properties.has_property(cp,
+        internal.types.Property.case_ignorable) {
+        return after_cased
+    }
+
+    return false
+}
+
+private func followed_by_cased(s: string, len: uint, pos: u32) -> bool {
+    var at: u32 = pos
+
+    while cast[uint] at < len {
+        var cp: char = cast[char] 0
+
+        try {
+            cp = internal.encoding.utf8_decode(s, at)!
+        } else failure {
+            return false
+        }
+
+        if internal.properties.has_property(cp,
+            internal.types.Property.cased) {
+            return true
+        }
+
+        if !internal.properties.has_property(cp,
+            internal.types.Property.case_ignorable) {
+            return false
+        }
+    }
+
+    return false
+}
+
+private func map_final_sigma(cp: char, after_cased: bool, s: string,
+                             len: uint, pos: u32,
+                             modify out: internal.runebuf.Char_Buf) -> bool {
+    if cast[u32] cp != cp_capital_sigma or !after_cased or
+        followed_by_cased(s, len, pos) {
+        return false
+    }
+
+    let off: u32? = sparse_lookup(generated.casemap.final_sigma_lower_index,
+        generated.casemap.final_sigma_lower_index_len, cp)
+
+    if off == nil {
+        return false
+    }
+
+    let at: u32 = off.get()
+    let count: u32 = generated.casemap.final_sigma_lower_data[at]
+
+    var i: u32 = 0
+    while i < count {
+        internal.runebuf.push(out,
+            cast[char] generated.casemap.final_sigma_lower_data[at + 1 + i])
+        i += 1
+    }
+
+    return true
+}
+
+private func full_case_map(s: string, full_index: Array[Array[u32]],
+                           full_index_len: u32, full_data: Array[u32],
+                           simple_index: Array[Array[u32]],
+                           simple_index_len: u32, simple_data: Array[u32],
+                           final_sigma: bool) -> string {
+    let len: uint = byte_len(s)
+
+    if len == 0 or !is_text(s) {
+        return s
+    }
+
+    var out: internal.runebuf.Char_Buf =
+        new[internal.runebuf.Char_Buf](cast[u32] len)
+
+    var pos: u32 = 0
+    var after_cased: bool = false
+
+    while cast[uint] pos < len {
+        var cp: char = cast[char] 0
+
+        try {
+            cp = internal.encoding.utf8_decode(s, pos)!
+        } else failure {
+            pos = cast[u32] len
+
+            continue
+        }
+
+        if !final_sigma or
+            !map_final_sigma(cp, after_cased, s, len, pos, out) {
+            full_map_char(cp, full_index, full_index_len, full_data,
+                simple_index, simple_index_len, simple_data, out)
+        }
+
+        after_cased = next_after_cased(cp, after_cased)
+    }
+
+    return internal.runebuf.to_string(out)
+}
+
+func toupper(s: string) -> string {
+    return full_case_map(s, generated.casemap.full_upper_index,
+        generated.casemap.full_upper_index_len,
+        generated.casemap.full_upper_data,
+        generated.casemap.simple_upper_index,
+        generated.casemap.simple_upper_index_len,
+        generated.casemap.simple_upper_data, false)
+}
+
+func tolower(s: string) -> string {
+    return full_case_map(s, generated.casemap.full_lower_index,
+        generated.casemap.full_lower_index_len,
+        generated.casemap.full_lower_data,
+        generated.casemap.simple_lower_index,
+        generated.casemap.simple_lower_index_len,
+        generated.casemap.simple_lower_data, true)
+}
+
+func casefold(s: string) -> string {
+    return full_case_map(s, generated.casemap.casefold_full_index,
+        generated.casemap.casefold_full_index_len,
+        generated.casemap.casefold_full_data,
+        generated.casemap.casefold_simple_index,
+        generated.casemap.casefold_simple_index_len,
+        generated.casemap.casefold_simple_data, false)
+}
+
+func totitle(s: string) -> string {
+    let len: uint = byte_len(s)
+
+    if len == 0 or !is_text(s) {
+        return s
+    }
+
+    var out: internal.runebuf.Char_Buf =
+        new[internal.runebuf.Char_Buf](cast[u32] len)
+
+    var pos: u32 = 0
+    var at_start: bool = true
+    var after_cased: bool = false
+
+    while cast[uint] pos < len {
+        var cp: char = cast[char] 0
+
+        try {
+            cp = internal.encoding.utf8_decode(s, pos)!
+        } else failure {
+            pos = cast[u32] len
+
+            continue
+        }
+
+        let cased: bool = internal.properties.has_property(cp,
+            internal.types.Property.cased)
+
+        if at_start and cased {
+            full_map_char(cp, generated.casemap.full_title_index,
+                generated.casemap.full_title_index_len,
+                generated.casemap.full_title_data,
+                generated.casemap.simple_title_index,
+                generated.casemap.simple_title_index_len,
+                generated.casemap.simple_title_data, out)
+        }
+        else {
+            if !map_final_sigma(cp, after_cased, s, len, pos, out) {
+                full_map_char(cp, generated.casemap.full_lower_index,
+                    generated.casemap.full_lower_index_len,
+                    generated.casemap.full_lower_data,
+                    generated.casemap.simple_lower_index,
+                    generated.casemap.simple_lower_index_len,
+                    generated.casemap.simple_lower_data, out)
+            }
+        }
+
+        after_cased = next_after_cased(cp, after_cased)
+
+        if cased {
+            at_start = false
+        }
+        else {
+            if !internal.properties.has_property(cp,
+                internal.types.Property.case_ignorable) {
+                at_start = true
+            }
+        }
+    }
+
+    return internal.runebuf.to_string(out)
+}
+
+func casecmp(a: string, b: string) -> i32 {
+    let fa: string = casefold(a)
+    let fb: string = casefold(b)
+
+    let la: uint = byte_len(fa)
+    let lb: uint = byte_len(fb)
+    var n: uint = lb
+    if la < lb {
+        n = la
+    }
+
+    var i: uint = 0
+    while i < n {
+        let ca: u8 = byte_at(fa, i)
+        let cb: u8 = byte_at(fb, i)
+
+        if ca != cb {
+            if ca < cb {
+                return -1
+            }
+            return 1
+        }
+        i += 1
+    }
+
+    if la == lb {
+        return 0
+    }
+
+    if la < lb {
+        return -1
+    }
+    return 1
+}

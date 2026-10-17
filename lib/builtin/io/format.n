@@ -41,14 +41,14 @@ public const default_repr_options: Repr_Options = (
 private const intbuf_len: uint = 54
 private const hexbuf_len: uint = 36
 
-private func write_raw(fd: int, bytes: Array[u8], at: uint, n: uint)
+private func write_raw(fd: int, bytes: Ref[Array[u8]], at: uint, n: uint)
     -> uint fail: int {
     if n == 0 {
         return 0
     }
     let whole: string = string.core.from_raw(bytes, cast[int] (at + n), copy = false,
                                  encoding = string.core.Str_Encoding.binary)
-    let wrote: i32 = __fd_write(cast[i32] fd,
+    let wrote: i32 = string.core.__fd_write(cast[i32] fd,
         string.core.byte_slice(whole, cast[int] at, cast[int] (at + n)))
     if wrote < 0 {
         fail cast[int] wrote
@@ -82,7 +82,7 @@ private func string_bytes(s: string) -> Array[u8] {
 func format_byte(fd: int, c: u8) -> uint fail: int {
     var buf: Array[u8] = new[Array[u8]](1)
     buf[0] = c
-    write_raw(fd, buf, 0, 1)!
+    write_raw(fd, ref buf, 0, 1)!
     return 1
 }
 
@@ -102,16 +102,15 @@ private func write_byte_hex(fd: int, c: u8, escaped: bool) -> uint fail: int {
         buf[len] = 0x78
         len += 1
     }
-    let map: Array[u8] = hex.hex_map_lower()
-    buf[len] = map[c >> 4]
+    buf[len] = hex.hex_map_lower[c >> 4]
     len += 1
-    buf[len] = map[c & 0x0f]
+    buf[len] = hex.hex_map_lower[c & 0x0f]
     len += 1
-    write_raw(fd, buf, 0, len)!
+    write_raw(fd, ref buf, 0, len)!
     return len
 }
 
-func format_bytes(fd: int, bytes: Array[u8], len: uint,
+func format_bytes(fd: int, bytes: Ref[Array[u8]], len: uint,
                   common: Repr_Options? = nil, byte_literal: bool = false,
                   force_hex: bool = false) -> uint fail: int {
     let fmt: Repr_Options = common.get_or_else(default_repr_options)
@@ -165,7 +164,8 @@ func format_bytes(fd: int, bytes: Array[u8], len: uint,
 
 func format_string(fd: int, s: string, common: Repr_Options? = nil)
     -> uint fail: int {
-    return format_bytes(fd, string_bytes(s), string.core.byte_len(s), common)!
+    var bytes: Array[u8] = string_bytes(s)
+    return format_bytes(fd, ref bytes, string.core.byte_len(s), common)!
 }
 
 private func format_hex(n: u128, spec: Int_Format, fd: int, neg: bool,
@@ -175,9 +175,9 @@ private func format_hex(n: u128, spec: Int_Format, fd: int, neg: bool,
     var hbuf: Array[u8] = new[Array[u8]](cast[int] size)
     let end: uint = size - 1
     var p: uint = end
-    var map: Array[u8] = hex.hex_map_lower()
+    var map: Array[u8] = hex.hex_map_lower
     if spec.common.all_caps {
-        map = hex.hex_map_upper()
+        map = hex.hex_map_upper
     }
     var w: uint = 0
     if value == 0 {
@@ -239,7 +239,7 @@ private func format_hex(n: u128, spec: Int_Format, fd: int, neg: bool,
             push_front(hbuf, p, 0x2b)
         }
     }
-    write_raw(fd, hbuf, p, end - p)!
+    write_raw(fd, ref hbuf, p, end - p)!
     return w
 }
 
@@ -307,7 +307,7 @@ private func format_dec(n: u128, spec: Int_Format, fd: int, neg: bool)
             }
         }
     }
-    write_raw(fd, buf, p, end - p)!
+    write_raw(fd, ref buf, p, end - p)!
     return cast[uint] w
 }
 

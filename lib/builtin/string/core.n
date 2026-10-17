@@ -44,7 +44,7 @@ public const utf8_word_high: u64 = 0x8080808080808080
 public const max_u8_len:     uint = 4
 
 
-private func words(self: Ref[string]) -> Ref[String_Words] {
+private inline func words(self: Ref[string]) -> Ref[String_Words] {
     return unsafe_cast[Ref[String_Words]] self
 }
 
@@ -53,7 +53,7 @@ private func long_selector(n: uint, encoding: u8, tag: u64) -> u64 {
         (tag << tag_shift)
 }
 
-private func __string_tag(s: string) -> u8 {
+private inline func __string_tag(s: string) -> u8 {
     return cast[u8](words(ref s).selector >> tag_shift)
 }
 
@@ -61,7 +61,7 @@ private func __string_encoding_bits(s: string) -> u8 {
     return cast[u8]((words(ref s).selector >> encoding_shift) & 3)
 }
 
-private func __string_byte_len(s: string) -> uint {
+private inline func __string_byte_len(s: string) -> uint {
     let selector: u64 = words(ref s).selector
     if selector >> tag_shift == 0 {
         return cast[uint]((selector >> 56) & 0xf)
@@ -80,8 +80,8 @@ private func __string_byte(s: string, i: uint) -> u8 {
     return cast[u8] stored
 }
 
-private func __string_make(bytes: Array[u8], at: uint, n: uint, encoding: u8,
-                           share: bool) -> string {
+private func __string_make(bytes: Ref[Array[u8]], at: uint, n: uint,
+                           encoding: u8, share: bool) -> string {
     var made: string = ""
     let view: Ref[String_Words] = words(ref made)
     if n <= str_short_cap {
@@ -121,11 +121,11 @@ private func __string_span(s: string, at: uint, n: uint,
     return made
 }
 
-private func __string_rich_body(s: string) -> Ref[`T] {
+func __string_rich_body(s: string) -> Ref[`T] {
     return unsafe_cast[Ref[`T]] words(ref s).data
 }
 
-private func __string_make_rich(body: Ref[`T]) -> string {
+func __string_make_rich(body: Ref[`T]) -> string {
     var made: string = ""
     let view: Ref[String_Words] = words(ref made)
     view.data = unsafe_cast[Ref[byte]] body
@@ -133,7 +133,8 @@ private func __string_make_rich(body: Ref[`T]) -> string {
     return made
 }
 
-private func adopt_bytes(bytes: Array[u8], n: uint, encoding: u8) -> string {
+private func adopt_bytes(bytes: Ref[Array[u8]], n: uint, encoding: u8)
+    -> string {
     if n <= str_short_cap {
         return __string_make(bytes, 0, n, encoding, false)
     }
@@ -148,13 +149,67 @@ func tag(self: string) -> u8 {
     return __string_tag(self)
 }
 
-func text(self: string) -> string {
+inline func text(self: string) -> string {
     var walked: string = self
     while __string_tag(walked) == cast[u8] str_tag_rich {
         let body: Ref[string] = unsafe_cast[Ref[string]] words(ref walked).data
         walked = body
     }
     return walked
+}
+
+inline func __text_bytes(base: Ref[string]) -> Ref[byte] {
+    let view: Ref[String_Words] = words(base)
+    if view.selector >> tag_shift == 0 {
+        return unsafe_cast[Ref[byte]] view
+    }
+    return view.data
+}
+
+private const fd_chunk_limit: uint = 0x7fffffff
+
+private func write_all(fd: i32, data: Ref[byte], len: uint) -> bool {
+    var done: uint = 0
+    while done < len {
+        var chunk: uint = len - done
+        if chunk > fd_chunk_limit {
+            chunk = fd_chunk_limit
+        }
+        let wrote: i32 = __write_bytes(fd,
+            __gc_byte_offset(data, cast[int] done), cast[u32] chunk)
+        if wrote <= 0 {
+            return false
+        }
+        done += cast[uint] wrote
+    }
+    return true
+}
+
+func __fd_write(fd: i32, s: string) -> i32 {
+    var base: string = text(s)
+    let len: uint = __string_byte_len(base)
+    if !write_all(fd, __text_bytes(ref base), len) {
+        return -1
+    }
+    if len > fd_chunk_limit {
+        return cast[i32] fd_chunk_limit
+    }
+    return cast[i32] len
+}
+
+func __fd_write_bytes(fd: i32, bytes: Array[u8], start: uint, end: uint)
+    -> i32 {
+    require start <= end and end <= __array_length(bytes)
+    if start == end {
+        return 0
+    }
+    if !write_all(fd, unsafe_cast[Ref[byte]] ref bytes[start], end - start) {
+        return -1
+    }
+    if end - start > fd_chunk_limit {
+        return cast[i32] fd_chunk_limit
+    }
+    return cast[i32] (end - start)
 }
 
 func encoding(self: string) -> Str_Encoding {
@@ -165,7 +220,7 @@ func is_text(self: string) -> bool {
     return encoding(self) != Str_Encoding.binary
 }
 
-func byte_len(self: string) -> uint {
+inline func byte_len(self: string) -> uint {
     return __string_byte_len(text(self))
 }
 
@@ -199,7 +254,7 @@ func __add(self: string, other: string) -> string {
         bytes[left_length + j] = __string_byte(right, j)
         j += 1
     }
-    return adopt_bytes(bytes, n, cast[u8] widen_encoding(encoding(left),
+    return adopt_bytes(ref bytes, n, cast[u8] widen_encoding(encoding(left),
                                                          encoding(right)))
 }
 
@@ -284,7 +339,8 @@ private func utf8_sequence(bytes: Array[u8], at: uint, remaining: uint)
     return length
 }
 
-func __string_from_utf8(bytes: Array[u8], result: Ref[string]) -> bool {
+func __string_from_utf8(bytes: Ref[Array[u8]], result: Ref[string])
+    -> bool {
     let length: uint = __array_length(bytes)
     var ascii: bool = true
     var at: uint = 0
@@ -300,11 +356,20 @@ func __string_from_utf8(bytes: Array[u8], result: Ref[string]) -> bool {
     if ascii {
         encoding = 1
     }
-    ref_write(result, __string_make(bytes, 0, length, encoding, false))
+    ref_write(result, __string_make(bytes, 0, length, encoding, true))
     return true
 }
 
-private func __string_storage(s: string) -> Array[u8]? {
+func string_backing_at(s: string) -> uint {
+    let view: Ref[String_Words] = words(ref s)
+    let tag: u64 = view.selector >> tag_shift
+    if tag != str_tag_long and tag != str_tag_span {
+        return 0
+    }
+    return __abi_ref_address(view.data)
+}
+
+func __string_storage(s: string) -> Array[u8]? {
     let view: Ref[String_Words] = words(ref s)
     if view.selector >> tag_shift != str_tag_long {
         return nil
@@ -317,6 +382,22 @@ private func __string_storage(s: string) -> Array[u8]? {
     return storage
 }
 
+func __text_byte_array(self: string) -> Array[u8] {
+    let base: string = text(self)
+    let storage: Array[u8]? = __string_storage(base)
+    if storage != nil {
+        return storage.get()
+    }
+    let len: uint = __string_byte_len(base)
+    var copy: Array[u8] = new[Array[u8]](cast[int] len)
+    var i: uint = 0
+    while i < len {
+        copy[i] = __string_byte(base, i)
+        i += 1
+    }
+    return copy
+}
+
 private func __string_with_encoding(s: string, encoding: u8) -> string {
     var out: string = s
     let view: Ref[String_Words] = words(ref out)
@@ -325,29 +406,32 @@ private func __string_with_encoding(s: string, encoding: u8) -> string {
     return out
 }
 
-private func raw_len(src: Array[u8], byte_len: int) -> uint {
+private func raw_len(src: Ref[Array[u8]], at: uint, byte_len: int) -> uint {
+    require at <= __array_length(src)
     if byte_len >= 0 {
+        require cast[uint] byte_len <= __array_length(src) - at
         return cast[uint] byte_len
     }
     var n: uint = 0
-    while n < __array_length(src) and src[n] != 0 {
+    while at + n < __array_length(src) and src[at + n] != 0 {
         n += 1
     }
     return n
 }
 
 func empty_string() -> string {
-    return __string_make(new[Array[u8]](0), 0, 0,
-                         cast[u8] Str_Encoding.ascii, false)
+    var none: Array[u8] = new[Array[u8]](0)
+    return __string_make(ref none, 0, 0, cast[u8] Str_Encoding.ascii, false)
 }
 
-func from_raw(src: Array[u8], byte_len: int, copy: bool = true,
-              encoding: Str_Encoding? = nil, unsafe: bool = false) -> string {
-    let len: uint = raw_len(src, byte_len)
+func from_raw(src: Ref[Array[u8]], byte_len: int, at: uint = 0,
+              copy: bool = true, encoding: Str_Encoding? = nil,
+              unsafe: bool = false) -> string {
+    let len: uint = raw_len(src, at, byte_len)
     if len == 0 {
         return empty_string()
     }
-    let probe: string = __string_make(src, 0, len, 0, true)
+    let probe: string = __string_make(src, at, len, 0, true)
     var enc: Str_Encoding = Str_Encoding.binary
     if unsafe {
         require encoding != nil
@@ -363,7 +447,7 @@ func from_raw(src: Array[u8], byte_len: int, copy: bool = true,
                 cast[u8] enc <= cast[u8] encoding.get()
         }
     }
-    return __string_make(src, 0, len, cast[u8] enc, !copy)
+    return __string_make(src, at, len, cast[u8] enc, !copy)
 }
 
 func as_text(self: string) -> string fail: String_Error {
@@ -411,7 +495,7 @@ func to_cstring(self: string, copy: bool = false, buf: Array[u8]? = nil)
     return out
 }
 
-func adopt(bytes: Array[u8], len: int) -> string {
+func adopt(bytes: Ref[Array[u8]], len: int) -> string {
     return from_raw(bytes, len, copy = false)
 }
 
@@ -442,8 +526,9 @@ func byte_slice(self: string, start: int, end: int) -> string {
         last = len
     }
     if first < 0 or last < 0 or first >= len or first >= last {
-        return __string_make(new[Array[u8]](0), 0, 0,
-                             cast[u8] Str_Encoding.binary, false)
+        var none: Array[u8] = new[Array[u8]](0)
+        return __string_make(ref none, 0, 0, cast[u8] Str_Encoding.binary,
+                             false)
     }
     let slice_len: uint = cast[uint](last - first)
     var enc: Str_Encoding = encoding(self)
@@ -463,7 +548,7 @@ func byte_slice(self: string, start: int, end: int) -> string {
             bytes[i] = __string_byte(base, cast[uint] first + i)
             i += 1
         }
-        return __string_make(bytes, 0, slice_len, cast[u8] enc, false)
+        return __string_make(ref bytes, 0, slice_len, cast[u8] enc, false)
     }
     return __string_span(base, cast[uint] first, slice_len, cast[u8] enc)
 }
@@ -520,18 +605,40 @@ func to_hex(self: string) -> string {
     let len: uint = __string_byte_len(base)
     let hex_len: uint = len * 2
     var data: Array[u8] = new[Array[u8]](cast[int] hex_len)
-    let map: Array[u8] = hex.hex_map_lower()
     var p: uint = 0
     var i: uint = 0
     while i < len {
         let c: u8 = __string_byte(base, i)
-        data[p] = map[c >> 4]
-        data[p + 1] = map[c & 0x0f]
+        data[p] = hex.hex_map_lower[c >> 4]
+        data[p + 1] = hex.hex_map_lower[c & 0x0f]
         p += 2
         i += 1
     }
-    return from_raw(data, cast[int] hex_len, copy = false,
+    return from_raw(ref data, cast[int] hex_len, copy = false,
                     encoding = Str_Encoding.ascii, unsafe = true)
+}
+
+private func put_utf8(modify out: Array[u8], at: uint, cp: u32) -> uint {
+    if cp <= 0x7f {
+        out[at] = unsafe_cast[u8] cp
+        return 1
+    }
+    if cp <= 0x7ff {
+        out[at] = unsafe_cast[u8](0xc0 | (cp >> 6))
+        out[at + 1] = unsafe_cast[u8](0x80 | (cp & 0x3f))
+        return 2
+    }
+    if cp <= 0xffff {
+        out[at] = unsafe_cast[u8](0xe0 | (cp >> 12))
+        out[at + 1] = unsafe_cast[u8](0x80 | ((cp >> 6) & 0x3f))
+        out[at + 2] = unsafe_cast[u8](0x80 | (cp & 0x3f))
+        return 3
+    }
+    out[at] = unsafe_cast[u8](0xf0 | (cp >> 18))
+    out[at + 1] = unsafe_cast[u8](0x80 | ((cp >> 12) & 0x3f))
+    out[at + 2] = unsafe_cast[u8](0x80 | ((cp >> 6) & 0x3f))
+    out[at + 3] = unsafe_cast[u8](0x80 | (cp & 0x3f))
+    return 4
 }
 
 func from_char(c: char) -> string {
@@ -540,34 +647,100 @@ func from_char(c: char) -> string {
         return empty_string()
     }
     var tmp: Array[u8] = new[Array[u8]](cast[int] max_u8_len)
-    var encoded: int = 0
-    if cp <= 0x7f {
-        tmp[0] = unsafe_cast[u8] cp
-        encoded = 1
-    }
-    elif cp <= 0x7ff {
-        tmp[0] = unsafe_cast[u8](0xc0 | (cp >> 6))
-        tmp[1] = unsafe_cast[u8](0x80 | (cp & 0x3f))
-        encoded = 2
-    }
-    elif cp <= 0xffff {
-        tmp[0] = unsafe_cast[u8](0xe0 | (cp >> 12))
-        tmp[1] = unsafe_cast[u8](0x80 | ((cp >> 6) & 0x3f))
-        tmp[2] = unsafe_cast[u8](0x80 | (cp & 0x3f))
-        encoded = 3
-    }
-    else {
-        tmp[0] = unsafe_cast[u8](0xf0 | (cp >> 18))
-        tmp[1] = unsafe_cast[u8](0x80 | ((cp >> 12) & 0x3f))
-        tmp[2] = unsafe_cast[u8](0x80 | ((cp >> 6) & 0x3f))
-        tmp[3] = unsafe_cast[u8](0x80 | (cp & 0x3f))
-        encoded = 4
-    }
+    let encoded: uint = put_utf8(tmp, 0, cp)
     var enc: Str_Encoding = Str_Encoding.utf8
     if cp <= 0x7f {
         enc = Str_Encoding.ascii
     }
-    return from_raw(tmp, encoded, encoding = enc, unsafe = true)
+    return from_raw(ref tmp, cast[int] encoded, encoding = enc, unsafe = true)
+}
+
+private func hex_value(b: u8) -> u32? {
+    if b >= 0x30 and b <= 0x39 {
+        return cast[u32] (b - 0x30)
+    }
+    if b >= 0x61 and b <= 0x66 {
+        return cast[u32] (b - 0x61 + 10)
+    }
+    if b >= 0x41 and b <= 0x46 {
+        return cast[u32] (b - 0x41 + 10)
+    }
+    return nil
+}
+
+private func simple_escape(b: u8) -> u8? {
+    switch b {
+        case 0x61 { return 0x07 }
+        case 0x62 { return 0x08 }
+        case 0x66 { return 0x0c }
+        case 0x6e { return 0x0a }
+        case 0x72 { return 0x0d }
+        case 0x74 { return 0x09 }
+        case 0x76 { return 0x0b }
+        case 0x30 { return 0x00 }
+        case 0x5c, 0x22, 0x27 { return b }
+        else { return nil }
+    }
+}
+
+func decode_escapes(raw: string) -> string fail: string {
+    let base: string = text(raw)
+    let n: uint = __string_byte_len(base)
+    var out: Array[u8] = new[Array[u8]](cast[int] n)
+    var len: uint = 0
+    var i: uint = 0
+    while i < n {
+        let c: u8 = __string_byte(base, i)
+        i += 1
+        if c != 0x5c {
+            out[len] = c
+            len += 1
+            continue
+        }
+        if i >= n {
+            fail "a string ends with an unfinished escape"
+        }
+        let e: u8 = __string_byte(base, i)
+        i += 1
+        let simple: u8? = simple_escape(e)
+        if simple != nil {
+            out[len] = simple.get()
+            len += 1
+            continue
+        }
+        var digits: uint = 0
+        if e == 0x78 {
+            digits = 2
+        }
+        elif e == 0x75 {
+            digits = 4
+        }
+        elif e == 0x55 {
+            digits = 8
+        }
+        else {
+            fail "a string contains an unknown escape"
+        }
+        if n - i < digits {
+            fail "a string has a numeric escape with too few hex digits"
+        }
+        var cp: u32 = 0
+        var k: uint = 0
+        while k < digits {
+            let digit: u32? = hex_value(__string_byte(base, i + k))
+            if digit == nil {
+                fail "a string has a numeric escape with a non-hex digit"
+            }
+            cp = (cp << 4) | digit.get()
+            k += 1
+        }
+        i += digits
+        if cp > 0x10ffff or (cp >= 0xd800 and cp <= 0xdfff) {
+            fail "a string escapes a value that is not a Unicode scalar"
+        }
+        len += put_utf8(out, len, cp)
+    }
+    return from_raw(ref out, cast[int] len, copy = false)
 }
 
 func widen_encoding(a: Str_Encoding, b: Str_Encoding) -> Str_Encoding {
@@ -627,7 +800,7 @@ func join(items: List[string], joiner: string) -> string {
         }
         k += 1
     }
-    return from_raw(data, cast[int] new_len, copy = false, encoding = enc,
+    return from_raw(ref data, cast[int] new_len, copy = false, encoding = enc,
                     unsafe = true)
 }
 
@@ -654,8 +827,7 @@ private record V16u8 {
     lanes: Array[u8][16]
 }
 
-private func utf8_tab1() -> Array[u8] {
-    let table: Array[u8] = [
+private const utf8_tab1: V16u8 = (lanes = [
     cast[u8](Utf8_Check.too_long),
     cast[u8](Utf8_Check.too_long),
     cast[u8](Utf8_Check.too_long),
@@ -672,12 +844,9 @@ private func utf8_tab1() -> Array[u8] {
     cast[u8](Utf8_Check.too_short),
     cast[u8](Utf8_Check.lead_3),
     cast[u8](Utf8_Check.lead_4),
-]'array
-    return table
-}
+])
 
-private func utf8_tab2() -> Array[u8] {
-    let table: Array[u8] = [
+private const utf8_tab2: V16u8 = (lanes = [
     cast[u8](Utf8_Check.carry | Utf8_Check.overlong_3 | Utf8_Check.overlong_2 | Utf8_Check.too_large_1000_or_overlong_4),
     cast[u8](Utf8_Check.carry | Utf8_Check.overlong_2),
     cast[u8](Utf8_Check.carry),
@@ -694,12 +863,9 @@ private func utf8_tab2() -> Array[u8] {
     cast[u8](Utf8_Check.big | Utf8_Check.surrogate),
     cast[u8](Utf8_Check.big),
     cast[u8](Utf8_Check.big),
-]'array
-    return table
-}
+])
 
-private func utf8_tab3() -> Array[u8] {
-    let table: Array[u8] = [
+private const utf8_tab3: V16u8 = (lanes = [
     cast[u8](Utf8_Check.too_short),
     cast[u8](Utf8_Check.too_short),
     cast[u8](Utf8_Check.too_short),
@@ -716,22 +882,38 @@ private func utf8_tab3() -> Array[u8] {
     cast[u8](Utf8_Check.too_short),
     cast[u8](Utf8_Check.too_short),
     cast[u8](Utf8_Check.too_short),
-]'array
-    return table
-}
+])
 
-private func splat(value: u8) -> V16u8 {
-    var r: V16u8
-    var i: uint = 0
-    while i < 16 {
-        r.lanes[i] = value
-        i += 1
-    }
-    return r
-}
+private const v_zero: V16u8 = (lanes = [
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+])
+
+private const v_four: V16u8 = (lanes = [
+    4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+])
+
+private const v_e0_thr: V16u8 = (lanes = [
+    0x60, 0x60, 0x60, 0x60, 0x60, 0x60, 0x60, 0x60,
+    0x60, 0x60, 0x60, 0x60, 0x60, 0x60, 0x60, 0x60,
+])
+
+private const v_f0_thr: V16u8 = (lanes = [
+    0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
+    0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
+])
+
+private const v_bit7: V16u8 = (lanes = [
+    0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,
+    0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,
+])
+
+private const v_lonib: V16u8 = (lanes = [
+    0x0f, 0x0f, 0x0f, 0x0f, 0x0f, 0x0f, 0x0f, 0x0f,
+    0x0f, 0x0f, 0x0f, 0x0f, 0x0f, 0x0f, 0x0f, 0x0f,
+])
 
 private func v_shr(a: V16u8, b: V16u8) -> V16u8 {
-    var r: V16u8 = splat(0)
+    var r: V16u8 = v_zero
     var i: uint = 0
     while i < 16 {
         r.lanes[i] = a.lanes[i] >> b.lanes[i]
@@ -741,7 +923,7 @@ private func v_shr(a: V16u8, b: V16u8) -> V16u8 {
 }
 
 private func v_and(a: V16u8, b: V16u8) -> V16u8 {
-    var r: V16u8 = splat(0)
+    var r: V16u8 = v_zero
     var i: uint = 0
     while i < 16 {
         r.lanes[i] = a.lanes[i] & b.lanes[i]
@@ -751,7 +933,7 @@ private func v_and(a: V16u8, b: V16u8) -> V16u8 {
 }
 
 private func v_or(a: V16u8, b: V16u8) -> V16u8 {
-    var r: V16u8 = splat(0)
+    var r: V16u8 = v_zero
     var i: uint = 0
     while i < 16 {
         r.lanes[i] = a.lanes[i] | b.lanes[i]
@@ -761,7 +943,7 @@ private func v_or(a: V16u8, b: V16u8) -> V16u8 {
 }
 
 private func v_xor(a: V16u8, b: V16u8) -> V16u8 {
-    var r: V16u8 = splat(0)
+    var r: V16u8 = v_zero
     var i: uint = 0
     while i < 16 {
         r.lanes[i] = a.lanes[i] ^ b.lanes[i]
@@ -775,7 +957,7 @@ private func continuation(s: string, i: uint) -> bool {
     return (b & 0xc0) == 0x80
 }
 
-private func validate_multibyte(s: string, p: uint, end: uint) -> i32 {
+func validate_multibyte(s: string, p: uint, end: uint) -> i32 {
     let b0: u8 = __string_byte(s, p)
     if b0 >= 0xc2 and b0 <= 0xdf {
         if p + 2 > end {
@@ -873,18 +1055,18 @@ private func scan_scalar(s: string, p: uint, end: uint, ascii: bool)
     return Str_Encoding.utf8
 }
 
-private inline func v_lookup(table: Array[u8], indices: V16u8) -> V16u8 {
-    var r: V16u8 = splat(0)
+private inline func v_lookup(table: V16u8, indices: V16u8) -> V16u8 {
+    var r: V16u8 = v_zero
     var i: uint = 0
     while i < 16 {
-        r.lanes[i] = table[indices.lanes[i] & 0x0f]
+        r.lanes[i] = table.lanes[indices.lanes[i] & 0x0f]
         i += 1
     }
     return r
 }
 
 private inline func v_prev(cur: V16u8, prev: V16u8, n: uint) -> V16u8 {
-    var r: V16u8 = splat(0)
+    var r: V16u8 = v_zero
     var i: uint = 0
     while i < n {
         r.lanes[i] = prev.lanes[16 - n + i]
@@ -899,7 +1081,7 @@ private inline func v_prev(cur: V16u8, prev: V16u8, n: uint) -> V16u8 {
 }
 
 private inline func v_sat_sub(a: V16u8, b: V16u8) -> V16u8 {
-    var r: V16u8 = splat(0)
+    var r: V16u8 = v_zero
     var i: uint = 0
     while i < 16 {
         if a.lanes[i] > b.lanes[i] {
@@ -922,30 +1104,21 @@ private inline func v_any_nonzero(v: V16u8) -> bool {
 }
 
 private func scan_simd(s: string, len: uint) -> Str_Encoding {
-    let v_four: V16u8 = splat(4)
-    let v_e0_thr: V16u8 = splat(0x60)
-    let v_f0_thr: V16u8 = splat(0x70)
-    let v_bit7: V16u8 = splat(0x80)
-    let v_lonib: V16u8 = splat(0x0f)
-    let zero: V16u8 = splat(0)
-    let tab1: Array[u8] = utf8_tab1()
-    let tab2: Array[u8] = utf8_tab2()
-    let tab3: Array[u8] = utf8_tab3()
-    var prev: V16u8 = zero
-    var errors: V16u8 = zero
-    var high: V16u8 = zero
+    var prev: V16u8 = v_zero
+    var errors: V16u8 = v_zero
+    var high: V16u8 = v_zero
     var i: uint = 0
     while i + 16 <= len {
-        var input: V16u8 = splat(0)
+        var input: V16u8 = v_zero
         var lane: uint = 0
         while lane < 16 {
             input.lanes[lane] = __string_byte(s, i + lane)
             lane += 1
         }
         let prev1: V16u8 = v_prev(input, prev, 1)
-        let hi_prev: V16u8 = v_lookup(tab1, v_shr(prev1, v_four))
-        let lo_prev: V16u8 = v_lookup(tab2, v_and(prev1, v_lonib))
-        let hi_cur: V16u8 = v_lookup(tab3, v_shr(input, v_four))
+        let hi_prev: V16u8 = v_lookup(utf8_tab1, v_shr(prev1, v_four))
+        let lo_prev: V16u8 = v_lookup(utf8_tab2, v_and(prev1, v_lonib))
+        let hi_cur: V16u8 = v_lookup(utf8_tab3, v_shr(input, v_four))
         let sc: V16u8 = v_and(v_and(hi_prev, lo_prev), hi_cur)
         let is_third: V16u8 = v_sat_sub(v_prev(input, prev, 2), v_e0_thr)
         let is_fourth: V16u8 = v_sat_sub(v_prev(input, prev, 3), v_f0_thr)

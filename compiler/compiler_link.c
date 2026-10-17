@@ -1017,12 +1017,14 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
              scope; scope = scope->all_next) {
             for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
                  symbol = symbol->next_in_scope) {
+                parse_tree_t *origin_declaration =
+                    canonical_symbol(symbol)->decl_node;
                 if (symbol->kind == PARSE_SYM_TYPEDEF && symbol->member_scope
                     && symbol->type
-                    && (!symbol->decl_node || !nt_is(grammar,
-                        symbol->decl_node, "alias-stmt")
+                    && (!origin_declaration || !nt_is(grammar,
+                        origin_declaration, "alias-stmt")
                         || !alias_declaration_is_transparent(
-                            symbol->decl_node))
+                            origin_declaration))
                     && th_named_info(th_resolve(symbol->type), nullptr,
                                      nullptr, nullptr, nullptr)
                     && !parse_symtab_bind_nominal_type(
@@ -1265,6 +1267,18 @@ resolve_module_member_site(parse_grammar_t *grammar,
     bool package_export = core_string_eq(exposed_scope->scope_tag,
                                          CORE_STRING_STATIC(
                                              "package-interface"));
+    core_string_t consumer_package = n00bb_package_namespace(unit);
+    parse_sym_entry_t *granted = !symbol && !type
+        && consumer_package.u8_bytes
+        ? granted_export_symbol(imported, member, consumer_package) : nullptr;
+    if (granted && granted->kind == PARSE_SYM_TYPEDEF) {
+        type = granted;
+        package_export = true;
+    }
+    else if (granted) {
+        symbol = granted;
+        package_export = true;
+    }
     if (type_reference || (!symbol && type)) {
         bool visible = type && type->kind == PARSE_SYM_TYPEDEF
             && (package_export
@@ -1342,7 +1356,11 @@ resolve_module_member_site(parse_grammar_t *grammar,
                 th_unify_in_place(state->types, th_func_ret(use),
                                   th_func_ret(instance));
         }
-        if (!direct_call && symbol->type && use_type
+        int64_t constant = 0;
+        bool contextual_constant = use_type
+            && th_kind_of(th_resolve(use_type)) != TH_VAR
+            && n00bb_integer_constant_reference(grammar, node, &constant);
+        if (!direct_call && !contextual_constant && symbol->type && use_type
             && state && state->types) {
             bool context_constructor = context_symbol(grammar, symbol);
             bool copied = context_constructor
@@ -1433,7 +1451,16 @@ implicit_builtin_export(core_translation_unit_t *unit,
     parse_sym_entry_t *type = types ? parse_symtab_lookup_in(types, name)
                                    : nullptr;
     parse_sym_entry_t *value = parse_symtab_lookup_in(package->scope, name);
-    return type_reference ? type : value ? value : type;
+    parse_sym_entry_t *found = type_reference ? type : value ? value : type;
+    core_string_t consumer_package = n00bb_package_namespace(unit);
+    if (!found && consumer_package.u8_bytes) {
+        parse_sym_entry_t *granted = granted_export_symbol(builtin, name,
+                                                           consumer_package);
+        if (granted && (!type_reference
+                        || granted->kind == PARSE_SYM_TYPEDEF))
+            found = granted;
+    }
+    return found;
 }
 
 bool
@@ -1795,7 +1822,8 @@ call_receiver_is_module(parse_grammar_t *grammar,
         site = link_use_site_for_node(state, receiver);
     }
     return site && site->dotted_path
-        && unit_for_module_site(unit, site, false) != nullptr;
+        && (unit_for_module_site(unit, site, false)
+            || unit_for_module_site(unit, site, true));
 }
 
 parse_sym_entry_t *
@@ -2808,6 +2836,11 @@ link_declaration_scopes(n00bb_tu_state_t *state,
             || !core_string_eq(scope->scope_tag,
                                CORE_STRING_STATIC("package-interface")))
             continue;
+        bool export_scope = false;
+        for (size_t p = 0; !export_scope
+             && p < state->package_declarations.len; p++)
+            export_scope = state->package_declarations.data[p].scope == scope;
+        if (export_scope) continue;
         parse_scope_t *candidate = namespace_name.u8_bytes
             ? parse_symtab_scope_in_namespace(symtab, scope, namespace_name)
             : scope;
@@ -2988,8 +3021,8 @@ register_link_declarations(core_link_unit_t *link, parse_grammar_t *grammar,
     }
 
     static const char *builtin_names[] = {
-        "has_type", "ref_read", "ref_write", "__fd_write",
-        "__repr_default", "__gc_byte_offset", "__gc_byte_diff",
+        "has_type", "ref_read", "ref_write",
+        "__gc_byte_offset", "__gc_byte_diff",
         "__count_leading_zeros", "__count_trailing_zeros",
         "__gc_memset", "__gc_memcpy",
         "__gc_invoke_finalizer",
@@ -3019,10 +3052,6 @@ register_link_declarations(core_link_unit_t *link, parse_grammar_t *grammar,
             if (!n00bb_builtin_function(symbol) || !symbol->uses) continue;
             core_string_t name = symbol->name;
             bool selected = parse_sym_binding(symbol,
-                    CORE_STRING_STATIC("n00bb.abi.fd_write"))
-                || parse_sym_binding(symbol,
-                    CORE_STRING_STATIC("n00bb.abi.repr_default"))
-                || parse_sym_binding(symbol,
                     CORE_STRING_STATIC("n00bb.abi.native"))
                 || n00bb_builtin_unsafe_arithmetic(symbol);
             for (size_t b = 0; !selected
@@ -4285,6 +4314,7 @@ register_builtin_value_defaults(th_env *defaults, const th_env *base,
                 }
                 th_type *shape = th_type_definition(state->types, receiver);
                 if (!th_is_closed(state->types, receiver)
+                    || n00bb_value_coercion_target(state->types, receiver)
                     || (record && (!shape
                         || th_kind_of(th_resolve(shape)) != TH_RECORD
                         || !th_is_closed(state->types, shape)))) continue;

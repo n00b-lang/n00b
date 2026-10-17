@@ -921,10 +921,6 @@ diagnose_unused_link_symbols(parse_grammar_t *grammar,
                             CORE_STRING_STATIC("start"))
                         || core_string_eq(symbol->name,
                             CORE_STRING_STATIC("comptime_start")))) continue;
-                if (core_string_eq(unit->module.identifier,
-                        CORE_STRING_STATIC("builtin.io.raw"))
-                    && core_string_eq(symbol->name,
-                        CORE_STRING_STATIC("__raw_repr_dispatch"))) continue;
                 bool native_root = false;
                 core_string_t module_name = unit->module.identifier;
                 for (size_t r = 0; r < analysis->native_root_count; r++) {
@@ -999,6 +995,7 @@ operand_unifies(th_ctx *types, th_type *parameter, th_type *operand)
 {
     if (th_unify_probe(types, parameter, operand))
         return th_unify_in_place(types, parameter, operand) != nullptr;
+    if (n00bb_value_coerces(types, operand, parameter)) return true;
     th_type *promoted = n00bb_dereferenced_type(types, operand);
     return promoted && th_unify_in_place(types, parameter, promoted);
 }
@@ -1132,13 +1129,14 @@ constructor_argument_fits(n00bb_tu_state_t *state, parse_tree_t *node,
                           th_type *parameter, th_type *argument)
 {
     th_type *element = nullptr;
-    if (!n00bb_option_type_element(parameter, &element)
-        || th_unify_probe(state->types, parameter, argument))
+    bool optional = n00bb_option_type_element(parameter, &element);
+    if (th_unify_probe(state->types, parameter, argument))
         return th_unify_in_place(state->types, parameter, argument) != nullptr;
-    if (th_is_nil(argument)) return true;
+    if (optional && th_is_nil(argument)) return true;
     if (core_tree_node_value(node).integer_literal_origin)
-        return n00bb_contextual_integer_literal(state, node, element);
-    return th_unify_probe(state->types, argument, element)
+        return n00bb_contextual_integer_literal(state, node,
+                                                optional ? element : parameter);
+    return optional && th_unify_probe(state->types, argument, element)
         && th_unify_in_place(state->types, element, argument) != nullptr;
 }
 
@@ -1748,6 +1746,28 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
                     status = resolve_site_method(state, site, promoted,
                                                  &trait_name, &method);
                     if (status == TH_ENV_METHOD_FOUND) receiver_type = promoted;
+                }
+                bool blanket = status == TH_ENV_METHOD_FOUND
+                    && n00bb_blanket_receiver(method.contract);
+                th_type *coerced = (status == TH_ENV_METHOD_NOT_FOUND
+                        || blanket)
+                    && receiver_type && !site->secondary_dispatch
+                    ? n00bb_value_coercion_target(state->types, receiver_type)
+                    : nullptr;
+                if (coerced) {
+                    th_env_method_t target = {0};
+                    const char *target_trait = trait_name;
+                    th_env_method_status_t target_status =
+                        resolve_site_method(state, site, coerced,
+                                            &target_trait, &target);
+                    if (target_status == TH_ENV_METHOD_FOUND
+                        && !(blanket
+                             && n00bb_blanket_receiver(target.contract))) {
+                        status = target_status;
+                        method = target;
+                        trait_name = target_trait;
+                        receiver_type = coerced;
+                    }
                 }
                 if (status == TH_ENV_METHOD_NOT_FOUND
                     && core_string_eq(site->dispatch_trait,

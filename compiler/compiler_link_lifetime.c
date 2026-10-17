@@ -197,13 +197,16 @@ function_lifetime_effects_for_symbol(n00bb_link_analysis_t *analysis,
         return true;
     }
     if (n00bb_builtin_native_function(function)) {
+        bool returns_parameter = parse_sym_binding(function,
+            CORE_STRING_STATIC("n00bb.native.returns-parameter")) != nullptr;
         *out = (n00bb_function_lifetime_effects_t){
             .parameter_count = th_func_nparams(function->type),
-            .return_kind = core_string_eq(function->name,
-                CORE_STRING_STATIC("__os_map_zeroed"))
+            .return_kind = returns_parameter ? N00BB_RETURN_ALIAS_PARAMETER
+                : core_string_eq(function->name,
+                    CORE_STRING_STATIC("__os_map_zeroed"))
                 ? N00BB_RETURN_ALIAS_FRESH_EXTERNAL
                 : N00BB_RETURN_ALIAS_NONE,
-            .return_parameter = UINT32_MAX,
+            .return_parameter = returns_parameter ? 0 : UINT32_MAX,
         };
         return true;
     }

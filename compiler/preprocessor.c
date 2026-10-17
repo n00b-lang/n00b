@@ -1,3 +1,6 @@
+#define _XOPEN_SOURCE 700
+#define _DARWIN_C_SOURCE 1
+
 #include "preprocessor.h"
 
 #include <errno.h>
@@ -731,6 +734,22 @@ external_definition_kind(core_string_t raw)
 }
 
 static bool
+parse_float_text(core_string_t text, double *value)
+{
+    char *digits = core_alloc_array(char, text.u8_bytes + 1);
+    size_t length = 0;
+    for (size_t i = 0; i < text.u8_bytes; i++)
+        if (text.data[i] != '_') digits[length++] = text.data[i];
+    digits[length] = 0;
+    char *end = nullptr;
+    errno = 0;
+    *value = strtod(digits, &end);
+    bool valid = end && *end == '\0' && end != digits && errno != ERANGE;
+    core_free(digits);
+    return valid;
+}
+
+static bool
 parse_literal(pp_context_t *ctx, parse_tree_t *node, pp_value_t *out)
 {
     if (is_name(ctx->grammar, node, "simple-lit")) {
@@ -755,13 +774,8 @@ parse_literal(pp_context_t *ctx, parse_tree_t *node, pp_value_t *out)
             return false;
         }
         if (core_string_eq(terminal, CORE_STRING_STATIC("FLOAT_LIT"))) {
-            char *copy = core_strndup(text.data, text.u8_bytes);
-            char *end = nullptr;
-            errno = 0;
-            double value = strtod(copy, &end);
-            bool valid = end && *end == '\0' && end != copy && errno != ERANGE;
-            core_free(copy);
-            if (valid) {
+            double value = 0.0;
+            if (parse_float_text(text, &value)) {
                 *out = (pp_value_t){.kind = PP_FLOAT, .as.real = value};
                 return true;
             }
@@ -808,13 +822,8 @@ parse_literal(pp_context_t *ctx, parse_tree_t *node, pp_value_t *out)
     }
     if (is_name(ctx->grammar, node, "float-lit")) {
         core_string_t text = first_leaf_text(ctx, node);
-        char *copy = core_strndup(text.data, text.u8_bytes);
-        char *end = nullptr;
-        errno = 0;
-        double value = strtod(copy, &end);
-        bool valid = end && *end == '\0' && end != copy && errno != ERANGE;
-        core_free(copy);
-        if (valid) {
+        double value = 0.0;
+        if (parse_float_text(text, &value)) {
             *out = (pp_value_t){.kind = PP_FLOAT, .as.real = value};
             return true;
         }
@@ -1081,6 +1090,7 @@ eval_builtin(pp_context_t *ctx, parse_tree_t *call, pp_value_t *out)
         if (core_string_eq(name, CORE_STRING_STATIC("target_os"))
             || core_string_eq(name, CORE_STRING_STATIC("target_arch"))
             || core_string_eq(name, CORE_STRING_STATIC("n00b_impl"))
+            || core_string_eq(name, CORE_STRING_STATIC("source_dir"))
             || core_string_eq(name, CORE_STRING_STATIC("preproc_env")))
             kind = PP_STRING;
         else if (core_string_eq(name, CORE_STRING_STATIC("target_is_little_endian"))
@@ -1208,6 +1218,24 @@ eval_builtin(pp_context_t *ctx, parse_tree_t *call, pp_value_t *out)
     if (core_string_eq(name, CORE_STRING_STATIC("n00b_minor"))) PP_INT(1);
     if (core_string_eq(name, CORE_STRING_STATIC("n00b_patch"))) PP_INT(0);
     if (core_string_eq(name, CORE_STRING_STATIC("n00b_impl"))) PP_STRING("n00bb");
+    if (core_string_eq(name, CORE_STRING_STATIC("source_dir"))) {
+        core_string_t path = core_source_file_path(&ctx->unit->source);
+        char *copy = path.data ? core_strndup(path.data, path.u8_bytes)
+                               : nullptr;
+        char *resolved = copy ? realpath(copy, nullptr) : nullptr;
+        core_free(copy);
+        char *slash = resolved ? strrchr(resolved, '/') : nullptr;
+        if (!slash) {
+            free(resolved);
+            pp_error(ctx, call, "source_dir() has no resolvable source file");
+            return false;
+        }
+        *slash = 0;
+        *out = (pp_value_t){.kind = PP_STRING,
+            .as.string = own_string(ctx, core_string_from_cstr(resolved))};
+        free(resolved);
+        return true;
+    }
 #undef PP_INT
 #undef PP_STRING
 
@@ -1631,7 +1659,7 @@ n00bb_preprocessor_builtin_name(core_string_t name)
         "debug_enabled", "comptime",
         "preproc_utc_year", "preproc_utc_month", "preproc_utc_day",
         "preproc_utc_hour", "preproc_utc_minute", "preproc_utc_second",
-        "n00b_major", "n00b_minor", "n00b_patch", "n00b_impl",
+        "n00b_major", "n00b_minor", "n00b_patch", "n00b_impl", "source_dir",
         "preproc_env", "preproc_env_defines", "preproc_defines",
         "preproc_value", "compile_warning", "compile_error", nullptr,
     };

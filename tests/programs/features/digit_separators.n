@@ -1,0 +1,12 @@
+const big: u32 = 0x8000_0000
+const million: int = 1_000_000
+const ratio: f64 = 1_000.25
+let local_ratio: f64 = 2_000.5
+var cells: Array[u8][1_6] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+require big == 0x80000000
+require million == 1000000
+require ratio == 1000.25
+require local_ratio == 2000.5
+require __array_length(cells) == 16
+__fd_write(2, "ok")

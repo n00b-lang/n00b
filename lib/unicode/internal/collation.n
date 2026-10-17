@@ -1,0 +1,515 @@
+import sys.abi
+import internal.types
+import internal.encoding
+import internal.properties
+import internal.normalization
+import generated.collation
+
+const ce_none: u32 = 0xffffffff
+const max_ce_per_cp: i32 = 18
+const max_contr_key: u32 = 4
+
+private func find_contraction_start(cp: char) -> u32? {
+    var lo: u32 = 0
+    var hi: u32 = generated.collation.contraction_count
+    var out: u32? = nil
+
+    while lo < hi {
+        let mid: u32 = lo + (hi - lo) / 2
+
+        if generated.collation.contr_keys[mid][0] < cast[u32] cp {
+            lo = mid + 1
+        }
+        else {
+            if generated.collation.contr_keys[mid][0] > cast[u32] cp {
+                hi = mid
+            }
+            else {
+                out = mid
+                hi = mid
+            }
+        }
+    }
+
+    return out
+}
+
+private func try_contraction(cps: Array[char], cccs: Array[u8], num_cps: u32,
+                             ix: u32, modify out: Array[u16], out_at: uint,
+                             max_ces: i32, modify matched: Array[bool]) -> i32 {
+    if generated.collation.contraction_count == 0 {
+        return 0
+    }
+
+    let start: u32? = find_contraction_start(cps[ix])
+
+    if start == nil {
+        return 0
+    }
+
+    var best_klen: u32 = 0
+    var have_best: bool = false
+    var best_ci: u32 = 0
+    var best_pos: Array[u32][4] = new[Array[u32][4]]()
+
+    var ci: u32 = start.get()
+    while ci < generated.collation.contraction_count and
+        generated.collation.contr_keys[ci][0] == cast[u32] cps[ix] {
+        let klen: u32 = generated.collation.contr_key_lens[ci]
+
+        if klen < 2 or klen > max_contr_key {
+            ci += 1
+            continue
+        }
+
+        var pos: Array[u32][4] = new[Array[u32][4]]()
+
+        pos[0] = ix
+
+        var contiguous: bool = true
+        var ip: u32 = ix + 1
+
+        var k: u32 = 1
+        while k < klen and contiguous {
+            if ip < num_cps and
+                cast[u32] cps[ip] == generated.collation.contr_keys[ci][k] {
+                pos[k] = ip
+                ip += 1
+            }
+            else {
+                contiguous = false
+            }
+
+            k += 1
+        }
+
+        if contiguous {
+            if klen > best_klen {
+                best_klen = klen
+                best_ci = ci
+                have_best = true
+
+                k = 0
+                while k < klen {
+                    best_pos[k] = pos[k]
+                    k += 1
+                }
+            }
+
+            ci += 1
+            continue
+        }
+
+        if cccs[ix] != 0 {
+            ci += 1
+            continue
+        }
+
+        pos[0] = ix
+        ip = ix + 1
+
+        var matched_k: u32 = 1
+        var running: bool = true
+
+        while running and matched_k < klen {
+            if ip < num_cps and
+                cast[u32] cps[ip] == generated.collation.contr_keys[ci][matched_k] {
+                pos[matched_k] = ip
+                ip += 1
+                matched_k += 1
+            }
+            else {
+                running = false
+            }
+        }
+
+        if matched_k == klen {
+            ci += 1
+            continue
+        }
+
+        var scan: u32 = ip
+        var last_ccc: u8 = 0
+        var discont_ok: bool = true
+
+        k = matched_k
+        while k < klen and discont_ok {
+            let target: u32 = generated.collation.contr_keys[ci][k]
+            var found: bool = false
+            var s: u32 = scan
+            var going: bool = true
+
+            while going and s < num_cps {
+                if matched[s] {
+                    s += 1
+
+                    continue
+                }
+
+                if cccs[s] == 0 {
+                    going = false
+
+                    continue
+                }
+
+                if cast[u32] cps[s] == target {
+                    let this_ccc: u8 = cccs[s]
+
+                    if this_ccc <= last_ccc {
+                        going = false
+
+                        continue
+                    }
+
+                    var blocked: bool = false
+
+                    var m: u32 = scan
+                    while m < s {
+                        if !matched[m] and cccs[m] >= this_ccc {
+                            blocked = true
+                        }
+
+                        m += 1
+                    }
+
+                    if blocked {
+                        going = false
+
+                        continue
+                    }
+
+                    pos[k] = s
+                    last_ccc = this_ccc
+                    scan = s + 1
+                    found = true
+                    going = false
+
+                    continue
+                }
+
+                s += 1
+            }
+
+            if !found {
+                discont_ok = false
+            }
+
+            k += 1
+        }
+
+        if discont_ok and klen > best_klen {
+            best_klen = klen
+            best_ci = ci
+            have_best = true
+
+            k = 0
+            while k < klen {
+                best_pos[k] = pos[k]
+                k += 1
+            }
+        }
+
+        ci += 1
+    }
+
+    if !have_best {
+        return 0
+    }
+
+    var k: u32 = 0
+    while k < best_klen {
+        matched[best_pos[k]] = true
+        k += 1
+    }
+
+    let ce_off: u32 = generated.collation.contr_ce_offsets[best_ci]
+    let count: u16 = generated.collation.contr_ce_data[ce_off]
+    var written: i32 = 0
+
+    var i: u16 = 0
+    while i < count and written < max_ces {
+        let base: u32 = ce_off + 1 + cast[u32] i * 3
+        let at: uint = out_at + cast[uint] written * 3
+
+        out[at] = generated.collation.contr_ce_data[base]
+        out[at + 1] = generated.collation.contr_ce_data[base + 1]
+        out[at + 2] = generated.collation.contr_ce_data[base + 2]
+        written += 1
+        i += 1
+    }
+
+    return written
+}
+
+private func is_core_han_block(cp: char) -> bool {
+    var i: u32 = 0
+    while i < generated.collation.core_han_range_count {
+        if cast[u32] cp >= generated.collation.core_han_ranges[i][0] and
+            cast[u32] cp <= generated.collation.core_han_ranges[i][1] {
+            return true
+        }
+
+        i += 1
+    }
+
+    return false
+}
+
+private func implicit_range(cp: char) -> u32? {
+    var i: u32 = 0
+    while i < generated.collation.implicit_range_count {
+        if cast[u32] cp >= generated.collation.implicit_ranges[i][0] and
+            cast[u32] cp <= generated.collation.implicit_ranges[i][1] {
+            return i
+        }
+
+        i += 1
+    }
+
+    return nil
+}
+
+private func implicit_range_lo_min(base: u32) -> u32 {
+    var lo_min: u32 = 0xffffffff
+
+    var i: u32 = 0
+    while i < generated.collation.implicit_range_count {
+        if generated.collation.implicit_ranges[i][2] == base and
+            generated.collation.implicit_ranges[i][0] < lo_min {
+            lo_min = generated.collation.implicit_ranges[i][0]
+        }
+
+        i += 1
+    }
+
+    return lo_min
+}
+
+private func implicit_base(cp: char) -> u16 {
+    if internal.properties.has_property(cp,
+        internal.types.Property.unified_ideograph) {
+        if is_core_han_block(cp) {
+            return 0xfb40
+        }
+
+        return 0xfb80
+    }
+
+    return 0xfbc0
+}
+
+private func get_ces(cp: char, modify out: Array[u16], out_at: uint,
+                     max_ces: i32) -> i32 {
+    let v: u32 = cast[u32] cp
+
+    if v >= internal.properties.max_cp {
+        return 0
+    }
+
+    let offset: u32 = generated.collation.ducet_stage2[
+        cast[u32] generated.collation.ducet_stage1[v >> 8] * 256 + (v & 0xff)]
+
+    if offset == ce_none {
+        if max_ces < 2 {
+            return 0
+        }
+
+        let range: u32? = implicit_range(cp)
+
+        if range != nil {
+            let r: u32 = range.get()
+            let base: u32 = generated.collation.implicit_ranges[r][2]
+            let lo_min: u32 = implicit_range_lo_min(base)
+
+            out[out_at] = cast[u16] base
+            out[out_at + 3] = cast[u16] ((v - lo_min) | 0x8000)
+        }
+        else {
+            let base: u16 = implicit_base(cp)
+
+            out[out_at] = base + cast[u16] (v >> 15)
+            out[out_at + 3] = cast[u16] ((v & 0x7fff) | 0x8000)
+        }
+
+        out[out_at + 1] = 0x0020
+        out[out_at + 2] = 0x0002
+        out[out_at + 4] = 0
+        out[out_at + 5] = 0
+
+        return 2
+    }
+
+    if offset >= generated.collation.ce_data_len {
+        return 0
+    }
+
+    let count: u16 = generated.collation.ce_data[offset]
+    var written: i32 = 0
+
+    var i: u16 = 0
+    while i < count and written < max_ces {
+        let base: u32 = offset + 1 + cast[u32] i * 3
+
+        if base + 2 >= generated.collation.ce_data_len {
+            break
+        }
+
+        let at: uint = out_at + cast[uint] written * 3
+
+        out[at] = generated.collation.ce_data[base]
+        out[at + 1] = generated.collation.ce_data[base + 1]
+        out[at + 2] = generated.collation.ce_data[base + 2]
+        written += 1
+        i += 1
+    }
+
+    return written
+}
+
+func sort_key(s: string) -> List[u8] {
+    let nfd: string = internal.normalization.nfd(s)
+    let byte_len: uint = byte_len(nfd)
+    var cap: uint = 1
+    if byte_len != 0 {
+        cap = byte_len
+    }
+
+    var cps: Array[char] = new[Array[char]](cast[int] cap)
+    var num_cps: u32 = 0
+    var pos: u32 = 0
+
+    while cast[uint] pos < byte_len {
+        try {
+            cps[num_cps] = internal.encoding.utf8_decode(nfd, pos)!
+        } else failure {
+            pos = cast[u32] byte_len
+
+            continue
+        }
+
+        num_cps += 1
+    }
+
+    var cccs: Array[u8] = new[Array[u8]](cast[int] cap)
+    var matched: Array[bool] = new[Array[bool]](cast[int] cap)
+
+    var j: u32 = 0
+    while j < num_cps {
+        cccs[j] = internal.properties.combining_class(cps[j])
+        matched[j] = false
+        j += 1
+    }
+
+    var ce_cap: i32 = cast[i32] num_cps + 16
+
+    var ces: Array[u16] = new[Array[u16]](cast[int] ce_cap * 3)
+    var total: i32 = 0
+
+    var i: u32 = 0
+    while i < num_cps {
+        if matched[i] {
+            i += 1
+            continue
+        }
+
+        if total + max_ce_per_cp > ce_cap {
+            var ncap: i32 = ce_cap * 2
+
+            while ncap < total + max_ce_per_cp {
+                ncap *= 2
+            }
+
+            var grown: Array[u16] = new[Array[u16]](cast[int] ncap * 3)
+
+            sys.abi.copy_items(grown, 0, ces, 0, cast[uint] total * 3)
+            ces = grown
+            ce_cap = ncap
+        }
+
+        let remaining: i32 = ce_cap - total
+
+        let n: i32 = try_contraction(cps, cccs, num_cps, i, ces,
+                                     cast[uint] total * 3, remaining, matched)
+
+        if n > 0 {
+            total += n
+
+            i += 1
+            continue
+        }
+
+        total += get_ces(cps[i], ces, cast[uint] total * 3, remaining)
+        i += 1
+    }
+
+    var key: Array[u8] = new[Array[u8]](cast[int] (total * 6 + 4))
+    var key_len: uint = 0
+
+    var level: i32 = 0
+    while level < 3 {
+        var k: i32 = 0
+        while k < total {
+            let w: u16 = ces[cast[int] (k * 3 + level)]
+
+            if w != 0 {
+                key[key_len] = cast[u8] (w >> 8)
+                key[key_len + 1] = cast[u8] (w & 0xff)
+                key_len += 2
+            }
+
+            k += 1
+        }
+
+        if level < 2 {
+            key[key_len] = 0
+            key[key_len + 1] = 0
+            key_len += 2
+        }
+
+        level += 1
+    }
+
+    return sys.abi.list_with_length(key, key_len)
+}
+
+func sort_key_compare(ka: List[u8], kb: List[u8]) -> i32 {
+    let la: uint = ka.len()
+    let lb: uint = kb.len()
+    var n: uint = lb
+    if la < lb {
+        n = la
+    }
+    var r: i32 = 0
+
+    var i: uint = 0
+    while i < n and r == 0 {
+        if ka[cast[int] i] != kb[cast[int] i] {
+            if ka[cast[int] i] < kb[cast[int] i] {
+                r = -1
+            }
+            else {
+                r = 1
+            }
+        }
+
+        i += 1
+    }
+
+    if r != 0 {
+        return r
+    }
+
+    if la == lb {
+        return 0
+    }
+
+    if la < lb {
+        return -1
+    }
+
+    return 1
+}
+
+func collate(a: string, b: string) -> i32 {
+    return sort_key_compare(sort_key(a), sort_key(b))
+}

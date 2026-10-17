@@ -9,10 +9,20 @@
 #include <string.h>
 
 #include "ir/layout.h"
+#include "ir/pass.h"
 #include "lib/byteorder.h"
 #include "lib/object_section.h"
 
 #define CHECK(condition) do { if (!(condition)) abort(); } while (0)
+
+static bool
+call_collector(ir_module_t *runtime, ir_func_t *collector, ir_block_t *block)
+{
+    ir_instr_t *call = block ? ir_instr_insert(block, IR_OP_CALL, 0) : nullptr;
+    return call
+        && ir_instr_operand_value(call, ir_func_address(runtime, collector))
+        && ir_instr_set_call_signature(call, collector->type);
+}
 
 typedef struct {
     unsigned roots;
@@ -340,6 +350,14 @@ main(void)
         no_mapping_source, unmanaged_parameter, nullptr, false,
         unmanaged_param);
     CHECK(origin);
+    ir_func_t *collector = ir_func_add(runtime, "pin_collect",
+        ir_type_parse(runtime, "() -> nil"), IR_LINK_EXTERN);
+    ir_block_t *collecting[] = {entry, unmanaged_entry, local_entry,
+                                opaque_entry, helper_entry, caller_entry,
+                                optional_entry, distinct_entry, record_entry,
+                                record_caller_entry};
+    for (size_t i = 0; i < sizeof collecting / sizeof *collecting; i++)
+        CHECK(collector && call_collector(runtime, collector, collecting[i]));
     core_diagnostics_t *diagnostics = core_diagnostics_new();
     n00bb_llvm_backend_t *backend = n00bb_llvm_backend_prepare(
         runtime, true, false, diagnostics);

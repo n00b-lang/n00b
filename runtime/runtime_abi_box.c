@@ -5,6 +5,17 @@
 
 extern void n00b_gc_barrier_value(const void *address, uint32_t type_index);
 
+int32_t n00bb_bootstrap_type_specializes(uint32_t type_field,
+                                         uint32_t general_type_index)
+{
+    const n00b_abi_snapshot_v1 *snapshot = n00b_abi_v1_current_snapshot();
+    if (!snapshot || !general_type_index) __builtin_trap();
+    int32_t match = n00b_abi_v1_type_specializes(snapshot,
+        type_field & UINT32_C(0x7fffffff), general_type_index);
+    if (match < 0) __builtin_trap();
+    return match;
+}
+
 uint32_t n00bb_bootstrap_type_component(uint32_t type_index, uint32_t ordinal)
 {
     const n00b_abi_snapshot_v1 *snapshot = n00b_abi_v1_current_snapshot();

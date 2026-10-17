@@ -1,0 +1,601 @@
+import sys.abi
+import internal.types
+import internal.encoding
+import internal.properties
+import generated.linebreak
+
+const dotted_circle: u32 = 0x25cc
+const hyphen: u32 = 0x2010
+
+private func raw_lb_class(cp: char) -> internal.types.Lb {
+    let v: u32 = cast[u32] cp
+    if v >= internal.properties.max_cp {
+        return internal.types.Lb.xx
+    }
+
+    return cast[internal.types.Lb] generated.linebreak.lb_stage2[
+        cast[u32] generated.linebreak.lb_stage1[v >> 8] * 256 + (v & 0xff)]
+}
+
+private func resolve_lb(cp: char, cls: internal.types.Lb) -> internal.types.Lb {
+    if cls == internal.types.Lb.ai or cls == internal.types.Lb.xx or
+        cls == internal.types.Lb.sg {
+        return internal.types.Lb.al
+    }
+
+    if cls == internal.types.Lb.cj {
+        return internal.types.Lb.ns
+    }
+
+    if cls == internal.types.Lb.sa {
+        let gc: internal.types.Gc = internal.properties.general_category(cp)
+
+        if gc == internal.types.Gc.mn or gc == internal.types.Gc.mc {
+            return internal.types.Lb.cm
+        }
+
+        return internal.types.Lb.al
+    }
+
+    return cls
+}
+
+func line_break(cp: char) -> internal.types.Lb {
+    return resolve_lb(cp, raw_lb_class(cp))
+}
+
+private func is_qu_pf(cp: char) -> bool {
+    return internal.properties.general_category(cp) == internal.types.Gc.pf
+}
+
+private func is_qu_pi(cp: char) -> bool {
+    return internal.properties.general_category(cp) == internal.types.Gc.pi
+}
+
+private func is_east_asian(cp: char) -> bool {
+    let eaw: internal.types.Eaw = internal.properties.east_asian_width(cp)
+
+    return eaw == internal.types.Eaw.f or eaw == internal.types.Eaw.w or
+        eaw == internal.types.Eaw.h
+}
+
+private func is_hyphen_ba(cp: char, cls: internal.types.Lb) -> bool {
+    return cls == internal.types.Lb.ba and !is_east_asian(cp) and
+        internal.properties.general_category(cp) == internal.types.Gc.pd
+}
+
+private func find_base_ix(cps: Array[char], ix: u32) -> u32 {
+    var out: u32 = ix
+    var going: bool = true
+
+    while going and out > 0 {
+        let raw: internal.types.Lb = line_break(cps[out])
+
+        if raw != internal.types.Lb.cm and raw != internal.types.Lb.zwj {
+            going = false
+        }
+        else {
+            out -= 1
+        }
+    }
+
+    return out
+}
+
+private func is_break_context(cls: internal.types.Lb) -> bool {
+    return cls == internal.types.Lb.bk or cls == internal.types.Lb.cr or
+        cls == internal.types.Lb.lf or cls == internal.types.Lb.nl or
+        cls == internal.types.Lb.sp or cls == internal.types.Lb.zw or
+        cls == internal.types.Lb.cb or cls == internal.types.Lb.gl
+}
+
+private func is_aksara(cls: internal.types.Lb, cp: char) -> bool {
+    return cls == internal.types.Lb.ak or cls == internal.types.Lb.as or
+        (cast[u32] cp == dotted_circle and cls == internal.types.Lb.al)
+}
+
+private func skip_cm_fwd(cls: Array[internal.types.Lb], n: u32, i: u32) -> u32 {
+    var j: u32 = i
+
+    while j < n and
+        (cls[j] == internal.types.Lb.cm or cls[j] == internal.types.Lb.zwj) {
+        j += 1
+    }
+
+    return j
+}
+
+private func lb_rule(cps: Array[char],
+                     modify cls: Array[internal.types.Lb],
+                     n: u32,
+                     i: u32,
+                     sp_j: u32,
+                     prev_base: u32,
+                     ri_run: u32) -> internal.types.Lb_Action {
+    var prev: internal.types.Lb = cls[i - 1]
+    var cur: internal.types.Lb = cls[i]
+
+    if prev == internal.types.Lb.bk {
+        return internal.types.Lb_Action.mandatory
+    }
+
+    if prev == internal.types.Lb.cr and cur == internal.types.Lb.lf {
+        return internal.types.Lb_Action.none
+    }
+
+    if prev == internal.types.Lb.cr or prev == internal.types.Lb.lf or
+        prev == internal.types.Lb.nl {
+        return internal.types.Lb_Action.mandatory
+    }
+
+    if cur == internal.types.Lb.bk or cur == internal.types.Lb.cr or
+        cur == internal.types.Lb.lf or cur == internal.types.Lb.nl {
+        return internal.types.Lb_Action.none
+    }
+
+    if cur == internal.types.Lb.sp or cur == internal.types.Lb.zw {
+        return internal.types.Lb_Action.none
+    }
+
+    var after_zw: bool = prev == internal.types.Lb.zw
+
+    if !after_zw and prev == internal.types.Lb.sp {
+        after_zw = sp_j > 0 and cls[sp_j - 1] == internal.types.Lb.zw
+    }
+
+    if after_zw {
+        return internal.types.Lb_Action.allowed
+    }
+
+    if prev == internal.types.Lb.zwj or
+        line_break(cps[i - 1]) == internal.types.Lb.zwj {
+        return internal.types.Lb_Action.none
+    }
+
+    if (cur == internal.types.Lb.cm or cur == internal.types.Lb.zwj) and
+        prev != internal.types.Lb.sp and prev != internal.types.Lb.bk and
+        prev != internal.types.Lb.cr and prev != internal.types.Lb.lf and
+        prev != internal.types.Lb.nl and prev != internal.types.Lb.zw {
+        cls[i] = prev
+
+        return internal.types.Lb_Action.none
+    }
+
+    if prev == internal.types.Lb.cm {
+        prev = internal.types.Lb.al
+    }
+
+    if cur == internal.types.Lb.cm {
+        cur = internal.types.Lb.al
+    }
+
+    if cur == internal.types.Lb.wj or prev == internal.types.Lb.wj {
+        return internal.types.Lb_Action.none
+    }
+
+    if prev == internal.types.Lb.gl {
+        return internal.types.Lb_Action.none
+    }
+
+    if cur == internal.types.Lb.gl and prev != internal.types.Lb.sp and
+        prev != internal.types.Lb.hy and prev != internal.types.Lb.hh {
+        return internal.types.Lb_Action.none
+    }
+
+    if cur == internal.types.Lb.ex or cur == internal.types.Lb.cl or
+        cur == internal.types.Lb.cp or cur == internal.types.Lb.sy {
+        return internal.types.Lb_Action.none
+    }
+
+    if sp_j > 0 and cls[sp_j - 1] == internal.types.Lb.op {
+        return internal.types.Lb_Action.none
+    }
+
+    if sp_j > 0 {
+        var qu_j: u32 = sp_j - 1
+        var going: bool = true
+
+        while going and qu_j > 0 and cls[qu_j] == internal.types.Lb.qu and
+            raw_lb_class(cps[qu_j]) != internal.types.Lb.qu {
+            qu_j -= 1
+        }
+
+        if cls[qu_j] == internal.types.Lb.qu and is_qu_pi(cps[qu_j]) {
+            var valid: bool = qu_j == 0
+
+            if !valid {
+                let b: internal.types.Lb = cls[qu_j - 1]
+
+                valid = b == internal.types.Lb.bk or b == internal.types.Lb.cr or
+                    b == internal.types.Lb.lf or b == internal.types.Lb.nl or
+                    b == internal.types.Lb.op or b == internal.types.Lb.qu or
+                    b == internal.types.Lb.gl or b == internal.types.Lb.sp or
+                    b == internal.types.Lb.zw
+            }
+
+            if valid {
+                return internal.types.Lb_Action.none
+            }
+        }
+    }
+
+    if cur == internal.types.Lb.qu and is_qu_pf(cps[i]) {
+        var valid: bool = i + 1 >= n
+
+        if !valid {
+            let a: internal.types.Lb = cls[i + 1]
+
+            valid = a == internal.types.Lb.sp or a == internal.types.Lb.gl or
+                a == internal.types.Lb.wj or a == internal.types.Lb.cl or
+                a == internal.types.Lb.qu or a == internal.types.Lb.cp or
+                a == internal.types.Lb.ex or a == internal.types.Lb.is or
+                a == internal.types.Lb.sy or a == internal.types.Lb.bk or
+                a == internal.types.Lb.cr or a == internal.types.Lb.lf or
+                a == internal.types.Lb.nl or a == internal.types.Lb.zw
+        }
+
+        if valid {
+            return internal.types.Lb_Action.none
+        }
+    }
+
+    if prev == internal.types.Lb.sp and cur == internal.types.Lb.is {
+        let la: u32 = skip_cm_fwd(cls, n, i + 1)
+
+        if la < n and cls[la] == internal.types.Lb.nu {
+            return internal.types.Lb_Action.allowed
+        }
+    }
+
+    if cur == internal.types.Lb.is {
+        return internal.types.Lb_Action.none
+    }
+
+    if cur == internal.types.Lb.ns and sp_j > 0 and
+        (cls[sp_j - 1] == internal.types.Lb.cl or
+        cls[sp_j - 1] == internal.types.Lb.cp) {
+        return internal.types.Lb_Action.none
+    }
+
+    if cur == internal.types.Lb.b2 and sp_j > 0 and
+        cls[sp_j - 1] == internal.types.Lb.b2 {
+        return internal.types.Lb_Action.none
+    }
+
+    if prev == internal.types.Lb.sp {
+        return internal.types.Lb_Action.allowed
+    }
+
+    if cur == internal.types.Lb.qu and !is_qu_pi(cps[i]) {
+        return internal.types.Lb_Action.none
+    }
+
+    if prev == internal.types.Lb.qu and !is_qu_pf(cps[prev_base]) {
+        return internal.types.Lb_Action.none
+    }
+
+    if cur == internal.types.Lb.qu {
+        if !is_east_asian(cps[prev_base]) {
+            return internal.types.Lb_Action.none
+        }
+
+        var valid: bool = i + 1 >= n
+
+        if !valid {
+            let la: u32 = skip_cm_fwd(cls, n, i + 1)
+
+            valid = la >= n or !is_east_asian(cps[la])
+        }
+
+        if valid {
+            return internal.types.Lb_Action.none
+        }
+    }
+
+    if prev == internal.types.Lb.qu and !is_east_asian(cps[i]) {
+        return internal.types.Lb_Action.none
+    }
+
+    if prev == internal.types.Lb.qu {
+        let qu_base: u32 = prev_base
+        var valid: bool = qu_base == 0
+
+        if !valid {
+            valid = !is_east_asian(cps[qu_base - 1])
+        }
+
+        if valid {
+            return internal.types.Lb_Action.none
+        }
+    }
+
+    if cur == internal.types.Lb.cb or prev == internal.types.Lb.cb {
+        return internal.types.Lb_Action.allowed
+    }
+
+    if (cur == internal.types.Lb.al or cur == internal.types.Lb.hl) and
+        (prev == internal.types.Lb.hy or prev == internal.types.Lb.hh or
+        prev == internal.types.Lb.ba) {
+        let pb: u32 = prev_base
+
+        if cast[u32] cps[pb] == hyphen or prev == internal.types.Lb.hy or
+            prev == internal.types.Lb.hh {
+            var valid: bool = pb == 0
+
+            if !valid {
+                valid = is_break_context(cls[pb - 1])
+            }
+
+            if valid {
+                return internal.types.Lb_Action.none
+            }
+        }
+    }
+
+    if cur == internal.types.Lb.ba or cur == internal.types.Lb.hy or
+        cur == internal.types.Lb.hh or cur == internal.types.Lb.ns or
+        prev == internal.types.Lb.bb {
+        return internal.types.Lb_Action.none
+    }
+
+    if i >= 2 and cur != internal.types.Lb.hl {
+        let pb: u32 = prev_base
+
+        if prev == internal.types.Lb.hy or prev == internal.types.Lb.hh or
+            is_hyphen_ba(cps[pb], cls[pb]) {
+            if pb > 0 and cls[pb - 1] == internal.types.Lb.hl {
+                return internal.types.Lb_Action.none
+            }
+        }
+    }
+
+    if prev == internal.types.Lb.sy and cur == internal.types.Lb.hl {
+        return internal.types.Lb_Action.none
+    }
+
+    if cur == internal.types.Lb.inseparable {
+        return internal.types.Lb_Action.none
+    }
+
+    if (prev == internal.types.Lb.al or prev == internal.types.Lb.hl) and
+        cur == internal.types.Lb.nu {
+        return internal.types.Lb_Action.none
+    }
+
+    if prev == internal.types.Lb.nu and
+        (cur == internal.types.Lb.al or cur == internal.types.Lb.hl) {
+        return internal.types.Lb_Action.none
+    }
+
+    if prev == internal.types.Lb.pr and
+        (cur == internal.types.Lb.id or cur == internal.types.Lb.eb or
+        cur == internal.types.Lb.em) {
+        return internal.types.Lb_Action.none
+    }
+
+    if (prev == internal.types.Lb.id or prev == internal.types.Lb.eb or
+        prev == internal.types.Lb.em) and
+        cur == internal.types.Lb.po {
+        return internal.types.Lb_Action.none
+    }
+
+    if (prev == internal.types.Lb.pr or prev == internal.types.Lb.po) and
+        (cur == internal.types.Lb.al or cur == internal.types.Lb.hl) {
+        return internal.types.Lb_Action.none
+    }
+
+    if (prev == internal.types.Lb.al or prev == internal.types.Lb.hl) and
+        (cur == internal.types.Lb.pr or cur == internal.types.Lb.po) {
+        return internal.types.Lb_Action.none
+    }
+
+    var j: u32 = i
+
+    if j > 0 and
+        (cls[j - 1] == internal.types.Lb.cl or cls[j - 1] == internal.types.Lb.cp) {
+        j -= 1
+    }
+
+    while j > 0 and
+        (cls[j - 1] == internal.types.Lb.sy or cls[j - 1] == internal.types.Lb.is) {
+        j -= 1
+    }
+
+    if j > 0 and cls[j - 1] == internal.types.Lb.nu and
+        (cur == internal.types.Lb.po or cur == internal.types.Lb.pr or
+        cur == internal.types.Lb.nu) {
+        return internal.types.Lb_Action.none
+    }
+
+    if (prev == internal.types.Lb.pr or prev == internal.types.Lb.po) and
+        cur == internal.types.Lb.nu {
+        return internal.types.Lb_Action.none
+    }
+
+    if (prev == internal.types.Lb.pr or prev == internal.types.Lb.po) and
+        (cur == internal.types.Lb.op or cur == internal.types.Lb.hy) {
+        let la: u32 = skip_cm_fwd(cls, n, i + 1)
+
+        if la < n and cls[la] == internal.types.Lb.nu {
+            return internal.types.Lb_Action.none
+        }
+
+        if la < n and cls[la] == internal.types.Lb.is {
+            let la2: u32 = skip_cm_fwd(cls, n, la + 1)
+
+            if la2 < n and cls[la2] == internal.types.Lb.nu {
+                return internal.types.Lb_Action.none
+            }
+        }
+    }
+
+    if prev == internal.types.Lb.hy and cur == internal.types.Lb.nu {
+        return internal.types.Lb_Action.none
+    }
+
+    if prev == internal.types.Lb.is and cur == internal.types.Lb.nu {
+        return internal.types.Lb_Action.none
+    }
+
+    if prev == internal.types.Lb.jl and
+        (cur == internal.types.Lb.jl or cur == internal.types.Lb.jv or
+        cur == internal.types.Lb.h2 or cur == internal.types.Lb.h3) {
+        return internal.types.Lb_Action.none
+    }
+
+    if (prev == internal.types.Lb.jv or prev == internal.types.Lb.h2) and
+        (cur == internal.types.Lb.jv or cur == internal.types.Lb.jt) {
+        return internal.types.Lb_Action.none
+    }
+
+    if (prev == internal.types.Lb.jt or prev == internal.types.Lb.h3) and
+        cur == internal.types.Lb.jt {
+        return internal.types.Lb_Action.none
+    }
+
+    if (prev == internal.types.Lb.jl or prev == internal.types.Lb.jv or
+        prev == internal.types.Lb.jt or prev == internal.types.Lb.h2 or
+        prev == internal.types.Lb.h3) and
+        cur == internal.types.Lb.po {
+        return internal.types.Lb_Action.none
+    }
+
+    if prev == internal.types.Lb.pr and
+        (cur == internal.types.Lb.jl or cur == internal.types.Lb.jv or
+        cur == internal.types.Lb.jt or cur == internal.types.Lb.h2 or
+        cur == internal.types.Lb.h3) {
+        return internal.types.Lb_Action.none
+    }
+
+    if (prev == internal.types.Lb.al or prev == internal.types.Lb.hl) and
+        (cur == internal.types.Lb.al or cur == internal.types.Lb.hl) {
+        return internal.types.Lb_Action.none
+    }
+
+    if prev == internal.types.Lb.ap and is_aksara(cur, cps[i]) {
+        return internal.types.Lb_Action.none
+    }
+
+    if is_aksara(prev, cps[prev_base]) and
+        (cur == internal.types.Lb.vf or cur == internal.types.Lb.vi) {
+        return internal.types.Lb_Action.none
+    }
+
+    if prev == internal.types.Lb.vi and i >= 2 and
+        (cur == internal.types.Lb.ak or
+        (cast[u32] cps[i] == dotted_circle and cur == internal.types.Lb.al)) {
+        let vi_base: u32 = prev_base
+
+        if vi_base > 0 {
+            let ab: u32 = find_base_ix(cps, vi_base - 1)
+
+            if is_aksara(cls[ab], cps[ab]) {
+                return internal.types.Lb_Action.none
+            }
+        }
+    }
+
+    if is_aksara(prev, cps[prev_base]) and is_aksara(cur, cps[i]) {
+        let la: u32 = skip_cm_fwd(cls, n, i + 1)
+
+        if la < n and cls[la] == internal.types.Lb.vf {
+            return internal.types.Lb_Action.none
+        }
+    }
+
+    if prev == internal.types.Lb.is and
+        (cur == internal.types.Lb.al or cur == internal.types.Lb.hl) {
+        return internal.types.Lb_Action.none
+    }
+
+    if (prev == internal.types.Lb.al or prev == internal.types.Lb.hl or
+        prev == internal.types.Lb.nu) and
+        cur == internal.types.Lb.op and !is_east_asian(cps[i]) {
+        return internal.types.Lb_Action.none
+    }
+
+    if prev == internal.types.Lb.cp and !is_east_asian(cps[prev_base]) and
+        (cur == internal.types.Lb.al or cur == internal.types.Lb.hl or
+        cur == internal.types.Lb.nu) {
+        return internal.types.Lb_Action.none
+    }
+
+    if prev == internal.types.Lb.ri and cur == internal.types.Lb.ri {
+        if ri_run % 2 == 1 {
+            return internal.types.Lb_Action.none
+        }
+    }
+
+    if prev == internal.types.Lb.eb and cur == internal.types.Lb.em {
+        return internal.types.Lb_Action.none
+    }
+
+    if cur == internal.types.Lb.em and
+        internal.properties.has_property(cps[prev_base],
+            internal.types.Property.extended_pictographic) and
+        internal.properties.general_category(cps[prev_base]) == internal.types.Gc.cn {
+        return internal.types.Lb_Action.none
+    }
+
+    return internal.types.Lb_Action.allowed
+}
+
+func linebreaks(s: string) -> List[u8] {
+    let byte_len: uint = byte_len(s)
+    var n: u32 = 0
+    var pos: u32 = 0
+
+    var out: Array[u8] = new[Array[u8]](cast[int] byte_len)
+
+    if byte_len == 0 or !is_text(s) {
+        return sys.abi.list_with_length(out, 0)
+    }
+
+    var cps: Array[char] = new[Array[char]](cast[int] byte_len)
+    var cls: Array[internal.types.Lb] = new[Array[internal.types.Lb]](cast[int] byte_len)
+
+    while cast[uint] pos < byte_len {
+        try {
+            cps[n] = internal.encoding.utf8_decode(s, pos)!
+            cls[n] = line_break(cps[n])
+            n += 1
+        } else failure {
+            pos = cast[u32] byte_len
+        }
+    }
+
+    if n != 0 {
+        out[0] = cast[u8] internal.types.Lb_Action.none
+    }
+
+    var sp_j: u32 = 0
+    var prev_base: u32 = 0
+    var ri_run: u32 = 0
+
+    var i: u32 = 1
+    while i < n {
+        if cls[i - 1] != internal.types.Lb.sp {
+            sp_j = i
+        }
+
+        let praw: internal.types.Lb = line_break(cps[i - 1])
+
+        if praw != internal.types.Lb.cm and praw != internal.types.Lb.zwj {
+            prev_base = i - 1
+        }
+
+        if cls[i - 1] == internal.types.Lb.ri {
+            if praw == internal.types.Lb.ri {
+                ri_run += 1
+            }
+        }
+        else {
+            ri_run = 0
+        }
+
+        out[i] = cast[u8] lb_rule(cps, cls, n, i, sp_j, prev_base, ri_run)
+        i += 1
+    }
+
+    return sys.abi.list_with_length(out, cast[uint] n)
+}

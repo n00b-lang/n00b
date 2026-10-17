@@ -50,7 +50,7 @@ runtime_abi_headers = lantern.partial_dependency(
 runtime_abi_sources = ['runtime/runtime_abi.c', 'runtime/runtime_allocate.c', 'runtime/runtime_abi_io.c',
      'runtime/runtime_panic.c', 'runtime/runtime_dwarf.c', 'runtime/runtime_ffi.c',
      'runtime/runtime_unwind.c',
-     'runtime/runtime_abi_box.c', 'runtime/runtime_abi_hash.c',
+     'runtime/runtime_abi_box.c',
      'runtime/runtime_abi_storage.c', 'runtime/native_frame_runtime.c', 'runtime/builtin_os.c',
      'runtime/builtin_os_stw.c',
      'runtime/builtin_abi.c', 'abi/abi_directory.c', 'abi/abi_string.c']
@@ -91,7 +91,7 @@ test('abi-static-graph', abi_static_graph_test)
 
 n00bb_exe = executable(
     'n00bb',
-    ['compiler/main.c', 'compiler/compiler_driver.c', 'compiler/compiler_lower.c', 'compiler/compiler_layout.c', 'compiler/compiler_baked.c', 'compiler/compiler_abi_driver.c', 'compiler/compiler_object_io.c', 'compiler/compiler_cli.c', 'compiler/compiler_tu.c', 'compiler/builtin_types.c',
+    ['compiler/main.c', 'compiler/compiler_driver.c', 'compiler/compiler_lower.c', 'compiler/compiler_buffer_borrow.c', 'compiler/compiler_layout.c', 'compiler/compiler_baked.c', 'compiler/compiler_abi_driver.c', 'compiler/compiler_object_io.c', 'compiler/compiler_cli.c', 'compiler/compiler_tu.c', 'compiler/builtin_types.c',
      'compiler/compiler_tu_range.c', 'compiler/compiler_tu_builtins.c',
      'compiler/compiler_tu_alias.c', 'compiler/compiler_tu_walk.c',
      'compiler/compiler_tu_interface.c',
@@ -102,7 +102,7 @@ n00bb_exe = executable(
      'compiler/compiler_link_packages.c', 'compiler/compiler_link_environment.c',
      'compiler/compiler_link_stages.c', 'compiler/driver.c',
      'compiler/enum_value.c',
-     'compiler/preprocessor.c', 'compiler/rich_string.c', 'abi/abi_string.c',
+     'compiler/preprocessor.c', 'abi/abi_string.c',
      'compiler/specialize.c',
      'runtime/runtime_native_roots.c', 'compiler/compiler_native_roots.c',
      'compiler/abi_layout.c', 'compiler/abi_record_layout.c', 'compiler/abi_static_graph.c',
@@ -157,14 +157,6 @@ runtime_abi_io_test = executable(
 )
 
 test('runtime-abi-io', runtime_abi_io_test)
-
-runtime_hash_test = executable(
-    'runtime-hash-test',
-    'tests/runtime_hash.c',
-    link_with: runtime_abi_support,
-)
-
-test('runtime-hash', runtime_hash_test)
 
 runtime_abi_test = executable(
     'runtime-abi-test',
@@ -590,11 +582,93 @@ test(
     suite: 'slow',
 )
 
+test(
+    'initializer-self-reference-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'features'
+               / 'initializer_self_reference.n',
+           'unresolved name \'y\''],
+    timeout: 120,
+    suite: 'slow',
+)
+
+test(
+    'let-array-reassign-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'features'
+               / 'let_array_reassign.n',
+           'has multiple initialization sites'],
+    timeout: 120,
+    suite: 'slow',
+)
+
+test(
+    'const-array-write-rejected-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'features'
+               / 'const_array_write_rejected.n',
+           'contents of constant const_array_write_rejected.bytes',
+           'contents of constant const_array_write_rejected.grid',
+           'contents of constant const_array_write_rejected.points'],
+    timeout: 120,
+    suite: 'slow',
+)
+
+test(
+    'untyped-consts-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'untyped_consts' / 'untyped_consts.n'],
+    env: ['N00B_PATH=' + (meson.current_source_dir() / 'tests' / 'programs'
+        / 'untyped_consts')],
+    timeout: 120,
+    suite: 'slow',
+)
+
+test(
+    'untyped-const-range-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'untyped_consts' / 'untyped_const_range.n',
+           'assigned value does not match the local type'],
+    timeout: 120,
+    suite: 'slow',
+)
+
+test(
+    'wide-integer-literal-range-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'features'
+               / 'wide_integer_literal_range.n',
+           'operands and result have incompatible types'],
+    timeout: 120,
+    suite: 'slow',
+)
+
 foreach feature : ['fallible_without_result', 'try_error_binding',
                    'builtin_type_record_literal', 'record_literal_nil_option',
                    'option_literal_argument', 'record_literal_return',
                    'constructor_option_argument', 'option_literal_context',
-                   'packed_record_fields']
+                   'packed_record_fields', 'hash_xxh3', 'data_file',
+                   'os_env_term', 'digit_separators',
+                   'array_element_compound', 'array_read_store_index',
+                   'package_named_fields', 'array_declared_bounds',
+                   'initializer_shadowing', 'array_element_shift',
+                   'array_element_field_update', 'let_array_elements',
+                   'constructor_integer_literal', 'wide_integer_literal',
+                   'quotes_litmod_raw']
     test(
         feature.replace('_', '-'), find_program('sh'),
         args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
@@ -605,6 +679,34 @@ foreach feature : ['fallible_without_result', 'try_error_binding',
         suite: 'slow',
     )
 endforeach
+
+test(
+    'buffer-probe', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'buffer'
+               / 'buffer_probe.n'],
+    timeout: 180,
+    suite: 'slow',
+)
+
+test(
+    'coercion-borrow', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'coercion_borrow.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'buffer'
+               / 'coercion_borrow.n'],
+    timeout: 180,
+    suite: 'slow',
+)
+
+test(
+    'coercion-reject', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'coercion_reject.sh',
+           n00bb_exe.full_path()],
+    timeout: 300,
+    suite: 'slow',
+)
 
 test(
     'visibility-n00b', find_program('sh'),
@@ -758,7 +860,7 @@ test(
 )
 
 foreach string_probe : ['core_probe', 'rstr_probe', 'raw_literal_probe',
-                        'encoding_probe']
+                        'encoding_probe', 'span_gc_probe', 'raw_offset_probe']
     test(
         'string-' + string_probe.replace('_', '-'),
         find_program('sh'),
@@ -1831,3 +1933,28 @@ foreach fixture : [
         suite: 'slow',
     )
 endforeach
+
+run_target(
+    'regen-unicode',
+    command: [
+        find_program('python3'),
+        meson.current_source_dir() / 'tools' / 'gen_unicode_tables.py',
+        '--cache-dir', meson.current_build_dir() / 'unicode-cache',
+        '--ucd-version', '18.0.0',
+        '--out-dir', meson.current_source_dir() / 'lib' / 'unicode' / 'generated',
+        '--conformance-dir', meson.current_source_dir() / 'tests' / 'data' / 'unicode',
+        '--conformance-program', meson.current_source_dir() / 'tests' / 'programs'
+            / 'unicode' / 'gen_conformance.n',
+        '--test-data-dir', meson.current_build_dir() / 'unicode-test-data',
+        '--allow-downloads',
+        '--no-strict',
+    ],
+)
+
+test(
+    'unicode-tables-match',
+    find_program('python3'),
+    args: [meson.current_source_dir() / 'tools' / 'check_unicode_tables.py',
+           '--root', meson.current_source_dir()],
+    timeout: 120,
+)

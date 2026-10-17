@@ -4,6 +4,7 @@ import containers.dict
 import containers.set
 import containers.tree
 import containers.view
+import containers.buffer
 import cursor
 import hash
 import containers.traits
@@ -12,12 +13,88 @@ import io.raw
 import ffi
 import panic
 import string.core
+import string.style
+import bitptr
+import abi
 
 package builtin {
+    export bitptr.Bitptr
+    export bitptr.bitptr
+    export abi.string_backing_at
+    export string.style.index_extends to text
+    export string.style.Text_Case to text
+    export string.style.Font_Hint to text
+    export string.style.Color to text
+    export string.style.Text_Style to text
+    export string.style.Sub_Spec to text
+    export string.style.Style_Record to text
+    export string.style.Rich_Body to text
+    export string.style.merge to text
+    export string.style.is_empty to text
+    export string.style.intrinsic_tag_style to text
+    export abi.Type_Kind to sys
+    export abi.Range to sys
+    export abi.String_Bits to sys
+    export abi.Type_Record to sys
+    export abi.Field_Record to sys
+    export abi.Trace_Record to sys
+    export abi.Trace_Child_Record to sys
+    export abi.Trace_Arm_Record to sys
+    export abi.Tag_Extractor_Record to sys
+    export abi.Frame_Layout_Record to sys
+    export abi.Native_Frame_Record to sys
+    export abi.Storage_Record to sys
+    export abi.Symbol_Record to sys
+    export abi.Module_Record to sys
+    export abi.Function_Record to sys
+    export abi.Baked_Node_Record to sys
     export containers.array.copy_items to sys.abi
     export containers.array.compare_items to sys.abi
     export containers.list.list_with_length to sys.abi
-    export string.core
+    export string.core.max_u8_len
+    export string.core.str_short_cap
+    export string.core.str_tag_short
+    export string.core.str_tag_long
+    export string.core.str_tag_span
+    export string.core.str_tag_rich
+    export string.core.utf8_word_ones
+    export string.core.utf8_word_high
+    export string.core.Str_Encoding
+    export string.core.String_Error
+    export string.core.__add
+    export string.core.__cmp
+    export string.core.__equal
+    export string.core.__fd_write
+    export string.core.__fd_write_bytes
+    export string.core.__string_from_utf8
+    export string.core.__text_byte_array
+    export string.core.__text_bytes
+    export string.core.adopt
+    export string.core.decode_escapes
+    export string.core.as_text
+    export string.core.byte_at
+    export string.core.byte_index
+    export string.core.byte_len
+    export string.core.byte_slice
+    export string.core.empty_string
+    export string.core.encoding
+    export string.core.encoding_of
+    export string.core.find_bytes
+    export string.core.from_char
+    export string.core.from_raw
+    export string.core.is_text
+    export string.core.join
+    export string.core.style_ref
+    export string.core.tag
+    export string.core.text
+    export string.core.to_cstring
+    export string.core.to_hex
+    export string.core.utf8_word_is_ascii
+    export string.core.widen_encoding
+    export string.core.string
+    export string.style.rich
+    export string.core.encoding_of to unicode
+    export string.core.validate_multibyte to unicode
     export ffi.Ffi_Bytes
     export ffi.ffi
     export ffi.foreign_text
@@ -31,6 +108,25 @@ package builtin {
     export ffi.__ffi_hold
     export ffi.__ffi_event
     export panic.panic
+    export containers.buffer.Buffer
+    export containers.buffer.Buffer_Error
+    export containers.buffer.empty_buffer_alloc
+    export containers.buffer.empty_buffer
+    export containers.buffer.buffer_from_bytes
+    export containers.buffer.resize
+    export containers.buffer.append_bytes
+    export containers.buffer.put_u8
+    export containers.buffer.put_be16
+    export containers.buffer.put_be32
+    export containers.buffer.put_be64
+    export containers.buffer.put_string
+    export containers.buffer.concat
+    export containers.buffer.set_index
+    export containers.buffer.set_slice
+    export containers.buffer.buffer_from_string
+    export containers.buffer.buffer_adopt
+    export containers.buffer.to_string
+    export containers.buffer.free
     export containers.list.List
     export containers.list.list
     export containers.dict.Dict

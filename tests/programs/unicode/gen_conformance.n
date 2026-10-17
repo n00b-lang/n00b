@@ -1,0 +1,17 @@
+import sys.fs
+
+public const conf_grapheme: Array[u8] = sys.fs.data_file(source_dir() + "/../../data/unicode/gen_conf_grapheme.bin")
+
+public const conf_word: Array[u8] = sys.fs.data_file(source_dir() + "/../../data/unicode/gen_conf_word.bin")
+
+public const conf_sentence: Array[u8] = sys.fs.data_file(source_dir() + "/../../data/unicode/gen_conf_sentence.bin")
+
+public const conf_line: Array[u8] = sys.fs.data_file(source_dir() + "/../../data/unicode/gen_conf_line.bin")
+
+public const conf_norm: Array[u8] = sys.fs.data_file(source_dir() + "/../../data/unicode/gen_conf_norm.bin")
+
+public const conf_bidi: Array[u8] = sys.fs.data_file(source_dir() + "/../../data/unicode/gen_conf_bidi.bin")
+
+public const conf_collate: Array[u8] = sys.fs.data_file(source_dir() + "/../../data/unicode/gen_conf_collate.bin")
+
+public const conf_idna: Array[u8] = sys.fs.data_file(source_dir() + "/../../data/unicode/gen_conf_idna.bin")

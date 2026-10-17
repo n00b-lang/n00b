@@ -1,0 +1,199 @@
+import string.core
+
+enum Type_Kind {
+    nil_type = 0, primitive_type = 1, record_type, variant_type, enum_type,
+    flagset_type,reference_type, option_type,array_type, view_type,
+    string_type, box_type, callback_type, function_type, trait_type,
+    wrapper_type, union_type,atomic_type, variable_type,named_type,
+    tuple_type, foreign_type
+}
+
+record Range layout(c) {
+    public first: u32
+    public count: u32
+}
+
+record String_Bits layout(c) {
+    public low:  u64
+    public high: u64
+}
+
+record Type_Record layout(c) {
+    public typehash:                         u64
+    public size_bits:                        u64
+    public canonical_name:                   String_Bits
+    public kind:                             u32
+    public flags:                            u32
+    public alignment_bytes:                  u32
+    public layout_index:                     u32
+    public owner_module_index:               u32
+    public tracing_index:                    u32
+    public components:                       Range
+    public fields_or_arms:                   Range
+    public constraints:                      Range
+    public semantic_width_bits:              u32
+    public unpacked_storage_bits:            u32
+    public call_signature_index:             u32
+    public typevar_owner_scope_index:        u32
+    public typevar_ordinal:                  u32
+    public specialization_start_ix:          u32
+    public specialization_end_ix:            u32
+    public typevar_import_requirement_index: u32
+    public named_constructor:                String_Bits
+    public named_arguments:                  Range
+    public finalizer_function_index:         u32
+}
+
+record Field_Record layout(c) {
+    public name:                       String_Bits
+    public parent_type_index:          u32
+    public child_type_index:           u32
+    public declaration_ordinal:        u32
+    public visibility:                 u32
+    public symbol_index:               u32
+    public reserved_zero:              u32
+    public logical_bit_offset:         u64
+    public packed_runs:                Range
+    public physical_runs:              Range
+    public inline_element_type_index:  u32
+    public inline_reserved_zero:       u32
+    public inline_element_count:       u64
+    public inline_element_stride_bits: u64
+}
+
+record Trace_Record layout(c) {
+    public type_index:          u32
+    public reserved_zero:       u32
+    public child_trace_index:   u32
+    public tag_extractor_index: u32
+    public fixed_children:      Range
+    public arms:                Range
+    public option_bit_offset:   u64
+}
+
+record Trace_Child_Record layout(c) {
+    public byte_offset:        u64
+    public child_type_index:   u32
+    public extent_form:        u32
+    public repeat_count:       u64
+    public stride_bits:        u64
+    public count_field_offset: u64
+    public count_field_bits:   u32
+    public reserved_zero:      u32
+    public sentinel:           u64
+}
+
+record Trace_Arm_Record layout(c) {
+    public tag_value:         u32
+    public child_trace_index: u32
+    public children:          Range
+}
+
+record Tag_Extractor_Record layout(c) {
+    public unit_byte_offset: u64
+    public mask:             u64
+    public unit_width_bits:  u32
+    public lsb_position:     u32
+    public tag_width_bits:   u32
+    public kind:             u32
+}
+
+record Frame_Layout_Record layout(c) {
+    public function_index:          u32
+    public shadow_frame_type_index: u32
+    public pointer_bitmap_bytes:    Range
+    public frame_byte_extent:       u64
+}
+
+record Native_Frame_Record layout(c) {
+    public function:        Ref[byte]?
+    public sentinel_offset: i32
+    public root_count:      u32
+    public first_root:      u32
+    public reserved_zero:   u32
+}
+
+record Storage_Record layout(c) {
+    public module_index:         u32
+    public symbol_index:         u32
+    public type_index:           u32
+    public segment_kind:         u32
+    public segment_index:        u32
+    public instance_shape_index: u32
+    public byte_offset:          u64
+    public byte_length:          u64
+    public tls_relocations:      Range
+}
+
+record Symbol_Record layout(c) {
+    public name:                       String_Bits
+    public kind:                       u32
+    public type_index:                 u32
+    public module_index:               u32
+    public scope_index:                u32
+    public visibility:                 u32
+    public flags:                      u32
+    public binding_kind:               u32
+    public storage_duration:           u32
+    public storage_class_name:         String_Bits
+    public declaration_location_index: u32
+    public native_binding_index:       u32
+    public definitions:                Range
+    public uses:                       Range
+}
+
+record Module_Record layout(c) {
+    public full_path:            String_Bits
+    public package_index:        u32
+    public scc_index:            u32
+    public initializer:          u32
+    public imports:              Range
+    public static_storage:       Range
+    public tls_storage:          Range
+    public runtime_config_index: u32
+    public source_file_index:    u32
+}
+
+record Function_Record layout(c) {
+    public name:                String_Bits
+    public module_index:        u32
+    public scope_index:         u32
+    public symbol_index:        u32
+    public success_type_index:  u32
+    public failure_type_index:  u32
+    public parameters:          Range
+    public keywords:            Range
+    public constraints:         Range
+    public code_ranges:         Range
+    public frame_layouts:       Range
+    public flags:               u32
+    public variadic_type_index: u32
+    public reserved_zero:       u32
+    public valid_keyword_bits:  u64
+}
+
+record Baked_Node_Record layout(c) {
+    public module_index:  u32
+    public type_index:    u32
+    public segment_kind:  u32
+    public segment_index: u32
+    public flags:         u32
+    public reserved_zero: u32
+    public byte_offset:   u64
+    public byte_length:   u64
+}
+
+func string_backing_at(s: string) -> uint {
+    return string.core.string_backing_at(s)
+}
+
+func __type_has_kind(type_field: u32, kind: u32) -> i32 {
+    let row: Ref[Type_Record]? = __abi_type(type_field & 0x7fffffff)
+    if row == nil {
+        return 0
+    }
+    if row.get().kind == kind {
+        return 1
+    }
+    return 0
+}

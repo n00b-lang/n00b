@@ -1,0 +1,1434 @@
+import string.core
+import containers.list
+import containers.buffer
+import io.format
+import hash
+
+public const index_extends: u32 = 0xffffffff
+
+private const sub_arm_none: u64 = 0
+private const sub_arm_position: u64 = 1
+private const sub_arm_argname: u64 = 2
+
+enum Text_Case {
+    none = 0, upper, lower, title, caps
+}
+
+enum Font_Hint {
+    default = 0, mono, serif, sans
+}
+
+alias Color = i32
+
+record Text_Style {
+    bold:             bool?
+    italic:           bool?
+    underline:        bool?
+    double_underline: bool?
+    strikethrough:    bool?
+    reverse:          bool?
+    dim:              bool?
+    blink:            bool?
+    text_case:        Text_Case
+    font_hint:        Font_Hint
+    font_index:       i8?
+    fg_palette_ix:    i8?
+    bg_palette_ix:    i8?
+    fg_rgb:           Color?
+    bg_rgb:           Color?
+    font_size:        i16?
+}
+
+variant Sub_Spec {
+    argname:  string
+    position: u64
+    none:     nil
+}
+
+record Style_Record {
+    start_ix:     u32?
+    end_ix:       u32?
+    style_tag:    string?
+    format_spec:  string?
+    substitution: Sub_Spec
+}
+
+record Rich_Body {
+    s:          string
+    style_info: List[Style_Record]
+    base_style: Text_Style?
+    opaque:     bool
+}
+
+private record Intrinsic_Tag {
+    name:  string
+    style: Text_Style
+}
+
+private const default_string_format: io.format.String_Repr = (
+    common = io.format.default_repr_options, hex = false)
+
+private const empty_style: Text_Style = (
+    bold = nil, italic = nil, underline = nil, double_underline = nil,
+    strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+    text_case = Text_Case.none, font_hint = Font_Hint.default,
+    font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+    fg_rgb = nil, bg_rgb = nil, font_size = nil)
+
+private func tri_rank(v: bool?) -> u64 {
+    if v == nil {
+        return 0
+    }
+    if v.get() {
+        return 2
+    }
+    return 1
+}
+
+private func sub_arm(sub: Sub_Spec) -> u64 {
+    switch sub {
+        case argname {
+            return sub_arm_argname
+        }
+        case position {
+            return sub_arm_position
+        }
+        case none {
+            return sub_arm_none
+        }
+    }
+    return sub_arm_none
+}
+
+private func cmp_bytes(left: string, right: string) -> int {
+    let left_len: uint = string.core.byte_len(left)
+    let right_len: uint = string.core.byte_len(right)
+    var cmp_len: uint = left_len
+    if right_len < cmp_len {
+        cmp_len = right_len
+    }
+    var i: uint = 0
+    while i < cmp_len {
+        let a: u8 = string.core.byte_at(left, i)
+        let b: u8 = string.core.byte_at(right, i)
+        if a != b {
+            if a < b {
+                return -1
+            }
+            return 1
+        }
+        i += 1
+    }
+    if left_len > right_len {
+        return 1
+    }
+    if left_len < right_len {
+        return -1
+    }
+    return 0
+}
+
+private func cmp_text(left: string, right: string) -> int {
+    return cmp_bytes(left, right)
+}
+
+private func cmp_words(left: u64, right: u64) -> int {
+    if left > right {
+        return 1
+    }
+    if left < right {
+        return -1
+    }
+    return 0
+}
+
+private func cmp_opt_u32(left: u32?, right: u32?) -> int {
+    let left_set: bool = left != nil
+    let right_set: bool = right != nil
+    if left_set != right_set {
+        if left_set {
+            return 1
+        }
+        return -1
+    }
+    if left == nil or right == nil {
+        return 0
+    }
+    return cmp_words(cast[u64] left.get(), cast[u64] right.get())
+}
+
+private func cmp_opt_string(left: string?, right: string?) -> int {
+    let left_set: bool = left != nil
+    let right_set: bool = right != nil
+    if left_set != right_set {
+        if left_set {
+            return 1
+        }
+        return -1
+    }
+    if left == nil or right == nil {
+        return 0
+    }
+    return cmp_text(left.get(), right.get())
+}
+
+private func cmp_sub_spec(left: Sub_Spec, right: Sub_Spec) -> int {
+    let left_arm: u64 = sub_arm(left)
+    let right_arm: u64 = sub_arm(right)
+    if left_arm != right_arm {
+        return cmp_words(left_arm, right_arm)
+    }
+    switch left {
+        case position {
+            let a: u64 = left.position
+            switch right {
+                case position {
+                    return cmp_words(a, right.position)
+                }
+                else {
+                    return 0
+                }
+            }
+        }
+        case argname {
+            let a: string = left.argname
+            switch right {
+                case argname {
+                    return cmp_text(a, right.argname)
+                }
+                else {
+                    return 0
+                }
+            }
+        }
+        case none {
+            return 0
+        }
+    }
+    return 0
+}
+
+private func cmp_style_record(left: Style_Record, right: Style_Record) -> int {
+    var result: int = cmp_opt_u32(left.start_ix, right.start_ix)
+    if result != 0 {
+        return result
+    }
+    result = cmp_opt_u32(left.end_ix, right.end_ix)
+    if result != 0 {
+        return result
+    }
+    result = cmp_opt_string(left.style_tag, right.style_tag)
+    if result != 0 {
+        return result
+    }
+    result = cmp_opt_string(left.format_spec, right.format_spec)
+    if result != 0 {
+        return result
+    }
+    return cmp_sub_spec(left.substitution, right.substitution)
+}
+
+private func cmp_opt_i8(left: i8?, right: i8?) -> int {
+    if (left != nil) != (right != nil) {
+        if left != nil {
+            return 1
+        }
+        return -1
+    }
+    if left == nil or right == nil {
+        return 0
+    }
+    return cmp_words(unsafe_cast[u64] left.get(), unsafe_cast[u64] right.get())
+}
+
+private func cmp_opt_i16(left: i16?, right: i16?) -> int {
+    if (left != nil) != (right != nil) {
+        if left != nil {
+            return 1
+        }
+        return -1
+    }
+    if left == nil or right == nil {
+        return 0
+    }
+    return cmp_words(unsafe_cast[u64] left.get(), unsafe_cast[u64] right.get())
+}
+
+private func cmp_opt_color(left: Color?, right: Color?) -> int {
+    if (left != nil) != (right != nil) {
+        if left != nil {
+            return 1
+        }
+        return -1
+    }
+    if left == nil or right == nil {
+        return 0
+    }
+    return cmp_words(cast[u64] unsafe_cast[u32] left.get(),
+                     cast[u64] unsafe_cast[u32] right.get())
+}
+
+private func cmp_style(left: Text_Style, right: Text_Style) -> int {
+    var result: int = cmp_words(tri_rank(left.bold), tri_rank(right.bold))
+    if result != 0 {
+        return result
+    }
+    result = cmp_words(tri_rank(left.italic), tri_rank(right.italic))
+    if result != 0 {
+        return result
+    }
+    result = cmp_words(tri_rank(left.underline), tri_rank(right.underline))
+    if result != 0 {
+        return result
+    }
+    result = cmp_words(tri_rank(left.double_underline),
+                       tri_rank(right.double_underline))
+    if result != 0 {
+        return result
+    }
+    result = cmp_words(tri_rank(left.strikethrough),
+                       tri_rank(right.strikethrough))
+    if result != 0 {
+        return result
+    }
+    result = cmp_words(tri_rank(left.reverse), tri_rank(right.reverse))
+    if result != 0 {
+        return result
+    }
+    result = cmp_words(tri_rank(left.dim), tri_rank(right.dim))
+    if result != 0 {
+        return result
+    }
+    result = cmp_words(tri_rank(left.blink), tri_rank(right.blink))
+    if result != 0 {
+        return result
+    }
+    result = cmp_words(cast[u64] left.text_case, cast[u64] right.text_case)
+    if result != 0 {
+        return result
+    }
+    result = cmp_words(cast[u64] left.font_hint, cast[u64] right.font_hint)
+    if result != 0 {
+        return result
+    }
+    result = cmp_opt_i8(left.font_index, right.font_index)
+    if result != 0 {
+        return result
+    }
+    result = cmp_opt_i8(left.fg_palette_ix, right.fg_palette_ix)
+    if result != 0 {
+        return result
+    }
+    result = cmp_opt_i8(left.bg_palette_ix, right.bg_palette_ix)
+    if result != 0 {
+        return result
+    }
+    result = cmp_opt_color(left.fg_rgb, right.fg_rgb)
+    if result != 0 {
+        return result
+    }
+    result = cmp_opt_color(left.bg_rgb, right.bg_rgb)
+    if result != 0 {
+        return result
+    }
+    return cmp_opt_i16(left.font_size, right.font_size)
+}
+
+private func cmp_opt_style(left: Text_Style?, right: Text_Style?) -> int {
+    if (left != nil) != (right != nil) {
+        if left != nil {
+            return 1
+        }
+        return -1
+    }
+    if left == nil or right == nil {
+        return 0
+    }
+    return cmp_style(left.get(), right.get())
+}
+
+private func is_rich(s: string) -> bool {
+    return cast[u64] string.core.tag(s) == string.core.str_tag_rich
+}
+
+private func rich_body(s: string) -> Ref[Rich_Body] {
+    return string.core.__string_rich_body(s)
+}
+
+private func cmp_rich_bodies(left: Ref[Rich_Body], right: Ref[Rich_Body])
+    -> int {
+    var result: int = 0
+    let left_rich: bool = is_rich(left.s)
+    let right_rich: bool = is_rich(right.s)
+    if left_rich != right_rich {
+        if left_rich {
+            return 1
+        }
+        return -1
+    }
+    if left_rich {
+        result = cmp_rich_bodies(rich_body(left.s), rich_body(right.s))
+    }
+    else {
+        result = cmp_text(left.s, right.s)
+    }
+    if result != 0 {
+        return result
+    }
+    let count: int = cast[int] left.style_info.len()
+    result = cmp_words(left.style_info.len(), right.style_info.len())
+    if result != 0 {
+        return result
+    }
+    var i: int = 0
+    while i < count {
+        result = cmp_style_record(left.style_info[i], right.style_info[i])
+        if result != 0 {
+            return result
+        }
+        i += 1
+    }
+    result = cmp_opt_style(left.base_style, right.base_style)
+    if result != 0 {
+        return result
+    }
+    if left.opaque == right.opaque {
+        return 0
+    }
+    if left.opaque {
+        return 1
+    }
+    return -1
+}
+
+func cmp_string_value(left: string, right: string) -> int {
+    let left_rich: bool = is_rich(left)
+    let right_rich: bool = is_rich(right)
+    if left_rich != right_rich {
+        if left_rich {
+            return 1
+        }
+        return -1
+    }
+    if !left_rich {
+        return cmp_text(left, right)
+    }
+    return cmp_rich_bodies(rich_body(left), rich_body(right))
+}
+
+private func hash_words(words: Array[u64]) -> u128 {
+    return hash.xxh3_128_at(unsafe_cast[Ref[byte]] ref words[0],
+                            __array_length(words) * 8)
+}
+
+private func hash_chain(acc: u128, next: u128) -> u128 {
+    var words: Array[u64] = new[Array[u64]](4)
+    words[0] = unsafe_cast[u64] acc
+    words[1] = unsafe_cast[u64] (acc >> 64)
+    words[2] = unsafe_cast[u64] next
+    words[3] = unsafe_cast[u64] (next >> 64)
+    return hash_words(words)
+}
+
+private func hash_text(s: string) -> u128 {
+    return s.hash()
+}
+
+private func hash_opt_u32(o: u32?) -> u128 {
+    var words: Array[u64] = new[Array[u64]](2)
+    if o != nil {
+        words[0] = 1
+        words[1] = cast[u64] o.get()
+    }
+    return hash_words(words)
+}
+
+private func hash_opt_string(o: string?) -> u128 {
+    var is_set: u64 = 0
+    if o != nil {
+        is_set = 1
+    }
+    let acc: u128 = is_set.hash()
+    if o == nil {
+        return acc
+    }
+    return hash_chain(acc, hash_text(o.get()))
+}
+
+private func hash_sub_spec(sub: Sub_Spec) -> u128 {
+    let arm: u64 = sub_arm(sub)
+    let acc: u128 = arm.hash()
+    switch sub {
+        case position {
+            return hash_chain(acc, sub.position.hash())
+        }
+        case argname {
+            return hash_chain(acc, hash_text(sub.argname))
+        }
+        case none {
+            return acc
+        }
+    }
+    return acc
+}
+
+private func hash_opt_i8(o: i8?) -> u128 {
+    if o == nil {
+        let zero: u64 = 0
+        return zero.hash()
+    }
+    let word: u64 = cast[u64] unsafe_cast[u8] o.get() + 1
+    return word.hash()
+}
+
+private func hash_opt_i16(o: i16?) -> u128 {
+    if o == nil {
+        let zero: u64 = 0
+        return zero.hash()
+    }
+    let word: u64 = cast[u64] unsafe_cast[u16] o.get() + 1
+    return word.hash()
+}
+
+private func hash_opt_color(o: Color?) -> u128 {
+    if o == nil {
+        let zero: u64 = 0
+        return zero.hash()
+    }
+    let word: u64 = cast[u64] unsafe_cast[u32] o.get() + 1
+    return word.hash()
+}
+
+private func hash_style(s: Text_Style) -> u128 {
+    let packed: u64 = tri_rank(s.bold) |
+        (tri_rank(s.italic) << 2) |
+        (tri_rank(s.underline) << 4) |
+        (tri_rank(s.double_underline) << 6) |
+        (tri_rank(s.strikethrough) << 8) |
+        (tri_rank(s.reverse) << 10) |
+        (tri_rank(s.dim) << 12) |
+        (tri_rank(s.blink) << 14) |
+        (cast[u64] s.text_case << 16) |
+        (cast[u64] s.font_hint << 19)
+    var acc: u128 = packed.hash()
+    acc = hash_chain(acc, hash_opt_i8(s.font_index))
+    acc = hash_chain(acc, hash_opt_i8(s.fg_palette_ix))
+    acc = hash_chain(acc, hash_opt_i8(s.bg_palette_ix))
+    acc = hash_chain(acc, hash_opt_color(s.fg_rgb))
+    acc = hash_chain(acc, hash_opt_color(s.bg_rgb))
+    acc = hash_chain(acc, hash_opt_i16(s.font_size))
+    return acc
+}
+
+private func hash_opt_style(o: Text_Style?) -> u128 {
+    if o == nil {
+        let zero: u64 = 0
+        return zero.hash()
+    }
+    return hash_style(o.get())
+}
+
+private func hash_rich_body(body: Ref[Rich_Body]) -> u128 {
+    var acc: u128 = 0
+    if is_rich(body.s) {
+        acc = hash_rich_body(rich_body(body.s))
+    }
+    else {
+        acc = hash_text(body.s)
+    }
+    let nrec: u64 = body.style_info.len()
+    acc = hash_chain(acc, nrec.hash())
+    var i: int = 0
+    while i < cast[int] nrec {
+        let r: Style_Record = body.style_info[i]
+        acc = hash_chain(acc, hash_opt_u32(r.start_ix))
+        acc = hash_chain(acc, hash_opt_u32(r.end_ix))
+        acc = hash_chain(acc, hash_opt_string(r.style_tag))
+        acc = hash_chain(acc, hash_opt_string(r.format_spec))
+        acc = hash_chain(acc, hash_sub_spec(r.substitution))
+        i += 1
+    }
+    acc = hash_chain(acc, hash_opt_style(body.base_style))
+    var opaque: u64 = 0
+    if body.opaque {
+        opaque = 1
+    }
+    acc = hash_chain(acc, opaque.hash())
+    return acc
+}
+
+func string_hash(s: string) -> u128 {
+    if is_rich(s) {
+        return hash_rich_body(rich_body(s))
+    }
+    if string.core.byte_len(s) == 0 {
+        let zero: u64 = 0
+        return zero.hash()
+    }
+    return hash_text(s)
+}
+
+private func format_style_tag(fd: int, tag: string, closing: bool)
+    -> uint fail: int {
+    var out: uint = 0
+    out += io.format.format_string(fd, "«")!
+    if closing {
+        out += io.format.format_byte(fd, 0x2f)!
+    }
+    out += io.format.format_string(fd, tag)!
+    out += io.format.format_string(fd, "»")!
+    return out
+}
+
+private func opens_here(r: Style_Record, pos: u64) -> bool {
+    return r.start_ix != nil and cast[u64] r.start_ix.get_or_else(0) == pos and
+        r.style_tag != nil
+}
+
+private func closes_here(r: Style_Record, pos: u64) -> bool {
+    return r.end_ix != nil and cast[u64] r.end_ix.get_or_else(0) == pos and
+        r.start_ix != nil and r.style_tag != nil
+}
+
+private func format_substitution(fd: int, r: Style_Record) -> uint fail: int {
+    var out: uint = 0
+    out += io.format.format_string(fd, "«#")!
+    let sub: Sub_Spec = r.substitution
+    switch sub {
+        case argname {
+            out += io.format.format_string(fd, sub.argname)!
+        }
+        case position {
+            let ix_fmt: io.format.Int_Format = (
+                common = io.format.default_repr_options,
+                sep_policy = io.format.Format_Num_Sep.none,
+                plus_policy = io.format.Format_Plus.never,
+                is_signed = false, hex = false, add_prefix = false)
+            out += io.format.format_uint(cast[u128] sub.position, ix_fmt,
+                                         fd)!
+        }
+        case none {
+        }
+    }
+    if r.format_spec != nil {
+        out += io.format.format_byte(fd, 0x3a)!
+        out += io.format.format_string(fd, r.format_spec.get())!
+    }
+    out += io.format.format_string(fd, "»")!
+    return out
+}
+
+private func level_opens(fd: int, body: Ref[Rich_Body], pos: u64)
+    -> uint fail: int {
+    let nrec: int = cast[int] body.style_info.len()
+    var out: uint = 0
+    let i: u64 = pos
+    var open_first: bool = true
+    var open_mark: u64 = 0
+    while true {
+        var found: bool = false
+        var best: u64 = 0
+        var j: int = 0
+        while j < nrec {
+            let r: Style_Record = body.style_info[j]
+            j += 1
+            if !opens_here(r, i) or r.end_ix == nil {
+                continue
+            }
+            let e: u64 = cast[u64] r.end_ix.get()
+            if !open_first and e >= open_mark {
+                continue
+            }
+            if !found or e > best {
+                best = e
+                found = true
+            }
+        }
+        if !found {
+            break
+        }
+        j = 0
+        while j < nrec {
+            let r: Style_Record = body.style_info[j]
+            j += 1
+            if !opens_here(r, i) or r.end_ix == nil or
+                cast[u64] r.end_ix.get_or_else(0) != best {
+                continue
+            }
+            out += format_style_tag(fd, r.style_tag.get_or_else(""), false)!
+        }
+        open_mark = best
+        open_first = false
+    }
+    var k: int = 0
+    while k < nrec {
+        let r: Style_Record = body.style_info[k]
+        k += 1
+        if r.start_ix != nil and cast[u64] r.start_ix.get_or_else(0) == i and
+            sub_arm(r.substitution) != sub_arm_none {
+            out += format_substitution(fd, r)!
+        }
+    }
+    return out
+}
+
+private func level_closes(fd: int, body: Ref[Rich_Body], pos: u64)
+    -> uint fail: int {
+    let nrec: int = cast[int] body.style_info.len()
+    var out: uint = 0
+    let i: u64 = pos
+    var close_first: bool = true
+    var close_mark: u64 = 0
+    while true {
+        var found: bool = false
+        var best: u64 = 0
+        var j: int = 0
+        while j < nrec {
+            let r: Style_Record = body.style_info[j]
+            j += 1
+            if !closes_here(r, i) {
+                continue
+            }
+            let s: u64 = cast[u64] r.start_ix.get_or_else(0)
+            if !close_first and s >= close_mark {
+                continue
+            }
+            if !found or s > best {
+                best = s
+                found = true
+            }
+        }
+        if !found {
+            break
+        }
+        j = 0
+        while j < nrec {
+            let r: Style_Record = body.style_info[j]
+            j += 1
+            if closes_here(r, i) and
+                cast[u64] r.start_ix.get_or_else(0) == best {
+                out += format_style_tag(fd, r.style_tag.get_or_else(""),
+                                        true)!
+            }
+        }
+        close_mark = best
+        close_first = false
+    }
+    return out
+}
+
+private func opens_outward_in(fd: int, cur: string, pos: u64)
+    -> uint fail: int {
+    var out: uint = 0
+    if !is_rich(cur) {
+        return out
+    }
+    let body: Ref[Rich_Body] = rich_body(cur)
+    out += level_opens(fd, body, pos)!
+    out += opens_outward_in(fd, body.s, pos)!
+    return out
+}
+
+private func closes_inward_out(fd: int, cur: string, pos: u64)
+    -> uint fail: int {
+    var out: uint = 0
+    if !is_rich(cur) {
+        return out
+    }
+    let body: Ref[Rich_Body] = rich_body(cur)
+    out += closes_inward_out(fd, body.s, pos)!
+    out += level_closes(fd, body, pos)!
+    return out
+}
+
+private func repr_rich_string(s: string, fd: int) -> uint fail: int {
+    let base: string = string.core.text(s)
+    let n: u64 = cast[u64] string.core.byte_len(base)
+    var out: uint = 0
+    out += io.format.format_string(fd, "r\"")!
+    var i: u64 = 0
+    while i <= n {
+        out += opens_outward_in(fd, s, i)!
+        out += closes_inward_out(fd, s, i)!
+        if i >= n {
+            i += 1
+            continue
+        }
+        let c: u8 = string.core.byte_at(base, i)
+        if i + 1 < n and c == 0xc2 {
+            let next: u8 = string.core.byte_at(base, i + 1)
+            if next == 0xab or next == 0xbb {
+                out += io.format.format_byte(fd, 0x5c)!
+            }
+        }
+        out += io.format.format_byte(fd, c)!
+        i += 1
+    }
+    out += io.format.format_byte(fd, 0x22)!
+    return out
+}
+
+func raw_repr_string(s: string, fd: int, common: io.format.Repr_Options?)
+    -> uint fail: int {
+    var fmt: io.format.String_Repr = default_string_format
+    if common != nil {
+        fmt.common = common.get()
+    }
+    if is_rich(s) {
+        return repr_rich_string(s, fd)!
+    }
+    let len: uint = string.core.byte_len(s)
+    if len != 0 and !string.core.is_text(s) {
+        fmt.hex = true
+    }
+    var bytes: Array[u8] = string.core.__text_byte_array(s)
+    return io.format.format_bytes(fd, ref bytes, len, fmt.common,
+                                  byte_literal = fmt.hex,
+                                  force_hex = fmt.hex)!
+}
+
+private func merge_tri(base: bool?, overlay: bool?) -> bool? {
+    if overlay != nil {
+        return overlay
+    }
+    return base
+}
+
+private func merge_opt_i8(base: i8?, overlay: i8?) -> i8? {
+    if overlay != nil {
+        return overlay
+    }
+    return base
+}
+
+private func merge_opt_i16(base: i16?, overlay: i16?) -> i16? {
+    if overlay != nil {
+        return overlay
+    }
+    return base
+}
+
+private func merge_opt_color(base: Color?, overlay: Color?) -> Color? {
+    if overlay != nil {
+        return overlay
+    }
+    return base
+}
+
+func merge(self: Text_Style, overlay: Text_Style) -> Text_Style {
+    var r: Text_Style = empty_style
+    r.bold = merge_tri(self.bold, overlay.bold)
+    r.italic = merge_tri(self.italic, overlay.italic)
+    r.underline = merge_tri(self.underline, overlay.underline)
+    r.double_underline = merge_tri(self.double_underline,
+                                   overlay.double_underline)
+    r.strikethrough = merge_tri(self.strikethrough, overlay.strikethrough)
+    r.reverse = merge_tri(self.reverse, overlay.reverse)
+    r.dim = merge_tri(self.dim, overlay.dim)
+    r.blink = merge_tri(self.blink, overlay.blink)
+    r.text_case = self.text_case
+    if overlay.text_case != Text_Case.none {
+        r.text_case = overlay.text_case
+    }
+    r.font_hint = self.font_hint
+    if overlay.font_hint != Font_Hint.default {
+        r.font_hint = overlay.font_hint
+    }
+    r.font_index = merge_opt_i8(self.font_index, overlay.font_index)
+    r.fg_palette_ix = merge_opt_i8(self.fg_palette_ix, overlay.fg_palette_ix)
+    r.bg_palette_ix = merge_opt_i8(self.bg_palette_ix, overlay.bg_palette_ix)
+    r.fg_rgb = merge_opt_color(self.fg_rgb, overlay.fg_rgb)
+    r.bg_rgb = merge_opt_color(self.bg_rgb, overlay.bg_rgb)
+    r.font_size = merge_opt_i16(self.font_size, overlay.font_size)
+    return r
+}
+
+private func opt_i8_eq(a: i8?, b: i8?) -> bool {
+    if (a != nil) != (b != nil) {
+        return false
+    }
+    if a == nil or b == nil {
+        return true
+    }
+    return a.get() == b.get()
+}
+
+private func opt_i16_eq(a: i16?, b: i16?) -> bool {
+    if (a != nil) != (b != nil) {
+        return false
+    }
+    if a == nil or b == nil {
+        return true
+    }
+    return a.get() == b.get()
+}
+
+private func opt_color_eq(a: Color?, b: Color?) -> bool {
+    if (a != nil) != (b != nil) {
+        return false
+    }
+    if a == nil or b == nil {
+        return true
+    }
+    return a.get() == b.get()
+}
+
+func __equal(self: Text_Style, other: Text_Style) -> bool {
+    return tri_rank(self.bold) == tri_rank(other.bold) and
+        tri_rank(self.italic) == tri_rank(other.italic) and
+        tri_rank(self.underline) == tri_rank(other.underline) and
+        tri_rank(self.double_underline) == tri_rank(other.double_underline) and
+        tri_rank(self.strikethrough) == tri_rank(other.strikethrough) and
+        tri_rank(self.reverse) == tri_rank(other.reverse) and
+        tri_rank(self.dim) == tri_rank(other.dim) and
+        tri_rank(self.blink) == tri_rank(other.blink) and
+        self.text_case == other.text_case and
+        self.font_hint == other.font_hint and
+        opt_i8_eq(self.font_index, other.font_index) and
+        opt_i8_eq(self.fg_palette_ix, other.fg_palette_ix) and
+        opt_i8_eq(self.bg_palette_ix, other.bg_palette_ix) and
+        opt_color_eq(self.fg_rgb, other.fg_rgb) and
+        opt_color_eq(self.bg_rgb, other.bg_rgb) and
+        opt_i16_eq(self.font_size, other.font_size)
+}
+
+func is_empty(self: Text_Style) -> bool {
+    return self == empty_style
+}
+
+private const intrinsic_tags: Array[Intrinsic_Tag] = [
+    (name = "b", style = (
+        bold = true, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "bold", style = (
+        bold = true, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "i", style = (
+        bold = nil, italic = true, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "italic", style = (
+        bold = nil, italic = true, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "u", style = (
+        bold = nil, italic = nil, underline = true, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "underline", style = (
+        bold = nil, italic = nil, underline = true, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "uu", style = (
+        bold = nil, italic = nil, underline = nil, double_underline = true,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "2u", style = (
+        bold = nil, italic = nil, underline = nil, double_underline = true,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "st", style = (
+        bold = nil, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = true, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "strike", style = (
+        bold = nil, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = true, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "strikethrough", style = (
+        bold = nil, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = true, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "r", style = (
+        bold = nil, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = true, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "reverse", style = (
+        bold = nil, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = true, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "dim", style = (
+        bold = nil, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = true, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "faint", style = (
+        bold = nil, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = true, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "blink", style = (
+        bold = nil, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = true,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "upper", style = (
+        bold = nil, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.upper, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "up", style = (
+        bold = nil, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.upper, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "lower", style = (
+        bold = nil, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.lower, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "l", style = (
+        bold = nil, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.lower, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "title", style = (
+        bold = nil, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.title, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "t", style = (
+        bold = nil, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.title, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "caps", style = (
+        bold = nil, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.caps, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "allcaps", style = (
+        bold = nil, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.caps, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    ))
+]
+
+func intrinsic_tag_style(tag: string) -> Text_Style {
+    var i: uint = 0
+    while i < __array_length(intrinsic_tags) {
+        if cmp_text(tag, intrinsic_tags[i].name) == 0 {
+            return intrinsic_tags[i].style
+        }
+        i += 1
+    }
+    return empty_style
+}
+
+private enum Markup_Kind {
+    prop_on = 0, prop_off, case_on, case_off, style_on, style_off, role_on,
+    role_off, reset, subst
+}
+
+private record Markup_Segment {
+    kind:        Markup_Kind
+    at:          u32
+    name:        string
+    prop:        Text_Style
+    sub_index:   u64?
+    raw_tag:     string
+    format_spec: string?
+}
+
+private record Pending_Style {
+    kind:       Markup_Kind
+    name:       string
+    prop:       Text_Style
+    raw_tag:    string
+    start_byte: u32
+}
+
+private record Slot_Numbering {
+    next_auto:    u64
+    saw_auto:     bool
+    saw_explicit: bool
+}
+
+private func segment(kind: Markup_Kind, at: u32, raw_tag: string,
+                     name: string = "", prop: Text_Style = empty_style,
+                     sub_index: u64? = nil, format_spec: string? = nil)
+    -> Markup_Segment {
+    return (kind = kind, at = at, name = name, prop = prop,
+            sub_index = sub_index, raw_tag = raw_tag,
+            format_spec = format_spec)
+}
+
+private func classify_tag(modify segments: List[Markup_Segment],
+                          modify numbering: Slot_Numbering, tag: string,
+                          at: u32) fail: string {
+    let len: uint = string.core.byte_len(tag)
+    if len == 0 {
+        return
+    }
+    let first: u8 = string.core.byte_at(tag, 0)
+    if len == 1 and first == 0x2f {
+        segments.append(segment(Markup_Kind.reset, at, tag))
+        return
+    }
+    if first == 0x23 {
+        var spec_len: uint = len - 1
+        var format_spec: string? = nil
+        var k: uint = 1
+        while k < len {
+            if string.core.byte_at(tag, k) == 0x3a {
+                format_spec = string.core.byte_slice(tag, cast[int] k + 1,
+                                                     cast[int] len)
+                spec_len = k - 1
+                break
+            }
+            k += 1
+        }
+        if spec_len == 0 {
+            if numbering.saw_explicit {
+                fail "rich string cannot mix automatic and explicit positional substitutions"
+            }
+            numbering.saw_auto = true
+            segments.append(segment(Markup_Kind.subst, at, tag,
+                                    sub_index = numbering.next_auto,
+                                    format_spec = format_spec))
+            numbering.next_auto += 1
+            return
+        }
+        var all_digits: bool = true
+        var d: uint = 1
+        while d <= spec_len {
+            let c: u8 = string.core.byte_at(tag, d)
+            if c < 0x30 or c > 0x39 {
+                all_digits = false
+                break
+            }
+            d += 1
+        }
+        if all_digits {
+            if numbering.saw_auto {
+                fail "rich string cannot mix automatic and explicit positional substitutions"
+            }
+            numbering.saw_explicit = true
+            var ix: u64 = 0
+            d = 1
+            while d <= spec_len {
+                ix = ix * 10 + cast[u64] (string.core.byte_at(tag, d) - 0x30)
+                if ix > 0xffffffff {
+                    fail "rich string substitution index is too large"
+                }
+                d += 1
+            }
+            segments.append(segment(Markup_Kind.subst, at, tag,
+                                    sub_index = ix,
+                                    format_spec = format_spec))
+            return
+        }
+        segments.append(segment(Markup_Kind.subst, at, tag,
+            name = string.core.byte_slice(tag, 1, cast[int] spec_len + 1),
+            format_spec = format_spec))
+        return
+    }
+    let is_close: bool = first == 0x2f
+    var name: string = tag
+    if is_close {
+        name = string.core.byte_slice(tag, 1, cast[int] len)
+    }
+    if string.core.byte_len(name) == 0 {
+        return
+    }
+    if string.core.byte_at(name, 0) == 0x40 {
+        var kind: Markup_Kind = Markup_Kind.role_on
+        if is_close {
+            kind = Markup_Kind.role_off
+        }
+        segments.append(segment(kind, at, tag, name = name))
+        return
+    }
+    let prop: Text_Style = intrinsic_tag_style(name)
+    if prop.text_case != Text_Case.none {
+        var kind: Markup_Kind = Markup_Kind.case_on
+        if is_close {
+            kind = Markup_Kind.case_off
+        }
+        segments.append(segment(kind, at, tag, prop = prop))
+        return
+    }
+    if !is_empty(prop) {
+        var kind: Markup_Kind = Markup_Kind.prop_on
+        if is_close {
+            kind = Markup_Kind.prop_off
+        }
+        segments.append(segment(kind, at, tag, prop = prop))
+        return
+    }
+    var kind: Markup_Kind = Markup_Kind.style_on
+    if is_close {
+        kind = Markup_Kind.style_off
+    }
+    segments.append(segment(kind, at, tag, name = name))
+}
+
+private func escape_length(raw: string, at: uint) -> uint {
+    let n: uint = string.core.byte_len(raw)
+    if at + 1 >= n {
+        return n - at
+    }
+    var digits: uint = 0
+    switch string.core.byte_at(raw, at + 1) {
+        case 0x78 {
+            digits = 2
+        }
+        case 0x75 {
+            digits = 4
+        }
+        case 0x55 {
+            digits = 8
+        }
+        else {
+            digits = 0
+        }
+    }
+    var len: uint = 2 + digits
+    if at + len > n {
+        len = n - at
+    }
+    return len
+}
+
+private func parse_rich_markup(raw: string,
+                               modify segments: List[Markup_Segment])
+    -> string fail: string {
+    var text: containers.buffer.Buffer = new[containers.buffer.Buffer](0)
+    var numbering: Slot_Numbering = (next_auto = 0, saw_auto = false,
+                                     saw_explicit = false)
+    let n: uint = string.core.byte_len(raw)
+    var i: uint = 0
+    while i < n {
+        let c: u8 = string.core.byte_at(raw, i)
+        if c == 0x5c {
+            if i + 2 < n and string.core.byte_at(raw, i + 1) == 0xc2 {
+                let after: u8 = string.core.byte_at(raw, i + 2)
+                if after == 0xab or after == 0xbb {
+                    containers.buffer.put_u8(text, 0xc2)
+                    containers.buffer.put_u8(text, after)
+                    i += 3
+                    continue
+                }
+            }
+            if i + 1 < n and string.core.byte_at(raw, i + 1) == 0x5b {
+                containers.buffer.put_u8(text, 0x5b)
+                i += 2
+                continue
+            }
+            let len: uint = escape_length(raw, i)
+            containers.buffer.put_string(text, string.core.decode_escapes(
+                string.core.byte_slice(raw, cast[int] i,
+                                       cast[int] (i + len)))!)
+            i += len
+            continue
+        }
+        if c == 0xc2 and i + 1 < n and string.core.byte_at(raw, i + 1) == 0xab {
+            var j: uint = i + 2
+            while j + 1 < n and !(string.core.byte_at(raw, j) == 0xc2 and
+                                  string.core.byte_at(raw, j + 1) == 0xbb) {
+                j += 1
+            }
+            if j + 1 < n {
+                classify_tag(segments, numbering,
+                    string.core.byte_slice(raw, cast[int] (i + 2),
+                                           cast[int] j),
+                    cast[u32] string.core.byte_len(text))!
+                i = j + 2
+            }
+            else {
+                containers.buffer.put_u8(text, 0xc2)
+                containers.buffer.put_u8(text, 0xab)
+                i += 2
+            }
+            continue
+        }
+        if c == 0x5b and i + 1 < n and string.core.byte_at(raw, i + 1) == 0x3a {
+            var j: uint = i + 2
+            while j + 1 < n and !(string.core.byte_at(raw, j) == 0x3a and
+                                  string.core.byte_at(raw, j + 1) == 0x5d) {
+                j += 1
+            }
+            if j + 1 >= n {
+                fail "rich string contains an unclosed ASCII tag"
+            }
+            classify_tag(segments, numbering,
+                string.core.byte_slice(raw, cast[int] (i + 2), cast[int] j),
+                cast[u32] string.core.byte_len(text))!
+            i = j + 2
+            continue
+        }
+        containers.buffer.put_u8(text, c)
+        i += 1
+    }
+    return containers.buffer.to_string(text)
+}
+
+private func span_record(pending: Pending_Style, end: u32?) -> Style_Record {
+    return (start_ix = pending.start_byte, end_ix = end,
+            style_tag = pending.raw_tag, format_spec = nil,
+            substitution = (none = nil))
+}
+
+private func without(pending: List[Pending_Style], index: int)
+    -> List[Pending_Style] {
+    var kept: List[Pending_Style] = []
+    var k: int = 0
+    while k < cast[int] pending.len() {
+        if k != index {
+            kept.append(pending[k])
+        }
+        k += 1
+    }
+    return kept
+}
+
+private func closes_pending(open: Pending_Style, close: Markup_Segment)
+    -> bool {
+    switch close.kind {
+        case Markup_Kind.prop_off {
+            return open.kind == Markup_Kind.prop_on and open.prop == close.prop
+        }
+        case Markup_Kind.case_off {
+            return open.kind == Markup_Kind.case_on
+        }
+        case Markup_Kind.style_off {
+            return open.kind == Markup_Kind.style_on and
+                cmp_text(open.name, close.name) == 0
+        }
+        case Markup_Kind.role_off {
+            return open.kind == Markup_Kind.role_on and
+                cmp_text(open.name, close.name) == 0
+        }
+        else {
+            return false
+        }
+    }
+    return false
+}
+
+private func build_style_records(segments: List[Markup_Segment])
+    -> List[Style_Record] {
+    var records: List[Style_Record] = []
+    var pending: List[Pending_Style] = []
+    var s: int = 0
+    while s < cast[int] segments.len() {
+        let seg: Markup_Segment = segments[s]
+        s += 1
+        switch seg.kind {
+            case Markup_Kind.prop_on, Markup_Kind.case_on, Markup_Kind.style_on, Markup_Kind.role_on {
+                let opened: Pending_Style = (kind = seg.kind, name = seg.name,
+                                             prop = seg.prop,
+                                             raw_tag = seg.raw_tag,
+                                             start_byte = seg.at)
+                pending.append(opened)
+            }
+            case Markup_Kind.prop_off, Markup_Kind.case_off, Markup_Kind.style_off, Markup_Kind.role_off {
+                var j: int = cast[int] pending.len() - 1
+                while j >= 0 {
+                    if closes_pending(pending[j], seg) {
+                        records.append(span_record(pending[j], seg.at))
+                        pending = without(pending, j)
+                        break
+                    }
+                    j -= 1
+                }
+            }
+            case Markup_Kind.reset {
+                var j: int = 0
+                while j < cast[int] pending.len() {
+                    records.append(span_record(pending[j], seg.at))
+                    j += 1
+                }
+                containers.list.clear(pending)
+            }
+            case Markup_Kind.subst {
+                var substitution: Sub_Spec = (argname = seg.name)
+                if seg.sub_index != nil {
+                    substitution = (position = seg.sub_index.get())
+                }
+                let slot: Style_Record = (start_ix = seg.at, end_ix = nil,
+                                          style_tag = nil,
+                                          format_spec = seg.format_spec,
+                                          substitution = substitution)
+                records.append(slot)
+            }
+        }
+    }
+    var j: int = 0
+    while j < cast[int] pending.len() {
+        records.append(span_record(pending[j], index_extends))
+        j += 1
+    }
+    return records
+}
+
+litmod<quotes> rich, r(raw: string) -> string fail: string {
+    var segments: List[Markup_Segment] = []
+    let text: string = parse_rich_markup(raw, segments)!
+    var body: Rich_Body = (s = text, style_info = build_style_records(segments),
+                           base_style = nil, opaque = false)
+    return string.core.__string_make_rich(ref body)
+}

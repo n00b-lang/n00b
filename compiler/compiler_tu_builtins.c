@@ -120,19 +120,19 @@ register_native_signature(parse_symtab_t *symtab, th_ctx *types,
     return symbol;
 }
 
-static bool
-register_builtin_native_function(parse_symtab_t *symtab, th_ctx *types,
-                                 th_type *nil_type, const char *name,
-                                 const char *native_name, th_type *result,
-                                 th_type *const *arguments, size_t count)
+static parse_sym_entry_t *
+builtin_native_symbol(parse_symtab_t *symtab, th_ctx *types,
+                      th_type *nil_type, const char *name,
+                      const char *native_name, th_type *result,
+                      th_type *const *arguments, size_t count)
 {
     th_param *parameters = count
         ? core_alloc_array(th_param, count) : nullptr;
-    if (count && !parameters) return false;
+    if (count && !parameters) return nullptr;
     for (size_t i = 0; i < count; i++) {
         if (!arguments[i]) {
             core_free(parameters);
-            return false;
+            return nullptr;
         }
         parameters[i] = (th_param){.mode = TH_IN, .type = arguments[i]};
     }
@@ -141,7 +141,42 @@ register_builtin_native_function(parse_symtab_t *symtab, th_ctx *types,
                              count, nullptr, nullptr, 0) : nullptr;
     core_free(parameters);
     return register_native_signature(symtab, types, nil_type,
-        core_string_from_cstr(name), native_name, signature) != nullptr;
+        core_string_from_cstr(name), native_name, signature);
+}
+
+static bool
+register_builtin_native_function(parse_symtab_t *symtab, th_ctx *types,
+                                 th_type *nil_type, const char *name,
+                                 const char *native_name, th_type *result,
+                                 th_type *const *arguments, size_t count)
+{
+    return builtin_native_symbol(symtab, types, nil_type, name, native_name,
+                                 result, arguments, count) != nullptr;
+}
+
+static bool
+register_collection_free_native(parse_symtab_t *symtab, th_ctx *types,
+                                th_type *nil_type, const char *name,
+                                const char *native_name, th_type *result,
+                                th_type *const *arguments, size_t count)
+{
+    parse_sym_entry_t *symbol = builtin_native_symbol(symtab, types,
+        nil_type, name, native_name, result, arguments, count);
+    return symbol && parse_sym_set_binding(symbol,
+        CORE_STRING_STATIC("n00bb.native.collection-free"), symbol);
+}
+
+static bool
+register_bitptr_builtin(parse_symtab_t *symtab, th_ctx *types,
+                        th_type *nil_type, th_type *reference)
+{
+    th_type *result = th_name(types, "builtin.bitptr.Bitptr");
+    parse_sym_entry_t *symbol = builtin_native_symbol(symtab, types,
+        nil_type, "__bitptr", "n00bb_bitptr", result, &reference, 1);
+    return symbol && parse_sym_set_binding(symbol,
+            CORE_STRING_STATIC("n00bb.native.returns-parameter"), symbol)
+        && parse_sym_set_binding(symbol,
+            CORE_STRING_STATIC("n00bb.native.collection-free"), symbol);
 }
 
 bool
@@ -191,8 +226,44 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
     th_type *resume_args[] = {uint, thread_context_ref};
     th_type *capture_args[] = {thread_context_ref};
     th_type *write_args[] = {i32, byte_reference, u32};
+    th_type *integer = th_name(types, "int");
+    th_type *open_args[] = {byte_reference, integer, u32};
+    th_type *read_args[] = {integer, byte_reference, uint};
+    th_type *close_args[] = {integer};
+    th_type *seek_args[] = {integer, integer, i32};
+    th_type *u16_reference = th_ind(types, 0, th_name(types, "u16"));
+    th_type *integer_reference = th_ind(types, 0, integer);
+    th_type *env_at_args[] = {uint};
+    th_type *terminal_size_args[] = {integer, u16_reference, u16_reference};
+    th_type *pipe_args[] = {integer_reference, integer_reference};
     return register_builtin_native_function(symtab, types, nil_type,
             "__os_page_size", "n00b_os_page_size", uint, nullptr, 0)
+        && register_builtin_native_function(symtab, types, nil_type,
+            "__gc_enter_blocking", "sys.internal.gc.alloc.enter_blocking_runtime",
+            nil_type, nullptr, 0)
+        && register_builtin_native_function(symtab, types, nil_type,
+            "__gc_leave_blocking", "sys.internal.gc.alloc.leave_blocking_runtime",
+            nil_type, nullptr, 0)
+        && register_builtin_native_function(symtab, types, nil_type,
+            "__os_env_count", "n00b_os_env_count", uint, nullptr, 0)
+        && register_builtin_native_function(symtab, types, nil_type,
+            "__os_env_at", "n00b_os_env_at", optional_reference,
+            env_at_args, 1)
+        && register_builtin_native_function(symtab, types, nil_type,
+            "__os_fd_is_tty", "n00b_os_fd_is_tty", integer, close_args, 1)
+        && register_builtin_native_function(symtab, types, nil_type,
+            "__os_terminal_size", "n00b_os_terminal_size", integer,
+            terminal_size_args, 3)
+        && register_builtin_native_function(symtab, types, nil_type,
+            "__os_pipe", "n00b_os_pipe", integer, pipe_args, 2)
+        && register_builtin_native_function(symtab, types, nil_type,
+            "__os_open", "n00b_os_open", integer, open_args, 3)
+        && register_builtin_native_function(symtab, types, nil_type,
+            "__os_read", "n00b_os_read", integer, read_args, 3)
+        && register_builtin_native_function(symtab, types, nil_type,
+            "__os_close", "n00b_os_close", integer, close_args, 1)
+        && register_builtin_native_function(symtab, types, nil_type,
+            "__os_seek", "n00b_os_seek", integer, seek_args, 3)
         && register_builtin_native_function(symtab, types, nil_type,
             "__write_bytes", "n00bb_runtime_write_bytes", i32,
             write_args, 3)
@@ -251,18 +322,18 @@ register_builtin_abi_symbols(parse_symtab_t *symtab, th_ctx *types,
     th_type *uint = th_name(types, "uint");
     th_type *typespec = th_name(types, "typespec");
     const char *record_names[] = {
-        "sys.internal.abi.Type_Record",
-        "sys.internal.abi.Field_Record",
-        "sys.internal.abi.Trace_Record",
-        "sys.internal.abi.Trace_Child_Record",
-        "sys.internal.abi.Trace_Arm_Record",
-        "sys.internal.abi.Tag_Extractor_Record",
-        "sys.internal.abi.Frame_Layout_Record",
-        "sys.internal.abi.Storage_Record",
-        "sys.internal.abi.Symbol_Record",
-        "sys.internal.abi.Module_Record",
-        "sys.internal.abi.Baked_Node_Record",
-        "sys.internal.abi.Function_Record",
+        "builtin.abi.Type_Record",
+        "builtin.abi.Field_Record",
+        "builtin.abi.Trace_Record",
+        "builtin.abi.Trace_Child_Record",
+        "builtin.abi.Trace_Arm_Record",
+        "builtin.abi.Tag_Extractor_Record",
+        "builtin.abi.Frame_Layout_Record",
+        "builtin.abi.Storage_Record",
+        "builtin.abi.Symbol_Record",
+        "builtin.abi.Module_Record",
+        "builtin.abi.Baked_Node_Record",
+        "builtin.abi.Function_Record",
     };
     const char *names[] = {
         "__abi_type", "__abi_field", "__abi_trace", "__abi_trace_child",
@@ -301,7 +372,7 @@ register_builtin_abi_symbols(parse_symtab_t *symtab, th_ctx *types,
     th_type *bytes_result = byte_reference
         ? th_option(types, byte_reference) : nullptr;
     th_type *native_frame = th_name(types,
-        "sys.internal.abi.Native_Frame_Record");
+        "builtin.abi.Native_Frame_Record");
     th_type *native_frame_reference = native_frame
         ? th_ind(types, 0, native_frame) : nullptr;
     th_type *native_frame_result = native_frame_reference
@@ -350,9 +421,15 @@ register_builtin_abi_symbols(parse_symtab_t *symtab, th_ctx *types,
         && register_builtin_native_function(symtab, types, nil_type,
             "__abi_bytes", "n00b_builtin_abi_bytes", bytes_result,
             bytes_args, 2)
-        && register_builtin_native_function(symtab, types, nil_type,
+        && register_collection_free_native(symtab, types, nil_type,
             "__abi_ref_address", "n00b_builtin_abi_ref_address", uint,
-            address_args, 1);
+            address_args, 1)
+        && register_bitptr_builtin(symtab, types, nil_type, reference)
+        && register_collection_free_native(symtab, types, nil_type,
+            "__load_le_u64", "n00bb_load_le_u64", th_name(types, "u64"),
+            &byte_reference, 1)
+        && register_collection_free_native(symtab, types, nil_type,
+            "__load_le_u32", "n00bb_load_le_u32", u32, &byte_reference, 1);
 }
 
 static n00bb_unsafe_arithmetic_t unsafe_arithmetic[] = {
@@ -812,29 +889,6 @@ register_builtin_symbols(parse_annot_result_t *annotations,
     th_type *option_get_or_else_contract = option_get_or_else_signature
         ? th_env_signature_contract(types, option_get_or_else_signature,
                                     nil_type) : nullptr;
-    th_type *string_type = th_name(types, "string");
-    th_type *i32_type = th_name(types, "i32");
-    th_param fd_write_parameters[] = {
-        {.mode = TH_IN, .type = i32_type},
-        {.mode = TH_IN, .type = string_type},
-    };
-    th_type *fd_write_signature = i32_type && string_type
-        ? th_func_with_error(types, i32_type, nil_type,
-            fd_write_parameters, 2, nullptr, nullptr, 0) : nullptr;
-    th_type *fd_write_contract = fd_write_signature
-        ? th_env_signature_contract(types, fd_write_signature, nil_type)
-        : nullptr;
-    th_type *repr_item = th_var(types);
-    th_param repr_parameters[] = {
-        {.mode = TH_IN, .type = repr_item},
-        {.mode = TH_IN, .type = i32_type},
-    };
-    th_type *repr_signature = repr_item && i32_type
-        ? th_func_with_error(types, i32_type, nil_type, repr_parameters,
-                             2, nullptr, nullptr, 0) : nullptr;
-    th_type *repr_contract = repr_signature
-        ? th_env_signature_contract(types, repr_signature, nil_type)
-        : nullptr;
     th_type *array_item = th_var(types);
     th_type *array_type = th_array(types, array_item);
     th_type *array_write_index = n00bb_array_index_type(
@@ -877,7 +931,7 @@ register_builtin_symbols(parse_annot_result_t *annotations,
         || !option_get_signature || !option_get_or_else_signature
         || !option_is_nil_contract || !option_get_contract
         || !option_get_or_else_contract
-        || !fd_write_contract || !repr_contract || !array_read_contract
+        || !array_read_contract
         || !array_write_contract)
         return false;
 
@@ -928,12 +982,6 @@ register_builtin_symbols(parse_annot_result_t *annotations,
     parse_sym_entry_t *array_read_symbol = parse_symtab_add(symtab,
         CORE_STRING_STATIC("builtin"), CORE_STRING_STATIC("__array_read"),
         PARSE_SYM_FUNCTION, nullptr);
-    parse_sym_entry_t *fd_write_symbol = parse_symtab_add(symtab,
-        CORE_STRING_STATIC("builtin"), CORE_STRING_STATIC("__fd_write"),
-        PARSE_SYM_FUNCTION, nullptr);
-    parse_sym_entry_t *repr_symbol = parse_symtab_add(symtab,
-        CORE_STRING_STATIC("builtin"), CORE_STRING_STATIC("__repr_default"),
-        PARSE_SYM_FUNCTION, nullptr);
     parse_sym_entry_t *init_symbol = parse_symtab_add(symtab,
         CORE_STRING_STATIC("builtin"), CORE_STRING_STATIC("init"),
         PARSE_SYM_FUNCTION, nullptr);
@@ -966,19 +1014,6 @@ register_builtin_symbols(parse_annot_result_t *annotations,
     bool array_clear_registered = register_builtin_native_function(symtab,
         types, nil_type, "__array_clear", "__n00bb_array_clear",
         nil_type, array_clear_arguments, 2);
-    th_type *hash_arguments[] = {th_array(types, th_name(types, "byte"))};
-    bool hash_registered = register_builtin_native_function(symtab, types,
-        nil_type, "__xxh3_128", "__n00bb_xxh3_128",
-        th_name(types, "u128"), hash_arguments, 1);
-    th_type *hash_item = th_var(types);
-    th_type *scalar_hash_arguments[] = {hash_item};
-    bool scalar_hash_registered = register_builtin_native_function(symtab,
-        types, nil_type, "__hash_scalar", "__n00bb_hash_scalar",
-        th_name(types, "u128"), scalar_hash_arguments, 1);
-    th_type *string_hash_arguments[] = {th_name(types, "string")};
-    bool string_hash_registered = register_builtin_native_function(symtab,
-        types, nil_type, "__hash_string", "__n00bb_hash_string",
-        th_name(types, "u128"), string_hash_arguments, 1);
     th_type *borrowed_array = th_ind(types, 0,
         th_array(types, th_name(types, "u8")));
     th_type *borrow_arguments[] = {borrowed_array,
@@ -1001,14 +1036,11 @@ register_builtin_symbols(parse_annot_result_t *annotations,
     if (!symbol || !read_symbol || !write_symbol || !option_is_nil_symbol
         || !option_get_symbol || !option_get_or_else_symbol
         || !array_read_symbol || !array_write_symbol
-        || !fd_write_symbol || !repr_symbol
         || !init_symbol || !init_contract
         || !os_builtins_registered || !abi_builtins_registered
         || !gc_builtins_registered || !unsafe_arithmetic_registered
         || !bit_counts_registered || !array_length_registered
         || !array_prefix_registered || !array_clear_registered
-        || !hash_registered || !scalar_hash_registered
-        || !string_hash_registered
         || !borrow_registered) return false;
     symbol->type = signature;
     symbol->error_type = nil_type;
@@ -1040,18 +1072,6 @@ register_builtin_symbols(parse_annot_result_t *annotations,
     if (!parse_sym_set_binding(array_write_symbol,
             CORE_STRING_STATIC("n00bb.array.write"),
             array_write_symbol)) return false;
-    fd_write_symbol->type = fd_write_signature;
-    fd_write_symbol->error_type = nil_type;
-    fd_write_symbol->callable_contract = fd_write_contract;
-    if (!parse_sym_set_binding(fd_write_symbol,
-            CORE_STRING_STATIC("n00bb.abi.fd_write"),
-            (void *)"n00bb_bootstrap_fd_write")) return false;
-    repr_symbol->type = repr_signature;
-    repr_symbol->error_type = nil_type;
-    repr_symbol->callable_contract = repr_contract;
-    if (!parse_sym_set_binding(repr_symbol,
-            CORE_STRING_STATIC("n00bb.abi.repr_default"),
-            (void *)"n00bb_bootstrap_repr_default")) return false;
     init_symbol->type = init_signature;
     init_symbol->error_type = nil_type;
     init_symbol->callable_contract = init_contract;
@@ -1065,8 +1085,6 @@ register_builtin_symbols(parse_annot_result_t *annotations,
         && option_get_or_else_symbol->callable_contract
         && array_read_symbol->callable_contract
         && array_write_symbol->callable_contract
-        && fd_write_symbol->callable_contract
-        && repr_symbol->callable_contract
         && init_symbol->callable_contract;
 }
 
@@ -1635,9 +1653,7 @@ register_builtin_traits(th_env *environment, th_ctx *types,
 bool
 n00bb_builtin_function(parse_sym_entry_t *symbol)
 {
-    return n00bb_builtin_fd_write_function(symbol)
-        || n00bb_builtin_repr_default_function(symbol)
-        || n00bb_builtin_native_function(symbol)
+    return n00bb_builtin_native_function(symbol)
         || (symbol && symbol->kind == PARSE_SYM_FUNCTION
         && !symbol->decl_node && symbol->scope && !symbol->scope->parent
         && symbol->scope->ns
@@ -1663,24 +1679,6 @@ n00bb_builtin_function(parse_sym_entry_t *symbol)
             || n00bb_builtin_atomic_access_function(symbol)
             || n00bb_builtin_callback_function(symbol)
             || n00bb_builtin_init_function(symbol)));
-}
-
-bool
-n00bb_builtin_fd_write_function(parse_sym_entry_t *symbol)
-{
-    return symbol && symbol->kind == PARSE_SYM_FUNCTION
-        && !symbol->decl_node
-        && parse_sym_binding(symbol,
-            CORE_STRING_STATIC("n00bb.abi.fd_write"));
-}
-
-bool
-n00bb_builtin_repr_default_function(parse_sym_entry_t *symbol)
-{
-    return symbol && symbol->kind == PARSE_SYM_FUNCTION
-        && !symbol->decl_node
-        && parse_sym_binding(symbol,
-            CORE_STRING_STATIC("n00bb.abi.repr_default"));
 }
 
 bool

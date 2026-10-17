@@ -170,7 +170,9 @@ build_import_environment(parse_grammar_t *grammar,
         if (!state || !state->types) continue;
         th_ctx_set_method_argument_coercions(state->types,
             TH_COERCE_OPTION_WRAP | TH_COERCE_NIL_OPTION
-            | TH_COERCE_RECORD_CONSTRUCT | TH_COERCE_OPTION_UNWRAP);
+            | TH_COERCE_RECORD_CONSTRUCT | TH_COERCE_OPTION_UNWRAP
+            | TH_COERCE_CUSTOM);
+        n00bb_register_value_coercions(state->types);
         bool attached = environment_attached
             ? th_ctx_set_environment_scope(state->types,
                 unit->module.identifier.data,

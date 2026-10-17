@@ -1,0 +1,108 @@
+func view_len(s: string) -> uint {
+    return byte_len(s)
+}
+
+func same_text(s: string, expected: string) -> bool {
+    return s == expected
+}
+
+func from_bytes_checks() {
+    var bytes: Array[u8] = new[Array[u8]](3)
+    bytes[0] = 0x61
+    bytes[1] = 0x62
+    bytes[2] = 0x63
+    var b: Buffer = buffer_from_bytes(bytes, 3)
+    require same_text(b, "abc")
+    var more: Array[u8] = new[Array[u8]](2)
+    more[0] = 0x64
+    more[1] = 0x65
+    append_bytes(b, more, 2)
+    require same_text(b, "abcde")
+    require byte_len(b) == 5
+    let empty: Buffer = empty_buffer()
+    require byte_len(empty) == 0
+}
+
+func literal_checks() {
+    var b: Buffer = buffer_from_string("hello")
+    try {
+        set_index(b, 0, 0x48)!
+    } else e {
+        require false
+    }
+    require same_text(b, "Hello")
+    var twin: Buffer = buffer_from_string("Hello")
+    require b.hash() == twin.hash()
+    require view_len(b) == 5
+}
+
+func to_string_checks() {
+    var b: Buffer = empty_buffer()
+    b += "a string that is long enough to need heap storage"
+    let before: uint = string_backing_at(b)
+    let s: string = to_string(b)
+    require s == "a string that is long enough to need heap storage"
+    require before != 0
+    require string_backing_at(s) == before
+}
+
+func length_checks() {
+    var b: Buffer = empty_buffer()
+    b += "abc"
+    b += "defg"
+    require byte_len(b) == 7
+}
+
+func operator_checks() {
+    var a: Buffer = buffer_from_string("left")
+    var b: Buffer = buffer_from_string("right")
+    var joined: Buffer = a + b
+    require same_text(joined, "leftright")
+    require same_text(a, "left")
+    a += "x"
+    require same_text(a, "leftx")
+    let prefixed: string = "x" + a
+    require prefixed == "xleftx"
+}
+
+func copy_checks() {
+    var b: Buffer = buffer_from_string("original")
+    var copy: Buffer = buffer_from_string(b)
+    b += "!"
+    require same_text(copy, "original")
+    require same_text(b, "original!")
+}
+
+func borrow_checks() {
+    var b: Buffer = buffer_from_string("borrowed")
+    require view_len(b) == 8
+    require same_text(b, "borrowed")
+}
+
+func snapshot_checks() {
+    var b: Buffer = buffer_from_string("before")
+    let kept: string = to_string(buffer_from_string(b))
+    b += " after"
+    require kept == "before"
+    require same_text(b, "before after")
+}
+
+func string_behaviour_checks() {
+    var b: Buffer = buffer_from_string("x")
+    require b == "x"
+    require "x" == b
+    require b.hash() == "x".hash()
+    require b.raw_repr(2) == "x".raw_repr(2)
+    __fd_write(2, "\n")
+}
+
+from_bytes_checks()
+literal_checks()
+to_string_checks()
+length_checks()
+operator_checks()
+copy_checks()
+borrow_checks()
+snapshot_checks()
+string_behaviour_checks()
+__fd_write(2, "buffer probe ok\n")

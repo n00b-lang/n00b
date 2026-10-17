@@ -79,7 +79,6 @@ double n00bb_profile_seconds(void);
 #include "scanner/lex.h"
 #include "unicode/encoding.h"
 #include "preprocessor.h"
-#include "rich_string.h"
 #include "signature_typevars.h"
 
 enum { N00BB_JOB_LOCATE_TU = 1, N00BB_JOB_PREPROCESS = 2 };
@@ -1836,6 +1835,10 @@ load_interface_imports(import_driver_t *driver, parse_grammar_t *grammar,
             TH_ENV_METADATA_ENVIRONMENT, module_name,
             "n00b.module-imports", 1, &size)
         : nullptr;
+    if (!data && module_name)
+        data = interface_owned_metadata(&driver->loader->interfaces,
+            TH_ENV_METADATA_ENVIRONMENT, module_name,
+            "n00b.package-imports", 1, &size);
     bool package_only = !data && module_name
         && !interface_owned_metadata(&driver->loader->interfaces,
             TH_ENV_METADATA_ENVIRONMENT, module_name,

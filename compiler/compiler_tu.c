@@ -1882,6 +1882,7 @@ unify_literal_items(th_ctx *types, literal_item_group_t *group,
         if (th_is_nil(item)) continue;
         th_type *target = payload && !n00bb_option_type_element(item, nullptr)
             ? payload : group->slot;
+        if (n00bb_value_coerces(types, item, target)) continue;
         if (!th_unify_in_place(types, target, item)) {
             *conflict = item;
             return false;
@@ -3151,22 +3152,6 @@ function_parameter_info(parse_grammar_t *grammar, parse_sym_entry_t *symbol,
         if (signature)
             formals = child_nt(grammar, signature, "trait-param-decl");
     }
-    if (symbol && (parse_sym_binding(symbol,
-            CORE_STRING_STATIC("n00bb.abi.fd_write"))
-        || parse_sym_binding(symbol,
-            CORE_STRING_STATIC("n00bb.abi.repr_default")))) {
-        th_type *signature = th_resolve(symbol->type);
-        const th_param *parameter = signature
-            && th_kind_of(signature) == TH_FUNCTION
-            ? th_func_param(signature, index) : nullptr;
-        if (!parameter) return false;
-        if (formal_out) *formal_out = nullptr;
-        if (name) *name = nullptr;
-        if (name_size) *name_size = 0;
-        if (flags) *flags = 0;
-        if (mode) *mode = parameter->mode;
-        return true;
-    }
     th_type *callback_public = n00bb_builtin_callback_function(symbol)
         ? parse_sym_binding(symbol,
             CORE_STRING_STATIC("n00bb.callback-public-signature")) : nullptr;
@@ -3517,9 +3502,19 @@ n00bb_constrain_literal_fit(parse_grammar_t *grammar,
     if (!origin || !node || !type || th_kind_of(th_resolve(type)) != TH_VAR)
         return false;
     ir_lit_t literal = {0};
-    if (!n00bb_parse_switch_integer(first_token_text(origin), &literal))
-        return false;
-    bool negative = false;
+    int64_t minimum = 0, maximum = 0;
+    if (nt_is(grammar, origin, "simple-lit")) {
+        if (!n00bb_parse_switch_integer(first_token_text(origin), &literal))
+            return false;
+    }
+    else if (parse_tree_integer_range(origin, &minimum, &maximum)
+             && minimum == maximum) {
+        literal.neg = minimum < 0;
+        literal.mag = minimum < 0 ? (ir_uint_t)(-(minimum + 1)) + 1
+                                  : (ir_uint_t)minimum;
+    }
+    else return false;
+    bool negative = literal.neg;
     for (parse_tree_t *at = core_tree_node_value(origin).parent;
          at && at != node; at = core_tree_node_value(at).parent)
         if (nt_is(grammar, at, "unary-expr")
@@ -3613,6 +3608,7 @@ unify_literal_operand(parse_grammar_t *grammar, n00bb_tu_state_t *state,
     bool comparison = core_string_eq(trait, CORE_STRING_STATIC("Equal"))
         || core_string_eq(trait, CORE_STRING_STATIC("Comparable"));
     bool shift = operator && operator->shift;
+    bool assignment = nt_is(grammar, node, "binop-assign-stmt");
     for (size_t side = 0; side < 2; side++) {
         parse_tree_t *operand = core_tree_child(node, side ? 2 : 0);
         parse_tree_t *other = core_tree_child(node, side ? 0 : 2);
@@ -3639,7 +3635,7 @@ unify_literal_operand(parse_grammar_t *grammar, n00bb_tu_state_t *state,
             core_tree_node_value(at).type = literal_type;
             if (at == operand) break;
         }
-        if (comparison || (shift && side == 1)) continue;
+        if (comparison || assignment || (shift && side == 1)) continue;
         th_type *result = core_tree_node_value(node).type;
         th_type *unified = result
             ? th_unify_in_place(state->types, result, literal_type)
@@ -3651,9 +3647,51 @@ unify_literal_operand(parse_grammar_t *grammar, n00bb_tu_state_t *state,
 }
 
 bool
+n00bb_untyped_integer_const(parse_grammar_t *grammar,
+                            parse_sym_entry_t *symbol,
+                            int64_t *minimum, int64_t *maximum)
+{
+    parse_tree_t *declaration = symbol && symbol->kind == PARSE_SYM_VARIABLE
+        ? symbol->decl_node : nullptr;
+    parse_tree_t *statement = declaration;
+    while (statement && !nt_is(grammar, statement, "variable-decl"))
+        statement = core_tree_node_value(statement).parent;
+    parse_tree_t *prefix = child_nt(grammar, statement, "declaration-prefix");
+    bool constant = core_string_eq(first_token_text(child_nt(grammar, prefix,
+        "binding-kind")), CORE_STRING_STATIC("const"));
+    parse_tree_t *initializer = constant
+            && nt_is(grammar, declaration, "sym-decl")
+            && !child_nt(grammar, declaration, "type-spec")
+        ? child_nt(grammar, declaration, "expression") : nullptr;
+    return initializer
+        && core_tree_node_value(initializer).integer_literal_origin
+        && parse_tree_integer_range(initializer, minimum, maximum)
+        && *minimum == *maximum;
+}
+
+bool
+n00bb_integer_constant_reference(parse_grammar_t *grammar, parse_tree_t *node,
+                                 int64_t *value)
+{
+    parse_node_resolution_t resolution = node && !core_tree_is_leaf(node)
+        ? parse_tree_resolution(node) : (parse_node_resolution_t){0};
+    return (nt_is(grammar, node, "primary")
+            || (nt_is(grammar, node, "postfix-expr")
+                && dotted_symbol_path_node(grammar, node)))
+        && resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
+        && n00bb_untyped_integer_const(grammar, resolution.target.symbol,
+                                       value, value);
+}
+
+bool
 n00bb_cache_contextual_integer(parse_grammar_t *grammar,
                                n00bb_tu_state_t *state, parse_tree_t *node)
 {
+    core_string_t trait = {0}, method = {0};
+    if (nt_is(grammar, node, "binop-assign-stmt"))
+        return !binary_operator_dispatch_for_node(grammar, node, &trait,
+                                                  &method)
+            || unify_literal_operand(grammar, state, node, trait, method);
     if (!n00bb_integer_range_wrapper(grammar, node)
         && !nt_is(grammar, node, "simple-lit")) return true;
     parse_nt_node_t *parsed = &core_tree_node_value(node);
@@ -3668,9 +3706,12 @@ n00bb_cache_contextual_integer(parse_grammar_t *grammar,
         }
         return true;
     }
-    core_string_t trait = {0}, method = {0};
+    int64_t constant = 0;
+    if (n00bb_integer_constant_reference(grammar, node, &constant)) {
+        parsed->integer_literal_origin = node;
+        return parse_tree_set_integer_range(node, constant, constant);
+    }
     if (core_tree_num_children(node) == 3
-        && !nt_is(grammar, node, "binop-assign-stmt")
         && binary_operator_dispatch_for_node(grammar, node, &trait, &method)
         && !unify_literal_operand(grammar, state, node, trait, method))
         return false;
@@ -4136,6 +4177,25 @@ member_access_node(parse_grammar_t *grammar, parse_tree_t *node)
     return nullptr;
 }
 
+static parse_tree_t *
+index_assignment_statement(parse_grammar_t *grammar, parse_tree_t *node,
+                           bool *through_receiver)
+{
+    *through_receiver = false;
+    parse_tree_t *at = node;
+    for (parse_tree_t *parent = core_tree_node_value(at).parent; parent;
+         at = parent, parent = core_tree_node_value(at).parent) {
+        if ((nt_is(grammar, parent, "assign-stmt")
+             || nt_is(grammar, parent, "binop-assign-stmt"))
+            && core_tree_child(parent, 0) == at) return parent;
+        if (nt_is(grammar, parent, "postfix-expr")
+            && core_tree_child(parent, 0) == at)
+            *through_receiver = true;
+        else if (core_tree_num_children(parent) != 1) return nullptr;
+    }
+    return nullptr;
+}
+
 bool
 index_dispatch_for_node(parse_grammar_t *grammar, parse_tree_t *node,
                         core_string_t *trait, core_string_t *method)
@@ -4153,15 +4213,10 @@ index_dispatch_for_node(parse_grammar_t *grammar, parse_tree_t *node,
         *method = CORE_STRING_STATIC("__read");
     }
 
-    for (parse_tree_t *at = node; at; at = core_tree_node_value(at).parent) {
-        parse_tree_t *parent = core_tree_node_value(at).parent;
-        if (!parent) break;
-        if (nt_is(grammar, parent, "postfix-expr")
-            && core_tree_child(parent, 0) == at) return true;
-        if (!nt_is(grammar, parent, "assign-stmt")) continue;
-        parse_tree_t *target = core_tree_num_children(parent)
-            ? core_tree_child(parent, 0) : nullptr;
-        if (!node_is_within(node, target)) break;
+    bool through_receiver = false;
+    parse_tree_t *statement = index_assignment_statement(grammar, node,
+                                                         &through_receiver);
+    if (!through_receiver && nt_is(grammar, statement, "assign-stmt")) {
         bool slice_write = nt_is(grammar, core_tree_child(node, 2),
                                  "slice-contents");
         *trait = slice_write ? CORE_STRING_STATIC("Index_Slice_Write")
@@ -5262,6 +5317,7 @@ prepare_initial_symbols(core_translation_unit_t *unit, th_ctx *types)
     if (state->annotations) return true;
 
     state->types = types;
+    n00bb_register_value_coercions(types);
     state->annotations = parse_annot_result_new(nullptr);
     parse_symtab_set_owner_unit(state->annotations->symtab, unit);
     if (!th_register_method_resolver(types, n00bb_callback_method_signature,
@@ -5389,6 +5445,22 @@ fold_static_extent(parse_grammar_t *grammar, parse_tree_t *expression,
     parse_node_resolution_t resolution = parse_tree_resolution(expression);
     parse_sym_entry_t *symbol = resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
         ? resolution.target.symbol : nullptr;
+    if (symbol && symbol->kind == PARSE_SYM_ENUM_CONST) {
+        if (!symbol->has_comptime_value || !symbol->comptime_value)
+            return false;
+        ir_uint_t bits = 0;
+        if (n00bb_flagset_member(symbol))
+            bits = ((const n00bb_flagset_value_t *)
+                        symbol->comptime_value)->mask;
+        else {
+            const n00bb_enum_value_t *member = symbol->comptime_value;
+            if (member->negative) return false;
+            bits = member->magnitude;
+        }
+        if (bits > UINT64_MAX) return false;
+        *value = (uint64_t)bits;
+        return true;
+    }
     if (symbol && symbol->kind == PARSE_SYM_VARIABLE) {
         parse_tree_t *initializer = symbol->mutability == PARSE_SYM_CONST
                 && symbol->decl_node
@@ -7847,43 +7919,70 @@ n00bb_float_literal_adopts(parse_tree_t *node, th_type *operand)
     return true;
 }
 
+static bool
+literal_path_negation(parse_tree_t *origin, parse_tree_t *node,
+                      bool *negated)
+{
+    *negated = false;
+    for (parse_tree_t *current = origin; current != node;) {
+        current = core_tree_node_value(current).parent;
+        if (!current) return false;
+        size_t children = core_tree_num_children(current);
+        if (children == 1) continue;
+        if (children == 2
+            && parse_tree_leaf_is(core_tree_child(current, 0),
+                                  CORE_STRING_STATIC("-"))) {
+            *negated = !*negated;
+            continue;
+        }
+        if (children == 2
+            && parse_tree_leaf_is(core_tree_child(current, 0),
+                                  CORE_STRING_STATIC("+"))) continue;
+        if (children == 3
+            && parse_tree_leaf_is(core_tree_child(current, 0),
+                                  CORE_STRING_STATIC("("))
+            && parse_tree_leaf_is(core_tree_child(current, 2),
+                                  CORE_STRING_STATIC(")"))) continue;
+        return false;
+    }
+    return true;
+}
+
+static bool
+literal_fits_type(n00bb_tu_state_t *state, parse_tree_t *origin,
+                  parse_tree_t *node, th_type *target)
+{
+    int64_t minimum = 0, maximum = 0;
+    if (n00bb_current_integer_range(state, node, &minimum, &maximum))
+        return n00bb_integer_interval_fits_type(target, minimum, maximum);
+    bool negated = false;
+    if (!literal_path_negation(origin, node, &negated)) return false;
+    if (n00bb_current_integer_range(state, origin, &minimum, &maximum))
+        return negated
+            ? minimum != INT64_MIN && n00bb_integer_interval_fits_type(
+                target, -maximum, -minimum)
+            : n00bb_integer_interval_fits_type(target, minimum, maximum);
+    ir_lit_t literal = {0};
+    uint64_t width = 0;
+    bool is_signed = false;
+    if (!n00bb_parse_switch_integer(first_token_text(origin), &literal)
+        || !n00bb_integer_representation(target, &width, &is_signed))
+        return false;
+    ir_scalar_t scalar = {
+        .class = is_signed ? IR_CLASS_SINT : IR_CLASS_UINT,
+        .width = width,
+    };
+    return n00bb_literal_fits_scalar(literal.mag, negated, &scalar);
+}
+
 bool
 n00bb_contextual_integer_literal(n00bb_tu_state_t *state,
                                  parse_tree_t *node, th_type *target)
 {
     parse_tree_t *origin = node
         ? core_tree_node_value(node).integer_literal_origin : nullptr;
-    int64_t minimum = 0, maximum = 0;
     if (!origin) return n00bb_contextual_float_literal(node, target);
-    if (!n00bb_current_integer_range(state, node, &minimum, &maximum)) {
-        if (!n00bb_current_integer_range(state, origin,
-                                         &minimum, &maximum)) return false;
-        for (parse_tree_t *current = origin; current != node;) {
-            current = core_tree_node_value(current).parent;
-            if (!current) return false;
-            size_t children = core_tree_num_children(current);
-            if (children == 1) continue;
-            if (children == 2
-                && parse_tree_leaf_is(core_tree_child(current, 0),
-                                      CORE_STRING_STATIC("-"))) {
-                int64_t previous_minimum = minimum;
-                minimum = -maximum;
-                maximum = -previous_minimum;
-                continue;
-            }
-            if (children == 2
-                && parse_tree_leaf_is(core_tree_child(current, 0),
-                                      CORE_STRING_STATIC("+"))) continue;
-            if (children == 3
-                && parse_tree_leaf_is(core_tree_child(current, 0),
-                                      CORE_STRING_STATIC("("))
-                && parse_tree_leaf_is(core_tree_child(current, 2),
-                                      CORE_STRING_STATIC(")"))) continue;
-            return false;
-        }
-    }
-    if (!n00bb_integer_interval_fits_type(target, minimum, maximum))
-        return false;
+    if (!literal_fits_type(state, origin, node, target)) return false;
     for (parse_tree_t *current = origin; current;
          current = core_tree_node_value(current).parent) {
         core_tree_node_value(current).type = target;
@@ -8032,6 +8131,65 @@ union_arm_for(th_ctx *types, th_type *actual, th_type *expected)
     return nullptr;
 }
 
+bool
+n00bb_value_coerces(th_ctx *types, th_type *from, th_type *to)
+{
+    from = from ? th_resolve(from) : nullptr;
+    to = to ? th_resolve(to) : nullptr;
+    if (!types || !from || !to || th_kind_of(from) != TH_NAMED
+        || th_kind_of(to) != TH_NAMED || !th_is_closed(types, from)
+        || !th_is_closed(types, to)
+        || th_hash(types, from) == th_hash(types, to)) return false;
+    const char *from_name = nullptr, *to_name = nullptr;
+    size_t from_length = 0, to_length = 0, from_args = 0, to_args = 0;
+    return th_named_info(from, &from_name, &from_length, nullptr, &from_args)
+        && th_named_info(to, &to_name, &to_length, nullptr, &to_args)
+        && !from_args && !to_args
+        && from_length == sizeof(n00bb_buffer_type_name) - 1
+        && !memcmp(from_name, n00bb_buffer_type_name, from_length)
+        && to_length == 6 && !memcmp(to_name, "string", 6);
+}
+
+static bool
+n00bb_coercion_hook(th_ctx *types, th_type *from, th_type *to, void *user)
+{
+    (void)user;
+    return n00bb_value_coerces(types, from, to);
+}
+
+th_type *
+n00bb_value_coercion_target(th_ctx *types, th_type *from)
+{
+    th_type *view = th_name(types, "string");
+    return n00bb_value_coerces(types, from, view) ? view : nullptr;
+}
+
+bool
+n00bb_blanket_receiver(th_type *contract)
+{
+    th_type *signature = contract ? th_resolve(contract) : nullptr;
+    const th_param *receiver = signature
+        && th_kind_of(signature) == TH_FUNCTION
+        && th_func_nparams(signature)
+        ? th_func_param(signature, 0) : nullptr;
+    return receiver && receiver->type
+        && th_kind_of(th_resolve(receiver->type)) == TH_VAR;
+}
+
+static th_type *
+n00bb_coercion_target_hook(th_ctx *types, th_type *from, void *user)
+{
+    (void)user;
+    return n00bb_value_coercion_target(types, from);
+}
+
+void
+n00bb_register_value_coercions(th_ctx *types)
+{
+    th_register_coercion(types, n00bb_coercion_hook, nullptr);
+    th_register_coercion_target(types, n00bb_coercion_target_hook);
+}
+
 th_type *
 n00bb_type_materialize(parse_grammar_t *grammar, n00bb_tu_state_t *state,
                        parse_tree_t *node, th_type *actual, th_type *expected,
@@ -8053,6 +8211,16 @@ n00bb_type_materialize(parse_grammar_t *grammar, n00bb_tu_state_t *state,
     if (n00bb_contextual_integer_literal(state, node, expected))
         return expected;
     *converted = true;
+    if (n00bb_value_coerces(types, actual, expected)) return expected;
+    if (n00bb_value_coerces(types, expected, actual)) {
+        *converted = false;
+        core_diagnostics_report_at(
+            core_translation_unit_diagnostics(state->unit), state->unit,
+            CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0036"),
+            CORE_STRING_STATIC(n00bb_string_to_buffer_text),
+            link_source_location(node));
+        return nullptr;
+    }
     if (integer_value_promotes(grammar, state, node, actual, expected)
         || n00bb_dereferences_to(types, actual, expected)) return expected;
     if (n00bb_option_type_element(expected, &element)
@@ -8833,7 +9001,9 @@ type_symbol_in_loaded_imports(core_translation_unit_t *root, th_ctx *types,
             if (!type_ns || scope->ns != type_ns) continue;
             for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
                  symbol = symbol->next_in_scope) {
-                if (!symbol->type || symbol->kind != PARSE_SYM_TYPEDEF)
+                if (!symbol->type || symbol->kind != PARSE_SYM_TYPEDEF
+                    || alias_declaration_is_transparent(
+                        canonical_symbol(symbol)->decl_node))
                     continue;
                 th_type *candidate = th_resolve(symbol->type);
                 const char *candidate_name = nullptr;
@@ -9778,17 +9948,6 @@ cache_package_export_syntax(parse_grammar_t *grammar,
     if (!stored_source.data || !stored_export.data) return false;
     for (size_t i = 0; i < package->exports.len; i++)
         if (package->exports.data[i].node == node) return true;
-    for (size_t i = 0; i < package->exports.len; i++)
-        if (core_string_eq(package->exports.data[i].export_name,
-                           stored_export)) {
-            core_diagnostics_report_at(
-                core_translation_unit_diagnostics(unit), unit,
-                CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-M0006"),
-                CORE_STRING_STATIC(
-                    "package export name conflicts with another binding"),
-                link_source_location(node));
-            return false;
-        }
     parse_tree_t *grantee = child_nt(grammar, node, "export-grantee");
     core_buffer_t grantee_name = {0};
     if (grantee && !append_dotted_name(grammar,
@@ -9802,6 +9961,22 @@ cache_package_export_syntax(parse_grammar_t *grammar,
         : (core_string_t){0};
     core_buffer_release(&grantee_name);
     if (grantee && !stored_grantee.data) return false;
+    for (size_t i = 0; i < package->exports.len; i++) {
+        core_string_t prior_grantee = package->exports.data[i].grantee;
+        bool same_audience = !prior_grantee.data == !stored_grantee.data
+            && (!stored_grantee.data
+                || core_string_eq(prior_grantee, stored_grantee));
+        if (same_audience && core_string_eq(
+                package->exports.data[i].export_name, stored_export)) {
+            core_diagnostics_report_at(
+                core_translation_unit_diagnostics(unit), unit,
+                CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-M0006"),
+                CORE_STRING_STATIC(
+                    "package export name conflicts with another binding"),
+                link_source_location(node));
+            return false;
+        }
+    }
     core_list_push(package->exports, ((n00bb_package_export_t){
         .source_name = stored_source,
         .export_name = stored_export,
@@ -10291,6 +10466,7 @@ probe_static_literal(parse_grammar_t *grammar, parse_tree_t *node,
             || nt_is(grammar, node, "tuple-or-paren")) {
             probe->literal = node;
             probe->literal_count = 1;
+            probe->valid = !n00bb_node_literal_site(node);
             return;
         }
         bool transparent = false;
@@ -10683,6 +10859,12 @@ refine_intrinsic_binary_result(parse_grammar_t *grammar,
         uint64_t width = n00bb_shift_receiver_width(left_type);
         parse_tree_t *literal_origin =
             core_tree_node_value(right).integer_literal_origin;
+        th_type *count_type = literal_origin && right_type
+            && th_kind_of(th_resolve(right_type)) == TH_VAR
+            ? n00bb_shift_count_type(state->types, left_type) : nullptr;
+        if (count_type
+            && n00bb_contextual_integer_literal(state, right, count_type))
+            right_type = core_tree_node_value(right).type;
         bool known_range = n00bb_current_integer_range(state, right,
                                                        &minimum, &maximum);
         if (!known_range && literal_origin)
@@ -10879,16 +11061,10 @@ refine_intrinsic_unary_result(parse_grammar_t *grammar,
 bool
 index_is_compound_target(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    for (parse_tree_t *at = node; at;
-         at = core_tree_node_value(at).parent) {
-        parse_tree_t *parent = core_tree_node_value(at).parent;
-        if (!parent) return false;
-        if (!nt_is(grammar, parent, "binop-assign-stmt")) continue;
-        parse_tree_t *target = core_tree_num_children(parent)
-            ? core_tree_child(parent, 0) : nullptr;
-        return target && node_is_within(node, target);
-    }
-    return false;
+    bool through_receiver = false;
+    return nt_is(grammar, index_assignment_statement(grammar, node,
+                                                     &through_receiver),
+                 "binop-assign-stmt");
 }
 
 th_type *
@@ -11220,8 +11396,6 @@ static const n00bb_literal_registration_t N00BB_LITERAL_HANDLERS[] = {
     {"a", N00BB_LITERAL_SEQUENCE_SHAPE, N00BB_LITERAL_ARRAY, "array"},
     {"binary", N00BB_LITERAL_STRING_SHAPE, N00BB_LITERAL_BINARY, "binary"},
     {"b", N00BB_LITERAL_STRING_SHAPE, N00BB_LITERAL_BINARY, "binary"},
-    {"rich", N00BB_LITERAL_STRING_SHAPE, N00BB_LITERAL_RICH, "rich"},
-    {"r", N00BB_LITERAL_STRING_SHAPE, N00BB_LITERAL_RICH, "rich"},
     {"u32", N00BB_LITERAL_STRING_SHAPE, N00BB_LITERAL_U32, "u32"},
 };
 

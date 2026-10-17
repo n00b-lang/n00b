@@ -73,7 +73,7 @@ public func foreign_text(pointer: Foreign[i8]?) -> string? {
         bytes[cast[int]position] = cast[u8]value
         position += 1
     }
-    return string.core.from_raw(bytes, cast[int]length, copy = false)
+    return string.core.from_raw(ref bytes, cast[int]length, copy = false)
 }
 
 func __ffi_fixup(pointer: Foreign[`T]?) -> string? where `T : Fixup {

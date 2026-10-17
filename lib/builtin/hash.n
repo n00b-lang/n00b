@@ -1,56 +1,387 @@
+import bitptr
+import string.core
+
 trait Hash {
     func hash(self: `T) -> u128
 }
 
+private const prime32_1: u64 = 0x9E3779B1
+private const prime32_2: u64 = 0x85EBCA77
+private const prime32_3: u64 = 0xC2B2AE3D
+private const prime64_1: u64 = 0x9E3779B185EBCA87
+private const prime64_2: u64 = 0xC2B2AE3D27D4EB4F
+private const prime64_3: u64 = 0x165667B19E3779F9
+private const prime64_4: u64 = 0x85EBCA77C2B2AE63
+private const prime64_5: u64 = 0x27D4EB2F165667C5
+private const secret_size: uint = 192
+private const stripe_len: uint = 64
+private const secret_consume_rate: uint = 8
+private const accumulators: uint = 8
+private const midsize_start: uint = 3
+private const midsize_last: uint = 17
+private const secret_size_min: uint = 136
+private const merge_accs_start: uint = 11
+private const last_acc_start: uint = 7
+private const u64_mask: u64 = 0xffffffffffffffff
+private const u32_mask: u64 = 0xffffffff
+
+private const secret: Array[u8] = [
+    0xb8, 0xfe, 0x6c, 0x39, 0x23, 0xa4, 0x4b, 0xbe, 0x7c, 0x01, 0x81, 0x2c,
+    0xf7, 0x21, 0xad, 0x1c, 0xde, 0xd4, 0x6d, 0xe9, 0x83, 0x90, 0x97, 0xdb,
+    0x72, 0x40, 0xa4, 0xa4, 0xb7, 0xb3, 0x67, 0x1f, 0xcb, 0x79, 0xe6, 0x4e,
+    0xcc, 0xc0, 0xe5, 0x78, 0x82, 0x5a, 0xd0, 0x7d, 0xcc, 0xff, 0x72, 0x21,
+    0xb8, 0x08, 0x46, 0x74, 0xf7, 0x43, 0x24, 0x8e, 0xe0, 0x35, 0x90, 0xe6,
+    0x81, 0x3a, 0x26, 0x4c, 0x3c, 0x28, 0x52, 0xbb, 0x91, 0xc3, 0x00, 0xcb,
+    0x88, 0xd0, 0x65, 0x8b, 0x1b, 0x53, 0x2e, 0xa3, 0x71, 0x64, 0x48, 0x97,
+    0xa2, 0x0d, 0xf9, 0x4e, 0x38, 0x19, 0xef, 0x46, 0xa9, 0xde, 0xac, 0xd8,
+    0xa8, 0xfa, 0x76, 0x3f, 0xe3, 0x9c, 0x34, 0x3f, 0xf9, 0xdc, 0xbb, 0xc7,
+    0xc7, 0x0b, 0x4f, 0x1d, 0x8a, 0x51, 0xe0, 0x4b, 0xcd, 0xb4, 0x59, 0x31,
+    0xc8, 0x9f, 0x7e, 0xc9, 0xd9, 0x78, 0x73, 0x64, 0xea, 0xc5, 0xac, 0x83,
+    0x34, 0xd3, 0xeb, 0xc3, 0xc5, 0x81, 0xa0, 0xff, 0xfa, 0x13, 0x63, 0xeb,
+    0x17, 0x0d, 0xdd, 0x51, 0xb7, 0xf0, 0xda, 0x49, 0xd3, 0x16, 0x55, 0x26,
+    0x29, 0xd4, 0x68, 0x9e, 0x2b, 0x16, 0xbe, 0x58, 0x7d, 0x47, 0xa1, 0xfc,
+    0x8f, 0xf8, 0xb8, 0xd1, 0x7a, 0xd0, 0x31, 0xce, 0x45, 0xcb, 0x3a, 0x8f,
+    0x95, 0x16, 0x04, 0x28, 0xaf, 0xd7, 0xfb, 0xca, 0xbb, 0x4b, 0x40, 0x7e,
+]'array
+
+private inline func in8(p: Ref[byte], at: uint) -> u64 {
+    let b: byte = __gc_byte_offset(p, cast[int] at)
+    return cast[u64] b
+}
+
+private inline func in32(p: Ref[byte], at: uint) -> u64 {
+    return cast[u64] __load_le_u32(__gc_byte_offset(p, cast[int] at))
+}
+
+private inline func in64(p: Ref[byte], at: uint) -> u64 {
+    return __load_le_u64(__gc_byte_offset(p, cast[int] at))
+}
+
+private inline func key32(at: uint) -> u64 {
+    return in32(unsafe_cast[Ref[byte]] ref secret[0], at)
+}
+
+private inline func key64(at: uint) -> u64 {
+    return in64(unsafe_cast[Ref[byte]] ref secret[0], at)
+}
+
+private func low64(m: u128) -> u64 {
+    return unsafe_cast[u64] m
+}
+
+private func high64(m: u128) -> u64 {
+    return unsafe_cast[u64](m >> 64)
+}
+
+private func join128(low: u64, high: u64) -> u128 {
+    return (cast[u128] high << 64) | cast[u128] low
+}
+
+private func mul128(a: u64, b: u64) -> u128 {
+    return unsafe_mul(cast[u128] a, cast[u128] b)
+}
+
+private func fold64(a: u64, b: u64) -> u64 {
+    let m: u128 = mul128(a, b)
+    return low64(m) ^ high64(m)
+}
+
+private func xorshift(v: u64, shift: uint) -> u64 {
+    return v ^ (v >> shift)
+}
+
+private func rotl32(v: u64, r: uint) -> u64 {
+    return ((v << r) | (v >> (32 - r))) & u32_mask
+}
+
+private func swap32(v: u64) -> u64 {
+    return ((v & 0xff) << 24) | ((v & 0xff00) << 8) | ((v >> 8) & 0xff00) |
+        ((v >> 24) & 0xff)
+}
+
+private func swap64(v: u64) -> u64 {
+    return (swap32(v & u32_mask) << 32) | swap32(v >> 32)
+}
+
+private func avalanche64(h: u64) -> u64 {
+    var x: u64 = xorshift(h, 33)
+    x = unsafe_mul(x, prime64_2)
+    x = xorshift(x, 29)
+    x = unsafe_mul(x, prime64_3)
+    return xorshift(x, 32)
+}
+
+private func avalanche3(h: u64) -> u64 {
+    var x: u64 = xorshift(h, 37)
+    x = unsafe_mul(x, 0x165667919E3779F9)
+    return xorshift(x, 32)
+}
+
+private func len_0() -> u128 {
+    return join128(avalanche64(key64(64) ^ key64(72)),
+                   avalanche64(key64(80) ^ key64(88)))
+}
+
+private func len_1to3(p: Ref[byte], len: uint) -> u128 {
+    let c1: u64 = in8(p, 0)
+    let c2: u64 = in8(p, len >> 1)
+    let c3: u64 = in8(p, len - 1)
+    let combined_low: u64 = (c1 << 16) | (c2 << 24) | c3 |
+        (cast[u64] len << 8)
+    let combined_high: u64 = rotl32(swap32(combined_low), 13)
+    let bitflip_low: u64 = key32(0) ^ key32(4)
+    let bitflip_high: u64 = key32(8) ^ key32(12)
+    return join128(avalanche64(combined_low ^ bitflip_low),
+                   avalanche64(combined_high ^ bitflip_high))
+}
+
+private func len_4to8(p: Ref[byte], len: uint) -> u128 {
+    let input: u64 = in32(p, 0) | (in32(p, len - 4) << 32)
+    let keyed: u64 = input ^ (key64(16) ^ key64(24))
+    let m: u128 = mul128(keyed,
+        unsafe_add(prime64_1, unsafe_shl(cast[u64] len, 2)))
+    var low: u64 = low64(m)
+    var high: u64 = unsafe_add(high64(m), unsafe_shl(low, 1))
+    low = low ^ (high >> 3)
+    low = xorshift(low, 35)
+    low = unsafe_mul(low, 0x9FB21C651E98DF25)
+    low = xorshift(low, 28)
+    high = avalanche3(high)
+    return join128(low, high)
+}
+
+private func len_9to16(p: Ref[byte], len: uint) -> u128 {
+    let bitflip_low: u64 = key64(32) ^ key64(40)
+    let bitflip_high: u64 = key64(48) ^ key64(56)
+    let input_low: u64 = in64(p, 0)
+    var input_high: u64 = in64(p, len - 8)
+    let m: u128 = mul128(input_low ^ input_high ^ bitflip_low, prime64_1)
+    var low: u64 = unsafe_add(low64(m), unsafe_shl(cast[u64](len - 1), 54))
+    input_high = input_high ^ bitflip_high
+    let high: u64 = unsafe_add(high64(m), unsafe_add(input_high,
+        (input_high & u32_mask) * (prime32_2 - 1)))
+    low = low ^ swap64(high)
+    let h: u128 = mul128(low, prime64_2)
+    let h_low: u64 = low64(h)
+    let h_high: u64 = unsafe_add(high64(h), unsafe_mul(high, prime64_2))
+    return join128(avalanche3(h_low), avalanche3(h_high))
+}
+
+private func mix16(p: Ref[byte], at: uint, key: uint) -> u64 {
+    return fold64(in64(p, at) ^ key64(key), in64(p, at + 8) ^ key64(key + 8))
+}
+
+private func mix32(modify low: u64, modify high: u64, p: Ref[byte],
+                   first: uint, second: uint, key: uint) {
+    low = unsafe_add(low, mix16(p, first, key))
+    low = low ^ unsafe_add(in64(p, second), in64(p, second + 8))
+    high = unsafe_add(high, mix16(p, second, key + 16))
+    high = high ^ unsafe_add(in64(p, first), in64(p, first + 8))
+}
+
+private func finish_mid(low: u64, high: u64, len: uint) -> u128 {
+    let sum: u64 = unsafe_add(low, high)
+    let mixed: u64 = unsafe_add(unsafe_add(unsafe_mul(low, prime64_1),
+        unsafe_mul(high, prime64_4)),
+        unsafe_mul(cast[u64] len, prime64_2))
+    let zero: u64 = 0
+    return join128(avalanche3(sum), unsafe_sub(zero, avalanche3(mixed)))
+}
+
+private func len_17to128(p: Ref[byte], len: uint) -> u128 {
+    var low: u64 = unsafe_mul(cast[u64] len, prime64_1)
+    var high: u64 = 0
+    if len > 32 {
+        if len > 64 {
+            if len > 96 {
+                mix32(low, high, p, 48, len - 64, 96)
+            }
+            mix32(low, high, p, 32, len - 48, 64)
+        }
+        mix32(low, high, p, 16, len - 32, 32)
+    }
+    mix32(low, high, p, 0, len - 16, 0)
+    return finish_mid(low, high, len)
+}
+
+private func len_129to240(p: Ref[byte], len: uint) -> u128 {
+    let rounds: uint = len / 32
+    var low: u64 = unsafe_mul(cast[u64] len, prime64_1)
+    var high: u64 = 0
+    var i: uint = 0
+    while i < 4 {
+        mix32(low, high, p, 32 * i, 32 * i + 16, 32 * i)
+        i += 1
+    }
+    low = avalanche3(low)
+    high = avalanche3(high)
+    while i < rounds {
+        mix32(low, high, p, 32 * i, 32 * i + 16,
+              midsize_start + 32 * (i - 4))
+        i += 1
+    }
+    mix32(low, high, p, len - 16, len - 32,
+          secret_size_min - midsize_last - 16)
+    return finish_mid(low, high, len)
+}
+
+private func accumulate_512(modify acc: Array[u64], p: Ref[byte], at: uint,
+                            key: uint) {
+    var i: uint = 0
+    while i < accumulators {
+        let data_val: u64 = in64(p, at + 8 * i)
+        let data_key: u64 = data_val ^ key64(key + 8 * i)
+        acc[i ^ 1] = unsafe_add(acc[i ^ 1], data_val)
+        acc[i] = unsafe_add(acc[i], (data_key & u32_mask) * (data_key >> 32))
+        i += 1
+    }
+}
+
+private func scramble(modify acc: Array[u64], key: uint) {
+    var i: uint = 0
+    while i < accumulators {
+        let scrambled: u64 = xorshift(acc[i], 47) ^ key64(key + 8 * i)
+        acc[i] = unsafe_mul(scrambled, prime32_1)
+        i += 1
+    }
+}
+
+private func accumulate(modify acc: Array[u64], p: Ref[byte], at: uint,
+                        stripes: uint) {
+    var n: uint = 0
+    while n < stripes {
+        accumulate_512(acc, p, at + n * stripe_len, n * secret_consume_rate)
+        n += 1
+    }
+}
+
+private func merge_accs(acc: Array[u64], key: uint, start: u64) -> u64 {
+    var result: u64 = start
+    var i: uint = 0
+    while i < 4 {
+        result = unsafe_add(result, fold64(acc[2 * i] ^ key64(key + 16 * i),
+            acc[2 * i + 1] ^ key64(key + 16 * i + 8)))
+        i += 1
+    }
+    return avalanche3(result)
+}
+
+private func len_long(p: Ref[byte], len: uint) -> u128 {
+    var acc: Array[u64] = [
+        prime32_3, prime64_1, prime64_2, prime64_3,
+        prime64_4, prime32_2, prime64_5, prime32_1,
+    ]'array
+    let stripes_per_block: uint = (secret_size - stripe_len) /
+        secret_consume_rate
+    let block_len: uint = stripe_len * stripes_per_block
+    let blocks: uint = (len - 1) / block_len
+    var n: uint = 0
+    while n < blocks {
+        accumulate(acc, p, n * block_len, stripes_per_block)
+        scramble(acc, secret_size - stripe_len)
+        n += 1
+    }
+    let stripes: uint = ((len - 1) - block_len * blocks) / stripe_len
+    accumulate(acc, p, blocks * block_len, stripes)
+    accumulate_512(acc, p, len - stripe_len,
+                   secret_size - stripe_len - last_acc_start)
+    let low: u64 = merge_accs(acc, merge_accs_start,
+                              unsafe_mul(cast[u64] len, prime64_1))
+    let high: u64 = merge_accs(acc,
+        secret_size - stripe_len - merge_accs_start,
+        u64_mask ^ unsafe_mul(cast[u64] len, prime64_2))
+    return join128(low, high)
+}
+
+func xxh3_128_at(p: Ref[byte], len: uint) -> u128 {
+    if len == 0 {
+        return len_0()
+    }
+    if len <= 3 {
+        return len_1to3(p, len)
+    }
+    if len <= 8 {
+        return len_4to8(p, len)
+    }
+    if len <= 16 {
+        return len_9to16(p, len)
+    }
+    if len <= 128 {
+        return len_17to128(p, len)
+    }
+    if len <= 240 {
+        return len_129to240(p, len)
+    }
+    return len_long(p, len)
+}
+
 func xxh3_128(bytes: Array[byte]) -> u128 {
-    return __xxh3_128(bytes)
+    let len: uint = __array_length(bytes)
+    if len == 0 {
+        return len_0()
+    }
+    return xxh3_128_at(unsafe_cast[Ref[byte]] ref bytes[0], len)
+}
+
+func hash_value(self: `T) -> u128 {
+    var width: uint = 0
+    var canonical: u128 = bitptr.load_bits(self, width)
+    return xxh3_128_at(unsafe_cast[Ref[byte]] ref canonical, (width + 7) / 8)
 }
 
 inline func hash(self: bool) -> u128 {
-    return __hash_scalar(self)
+    return hash_value(self)
 }
 inline func hash(self: byte) -> u128 {
-    return __hash_scalar(self)
+    return hash_value(self)
 }
 inline func hash(self: char) -> u128 {
-    return __hash_scalar(self)
+    return hash_value(self)
 }
 inline func hash(self: int) -> u128 {
-    return __hash_scalar(self)
+    return hash_value(self)
 }
 inline func hash(self: uint) -> u128 {
-    return __hash_scalar(self)
+    return hash_value(self)
 }
 inline func hash(self: i8) -> u128 {
-    return __hash_scalar(self)
+    return hash_value(self)
 }
 inline func hash(self: i16) -> u128 {
-    return __hash_scalar(self)
+    return hash_value(self)
 }
 inline func hash(self: i32) -> u128 {
-    return __hash_scalar(self)
+    return hash_value(self)
 }
 inline func hash(self: i128) -> u128 {
-    return __hash_scalar(self)
+    return hash_value(self)
 }
 inline func hash(self: u8) -> u128 {
-    return __hash_scalar(self)
+    return hash_value(self)
 }
 inline func hash(self: u16) -> u128 {
-    return __hash_scalar(self)
+    return hash_value(self)
 }
 inline func hash(self: u32) -> u128 {
-    return __hash_scalar(self)
+    return hash_value(self)
 }
 inline func hash(self: u128) -> u128 {
-    return __hash_scalar(self)
+    return hash_value(self)
 }
 inline func hash(self: float) -> u128 {
-    return __hash_scalar(self)
+    if self == 0.0 {
+        return hash_value(0.0)
+    }
+    return hash_value(self)
 }
-inline func hash(self: string) -> u128 {
-    return __hash_string(self)
+func hash(self: string) -> u128 {
+    var base: string = string.core.text(self)
+    let len: uint = string.core.byte_len(base)
+    if len == 0 {
+        return len_0()
+    }
+    return xxh3_128_at(string.core.__text_bytes(ref base), len)
 }
 inline func hash(self: Ref[`T]) -> u128 {
-    return __hash_scalar(self)
+    return hash_value(__abi_ref_address(self))
 }

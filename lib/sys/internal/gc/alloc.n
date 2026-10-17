@@ -575,6 +575,20 @@ func mutator_for_native() -> Ref[internal.gc.core.Mutator]? {
     return active_mutator()
 }
 
+func enter_blocking_runtime() {
+    let mutator: Ref[internal.gc.core.Mutator]? = active_mutator()
+    if mutator != nil {
+        internal.gc.handshake.enter_blocking(mutator.get())
+    }
+}
+
+func leave_blocking_runtime() {
+    let mutator: Ref[internal.gc.core.Mutator]? = active_mutator()
+    if mutator != nil {
+        internal.gc.handshake.leave_blocking(mutator.get())
+    }
+}
+
 func native_root_depth() -> uint {
     let mutator: Ref[internal.gc.core.Mutator]? = active_mutator()
     require mutator != nil

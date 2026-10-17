@@ -5,4 +5,7 @@ package sys {
     export package memory
     export package clock
     export package marshal
+    export package fs
+    export package env
+    export package term
 }

@@ -2,7 +2,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "abi_string.h"
 #include "n00b-abi-v1.h"
 #include "runtime_dwarf.h"
 
@@ -163,21 +162,4 @@ n00bb_runtime_trap(const char *reason, uint64_t length)
 {
     panic_from(reason, length,
                (const uintptr_t *)__builtin_frame_address(0));
-}
-
-__attribute__((noinline, noreturn, cold)) void
-n00bb_runtime_trap_string(uint64_t low, uint64_t high)
-{
-    const uintptr_t *frame = (const uintptr_t *)__builtin_frame_address(0);
-    n00b_abi_string_v1 value = {.words = {low, high}};
-    n00bb_abi_string_header_t header;
-    bool plain = n00bb_abi_string_decode((const uint8_t *)&value,
-            sizeof(value), &header)
-        && header.tag != N00BB_ABI_STRING_RICH;
-    const char *bytes = !plain ? nullptr
-        : header.tag == N00BB_ABI_STRING_SHORT
-            ? (const char *)value.short_value.bytes
-            : (const char *)value.long_value.data;
-    if (!bytes) panic_from("failure", sizeof("failure") - 1, frame);
-    panic_from(bytes, header.length, frame);
 }

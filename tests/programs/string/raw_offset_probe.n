@@ -1,0 +1,68 @@
+func filled(n: uint, first: u8) -> Array[u8] {
+    var bytes: Array[u8] = new[Array[u8]](n)
+    var i: uint = 0
+    while i < n {
+        bytes[i] = first + cast[u8](i % 26)
+        i += 1
+    }
+    return bytes
+}
+
+func same(s: string, src: Array[u8], at: uint, n: uint) -> bool {
+    if byte_len(s) != n {
+        return false
+    }
+    var i: uint = 0
+    while i < n {
+        if byte_at(s, i) != src[at + i] {
+            return false
+        }
+        i += 1
+    }
+    return true
+}
+
+func spans_share_storage() -> bool {
+    var local: Array[u8] = filled(64, 0x61)
+    let one: string = from_raw(ref local, 40, copy = false)
+    let two: string = from_raw(ref local, 40, copy = false)
+    return string_backing_at(one) == string_backing_at(two) and
+        string_backing_at(one) == __abi_ref_address(ref local[0])
+}
+
+func adopt_shares_storage() -> bool {
+    var local: Array[u8] = filled(32, 0x61)
+    let adopted: string = adopt(ref local, 32)
+    return string_backing_at(adopted) == __abi_ref_address(ref local[0])
+}
+
+func utf8_shares_storage() -> bool {
+    var local: Array[u8] = filled(32, 0x61)
+    var decoded: string = ""
+    return __string_from_utf8(ref local, ref decoded) and
+        string_backing_at(decoded) == __abi_ref_address(ref local[0])
+}
+
+var pool: Array[u8] = filled(64, 0x61)
+let short_view: string = from_raw(ref pool, 3, at = 5, copy = false)
+require same(short_view, pool, 5, 3)
+let shared: string = from_raw(ref pool, 30, at = 10, copy = false)
+let copied: string = from_raw(ref pool, 30, at = 10)
+require same(shared, pool, 10, 30)
+require same(copied, pool, 10, 30)
+require tag(shared) == cast[u8] str_tag_span
+require tag(copied) != cast[u8] str_tag_span
+require string_backing_at(shared) == __abi_ref_address(ref pool[10])
+require string_backing_at(copied) != __abi_ref_address(ref pool[10])
+pool[10] = 0x5a
+require byte_at(shared, 0) == 0x5a
+require byte_at(copied, 0) == 0x6b
+require spans_share_storage()
+require adopt_shares_storage()
+require utf8_shares_storage()
+
+var terminated: Array[u8] = filled(8, 0x41)
+terminated[6] = 0
+require byte_len(from_raw(ref terminated, -1, at = 2)) == 4
+require byte_len(from_raw(ref pool, 0, at = 64)) == 0
+__fd_write(2, "ok")

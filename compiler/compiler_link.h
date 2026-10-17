@@ -479,6 +479,9 @@ core_link_stage_result_t n00bb_link_stage_ir_bindings(
 bool validate_package_interfaces(n00bb_link_analysis_t *analysis);
 bool connect_package_subpackages(n00bb_link_analysis_t *analysis);
 bool populate_package_interfaces(n00bb_link_analysis_t *analysis);
+parse_sym_entry_t *granted_export_symbol(core_translation_unit_t *provider,
+                                         core_string_t name,
+                                         core_string_t grantee);
 bool bind_imported_module_scopes(
     core_list_t(core_translation_unit_ptr_t) *units);
 void package_diagnostic(core_translation_unit_t *unit, parse_tree_t *node,

@@ -19,6 +19,7 @@ double n00bb_profile_seconds(void);
 #include "compiler_tu.h"
 #include "compiler_link.h"
 #include "compiler_link_lifetime.h"
+#include "compiler_buffer_borrow.h"
 #include "compiler_ir_setup.h"
 #include "compiler_lower.h"
 #include "compiler_layout.h"
@@ -75,7 +76,6 @@ double n00bb_profile_seconds(void);
 #include "scanner/lex.h"
 #include "unicode/encoding.h"
 #include "preprocessor.h"
-#include "rich_string.h"
 #include "signature_typevars.h"
 #include "field_extent.h"
 
@@ -714,6 +714,9 @@ static ir_value_t *n00bb_emit_indirect_read(
 static ir_value_t *n00bb_materialize(
     ir_lower_context_t *context, parse_tree_t *node, ir_value_t *value,
     th_type *target, ir_span_t span);
+static ir_value_t *n00bb_result_value(
+    ir_lower_context_t *context, parse_tree_t *expression,
+    ir_local_t *result);
 static ir_value_t *n00bb_emit_wrapping(
     ir_lower_context_t *context, ir_op_t op, ir_value_t *payload,
     th_type *target, ir_span_t span);
@@ -1007,7 +1010,9 @@ n00bb_emit_indirect_write(ir_lower_context_t *context, ir_value_t *address,
     ir_instr_t *instruction = address && value
         ? ir_lower_emit_instruction(context, IR_OP_STORE, span) : nullptr;
     th_type *referent = address ? th_ind_referent(address->type) : nullptr;
-    if (!instruction || !ir_instr_set_binding_initialization(instruction, true)
+    if (!instruction
+        || (!ir_value_addresses_sequence_contents(address)
+            && !ir_instr_set_binding_initialization(instruction, true))
         || !ir_instr_operand_value(instruction, address)
         || !ir_instr_operand_value(instruction, value)
         || (n00bb_atomic_element_type(referent)
@@ -2082,7 +2087,8 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                     : value_body_expression(
                         visit->grammar, visit->node);
                 ir_value_t *value = expression
-                    ? ir_lower_node_value(context, expression) : nullptr;
+                    ? n00bb_result_value(context, expression,
+                                         frame->result_local) : nullptr;
                 if (frame->short_circuit && value
                     && !ir_type_eq(context->module, value->type,
                                    frame->result_local->type)) {
@@ -2124,7 +2130,8 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                 parse_tree_t *expression = value_body_expression(
                     visit->grammar, visit->node);
                 ir_value_t *value = expression
-                    ? ir_lower_node_value(context, expression) : nullptr;
+                    ? n00bb_result_value(context, expression,
+                                         frame->result_local) : nullptr;
                 ir_instr_t *store = value
                     ? ir_lower_emit_instruction(context, IR_OP_COPY,
                         lower_span_for_tree(context, visit->node)) : nullptr;
@@ -2465,7 +2472,8 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                 parse_tree_t *expression = value_body_expression(
                     visit->grammar, visit->node);
                 ir_value_t *value = expression
-                    ? ir_lower_node_value(context, expression) : nullptr;
+                    ? n00bb_result_value(context, expression,
+                                         frame->result_local) : nullptr;
                 ir_instr_t *store = value
                     ? ir_lower_emit_instruction(context, IR_OP_COPY,
                         lower_span_for_tree(context, visit->node)) : nullptr;
@@ -2986,8 +2994,9 @@ n00bb_lower_typecase_scope(ir_lower_context_t *context, parse_visit_t *visit,
         if (frame->expression && context->reachable) {
             parse_tree_t *expression = value_body_expression(
                 visit->grammar, visit->node);
-            ir_value_t *value = expression
-                ? ir_lower_node_value(context, expression) : nullptr;
+            ir_value_t *value = expression && frame->result_local
+                ? n00bb_result_value(context, expression,
+                                     frame->result_local) : nullptr;
             ir_instr_t *store = value
                 ? ir_lower_emit_instruction(context, IR_OP_COPY,
                     lower_span_for_tree(context, visit->node)) : nullptr;
@@ -3692,7 +3701,8 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
             parse_tree_t *expression = child_nt(visit->grammar, visit->node,
                                                 "expression");
             ir_value_t *value = expression
-                ? ir_lower_node_value(context, expression) : nullptr;
+                ? n00bb_result_value(context, expression, frame->result)
+                : nullptr;
             ir_instr_t *store = value
                 ? ir_lower_emit_instruction(context, IR_OP_COPY,
                     lower_span_for_tree(context, visit->node)) : nullptr;
@@ -4184,6 +4194,40 @@ n00bb_abstract_trait_requirement(ir_lower_context_t *context,
     return selection->dest;
 }
 
+static ir_value_t *
+n00bb_result_value(ir_lower_context_t *context, parse_tree_t *expression,
+                   ir_local_t *result)
+{
+    ir_value_t *value = ir_lower_node_value(context, expression);
+    if (!value || !result
+        || !n00bb_value_coerces(ir_module_types(context->module),
+                                value->type, result->type))
+        return value;
+    return n00bb_materialize(context, expression, value, result->type,
+                             lower_span_for_tree(context, expression));
+}
+
+static bool
+n00bb_coerce_method_operands(ir_lower_context_t *context, parse_tree_t *node,
+                             th_type *callable, ir_value_t *const *operands,
+                             size_t first, size_t count,
+                             ir_value_t **coerced, ir_span_t span)
+{
+    th_ctx *types = ir_module_types(context->module);
+    bool function = th_kind_of(th_resolve(callable)) == TH_FUNCTION;
+    for (size_t i = 0; i < count; i++) {
+        const th_param *formal = function && i >= first
+            ? th_func_param(callable, i) : nullptr;
+        coerced[i] = formal && operands[i]
+            && n00bb_value_coerces(types, operands[i]->type, formal->type)
+            ? n00bb_materialize(context, node, operands[i], formal->type,
+                                span)
+            : operands[i];
+        if (!coerced[i]) return false;
+    }
+    return true;
+}
+
 static ir_lower_result_t
 n00bb_lower_operator_method(ir_lower_context_t *context,
                           parse_visit_t *visit,
@@ -4242,6 +4286,13 @@ n00bb_lower_operator_method(ir_lower_context_t *context,
     th_type *contract = implementation->callable_contract
         ? implementation->callable_contract : implementation->type;
     th_type *callable = th_type_clone(types, contract);
+    ir_value_t *coerced[2] = {0};
+    if (callable && operand_count <= 2
+        && !n00bb_coerce_method_operands(context, visit->node, callable,
+            operands, 0, operand_count, coerced, span))
+        return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
+            "could not borrow the Buffer operand as a string");
+    if (callable && operand_count <= 2) operands = coerced;
     th_param parameters[2] = {
         {.mode = TH_IN, .type = operands[0]->type},
         {.mode = TH_IN, .type = operand_count == 2
@@ -4389,6 +4440,12 @@ n00bb_lower_in_place_method(ir_lower_context_t *context, parse_visit_t *visit,
     th_type *contract = symbol->callable_contract
         ? symbol->callable_contract : symbol->type;
     th_type *callable = th_type_clone(types, contract);
+    ir_value_t *coerced[2] = {0};
+    if (callable && !n00bb_coerce_method_operands(context, visit->node,
+            callable, operands, 1, 2, coerced, span))
+        return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
+            "could not borrow the Buffer operand as a string");
+    if (callable) operands = coerced;
     th_param parameters[2] = {
         {.mode = TH_INOUT, .type = target_type},
         {.mode = TH_IN, .type = operands[1]->type},
@@ -5689,8 +5746,6 @@ n00bb_lower_string_literal(ir_lower_context_t *context,
     if (user_site)
         return n00bb_lower_user_literal(context, visit, user_site,
                                         result_type, span);
-    bool rich = registration
-        && registration->handler == N00BB_LITERAL_RICH;
     if (modifier.data && !registration && !user_site)
         return lower_error(context, IR_DIAG_TYPE_LITERAL, span,
             n00bb_literal_prefix_registered(modifier)
@@ -5700,32 +5755,8 @@ n00bb_lower_string_literal(ir_lower_context_t *context,
         return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
                            "string literal has no inferred result type");
     core_buffer_t *decoded = core_buffer_empty();
-    core_buffer_t *rich_metadata = nullptr;
-    bool ok = decoded != nullptr;
-    if (ok && rich) {
-        n00bb_rich_string_error_t error;
-        core_buffer_t *markup_text = nullptr;
-        ok = n00bb_rich_string_parse(spelling, &markup_text,
-                                     &rich_metadata, &error);
-        core_buffer_free(decoded);
-        decoded = markup_text;
-        if (!ok) {
-            const char *message = error == N00BB_RICH_STRING_BAD_ESCAPE
-                ? "rich string contains an invalid escape sequence"
-                : error == N00BB_RICH_STRING_UNCLOSED_ASCII_TAG
-                    ? "rich string contains an unclosed ASCII tag"
-                : error == N00BB_RICH_STRING_MIXED_NUMBERING
-                    ? "rich string cannot mix automatic and explicit positional substitutions"
-                : error == N00BB_RICH_STRING_INDEX_OVERFLOW
-                    ? "rich string substitution index is too large"
-                : error == N00BB_RICH_STRING_TOO_LARGE
-                    ? "rich string exceeds the supported byte length"
-                : "rich string could not be parsed";
-            return lower_error(context, IR_DIAG_TYPE_LITERAL, span,
-                               message);
-        }
-    }
-    else if (ok) ok = n00bb_decode_string_literal(spelling, decoded);
+    bool ok = decoded != nullptr
+        && n00bb_decode_string_literal(spelling, decoded);
     if (!ok) {
         core_buffer_free(decoded);
         return lower_error(context, IR_DIAG_TYPE_LITERAL, span,
@@ -5738,7 +5769,6 @@ n00bb_lower_string_literal(ir_lower_context_t *context,
     if (char_array) {
         if (decoded->byte_len > UINT32_MAX) {
             core_buffer_free(decoded);
-            core_buffer_free(rich_metadata);
             return lower_error(context, IR_DIAG_TYPE_LITERAL, span,
                                "u32 literal is too large to lower");
         }
@@ -5781,7 +5811,6 @@ n00bb_lower_string_literal(ir_lower_context_t *context,
             }) && ir_value_set_shape(aggregate->dest, shape);
         core_list_free(values);
         core_buffer_free(decoded);
-        core_buffer_free(rich_metadata);
         if (!ok)
             return lower_error(context, IR_DIAG_TYPE_LITERAL, span,
                                "u32 literal contains invalid UTF-8 or could not be lowered");
@@ -5793,16 +5822,6 @@ n00bb_lower_string_literal(ir_lower_context_t *context,
                                                 "__n00bb_", result_type)
         && ir_instr_set_const_bytes(instruction,
             (const uint8_t *)decoded->data, decoded->byte_len);
-    if (ok && rich_metadata) {
-        n00bb_lower_context_t *lower = context->user;
-        ok = lower && lower->ir_context
-            && ir_annot_set(lower->ir_context, &instruction->annots,
-                (ir_annot_t){
-                    .key = "n00bb.rich.metadata",
-                    .kind = IR_ANNOT_STR,
-                    .s = ir_strdup(lower->ir_context, rich_metadata->data),
-                });
-    }
     if (ok && registration && lower && lower->ir_context)
         ok = ir_annot_set(lower->ir_context, &instruction->annots,
             (ir_annot_t){
@@ -5812,7 +5831,6 @@ n00bb_lower_string_literal(ir_lower_context_t *context,
                                registration->canonical_name),
             });
     core_buffer_free(decoded);
-    core_buffer_free(rich_metadata);
     if (!ok)
         return lower_error(context, IR_DIAG_INTERNAL, span,
                            "could not emit a byte-exact string constant");
@@ -6395,8 +6413,13 @@ n00bb_lower_user_literal(ir_lower_context_t *context,
         core_string_t spelling = token && core_option_is_set(token->value)
             ? core_option_get(token->value) : (core_string_t){0};
         bool valid = token && decoded && spelling.data;
-        if (valid && quotes)
-            valid = n00bb_decode_string_literal(spelling, decoded);
+        if (valid && quotes) {
+            valid = spelling.u8_bytes >= 2 && spelling.data[0] == '"'
+                && spelling.data[spelling.u8_bytes - 1] == '"';
+            if (valid)
+                core_buffer_append(decoded, spelling.data + 1,
+                                   spelling.u8_bytes - 2);
+        }
         else if (valid) {
             bool hex = core_string_eq(site->registration->kind,
                                       CORE_STRING_STATIC("hex"));
@@ -6746,6 +6769,31 @@ n00bb_lower_static_litmod(ir_lower_context_t *context,
 }
 
 
+static bool
+n00bb_lower_integer_constant_reference(ir_lower_context_t *context,
+                                       parse_visit_t *visit, bool entering,
+                                       void *state)
+{
+    (void)state;
+    int64_t value = 0;
+    if (!entering || !context->reachable
+        || !n00bb_integer_constant_reference(visit->grammar, visit->node,
+                                             &value)) return true;
+    ir_span_t span = lower_span_for_tree(context, visit->node);
+    th_type *type = core_tree_node_value(visit->node).type;
+    ir_instr_t *constant = type
+        ? ir_lower_emit_instruction(context, IR_OP_CONST, span) : nullptr;
+    if (constant
+        && ir_lower_set_temp_dest(context, constant, "__n00bb_constant_",
+                                  th_resolve(type))
+        && ir_instr_operand_int(constant, (ir_int_t)value)
+        && ir_lower_set_node_value(context, visit->node, constant->dest))
+        return true;
+    lower_error(context, IR_DIAG_INTERNAL, span,
+                "could not emit an integer constant reference");
+    return false;
+}
+
 static ir_instr_t *
 n00bb_emit_uint_constant(ir_lower_context_t *context, th_type *uint_type,
                          uint64_t value, ir_span_t span, const char *prefix)
@@ -6986,6 +7034,72 @@ static ir_lower_result_t n00bb_lower_constructor_new(
     ir_lower_context_t *context, parse_visit_t *visit, th_type *result_type,
     ir_span_t span);
 
+static ir_value_t *
+n00bb_emit_array_allocation(ir_lower_context_t *context, th_type *leaf,
+                            uint32_t rank, ir_shape_extent_t *extents,
+                            th_type *result_type, ir_span_t span)
+{
+    n00bb_lower_context_t *lower = context->user;
+    th_type *uint_type = n00bb_ir_builtin_type(context->module, "uint");
+    ir_instr_t *one = uint_type
+        ? n00bb_emit_uint_constant(context, uint_type, 1, span,
+                                   "__n00bb_array_one") : nullptr;
+    if (!lower || !lower->ir_context || !one) return nullptr;
+    for (uint32_t i = 0; i < rank; i++) {
+        if (extents[i].value || extents[i].kind != IR_SHAPE_EXTENT_STATIC)
+            continue;
+        ir_instr_t *constant = n00bb_emit_uint_constant(context, uint_type,
+            extents[i].static_value, span, "__n00bb_array_extent");
+        if (!constant) return nullptr;
+        extents[i].value = constant->dest;
+    }
+    uint32_t known_prefix = 0;
+    while (known_prefix < rank && extents[known_prefix].value)
+        known_prefix++;
+    for (uint32_t i = known_prefix; i < rank; i++)
+        if (extents[i].value) return nullptr;
+    ir_shape_t *shape = ir_shape_new(lower->ir_context, leaf, rank);
+    bool ok = shape != nullptr;
+    for (uint32_t i = 0; ok && i < rank; i++)
+        ok = ir_shape_set_extent(shape, i, extents[i]);
+    ok = ok && ir_shape_set_storage(shape, known_prefix, true);
+    ir_value_t *count = one->dest;
+    for (uint32_t i = 0; ok && i < known_prefix; i++) {
+        ir_instr_t *product = n00bb_emit_checked_product(context, count,
+            extents[i].value, uint_type, span);
+        if (!product) ok = false;
+        else count = product->dest;
+    }
+    ok = ok && ir_shape_set_element_count(shape, (ir_shape_measure_t){
+        .kind = IR_SHAPE_MEASURE_RUNTIME,
+        .value = count,
+    });
+    ir_value_t *stride = one->dest;
+    for (uint32_t i = known_prefix; ok && i > 0; i--) {
+        uint32_t dimension = i - 1;
+        ok = ir_shape_set_stride(shape, dimension,
+            (ir_shape_measure_t){.kind = IR_SHAPE_MEASURE_RUNTIME,
+                                  .value = stride});
+        if (ok && dimension > 0) {
+            ir_instr_t *product = n00bb_emit_checked_product(context, stride,
+                extents[dimension].value, uint_type, span);
+            if (!product) ok = false;
+            else stride = product->dest;
+        }
+    }
+    ir_instr_t *instruction = ok
+        ? ir_lower_emit_instruction(context, IR_OP_ARRAY_NEW, span) : nullptr;
+    ok = ok && instruction
+        && ir_lower_set_temp_dest(context, instruction,
+                                  "__n00bb_array_new_", result_type)
+        && ir_instr_set_array_init(lower->ir_context, instruction,
+                                   IR_ARRAY_INIT_LANGUAGE_ZERO);
+    for (uint32_t i = 0; ok && i < known_prefix; i++)
+        ok = ir_instr_operand_value(instruction, extents[i].value);
+    ok = ok && ir_value_set_shape(instruction->dest, shape);
+    return ok ? instruction->dest : nullptr;
+}
+
 static ir_lower_result_t
 n00bb_lower_array_new(ir_lower_context_t *context, parse_visit_t *visit,
                       ir_value_t *const *operands, size_t operand_count,
@@ -7196,74 +7310,31 @@ n00bb_lower_array_new(ir_lower_context_t *context, parse_visit_t *visit,
                            "could not lower array dimensions");
     }
 
-    ir_shape_t *shape = ir_shape_new(context->user
-        ? ((n00bb_lower_context_t *)context->user)->ir_context : nullptr,
-        leaf, rank);
-    ok = shape != nullptr;
-    uint32_t known_prefix = 0;
-    while (known_prefix < rank && dimension_values.data[known_prefix])
-        known_prefix++;
-    for (uint32_t i = known_prefix; i < rank; i++)
-        if (dimension_values.data[i]) ok = false;
-    for (uint32_t i = 0; ok && i < rank; i++) {
-        ir_shape_extent_t extent = {0};
+    ir_shape_extent_t *extents = core_alloc_array(ir_shape_extent_t, rank);
+    for (uint32_t i = 0; i < rank; i++) {
         if (dimension_expressions.data[i]) {
-            extent = array_dimension_extent(visit->grammar,
+            extents[i] = array_dimension_extent(visit->grammar,
                 dimension_expressions.data[i]);
-            extent.value = dimension_values.data[i];
+            extents[i].value = dimension_values.data[i];
         }
-        else if (dimension_values.data[i]) {
-            extent = (ir_shape_extent_t){
+        else if (dimension_values.data[i])
+            extents[i] = (ir_shape_extent_t){
                 .kind = IR_SHAPE_EXTENT_RUNTIME,
                 .value = dimension_values.data[i],
             };
-        }
-        else extent.kind = IR_SHAPE_EXTENT_UNRESOLVED;
-        ok = ir_shape_set_extent(shape, i, extent);
+        else extents[i] = (ir_shape_extent_t){
+                .kind = IR_SHAPE_EXTENT_UNRESOLVED};
     }
-    ok = ok && ir_shape_set_storage(shape, known_prefix, true);
-    ir_value_t *count = one->dest;
-    for (uint32_t i = 0; ok && i < known_prefix; i++) {
-        ir_instr_t *product = n00bb_emit_checked_product(context, count,
-            dimension_values.data[i], uint_type, span);
-        if (!product) ok = false;
-        else count = product->dest;
-    }
-    ok = ok && ir_shape_set_element_count(shape, (ir_shape_measure_t){
-        .kind = IR_SHAPE_MEASURE_RUNTIME,
-        .value = count,
-    });
-    ir_value_t *stride = one->dest;
-    for (uint32_t i = known_prefix; ok && i > 0; i--) {
-        uint32_t dimension = i - 1;
-        ok = ir_shape_set_stride(shape, dimension,
-            (ir_shape_measure_t){.kind = IR_SHAPE_MEASURE_RUNTIME,
-                                  .value = stride});
-        if (ok && dimension > 0) {
-            ir_instr_t *product = n00bb_emit_checked_product(context, stride,
-                dimension_values.data[dimension], uint_type, span);
-            if (!product) ok = false;
-            else stride = product->dest;
-        }
-    }
-    ir_instr_t *instruction = ok
-        ? ir_lower_emit_instruction(context, IR_OP_ARRAY_NEW, span) : nullptr;
-    ok = ok && instruction
-        && ir_lower_set_temp_dest(context, instruction,
-                                  "__n00bb_array_new_", result_type)
-        && lower && lower->ir_context
-        && ir_instr_set_array_init(lower->ir_context, instruction,
-                                   IR_ARRAY_INIT_LANGUAGE_ZERO);
-    for (uint32_t i = 0; ok && i < known_prefix; i++)
-        ok = ir_instr_operand_value(instruction, dimension_values.data[i]);
-    ok = ok && ir_value_set_shape(instruction->dest, shape);
+    ir_value_t *array = n00bb_emit_array_allocation(context, leaf, rank,
+        extents, result_type, span);
+    core_free(extents);
     core_list_free(type_dimensions);
     core_list_free(dimension_values);
     core_list_free(dimension_expressions);
-    if (!ok)
+    if (!array)
         return lower_error(context, IR_DIAG_INTERNAL, span,
                            "could not emit semantic array construction");
-    return (ir_lower_result_t){IR_LOWER_VALUE, instruction->dest};
+    return (ir_lower_result_t){IR_LOWER_VALUE, array};
 }
 
 static bool
@@ -9282,6 +9353,39 @@ n00bb_record_field_call(ir_lower_context_t *context, ir_block_t *block,
     return ok ? call->dest : nullptr;
 }
 
+static bool
+n00bb_emit_panic(ir_lower_context_t *context, ir_value_t *message,
+                 ir_span_t span)
+{
+    n00bb_lower_context_t *lower = context ? context->user : nullptr;
+    n00bb_tu_state_t *state = lower ? tu_state(lower->unit) : nullptr;
+    n00bb_link_analysis_t *analysis = state ? state->link_analysis : nullptr;
+    for (size_t i = 0; analysis && i < analysis->units.len; i++) {
+        core_translation_unit_t *unit = analysis->units.data[i];
+        if (!core_string_eq(unit->module.identifier,
+                            CORE_STRING_STATIC("builtin.panic"))) continue;
+        n00bb_tu_state_t *owner = tu_state(unit);
+        parse_scope_t *scope = module_scope(owner);
+        parse_sym_entry_t *symbol = scope
+            ? parse_symtab_lookup_in(scope, CORE_STRING_STATIC("panic"))
+            : nullptr;
+        ir_func_t *function = symbol
+            ? link_ir_function_for_symbol(analysis, symbol) : nullptr;
+        ir_module_t *module = unit_module(owner);
+        ir_value_t *callee = function && module
+            ? ir_func_address(module, function) : nullptr;
+        ir_instr_t *call = callee
+            ? ir_instr_add(context->block, IR_OP_CALL) : nullptr;
+        if (!call || !ir_instr_operand_value(call, callee)
+            || !ir_instr_operand_value(call, message)
+            || !ir_instr_set_call_signature(call, function->type))
+            return false;
+        call->span = span;
+        return true;
+    }
+    return false;
+}
+
 static ir_func_t *n00bb_record_hash_function(ir_lower_context_t *context,
                                              th_type *receiver);
 
@@ -9451,37 +9555,33 @@ n00bb_scalar_hash_function(ir_lower_context_t *context, th_type *receiver)
     ir_func_t *function = context ? context->function : nullptr;
     if (!lower || !lower->ir_context || !types || !function
         || function->n_blocks) return nullptr;
+    n00bb_tu_state_t *state = tu_state(lower->unit);
     th_type *hash_type = th_name(types, "u128");
-    th_param parameter = {.mode = TH_IN, .type = receiver};
-    th_type *signature = th_func_with_error(types, hash_type,
-        th_name(types, "nil"), &parameter, 1, nullptr, nullptr, 0);
-    core_buffer_t native_name = {0};
-    core_buffer_printf(&native_name, "__n00bb_hash_scalar_%016llx",
-        (unsigned long long)th_hash(types, receiver));
-    ir_func_t *native = signature && native_name.data
-        ? ir_func_find(context->module, native_name.data) : nullptr;
-    if (!native && signature && native_name.data)
-        native = ir_func_add(context->module, native_name.data,
-            signature, IR_LINK_EXTERN);
-    core_buffer_release(&native_name);
-    if (!native || !ir_annot_set(lower->ir_context, &native->annots,
-            (ir_annot_t){
-                .key = "n00bb.abi.native",
-                .kind = IR_ANNOT_STR,
-                .s = "__n00bb_hash_scalar",
-            })) return nullptr;
+    bool flagset = n00bb_flagset_type(lower->unit, state, receiver, nullptr);
+    parse_sym_entry_t *enum_symbol = flagset ? nullptr
+        : n00bb_enum_type_symbol(state->link_analysis, receiver);
+    const n00bb_enum_range_t *range = enum_symbol
+        ? parse_sym_binding(enum_symbol,
+            CORE_STRING_STATIC("n00bb.enum-range")) : nullptr;
+    if (!flagset && !range) return nullptr;
+    th_type *integer_type = th_name(types,
+        range && range->is_signed ? "i128" : "u128");
+    th_env_method_t selected = {0};
+    if (th_env_method_resolve(state->types, integer_type,
+            "builtin.hash.Hash", "hash", &selected) != TH_ENV_METHOD_FOUND)
+        return nullptr;
     ir_value_t *self = ir_param_add(function, "self", receiver);
     ir_block_t *block = ir_block_add(function, "entry");
-    ir_value_t *callee = ir_func_address(context->module, native);
-    ir_instr_t *call = block ? ir_instr_add(block, IR_OP_CALL) : nullptr;
-    ir_instr_t *ret = block ? ir_instr_add(block, IR_OP_RETURN) : nullptr;
-    return self && callee && call && ret
-        && ir_instr_set_dest(call, "hash", hash_type)
-        && ir_instr_operand_value(call, callee)
-        && ir_instr_operand_value(call, self)
-        && ir_instr_set_call_signature(call, signature)
-        && ir_instr_operand_value(ret, call->dest)
-        ? function : nullptr;
+    ir_instr_t *integer = block ? ir_instr_add(block,
+        flagset ? IR_OP_BITSET_VALUE : IR_OP_ENUM_VALUE) : nullptr;
+    if (!self || !integer
+        || !ir_instr_set_dest(integer, "value", integer_type)
+        || !ir_instr_operand_value(integer, self)
+        || (flagset && !ir_instr_add_mod(integer, "trap"))) return nullptr;
+    ir_value_t *hashed = n00bb_record_field_call(context, block, &selected,
+        integer->dest, nullptr, hash_type, "hash");
+    ir_instr_t *ret = hashed ? ir_instr_add(block, IR_OP_RETURN) : nullptr;
+    return ret && ir_instr_operand_value(ret, hashed) ? function : nullptr;
 }
 
 static bool
@@ -10315,6 +10415,18 @@ n00bb_materialize(ir_lower_context_t *context, parse_tree_t *node,
     if (!value || !target || ir_type_eq(context->module, value->type, target))
         return value;
     th_ctx *types = ir_module_types(context->module);
+    if (n00bb_value_coerces(types, value->type, target)) {
+        n00bb_lower_context_t *lower = context->user;
+        ir_value_t *view = n00bb_emit_wrapping(context,
+            IR_OP_BUFFER_AS_STRING, value, target, span);
+        return view && lower && ir_value_set_alias_targets(lower->ir_context,
+            view, nullptr, 0, true) ? view : nullptr;
+    }
+    if (n00bb_value_coerces(types, target, value->type)) {
+        lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
+                    n00bb_string_to_buffer_text);
+        return nullptr;
+    }
     if (!th_is_closed(types, target) && th_is_closed(types, value->type)
         && th_unify_probe(types, target, value->type))
         return value;
@@ -10643,8 +10755,6 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                 "builtin array read could not retain element shape");
         return (ir_lower_result_t){IR_LOWER_VALUE, read->dest};
     }
-    bool fd_write_builtin = n00bb_builtin_fd_write_function(symbol);
-    bool repr_default_builtin = n00bb_builtin_repr_default_function(symbol);
     bool native_builtin = n00bb_builtin_native_function(symbol);
     bool reference_builtin = n00bb_builtin_reference_function(symbol);
     bool byte_offset_builtin = n00bb_builtin_byte_offset_function(symbol);
@@ -10680,8 +10790,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
             "an option's value requires it to be proven non-nil by the "
             "active branch");
-    bool no_function_body = fd_write_builtin || repr_default_builtin
-        || native_builtin
+    bool no_function_body = native_builtin
         || reference_builtin || byte_offset_builtin || byte_diff_builtin
         || unsafe_arithmetic
         || bit_count_builtin
@@ -10789,16 +10898,9 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
             return lower_error(context, IR_DIAG_INTERNAL, span,
                 "could not retain builtin trait method requirement");
     }
-    if (fd_write_builtin || repr_default_builtin || native_builtin) {
-        const char *key = fd_write_builtin ? "n00bb.abi.fd_write"
-            : repr_default_builtin ? "n00bb.abi.repr_default"
-                                   : "n00bb.abi.native";
-        const char *native_name = parse_sym_binding(symbol,
-            core_string_from_cstr(key));
-        const char *ir_name = fd_write_builtin
-            ? "__n00bb_bootstrap_fd_write"
-            : repr_default_builtin ? "__n00bb_bootstrap_repr_default"
-                                   : native_name;
+    if (native_builtin) {
+        const char *ir_name = parse_sym_binding(symbol,
+            CORE_STRING_STATIC("n00bb.abi.native"));
         ir_func_t *function = ir_func_find(context->module, ir_name);
         if (!function) {
             th_type *declaration = th_type_clone(
@@ -10809,16 +10911,25 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         }
         if (function && !ir_annot_set(lower->ir_context,
                 &function->annots, (ir_annot_t){
-                    .key = key,
+                    .key = "n00bb.abi.native",
                     .kind = IR_ANNOT_STR,
-                    .s = native_name,
+                    .s = ir_name,
                 })) return lower_error(context, IR_DIAG_INTERNAL, span,
-                    "could not annotate the bootstrap IO function");
+                    "could not annotate a native function");
+        if (function && parse_sym_binding(symbol,
+                CORE_STRING_STATIC("n00bb.native.collection-free"))
+            && !ir_annot_set(lower->ir_context, &function->annots,
+                (ir_annot_t){
+                    .key = "n00bb.native.collection-free",
+                    .kind = IR_ANNOT_BOOL,
+                    .b = true,
+                })) return lower_error(context, IR_DIAG_INTERNAL, span,
+                    "could not annotate a collection-free native");
         callee_value = function
             ? ir_func_address(context->module, function) : nullptr;
         if (!callee_value)
             return lower_error(context, IR_DIAG_INTERNAL, span,
-                "could not declare the bootstrap IO function");
+                "could not declare a native function");
     }
     core_tree_node_value(call_node).type = signature_return;
     parse_tree_t *args = call_label
@@ -12545,9 +12656,14 @@ n00bb_unwrap_call_outcome(ir_lower_context_t *context, parse_visit_t *visit,
         n00bb_lower_context_t *lower = context->user;
         bool literal_producer = lower && lower->has_active_literal;
         if (trap_unhandled || literal_producer) {
+            if (literal_producer
+                && th_builtin_kind_of(th_resolve(error_type))
+                    == TH_BUILTIN_STRING
+                && !n00bb_emit_panic(context, error, span))
+                return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
+                    "could not lower an unhandled literal failure");
             ir_instr_t *trap = ir_instr_add(context->block, IR_OP_TRAP);
-            if (!trap || (literal_producer
-                && !ir_instr_operand_value(trap, error)))
+            if (!trap)
                 return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
                     "could not lower an unhandled call failure");
             trap->span = span;
@@ -12865,6 +12981,37 @@ n00bb_lower_signature_array_shape(ir_lowerer_t *lowerer,
 }
 
 static bool
+n00bb_allocate_declared_array(ir_lower_context_t *context, ir_local_t *local,
+                              ir_shape_t *shape, ir_span_t span)
+{
+    ir_shape_storage_t storage;
+    if (!local || !shape || !ir_shape_storage(shape, &storage)
+        || !storage.flat_prefix_rank) return true;
+    uint32_t rank = ir_shape_rank(shape);
+    ir_shape_extent_t *extents = core_alloc_array(ir_shape_extent_t, rank);
+    bool ok = true;
+    for (uint32_t i = 0; ok && i < rank; i++) {
+        ok = ir_shape_extent(shape, i, &extents[i]);
+        if (ok && i < storage.flat_prefix_rank && !extents[i].value
+            && extents[i].kind != IR_SHAPE_EXTENT_STATIC) {
+            lower_error(context, IR_DIAG_TYPE_ARGS, span,
+                "array extent is not available where the array is declared");
+            core_free(extents);
+            return false;
+        }
+    }
+    ir_value_t *array = ok ? n00bb_emit_array_allocation(context,
+        ir_shape_element_type(shape), rank, extents, local->type, span)
+        : nullptr;
+    core_free(extents);
+    if (array && n00bb_emit_local_write(context, local, array, span))
+        return true;
+    lower_error(context, IR_DIAG_INTERNAL, span,
+                "could not allocate the declared array");
+    return false;
+}
+
+static bool
 n00bb_lower_declare_local(ir_lower_context_t *context, parse_visit_t *visit,
                           bool entering, void *state)
 {
@@ -12884,7 +13031,11 @@ n00bb_lower_declare_local(ir_lower_context_t *context, parse_visit_t *visit,
                 "could not bind runtime array dimensions");
             return false;
         }
-        if (!expression || !n00bb_shape_has_constraints(shape)) return true;
+        if (!expression)
+            return !symbol || symbol->mutability != PARSE_SYM_MUTABLE
+                || n00bb_allocate_declared_array(context, local, shape,
+                       lower_span_for_tree(context, visit->node));
+        if (!n00bb_shape_has_constraints(shape)) return true;
         ir_value_t *value = ir_lower_node_value(context, expression);
         if (!value || !n00bb_attach_expression_shape(context, visit->grammar,
                 expression, value)
@@ -14492,7 +14643,8 @@ n00bb_lower_compound_assignment(ir_lower_context_t *context,
     parse_sym_entry_t *symbol = n00bb_compound_target_symbol(context, target);
     n00bb_lower_context_t *lower = context->user;
     bool field_target = member_access_node(visit->grammar, target) != nullptr;
-    bool index_target = n00bb_has_index_store_target(visit->grammar, target);
+    bool index_target = !field_target
+        && n00bb_has_index_store_target(visit->grammar, target);
     ir_local_t *local = ir_lower_bound_local(context, symbol);
     ir_value_t *address = ir_lower_bound_address(context, symbol);
     ir_value_t *binding = ir_lower_bound_value(context, symbol);
@@ -19979,6 +20131,10 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
     ok = ok && ir_lowerer_register_nt_visit(lowerer,
         "new-expr", n00bb_mark_constructor_lvalues, nullptr);
     ok = ok && ir_lowerer_register_nt_visit(lowerer,
+        "primary", n00bb_lower_integer_constant_reference, nullptr)
+        && ir_lowerer_register_nt_visit(lowerer,
+        "postfix-expr", n00bb_lower_integer_constant_reference, nullptr);
+    ok = ok && ir_lowerer_register_nt_visit(lowerer,
         "assert-stmt", n00bb_lower_assert_statement, nullptr);
     ok = ok && ir_lowerer_register_nt_visit(lowerer,
         "expression", n00bb_capture_compound_target, nullptr);
@@ -20094,8 +20250,6 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         fprintf(stderr, "PROFILE lower-initializers %.3f\n",
             n00bb_profile_seconds() - profile_start);
 
-    if (ok && dump_ir) ok = n00bb_dump_ir(analysis);
-
     for (size_t i = 0; ok && i < units.len; i++) {
         core_translation_unit_t *unit = units.data[i];
         ir_module_t *module = tu_state(unit)->ir_module;
@@ -20157,6 +20311,13 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         &ir_pass_structure,
         &ir_pass_layout,
     };
+    for (size_t i = 0; ok && i < units.len; i++) {
+        core_translation_unit_t *unit = units.data[i];
+        ok = n00bb_buffer_borrow_pass(tu_state(unit)->ir_module,
+            ir_diags_new_attached(ir_context, nullptr,
+                core_translation_unit_diagnostics(unit), unit));
+    }
+    if (ok && dump_ir) ok = n00bb_dump_ir(analysis);
     for (size_t i = 0; ok && i < units.len; i++) {
         core_translation_unit_t *unit = units.data[i];
         ir_module_t *module = tu_state(unit)->ir_module;
