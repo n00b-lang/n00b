@@ -7721,43 +7721,70 @@ n00bb_float_literal_adopts(parse_tree_t *node, th_type *operand)
     return true;
 }
 
+static bool
+literal_path_negation(parse_tree_t *origin, parse_tree_t *node,
+                      bool *negated)
+{
+    *negated = false;
+    for (parse_tree_t *current = origin; current != node;) {
+        current = core_tree_node_value(current).parent;
+        if (!current) return false;
+        size_t children = core_tree_num_children(current);
+        if (children == 1) continue;
+        if (children == 2
+            && parse_tree_leaf_is(core_tree_child(current, 0),
+                                  CORE_STRING_STATIC("-"))) {
+            *negated = !*negated;
+            continue;
+        }
+        if (children == 2
+            && parse_tree_leaf_is(core_tree_child(current, 0),
+                                  CORE_STRING_STATIC("+"))) continue;
+        if (children == 3
+            && parse_tree_leaf_is(core_tree_child(current, 0),
+                                  CORE_STRING_STATIC("("))
+            && parse_tree_leaf_is(core_tree_child(current, 2),
+                                  CORE_STRING_STATIC(")"))) continue;
+        return false;
+    }
+    return true;
+}
+
+static bool
+literal_fits_type(n00bb_tu_state_t *state, parse_tree_t *origin,
+                  parse_tree_t *node, th_type *target)
+{
+    int64_t minimum = 0, maximum = 0;
+    if (n00bb_current_integer_range(state, node, &minimum, &maximum))
+        return n00bb_integer_interval_fits_type(target, minimum, maximum);
+    bool negated = false;
+    if (!literal_path_negation(origin, node, &negated)) return false;
+    if (n00bb_current_integer_range(state, origin, &minimum, &maximum))
+        return negated
+            ? minimum != INT64_MIN && n00bb_integer_interval_fits_type(
+                target, -maximum, -minimum)
+            : n00bb_integer_interval_fits_type(target, minimum, maximum);
+    ir_lit_t literal = {0};
+    uint64_t width = 0;
+    bool is_signed = false;
+    if (!n00bb_parse_switch_integer(first_token_text(origin), &literal)
+        || !n00bb_integer_representation(target, &width, &is_signed))
+        return false;
+    ir_scalar_t scalar = {
+        .class = is_signed ? IR_CLASS_SINT : IR_CLASS_UINT,
+        .width = width,
+    };
+    return n00bb_literal_fits_scalar(literal.mag, negated, &scalar);
+}
+
 bool
 n00bb_contextual_integer_literal(n00bb_tu_state_t *state,
                                  parse_tree_t *node, th_type *target)
 {
     parse_tree_t *origin = node
         ? core_tree_node_value(node).integer_literal_origin : nullptr;
-    int64_t minimum = 0, maximum = 0;
     if (!origin) return n00bb_contextual_float_literal(node, target);
-    if (!n00bb_current_integer_range(state, node, &minimum, &maximum)) {
-        if (!n00bb_current_integer_range(state, origin,
-                                         &minimum, &maximum)) return false;
-        for (parse_tree_t *current = origin; current != node;) {
-            current = core_tree_node_value(current).parent;
-            if (!current) return false;
-            size_t children = core_tree_num_children(current);
-            if (children == 1) continue;
-            if (children == 2
-                && parse_tree_leaf_is(core_tree_child(current, 0),
-                                      CORE_STRING_STATIC("-"))) {
-                int64_t previous_minimum = minimum;
-                minimum = -maximum;
-                maximum = -previous_minimum;
-                continue;
-            }
-            if (children == 2
-                && parse_tree_leaf_is(core_tree_child(current, 0),
-                                      CORE_STRING_STATIC("+"))) continue;
-            if (children == 3
-                && parse_tree_leaf_is(core_tree_child(current, 0),
-                                      CORE_STRING_STATIC("("))
-                && parse_tree_leaf_is(core_tree_child(current, 2),
-                                      CORE_STRING_STATIC(")"))) continue;
-            return false;
-        }
-    }
-    if (!n00bb_integer_interval_fits_type(target, minimum, maximum))
-        return false;
+    if (!literal_fits_type(state, origin, node, target)) return false;
     for (parse_tree_t *current = origin; current;
          current = core_tree_node_value(current).parent) {
         core_tree_node_value(current).type = target;
