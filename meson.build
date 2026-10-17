@@ -714,17 +714,32 @@ test(
     suite: 'slow',
 )
 
-test(
-    'folded-const-range-n00b',
-    find_program('sh'),
-    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
-           n00bb_exe.full_path(),
-           meson.current_source_dir() / 'tests' / 'programs'
-               / 'folded_consts' / 'folded_const_range.n',
-           'assigned value does not match the local type'],
-    timeout: 120,
-    suite: 'slow',
-)
+foreach rejected : [
+    ['folded-const-range-n00b', 'folded_const_range.n',
+     'assigned value does not match the local type'],
+    ['folded-bitwise-local-n00b', 'folded_bitwise_local.n',
+     'assigned value does not match the local type'],
+    ['folded-bitwise-argument-n00b', 'folded_bitwise_argument.n',
+     'call type does not match its function (uint vs i16)'],
+    ['folded-bitwise-return-n00b', 'folded_bitwise_return.n',
+     'does not match declared signature'],
+    ['folded-bitwise-assign-n00b', 'folded_bitwise_assign.n',
+     'storing uint in global'],
+    ['folded-bitwise-const-n00b', 'folded_bitwise_const.n',
+     'assigned value does not match the local type'],
+]
+    test(
+        rejected[0],
+        find_program('sh'),
+        args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+               n00bb_exe.full_path(),
+               meson.current_source_dir() / 'tests' / 'programs'
+                   / 'folded_consts' / rejected[1],
+               rejected[2]],
+        timeout: 120,
+        suite: 'slow',
+    )
+endforeach
 
 test(
     'wide-integer-literal-range-n00b',

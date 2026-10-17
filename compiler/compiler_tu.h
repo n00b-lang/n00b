@@ -337,6 +337,7 @@ typedef struct {
     bool static_literal;
     bool selected_when_body;
     bool proven_above_int64;
+    bool unsigned_literal;
 } n00bb_node_facts_t;
 typedef core_translation_unit_t *core_translation_unit_ptr_t;
 core_list_decl(core_translation_unit_ptr_t);
@@ -766,6 +767,7 @@ bool n00bb_integer_constant_reference(parse_grammar_t *grammar,
                                       parse_tree_t *node, int64_t *value);
 bool n00bb_folded_integer_expression(parse_grammar_t *grammar,
                                      parse_tree_t *node, int64_t *value);
+bool n00bb_unsigned_literal_origin(parse_tree_t *origin);
 th_type *n00bb_integer_literal_context(parse_grammar_t *grammar,
                                        n00bb_tu_state_t *state,
                                        parse_tree_t *literal);
