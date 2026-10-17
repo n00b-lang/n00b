@@ -256,15 +256,6 @@ static th_type *slice_call_shape(ictx *c, th_type *result)
     return th_func(c->tc, result, bounds, 2, nullptr, nullptr, 0);
 }
 
-static bool is_index_postfix(parse_grammar_t *grammar, parse_tree_t *node)
-{
-    return node_is(grammar, node, "postfix-expr") &&
-        core_tree_num_children(node) >= 4 &&
-        core_tree_is_leaf(core_tree_child(node, 1)) &&
-        parse_tree_leaf_is(core_tree_child(node, 1),
-                           CORE_STRING_STATIC("["));
-}
-
 static parse_tree_t *assignment_target(parse_visit_t *visit)
 {
     for (size_t distance = 1; ; distance++) {
@@ -273,7 +264,7 @@ static parse_tree_t *assignment_target(parse_visit_t *visit)
         parse_tree_t *child = parse_visit_ancestor(visit, distance - 1);
         if (node_is(visit->grammar, parent, "assign-stmt"))
             return core_tree_child(parent, 0) == child ? parent : nullptr;
-        if (is_index_postfix(visit->grammar, parent)) return nullptr;
+        if (core_tree_num_children(parent) != 1) return nullptr;
     }
 }
 

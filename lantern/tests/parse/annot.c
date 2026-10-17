@@ -1739,17 +1739,24 @@ test_ordering_inference_uses_comparable_trait(void)
 }
 
 static void
-test_index_inference_uses_index_load_trait(void)
+check_index_load_result(const char *what, const char *top,
+                        const char *source)
 {
-    static const char *const G =
-        "<top> @tokenizer(\"toy\") ::= <access>\n"
-        "<access> @infer(\"element_of($0, load, store)\") ::= <receiver> %\"[\" <index-contents> %\"]\"\n"
+    core_buffer_t text = {0};
+    core_buffer_printf(&text,
+        "<top> @tokenizer(\"toy\") ::= %s\n"
+        "<assign-stmt> ::= <member> %%\"=\" <expression>\n"
+        "<member> ::= <access> %%\".\" __LOWER\n"
+        "<access> @infer(\"element_of($0, load, store)\") ::= <receiver> %%\"[\" <index-contents> %%\"]\"\n"
         "<index-contents> ::= <expression>\n"
         "<receiver> @infer(\"OpaqueBox[int]\") ::= __LOWER\n"
-        "<expression> @infer(\"int\") ::= __LOWER\n";
+        "<expression> @infer(\"int\") ::= __LOWER\n", top);
     parse_grammar_t *g = parse_grammar_new();
     parse_grammar_set_error_recovery(g, false);
-    bool loaded = parse_bnf_load(S(G), S("top"), g);
+    bool loaded = parse_bnf_load(core_string_borrow(text.data,
+                                                    text.byte_len),
+                                 S("top"), g);
+    core_buffer_release(&text);
     check("index inference grammar loads", loaded);
     if (!loaded) {
         parse_grammar_free(g);
@@ -1758,8 +1765,8 @@ test_index_inference_uses_index_load_trait(void)
 
     parse_pwz_parser_t *parser = nullptr;
     parse_token_stream_t *tokens = nullptr;
-    parse_tree_t *tree = parse_toy(g, "top", "a[i]", &parser, &tokens);
-    check("single-index expression parses", tree != nullptr);
+    parse_tree_t *tree = parse_toy(g, "top", source, &parser, &tokens);
+    check("index inference sample parses", tree != nullptr);
     if (!tree) {
         if (parser) parse_pwz_free(parser);
         if (tokens) scan_token_stream_free(tokens);
@@ -1803,8 +1810,7 @@ test_index_inference_uses_index_load_trait(void)
     if (attached) annotate_once(g, tree, annotations, inference, nullptr);
     parse_tree_t *access = find_node(g, tree, "access");
     th_type *actual = access ? core_tree_node_value(access).type : nullptr;
-    check("index result comes from the Index_Load contract",
-          attached && actual &&
+    check(what, attached && actual &&
               th_hash(inference, actual) ==
                   th_hash(inference, th_name(inference, "string")));
 
@@ -1815,6 +1821,16 @@ test_index_inference_uses_index_load_trait(void)
     parse_pwz_free(parser);
     scan_token_stream_free(tokens);
     parse_grammar_free(g);
+}
+
+static void
+test_index_inference_uses_index_load_trait(void)
+{
+    check_index_load_result("index result comes from the Index_Load contract",
+                            "<access>", "a[i]");
+    check_index_load_result(
+        "an index that receives a field assignment is still a load",
+        "<assign-stmt>", "a[i].f=i");
 }
 
 static void
