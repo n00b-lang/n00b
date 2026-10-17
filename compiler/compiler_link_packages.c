@@ -1941,10 +1941,10 @@ add_implicit_package_scope(parse_symtab_t *symtab,
 {
     parse_sym_entry_t *existing = parse_symtab_lookup_in(parent, name);
     if (existing) {
-        if (existing->kind != PARSE_SYM_MODULE
-            || !parse_sym_binding(existing,
-                CORE_STRING_STATIC("n00bb.implicit-package"))) return false;
-        *out = existing->exposed_scope;
+        *out = existing->kind == PARSE_SYM_MODULE
+            ? parse_sym_binding(existing,
+                CORE_STRING_STATIC("n00bb.implicit-package"))
+            : nullptr;
         return *out != nullptr;
     }
     parse_symtab_enter_scope_all(symtab, parent);
@@ -1962,7 +1962,7 @@ add_implicit_package_scope(parse_symtab_t *symtab,
         CORE_STRING_STATIC(""), name, PARSE_SYM_MODULE, nullptr);
     parse_symtab_leave_scope_all(symtab);
     if (!module || !parse_sym_set_binding(module,
-            CORE_STRING_STATIC("n00bb.implicit-package"), unit)
+            CORE_STRING_STATIC("n00bb.implicit-package"), scope)
         || !parse_sym_set_binding(module,
             CORE_STRING_STATIC("n00bb.package-unit"), unit)) return false;
     module->exposed_scope = scope;

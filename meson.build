@@ -588,7 +588,8 @@ foreach feature : ['fallible_without_result', 'try_error_binding',
                    'constructor_option_argument', 'option_literal_context',
                    'packed_record_fields', 'hash_xxh3', 'data_file',
                    'os_env_term', 'digit_separators',
-                   'array_element_compound', 'array_read_store_index']
+                   'array_element_compound', 'array_read_store_index',
+                   'package_named_fields']
     test(
         feature.replace('_', '-'), find_program('sh'),
         args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
