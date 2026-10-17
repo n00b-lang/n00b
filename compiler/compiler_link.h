@@ -48,6 +48,8 @@ bool site_is_resolved_module_prefix(parse_grammar_t *grammar,
                                     core_translation_unit_t *unit,
                                     n00bb_tu_state_t *state,
                                     n00bb_link_use_site_t *site);
+bool n00bb_pending_type_reference(n00bb_tu_state_t *state,
+                                  parse_tree_t *node);
 bool resolve_module_member_site(parse_grammar_t *grammar,
                                 core_translation_unit_t *unit,
                                 parse_tree_t *node);
@@ -431,6 +433,8 @@ bool n00bb_collect_initializer_order(core_link_unit_t *link,
     core_list_t(core_translation_unit_ptr_t) *order);
 void free_initializer_order(void *opaque);
 parse_sym_entry_t *initializer_declaration_symbol(
+    core_link_declaration_t *declaration);
+void append_initializer_declaration_name(core_buffer_t *out,
     core_link_declaration_t *declaration);
 bool dynamic_initializer_declaration(parse_grammar_t *grammar,
     core_link_declaration_t *declaration);

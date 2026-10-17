@@ -1,0 +1,8 @@
+import ping
+import pong
+
+require ping.ping(5) == 0
+require pong.pong(4) == 0
+require ping.base == 10
+require pong.offset == 11
+require ping.after == 12

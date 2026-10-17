@@ -204,6 +204,7 @@ publish_link_initializer_uses(core_link_unit_t *link,
 
 typedef struct {
     core_link_declaration_t *declaration;
+    size_t parent;
     uint8_t color;
 } n00bb_initializer_graph_node_t;
 core_list_decl(n00bb_initializer_graph_node_t);
@@ -297,6 +298,60 @@ initializer_graph_add_node(
     return true;
 }
 
+static void
+append_initializer_cycle_member(core_buffer_t *chain, core_buffer_t *modules,
+                                core_list_t(core_string_t) *seen,
+                                core_link_declaration_t *declaration)
+{
+    core_string_t module = core_link_declaration_module(declaration);
+    if (chain->byte_len) core_buffer_puts(chain, " -> ");
+    append_initializer_declaration_name(chain, declaration);
+    for (size_t i = 0; i < seen->len; i++)
+        if (core_string_eq(seen->data[i], module)) return;
+    core_list_push(*seen, module);
+    core_buffer_printf(modules, "%s'%.*s'", modules->byte_len ? ", " : "",
+                       (int)module.u8_bytes, module.data);
+}
+
+static void
+report_initializer_cycle(core_list_t(n00bb_initializer_graph_node_t) *nodes,
+                         size_t from, size_t target,
+                         core_link_dependency_view_t *edge)
+{
+    size_t length = 1;
+    for (size_t at = from; at != target; at = nodes->data[at].parent)
+        length++;
+    size_t *members = core_alloc_array(size_t, length);
+    members[0] = target;
+    size_t index = length;
+    for (size_t at = from; at != target; at = nodes->data[at].parent)
+        members[--index] = at;
+    core_buffer_t chain = {0};
+    core_buffer_t modules = {0};
+    core_list_t(core_string_t) seen = core_list_new(core_string_t);
+    for (size_t i = 0; i < length; i++)
+        append_initializer_cycle_member(&chain, &modules, &seen,
+            nodes->data[members[i]].declaration);
+    append_initializer_cycle_member(&chain, &modules, &seen,
+                                    nodes->data[target].declaration);
+    core_buffer_t message = {0};
+    core_buffer_printf(&message,
+        "initializer dependency cycle requires reading an uninitialized global: %s (module%s %s)",
+        chain.data ? chain.data : "", seen.len == 1 ? "" : "s",
+        modules.data ? modules.data : "");
+    core_diagnostics_report_at(
+        core_translation_unit_diagnostics(edge->source_unit),
+        edge->source_unit, CORE_DIAG_ERROR,
+        CORE_STRING_STATIC("N00BB-L0040"),
+        core_string_borrow(message.data, message.byte_len),
+        edge->source_location);
+    core_buffer_release(&message);
+    core_buffer_release(&chain);
+    core_buffer_release(&modules);
+    core_list_free(seen);
+    core_free(members);
+}
+
 static bool
 initializer_graph_cycle_visit(core_link_unit_t *link,
     n00bb_link_analysis_t *analysis,
@@ -321,16 +376,12 @@ initializer_graph_cycle_visit(core_link_unit_t *link,
         uint8_t color = nodes->data[target].color;
         if (color == 1) {
             if (!*reported && edge.source_unit) {
-                core_diagnostics_report_at(
-                    core_translation_unit_diagnostics(edge.source_unit),
-                    edge.source_unit, CORE_DIAG_ERROR,
-                    CORE_STRING_STATIC("N00BB-L0040"),
-                    CORE_STRING_STATIC("initializer dependency cycle requires reading an uninitialized global"),
-                    edge.source_location);
+                report_initializer_cycle(nodes, node_index, target, &edge);
                 *reported = true;
             }
             continue;
         }
+        if (!color) nodes->data[target].parent = node_index;
         if (!color && !initializer_graph_cycle_visit(link, analysis, nodes,
                 positions, target, reported)) return false;
     }
