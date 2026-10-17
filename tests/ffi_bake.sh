@@ -28,8 +28,9 @@ if nm bake_baked | grep -q '\.bake_build$'; then
     echo "bake_baked ships the build-time bake_build call" >&2
     exit 1
 fi
+test "$(./bake_baked 2>&1)" = "baked ok"
 rm bake_spec.txt
-./bake_baked
+test "$(./bake_baked 2>&1)" = "recreated baked ok"
 
 if "$compiler" build --output undescribed "$bake_dir/undescribed.n00b" \
     >undescribed.log 2>&1; then
