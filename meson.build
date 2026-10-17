@@ -703,7 +703,7 @@ foreach feature : ['fallible_without_result', 'try_error_binding',
                    'initializer_shadowing', 'array_element_shift',
                    'array_element_field_update', 'let_array_elements',
                    'constructor_integer_literal', 'wide_integer_literal',
-                   'quotes_litmod_raw']
+                   'quotes_litmod_raw', 'import_prelude_name']
     test(
         feature.replace('_', '-'), find_program('sh'),
         args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',

@@ -40,6 +40,20 @@ typedef enum {
     SEMANTIC_AFTER_EXIT,
 } semantic_step_t;
 
+static bool
+untyped_module_name(n00bb_tu_state_t *state, parse_tree_t *import)
+{
+    parse_node_resolution_t resolution = parse_tree_resolution(import);
+    parse_sym_entry_t *module = resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
+        ? resolution.target.symbol : core_tree_node_value(import).sym;
+    if (!module || module->kind != PARSE_SYM_MODULE
+        || (module->type && th_is_scheme(module->type)))
+        return true;
+    th_type *any = th_var(state->types);
+    module->type = any ? th_generalize(state->types, any) : nullptr;
+    return module->type != nullptr;
+}
+
 static void
 report_literal_failure(core_translation_unit_t *unit, parse_tree_t *node,
                        size_t before, const char *code, const char *message)
@@ -448,6 +462,16 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 if (type) th_type_define(state->types, type, representation);
                 core_buffer_release(&qualified);
             }
+        }
+        if (nt_is(grammar, node, "import-stmt")
+            && !untyped_module_name(state, node)) {
+            core_diagnostics_report_at(
+                core_translation_unit_diagnostics(unit), unit,
+                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0004"),
+                CORE_STRING_STATIC(
+                    "could not keep the imported module name out of value inference"),
+                link_source_location(node));
+            return;
         }
         record_function_exit_fact(grammar, unit, node, state);
         if (type_reference || dotted_symbol_path_node(grammar, node))
