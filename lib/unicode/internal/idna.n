@@ -515,7 +515,7 @@ private func bidi_label_ok(label: Array[char], n: u32) -> bool {
         tail == internal.types.Bidi_Class.en
 }
 
-func idna_map(s: string) -> string fail: Idna_Error {
+func idna_map(consume s: string) -> string fail: Idna_Error {
     let len: uint = byte_len(s)
 
     if len == 0 {
@@ -688,7 +688,7 @@ private func domain_is_bidi(norm: string, len: uint) -> bool {
     return false
 }
 
-func idna_to_ascii(domain: string, check_hyphens: bool = true,
+func idna_to_ascii(consume domain: string, check_hyphens: bool = true,
                    check_bidi: bool = true, check_joiners: bool = true,
                    verify_dns_length: bool = true)
     -> string fail: Idna_Error {
@@ -877,7 +877,7 @@ func idna_to_ascii(domain: string, check_hyphens: bool = true,
     return internal.runebuf.to_string(out)
 }
 
-func idna_to_unicode(domain: string) -> string fail: Idna_Error {
+func idna_to_unicode(consume domain: string) -> string fail: Idna_Error {
     var norm: string = empty_string()
 
     try {

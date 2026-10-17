@@ -79,7 +79,7 @@ private func confusable_lookup(cp: char) -> u32? {
     return nil
 }
 
-func skeleton(s: string) -> string {
+func skeleton(consume s: string) -> string {
     let nfd: string = internal.normalization.nfd(s)
     let len: uint = byte_len(nfd)
 

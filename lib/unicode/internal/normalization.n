@@ -370,7 +370,7 @@ private func decompose_string(s: string, modify b: internal.runebuf.Char_Buf,
     canonical_order(b.data, b.len)
 }
 
-private func normalize(s: string, form: Norm_Form) -> string {
+private func normalize(consume s: string, form: Norm_Form) -> string {
     let len: uint = byte_len(s)
 
     if len == 0 or !is_text(s) {
@@ -390,19 +390,19 @@ private func normalize(s: string, form: Norm_Form) -> string {
     return internal.runebuf.to_string(b)
 }
 
-func nfd(s: string) -> string {
+func nfd(consume s: string) -> string {
     return normalize(s, Norm_Form.nfd)
 }
 
-func nfkd(s: string) -> string {
+func nfkd(consume s: string) -> string {
     return normalize(s, Norm_Form.nfkd)
 }
 
-func nfc(s: string) -> string {
+func nfc(consume s: string) -> string {
     return normalize(s, Norm_Form.nfc)
 }
 
-func nfkc(s: string) -> string {
+func nfkc(consume s: string) -> string {
     return normalize(s, Norm_Form.nfkc)
 }
 
@@ -460,7 +460,8 @@ func is_nfc(s: string) -> bool {
         return true
     }
 
-    let norm: string = nfc(s)
+    let input: string = s
+    let norm: string = nfc(input)
 
     if byte_len(norm) != len {
         return false
