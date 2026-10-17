@@ -120,19 +120,19 @@ register_native_signature(parse_symtab_t *symtab, th_ctx *types,
     return symbol;
 }
 
-static bool
-register_builtin_native_function(parse_symtab_t *symtab, th_ctx *types,
-                                 th_type *nil_type, const char *name,
-                                 const char *native_name, th_type *result,
-                                 th_type *const *arguments, size_t count)
+static parse_sym_entry_t *
+builtin_native_symbol(parse_symtab_t *symtab, th_ctx *types,
+                      th_type *nil_type, const char *name,
+                      const char *native_name, th_type *result,
+                      th_type *const *arguments, size_t count)
 {
     th_param *parameters = count
         ? core_alloc_array(th_param, count) : nullptr;
-    if (count && !parameters) return false;
+    if (count && !parameters) return nullptr;
     for (size_t i = 0; i < count; i++) {
         if (!arguments[i]) {
             core_free(parameters);
-            return false;
+            return nullptr;
         }
         parameters[i] = (th_param){.mode = TH_IN, .type = arguments[i]};
     }
@@ -141,22 +141,42 @@ register_builtin_native_function(parse_symtab_t *symtab, th_ctx *types,
                              count, nullptr, nullptr, 0) : nullptr;
     core_free(parameters);
     return register_native_signature(symtab, types, nil_type,
-        core_string_from_cstr(name), native_name, signature) != nullptr;
+        core_string_from_cstr(name), native_name, signature);
+}
+
+static bool
+register_builtin_native_function(parse_symtab_t *symtab, th_ctx *types,
+                                 th_type *nil_type, const char *name,
+                                 const char *native_name, th_type *result,
+                                 th_type *const *arguments, size_t count)
+{
+    return builtin_native_symbol(symtab, types, nil_type, name, native_name,
+                                 result, arguments, count) != nullptr;
+}
+
+static bool
+register_collection_free_native(parse_symtab_t *symtab, th_ctx *types,
+                                th_type *nil_type, const char *name,
+                                const char *native_name, th_type *result,
+                                th_type *const *arguments, size_t count)
+{
+    parse_sym_entry_t *symbol = builtin_native_symbol(symtab, types,
+        nil_type, name, native_name, result, arguments, count);
+    return symbol && parse_sym_set_binding(symbol,
+        CORE_STRING_STATIC("n00bb.native.collection-free"), symbol);
 }
 
 static bool
 register_bitptr_builtin(parse_symtab_t *symtab, th_ctx *types,
                         th_type *nil_type, th_type *reference)
 {
-    th_param parameter = {.mode = TH_IN, .type = reference};
     th_type *result = th_name(types, "builtin.bitptr.Bitptr");
-    th_type *signature = reference && result
-        ? th_func_with_error(types, result, nil_type, &parameter, 1,
-                             nullptr, nullptr, 0) : nullptr;
-    parse_sym_entry_t *symbol = register_native_signature(symtab, types,
-        nil_type, CORE_STRING_STATIC("__bitptr"), "n00bb_bitptr", signature);
+    parse_sym_entry_t *symbol = builtin_native_symbol(symtab, types,
+        nil_type, "__bitptr", "n00bb_bitptr", result, &reference, 1);
     return symbol && parse_sym_set_binding(symbol,
-        CORE_STRING_STATIC("n00bb.native.returns-parameter"), symbol);
+            CORE_STRING_STATIC("n00bb.native.returns-parameter"), symbol)
+        && parse_sym_set_binding(symbol,
+            CORE_STRING_STATIC("n00bb.native.collection-free"), symbol);
 }
 
 bool
@@ -358,14 +378,14 @@ register_builtin_abi_symbols(parse_symtab_t *symtab, th_ctx *types,
         && register_builtin_native_function(symtab, types, nil_type,
             "__abi_bytes", "n00b_builtin_abi_bytes", bytes_result,
             bytes_args, 2)
-        && register_builtin_native_function(symtab, types, nil_type,
+        && register_collection_free_native(symtab, types, nil_type,
             "__abi_ref_address", "n00b_builtin_abi_ref_address", uint,
             address_args, 1)
         && register_bitptr_builtin(symtab, types, nil_type, reference)
-        && register_builtin_native_function(symtab, types, nil_type,
+        && register_collection_free_native(symtab, types, nil_type,
             "__load_le_u64", "n00bb_load_le_u64", th_name(types, "u64"),
             &byte_reference, 1)
-        && register_builtin_native_function(symtab, types, nil_type,
+        && register_collection_free_native(symtab, types, nil_type,
             "__load_le_u32", "n00bb_load_le_u32", u32, &byte_reference, 1);
 }
 

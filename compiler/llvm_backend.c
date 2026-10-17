@@ -5710,6 +5710,21 @@ variant_store_tag(lower_state_t *state, LLVMValueRef storage,
 }
 
 static LLVMValueRef
+load_array_extent(lower_state_t *state, LLVMValueRef address,
+                  const char *name)
+{
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMValueRef extent = LLVMBuildLoad2(state->builder,
+        LLVMInt64TypeInContext(context), address, name);
+    if (extent)
+        LLVMSetMetadata(extent,
+            LLVMGetMDKindIDInContext(context, "invariant.load", 14),
+            LLVMMetadataAsValue(context,
+                LLVMMDNodeInContext2(context, nullptr, 0)));
+    return extent;
+}
+
+static LLVMValueRef
 checked_array_index(lower_state_t *state, LLVMValueRef index,
                     LLVMValueRef limit, bool signed_index,
                     bool check_bounds)
@@ -5749,7 +5764,6 @@ native_array_slot(lower_state_t *state, LLVMValueRef array_address,
                   LLVMTypeRef element_type, bool signed_index)
 {
     LLVMContextRef context = LLVMGetModuleContext(state->module);
-    LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
     LLVMValueRef array = LLVMBuildLoad2(state->builder, array_type,
         array_address, "array.value");
     LLVMValueRef data = LLVMBuildExtractValue(state->builder, array, 0,
@@ -5759,8 +5773,8 @@ native_array_slot(lower_state_t *state, LLVMValueRef array_address,
     LLVMValueRef length_address = LLVMBuildStructGEP2(state->builder,
         array_descriptor_type(context), descriptor, 5,
         "array.length.address");
-    LLVMValueRef length = LLVMBuildLoad2(state->builder, i64,
-        length_address, "array.length");
+    LLVMValueRef length = load_array_extent(state, length_address,
+        "array.length");
     LLVMValueRef position = checked_array_index(state, index, length,
         signed_index, true);
     if (!position) return nullptr;
@@ -6684,8 +6698,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         LLVMTypeRef descriptor_type = array_descriptor_type(context);
         LLVMValueRef slot = LLVMBuildStructGEP2(state->builder,
             descriptor_type, descriptor, 5, "array.length.slot");
-        LLVMValueRef length = LLVMBuildLoad2(state->builder,
-            LLVMInt64TypeInContext(context), slot, "array.length");
+        LLVMValueRef length = load_array_extent(state, slot, "array.length");
         return save_result(state, instruction, length);
     }
     case IR_OP_INDEX:
@@ -6916,9 +6929,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             LLVMTypeRef descriptor_type = array_descriptor_type(context);
             LLVMValueRef length_address = LLVMBuildStructGEP2(state->builder,
                 descriptor_type, descriptor, 5, "array.length.address");
-            limit = LLVMBuildLoad2(state->builder,
-                LLVMInt64TypeInContext(context), length_address,
-                "array.length");
+            limit = load_array_extent(state, length_address, "array.length");
             LLVMValueRef flat_address = LLVMBuildStructGEP2(state->builder,
                 descriptor_type, descriptor, 2, "array.flat.rank.address");
             flat_rank = LLVMBuildLoad2(state->builder,
@@ -7513,6 +7524,8 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             || ir_allocation_has_only_local_uses(state->function,
                                               instruction)) {
             result = entry_alloca(state, type);
+            if (result && instruction->op == IR_OP_ALLOC)
+                LLVMBuildStore(state->builder, LLVMConstNull(type), result);
         } else {
             bool required = false;
             const char *storage_class = ir_instr_storage_class(instruction,
@@ -10343,9 +10356,41 @@ mark_conservative_frame(lower_state_t *state)
                           2, "") != nullptr;
 }
 
+static bool has_dynamic_allocation(ir_func_t *function);
+
+static bool
+may_collect(ir_func_t *function,
+            core_list_t(inline_function_ptr_t) *visiting)
+{
+    if (!function->n_blocks) {
+        ir_annot_t *free_native = ir_annot_get(&function->annots,
+            "n00bb.native.collection-free");
+        return !free_native || free_native->kind != IR_ANNOT_BOOL
+            || !free_native->b;
+    }
+    if (inline_list_contains(visiting, function)) return false;
+    core_list_push(*visiting, function);
+    if (has_dynamic_allocation(function)) return true;
+    for (uint32_t b = 0; b < function->n_blocks; b++) {
+        ir_block_t *block = function->blocks[b];
+        for (uint32_t i = 0; i < block->n_instrs; i++) {
+            if (block->instrs[i]->op != IR_OP_CALL) continue;
+            ir_func_t *callee = direct_call_target(block->instrs[i]);
+            if (!callee || may_collect(callee, visiting)) return true;
+        }
+    }
+    return false;
+}
+
 static bool
 prepare_frame_map(lower_state_t *state)
 {
+    core_list_t(inline_function_ptr_t) visiting =
+        core_list_new(inline_function_ptr_t);
+    bool collects = state->with_mutator
+        || may_collect(state->function, &visiting);
+    core_list_free(visiting);
+    if (!collects) return true;
     frame_root_count_t selected = {.state = state, .possible = true};
     size_t total = 0;
     for (uint32_t i = 0; i < state->function->n_locals; i++) {
