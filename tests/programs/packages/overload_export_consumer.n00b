@@ -11,6 +11,9 @@ overloads.shut(first)
 require first.raw == 1
 overloads.poke(second)
 require second.raw == 3
+require overloads.span(first, first) == 2
+require overloads.span("wide") == "w"
+require overloads.span("wide", scale = 2) == "wi"
 
 let opts: overloads.Opts = (a = 50, b = nil)
 require opts.a != nil
