@@ -10507,6 +10507,12 @@ refine_intrinsic_binary_result(parse_grammar_t *grammar,
         uint64_t width = n00bb_shift_receiver_width(left_type);
         parse_tree_t *literal_origin =
             core_tree_node_value(right).integer_literal_origin;
+        th_type *count_type = literal_origin && right_type
+            && th_kind_of(th_resolve(right_type)) == TH_VAR
+            ? n00bb_shift_count_type(state->types, left_type) : nullptr;
+        if (count_type
+            && n00bb_contextual_integer_literal(state, right, count_type))
+            right_type = core_tree_node_value(right).type;
         bool known_range = n00bb_current_integer_range(state, right,
                                                        &minimum, &maximum);
         if (!known_range && literal_origin)

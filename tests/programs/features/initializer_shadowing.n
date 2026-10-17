@@ -1,0 +1,32 @@
+func g(x: int) -> int {
+    return x + 1
+}
+
+func typed(x: int) -> int {
+    let g: int = g(x)
+    return g
+}
+
+func untyped(x: int) -> int {
+    let g = g(x)
+    return g
+}
+
+func outer(x: int) -> int {
+    if x > 0 {
+        let x: int = x + 1
+        return x
+    }
+    return 0
+}
+
+func length(s: string) -> uint {
+    let byte_len: uint = byte_len(s)
+    return byte_len
+}
+
+require typed(2) == 3
+require untyped(4) == 5
+require outer(1) == 2
+require length("abc") == 3
+__fd_write(2, "ok")

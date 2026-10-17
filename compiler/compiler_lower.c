@@ -14423,7 +14423,8 @@ n00bb_lower_compound_assignment(ir_lower_context_t *context,
     parse_sym_entry_t *symbol = n00bb_compound_target_symbol(context, target);
     n00bb_lower_context_t *lower = context->user;
     bool field_target = member_access_node(visit->grammar, target) != nullptr;
-    bool index_target = n00bb_has_index_store_target(visit->grammar, target);
+    bool index_target = !field_target
+        && n00bb_has_index_store_target(visit->grammar, target);
     ir_local_t *local = ir_lower_bound_local(context, symbol);
     ir_value_t *address = ir_lower_bound_address(context, symbol);
     ir_value_t *binding = ir_lower_bound_value(context, symbol);
