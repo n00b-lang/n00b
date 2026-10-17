@@ -1,10 +1,12 @@
 import internal.types
 import internal.encoding
 import internal.runebuf
+import internal.properties
 
 package unicode {
     export internal.types
     export internal.encoding
     export internal.runebuf
+    export internal.properties
     export builtin.encoding_of
 }
