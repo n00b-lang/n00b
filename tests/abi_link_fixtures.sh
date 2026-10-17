@@ -29,7 +29,8 @@ for module in builtin.__init builtin.io.debug builtin.io.raw builtin.ffi \
     builtin.containers.view builtin.cursor builtin.containers.dict \
     builtin.hashing builtin.containers.hash_index builtin.sort \
     builtin.containers.set builtin.containers.tree builtin.hex \
-    builtin.bitptr builtin.abi builtin.containers.buffer; do
+    builtin.bitptr builtin.abi builtin.containers.buffer builtin.io.format \
+    builtin.string.style; do
     N00B_PATH="$script_dir/programs/link_records" "$compiler" compile \
         --output "$tmp/$module.n00bm" "$module" 2>"$tmp/$module.err" || {
         cat "$tmp/$module.err"

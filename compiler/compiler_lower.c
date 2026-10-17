@@ -6619,6 +6619,33 @@ n00bb_lower_integer_constant_reference(ir_lower_context_t *context,
     return false;
 }
 
+static bool
+n00bb_lower_folded_integer_expression(ir_lower_context_t *context,
+                                      parse_visit_t *visit, bool entering,
+                                      void *state)
+{
+    (void)state;
+    int64_t value = 0;
+    if (!entering || !context->reachable
+        || !n00bb_folded_integer_expression(visit->grammar, visit->node,
+                                            &value)) return true;
+    ir_span_t span = lower_span_for_tree(context, visit->node);
+    th_type *type = core_tree_node_value(visit->node).type;
+    if (!type || !is_integer_type(th_resolve(type))) return true;
+    ir_instr_t *constant = ir_lower_emit_instruction(context, IR_OP_CONST,
+                                                     span);
+    if (constant
+        && ir_lower_set_temp_dest(context, constant, "__n00bb_folded_",
+                                  th_resolve(type))
+        && ir_instr_operand_int(constant, (ir_int_t)value)
+        && ir_lower_set_node_value(context, visit->node, constant->dest)
+        && ir_lower_prune_node(context, visit->node))
+        return true;
+    lower_error(context, IR_DIAG_INTERNAL, span,
+                "could not emit a folded integer constant");
+    return false;
+}
+
 static ir_instr_t *
 n00bb_emit_uint_constant(ir_lower_context_t *context, th_type *uint_type,
                          uint64_t value, ir_span_t span, const char *prefix)
@@ -10564,6 +10591,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     bool option_builtin = n00bb_builtin_option_function(symbol);
     n00bb_link_analysis_t *analysis = caller_state
         ? caller_state->link_analysis : nullptr;
+    parse_sym_entry_t *implementation = symbol;
     if (trait_call && !reference_builtin && !option_builtin) {
         symbol = linkable_trait_requirement(analysis, lower->unit,
                                             dispatch_site, symbol);
@@ -11224,13 +11252,25 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     th_ctx *types = ir_module_types(context->module);
     th_type *fact_failure = nullptr;
     bool fact_failure_conflict = false;
-    if (builtin_trait_call && !lower->tries.len) {
+    th_type *implementation_type = implementation != symbol
+        && implementation && implementation->kind == PARSE_SYM_FUNCTION
+        && implementation->type ? th_resolve(implementation->type) : nullptr;
+    th_type *implementation_failure = implementation_type
+        && th_kind_of(implementation_type) == TH_FUNCTION
+        ? th_func_error(implementation_type) : nullptr;
+    if (implementation_failure
+        && !th_is_closed(types, implementation_failure))
+        implementation_failure = nullptr;
+    if (builtin_trait_call
+        && (implementation_failure || !lower->tries.len)) {
         th_type *current_failure = th_func_error(signature);
         if (current_failure
             && th_kind_of(th_resolve(current_failure)) == TH_VAR) {
-            th_type *enclosing_failure = th_func_error(
-                lower->function_symbol ? lower->function_symbol->type
-                                       : context->function->type);
+            th_type *enclosing_failure = implementation_failure
+                ? implementation_failure
+                : th_func_error(lower->function_symbol
+                    ? lower->function_symbol->type
+                    : context->function->type);
             th_type *bound_failure = enclosing_failure
                 ? th_unify_in_place(types, current_failure,
                     th_type_clone(types, enclosing_failure)) : nullptr;
@@ -19786,6 +19826,14 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         "tuple-or-paren", n00bb_lower_static_litmod, nullptr);
     ok = ok && ir_lowerer_register_nt_visit(lowerer,
         "new-expr", n00bb_mark_constructor_lvalues, nullptr);
+    static const char *const folded_kinds[] = {
+        "add-expr", "mul-expr", "shift-expr", "bitand-expr", "bitxor-expr",
+        "bitor-expr",
+    };
+    for (size_t i = 0; ok && i < sizeof(folded_kinds) / sizeof(*folded_kinds);
+         i++)
+        ok = ir_lowerer_register_nt_visit(lowerer, folded_kinds[i],
+            n00bb_lower_folded_integer_expression, nullptr);
     ok = ok && ir_lowerer_register_nt_visit(lowerer,
         "primary", n00bb_lower_integer_constant_reference, nullptr)
         && ir_lowerer_register_nt_visit(lowerer,

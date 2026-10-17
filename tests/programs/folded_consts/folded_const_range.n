@@ -1,0 +1,6 @@
+func narrow() -> u8 {
+    let small: u8 = 200 + 100
+    return small
+}
+
+narrow()

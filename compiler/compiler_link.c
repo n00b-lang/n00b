@@ -1472,6 +1472,35 @@ implicit_builtin_export(core_translation_unit_t *unit,
     return found;
 }
 
+static bool
+names_member_receiver(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    for (parse_tree_t *at = node; at; at = core_tree_node_value(at).parent) {
+        parse_tree_t *parent = core_tree_node_value(at).parent;
+        if (!parent) return false;
+        if (dotted_symbol_path_node(grammar, parent))
+            return core_tree_child(parent, 0) == at;
+        if (core_tree_num_children(parent) != 1) return false;
+    }
+    return false;
+}
+
+static bool
+resolve_prelude_value(parse_grammar_t *grammar,
+                      core_translation_unit_t *unit,
+                      n00bb_tu_state_t *state, n00bb_link_use_site_t *site)
+{
+    parse_sym_entry_t *builtin = parse_symtab_lookup_scoped(
+        state->annotations->symtab, site->scope,
+        CORE_STRING_STATIC("builtin"), site->member_name);
+    site->symbol = n00bb_builtin_function(builtin) ? builtin
+        : implicit_builtin_export(unit, site->member_name,
+            is_type_reference_node(grammar, site->node));
+    return !site->symbol
+        || (parse_tree_set_resolution_symbol(site->node, site->symbol)
+            && parse_tree_mark_direct_symbol_reference(site->node));
+}
+
 bool
 resolve_imported_module_symbols(parse_grammar_t *grammar,
     core_list_t(core_translation_unit_ptr_t) *units)
@@ -1569,31 +1598,31 @@ resolve_imported_module_symbols(parse_grammar_t *grammar,
                 site->symbol = parse_symtab_resolve_node(
                     state->annotations->symtab, site->node,
                     CORE_STRING_STATIC(""));
-                if (!site->symbol) {
-                    core_string_t name = site->member_name;
-                    site->symbol = parse_symtab_lookup_scoped(
-                        state->annotations->symtab, site->scope,
-                        CORE_STRING_STATIC("builtin"), name);
-                    if (n00bb_builtin_function(site->symbol)) {
-                        if (!parse_tree_set_resolution_symbol(site->node,
-                                                              site->symbol)
-                            || !parse_tree_mark_direct_symbol_reference(
-                                site->node)) return false;
-                    }
-                    else site->symbol = nullptr;
-                }
-                if (!site->symbol) {
-                    site->symbol = implicit_builtin_export(unit,
-                        site->member_name,
-                        is_type_reference_node(grammar, site->node));
-                    if (site->symbol
-                        && (!parse_tree_set_resolution_symbol(site->node,
-                               site->symbol)
-                            || !parse_tree_mark_direct_symbol_reference(
-                                site->node))) return false;
-                }
+                if (!site->symbol
+                    && !resolve_prelude_value(grammar, unit, state, site))
+                    return false;
                 if (!site->symbol)
                     resolve_local_enum_constant(grammar, state, site);
+            }
+            if (site->symbol && site->symbol->kind == PARSE_SYM_MODULE
+                && !site->dotted_path
+                && !names_member_receiver(grammar, site->node)) {
+                parse_sym_entry_t *module = site->symbol;
+                site->symbol = nullptr;
+                if (!resolve_prelude_value(grammar, unit, state, site))
+                    return false;
+                for (parse_tree_t *at = site->symbol
+                         ? core_tree_node_value(site->node).parent : nullptr;
+                     at; at = core_tree_node_value(at).parent) {
+                    parse_node_resolution_t wrapped =
+                        parse_tree_resolution(at);
+                    if (wrapped.kind != PARSE_NODE_RESOLUTION_SYMBOL
+                        || wrapped.target.symbol != module) break;
+                    if (!parse_tree_set_resolution_symbol(at, site->symbol))
+                        return false;
+                    if (core_tree_node_value(at).sym == module)
+                        core_tree_node_value(at).sym = site->symbol;
+                }
             }
             bool bracket_type_name = !site->symbol && !site->dotted_path
                 && inside_array_dimension(grammar, site->node);

@@ -620,6 +620,16 @@ test(
     suite: 'slow',
 )
 
+test(
+    'compile-fallible-index-read-n00b', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'compile_module.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'compile_mode',
+           'fallible_index_read'],
+    timeout: 120,
+    suite: 'slow',
+)
+
 foreach static_case : ['static_enum', 'static_option', 'static_nested_import']
     test(
         static_case.replace('_', '-') + '-n00b', find_program('sh'),
@@ -681,6 +691,29 @@ test(
 )
 
 test(
+    'folded-consts-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'folded_consts' / 'folded_consts.n'],
+    timeout: 120,
+    suite: 'slow',
+)
+
+test(
+    'folded-const-range-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'folded_consts' / 'folded_const_range.n',
+           'assigned value does not match the local type'],
+    timeout: 120,
+    suite: 'slow',
+)
+
+test(
     'wide-integer-literal-range-n00b',
     find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
@@ -703,7 +736,7 @@ foreach feature : ['fallible_without_result', 'try_error_binding',
                    'initializer_shadowing', 'array_element_shift',
                    'array_element_field_update', 'let_array_elements',
                    'constructor_integer_literal', 'wide_integer_literal',
-                   'quotes_litmod_raw']
+                   'quotes_litmod_raw', 'import_prelude_name']
     test(
         feature.replace('_', '-'), find_program('sh'),
         args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',

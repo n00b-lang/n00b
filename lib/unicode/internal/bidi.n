@@ -6,7 +6,7 @@ import generated.bidi_brackets
 
 const bidi_max_depth = 125
 const bidi_stack_size = 128
-const bidi_max_brackets: i32 = 63
+const bidi_max_brackets = 63
 const bidi_max_pairs = 128
 
 record Bidi {
