@@ -8,7 +8,7 @@ static_assert(sizeof(n00b_abi_string_v1) == 16);
 static_assert(sizeof(n00b_abi_type_v1) == 144);
 static_assert(sizeof(n00b_abi_field_v1) == 88);
 static_assert(sizeof(n00b_abi_trace_v1) == 40);
-static_assert(sizeof(n00b_abi_trace_child_v1) == 32);
+static_assert(sizeof(n00b_abi_trace_child_v1) == 56);
 static_assert(sizeof(n00b_abi_trace_arm_v1) == 16);
 static_assert(sizeof(n00b_abi_tag_extractor_v1) == 32);
 static_assert(sizeof(n00b_abi_frame_layout_v1) == 24);

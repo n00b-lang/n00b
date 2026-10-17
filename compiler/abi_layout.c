@@ -663,6 +663,7 @@ n00bb_abi_publish_record_layout(
             .alignment_bits = packed || bit_packed ? 1
                                      : (uint64_t)child->alignment_bytes * 8,
             .c_compatible = members[i].c_compatible,
+            .union_group = members[i].union_group,
         };
     }
 
@@ -737,6 +738,29 @@ n00bb_abi_publish_record_layout(
     if (ok && occupied_count)
         qsort(occupied, occupied_count, sizeof(*occupied),
               compare_layout_runs);
+    ir_layout_bit_run_t overlap = {0};
+    for (size_t i = 0; ok && i < count; i++) {
+        if (!members[i].union_group) continue;
+        uint64_t start = placements[i].bit_offset;
+        uint64_t end = start + fields[i].extent_bits;
+        uint64_t region_end = overlap.offset + overlap.width;
+        if (!overlap.width || start < overlap.offset) overlap.offset = start;
+        if (!overlap.width || end > region_end) region_end = end;
+        overlap.width = region_end - overlap.offset;
+    }
+    if (ok && occupied_count) {
+        size_t merged = 0;
+        for (size_t i = 1; i < occupied_count; i++) {
+            ir_layout_bit_run_t *last = &occupied[merged];
+            uint64_t last_end = last->offset + last->width;
+            if (occupied[i].offset < last_end) {
+                uint64_t end = occupied[i].offset + occupied[i].width;
+                if (end > last_end) last->width = end - last->offset;
+            }
+            else occupied[++merged] = occupied[i];
+        }
+        occupied_count = merged + 1;
+    }
     if (ok && reserved_count)
         qsort(reserved, reserved_count, sizeof(*reserved),
               compare_layout_runs);
@@ -749,6 +773,7 @@ n00bb_abi_publish_record_layout(
         .n_reserved = reserved_count,
         .members = final_members,
         .n_members = count,
+        .member_overlap_region = overlap,
     };
     if (ok && (placement.alignment_bits % 8
                || placement.alignment_bits / 8 > UINT32_MAX)) ok = false;

@@ -3,7 +3,7 @@ enum Type_Kind {
     flagset_type,reference_type, option_type,array_type, view_type,
     string_type, box_type, callback_type, function_type, trait_type,
     wrapper_type, union_type,atomic_type, variable_type,named_type,
-    tuple_type
+    tuple_type, foreign_type
 }
 
 enum Tag_Kind {
@@ -106,11 +106,15 @@ record Trace_Record layout(c) {
 }
 
 record Trace_Child_Record layout(c) {
-    byte_offset:      u64
-    child_type_index: u32
-    reserved_zero:    u32
-    repeat_count:     u64
-    stride_bits:      u64
+    byte_offset:        u64
+    child_type_index:   u32
+    extent_form:        u32
+    repeat_count:       u64
+    stride_bits:        u64
+    count_field_offset: u64
+    count_field_bits:   u32
+    reserved_zero:      u32
+    sentinel:           u64
 }
 
 record Trace_Arm_Record layout(c) {

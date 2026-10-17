@@ -12,6 +12,7 @@ typedef struct {
     bool packed;
     th_type *inline_element_type;
     uint64_t inline_element_count;
+    uint32_t union_group;
 } n00bb_abi_record_member_t;
 
 typedef struct {

@@ -18,6 +18,7 @@ typedef struct {
     uint64_t occupied_bits;
     uint64_t alignment_bits;
     bool c_compatible;
+    uint32_t union_group;
 } n00bb_record_field_t;
 
 typedef struct {

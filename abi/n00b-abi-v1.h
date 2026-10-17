@@ -183,6 +183,7 @@ typedef enum {
     N00B_ABI_TYPE_VARIABLE,
     N00B_ABI_TYPE_NAMED,
     N00B_ABI_TYPE_TUPLE,
+    N00B_ABI_TYPE_FOREIGN,
 } n00b_abi_type_kind_v1;
 
 typedef enum {
@@ -523,12 +524,22 @@ typedef struct {
     uint64_t option_bit_offset;
 } n00b_abi_trace_v1;
 
+typedef enum {
+    N00B_ABI_EXTENT_NONE = 0,
+    N00B_ABI_EXTENT_COUNT_FIELD = 1,
+    N00B_ABI_EXTENT_SENTINEL = 2,
+} n00b_abi_extent_form_v1;
+
 typedef struct {
     uint64_t byte_offset;
     uint32_t child_type_index;
-    uint32_t reserved_zero;
+    uint32_t extent_form;
     uint64_t repeat_count;
     uint64_t stride_bits;
+    uint64_t count_field_offset;
+    uint32_t count_field_bits;
+    uint32_t reserved_zero;
+    uint64_t sentinel;
 } n00b_abi_trace_child_v1;
 
 typedef struct {
@@ -988,7 +999,7 @@ _Static_assert(sizeof(n00b_abi_tag_extractor_v1) == 32, "tag width");
 _Static_assert(offsetof(n00b_abi_tag_extractor_v1, kind) == 28,
                "tag kind offset");
 _Static_assert(sizeof(n00b_abi_trace_v1) == 40, "trace width");
-_Static_assert(sizeof(n00b_abi_trace_child_v1) == 32, "trace child width");
+_Static_assert(sizeof(n00b_abi_trace_child_v1) == 56, "trace child width");
 _Static_assert(sizeof(n00b_abi_trace_arm_v1) == 16, "trace arm width");
 _Static_assert(sizeof(n00b_abi_function_v1) == 96, "function width");
 _Static_assert(sizeof(n00b_abi_parameter_v1) == 40, "parameter width");

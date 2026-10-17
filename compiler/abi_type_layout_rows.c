@@ -8,6 +8,7 @@
 #include "ir/typelang.h"
 #include "lib/alloc.h"
 #include "lib/list.h"
+#include "field_extent.h"
 #include "record_layout_request.h"
 
 core_list_decl(n00b_abi_layout_v1);
@@ -38,9 +39,58 @@ typedef struct {
     const core_list_t(n00b_abi_field_v1) *fields;
     const core_list_t(n00b_abi_arm_v1) *arms;
     const core_list_t(uint32_t) *indexes;
+    const n00bb_abi_decl_index_t *declarations;
     uint32_t stream_base;
     uint8_t *need;
 } trace_source_t;
+
+static const n00b_abi_field_v1 *trace_member(const trace_source_t *source,
+                                             uint32_t type_index,
+                                             uint32_t ordinal);
+static bool trace_unary_component(const trace_source_t *source,
+                                  uint32_t type_index,
+                                  uint32_t *component_index);
+
+static bool
+trace_child_extent(const trace_source_t *source, uint32_t parent_type_index,
+                   const n00b_abi_field_v1 *field,
+                   n00b_abi_trace_child_v1 *child)
+{
+    parse_sym_entry_t *symbol = field->symbol_index && source->declarations
+        ? n00bb_abi_decl_symbol_at(source->declarations, field->symbol_index)
+        : nullptr;
+    n00bb_field_extent_t *extent = symbol
+        ? parse_sym_binding(symbol, N00BB_FIELD_EXTENT_KEY) : nullptr;
+    if (!extent) return true;
+    uint32_t pointer_index = child->child_type_index;
+    if (source->types->rows[pointer_index].kind == N00B_ABI_TYPE_OPTION
+        && !trace_unary_component(source, pointer_index, &pointer_index))
+        return false;
+    if (source->types->rows[pointer_index].kind != N00B_ABI_TYPE_FOREIGN)
+        return false;
+    if (extent->kind == N00BB_FIELD_EXTENT_UNTIL) {
+        child->extent_form = N00B_ABI_EXTENT_SENTINEL;
+        child->sentinel = extent->sentinel;
+        return true;
+    }
+    for (uint32_t i = 0; i < source->members[parent_type_index].count; i++) {
+        const n00b_abi_field_v1 *sibling = trace_member(source,
+            parent_type_index, i);
+        parse_sym_entry_t *sibling_symbol = sibling && sibling->symbol_index
+            ? n00bb_abi_decl_symbol_at(source->declarations,
+                                       sibling->symbol_index) : nullptr;
+        if (!sibling || sibling_symbol != extent->count_field) continue;
+        const n00b_abi_type_v1 *count_type =
+            &source->types->rows[sibling->child_type_index];
+        if (count_type->kind != N00B_ABI_TYPE_PRIMITIVE
+            || sibling->logical_bit_offset % 8) return false;
+        child->extent_form = N00B_ABI_EXTENT_COUNT_FIELD;
+        child->count_field_offset = sibling->logical_bit_offset / 8;
+        child->count_field_bits = (uint32_t)count_type->size_bits;
+        return true;
+    }
+    return false;
+}
 
 static bool
 trace_unary_component(const trace_source_t *source, uint32_t type_index,
@@ -234,12 +284,15 @@ trace_child_append(const trace_source_t *source,
         || child_bits > parent->size_bits - last
         || children->len >= UINT32_MAX) return false;
     uint32_t index = (uint32_t)children->len;
-    core_list_push(*children, ((n00b_abi_trace_child_v1){
+    n00b_abi_trace_child_v1 row = {
         .byte_offset = offset / 8,
         .child_type_index = child_index,
         .repeat_count = field->inline_element_count,
         .stride_bits = stride,
-    }));
+    };
+    if (!trace_child_extent(source, parent_type_index, field, &row))
+        return false;
+    core_list_push(*children, row);
     return trace_index_append(stream_base, indexes, index, range);
 }
 
@@ -766,6 +819,7 @@ n00bb_abi_type_layout_rows_build(
                 .module = runtime,
                 .types = types, .members = type_field_ranges,
                 .fields = &fields, .arms = &arms, .indexes = &indexes,
+                .declarations = declarations,
                 .stream_base = stream_base, .need = need,
             };
             valid = append_traces(&source, &layouts, &tag_extractors,

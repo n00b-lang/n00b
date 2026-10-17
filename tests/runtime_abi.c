@@ -346,7 +346,7 @@ main(int argc, char **argv)
         && error.table_kind == N00B_ABI_TABLE_TYPE
         && error.record_index == 3 && !n00b_abi_v1_current_snapshot());
     image.types[3].typevar_ordinal = 0;
-    image.types[3].kind = N00B_ABI_TYPE_TUPLE + 1;
+    image.types[3].kind = N00B_ABI_TYPE_FOREIGN + 1;
     assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
         == N00B_ABI_BAD_METADATA
         && error.table_kind == N00B_ABI_TABLE_TYPE

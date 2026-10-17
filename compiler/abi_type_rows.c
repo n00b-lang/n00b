@@ -119,7 +119,8 @@ type_category(ir_module_t *module, th_type *type,
     case TH_INDIRECTION: {
         uint8_t attrs = 0;
         if (!th_ind_attrs(type, &attrs)) return false;
-        row->kind = N00B_ABI_TYPE_REFERENCE;
+        row->kind = attrs & TH_FOREIGN ? N00B_ABI_TYPE_FOREIGN
+                                       : N00B_ABI_TYPE_REFERENCE;
         if (!attrs) row->flags |= N00B_ABI_TYPE_FLAG_PLAIN_REF;
         return true;
     }
@@ -761,6 +762,7 @@ append_type_components(n00bb_abi_type_index_t *index, ir_module_t *module,
         return true;
     }
     if (kind == N00B_ABI_TYPE_REFERENCE
+        || kind == N00B_ABI_TYPE_FOREIGN
         || kind == N00B_ABI_TYPE_OPTION
         || kind == N00B_ABI_TYPE_ARRAY
         || kind == N00B_ABI_TYPE_VIEW
@@ -775,7 +777,8 @@ append_type_components(n00bb_abi_type_index_t *index, ir_module_t *module,
             if (arg && arg->kind == TH_ARG_TYPE) component = arg->type;
         }
         else if (source_kind == TH_INDIRECTION
-                 && kind == N00B_ABI_TYPE_REFERENCE)
+                 && (kind == N00B_ABI_TYPE_REFERENCE
+                     || kind == N00B_ABI_TYPE_FOREIGN))
             component = th_ind_referent(type);
         else if (source_kind == TH_SEQUENCE
                  && kind == N00B_ABI_TYPE_ARRAY)

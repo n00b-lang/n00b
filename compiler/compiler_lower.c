@@ -77,6 +77,7 @@ double n00bb_profile_seconds(void);
 #include "preprocessor.h"
 #include "rich_string.h"
 #include "signature_typevars.h"
+#include "field_extent.h"
 
 bool
 n00bb_prepare_ir_bindings(core_link_unit_t *link,
@@ -19564,6 +19565,53 @@ n00bb_dump_ir(const n00bb_link_analysis_t *analysis)
 }
 
 static bool
+foreign_pointer_type(th_type *type)
+{
+    th_type *element = nullptr;
+    th_type *resolved = th_resolve(type);
+    if (n00bb_option_type_element(resolved, &element))
+        resolved = th_resolve(element);
+    uint8_t attrs = 0;
+    return th_kind_of(resolved) == TH_INDIRECTION
+        && th_ind_attrs(resolved, &attrs) && (attrs & TH_FOREIGN);
+}
+
+static bool
+field_extents_hold(core_list_t(core_translation_unit_ptr_t) *units)
+{
+    bool ok = true;
+    for (size_t u = 0; u < units->len; u++) {
+        core_translation_unit_t *unit = units->data[u];
+        n00bb_tu_state_t *state = tu_state(unit);
+        parse_symtab_t *symtab = state && state->annotations
+            ? state->annotations->symtab : nullptr;
+        for (parse_scope_t *scope = symtab ? symtab->all_scopes : nullptr;
+             scope; scope = scope->all_next)
+            for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
+                 symbol = symbol->next_in_scope) {
+                n00bb_field_extent_t *extent = symbol->is_field
+                    ? parse_sym_binding(symbol, N00BB_FIELD_EXTENT_KEY)
+                    : nullptr;
+                if (!extent) continue;
+                const char *problem = !foreign_pointer_type(symbol->type)
+                    ? "an extent clause needs a Foreign[...] field"
+                    : extent->count_field && !is_integer_type(
+                        th_resolve(extent->count_field->type))
+                    ? "a 'count' field must have an integer type"
+                    : nullptr;
+                if (!problem) continue;
+                core_diagnostics_report_at(
+                    core_translation_unit_diagnostics(unit), unit,
+                    CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0037"),
+                    core_string_from_cstr(problem),
+                    link_source_location(extent->node));
+                ok = false;
+            }
+    }
+    return ok;
+}
+
+static bool
 rigid_type_parameters_hold(core_list_t(core_translation_unit_ptr_t) *units)
 {
     bool ok = true;
@@ -19637,7 +19685,8 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
          && i < core_link_unit_translation_unit_count(link); i++)
         core_list_push(units,
             core_link_unit_translation_unit(link, i));
-    ok = ok && units.len && rigid_type_parameters_hold(&units);
+    ok = ok && units.len && rigid_type_parameters_hold(&units)
+        && field_extents_hold(&units);
     for (size_t i = 0; ok && i < units.len; i++) {
         n00bb_tu_state_t *state = tu_state(units.data[i]);
         if (!state) ok = false;

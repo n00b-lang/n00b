@@ -487,7 +487,7 @@ test_cycle_selection(char **paths, const char *linked_path)
     }
     assert(type_probe);
     n00b_abi_type_v1 remapped_type;
-    type_probe->kind = N00B_ABI_TYPE_TUPLE + 1;
+    type_probe->kind = N00B_ABI_TYPE_FOREIGN + 1;
     assert(!n00bb_abi_remap_row(&selected, plan, 0, N00B_ABI_TABLE_TYPE,
         type_probe_index, &remapped_type, sizeof(remapped_type), nullptr));
     type_probe->kind = N00B_ABI_TYPE_PRIMITIVE;

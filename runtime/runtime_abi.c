@@ -984,6 +984,7 @@ type_needs_trace(const n00b_abi_type_v1 *type)
     if (type->flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE) return false;
     switch (type->kind) {
     case N00B_ABI_TYPE_REFERENCE:
+    case N00B_ABI_TYPE_FOREIGN:
     case N00B_ABI_TYPE_ARRAY:
     case N00B_ABI_TYPE_VIEW:
     case N00B_ABI_TYPE_STRING:
@@ -1326,7 +1327,8 @@ option_metadata_valid(const n00b_abi_snapshot_v1 *snapshot,
                 tag_bit, tag_bit + 1, child->size_bits)) return false;
     }
     else if (tag->kind == N00B_ABI_TAG_POINTER_NULL) {
-        if (child->kind != N00B_ABI_TYPE_REFERENCE
+        if ((child->kind != N00B_ABI_TYPE_REFERENCE
+             && child->kind != N00B_ABI_TYPE_FOREIGN)
             || child->size_bits != 64 || type->size_bits != 64
             || tag_bit || tag->unit_width_bits != 64
             || tag->lsb_position || tag->tag_width_bits != 1

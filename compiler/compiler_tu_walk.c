@@ -970,6 +970,17 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                         link_source_location(node));
                 return;
             }
+            if (!cache_record_field_extents(grammar, unit, node)) {
+                if (!core_diagnostics_failed(
+                        core_translation_unit_diagnostics(unit)))
+                    core_diagnostics_report_at(
+                        core_translation_unit_diagnostics(unit), unit,
+                        CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0037"),
+                        CORE_STRING_STATIC(
+                            "could not retain the record field extents"),
+                        link_source_location(node));
+                return;
+            }
             if (!register_record_semantic_shape(grammar, unit, node)) {
                 if (!core_translation_unit_has_fatal_diagnostics(unit))
                     core_diagnostics_report_at(

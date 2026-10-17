@@ -10,6 +10,7 @@
 #include "enum_value.h"
 #include "flagset_value.h"
 #include "record_layout_request.h"
+#include "field_extent.h"
 #include "preprocessor.h"
 #include "parse/tree_util.h"
 
@@ -2273,6 +2274,117 @@ cache_record_layout_request(parse_grammar_t *grammar,
         CORE_STRING_STATIC("n00bb.record-layout-request"), stored);
 }
 
+static parse_sym_entry_t *
+member_field_named(parse_scope_t *scope, core_string_t name)
+{
+    for (parse_sym_entry_t *member = scope ? scope->first_in_scope : nullptr;
+         member; member = member->next_in_scope)
+        if (member->is_field && core_string_eq(member->name, name))
+            return member;
+    return nullptr;
+}
+
+bool
+cache_record_field_extents(parse_grammar_t *grammar,
+                           core_translation_unit_t *unit,
+                           parse_tree_t *declaration)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    parse_sym_entry_t *record = core_tree_node_value(declaration).sym;
+    parse_scope_t *scope = record ? record->member_scope : nullptr;
+    if (!state || !scope) return true;
+    for (parse_sym_entry_t *field = scope->first_in_scope; field;
+         field = field->next_in_scope) {
+        parse_tree_t *clause = field->is_field && field->decl_node
+            ? child_nt(grammar, field->decl_node, "field-extent") : nullptr;
+        if (!clause) continue;
+        n00bb_field_extent_t *extent = core_arena_alloc(
+            &state->semantic_values, sizeof(*extent));
+        if (!extent) return false;
+        bool counted = core_string_eq(first_token_text(clause),
+                                      CORE_STRING_STATIC("count"));
+        *extent = (n00bb_field_extent_t){
+            .kind = counted ? N00BB_FIELD_EXTENT_COUNT
+                            : N00BB_FIELD_EXTENT_UNTIL,
+            .node = clause,
+        };
+        if (!counted && !n00bb_static_integer_expression(grammar,
+                child_nt(grammar, clause, "expression"),
+                th_name(state->types, "int"), &extent->sentinel)) {
+            core_diagnostics_report_at(
+                core_translation_unit_diagnostics(unit), unit,
+                CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0037"),
+                CORE_STRING_STATIC("an 'until' sentinel must be a constant integer"),
+                link_source_location(clause));
+            return false;
+        }
+        if (counted) {
+            core_string_t name = first_token_text(core_tree_child(clause, 1));
+            extent->count_field = member_field_named(scope, name);
+            if (!extent->count_field || extent->count_field == field) {
+                core_buffer_t message = {0};
+                core_buffer_printf(&message,
+                    "'count %.*s' names no other field of this record",
+                    (int)name.u8_bytes, name.data);
+                core_diagnostics_report_at(
+                    core_translation_unit_diagnostics(unit), unit,
+                    CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0037"),
+                    core_string_borrow(message.data, message.byte_len),
+                    link_source_location(clause));
+                core_buffer_release(&message);
+                return false;
+            }
+        }
+        if (!parse_sym_set_binding(field, N00BB_FIELD_EXTENT_KEY, extent))
+            return false;
+    }
+    core_list_t(parse_tree_ptr_t) groups = core_list_new(parse_tree_ptr_t);
+    bool ok = true;
+    for (parse_sym_entry_t *field = scope->first_in_scope; ok && field;
+         field = field->next_in_scope) {
+        parse_tree_t *arm = field->is_field && field->decl_node
+            && nt_is(grammar, field->decl_node, "union-arm")
+            ? field->decl_node : nullptr;
+        parse_tree_t *owner = arm ? core_tree_node_value(arm).parent : nullptr;
+        while (owner && !nt_is(grammar, owner, "field-union"))
+            owner = core_tree_node_value(owner).parent;
+        if (!owner) continue;
+        size_t group = 0;
+        while (group < groups.len && groups.data[group] != owner) group++;
+        if (group == groups.len) core_list_push(groups, owner);
+        core_string_t name = first_token_text(core_tree_child(owner, 2));
+        n00bb_field_union_t *member = core_arena_alloc(
+            &state->semantic_values, sizeof(*member));
+        ok = member != nullptr;
+        if (!ok) break;
+        *member = (n00bb_field_union_t){
+            .group = (uint32_t)group + 1,
+            .discriminant = member_field_named(scope, name),
+            .node = arm,
+        };
+        const char *problem = !member->discriminant
+            || (member->discriminant->decl_node
+                && nt_is(grammar, member->discriminant->decl_node,
+                         "union-arm"))
+            ? "'union by' names no plain field of this record"
+            : !n00bb_static_integer_expression(grammar,
+                child_nt(grammar, arm, "expression"),
+                th_name(state->types, "int"), &member->tag)
+            ? "a union arm's value must be a constant integer" : nullptr;
+        if (problem) {
+            core_diagnostics_report_at(
+                core_translation_unit_diagnostics(unit), unit,
+                CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0037"),
+                core_string_from_cstr(problem), link_source_location(arm));
+            ok = false;
+            break;
+        }
+        ok = parse_sym_set_binding(field, N00BB_FIELD_UNION_KEY, member);
+    }
+    core_list_free(groups);
+    return ok;
+}
+
 bool
 register_record_semantic_shape(parse_grammar_t *grammar,
                                core_translation_unit_t *unit,
@@ -4090,7 +4202,7 @@ static const struct {
     {"Array", 1}, {"Array_Locking", 1}, {"List", 1}, {"List_Locking", 1},
     {"Set", 1}, {"Set_Locking", 1}, {"View", 1},
     {"Atomic", 1}, {"Ref", 1}, {"Dict", 2}, {"Dict_Locking", 2},
-    {"Tuple", -2},
+    {"Foreign", 1}, {"Foreign_Fn", 1}, {"Tuple", -2},
 };
 
 static const char *const N00BB_NAMED_BUILTIN_TYPES[] = {
@@ -11609,6 +11721,13 @@ apply_type_arguments(th_ctx *types, const char *name,
     if (!strcmp(canonical, "Ref") && count == 1
         && arguments[0].kind == TH_ARG_TYPE)
         return th_ind(types, 0, arguments[0].type);
+    if (!strcmp(canonical, "Foreign") && count == 1
+        && arguments[0].kind == TH_ARG_TYPE)
+        return th_ind(types, TH_FOREIGN, arguments[0].type);
+    if (!strcmp(canonical, "Foreign_Fn") && count == 1
+        && arguments[0].kind == TH_ARG_TYPE
+        && th_kind_of(th_resolve(arguments[0].type)) == TH_FUNCTION)
+        return th_ind(types, TH_FOREIGN, arguments[0].type);
     if (!strcmp(canonical, "Tuple")) {
         th_type **elements = count
             ? core_alloc_array(th_type *, count) : nullptr;

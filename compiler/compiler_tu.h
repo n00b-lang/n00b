@@ -53,6 +53,9 @@ th_type *n00bb_variant_arm_payload_type(th_ctx *types, th_type *variant,
 bool cache_record_layout_request(parse_grammar_t *grammar,
                                  core_translation_unit_t *unit,
                                  parse_tree_t *declaration);
+bool cache_record_field_extents(parse_grammar_t *grammar,
+                                core_translation_unit_t *unit,
+                                parse_tree_t *declaration);
 bool register_record_semantic_shape(parse_grammar_t *grammar,
                                     core_translation_unit_t *unit,
                                     parse_tree_t *declaration);

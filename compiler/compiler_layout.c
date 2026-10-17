@@ -8,6 +8,7 @@
 #include "abi_semantics.h"
 #include "abi_record_layout.h"
 #include "record_layout_request.h"
+#include "field_extent.h"
 #include "enum_value.h"
 #include "flagset_value.h"
 #include "storage_selection.h"
@@ -424,6 +425,9 @@ publish_c_record_symbol(n00bb_link_analysis_t *analysis,
             .c_compatible = true,
             .inline_element_type = inline_element,
             .inline_element_count = inline_count,
+            .union_group = parse_sym_binding(field, N00BB_FIELD_UNION_KEY)
+                ? ((n00bb_field_union_t *)parse_sym_binding(field,
+                    N00BB_FIELD_UNION_KEY))->group : 0,
         };
     }
     if (valid) valid = n00bb_abi_publish_c_record_layout(module,

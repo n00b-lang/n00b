@@ -233,6 +233,8 @@ typedef struct {
     uint64_t shift;
     uint64_t width;
     bool packed;
+    bool overlay;
+    uint64_t overlay_offset;
 } record_slot_t;
 
 typedef struct {
@@ -645,19 +647,57 @@ record_shape_build(ir_module_t *module, th_type *type,
             break;
         }
         size_t j = i + 1;
+        bool overlay = false;
+        uint32_t overlay_alignment = alignment;
         for (; j < count; j++) {
             const ir_final_member_layout_t *next = &layout->members[order[j]];
             if (next->bit_offset / 8 >= last) break;
             uint64_t next_width = next->inline_element_count ? 0
                 : packed_value_width(module, record_member_type(shape, next));
-            if (!width || !next_width) {
-                ok = false;
-                break;
+            uint64_t next_bytes = 0;
+            uint32_t next_alignment = 1;
+            if (!width || !next_width || overlay) {
+                if (!record_member_extent(module, next, &next_bytes,
+                        &next_alignment) || next->bit_offset % 8
+                    || member->bit_offset % 8 || !sized) {
+                    ok = false;
+                    break;
+                }
+                overlay = true;
+                if (next_alignment > overlay_alignment)
+                    overlay_alignment = next_alignment;
+                uint64_t next_last = next->bit_offset / 8 + next_bytes;
+                if (first + bytes > last) last = first + bytes;
+                if (next_last > last) last = next_last;
+                continue;
             }
             uint64_t next_last = (next->bit_offset + next_width + 7) / 8;
             if (next_last > last) last = next_last;
         }
         if (!ok) break;
+        if (overlay) {
+            uint64_t span = last - first;
+            unsigned unit_bits = overlay_alignment * 8;
+            ok = !(first % overlay_alignment) && !(span % overlay_alignment)
+                && span / overlay_alignment <= UINT32_MAX
+                && record_shape_pad(shape, capacity, context, &cursor, first,
+                                    overlay_alignment)
+                && record_shape_push(shape, capacity, LLVMArrayType(
+                    LLVMIntTypeInContext(context, unit_bits),
+                    (unsigned)(span / overlay_alignment)), first, false);
+            for (size_t k = i; ok && k < j; k++)
+                shape->slots[order[k]] = (record_slot_t){
+                    .element = shape->n_elements - 1,
+                    .overlay = true,
+                    .overlay_offset = layout->members[order[k]].bit_offset / 8
+                        - first,
+                };
+            if (overlay_alignment > record_alignment)
+                record_alignment = overlay_alignment;
+            cursor = last;
+            i = j;
+            continue;
+        }
         uint64_t bound = j < count
             ? layout->members[order[j]].bit_offset / 8 : stride_bits / 8;
         bool natural = j == i + 1 && !(member->bit_offset % 8) && sized
@@ -2337,7 +2377,7 @@ literal_element_layout_matches(ir_module_t *module, th_type *type,
         for (size_t i = 0; valid && i < layout->n_members; i++) {
             const ir_final_member_layout_t *member = &layout->members[i];
             const record_slot_t *slot = &shape.slots[i];
-            if (slot->packed) continue;
+            if (slot->packed || slot->overlay) continue;
             th_type *field = member->name
                 ? th_record_lookup(definition, member->name) : nullptr;
             LLVMTypeRef child = shape.elements[slot->element];
@@ -2503,6 +2543,20 @@ record_byte_run_from_bits(lower_state_t *state, LLVMValueRef bits,
     return run;
 }
 
+static LLVMValueRef entry_alloca(lower_state_t *state, LLVMTypeRef type);
+
+static LLVMValueRef
+overlay_member_address(lower_state_t *state, LLVMValueRef storage,
+                       const record_slot_t *slot)
+{
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMValueRef offset = LLVMConstInt(LLVMInt64TypeInContext(context),
+                                       slot->overlay_offset, false);
+    return LLVMBuildInBoundsGEP2(state->builder,
+        LLVMInt8TypeInContext(context), storage, &offset, 1,
+        "record.overlay.member");
+}
+
 static LLVMValueRef
 record_value_get(lower_state_t *state, LLVMValueRef record,
                  const record_slot_t *slot, th_type *type)
@@ -2511,6 +2565,17 @@ record_value_get(lower_state_t *state, LLVMValueRef record,
         slot->element, "record.field");
     if (!element) return nullptr;
     LLVMContextRef context = LLVMGetModuleContext(state->module);
+    if (slot->overlay) {
+        LLVMTypeRef member = value_type(state->function->owner, type,
+                                        context);
+        LLVMValueRef storage = member
+            ? entry_alloca(state, LLVMTypeOf(element)) : nullptr;
+        if (!storage) return nullptr;
+        LLVMBuildStore(state->builder, element, storage);
+        return LLVMBuildLoad2(state->builder, member,
+            overlay_member_address(state, storage, slot),
+            "record.overlay.read");
+    }
     if (!slot->packed)
         return ir_machine_of(state->function->owner, type).class
                 == IR_CLASS_BOOL
@@ -2537,6 +2602,18 @@ record_value_set(lower_state_t *state, LLVMValueRef record,
         return nullptr;
     LLVMTypeRef storage = LLVMStructGetTypeAtIndex(LLVMTypeOf(record),
                                                    slot->element);
+    if (slot->overlay) {
+        LLVMValueRef scratch = entry_alloca(state, storage);
+        if (!scratch) return nullptr;
+        LLVMBuildStore(state->builder, LLVMBuildExtractValue(state->builder,
+            record, slot->element, "record.overlay"), scratch);
+        LLVMBuildStore(state->builder, value,
+                       overlay_member_address(state, scratch, slot));
+        return LLVMBuildInsertValue(state->builder, record,
+            LLVMBuildLoad2(state->builder, storage, scratch,
+                           "record.overlay.updated"),
+            slot->element, "record.overlay.set");
+    }
     if (!slot->packed) {
         if (storage == LLVMInt8TypeInContext(context)
             && LLVMTypeOf(value) == LLVMInt1TypeInContext(context))
@@ -4177,6 +4254,10 @@ static_record_value(lower_state_t *state, ir_module_t *source, th_type *type,
         const ir_global_init_value_t *item = static_record_item(init,
                                                                 member->name);
         if (!item) continue;
+        if (slot->overlay) {
+            valid = false;
+            break;
+        }
         if (slot->packed) {
             valid = static_packed_field(target, static_init_value(state,
                 source, record_member_type(&shape, member), item, constant),
@@ -4656,7 +4737,7 @@ store_gc_barrier(lower_state_t *state, LLVMValueRef value, th_type *type)
             }
             for (size_t i = 0; supported && i < shape.layout->n_members;
                  i++) {
-                if (shape.slots[i].packed) continue;
+                if (shape.slots[i].packed || shape.slots[i].overlay) continue;
                 LLVMValueRef part = LLVMBuildExtractValue(state->builder,
                     value, shape.slots[i].element, "barrier.field");
                 if (!part || !store_gc_barrier(state, part,
@@ -4774,7 +4855,8 @@ gc_references_equal(lower_state_t *state, LLVMValueRef old_value,
         if (!field) { same = nullptr; break; }
         ir_class_t category = ir_machine_of(state->function->owner,
                                              field).class;
-        if (shape.slots[i].packed || category == IR_CLASS_VOID
+        if (shape.slots[i].packed || shape.slots[i].overlay
+            || category == IR_CLASS_VOID
             || category == IR_CLASS_BOOL || category == IR_CLASS_SINT
             || category == IR_CLASS_UINT || category == IR_CLASS_FLOAT)
             continue;
@@ -6512,6 +6594,8 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         }
         result = LLVMBuildStructGEP2(state->builder, native, address,
                                      member_slot.element, "field.address");
+        if (member_slot.overlay)
+            result = overlay_member_address(state, result, &member_slot);
         bool bit_reference = uses_bitptr(state->function->owner,
                                          instruction->dest->type);
         if (member_slot.packed && !bit_reference) {

@@ -225,10 +225,30 @@ n00bb_abi_place_record(const n00bb_record_field_t *fields, size_t count,
         uint64_t cursor = 0;
         for (size_t i = 0; ok && i < aligned_count; i++) {
             size_t field = aligned[i];
-            uint64_t offset;
-            ok = align_up(cursor, fields[field].alignment_bits, &offset)
-                && place_at(fields, field, offset, placements, &cursor,
-                            &high_water);
+            uint32_t group = fields[field].union_group;
+            if (!group) {
+                uint64_t offset;
+                ok = align_up(cursor, fields[field].alignment_bits, &offset)
+                    && place_at(fields, field, offset, placements, &cursor,
+                                &high_water);
+                continue;
+            }
+            if (i && fields[aligned[i - 1]].union_group == group) continue;
+            uint64_t group_alignment = 1, offset, end;
+            for (size_t j = i; j < aligned_count
+                 && fields[aligned[j]].union_group == group; j++)
+                if (fields[aligned[j]].alignment_bits > group_alignment)
+                    group_alignment = fields[aligned[j]].alignment_bits;
+            ok = align_up(cursor, group_alignment, &offset);
+            end = offset;
+            for (size_t j = i; ok && j < aligned_count
+                 && fields[aligned[j]].union_group == group; j++) {
+                uint64_t member_end = offset;
+                ok = place_at(fields, aligned[j], offset, placements,
+                              &member_end, &high_water);
+                if (member_end > end) end = member_end;
+            }
+            cursor = end;
         }
         if (ok && policy == N00BB_RECORD_C)
             ok = align_up(high_water, alignment, &high_water);
