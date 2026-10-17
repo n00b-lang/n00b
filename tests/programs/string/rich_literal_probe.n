@@ -1,3 +1,4 @@
+import sys.abi
 import text
 
 let fancy: string = "«b»Hello«/b» «i»world«/i»"'r
@@ -60,6 +61,35 @@ func dispatch() {
     require written == cast[i32] byte_len(repr_of(bold))
 }
 
+func rich_body_text_offset() -> u64? {
+    let probe: text.Rich_Body? = nil
+    let row: Ref[sys.abi.Type_Record]? = sys.abi.type_for(typeof(probe))
+    if row == nil {
+        return nil
+    }
+    let body: Ref[sys.abi.Type_Record]? = sys.abi.first_component(row.get())
+    if body == nil {
+        return nil
+    }
+    let fields: sys.abi.Range = body.get().fields_or_arms
+    var i: u32 = 0
+    while i < fields.count {
+        let index: i64 = sys.abi.range_index(fields, i)
+        if index >= 0 {
+            let field: Ref[sys.abi.Field_Record]? =
+                sys.abi.field_at(cast[u32] index)
+            if field != nil and field.get().declaration_ordinal == 0 {
+                return field.get().logical_bit_offset
+            }
+        }
+        i += 1
+    }
+    return nil
+}
+
+let text_offset: u64? = rich_body_text_offset()
+require text_offset != nil
+require text_offset.get() == 0
 check_rich(fancy, "Hello world", "r\"«b»Hello«/b» «i»world«/i»\"")
 local_literals()
 dispatch()
