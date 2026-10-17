@@ -133,9 +133,10 @@ private func __string_make_rich(body: Ref[`T]) -> string {
     return made
 }
 
-private func adopt_bytes(bytes: Array[u8], n: uint, encoding: u8) -> string {
+private func adopt_bytes(bytes: Ref[Array[u8]], n: uint, encoding: u8)
+    -> string {
     if n <= str_short_cap {
-        return __string_make(ref bytes, 0, n, encoding, false)
+        return __string_make(bytes, 0, n, encoding, false)
     }
     var made: string = ""
     let view: Ref[String_Words] = words(ref made)
@@ -253,7 +254,7 @@ func __add(self: string, other: string) -> string {
         bytes[left_length + j] = __string_byte(right, j)
         j += 1
     }
-    return adopt_bytes(bytes, n, cast[u8] widen_encoding(encoding(left),
+    return adopt_bytes(ref bytes, n, cast[u8] widen_encoding(encoding(left),
                                                          encoding(right)))
 }
 
@@ -338,7 +339,8 @@ private func utf8_sequence(bytes: Array[u8], at: uint, remaining: uint)
     return length
 }
 
-func __string_from_utf8(bytes: Array[u8], result: Ref[string]) -> bool {
+func __string_from_utf8(bytes: Ref[Array[u8]], result: Ref[string])
+    -> bool {
     let length: uint = __array_length(bytes)
     var ascii: bool = true
     var at: uint = 0
@@ -354,7 +356,7 @@ func __string_from_utf8(bytes: Array[u8], result: Ref[string]) -> bool {
     if ascii {
         encoding = 1
     }
-    ref_write(result, __string_make(ref bytes, 0, length, encoding, false))
+    ref_write(result, __string_make(bytes, 0, length, encoding, true))
     return true
 }
 
@@ -493,8 +495,8 @@ func to_cstring(self: string, copy: bool = false, buf: Array[u8]? = nil)
     return out
 }
 
-func adopt(bytes: Array[u8], len: int) -> string {
-    return from_raw(ref bytes, len, copy = false)
+func adopt(bytes: Ref[Array[u8]], len: int) -> string {
+    return from_raw(bytes, len, copy = false)
 }
 
 func byte_index(self: string, n: int) -> u8 fail: String_Error {
