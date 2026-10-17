@@ -35,6 +35,30 @@ func build_graph() -> bake.Bake_Root {
 
 const graph = build_graph()
 
+func hash(self: bake.Bake_Item_T) -> u128 {
+    return cast[u128]self.hash
+}
+
+func item_at(root: bake.Bake_Root, index: uint) -> bake.Bake_Item_T {
+    let root_record: Ref[bake.Bake_Root_T] = unsafe_cast[Ref[bake.Bake_Root_T]] root.raw
+    let base: Ref[byte] = unsafe_cast[Ref[byte]] root_record.items.data
+    let item: Ref[bake.Bake_Item_T] = unsafe_cast[Ref[bake.Bake_Item_T]] __gc_byte_offset(base, index * 24)
+    return item
+}
+
+func build_index(root: bake.Bake_Root) -> Dict[bake.Bake_Item_T, i32] {
+    var index: Dict[bake.Bake_Item_T, i32] = new[Dict[bake.Bake_Item_T, i32]]()
+    var position: uint = 0
+    while position < 4 {
+        let item: bake.Bake_Item_T = item_at(root, position)
+        require index.add(item, item.value)
+        position += 1
+    }
+    return index
+}
+
+const index: Dict[bake.Bake_Item_T, i32] = build_index(graph)
+
 func reopen() -> string? {
     try {
         let status = bake.bake_reopen(graph)!
@@ -73,5 +97,12 @@ func start() -> nil {
         require failure.text.get() == "a baked object cannot be released"
     }
     require bake.bake_query(graph, 8) == 2
+    var position: uint = 0
+    while position < 4 {
+        let found: i32? = index.get(item_at(graph, position))
+        require found != nil
+        require found.get() == cast[i32]((position + 1) * 10)
+        position += 1
+    }
     __fd_write(2, "baked ok\n")
 }

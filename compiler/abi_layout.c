@@ -834,8 +834,13 @@ publish_tuple_layout(ir_module_t *module, th_type *type,
             break;
         }
         if (!ir_layout_final(module, child, target->triple)) {
-            ready = false;
-            break;
+            const ir_final_layout_t *visible = ir_layout_final_visible(
+                module, child, target->triple);
+            if (!visible || !ir_layout_publish_final(module, child,
+                    target->triple, visible)) {
+                ready = false;
+                break;
+            }
         }
         size_t capacity = 3 * sizeof(size_t) + 2;
         names[i] = core_alloc_array(char, capacity);
