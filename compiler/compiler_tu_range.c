@@ -707,6 +707,17 @@ n00bb_propagate_integer_range_node(parse_grammar_t *grammar,
         }
         goto record;
     }
+    int64_t constant = 0;
+    if (n00bb_integer_constant_reference(grammar, node, &constant)) {
+        parsed->integer_literal_origin = node;
+        if (!n00bb_integer_interval_type(parsed->type,
+                &type_minimum, &type_maximum)
+            || (constant >= type_minimum && constant <= type_maximum))
+            result = core_csp_new_var(store,
+                CORE_STRING_STATIC("integer-constant"),
+                core_csp_dom_singleton(constant));
+        goto record;
+    }
     if (!is_integer_type(parsed->type)
         || !n00bb_integer_interval_type(parsed->type,
             &type_minimum, &type_maximum)) {

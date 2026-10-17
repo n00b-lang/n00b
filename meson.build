@@ -620,6 +620,31 @@ test(
     suite: 'slow',
 )
 
+test(
+    'untyped-consts-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'untyped_consts' / 'untyped_consts.n'],
+    env: ['N00B_PATH=' + (meson.current_source_dir() / 'tests' / 'programs'
+        / 'untyped_consts')],
+    timeout: 120,
+    suite: 'slow',
+)
+
+test(
+    'untyped-const-range-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'untyped_consts' / 'untyped_const_range.n',
+           'assigned value does not match the local type'],
+    timeout: 120,
+    suite: 'slow',
+)
+
 foreach feature : ['fallible_without_result', 'try_error_binding',
                    'builtin_type_record_literal', 'record_literal_nil_option',
                    'option_literal_argument', 'record_literal_return',
