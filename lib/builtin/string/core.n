@@ -395,12 +395,14 @@ private func __string_with_encoding(s: string, encoding: u8) -> string {
     return out
 }
 
-private func raw_len(src: Array[u8], byte_len: int) -> uint {
+private func raw_len(src: Array[u8], at: uint, byte_len: int) -> uint {
+    require at <= __array_length(src)
     if byte_len >= 0 {
+        require cast[uint] byte_len <= __array_length(src) - at
         return cast[uint] byte_len
     }
     var n: uint = 0
-    while n < __array_length(src) and src[n] != 0 {
+    while at + n < __array_length(src) and src[at + n] != 0 {
         n += 1
     }
     return n
@@ -411,13 +413,14 @@ func empty_string() -> string {
                          cast[u8] Str_Encoding.ascii, false)
 }
 
-func from_raw(src: Array[u8], byte_len: int, copy: bool = true,
-              encoding: Str_Encoding? = nil, unsafe: bool = false) -> string {
-    let len: uint = raw_len(src, byte_len)
+func from_raw(src: Array[u8], byte_len: int, at: uint = 0,
+              copy: bool = true, encoding: Str_Encoding? = nil,
+              unsafe: bool = false) -> string {
+    let len: uint = raw_len(src, at, byte_len)
     if len == 0 {
         return empty_string()
     }
-    let probe: string = __string_make(src, 0, len, 0, true)
+    let probe: string = __string_make(src, at, len, 0, true)
     var enc: Str_Encoding = Str_Encoding.binary
     if unsafe {
         require encoding != nil
@@ -433,7 +436,7 @@ func from_raw(src: Array[u8], byte_len: int, copy: bool = true,
                 cast[u8] enc <= cast[u8] encoding.get()
         }
     }
-    return __string_make(src, 0, len, cast[u8] enc, !copy)
+    return __string_make(src, at, len, cast[u8] enc, !copy)
 }
 
 func as_text(self: string) -> string fail: String_Error {
