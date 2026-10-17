@@ -586,7 +586,7 @@ foreach feature : ['fallible_without_result', 'try_error_binding',
                    'builtin_type_record_literal', 'record_literal_nil_option',
                    'option_literal_argument', 'record_literal_return',
                    'constructor_option_argument', 'option_literal_context',
-                   'packed_record_fields', 'hash_xxh3']
+                   'packed_record_fields', 'hash_xxh3', 'data_file']
     test(
         feature.replace('_', '-'), find_program('sh'),
         args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',

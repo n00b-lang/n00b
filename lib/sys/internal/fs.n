@@ -1,0 +1,102 @@
+public const einval: int = -22
+
+private inline func open_read_flags() -> int {
+    when target_os() == "linux" {
+        return 0x80000
+    } else when target_os() == "macos" {
+        return 0x1000000
+    } else {
+        return 0
+    }
+}
+
+private const seek_set: i32 = 0
+private const seek_end: i32 = 2
+
+func open_read(path: string) -> int fail: int {
+    var bytes: Array[u8] = new[Array[u8]](1)
+    try {
+        bytes = to_cstring(path, copy = true,
+            buf = new[Array[u8]](cast[int] byte_len(path) + 1))!
+    } else failure {
+        fail einval
+    }
+    let fd: int = __os_open(unsafe_cast[Ref[byte]] ref bytes[0],
+                            open_read_flags(), 0)
+    if fd < 0 {
+        fail fd
+    }
+    return fd
+}
+
+func size(fd: int) -> uint fail: int {
+    let end: int = __os_seek(fd, 0, seek_end)
+    if end < 0 {
+        fail end
+    }
+    let start: int = __os_seek(fd, 0, seek_set)
+    if start < 0 {
+        fail start
+    }
+    return cast[uint] end
+}
+
+func read_into(fd: int, modify buffer: Array[u8], at: uint, count: uint)
+    -> uint fail: int {
+    require at <= __array_length(buffer)
+    require count <= __array_length(buffer) - at
+    if count == 0 {
+        return 0
+    }
+    let got: int = __os_read(fd, unsafe_cast[Ref[byte]] ref buffer[at], count)
+    if got < 0 {
+        fail got
+    }
+    return cast[uint] got
+}
+
+func close(fd: int) -> nil fail: int {
+    let result: int = __os_close(fd)
+    if result < 0 {
+        fail result
+    }
+}
+
+func read_file(path: string) -> Array[u8] fail: int {
+    let fd: int = open_read(path)!
+    var length: uint = 0
+    try {
+        length = size(fd)!
+    } else failure {
+        __os_close(fd)
+        fail failure
+    }
+    var data: Array[u8] = new[Array[u8]](cast[int] length)
+    var done: uint = 0
+    while done < length {
+        var got: uint = 0
+        try {
+            got = read_into(fd, data, done, length - done)!
+        } else failure {
+            __os_close(fd)
+            fail failure
+        }
+        if got == 0 {
+            __os_close(fd)
+            fail einval
+        }
+        done += got
+    }
+    close(fd)!
+    return data
+}
+
+func data_file(path: string) -> Array[u8] {
+    var data: Array[u8] = new[Array[u8]](0)
+    try {
+        data = read_file(path)!
+    } else failure {
+        panic("cannot read data file " + path)
+    }
+    return data
+}

@@ -36,6 +36,10 @@ void n00b_os_cpu_relax(void);
 void *n00b_os_map_zeroed(size_t bytes, size_t alignment);
 int32_t n00b_os_unmap(void *address, size_t bytes);
 int32_t n00b_os_protect(void *address, size_t bytes, uint32_t protection);
+int64_t n00b_os_open(const uint8_t *path, int64_t flags, uint32_t mode);
+int64_t n00b_os_read(int64_t fd, uint8_t *buffer, uint64_t count);
+int64_t n00b_os_close(int64_t fd);
+int64_t n00b_os_seek(int64_t fd, int64_t offset, int32_t whence);
 uint64_t n00b_os_thread_control_self(void);
 void n00b_os_thread_capture_self(n00b_os_thread_context *context);
 int32_t n00b_os_thread_suspend(uint64_t control,

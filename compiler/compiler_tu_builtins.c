@@ -226,8 +226,21 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
     th_type *resume_args[] = {uint, thread_context_ref};
     th_type *capture_args[] = {thread_context_ref};
     th_type *write_args[] = {i32, byte_reference, u32};
+    th_type *integer = th_name(types, "int");
+    th_type *open_args[] = {byte_reference, integer, u32};
+    th_type *read_args[] = {integer, byte_reference, uint};
+    th_type *close_args[] = {integer};
+    th_type *seek_args[] = {integer, integer, i32};
     return register_builtin_native_function(symtab, types, nil_type,
             "__os_page_size", "n00b_os_page_size", uint, nullptr, 0)
+        && register_builtin_native_function(symtab, types, nil_type,
+            "__os_open", "n00b_os_open", integer, open_args, 3)
+        && register_builtin_native_function(symtab, types, nil_type,
+            "__os_read", "n00b_os_read", integer, read_args, 3)
+        && register_builtin_native_function(symtab, types, nil_type,
+            "__os_close", "n00b_os_close", integer, close_args, 1)
+        && register_builtin_native_function(symtab, types, nil_type,
+            "__os_seek", "n00b_os_seek", integer, seek_args, 3)
         && register_builtin_native_function(symtab, types, nil_type,
             "__write_bytes", "n00bb_runtime_write_bytes", i32,
             write_args, 3)

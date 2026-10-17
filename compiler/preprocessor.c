@@ -1,3 +1,6 @@
+#define _XOPEN_SOURCE 700
+#define _DARWIN_C_SOURCE 1
+
 #include "preprocessor.h"
 
 #include <errno.h>
@@ -1081,6 +1084,7 @@ eval_builtin(pp_context_t *ctx, parse_tree_t *call, pp_value_t *out)
         if (core_string_eq(name, CORE_STRING_STATIC("target_os"))
             || core_string_eq(name, CORE_STRING_STATIC("target_arch"))
             || core_string_eq(name, CORE_STRING_STATIC("n00b_impl"))
+            || core_string_eq(name, CORE_STRING_STATIC("source_dir"))
             || core_string_eq(name, CORE_STRING_STATIC("preproc_env")))
             kind = PP_STRING;
         else if (core_string_eq(name, CORE_STRING_STATIC("target_is_little_endian"))
@@ -1208,6 +1212,24 @@ eval_builtin(pp_context_t *ctx, parse_tree_t *call, pp_value_t *out)
     if (core_string_eq(name, CORE_STRING_STATIC("n00b_minor"))) PP_INT(1);
     if (core_string_eq(name, CORE_STRING_STATIC("n00b_patch"))) PP_INT(0);
     if (core_string_eq(name, CORE_STRING_STATIC("n00b_impl"))) PP_STRING("n00bb");
+    if (core_string_eq(name, CORE_STRING_STATIC("source_dir"))) {
+        core_string_t path = core_source_file_path(&ctx->unit->source);
+        char *copy = path.data ? core_strndup(path.data, path.u8_bytes)
+                               : nullptr;
+        char *resolved = copy ? realpath(copy, nullptr) : nullptr;
+        core_free(copy);
+        char *slash = resolved ? strrchr(resolved, '/') : nullptr;
+        if (!slash) {
+            free(resolved);
+            pp_error(ctx, call, "source_dir() has no resolvable source file");
+            return false;
+        }
+        *slash = 0;
+        *out = (pp_value_t){.kind = PP_STRING,
+            .as.string = own_string(ctx, core_string_from_cstr(resolved))};
+        free(resolved);
+        return true;
+    }
 #undef PP_INT
 #undef PP_STRING
 
@@ -1631,7 +1653,7 @@ n00bb_preprocessor_builtin_name(core_string_t name)
         "debug_enabled", "comptime",
         "preproc_utc_year", "preproc_utc_month", "preproc_utc_day",
         "preproc_utc_hour", "preproc_utc_minute", "preproc_utc_second",
-        "n00b_major", "n00b_minor", "n00b_patch", "n00b_impl",
+        "n00b_major", "n00b_minor", "n00b_patch", "n00b_impl", "source_dir",
         "preproc_env", "preproc_env_defines", "preproc_defines",
         "preproc_value", "compile_warning", "compile_error", nullptr,
     };

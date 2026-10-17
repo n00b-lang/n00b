@@ -167,9 +167,34 @@ static int32_t os_protect_raw(void *address, size_t bytes, uint32_t protection)
     return result < 0 ? -1 : 0;
 }
 
+static int64_t os_open_raw(const uint8_t *path, int64_t flags, uint32_t mode)
+{
+    return n00b_linux_syscall6(__NR_openat, AT_FDCWD, (long)path, (long)flags,
+                               (long)mode, 0, 0);
+}
+
+static int64_t os_read_raw(int64_t fd, uint8_t *buffer, uint64_t count)
+{
+    return n00b_linux_syscall6(__NR_read, (long)fd, (long)buffer, (long)count,
+                               0, 0, 0);
+}
+
+static int64_t os_close_raw(int64_t fd)
+{
+    return n00b_linux_syscall6(__NR_close, (long)fd, 0, 0, 0, 0, 0);
+}
+
+static int64_t os_seek_raw(int64_t fd, int64_t offset, int32_t whence)
+{
+    return n00b_linux_syscall6(__NR_lseek, (long)fd, (long)offset,
+                               (long)whence, 0, 0, 0);
+}
+
 #elif defined(__APPLE__)
 
 #include <sys/mman.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <sched.h>
 #include <time.h>
@@ -227,10 +252,39 @@ static int32_t os_protect_raw(void *address, size_t bytes, uint32_t protection)
     return mprotect(address, bytes, (int)protection) == 0 ? 0 : -1;
 }
 
+static int64_t os_errno_result(int64_t result)
+{
+    return result < 0 ? -(int64_t)errno : result;
+}
+
+static int64_t os_open_raw(const uint8_t *path, int64_t flags, uint32_t mode)
+{
+    return os_errno_result(open((const char *)path, (int)flags, (int)mode));
+}
+
+static int64_t os_read_raw(int64_t fd, uint8_t *buffer, uint64_t count)
+{
+    return os_errno_result(read((int)fd, buffer, (size_t)count));
+}
+
+static int64_t os_close_raw(int64_t fd)
+{
+    return os_errno_result(close((int)fd));
+}
+
+static int64_t os_seek_raw(int64_t fd, int64_t offset, int32_t whence)
+{
+    return os_errno_result(lseek((int)fd, (off_t)offset, whence));
+}
+
 #elif defined(_WIN32)
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <io.h>
+#include <limits.h>
 
 static void os_thread_yield(void)
 {
@@ -299,9 +353,57 @@ static int32_t os_protect_raw(void *address, size_t bytes, uint32_t protection)
     return VirtualProtect(address, bytes, mode, &old) ? 0 : -1;
 }
 
+static int64_t os_errno_result(int64_t result)
+{
+    return result < 0 ? -(int64_t)errno : result;
+}
+
+static int64_t os_open_raw(const uint8_t *path, int64_t flags, uint32_t mode)
+{
+    return os_errno_result(_open((const char *)path, (int)flags | _O_BINARY,
+                                 (int)mode));
+}
+
+static int64_t os_read_raw(int64_t fd, uint8_t *buffer, uint64_t count)
+{
+    unsigned chunk = count > INT_MAX ? INT_MAX : (unsigned)count;
+    return os_errno_result(_read((int)fd, buffer, chunk));
+}
+
+static int64_t os_close_raw(int64_t fd)
+{
+    return os_errno_result(_close((int)fd));
+}
+
+static int64_t os_seek_raw(int64_t fd, int64_t offset, int32_t whence)
+{
+    return os_errno_result(_lseeki64((int)fd, offset, whence));
+}
+
 #else
 #error "builtin/os requires macOS, Linux, or Windows"
 #endif
+
+int64_t n00b_os_open(const uint8_t *path, int64_t flags, uint32_t mode)
+{
+    return path ? os_open_raw(path, flags, mode) : -14;
+}
+
+int64_t n00b_os_read(int64_t fd, uint8_t *buffer, uint64_t count)
+{
+    if (!count) return 0;
+    return buffer ? os_read_raw(fd, buffer, count) : -14;
+}
+
+int64_t n00b_os_close(int64_t fd)
+{
+    return os_close_raw(fd);
+}
+
+int64_t n00b_os_seek(int64_t fd, int64_t offset, int32_t whence)
+{
+    return os_seek_raw(fd, offset, whence);
+}
 
 size_t n00b_os_page_size(void)
 {
