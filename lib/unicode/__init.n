@@ -11,6 +11,7 @@ import internal.linebreak
 import internal.bidi
 import internal.collation
 import internal.query
+import internal.security
 
 package unicode {
     export internal.types
@@ -26,5 +27,6 @@ package unicode {
     export internal.bidi
     export internal.collation
     export internal.query
+    export internal.security
     export builtin.encoding_of
 }
