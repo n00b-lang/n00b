@@ -4155,6 +4155,27 @@ n00bb_abstract_trait_requirement(ir_lower_context_t *context,
     return selection->dest;
 }
 
+static bool
+n00bb_coerce_method_operands(ir_lower_context_t *context, parse_tree_t *node,
+                             th_type *callable, ir_value_t *const *operands,
+                             size_t first, size_t count,
+                             ir_value_t **coerced, ir_span_t span)
+{
+    th_ctx *types = ir_module_types(context->module);
+    bool function = th_kind_of(th_resolve(callable)) == TH_FUNCTION;
+    for (size_t i = 0; i < count; i++) {
+        const th_param *formal = function && i >= first
+            ? th_func_param(callable, i) : nullptr;
+        coerced[i] = formal && operands[i]
+            && n00bb_value_coerces(types, operands[i]->type, formal->type)
+            ? n00bb_materialize(context, node, operands[i], formal->type,
+                                span)
+            : operands[i];
+        if (!coerced[i]) return false;
+    }
+    return true;
+}
+
 static ir_lower_result_t
 n00bb_lower_operator_method(ir_lower_context_t *context,
                           parse_visit_t *visit,
@@ -4213,6 +4234,13 @@ n00bb_lower_operator_method(ir_lower_context_t *context,
     th_type *contract = implementation->callable_contract
         ? implementation->callable_contract : implementation->type;
     th_type *callable = th_type_clone(types, contract);
+    ir_value_t *coerced[2] = {0};
+    if (callable && operand_count <= 2
+        && !n00bb_coerce_method_operands(context, visit->node, callable,
+            operands, 0, operand_count, coerced, span))
+        return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
+            "could not borrow the Buffer operand as a string");
+    if (callable && operand_count <= 2) operands = coerced;
     th_param parameters[2] = {
         {.mode = TH_IN, .type = operands[0]->type},
         {.mode = TH_IN, .type = operand_count == 2
@@ -4360,6 +4388,12 @@ n00bb_lower_in_place_method(ir_lower_context_t *context, parse_visit_t *visit,
     th_type *contract = symbol->callable_contract
         ? symbol->callable_contract : symbol->type;
     th_type *callable = th_type_clone(types, contract);
+    ir_value_t *coerced[2] = {0};
+    if (callable && !n00bb_coerce_method_operands(context, visit->node,
+            callable, operands, 1, 2, coerced, span))
+        return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
+            "could not borrow the Buffer operand as a string");
+    if (callable) operands = coerced;
     th_param parameters[2] = {
         {.mode = TH_INOUT, .type = target_type},
         {.mode = TH_IN, .type = operands[1]->type},

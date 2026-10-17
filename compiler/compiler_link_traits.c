@@ -980,6 +980,7 @@ operand_unifies(th_ctx *types, th_type *parameter, th_type *operand)
 {
     if (th_unify_probe(types, parameter, operand))
         return th_unify_in_place(types, parameter, operand) != nullptr;
+    if (n00bb_value_coerces(types, operand, parameter)) return true;
     th_type *promoted = n00bb_dereferenced_type(types, operand);
     return promoted && th_unify_in_place(types, parameter, promoted);
 }
@@ -1729,6 +1730,15 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
                     status = resolve_site_method(state, site, promoted,
                                                  &trait_name, &method);
                     if (status == TH_ENV_METHOD_FOUND) receiver_type = promoted;
+                }
+                th_type *coerced = status == TH_ENV_METHOD_NOT_FOUND
+                    && receiver_type && !site->secondary_dispatch
+                    ? n00bb_value_coercion_target(state->types, receiver_type)
+                    : nullptr;
+                if (coerced) {
+                    status = resolve_site_method(state, site, coerced,
+                                                 &trait_name, &method);
+                    if (status == TH_ENV_METHOD_FOUND) receiver_type = coerced;
                 }
                 if (status == TH_ENV_METHOD_NOT_FOUND
                     && core_string_eq(site->dispatch_trait,

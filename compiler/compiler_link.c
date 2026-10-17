@@ -4307,6 +4307,7 @@ register_builtin_value_defaults(th_env *defaults, const th_env *base,
                 }
                 th_type *shape = th_type_definition(state->types, receiver);
                 if (!th_is_closed(state->types, receiver)
+                    || n00bb_value_coercion_target(state->types, receiver)
                     || (record && (!shape
                         || th_kind_of(th_resolve(shape)) != TH_RECORD
                         || !th_is_closed(state->types, shape)))) continue;

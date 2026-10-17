@@ -5066,6 +5066,7 @@ prepare_initial_symbols(core_translation_unit_t *unit, th_ctx *types)
     if (state->annotations) return true;
 
     state->types = types;
+    n00bb_register_value_coercions(types);
     state->annotations = parse_annot_result_new(nullptr);
     parse_symtab_set_owner_unit(state->annotations->symtab, unit);
     if (!th_register_method_resolver(types, n00bb_callback_method_signature,
@@ -7817,6 +7818,34 @@ n00bb_value_coerces(th_ctx *types, th_type *from, th_type *to)
         && from_length == sizeof(n00bb_buffer_type_name) - 1
         && !memcmp(from_name, n00bb_buffer_type_name, from_length)
         && to_length == 6 && !memcmp(to_name, "string", 6);
+}
+
+static bool
+n00bb_coercion_hook(th_ctx *types, th_type *from, th_type *to, void *user)
+{
+    (void)user;
+    return n00bb_value_coerces(types, from, to);
+}
+
+th_type *
+n00bb_value_coercion_target(th_ctx *types, th_type *from)
+{
+    th_type *view = th_name(types, "string");
+    return n00bb_value_coerces(types, from, view) ? view : nullptr;
+}
+
+static th_type *
+n00bb_coercion_target_hook(th_ctx *types, th_type *from, void *user)
+{
+    (void)user;
+    return n00bb_value_coercion_target(types, from);
+}
+
+void
+n00bb_register_value_coercions(th_ctx *types)
+{
+    th_register_coercion(types, n00bb_coercion_hook, nullptr);
+    th_register_coercion_target(types, n00bb_coercion_target_hook);
 }
 
 th_type *
