@@ -6,6 +6,8 @@ import internal.identifiers
 import internal.emoji
 import internal.casemap
 import internal.normalization
+import internal.segmentation
+import internal.linebreak
 
 package unicode {
     export internal.types
@@ -16,5 +18,7 @@ package unicode {
     export internal.emoji
     export internal.casemap
     export internal.normalization
+    export internal.segmentation
+    export internal.linebreak
     export builtin.encoding_of
 }
