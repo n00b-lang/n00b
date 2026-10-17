@@ -1114,13 +1114,14 @@ constructor_argument_fits(n00bb_tu_state_t *state, parse_tree_t *node,
                           th_type *parameter, th_type *argument)
 {
     th_type *element = nullptr;
-    if (!n00bb_option_type_element(parameter, &element)
-        || th_unify_probe(state->types, parameter, argument))
+    bool optional = n00bb_option_type_element(parameter, &element);
+    if (th_unify_probe(state->types, parameter, argument))
         return th_unify_in_place(state->types, parameter, argument) != nullptr;
-    if (th_is_nil(argument)) return true;
+    if (optional && th_is_nil(argument)) return true;
     if (core_tree_node_value(node).integer_literal_origin)
-        return n00bb_contextual_integer_literal(state, node, element);
-    return th_unify_probe(state->types, argument, element)
+        return n00bb_contextual_integer_literal(state, node,
+                                                optional ? element : parameter);
+    return optional && th_unify_probe(state->types, argument, element)
         && th_unify_in_place(state->types, element, argument) != nullptr;
 }
 

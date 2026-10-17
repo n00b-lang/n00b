@@ -1356,7 +1356,11 @@ resolve_module_member_site(parse_grammar_t *grammar,
                 th_unify_in_place(state->types, th_func_ret(use),
                                   th_func_ret(instance));
         }
-        if (!direct_call && symbol->type && use_type
+        int64_t constant = 0;
+        bool contextual_constant = use_type
+            && th_kind_of(th_resolve(use_type)) != TH_VAR
+            && n00bb_integer_constant_reference(grammar, node, &constant);
+        if (!direct_call && !contextual_constant && symbol->type && use_type
             && state && state->types) {
             bool context_constructor = context_symbol(grammar, symbol);
             bool copied = context_constructor

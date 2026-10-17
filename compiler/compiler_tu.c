@@ -3304,9 +3304,19 @@ n00bb_constrain_literal_fit(parse_grammar_t *grammar,
     if (!origin || !node || !type || th_kind_of(th_resolve(type)) != TH_VAR)
         return false;
     ir_lit_t literal = {0};
-    if (!n00bb_parse_switch_integer(first_token_text(origin), &literal))
-        return false;
-    bool negative = false;
+    int64_t minimum = 0, maximum = 0;
+    if (nt_is(grammar, origin, "simple-lit")) {
+        if (!n00bb_parse_switch_integer(first_token_text(origin), &literal))
+            return false;
+    }
+    else if (parse_tree_integer_range(origin, &minimum, &maximum)
+             && minimum == maximum) {
+        literal.neg = minimum < 0;
+        literal.mag = minimum < 0 ? (ir_uint_t)(-(minimum + 1)) + 1
+                                  : (ir_uint_t)minimum;
+    }
+    else return false;
+    bool negative = literal.neg;
     for (parse_tree_t *at = core_tree_node_value(origin).parent;
          at && at != node; at = core_tree_node_value(at).parent)
         if (nt_is(grammar, at, "unary-expr")
@@ -3439,6 +3449,43 @@ unify_literal_operand(parse_grammar_t *grammar, n00bb_tu_state_t *state,
 }
 
 bool
+n00bb_untyped_integer_const(parse_grammar_t *grammar,
+                            parse_sym_entry_t *symbol,
+                            int64_t *minimum, int64_t *maximum)
+{
+    parse_tree_t *declaration = symbol && symbol->kind == PARSE_SYM_VARIABLE
+        ? symbol->decl_node : nullptr;
+    parse_tree_t *statement = declaration;
+    while (statement && !nt_is(grammar, statement, "variable-decl"))
+        statement = core_tree_node_value(statement).parent;
+    parse_tree_t *prefix = child_nt(grammar, statement, "declaration-prefix");
+    bool constant = core_string_eq(first_token_text(child_nt(grammar, prefix,
+        "binding-kind")), CORE_STRING_STATIC("const"));
+    parse_tree_t *initializer = constant
+            && nt_is(grammar, declaration, "sym-decl")
+            && !child_nt(grammar, declaration, "type-spec")
+        ? child_nt(grammar, declaration, "expression") : nullptr;
+    return initializer
+        && core_tree_node_value(initializer).integer_literal_origin
+        && parse_tree_integer_range(initializer, minimum, maximum)
+        && *minimum == *maximum;
+}
+
+bool
+n00bb_integer_constant_reference(parse_grammar_t *grammar, parse_tree_t *node,
+                                 int64_t *value)
+{
+    parse_node_resolution_t resolution = node && !core_tree_is_leaf(node)
+        ? parse_tree_resolution(node) : (parse_node_resolution_t){0};
+    return (nt_is(grammar, node, "primary")
+            || (nt_is(grammar, node, "postfix-expr")
+                && dotted_symbol_path_node(grammar, node)))
+        && resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
+        && n00bb_untyped_integer_const(grammar, resolution.target.symbol,
+                                       value, value);
+}
+
+bool
 n00bb_cache_contextual_integer(parse_grammar_t *grammar,
                                n00bb_tu_state_t *state, parse_tree_t *node)
 {
@@ -3460,6 +3507,11 @@ n00bb_cache_contextual_integer(parse_grammar_t *grammar,
                 return false;
         }
         return true;
+    }
+    int64_t constant = 0;
+    if (n00bb_integer_constant_reference(grammar, node, &constant)) {
+        parsed->integer_literal_origin = node;
+        return parse_tree_set_integer_range(node, constant, constant);
     }
     if (core_tree_num_children(node) == 3
         && binary_operator_dispatch_for_node(grammar, node, &trait, &method)

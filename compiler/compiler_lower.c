@@ -6628,6 +6628,31 @@ n00bb_lower_static_litmod(ir_lower_context_t *context,
 }
 
 
+static bool
+n00bb_lower_integer_constant_reference(ir_lower_context_t *context,
+                                       parse_visit_t *visit, bool entering,
+                                       void *state)
+{
+    (void)state;
+    int64_t value = 0;
+    if (!entering || !context->reachable
+        || !n00bb_integer_constant_reference(visit->grammar, visit->node,
+                                             &value)) return true;
+    ir_span_t span = lower_span_for_tree(context, visit->node);
+    th_type *type = core_tree_node_value(visit->node).type;
+    ir_instr_t *constant = type
+        ? ir_lower_emit_instruction(context, IR_OP_CONST, span) : nullptr;
+    if (constant
+        && ir_lower_set_temp_dest(context, constant, "__n00bb_constant_",
+                                  th_resolve(type))
+        && ir_instr_operand_int(constant, (ir_int_t)value)
+        && ir_lower_set_node_value(context, visit->node, constant->dest))
+        return true;
+    lower_error(context, IR_DIAG_INTERNAL, span,
+                "could not emit an integer constant reference");
+    return false;
+}
+
 static ir_instr_t *
 n00bb_emit_uint_constant(ir_lower_context_t *context, th_type *uint_type,
                          uint64_t value, ir_span_t span, const char *prefix)
@@ -19795,6 +19820,10 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         "tuple-or-paren", n00bb_lower_static_litmod, nullptr);
     ok = ok && ir_lowerer_register_nt_visit(lowerer,
         "new-expr", n00bb_mark_constructor_lvalues, nullptr);
+    ok = ok && ir_lowerer_register_nt_visit(lowerer,
+        "primary", n00bb_lower_integer_constant_reference, nullptr)
+        && ir_lowerer_register_nt_visit(lowerer,
+        "postfix-expr", n00bb_lower_integer_constant_reference, nullptr);
     ok = ok && ir_lowerer_register_nt_visit(lowerer,
         "assert-stmt", n00bb_lower_assert_statement, nullptr);
     ok = ok && ir_lowerer_register_nt_visit(lowerer,
