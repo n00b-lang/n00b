@@ -6811,6 +6811,72 @@ static ir_lower_result_t n00bb_lower_constructor_new(
     ir_lower_context_t *context, parse_visit_t *visit, th_type *result_type,
     ir_span_t span);
 
+static ir_value_t *
+n00bb_emit_array_allocation(ir_lower_context_t *context, th_type *leaf,
+                            uint32_t rank, ir_shape_extent_t *extents,
+                            th_type *result_type, ir_span_t span)
+{
+    n00bb_lower_context_t *lower = context->user;
+    th_type *uint_type = n00bb_ir_builtin_type(context->module, "uint");
+    ir_instr_t *one = uint_type
+        ? n00bb_emit_uint_constant(context, uint_type, 1, span,
+                                   "__n00bb_array_one") : nullptr;
+    if (!lower || !lower->ir_context || !one) return nullptr;
+    for (uint32_t i = 0; i < rank; i++) {
+        if (extents[i].value || extents[i].kind != IR_SHAPE_EXTENT_STATIC)
+            continue;
+        ir_instr_t *constant = n00bb_emit_uint_constant(context, uint_type,
+            extents[i].static_value, span, "__n00bb_array_extent");
+        if (!constant) return nullptr;
+        extents[i].value = constant->dest;
+    }
+    uint32_t known_prefix = 0;
+    while (known_prefix < rank && extents[known_prefix].value)
+        known_prefix++;
+    for (uint32_t i = known_prefix; i < rank; i++)
+        if (extents[i].value) return nullptr;
+    ir_shape_t *shape = ir_shape_new(lower->ir_context, leaf, rank);
+    bool ok = shape != nullptr;
+    for (uint32_t i = 0; ok && i < rank; i++)
+        ok = ir_shape_set_extent(shape, i, extents[i]);
+    ok = ok && ir_shape_set_storage(shape, known_prefix, true);
+    ir_value_t *count = one->dest;
+    for (uint32_t i = 0; ok && i < known_prefix; i++) {
+        ir_instr_t *product = n00bb_emit_checked_product(context, count,
+            extents[i].value, uint_type, span);
+        if (!product) ok = false;
+        else count = product->dest;
+    }
+    ok = ok && ir_shape_set_element_count(shape, (ir_shape_measure_t){
+        .kind = IR_SHAPE_MEASURE_RUNTIME,
+        .value = count,
+    });
+    ir_value_t *stride = one->dest;
+    for (uint32_t i = known_prefix; ok && i > 0; i--) {
+        uint32_t dimension = i - 1;
+        ok = ir_shape_set_stride(shape, dimension,
+            (ir_shape_measure_t){.kind = IR_SHAPE_MEASURE_RUNTIME,
+                                  .value = stride});
+        if (ok && dimension > 0) {
+            ir_instr_t *product = n00bb_emit_checked_product(context, stride,
+                extents[dimension].value, uint_type, span);
+            if (!product) ok = false;
+            else stride = product->dest;
+        }
+    }
+    ir_instr_t *instruction = ok
+        ? ir_lower_emit_instruction(context, IR_OP_ARRAY_NEW, span) : nullptr;
+    ok = ok && instruction
+        && ir_lower_set_temp_dest(context, instruction,
+                                  "__n00bb_array_new_", result_type)
+        && ir_instr_set_array_init(lower->ir_context, instruction,
+                                   IR_ARRAY_INIT_LANGUAGE_ZERO);
+    for (uint32_t i = 0; ok && i < known_prefix; i++)
+        ok = ir_instr_operand_value(instruction, extents[i].value);
+    ok = ok && ir_value_set_shape(instruction->dest, shape);
+    return ok ? instruction->dest : nullptr;
+}
+
 static ir_lower_result_t
 n00bb_lower_array_new(ir_lower_context_t *context, parse_visit_t *visit,
                       ir_value_t *const *operands, size_t operand_count,
@@ -7021,74 +7087,31 @@ n00bb_lower_array_new(ir_lower_context_t *context, parse_visit_t *visit,
                            "could not lower array dimensions");
     }
 
-    ir_shape_t *shape = ir_shape_new(context->user
-        ? ((n00bb_lower_context_t *)context->user)->ir_context : nullptr,
-        leaf, rank);
-    ok = shape != nullptr;
-    uint32_t known_prefix = 0;
-    while (known_prefix < rank && dimension_values.data[known_prefix])
-        known_prefix++;
-    for (uint32_t i = known_prefix; i < rank; i++)
-        if (dimension_values.data[i]) ok = false;
-    for (uint32_t i = 0; ok && i < rank; i++) {
-        ir_shape_extent_t extent = {0};
+    ir_shape_extent_t *extents = core_alloc_array(ir_shape_extent_t, rank);
+    for (uint32_t i = 0; i < rank; i++) {
         if (dimension_expressions.data[i]) {
-            extent = array_dimension_extent(visit->grammar,
+            extents[i] = array_dimension_extent(visit->grammar,
                 dimension_expressions.data[i]);
-            extent.value = dimension_values.data[i];
+            extents[i].value = dimension_values.data[i];
         }
-        else if (dimension_values.data[i]) {
-            extent = (ir_shape_extent_t){
+        else if (dimension_values.data[i])
+            extents[i] = (ir_shape_extent_t){
                 .kind = IR_SHAPE_EXTENT_RUNTIME,
                 .value = dimension_values.data[i],
             };
-        }
-        else extent.kind = IR_SHAPE_EXTENT_UNRESOLVED;
-        ok = ir_shape_set_extent(shape, i, extent);
+        else extents[i] = (ir_shape_extent_t){
+                .kind = IR_SHAPE_EXTENT_UNRESOLVED};
     }
-    ok = ok && ir_shape_set_storage(shape, known_prefix, true);
-    ir_value_t *count = one->dest;
-    for (uint32_t i = 0; ok && i < known_prefix; i++) {
-        ir_instr_t *product = n00bb_emit_checked_product(context, count,
-            dimension_values.data[i], uint_type, span);
-        if (!product) ok = false;
-        else count = product->dest;
-    }
-    ok = ok && ir_shape_set_element_count(shape, (ir_shape_measure_t){
-        .kind = IR_SHAPE_MEASURE_RUNTIME,
-        .value = count,
-    });
-    ir_value_t *stride = one->dest;
-    for (uint32_t i = known_prefix; ok && i > 0; i--) {
-        uint32_t dimension = i - 1;
-        ok = ir_shape_set_stride(shape, dimension,
-            (ir_shape_measure_t){.kind = IR_SHAPE_MEASURE_RUNTIME,
-                                  .value = stride});
-        if (ok && dimension > 0) {
-            ir_instr_t *product = n00bb_emit_checked_product(context, stride,
-                dimension_values.data[dimension], uint_type, span);
-            if (!product) ok = false;
-            else stride = product->dest;
-        }
-    }
-    ir_instr_t *instruction = ok
-        ? ir_lower_emit_instruction(context, IR_OP_ARRAY_NEW, span) : nullptr;
-    ok = ok && instruction
-        && ir_lower_set_temp_dest(context, instruction,
-                                  "__n00bb_array_new_", result_type)
-        && lower && lower->ir_context
-        && ir_instr_set_array_init(lower->ir_context, instruction,
-                                   IR_ARRAY_INIT_LANGUAGE_ZERO);
-    for (uint32_t i = 0; ok && i < known_prefix; i++)
-        ok = ir_instr_operand_value(instruction, dimension_values.data[i]);
-    ok = ok && ir_value_set_shape(instruction->dest, shape);
+    ir_value_t *array = n00bb_emit_array_allocation(context, leaf, rank,
+        extents, result_type, span);
+    core_free(extents);
     core_list_free(type_dimensions);
     core_list_free(dimension_values);
     core_list_free(dimension_expressions);
-    if (!ok)
+    if (!array)
         return lower_error(context, IR_DIAG_INTERNAL, span,
                            "could not emit semantic array construction");
-    return (ir_lower_result_t){IR_LOWER_VALUE, instruction->dest};
+    return (ir_lower_result_t){IR_LOWER_VALUE, array};
 }
 
 static bool
@@ -12715,6 +12738,37 @@ n00bb_lower_signature_array_shape(ir_lowerer_t *lowerer,
 }
 
 static bool
+n00bb_allocate_declared_array(ir_lower_context_t *context, ir_local_t *local,
+                              ir_shape_t *shape, ir_span_t span)
+{
+    ir_shape_storage_t storage;
+    if (!local || !shape || !ir_shape_storage(shape, &storage)
+        || !storage.flat_prefix_rank) return true;
+    uint32_t rank = ir_shape_rank(shape);
+    ir_shape_extent_t *extents = core_alloc_array(ir_shape_extent_t, rank);
+    bool ok = true;
+    for (uint32_t i = 0; ok && i < rank; i++) {
+        ok = ir_shape_extent(shape, i, &extents[i]);
+        if (ok && i < storage.flat_prefix_rank && !extents[i].value
+            && extents[i].kind != IR_SHAPE_EXTENT_STATIC) {
+            lower_error(context, IR_DIAG_TYPE_ARGS, span,
+                "array extent is not available where the array is declared");
+            core_free(extents);
+            return false;
+        }
+    }
+    ir_value_t *array = ok ? n00bb_emit_array_allocation(context,
+        ir_shape_element_type(shape), rank, extents, local->type, span)
+        : nullptr;
+    core_free(extents);
+    if (array && n00bb_emit_local_write(context, local, array, span))
+        return true;
+    lower_error(context, IR_DIAG_INTERNAL, span,
+                "could not allocate the declared array");
+    return false;
+}
+
+static bool
 n00bb_lower_declare_local(ir_lower_context_t *context, parse_visit_t *visit,
                           bool entering, void *state)
 {
@@ -12734,7 +12788,11 @@ n00bb_lower_declare_local(ir_lower_context_t *context, parse_visit_t *visit,
                 "could not bind runtime array dimensions");
             return false;
         }
-        if (!expression || !n00bb_shape_has_constraints(shape)) return true;
+        if (!expression)
+            return !symbol || symbol->mutability != PARSE_SYM_MUTABLE
+                || n00bb_allocate_declared_array(context, local, shape,
+                       lower_span_for_tree(context, visit->node));
+        if (!n00bb_shape_has_constraints(shape)) return true;
         ir_value_t *value = ir_lower_node_value(context, expression);
         if (!value || !n00bb_attach_expression_shape(context, visit->grammar,
                 expression, value)
