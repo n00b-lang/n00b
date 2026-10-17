@@ -6315,6 +6315,9 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
     }
     case IR_OP_COPY:
         if (count != 1 || operands[0].kind != IR_OPD_VALUE) break;
+        if (operands[0].value && ir_machine_of(state->function->owner,
+                operands[0].value->type).class == IR_CLASS_VOID)
+            return true;
         result = lowered_value(state, operands[0].value);
         if (result && instruction->dest
             && ir_annot_get(&instruction->annots, "n00bb.literal_copy"))

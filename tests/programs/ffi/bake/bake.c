@@ -147,6 +147,18 @@ bake_open(const char *path)
     return path ? open(path, O_RDONLY) : -1;
 }
 
+int32_t
+bake_touch(const char *path, const char *text)
+{
+    int fd = path && text ? open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644)
+                          : -1;
+    if (fd < 0) return -1;
+    size_t length = strlen(text);
+    ssize_t written = write(fd, text, length);
+    close(fd);
+    return written == (ssize_t)length ? 0 : -1;
+}
+
 void
 bake_free(bake_root_t *root)
 {

@@ -653,6 +653,16 @@ test(
 )
 
 test(
+    'ffi-bake', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'ffi_bake.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'ffi'
+               / 'bake'],
+    timeout: 300,
+    suite: 'slow',
+)
+
+test(
     'ffi-zlib', find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'ffi_zlib.sh',
            n00bb_exe.full_path(),

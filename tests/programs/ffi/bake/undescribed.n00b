@@ -1,0 +1,19 @@
+record Inner layout(c) {
+    blob: Foreign[nil]?
+}
+
+record Holder layout(c) {
+    count: i64
+    inner: Inner
+}
+
+func make() -> Holder {
+    let inner: Inner = (blob = unsafe_cast[Foreign[nil]?] 4096)
+    return (count = 1, inner = inner)
+}
+
+const held: Holder = make()
+
+func start() -> nil {
+    require held.count == 1
+}
