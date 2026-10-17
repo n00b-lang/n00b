@@ -3,8 +3,6 @@
 #include <limits.h>
 #include <stdint.h>
 
-#include "abi_string.h"
-
 #if defined(__linux__)
 #include "builtin_os_syscall.h"
 
@@ -109,20 +107,13 @@ static int32_t write_bytes(int32_t fd, const uint8_t *bytes, uint32_t count)
 #error "raw_fd_write needs an implementation for this target"
 #endif
 
-int32_t n00b_abi_v1_raw_fd_write(int32_t fd, n00b_abi_string_v1 text)
+int32_t n00b_abi_v1_raw_fd_write(int32_t fd, const uint8_t *bytes,
+                                 uint64_t count)
 {
-    n00bb_abi_string_header_t header;
-    if (!n00bb_abi_string_decode((const uint8_t *)&text, sizeof text,
-                                 &header) ||
-        header.tag == N00BB_ABI_STRING_RICH) return -1;
-    const uint8_t *bytes = header.tag == N00BB_ABI_STRING_SHORT
-                               ? text.short_value.bytes
-                               : text.long_value.data;
-    if (!header.length) return 0;
+    if (!count) return 0;
     if (fd < 0 || !bytes) return -1;
-    uint32_t count = header.length > INT32_MAX
-                         ? INT32_MAX : (uint32_t)header.length;
-    return write_bytes(fd, bytes, count);
+    return write_bytes(fd, bytes,
+                       count > INT32_MAX ? INT32_MAX : (uint32_t)count);
 }
 
 int32_t n00bb_runtime_write_bytes(int32_t fd, const uint8_t *bytes,
