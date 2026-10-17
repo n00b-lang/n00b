@@ -625,6 +625,10 @@ ir_func_t   *ir_func_clone_replacing(ir_func_t *source, const char *name,
                                     const th_type *const *from,
                                     th_type *const *to, size_t count,
                                     const char **failure);
+ir_func_t   *ir_func_clone_into(ir_func_t *source, ir_module_t *module,
+                                const char *name, const th_type *const *from,
+                                th_type *const *to, size_t count,
+                                const char **failure);
 ir_func_t   *ir_func_find(ir_module_t *m, const char *name);
 /* Preserve a universally quantified callable contract separately from the
  * function's IR parameter/result shape. Calls instantiate this contract per

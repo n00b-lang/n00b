@@ -183,8 +183,18 @@ ir_func_t *ir_func_clone_replacing(ir_func_t *source, const char *name,
                                   th_type *const *to, size_t count,
                                   const char **failure)
 {
+    return ir_func_clone_into(source, source ? source->owner : nullptr, name,
+                              from, to, count, failure);
+}
+
+ir_func_t *ir_func_clone_into(ir_func_t *source, ir_module_t *module,
+                              const char *name, const th_type *const *from,
+                              th_type *const *to, size_t count,
+                              const char **failure)
+{
     if (failure) *failure = "invalid clone request";
-    if (!source || !name || !*name || (count && (!from || !to)))
+    if (!source || !module || module->ctx != source->owner->ctx || !name
+        || !*name || (count && (!from || !to)))
         return nullptr;
     clone_t c = {.source = source, .from = from, .to = to,
                  .count = count, .failure = failure};
@@ -192,7 +202,7 @@ ir_func_t *ir_func_clone_replacing(ir_func_t *source, const char *name,
     th_type *signature = th_type_clone_replacing(
         ir_ctx_types(source->owner->ctx), source->type, from, to, count);
     if (!signature) return nullptr;
-    c.copy = ir_func_add(source->owner, name, signature, IR_LINK_INTERNAL);
+    c.copy = ir_func_add(module, name, signature, IR_LINK_INTERNAL);
     if (!c.copy) return nullptr;
     c.copy->span = source->span;
     c.copy->origin = source->origin;
