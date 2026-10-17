@@ -606,6 +606,20 @@ test(
     suite: 'slow',
 )
 
+test(
+    'const-array-write-rejected-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'features'
+               / 'const_array_write_rejected.n',
+           'contents of constant const_array_write_rejected.bytes',
+           'contents of constant const_array_write_rejected.grid',
+           'contents of constant const_array_write_rejected.points'],
+    timeout: 120,
+    suite: 'slow',
+)
+
 foreach feature : ['fallible_without_result', 'try_error_binding',
                    'builtin_type_record_literal', 'record_literal_nil_option',
                    'option_literal_argument', 'record_literal_return',
