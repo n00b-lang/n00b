@@ -239,6 +239,12 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
     return register_builtin_native_function(symtab, types, nil_type,
             "__os_page_size", "n00b_os_page_size", uint, nullptr, 0)
         && register_builtin_native_function(symtab, types, nil_type,
+            "__gc_enter_blocking", "sys.internal.gc.alloc.enter_blocking_runtime",
+            nil_type, nullptr, 0)
+        && register_builtin_native_function(symtab, types, nil_type,
+            "__gc_leave_blocking", "sys.internal.gc.alloc.leave_blocking_runtime",
+            nil_type, nullptr, 0)
+        && register_builtin_native_function(symtab, types, nil_type,
             "__os_env_count", "n00b_os_env_count", uint, nullptr, 0)
         && register_builtin_native_function(symtab, types, nil_type,
             "__os_env_at", "n00b_os_env_at", optional_reference,

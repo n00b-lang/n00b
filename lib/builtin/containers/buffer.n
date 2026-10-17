@@ -1,0 +1,496 @@
+import containers.array
+import string.core
+import panic
+
+record Buffer {
+    lock:      Atomic[u32]
+    store:     Array[u8]
+    byte_len:  uint
+    alloc_len: uint
+    borrowed:  bool
+}
+
+public const empty_buffer_alloc: uint = 16
+
+enum Buffer_Error {
+    index_oob, slice_oob
+}
+
+private const writer_bit: u32 = 0x8000_0000
+private const align_unit: uint = 8
+
+thread var borrowed_buffers: Array[Ref[Buffer]?][8] =
+    [nil, nil, nil, nil, nil, nil, nil, nil]
+thread var borrowed_top: uint = 0
+
+private func spin_wait(modify attempt: u32) {
+    if attempt < 64 {
+        __os_cpu_relax()
+        attempt += 1
+        return
+    }
+    __gc_enter_blocking()
+    __os_thread_yield()
+    __gc_leave_blocking()
+    attempt = 0
+}
+
+private func read_lock(self: Ref[Buffer]) {
+    var attempt: u32 = 0
+    while true {
+        let seen: u32 = __atomic_load(ref self.lock)
+        if seen & writer_bit == 0 and
+            __atomic_compare_exchange(ref self.lock, seen, seen + 1) {
+            return
+        }
+        spin_wait(attempt)
+    }
+}
+
+private func read_unlock(self: Ref[Buffer]) {
+    __atomic_fetch_sub(ref self.lock, 1)
+}
+
+private func check_not_borrowed(self: Ref[Buffer]) {
+    when debug_enabled() {
+        let target: uint = __abi_ref_address(self)
+        var i: uint = 0
+        while i < borrowed_top {
+            let entry: Ref[Buffer]? = borrowed_buffers[i]
+            if entry != nil and __abi_ref_address(entry.get()) == target {
+                panic.panic("buffer written while borrowed as string")
+            }
+            i += 1
+        }
+    }
+}
+
+private func write_lock(self: Ref[Buffer]) {
+    check_not_borrowed(self)
+    var attempt: u32 = 0
+    while !__atomic_compare_exchange(ref self.lock, 0, writer_bit) {
+        spin_wait(attempt)
+    }
+}
+
+private func write_unlock(self: Ref[Buffer]) {
+    __atomic_store(ref self.lock, 0)
+}
+
+context Buffer_Read(b: Ref[Buffer]) {
+    enter() {
+        read_lock(b)
+    }
+    ensure() {
+        read_unlock(b)
+    }
+}
+
+context Buffer_Write(b: Ref[Buffer]) {
+    enter() {
+        write_lock(b)
+    }
+    ensure() {
+        write_unlock(b)
+    }
+}
+
+private func align(n: uint) -> uint {
+    return (n + align_unit - 1) & ~(align_unit - 1)
+}
+
+private func pow2_ceil(n: uint) -> uint {
+    if n <= 1 {
+        return 1
+    }
+    return unsafe_shl(cast[uint] 1, 64 - __count_leading_zeros(n - 1))
+}
+
+private func hex_digit(byte: u8, out value: u8) -> bool {
+    if byte >= 0x30 and byte <= 0x39 {
+        value = byte - 0x30
+        return true
+    }
+    if byte >= 0x61 and byte <= 0x66 {
+        value = byte - 0x61 + 10
+        return true
+    }
+    if byte >= 0x41 and byte <= 0x46 {
+        value = byte - 0x41 + 10
+        return true
+    }
+    value = 0
+    return false
+}
+
+func __init(modify self: Buffer, length: int = -1, hex: string = "",
+            ptr: Array[u8]? = nil, copy: bool = true) {
+    var count: int = length
+    let hex_len: uint = string.core.byte_len(hex)
+
+    if hex_len == 0 and ptr == nil {
+        if count < 0 {
+            return
+        }
+    }
+
+    if count < 0 {
+        if hex_len == 0 {
+            return
+        }
+        count = cast[int] (hex_len >> 1)
+    }
+
+    if count == 0 {
+        assert ptr == nil
+        self.alloc_len = empty_buffer_alloc
+        self.store = new[Array[u8]](cast[int] self.alloc_len)
+        self.byte_len = 0
+        return
+    }
+
+    if ptr == nil and hex_len == 0 {
+        self.byte_len = cast[uint] count
+        self.store = new[Array[u8]](count)
+        self.alloc_len = cast[uint] count
+        return
+    }
+
+    if hex_len != 0 {
+        assert ptr == nil
+        self.store = new[Array[u8]](count)
+        self.alloc_len = cast[uint] count
+        var cur: u8 = 0
+        var valid_count: int = 0
+        var i: uint = 0
+        while i < hex_len {
+            var nibble: u8 = 0
+            if hex_digit(string.core.byte_at(hex, i), nibble) {
+                valid_count += 1
+                if valid_count % 2 == 1 {
+                    cur = nibble << 4
+                }
+                else {
+                    cur = cur | nibble
+                    self.store[self.byte_len] = cur
+                    self.byte_len += 1
+                }
+            }
+            i += 1
+        }
+        return
+    }
+
+    self.byte_len = cast[uint] count
+
+    if ptr != nil {
+        if copy {
+            self.alloc_len = align(cast[uint] count)
+            self.store = new[Array[u8]](cast[int] self.alloc_len)
+            containers.array.copy_items(self.store, 0, ptr.get(), 0,
+                                        cast[uint] count)
+        }
+        else {
+            self.alloc_len = cast[uint] count
+            self.borrowed = true
+            self.store = ptr.get()
+        }
+    }
+}
+
+func empty_buffer() -> Buffer {
+    return new[Buffer](0)
+}
+
+func buffer_from_bytes(bytes: Array[u8], len: int, copy: bool = true)
+    -> Buffer {
+    return new[Buffer](len, ptr = bytes, copy = copy)
+}
+
+private func raw_own(modify self: Buffer) {
+    if !self.borrowed {
+        return
+    }
+
+    let new_alloc_sz: uint = pow2_ceil(self.alloc_len)
+    var new_raw: Array[u8] = new[Array[u8]](cast[int] new_alloc_sz)
+
+    if self.byte_len != 0 {
+        containers.array.copy_items(new_raw, 0, self.store, 0, self.byte_len)
+    }
+
+    self.borrowed = false
+    self.store = new_raw
+    self.alloc_len = new_alloc_sz
+}
+
+private func raw_resize(modify self: Buffer, new_sz: uint) {
+    raw_own(self)
+
+    if new_sz > self.alloc_len {
+        let new_alloc_sz: uint = pow2_ceil(new_sz)
+        var new_raw: Array[u8] = new[Array[u8]](cast[int] new_alloc_sz)
+
+        containers.array.copy_items(new_raw, 0, self.store, 0, self.byte_len)
+
+        self.store = new_raw
+        self.alloc_len = new_alloc_sz
+        self.byte_len = new_sz
+        return
+    }
+
+    var at: uint = self.byte_len
+    while at < new_sz {
+        self.store[at] = 0
+        at += 1
+    }
+
+    self.byte_len = new_sz
+}
+
+func resize(modify self: Buffer, new_sz: uint) {
+    with Buffer_Write(ref self) {
+        raw_resize(self, new_sz)
+    }
+}
+
+func append_bytes(modify self: Buffer, src: Array[u8], len: uint) {
+    if len == 0 {
+        return
+    }
+
+    with Buffer_Write(ref self) {
+        let old_len: uint = self.byte_len
+        let needed: uint = old_len + len
+
+        raw_own(self)
+
+        if needed > self.alloc_len {
+            raw_resize(self, needed)
+        }
+
+        containers.array.copy_items(self.store, old_len, src, 0, len)
+        self.byte_len = needed
+    }
+}
+
+func put_u8(modify self: Buffer, v: u8) {
+    var bytes: Array[u8] = new[Array[u8]](1)
+    bytes[0] = v
+    append_bytes(self, bytes, 1)
+}
+
+private func put_be(modify self: Buffer, v: u64, width: uint) {
+    var bytes: Array[u8] = new[Array[u8]](cast[int] width)
+    var i: uint = 0
+    while i < width {
+        bytes[i] = unsafe_cast[u8] (v >> (8 * (width - 1 - i)))
+        i += 1
+    }
+    append_bytes(self, bytes, width)
+}
+
+func put_be16(modify self: Buffer, v: u16) {
+    put_be(self, cast[u64] v, 2)
+}
+
+func put_be32(modify self: Buffer, v: u32) {
+    put_be(self, cast[u64] v, 4)
+}
+
+func put_be64(modify self: Buffer, v: u64) {
+    put_be(self, v, 8)
+}
+
+func put_string(modify self: Buffer, s: string) {
+    append_bytes(self, string.core.__text_byte_array(s), string.core.byte_len(s))
+}
+
+func __add(self: Buffer, other: string) -> Buffer {
+    var left: Buffer = self
+    var result: Buffer = empty_buffer()
+    with Buffer_Read(ref left) {
+        let other_len: uint = string.core.byte_len(other)
+        let new_len: uint = left.byte_len + other_len
+
+        result = new[Buffer](cast[int] new_len)
+        with Buffer_Write(ref result) {
+            containers.array.copy_items(result.store, 0, left.store, 0,
+                                        left.byte_len)
+            containers.array.copy_items(result.store, left.byte_len,
+                                        string.core.__text_byte_array(other), 0,
+                                        other_len)
+            result.byte_len = new_len
+        }
+    }
+    return result
+}
+
+private func concat_raw(modify self: Buffer, src: Array[u8], src_len: uint,
+                        to_front: bool) {
+    if src_len == 0 {
+        return
+    }
+
+    let old_len: uint = self.byte_len
+    let new_len: uint = old_len + src_len
+
+    raw_own(self)
+
+    if self.alloc_len < new_len {
+        raw_resize(self, new_len)
+    }
+
+    if !to_front {
+        containers.array.copy_items(self.store, old_len, src, 0, src_len)
+    }
+    else {
+        containers.array.copy_items(self.store, src_len, self.store, 0,
+                                    old_len)
+        containers.array.copy_items(self.store, 0, src, 0, src_len)
+    }
+    self.byte_len = new_len
+}
+
+func __add_assign(modify self: Buffer, other: string) {
+    with Buffer_Write(ref self) {
+        concat_raw(self, string.core.__text_byte_array(other), string.core.byte_len(other), false)
+    }
+}
+
+func concat(modify self: Buffer, src: string, to_front: bool = false) {
+    with Buffer_Write(ref self) {
+        concat_raw(self, string.core.__text_byte_array(src), string.core.byte_len(src), to_front)
+    }
+}
+
+func set_index(modify self: Buffer, n: int, c: u8) fail: Buffer_Error {
+    var ok: bool = false
+    with Buffer_Write(ref self) {
+        var at: int = n
+        if at < 0 {
+            at += cast[int] self.byte_len
+        }
+
+        if at >= 0 and at < cast[int] self.byte_len {
+            raw_own(self)
+            self.store[cast[uint] at] = c
+            ok = true
+        }
+    }
+    if !ok {
+        fail Buffer_Error.index_oob
+    }
+}
+
+private func set_slice_raw(modify self: Buffer, start: int, end: int,
+                           v_data: Array[u8], add_len: int) -> bool {
+    let len: int = cast[int] self.byte_len
+    var first: int = start
+    var last: int = end
+
+    if first < 0 {
+        first += len
+    }
+
+    if last < 0 {
+        last += len + 1
+    }
+    else {
+        if last > len {
+            last = len
+        }
+    }
+
+    if first < 0 or last < 0 or first > len or first > last {
+        return false
+    }
+
+    let cut_len: int = last - first
+    let needed_len: int = len - cut_len + add_len
+    let tail_len: int = len - last
+
+    raw_own(self)
+
+    if needed_len > cast[int] self.alloc_len {
+        raw_resize(self, cast[uint] needed_len)
+    }
+
+    if tail_len != 0 {
+        containers.array.copy_items(self.store, cast[uint] (first + add_len),
+                                    self.store, cast[uint] last,
+                                    cast[uint] tail_len)
+    }
+
+    if add_len != 0 {
+        containers.array.copy_items(self.store, cast[uint] first, v_data, 0,
+                                    cast[uint] add_len)
+    }
+
+    self.byte_len = cast[uint] needed_len
+    return true
+}
+
+func set_slice(modify self: Buffer, start: int, end: int,
+               val: string? = nil) fail: Buffer_Error {
+    var ok: bool = false
+    var bytes: Array[u8] = new[Array[u8]](0)
+    var add_len: int = 0
+    if val != nil {
+        bytes = string.core.__text_byte_array(val.get())
+        add_len = cast[int] string.core.byte_len(val.get())
+    }
+    with Buffer_Write(ref self) {
+        ok = set_slice_raw(self, start, end, bytes, add_len)
+    }
+    if !ok {
+        fail Buffer_Error.slice_oob
+    }
+}
+
+func buffer_from_string(s: string) -> Buffer {
+    return buffer_from_bytes(string.core.__text_byte_array(s), cast[int] string.core.byte_len(s))
+}
+
+func buffer_adopt(s: string) -> Buffer {
+    let storage: Array[u8]? = string.core.__string_storage(s)
+    if storage != nil {
+        return buffer_from_bytes(storage.get(), cast[int] string.core.byte_len(s),
+                                 copy = false)
+    }
+    return buffer_from_string(s)
+}
+
+func to_string(consume self: Buffer, encoding: string.core.Str_Encoding? = nil)
+    -> string {
+    var result: string = string.core.empty_string()
+    var owned: Buffer = self
+    with Buffer_Write(ref owned) {
+        let len: uint = owned.byte_len
+
+        raw_own(owned)
+
+        if owned.alloc_len <= len {
+            raw_resize(owned, len + 1)
+            owned.byte_len = len
+        }
+
+        owned.store[len] = 0
+
+        result = string.core.from_raw(owned.store, cast[int] len,
+                                      copy = false, encoding = encoding)
+    }
+    return result
+}
+
+func free(modify self: Buffer) {
+    with Buffer_Write(ref self) {
+        if !self.borrowed {
+            self.store = new[Array[u8]](0)
+        }
+    }
+
+    self.store = new[Array[u8]](0)
+    self.byte_len = 0
+    self.alloc_len = 0
+}

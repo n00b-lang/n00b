@@ -4,6 +4,7 @@ import containers.dict
 import containers.set
 import containers.tree
 import containers.view
+import containers.buffer
 import cursor
 import hash
 import containers.traits
@@ -90,6 +91,25 @@ package builtin {
     export ffi.__ffi_hold
     export ffi.__ffi_event
     export panic.panic
+    export containers.buffer.Buffer
+    export containers.buffer.Buffer_Error
+    export containers.buffer.empty_buffer_alloc
+    export containers.buffer.empty_buffer
+    export containers.buffer.buffer_from_bytes
+    export containers.buffer.resize
+    export containers.buffer.append_bytes
+    export containers.buffer.put_u8
+    export containers.buffer.put_be16
+    export containers.buffer.put_be32
+    export containers.buffer.put_be64
+    export containers.buffer.put_string
+    export containers.buffer.concat
+    export containers.buffer.set_index
+    export containers.buffer.set_slice
+    export containers.buffer.buffer_from_string
+    export containers.buffer.buffer_adopt
+    export containers.buffer.to_string
+    export containers.buffer.free
     export containers.list.List
     export containers.list.list
     export containers.dict.Dict

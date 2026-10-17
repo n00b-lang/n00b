@@ -358,7 +358,7 @@ func __string_from_utf8(bytes: Array[u8], result: Ref[string]) -> bool {
     return true
 }
 
-private func __string_storage(s: string) -> Array[u8]? {
+func __string_storage(s: string) -> Array[u8]? {
     let view: Ref[String_Words] = words(ref s)
     if view.selector >> tag_shift != str_tag_long {
         return nil
