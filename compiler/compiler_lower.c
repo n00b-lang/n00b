@@ -20112,6 +20112,11 @@ n00bb_static_value_to_ir_initializer(const n00bb_static_value_t *value,
     if (n00bb_atomic_element_type(type))
         return n00bb_static_value_to_ir_initializer(value,
             n00bb_atomic_element_type(type), state, out, depth + 1);
+    th_type *option_element = nullptr;
+    if (value->kind != N00BB_STATIC_VALUE_NIL
+        && n00bb_option_type_element(type, &option_element))
+        return n00bb_static_value_to_ir_initializer(value, option_element,
+                                                    state, out, depth + 1);
     *out = (ir_global_init_value_t){0};
     switch (value->kind) {
     case N00BB_STATIC_VALUE_BOOL:

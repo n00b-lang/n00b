@@ -620,6 +620,41 @@ test(
     suite: 'slow',
 )
 
+foreach static_case : ['static_enum', 'static_option', 'static_nested_import']
+    test(
+        static_case.replace('_', '-') + '-n00b', find_program('sh'),
+        args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
+               n00bb_exe.full_path(),
+               meson.current_source_dir() / 'tests' / 'programs'
+                   / 'static_encoding' / static_case + '.n'],
+        env: ['N00B_PATH=' + (meson.current_source_dir() / 'tests'
+            / 'programs' / 'static_encoding')],
+        timeout: 120,
+        suite: 'slow',
+    )
+    test(
+        static_case.replace('_', '-') + '-baked-n00b', find_program('sh'),
+        args: [meson.current_source_dir() / 'tests' / 'no_build_time_run.sh',
+               n00bb_exe.full_path(),
+               meson.current_source_dir() / 'tests' / 'programs'
+                   / 'static_encoding' / static_case + '.n'],
+        env: ['N00B_PATH=' + (meson.current_source_dir() / 'tests'
+            / 'programs' / 'static_encoding')],
+        timeout: 120,
+        suite: 'slow',
+    )
+endforeach
+
+test(
+    'hello-no-build-time-run-n00b', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'no_build_time_run.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'static_encoding' / 'hello.n'],
+    timeout: 120,
+    suite: 'slow',
+)
+
 test(
     'untyped-consts-n00b',
     find_program('sh'),
