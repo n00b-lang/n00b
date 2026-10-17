@@ -7684,9 +7684,14 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                     break;
                 }
             uint32_t type_index = binding ? binding->index : 0;
+            uint64_t stride_bits = 0;
+            bool strided = layout
+                && ir_layout_final_stride_bits(layout, &stride_bits)
+                && stride_bits % 8 == 0;
+            bytes = stride_bits / 8;
             if (!layout || !target || !type_index
                 || !layout->alignment_bytes
-                || !ir_layout_final_byte_extent(layout, &bytes)
+                || !strided
                 || LLVMABISizeOfType(target, type) != bytes
                 || LLVMABIAlignmentOfType(target, type)
                     != layout->alignment_bytes) {
