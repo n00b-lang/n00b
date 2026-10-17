@@ -1007,42 +1007,93 @@ split_edge(ir_func_t *function, ir_block_t *from, ir_block_t *to,
     return middle;
 }
 
+typedef struct {
+    ir_local_t *local;
+    th_type *type;
+    uint32_t serial;
+} held_t;
+
 static bool
-insert_end(window_t *window, ir_block_t *block, uint32_t at)
+insert_held_assignment(window_t *window, held_t *held, ir_block_t *block,
+                       uint32_t at, ir_value_t *buffer)
 {
-    ir_instr_t *end = ir_instr_generated(block, IR_OP_BUFFER_BORROW_END,
+    char name[64];
+    snprintf(name, sizeof(name), "__n00bb_borrow_held_%u", held->serial++);
+    ir_instr_t *wrap = ir_instr_generated(block,
+        buffer ? IR_OP_OPTION_SOME : IR_OP_OPTION_NONE,
         window->conversion->span, "n00bb.buffer-borrow", at);
-    return end && ir_instr_operand_value(end, window->buffer);
+    if (!wrap || !ir_instr_set_dest(wrap, name, held->type)
+        || (buffer && !ir_instr_operand_value(wrap, buffer))) return false;
+    ir_instr_t *copy = ir_instr_generated(block, IR_OP_COPY,
+        window->conversion->span, "n00bb.buffer-borrow", at + 1);
+    return copy && ir_instr_set_dest_local(copy, held->local)
+        && ir_instr_operand_value(copy, wrap->dest);
 }
 
 static bool
-insert_ends(window_t *window, end_sites_t *sites)
+insert_end(window_t *window, ir_block_t *block, uint32_t at, held_t *held)
+{
+    ir_instr_t *end = ir_instr_generated(block, IR_OP_BUFFER_BORROW_END,
+        window->conversion->span, "n00bb.buffer-borrow", at);
+    if (!end) return false;
+    if (!held) return ir_instr_operand_value(end, window->buffer);
+    return ir_instr_operand_value(end,
+            ir_local_value(window->function, held->local))
+        && insert_held_assignment(window, held, block, at + 1, nullptr);
+}
+
+static bool
+insert_ends(window_t *window, end_sites_t *sites, held_t *held)
 {
     for (uint32_t i = 0; i < sites->len; i++) {
         end_site_t *site = &sites->items[i];
         if (site->after) {
             if (!insert_end(window, site->after->block,
-                            instruction_position(site->after) + 1))
+                            instruction_position(site->after) + 1, held))
                 return false;
             continue;
         }
         if (predecessor_count(window->function, site->to) == 1) {
-            if (!insert_end(window, site->to, first_non_phi(site->to)))
+            if (!insert_end(window, site->to, first_non_phi(site->to),
+                            held))
                 return false;
             continue;
         }
         ir_instr_t *terminator = ir_block_terminator(site->from);
         if (terminator && ir_succ_count(terminator) == 1) {
             if (!insert_end(window, site->from,
-                            instruction_position(terminator)))
+                            instruction_position(terminator), held))
                 return false;
             continue;
         }
         ir_block_t *middle = split_edge(window->function, site->from,
                                         site->to, window->conversion->span);
-        if (!middle || !insert_end(window, middle, 0)) return false;
+        if (!middle || !insert_end(window, middle, 0, held)) return false;
     }
     return true;
+}
+
+static bool
+insert_held_ends(window_t *window, end_sites_t *sites)
+{
+    static uint32_t next_local;
+    ir_func_t *function = window->function;
+    th_type *type = th_option(ir_module_types(function->owner),
+                              window->buffer->type);
+    char name[64];
+    snprintf(name, sizeof(name), "__n00bb_borrow_held_local_%u",
+             next_local++);
+    held_t held = {
+        .local = type ? ir_local_add(function, name, type) : nullptr,
+        .type = type,
+    };
+    ir_block_t *entry = ir_block_entry(function);
+    return held.local && entry
+        && insert_held_assignment(window, &held, entry,
+                                  first_non_phi(entry), nullptr)
+        && insert_held_assignment(window, &held, window->conversion->block,
+               instruction_position(window->conversion) + 1, window->buffer)
+        && insert_ends(window, sites, &held);
 }
 
 enum { BLOCK_UNSEEN, BLOCK_ACTIVE, BLOCK_DONE };
@@ -1065,6 +1116,7 @@ typedef struct {
     const char *reason;
     root_set_t source;
     bool source_global;
+    bool conditional;
 } walk_t;
 
 static bool
@@ -1203,9 +1255,7 @@ check_joins(walk_t *walk)
                  s++)
                 if (ir_succ_at(terminator, s) == block
                     && !walk->continued[(size_t)b * count + p])
-                    blame(walk, block->n_instrs ? block->instrs[0] : nullptr,
-                          "the borrowed string also reaches here on a path "
-                          "where the Buffer is not borrowed");
+                    walk->conditional = true;
         }
     }
     return true;
@@ -1325,8 +1375,10 @@ borrow_conversion(ir_diags_t *diagnostics, ir_func_t *function,
     }
     if (ok && walk.offender)
         report_borrow(&window, walk.offender, walk.reason);
+    else if (ok && walk.conditional)
+        ok = insert_held_ends(&window, &walk.sites);
     else if (ok)
-        ok = insert_ends(&window, &walk.sites);
+        ok = insert_ends(&window, &walk.sites, nullptr);
     if (!ok)
         report_borrow(&window, nullptr, nullptr);
     bool accepted = ok && !walk.offender;

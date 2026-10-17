@@ -540,3 +540,9 @@ func buffer_borrow_end(self: Buffer) {
     }
     read_unlock(state)
 }
+
+func buffer_borrow_end_if_held(held: Buffer?) {
+    if held != nil {
+        buffer_borrow_end(held.get())
+    }
+}

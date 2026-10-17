@@ -440,6 +440,16 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
                     if (method_status == TH_ENV_METHOD_FOUND)
                         receiver_type = promoted;
                 }
+                th_type *coerced = method_status == TH_ENV_METHOD_NOT_FOUND
+                    ? n00bb_value_coercion_target(state->types, receiver_type)
+                    : nullptr;
+                if (coerced) {
+                    method_status = th_env_method_resolve_by_name(
+                        state->types, coerced, method_name, &method,
+                        &trait_name);
+                    if (method_status == TH_ENV_METHOD_FOUND)
+                        receiver_type = coerced;
+                }
                 if (method_status == TH_ENV_METHOD_FOUND) {
                     signature = call_site_signature(call_sites, label,
                         state->types, method.signature);

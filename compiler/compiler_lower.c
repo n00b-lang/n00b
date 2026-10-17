@@ -714,6 +714,9 @@ static ir_value_t *n00bb_emit_indirect_read(
 static ir_value_t *n00bb_materialize(
     ir_lower_context_t *context, parse_tree_t *node, ir_value_t *value,
     th_type *target, ir_span_t span);
+static ir_value_t *n00bb_result_value(
+    ir_lower_context_t *context, parse_tree_t *expression,
+    ir_local_t *result);
 static ir_value_t *n00bb_emit_wrapping(
     ir_lower_context_t *context, ir_op_t op, ir_value_t *payload,
     th_type *target, ir_span_t span);
@@ -2053,7 +2056,8 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                     : value_body_expression(
                         visit->grammar, visit->node);
                 ir_value_t *value = expression
-                    ? ir_lower_node_value(context, expression) : nullptr;
+                    ? n00bb_result_value(context, expression,
+                                         frame->result_local) : nullptr;
                 if (frame->short_circuit && value
                     && !ir_type_eq(context->module, value->type,
                                    frame->result_local->type)) {
@@ -2095,7 +2099,8 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                 parse_tree_t *expression = value_body_expression(
                     visit->grammar, visit->node);
                 ir_value_t *value = expression
-                    ? ir_lower_node_value(context, expression) : nullptr;
+                    ? n00bb_result_value(context, expression,
+                                         frame->result_local) : nullptr;
                 ir_instr_t *store = value
                     ? ir_lower_emit_instruction(context, IR_OP_COPY,
                         lower_span_for_tree(context, visit->node)) : nullptr;
@@ -2436,7 +2441,8 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                 parse_tree_t *expression = value_body_expression(
                     visit->grammar, visit->node);
                 ir_value_t *value = expression
-                    ? ir_lower_node_value(context, expression) : nullptr;
+                    ? n00bb_result_value(context, expression,
+                                         frame->result_local) : nullptr;
                 ir_instr_t *store = value
                     ? ir_lower_emit_instruction(context, IR_OP_COPY,
                         lower_span_for_tree(context, visit->node)) : nullptr;
@@ -2957,8 +2963,9 @@ n00bb_lower_typecase_scope(ir_lower_context_t *context, parse_visit_t *visit,
         if (frame->expression && context->reachable) {
             parse_tree_t *expression = value_body_expression(
                 visit->grammar, visit->node);
-            ir_value_t *value = expression
-                ? ir_lower_node_value(context, expression) : nullptr;
+            ir_value_t *value = expression && frame->result_local
+                ? n00bb_result_value(context, expression,
+                                     frame->result_local) : nullptr;
             ir_instr_t *store = value
                 ? ir_lower_emit_instruction(context, IR_OP_COPY,
                     lower_span_for_tree(context, visit->node)) : nullptr;
@@ -3663,7 +3670,8 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
             parse_tree_t *expression = child_nt(visit->grammar, visit->node,
                                                 "expression");
             ir_value_t *value = expression
-                ? ir_lower_node_value(context, expression) : nullptr;
+                ? n00bb_result_value(context, expression, frame->result)
+                : nullptr;
             ir_instr_t *store = value
                 ? ir_lower_emit_instruction(context, IR_OP_COPY,
                     lower_span_for_tree(context, visit->node)) : nullptr;
@@ -4153,6 +4161,19 @@ n00bb_abstract_trait_requirement(ir_lower_context_t *context,
         || !ir_instr_operand_value(selection, requirement_address))
         return nullptr;
     return selection->dest;
+}
+
+static ir_value_t *
+n00bb_result_value(ir_lower_context_t *context, parse_tree_t *expression,
+                   ir_local_t *result)
+{
+    ir_value_t *value = ir_lower_node_value(context, expression);
+    if (!value || !result
+        || !n00bb_value_coerces(ir_module_types(context->module),
+                                value->type, result->type))
+        return value;
+    return n00bb_materialize(context, expression, value, result->type,
+                             lower_span_for_tree(context, expression));
 }
 
 static bool

@@ -8210,8 +8210,11 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         bool begin = instruction->op == IR_OP_BUFFER_AS_STRING;
         if (count != 1 || operands[0].kind != IR_OPD_VALUE
             || begin != (instruction->dest != nullptr)) break;
+        bool held = !begin && operands[0].value->type
+            && th_option_item(th_resolve(operands[0].value->type));
         const char *name = begin
             ? "builtin.containers.buffer.buffer_borrow_begin"
+            : held ? "builtin.containers.buffer.buffer_borrow_end_if_held"
             : "builtin.containers.buffer.buffer_borrow_end";
         LLVMValueRef buffer = lowered_value(state, operands[0].value);
         LLVMContextRef context = LLVMGetModuleContext(state->module);

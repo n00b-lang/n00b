@@ -20,6 +20,8 @@ const n00bb_runtime_native_root_t n00bb_runtime_native_roots[] = {
     {"builtin.abi.__type_has_kind", nullptr, nullptr, 0},
     {"builtin.containers.buffer.buffer_borrow_begin", nullptr, nullptr, 0},
     {"builtin.containers.buffer.buffer_borrow_end", nullptr, nullptr, 0},
+    {"builtin.containers.buffer.buffer_borrow_end_if_held", nullptr, nullptr,
+        0},
     {"builtin.ffi.__ffi_enter", "n00b_ffi_enter", nullptr, 0},
     {"builtin.ffi.__ffi_leave", "n00b_ffi_leave", nullptr, 0},
     {"builtin.ffi.__ffi_panic_hook", "n00b_ffi_panic_hook", nullptr, 0},
