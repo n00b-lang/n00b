@@ -53,7 +53,7 @@ record Style_Record {
     substitution: Sub_Spec
 }
 
-record Rich_Body {
+record Rich_Body layout(ordered) {
     s:          string
     style_info: List[Style_Record]
     base_style: Text_Style?
