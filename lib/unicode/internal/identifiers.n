@@ -1,0 +1,76 @@
+import internal.types
+import internal.encoding
+import internal.properties
+import generated.identifiers
+
+func is_id_start(cp: char) -> bool {
+    return internal.properties.has_property(cp,
+        internal.types.Property.id_start)
+}
+
+func is_id_continue(cp: char) -> bool {
+    return internal.properties.has_property(cp,
+        internal.types.Property.id_continue)
+}
+
+func is_xid_start(cp: char) -> bool {
+    return internal.properties.has_property(cp,
+        internal.types.Property.xid_start)
+}
+
+func is_xid_continue(cp: char) -> bool {
+    return internal.properties.has_property(cp,
+        internal.types.Property.xid_continue)
+}
+
+func is_pattern_syntax(cp: char) -> bool {
+    return internal.properties.has_property(cp,
+        internal.types.Property.pattern_syntax)
+}
+
+func is_pattern_white_space(cp: char) -> bool {
+    return internal.properties.has_property(cp,
+        internal.types.Property.pattern_white_space)
+}
+
+func is_identifier_allowed(cp: char) -> bool {
+    let v: u32 = cast[u32] cp
+
+    if v >= internal.properties.max_cp {
+        return false
+    }
+
+    return generated.identifiers.id_status_stage2[
+        cast[u32] generated.identifiers.id_status_stage1[v >> 8] * 256 +
+        (v & 0xff)] == 1
+}
+
+func is_valid_identifier(s: string) -> bool {
+    let len: uint = byte_len(s)
+
+    if len == 0 or !is_text(s) {
+        return false
+    }
+
+    var pos: u32 = 0
+
+    try {
+        if !is_xid_start(internal.encoding.utf8_decode(s, pos)!) {
+            return false
+        }
+    } else failure {
+        return false
+    }
+
+    while cast[uint] pos < len {
+        try {
+            if !is_xid_continue(internal.encoding.utf8_decode(s, pos)!) {
+                return false
+            }
+        } else failure {
+            return false
+        }
+    }
+
+    return true
+}

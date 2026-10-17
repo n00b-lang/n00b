@@ -1,0 +1,224 @@
+import internal.encoding
+import internal.properties
+import internal.types
+
+const cp_vs16: u32 = 0xfe0f
+const cp_keycap: u32 = 0x20e3
+const cp_zwj: u32 = 0x200d
+const cp_ri_first: u32 = 0x1f1e6
+const cp_ri_last: u32 = 0x1f1ff
+const cp_tag_low: u32 = 0xe0020
+const cp_tag_high: u32 = 0xe007e
+const cp_tag_end: u32 = 0xe007f
+
+enum Emoji_Type {
+    none = 0, basic, presentation_seq, keycap, modifier_seq, flag, tag_seq,
+    zwj_seq
+}
+
+record Emoji_Scan {
+    kind:      Emoji_Type
+    seq_bytes: u32
+}
+
+func is_emoji(cp: char) -> bool {
+    return internal.properties.has_property(cp,
+        internal.types.Property.emoji)
+}
+
+func is_emoji_presentation(cp: char) -> bool {
+    return internal.properties.has_property(cp,
+        internal.types.Property.emoji_presentation)
+}
+
+private func is_emoji_start(cp: char) -> bool {
+    return internal.properties.has_property(cp,
+        internal.types.Property.emoji) or
+        internal.properties.has_property(cp,
+            internal.types.Property.extended_pictographic)
+}
+
+private func take_char(s: string, modify pos: u32) -> char? {
+    if cast[uint] pos >= byte_len(s) {
+        return nil
+    }
+
+    try {
+        return internal.encoding.utf8_decode(s, pos)!
+    } else failure {
+        return nil
+    }
+}
+
+func emoji_scan(s: string, byte_pos: u32) -> Emoji_Scan {
+    var out: Emoji_Scan = (kind = Emoji_Type.none, seq_bytes = 0)
+    let len: uint = byte_len(s)
+
+    if cast[uint] byte_pos >= len or !is_text(s) {
+        return out
+    }
+
+    var pos: u32 = byte_pos
+    let first: char? = take_char(s, pos)
+
+    if first == nil {
+        return out
+    }
+
+    let cp: char = first.get()
+
+    if !is_emoji_start(cp) {
+        return out
+    }
+
+    let start: u32 = byte_pos
+    var result: Emoji_Type = Emoji_Type.basic
+
+    if internal.properties.has_property(cp,
+        internal.types.Property.emoji_presentation) {
+        result = Emoji_Type.presentation_seq
+    }
+
+    var save: u32 = pos
+    let nxt: char? = take_char(s, pos)
+
+    if nxt != nil and cast[u32] nxt.get() == cp_vs16 {
+        result = Emoji_Type.presentation_seq
+    }
+    else {
+        pos = save
+    }
+
+    if (cast[u32] cp >= cast[u32] '0' and cast[u32] cp <= cast[u32] '9') or
+        cast[u32] cp == cast[u32] '#' or cast[u32] cp == cast[u32] '*' {
+        save = pos
+
+        let k1: char? = take_char(s, pos)
+
+        if k1 != nil and cast[u32] k1.get() == cp_keycap {
+            result = Emoji_Type.keycap
+        }
+        else {
+            pos = save
+        }
+    }
+
+    if internal.properties.has_property(cp,
+        internal.types.Property.emoji_modifier_base) {
+        save = pos
+
+        let m: char? = take_char(s, pos)
+
+        if m != nil and internal.properties.has_property(m.get(),
+            internal.types.Property.emoji_modifier) {
+            result = Emoji_Type.modifier_seq
+        }
+        else {
+            pos = save
+        }
+    }
+
+    if cast[u32] cp >= cp_ri_first and cast[u32] cp <= cp_ri_last {
+        save = pos
+
+        let ri: char? = take_char(s, pos)
+
+        if ri != nil and cast[u32] ri.get() >= cp_ri_first and
+            cast[u32] ri.get() <= cp_ri_last {
+            result = Emoji_Type.flag
+        }
+        else {
+            pos = save
+        }
+    }
+
+    var had_zwj: bool = false
+    var scanning: bool = true
+
+    while scanning and cast[uint] pos < len {
+        save = pos
+
+        let n: char? = take_char(s, pos)
+
+        if n == nil {
+            pos = save
+            scanning = false
+
+            continue
+        }
+
+        let next: u32 = cast[u32] n.get()
+
+        if next == cp_zwj {
+            let after: char? = take_char(s, pos)
+
+            if after != nil and is_emoji_start(after.get()) {
+                had_zwj = true
+
+                var vs_save: u32 = pos
+                let vs: char? = take_char(s, vs_save)
+
+                if vs != nil and cast[u32] vs.get() == cp_vs16 {
+                    pos = vs_save
+                }
+
+                var mod_save: u32 = pos
+                let md: char? = take_char(s, mod_save)
+
+                if md != nil and internal.properties.has_property(md.get(),
+                    internal.types.Property.emoji_modifier) {
+                    pos = mod_save
+                }
+
+                continue
+            }
+
+            pos = save
+            scanning = false
+
+            continue
+        }
+
+        if next == cp_vs16 {
+            continue
+        }
+
+        if next >= cp_tag_low and next <= cp_tag_high {
+            var tagging: bool = true
+
+            while tagging and cast[uint] pos < len {
+                let tag_save: u32 = pos
+                let tg: char? = take_char(s, pos)
+
+                if tg != nil and cast[u32] tg.get() == cp_tag_end {
+                    result = Emoji_Type.tag_seq
+                    tagging = false
+
+                    continue
+                }
+
+                if tg == nil or cast[u32] tg.get() < cp_tag_low or
+                    cast[u32] tg.get() > cp_tag_high {
+                    pos = tag_save
+                    tagging = false
+                }
+            }
+
+            scanning = false
+
+            continue
+        }
+
+        pos = save
+        scanning = false
+    }
+
+    if had_zwj {
+        result = Emoji_Type.zwj_seq
+    }
+
+    out.kind = result
+    out.seq_bytes = pos - start
+
+    return out
+}

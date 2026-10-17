@@ -1,0 +1,513 @@
+import sys.abi
+import internal.encoding
+import internal.runebuf
+import internal.properties
+import generated.decomposition
+import generated.composition
+import generated.normprops
+
+const hangul_s_base: u32 = 0xac00
+const hangul_l_base: u32 = 0x1100
+const hangul_v_base: u32 = 0x1161
+const hangul_t_base: u32 = 0x11a7
+const hangul_l_count: u32 = 19
+const hangul_v_count: u32 = 21
+const hangul_t_count: u32 = 28
+const hangul_n_count: u32 = hangul_v_count * hangul_t_count
+const hangul_s_count: u32 = hangul_l_count * hangul_n_count
+const canon_insertion_max: u32 = 32
+const nqc_yes: u8 = 0
+const nqc_maybe: u8 = 1
+const nqc_no: u8 = 2
+
+enum Norm_Form {
+    nfc = 0, nfd, nfkc, nfkd
+}
+
+private inline func hangul_is_syllable(cp: char) -> bool {
+    return cast[u32] cp >= hangul_s_base and
+        cast[u32] cp < hangul_s_base + hangul_s_count
+}
+
+private inline func hangul_is_l(cp: char) -> bool {
+    return cast[u32] cp >= hangul_l_base and
+        cast[u32] cp < hangul_l_base + hangul_l_count
+}
+
+private inline func hangul_is_v(cp: char) -> bool {
+    return cast[u32] cp >= hangul_v_base and
+        cast[u32] cp < hangul_v_base + hangul_v_count
+}
+
+private inline func hangul_is_t(cp: char) -> bool {
+    return hangul_t_base < cast[u32] cp and
+        cast[u32] cp < hangul_t_base + hangul_t_count
+}
+
+private func hangul_decompose(cp: char, modify out: Array[char]) -> i32 {
+    let s_index: u32 = cast[u32] cp - hangul_s_base
+    let l: u32 = hangul_l_base + s_index / hangul_n_count
+    let v: u32 = hangul_v_base +
+        (s_index % hangul_n_count) / hangul_t_count
+    let t: u32 = hangul_t_base + s_index % hangul_t_count
+
+    out[0] = cast[char] l
+    out[1] = cast[char] v
+
+    if t != hangul_t_base {
+        out[2] = cast[char] t
+
+        return 3
+    }
+
+    return 2
+}
+
+private func hangul_compose(a: char, b: char) -> char {
+    if hangul_is_l(a) and hangul_is_v(b) {
+        let l_index: u32 = cast[u32] a - hangul_l_base
+        let v_index: u32 = cast[u32] b - hangul_v_base
+
+        return cast[char] (hangul_s_base +
+            (l_index * hangul_v_count + v_index) * hangul_t_count)
+    }
+
+    if hangul_is_syllable(a) {
+        let s_index: u32 = cast[u32] a - hangul_s_base
+
+        if s_index % hangul_t_count == 0 and hangul_is_t(b) {
+            return cast[char] (cast[u32] a + (cast[u32] b - hangul_t_base))
+        }
+    }
+
+    return cast[char] 0
+}
+
+private func sparse_lookup(index: Array[Array[u32]], index_len: u32,
+                           cp: char) -> u32? {
+    let v: u32 = cast[u32] cp
+    var lo: u32 = 0
+    var hi: u32 = index_len
+
+    while lo < hi {
+        let mid: u32 = lo + (hi - lo) / 2
+
+        if index[mid][0] < v {
+            lo = mid + 1
+        }
+        else {
+            if index[mid][0] > v {
+                hi = mid
+            }
+            else {
+                return index[mid][1]
+            }
+        }
+    }
+
+    return nil
+}
+
+private func get_canon_decomp(cp: char, modify out: Array[char]) -> i32 {
+    if hangul_is_syllable(cp) {
+        return hangul_decompose(cp, out)
+    }
+
+    let off: u32? = sparse_lookup(generated.decomposition.canon_decomp_index,
+        generated.decomposition.canon_decomp_index_len, cp)
+
+    if off == nil {
+        return 0
+    }
+
+    let at: u32 = off.get()
+    let len: u32 = generated.decomposition.canon_decomp_data[at]
+
+    var i: u32 = 0
+    while i < len and i < cast[u32] generated.decomposition.max_decomp {
+        out[i] = cast[char] generated.decomposition.canon_decomp_data[at + 1 + i]
+        i += 1
+    }
+
+    return cast[i32] len
+}
+
+private func get_compat_decomp(cp: char, modify out: Array[char]) -> i32 {
+    let n: i32 = get_canon_decomp(cp, out)
+
+    if n > 0 {
+        return n
+    }
+
+    let off: u32? = sparse_lookup(generated.decomposition.compat_decomp_index,
+        generated.decomposition.compat_decomp_index_len, cp)
+
+    if off == nil {
+        return 0
+    }
+
+    let at: u32 = off.get()
+    let len: u32 = generated.decomposition.compat_decomp_data[at]
+
+    var i: u32 = 0
+    while i < len and i < cast[u32] generated.decomposition.max_decomp {
+        out[i] = cast[char] generated.decomposition.compat_decomp_data[at + 1 + i]
+        i += 1
+    }
+
+    return cast[i32] len
+}
+
+private func compose_pair(a: char, b: char) -> char {
+    let h: char = hangul_compose(a, b)
+
+    if cast[u32] h != 0 {
+        return h
+    }
+
+    let key: u64 = (cast[u64] cast[u32] a << 21) | cast[u64] cast[u32] b
+    let slot: u32 = cast[u32] (key %
+        cast[u64] generated.composition.comp_table_size)
+
+    var i: u32 = 0
+    while i < cast[u32] generated.composition.comp_table_size {
+        let ix: u32 = (slot + i) %
+            cast[u32] generated.composition.comp_table_size
+
+        if generated.composition.comp_starter[ix] ==
+            cast[u32] generated.composition.comp_empty {
+            return cast[char] 0
+        }
+
+        if generated.composition.comp_starter[ix] == cast[u32] a and
+            generated.composition.comp_combining[ix] == cast[u32] b {
+            return cast[char] generated.composition.comp_result[ix]
+        }
+        i += 1
+    }
+
+    return cast[char] 0
+}
+
+private func decompose_into(cp: char, modify b: internal.runebuf.Char_Buf,
+                            compat: bool) {
+    var decomp: Array[char][generated.decomposition.max_decomp] =
+        new[Array[char][generated.decomposition.max_decomp]]()
+    var n: i32 = 0
+    if compat {
+        n = get_compat_decomp(cp, decomp)
+    }
+    else {
+        n = get_canon_decomp(cp, decomp)
+    }
+
+    if n == 0 {
+        internal.runebuf.push(b, cp)
+
+        return
+    }
+
+    var i: i32 = 0
+    while i < n {
+        decompose_into(decomp[cast[uint] i], b, compat)
+        i += 1
+    }
+}
+
+private func canonical_order(modify cps: Array[char], len: u32) {
+    var i: u32 = 0
+
+    while i < len {
+        if internal.properties.combining_class(cps[i]) == 0 {
+            i += 1
+
+            continue
+        }
+
+        let start: u32 = i
+
+        while i < len and internal.properties.combining_class(cps[i]) != 0 {
+            i += 1
+        }
+
+        let n: u32 = i - start
+
+        if n < 2 {
+            continue
+        }
+
+        if n <= canon_insertion_max {
+            var j: u32 = start + 1
+            while j < i {
+                let cp: char = cps[j]
+                let ccc: u8 = internal.properties.combining_class(cp)
+                var k: u32 = j
+
+                while k > start and
+                    internal.properties.combining_class(cps[k - 1]) > ccc {
+                    cps[k] = cps[k - 1]
+                    k -= 1
+                }
+
+                cps[k] = cp
+                j += 1
+            }
+
+            continue
+        }
+
+        var counts: Array[u32][256] = new[Array[u32][256]]()
+
+        var c: u32 = 0
+        while c < 256 {
+            counts[c] = 0
+            c += 1
+        }
+
+        var j: u32 = start
+        while j < i {
+            counts[internal.properties.combining_class(cps[j])] += 1
+            j += 1
+        }
+
+        var running: u32 = 0
+
+        c = 0
+        while c < 256 {
+            let t: u32 = counts[c]
+
+            counts[c] = running
+            running += t
+            c += 1
+        }
+
+        var tmp: Array[char] = new[Array[char]](cast[int] n)
+
+        j = start
+        while j < i {
+            let ccc: u8 = internal.properties.combining_class(cps[j])
+
+            tmp[counts[ccc]] = cps[j]
+            counts[ccc] += 1
+            j += 1
+        }
+
+        sys.abi.copy_items(cps, cast[uint] start, tmp, 0, cast[uint] n)
+    }
+}
+
+private func canonical_compose(modify b: internal.runebuf.Char_Buf) {
+    if b.len < 2 {
+        return
+    }
+
+    var w: u32 = 1
+    var starter_ix: u32 = 0
+    var last_ccc: u8 = internal.properties.combining_class(b.data[0])
+    var has_starter: bool = last_ccc == 0
+
+    var r: u32 = 1
+    while r < b.len {
+        let cp: char = b.data[r]
+        let ccc: u8 = internal.properties.combining_class(cp)
+        var absorbed: bool = false
+
+        if has_starter {
+            var blocked: bool = last_ccc >= ccc
+            if ccc == 0 {
+                blocked = last_ccc != 0
+            }
+
+            if !blocked {
+                let composed: char = compose_pair(b.data[starter_ix], cp)
+
+                if cast[u32] composed != 0 {
+                    b.data[starter_ix] = composed
+                    absorbed = true
+                }
+            }
+        }
+
+        if absorbed {
+            r += 1
+
+            continue
+        }
+
+        b.data[w] = cp
+
+        if ccc == 0 {
+            starter_ix = w
+            has_starter = true
+            last_ccc = 0
+        }
+        else {
+            last_ccc = ccc
+        }
+
+        w += 1
+        r += 1
+    }
+
+    b.len = w
+}
+
+private func decompose_string(s: string, modify b: internal.runebuf.Char_Buf,
+                              compat: bool) {
+    let len: uint = byte_len(s)
+    var pos: u32 = 0
+
+    while cast[uint] pos < len {
+        try {
+            decompose_into(internal.encoding.utf8_decode(s, pos)!, b, compat)
+        } else failure {
+            pos = cast[u32] len
+
+            continue
+        }
+    }
+
+    canonical_order(b.data, b.len)
+}
+
+private func normalize(s: string, form: Norm_Form) -> string {
+    let len: uint = byte_len(s)
+
+    if len == 0 or !is_text(s) {
+        return s
+    }
+
+    let compat: bool = form == Norm_Form.nfkc or form == Norm_Form.nfkd
+    var b: internal.runebuf.Char_Buf =
+        new[internal.runebuf.Char_Buf](cast[u32] len)
+
+    decompose_string(s, b, compat)
+
+    if form == Norm_Form.nfc or form == Norm_Form.nfkc {
+        canonical_compose(b)
+    }
+
+    return internal.runebuf.to_string(b)
+}
+
+func nfd(s: string) -> string {
+    return normalize(s, Norm_Form.nfd)
+}
+
+func nfkd(s: string) -> string {
+    return normalize(s, Norm_Form.nfkd)
+}
+
+func nfc(s: string) -> string {
+    return normalize(s, Norm_Form.nfc)
+}
+
+func nfkc(s: string) -> string {
+    return normalize(s, Norm_Form.nfkc)
+}
+
+private func nqc_lookup(cp: char) -> u8 {
+    let v: u32 = cast[u32] cp
+
+    if v >= internal.properties.max_cp {
+        return 0
+    }
+
+    return generated.normprops.nqc_stage2[
+        cast[u32] generated.normprops.nqc_stage1[v >> 8] * 256 + (v & 0xff)]
+}
+
+func is_nfc(s: string) -> bool {
+    let len: uint = byte_len(s)
+
+    if len == 0 or !is_text(s) {
+        return true
+    }
+
+    var pos: u32 = 0
+    var last_ccc: u8 = 0
+    var maybe: bool = false
+
+    while cast[uint] pos < len {
+        var cp: char = cast[char] 0
+
+        try {
+            cp = internal.encoding.utf8_decode(s, pos)!
+        } else failure {
+            return false
+        }
+
+        let ccc: u8 = internal.properties.combining_class(cp)
+
+        if last_ccc > ccc and ccc != 0 {
+            return false
+        }
+
+        let qc: u8 = nqc_lookup(cp) & 0x03
+
+        if qc == nqc_no {
+            return false
+        }
+
+        if qc == nqc_maybe {
+            maybe = true
+        }
+
+        last_ccc = ccc
+    }
+
+    if !maybe {
+        return true
+    }
+
+    let norm: string = nfc(s)
+
+    if byte_len(norm) != len {
+        return false
+    }
+
+    var i: uint = 0
+    while i < len {
+        if byte_at(norm, i) != byte_at(s, i) {
+            return false
+        }
+        i += 1
+    }
+
+    return true
+}
+
+func is_nfd(s: string) -> bool {
+    let len: uint = byte_len(s)
+
+    if len == 0 or !is_text(s) {
+        return true
+    }
+
+    var pos: u32 = 0
+    var last_ccc: u8 = 0
+
+    while cast[uint] pos < len {
+        var cp: char = cast[char] 0
+
+        try {
+            cp = internal.encoding.utf8_decode(s, pos)!
+        } else failure {
+            return false
+        }
+
+        let ccc: u8 = internal.properties.combining_class(cp)
+
+        if last_ccc > ccc and ccc != 0 {
+            return false
+        }
+
+        if ((nqc_lookup(cp) >> 2) & 0x03) != 0 {
+            return false
+        }
+
+        last_ccc = ccc
+    }
+
+    return true
+}
