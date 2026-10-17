@@ -73,10 +73,10 @@ int32_t keywords_db_close(db_state *db);
 #include <stdlib.h>
 #include <string.h>
 
-db_state * db_open(const char *path, const OpenOpts *opts);
-int64_t db_limit(db_state *db, const Limits *limits);
-uint32_t db_flags(db_state *db, const Sized *sized);
-int db_depth(db_state *db, const Plain *plain);
+db_state * db_open(const char *path, OpenOpts *opts);
+int64_t db_limit(db_state *db, Limits *limits);
+uint32_t db_flags(db_state *db, Sized *sized);
+int db_depth(db_state *db, Plain *plain);
 void db_close(db_state *db);
 
 void keywords_bytes_free(keywords_bytes_t *bytes) {
@@ -104,7 +104,7 @@ static int32_t keywords_encode(const char *text, size_t length, char **out) {
 
 int32_t keywords_db_open(const char *path, size_t path_length, OpenOpts *opts, db_state **result) {
     const char *s0 = 0;
-    const OpenOpts *s1 = 0;
+    OpenOpts *s1 = 0;
     db_state *ret = 0;
     char *l0 = NULL;
     int32_t outcome = 0;
@@ -135,7 +135,7 @@ finish:
 
 int64_t keywords_db_limit(db_state *db, Limits *limits) {
     db_state *s0 = 0;
-    const Limits *s1 = 0;
+    Limits *s1 = 0;
     int64_t ret = 0;
     s0 = db;
     s1 = limits;
@@ -145,7 +145,7 @@ int64_t keywords_db_limit(db_state *db, Limits *limits) {
 
 uint32_t keywords_db_flags(db_state *db, Sized *sized) {
     db_state *s0 = 0;
-    const Sized *s1 = 0;
+    Sized *s1 = 0;
     uint32_t ret = 0;
     s0 = db;
     s1 = sized;
@@ -155,7 +155,7 @@ uint32_t keywords_db_flags(db_state *db, Sized *sized) {
 
 int keywords_db_depth(db_state *db, Plain *plain) {
     db_state *s0 = 0;
-    const Plain *s1 = 0;
+    Plain *s1 = 0;
     int ret = 0;
     s0 = db;
     s1 = plain;

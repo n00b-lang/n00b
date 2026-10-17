@@ -14,13 +14,13 @@ expect(bool ok, const char *what)
 }
 
 static int
-descending(const void *a, const void *b)
+descending(void *a, void *b)
 {
     return *(const uint8_t *)b - *(const uint8_t *)a;
 }
 
 static void
-record(const void *context, const Event *event)
+record(void *context, Event *event)
 {
     *(int *)context = event->code;
 }

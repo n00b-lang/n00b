@@ -273,8 +273,7 @@ writ_str_t
 writ_c_real_param_type(const writ_c_context_t *c, const writ_slot_view_t *slot)
 {
     const writ_type_view_t *type = slot->physical ? slot->physical : slot->type;
-    bool constant = slot->mode == WRIT_MODE_IN && type->kind != WRIT_TYPE_HANDLE
-                 && (type->kind == WRIT_TYPE_POINTER || type->kind == WRIT_TYPE_ARRAY);
+    bool constant = slot->mode == WRIT_MODE_IN && (type->kind == WRIT_TYPE_ARRAY || writ_c_is_text(type));
     return writ_c_type(c, type, constant);
 }
 

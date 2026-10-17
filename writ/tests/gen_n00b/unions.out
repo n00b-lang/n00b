@@ -66,8 +66,8 @@ uint8_t unions_cell_flag(Cell *cell, Raw *raw);
 #include <stdlib.h>
 #include <string.h>
 
-int value_kind(const Value *value);
-uint8_t cell_flag(const Cell *cell, const Raw *raw);
+int value_kind(Value *value);
+uint8_t cell_flag(Cell *cell, Raw *raw);
 
 void unions_bytes_free(unions_bytes_t *bytes) {
     free(bytes->data);
@@ -80,7 +80,7 @@ void unions_free(void *data) {
 }
 
 int unions_value_kind(Value *value) {
-    const Value *s0 = 0;
+    Value *s0 = 0;
     int ret = 0;
     s0 = value;
     ret = value_kind(s0);
@@ -88,8 +88,8 @@ int unions_value_kind(Value *value) {
 }
 
 uint8_t unions_cell_flag(Cell *cell, Raw *raw) {
-    const Cell *s0 = 0;
-    const Raw *s1 = 0;
+    Cell *s0 = 0;
+    Raw *s1 = 0;
     uint8_t ret = 0;
     s0 = cell;
     s1 = raw;

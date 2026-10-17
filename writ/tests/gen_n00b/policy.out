@@ -29,7 +29,7 @@ void policy_free(void *data);
 
 typedef struct stmt_state stmt_state;
 
-typedef void (*text_free)(const void *p);
+typedef void (*text_free)(void *p);
 
 
 enum {
@@ -244,7 +244,7 @@ int32_t policy_n00b_bind_text_text_transient(uint64_t stmt, const void *text, vo
     return writ_n00b_value;
 }
 
-void policy_n00b_bind_text_with_dtor_free(const void *p) {
+void policy_n00b_bind_text_with_dtor_free(void *p) {
     free((void *)p);
 }
 
