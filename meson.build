@@ -594,6 +594,18 @@ test(
     suite: 'slow',
 )
 
+test(
+    'let-array-reassign-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'features'
+               / 'let_array_reassign.n',
+           'has multiple initialization sites'],
+    timeout: 120,
+    suite: 'slow',
+)
+
 foreach feature : ['fallible_without_result', 'try_error_binding',
                    'builtin_type_record_literal', 'record_literal_nil_option',
                    'option_literal_argument', 'record_literal_return',
@@ -603,7 +615,7 @@ foreach feature : ['fallible_without_result', 'try_error_binding',
                    'array_element_compound', 'array_read_store_index',
                    'package_named_fields', 'array_declared_bounds',
                    'initializer_shadowing', 'array_element_shift',
-                   'array_element_field_update']
+                   'array_element_field_update', 'let_array_elements']
     test(
         feature.replace('_', '-'), find_program('sh'),
         args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',

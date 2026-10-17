@@ -1007,7 +1007,9 @@ n00bb_emit_indirect_write(ir_lower_context_t *context, ir_value_t *address,
     ir_instr_t *instruction = address && value
         ? ir_lower_emit_instruction(context, IR_OP_STORE, span) : nullptr;
     th_type *referent = address ? th_ind_referent(address->type) : nullptr;
-    if (!instruction || !ir_instr_set_binding_initialization(instruction, true)
+    if (!instruction
+        || (!ir_value_addresses_sequence_contents(address)
+            && !ir_instr_set_binding_initialization(instruction, true))
         || !ir_instr_operand_value(instruction, address)
         || !ir_instr_operand_value(instruction, value)
         || (n00bb_atomic_element_type(referent)
