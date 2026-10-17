@@ -1187,9 +1187,55 @@ blame(walk_t *walk, ir_instr_t *offender, const char *reason)
 }
 
 static bool
+variable_slot(const ir_value_t *address)
+{
+    return address && address->kind == IR_VAL_INSTR && address->def
+        && (address->def->op == IR_OP_ALLOC
+            || address->def->op == IR_OP_ADDRESS_OF);
+}
+
+static bool
+stores_into_aggregate(window_t *window, const ir_instr_t *instruction)
+{
+    uint32_t index = 0;
+    switch (instruction->op) {
+    case IR_OP_STORE:
+        return instruction->n_operands >= 2
+            && tracked_index(window, operand_at(instruction, 1), &index)
+            && !variable_slot(operand_at(instruction, 0));
+    case IR_OP_INSERT:
+    case IR_OP_SEQUENCE_SET:
+        return instruction->n_operands >= 3
+            && tracked_index(window, operand_at(instruction, 2), &index);
+    case IR_OP_AGGREGATE:
+    case IR_OP_ARRAY_NEW:
+    case IR_OP_ARRAY_NEW_USING:
+    case IR_OP_VARIANT_NEW:
+    case IR_OP_VARIANT_NEW_USING:
+    case IR_OP_VARIANT_MAKE:
+    case IR_OP_BOX:
+    case IR_OP_ATOMIC_WRAP:
+    case IR_OP_ATOMIC_RMW:
+    case IR_OP_ATOMIC_CAS:
+    case IR_OP_GLOBAL_STORE:
+    case IR_OP_MEMCPY:
+        for (uint32_t o = 0; o < instruction->n_operands; o++)
+            if (tracked_index(window, operand_at(instruction, o), &index))
+                return true;
+        return false;
+    default:
+        return false;
+    }
+}
+
+static bool
 check_instruction(walk_t *walk, ir_instr_t *instruction)
 {
     window_t *window = walk->window;
+    if (stores_into_aggregate(window, instruction))
+        blame(walk, instruction,
+              "the borrowed string is stored into a field, element or "
+              "container here");
     if (instruction->op == IR_OP_RETURN) {
         uint32_t index = 0;
         for (uint32_t o = 0; o < instruction->n_operands; o++)

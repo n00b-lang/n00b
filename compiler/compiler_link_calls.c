@@ -39,6 +39,10 @@ unify_call_node_type(core_translation_unit_t *unit,
                      th_type *expected)
 {
     if (!actual || !expected) return true;
+    if (n00bb_value_coerces(state->types, expected, actual)) {
+        core_tree_node_value(typed_node).type = expected;
+        return true;
+    }
     bool converted = false;
     th_type *materialized = n00bb_type_materialize(state->link_analysis
             ? state->link_analysis->grammar : nullptr,

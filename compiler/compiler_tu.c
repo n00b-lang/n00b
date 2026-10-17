@@ -7870,6 +7870,15 @@ n00bb_type_materialize(parse_grammar_t *grammar, n00bb_tu_state_t *state,
         return expected;
     *converted = true;
     if (n00bb_value_coerces(types, actual, expected)) return expected;
+    if (n00bb_value_coerces(types, expected, actual)) {
+        *converted = false;
+        core_diagnostics_report_at(
+            core_translation_unit_diagnostics(state->unit), state->unit,
+            CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0036"),
+            CORE_STRING_STATIC(n00bb_string_to_buffer_text),
+            link_source_location(node));
+        return nullptr;
+    }
     if (integer_value_promotes(grammar, state, node, actual, expected)
         || n00bb_dereferences_to(types, actual, expected)) return expected;
     if (n00bb_option_type_element(expected, &element)
