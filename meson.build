@@ -1808,3 +1808,11 @@ run_target(
         '--no-strict',
     ],
 )
+
+test(
+    'unicode-tables-match',
+    find_program('python3'),
+    args: [meson.current_source_dir() / 'tools' / 'check_unicode_tables.py',
+           '--root', meson.current_source_dir()],
+    timeout: 120,
+)
