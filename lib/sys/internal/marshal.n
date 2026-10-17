@@ -531,6 +531,11 @@ func visit_pointer(graph: Ref[Graph], source: u32, slot: Ref[byte],
 
 func visit_string(graph: Ref[Graph], source: u32, address: Ref[byte]) {
     let tag: u64 = string_tag(address)
+    if tag == 3 {
+        visit_pointer(graph, source, address,
+                      internal.abi.string_backing_at(address))
+        return
+    }
     if tag == 0 or graph.copying {
         return
     }

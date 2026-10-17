@@ -1,0 +1,3 @@
+import beta
+
+public var a: int = beta.b + 1

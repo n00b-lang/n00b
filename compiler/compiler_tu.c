@@ -1279,6 +1279,11 @@ static_value_matches_type(const n00bb_static_value_t *value, th_type *type,
     if (n00bb_atomic_element_type(type) != nullptr)
         return static_value_matches_type(value,
             n00bb_atomic_element_type(type), state, depth + 1);
+    th_type *option_element = nullptr;
+    if (value->kind != N00BB_STATIC_VALUE_NIL
+        && n00bb_option_type_element(type, &option_element))
+        return static_value_matches_type(value, option_element, state,
+                                         depth + 1);
     if (value->kind == N00BB_STATIC_VALUE_SEQUENCE) {
         th_type *element_type = static_sequence_element_type(type);
         if (!element_type) return false;
@@ -1343,9 +1348,15 @@ static_value_matches_type(const n00bb_static_value_t *value, th_type *type,
     switch (value->kind) {
     case N00BB_STATIC_VALUE_BOOL:
         return n00bb_scalar_class_is(type, IR_CLASS_BOOL);
-    case N00BB_STATIC_VALUE_INT:
+    case N00BB_STATIC_VALUE_INT: {
+        th_type *definition = th_kind_of(type) == TH_NAMED
+            ? th_type_definition(state->types, type) : nullptr;
+        definition = definition ? th_resolve(definition) : nullptr;
         return is_integer_type(type)
-            || n00bb_scalar_role_is(type, IR_ROLE_BYTE);
+            || n00bb_scalar_role_is(type, IR_ROLE_BYTE)
+            || (definition && (th_kind_of(definition) == TH_BITINT
+                               || is_integer_type(definition)));
+    }
     case N00BB_STATIC_VALUE_FLOAT:
         return is_float_type(type);
     case N00BB_STATIC_VALUE_STRING:
@@ -1458,6 +1469,83 @@ named_field_identifier(parse_grammar_t *grammar, parse_tree_t *field)
     return parse_tree_leaf_text(name);
 }
 
+static parse_sym_entry_t *
+static_reference_symbol(parse_grammar_t *grammar, n00bb_tu_state_t *state,
+                        parse_tree_t *node)
+{
+    while (node && !core_tree_is_leaf(node)) {
+        parse_node_resolution_t resolution = parse_tree_resolution(node);
+        if (resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL)
+            return resolution.target.symbol;
+        size_t children = core_tree_num_children(node);
+        if (children == 3
+            && parse_tree_leaf_is(core_tree_child(node, 1),
+                                  CORE_STRING_STATIC("."))) {
+            parse_sym_entry_t *owner = static_reference_symbol(grammar,
+                state, core_tree_child(node, 0));
+            if (!owner || owner->kind != PARSE_SYM_TYPEDEF
+                || !owner->member_scope) return nullptr;
+            core_string_t name = parse_tree_leaf_text(core_tree_child(node, 2));
+            n00bb_tu_state_t *declaring = owner->owner_unit
+                ? tu_state(owner->owner_unit) : state;
+            parse_scope_t *values = declaring && declaring->annotations
+                ? parse_symtab_scope_in_namespace(
+                    declaring->annotations->symtab, owner->member_scope,
+                    CORE_STRING_STATIC(""))
+                : nullptr;
+            parse_sym_entry_t *member = values
+                ? parse_symtab_lookup_in(values, name) : nullptr;
+            return member ? member
+                : parse_symtab_lookup_in(owner->member_scope, name);
+        }
+        if (children == 1 && core_tree_is_leaf(core_tree_child(node, 0))) {
+            parse_symtab_t *symtab = state && state->annotations
+                ? state->annotations->symtab : nullptr;
+            return symtab ? lookup_named_type_reference(grammar, state,
+                symtab, parse_symtab_scope_for_node(symtab, node),
+                parse_tree_leaf_text(core_tree_child(node, 0))) : nullptr;
+        }
+        if (children != 1) return nullptr;
+        node = core_tree_child(node, 0);
+    }
+    return nullptr;
+}
+
+static bool
+static_reference_value(parse_grammar_t *grammar, parse_sym_entry_t *symbol,
+                       n00bb_tu_state_t *state, n00bb_static_value_t *out,
+                       size_t depth)
+{
+    if (symbol->kind == PARSE_SYM_ENUM_CONST) {
+        if (!symbol->has_comptime_value || !symbol->comptime_value)
+            return false;
+        __int128 value = 0;
+        if (n00bb_flagset_member(symbol))
+            value = (__int128)((const n00bb_flagset_value_t *)
+                symbol->comptime_value)->mask;
+        else {
+            const n00bb_enum_value_t *member = symbol->comptime_value;
+            value = member->negative
+                ? -(__int128)(member->magnitude - 1) - 1
+                : (__int128)member->magnitude;
+        }
+        *out = (n00bb_static_value_t){
+            .kind = N00BB_STATIC_VALUE_INT,
+            .as.integer = value,
+        };
+        return true;
+    }
+    parse_tree_t *declaration = symbol->kind == PARSE_SYM_VARIABLE
+            && symbol->mutability == PARSE_SYM_CONST && symbol->type
+        ? symbol->decl_node : nullptr;
+    parse_tree_t *initializer = nt_is(grammar, declaration, "sym-decl")
+        ? child_nt(grammar, declaration, "expression") : nullptr;
+    n00bb_tu_state_t *owner = symbol->owner_unit
+        ? tu_state(symbol->owner_unit) : nullptr;
+    return initializer && semantic_static_value_from_expression(grammar,
+        initializer, symbol->type, owner ? owner : state, out, depth + 1);
+}
+
 bool
 semantic_static_value_from_expression(parse_grammar_t *grammar,
                                       parse_tree_t *expression,
@@ -1466,9 +1554,13 @@ semantic_static_value_from_expression(parse_grammar_t *grammar,
                                       n00bb_static_value_t *out,
                                       size_t depth)
 {
-    if (!grammar || !expression || !type || !state || !out)
+    if (!grammar || !expression || !type || !state || !out || depth > 64)
         return false;
     type = th_resolve(type);
+    parse_sym_entry_t *referenced = static_reference_symbol(grammar, state,
+                                                            expression);
+    if (referenced)
+        return static_reference_value(grammar, referenced, state, out, depth);
     n00bb_static_literal_probe_t probe = find_static_literal(grammar,
                                                               expression);
     parse_tree_t *literal = probe.valid ? probe.literal : nullptr;
@@ -9404,6 +9496,7 @@ initial_symbol_node(parse_visit_t *visit, bool entering, void *context)
     if (nt_is(visit->grammar, visit->node, "sym-decl")
         && declared && declared->decl_node == visit->node
         && declared->shadowed
+        && declared->shadowed->kind != PARSE_SYM_MODULE
         && declared->scope == declared->shadowed->scope) {
         core_diagnostics_report_at(
             annotations->diagnostics, annotations->diagnostic_unit,

@@ -1,0 +1,12 @@
+import third
+
+public func step(n: int) -> int {
+    if n <= 0 {
+        return 0
+    }
+    return third.hop(n - 1) + 1
+}
+
+public func relay(n: int) -> int {
+    return third.same(n)
+}

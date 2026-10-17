@@ -153,8 +153,10 @@ typedef struct {
     pointer_map_t index;
     pointer_map_t contents_index;
     ir_value_t **contents;
+    bool *contents_hold_buffer;
     uint32_t contents_len;
     uint32_t contents_cap;
+    th_ctx *types;
     bool failed;
 } effects_table_t;
 
@@ -169,18 +171,122 @@ contents_type(th_type *type)
     return resolved;
 }
 
+static bool
+is_buffer_type(th_type *type)
+{
+    const char *name = nullptr;
+    size_t length = 0, args = 0;
+    return th_kind_of(type) == TH_NAMED
+        && th_named_info(type, &name, &length, nullptr, &args) && !args
+        && length == sizeof(n00bb_buffer_type_name) - 1
+        && !memcmp(name, n00bb_buffer_type_name, length);
+}
+
+static bool type_may_hold_buffer(th_ctx *types, th_type *type,
+                                 uint32_t depth);
+
+static bool
+arguments_may_hold_buffer(th_ctx *types, th_type *type, uint32_t depth)
+{
+    size_t args = 0;
+    if (!th_named_info(type, nullptr, nullptr, nullptr, &args)) return false;
+    for (size_t i = 0; i < args; i++) {
+        const th_arg *argument = th_named_arg(type, i);
+        if (argument && argument->kind == TH_ARG_TYPE
+            && type_may_hold_buffer(types, argument->type, depth + 1))
+            return true;
+    }
+    return false;
+}
+
+static bool
+type_may_hold_buffer(th_ctx *types, th_type *type, uint32_t depth)
+{
+    type = type ? th_resolve(type) : nullptr;
+    if (!type || depth > 16 || th_kind_of(type) == TH_VAR) return true;
+    if (!type_may_contain_reference_alias(types, type)) return false;
+    switch (th_kind_of(type)) {
+    case TH_NAMED: {
+        if (is_buffer_type(type)) return true;
+        if (arguments_may_hold_buffer(types, type, depth)) return true;
+        th_type *definition = th_type_definition(types, type);
+        return definition && th_resolve(definition) != type
+            && type_may_hold_buffer(types, definition, depth + 1);
+    }
+    case TH_RECORD:
+        for (size_t i = 0; i < th_record_len(type); i++) {
+            const th_member *member = th_record_member(type, i);
+            if (!member || type_may_hold_buffer(types, member->type,
+                                                depth + 1))
+                return true;
+        }
+        return false;
+    case TH_SEQUENCE:
+        return type_may_hold_buffer(types, th_seq_elem(type), depth + 1);
+    case TH_INDIRECTION:
+        return type_may_hold_buffer(types, th_ind_referent(type),
+                                    depth + 1);
+    default:
+        if (!th_sum_len(type)) return true;
+        for (size_t i = 0; i < th_sum_len(type); i++)
+            if (type_may_hold_buffer(types, th_sum_arm(type, i), depth + 1))
+                return true;
+        return false;
+    }
+}
+
+static bool
+contents_may_hold_buffer(th_ctx *types, th_type *type, uint32_t depth)
+{
+    type = type ? th_resolve(type) : nullptr;
+    if (!type || depth > 16 || th_kind_of(type) == TH_VAR) return true;
+    switch (th_kind_of(type)) {
+    case TH_SEQUENCE:
+        return type_may_hold_buffer(types, th_seq_elem(type), depth + 1);
+    case TH_INDIRECTION:
+        return type_may_hold_buffer(types, th_ind_referent(type),
+                                    depth + 1);
+    case TH_NAMED: {
+        if (is_buffer_type(type)) return false;
+        if (arguments_may_hold_buffer(types, type, depth)) return true;
+        th_type *definition = th_type_definition(types, type);
+        return definition && th_resolve(definition) != type
+            && contents_may_hold_buffer(types, definition, depth + 1);
+    }
+    case TH_RECORD:
+        for (size_t i = 0; i < th_record_len(type); i++) {
+            const th_member *member = th_record_member(type, i);
+            if (!member || contents_may_hold_buffer(types, member->type,
+                                                    depth + 1))
+                return true;
+        }
+        return false;
+    default:
+        if (!type_may_contain_reference_alias(types, type)) return false;
+        if (!th_sum_len(type)) return true;
+        for (size_t i = 0; i < th_sum_len(type); i++)
+            if (contents_may_hold_buffer(types, th_sum_arm(type, i),
+                                         depth + 1))
+                return true;
+        return false;
+    }
+}
+
 static ir_value_t *
-contents_root(effects_table_t *table, ir_value_t *parameter)
+contents_root(effects_table_t *table, ir_value_t *base)
 {
     uint32_t slot = 0;
-    if (pointer_map_get(&table->contents_index, parameter, &slot))
+    if (pointer_map_get(&table->contents_index, base, &slot))
         return table->contents[slot];
     if (table->contents_len == table->contents_cap) {
         uint32_t cap = table->contents_cap ? table->contents_cap * 2 : 32;
         ir_value_t **contents = realloc(table->contents,
                                         cap * sizeof(*contents));
-        if (!contents) return nullptr;
-        table->contents = contents;
+        if (contents) table->contents = contents;
+        bool *holds = contents ? realloc(table->contents_hold_buffer,
+                                         cap * sizeof(*holds)) : nullptr;
+        if (!contents || !holds) return nullptr;
+        table->contents_hold_buffer = holds;
         table->contents_cap = cap;
     }
     ir_value_t *root = calloc(1, sizeof(*root));
@@ -188,18 +294,23 @@ contents_root(effects_table_t *table, ir_value_t *parameter)
     *root = (ir_value_t){
         .kind = IR_VAL_LOCAL,
         .name = "<contents>",
-        .type = contents_type(parameter->type),
-        .owner = parameter->owner,
-        .index = parameter->index,
+        .type = base->type,
+        .owner = base->owner,
+        .index = base->index,
     };
-    if (!pointer_map_put(&table->contents_index, parameter,
-                         table->contents_len)
-        || !pointer_map_put(&table->contents_index, root,
-                            table->contents_len)) {
+    uint32_t at = table->contents_len;
+    if (!pointer_map_put(&table->contents_index, root, at)) {
         free(root);
         return nullptr;
     }
-    table->contents[table->contents_len++] = root;
+    if (!pointer_map_put(&table->contents_index, base, at)) {
+        free(root);
+        return nullptr;
+    }
+    table->contents[at] = root;
+    table->contents_hold_buffer[at] = contents_may_hold_buffer(table->types,
+        base->type, 0);
+    table->contents_len++;
     return root;
 }
 
@@ -218,6 +329,7 @@ effects_table_free(effects_table_t *table)
     for (uint32_t i = 0; i < table->contents_len; i++)
         free(table->contents[i]);
     free(table->contents);
+    free(table->contents_hold_buffer);
     free(table->items);
     pointer_map_free(&table->index);
     pointer_map_free(&table->contents_index);
@@ -409,7 +521,8 @@ load_roots(origins_t *state, const root_set_t *address, root_set_t *into)
             if (!memory || !root_set_union(into, memory, nullptr))
                 return false;
         }
-        else if (root != &nonlocal_root && root->kind == IR_VAL_PARAM) {
+        else if (root != &nonlocal_root
+                 && !is_contents_root(state->effects, root)) {
             ir_value_t *contents = contents_root(state->effects, root);
             if (!contents || !root_set_add(into, contents, nullptr))
                 return false;
@@ -945,6 +1058,11 @@ uses_and_defs(window_t *window, const ir_instr_t *instruction,
     if (instruction->dest
         && tracked_index(window, instruction->dest, &index))
         bitset_clear(live, index);
+    if (instruction->op == IR_OP_COPY && instruction->dest_local
+        && tracked_index(window, ir_local_value(window->function,
+                                                instruction->dest_local),
+                         &index))
+        bitset_clear(live, index);
     if (instruction->op == IR_OP_PHI) return;
     for (uint32_t o = 0; o < instruction->n_operands; o++)
         if (tracked_index(window, operand_at(instruction, o), &index))
@@ -1258,46 +1376,22 @@ typedef struct {
 } walk_t;
 
 static bool
-type_holds_buffer(th_type *type, uint32_t depth)
+root_is_buffer(const effects_table_t *table, const ir_value_t *root)
 {
-    type = type ? th_resolve(type) : nullptr;
-    if (!type || depth > 8) return false;
-    switch (th_kind_of(type)) {
-    case TH_NAMED: {
-        const char *name = nullptr;
-        size_t length = 0, args = 0;
-        if (!th_named_info(type, &name, &length, nullptr, &args))
-            return false;
-        size_t buffer_length = sizeof(n00bb_buffer_type_name) - 1;
-        return length >= buffer_length
-            && !memcmp(name, n00bb_buffer_type_name, buffer_length)
-            && (length == buffer_length
-                || (length == buffer_length + 6
-                    && !memcmp(name + buffer_length, "_State", 6)));
-    }
-    case TH_INDIRECTION:
-        return type_holds_buffer(th_ind_referent(type), depth + 1);
-    case TH_SEQUENCE:
-        return type_holds_buffer(th_seq_elem(type), depth + 1);
-    default:
-        for (size_t i = 0; th_sum_len(type) && i < th_sum_len(type); i++)
-            if (type_holds_buffer(th_sum_arm(type, i), depth + 1))
-                return true;
-        return false;
-    }
+    uint32_t slot = 0;
+    if (root == &nonlocal_root) return true;
+    if (is_contents_root(table, root)
+        && pointer_map_get(&table->contents_index, root, &slot))
+        return table->contents_hold_buffer[slot];
+    return type_may_hold_buffer(table->types, root->type, 0);
 }
 
 static bool
-root_is_buffer(const ir_value_t *root)
-{
-    return root == &nonlocal_root || type_holds_buffer(root->type, 0);
-}
-
-static bool
-buffer_roots_meet(const root_set_t *left, const root_set_t *right)
+buffer_roots_meet(const effects_table_t *table, const root_set_t *left,
+                  const root_set_t *right)
 {
     for (uint32_t i = 0; i < left->len; i++)
-        if (root_is_buffer(left->items[i])
+        if (root_is_buffer(table, left->items[i])
             && root_set_has(right, left->items[i]))
             return true;
     return false;
@@ -1306,9 +1400,10 @@ buffer_roots_meet(const root_set_t *left, const root_set_t *right)
 static bool
 roots_reach_global(const walk_t *walk, const root_set_t *roots)
 {
+    const effects_table_t *table = walk->window->origins->effects;
     for (uint32_t i = 0; i < roots->len; i++) {
         ir_value_t *root = roots->items[i];
-        if (!root_is_buffer(root)) continue;
+        if (!root_is_buffer(table, root)) continue;
         if (root == &nonlocal_root || root->kind == IR_VAL_PARAM
             || is_contents_root(walk->window->origins->effects, root)
             || root_set_has(&walk->window->origins->escaped, root))
@@ -1396,7 +1491,8 @@ check_instruction(walk_t *walk, ir_instr_t *instruction)
     bool writes_nonlocal = false;
     bool ok = call_write_roots(window->origins, instruction, &written,
                                &writes_nonlocal);
-    if (ok && (buffer_roots_meet(&written, &walk->source)
+    if (ok && (buffer_roots_meet(window->origins->effects, &written,
+                                 &walk->source)
                || (walk->source_global
                    && (writes_nonlocal
                        || roots_reach_global(walk, &written)))))
@@ -1633,8 +1729,8 @@ borrow_function(ir_diags_t *diagnostics, effects_table_t *table,
 bool
 n00bb_buffer_borrow_pass(ir_module_t *module, ir_diags_t *diagnostics)
 {
-    effects_table_t table = {0};
     th_ctx *types = ir_module_types(module);
+    effects_table_t table = {.types = types};
     bool ok = true;
     bool solved = false;
     for (size_t f = 0; ok && f < ir_func_count(module); f++) {

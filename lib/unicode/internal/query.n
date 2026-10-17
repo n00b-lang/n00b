@@ -1,0 +1,482 @@
+import sys.abi
+import internal.types
+import internal.encoding
+import internal.properties
+import internal.runebuf
+import generated.names
+import generated.scripts
+import generated.blocks
+
+private const gc_names: Array[string] = [
+    "Lu", "Ll", "Lt", "Lm", "Lo",
+    "Mn", "Mc", "Me",
+    "Nd", "Nl", "No",
+    "Pc", "Pd", "Ps", "Pe", "Pi", "Pf", "Po",
+    "Sm", "Sc", "Sk", "So",
+    "Zs", "Zl", "Zp",
+    "Cc", "Cf", "Cs", "Co", "Cn"
+]
+
+func filter_gc(gc: internal.types.Gc) -> internal.types.Char_Filter {
+    return (kind = internal.types.Char_Filter_Kind.gc, lo = cast[u32] gc,
+            hi = 0, set = nil)
+}
+
+func filter_script(script: internal.types.Script)
+    -> internal.types.Char_Filter {
+    return (kind = internal.types.Char_Filter_Kind.script,
+            lo = cast[u32] script, hi = 0, set = nil)
+}
+
+func filter_bidi(bidi: internal.types.Bidi_Class)
+    -> internal.types.Char_Filter {
+    return (kind = internal.types.Char_Filter_Kind.bidi, lo = cast[u32] bidi,
+            hi = 0, set = nil)
+}
+
+func filter_property(prop: internal.types.Property)
+    -> internal.types.Char_Filter {
+    return (kind = internal.types.Char_Filter_Kind.property,
+            lo = cast[u32] prop, hi = 0, set = nil)
+}
+
+func filter_block(block: internal.types.Block)
+    -> internal.types.Char_Filter {
+    return (kind = internal.types.Char_Filter_Kind.block,
+            lo = cast[u32] block, hi = 0, set = nil)
+}
+
+func filter_eaw(eaw: internal.types.Eaw) -> internal.types.Char_Filter {
+    return (kind = internal.types.Char_Filter_Kind.eaw, lo = cast[u32] eaw,
+            hi = 0, set = nil)
+}
+
+func filter_range(lo: char, hi: char) -> internal.types.Char_Filter {
+    return (kind = internal.types.Char_Filter_Kind.range, lo = cast[u32] lo,
+            hi = cast[u32] hi, set = nil)
+}
+
+private func count_wide_chars(chars: string) -> uint {
+    var n: uint = 0
+    var pos: u32 = 0
+
+    while cast[uint] pos < byte_len(chars) {
+        var got: char = cast[char] 0
+
+        try {
+            got = internal.encoding.utf8_decode(chars, pos)!
+        } else failure {
+            break
+        }
+
+        if cast[u32] got > 127 {
+            n += 1
+        }
+    }
+
+    return n
+}
+
+func char_set(chars: string) -> internal.types.Char_Set {
+    var out: internal.types.Char_Set = (ascii_lo = 0, ascii_hi = 0,
+        ranges = sys.abi.list_with_length(
+            new[Array[internal.types.Char_Pair]](
+                cast[int] count_wide_chars(chars)), 0))
+
+    var pos: u32 = 0
+
+    while cast[uint] pos < byte_len(chars) {
+        var got: char = cast[char] 0
+
+        try {
+            got = internal.encoding.utf8_decode(chars, pos)!
+        } else failure {
+            break
+        }
+
+        let cp: char = got
+
+        if cast[u32] cp < 64 {
+            out.ascii_lo |= cast[u64] 1 << cast[u64] cp
+        }
+        else {
+            if cast[u32] cp < 128 {
+                out.ascii_hi |= cast[u64] 1 << cast[u64] (cast[u32] cp - 64)
+            }
+            else {
+                let pair: internal.types.Char_Pair = (lo = cp, hi = cp)
+                out.ranges.append(pair)
+            }
+        }
+    }
+
+    return out
+}
+
+func holds(self: internal.types.Char_Set, cp: char) -> bool {
+    if cast[u32] cp < 64 {
+        return (self.ascii_lo & (cast[u64] 1 << cast[u64] cp)) != 0
+    }
+
+    if cast[u32] cp < 128 {
+        return (self.ascii_hi &
+            (cast[u64] 1 << cast[u64] (cast[u32] cp - 64))) != 0
+    }
+
+    var i: uint = 0
+    while i < self.ranges.len() {
+        let r: internal.types.Char_Pair = self.ranges[cast[int] i]
+
+        if cast[u32] cp >= cast[u32] r.lo and cast[u32] cp <= cast[u32] r.hi {
+            return true
+        }
+        i += 1
+    }
+
+    return false
+}
+
+func filter_char_set(s: internal.types.Char_Set) -> internal.types.Char_Filter {
+    return (kind = internal.types.Char_Filter_Kind.set, lo = 0, hi = 0,
+            set = s)
+}
+
+func filter_chars(chars: string) -> internal.types.Char_Filter {
+    return filter_char_set(char_set(chars))
+}
+
+func filter_char(cp: char) -> internal.types.Char_Filter {
+    return filter_range(cp, cp)
+}
+
+func matches(self: internal.types.Char_Filter, cp: char) -> bool {
+    if self.kind == internal.types.Char_Filter_Kind.set {
+        return self.set != nil and holds(self.set.get(), cp)
+    }
+
+    if self.kind == internal.types.Char_Filter_Kind.gc {
+        return cast[u32] internal.properties.general_category(cp) == self.lo
+    }
+
+    if self.kind == internal.types.Char_Filter_Kind.script {
+        return cast[u32] internal.properties.script(cp) == self.lo
+    }
+
+    if self.kind == internal.types.Char_Filter_Kind.bidi {
+        return cast[u32] internal.properties.bidi_class(cp) == self.lo
+    }
+
+    if self.kind == internal.types.Char_Filter_Kind.property {
+        return internal.properties.has_property(cp,
+            cast[internal.types.Property] self.lo)
+    }
+
+    if self.kind == internal.types.Char_Filter_Kind.block {
+        return cast[u32] internal.properties.block(cp) == self.lo
+    }
+
+    if self.kind == internal.types.Char_Filter_Kind.eaw {
+        return cast[u32] internal.properties.east_asian_width(cp) == self.lo
+    }
+
+    return cast[u32] cp >= self.lo and cast[u32] cp <= self.hi
+}
+
+private func filters_match(fv: List[internal.types.Char_Filter], n: uint,
+                           cp: char, any: bool) -> bool {
+    var i: uint = 0
+    while i < n {
+        if matches(fv[cast[int] i], cp) == any {
+            return any
+        }
+        i += 1
+    }
+
+    return !any
+}
+
+private func filters_sweep(filters: List[internal.types.Char_Filter], cp: char,
+                           any: bool) -> bool {
+    var out: bool = !any
+
+    out = filters_match(filters, filters.len(), cp, any)
+
+    return out
+}
+
+func match_any(filters: List[internal.types.Char_Filter], cp: char) -> bool {
+    return filters_sweep(filters, cp, true)
+}
+
+func match_all(filters: List[internal.types.Char_Filter], cp: char) -> bool {
+    return filters_sweep(filters, cp, false)
+}
+
+private func filter_block_id(f: internal.types.Char_Filter)
+    -> internal.types.Block? {
+    if f.kind != internal.types.Char_Filter_Kind.block {
+        return nil
+    }
+
+    return cast[internal.types.Block] f.lo
+}
+
+func ranges(self: internal.types.Char_Filter)
+    -> List[internal.types.Char_Pair] {
+    var acc: internal.runebuf.Char_Buf = new[internal.runebuf.Char_Buf](64)
+
+    let blk: internal.types.Block? = filter_block_id(self)
+
+    if self.kind == internal.types.Char_Filter_Kind.range {
+        if self.lo < internal.properties.max_cp {
+            internal.runebuf.push(acc, cast[char] self.lo)
+            var last: u32 = internal.properties.max_cp - 1
+            if self.hi < internal.properties.max_cp {
+                last = self.hi
+            }
+            internal.runebuf.push(acc, cast[char] last)
+        }
+    }
+    else {
+        if blk != nil {
+            let want: u32 = cast[u32] blk.get()
+
+            var i: u32 = 0
+            while i < generated.blocks.block_count {
+                if cast[u32] generated.blocks.block_ids[i] == want {
+                    internal.runebuf.push(acc,
+                        cast[char] generated.blocks.block_ranges[i][0])
+                    internal.runebuf.push(acc,
+                        cast[char] generated.blocks.block_ranges[i][1])
+                }
+                i += 1
+            }
+        }
+        else {
+            var input_at: bool = false
+
+            var cp: u32 = 0
+            while cp < internal.properties.max_cp {
+                let hit: bool = matches(self, cast[char] cp)
+
+                if hit and !input_at {
+                    internal.runebuf.push(acc, cast[char] cp)
+                    internal.runebuf.push(acc, cast[char] cp)
+                }
+                else {
+                    if hit {
+                        acc.data[acc.len - 1] = cast[char] cp
+                    }
+                }
+
+                input_at = hit
+                cp += 1
+            }
+        }
+    }
+
+    let runs: uint = cast[uint] (acc.len / 2)
+
+    var pv: Array[internal.types.Char_Pair] =
+        new[Array[internal.types.Char_Pair]](cast[int] runs)
+
+    var i: uint = 0
+    while i < runs {
+        pv[i] = (lo = acc.data[cast[u32] i * 2],
+                 hi = acc.data[cast[u32] i * 2 + 1])
+        i += 1
+    }
+
+    return sys.abi.list_with_length(pv, runs)
+}
+
+private func query_sweep(filters: List[internal.types.Char_Filter], any: bool)
+    -> List[char] {
+    var acc: internal.runebuf.Char_Buf = new[internal.runebuf.Char_Buf](64)
+
+    let fv: List[internal.types.Char_Filter] = filters
+    let n: uint = filters.len()
+
+    var cp: u32 = 0
+    while cp < internal.properties.max_cp {
+        if filters_match(fv, n, cast[char] cp, any) {
+            internal.runebuf.push(acc, cast[char] cp)
+        }
+        cp += 1
+    }
+
+    var cv: Array[char] = new[Array[char]](cast[int] acc.len)
+
+    var i: u32 = 0
+    while i < acc.len {
+        cv[i] = acc.data[i]
+        i += 1
+    }
+
+    return sys.abi.list_with_length(cv, cast[uint] acc.len)
+}
+
+func char_query(filters: List[internal.types.Char_Filter]) -> List[char] {
+    return query_sweep(filters, false)
+}
+
+func char_query_any(filters: List[internal.types.Char_Filter]) -> List[char] {
+    return query_sweep(filters, true)
+}
+
+private func name_index_word(word: u32) -> u32 {
+    let b: u32 = word * 4
+
+    return cast[u32] generated.names.name_index[b] |
+        (cast[u32] generated.names.name_index[b + 1] << 8) |
+        (cast[u32] generated.names.name_index[b + 2] << 16) |
+        (cast[u32] generated.names.name_index[b + 3] << 24)
+}
+
+private func name_index(off: u32) -> string {
+    var n: u32 = 0
+
+    while generated.names.name_pool[off + n] != 0 {
+        n += 1
+    }
+
+    return from_raw(ref generated.names.name_pool, cast[int] n,
+                    at = cast[uint] off, copy = false,
+                    encoding = Str_Encoding.ascii)
+}
+
+func char_name(cp: char) -> string? {
+    var lo: u32 = 0
+    var hi: u32 = generated.names.name_count
+
+    while lo < hi {
+        let mid: u32 = lo + (hi - lo) / 2
+        let mcp: u32 = name_index_word(mid * 2)
+
+        if mcp < cast[u32] cp {
+            lo = mid + 1
+        }
+        else {
+            if mcp > cast[u32] cp {
+                hi = mid
+            }
+            else {
+                return name_index(name_index_word(mid * 2 + 1))
+            }
+        }
+    }
+
+    return nil
+}
+
+private func by_name_word(word: u32) -> u32 {
+    let b: u32 = word * 4
+
+    return cast[u32] generated.names.name_by_name[b] |
+        (cast[u32] generated.names.name_by_name[b + 1] << 8) |
+        (cast[u32] generated.names.name_by_name[b + 2] << 16) |
+        (cast[u32] generated.names.name_by_name[b + 3] << 24)
+}
+
+private func name_order(a: string, b: string) -> i32 {
+    let la: uint = byte_len(a)
+    let lb: uint = byte_len(b)
+    var n: uint = lb
+    if la < lb {
+        n = la
+    }
+
+    var i: uint = 0
+    while i < n {
+        let ca: u8 = byte_at(a, i)
+        let cb: u8 = byte_at(b, i)
+
+        if ca != cb {
+            var order: i32 = 1
+            if ca < cb {
+                order = -1
+            }
+            return order
+        }
+        i += 1
+    }
+
+    if la == lb {
+        return 0
+    }
+
+    var order: i32 = 1
+    if la < lb {
+        order = -1
+    }
+    return order
+}
+
+func char_from_name(name: string) -> char? {
+    var lo: u32 = 0
+    var hi: u32 = generated.names.name_count
+
+    while lo < hi {
+        let mid: u32 = lo + (hi - lo) / 2
+        let r: i32 = name_order(name_index(by_name_word(mid * 2)), name)
+
+        if r < 0 {
+            lo = mid + 1
+        }
+        else {
+            if r > 0 {
+                hi = mid
+            }
+            else {
+                return cast[char] by_name_word(mid * 2 + 1)
+            }
+        }
+    }
+
+    return nil
+}
+
+func script_by_name(name: string) -> internal.types.Script? {
+    var i: u32 = 0
+    while i < generated.scripts.script_count {
+        if generated.scripts.script_names[i] == name {
+            return cast[internal.types.Script] i
+        }
+        i += 1
+    }
+
+    return nil
+}
+
+func block_by_name(name: string) -> internal.types.Block? {
+    var i: u32 = 0
+    while i <= generated.blocks.block_count {
+        if generated.blocks.block_names[i] == name {
+            return cast[internal.types.Block] i
+        }
+        i += 1
+    }
+
+    return nil
+}
+
+func gc_name(gc: internal.types.Gc) -> string {
+    var got: string = "??"
+    if cast[uint] gc < gc_names.len() {
+        got = gc_names[cast[uint] gc]
+    }
+
+    return got
+}
+
+func gc_by_name(name: string) -> internal.types.Gc? {
+    var i: uint = 0
+    while i < gc_names.len() {
+        if gc_names[i] == name {
+            return cast[internal.types.Gc] i
+        }
+        i += 1
+    }
+
+    return nil
+}

@@ -1,0 +1,3 @@
+import wrapper
+
+require wrapper.wrapped() == 1

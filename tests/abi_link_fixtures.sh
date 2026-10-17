@@ -30,7 +30,7 @@ for module in builtin.__init builtin.io.debug builtin.io.raw builtin.ffi \
     builtin.panic builtin.string.core builtin.containers.array \
     builtin.containers.list builtin.containers.traits \
     builtin.containers.view builtin.cursor builtin.containers.dict \
-    builtin.hash builtin.containers.hash_index builtin.sort \
+    builtin.hashing builtin.containers.hash_index builtin.sort \
     builtin.containers.set builtin.containers.tree builtin.hex \
     builtin.bitptr builtin.abi builtin.containers.buffer; do
     N00B_PATH="$script_dir/programs/link_records" "$compiler" compile \

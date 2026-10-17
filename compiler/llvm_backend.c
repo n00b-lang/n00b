@@ -850,11 +850,13 @@ packed_option_type(ir_module_t *module, th_type *type,
     uint64_t bit = outer->discriminant.unit_bit_offset
         + outer->discriminant.lsb;
     if (presence_bit) *presence_bit = bit;
-    if (aggregate_payload && outer->alignment_bytes == 8
-        && outer_stride > 64 && outer_stride % 64 == 0
-        && outer_stride / 64 <= UINT32_MAX)
-        return LLVMArrayType(LLVMInt64TypeInContext(context),
-                             (unsigned)(outer_stride / 64));
+    uint64_t unit_bits = outer->alignment_bytes * 8;
+    if (aggregate_payload && unit_bits >= 8 && unit_bits <= 64
+        && outer_stride > unit_bits && outer_stride % unit_bits == 0
+        && outer_stride / unit_bits <= UINT32_MAX)
+        return LLVMArrayType(LLVMIntTypeInContext(context,
+                                                  (unsigned)unit_bits),
+                             (unsigned)(outer_stride / unit_bits));
     return LLVMIntTypeInContext(context, (unsigned)(aggregate_payload
         ? outer_stride : outer_bytes * 8));
 }
@@ -4232,7 +4234,6 @@ option_some_constant(LLVMModuleRef module, const option_repr_t *repr,
                      LLVMValueRef payload)
 {
     if (!repr || !payload) return nullptr;
-    LLVMContextRef context = LLVMGetModuleContext(module);
     switch (repr->kind) {
     case OPTION_REPR_POINTER:
         return LLVMTypeOf(payload) == repr->storage ? payload : nullptr;
@@ -4277,16 +4278,24 @@ option_some_constant(LLVMModuleRef module, const option_repr_t *repr,
             if (LLVMGetTypeKind(repr->storage) == LLVMIntegerTypeKind)
                 result = LLVMConstIntOfArbitraryPrecision(repr->storage,
                     (unsigned)words_count, words);
-            else if (LLVMGetTypeKind(repr->storage) == LLVMArrayTypeKind
-                && LLVMGetArrayLength(repr->storage) == words_count) {
-                LLVMValueRef *elements = calloc(words_count,
-                                                sizeof(*elements));
+            else if (LLVMGetTypeKind(repr->storage) == LLVMArrayTypeKind) {
+                LLVMTypeRef unit = LLVMGetElementType(repr->storage);
+                unsigned unit_bytes = LLVMGetTypeKind(unit)
+                    == LLVMIntegerTypeKind
+                    ? LLVMGetIntTypeWidth(unit) / 8 : 0;
+                unsigned count = LLVMGetArrayLength(repr->storage);
+                LLVMValueRef *elements = unit_bytes && unit_bytes <= 8
+                    && (uint64_t)count * unit_bytes == size
+                    ? calloc(count, sizeof(*elements)) : nullptr;
                 if (elements) {
-                    for (uint64_t w = 0; w < words_count; w++)
-                        elements[w] = LLVMConstInt(
-                            LLVMInt64TypeInContext(context), words[w], false);
-                    result = LLVMConstArray(LLVMInt64TypeInContext(context),
-                        elements, (unsigned)words_count);
+                    for (unsigned e = 0; e < count; e++) {
+                        uint64_t value = 0;
+                        for (unsigned b = 0; b < unit_bytes; b++)
+                            value |= (uint64_t)bytes[e * unit_bytes + b]
+                                << (b * 8);
+                        elements[e] = LLVMConstInt(unit, value, false);
+                    }
+                    result = LLVMConstArray(unit, elements, count);
                     free(elements);
                 }
             }
@@ -5562,12 +5571,12 @@ packed_option_bits_type(LLVMTypeRef storage, LLVMContextRef context)
     if (!storage) return nullptr;
     if (LLVMGetTypeKind(storage) == LLVMIntegerTypeKind) return storage;
     if (LLVMGetTypeKind(storage) != LLVMArrayTypeKind
-        || LLVMGetTypeKind(LLVMGetElementType(storage)) != LLVMIntegerTypeKind
-        || LLVMGetIntTypeWidth(LLVMGetElementType(storage)) != 64)
+        || LLVMGetTypeKind(LLVMGetElementType(storage)) != LLVMIntegerTypeKind)
         return nullptr;
+    unsigned width = LLVMGetIntTypeWidth(LLVMGetElementType(storage));
     unsigned count = LLVMGetArrayLength(storage);
-    return count && count <= UINT_MAX / 64
-        ? LLVMIntTypeInContext(context, count * 64) : nullptr;
+    return width && count && count <= UINT_MAX / width
+        ? LLVMIntTypeInContext(context, count * width) : nullptr;
 }
 
 static LLVMValueRef

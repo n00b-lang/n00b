@@ -10,4 +10,5 @@ package text {
     export builtin.merge
     export builtin.is_empty
     export builtin.intrinsic_tag_style
+    export builtin.raw_repr_string
 }

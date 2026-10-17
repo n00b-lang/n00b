@@ -9502,7 +9502,7 @@ n00bb_record_hash_function(ir_lower_context_t *context, th_type *receiver)
         const th_member *field = th_record_member(shape, i);
         th_env_method_t selected = {0};
         if (!field || th_env_method_resolve(state->types, field->type,
-                "builtin.hash.Hash", "hash", &selected)
+                "builtin.hashing.Hash", "hash", &selected)
                 != TH_ENV_METHOD_FOUND
             || (selected.error_type
                 && !th_is_nil(selected.error_type)))
@@ -9568,7 +9568,7 @@ n00bb_scalar_hash_function(ir_lower_context_t *context, th_type *receiver)
         range && range->is_signed ? "i128" : "u128");
     th_env_method_t selected = {0};
     if (th_env_method_resolve(state->types, integer_type,
-            "builtin.hash.Hash", "hash", &selected) != TH_ENV_METHOD_FOUND)
+            "builtin.hashing.Hash", "hash", &selected) != TH_ENV_METHOD_FOUND)
         return nullptr;
     ir_value_t *self = ir_param_add(function, "self", receiver);
     ir_block_t *block = ir_block_add(function, "entry");
@@ -20450,6 +20450,11 @@ n00bb_static_value_to_ir_initializer(const n00bb_static_value_t *value,
     if (n00bb_atomic_element_type(type))
         return n00bb_static_value_to_ir_initializer(value,
             n00bb_atomic_element_type(type), state, out, depth + 1);
+    th_type *option_element = nullptr;
+    if (value->kind != N00BB_STATIC_VALUE_NIL
+        && n00bb_option_type_element(type, &option_element))
+        return n00bb_static_value_to_ir_initializer(value, option_element,
+                                                    state, out, depth + 1);
     *out = (ir_global_init_value_t){0};
     switch (value->kind) {
     case N00BB_STATIC_VALUE_BOOL:

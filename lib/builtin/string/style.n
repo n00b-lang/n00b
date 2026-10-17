@@ -2,7 +2,7 @@ import string.core
 import containers.list
 import containers.buffer
 import io.format
-import hash
+import hashing
 
 public const index_extends: u32 = 0xffffffff
 
@@ -53,7 +53,7 @@ record Style_Record {
     substitution: Sub_Spec
 }
 
-record Rich_Body {
+record Rich_Body layout(ordered) {
     s:          string
     style_info: List[Style_Record]
     base_style: Text_Style?
@@ -417,8 +417,8 @@ func cmp_string_value(left: string, right: string) -> int {
 }
 
 private func hash_words(words: Array[u64]) -> u128 {
-    return hash.xxh3_128_at(unsafe_cast[Ref[byte]] ref words[0],
-                            __array_length(words) * 8)
+    return hashing.xxh3_128_at(unsafe_cast[Ref[byte]] ref words[0],
+                               __array_length(words) * 8)
 }
 
 private func hash_chain(acc: u128, next: u128) -> u128 {
@@ -1334,7 +1334,7 @@ private func span_record(pending: Pending_Style, end: u32?) -> Style_Record {
 
 private func without(pending: List[Pending_Style], index: int)
     -> List[Pending_Style] {
-    var kept: List[Pending_Style] = []
+    var kept: List[Pending_Style] = new[List[Pending_Style]]()
     var k: int = 0
     while k < cast[int] pending.len() {
         if k != index {
@@ -1371,8 +1371,8 @@ private func closes_pending(open: Pending_Style, close: Markup_Segment)
 
 private func build_style_records(segments: List[Markup_Segment])
     -> List[Style_Record] {
-    var records: List[Style_Record] = []
-    var pending: List[Pending_Style] = []
+    var records: List[Style_Record] = new[List[Style_Record]]()
+    var pending: List[Pending_Style] = new[List[Pending_Style]]()
     var s: int = 0
     while s < cast[int] segments.len() {
         let seg: Markup_Segment = segments[s]
@@ -1426,7 +1426,7 @@ private func build_style_records(segments: List[Markup_Segment])
 }
 
 litmod<quotes> rich, r(raw: string) -> string fail: string {
-    var segments: List[Markup_Segment] = []
+    var segments: List[Markup_Segment] = new[List[Markup_Segment]]()
     let text: string = parse_rich_markup(raw, segments)!
     var body: Rich_Body = (s = text, style_info = build_style_records(segments),
                            base_style = nil, opaque = false)

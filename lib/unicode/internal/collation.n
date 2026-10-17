@@ -5,9 +5,9 @@ import internal.properties
 import internal.normalization
 import generated.collation
 
-const ce_none: u32 = 0xffffffff
-const max_ce_per_cp: i32 = 18
-const max_contr_key: u32 = 4
+const ce_none = 0xffffffff
+const max_ce_per_cp = 18
+const max_contr_key = 4
 
 private func find_contraction_start(cp: char) -> u32? {
     var lo: u32 = 0

@@ -4,8 +4,8 @@ import internal.encoding
 import internal.properties
 import generated.linebreak
 
-const dotted_circle: u32 = 0x25cc
-const hyphen: u32 = 0x2010
+const dotted_circle = 0x25cc
+const hyphen = 0x2010
 
 private func raw_lb_class(cp: char) -> internal.types.Lb {
     let v: u32 = cast[u32] cp

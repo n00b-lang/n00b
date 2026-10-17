@@ -74,8 +74,7 @@ n00bb_link_stage_semantics(core_link_unit_t *link, uint32_t stage_kind,
     th_env *environment = build_import_environment(analysis->grammar,
                                                    link, analysis);
     if (!environment) {
-        if (!core_diagnostics_failed(core_translation_unit_diagnostics(
-                units->data[0])))
+        if (!call_units_failed(units->data, units->len))
             core_diagnostics_report(core_translation_unit_diagnostics(
                 units->data[0]), units->data[0], CORE_DIAG_FATAL,
                 CORE_STRING_STATIC("N00BB-L0057"),
