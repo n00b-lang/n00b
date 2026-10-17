@@ -356,6 +356,22 @@ private func __string_storage(s: string) -> Array[u8]? {
     return storage
 }
 
+func __text_byte_array(self: string) -> Array[u8] {
+    let base: string = text(self)
+    let storage: Array[u8]? = __string_storage(base)
+    if storage != nil {
+        return storage.get()
+    }
+    let len: uint = __string_byte_len(base)
+    var copy: Array[u8] = new[Array[u8]](cast[int] len)
+    var i: uint = 0
+    while i < len {
+        copy[i] = __string_byte(base, i)
+        i += 1
+    }
+    return copy
+}
+
 private func __string_with_encoding(s: string, encoding: u8) -> string {
     var out: string = s
     let view: Ref[String_Words] = words(ref out)
