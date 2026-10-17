@@ -102,7 +102,7 @@ n00bb_exe = executable(
      'compiler/compiler_link_packages.c', 'compiler/compiler_link_environment.c',
      'compiler/compiler_link_stages.c', 'compiler/driver.c',
      'compiler/enum_value.c',
-     'compiler/preprocessor.c', 'compiler/rich_string.c', 'abi/abi_string.c',
+     'compiler/preprocessor.c', 'abi/abi_string.c',
      'compiler/specialize.c',
      'runtime/runtime_native_roots.c', 'compiler/compiler_native_roots.c',
      'compiler/abi_layout.c', 'compiler/abi_record_layout.c', 'compiler/abi_static_graph.c',

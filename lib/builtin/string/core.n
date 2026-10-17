@@ -125,7 +125,7 @@ func __string_rich_body(s: string) -> Ref[`T] {
     return unsafe_cast[Ref[`T]] words(ref s).data
 }
 
-private func __string_make_rich(body: Ref[`T]) -> string {
+func __string_make_rich(body: Ref[`T]) -> string {
     var made: string = ""
     let view: Ref[String_Words] = words(ref made)
     view.data = unsafe_cast[Ref[byte]] body

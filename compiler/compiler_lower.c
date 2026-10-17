@@ -76,7 +76,6 @@ double n00bb_profile_seconds(void);
 #include "scanner/lex.h"
 #include "unicode/encoding.h"
 #include "preprocessor.h"
-#include "rich_string.h"
 #include "signature_typevars.h"
 
 bool
@@ -5571,8 +5570,6 @@ n00bb_lower_string_literal(ir_lower_context_t *context,
     if (user_site)
         return n00bb_lower_user_literal(context, visit, user_site,
                                         result_type, span);
-    bool rich = registration
-        && registration->handler == N00BB_LITERAL_RICH;
     if (modifier.data && !registration && !user_site)
         return lower_error(context, IR_DIAG_TYPE_LITERAL, span,
             n00bb_literal_prefix_registered(modifier)
@@ -5582,32 +5579,8 @@ n00bb_lower_string_literal(ir_lower_context_t *context,
         return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
                            "string literal has no inferred result type");
     core_buffer_t *decoded = core_buffer_empty();
-    core_buffer_t *rich_metadata = nullptr;
-    bool ok = decoded != nullptr;
-    if (ok && rich) {
-        n00bb_rich_string_error_t error;
-        core_buffer_t *markup_text = nullptr;
-        ok = n00bb_rich_string_parse(spelling, &markup_text,
-                                     &rich_metadata, &error);
-        core_buffer_free(decoded);
-        decoded = markup_text;
-        if (!ok) {
-            const char *message = error == N00BB_RICH_STRING_BAD_ESCAPE
-                ? "rich string contains an invalid escape sequence"
-                : error == N00BB_RICH_STRING_UNCLOSED_ASCII_TAG
-                    ? "rich string contains an unclosed ASCII tag"
-                : error == N00BB_RICH_STRING_MIXED_NUMBERING
-                    ? "rich string cannot mix automatic and explicit positional substitutions"
-                : error == N00BB_RICH_STRING_INDEX_OVERFLOW
-                    ? "rich string substitution index is too large"
-                : error == N00BB_RICH_STRING_TOO_LARGE
-                    ? "rich string exceeds the supported byte length"
-                : "rich string could not be parsed";
-            return lower_error(context, IR_DIAG_TYPE_LITERAL, span,
-                               message);
-        }
-    }
-    else if (ok) ok = n00bb_decode_string_literal(spelling, decoded);
+    bool ok = decoded != nullptr
+        && n00bb_decode_string_literal(spelling, decoded);
     if (!ok) {
         core_buffer_free(decoded);
         return lower_error(context, IR_DIAG_TYPE_LITERAL, span,
@@ -5620,7 +5593,6 @@ n00bb_lower_string_literal(ir_lower_context_t *context,
     if (char_array) {
         if (decoded->byte_len > UINT32_MAX) {
             core_buffer_free(decoded);
-            core_buffer_free(rich_metadata);
             return lower_error(context, IR_DIAG_TYPE_LITERAL, span,
                                "u32 literal is too large to lower");
         }
@@ -5663,7 +5635,6 @@ n00bb_lower_string_literal(ir_lower_context_t *context,
             }) && ir_value_set_shape(aggregate->dest, shape);
         core_list_free(values);
         core_buffer_free(decoded);
-        core_buffer_free(rich_metadata);
         if (!ok)
             return lower_error(context, IR_DIAG_TYPE_LITERAL, span,
                                "u32 literal contains invalid UTF-8 or could not be lowered");
@@ -5675,16 +5646,6 @@ n00bb_lower_string_literal(ir_lower_context_t *context,
                                                 "__n00bb_", result_type)
         && ir_instr_set_const_bytes(instruction,
             (const uint8_t *)decoded->data, decoded->byte_len);
-    if (ok && rich_metadata) {
-        n00bb_lower_context_t *lower = context->user;
-        ok = lower && lower->ir_context
-            && ir_annot_set(lower->ir_context, &instruction->annots,
-                (ir_annot_t){
-                    .key = "n00bb.rich.metadata",
-                    .kind = IR_ANNOT_STR,
-                    .s = ir_strdup(lower->ir_context, rich_metadata->data),
-                });
-    }
     if (ok && registration && lower && lower->ir_context)
         ok = ir_annot_set(lower->ir_context, &instruction->annots,
             (ir_annot_t){
@@ -5694,7 +5655,6 @@ n00bb_lower_string_literal(ir_lower_context_t *context,
                                registration->canonical_name),
             });
     core_buffer_free(decoded);
-    core_buffer_free(rich_metadata);
     if (!ok)
         return lower_error(context, IR_DIAG_INTERNAL, span,
                            "could not emit a byte-exact string constant");

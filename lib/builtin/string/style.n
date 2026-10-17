@@ -1,5 +1,6 @@
 import string.core
 import containers.list
+import containers.buffer
 import io.format
 import hash
 
@@ -950,4 +951,358 @@ func intrinsic_tag_style(tag: string) -> Text_Style {
         i += 1
     }
     return empty_style
+}
+
+private enum Markup_Kind {
+    prop_on = 0, prop_off, case_on, case_off, style_on, style_off, role_on,
+    role_off, reset, subst
+}
+
+private record Markup_Segment {
+    kind:        Markup_Kind
+    at:          u32
+    name:        string
+    prop:        Text_Style
+    sub_index:   u64?
+    raw_tag:     string
+    format_spec: string?
+}
+
+private record Pending_Style {
+    kind:       Markup_Kind
+    name:       string
+    prop:       Text_Style
+    raw_tag:    string
+    start_byte: u32
+}
+
+private record Slot_Numbering {
+    next_auto:    u64
+    saw_auto:     bool
+    saw_explicit: bool
+}
+
+private func segment(kind: Markup_Kind, at: u32, raw_tag: string,
+                     name: string = "", prop: Text_Style = empty_style,
+                     sub_index: u64? = nil, format_spec: string? = nil)
+    -> Markup_Segment {
+    return (kind = kind, at = at, name = name, prop = prop,
+            sub_index = sub_index, raw_tag = raw_tag,
+            format_spec = format_spec)
+}
+
+private func classify_tag(modify segments: List[Markup_Segment],
+                          modify numbering: Slot_Numbering, tag: string,
+                          at: u32) fail: string {
+    let len: uint = string.core.byte_len(tag)
+    if len == 0 {
+        return
+    }
+    let first: u8 = string.core.byte_at(tag, 0)
+    if len == 1 and first == 0x2f {
+        segments.append(segment(Markup_Kind.reset, at, tag))
+        return
+    }
+    if first == 0x23 {
+        var spec_len: uint = len - 1
+        var format_spec: string? = nil
+        var k: uint = 1
+        while k < len {
+            if string.core.byte_at(tag, k) == 0x3a {
+                format_spec = string.core.byte_slice(tag, cast[int] k + 1,
+                                                     cast[int] len)
+                spec_len = k - 1
+                break
+            }
+            k += 1
+        }
+        if spec_len == 0 {
+            if numbering.saw_explicit {
+                fail "rich string cannot mix automatic and explicit positional substitutions"
+            }
+            numbering.saw_auto = true
+            segments.append(segment(Markup_Kind.subst, at, tag,
+                                    sub_index = numbering.next_auto,
+                                    format_spec = format_spec))
+            numbering.next_auto += 1
+            return
+        }
+        var all_digits: bool = true
+        var d: uint = 1
+        while d <= spec_len {
+            let c: u8 = string.core.byte_at(tag, d)
+            if c < 0x30 or c > 0x39 {
+                all_digits = false
+                break
+            }
+            d += 1
+        }
+        if all_digits {
+            if numbering.saw_auto {
+                fail "rich string cannot mix automatic and explicit positional substitutions"
+            }
+            numbering.saw_explicit = true
+            var ix: u64 = 0
+            d = 1
+            while d <= spec_len {
+                ix = ix * 10 + cast[u64] (string.core.byte_at(tag, d) - 0x30)
+                if ix > 0xffffffff {
+                    fail "rich string substitution index is too large"
+                }
+                d += 1
+            }
+            segments.append(segment(Markup_Kind.subst, at, tag,
+                                    sub_index = ix,
+                                    format_spec = format_spec))
+            return
+        }
+        segments.append(segment(Markup_Kind.subst, at, tag,
+            name = string.core.byte_slice(tag, 1, cast[int] spec_len + 1),
+            format_spec = format_spec))
+        return
+    }
+    let is_close: bool = first == 0x2f
+    var name: string = tag
+    if is_close {
+        name = string.core.byte_slice(tag, 1, cast[int] len)
+    }
+    if string.core.byte_len(name) == 0 {
+        return
+    }
+    if string.core.byte_at(name, 0) == 0x40 {
+        var kind: Markup_Kind = Markup_Kind.role_on
+        if is_close {
+            kind = Markup_Kind.role_off
+        }
+        segments.append(segment(kind, at, tag, name = name))
+        return
+    }
+    let prop: Text_Style = intrinsic_tag_style(name)
+    if prop.text_case != Text_Case.none {
+        var kind: Markup_Kind = Markup_Kind.case_on
+        if is_close {
+            kind = Markup_Kind.case_off
+        }
+        segments.append(segment(kind, at, tag, prop = prop))
+        return
+    }
+    if !is_empty(prop) {
+        var kind: Markup_Kind = Markup_Kind.prop_on
+        if is_close {
+            kind = Markup_Kind.prop_off
+        }
+        segments.append(segment(kind, at, tag, prop = prop))
+        return
+    }
+    var kind: Markup_Kind = Markup_Kind.style_on
+    if is_close {
+        kind = Markup_Kind.style_off
+    }
+    segments.append(segment(kind, at, tag, name = name))
+}
+
+private func escape_length(raw: string, at: uint) -> uint {
+    let n: uint = string.core.byte_len(raw)
+    if at + 1 >= n {
+        return n - at
+    }
+    var digits: uint = 0
+    switch string.core.byte_at(raw, at + 1) {
+        case 0x78 {
+            digits = 2
+        }
+        case 0x75 {
+            digits = 4
+        }
+        case 0x55 {
+            digits = 8
+        }
+        else {
+            digits = 0
+        }
+    }
+    var len: uint = 2 + digits
+    if at + len > n {
+        len = n - at
+    }
+    return len
+}
+
+private func parse_rich_markup(raw: string,
+                               modify segments: List[Markup_Segment])
+    -> string fail: string {
+    var text: containers.buffer.Buffer = new[containers.buffer.Buffer](0)
+    var numbering: Slot_Numbering = (next_auto = 0, saw_auto = false,
+                                     saw_explicit = false)
+    let n: uint = string.core.byte_len(raw)
+    var i: uint = 0
+    while i < n {
+        let c: u8 = string.core.byte_at(raw, i)
+        if c == 0x5c {
+            if i + 2 < n and string.core.byte_at(raw, i + 1) == 0xc2 {
+                let after: u8 = string.core.byte_at(raw, i + 2)
+                if after == 0xab or after == 0xbb {
+                    containers.buffer.put_u8(text, 0xc2)
+                    containers.buffer.put_u8(text, after)
+                    i += 3
+                    continue
+                }
+            }
+            if i + 1 < n and string.core.byte_at(raw, i + 1) == 0x5b {
+                containers.buffer.put_u8(text, 0x5b)
+                i += 2
+                continue
+            }
+            let len: uint = escape_length(raw, i)
+            containers.buffer.put_string(text, string.core.decode_escapes(
+                string.core.byte_slice(raw, cast[int] i,
+                                       cast[int] (i + len)))!)
+            i += len
+            continue
+        }
+        if c == 0xc2 and i + 1 < n and string.core.byte_at(raw, i + 1) == 0xab {
+            var j: uint = i + 2
+            while j + 1 < n and !(string.core.byte_at(raw, j) == 0xc2 and
+                                  string.core.byte_at(raw, j + 1) == 0xbb) {
+                j += 1
+            }
+            if j + 1 < n {
+                classify_tag(segments, numbering,
+                    string.core.byte_slice(raw, cast[int] (i + 2),
+                                           cast[int] j),
+                    cast[u32] byte_len(text))!
+                i = j + 2
+            }
+            else {
+                containers.buffer.put_u8(text, 0xc2)
+                containers.buffer.put_u8(text, 0xab)
+                i += 2
+            }
+            continue
+        }
+        if c == 0x5b and i + 1 < n and string.core.byte_at(raw, i + 1) == 0x3a {
+            var j: uint = i + 2
+            while j + 1 < n and !(string.core.byte_at(raw, j) == 0x3a and
+                                  string.core.byte_at(raw, j + 1) == 0x5d) {
+                j += 1
+            }
+            if j + 1 >= n {
+                fail "rich string contains an unclosed ASCII tag"
+            }
+            classify_tag(segments, numbering,
+                string.core.byte_slice(raw, cast[int] (i + 2), cast[int] j),
+                cast[u32] byte_len(text))!
+            i = j + 2
+            continue
+        }
+        containers.buffer.put_u8(text, c)
+        i += 1
+    }
+    return containers.buffer.to_string(text)
+}
+
+private func span_record(pending: Pending_Style, end: u32?) -> Style_Record {
+    return (start_ix = pending.start_byte, end_ix = end,
+            style_tag = pending.raw_tag, format_spec = nil,
+            substitution = (none = nil))
+}
+
+private func without(pending: List[Pending_Style], index: int)
+    -> List[Pending_Style] {
+    var kept: List[Pending_Style] = []
+    var k: int = 0
+    while k < cast[int] pending.len() {
+        if k != index {
+            kept.append(pending[k])
+        }
+        k += 1
+    }
+    return kept
+}
+
+private func closes_pending(open: Pending_Style, close: Markup_Segment)
+    -> bool {
+    switch close.kind {
+        case Markup_Kind.prop_off {
+            return open.kind == Markup_Kind.prop_on and open.prop == close.prop
+        }
+        case Markup_Kind.case_off {
+            return open.kind == Markup_Kind.case_on
+        }
+        case Markup_Kind.style_off {
+            return open.kind == Markup_Kind.style_on and
+                cmp_text(open.name, close.name) == 0
+        }
+        case Markup_Kind.role_off {
+            return open.kind == Markup_Kind.role_on and
+                cmp_text(open.name, close.name) == 0
+        }
+        else {
+            return false
+        }
+    }
+    return false
+}
+
+private func build_style_records(segments: List[Markup_Segment])
+    -> List[Style_Record] {
+    var records: List[Style_Record] = []
+    var pending: List[Pending_Style] = []
+    var s: int = 0
+    while s < cast[int] segments.len() {
+        let seg: Markup_Segment = segments[s]
+        s += 1
+        switch seg.kind {
+            case Markup_Kind.prop_on, Markup_Kind.case_on,
+                 Markup_Kind.style_on, Markup_Kind.role_on {
+                pending.append((kind = seg.kind, name = seg.name,
+                                prop = seg.prop, raw_tag = seg.raw_tag,
+                                start_byte = seg.at))
+            }
+            case Markup_Kind.prop_off, Markup_Kind.case_off,
+                 Markup_Kind.style_off, Markup_Kind.role_off {
+                var j: int = cast[int] pending.len() - 1
+                while j >= 0 {
+                    if closes_pending(pending[j], seg) {
+                        records.append(span_record(pending[j], seg.at))
+                        pending = without(pending, j)
+                        break
+                    }
+                    j -= 1
+                }
+            }
+            case Markup_Kind.reset {
+                var j: int = 0
+                while j < cast[int] pending.len() {
+                    records.append(span_record(pending[j], seg.at))
+                    j += 1
+                }
+                pending = []
+            }
+            case Markup_Kind.subst {
+                var substitution: Sub_Spec = (argname = seg.name)
+                if seg.sub_index != nil {
+                    substitution = (position = seg.sub_index.get())
+                }
+                records.append((start_ix = seg.at, end_ix = nil,
+                                style_tag = nil,
+                                format_spec = seg.format_spec,
+                                substitution = substitution))
+            }
+        }
+    }
+    var j: int = 0
+    while j < cast[int] pending.len() {
+        records.append(span_record(pending[j], index_extends))
+        j += 1
+    }
+    return records
+}
+
+litmod<quotes> rich, r(raw: string) -> string fail: string {
+    var segments: List[Markup_Segment] = []
+    let text: string = parse_rich_markup(raw, segments)!
+    var body: Rich_Body = (s = text, style_info = build_style_records(segments),
+                           base_style = nil, opaque = false)
+    return string.core.__string_make_rich(ref body)
 }

@@ -101,7 +101,6 @@ typedef enum {
     N00BB_LITERAL_DICT,
     N00BB_LITERAL_SET,
     N00BB_LITERAL_BINARY,
-    N00BB_LITERAL_RICH,
     N00BB_LITERAL_U32,
 } n00bb_literal_handler_t;
 

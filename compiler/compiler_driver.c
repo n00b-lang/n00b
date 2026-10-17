@@ -79,7 +79,6 @@ double n00bb_profile_seconds(void);
 #include "scanner/lex.h"
 #include "unicode/encoding.h"
 #include "preprocessor.h"
-#include "rich_string.h"
 #include "signature_typevars.h"
 
 enum { N00BB_JOB_LOCATE_TU = 1, N00BB_JOB_PREPROCESS = 2 };
