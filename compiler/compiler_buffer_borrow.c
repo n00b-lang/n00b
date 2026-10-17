@@ -133,11 +133,13 @@ root_set_union(root_set_t *into, const root_set_t *from, bool *changed)
     return true;
 }
 
+enum { REACH_SELF, REACH_CONTENTS, REACH_KINDS };
+
 typedef struct {
     ir_func_t *function;
-    uint64_t writes;
-    uint64_t escapes;
-    uint64_t returns;
+    uint64_t writes[REACH_KINDS];
+    uint64_t escapes[REACH_KINDS];
+    uint64_t returns[REACH_KINDS];
     bool writes_nonlocal;
     bool returns_nonlocal;
     bool returns_fresh;
@@ -149,8 +151,77 @@ typedef struct {
     size_t len;
     size_t cap;
     pointer_map_t index;
+    pointer_map_t contents_index;
+    ir_value_t **contents;
+    uint32_t contents_len;
+    uint32_t contents_cap;
     bool failed;
 } effects_table_t;
+
+static th_type *
+contents_type(th_type *type)
+{
+    th_type *resolved = type ? th_resolve(type) : nullptr;
+    if (!resolved) return nullptr;
+    if (th_kind_of(resolved) == TH_SEQUENCE) return th_seq_elem(resolved);
+    if (th_kind_of(resolved) == TH_INDIRECTION)
+        return th_ind_referent(resolved);
+    return resolved;
+}
+
+static ir_value_t *
+contents_root(effects_table_t *table, ir_value_t *parameter)
+{
+    uint32_t slot = 0;
+    if (pointer_map_get(&table->contents_index, parameter, &slot))
+        return table->contents[slot];
+    if (table->contents_len == table->contents_cap) {
+        uint32_t cap = table->contents_cap ? table->contents_cap * 2 : 32;
+        ir_value_t **contents = realloc(table->contents,
+                                        cap * sizeof(*contents));
+        if (!contents) return nullptr;
+        table->contents = contents;
+        table->contents_cap = cap;
+    }
+    ir_value_t *root = calloc(1, sizeof(*root));
+    if (!root) return nullptr;
+    *root = (ir_value_t){
+        .kind = IR_VAL_LOCAL,
+        .name = "<contents>",
+        .type = contents_type(parameter->type),
+        .owner = parameter->owner,
+        .index = parameter->index,
+    };
+    if (!pointer_map_put(&table->contents_index, parameter,
+                         table->contents_len)
+        || !pointer_map_put(&table->contents_index, root,
+                            table->contents_len)) {
+        free(root);
+        return nullptr;
+    }
+    table->contents[table->contents_len++] = root;
+    return root;
+}
+
+static bool
+is_contents_root(const effects_table_t *table, const ir_value_t *root)
+{
+    uint32_t slot = 0;
+    return root && root->kind != IR_VAL_PARAM
+        && pointer_map_get(&table->contents_index, root, &slot)
+        && table->contents[slot] == root;
+}
+
+static void
+effects_table_free(effects_table_t *table)
+{
+    for (uint32_t i = 0; i < table->contents_len; i++)
+        free(table->contents[i]);
+    free(table->contents);
+    free(table->items);
+    pointer_map_free(&table->index);
+    pointer_map_free(&table->contents_index);
+}
 
 static bool
 function_is_native(const ir_func_t *function)
@@ -190,15 +261,18 @@ effects_for(effects_table_t *table, ir_func_t *function)
     effects_t *effects = &table->items[table->len];
     *effects = (effects_t){.function = function};
     if (!function->n_blocks && !function_is_native(function)) {
-        effects->writes = effects->escapes = effects->returns = UINT64_MAX;
+        for (int kind = 0; kind < REACH_KINDS; kind++)
+            effects->writes[kind] = effects->escapes[kind]
+                = effects->returns[kind] = UINT64_MAX;
         effects->writes_nonlocal = effects->returns_nonlocal = true;
         effects->opaque = true;
     }
     else if (!function->n_blocks) {
-        effects->returns = UINT64_MAX;
+        effects->returns[REACH_SELF] = UINT64_MAX;
+        effects->returns[REACH_CONTENTS] = UINT64_MAX;
         effects->returns_fresh = true;
     }
-    if (function_is_write_lock(function)) effects->writes = 1;
+    if (function_is_write_lock(function)) effects->writes[REACH_SELF] = 1;
     if (!pointer_map_put(&table->index, function, (uint32_t)table->len)) {
         table->failed = true;
         return nullptr;
@@ -335,9 +409,29 @@ load_roots(origins_t *state, const root_set_t *address, root_set_t *into)
             if (!memory || !root_set_union(into, memory, nullptr))
                 return false;
         }
+        else if (root != &nonlocal_root && root->kind == IR_VAL_PARAM) {
+            ir_value_t *contents = contents_root(state->effects, root);
+            if (!contents || !root_set_add(into, contents, nullptr))
+                return false;
+        }
         else if (!root_set_add(into, root, nullptr)) return false;
     }
     return true;
+}
+
+static bool
+contents_carry_references(origins_t *state, const ir_value_t *argument)
+{
+    th_type *contents = argument ? contents_type(argument->type) : nullptr;
+    return !contents
+        || th_kind_of(th_resolve(contents)) == TH_VAR
+        || type_may_contain_reference_alias(state->types, contents);
+}
+
+static bool
+effect_bit(const uint64_t *mask, uint32_t index, int kind)
+{
+    return index >= 64 || (mask[kind] >> index & 1);
 }
 
 static bool
@@ -367,16 +461,25 @@ transfer_call(origins_t *state, ir_instr_t *instruction, root_set_t *result,
         ir_value_t *argument = operand_at(instruction, i);
         if (!argument) continue;
         root_set_t roots = {0};
-        ok = seed_value(state, argument, &roots, nullptr);
+        root_set_t contents = {0};
+        ok = seed_value(state, argument, &roots, nullptr)
+            && load_roots(state, &roots, &contents);
         uint32_t index = i - first;
-        bool escapes = opaque || index >= 64
-            || (effects->escapes >> index & 1);
-        bool returned = opaque || index >= 64
-            || (effects->returns >> index & 1);
-        if (ok && escapes) ok = record_escape(state, &roots, changed);
-        if (ok && escapes) ok = root_set_union(&kept, &roots, nullptr);
-        if (ok && returned) ok = root_set_union(result, &roots, nullptr);
+        bool carry = contents_carry_references(state, argument);
+        for (int kind = 0; ok && kind < REACH_KINDS; kind++) {
+            if (kind == REACH_CONTENTS && !carry) continue;
+            root_set_t *reached = kind == REACH_SELF ? &roots : &contents;
+            bool escapes = opaque
+                || effect_bit(effects->escapes, index, kind);
+            bool returned = opaque
+                || effect_bit(effects->returns, index, kind);
+            if (ok && escapes) ok = record_escape(state, reached, changed);
+            if (ok && escapes) ok = root_set_union(&kept, reached, nullptr);
+            if (ok && returned)
+                ok = root_set_union(result, reached, nullptr);
+        }
         free(roots.items);
+        free(contents.items);
     }
     for (uint32_t i = first; ok && i < instruction->n_operands; i++) {
         root_set_t roots = {0};
@@ -429,7 +532,8 @@ transfer(origins_t *state, ir_instr_t *instruction, bool *changed)
         ok = instruction->dest
             && root_set_add(&gathered, instruction->dest, nullptr);
         break;
-    case IR_OP_LOAD: {
+    case IR_OP_LOAD:
+    case IR_OP_SEQUENCE_GET: {
         root_set_t address = {0};
         ok = instruction->n_operands >= 1
             && seed_value(state, operand_at(instruction, 0), &address,
@@ -452,8 +556,16 @@ transfer(origins_t *state, ir_instr_t *instruction, bool *changed)
             && seed_value(state, operand_at(instruction, value_at), &stored,
                           nullptr);
         if (ok && instruction->op == IR_OP_MEMCPY) {
+            ir_value_t *destination = operand_at(instruction, 0);
+            th_type *pointer = destination && destination->type
+                ? th_resolve(destination->type) : nullptr;
+            th_type *element = pointer
+                && th_kind_of(pointer) == TH_INDIRECTION
+                ? th_ind_referent(pointer) : nullptr;
             root_set_t contents = {0};
-            ok = load_roots(state, &stored, &contents);
+            if (!element
+                || type_may_contain_reference_alias(state->types, element))
+                ok = load_roots(state, &stored, &contents);
             free(stored.items);
             stored = contents;
         }
@@ -567,10 +679,17 @@ call_write_roots(origins_t *state, ir_instr_t *instruction,
     uint32_t first = instruction->op == IR_OP_CALL ? 1 : 0;
     for (uint32_t i = first; i < instruction->n_operands; i++) {
         uint32_t index = i - first;
-        if (!opaque && index < 64 && !(effects->writes >> index & 1))
-            continue;
-        if (!seed_value(state, operand_at(instruction, i), written, nullptr))
-            return false;
+        bool self = opaque || effect_bit(effects->writes, index, REACH_SELF);
+        bool contents = opaque
+            || effect_bit(effects->writes, index, REACH_CONTENTS);
+        if (!self && !contents) continue;
+        root_set_t roots = {0};
+        bool ok = seed_value(state, operand_at(instruction, i), &roots,
+                             nullptr)
+            && (!self || root_set_union(written, &roots, nullptr))
+            && (!contents || load_roots(state, &roots, written));
+        free(roots.items);
+        if (!ok) return false;
     }
     return expand_contents(state, written);
 }
@@ -579,6 +698,21 @@ static uint64_t
 parameter_bit(const ir_value_t *root)
 {
     return root->index < 64 ? UINT64_C(1) << root->index : UINT64_MAX;
+}
+
+static bool
+reach_kind(const effects_table_t *table, const ir_value_t *root, int *kind)
+{
+    if (root == &nonlocal_root) return false;
+    if (root->kind == IR_VAL_PARAM) {
+        *kind = REACH_SELF;
+        return true;
+    }
+    if (is_contents_root(table, root)) {
+        *kind = REACH_CONTENTS;
+        return true;
+    }
+    return false;
 }
 
 static bool
@@ -591,12 +725,15 @@ summarize(effects_table_t *table, th_ctx *types, effects_t *effects,
         .function = function, .types = types, .effects = table,
     };
     bool ok = origins_solve(&state);
-    uint64_t writes = effects->writes;
-    uint64_t escapes = 0;
-    uint64_t returns = 0;
+    uint64_t writes[REACH_KINDS] = {
+        effects->writes[REACH_SELF], effects->writes[REACH_CONTENTS],
+    };
+    uint64_t escapes[REACH_KINDS] = {0};
+    uint64_t returns[REACH_KINDS] = {0};
     bool writes_nonlocal = false;
     bool returns_nonlocal = false;
     bool returns_fresh = false;
+    int kind = 0;
     for (uint32_t b = 0; ok && b < function->n_blocks; b++) {
         ir_block_t *block = function->blocks[b];
         for (uint32_t i = 0; ok && i < block->n_instrs; i++) {
@@ -610,8 +747,8 @@ summarize(effects_table_t *table, th_ctx *types, effects_t *effects,
                 for (uint32_t r = 0; ok && r < roots.len; r++) {
                     ir_value_t *root = roots.items[r];
                     if (root == &nonlocal_root) writes_nonlocal = true;
-                    else if (root->kind == IR_VAL_PARAM)
-                        writes |= parameter_bit(root);
+                    else if (reach_kind(table, root, &kind))
+                        writes[kind] |= parameter_bit(root);
                 }
             }
             else if (instruction->op == IR_OP_RETURN) {
@@ -621,8 +758,8 @@ summarize(effects_table_t *table, th_ctx *types, effects_t *effects,
                 for (uint32_t r = 0; ok && r < roots.len; r++) {
                     ir_value_t *root = roots.items[r];
                     if (root == &nonlocal_root) returns_nonlocal = true;
-                    else if (root->kind == IR_VAL_PARAM)
-                        returns |= parameter_bit(root);
+                    else if (reach_kind(table, root, &kind))
+                        returns[kind] |= parameter_bit(root);
                     else returns_fresh = true;
                 }
             }
@@ -631,19 +768,20 @@ summarize(effects_table_t *table, th_ctx *types, effects_t *effects,
     }
     for (uint32_t r = 0; ok && r < state.escaped.len; r++) {
         ir_value_t *root = state.escaped.items[r];
-        if (root != &nonlocal_root && root->kind == IR_VAL_PARAM)
-            escapes |= parameter_bit(root);
+        if (reach_kind(table, root, &kind))
+            escapes[kind] |= parameter_bit(root);
     }
     origins_free(&state);
     if (!ok) return false;
-    if (writes != effects->writes || escapes != effects->escapes
-        || returns != effects->returns
+    if (memcmp(writes, effects->writes, sizeof(writes))
+        || memcmp(escapes, effects->escapes, sizeof(escapes))
+        || memcmp(returns, effects->returns, sizeof(returns))
         || writes_nonlocal != effects->writes_nonlocal
         || returns_nonlocal != effects->returns_nonlocal
         || returns_fresh != effects->returns_fresh) {
-        effects->writes = writes;
-        effects->escapes = escapes;
-        effects->returns = returns;
+        memcpy(effects->writes, writes, sizeof(writes));
+        memcpy(effects->escapes, escapes, sizeof(escapes));
+        memcpy(effects->returns, returns, sizeof(returns));
         effects->writes_nonlocal = writes_nonlocal;
         effects->returns_nonlocal = returns_nonlocal;
         effects->returns_fresh = returns_fresh;
@@ -1172,6 +1310,7 @@ roots_reach_global(const walk_t *walk, const root_set_t *roots)
         ir_value_t *root = roots->items[i];
         if (!root_is_buffer(root)) continue;
         if (root == &nonlocal_root || root->kind == IR_VAL_PARAM
+            || is_contents_root(walk->window->origins->effects, root)
             || root_set_has(&walk->window->origins->escaped, root))
             return true;
     }
@@ -1245,6 +1384,14 @@ check_instruction(walk_t *walk, ir_instr_t *instruction)
         return true;
     }
     if (!is_call(instruction)) return true;
+    ir_func_t *callee = direct_callee(instruction);
+    effects_t *effects = callee
+        ? effects_for(window->origins->effects, callee) : nullptr;
+    if (!effects || effects->opaque) {
+        blame(walk, instruction,
+              "this indirect or unknown call may write the borrowed Buffer");
+        return true;
+    }
     root_set_t written = {0};
     bool writes_nonlocal = false;
     bool ok = call_write_roots(window->origins, instruction, &written,
@@ -1504,7 +1651,6 @@ n00bb_buffer_borrow_pass(ir_module_t *module, ir_diags_t *diagnostics)
                                    count))
             ok = false;
     }
-    free(table.items);
-    pointer_map_free(&table.index);
+    effects_table_free(&table);
     return ok;
 }

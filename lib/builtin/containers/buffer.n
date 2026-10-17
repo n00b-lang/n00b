@@ -467,8 +467,10 @@ func set_slice(self: Buffer, start: int, end: int, val: string? = nil)
 }
 
 func buffer_from_string(s: string) -> Buffer {
-    return buffer_from_bytes(string.core.__text_byte_array(s),
-                             cast[int] string.core.byte_len(s))
+    var copy: Buffer = new[Buffer](0)
+    concat_raw(copy.state, string.core.__text_byte_array(s),
+               string.core.byte_len(s), false)
+    return copy
 }
 
 func buffer_adopt(s: string) -> Buffer {

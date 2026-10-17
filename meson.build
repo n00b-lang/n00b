@@ -642,6 +642,34 @@ foreach feature : ['fallible_without_result', 'try_error_binding',
 endforeach
 
 test(
+    'buffer-probe', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'buffer'
+               / 'buffer_probe.n'],
+    timeout: 180,
+    suite: 'slow',
+)
+
+test(
+    'coercion-borrow', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'coercion_borrow.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'buffer'
+               / 'coercion_borrow.n'],
+    timeout: 180,
+    suite: 'slow',
+)
+
+test(
+    'coercion-reject', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'coercion_reject.sh',
+           n00bb_exe.full_path()],
+    timeout: 300,
+    suite: 'slow',
+)
+
+test(
     'visibility-n00b', find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'visibility_n00b.sh',
            n00bb_exe.full_path(),
