@@ -316,7 +316,7 @@ int32_t writ_bake_n00b_bake_reopen(uint64_t root) {
 
 int32_t writ_bake_n00b_bake_open(const void *path, void *result) {
     size_t path_length = 0;
-    const void *path_borrowed = n00b_ffi_borrow((void *)path, &path_length, 2);
+    const void *path_borrowed = n00b_ffi_borrow((void *)path, &path_length, 0);
     uint8_t *path_data = malloc(path_length + 1);
     if (path_data && path_length) {
         memcpy(path_data, path_borrowed, path_length);
@@ -336,7 +336,7 @@ int32_t writ_bake_n00b_bake_open(const void *path, void *result) {
 
 int32_t writ_bake_n00b_bake_touch(const void *path, const void *text, void *result) {
     size_t path_length = 0;
-    const void *path_borrowed = n00b_ffi_borrow((void *)path, &path_length, 2);
+    const void *path_borrowed = n00b_ffi_borrow((void *)path, &path_length, 0);
     uint8_t *path_data = malloc(path_length + 1);
     if (path_data && path_length) {
         memcpy(path_data, path_borrowed, path_length);
@@ -346,7 +346,7 @@ int32_t writ_bake_n00b_bake_touch(const void *path, const void *text, void *resu
     }
     n00b_ffi_release((void *)path);
     size_t text_length = 0;
-    const void *text_borrowed = n00b_ffi_borrow((void *)text, &text_length, 2);
+    const void *text_borrowed = n00b_ffi_borrow((void *)text, &text_length, 0);
     uint8_t *text_data = malloc(text_length + 1);
     if (text_data && text_length) {
         memcpy(text_data, text_borrowed, text_length);
@@ -511,7 +511,7 @@ func bake_reopen(root: Bake_Root) fail: Error {
 }
 
 func bake_open(path: string) -> i32 fail: Error {
-    var path_value = path
+    var path_value: Array[u8] = __text_byte_array(path)
     var result: i32 = 0
     let outcome = __bake_open(ref path_value, ref result)
     if outcome < 0 {
@@ -522,8 +522,8 @@ func bake_open(path: string) -> i32 fail: Error {
 }
 
 func bake_touch(path: string, text: string) -> i32 fail: Error {
-    var path_value = path
-    var text_value = text
+    var path_value: Array[u8] = __text_byte_array(path)
+    var text_value: Array[u8] = __text_byte_array(text)
     var result: i32 = 0
     let outcome = __bake_touch(ref path_value, ref text_value, ref result)
     if outcome < 0 {
@@ -581,6 +581,6 @@ extern __bake_multiply writ_bake_n00b_bake_multiply (int, int) -> int fail: nil
 extern __bake_build writ_bake_n00b_bake_build (ref[array[u8]], ref[uint]) -> i32 fail: nil
 extern __bake_query writ_bake_n00b_bake_query (uint, i32) -> int fail: nil
 extern __bake_reopen writ_bake_n00b_bake_reopen (uint) -> i32 fail: nil
-extern __bake_open writ_bake_n00b_bake_open (ref[string], ref[i32]) -> i32 fail: nil
-extern __bake_touch writ_bake_n00b_bake_touch (ref[string], ref[string], ref[i32]) -> i32 fail: nil
+extern __bake_open writ_bake_n00b_bake_open (ref[array[u8]], ref[i32]) -> i32 fail: nil
+extern __bake_touch writ_bake_n00b_bake_touch (ref[array[u8]], ref[array[u8]], ref[i32]) -> i32 fail: nil
 extern __bake_free writ_bake_n00b_bake_free (uint) -> i32 fail: nil
