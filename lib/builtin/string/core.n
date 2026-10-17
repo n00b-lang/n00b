@@ -121,7 +121,7 @@ private func __string_span(s: string, at: uint, n: uint,
     return made
 }
 
-private func __string_rich_body(s: string) -> Ref[`T] {
+func __string_rich_body(s: string) -> Ref[`T] {
     return unsafe_cast[Ref[`T]] words(ref s).data
 }
 

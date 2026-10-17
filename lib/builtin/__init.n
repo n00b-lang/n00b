@@ -13,6 +13,7 @@ import io.raw
 import ffi
 import panic
 import string.core
+import string.style
 import bitptr
 import abi
 
@@ -20,6 +21,17 @@ package builtin {
     export bitptr.Bitptr
     export bitptr.bitptr
     export abi.string_backing_at
+    export string.style.index_extends to text
+    export string.style.Text_Case to text
+    export string.style.Font_Hint to text
+    export string.style.Color to text
+    export string.style.Text_Style to text
+    export string.style.Sub_Spec to text
+    export string.style.Style_Record to text
+    export string.style.Rich_Body to text
+    export string.style.merge to text
+    export string.style.is_empty to text
+    export string.style.intrinsic_tag_style to text
     export abi.Type_Kind to sys
     export abi.Range to sys
     export abi.String_Bits to sys
