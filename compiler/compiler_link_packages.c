@@ -1830,10 +1830,12 @@ resolve_one_package_export(core_translation_unit_t *unit,
         while (end < source.u8_bytes && source.data[end] != '.') end++;
         core_string_t name = core_string_borrow(source.data + component,
                                                 end - component);
-        symbol = lookup_export_symbol_in_scope(
-            tu_state(source_unit)->annotations->symtab, scope, name);
-        if (!symbol && source_unit != unit)
-            symbol = granted_export_symbol(source_unit, name, package->name);
+        symbol = source_unit != unit
+            ? granted_export_symbol(source_unit, name, package->name)
+            : nullptr;
+        if (!symbol)
+            symbol = lookup_export_symbol_in_scope(
+                tu_state(source_unit)->annotations->symtab, scope, name);
         if (!symbol) return 0;
         if (end < source.u8_bytes) {
             scope = symbol->member_scope;
