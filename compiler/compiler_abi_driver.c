@@ -699,7 +699,16 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             lto_modules[i] = object;
             object = (core_buffer_t){0};
         } else if (ok) {
-            ok = n00bb_native_frames_add(native_frames,
+            const char *patch_failure = nullptr;
+            ok = n00bb_llvm_patch_index_tables((uint8_t *)object.data,
+                object.byte_len, analysis->target.object_format,
+                type_indices, type_index_count, function_indices,
+                function_index_count, &patch_failure);
+            if (!ok)
+                core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_ERROR,
+                    CORE_STRING_STATIC("N00BB-B0011"),
+                    core_string_from_cstr(patch_failure));
+            ok = ok && n00bb_native_frames_add(native_frames,
                 object.data, object.byte_len);
             if (ok) objects[i] = n00bb_write_temporary_object(
                 object.data, object.byte_len);

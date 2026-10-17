@@ -14,6 +14,21 @@
 #include "n00b-abi-v1.h"
 #include "runtime_native_roots.h"
 
+static uint64_t
+index_operand(LLVMValueRef value)
+{
+    if (LLVMIsAConstantInt(value)) return LLVMConstIntGetZExtValue(value);
+    assert(LLVMIsALoadInst(value));
+    LLVMValueRef address = LLVMGetOperand(value, 0);
+    assert(LLVMIsAGetElementPtrInst(address) || LLVMIsAConstantExpr(address));
+    LLVMValueRef table = LLVMGetOperand(address, 0);
+    LLVMValueRef slot = LLVMGetOperand(address, 1);
+    assert(LLVMIsAGlobalVariable(table) && LLVMIsAConstantInt(slot));
+    return LLVMConstIntGetZExtValue(LLVMGetAggregateElement(
+        LLVMGetInitializer(table),
+        (unsigned)LLVMConstIntGetZExtValue(slot)));
+}
+
 int
 main(void)
 {
@@ -861,7 +876,7 @@ main(void)
                 || LLVMGetCalledValue(value) != allocator) continue;
             assert(LLVMGetTypeKind(LLVMTypeOf(LLVMGetArgOperand(value, 0)))
                 == LLVMPointerTypeKind);
-            assert(LLVMConstIntGetZExtValue(LLVMGetArgOperand(value, 1))
+            assert(index_operand(LLVMGetArgOperand(value, 1))
                 == type_indices[0].index);
             assert(LLVMConstIntGetZExtValue(LLVMGetArgOperand(value, 2))
                 == 8);
