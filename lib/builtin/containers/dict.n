@@ -79,8 +79,12 @@ func __equal(self: Dict[`K, `V], other: Dict[`K, `V]) -> bool {
     return self.state == other.state
 }
 
+private func state_hash(self: Dict[`K, `V]) -> u128 {
+    return hash.hash_value(self.state)
+}
+
 func hash(self: Dict[`K, `V]) -> u128 {
-    return __hash_scalar(self.state)
+    return state_hash(self)
 }
 
 inline func get(self: Dict[`K, `V], key: `K) -> `V? where ` K : hash . Hash {

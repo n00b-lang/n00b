@@ -50,7 +50,7 @@ runtime_abi_headers = lantern.partial_dependency(
 runtime_abi_sources = ['runtime/runtime_abi.c', 'runtime/runtime_allocate.c', 'runtime/runtime_abi_io.c',
      'runtime/runtime_panic.c', 'runtime/runtime_dwarf.c', 'runtime/runtime_ffi.c',
      'runtime/runtime_unwind.c',
-     'runtime/runtime_abi_box.c', 'runtime/runtime_abi_hash.c',
+     'runtime/runtime_abi_box.c',
      'runtime/runtime_abi_storage.c', 'runtime/native_frame_runtime.c', 'runtime/builtin_os.c',
      'runtime/builtin_os_stw.c',
      'runtime/builtin_abi.c', 'abi/abi_directory.c', 'abi/abi_string.c']
@@ -157,14 +157,6 @@ runtime_abi_io_test = executable(
 )
 
 test('runtime-abi-io', runtime_abi_io_test)
-
-runtime_hash_test = executable(
-    'runtime-hash-test',
-    'tests/runtime_hash.c',
-    link_with: runtime_abi_support,
-)
-
-test('runtime-hash', runtime_hash_test)
 
 runtime_abi_test = executable(
     'runtime-abi-test',
@@ -594,7 +586,7 @@ foreach feature : ['fallible_without_result', 'try_error_binding',
                    'builtin_type_record_literal', 'record_literal_nil_option',
                    'option_literal_argument', 'record_literal_return',
                    'constructor_option_argument', 'option_literal_context',
-                   'packed_record_fields']
+                   'packed_record_fields', 'hash_xxh3']
     test(
         feature.replace('_', '-'), find_program('sh'),
         args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',

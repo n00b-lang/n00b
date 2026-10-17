@@ -1,0 +1,10 @@
+record Bitptr layout(c) {
+    base:       Ref[byte]
+    type_index: u32
+    start_bit:  u16
+    end_bit:    u16
+}
+
+func bitptr(r: Ref[`T]) -> Bitptr {
+    return __bitptr(r)
+}

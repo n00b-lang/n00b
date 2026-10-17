@@ -12,8 +12,11 @@ import io.raw
 import ffi
 import panic
 import string.core
+import bitptr
 
 package builtin {
+    export bitptr.Bitptr
+    export bitptr.bitptr
     export containers.array.copy_items to sys.abi
     export containers.array.compare_items to sys.abi
     export containers.list.list_with_length to sys.abi

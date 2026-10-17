@@ -9275,37 +9275,33 @@ n00bb_scalar_hash_function(ir_lower_context_t *context, th_type *receiver)
     ir_func_t *function = context ? context->function : nullptr;
     if (!lower || !lower->ir_context || !types || !function
         || function->n_blocks) return nullptr;
+    n00bb_tu_state_t *state = tu_state(lower->unit);
     th_type *hash_type = th_name(types, "u128");
-    th_param parameter = {.mode = TH_IN, .type = receiver};
-    th_type *signature = th_func_with_error(types, hash_type,
-        th_name(types, "nil"), &parameter, 1, nullptr, nullptr, 0);
-    core_buffer_t native_name = {0};
-    core_buffer_printf(&native_name, "__n00bb_hash_scalar_%016llx",
-        (unsigned long long)th_hash(types, receiver));
-    ir_func_t *native = signature && native_name.data
-        ? ir_func_find(context->module, native_name.data) : nullptr;
-    if (!native && signature && native_name.data)
-        native = ir_func_add(context->module, native_name.data,
-            signature, IR_LINK_EXTERN);
-    core_buffer_release(&native_name);
-    if (!native || !ir_annot_set(lower->ir_context, &native->annots,
-            (ir_annot_t){
-                .key = "n00bb.abi.native",
-                .kind = IR_ANNOT_STR,
-                .s = "__n00bb_hash_scalar",
-            })) return nullptr;
+    bool flagset = n00bb_flagset_type(lower->unit, state, receiver, nullptr);
+    parse_sym_entry_t *enum_symbol = flagset ? nullptr
+        : n00bb_enum_type_symbol(state->link_analysis, receiver);
+    const n00bb_enum_range_t *range = enum_symbol
+        ? parse_sym_binding(enum_symbol,
+            CORE_STRING_STATIC("n00bb.enum-range")) : nullptr;
+    if (!flagset && !range) return nullptr;
+    th_type *integer_type = th_name(types,
+        range && range->is_signed ? "i128" : "u128");
+    th_env_method_t selected = {0};
+    if (th_env_method_resolve(state->types, integer_type,
+            "builtin.hash.Hash", "hash", &selected) != TH_ENV_METHOD_FOUND)
+        return nullptr;
     ir_value_t *self = ir_param_add(function, "self", receiver);
     ir_block_t *block = ir_block_add(function, "entry");
-    ir_value_t *callee = ir_func_address(context->module, native);
-    ir_instr_t *call = block ? ir_instr_add(block, IR_OP_CALL) : nullptr;
-    ir_instr_t *ret = block ? ir_instr_add(block, IR_OP_RETURN) : nullptr;
-    return self && callee && call && ret
-        && ir_instr_set_dest(call, "hash", hash_type)
-        && ir_instr_operand_value(call, callee)
-        && ir_instr_operand_value(call, self)
-        && ir_instr_set_call_signature(call, signature)
-        && ir_instr_operand_value(ret, call->dest)
-        ? function : nullptr;
+    ir_instr_t *integer = block ? ir_instr_add(block,
+        flagset ? IR_OP_BITSET_VALUE : IR_OP_ENUM_VALUE) : nullptr;
+    if (!self || !integer
+        || !ir_instr_set_dest(integer, "value", integer_type)
+        || !ir_instr_operand_value(integer, self)
+        || (flagset && !ir_instr_add_mod(integer, "trap"))) return nullptr;
+    ir_value_t *hashed = n00bb_record_field_call(context, block, &selected,
+        integer->dest, nullptr, hash_type, "hash");
+    ir_instr_t *ret = hashed ? ir_instr_add(block, IR_OP_RETURN) : nullptr;
+    return ret && ir_instr_operand_value(ret, hashed) ? function : nullptr;
 }
 
 static bool

@@ -1,0 +1,30 @@
+var data: Array[u8] = new[Array[u8]](4200)
+var i: uint = 0
+while i < 4200 {
+    data[i] = unsafe_cast[u8]((i * 131 + 7) & 0xff)
+    i += 1
+}
+func prefix(n: uint) -> Array[u8] {
+    var out: Array[u8] = new[Array[u8]](cast[int] n)
+    var j: uint = 0
+    while j < n {
+        out[j] = data[j]
+        j += 1
+    }
+    return out
+}
+require from_raw(prefix(0), 0, encoding = Str_Encoding.binary).hash() == 0x99aa06d3014798d86001c324468d497f
+require from_raw(prefix(1), 1, encoding = Str_Encoding.binary).hash() == 0x495b62073ef70ca44c5cca45d0f4811f
+require from_raw(prefix(3), 3, encoding = Str_Encoding.binary).hash() == 0x390cdc5b4a895dd76e3e2670e61106ac
+require from_raw(prefix(4), 4, encoding = Str_Encoding.binary).hash() == 0xaa6e2f274640a3f43d668af6f2a44d77
+require from_raw(prefix(8), 8, encoding = Str_Encoding.binary).hash() == 0x6a86a3bda6af4e3d61ddbe7f31a6100d
+require from_raw(prefix(9), 9, encoding = Str_Encoding.binary).hash() == 0x664c7ca18afd62558c7b67fd458a936b
+require from_raw(prefix(16), 16, encoding = Str_Encoding.binary).hash() == 0x7f9a218b0425449ae2ce54a7c19c730d
+require from_raw(prefix(17), 17, encoding = Str_Encoding.binary).hash() == 0x66fc23f6439dbd778d96ef110fcdebb4
+require from_raw(prefix(128), 128, encoding = Str_Encoding.binary).hash() == 0xaec730751478556cff361dec1385710a
+require from_raw(prefix(129), 129, encoding = Str_Encoding.binary).hash() == 0x98cd36ccbb5579264545b3a09738e31a
+require from_raw(prefix(240), 240, encoding = Str_Encoding.binary).hash() == 0x5293e17bf553903d3f2c53e72293711f
+require from_raw(prefix(241), 241, encoding = Str_Encoding.binary).hash() == 0xb53840fe3fedf161956cae592c67279e
+require from_raw(prefix(1024), 1024, encoding = Str_Encoding.binary).hash() == 0xf69630613f24324d70bd377d9574f4bb
+require from_raw(prefix(1025), 1025, encoding = Str_Encoding.binary).hash() == 0x621af7b8277effa466c4487c41e127a7
+require from_raw(prefix(4200), 4200, encoding = Str_Encoding.binary).hash() == 0x007161758707bfa270f62ca10c1e5638

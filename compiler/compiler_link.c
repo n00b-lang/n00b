@@ -1795,7 +1795,8 @@ call_receiver_is_module(parse_grammar_t *grammar,
         site = link_use_site_for_node(state, receiver);
     }
     return site && site->dotted_path
-        && unit_for_module_site(unit, site, false) != nullptr;
+        && (unit_for_module_site(unit, site, false)
+            || unit_for_module_site(unit, site, true));
 }
 
 parse_sym_entry_t *

@@ -44,7 +44,7 @@ public const utf8_word_high: u64 = 0x8080808080808080
 public const max_u8_len:     uint = 4
 
 
-private func words(self: Ref[string]) -> Ref[String_Words] {
+private inline func words(self: Ref[string]) -> Ref[String_Words] {
     return unsafe_cast[Ref[String_Words]] self
 }
 
@@ -53,7 +53,7 @@ private func long_selector(n: uint, encoding: u8, tag: u64) -> u64 {
         (tag << tag_shift)
 }
 
-private func __string_tag(s: string) -> u8 {
+private inline func __string_tag(s: string) -> u8 {
     return cast[u8](words(ref s).selector >> tag_shift)
 }
 
@@ -61,7 +61,7 @@ private func __string_encoding_bits(s: string) -> u8 {
     return cast[u8]((words(ref s).selector >> encoding_shift) & 3)
 }
 
-private func __string_byte_len(s: string) -> uint {
+private inline func __string_byte_len(s: string) -> uint {
     let selector: u64 = words(ref s).selector
     if selector >> tag_shift == 0 {
         return cast[uint]((selector >> 56) & 0xf)
@@ -148,7 +148,7 @@ func tag(self: string) -> u8 {
     return __string_tag(self)
 }
 
-func text(self: string) -> string {
+inline func text(self: string) -> string {
     var walked: string = self
     while __string_tag(walked) == cast[u8] str_tag_rich {
         let body: Ref[string] = unsafe_cast[Ref[string]] words(ref walked).data
@@ -157,7 +157,7 @@ func text(self: string) -> string {
     return walked
 }
 
-private func text_bytes(base: Ref[string]) -> Ref[byte] {
+inline func __text_bytes(base: Ref[string]) -> Ref[byte] {
     let view: Ref[String_Words] = words(base)
     if view.selector >> tag_shift == 0 {
         return unsafe_cast[Ref[byte]] view
@@ -187,7 +187,7 @@ private func write_all(fd: i32, data: Ref[byte], len: uint) -> bool {
 func __fd_write(fd: i32, s: string) -> i32 {
     var base: string = text(s)
     let len: uint = __string_byte_len(base)
-    if !write_all(fd, text_bytes(ref base), len) {
+    if !write_all(fd, __text_bytes(ref base), len) {
         return -1
     }
     if len > fd_chunk_limit {
@@ -204,7 +204,7 @@ func is_text(self: string) -> bool {
     return encoding(self) != Str_Encoding.binary
 }
 
-func byte_len(self: string) -> uint {
+inline func byte_len(self: string) -> uint {
     return __string_byte_len(text(self))
 }
 

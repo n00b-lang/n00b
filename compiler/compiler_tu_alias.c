@@ -1,6 +1,19 @@
 #include "compiler_tu.h"
 
 static bool
+type_holds_reference(th_type *type)
+{
+    th_type *held = type ? th_resolve(type) : nullptr;
+    while (held && th_builtin_kind_of(held) == TH_BUILTIN_OPTION) {
+        const th_arg *payload = th_named_arg(held, 0);
+        held = payload && payload->kind == TH_ARG_TYPE
+            ? th_resolve(payload->type) : nullptr;
+    }
+    return !held || th_kind_of(held) == TH_INDIRECTION
+        || th_kind_of(held) == TH_VAR;
+}
+
+static bool
 alias_component_add(core_list_t(parse_sym_entry_ptr_t) *symbols,
                     parse_sym_entry_t *symbol)
 {
@@ -190,7 +203,10 @@ mark_referent_value_may_escape(th_ctx *types,
                                parse_sym_entry_t *symbol)
 {
     if (!symbol) return;
-    if (type_may_contain_reference_alias(types, symbol->type))
+    th_type *held = symbol->type ? th_resolve(symbol->type) : nullptr;
+    if (held && th_kind_of(held) == TH_INDIRECTION)
+        held = th_ind_referent(held);
+    if (type_may_contain_reference_alias(types, held))
         symbol->lifetime.referent_value_escapes = true;
     core_list_t(parse_sym_entry_ptr_t) work =
         core_list_new(parse_sym_entry_ptr_t);
@@ -352,6 +368,9 @@ mark_return_value_aliases_may_escape(parse_grammar_t *grammar,
     n00bb_alias_edges_t *facts = state && node
         ? n00bb_node_alias_edges(node) : nullptr;
     if (!facts) return;
+    th_type *returned = core_tree_node_value(node).type;
+    if (returned && !type_may_contain_reference_alias(state->types, returned))
+        return;
     for (size_t i = 0; i < facts->count; i++) {
         n00bb_alias_edge_t *edge = &facts->edges[i];
         parse_sym_entry_t *source = edge->symbol;
@@ -463,6 +482,35 @@ record_reference_facts(parse_grammar_t *grammar,
         for (size_t i = 0; value_aliases && i < value_aliases->count; i++)
             if (value_aliases->edges[i].kind == N00BB_ALIAS_CALL) return;
         mark_expression_aliases_may_escape(grammar, unit, value_node);
+        return;
+    }
+    if (is_reference_symbol(source) && !unresolved_source_type
+        && holder->type && !type_holds_reference(holder->type)) {
+        for (size_t i = 0; i < parse_sym_alias_count(source); i++) {
+            const parse_sym_alias_t *known = parse_sym_alias_at(source, i);
+            parse_sym_entry_t *referent = known ? known->other : nullptr;
+            if (!referent) {
+                holder->lifetime.escapes = true;
+                continue;
+            }
+            for (size_t j = 0; j < parse_sym_alias_count(referent); j++) {
+                const parse_sym_alias_t *content =
+                    parse_sym_alias_at(referent, j);
+                if (!content || !content->other) {
+                    holder->lifetime.escapes = true;
+                    continue;
+                }
+                if (content->other == holder) continue;
+                bool outlives = scope_has_lexical_lifetime(
+                        content->other->scope)
+                    && !scope_is_within(holder->scope, content->other->scope);
+                parse_symtab_add_alias(holder, content->other, content->kind,
+                    derivation, content->escapes || outlives);
+            }
+        }
+        if (!source->alias_count
+            && type_may_contain_reference_alias(state->types, holder->type))
+            parse_sym_set_alias_analysis_complete(holder, false);
         return;
     }
     if (source->lifetime.escapes) holder->lifetime.escapes = true;

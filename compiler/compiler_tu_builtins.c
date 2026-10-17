@@ -144,6 +144,21 @@ register_builtin_native_function(parse_symtab_t *symtab, th_ctx *types,
         core_string_from_cstr(name), native_name, signature) != nullptr;
 }
 
+static bool
+register_bitptr_builtin(parse_symtab_t *symtab, th_ctx *types,
+                        th_type *nil_type, th_type *reference)
+{
+    th_param parameter = {.mode = TH_IN, .type = reference};
+    th_type *result = th_name(types, "builtin.bitptr.Bitptr");
+    th_type *signature = reference && result
+        ? th_func_with_error(types, result, nil_type, &parameter, 1,
+                             nullptr, nullptr, 0) : nullptr;
+    parse_sym_entry_t *symbol = register_native_signature(symtab, types,
+        nil_type, CORE_STRING_STATIC("__bitptr"), "n00bb_bitptr", signature);
+    return symbol && parse_sym_set_binding(symbol,
+        CORE_STRING_STATIC("n00bb.native.returns-parameter"), symbol);
+}
+
 bool
 register_native_declarations(parse_annot_result_t *annotations, th_ctx *types,
                              n00bb_native_declarations_t natives)
@@ -345,7 +360,13 @@ register_builtin_abi_symbols(parse_symtab_t *symtab, th_ctx *types,
             bytes_args, 2)
         && register_builtin_native_function(symtab, types, nil_type,
             "__abi_ref_address", "n00b_builtin_abi_ref_address", uint,
-            address_args, 1);
+            address_args, 1)
+        && register_bitptr_builtin(symtab, types, nil_type, reference)
+        && register_builtin_native_function(symtab, types, nil_type,
+            "__load_le_u64", "n00bb_load_le_u64", th_name(types, "u64"),
+            &byte_reference, 1)
+        && register_builtin_native_function(symtab, types, nil_type,
+            "__load_le_u32", "n00bb_load_le_u32", u32, &byte_reference, 1);
 }
 
 static n00bb_unsafe_arithmetic_t unsafe_arithmetic[] = {
@@ -945,19 +966,6 @@ register_builtin_symbols(parse_annot_result_t *annotations,
     bool array_clear_registered = register_builtin_native_function(symtab,
         types, nil_type, "__array_clear", "__n00bb_array_clear",
         nil_type, array_clear_arguments, 2);
-    th_type *hash_arguments[] = {th_array(types, th_name(types, "byte"))};
-    bool hash_registered = register_builtin_native_function(symtab, types,
-        nil_type, "__xxh3_128", "__n00bb_xxh3_128",
-        th_name(types, "u128"), hash_arguments, 1);
-    th_type *hash_item = th_var(types);
-    th_type *scalar_hash_arguments[] = {hash_item};
-    bool scalar_hash_registered = register_builtin_native_function(symtab,
-        types, nil_type, "__hash_scalar", "__n00bb_hash_scalar",
-        th_name(types, "u128"), scalar_hash_arguments, 1);
-    th_type *string_hash_arguments[] = {th_name(types, "string")};
-    bool string_hash_registered = register_builtin_native_function(symtab,
-        types, nil_type, "__hash_string", "__n00bb_hash_string",
-        th_name(types, "u128"), string_hash_arguments, 1);
     th_type *borrowed_array = th_ind(types, 0,
         th_array(types, th_name(types, "u8")));
     th_type *borrow_arguments[] = {borrowed_array,
@@ -986,8 +994,6 @@ register_builtin_symbols(parse_annot_result_t *annotations,
         || !gc_builtins_registered || !unsafe_arithmetic_registered
         || !bit_counts_registered || !array_length_registered
         || !array_prefix_registered || !array_clear_registered
-        || !hash_registered || !scalar_hash_registered
-        || !string_hash_registered
         || !borrow_registered) return false;
     symbol->type = signature;
     symbol->error_type = nil_type;
