@@ -80,7 +80,7 @@ func __equal(self: Dict[`K, `V], other: Dict[`K, `V]) -> bool {
 }
 
 private func state_hash(self: Dict[`K, `V]) -> u128 {
-    return hash.hash_value(self.state)
+    return hash.hash_value(__abi_ref_address(self.state))
 }
 
 func hash(self: Dict[`K, `V]) -> u128 {

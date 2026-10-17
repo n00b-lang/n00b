@@ -401,5 +401,5 @@ func hash(self: string) -> u128 {
     return xxh3_128_at(string.core.__text_bytes(ref base), len)
 }
 inline func hash(self: Ref[`T]) -> u128 {
-    return hash_value(self)
+    return hash_value(__abi_ref_address(self))
 }

@@ -9106,6 +9106,39 @@ n00bb_record_field_call(ir_lower_context_t *context, ir_block_t *block,
     return ok ? call->dest : nullptr;
 }
 
+static bool
+n00bb_emit_panic(ir_lower_context_t *context, ir_value_t *message,
+                 ir_span_t span)
+{
+    n00bb_lower_context_t *lower = context ? context->user : nullptr;
+    n00bb_tu_state_t *state = lower ? tu_state(lower->unit) : nullptr;
+    n00bb_link_analysis_t *analysis = state ? state->link_analysis : nullptr;
+    for (size_t i = 0; analysis && i < analysis->units.len; i++) {
+        core_translation_unit_t *unit = analysis->units.data[i];
+        if (!core_string_eq(unit->module.identifier,
+                            CORE_STRING_STATIC("builtin.panic"))) continue;
+        n00bb_tu_state_t *owner = tu_state(unit);
+        parse_scope_t *scope = module_scope(owner);
+        parse_sym_entry_t *symbol = scope
+            ? parse_symtab_lookup_in(scope, CORE_STRING_STATIC("panic"))
+            : nullptr;
+        ir_func_t *function = symbol
+            ? link_ir_function_for_symbol(analysis, symbol) : nullptr;
+        ir_module_t *module = unit_module(owner);
+        ir_value_t *callee = function && module
+            ? ir_func_address(module, function) : nullptr;
+        ir_instr_t *call = callee
+            ? ir_instr_add(context->block, IR_OP_CALL) : nullptr;
+        if (!call || !ir_instr_operand_value(call, callee)
+            || !ir_instr_operand_value(call, message)
+            || !ir_instr_set_call_signature(call, function->type))
+            return false;
+        call->span = span;
+        return true;
+    }
+    return false;
+}
+
 static ir_func_t *n00bb_record_hash_function(ir_lower_context_t *context,
                                              th_type *receiver);
 
@@ -12346,9 +12379,14 @@ n00bb_unwrap_call_outcome(ir_lower_context_t *context, parse_visit_t *visit,
         n00bb_lower_context_t *lower = context->user;
         bool literal_producer = lower && lower->has_active_literal;
         if (trap_unhandled || literal_producer) {
+            if (literal_producer
+                && th_builtin_kind_of(th_resolve(error_type))
+                    == TH_BUILTIN_STRING
+                && !n00bb_emit_panic(context, error, span))
+                return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
+                    "could not lower an unhandled literal failure");
             ir_instr_t *trap = ir_instr_add(context->block, IR_OP_TRAP);
-            if (!trap || (literal_producer
-                && !ir_instr_operand_value(trap, error)))
+            if (!trap)
                 return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
                     "could not lower an unhandled call failure");
             trap->span = span;

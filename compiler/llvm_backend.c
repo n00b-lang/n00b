@@ -1818,11 +1818,19 @@ reference_bitptr(lower_state_t *state, LLVMValueRef reference,
         ? th_ind_referent(th_resolve(reference_type)) : nullptr;
     if (!reference || !referent || !target
         || LLVMGetTypeKind(target) != LLVMStructTypeKind
-        || LLVMCountStructElementTypes(target) != 4) return nullptr;
+        || LLVMCountStructElementTypes(target) != 4) {
+        backend_error(state->diagnostics,
+            "bitptr requires a reference and the Bitptr record");
+        return nullptr;
+    }
     LLVMValueRef bitptr = reference;
     if (LLVMTypeOf(reference) != bitptr_llvm_type(context)) {
-        if (LLVMGetTypeKind(LLVMTypeOf(reference)) != LLVMPointerTypeKind)
+        if (LLVMGetTypeKind(LLVMTypeOf(reference)) != LLVMPointerTypeKind) {
+            backend_error(state->diagnostics,
+                "bitptr requires a reference whose referent type is known "
+                "at compile time");
             return nullptr;
+        }
         const ir_final_layout_t *layout = ir_layout_final_visible(module,
             referent, ir_module_target(module));
         uint64_t width = 0;
@@ -9923,31 +9931,6 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                 th_func_error(state->function->type));
         return result && emit_outcome_return(state, result, true);
     case IR_OP_TRAP:
-        if (count == 1 && operands[0].kind == IR_OPD_VALUE
-            && operands[0].value
-            && is_string_type(operands[0].value->type)) {
-            LLVMValueRef message = lowered_value(state, operands[0].value);
-            if (!message) break;
-            LLVMContextRef context = LLVMGetModuleContext(state->module);
-            LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
-            LLVMTypeRef parameters[] = {i64, i64};
-            LLVMTypeRef trap_type = LLVMFunctionType(
-                LLVMVoidTypeInContext(context), parameters, 2, false);
-            LLVMValueRef trap = LLVMGetNamedFunction(state->module,
-                "n00bb_runtime_trap_string");
-            if (!trap)
-                trap = LLVMAddFunction(state->module,
-                    "n00bb_runtime_trap_string", trap_type);
-            LLVMValueRef arguments[] = {
-                LLVMBuildExtractValue(state->builder, message, 0,
-                                      "failure.low"),
-                LLVMBuildExtractValue(state->builder, message, 1,
-                                      "failure.high"),
-            };
-            LLVMBuildCall2(state->builder, trap_type, trap, arguments, 2, "");
-            LLVMBuildUnreachable(state->builder);
-            return true;
-        }
         if (count != 0) break;
         {
             const char *path = instruction->span.file >= 0
