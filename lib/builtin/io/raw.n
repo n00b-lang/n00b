@@ -12,7 +12,7 @@ private const signed_flag: u32 = 1
 
 func raw_repr(self: string, fd: i32) -> i32 {
     try {
-        return cast[i32] string.style.raw_repr_string(self, cast[int] fd, nil)
+        return cast[i32] string.style.raw_repr_string(self, cast[int] fd, nil)!
     } else err: int {
         return cast[i32] err
     }

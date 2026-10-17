@@ -49,8 +49,8 @@ func dispatch() {
     require bold != "Hi"
     require "Hi" < bold
     require !(bold < same)
-    require hash(bold) == hash(same)
-    require hash(bold) != hash("Hi")
+    require bold.hash() == same.hash()
+    require bold.hash() != "Hi".hash()
     var read_fd: int = -1
     var write_fd: int = -1
     require __os_pipe(ref read_fd, ref write_fd) == 0
