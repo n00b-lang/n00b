@@ -1447,7 +1447,16 @@ implicit_builtin_export(core_translation_unit_t *unit,
     parse_sym_entry_t *type = types ? parse_symtab_lookup_in(types, name)
                                    : nullptr;
     parse_sym_entry_t *value = parse_symtab_lookup_in(package->scope, name);
-    return type_reference ? type : value ? value : type;
+    parse_sym_entry_t *found = type_reference ? type : value ? value : type;
+    core_string_t consumer_package = n00bb_package_namespace(unit);
+    if (!found && consumer_package.u8_bytes) {
+        parse_sym_entry_t *granted = granted_export_symbol(builtin, name,
+                                                           consumer_package);
+        if (granted && (!type_reference
+                        || granted->kind == PARSE_SYM_TYPEDEF))
+            found = granted;
+    }
+    return found;
 }
 
 bool

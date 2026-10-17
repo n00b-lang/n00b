@@ -1,7 +1,8 @@
 import sys.abi
 
 enum Bom {
-    none, utf8, utf16_le, utf16_be, utf32_le, utf32_be
+    none = 0, utf8 = 1, utf16_le = 2, utf16_be = 3, utf32_le = 4,
+    utf32_be = 5
 }
 
 record Utf8_Step {
@@ -21,7 +22,7 @@ private func decode_step(s: string, pos: u32) -> Utf8_Step {
         return step
     }
 
-    step.adv = __validate_multibyte(s, p, len)
+    step.adv = validate_multibyte(s, p, len)
 
     if step.adv == 0 {
         return step

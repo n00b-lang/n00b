@@ -9530,17 +9530,6 @@ cache_package_export_syntax(parse_grammar_t *grammar,
     if (!stored_source.data || !stored_export.data) return false;
     for (size_t i = 0; i < package->exports.len; i++)
         if (package->exports.data[i].node == node) return true;
-    for (size_t i = 0; i < package->exports.len; i++)
-        if (core_string_eq(package->exports.data[i].export_name,
-                           stored_export)) {
-            core_diagnostics_report_at(
-                core_translation_unit_diagnostics(unit), unit,
-                CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-M0006"),
-                CORE_STRING_STATIC(
-                    "package export name conflicts with another binding"),
-                link_source_location(node));
-            return false;
-        }
     parse_tree_t *grantee = child_nt(grammar, node, "export-grantee");
     core_buffer_t grantee_name = {0};
     if (grantee && !append_dotted_name(grammar,
@@ -9554,6 +9543,22 @@ cache_package_export_syntax(parse_grammar_t *grammar,
         : (core_string_t){0};
     core_buffer_release(&grantee_name);
     if (grantee && !stored_grantee.data) return false;
+    for (size_t i = 0; i < package->exports.len; i++) {
+        core_string_t prior_grantee = package->exports.data[i].grantee;
+        bool same_audience = !prior_grantee.data == !stored_grantee.data
+            && (!stored_grantee.data
+                || core_string_eq(prior_grantee, stored_grantee));
+        if (same_audience && core_string_eq(
+                package->exports.data[i].export_name, stored_export)) {
+            core_diagnostics_report_at(
+                core_translation_unit_diagnostics(unit), unit,
+                CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-M0006"),
+                CORE_STRING_STATIC(
+                    "package export name conflicts with another binding"),
+                link_source_location(node));
+            return false;
+        }
+    }
     core_list_push(package->exports, ((n00bb_package_export_t){
         .source_name = stored_source,
         .export_name = stored_export,

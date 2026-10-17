@@ -37,8 +37,48 @@ package builtin {
     export containers.array.copy_items to sys.abi
     export containers.array.compare_items to sys.abi
     export containers.list.list_with_length to sys.abi
-    export string.core
+    export string.core.max_u8_len
+    export string.core.str_short_cap
+    export string.core.str_tag_short
+    export string.core.str_tag_long
+    export string.core.str_tag_span
+    export string.core.str_tag_rich
+    export string.core.utf8_word_ones
+    export string.core.utf8_word_high
+    export string.core.Str_Encoding
+    export string.core.String_Error
+    export string.core.__add
+    export string.core.__cmp
+    export string.core.__equal
+    export string.core.__fd_write
+    export string.core.__fd_write_bytes
+    export string.core.__string_from_utf8
+    export string.core.__text_byte_array
+    export string.core.__text_bytes
+    export string.core.adopt
+    export string.core.as_text
+    export string.core.byte_at
+    export string.core.byte_index
+    export string.core.byte_len
+    export string.core.byte_slice
+    export string.core.empty_string
+    export string.core.encoding
+    export string.core.encoding_of
+    export string.core.find_bytes
+    export string.core.from_char
+    export string.core.from_raw
+    export string.core.is_text
+    export string.core.join
+    export string.core.style_ref
+    export string.core.tag
+    export string.core.text
+    export string.core.to_cstring
+    export string.core.to_hex
+    export string.core.utf8_word_is_ascii
+    export string.core.widen_encoding
+    export string.core.string
     export string.core.encoding_of to unicode
+    export string.core.validate_multibyte to unicode
     export ffi.Ffi_Bytes
     export ffi.ffi
     export ffi.Ffi_Table

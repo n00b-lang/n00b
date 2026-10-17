@@ -1,13 +1,13 @@
 import sys.abi
 import internal.encoding
 
-record Rune_Buf {
+record Char_Buf {
     data: Array[char]
     len:  u32
     cap:  u32
 }
 
-func __init(modify self: Rune_Buf, cap: u32) {
+func __init(modify self: Char_Buf, cap: u32) {
     self.len = 0
     self.cap = cap
     if self.cap == 0 {
@@ -16,7 +16,7 @@ func __init(modify self: Rune_Buf, cap: u32) {
     self.data = new[Array[char]](cast[int] self.cap)
 }
 
-func push(modify self: Rune_Buf, cp: char) {
+func push(modify self: Char_Buf, cp: char) {
     if self.len == self.cap {
         let ncap: u32 = self.cap * 2
         var nd: Array[char] = new[Array[char]](cast[int] ncap)
@@ -31,7 +31,7 @@ func push(modify self: Rune_Buf, cp: char) {
     self.len += 1
 }
 
-func to_string(self: Rune_Buf) -> string {
+func to_string(self: Char_Buf) -> string {
     if self.len == 0 {
         return empty_string()
     }

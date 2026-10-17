@@ -1,23 +1,23 @@
-record Rune_Pair {
+record Char_Pair {
     lo: char
     hi: char
 }
 
-enum Rune_Filter_Kind {
+enum Char_Filter_Kind {
     gc = 0, script, bidi, property, range, block, eaw, set
 }
 
-record Rune_Set {
+record Char_Set {
     ascii_lo: u64
     ascii_hi: u64
-    ranges:   List[Rune_Pair]
+    ranges:   List[Char_Pair]
 }
 
-record Rune_Filter {
-    kind: Rune_Filter_Kind
+record Char_Filter {
+    kind: Char_Filter_Kind
     lo:   u32
     hi:   u32
-    set:  Rune_Set?
+    set:  Char_Set?
 }
 
 alias Script = u16

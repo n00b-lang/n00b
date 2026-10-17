@@ -853,7 +853,7 @@ private func continuation(s: string, i: uint) -> bool {
     return (b & 0xc0) == 0x80
 }
 
-func __validate_multibyte(s: string, p: uint, end: uint) -> i32 {
+func validate_multibyte(s: string, p: uint, end: uint) -> i32 {
     let b0: u8 = __string_byte(s, p)
     if b0 >= 0xc2 and b0 <= 0xdf {
         if p + 2 > end {
@@ -939,7 +939,7 @@ private func scan_scalar(s: string, p: uint, end: uint, ascii: bool)
             continue
         }
         clean = false
-        let adv: i32 = __validate_multibyte(s, cursor, end)
+        let adv: i32 = validate_multibyte(s, cursor, end)
         if adv == 0 {
             return Str_Encoding.binary
         }
