@@ -6,6 +6,7 @@
 #include "ir/trait.h"
 #include "ir/rule.h"
 #include "ir/text.h"
+#include "ir/typelang.h"
 #include "ir/verify.h"
 #include "harness.h"
 
@@ -1471,6 +1472,25 @@ static void test_recursive_global_static_initializer(void)
                       .aggregate = {.items = list_items, .count = 1}}));
     check("tuple initializer node matches its type", tuple_set);
     check("dictionary initializer node matches its type", dict_set);
+    th_type *option_type = th_option(ir_module_types(module),
+                                     ir_type_parse(module, "i64"));
+    ir_global_t *present = option_type
+        ? ir_global_add(module, "present_option", option_type) : nullptr;
+    ir_global_t *absent = option_type
+        ? ir_global_add(module, "absent_option", option_type) : nullptr;
+    ir_global_t *mistyped = option_type
+        ? ir_global_add(module, "mistyped_option", option_type) : nullptr;
+    check("an option initializer accepts a payload value",
+          present && ir_global_set_static_initializer(module, present,
+              &(ir_global_init_value_t){.kind = IR_GLOBAL_INIT_INT,
+                                         .integer = ir_lit_of(7)}));
+    check("an option initializer accepts nil",
+          absent && ir_global_set_static_initializer(module, absent,
+              &(ir_global_init_value_t){.kind = IR_GLOBAL_INIT_NIL}));
+    check("an option initializer rejects a payload of another type",
+          mistyped && !ir_global_set_static_initializer(module, mistyped,
+              &(ir_global_init_value_t){.kind = IR_GLOBAL_INIT_STRING,
+                  .string = {.bytes = "x", .length = 1}}));
     bool set = global && ir_global_set_static_initializer(
         module, global, &initializer);
     pair_text[0] = 'X';

@@ -1,6 +1,7 @@
 #include <string.h>
 
 #include "lib/alloc.h"
+#include "lib/hash.h"
 #include "private/th/internal.h"
 
 core_list_decl(th_member);
@@ -1618,10 +1619,22 @@ static bool trait_methods_match(th_ctx *ctx, th_type *receiver,
   return matched;
 }
 
-bool th_env_implements(th_ctx *ctx, th_type *receiver, const char *trait_name) {
-  if (!ctx || !ctx->environment || !ctx->environment->frozen || !receiver ||
-      !trait_name || th_kind_of(th_resolve(receiver)) == TH_VAR)
-    return false;
+static uint64_t implements_memo_key(th_ctx *ctx, th_type *receiver,
+                                    const char *trait_name) {
+  uint64_t parts[] = {
+      (uint64_t)(uintptr_t)ctx->environment,
+      core_xxh3_64bits_raw(ctx->module ? ctx->module : "",
+                           ctx->module ? strlen(ctx->module) : 0),
+      core_xxh3_64bits_raw(ctx->package ? ctx->package : "",
+                           ctx->package ? strlen(ctx->package) : 0),
+      th_hash(ctx, receiver),
+      core_xxh3_64bits_raw(trait_name, strlen(trait_name)),
+  };
+  return core_xxh3_64bits_raw(parts, sizeof(parts));
+}
+
+static bool implements_uncached(th_ctx *ctx, th_type *receiver,
+                                const char *trait_name) {
   const th_env_trait_t *trait = visible_trait(ctx, trait_name);
   if (!trait)
     return false;
@@ -1631,6 +1644,33 @@ bool th_env_implements(th_ctx *ctx, th_type *receiver, const char *trait_name) {
   return trait_methods_match(ctx, receiver, trait, methods, 0);
 }
 
+bool th_env_implements(th_ctx *ctx, th_type *receiver, const char *trait_name) {
+  if (!ctx || !ctx->environment || !ctx->environment->frozen || !receiver ||
+      !trait_name || th_kind_of(th_resolve(receiver)) == TH_VAR)
+    return false;
+  if (!th_is_closed(ctx, receiver))
+    return implements_uncached(ctx, receiver, trait_name);
+  if (!ctx->implements_memo) {
+    ctx->implements_memo = core_alloc(core_dict_t);
+    core_dict_init(ctx->implements_memo, core_hash_word, nullptr);
+  }
+  uint64_t key = implements_memo_key(ctx, receiver, trait_name);
+  bool found = false;
+  void *known = core_dict_get(ctx->implements_memo,
+                              (const void *)(uintptr_t)key, &found);
+  if (found)
+    return known == (void *)(uintptr_t)2;
+  bool result = implements_uncached(ctx, receiver, trait_name);
+  core_dict_put(ctx->implements_memo, (const void *)(uintptr_t)key,
+                (void *)(uintptr_t)(result ? 2 : 1));
+  return result;
+}
+
+static th_env_method_status_t
+method_resolve_best(th_ctx *ctx, th_type *receiver, const char *trait_name,
+                    const char *method_name,
+                    const th_env_function_t **best_out);
+
 th_env_method_status_t th_env_method_resolve(th_ctx *ctx, th_type *receiver,
                                              const char *trait_name,
                                              const char *method_name,
@@ -1638,6 +1678,65 @@ th_env_method_status_t th_env_method_resolve(th_ctx *ctx, th_type *receiver,
   if (!ctx || !ctx->environment || !receiver || !trait_name || !method_name ||
       !th_env_implements(ctx, receiver, trait_name))
     return TH_ENV_METHOD_NOT_FOUND;
+  const th_env_function_t *best = nullptr;
+  th_env_method_status_t status = TH_ENV_METHOD_NOT_FOUND;
+  bool memo = ctx->environment->frozen && th_is_closed(ctx, receiver);
+  uint64_t key = 0;
+  if (memo) {
+    if (!ctx->method_memo) {
+      ctx->method_memo = core_alloc(core_dict_t);
+      core_dict_init(ctx->method_memo, core_hash_word, nullptr);
+    }
+    uint64_t parts[] = {
+        implements_memo_key(ctx, receiver, trait_name),
+        core_xxh3_64bits_raw(method_name, strlen(method_name)),
+    };
+    key = core_xxh3_64bits_raw(parts, sizeof(parts));
+    bool found = false;
+    void *known = core_dict_get(ctx->method_memo,
+                                (const void *)(uintptr_t)key, &found);
+    if (found) {
+      status = known == (void *)(uintptr_t)1 ? TH_ENV_METHOD_NOT_FOUND
+          : known == (void *)(uintptr_t)2 ? TH_ENV_METHOD_AMBIGUOUS
+          : TH_ENV_METHOD_FOUND;
+      best = status == TH_ENV_METHOD_FOUND ? known : nullptr;
+    }
+    else {
+      status = method_resolve_best(ctx, receiver, trait_name, method_name,
+                                   &best);
+      core_dict_put(ctx->method_memo, (const void *)(uintptr_t)key,
+                    status == TH_ENV_METHOD_FOUND ? (void *)best
+                    : (void *)(uintptr_t)(status == TH_ENV_METHOD_AMBIGUOUS
+                                              ? 2 : 1));
+    }
+  }
+  else
+    status = method_resolve_best(ctx, receiver, trait_name, method_name,
+                                 &best);
+  if (status != TH_ENV_METHOD_FOUND)
+    return status;
+  th_type *signature = nullptr;
+  th_type *error_type = nullptr;
+  if (!th_env_signature_channels(ctx, best->contract, &signature,
+                                 &error_type))
+    return TH_ENV_METHOD_NOT_FOUND;
+  if (out)
+    *out = (th_env_method_t){
+        .qualified_name = best->qualified_name,
+        .root_name = best->root_name,
+        .module = best->module,
+        .package = best->package,
+        .signature = signature,
+        .error_type = error_type,
+        .contract = best->contract,
+    };
+  return TH_ENV_METHOD_FOUND;
+}
+
+static th_env_method_status_t
+method_resolve_best(th_ctx *ctx, th_type *receiver, const char *trait_name,
+                    const char *method_name,
+                    const th_env_function_t **best_out) {
   const th_env_trait_t *trait = visible_trait(ctx, trait_name);
   th_type *trait_methods = trait ? fresh_pattern(ctx, trait->contracts) : nullptr;
   if (!trait_methods || !contract_lookup(trait_methods, method_name))
@@ -1730,21 +1829,7 @@ th_env_method_status_t th_env_method_resolve(th_ctx *ctx, th_type *receiver,
     return TH_ENV_METHOD_AMBIGUOUS;
   if (!best)
     return TH_ENV_METHOD_NOT_FOUND;
-  th_type *signature = nullptr;
-  th_type *error_type = nullptr;
-  if (!th_env_signature_channels(ctx, best->contract, &signature,
-                                 &error_type))
-    return TH_ENV_METHOD_NOT_FOUND;
-  if (out)
-    *out = (th_env_method_t){
-        .qualified_name = best->qualified_name,
-        .root_name = best->root_name,
-        .module = best->module,
-        .package = best->package,
-        .signature = signature,
-        .error_type = error_type,
-        .contract = best->contract,
-    };
+  *best_out = best;
   return TH_ENV_METHOD_FOUND;
 }
 
@@ -1755,15 +1840,15 @@ bool th_env_method_lookup(th_ctx *ctx, th_type *receiver,
          TH_ENV_METHOD_FOUND;
 }
 
-th_env_method_status_t th_env_method_resolve_by_name(
-    th_ctx *ctx, th_type *receiver, const char *method_name,
-    th_env_method_t *out, const char **trait_name) {
-  if (out) *out = (th_env_method_t){0};
-  if (trait_name) *trait_name = nullptr;
-  if (!ctx || !ctx->environment || !ctx->environment->frozen || !receiver ||
-      !method_name)
-    return TH_ENV_METHOD_NOT_FOUND;
+typedef struct {
+  th_env_method_status_t status;
+  const th_env_function_t *function;
+  const th_env_trait_t *trait;
+} method_choice_t;
 
+static th_env_method_status_t method_resolve_by_name_choice(
+    th_ctx *ctx, th_type *receiver, const char *method_name,
+    method_choice_t *choice) {
   typedef struct {
     const th_env_trait_t *trait;
     const th_env_function_t *function;
@@ -1848,27 +1933,73 @@ th_env_method_status_t th_env_method_resolve_by_name(
   if (incomparable || tied_functions)
     status = TH_ENV_METHOD_AMBIGUOUS;
   else if (best) {
-    th_type *signature = nullptr;
-    th_type *error_type = nullptr;
-    if (th_env_signature_channels(ctx, best->function->contract, &signature,
-                                  &error_type)) {
-      if (out)
-        *out = (th_env_method_t){
-            .qualified_name = best->function->qualified_name,
-            .root_name = best->function->root_name,
-            .module = best->function->module,
-            .package = best->function->package,
-            .signature = signature,
-            .error_type = error_type,
-            .contract = best->function->contract,
-        };
-      if (trait_name) *trait_name = best->trait->name;
-      status = TH_ENV_METHOD_FOUND;
-    }
+    choice->function = best->function;
+    choice->trait = best->trait;
+    status = TH_ENV_METHOD_FOUND;
   }
   core_free(maximal);
   core_list_free(matches);
   return status;
+}
+
+th_env_method_status_t th_env_method_resolve_by_name(
+    th_ctx *ctx, th_type *receiver, const char *method_name,
+    th_env_method_t *out, const char **trait_name) {
+  if (out) *out = (th_env_method_t){0};
+  if (trait_name) *trait_name = nullptr;
+  if (!ctx || !ctx->environment || !ctx->environment->frozen || !receiver ||
+      !method_name)
+    return TH_ENV_METHOD_NOT_FOUND;
+  method_choice_t local = {0};
+  method_choice_t *choice = &local;
+  th_env_method_status_t status = TH_ENV_METHOD_NOT_FOUND;
+  if (th_is_closed(ctx, receiver)) {
+    if (!ctx->method_memo) {
+      ctx->method_memo = core_alloc(core_dict_t);
+      core_dict_init(ctx->method_memo, core_hash_word, nullptr);
+    }
+    uint64_t parts[] = {
+        implements_memo_key(ctx, receiver, ""),
+        core_xxh3_64bits_raw(method_name, strlen(method_name)),
+        1,
+    };
+    uint64_t key = core_xxh3_64bits_raw(parts, sizeof(parts));
+    bool found = false;
+    method_choice_t *known = core_dict_get(ctx->method_memo,
+        (const void *)(uintptr_t)key, &found);
+    if (found)
+      choice = known;
+    else {
+      choice = core_arena_alloc(&ctx->arena, sizeof(*choice));
+      if (!choice) return TH_ENV_METHOD_NOT_FOUND;
+      choice->status = method_resolve_by_name_choice(ctx, receiver,
+                                                     method_name, choice);
+      core_dict_put(ctx->method_memo, (const void *)(uintptr_t)key, choice);
+    }
+    status = choice->status;
+  }
+  else
+    status = method_resolve_by_name_choice(ctx, receiver, method_name,
+                                           choice);
+  if (status != TH_ENV_METHOD_FOUND)
+    return status;
+  th_type *signature = nullptr;
+  th_type *error_type = nullptr;
+  if (!th_env_signature_channels(ctx, choice->function->contract, &signature,
+                                 &error_type))
+    return TH_ENV_METHOD_NOT_FOUND;
+  if (out)
+    *out = (th_env_method_t){
+        .qualified_name = choice->function->qualified_name,
+        .root_name = choice->function->root_name,
+        .module = choice->function->module,
+        .package = choice->function->package,
+        .signature = signature,
+        .error_type = error_type,
+        .contract = choice->function->contract,
+    };
+  if (trait_name) *trait_name = choice->trait->name;
+  return TH_ENV_METHOD_FOUND;
 }
 
 size_t th_env_method_candidates(th_ctx *ctx, const char *trait_name,

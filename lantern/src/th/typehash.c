@@ -78,6 +78,8 @@ void th_ctx_free(th_ctx *ctx)
     free_index(ctx->closed_type_records);
     free_index(ctx->open_type_records);
     free_index(ctx->generic_type_heads);
+    free_index(ctx->implements_memo);
+    free_index(ctx->method_memo);
     core_list_free(ctx->methods);
     core_list_free(ctx->method_resolvers);
     core_list_free(ctx->errors);

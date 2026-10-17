@@ -267,12 +267,23 @@ static bool global_init_value_matches(ir_module_t *module,
     if (atomic_item && value->kind != IR_GLOBAL_INIT_PHASE_RESULT)
         return global_init_value_matches(module, value, atomic_item,
                                          depth + 1);
+    th_type *option_item = th_option_item(type);
+    if (option_item && value->kind != IR_GLOBAL_INIT_NIL
+        && value->kind != IR_GLOBAL_INIT_PHASE_RESULT)
+        return global_init_value_matches(module, value, option_item,
+                                         depth + 1);
     ir_machine_t machine = ir_machine_of(module, (th_type *)type);
 
     switch (value->kind) {
     case IR_GLOBAL_INIT_BOOL:
         return machine.class == IR_CLASS_BOOL;
     case IR_GLOBAL_INIT_INT: {
+        th_type *definition = th_kind_of(type) == TH_NAMED
+            && machine.class == IR_CLASS_OPAQUE
+            ? ir_type_definition(module, (th_type *)type) : nullptr;
+        if (definition && th_resolve(definition) != type)
+            return global_init_value_matches(module, value, definition,
+                                             depth + 1);
         bool fits = global_init_integer_fits(value->integer, machine);
         return machine.class != IR_CLASS_BOOL && fits;
     }
