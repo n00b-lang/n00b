@@ -1030,11 +1030,17 @@ lower_builtin_action(ir_lower_context_t *context, const char *action,
                                 CORE_STRING_STATIC("f64"))
                  || core_string_eq(literal_annotation->op_kind,
                                    CORE_STRING_STATIC("float"))) {
+            char *digits = malloc(text.u8_bytes + 1);
+            size_t length = 0;
+            for (size_t i = 0; digits && i < text.u8_bytes; i++)
+                if (text.data[i] != '_') digits[length++] = text.data[i];
+            if (digits) digits[length] = 0;
             errno = 0;
             char *end = nullptr;
-            double value = strtod(text.data, &end);
-            emitted = !errno && end == text.data + text.u8_bytes
+            double value = digits ? strtod(digits, &end) : 0.0;
+            emitted = digits && !errno && end == digits + length
                 && ir_instr_operand_float(instruction, value);
+            free(digits);
         }
         if (!emitted)
             return lower_failure(context, IR_DIAG_TYPE_LITERAL, span,
