@@ -4,10 +4,10 @@ import internal.encoding
 import internal.properties
 import generated.bidi_brackets
 
-const bidi_max_depth: u8 = 125
-const bidi_stack_size: u32 = 128
+const bidi_max_depth = 125
+const bidi_stack_size = 128
 const bidi_max_brackets: i32 = 63
-const bidi_max_pairs: u32 = 128
+const bidi_max_pairs = 128
 
 record Bidi {
     cps:        Array[char]

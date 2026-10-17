@@ -15,10 +15,10 @@ const hangul_v_count: u32 = 21
 const hangul_t_count: u32 = 28
 const hangul_n_count: u32 = hangul_v_count * hangul_t_count
 const hangul_s_count: u32 = hangul_l_count * hangul_n_count
-const canon_insertion_max: u32 = 32
-const nqc_yes: u8 = 0
-const nqc_maybe: u8 = 1
-const nqc_no: u8 = 2
+const canon_insertion_max = 32
+const nqc_yes = 0
+const nqc_maybe = 1
+const nqc_no = 2
 
 enum Norm_Form {
     nfc = 0, nfd, nfkc, nfkd

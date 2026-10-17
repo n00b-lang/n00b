@@ -4,7 +4,7 @@ import internal.properties
 import internal.types
 import generated.casemap
 
-const cp_capital_sigma: u32 = 0x03a3
+const cp_capital_sigma = 0x03a3
 
 private func sparse_lookup(index: Array[Array[u32]], index_len: u32,
                            cp: char) -> u32? {
