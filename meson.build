@@ -845,6 +845,18 @@ test(
 )
 
 test(
+    'implicit-package-name-n00b', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'import_names' / 'implicit_package_name.n',
+           '\'builtin\' cannot be declared here because it names a package this module uses',
+           'implicit_package_name.n:1:1'],
+    timeout: 120,
+    suite: 'slow',
+)
+
+test(
     'import-name-clash-module-n00b', find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
            n00bb_exe.full_path(),

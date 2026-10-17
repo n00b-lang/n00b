@@ -609,6 +609,8 @@ bool resolve_forward_literal_sites(core_translation_unit_t *unit,
                                    n00bb_tu_state_t *state);
 bool report_shadowed_litmods(core_translation_unit_t *unit,
                              n00bb_tu_state_t *state);
+bool n00bb_declares_litmod(n00bb_tu_state_t *state,
+                           parse_sym_entry_t *symbol);
 bool collect_ordered_children(parse_tree_t *node,
     core_list_t(parse_tree_ptr_t) *children);
 core_string_t named_field_identifier(parse_grammar_t *grammar,
