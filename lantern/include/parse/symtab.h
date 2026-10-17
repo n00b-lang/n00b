@@ -146,6 +146,7 @@ struct parse_sym_entry_t {
     core_string_t             pass_by;
     int32_t                  scope_depth;
     parse_tree_t        *decl_node;
+    parse_tree_t        *initializer_node;
     parse_tree_t       **definition_nodes;
     size_t                definition_count;
     size_t                definition_capacity;
@@ -415,6 +416,13 @@ parse_sym_entry_t *parse_symtab_lookup(parse_symtab_t *st, core_string_t ns_name
 parse_sym_entry_t *parse_symtab_lookup_scoped(parse_symtab_t *st, parse_scope_t *scope,
                                           core_string_t ns_name,
                                           core_string_t name);
+
+parse_sym_entry_t *parse_symtab_lookup_visible(parse_symtab_t *st,
+                                               parse_scope_t *scope,
+                                               core_string_t ns_name,
+                                               core_string_t name,
+                                               parse_tree_t *use);
+bool parse_sym_visible_at(const parse_sym_entry_t *symbol, parse_tree_t *use);
 
 parse_sym_entry_t *parse_symtab_lookup_in(parse_scope_t *scope, core_string_t name);
 bool parse_symtab_bind_nominal_type(parse_symtab_t *st, th_type *type,

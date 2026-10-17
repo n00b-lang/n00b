@@ -252,6 +252,20 @@ sym_kind_of(core_string_t spec)
     return PARSE_SYM_VARIABLE;
 }
 
+static parse_tree_t *child(parse_visit_t *v, parse_child_ref_t ref);
+
+static parse_tree_t *
+declaration_initializer(parse_visit_t *v, parse_annotation_t *declares)
+{
+    if (!parse_grammar_declares_after_initializer(v->grammar)) return nullptr;
+    parse_annotation_t *assigns = parse_rule_find_annot(v->grammar, v->rule,
+                                                        PARSE_ANNOT_ASSIGNS);
+    if (!assigns
+        || child(v, assigns->name_ref) != child(v, declares->name_ref))
+        return nullptr;
+    return child(v, assigns->value_ref);
+}
+
 static bool
 annot_declares(parse_visit_t *v)
 {
@@ -288,6 +302,7 @@ annot_declares(parse_visit_t *v)
     sym->mutability = kind == PARSE_SYM_PARAM ? PARSE_SYM_IMMUTABLE
                                             : PARSE_SYM_MUTABLE;
     sym->type       = type_of_child(a, v, an->type_ref);
+    sym->initializer_node = declaration_initializer(v, an);
 
     if (a->pending_visibility.data && kind != PARSE_SYM_PARAM) {
         sym->visibility       = a->pending_visibility;
@@ -1119,8 +1134,8 @@ cf_varref(parse_visit_t *v)
                            : parse_symtab_current_scope(a->out->symtab,
                                                       ns_default());
     v->pn->scope = scope;
-    parse_sym_entry_t *sym = parse_symtab_lookup_scoped(a->out->symtab, scope,
-                                                    ns_default(), nm);
+    parse_sym_entry_t *sym = parse_symtab_lookup_visible(a->out->symtab, scope,
+                                                     ns_default(), nm, v->node);
 
     if (sym) {
         if (!parse_sym_add_use(sym, v->node)) return false;

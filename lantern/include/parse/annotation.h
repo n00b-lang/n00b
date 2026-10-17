@@ -55,7 +55,8 @@
     X(SIZE, "size") \
     X(ALIGNMENT, "alignment") \
     X(OFFSET, "offset") \
-    X(WIDTH, "width")
+    X(WIDTH, "width") \
+    X(DECLARATION_POINT, "declaration_point")
 
 typedef enum {
 #define PARSE_ANNOT_ENUM(sym, spelling) PARSE_ANNOT_##sym,
@@ -161,3 +162,4 @@ parse_annotation_t *parse_nt_find_direct_annot(
     const parse_nonterm_t *nt, parse_annot_kind_t kind);
 parse_annotation_t *parse_grammar_find_annot(parse_grammar_t   *g,
                                          parse_annot_kind_t kind);
+bool parse_grammar_declares_after_initializer(parse_grammar_t *g);

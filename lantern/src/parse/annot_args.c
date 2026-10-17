@@ -480,6 +480,7 @@ static struct {
     {PARSE_ANNOT_OFFSET,     CORE_STRING_STATIC("a-val")},
     {PARSE_ANNOT_WIDTH,      CORE_STRING_STATIC("a-val")},
     {PARSE_ANNOT_LEXER,      CORE_STRING_STATIC("a-tag")},
+    {PARSE_ANNOT_DECLARATION_POINT, CORE_STRING_STATIC("a-tag")},
 };
 
 core_string_t
@@ -681,6 +682,14 @@ decode(parse_annotation_t *a, aa_node *args)
     case PARSE_ANNOT_TOKENIZER:
     case PARSE_ANNOT_LEXER:
         a->scope_tag = arg_tag(args, 0);
+        break;
+
+    case PARSE_ANNOT_DECLARATION_POINT:
+        a->scope_tag = arg_tag(args, 0);
+        if (!core_string_eq(a->scope_tag, CORE_STRING_STATIC("declarator"))
+            && !core_string_eq(a->scope_tag,
+                               CORE_STRING_STATIC("after_initializer")))
+            return false;
         break;
 
     case PARSE_ANNOT_VISIBILITY:

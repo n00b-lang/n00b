@@ -272,6 +272,15 @@ parse_grammar_find_annot(parse_grammar_t *g, parse_annot_kind_t kind)
     return out;
 }
 
+bool
+parse_grammar_declares_after_initializer(parse_grammar_t *g)
+{
+    parse_annotation_t *point = parse_grammar_find_annot(
+        g, PARSE_ANNOT_DECLARATION_POINT);
+    return point && core_string_eq(point->scope_tag,
+                                   CORE_STRING_STATIC("after_initializer"));
+}
+
 size_t
 parse_nt_annot_count(const parse_nonterm_t *nt)
 {

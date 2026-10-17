@@ -2220,6 +2220,84 @@ test_symbol_records_declaration_definition_and_use_nodes(void)
     parse_grammar_free(grammar);
 }
 
+static parse_tree_t *
+last_node(parse_grammar_t *g, parse_tree_t *node, const char *name)
+{
+    if (!node || core_tree_is_leaf(node)) return nullptr;
+    for (size_t i = core_tree_num_children(node); i > 0; i--) {
+        parse_tree_t *found = last_node(g, core_tree_child(node, i - 1),
+                                        name);
+        if (found) return found;
+    }
+    return parse_tree_nt_name(g, node).data
+        && core_string_eq(parse_tree_nt_name(g, node), S(name))
+        ? node : nullptr;
+}
+
+typedef enum {
+    INITIALIZER_TARGET_NONE,
+    INITIALIZER_TARGET_SELF,
+    INITIALIZER_TARGET_EARLIER,
+} initializer_target_t;
+
+static initializer_target_t
+initializer_reference_target(const char *point)
+{
+    core_buffer_t text = {0};
+    core_buffer_printf(&text,
+        "@tokenizer(\"toy\")\n%s"
+        "<top> @scope(\"module\") ::= <decl> <decl>\n"
+        "<decl> @declares($1, \"var\") @assigns($1, $3) ::= "
+        "\"v\" <name> \"=\" <ref> \";\"\n"
+        "<ref> @varref($0) ::= <name>\n"
+        "<name> ::= __LOWER\n", point);
+    parse_grammar_t *grammar = parse_grammar_new();
+    parse_grammar_set_error_recovery(grammar, false);
+    bool loaded = parse_bnf_load(core_string_borrow(text.data,
+                                                    text.byte_len),
+                                 S("top"), grammar);
+    core_buffer_release(&text);
+    parse_pwz_parser_t *parser = nullptr;
+    parse_token_stream_t *tokens = nullptr;
+    parse_tree_t *tree = loaded
+        ? parse_toy(grammar, "top", "va=b;va=a;", &parser, &tokens)
+        : nullptr;
+    parse_annot_result_t *result = tree
+        ? annotate_new(grammar, tree, nullptr) : nullptr;
+    parse_tree_t *declaration = tree ? last_node(grammar, tree, "decl")
+                                     : nullptr;
+    parse_tree_t *use = tree ? last_node(grammar, tree, "ref") : nullptr;
+    parse_node_resolution_t resolution = use ? parse_tree_resolution(use)
+        : (parse_node_resolution_t){0};
+    parse_sym_entry_t *target = resolution.kind
+            == PARSE_NODE_RESOLUTION_SYMBOL
+        ? resolution.target.symbol : nullptr;
+    bool self = target && target->decl_node == declaration;
+    bool earlier = target && target->decl_node != declaration
+        && target->decl_node;
+    if (result) parse_annot_result_free(result);
+    if (parser) parse_pwz_free(parser);
+    if (tokens) scan_token_stream_free(tokens);
+    parse_grammar_free(grammar);
+    return self ? INITIALIZER_TARGET_SELF
+        : earlier ? INITIALIZER_TARGET_EARLIER : INITIALIZER_TARGET_NONE;
+}
+
+static void
+test_declaration_point_hides_a_binding_in_its_initializer(void)
+{
+    check("by default a binding is visible in its own initializer",
+          initializer_reference_target("") == INITIALIZER_TARGET_SELF);
+    check("a declarator declaration point keeps the default",
+          initializer_reference_target(
+              "@declaration_point(\"declarator\")\n")
+              == INITIALIZER_TARGET_SELF);
+    check("after_initializer resolves the initializer to the earlier binding",
+          initializer_reference_target(
+              "@declaration_point(\"after_initializer\")\n")
+              == INITIALIZER_TARGET_EARLIER);
+}
+
 static void
 test_symbol_lookup_instantiates_schemes(void)
 {
@@ -2693,6 +2771,7 @@ test_part_two_rejections(void)
         "<top> @size() ::= <n>\n<n> ::= __LOWER\n",
         "<top> @size(sizeof) ::= <n>\n<n> ::= __LOWER\n",
         "<top> @alignment(1, 2) ::= <n>\n<n> ::= __LOWER\n",
+        "@declaration_point(\"later\")\n<top> ::= <n>\n<n> ::= __LOWER\n",
     };
 
     for (size_t i = 0; i < sizeof(BAD) / sizeof(BAD[0]); i++) {
@@ -2748,6 +2827,7 @@ main(void)
     test_the_representation_and_declaration_annotations();
     test_initial_symbol_walk_callback(g);
     test_symbol_records_declaration_definition_and_use_nodes();
+    test_declaration_point_hides_a_binding_in_its_initializer();
     test_selected_type_annotations_per_node(g);
     test_frontend_type_node_resolver();
     test_inference_result_is_propagated();

@@ -600,8 +600,8 @@ symbol_type(ictx *c, int32_t ix)
                            ? c->v->pn->scope
                            : parse_symtab_current_scope(c->st,
                                                       core_string_empty());
-    parse_sym_entry_t *sym = parse_symtab_lookup_scoped(c->st, scope,
-                                                    core_string_empty(), nm);
+    parse_sym_entry_t *sym = parse_symtab_lookup_visible(c->st, scope,
+        core_string_empty(), nm, c->v->node);
     if (!sym && core_tree_num_children(c->v->node) == 1
         && core_tree_child(c->v->node, 0) == k) {
         parse_node_resolution_t resolution = parse_tree_resolution(c->v->node);

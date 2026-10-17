@@ -1318,6 +1318,28 @@ parse_symtab_lookup_scoped(parse_symtab_t *st, parse_scope_t *scope,
     return ns ? parse_symtab_lookup_in(ns->root, name) : nullptr;
 }
 
+bool
+parse_sym_visible_at(const parse_sym_entry_t *symbol, parse_tree_t *use)
+{
+    if (!symbol || !symbol->initializer_node) return true;
+    for (parse_tree_t *at = use; at && !core_tree_is_leaf(at);
+         at = core_tree_node_value(at).parent)
+        if (at == symbol->initializer_node) return false;
+    return true;
+}
+
+parse_sym_entry_t *
+parse_symtab_lookup_visible(parse_symtab_t *st, parse_scope_t *scope,
+                            core_string_t ns_name, core_string_t name,
+                            parse_tree_t *use)
+{
+    parse_sym_entry_t *symbol = parse_symtab_lookup_scoped(st, scope,
+                                                           ns_name, name);
+    while (symbol && !parse_sym_visible_at(symbol, use))
+        symbol = symbol->shadowed;
+    return symbol;
+}
+
 parse_sym_entry_t *
 parse_symtab_resolve_node(parse_symtab_t *st, parse_tree_t *node,
                           core_string_t ns_name)
@@ -1339,8 +1361,8 @@ parse_symtab_resolve_node(parse_symtab_t *st, parse_tree_t *node,
     parse_scope_t *scope = resolution.kind == PARSE_NODE_RESOLUTION_SCOPE
         ? resolution.target.scope : pn->scope;
     if (!scope) scope = parse_symtab_scope_for_node(st, node);
-    parse_sym_entry_t *symbol = parse_symtab_lookup_scoped(
-        st, scope, ns_name, name);
+    parse_sym_entry_t *symbol = parse_symtab_lookup_visible(
+        st, scope, ns_name, name, node);
     if (symbol) {
         parse_tree_set_resolution_symbol(node, symbol);
     }
