@@ -210,18 +210,18 @@ int32_t writ_bake_n00b_bake_build(const void *spec, void *result) {
     return writ_n00b_value;
 }
 
-int64_t writ_bake_n00b_bake_query(const void *root, int32_t key) {
-    int64_t writ_n00b_value = writ_bake_bake_query((bake_root_t *)root, key);
+int64_t writ_bake_n00b_bake_query(uint64_t root, int32_t key) {
+    int64_t writ_n00b_value = writ_bake_bake_query((bake_root_t *)(uintptr_t)root, key);
     return writ_n00b_value;
 }
 
-int32_t writ_bake_n00b_bake_reopen(const void *root) {
-    int32_t writ_n00b_value = writ_bake_bake_reopen((bake_root_t *)root);
+int32_t writ_bake_n00b_bake_reopen(uint64_t root) {
+    int32_t writ_n00b_value = writ_bake_bake_reopen((bake_root_t *)(uintptr_t)root);
     return writ_n00b_value;
 }
 
-int32_t writ_bake_n00b_bake_free(const void *root) {
-    int32_t writ_n00b_value = writ_bake_bake_free((bake_root_t *)root);
+int32_t writ_bake_n00b_bake_free(uint64_t root) {
+    int32_t writ_n00b_value = writ_bake_bake_free((bake_root_t *)(uintptr_t)root);
     return writ_n00b_value;
 }
 
@@ -276,6 +276,24 @@ record Bake_Root_T layout(c) {
     public path: Foreign[i8]? until 0
 }
 
+type Bake_Root_Cell {
+    public raw: Foreign[Bake_Root_T]?
+}
+
+alias Bake_Root = Ref[Bake_Root_Cell]
+
+func __bake_root_cell(raw: uint) -> Bake_Root {
+    var cell: Bake_Root_Cell = (raw = unsafe_cast[Foreign[Bake_Root_T]?] raw)
+    return ref cell
+}
+
+func __finalize(consume self: Ref[Bake_Root_Cell]) {
+    if self.raw != nil and debug_enabled() and !__abi_baked_address(unsafe_cast[uint] self.raw) {
+        __fd_write(2, "Bake_Root collected while open; releasing it\n")
+        let released = __bake_free(unsafe_cast[uint] self.raw)
+    }
+}
+
 enum Bake_Kind {
     BAKE_NUMBER = 1,
     BAKE_TEXT = 2
@@ -302,7 +320,7 @@ func bake_multiply(left: i64, right: i64) -> i64 {
     return result
 }
 
-func bake_build(spec: string) -> Bake_Root_T fail: Error {
+func bake_build(spec: string) -> Bake_Root fail: Error {
     var spec_value = spec
     var result: uint = 0
     let outcome = __bake_build(ref spec_value, ref result)
@@ -310,25 +328,40 @@ func bake_build(spec: string) -> Bake_Root_T fail: Error {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "bake_build")
         fail failure
     }
+    return __bake_root_cell(result)
+}
+
+func bake_query(root: Bake_Root, key: i32) -> i64 {
+    if root.raw == nil {
+        panic("bake_query: handle is closed")
+    }
+    let result = __bake_query(unsafe_cast[uint] root.raw, key)
     return result
 }
 
-func bake_query(root: Bake_Root_T, key: i32) -> i64 {
-    let result = __bake_query(ref root, key)
+func bake_reopen(root: Bake_Root) -> i32 {
+    if root.raw == nil {
+        panic("bake_reopen: handle is closed")
+    }
+    let result = __bake_reopen(unsafe_cast[uint] root.raw)
     return result
 }
 
-func bake_reopen(root: Bake_Root_T) -> i32 {
-    let result = __bake_reopen(ref root)
-    return result
-}
-
-func bake_free(root: Bake_Root_T) fail: Error {
-    let outcome = __bake_free(ref root)
+func close(modify self: Bake_Root) fail: Error {
+    if self.raw == nil {
+        let failure: Error = (code = -1, text = "handle is closed", fn = "bake_free")
+        fail failure
+    }
+    if __abi_baked_address(unsafe_cast[uint] self.raw) {
+        let failure: Error = (code = -1, text = "a baked object cannot be released", fn = "bake_free")
+        fail failure
+    }
+    let outcome = __bake_free(unsafe_cast[uint] self.raw)
     if outcome < 0 {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "bake_free")
         fail failure
     }
+    self.raw = nil
 }
 7	tests/gen_n00b/bake.writ:6:1	bake_item_t
 14	tests/gen_n00b/bake.writ:13:1	bake_items_t
@@ -336,27 +369,28 @@ func bake_free(root: Bake_Root_T) fail: Error {
 28	tests/gen_n00b/bake.writ:29:1	bake_slot_t
 34	tests/gen_n00b/bake.writ:35:1	bake_table_t
 39	tests/gen_n00b/bake.writ:40:1	bake_root_t
-52	tests/gen_n00b/bake.writ:4:1	bake_kind
-57	tests/gen_n00b/bake.writ:53:1	BAKE_QUERY_NAME
-58	tests/gen_n00b/bake.writ:54:1	BAKE_QUERY_ITEMS
-59	tests/gen_n00b/bake.writ:55:1	BAKE_QUERY_CODES
-60	tests/gen_n00b/bake.writ:56:1	BAKE_QUERY_VARIANT
-61	tests/gen_n00b/bake.writ:57:1	BAKE_QUERY_SHARED
-62	tests/gen_n00b/bake.writ:58:1	BAKE_QUERY_MIDDLE
-63	tests/gen_n00b/bake.writ:59:1	BAKE_QUERY_OP
-64	tests/gen_n00b/bake.writ:60:1	BAKE_QUERY_HASH
-65	tests/gen_n00b/bake.writ:61:1	BAKE_QUERY_CACHE
-66	tests/gen_n00b/bake.writ:62:1	BAKE_QUERY_FD
-68	tests/gen_n00b/bake.writ:64:1	bake_add
-73	tests/gen_n00b/bake.writ:65:1	bake_multiply
-78	tests/gen_n00b/bake.writ:66:1	bake_build
-89	tests/gen_n00b/bake.writ:67:1	bake_query
-94	tests/gen_n00b/bake.writ:68:1	bake_reopen
-99	tests/gen_n00b/bake.writ:69:1	bake_free
+52	tests/gen_n00b/bake.writ:40:1	bake_root
+70	tests/gen_n00b/bake.writ:4:1	bake_kind
+75	tests/gen_n00b/bake.writ:53:1	BAKE_QUERY_NAME
+76	tests/gen_n00b/bake.writ:54:1	BAKE_QUERY_ITEMS
+77	tests/gen_n00b/bake.writ:55:1	BAKE_QUERY_CODES
+78	tests/gen_n00b/bake.writ:56:1	BAKE_QUERY_VARIANT
+79	tests/gen_n00b/bake.writ:57:1	BAKE_QUERY_SHARED
+80	tests/gen_n00b/bake.writ:58:1	BAKE_QUERY_MIDDLE
+81	tests/gen_n00b/bake.writ:59:1	BAKE_QUERY_OP
+82	tests/gen_n00b/bake.writ:60:1	BAKE_QUERY_HASH
+83	tests/gen_n00b/bake.writ:61:1	BAKE_QUERY_CACHE
+84	tests/gen_n00b/bake.writ:62:1	BAKE_QUERY_FD
+86	tests/gen_n00b/bake.writ:64:1	bake_add
+91	tests/gen_n00b/bake.writ:65:1	bake_multiply
+96	tests/gen_n00b/bake.writ:66:1	bake_build
+107	tests/gen_n00b/bake.writ:67:1	bake_query
+115	tests/gen_n00b/bake.writ:68:1	bake_reopen
+123	tests/gen_n00b/bake.writ:69:1	bake_free
 load static
 extern __bake_add writ_bake_n00b_bake_add (int, int) -> int fail: nil
 extern __bake_multiply writ_bake_n00b_bake_multiply (int, int) -> int fail: nil
 extern __bake_build writ_bake_n00b_bake_build (ref[string], ref[uint]) -> i32 fail: nil
-extern __bake_query writ_bake_n00b_bake_query (ref[Bake_Root_T], i32) -> int fail: nil
-extern __bake_reopen writ_bake_n00b_bake_reopen (ref[Bake_Root_T]) -> i32 fail: nil
-extern __bake_free writ_bake_n00b_bake_free (ref[Bake_Root_T]) -> i32 fail: nil
+extern __bake_query writ_bake_n00b_bake_query (uint, i32) -> int fail: nil
+extern __bake_reopen writ_bake_n00b_bake_reopen (uint) -> i32 fail: nil
+extern __bake_free writ_bake_n00b_bake_free (uint) -> i32 fail: nil
