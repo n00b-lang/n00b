@@ -1,4 +1,5 @@
 import internal.color
+import internal.capability
 
 package text {
     export builtin.index_extends
@@ -15,4 +16,5 @@ package text {
     export builtin.intrinsic_tag_style
     export builtin.raw_repr_string
     export internal.color
+    export internal.capability
 }
