@@ -55,6 +55,8 @@ bool resolve_module_member_site(parse_grammar_t *grammar,
                                 parse_tree_t *node);
 bool resolve_imported_module_symbols(parse_grammar_t *grammar,
     core_list_t(core_translation_unit_ptr_t) *units);
+void mark_resolved_flagset_operator_sites(parse_grammar_t *grammar,
+    core_list_t(core_translation_unit_ptr_t) *units);
 bool module_type_universe_is_shared(
     core_list_t(core_translation_unit_ptr_t) *units);
 bool native_root_matches(core_string_t qualified, core_string_t module,
