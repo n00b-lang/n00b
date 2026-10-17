@@ -757,6 +757,43 @@ test(
 )
 
 test(
+    'import-name-clash-n00b', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'import_names' / 'import_name_clash.n',
+           '\'util\' cannot be declared here because this module imports module \'util\' (line 1)',
+           'import_name_clash.n:8:1',
+           '\'shape\' cannot be declared here',
+           'import_name_clash.n:12:1',
+           '\'limit\' cannot be declared here',
+           'import_name_clash.n:16:7',
+           '\'counter\' cannot be declared here',
+           'import_name_clash.n:18:5',
+           '\'lit\' cannot be declared here',
+           '\'verbatim\' cannot be declared here'],
+    env: ['N00B_PATH=' + (meson.current_source_dir() / 'tests'
+        / 'programs' / 'import_names')],
+    timeout: 120,
+    suite: 'slow',
+)
+
+test(
+    'import-name-clash-module-n00b', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'import_names' / 'import_name_nested.n',
+           'N00BB-M0012',
+           'module wrapper',
+           'wrapper.n:3:1'],
+    env: ['N00B_PATH=' + (meson.current_source_dir() / 'tests'
+        / 'programs' / 'import_names')],
+    timeout: 120,
+    suite: 'slow',
+)
+
+test(
     'litmod-duplicates', find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'litmod_duplicates.sh',
            n00bb_exe.full_path(),

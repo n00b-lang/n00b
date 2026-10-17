@@ -1,0 +1,9 @@
+import util
+
+public func util(text: string) -> int {
+    return 0
+}
+
+public func wrapped() -> int {
+    return util.util_value()
+}

@@ -9154,6 +9154,7 @@ initial_symbol_node(parse_visit_t *visit, bool entering, void *context)
     if (nt_is(visit->grammar, visit->node, "sym-decl")
         && declared && declared->decl_node == visit->node
         && declared->shadowed
+        && declared->shadowed->kind != PARSE_SYM_MODULE
         && declared->scope == declared->shadowed->scope) {
         core_diagnostics_report_at(
             annotations->diagnostics, annotations->diagnostic_unit,

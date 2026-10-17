@@ -1508,6 +1508,76 @@ semantic_annotate_tree(parse_grammar_t *grammar, th_ctx *types,
     return ok;
 }
 
+static void
+collect_import_statements(parse_grammar_t *grammar, parse_tree_t *node,
+                          core_list_t(n00bb_tree_ptr_t) *imports)
+{
+    if (!node || core_tree_is_leaf(node) || nt_is(grammar, node, "func-def"))
+        return;
+    if (nt_is(grammar, node, "import-stmt")) {
+        core_list_push(*imports, node);
+        return;
+    }
+    for (size_t i = 0; i < core_tree_num_children(node); i++)
+        collect_import_statements(grammar, core_tree_child(node, i), imports);
+}
+
+static void
+report_imported_module_name(core_translation_unit_t *unit,
+                            core_string_t name, parse_tree_t *import,
+                            core_diag_location_t location)
+{
+    core_diag_location_t imported = link_source_location(import);
+    core_buffer_t message = {0};
+    core_buffer_printf(&message,
+        "'%.*s' cannot be declared here because this module imports module '%.*s' (line %u)",
+        (int)name.u8_bytes, name.data, (int)name.u8_bytes, name.data,
+        imported.line);
+    core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit,
+        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-M0012"),
+        core_string_borrow(message.data, message.byte_len), location);
+    core_buffer_release(&message);
+}
+
+static bool
+reject_imported_module_names(parse_grammar_t *grammar,
+                             core_translation_unit_t *unit,
+                             n00bb_tu_state_t *state, parse_tree_t *tree)
+{
+    core_list_t(n00bb_tree_ptr_t) imports = core_list_new(n00bb_tree_ptr_t);
+    collect_import_statements(grammar, tree, &imports);
+    parse_scope_t *scopes[] = {module_scope(state), type_module_scope(state)};
+    bool distinct = true;
+    for (size_t i = 0; i < imports.len; i++) {
+        core_string_t name = first_token_text(
+            child_nt(grammar, imports.data[i], "member-chain"));
+        if (!name.u8_bytes) continue;
+        for (size_t s = 0; s < sizeof(scopes) / sizeof(scopes[0]); s++)
+            for (parse_sym_entry_t *symbol = scopes[s]
+                     ? scopes[s]->first_in_scope : nullptr;
+                 symbol; symbol = symbol->next_in_scope) {
+                if (symbol->kind == PARSE_SYM_MODULE || !symbol->decl_node
+                    || !core_string_eq(symbol->name, name)) continue;
+                report_imported_module_name(unit, name, imports.data[i],
+                    link_source_location(symbol->decl_node));
+                distinct = false;
+            }
+        for (size_t m = 0; m < state->literal_modifiers.len; m++) {
+            n00bb_user_litmod_t *litmod = &state->literal_modifiers.data[m];
+            parse_sym_entry_t *owner = litmod->declaration
+                && !core_tree_is_leaf(litmod->declaration)
+                ? core_tree_node_value(litmod->declaration).sym : nullptr;
+            if (!core_string_eq(litmod->modifier, name)
+                || (owner && core_string_eq(owner->name, name))) continue;
+            report_imported_module_name(unit, name, imports.data[i],
+                                        litmod->location);
+            distinct = false;
+        }
+    }
+    core_list_free(imports);
+    return distinct;
+}
+
 bool
 semantic_annotate_closure(parse_grammar_t *grammar, th_ctx *types,
     core_translation_unit_t *unit, n00bb_semantic_unit_finish_t finish,
@@ -1528,8 +1598,10 @@ semantic_annotate_closure(parse_grammar_t *grammar, th_ctx *types,
     n00bb_lex_result_t *lex = state->lex;
     parse_tree_t *tree = lex && lex->parser
         ? parse_pwz_get_tree(lex->parser) : nullptr;
-    if (!tree || !report_shadowed_litmods(unit, state)
-        || !semantic_annotate_tree(grammar, types, unit, tree)
+    if (!tree || !report_shadowed_litmods(unit, state)) return false;
+    bool annotated = semantic_annotate_tree(grammar, types, unit, tree);
+    if (!reject_imported_module_names(grammar, unit, state, tree)
+        || !annotated
         || !resolve_forward_literal_sites(unit, state)
         || core_translation_unit_has_fatal_diagnostics(unit)
         || core_diagnostics_failed(core_translation_unit_diagnostics(unit))
