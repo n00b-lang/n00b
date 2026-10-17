@@ -71,4 +71,5 @@ enum {
 bake_root_t *bake_build(const char *spec);
 int64_t bake_query(bake_root_t *root, int32_t key);
 int32_t bake_reopen(bake_root_t *root);
+int32_t bake_open(const char *path);
 void bake_free(bake_root_t *root);

@@ -137,8 +137,14 @@ int32_t
 bake_reopen(bake_root_t *root)
 {
     if (!root) return -1;
-    root->fd = open(root->path, O_RDONLY);
+    root->fd = bake_open(root->path);
     return root->fd >= 0 ? 0 : -1;
+}
+
+int32_t
+bake_open(const char *path)
+{
+    return path ? open(path, O_RDONLY) : -1;
 }
 
 void

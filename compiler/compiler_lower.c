@@ -4840,11 +4840,14 @@ n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
         && source_attrs == 0 && target_attrs == 0;
     ir_machine_t from_machine = ir_machine_of(context->module, from);
     ir_machine_t target_machine = ir_machine_of(context->module, target);
+    uint8_t plain_attrs = 0;
     if (unsafe_cast
         && ((foreign_pointer_type(from) && is_integer_type(target)
              && target_machine.width == 64)
             || (foreign_pointer_type(target) && is_integer_type(from)
-                && from_machine.width == 64)))
+                && from_machine.width == 64)
+            || (foreign_pointer_type(from)
+                && th_ind_attrs(target, &plain_attrs) && !plain_attrs)))
         plain_reference_cast = true;
     if (unsafe_cast && is_integer_type(from) && is_integer_type(target)) {
         ir_instr_t *cast = ir_lower_emit_instruction(context, IR_OP_CAST,
@@ -4940,7 +4943,8 @@ n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
             || !ir_instr_operand_value(cast, operands[0])
             || !ir_value_set_alias_targets(lower->ir_context, cast->dest,
                                            &alias, 1, true)
-            || (ir_value_has_external_writable_storage(operands[0])
+            || ((ir_value_has_external_writable_storage(operands[0])
+                 || foreign_pointer_type(from))
                 && !ir_value_set_external_writable_storage(lower->ir_context,
                                                              cast->dest)))
             return lower_error(context, IR_DIAG_INTERNAL, span,
@@ -10189,6 +10193,9 @@ n00bb_materialize(ir_lower_context_t *context, parse_tree_t *node,
     if (!value || !target || ir_type_eq(context->module, value->type, target))
         return value;
     th_ctx *types = ir_module_types(context->module);
+    if (!th_is_closed(types, target) && th_is_closed(types, value->type)
+        && th_unify_probe(types, target, value->type))
+        return value;
     th_type *referent = n00bb_dereference_target(types, value->type, target);
     if (referent) {
         ir_value_t *loaded = ir_lower_value_as(context, value, referent, span);
@@ -10220,10 +10227,14 @@ n00bb_materialize(ir_lower_context_t *context, parse_tree_t *node,
                                        target, span);
         ir_value_t *inner = n00bb_materialize(context, node, value,
                                               option_element, span);
-        if (!inner || !ir_type_eq(context->module, inner->type,
-                                  option_element)) return inner;
-        return n00bb_emit_wrapping(context, IR_OP_OPTION_SOME, inner, target,
-                                   span);
+        if (!inner || (!ir_type_eq(context->module, inner->type,
+                                   option_element)
+                       && (th_is_closed(types, option_element)
+                           || !th_unify_probe(types, option_element,
+                                              inner->type)))) return inner;
+        return n00bb_emit_wrapping(context, IR_OP_OPTION_SOME, inner,
+            th_is_closed(types, option_element) ? target
+                : th_option(types, inner->type), span);
     }
     ir_value_t *integer = n00bb_typed_integer_value(context, node, value,
                                                     target);

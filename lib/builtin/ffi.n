@@ -27,7 +27,73 @@ type Ffi_Hold {
 
 var ffi_holds: List[Ffi_Hold] = new[List[Ffi_Hold]]()
 var ffi_hold_groups: u64 = 0
+var ffi_fixed: List[uint] = new[List[uint]]()
 thread var ffi_unwind_top: uint = 0
+
+func fixup(modify self: `T) -> nil fail: string {
+}
+
+func ffi_run_fixup(modify value: `T) -> string? where `T : Fixup {
+    try {
+        value.fixup()!
+    } else failure {
+        return failure
+    }
+    return nil
+}
+
+func ffi_is_fixed(address: uint) -> bool {
+    var position = 0
+    while position < cast[int]ffi_fixed.len() {
+        if ffi_fixed[position] == address {
+            return true
+        }
+        position += 1
+    }
+    return false
+}
+
+public func foreign_text(pointer: Foreign[i8]?) -> string? {
+    if pointer == nil {
+        return nil
+    }
+    let base: Ref[byte] = unsafe_cast[Ref[byte]] pointer
+    var length: uint = 0
+    while true {
+        let value: byte = __gc_byte_offset(base, length)
+        if value == 0 {
+            break
+        }
+        length += 1
+    }
+    var bytes: Array[u8] = new[Array[u8]](length)
+    var position: uint = 0
+    while position < length {
+        let value: byte = __gc_byte_offset(base, position)
+        bytes[cast[int]position] = cast[u8]value
+        position += 1
+    }
+    return string.core.from_raw(bytes, cast[int]length, copy = false)
+}
+
+func __ffi_fixup(pointer: Foreign[`T]?) -> string? where `T : Fixup {
+    if pointer == nil {
+        return nil
+    }
+    let address: uint = unsafe_cast[uint] pointer
+    if !__abi_baked_address(address) or ffi_is_fixed(address) {
+        return nil
+    }
+    let target: Ref[`T] = unsafe_cast[Ref[`T]] pointer
+    var value: `T = target
+    let problem: string? = ffi_run_fixup(value)
+    if problem != nil {
+        return problem
+    }
+    ref_write(target, value)
+    ffi_fixed.append(address)
+    return nil
+}
 
 litmod<fence> ffi(source: string) -> nil fail: string {
     fail "an 'ffi literal is bound by the compiler"

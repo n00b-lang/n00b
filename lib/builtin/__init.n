@@ -20,6 +20,8 @@ package builtin {
     export string.core
     export ffi.Ffi_Bytes
     export ffi.ffi
+    export ffi.foreign_text
+    export ffi.__ffi_fixup
     export ffi.Ffi_Table
     export ffi.__ffi_table_insert
     export ffi.__ffi_table_get
