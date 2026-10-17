@@ -6,4 +6,6 @@ package sys {
     export package clock
     export package marshal
     export package fs
+    export package env
+    export package term
 }

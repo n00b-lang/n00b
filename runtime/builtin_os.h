@@ -40,6 +40,11 @@ int64_t n00b_os_open(const uint8_t *path, int64_t flags, uint32_t mode);
 int64_t n00b_os_read(int64_t fd, uint8_t *buffer, uint64_t count);
 int64_t n00b_os_close(int64_t fd);
 int64_t n00b_os_seek(int64_t fd, int64_t offset, int32_t whence);
+uint64_t n00b_os_env_count(void);
+const uint8_t *n00b_os_env_at(uint64_t index);
+int64_t n00b_os_fd_is_tty(int64_t fd);
+int64_t n00b_os_terminal_size(int64_t fd, uint16_t *rows, uint16_t *cols);
+int64_t n00b_os_pipe(int64_t *read_fd, int64_t *write_fd);
 uint64_t n00b_os_thread_control_self(void);
 void n00b_os_thread_capture_self(n00b_os_thread_context *context);
 int32_t n00b_os_thread_suspend(uint64_t control,

@@ -1,0 +1,43 @@
+import sys.env
+import sys.term
+
+func has_equals(entry: string) -> bool {
+    var i: uint = 0
+    while i < byte_len(entry) {
+        if byte_at(entry, i) == 0x3d {
+            return i > 0
+        }
+        i += 1
+    }
+    return false
+}
+
+require sys.env.count() > 0
+var i: uint = 0
+while i < sys.env.count() {
+    let entry: string? = sys.env.at(i)
+    require entry != nil
+    require has_equals(entry.get())
+    i += 1
+}
+require sys.env.at(sys.env.count()) == nil
+
+var read_fd: int = -1
+var write_fd: int = -1
+require __os_pipe(ref read_fd, ref write_fd) == 0
+try {
+    require !sys.term.fd_is_tty(read_fd)!
+} else failure {
+    require false
+}
+var rows: u16 = 0
+var cols: u16 = 0
+try {
+    sys.term.terminal_size(read_fd, rows, cols)!
+    require false
+} else failure {
+    require failure < 0
+}
+require __os_close(read_fd) == 0
+require __os_close(write_fd) == 0
+__fd_write(2, "ok")

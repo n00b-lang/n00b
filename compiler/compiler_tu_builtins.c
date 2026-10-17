@@ -231,8 +231,25 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
     th_type *read_args[] = {integer, byte_reference, uint};
     th_type *close_args[] = {integer};
     th_type *seek_args[] = {integer, integer, i32};
+    th_type *u16_reference = th_ind(types, 0, th_name(types, "u16"));
+    th_type *integer_reference = th_ind(types, 0, integer);
+    th_type *env_at_args[] = {uint};
+    th_type *terminal_size_args[] = {integer, u16_reference, u16_reference};
+    th_type *pipe_args[] = {integer_reference, integer_reference};
     return register_builtin_native_function(symtab, types, nil_type,
             "__os_page_size", "n00b_os_page_size", uint, nullptr, 0)
+        && register_builtin_native_function(symtab, types, nil_type,
+            "__os_env_count", "n00b_os_env_count", uint, nullptr, 0)
+        && register_builtin_native_function(symtab, types, nil_type,
+            "__os_env_at", "n00b_os_env_at", optional_reference,
+            env_at_args, 1)
+        && register_builtin_native_function(symtab, types, nil_type,
+            "__os_fd_is_tty", "n00b_os_fd_is_tty", integer, close_args, 1)
+        && register_builtin_native_function(symtab, types, nil_type,
+            "__os_terminal_size", "n00b_os_terminal_size", integer,
+            terminal_size_args, 3)
+        && register_builtin_native_function(symtab, types, nil_type,
+            "__os_pipe", "n00b_os_pipe", integer, pipe_args, 2)
         && register_builtin_native_function(symtab, types, nil_type,
             "__os_open", "n00b_os_open", integer, open_args, 3)
         && register_builtin_native_function(symtab, types, nil_type,

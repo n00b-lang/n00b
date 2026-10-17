@@ -190,11 +190,35 @@ static int64_t os_seek_raw(int64_t fd, int64_t offset, int32_t whence)
                                (long)whence, 0, 0, 0);
 }
 
+enum { LINUX_TCGETS = 0x5401, LINUX_TIOCGWINSZ = 0x5413, LINUX_ENOTTY = 25 };
+
+static int64_t os_fd_is_tty_raw(int64_t fd)
+{
+    uint64_t termios[8];
+    long result = n00b_linux_syscall6(__NR_ioctl, (long)fd, LINUX_TCGETS,
+                                      (long)termios, 0, 0, 0);
+    if (result >= 0) return 1;
+    return result == -LINUX_ENOTTY ? 0 : result;
+}
+
+static int64_t os_terminal_size_raw(int64_t fd, uint16_t winsize[4])
+{
+    return n00b_linux_syscall6(__NR_ioctl, (long)fd, LINUX_TIOCGWINSZ,
+                               (long)winsize, 0, 0, 0);
+}
+
+static int64_t os_pipe_raw(int32_t fds[2])
+{
+    return n00b_linux_syscall6(__NR_pipe2, (long)fds, O_CLOEXEC, 0, 0, 0, 0);
+}
+
 #elif defined(__APPLE__)
 
+#include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <termios.h>
 #include <pthread.h>
 #include <sched.h>
 #include <time.h>
@@ -275,6 +299,31 @@ static int64_t os_close_raw(int64_t fd)
 static int64_t os_seek_raw(int64_t fd, int64_t offset, int32_t whence)
 {
     return os_errno_result(lseek((int)fd, (off_t)offset, whence));
+}
+
+static int64_t os_fd_is_tty_raw(int64_t fd)
+{
+    struct termios settings;
+    int64_t result = os_errno_result(ioctl((int)fd, TIOCGETA, &settings));
+    if (result >= 0) return 1;
+    return result == -ENOTTY ? 0 : result;
+}
+
+static int64_t os_terminal_size_raw(int64_t fd, uint16_t winsize[4])
+{
+    return os_errno_result(ioctl((int)fd, TIOCGWINSZ, winsize));
+}
+
+static int64_t os_pipe_raw(int32_t fds[2])
+{
+    int pair[2];
+    int64_t result = os_errno_result(pipe(pair));
+    if (result < 0) return result;
+    (void)fcntl(pair[0], F_SETFD, FD_CLOEXEC);
+    (void)fcntl(pair[1], F_SETFD, FD_CLOEXEC);
+    fds[0] = pair[0];
+    fds[1] = pair[1];
+    return 0;
 }
 
 #elif defined(_WIN32)
@@ -380,6 +429,32 @@ static int64_t os_seek_raw(int64_t fd, int64_t offset, int32_t whence)
     return os_errno_result(_lseeki64((int)fd, offset, whence));
 }
 
+static int64_t os_fd_is_tty_raw(int64_t fd)
+{
+    return _isatty((int)fd) ? 1 : 0;
+}
+
+static int64_t os_terminal_size_raw(int64_t fd, uint16_t winsize[4])
+{
+    CONSOLE_SCREEN_BUFFER_INFO info;
+    HANDLE handle = (HANDLE)_get_osfhandle((int)fd);
+    if (handle == INVALID_HANDLE_VALUE
+        || !GetConsoleScreenBufferInfo(handle, &info)) return -25;
+    winsize[0] = (uint16_t)(info.srWindow.Bottom - info.srWindow.Top + 1);
+    winsize[1] = (uint16_t)(info.srWindow.Right - info.srWindow.Left + 1);
+    return 0;
+}
+
+static int64_t os_pipe_raw(int32_t fds[2])
+{
+    int pair[2];
+    int64_t result = os_errno_result(_pipe(pair, 65536, _O_BINARY));
+    if (result < 0) return result;
+    fds[0] = pair[0];
+    fds[1] = pair[1];
+    return 0;
+}
+
 #else
 #error "builtin/os requires macOS, Linux, or Windows"
 #endif
@@ -403,6 +478,48 @@ int64_t n00b_os_close(int64_t fd)
 int64_t n00b_os_seek(int64_t fd, int64_t offset, int32_t whence)
 {
     return os_seek_raw(fd, offset, whence);
+}
+
+extern char **environ;
+
+uint64_t n00b_os_env_count(void)
+{
+    uint64_t count = 0;
+    while (environ && environ[count]) count++;
+    return count;
+}
+
+const uint8_t *n00b_os_env_at(uint64_t index)
+{
+    return index < n00b_os_env_count()
+        ? (const uint8_t *)environ[index] : NULL;
+}
+
+int64_t n00b_os_fd_is_tty(int64_t fd)
+{
+    return os_fd_is_tty_raw(fd);
+}
+
+int64_t n00b_os_terminal_size(int64_t fd, uint16_t *rows, uint16_t *cols)
+{
+    uint16_t winsize[4] = {0};
+    if (!rows || !cols) return -14;
+    int64_t result = os_terminal_size_raw(fd, winsize);
+    if (result < 0) return result;
+    *rows = winsize[0];
+    *cols = winsize[1];
+    return 0;
+}
+
+int64_t n00b_os_pipe(int64_t *read_fd, int64_t *write_fd)
+{
+    int32_t fds[2] = {-1, -1};
+    if (!read_fd || !write_fd) return -14;
+    int64_t result = os_pipe_raw(fds);
+    if (result < 0) return result;
+    *read_fd = fds[0];
+    *write_fd = fds[1];
+    return 0;
 }
 
 size_t n00b_os_page_size(void)
