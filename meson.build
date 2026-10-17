@@ -837,9 +837,7 @@ test(
            '\'limit\' cannot be declared here',
            'import_name_clash.n:16:7',
            '\'counter\' cannot be declared here',
-           'import_name_clash.n:18:5',
-           '\'lit\' cannot be declared here',
-           '\'verbatim\' cannot be declared here'],
+           'import_name_clash.n:18:5'],
     env: ['N00B_PATH=' + (meson.current_source_dir() / 'tests'
         / 'programs' / 'import_names')],
     timeout: 120,

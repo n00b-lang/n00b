@@ -1564,6 +1564,19 @@ report_imported_module_name(core_translation_unit_t *unit,
 }
 
 static bool
+declares_litmod(n00bb_tu_state_t *state, parse_sym_entry_t *symbol)
+{
+    for (size_t m = 0; m < state->literal_modifiers.len; m++) {
+        parse_tree_t *declaration = state->literal_modifiers.data[m]
+            .declaration;
+        if (declaration && !core_tree_is_leaf(declaration)
+            && core_tree_node_value(declaration).sym == symbol)
+            return true;
+    }
+    return false;
+}
+
+static bool
 reject_imported_module_names(parse_grammar_t *grammar,
                              core_translation_unit_t *unit,
                              n00bb_tu_state_t *state, parse_tree_t *tree)
@@ -1581,22 +1594,12 @@ reject_imported_module_names(parse_grammar_t *grammar,
                      ? scopes[s]->first_in_scope : nullptr;
                  symbol; symbol = symbol->next_in_scope) {
                 if (symbol->kind == PARSE_SYM_MODULE || !symbol->decl_node
-                    || !core_string_eq(symbol->name, name)) continue;
+                    || !core_string_eq(symbol->name, name)
+                    || declares_litmod(state, symbol)) continue;
                 report_imported_module_name(unit, name, imports.data[i],
                     link_source_location(symbol->decl_node));
                 distinct = false;
             }
-        for (size_t m = 0; m < state->literal_modifiers.len; m++) {
-            n00bb_user_litmod_t *litmod = &state->literal_modifiers.data[m];
-            parse_sym_entry_t *owner = litmod->declaration
-                && !core_tree_is_leaf(litmod->declaration)
-                ? core_tree_node_value(litmod->declaration).sym : nullptr;
-            if (!core_string_eq(litmod->modifier, name)
-                || (owner && core_string_eq(owner->name, name))) continue;
-            report_imported_module_name(unit, name, imports.data[i],
-                                        litmod->location);
-            distinct = false;
-        }
     }
     core_list_free(imports);
     return distinct;
