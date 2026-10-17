@@ -582,6 +582,18 @@ test(
     suite: 'slow',
 )
 
+test(
+    'initializer-self-reference-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'features'
+               / 'initializer_self_reference.n',
+           'unresolved name \'y\''],
+    timeout: 120,
+    suite: 'slow',
+)
+
 foreach feature : ['fallible_without_result', 'try_error_binding',
                    'builtin_type_record_literal', 'record_literal_nil_option',
                    'option_literal_argument', 'record_literal_return',
@@ -589,7 +601,8 @@ foreach feature : ['fallible_without_result', 'try_error_binding',
                    'packed_record_fields', 'hash_xxh3', 'data_file',
                    'os_env_term', 'digit_separators',
                    'array_element_compound', 'array_read_store_index',
-                   'package_named_fields', 'array_declared_bounds']
+                   'package_named_fields', 'array_declared_bounds',
+                   'initializer_shadowing']
     test(
         feature.replace('_', '-'), find_program('sh'),
         args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
