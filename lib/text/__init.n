@@ -1,5 +1,6 @@
 import internal.color
 import internal.capability
+import internal.theme
 
 package text {
     export builtin.index_extends
@@ -17,4 +18,5 @@ package text {
     export builtin.raw_repr_string
     export internal.color
     export internal.capability
+    export internal.theme
 }

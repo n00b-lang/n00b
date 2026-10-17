@@ -1,0 +1,11 @@
+import text
+
+let italic: text.Text_Style = (
+    bold = nil, italic = true, underline = nil, double_underline = nil,
+    strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+    text_case = text.Text_Case.none, font_hint = text.Font_Hint.default,
+    font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil, fg_rgb = nil,
+    bg_rgb = nil, font_size = nil)
+
+text.set_role(text.theme_builtin(0), "@probe", italic)
+__fd_write(2, "FAIL theme_probe 901\n")
