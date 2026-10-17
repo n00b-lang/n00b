@@ -3622,6 +3622,29 @@ static void test_callback_semantics(void)
     close_env(e);
 }
 
+static void test_buffer_borrowing(void)
+{
+    env *e = open_env(&ir_profile_bce, "i32");
+
+    ir_instr_t *borrow = op(e, IR_OP_BUFFER_AS_STRING);
+    ir_instr_operand_value(borrow, val(e, "pkg.Buffer"));
+    ir_instr_set_dest(borrow, "text", ir_type_parse(e->m, "pkg.Text"));
+    check("borrowing a buffer as a string takes its destination type",
+          accepts_as(e, borrow, "pkg.Text"));
+
+    ir_instr_t *unnamed = op(e, IR_OP_BUFFER_AS_STRING);
+    ir_instr_operand_value(unnamed, val(e, "pkg.Buffer"));
+    check("a buffer borrow without a destination type is rejected",
+          apply(e, unnamed) == IR_RULE_REJECT);
+
+    ir_instr_t *release = op(e, IR_OP_BUFFER_BORROW_END);
+    ir_instr_operand_value(release, val(e, "pkg.Buffer"));
+    check("ending a buffer borrow has no result",
+          accepts_as(e, release, nullptr));
+
+    close_env(e);
+}
+
 
 static void report_coverage(void)
 {
@@ -3669,6 +3692,7 @@ int main(void)
     test_opaque_named();
     test_annotation_of_results();
     test_callback_semantics();
+    test_buffer_borrowing();
     report_coverage();
 
     dump_produced_codes("produced-codes-typing.txt", produced);
