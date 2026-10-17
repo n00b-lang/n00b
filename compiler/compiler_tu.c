@@ -1881,6 +1881,7 @@ unify_literal_items(th_ctx *types, literal_item_group_t *group,
         if (th_is_nil(item)) continue;
         th_type *target = payload && !n00bb_option_type_element(item, nullptr)
             ? payload : group->slot;
+        if (n00bb_value_coerces(types, item, target)) continue;
         if (!th_unify_in_place(types, target, item)) {
             *conflict = item;
             return false;
