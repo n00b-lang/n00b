@@ -6,15 +6,15 @@ import generated.decomposition
 import generated.composition
 import generated.normprops
 
-const hangul_s_base: u32 = 0xac00
-const hangul_l_base: u32 = 0x1100
-const hangul_v_base: u32 = 0x1161
-const hangul_t_base: u32 = 0x11a7
-const hangul_l_count: u32 = 19
-const hangul_v_count: u32 = 21
-const hangul_t_count: u32 = 28
-const hangul_n_count: u32 = hangul_v_count * hangul_t_count
-const hangul_s_count: u32 = hangul_l_count * hangul_n_count
+const hangul_s_base = 0xac00
+const hangul_l_base = 0x1100
+const hangul_v_base = 0x1161
+const hangul_t_base = 0x11a7
+const hangul_l_count = 19
+const hangul_v_count = 21
+const hangul_t_count = 28
+const hangul_n_count = hangul_v_count * hangul_t_count
+const hangul_s_count = hangul_l_count * hangul_n_count
 const canon_insertion_max = 32
 const nqc_yes = 0
 const nqc_maybe = 1

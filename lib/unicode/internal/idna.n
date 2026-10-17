@@ -5,24 +5,24 @@ import internal.properties
 import internal.normalization
 import generated.idna
 
-const idna_valid: u8 = 0
-const idna_ignored: u8 = 1
-const idna_mapped: u8 = 2
-const idna_deviation: u8 = 3
-const idna_disallowed: u8 = 4
-const idna_std3_valid: u8 = 5
-const idna_std3_mapped: u8 = 6
-const puny_base: i32 = 36
-const puny_tmin: i32 = 1
-const puny_tmax: i32 = 26
-const puny_skew: i32 = 38
-const puny_damp: i32 = 700
-const puny_initial_bias: i32 = 72
-const puny_initial_n: i32 = 128
-const puny_max: i32 = 0x7fffffff
-const idna_ccc_virama: u8 = 9
-const idna_max_domain: u32 = 253
-const idna_max_label: u32 = 63
+const idna_valid = 0
+const idna_ignored = 1
+const idna_mapped = 2
+const idna_deviation = 3
+const idna_disallowed = 4
+const idna_std3_valid = 5
+const idna_std3_mapped = 6
+const puny_base = 36
+const puny_tmin = 1
+const puny_tmax = 26
+const puny_skew = 38
+const puny_damp = 700
+const puny_initial_bias = 72
+const puny_initial_n = 128
+const puny_max = 0x7fffffff
+const idna_ccc_virama = 9
+const idna_max_domain = 253
+const idna_max_label = 63
 
 enum Idna_Error {
     ok = 0, disallowed, empty_label, label_too_long, punycode_error,
