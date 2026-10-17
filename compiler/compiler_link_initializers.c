@@ -139,12 +139,7 @@ publish_link_initializer_uses(core_link_unit_t *link,
             analysis, &call);
         if (call.state == CORE_LINK_DEPENDENCY_EXTERNAL
             && (link_dependency_reference_builtin(&call, nullptr)
-                || n00bb_builtin_function(callee)
-                || (call.to
-                    && core_string_eq(core_link_declaration_module(call.to),
-                        CORE_STRING_STATIC("builtins"))
-                    && core_string_eq(core_link_declaration_key(call.to),
-                            CORE_STRING_STATIC("__repr_default"))))) continue;
+                || n00bb_builtin_function(callee))) continue;
         parse_tree_t *site = (parse_tree_t *)call.source_site;
         n00bb_tu_state_t *source_state = tu_state(call.source_unit);
         parse_sym_entry_t *owner_symbol = module_variable_initializer_owner(

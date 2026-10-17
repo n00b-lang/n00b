@@ -1341,6 +1341,53 @@ interface_declaration_named(n00bb_interface_context_t *loader,
     return false;
 }
 
+static bool
+read_grant_string(const uint8_t *data, size_t size, size_t *at,
+                  core_string_t *out)
+{
+    if (*at > size || size - *at < 4) return false;
+    size_t length = read_u32_le(data + *at);
+    *at += 4;
+    if (size - *at < length) return false;
+    *out = core_string_borrow((const char *)data + *at, length);
+    *at += length;
+    return true;
+}
+
+static bool
+restore_interface_grants(n00bb_interface_context_t *loader,
+                         n00bb_tu_state_t *state, const char *package_name,
+                         n00bb_package_declaration_t *package)
+{
+    size_t size = 0;
+    const uint8_t *data = interface_owned_metadata(loader,
+        TH_ENV_METADATA_ENVIRONMENT, package_name, "n00b.package-grants", 1,
+        &size);
+    if (!data) return true;
+    if (size < 4) return false;
+    size_t count = read_u32_le(data);
+    size_t at = 4;
+    for (size_t i = 0; i < count; i++) {
+        core_string_t export_name, grantee, module, local;
+        if (!read_grant_string(data, size, &at, &export_name)
+            || !read_grant_string(data, size, &at, &grantee)
+            || !read_grant_string(data, size, &at, &module)
+            || !read_grant_string(data, size, &at, &local)) return false;
+        core_buffer_t source_name = {0};
+        core_buffer_printf(&source_name, "%.*s.%.*s",
+            (int)module.u8_bytes, module.data,
+            (int)local.u8_bytes, local.data);
+        core_list_push(package->exports, ((n00bb_package_export_t){
+            .source_name = store_semantic_string(state,
+                core_string_borrow(source_name.data, source_name.byte_len)),
+            .export_name = store_semantic_string(state, export_name),
+            .grantee = store_semantic_string(state, grantee),
+        }));
+        core_buffer_release(&source_name);
+    }
+    return at == size;
+}
+
 static n00bb_package_declaration_t *
 interface_root_package(n00bb_interface_context_t *loader,
                        n00bb_tu_state_t *state, parse_symtab_t *symtab,
@@ -1375,8 +1422,13 @@ interface_root_package(n00bb_interface_context_t *loader,
     if (!scope) return nullptr;
     core_list_push(state->package_declarations,
         ((n00bb_package_declaration_t){.name = root, .scope = scope}));
-    return &state->package_declarations.data[
+    n00bb_package_declaration_t *package = &state->package_declarations.data[
         state->package_declarations.len - 1];
+    char *root_name = core_strndup(root.data, root.u8_bytes);
+    bool restored = root_name
+        && restore_interface_grants(loader, state, root_name, package);
+    core_free(root_name);
+    return restored ? package : nullptr;
 }
 
 static bool

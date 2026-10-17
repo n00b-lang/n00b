@@ -286,18 +286,18 @@ register_builtin_abi_symbols(parse_symtab_t *symtab, th_ctx *types,
     th_type *uint = th_name(types, "uint");
     th_type *typespec = th_name(types, "typespec");
     const char *record_names[] = {
-        "sys.internal.abi.Type_Record",
-        "sys.internal.abi.Field_Record",
-        "sys.internal.abi.Trace_Record",
-        "sys.internal.abi.Trace_Child_Record",
-        "sys.internal.abi.Trace_Arm_Record",
-        "sys.internal.abi.Tag_Extractor_Record",
-        "sys.internal.abi.Frame_Layout_Record",
-        "sys.internal.abi.Storage_Record",
-        "sys.internal.abi.Symbol_Record",
-        "sys.internal.abi.Module_Record",
-        "sys.internal.abi.Baked_Node_Record",
-        "sys.internal.abi.Function_Record",
+        "builtin.abi.Type_Record",
+        "builtin.abi.Field_Record",
+        "builtin.abi.Trace_Record",
+        "builtin.abi.Trace_Child_Record",
+        "builtin.abi.Trace_Arm_Record",
+        "builtin.abi.Tag_Extractor_Record",
+        "builtin.abi.Frame_Layout_Record",
+        "builtin.abi.Storage_Record",
+        "builtin.abi.Symbol_Record",
+        "builtin.abi.Module_Record",
+        "builtin.abi.Baked_Node_Record",
+        "builtin.abi.Function_Record",
     };
     const char *names[] = {
         "__abi_type", "__abi_field", "__abi_trace", "__abi_trace_child",
@@ -336,7 +336,7 @@ register_builtin_abi_symbols(parse_symtab_t *symtab, th_ctx *types,
     th_type *bytes_result = byte_reference
         ? th_option(types, byte_reference) : nullptr;
     th_type *native_frame = th_name(types,
-        "sys.internal.abi.Native_Frame_Record");
+        "builtin.abi.Native_Frame_Record");
     th_type *native_frame_reference = native_frame
         ? th_ind(types, 0, native_frame) : nullptr;
     th_type *native_frame_result = native_frame_reference
@@ -846,18 +846,6 @@ register_builtin_symbols(parse_annot_result_t *annotations,
     th_type *option_get_or_else_contract = option_get_or_else_signature
         ? th_env_signature_contract(types, option_get_or_else_signature,
                                     nil_type) : nullptr;
-    th_type *i32_type = th_name(types, "i32");
-    th_type *repr_item = th_var(types);
-    th_param repr_parameters[] = {
-        {.mode = TH_IN, .type = repr_item},
-        {.mode = TH_IN, .type = i32_type},
-    };
-    th_type *repr_signature = repr_item && i32_type
-        ? th_func_with_error(types, i32_type, nil_type, repr_parameters,
-                             2, nullptr, nullptr, 0) : nullptr;
-    th_type *repr_contract = repr_signature
-        ? th_env_signature_contract(types, repr_signature, nil_type)
-        : nullptr;
     th_type *array_item = th_var(types);
     th_type *array_type = th_array(types, array_item);
     th_type *array_write_index = n00bb_array_index_type(
@@ -900,7 +888,7 @@ register_builtin_symbols(parse_annot_result_t *annotations,
         || !option_get_signature || !option_get_or_else_signature
         || !option_is_nil_contract || !option_get_contract
         || !option_get_or_else_contract
-        || !repr_contract || !array_read_contract
+        || !array_read_contract
         || !array_write_contract)
         return false;
 
@@ -950,9 +938,6 @@ register_builtin_symbols(parse_annot_result_t *annotations,
         PARSE_SYM_FUNCTION, nullptr);
     parse_sym_entry_t *array_read_symbol = parse_symtab_add(symtab,
         CORE_STRING_STATIC("builtin"), CORE_STRING_STATIC("__array_read"),
-        PARSE_SYM_FUNCTION, nullptr);
-    parse_sym_entry_t *repr_symbol = parse_symtab_add(symtab,
-        CORE_STRING_STATIC("builtin"), CORE_STRING_STATIC("__repr_default"),
         PARSE_SYM_FUNCTION, nullptr);
     parse_sym_entry_t *init_symbol = parse_symtab_add(symtab,
         CORE_STRING_STATIC("builtin"), CORE_STRING_STATIC("init"),
@@ -1008,7 +993,6 @@ register_builtin_symbols(parse_annot_result_t *annotations,
     if (!symbol || !read_symbol || !write_symbol || !option_is_nil_symbol
         || !option_get_symbol || !option_get_or_else_symbol
         || !array_read_symbol || !array_write_symbol
-        || !repr_symbol
         || !init_symbol || !init_contract
         || !os_builtins_registered || !abi_builtins_registered
         || !gc_builtins_registered || !unsafe_arithmetic_registered
@@ -1045,12 +1029,6 @@ register_builtin_symbols(parse_annot_result_t *annotations,
     if (!parse_sym_set_binding(array_write_symbol,
             CORE_STRING_STATIC("n00bb.array.write"),
             array_write_symbol)) return false;
-    repr_symbol->type = repr_signature;
-    repr_symbol->error_type = nil_type;
-    repr_symbol->callable_contract = repr_contract;
-    if (!parse_sym_set_binding(repr_symbol,
-            CORE_STRING_STATIC("n00bb.abi.repr_default"),
-            (void *)"n00bb_bootstrap_repr_default")) return false;
     init_symbol->type = init_signature;
     init_symbol->error_type = nil_type;
     init_symbol->callable_contract = init_contract;
@@ -1064,7 +1042,6 @@ register_builtin_symbols(parse_annot_result_t *annotations,
         && option_get_or_else_symbol->callable_contract
         && array_read_symbol->callable_contract
         && array_write_symbol->callable_contract
-        && repr_symbol->callable_contract
         && init_symbol->callable_contract;
 }
 
@@ -1633,8 +1610,7 @@ register_builtin_traits(th_env *environment, th_ctx *types,
 bool
 n00bb_builtin_function(parse_sym_entry_t *symbol)
 {
-    return n00bb_builtin_repr_default_function(symbol)
-        || n00bb_builtin_native_function(symbol)
+    return n00bb_builtin_native_function(symbol)
         || (symbol && symbol->kind == PARSE_SYM_FUNCTION
         && !symbol->decl_node && symbol->scope && !symbol->scope->parent
         && symbol->scope->ns
@@ -1660,15 +1636,6 @@ n00bb_builtin_function(parse_sym_entry_t *symbol)
             || n00bb_builtin_atomic_access_function(symbol)
             || n00bb_builtin_callback_function(symbol)
             || n00bb_builtin_init_function(symbol)));
-}
-
-bool
-n00bb_builtin_repr_default_function(parse_sym_entry_t *symbol)
-{
-    return symbol && symbol->kind == PARSE_SYM_FUNCTION
-        && !symbol->decl_node
-        && parse_sym_binding(symbol,
-            CORE_STRING_STATIC("n00bb.abi.repr_default"));
 }
 
 bool

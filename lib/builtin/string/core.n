@@ -196,6 +196,21 @@ func __fd_write(fd: i32, s: string) -> i32 {
     return cast[i32] len
 }
 
+func __fd_write_bytes(fd: i32, bytes: Array[u8], start: uint, end: uint)
+    -> i32 {
+    require start <= end and end <= __array_length(bytes)
+    if start == end {
+        return 0
+    }
+    if !write_all(fd, unsafe_cast[Ref[byte]] ref bytes[start], end - start) {
+        return -1
+    }
+    if end - start > fd_chunk_limit {
+        return cast[i32] fd_chunk_limit
+    }
+    return cast[i32] (end - start)
+}
+
 func encoding(self: string) -> Str_Encoding {
     return cast[Str_Encoding] __string_encoding_bits(text(self))
 }

@@ -324,26 +324,8 @@ func xxh3_128(bytes: Array[byte]) -> u128 {
 }
 
 func hash_value(self: `T) -> u128 {
-    var copy: `T = self
-    let place: bitptr.Bitptr = bitptr.bitptr(ref copy)
-    let start: uint = cast[uint] place.start_bit
-    let width: uint = cast[uint] place.end_bit - start
-    require width > 0 and width <= 128
-    var canonical: u128 = 0
-    var i: uint = 0
-    while 8 * i < start + width {
-        let b: u128 = cast[u128] in8(place.base, i)
-        if 8 * i >= start {
-            canonical = canonical | unsafe_shl(b, 8 * i - start)
-        }
-        else {
-            canonical = canonical | (b >> start)
-        }
-        i += 1
-    }
-    if width < 128 {
-        canonical = canonical & (unsafe_shl(cast[u128] 1, width) - 1)
-    }
+    var width: uint = 0
+    var canonical: u128 = bitptr.load_bits(self, width)
     return xxh3_128_at(unsafe_cast[Ref[byte]] ref canonical, (width + 7) / 8)
 }
 

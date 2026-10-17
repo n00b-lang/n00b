@@ -906,10 +906,6 @@ diagnose_unused_link_symbols(parse_grammar_t *grammar,
                             CORE_STRING_STATIC("start"))
                         || core_string_eq(symbol->name,
                             CORE_STRING_STATIC("comptime_start")))) continue;
-                if (core_string_eq(unit->module.identifier,
-                        CORE_STRING_STATIC("builtin.io.raw"))
-                    && core_string_eq(symbol->name,
-                        CORE_STRING_STATIC("__raw_repr_dispatch"))) continue;
                 bool native_root = false;
                 core_string_t module_name = unit->module.identifier;
                 for (size_t r = 0; r < analysis->native_root_count; r++) {

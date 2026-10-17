@@ -1265,6 +1265,18 @@ resolve_module_member_site(parse_grammar_t *grammar,
     bool package_export = core_string_eq(exposed_scope->scope_tag,
                                          CORE_STRING_STATIC(
                                              "package-interface"));
+    core_string_t consumer_package = n00bb_package_namespace(unit);
+    parse_sym_entry_t *granted = !symbol && !type
+        && consumer_package.u8_bytes
+        ? granted_export_symbol(imported, member, consumer_package) : nullptr;
+    if (granted && granted->kind == PARSE_SYM_TYPEDEF) {
+        type = granted;
+        package_export = true;
+    }
+    else if (granted) {
+        symbol = granted;
+        package_export = true;
+    }
     if (type_reference || (!symbol && type)) {
         bool visible = type && type->kind == PARSE_SYM_TYPEDEF
             && (package_export
@@ -2995,7 +3007,7 @@ register_link_declarations(core_link_unit_t *link, parse_grammar_t *grammar,
 
     static const char *builtin_names[] = {
         "has_type", "ref_read", "ref_write",
-        "__repr_default", "__gc_byte_offset", "__gc_byte_diff",
+        "__gc_byte_offset", "__gc_byte_diff",
         "__count_leading_zeros", "__count_trailing_zeros",
         "__gc_memset", "__gc_memcpy",
         "__gc_invoke_finalizer",
@@ -3025,8 +3037,6 @@ register_link_declarations(core_link_unit_t *link, parse_grammar_t *grammar,
             if (!n00bb_builtin_function(symbol) || !symbol->uses) continue;
             core_string_t name = symbol->name;
             bool selected = parse_sym_binding(symbol,
-                    CORE_STRING_STATIC("n00bb.abi.repr_default"))
-                || parse_sym_binding(symbol,
                     CORE_STRING_STATIC("n00bb.abi.native"))
                 || n00bb_builtin_unsafe_arithmetic(symbol);
             for (size_t b = 0; !selected

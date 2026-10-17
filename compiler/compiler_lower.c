@@ -10463,7 +10463,6 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                 "builtin array read could not retain element shape");
         return (ir_lower_result_t){IR_LOWER_VALUE, read->dest};
     }
-    bool repr_default_builtin = n00bb_builtin_repr_default_function(symbol);
     bool native_builtin = n00bb_builtin_native_function(symbol);
     bool reference_builtin = n00bb_builtin_reference_function(symbol);
     bool byte_offset_builtin = n00bb_builtin_byte_offset_function(symbol);
@@ -10499,8 +10498,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
             "an option's value requires it to be proven non-nil by the "
             "active branch");
-    bool no_function_body = repr_default_builtin
-        || native_builtin
+    bool no_function_body = native_builtin
         || reference_builtin || byte_offset_builtin || byte_diff_builtin
         || unsafe_arithmetic
         || bit_count_builtin
@@ -10608,13 +10606,9 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
             return lower_error(context, IR_DIAG_INTERNAL, span,
                 "could not retain builtin trait method requirement");
     }
-    if (repr_default_builtin || native_builtin) {
-        const char *key = repr_default_builtin ? "n00bb.abi.repr_default"
-                                               : "n00bb.abi.native";
-        const char *native_name = parse_sym_binding(symbol,
-            core_string_from_cstr(key));
-        const char *ir_name = repr_default_builtin
-            ? "__n00bb_bootstrap_repr_default" : native_name;
+    if (native_builtin) {
+        const char *ir_name = parse_sym_binding(symbol,
+            CORE_STRING_STATIC("n00bb.abi.native"));
         ir_func_t *function = ir_func_find(context->module, ir_name);
         if (!function) {
             th_type *declaration = th_type_clone(
@@ -10625,11 +10619,11 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         }
         if (function && !ir_annot_set(lower->ir_context,
                 &function->annots, (ir_annot_t){
-                    .key = key,
+                    .key = "n00bb.abi.native",
                     .kind = IR_ANNOT_STR,
-                    .s = native_name,
+                    .s = ir_name,
                 })) return lower_error(context, IR_DIAG_INTERNAL, span,
-                    "could not annotate the bootstrap IO function");
+                    "could not annotate a native function");
         if (function && parse_sym_binding(symbol,
                 CORE_STRING_STATIC("n00bb.native.collection-free"))
             && !ir_annot_set(lower->ir_context, &function->annots,
@@ -10643,7 +10637,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
             ? ir_func_address(context->module, function) : nullptr;
         if (!callee_value)
             return lower_error(context, IR_DIAG_INTERNAL, span,
-                "could not declare the bootstrap IO function");
+                "could not declare a native function");
     }
     core_tree_node_value(call_node).type = signature_return;
     parse_tree_t *args = call_label

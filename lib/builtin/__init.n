@@ -13,10 +13,27 @@ import ffi
 import panic
 import string.core
 import bitptr
+import abi
 
 package builtin {
     export bitptr.Bitptr
     export bitptr.bitptr
+    export abi.Type_Kind to sys
+    export abi.Range to sys
+    export abi.String_Bits to sys
+    export abi.Type_Record to sys
+    export abi.Field_Record to sys
+    export abi.Trace_Record to sys
+    export abi.Trace_Child_Record to sys
+    export abi.Trace_Arm_Record to sys
+    export abi.Tag_Extractor_Record to sys
+    export abi.Frame_Layout_Record to sys
+    export abi.Native_Frame_Record to sys
+    export abi.Storage_Record to sys
+    export abi.Symbol_Record to sys
+    export abi.Module_Record to sys
+    export abi.Function_Record to sys
+    export abi.Baked_Node_Record to sys
     export containers.array.copy_items to sys.abi
     export containers.array.compare_items to sys.abi
     export containers.list.list_with_length to sys.abi

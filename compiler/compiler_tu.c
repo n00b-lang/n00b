@@ -2953,20 +2953,6 @@ function_parameter_info(parse_grammar_t *grammar, parse_sym_entry_t *symbol,
         if (signature)
             formals = child_nt(grammar, signature, "trait-param-decl");
     }
-    if (symbol && parse_sym_binding(symbol,
-            CORE_STRING_STATIC("n00bb.abi.repr_default"))) {
-        th_type *signature = th_resolve(symbol->type);
-        const th_param *parameter = signature
-            && th_kind_of(signature) == TH_FUNCTION
-            ? th_func_param(signature, index) : nullptr;
-        if (!parameter) return false;
-        if (formal_out) *formal_out = nullptr;
-        if (name) *name = nullptr;
-        if (name_size) *name_size = 0;
-        if (flags) *flags = 0;
-        if (mode) *mode = parameter->mode;
-        return true;
-    }
     th_type *callback_public = n00bb_builtin_callback_function(symbol)
         ? parse_sym_binding(symbol,
             CORE_STRING_STATIC("n00bb.callback-public-signature")) : nullptr;
@@ -8581,7 +8567,9 @@ type_symbol_in_loaded_imports(core_translation_unit_t *root, th_ctx *types,
             if (!type_ns || scope->ns != type_ns) continue;
             for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
                  symbol = symbol->next_in_scope) {
-                if (!symbol->type || symbol->kind != PARSE_SYM_TYPEDEF)
+                if (!symbol->type || symbol->kind != PARSE_SYM_TYPEDEF
+                    || alias_declaration_is_transparent(
+                        canonical_symbol(symbol)->decl_node))
                     continue;
                 th_type *candidate = th_resolve(symbol->type);
                 const char *candidate_name = nullptr;

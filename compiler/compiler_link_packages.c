@@ -1360,6 +1360,49 @@ register_package_context_effect_metadata(n00bb_link_analysis_t *analysis)
     return true;
 }
 
+static bool
+append_grant_string(core_buffer_t *payload, core_string_t text)
+{
+    if (text.u8_bytes > UINT32_MAX
+        || !append_u32_le(payload, (uint32_t)text.u8_bytes)) return false;
+    core_buffer_append(payload, text.data, text.u8_bytes);
+    return true;
+}
+
+static bool
+register_package_grants(n00bb_link_analysis_t *analysis, th_env *environment,
+                        n00bb_package_declaration_t *package)
+{
+    uint32_t count = 0;
+    core_buffer_t entries = {0};
+    bool ok = true;
+    for (size_t e = 0; ok && e < package->exports.len; e++) {
+        n00bb_package_export_t *export = &package->exports.data[e];
+        if (!export->grantee.data || !export->symbol) continue;
+        parse_sym_entry_t *source = canonical_symbol(export->symbol);
+        core_translation_unit_t *source_unit = source
+            ? unit_for_symbol(analysis->grammar, &analysis->units, source)
+            : nullptr;
+        ok = source_unit
+            && append_grant_string(&entries, export->export_name)
+            && append_grant_string(&entries, export->grantee)
+            && append_grant_string(&entries, source_unit->module.identifier)
+            && append_grant_string(&entries, source->name);
+        count++;
+    }
+    core_buffer_t payload = {0};
+    if (ok && count) {
+        ok = append_u32_le(&payload, count);
+        if (ok) core_buffer_append(&payload, entries.data, entries.byte_len);
+        if (ok) ok = th_env_register_metadata(environment,
+            TH_ENV_METADATA_ENVIRONMENT, package->name.data,
+            "n00b.package-grants", 1, payload.data, payload.byte_len);
+    }
+    core_buffer_release(&payload);
+    core_buffer_release(&entries);
+    return ok;
+}
+
 bool
 register_package_interfaces(n00bb_link_analysis_t *analysis,
                             th_env *environment)
@@ -1376,6 +1419,8 @@ register_package_interfaces(n00bb_link_analysis_t *analysis,
                     TH_ENV_METADATA_ENVIRONMENT,
                     package->name.data, "n00b.package-interface", 1,
                     package_id.data, package_id.u8_bytes + 1)) return false;
+            if (!register_package_grants(analysis, environment, package))
+                return false;
             parse_scope_t *scopes[] = {
                 package->scope,
                 parse_symtab_scope_in_namespace(state->annotations->symtab,
@@ -1667,7 +1712,11 @@ lookup_export_symbol_in_scope(parse_symtab_t *symtab, parse_scope_t *scope,
     return value ? value : type;
 }
 
-static parse_sym_entry_t *
+static int resolve_one_package_export(core_translation_unit_t *unit,
+                                      n00bb_package_declaration_t *package,
+                                      n00bb_package_export_t *export);
+
+parse_sym_entry_t *
 granted_export_symbol(core_translation_unit_t *provider, core_string_t name,
                       core_string_t grantee)
 {
@@ -1677,10 +1726,12 @@ granted_export_symbol(core_translation_unit_t *provider, core_string_t name,
             &state->package_declarations.data[p];
         for (size_t e = 0; e < package->exports.len; e++) {
             n00bb_package_export_t *export = &package->exports.data[e];
-            if (export->symbol && export->grantee.data
-                && core_string_eq(export->grantee, grantee)
-                && core_string_eq(export->export_name, name))
-                return export->symbol;
+            if (!export->grantee.data
+                || !core_string_eq(export->grantee, grantee)
+                || !core_string_eq(export->export_name, name)) continue;
+            if (!export->symbol && export->source_name.data)
+                (void)resolve_one_package_export(provider, package, export);
+            if (export->symbol) return export->symbol;
         }
     }
     return nullptr;

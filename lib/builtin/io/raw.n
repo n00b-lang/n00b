@@ -1,17 +1,257 @@
 import string.core
+import bitptr
+import abi
 
 trait Raw_Repr {
     func raw_repr(self: `T, fd: i32) -> i32
 }
+
+private const signed_flag: u32 = 1
+private const hex_digits: Array[u8] = [
+    0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37,
+    0x38, 0x39, 0x61, 0x62, 0x63, 0x64, 0x65, 0x66,
+]'array
 
 func raw_repr(self: string, fd: i32) -> i32 {
     return string.core.__fd_write(fd, self)
 }
 
 func raw_repr(self: `T, fd: i32) -> i32 {
-    return __repr_default(self, fd)
+    typecase self {
+        case bool {
+            if self {
+                return string.core.__fd_write(fd, "True")
+            }
+            return string.core.__fd_write(fd, "False")
+        }
+        case f32 {
+            var width: uint = 0
+            let bits: u128 = bitptr.load_bits(self, width)
+            return emit_float(fd, cast[f64] self, (bits >> 31) & 1 != 0,
+                (bits >> 23) & 0xff == 0xff, bits & 0x7fffff != 0)
+        }
+        case f64 {
+            var width: uint = 0
+            let bits: u128 = bitptr.load_bits(self, width)
+            return emit_float(fd, self, (bits >> 63) & 1 != 0,
+                (bits >> 52) & 0x7ff == 0x7ff,
+                bits & 0x000fffffffffffff != 0)
+        }
+        case Ref[`R] {
+            return emit_address(fd, cast[u64] __abi_ref_address(self))
+        }
+        case Array[`E] {
+            return emit_array(fd, self)
+        }
+        else {
+            return emit_default(fd, self)
+        }
+    }
 }
 
 func __raw_repr_dispatch(value: Raw_Repr, fd: i32) -> i32 {
     return value.raw_repr(fd)
+}
+
+private func push(modify buf: Array[u8], modify at: uint, b: u8) {
+    buf[at] = b
+    at += 1
+}
+
+private func push_word(modify buf: Array[u8], modify at: uint, word: string) {
+    let n: uint = string.core.byte_len(word)
+    var i: uint = 0
+    while i < n {
+        push(buf, at, string.core.byte_at(word, i))
+        i += 1
+    }
+}
+
+private func push_unsigned(modify buf: Array[u8], modify at: uint,
+                           value: u64) {
+    var digits: Array[u8] = new[Array[u8]](20)
+    var start: uint = 20
+    var rest: u64 = value
+    start -= 1
+    digits[start] = 0x30 + cast[u8] (rest % 10)
+    rest = rest / 10
+    while rest != 0 {
+        start -= 1
+        digits[start] = 0x30 + cast[u8] (rest % 10)
+        rest = rest / 10
+    }
+    while start < 20 {
+        push(buf, at, digits[start])
+        start += 1
+    }
+}
+
+private func push_fraction(modify buf: Array[u8], modify at: uint,
+                           value: f64) {
+    var fraction: f64 = value
+    let dot: uint = at
+    push(buf, at, 0x2e)
+    var i: uint = 0
+    while i < 6 {
+        fraction = fraction * 10.0
+        var digit: int = cast[int] fraction
+        if digit < 0 {
+            digit = 0
+        }
+        if digit > 9 {
+            digit = 9
+        }
+        push(buf, at, 0x30 + cast[u8] digit)
+        fraction = fraction - cast[f64] digit
+        i += 1
+    }
+    while at > dot + 2 and buf[at - 1] == 0x30 {
+        at -= 1
+    }
+}
+
+private func emit_float(fd: i32, value: f64, negative: bool, special: bool,
+                        payload: bool) -> i32 {
+    var buf: Array[u8] = new[Array[u8]](64)
+    var at: uint = 0
+    var magnitude: f64 = value
+    if negative {
+        push(buf, at, 0x2d)
+        magnitude = -magnitude
+    }
+    if special {
+        if payload {
+            push_word(buf, at, "nan")
+        }
+        else {
+            push_word(buf, at, "infinity")
+        }
+        return string.core.__fd_write_bytes(fd, buf, 0, at)
+    }
+    if magnitude == 0.0 {
+        push_word(buf, at, "0.0")
+        return string.core.__fd_write_bytes(fd, buf, 0, at)
+    }
+    var scaled: f64 = magnitude
+    var exponent: int = 0
+    while scaled >= 10.0 {
+        scaled = scaled / 10.0
+        exponent += 1
+    }
+    while scaled < 1.0 {
+        scaled = scaled * 10.0
+        exponent -= 1
+    }
+    if exponent < -4 or exponent >= 6 {
+        let first: int = cast[int] scaled
+        push(buf, at, 0x30 + cast[u8] first)
+        push_fraction(buf, at, scaled - cast[f64] first)
+        push(buf, at, 0x65)
+        if exponent < 0 {
+            push(buf, at, 0x2d)
+            exponent = -exponent
+        }
+        push_unsigned(buf, at, cast[u64] exponent)
+    }
+    else {
+        let whole: u64 = cast[u64] magnitude
+        push_unsigned(buf, at, whole)
+        push_fraction(buf, at, magnitude - cast[f64] whole)
+    }
+    return string.core.__fd_write_bytes(fd, buf, 0, at)
+}
+
+private func emit_address(fd: i32, address: u64) -> i32 {
+    var buf: Array[u8] = new[Array[u8]](16)
+    var rest: u64 = address
+    var i: uint = 16
+    while i > 0 {
+        i -= 1
+        buf[i] = hex_digits[rest & 15]
+        rest = rest >> 4
+    }
+    return string.core.__fd_write_bytes(fd, buf, 0, 16)
+}
+
+private func emit_integer(fd: i32, bits: u128, width: uint, signed: bool)
+    -> i32 {
+    var magnitude: u128 = bits
+    var negative: bool = false
+    if signed and (bits >> (width - 1)) & 1 != 0 {
+        negative = true
+        if width < 128 {
+            magnitude = magnitude | ~(unsafe_shl(cast[u128] 1, width) - 1)
+        }
+        magnitude = unsafe_sub(cast[u128] 0, magnitude)
+    }
+    var buf: Array[u8] = new[Array[u8]](40)
+    var start: uint = 40
+    start -= 1
+    buf[start] = 0x30 + cast[u8] (magnitude % 10)
+    magnitude = magnitude / 10
+    while magnitude != 0 {
+        start -= 1
+        buf[start] = 0x30 + cast[u8] (magnitude % 10)
+        magnitude = magnitude / 10
+    }
+    if negative {
+        start -= 1
+        buf[start] = 0x2d
+    }
+    return string.core.__fd_write_bytes(fd, buf, start, 40)
+}
+
+private func emit_array(fd: i32, items: Array[`E]) -> i32 {
+    var written: int = cast[int] string.core.__fd_write(fd, "[")
+    if written < 0 {
+        return -1
+    }
+    let count: uint = __array_length(items)
+    var i: uint = 0
+    while i < count {
+        if i != 0 {
+            if string.core.__fd_write(fd, ", ") < 0 {
+                return -1
+            }
+            written += 2
+        }
+        let part: i32 = __raw_repr_dispatch(items[i], fd)
+        if part < 0 {
+            return -1
+        }
+        written += cast[int] part
+        if written > 0x7fffffff {
+            return -1
+        }
+        i += 1
+    }
+    if string.core.__fd_write(fd, "]") < 0 or written == 0x7fffffff {
+        return -1
+    }
+    return cast[i32] (written + 1)
+}
+
+private func emit_default(fd: i32, self: `T) -> i32 {
+    let found: Ref[abi.Type_Record]? = __abi_type_for(typeof(self))
+    require found != nil
+    let row: Ref[abi.Type_Record] = found.get()
+    let width_bits: u32 = row.semantic_width_bits
+    let primitive: bool = row.kind == cast[u32] abi.Type_Kind.primitive_type
+    if primitive and width_bits != 0 and width_bits <= 128 {
+        var width: uint = 0
+        let bits: u128 = bitptr.load_bits(self, width)
+        return emit_integer(fd, bits, cast[uint] width_bits,
+            row.flags & signed_flag != 0)
+    }
+    let name: string = unsafe_cast[Ref[string]] (ref row.canonical_name)
+    if string.core.__fd_write(fd, "<") < 0 {
+        return -1
+    }
+    if string.core.__fd_write(fd, name) < 0 {
+        return -1
+    }
+    if string.core.__fd_write(fd, ">") < 0 {
+        return -1
+    }
+    return cast[i32] (string.core.byte_len(name) + 2)
 }

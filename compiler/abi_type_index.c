@@ -440,7 +440,8 @@ append_call_specialization(n00bb_abi_type_index_t *index,
         ? callee->owner : nullptr;
     th_type *actual = ir_instr_call_signature(instruction);
     th_ctx *types = ir_module_types(index->module);
-    if (!target || !target->type || !actual) return true;
+    if (!target || !target->type || !actual
+        || th_is_closed(types, target->type)) return true;
     if (count && !th_is_closed(types, actual))
         actual = th_type_clone_replacing(types, actual, from, to, count);
     if (!actual) return false;

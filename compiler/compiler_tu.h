@@ -862,7 +862,6 @@ bool prepare_callback_call_symbols(core_translation_unit_t *unit);
 bool n00bb_bind_callback_call(n00bb_tu_state_t *state,
                               n00bb_link_use_site_t *site);
 bool n00bb_builtin_function(parse_sym_entry_t *symbol);
-bool n00bb_builtin_repr_default_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_native_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_init_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_array_read_function(parse_sym_entry_t *symbol);
