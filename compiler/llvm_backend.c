@@ -815,7 +815,9 @@ packed_option_type(ir_module_t *module, th_type *type,
         || !outer->has_discriminant || outer->discriminant_is_niche
         || !ir_layout_final_byte_extent(outer, &outer_bytes)
         || !ir_layout_final_byte_extent(inner, &inner_bytes)
-        || outer_bytes != inner_bytes || !outer_bytes
+        || (aggregate_payload ? outer_bytes < inner_bytes
+                              : outer_bytes != inner_bytes)
+        || !outer_bytes
         || (!aggregate_payload && outer_bytes > 16)
         || outer->intrinsic_bits > outer_bytes * 8
         || inner->intrinsic_bits > inner_bytes * 8
@@ -7364,7 +7366,15 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             instruction->dest->type, LLVMGetModuleContext(state->module));
         if (!source || !target
             || LLVMGetTypeKind(target) == LLVMVoidTypeKind) break;
+        LLVMTypeKind source_kind = LLVMGetTypeKind(LLVMTypeOf(source));
+        LLVMTypeKind target_kind = LLVMGetTypeKind(target);
         result = LLVMTypeOf(source) == target ? source
+            : source_kind == LLVMPointerTypeKind
+                && target_kind == LLVMIntegerTypeKind
+            ? LLVMBuildPtrToInt(state->builder, source, target, "address")
+            : source_kind == LLVMIntegerTypeKind
+                && target_kind == LLVMPointerTypeKind
+            ? LLVMBuildIntToPtr(state->builder, source, target, "pointer")
             : LLVMBuildBitCast(state->builder, source, target, "bitcast");
         return save_result(state, instruction, result);
     }

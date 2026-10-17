@@ -1,3 +1,5 @@
+#define _GNU_SOURCE
+#include <dlfcn.h>
 #include "builtin_abi.h"
 
 const n00b_abi_type_v1 *
@@ -137,4 +139,13 @@ uint64_t
 n00b_builtin_abi_ref_address(const void *value)
 {
     return (uint64_t)(uintptr_t)value;
+}
+
+const uint8_t *
+n00b_builtin_native_symbol_name(uint64_t address)
+{
+    Dl_info info = {0};
+    if (!dladdr((const void *)(uintptr_t)address, &info) || !info.dli_sname
+        || (uint64_t)(uintptr_t)info.dli_saddr != address) return NULL;
+    return (const uint8_t *)info.dli_sname;
 }

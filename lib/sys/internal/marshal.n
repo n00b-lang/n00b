@@ -14,6 +14,11 @@ type Graph_Node {
     type_index: u32
     flags:      u32
     copy:       Ref[byte]?
+    count:         u64
+    merged_into: i64
+    merged_offset:  uint
+    parent:        i64
+    parent_offset: uint
 }
 
 type Graph_Edge {
@@ -35,6 +40,13 @@ type Graph_Slot {
     table:  u32
     kind:   u32
     index:  u32
+    native: Ref[byte]?
+}
+
+type Capture_Failure {
+    node:    u32
+    offset:  uint
+    message: string
 }
 
 type Graph {
@@ -45,6 +57,7 @@ type Graph {
     roots:   List[Graph_Root]
     slots:   List[Graph_Slot]
     pending: List[u32]
+    failure: Capture_Failure?
 }
 
 func type_row(type_index: u32) -> Ref[internal.abi.Type_Record] {
@@ -59,7 +72,7 @@ func new_graph(copying: bool) -> Graph {
     return (heap = mutator.get().heap, copying = copying,
             nodes = new[List[Graph_Node]](), edges = new[List[Graph_Edge]](),
             roots = new[List[Graph_Root]](), slots = new[List[Graph_Slot]](),
-            pending = new[List[u32]]())
+            pending = new[List[u32]](), failure = nil)
 }
 
 func node_containing(graph: Ref[Graph], address: uint) -> i64 {
@@ -95,7 +108,8 @@ func add_node(graph: Ref[Graph], base: Ref[byte], size: uint, alignment: u32,
     }
     let node: Graph_Node = (base = base, size = size, alignment = alignment,
                             typehash = typehash, type_index = type_index,
-                            flags = flags, copy = copy)
+                            flags = flags, copy = copy, count = 1, merged_into = -1,
+                            merged_offset = 0, parent = -1, parent_offset = 0)
     graph.nodes.append(node)
     if trace and (!graph.copying or copy != nil) {
         graph.pending.append(index)
@@ -200,7 +214,8 @@ func add_slot(graph: Ref[Graph], source: u32, address: Ref[byte],
     let base: uint = __abi_ref_address(graph.nodes[cast[int]source].base)
     let slot: Graph_Slot = (node = source,
                             offset = __abi_ref_address(address) - base,
-                            table = table, kind = kind, index = index)
+                            table = table, kind = kind, index = index,
+                            native = nil)
     graph.slots.append(slot)
 }
 
@@ -246,12 +261,260 @@ func redirect(graph: Ref[Graph], slot: Ref[byte], target: u32,
     internal.gc.alloc.barrier_pointer_runtime(moved)
 }
 
+func node_offset(graph: Ref[Graph], node: u32, address: Ref[byte]) -> uint {
+    return __abi_ref_address(address) - __abi_ref_address(graph.nodes[cast[int]node].base)
+}
+
+func set_origin(graph: Ref[Graph], node: u32, parent: u32, slot: Ref[byte]) {
+    var entry: Graph_Node = graph.nodes[cast[int]node]
+    entry.parent = cast[i64]parent
+    entry.parent_offset = node_offset(graph, parent, slot)
+    graph.nodes[cast[int]node] = entry
+}
+
+func fail_capture(graph: Ref[Graph], source: u32, slot: Ref[byte],
+                  message: string) {
+    if graph.failure == nil {
+        graph.failure = (node = source, offset = node_offset(graph, source, slot),
+                         message = message)
+    }
+}
+
+func foreign_target(type_index: u32) -> u32 {
+    let row: Ref[internal.abi.Type_Record] = type_row(type_index)
+    if row.kind == cast[u32](internal.abi.Type_Kind.foreign_type) {
+        return type_index
+    }
+    if row.kind == cast[u32](internal.abi.Type_Kind.option_type) {
+        let inner: i64 = internal.abi.range_index(row.components, 0)
+        if inner > 0 and type_row(cast[u32]inner).kind ==
+            cast[u32](internal.abi.Type_Kind.foreign_type) {
+            return cast[u32]inner
+        }
+    }
+    return 0
+}
+
+func scalar_width(row: Ref[internal.abi.Type_Record]) -> u32 {
+    if row.kind != cast[u32](internal.abi.Type_Kind.primitive_type) and
+        row.kind != cast[u32](internal.abi.Type_Kind.enum_type) {
+        return 0
+    }
+    let width: u32 = cast[u32]row.size_bits
+    if width == 8 or width == 16 or width == 32 or width == 64 {
+        return width
+    }
+    return 0
+}
+
+func sentinel_count(pointer: Ref[byte], element: Ref[internal.abi.Type_Record],
+                    sentinel: u64) -> u64 {
+    let width: u32 = scalar_width(element)
+    if width == 0 {
+        return 0
+    }
+    var mask: u64 = 0xffffffffffffffff
+    if width < 64 {
+        mask = (cast[u64]1 << cast[u64]width) - 1
+    }
+    let stride: uint = internal.abi.size_bytes(element)
+    var count: u64 = 0
+    while true {
+        let value: u64 = internal.gc.mark.trace_unit(
+            __gc_byte_offset(pointer, cast[uint]count * stride), width)
+        count += 1
+        if value == (sentinel & mask) {
+            return count
+        }
+    }
+    return 0
+}
+
+func foreign_node(graph: Ref[Graph], source: u32, slot: Ref[byte],
+                  pointer: Ref[byte], size: uint, element_index: u32) -> i64 {
+    let start: uint = __abi_ref_address(pointer)
+    let end:   uint = start + size
+    var low: uint = start
+    var high: uint = end
+    var low_base: Ref[byte] = pointer
+    var overlaps: List[u32] = new[List[u32]]()
+    var index: int = 0
+    while index < cast[int]graph.nodes.len() {
+        let node: Graph_Node = graph.nodes[index]
+        if (node.flags & internal.abi.baked_foreign) != 0 and node.merged_into < 0 {
+            let base: uint = __abi_ref_address(node.base)
+            let top:  uint = base + node.size
+            if start < top and base < end {
+                if base <= start and end <= top {
+                    return cast[i64]index
+                }
+                overlaps.append(cast[u32]index)
+                if base < low {
+                    low = base
+                    low_base = node.base
+                }
+                if top > high {
+                    high = top
+                }
+            }
+        }
+        index += 1
+    }
+    let element: Ref[internal.abi.Type_Record] = type_row(element_index)
+    let stride: uint = internal.abi.size_bytes(element)
+    var ordinal: int = 0
+    while ordinal < cast[int]overlaps.len() {
+        let other: Graph_Node = graph.nodes[cast[int]overlaps[ordinal]]
+        if other.type_index != element_index or
+            (__abi_ref_address(other.base) - low) % stride != 0 {
+            fail_capture(graph, source, slot,
+                "points into a block that another pointer reaches as a different type")
+            return -1
+        }
+        ordinal += 1
+    }
+    let created: u32 = add_node(graph, low_base, high - low,
+        cast[u32]internal.abi.alignment_bytes(element), element_index,
+        internal.abi.baked_foreign, true)
+    var entry: Graph_Node = graph.nodes[cast[int]created]
+    entry.count = cast[u64]((high - low) / stride)
+    graph.nodes[cast[int]created] = entry
+    set_origin(graph, created, source, slot)
+    ordinal = 0
+    while ordinal < cast[int]overlaps.len() {
+        absorb(graph, overlaps[ordinal], created)
+        ordinal += 1
+    }
+    return cast[i64]created
+}
+
+func absorb(graph: Ref[Graph], node: u32, into: u32) {
+    var entry: Graph_Node = graph.nodes[cast[int]node]
+    entry.merged_into = cast[i64]into
+    entry.merged_offset = __abi_ref_address(entry.base) -
+        __abi_ref_address(graph.nodes[cast[int]into].base)
+    graph.nodes[cast[int]node] = entry
+    var edges: List[Graph_Edge] = new[List[Graph_Edge]]()
+    var index: int = 0
+    while index < cast[int]graph.edges.len() {
+        let edge: Graph_Edge = graph.edges[index]
+        if edge.source != node {
+            edges.append(edge)
+        }
+        index += 1
+    }
+    graph.edges = edges
+    var slots: List[Graph_Slot] = new[List[Graph_Slot]]()
+    index = 0
+    while index < cast[int]graph.slots.len() {
+        let slot: Graph_Slot = graph.slots[index]
+        if slot.node != node {
+            slots.append(slot)
+        }
+        index += 1
+    }
+    graph.slots = slots
+}
+
+func visit_foreign(graph: Ref[Graph], source: u32, parent: Ref[byte],
+                   slot: Ref[byte], foreign_index: u32,
+                   child: Ref[internal.abi.Trace_Child_Record]?) {
+    if graph.copying {
+        return
+    }
+    let found: Ref[byte]? = __atomic_load(internal.gc.mark.pointer_word_at(slot))
+    if found == nil {
+        return
+    }
+    let pointer: Ref[byte] = found.get()
+    let element_index: i64 = internal.abi.range_index(
+        type_row(foreign_index).components, 0)
+    require element_index > 0
+    let element: Ref[internal.abi.Type_Record] = type_row(cast[u32]element_index)
+    if element.kind == cast[u32](internal.abi.Type_Kind.function_type) {
+        let name: Ref[byte]? = __native_symbol_name(__abi_ref_address(pointer))
+        if name == nil {
+            fail_capture(graph, source, slot,
+                "points to a function that has no exported symbol")
+            return
+        }
+        let entry: Graph_Slot = (node = source,
+                                 offset = node_offset(graph, source, slot),
+                                 table = internal.abi.table_native, kind = 0,
+                                 index = 0, native = name)
+        graph.slots.append(entry)
+        return
+    }
+    if element.alignment_bytes == 0 or element.size_bits == 0 or
+        (element.flags & internal.abi.type_flag_opaque) != 0 {
+        fail_capture(graph, source, slot,
+            "points to memory that has no description")
+        return
+    }
+    var count: u64 = 1
+    if child != nil {
+        let extent: Ref[internal.abi.Trace_Child_Record] = child.get()
+        if extent.extent_form == internal.abi.extent_count_field {
+            count = internal.gc.mark.trace_unit(
+                __gc_byte_offset(parent, cast[uint]extent.count_field_offset),
+                extent.count_field_bits)
+        }
+        if extent.extent_form == internal.abi.extent_sentinel {
+            count = sentinel_count(pointer, element, extent.sentinel)
+            if count == 0 {
+                fail_capture(graph, source, slot,
+                    "has an 'until' sentinel on elements that are not integers")
+                return
+            }
+        }
+    }
+    if count == 0 {
+        fail_capture(graph, source, slot,
+            "points to an empty array, which cannot be baked")
+        return
+    }
+    let target: i64 = foreign_node(graph, source, slot, pointer,
+        cast[uint]count * internal.abi.size_bytes(element),
+        cast[u32]element_index)
+    if target >= 0 {
+        add_edge(graph, source, slot, cast[u32]target, pointer)
+    }
+}
+
+func visit_record_arm(graph: Ref[Graph], source: u32, address: Ref[byte],
+                      trace: Ref[internal.abi.Trace_Record]) {
+    let found: Ref[internal.abi.Tag_Extractor_Record]? = internal.abi.tag_extractor_at(
+        trace.tag_extractor_index)
+    require found != nil
+    let tag: Ref[internal.abi.Tag_Extractor_Record] = found.get()
+    let active: u64 = (internal.gc.mark.trace_unit(
+        __gc_byte_offset(address, tag.unit_byte_offset), tag.unit_width_bits)
+        & tag.mask) >> tag.lsb_position
+    var ordinal: u32 = 0
+    while ordinal < trace.arms.count {
+        let index: i64 = internal.abi.range_index(trace.arms, ordinal)
+        require index > 0
+        let arm: Ref[internal.abi.Trace_Arm_Record]? = internal.abi.trace_arm_at(
+            cast[u32]index)
+        require arm != nil
+        if cast[u64](arm.get().tag_value) == active {
+            visit_children(graph, source, address, arm.get().children)
+            return
+        }
+        ordinal += 1
+    }
+}
+
 func visit_pointer(graph: Ref[Graph], source: u32, slot: Ref[byte],
                    pointer: Ref[byte]?) {
     if pointer == nil {
         return
     }
+    let known: int = cast[int]graph.nodes.len()
     let target: i64 = target_node(graph, pointer.get())
+    if target >= cast[i64]known {
+        set_origin(graph, cast[u32]target, source, slot)
+    }
     if graph.copying {
         if target >= 0 {
             redirect(graph, slot, cast[u32]target, pointer.get())
@@ -298,12 +561,18 @@ func visit_children(graph: Ref[Graph], source: u32, address: Ref[byte],
         if count == 0 {
             count = 1
         }
+        let foreign: u32 = foreign_target(child.child_type_index)
         var repetition: u64 = 0
         while repetition < count {
             let offset: uint = cast[uint](child.byte_offset +
                 repetition * (child.stride_bits / 8))
-            visit_value(graph, source, __gc_byte_offset(address, offset),
-                        child.child_type_index)
+            if foreign != 0 {
+                visit_foreign(graph, source, address,
+                              __gc_byte_offset(address, offset), foreign, child)
+            } else {
+                visit_value(graph, source, __gc_byte_offset(address, offset),
+                            child.child_type_index)
+            }
             repetition += 1
         }
         ordinal += 1
@@ -417,6 +686,11 @@ func visit_value(graph: Ref[Graph], source: u32, address: Ref[byte],
     if row.tracing_index == 0 {
         return
     }
+    let foreign: u32 = foreign_target(type_index)
+    if foreign != 0 {
+        visit_foreign(graph, source, address, address, foreign, nil)
+        return
+    }
     if (row.flags & internal.abi.type_flag_type_index) != 0 {
         add_slot(graph, source, address, internal.abi.table_type,
                  internal.abi.patch_index, u32_at(address))
@@ -450,6 +724,9 @@ func visit_value(graph: Ref[Graph], source: u32, address: Ref[byte],
     if row.kind == cast[u32](internal.abi.Type_Kind.record_type) or
         row.kind == cast[u32](internal.abi.Type_Kind.tuple_type) {
         visit_children(graph, source, address, trace.get().fixed_children)
+        if trace.get().tag_extractor_index != 0 {
+            visit_record_arm(graph, source, address, trace.get())
+        }
         return
     }
     if row.kind == cast[u32](internal.abi.Type_Kind.variant_type) {
@@ -477,6 +754,21 @@ func trace_node(graph: Ref[Graph], index: u32) {
     var base: Ref[byte] = node.base
     if node.copy != nil {
         base = node.copy.get()
+    }
+    if (node.flags & internal.abi.baked_foreign) != 0 {
+        let element: Ref[internal.abi.Type_Record] = type_row(node.type_index)
+        if node.merged_into >= 0 or element.tracing_index == 0 {
+            return
+        }
+        let stride: uint = internal.abi.size_bytes(element)
+        var ordinal: u64 = 0
+        while ordinal < node.count {
+            visit_value(graph, index,
+                __gc_byte_offset(base, cast[uint]ordinal * stride),
+                node.type_index)
+            ordinal += 1
+        }
+        return
     }
     if (node.flags & internal.abi.baked_array_backing) != 0 {
         let shape: Ref[internal.abi.Array_Descriptor_Header] = internal.gc.core.array_descriptor_at(base)
@@ -529,27 +821,57 @@ func write_string(address: Ref[byte]) {
     }
 }
 
+func resolved_node(graph: Ref[Graph], node: u32) -> u32 {
+    var current: u32 = node
+    while graph.nodes[cast[int]current].merged_into >= 0 {
+        current = cast[u32]graph.nodes[cast[int]current].merged_into
+    }
+    return current
+}
+
+func resolved_offset(graph: Ref[Graph], node: u32, offset: uint) -> uint {
+    var current: u32 = node
+    var total: uint = offset
+    while graph.nodes[cast[int]current].merged_into >= 0 {
+        total += graph.nodes[cast[int]current].merged_offset
+        current = cast[u32]graph.nodes[cast[int]current].merged_into
+    }
+    return total
+}
+
 func write_graph(graph: Ref[Graph]) {
-    write_word(cast[u64]graph.nodes.len(), 8)
+    var numbers: List[u32] = new[List[u32]]()
+    var kept: u32 = 0
     var index: int = 0
     while index < cast[int]graph.nodes.len() {
+        numbers.append(kept)
+        if graph.nodes[index].merged_into < 0 {
+            kept += 1
+        }
+        index += 1
+    }
+    write_word(cast[u64]kept, 8)
+    index = 0
+    while index < cast[int]graph.nodes.len() {
         let node: Graph_Node = graph.nodes[index]
-        write_word(cast[u64]node.size, 8)
-        write_word(cast[u64]node.alignment, 4)
-        write_word(node.typehash, 8)
-        write_type_name(node.type_index)
-        write_word(cast[u64]node.flags, 4)
-        write_block(node.base, node.size)
+        if node.merged_into < 0 {
+            write_word(cast[u64]node.size, 8)
+            write_word(cast[u64]node.alignment, 4)
+            write_word(node.typehash, 8)
+            write_type_name(node.type_index)
+            write_word(cast[u64]node.flags, 4)
+            write_block(node.base, node.size)
+        }
         index += 1
     }
     write_word(cast[u64]graph.edges.len(), 8)
     index = 0
     while index < cast[int]graph.edges.len() {
         let edge: Graph_Edge = graph.edges[index]
-        write_word(cast[u64]edge.source, 4)
-        write_word(cast[u64]edge.source_offset, 8)
-        write_word(cast[u64]edge.target, 4)
-        write_word(cast[u64]edge.target_offset, 8)
+        write_word(cast[u64]numbers[cast[int]resolved_node(graph, edge.source)], 4)
+        write_word(cast[u64]resolved_offset(graph, edge.source, edge.source_offset), 8)
+        write_word(cast[u64]numbers[cast[int]resolved_node(graph, edge.target)], 4)
+        write_word(cast[u64]resolved_offset(graph, edge.target, edge.target_offset), 8)
         index += 1
     }
     write_word(cast[u64]graph.roots.len(), 8)
@@ -558,15 +880,135 @@ func write_graph(graph: Ref[Graph]) {
         let root: Graph_Root = graph.roots[index]
         write_string(root.module_path)
         write_string(root.name)
-        write_word(cast[u64]root.node, 4)
+        write_word(cast[u64]numbers[cast[int]resolved_node(graph, root.node)], 4)
         index += 1
     }
     write_word(cast[u64]graph.slots.len(), 8)
     index = 0
     while index < cast[int]graph.slots.len() {
-        write_slot(graph.slots[index])
+        var slot: Graph_Slot = graph.slots[index]
+        slot.offset = resolved_offset(graph, slot.node, slot.offset)
+        slot.node = numbers[cast[int]resolved_node(graph, slot.node)]
+        write_slot(slot)
         index += 1
     }
+}
+
+func write_c_string(text: Ref[byte]) {
+    var length: uint = 0
+    while true {
+        let value: byte = __gc_byte_offset(text, length)
+        if value == 0 {
+            write_word(cast[u64]length, 8)
+            write_block(text, length)
+            return
+        }
+        length += 1
+    }
+}
+
+func write_field_path(type_index: u32, offset: uint) {
+    var current: u32 = type_index
+    var at: uint = offset
+    while true {
+        let row: Ref[internal.abi.Type_Record] = type_row(current)
+        if row.kind == cast[u32](internal.abi.Type_Kind.option_type) or
+            row.kind == cast[u32](internal.abi.Type_Kind.wrapper_type) or
+            row.kind == cast[u32](internal.abi.Type_Kind.atomic_type) {
+            let inner: i64 = internal.abi.range_index(row.components, 0)
+            if inner <= 0 {
+                return
+            }
+            current = cast[u32]inner
+        } elif row.kind == cast[u32](internal.abi.Type_Kind.record_type) or
+            row.kind == cast[u32](internal.abi.Type_Kind.tuple_type) {
+            var found: Ref[internal.abi.Field_Record]? = nil
+            var ordinal: u32 = 0
+            while found == nil and ordinal < row.fields_or_arms.count {
+                let field_index: i64 = internal.abi.range_index(row.fields_or_arms, ordinal)
+                let field: Ref[internal.abi.Field_Record]? = internal.abi.field_at(
+                    cast[u32]field_index)
+                if field != nil {
+                    let start: uint = cast[uint](field.get().logical_bit_offset / 8)
+                    var extent: uint = 0
+                    if field.get().inline_element_count != 0 {
+                        extent = cast[uint](field.get().inline_element_count *
+                            field.get().inline_element_stride_bits / 8)
+                    } else {
+                        extent = internal.abi.size_bytes(type_row(field.get().child_type_index))
+                    }
+                    if at >= start and at < start + extent {
+                        found = field
+                    }
+                }
+                ordinal += 1
+            }
+            if found == nil {
+                return
+            }
+            let field: Ref[internal.abi.Field_Record] = found.get()
+            write_word(1, 4)
+            write_string(unsafe_cast[Ref[byte]] (ref field.name))
+            at -= cast[uint](field.logical_bit_offset / 8)
+            if field.inline_element_count != 0 {
+                let stride: uint = cast[uint](field.inline_element_stride_bits / 8)
+                write_word(2, 4)
+                write_word(cast[u64](at / stride), 8)
+                at = at % stride
+                current = field.inline_element_type_index
+            } else {
+                current = field.child_type_index
+            }
+        } else {
+            return
+        }
+    }
+}
+
+func write_failure(graph: Ref[Graph]) {
+    let recorded: Capture_Failure? = graph.failure
+    require recorded != nil
+    let failure: Capture_Failure = recorded.get()
+    var hops: List[u32] = new[List[u32]]()
+    var offsets: List[uint] = new[List[uint]]()
+    var node: u32 = failure.node
+    var offset: uint = failure.offset
+    while true {
+        let entry: Graph_Node = graph.nodes[cast[int]node]
+        hops.append(node)
+        offsets.append(offset)
+        if entry.parent < 0 {
+            break
+        }
+        offset = entry.parent_offset
+        node = cast[u32]entry.parent
+    }
+    write_word(0xffffffffffffffff, 8)
+    var root_index: int = 0
+    while root_index < cast[int]graph.roots.len() and
+        graph.roots[root_index].node != node {
+        root_index += 1
+    }
+    require root_index < cast[int]graph.roots.len()
+    write_string(graph.roots[root_index].module_path)
+    write_string(graph.roots[root_index].name)
+    var hop: int = cast[int]hops.len() - 1
+    while hop >= 0 {
+        let entry: Graph_Node = graph.nodes[cast[int]hops[hop]]
+        var at: uint = offsets[hop]
+        if (entry.flags & internal.abi.baked_foreign) != 0 and entry.count > 1 {
+            let stride: uint = internal.abi.size_bytes(type_row(entry.type_index))
+            write_word(2, 4)
+            write_word(cast[u64](at / stride), 8)
+            at = at % stride
+        }
+        if entry.type_index != 0 and (entry.flags & internal.abi.baked_array_backing) == 0 {
+            write_field_path(entry.type_index, at)
+        }
+        hop -= 1
+    }
+    write_word(0, 4)
+    write_string(unsafe_cast[Ref[byte]] (ref failure.message))
 }
 
 func write_type_name(type_index: u32) {
@@ -582,6 +1024,12 @@ func write_slot(slot: Graph_Slot) {
     write_word(cast[u64]slot.offset, 8)
     write_word(cast[u64]slot.table, 4)
     write_word(cast[u64]slot.kind, 4)
+    if slot.table == internal.abi.table_native {
+        let text: Ref[byte]? = slot.native
+        require text != nil
+        write_c_string(text.get())
+        return
+    }
     if slot.table == internal.abi.table_type {
         write_word(type_row(slot.index).typehash, 8)
         write_type_name(slot.index)
@@ -628,5 +1076,9 @@ func capture_consts() {
         storage_index += 1
     }
     drain(ref graph)
+    if graph.failure != nil {
+        write_failure(ref graph)
+        return
+    }
     write_graph(ref graph)
 }

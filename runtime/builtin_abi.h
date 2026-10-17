@@ -25,5 +25,6 @@ const uint8_t *n00b_builtin_abi_bytes(uint32_t first, uint32_t count);
 int64_t n00b_builtin_abi_range_index(uint32_t first, uint32_t count,
                                       uint32_t ordinal);
 uint64_t n00b_builtin_abi_ref_address(const void *value);
+const uint8_t *n00b_builtin_native_symbol_name(uint64_t address);
 
 #endif

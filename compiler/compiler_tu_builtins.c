@@ -314,7 +314,14 @@ register_builtin_abi_symbols(parse_symtab_t *symtab, th_ctx *types,
     th_type *reference = item ? th_ind(types, 0, item) : nullptr;
     th_type *address_args[] = {reference};
     th_type *storage_args[] = {u32};
+    th_type *baked_args[] = {th_name(types, "uint")};
     return register_builtin_native_function(symtab, types, nil_type,
+            "__abi_baked_address", "n00b_abi_baked_address",
+            th_name(types, "bool"), baked_args, 1)
+        && register_builtin_native_function(symtab, types, nil_type,
+            "__native_symbol_name", "n00b_builtin_native_symbol_name",
+            bytes_result, baked_args, 1)
+        && register_builtin_native_function(symtab, types, nil_type,
             "__abi_native_frame_at", "n00b_builtin_abi_native_frame_at",
             native_frame_result, native_frame_args, 3)
         && register_builtin_native_function(symtab, types, nil_type,

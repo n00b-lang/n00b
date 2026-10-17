@@ -4794,6 +4794,18 @@ n00bb_lower_enum_from_value(ir_lower_context_t *context,
     return (ir_lower_result_t){IR_LOWER_VALUE, converted};
 }
 
+static bool
+foreign_pointer_type(th_type *type)
+{
+    th_type *element = nullptr;
+    th_type *resolved = th_resolve(type);
+    if (n00bb_option_type_element(resolved, &element))
+        resolved = th_resolve(element);
+    uint8_t attrs = 0;
+    return th_kind_of(resolved) == TH_INDIRECTION
+        && th_ind_attrs(resolved, &attrs) && (attrs & TH_FOREIGN);
+}
+
 static ir_lower_result_t
 n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
                  ir_value_t *const *operands, size_t operand_count,
@@ -4826,6 +4838,14 @@ n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
     bool plain_reference_cast = th_ind_attrs(from, &source_attrs)
         && th_ind_attrs(target, &target_attrs)
         && source_attrs == 0 && target_attrs == 0;
+    ir_machine_t from_machine = ir_machine_of(context->module, from);
+    ir_machine_t target_machine = ir_machine_of(context->module, target);
+    if (unsafe_cast
+        && ((foreign_pointer_type(from) && is_integer_type(target)
+             && target_machine.width == 64)
+            || (foreign_pointer_type(target) && is_integer_type(from)
+                && from_machine.width == 64)))
+        plain_reference_cast = true;
     if (unsafe_cast && is_integer_type(from) && is_integer_type(target)) {
         ir_instr_t *cast = ir_lower_emit_instruction(context, IR_OP_CAST,
                                                      span);
@@ -13078,7 +13098,18 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
             lower->unit, receiver_node,
             lower_span_for_tree(context, receiver_node)) : nullptr;
     parse_sym_phase_t phase = n00bb_compile_phase();
-    if (!receiver_symbol || !parse_sym_can_write(receiver_symbol, phase)
+    bool through_reference = false;
+    for (parse_tree_t *member = receiver_member; member && !through_reference;
+         member = member_access_node(grammar, core_tree_child(member, 0))) {
+        parse_tree_t *base = core_tree_num_children(member)
+            ? core_tree_child(member, 0) : nullptr;
+        th_type *base_type = base
+            ? th_resolve(core_tree_node_value(base).type) : nullptr;
+        through_reference = base_type
+            && th_kind_of(base_type) == TH_INDIRECTION;
+    }
+    if (!receiver_symbol
+        || (!through_reference && !parse_sym_can_write(receiver_symbol, phase))
         || (receiver_field && receiver_field->is_field
             && receiver_field->mutability != PARSE_SYM_MUTABLE)
         || (!receiver_local && !receiver_global && !receiver_address
@@ -19562,18 +19593,6 @@ n00bb_dump_ir(const n00bb_link_analysis_t *analysis)
         core_free(text);
     }
     return analysis != nullptr;
-}
-
-static bool
-foreign_pointer_type(th_type *type)
-{
-    th_type *element = nullptr;
-    th_type *resolved = th_resolve(type);
-    if (n00bb_option_type_element(resolved, &element))
-        resolved = th_resolve(element);
-    uint8_t attrs = 0;
-    return th_kind_of(resolved) == TH_INDIRECTION
-        && th_ind_attrs(resolved, &attrs) && (attrs & TH_FOREIGN);
 }
 
 static bool

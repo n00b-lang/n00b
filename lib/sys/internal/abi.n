@@ -228,6 +228,11 @@ public const patch_box_type:      u32 = 2
 public const binding_const:       u32 = 3
 public const baked_immutable:     u32 = 1
 public const baked_array_backing: u32 = 2
+public const baked_foreign:       u32 = 4
+public const table_native:        u32 = 19
+public const type_flag_opaque:    u32 = 1 << 1
+public const extent_count_field:  u32 = 1
+public const extent_sentinel:     u32 = 2
 
 func type_at(index: u32) -> Ref[Type_Record]? {
     return __abi_type(index)
@@ -301,6 +306,22 @@ func baked_node_at(index: u32) -> Ref[Baked_Node_Record]? {
 
 func baked_node_address(index: u32) -> Ref[byte]? {
     return __abi_baked_node_address(index)
+}
+
+func baked_address(address: uint) -> bool {
+    var index: u32 = 1
+    while index < baked_node_count() {
+        let row: Ref[Baked_Node_Record]? = baked_node_at(index)
+        let base: Ref[byte]? = baked_node_address(index)
+        if row != nil and base != nil {
+            let start: uint = __abi_ref_address(base.get())
+            if address >= start and address < start + cast[uint]row.get().byte_length {
+                return true
+            }
+        }
+        index += 1
+    }
+    return false
 }
 
 func storage_address(index: u32) -> Ref[byte]? {
