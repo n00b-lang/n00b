@@ -1,0 +1,716 @@
+import internal.types
+import internal.encoding
+import internal.properties
+import generated.grapheme
+import generated.incb
+import generated.wordbreak
+import generated.sentbreak
+
+private inline func break_stage_ix(stage1: Array[u16], cp: char) -> u32 {
+    let v: u32 = cast[u32] cp
+    return cast[u32] stage1[v >> 8] * 256 + (v & 0xff)
+}
+
+func grapheme_break(cp: char) -> internal.types.Gcb {
+    if cast[u32] cp >= internal.properties.max_cp {
+        return internal.types.Gcb.other
+    }
+
+    return cast[internal.types.Gcb] generated.grapheme.gcb_stage2[
+        break_stage_ix(generated.grapheme.gcb_stage1, cp)]
+}
+
+func incb(cp: char) -> internal.types.Incb {
+    if cast[u32] cp >= internal.properties.max_cp {
+        return internal.types.Incb.none
+    }
+
+    return cast[internal.types.Incb] generated.incb.incb_stage2[
+        break_stage_ix(generated.incb.incb_stage1, cp)]
+}
+
+private func is_ep(cp: char) -> bool {
+    return internal.properties.has_property(cp,
+        internal.types.Property.extended_pictographic)
+}
+
+private func grapheme_is_break(it: internal.types.Break_Iter,
+                               prev: internal.types.Gcb,
+                               cur: internal.types.Gcb,
+                               cur_incb: internal.types.Incb) -> bool {
+    if prev == internal.types.Gcb.cr and cur == internal.types.Gcb.lf {
+        return false
+    }
+
+    if prev == internal.types.Gcb.control or prev == internal.types.Gcb.cr or
+        prev == internal.types.Gcb.lf {
+        return true
+    }
+
+    if cur == internal.types.Gcb.control or cur == internal.types.Gcb.cr or
+        cur == internal.types.Gcb.lf {
+        return true
+    }
+
+    if prev == internal.types.Gcb.l and
+        (cur == internal.types.Gcb.l or cur == internal.types.Gcb.v or
+        cur == internal.types.Gcb.lv or cur == internal.types.Gcb.lvt) {
+        return false
+    }
+
+    if (prev == internal.types.Gcb.lv or prev == internal.types.Gcb.v) and
+        (cur == internal.types.Gcb.v or cur == internal.types.Gcb.t) {
+        return false
+    }
+
+    if (prev == internal.types.Gcb.lvt or prev == internal.types.Gcb.t) and
+        cur == internal.types.Gcb.t {
+        return false
+    }
+
+    if cur == internal.types.Gcb.extend or cur == internal.types.Gcb.zwj {
+        return false
+    }
+
+    if cur == internal.types.Gcb.spacingmark {
+        return false
+    }
+
+    if prev == internal.types.Gcb.prepend {
+        return false
+    }
+
+    if cur_incb == internal.types.Incb.consonant and it.incb_linker_seen {
+        return false
+    }
+
+    if prev == internal.types.Gcb.regional_indicator and
+        cur == internal.types.Gcb.regional_indicator {
+        return (it.ri_count % 2) == 0
+    }
+
+    return true
+}
+
+func grapheme_iter(s: string) -> internal.types.Break_Iter {
+    let it: internal.types.Break_Iter = (text = s,
+        kind = internal.types.Break_Type.grapheme, byte_pos = 0, ri_count = 0,
+        after_zwj = false, ep_before_zwj = false, incb_consonant_base = false,
+        incb_linker_seen = false, prev_wb = internal.types.Wb.other,
+        prev_prev_wb = internal.types.Wb.other,
+        prev_prev_sb = internal.types.Sb.other, sb_term_phase = 0,
+        sb_is_aterm = false)
+    return it
+}
+
+private func next_char(it: internal.types.Break_Iter, modify pos: u32) -> char? {
+    try {
+        let rc: char = internal.encoding.utf8_decode(it.text, pos)!
+        return rc
+    } else failure {
+        return nil
+    }
+}
+
+func word_break(cp: char) -> internal.types.Wb {
+    if cast[u32] cp >= internal.properties.max_cp {
+        return internal.types.Wb.other
+    }
+
+    return cast[internal.types.Wb] generated.wordbreak.wb_stage2[
+        break_stage_ix(generated.wordbreak.wb_stage1, cp)]
+}
+
+func word_iter(s: string) -> internal.types.Break_Iter {
+    let it: internal.types.Break_Iter = (text = s,
+        kind = internal.types.Break_Type.word, byte_pos = 0, ri_count = 0,
+        after_zwj = false, ep_before_zwj = false, incb_consonant_base = false,
+        incb_linker_seen = false, prev_wb = internal.types.Wb.other,
+        prev_prev_wb = internal.types.Wb.other,
+        prev_prev_sb = internal.types.Sb.other, sb_term_phase = 0,
+        sb_is_aterm = false)
+    return it
+}
+
+private func wb_transparent(w: internal.types.Wb) -> bool {
+    return w == internal.types.Wb.extend or w == internal.types.Wb.format or
+        w == internal.types.Wb.zwj
+}
+
+private func wb_ahletter(w: internal.types.Wb) -> bool {
+    return w == internal.types.Wb.aletter or w == internal.types.Wb.hebrew_letter
+}
+
+private func wb_lookahead_is(it: internal.types.Break_Iter,
+                             a: internal.types.Wb,
+                             b: internal.types.Wb) -> bool {
+    let len: uint = byte_len(it.text)
+    var la: u32 = it.byte_pos
+    var found: bool = false
+    var going: bool = true
+
+    while going and cast[uint] la < len {
+        let c: char? = next_char(it, la)
+
+        if c == nil {
+            going = false
+
+            continue
+        }
+
+        let w: internal.types.Wb = word_break(c.get())
+
+        if wb_transparent(w) {
+            continue
+        }
+
+        found = w == a or w == b
+        going = false
+    }
+
+    return found
+}
+
+private func word_next(modify it: internal.types.Break_Iter, first_cp: char) -> u32? {
+    let len: uint = byte_len(it.text)
+    var prev_wb: internal.types.Wb = word_break(first_cp)
+    var ri_count: u32 = 0
+    if prev_wb == internal.types.Wb.regional_indicator {
+        ri_count = 1
+    }
+    var prev_zwj: bool = prev_wb == internal.types.Wb.zwj
+
+    it.prev_prev_wb = internal.types.Wb.other
+    it.prev_wb = prev_wb
+
+    var running: bool = true
+
+    while running and cast[uint] it.byte_pos < len {
+        let save: u32 = it.byte_pos
+        let n: char? = next_char(it, it.byte_pos)
+
+        if n == nil {
+            running = false
+
+            continue
+        }
+
+        let ncp: char = n.get()
+        let cur_wb: internal.types.Wb = word_break(ncp)
+
+        if prev_wb == internal.types.Wb.cr and cur_wb == internal.types.Wb.lf {
+            prev_wb = cur_wb
+            prev_zwj = false
+            ri_count = 0
+
+            continue
+        }
+
+        if prev_wb == internal.types.Wb.newline or prev_wb == internal.types.Wb.cr or
+            prev_wb == internal.types.Wb.lf or cur_wb == internal.types.Wb.newline or
+            cur_wb == internal.types.Wb.cr or cur_wb == internal.types.Wb.lf {
+            it.byte_pos = save
+
+            return it.byte_pos
+        }
+
+        if prev_zwj and is_ep(ncp) {
+            prev_wb = cur_wb
+            prev_zwj = false
+            ri_count = 0
+
+            continue
+        }
+
+        if prev_wb == internal.types.Wb.wsegspace and
+            cur_wb == internal.types.Wb.wsegspace {
+            prev_wb = cur_wb
+            prev_zwj = false
+
+            continue
+        }
+
+        if wb_transparent(cur_wb) {
+            if prev_wb == internal.types.Wb.wsegspace and
+                cur_wb != internal.types.Wb.format {
+                prev_wb = internal.types.Wb.other
+            }
+
+            prev_zwj = cur_wb == internal.types.Wb.zwj
+
+            continue
+        }
+
+        prev_zwj = false
+
+        let prev_ah: bool = wb_ahletter(prev_wb)
+        let cur_ah: bool = wb_ahletter(cur_wb)
+        let cur_ml: bool = cur_wb == internal.types.Wb.midletter or
+            cur_wb == internal.types.Wb.midnumlet or
+            cur_wb == internal.types.Wb.single_quote
+        let cur_mn: bool = cur_wb == internal.types.Wb.midnum or
+            cur_wb == internal.types.Wb.midnumlet or
+            cur_wb == internal.types.Wb.single_quote
+        let prev_mid: bool = it.prev_wb == internal.types.Wb.midletter or
+            it.prev_wb == internal.types.Wb.midnumlet or
+            it.prev_wb == internal.types.Wb.single_quote
+        let prev_mn: bool = it.prev_wb == internal.types.Wb.midnum or
+            it.prev_wb == internal.types.Wb.midnumlet or
+            it.prev_wb == internal.types.Wb.single_quote
+
+        var joined: bool = false
+
+        if prev_ah and cur_ah {
+            joined = true
+        }
+
+        if !joined and prev_ah and cur_ml and
+            wb_lookahead_is(it, internal.types.Wb.aletter,
+                internal.types.Wb.hebrew_letter) {
+            joined = true
+        }
+
+        if !joined and cur_ah and prev_mid and wb_ahletter(it.prev_prev_wb) {
+            joined = true
+        }
+
+        if !joined and prev_wb == internal.types.Wb.hebrew_letter and
+            cur_wb == internal.types.Wb.single_quote {
+            joined = true
+        }
+
+        if !joined and prev_wb == internal.types.Wb.hebrew_letter and
+            cur_wb == internal.types.Wb.double_quote and
+            wb_lookahead_is(it, internal.types.Wb.hebrew_letter,
+                internal.types.Wb.hebrew_letter) {
+            joined = true
+        }
+
+        if !joined and cur_wb == internal.types.Wb.hebrew_letter and
+            it.prev_wb == internal.types.Wb.double_quote and
+            it.prev_prev_wb == internal.types.Wb.hebrew_letter {
+            joined = true
+        }
+
+        if !joined and prev_wb == internal.types.Wb.numeric and
+            cur_wb == internal.types.Wb.numeric {
+            joined = true
+        }
+
+        if !joined and prev_ah and cur_wb == internal.types.Wb.numeric {
+            joined = true
+        }
+
+        if !joined and prev_wb == internal.types.Wb.numeric and cur_ah {
+            joined = true
+        }
+
+        if !joined and cur_wb == internal.types.Wb.numeric and prev_mn and
+            it.prev_prev_wb == internal.types.Wb.numeric {
+            joined = true
+        }
+
+        if !joined and prev_wb == internal.types.Wb.numeric and cur_mn and
+            wb_lookahead_is(it, internal.types.Wb.numeric,
+                internal.types.Wb.numeric) {
+            joined = true
+        }
+
+        if !joined and prev_wb == internal.types.Wb.katakana and
+            cur_wb == internal.types.Wb.katakana {
+            joined = true
+        }
+
+        if !joined and
+            (prev_ah or prev_wb == internal.types.Wb.numeric or
+            prev_wb == internal.types.Wb.katakana or
+            prev_wb == internal.types.Wb.extendnumlet) and
+            cur_wb == internal.types.Wb.extendnumlet {
+            joined = true
+        }
+
+        if !joined and prev_wb == internal.types.Wb.extendnumlet and
+            (cur_ah or cur_wb == internal.types.Wb.numeric or
+            cur_wb == internal.types.Wb.katakana) {
+            joined = true
+        }
+
+        if !joined and prev_wb == internal.types.Wb.regional_indicator and
+            cur_wb == internal.types.Wb.regional_indicator and
+            ri_count % 2 == 1 {
+            ri_count += 1
+            prev_wb = cur_wb
+
+            continue
+        }
+
+        if !joined {
+            it.byte_pos = save
+
+            return it.byte_pos
+        }
+
+        it.prev_prev_wb = it.prev_wb
+        it.prev_wb = cur_wb
+        prev_wb = cur_wb
+        if cur_wb != internal.types.Wb.regional_indicator {
+            ri_count = 0
+        }
+    }
+
+    return it.byte_pos
+}
+
+func sentence_break(cp: char) -> internal.types.Sb {
+    if cast[u32] cp >= internal.properties.max_cp {
+        return internal.types.Sb.other
+    }
+
+    return cast[internal.types.Sb] generated.sentbreak.sb_stage2[
+        break_stage_ix(generated.sentbreak.sb_stage1, cp)]
+}
+
+func sentence_iter(s: string) -> internal.types.Break_Iter {
+    let it: internal.types.Break_Iter = (text = s,
+        kind = internal.types.Break_Type.sentence, byte_pos = 0, ri_count = 0,
+        after_zwj = false, ep_before_zwj = false, incb_consonant_base = false,
+        incb_linker_seen = false, prev_wb = internal.types.Wb.other,
+        prev_prev_wb = internal.types.Wb.other,
+        prev_prev_sb = internal.types.Sb.other, sb_term_phase = 0,
+        sb_is_aterm = false)
+    return it
+}
+
+private func sb_blocker(w: internal.types.Sb) -> bool {
+    return w == internal.types.Sb.oletter or w == internal.types.Sb.upper or
+        w == internal.types.Sb.sep or w == internal.types.Sb.cr or
+        w == internal.types.Sb.lf or w == internal.types.Sb.sterm or
+        w == internal.types.Sb.aterm
+}
+
+private func sb8_finds_lower(it: internal.types.Break_Iter) -> bool {
+    let len: uint = byte_len(it.text)
+    var la: u32 = it.byte_pos
+    var found: bool = false
+    var going: bool = true
+
+    while going and cast[uint] la < len {
+        let c: char? = next_char(it, la)
+
+        if c == nil {
+            going = false
+
+            continue
+        }
+
+        let w: internal.types.Sb = sentence_break(c.get())
+
+        if w == internal.types.Sb.format or w == internal.types.Sb.extend {
+            continue
+        }
+
+        if w == internal.types.Sb.lower {
+            found = true
+            going = false
+
+            continue
+        }
+
+        if sb_blocker(w) {
+            going = false
+        }
+    }
+
+    return found
+}
+
+private func sentence_next(modify it: internal.types.Break_Iter,
+                           first_cp: char) -> u32? {
+    let len: uint = byte_len(it.text)
+    var prev_sb: internal.types.Sb = sentence_break(first_cp)
+
+    it.sb_term_phase = 0
+    it.prev_prev_sb = internal.types.Sb.other
+
+    if prev_sb == internal.types.Sb.aterm {
+        it.sb_term_phase = 1
+        it.sb_is_aterm = true
+    }
+
+    if prev_sb == internal.types.Sb.sterm {
+        it.sb_term_phase = 1
+        it.sb_is_aterm = false
+    }
+
+    var running: bool = true
+
+    while running and cast[uint] it.byte_pos < len {
+        let save: u32 = it.byte_pos
+        let n: char? = next_char(it, it.byte_pos)
+
+        if n == nil {
+            running = false
+
+            continue
+        }
+
+        let cur_sb: internal.types.Sb = sentence_break(n.get())
+
+        if prev_sb == internal.types.Sb.cr and cur_sb == internal.types.Sb.lf {
+            if it.sb_term_phase >= 1 and it.sb_term_phase <= 3 {
+                it.sb_term_phase = 4
+            }
+
+            prev_sb = cur_sb
+
+            continue
+        }
+
+        if prev_sb == internal.types.Sb.sep or prev_sb == internal.types.Sb.cr or
+            prev_sb == internal.types.Sb.lf {
+            it.sb_term_phase = 0
+            it.byte_pos = save
+
+            return it.byte_pos
+        }
+
+        if cur_sb == internal.types.Sb.format or cur_sb == internal.types.Sb.extend {
+            continue
+        }
+
+        let in_term: bool = it.sb_term_phase >= 1
+        var handled: bool = false
+
+        if in_term and it.sb_is_aterm and it.sb_term_phase == 1 and
+            cur_sb == internal.types.Sb.numeric {
+            it.sb_term_phase = 0
+            handled = true
+        }
+
+        if !handled and in_term and it.sb_is_aterm and it.sb_term_phase == 1 and
+            cur_sb == internal.types.Sb.upper and
+            (it.prev_prev_sb == internal.types.Sb.upper or
+            it.prev_prev_sb == internal.types.Sb.lower) {
+            it.sb_term_phase = 0
+            handled = true
+        }
+
+        if !handled and in_term and it.sb_term_phase <= 3 and
+            (cur_sb == internal.types.Sb.scontinue or
+            cur_sb == internal.types.Sb.aterm or
+            cur_sb == internal.types.Sb.sterm) {
+            if cur_sb == internal.types.Sb.aterm {
+                it.sb_term_phase = 1
+                it.sb_is_aterm = true
+            }
+            else {
+                if cur_sb == internal.types.Sb.sterm {
+                    it.sb_term_phase = 1
+                    it.sb_is_aterm = false
+                }
+                else {
+                    it.sb_term_phase = 0
+                }
+            }
+
+            handled = true
+        }
+
+        if !handled and in_term and it.sb_is_aterm and it.sb_term_phase <= 3 {
+            if cur_sb == internal.types.Sb.lower {
+                it.sb_term_phase = 0
+                handled = true
+            }
+            else {
+                if !sb_blocker(cur_sb) and sb8_finds_lower(it) {
+                    handled = true
+                }
+            }
+        }
+
+        if !handled and in_term and it.sb_term_phase <= 2 {
+            if cur_sb == internal.types.Sb.close {
+                it.sb_term_phase = 2
+                handled = true
+            }
+            else {
+                if cur_sb == internal.types.Sb.sp or cur_sb == internal.types.Sb.sep or
+                    cur_sb == internal.types.Sb.cr or cur_sb == internal.types.Sb.lf {
+                    if cur_sb == internal.types.Sb.sp {
+                        it.sb_term_phase = 3
+                    }
+                    else {
+                        it.sb_term_phase = 4
+                    }
+                    handled = true
+                }
+            }
+        }
+
+        if !handled and in_term and it.sb_term_phase == 3 {
+            if cur_sb == internal.types.Sb.sp {
+                handled = true
+            }
+            else {
+                if cur_sb == internal.types.Sb.sep or cur_sb == internal.types.Sb.cr or
+                    cur_sb == internal.types.Sb.lf {
+                    it.sb_term_phase = 4
+                    handled = true
+                }
+            }
+        }
+
+        if !handled and in_term {
+            it.sb_term_phase = 0
+            it.byte_pos = save
+
+            return it.byte_pos
+        }
+
+        if !handled {
+            if cur_sb == internal.types.Sb.aterm {
+                it.sb_term_phase = 1
+                it.sb_is_aterm = true
+            }
+
+            if cur_sb == internal.types.Sb.sterm {
+                it.sb_term_phase = 1
+                it.sb_is_aterm = false
+            }
+        }
+
+        it.prev_prev_sb = prev_sb
+        prev_sb = cur_sb
+    }
+
+    return it.byte_pos
+}
+
+func next(modify self: internal.types.Break_Iter) -> u32? {
+    let len: uint = byte_len(self.text)
+
+    if cast[uint] self.byte_pos >= len {
+        return nil
+    }
+
+    let first: char? = next_char(self, self.byte_pos)
+
+    if first == nil {
+        return nil
+    }
+
+    let cp: char = first.get()
+
+    if self.kind == internal.types.Break_Type.word {
+        return word_next(self, cp)
+    }
+
+    if self.kind == internal.types.Break_Type.sentence {
+        return sentence_next(self, cp)
+    }
+
+    var prev_gcb: internal.types.Gcb = grapheme_break(cp)
+
+    self.ri_count = 0
+    if prev_gcb == internal.types.Gcb.regional_indicator {
+        self.ri_count = 1
+    }
+    self.after_zwj = prev_gcb == internal.types.Gcb.zwj
+    self.ep_before_zwj = is_ep(cp)
+    self.incb_consonant_base = incb(cp) == internal.types.Incb.consonant
+    self.incb_linker_seen = incb(cp) == internal.types.Incb.linker
+
+    var running: bool = true
+
+    while running and cast[uint] self.byte_pos < len {
+        let save: u32 = self.byte_pos
+        let n: char? = next_char(self, self.byte_pos)
+
+        if n == nil {
+            running = false
+
+            continue
+        }
+
+        let ncp: char = n.get()
+        let cur_gcb: internal.types.Gcb = grapheme_break(ncp)
+        let cur_incb: internal.types.Incb = incb(ncp)
+        let cur_ep: bool = is_ep(ncp)
+
+        if self.after_zwj and self.ep_before_zwj and cur_ep {
+            prev_gcb = cur_gcb
+            self.after_zwj = false
+            self.ep_before_zwj = true
+            self.ri_count = 0
+
+            if cur_incb == internal.types.Incb.linker {
+                self.incb_linker_seen = true
+            }
+
+            continue
+        }
+
+        if grapheme_is_break(self, prev_gcb, cur_gcb, cur_incb) {
+            self.byte_pos = save
+            running = false
+
+            continue
+        }
+
+        if cur_gcb == internal.types.Gcb.regional_indicator {
+            self.ri_count += 1
+        }
+        else {
+            self.ri_count = 0
+        }
+
+        if cur_ep {
+            self.ep_before_zwj = true
+        }
+        else {
+            if cur_gcb != internal.types.Gcb.extend and
+                cur_gcb != internal.types.Gcb.zwj {
+                self.ep_before_zwj = false
+            }
+        }
+
+        self.after_zwj = cur_gcb == internal.types.Gcb.zwj
+
+        if cur_incb == internal.types.Incb.linker {
+            self.incb_linker_seen = true
+        }
+        else {
+            if cur_incb == internal.types.Incb.consonant {
+                self.incb_consonant_base = true
+                self.incb_linker_seen = false
+            }
+            else {
+                if cur_incb != internal.types.Incb.extend {
+                    self.incb_consonant_base = false
+                    self.incb_linker_seen = false
+                }
+            }
+        }
+
+        prev_gcb = cur_gcb
+    }
+
+    return self.byte_pos
+}
+
+func grapheme_count(s: string) -> u64 {
+    let len: uint = byte_len(s)
+
+    if len == 0 or !is_text(s) {
+        return 0
+    }
+
+    var it: internal.types.Break_Iter = grapheme_iter(s)
+    var n: u64 = 0
+
+    while next(it) != nil {
+        n += 1
+    }
+
+    return n
+}
