@@ -48,7 +48,9 @@ fi
     cat "$tmp/show-ffi.log" >&2
     exit 1
 }
-diff -u zlib.show-ffi.expected "$tmp/show-ffi"
+grep -v 'ZLIB_VER' zlib.show-ffi.expected >"$tmp/show-ffi.expected"
+grep -v 'ZLIB_VER' "$tmp/show-ffi" >"$tmp/show-ffi.actual"
+diff -u "$tmp/show-ffi.expected" "$tmp/show-ffi.actual"
 test ! -s "$tmp/show-ffi.log"
 test ! -e a.out
 

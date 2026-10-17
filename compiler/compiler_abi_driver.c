@@ -807,7 +807,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             + 2 * native->framework_count;
         char **arguments = calloc(object_count + (size_t)extra_count
                                       + native_flags
-                                      + N00BB_SYSTEM_LIBRARY_COUNT + 5,
+                                      + N00BB_SYSTEM_LIBRARY_COUNT + 6,
                                   sizeof(*arguments));
         char **native_arguments = native_flags
             ? calloc(native_flags, sizeof(*native_arguments)) : nullptr;
@@ -848,6 +848,10 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
                     arguments[tail++] = native_arguments[i];
                 for (size_t s = 0; s < N00BB_SYSTEM_LIBRARY_COUNT; s++)
                     arguments[tail++] = (char *)n00bb_system_libraries[s];
+                if (analysis->target.object_format == CORE_TARGET_OBJECT_ELF
+                    && parse_cmdr_flag_present(args,
+                        CORE_STRING_STATIC("--build-time")))
+                    arguments[tail++] = "-rdynamic";
                 arguments[tail++] = "-o";
                 arguments[tail] = staging;
                 pid_t child = 0;

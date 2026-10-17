@@ -397,6 +397,7 @@ typedef struct n00bb_link_analysis_t {
     char *baked_failure_root;
     char *baked_failure_path;
     char *baked_failure_message;
+    bool baked_failure_reported;
     bool build_time_capture;
     core_dict_t declarations_by_symbol;
     ir_exec_graph_t *execution_graph;

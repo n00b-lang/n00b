@@ -15553,24 +15553,28 @@ bake_const_global(core_translation_unit_t *source, ir_module_t *destination,
         bool failed = root.data
             && !strcmp(root.data, analysis->baked_failure_root);
         core_buffer_release(&root);
-        if (failed) {
-            core_buffer_t message = {0};
-            core_buffer_printf(&message,
-                "const '%.*s' cannot be baked: field '%.*s%s%s' %s",
-                (int)symbol->name.u8_bytes, symbol->name.data,
-                (int)symbol->name.u8_bytes, symbol->name.data,
-                *analysis->baked_failure_path
-                    && *analysis->baked_failure_path != '[' ? "." : "",
-                analysis->baked_failure_path,
-                analysis->baked_failure_message);
+        const char *colon = strrchr(analysis->baked_failure_root, ':');
+        const char *name = colon ? colon + 1 : analysis->baked_failure_root;
+        core_buffer_t message = {0};
+        core_buffer_printf(&message,
+            "const '%s' cannot be baked: field '%s%s%s' %s", name, name,
+            *analysis->baked_failure_path
+                && *analysis->baked_failure_path != '[' ? "." : "",
+            analysis->baked_failure_path, analysis->baked_failure_message);
+        if (failed && !analysis->baked_failure_reported)
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(source), source,
                 CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-B0032"),
                 core_string_borrow(message.data, message.byte_len),
                 link_source_location(symbol->decl_node));
-            core_buffer_release(&message);
-            return false;
-        }
+        else if (!analysis->baked_failure_reported)
+            core_diagnostics_report(
+                core_translation_unit_diagnostics(source), source,
+                CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-B0032"),
+                core_string_borrow(message.data, message.byte_len));
+        analysis->baked_failure_reported = true;
+        core_buffer_release(&message);
+        return false;
     }
     const char *identifier = n00bb_baked_root_identifier(analysis,
         source->module.identifier, symbol->name);
