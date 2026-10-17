@@ -3424,16 +3424,25 @@ folded_operator_is_bitwise(parse_tree_t *node)
         || core_string_eq(op, CORE_STRING_STATIC(">>"));
 }
 
-static bool
-folded_expression_is_bitwise(parse_tree_t *node)
+bool
+n00bb_unsigned_literal_origin(parse_tree_t *origin)
 {
-    if (!folded_compound_origin(node)) return false;
-    if (folded_operator_is_bitwise(node)) return true;
-    for (size_t side = 0; side < 2; side++)
-        if (folded_expression_is_bitwise(core_tree_node_value(
-                core_tree_child(node, side ? 2 : 0)).integer_literal_origin))
-            return true;
-    return false;
+    n00bb_node_facts_t *facts = n00bb_node_facts(origin);
+    return facts && facts->unsigned_literal;
+}
+
+static bool
+mark_unsigned_literal(parse_grammar_t *grammar, n00bb_tu_state_t *state,
+                      parse_tree_t *node, bool unsigned_literal)
+{
+    if (!unsigned_literal) return true;
+    n00bb_node_facts_t *facts = n00bb_ensure_node_facts(state, node);
+    if (!facts) return false;
+    facts->unsigned_literal = true;
+    th_type *type = core_tree_node_value(node).type;
+    return !type || th_kind_of(th_resolve(type)) != TH_VAR
+        || n00bb_constrain_literal_fit(grammar, state, node, node, type,
+                                       true);
 }
 
 static void
@@ -3491,7 +3500,7 @@ unify_literal_operand(parse_grammar_t *grammar, n00bb_tu_state_t *state,
                                       : th_resolve(other_type);
         if (!literal_type || !n00bb_constrain_literal_fit(grammar, state,
                 origin, operand, literal_type,
-                unsigned_only || folded_expression_is_bitwise(origin)))
+                unsigned_only || n00bb_unsigned_literal_origin(origin)))
             return false;
         for (parse_tree_t *at = origin; at;
              at = core_tree_node_value(at).parent) {
@@ -3510,10 +3519,8 @@ unify_literal_operand(parse_grammar_t *grammar, n00bb_tu_state_t *state,
     return true;
 }
 
-bool
-n00bb_untyped_integer_const(parse_grammar_t *grammar,
-                            parse_sym_entry_t *symbol,
-                            int64_t *minimum, int64_t *maximum)
+static parse_tree_t *
+untyped_const_initializer(parse_grammar_t *grammar, parse_sym_entry_t *symbol)
 {
     parse_tree_t *declaration = symbol && symbol->kind == PARSE_SYM_VARIABLE
         ? symbol->decl_node : nullptr;
@@ -3529,13 +3536,22 @@ n00bb_untyped_integer_const(parse_grammar_t *grammar,
         ? child_nt(grammar, declaration, "expression") : nullptr;
     return initializer
         && core_tree_node_value(initializer).integer_literal_origin
+        ? initializer : nullptr;
+}
+
+bool
+n00bb_untyped_integer_const(parse_grammar_t *grammar,
+                            parse_sym_entry_t *symbol,
+                            int64_t *minimum, int64_t *maximum)
+{
+    parse_tree_t *initializer = untyped_const_initializer(grammar, symbol);
+    return initializer
         && parse_tree_integer_range(initializer, minimum, maximum)
         && *minimum == *maximum;
 }
 
-bool
-n00bb_integer_constant_reference(parse_grammar_t *grammar, parse_tree_t *node,
-                                 int64_t *value)
+static parse_sym_entry_t *
+integer_constant_symbol(parse_grammar_t *grammar, parse_tree_t *node)
 {
     parse_node_resolution_t resolution = node && !core_tree_is_leaf(node)
         ? parse_tree_resolution(node) : (parse_node_resolution_t){0};
@@ -3543,8 +3559,25 @@ n00bb_integer_constant_reference(parse_grammar_t *grammar, parse_tree_t *node,
             || (nt_is(grammar, node, "postfix-expr")
                 && dotted_symbol_path_node(grammar, node)))
         && resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
-        && n00bb_untyped_integer_const(grammar, resolution.target.symbol,
-                                       value, value);
+        ? resolution.target.symbol : nullptr;
+}
+
+bool
+n00bb_integer_constant_reference(parse_grammar_t *grammar, parse_tree_t *node,
+                                 int64_t *value)
+{
+    parse_sym_entry_t *symbol = integer_constant_symbol(grammar, node);
+    return symbol && n00bb_untyped_integer_const(grammar, symbol, value,
+                                                 value);
+}
+
+static bool
+unsigned_integer_constant(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    parse_tree_t *initializer = untyped_const_initializer(grammar,
+        integer_constant_symbol(grammar, node));
+    return initializer && n00bb_unsigned_literal_origin(
+        core_tree_node_value(initializer).integer_literal_origin);
 }
 
 static bool
@@ -3660,16 +3693,31 @@ n00bb_cache_contextual_integer(parse_grammar_t *grammar,
     int64_t constant = 0;
     if (n00bb_integer_constant_reference(grammar, node, &constant)) {
         parsed->integer_literal_origin = node;
-        return parse_tree_set_integer_range(node, constant, constant);
+        return parse_tree_set_integer_range(node, constant, constant)
+            && mark_unsigned_literal(grammar, state, node,
+                                     unsigned_integer_constant(grammar, node));
     }
     if (fold_integer_literal_expression(grammar, node, &constant)) {
         parsed->integer_literal_origin = node;
+        if (!parse_tree_set_integer_range(node, constant, constant))
+            return false;
+        bool shift = nt_is(grammar, node, "shift-expr");
+        bool unsigned_literal = folded_operator_is_bitwise(node)
+            || n00bb_unsigned_literal_origin(core_tree_node_value(
+                core_tree_child(node, 0)).integer_literal_origin)
+            || (!shift && n00bb_unsigned_literal_origin(core_tree_node_value(
+                core_tree_child(node, 2)).integer_literal_origin));
         th_type *operand = core_tree_node_value(core_tree_child(node, 0)).type;
         operand = operand ? th_resolve(operand) : nullptr;
-        if (operand && is_integer_type(operand)
+        int64_t count = 0;
+        bool count_outside = shift
+            && folded_integer_operand(core_tree_child(node, 2), &count)
+            && (uint64_t)count >= n00bb_shift_receiver_width(operand);
+        if (operand && is_integer_type(operand) && !count_outside
             && !n00bb_integer_interval_fits_type(operand, constant, constant))
-            type_folded_operands(state, node, th_name(state->types, "int"));
-        return parse_tree_set_integer_range(node, constant, constant);
+            type_folded_operands(state, node, th_name(state->types,
+                unsigned_literal ? "uint" : "int"));
+        return mark_unsigned_literal(grammar, state, node, unsigned_literal);
     }
     if (core_tree_num_children(node) == 3
         && binary_operator_dispatch_for_node(grammar, node, &trait, &method)
@@ -7943,7 +7991,7 @@ n00bb_contextual_integer_literal(n00bb_tu_state_t *state,
         ? core_tree_node_value(node).integer_literal_origin : nullptr;
     if (!origin) return n00bb_contextual_float_literal(node, target);
     if (!literal_fits_type(state, origin, node, target)) return false;
-    if (folded_expression_is_bitwise(origin) && !n00bb_bitwise_type(target))
+    if (n00bb_unsigned_literal_origin(origin) && !n00bb_bitwise_type(target))
         return false;
     for (parse_tree_t *current = origin; current;
          current = core_tree_node_value(current).parent) {
@@ -7960,6 +8008,8 @@ integer_value_promotes(parse_grammar_t *grammar, n00bb_tu_state_t *state,
 {
     int64_t minimum = 0, maximum = 0;
     return node && is_integer_type(actual) && is_integer_type(expected)
+        && (n00bb_bitwise_type(expected) || !n00bb_unsigned_literal_origin(
+            core_tree_node_value(node).integer_literal_origin))
         && (n00bb_integer_type_promotes_to(actual, expected)
             || n00bb_practical_unsigned_to_signed(grammar, state, node,
                                                   actual, expected)

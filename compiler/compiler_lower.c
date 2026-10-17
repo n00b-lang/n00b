@@ -6594,28 +6594,46 @@ n00bb_lower_static_litmod(ir_lower_context_t *context,
 
 
 static bool
+n00bb_emit_contextual_integer_constant(ir_lower_context_t *context,
+                                       parse_visit_t *visit, int64_t value,
+                                       bool prune)
+{
+    ir_span_t span = lower_span_for_tree(context, visit->node);
+    th_type *type = core_tree_node_value(visit->node).type;
+    type = type ? th_resolve(type) : nullptr;
+    if (!type || !is_integer_type(type)) return true;
+    if (n00bb_unsigned_literal_origin(visit->node)
+        && !n00bb_bitwise_type(type)) {
+        lower_error(context, IR_DIAG_TYPE_CLASS, span,
+            "a bitwise or shift integer constant requires an unsigned type");
+        return false;
+    }
+    ir_instr_t *constant = ir_lower_emit_instruction(context, IR_OP_CONST,
+                                                     span);
+    if (constant
+        && ir_lower_set_temp_dest(context, constant, "__n00bb_constant_",
+                                  type)
+        && ir_instr_operand_int(constant, (ir_int_t)value)
+        && ir_lower_set_node_value(context, visit->node, constant->dest)
+        && (!prune || ir_lower_prune_node(context, visit->node)))
+        return true;
+    lower_error(context, IR_DIAG_INTERNAL, span,
+                "could not emit an integer constant");
+    return false;
+}
+
+static bool
 n00bb_lower_integer_constant_reference(ir_lower_context_t *context,
                                        parse_visit_t *visit, bool entering,
                                        void *state)
 {
     (void)state;
     int64_t value = 0;
-    if (!entering || !context->reachable
+    return !entering || !context->reachable
         || !n00bb_integer_constant_reference(visit->grammar, visit->node,
-                                             &value)) return true;
-    ir_span_t span = lower_span_for_tree(context, visit->node);
-    th_type *type = core_tree_node_value(visit->node).type;
-    ir_instr_t *constant = type
-        ? ir_lower_emit_instruction(context, IR_OP_CONST, span) : nullptr;
-    if (constant
-        && ir_lower_set_temp_dest(context, constant, "__n00bb_constant_",
-                                  th_resolve(type))
-        && ir_instr_operand_int(constant, (ir_int_t)value)
-        && ir_lower_set_node_value(context, visit->node, constant->dest))
-        return true;
-    lower_error(context, IR_DIAG_INTERNAL, span,
-                "could not emit an integer constant reference");
-    return false;
+                                             &value)
+        || n00bb_emit_contextual_integer_constant(context, visit, value,
+                                                  false);
 }
 
 static bool
@@ -6625,24 +6643,11 @@ n00bb_lower_folded_integer_expression(ir_lower_context_t *context,
 {
     (void)state;
     int64_t value = 0;
-    if (!entering || !context->reachable
+    return !entering || !context->reachable
         || !n00bb_folded_integer_expression(visit->grammar, visit->node,
-                                            &value)) return true;
-    ir_span_t span = lower_span_for_tree(context, visit->node);
-    th_type *type = core_tree_node_value(visit->node).type;
-    if (!type || !is_integer_type(th_resolve(type))) return true;
-    ir_instr_t *constant = ir_lower_emit_instruction(context, IR_OP_CONST,
-                                                     span);
-    if (constant
-        && ir_lower_set_temp_dest(context, constant, "__n00bb_folded_",
-                                  th_resolve(type))
-        && ir_instr_operand_int(constant, (ir_int_t)value)
-        && ir_lower_set_node_value(context, visit->node, constant->dest)
-        && ir_lower_prune_node(context, visit->node))
-        return true;
-    lower_error(context, IR_DIAG_INTERNAL, span,
-                "could not emit a folded integer constant");
-    return false;
+                                            &value)
+        || n00bb_emit_contextual_integer_constant(context, visit, value,
+                                                  true);
 }
 
 static ir_instr_t *
@@ -10122,6 +10127,10 @@ n00bb_typed_integer_value(ir_lower_context_t *context,
             return nullptr;
         return cast->dest;
     }
+    if (node && !core_tree_is_leaf(node)
+        && n00bb_unsigned_literal_origin(
+            core_tree_node_value(node).integer_literal_origin)
+        && !n00bb_bitwise_type(target)) return value;
     ir_machine_t machine = ir_machine_of(context->module, target);
     ir_machine_t source = ir_machine_of(context->module, value->type);
     ir_lit_t literal = constant->operands[0].lit.i;
