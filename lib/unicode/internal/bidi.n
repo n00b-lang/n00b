@@ -1,0 +1,1122 @@
+import sys.abi
+import internal.types
+import internal.encoding
+import internal.properties
+import generated.bidi_brackets
+
+const bidi_max_depth: u8 = 125
+const bidi_stack_size: u32 = 128
+const bidi_max_brackets: i32 = 63
+const bidi_max_pairs: u32 = 128
+
+record Bidi {
+    cps:        Array[char]
+    types:      Array[u8]
+    levels:     Array[u8]
+    len:        u32
+    para_level: u8
+}
+
+private func is_isolate_init(t: u8) -> bool {
+    return t == cast[u8] internal.types.Bidi_Class.lri or
+        t == cast[u8] internal.types.Bidi_Class.rli or
+        t == cast[u8] internal.types.Bidi_Class.fsi
+}
+
+private func level_dir(level: u8) -> u8 {
+    if level % 2 != 0 {
+        return cast[u8] internal.types.Bidi_Class.r
+    }
+
+    return cast[u8] internal.types.Bidi_Class.l
+}
+
+private func determine_para_level(types: Array[u8], len: u32) -> u8 {
+    var i: u32 = 0
+
+    while i < len {
+        let t: u8 = types[i]
+
+        if t == cast[u8] internal.types.Bidi_Class.l {
+            return 0
+        }
+
+        if t == cast[u8] internal.types.Bidi_Class.r or
+            t == cast[u8] internal.types.Bidi_Class.al {
+            return 1
+        }
+
+        if is_isolate_init(t) {
+            var depth: i32 = 1
+
+            i += 1
+
+            while i < len and depth > 0 {
+                if is_isolate_init(types[i]) {
+                    depth += 1
+                }
+                else {
+                    if types[i] == cast[u8] internal.types.Bidi_Class.pdi {
+                        depth -= 1
+                    }
+                }
+
+                i += 1
+            }
+
+            continue
+        }
+
+        i += 1
+    }
+
+    return 0
+}
+
+private func resolve_explicit(modify types: Array[u8], modify levels: Array[u8],
+                              len: u32, para_level: u8) {
+    var stack_level: Array[u8][128] = new[Array[u8][128]]()
+    var stack_override: Array[u8][128] = new[Array[u8][128]]()
+    var stack_isolate: Array[bool][128] = new[Array[bool][128]]()
+
+    var sp: i32 = 0
+    var cur_level: u8 = para_level
+    var cur_override: u8 = cast[u8] internal.types.Bidi_Class.on
+    var overflow_isolate: i32 = 0
+    var overflow_embedding: i32 = 0
+    var valid_isolate: i32 = 0
+
+    stack_level[0] = para_level
+    stack_override[0] = cast[u8] internal.types.Bidi_Class.on
+    stack_isolate[0] = false
+
+    var i: u32 = 0
+    while i < len {
+        var kind: u8 = types[i]
+
+        if kind == cast[u8] internal.types.Bidi_Class.rle or
+            kind == cast[u8] internal.types.Bidi_Class.lre or
+            kind == cast[u8] internal.types.Bidi_Class.rlo or
+            kind == cast[u8] internal.types.Bidi_Class.lro {
+            var new_level: u8 = 0
+
+            if kind == cast[u8] internal.types.Bidi_Class.rle or
+                kind == cast[u8] internal.types.Bidi_Class.rlo {
+                new_level = (cur_level + 1) | 1
+            }
+            else {
+                new_level = (cur_level + 2) & ~1
+            }
+
+            if new_level <= bidi_max_depth and overflow_isolate == 0 and
+                overflow_embedding == 0 {
+                sp += 1
+                stack_level[cast[int] sp] = cur_level
+                stack_override[cast[int] sp] = cur_override
+                stack_isolate[cast[int] sp] = false
+                cur_level = new_level
+
+                if kind == cast[u8] internal.types.Bidi_Class.rlo {
+                    cur_override = cast[u8] internal.types.Bidi_Class.r
+                }
+                else {
+                    if kind == cast[u8] internal.types.Bidi_Class.lro {
+                        cur_override = cast[u8] internal.types.Bidi_Class.l
+                    }
+                    else {
+                        cur_override = cast[u8] internal.types.Bidi_Class.on
+                    }
+                }
+            }
+            else {
+                if overflow_isolate == 0 {
+                    overflow_embedding += 1
+                }
+            }
+
+            levels[i] = cur_level
+            types[i] = cast[u8] internal.types.Bidi_Class.bn
+
+            i += 1
+            continue
+        }
+
+        if is_isolate_init(kind) {
+            if kind == cast[u8] internal.types.Bidi_Class.fsi {
+                var fsi_depth: i32 = 1
+                var fsi_dir: u8 = cast[u8] internal.types.Bidi_Class.lri
+                var j: u32 = i + 1
+                var seeking: bool = true
+
+                while seeking and j < len and fsi_depth > 0 {
+                    let jt: u8 = types[j]
+
+                    if is_isolate_init(jt) {
+                        fsi_depth += 1
+                    }
+                    else {
+                        if jt == cast[u8] internal.types.Bidi_Class.pdi {
+                            fsi_depth -= 1
+                        }
+                        else {
+                            if fsi_depth == 1 {
+                                if jt == cast[u8] internal.types.Bidi_Class.l {
+                                    fsi_dir = cast[u8] internal.types.Bidi_Class.lri
+                                    seeking = false
+                                }
+
+                                if jt == cast[u8] internal.types.Bidi_Class.r or
+                                    jt == cast[u8] internal.types.Bidi_Class.al {
+                                    fsi_dir = cast[u8] internal.types.Bidi_Class.rli
+                                    seeking = false
+                                }
+                            }
+                        }
+                    }
+
+                    j += 1
+                }
+
+                kind = fsi_dir
+            }
+
+            levels[i] = cur_level
+
+            if cur_override != cast[u8] internal.types.Bidi_Class.on {
+                types[i] = cur_override
+            }
+
+            var new_level: u8 = 0
+
+            if kind == cast[u8] internal.types.Bidi_Class.rli {
+                new_level = (cur_level + 1) | 1
+            }
+            else {
+                new_level = (cur_level + 2) & ~1
+            }
+
+            if new_level <= bidi_max_depth and overflow_isolate == 0 and
+                overflow_embedding == 0 {
+                sp += 1
+                stack_level[cast[int] sp] = cur_level
+                stack_override[cast[int] sp] = cur_override
+                stack_isolate[cast[int] sp] = true
+                valid_isolate += 1
+                cur_level = new_level
+                cur_override = cast[u8] internal.types.Bidi_Class.on
+            }
+            else {
+                overflow_isolate += 1
+            }
+
+            i += 1
+            continue
+        }
+
+        if kind == cast[u8] internal.types.Bidi_Class.pdi {
+            if overflow_isolate > 0 {
+                overflow_isolate -= 1
+            }
+            else {
+                if valid_isolate > 0 {
+                    overflow_embedding = 0
+
+                    while sp > 0 and !stack_isolate[cast[int] sp] {
+                        sp -= 1
+                    }
+
+                    if sp > 0 {
+                        cur_level = stack_level[cast[int] sp]
+                        cur_override = stack_override[cast[int] sp]
+                        sp -= 1
+                    }
+
+                    valid_isolate -= 1
+                }
+            }
+
+            levels[i] = cur_level
+
+            if cur_override != cast[u8] internal.types.Bidi_Class.on {
+                types[i] = cur_override
+            }
+
+            i += 1
+            continue
+        }
+
+        if kind == cast[u8] internal.types.Bidi_Class.pdf {
+            if overflow_isolate == 0 {
+                if overflow_embedding > 0 {
+                    overflow_embedding -= 1
+                }
+                else {
+                    if sp > 0 and !stack_isolate[cast[int] sp] {
+                        cur_level = stack_level[cast[int] sp]
+                        cur_override = stack_override[cast[int] sp]
+                        sp -= 1
+                    }
+                }
+            }
+
+            levels[i] = cur_level
+            types[i] = cast[u8] internal.types.Bidi_Class.bn
+
+            i += 1
+            continue
+        }
+
+        levels[i] = cur_level
+
+        if cur_override != cast[u8] internal.types.Bidi_Class.on and
+            kind != cast[u8] internal.types.Bidi_Class.b and
+            kind != cast[u8] internal.types.Bidi_Class.bn {
+            types[i] = cur_override
+        }
+
+        i += 1
+    }
+}
+
+private func seq_type(types: Array[u8], seq: Array[u32], n: u32, k: u32,
+                      sos: u8, eos: u8, delta: i32) -> u8 {
+    let j: i32 = cast[i32] k + delta
+
+    if j < 0 {
+        return sos
+    }
+
+    if cast[u32] j >= n {
+        return eos
+    }
+
+    return types[seq[cast[int] j]]
+}
+
+private func resolve_weak(modify types: Array[u8], seq: Array[u32], n: u32,
+                          sos: u8, eos: u8) {
+    var k: u32 = 0
+    while k < n {
+        if types[seq[k]] != cast[u8] internal.types.Bidi_Class.nsm {
+            k += 1
+            continue
+        }
+
+        let prev: u8 = seq_type(types, seq, n, k, sos, eos, -1)
+
+        if is_isolate_init(prev) or
+            prev == cast[u8] internal.types.Bidi_Class.pdi {
+            types[seq[k]] = cast[u8] internal.types.Bidi_Class.on
+        }
+        else {
+            types[seq[k]] = prev
+        }
+
+        k += 1
+    }
+
+    var prev_strong: u8 = sos
+
+    k = 0
+    while k < n {
+        let t: u8 = types[seq[k]]
+
+        if t == cast[u8] internal.types.Bidi_Class.l or
+            t == cast[u8] internal.types.Bidi_Class.r or
+            t == cast[u8] internal.types.Bidi_Class.al {
+            prev_strong = t
+
+            k += 1
+            continue
+        }
+
+        if t == cast[u8] internal.types.Bidi_Class.en and
+            prev_strong == cast[u8] internal.types.Bidi_Class.al {
+            types[seq[k]] = cast[u8] internal.types.Bidi_Class.an
+        }
+
+        k += 1
+    }
+
+    k = 0
+    while k < n {
+        if types[seq[k]] == cast[u8] internal.types.Bidi_Class.al {
+            types[seq[k]] = cast[u8] internal.types.Bidi_Class.r
+        }
+
+        k += 1
+    }
+
+    k = 0
+    while k < n {
+        let t: u8 = types[seq[k]]
+
+        if t != cast[u8] internal.types.Bidi_Class.es and
+            t != cast[u8] internal.types.Bidi_Class.cs {
+            k += 1
+            continue
+        }
+
+        let pt: u8 = seq_type(types, seq, n, k, sos, eos, -1)
+        let nt: u8 = seq_type(types, seq, n, k, sos, eos, 1)
+
+        if t == cast[u8] internal.types.Bidi_Class.es and
+            pt == cast[u8] internal.types.Bidi_Class.en and
+            nt == cast[u8] internal.types.Bidi_Class.en {
+            types[seq[k]] = cast[u8] internal.types.Bidi_Class.en
+
+            k += 1
+            continue
+        }
+
+        if t == cast[u8] internal.types.Bidi_Class.cs and pt == nt and
+            (pt == cast[u8] internal.types.Bidi_Class.en or
+            pt == cast[u8] internal.types.Bidi_Class.an) {
+            types[seq[k]] = pt
+        }
+
+        k += 1
+    }
+
+    k = 0
+    while k < n {
+        if types[seq[k]] != cast[u8] internal.types.Bidi_Class.et {
+            k += 1
+            continue
+        }
+
+        var end: u32 = k
+
+        while end < n and
+            types[seq[end]] == cast[u8] internal.types.Bidi_Class.et {
+            end += 1
+        }
+
+        let before: u8 = seq_type(types, seq, n, k, sos, eos, -1)
+        var after: u8 = eos
+        if end < n {
+            after = types[seq[end]]
+        }
+        let is_en: bool = before == cast[u8] internal.types.Bidi_Class.en or
+            after == cast[u8] internal.types.Bidi_Class.en
+
+        if is_en {
+            var j: u32 = k
+            while j < end {
+                types[seq[j]] = cast[u8] internal.types.Bidi_Class.en
+                j += 1
+            }
+        }
+
+        k = end - 1
+        k += 1
+    }
+
+    k = 0
+    while k < n {
+        let t: u8 = types[seq[k]]
+
+        if t == cast[u8] internal.types.Bidi_Class.es or
+            t == cast[u8] internal.types.Bidi_Class.et or
+            t == cast[u8] internal.types.Bidi_Class.cs {
+            types[seq[k]] = cast[u8] internal.types.Bidi_Class.on
+        }
+
+        k += 1
+    }
+
+    var last_strong: u8 = sos
+
+    k = 0
+    while k < n {
+        let t: u8 = types[seq[k]]
+
+        if t == cast[u8] internal.types.Bidi_Class.l or
+            t == cast[u8] internal.types.Bidi_Class.r {
+            last_strong = t
+
+            k += 1
+            continue
+        }
+
+        if t == cast[u8] internal.types.Bidi_Class.en and
+            last_strong == cast[u8] internal.types.Bidi_Class.l {
+            types[seq[k]] = cast[u8] internal.types.Bidi_Class.l
+        }
+
+        k += 1
+    }
+}
+
+private func find_bracket(cp: char) -> u32? {
+    var lo: u32 = 0
+    var hi: u32 = generated.bidi_brackets.bidi_bracket_index_len
+
+    while lo < hi {
+        let mid: u32 = lo + (hi - lo) / 2
+
+        if generated.bidi_brackets.bidi_bracket_index[mid][0] < cast[u32] cp {
+            lo = mid + 1
+        }
+        else {
+            if generated.bidi_brackets.bidi_bracket_index[mid][0] > cast[u32] cp {
+                hi = mid
+            }
+            else {
+                return generated.bidi_brackets.bidi_bracket_index[mid][1]
+            }
+        }
+    }
+
+    return nil
+}
+
+private func strong_class(t: u8) -> u8 {
+    if t == cast[u8] internal.types.Bidi_Class.l {
+        return cast[u8] internal.types.Bidi_Class.l
+    }
+
+    if t == cast[u8] internal.types.Bidi_Class.r or
+        t == cast[u8] internal.types.Bidi_Class.an or
+        t == cast[u8] internal.types.Bidi_Class.en {
+        return cast[u8] internal.types.Bidi_Class.r
+    }
+
+    return cast[u8] internal.types.Bidi_Class.on
+}
+
+private func canonical_bracket(cp: char) -> char {
+    if cast[u32] cp == 0x3008 {
+        return cast[char] 0x2329
+    }
+
+    if cast[u32] cp == 0x3009 {
+        return cast[char] 0x232a
+    }
+
+    return cp
+}
+
+private func resolve_brackets(cps: Array[char], modify types: Array[u8],
+                              seq: Array[u32], n: u32, sos: u8,
+                              embed_dir: u8) {
+    var stack_pos: Array[u32][63] = new[Array[u32][63]]()
+    var stack_pair: Array[u32][63] = new[Array[u32][63]]()
+    var pair_open: Array[u32][128] = new[Array[u32][128]]()
+    var pair_close: Array[u32][128] = new[Array[u32][128]]()
+
+    var top: i32 = -1
+    var npairs: u32 = 0
+    var scanning: bool = true
+
+    var k: u32 = 0
+    while scanning and k < n and npairs < bidi_max_pairs {
+        if types[seq[k]] != cast[u8] internal.types.Bidi_Class.on {
+            k += 1
+            continue
+        }
+
+        let off: u32? = find_bracket(cps[seq[k]])
+
+        if off == nil {
+            k += 1
+            continue
+        }
+
+        let base: u32 = off.get()
+
+        if generated.bidi_brackets.bidi_bracket_data[base] < 2 {
+            k += 1
+            continue
+        }
+
+        let paired: char = cast[char] generated.bidi_brackets.bidi_bracket_data[
+            base + 1]
+        let btype: u32 = generated.bidi_brackets.bidi_bracket_data[base + 2]
+
+        if btype == 1 {
+            if top >= bidi_max_brackets - 1 {
+                npairs = 0
+                scanning = false
+
+                k += 1
+                continue
+            }
+
+            top += 1
+            stack_pos[cast[int] top] = k
+            stack_pair[cast[int] top] = cast[u32] canonical_bracket(paired)
+
+            k += 1
+            continue
+        }
+
+        if btype == 2 {
+            var j: i32 = top
+            var going: bool = true
+
+            while going and j >= 0 {
+                if stack_pair[cast[int] j] ==
+                    cast[u32] canonical_bracket(cps[seq[k]]) {
+                    pair_open[npairs] = stack_pos[cast[int] j]
+                    pair_close[npairs] = k
+                    npairs += 1
+                    top = j - 1
+                    going = false
+                }
+                else {
+                    j -= 1
+                }
+            }
+        }
+
+        k += 1
+    }
+
+    var a: u32 = 1
+    while a < npairs {
+        var b: u32 = a
+
+        while b > 0 and pair_open[b] < pair_open[b - 1] {
+            let upto: u32 = pair_open[b]
+            let tc: u32 = pair_close[b]
+
+            pair_open[b] = pair_open[b - 1]
+            pair_close[b] = pair_close[b - 1]
+            pair_open[b - 1] = upto
+            pair_close[b - 1] = tc
+            b -= 1
+        }
+
+        a += 1
+    }
+
+    var p: u32 = 0
+    while p < npairs {
+        let open_ix: u32 = pair_open[p]
+        let close_ix: u32 = pair_close[p]
+        var opposite: u8 = cast[u8] internal.types.Bidi_Class.l
+        if embed_dir == cast[u8] internal.types.Bidi_Class.l {
+            opposite = cast[u8] internal.types.Bidi_Class.r
+        }
+
+        var found_same: bool = false
+        var found_opposite: bool = false
+
+        k = open_ix + 1
+        while k < close_ix {
+            let s: u8 = strong_class(types[seq[k]])
+
+            if s == cast[u8] internal.types.Bidi_Class.on {
+                k += 1
+                continue
+            }
+
+            if s == embed_dir {
+                found_same = true
+            }
+            else {
+                found_opposite = true
+            }
+
+            k += 1
+        }
+
+        var resolved: u8 = cast[u8] internal.types.Bidi_Class.on
+
+        if found_same {
+            resolved = embed_dir
+        }
+        else {
+            if found_opposite {
+                var context_class: u8 = sos
+                k = open_ix
+                var going: bool = true
+
+                while going and k > 0 {
+                    let s: u8 = strong_class(types[seq[k - 1]])
+
+                    if s == cast[u8] internal.types.Bidi_Class.on {
+                        k -= 1
+
+                        continue
+                    }
+
+                    context_class = s
+                    going = false
+                }
+
+                if context_class == opposite {
+                    resolved = opposite
+                }
+                else {
+                    resolved = embed_dir
+                }
+            }
+        }
+
+        if resolved != cast[u8] internal.types.Bidi_Class.on {
+            types[seq[open_ix]] = resolved
+            types[seq[close_ix]] = resolved
+
+            k = open_ix + 1
+            while k < n and
+                cast[u8] internal.properties.bidi_class(cps[seq[k]]) ==
+                cast[u8] internal.types.Bidi_Class.nsm {
+                types[seq[k]] = resolved
+                k += 1
+            }
+
+            k = close_ix + 1
+            while k < n and
+                cast[u8] internal.properties.bidi_class(cps[seq[k]]) ==
+                cast[u8] internal.types.Bidi_Class.nsm {
+                types[seq[k]] = resolved
+                k += 1
+            }
+        }
+
+        p += 1
+    }
+}
+
+private func is_neutral(t: u8) -> bool {
+    return t == cast[u8] internal.types.Bidi_Class.b or
+        t == cast[u8] internal.types.Bidi_Class.s or
+        t == cast[u8] internal.types.Bidi_Class.ws or
+        t == cast[u8] internal.types.Bidi_Class.on or is_isolate_init(t) or
+        t == cast[u8] internal.types.Bidi_Class.pdi
+}
+
+private func resolve_neutral(modify types: Array[u8], seq: Array[u32], n: u32,
+                             sos: u8, eos: u8, embed_dir: u8) {
+    var k: u32 = 0
+
+    while k < n {
+        if !is_neutral(types[seq[k]]) {
+            k += 1
+
+            continue
+        }
+
+        let start: u32 = k
+
+        while k < n and is_neutral(types[seq[k]]) {
+            k += 1
+        }
+
+        let end: u32 = k
+        var before: u8 = sos
+        if start != 0 {
+            before = strong_class(types[seq[start - 1]])
+        }
+        var after: u8 = eos
+        if end < n {
+            after = strong_class(types[seq[end]])
+        }
+
+        if before == cast[u8] internal.types.Bidi_Class.on {
+            before = sos
+        }
+
+        if after == cast[u8] internal.types.Bidi_Class.on {
+            after = eos
+        }
+
+        var resolved: u8 = embed_dir
+        if before == after {
+            resolved = before
+        }
+
+        var j: u32 = start
+        while j < end {
+            types[seq[j]] = resolved
+            j += 1
+        }
+    }
+}
+
+private func resolve_implicit(types: Array[u8], modify levels: Array[u8],
+                              len: u32) {
+    var i: u32 = 0
+    while i < len {
+        if types[i] == cast[u8] internal.types.Bidi_Class.bn {
+            i += 1
+            continue
+        }
+
+        if levels[i] % 2 == 0 {
+            if types[i] == cast[u8] internal.types.Bidi_Class.r {
+                levels[i] += 1
+            }
+            else {
+                if types[i] == cast[u8] internal.types.Bidi_Class.an or
+                    types[i] == cast[u8] internal.types.Bidi_Class.en {
+                    levels[i] += 2
+                }
+            }
+        }
+        else {
+            if types[i] == cast[u8] internal.types.Bidi_Class.l or
+                types[i] == cast[u8] internal.types.Bidi_Class.en or
+                types[i] == cast[u8] internal.types.Bidi_Class.an {
+                levels[i] += 1
+            }
+        }
+
+        i += 1
+    }
+}
+
+private func is_l1_reset(t: u8) -> bool {
+    return t == cast[u8] internal.types.Bidi_Class.ws or is_isolate_init(t) or
+        t == cast[u8] internal.types.Bidi_Class.pdi or
+        t == cast[u8] internal.types.Bidi_Class.bn or
+        t == cast[u8] internal.types.Bidi_Class.lre or
+        t == cast[u8] internal.types.Bidi_Class.rle or
+        t == cast[u8] internal.types.Bidi_Class.lro or
+        t == cast[u8] internal.types.Bidi_Class.rlo or
+        t == cast[u8] internal.types.Bidi_Class.pdf
+}
+
+private func run_sequences(cps: Array[char], modify types: Array[u8],
+                           levels: Array[u8], orig: Array[u8], len: u32,
+                           para_level: u8) {
+    var keep: Array[u32] = new[Array[u32]](cast[int] len + 1)
+    var nk: u32 = 0
+
+    var i: u32 = 0
+    while i < len {
+        if types[i] != cast[u8] internal.types.Bidi_Class.bn {
+            keep[nk] = i
+            nk += 1
+        }
+
+        i += 1
+    }
+
+    if nk == 0 {
+        return
+    }
+
+    var used: Array[bool] = new[Array[bool]](cast[int] nk)
+
+    var pdi_matched: Array[bool] = new[Array[bool]](cast[int] nk)
+    var open_ix: u32 = 0
+
+    i = 0
+    while i < nk {
+        used[i] = false
+        pdi_matched[i] = false
+
+        if is_isolate_init(orig[keep[i]]) {
+            open_ix += 1
+        }
+        else {
+            if orig[keep[i]] == cast[u8] internal.types.Bidi_Class.pdi and
+                open_ix > 0 {
+                pdi_matched[i] = true
+                open_ix -= 1
+            }
+        }
+
+        i += 1
+    }
+
+    var seq: Array[u32] = new[Array[u32]](cast[int] nk)
+
+    var start: u32 = 0
+    while start < nk {
+        if used[start] {
+            start += 1
+            continue
+        }
+
+        if orig[keep[start]] == cast[u8] internal.types.Bidi_Class.pdi and
+            pdi_matched[start] {
+            start += 1
+            continue
+        }
+
+        var n: u32 = 0
+        var pos: u32 = start
+        var going: bool = true
+        var last_ki: u32 = start
+
+        while going {
+            let lvl: u8 = levels[keep[pos]]
+            var e: u32 = pos
+
+            while e < nk and levels[keep[e]] == lvl {
+                seq[n] = keep[e]
+                n += 1
+                used[e] = true
+                e += 1
+            }
+
+            last_ki = e - 1
+
+            going = false
+
+            if n > 0 and is_isolate_init(orig[seq[n - 1]]) {
+                var depth: u32 = 1
+                var j: u32 = e
+
+                while j < nk and depth > 0 {
+                    if is_isolate_init(orig[keep[j]]) {
+                        depth += 1
+                    }
+                    else {
+                        if orig[keep[j]] == cast[u8] internal.types.Bidi_Class.pdi {
+                            depth -= 1
+
+                            if depth == 0 {
+                                pos = j
+                                going = true
+                            }
+                        }
+                    }
+
+                    j += 1
+                }
+            }
+        }
+
+        if n == 0 {
+            start += 1
+            continue
+        }
+
+        let first: u32 = seq[0]
+        let last: u32 = seq[n - 1]
+        let lvl: u8 = levels[first]
+
+        var prev_lvl: u8 = para_level
+
+        if start > 0 {
+            prev_lvl = levels[keep[start - 1]]
+        }
+
+        var sos_level: u8 = prev_lvl
+        if lvl > prev_lvl {
+            sos_level = lvl
+        }
+        let sos: u8 = level_dir(sos_level)
+
+        let li: u32 = last_ki
+        var next_lvl: u8 = para_level
+
+        if li + 1 < nk {
+            next_lvl = levels[keep[li + 1]]
+        }
+
+        if is_isolate_init(orig[last]) {
+            var depth: u32 = 1
+            var j: u32 = li + 1
+            var matched: bool = false
+
+            while j < nk and depth > 0 {
+                if is_isolate_init(orig[keep[j]]) {
+                    depth += 1
+                }
+                else {
+                    if orig[keep[j]] == cast[u8] internal.types.Bidi_Class.pdi {
+                        depth -= 1
+
+                        if depth == 0 {
+                            matched = true
+                        }
+                    }
+                }
+
+                j += 1
+            }
+
+            if !matched {
+                next_lvl = para_level
+            }
+        }
+
+        let last_lvl: u8 = levels[last]
+        var eos_level: u8 = next_lvl
+        if last_lvl > next_lvl {
+            eos_level = last_lvl
+        }
+        let eos: u8 = level_dir(eos_level)
+        let embed_dir: u8 = level_dir(lvl)
+
+        resolve_weak(types, seq, n, sos, eos)
+        resolve_brackets(cps, types, seq, n, sos, embed_dir)
+        resolve_neutral(types, seq, n, sos, eos, embed_dir)
+
+        start += 1
+    }
+}
+
+func bidi_open(s: string, para_level: u8? = nil) -> Bidi {
+    let byte_len: uint = byte_len(s)
+
+    var cap: uint = 1
+    if byte_len != 0 {
+        cap = byte_len
+    }
+
+    var p: Bidi = (cps = new[Array[char]](cast[int] cap),
+                   types = new[Array[u8]](cast[int] cap),
+                   levels = new[Array[u8]](cast[int] cap), len = 0,
+                   para_level = 0)
+
+    if byte_len != 0 and is_text(s) {
+        var pos: u32 = 0
+
+        while cast[uint] pos < byte_len {
+            try {
+                p.cps[p.len] = internal.encoding.utf8_decode(s, pos)!
+            } else failure {
+                pos = cast[u32] byte_len
+
+                continue
+            }
+
+            p.types[p.len] = cast[u8] internal.properties.bidi_class(p.cps[p.len])
+            p.levels[p.len] = 0
+            p.len += 1
+        }
+    }
+
+    if para_level != nil {
+        p.para_level = para_level.get()
+    }
+    else {
+        p.para_level = determine_para_level(p.types, p.len)
+    }
+
+    var orig: Array[u8] = new[Array[u8]](cast[int] cap)
+
+    var i: u32 = 0
+    while i < p.len {
+        orig[i] = p.types[i]
+        i += 1
+    }
+
+    resolve_explicit(p.types, p.levels, p.len, p.para_level)
+    run_sequences(p.cps, p.types, p.levels, orig, p.len, p.para_level)
+    resolve_implicit(p.types, p.levels, p.len)
+
+    i = 0
+    while i < p.len {
+        let orig_class: u8 = cast[u8] internal.properties.bidi_class(p.cps[i])
+
+        if orig_class == cast[u8] internal.types.Bidi_Class.s or
+            orig_class == cast[u8] internal.types.Bidi_Class.b {
+            p.levels[i] = p.para_level
+
+            var j: u32 = i
+            var going: bool = true
+
+            while going and j > 0 {
+                let ot: u8 = cast[u8] internal.properties.bidi_class(p.cps[j - 1])
+
+                if is_l1_reset(ot) {
+                    p.levels[j - 1] = p.para_level
+                    j -= 1
+                }
+                else {
+                    going = false
+                }
+            }
+        }
+
+        i += 1
+    }
+
+    var j: u32 = p.len
+    var going: bool = true
+
+    while going and j > 0 {
+        let ot: u8 = cast[u8] internal.properties.bidi_class(p.cps[j - 1])
+
+        if is_l1_reset(ot) or ot == cast[u8] internal.types.Bidi_Class.s or
+            ot == cast[u8] internal.types.Bidi_Class.b {
+            p.levels[j - 1] = p.para_level
+            j -= 1
+        }
+        else {
+            going = false
+        }
+    }
+
+    return p
+}
+
+func paragraph_level(self: Bidi) -> u8 {
+    return self.para_level
+}
+
+func levels(self: Bidi) -> List[u8] {
+    var d: Array[u8] = new[Array[u8]](cast[int] self.len)
+
+    var i: u32 = 0
+    while i < self.len {
+        d[i] = self.levels[i]
+        i += 1
+    }
+
+    return sys.abi.list_with_length(d, cast[uint] self.len)
+}
+
+func reorder_visual(self: Bidi) -> List[i32] {
+    var vis: Array[i32] = new[Array[i32]](cast[int] self.len)
+
+    var i: u32 = 0
+    while i < self.len {
+        vis[i] = cast[i32] i
+        i += 1
+    }
+
+    var max_level: u8 = 0
+
+    i = 0
+    while i < self.len {
+        if self.levels[i] > max_level {
+            max_level = self.levels[i]
+        }
+
+        i += 1
+    }
+
+    var level: u32 = cast[u32] max_level
+
+    while level >= 1 {
+        i = 0
+
+        while i < self.len {
+            if cast[u32] self.levels[i] >= level {
+                let start: u32 = i
+
+                while i < self.len and cast[u32] self.levels[i] >= level {
+                    i += 1
+                }
+
+                var lo: u32 = start
+                var hi: u32 = i - 1
+
+                while lo < hi {
+                    let tmp: i32 = vis[lo]
+
+                    vis[lo] = vis[hi]
+                    vis[hi] = tmp
+                    lo += 1
+                    hi -= 1
+                }
+            }
+            else {
+                i += 1
+            }
+        }
+
+        level -= 1
+    }
+
+    return sys.abi.list_with_length(vis, cast[uint] self.len)
+}

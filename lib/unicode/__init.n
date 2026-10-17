@@ -6,6 +6,8 @@ import internal.identifiers
 import internal.emoji
 import internal.casemap
 import internal.normalization
+import internal.bidi
+import internal.collation
 
 package unicode {
     export internal.types
@@ -16,5 +18,7 @@ package unicode {
     export internal.emoji
     export internal.casemap
     export internal.normalization
+    export internal.bidi
+    export internal.collation
     export builtin.encoding_of
 }
