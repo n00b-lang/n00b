@@ -1,0 +1,8 @@
+import internal.types
+import internal.encoding
+
+package unicode {
+    export internal.types
+    export internal.encoding
+    export builtin.encoding_of
+}

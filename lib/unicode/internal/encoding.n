@@ -1,0 +1,266 @@
+import sys.abi
+
+enum Bom {
+    none, utf8, utf16_le, utf16_be, utf32_le, utf32_be
+}
+
+record Utf8_Step {
+    cp:  char
+    adv: i32
+}
+
+private func decode_step(s: string, pos: u32) -> Utf8_Step {
+    var step: Utf8_Step = (cp = cast[char] 0, adv = 0)
+    let len: uint = byte_len(s)
+    let p: uint = cast[uint] pos
+    let b0: u8 = byte_at(s, p)
+
+    if b0 < 0x80 {
+        step.cp = cast[char] b0
+        step.adv = 1
+        return step
+    }
+
+    step.adv = __validate_multibyte(s, p, len)
+
+    if step.adv == 0 {
+        return step
+    }
+
+    var cp: u32 = cast[u32] (b0 & (0x7f >> cast[u8] step.adv))
+    var i: i32 = 1
+    while i < step.adv {
+        cp = (cp << 6) | cast[u32] (byte_at(s, p + cast[uint] i) & 0x3f)
+        i += 1
+    }
+    step.cp = cast[char] cp
+    return step
+}
+
+func utf8_decode(s: string, modify pos: u32) -> char fail: String_Error {
+    if cast[uint] pos >= byte_len(s) {
+        fail String_Error.index_oob
+    }
+
+    let step: Utf8_Step = decode_step(s, pos)
+
+    if step.adv == 0 {
+        pos += 1
+        fail String_Error.bad_encoding
+    }
+
+    pos += cast[u32] step.adv
+    return step.cp
+}
+
+func detect_bom(s: string, out bom_len: u32) -> Bom {
+    let len: uint = byte_len(s)
+
+    if len >= 4 and byte_at(s, 0) == 0x00 and byte_at(s, 1) == 0x00 and
+        byte_at(s, 2) == 0xfe and byte_at(s, 3) == 0xff {
+        bom_len = 4
+        return Bom.utf32_be
+    }
+
+    if len >= 4 and byte_at(s, 0) == 0xff and byte_at(s, 1) == 0xfe and
+        byte_at(s, 2) == 0x00 and byte_at(s, 3) == 0x00 {
+        bom_len = 4
+        return Bom.utf32_le
+    }
+
+    if len >= 3 and byte_at(s, 0) == 0xef and byte_at(s, 1) == 0xbb and
+        byte_at(s, 2) == 0xbf {
+        bom_len = 3
+        return Bom.utf8
+    }
+
+    if len >= 2 and byte_at(s, 0) == 0xfe and byte_at(s, 1) == 0xff {
+        bom_len = 2
+        return Bom.utf16_be
+    }
+
+    if len >= 2 and byte_at(s, 0) == 0xff and byte_at(s, 1) == 0xfe {
+        bom_len = 2
+        return Bom.utf16_le
+    }
+
+    bom_len = 0
+    return Bom.none
+}
+
+func utf8_encode(cp: char, modify out: Array[u8], at: uint) -> i32 {
+    let v: u32 = cast[u32] cp
+
+    if v > 0x10ffff or (v >= 0xd800 and v <= 0xdfff) {
+        return 0
+    }
+
+    if v <= 0x7f {
+        out[at] = cast[u8] v
+        return 1
+    }
+
+    if v <= 0x7ff {
+        out[at] = cast[u8] (0xc0 | (v >> 6))
+        out[at + 1] = cast[u8] (0x80 | (v & 0x3f))
+        return 2
+    }
+
+    if v <= 0xffff {
+        out[at] = cast[u8] (0xe0 | (v >> 12))
+        out[at + 1] = cast[u8] (0x80 | ((v >> 6) & 0x3f))
+        out[at + 2] = cast[u8] (0x80 | (v & 0x3f))
+        return 3
+    }
+
+    out[at] = cast[u8] (0xf0 | (v >> 18))
+    out[at + 1] = cast[u8] (0x80 | ((v >> 12) & 0x3f))
+    out[at + 2] = cast[u8] (0x80 | ((v >> 6) & 0x3f))
+    out[at + 3] = cast[u8] (0x80 | (v & 0x3f))
+    return 4
+}
+
+func utf32_to_string(src: List[char]) -> string fail: String_Error {
+    if src.len() == 0 {
+        return empty_string()
+    }
+
+    let count: uint = src.len()
+    var data: Array[u8] = new[Array[u8]](cast[int] (count * 4 + 1))
+    var pos: uint = 0
+    var ok: bool = true
+
+    var i: int = 0
+    while i < cast[int] count {
+        var n: i32 = 0
+        if ok {
+            n = utf8_encode(src[i], data, pos)
+        }
+
+        if n != 0 {
+            pos += cast[uint] n
+        }
+        else {
+            ok = false
+        }
+        i += 1
+    }
+
+    if !ok {
+        fail String_Error.bad_encoding
+    }
+
+    data[pos] = 0
+    return from_raw(data, cast[int] pos, copy = false)
+}
+
+func utf16_to_string(src: List[u16]) -> string fail: String_Error {
+    if src.len() == 0 {
+        return empty_string()
+    }
+
+    let count: uint = src.len()
+    var data: Array[u8] = new[Array[u8]](cast[int] (count * 4 + 1))
+    var pos: uint = 0
+    var ok: bool = true
+
+    var i: int = 0
+    while i < cast[int] count {
+        if !ok {
+            i += 1
+            continue
+        }
+
+        var cp: u32 = cast[u32] src[i]
+
+        if cp >= 0xd800 and cp <= 0xdbff and i + 1 < cast[int] count and
+            src[i + 1] >= 0xdc00 and src[i + 1] <= 0xdfff {
+            cp = 0x10000 + ((cp - 0xd800) << 10) +
+                cast[u32] (src[i + 1] - 0xdc00)
+            i += 1
+        }
+
+        let n: i32 = utf8_encode(cast[char] cp, data, pos)
+
+        if n != 0 {
+            pos += cast[uint] n
+        }
+        else {
+            ok = false
+        }
+        i += 1
+    }
+
+    if !ok {
+        fail String_Error.bad_encoding
+    }
+
+    data[pos] = 0
+    return from_raw(data, cast[int] pos, copy = false)
+}
+
+func utf32_from_string(s: string) -> List[char] fail: String_Error {
+    let len: uint = byte_len(s)
+
+    if len != 0 and !is_text(s) {
+        fail String_Error.not_text
+    }
+
+    var cps: Array[char] = new[Array[char]](cast[int] len)
+    var pos: u32 = 0
+    var idx: uint = 0
+
+    while cast[uint] pos < len {
+        let step: Utf8_Step = decode_step(s, pos)
+
+        if step.adv != 0 {
+            cps[idx] = step.cp
+            idx += 1
+            pos += cast[u32] step.adv
+        }
+        else {
+            pos = cast[u32] len
+        }
+    }
+
+    return sys.abi.list_with_length(cps, idx)
+}
+
+func utf16_from_string(s: string) -> List[u16] fail: String_Error {
+    let len: uint = byte_len(s)
+
+    if len != 0 and !is_text(s) {
+        fail String_Error.not_text
+    }
+
+    var units: Array[u16] = new[Array[u16]](cast[int] len)
+    var pos: u32 = 0
+    var idx: uint = 0
+
+    while cast[uint] pos < len {
+        let step: Utf8_Step = decode_step(s, pos)
+
+        if step.adv == 0 {
+            pos = cast[u32] len
+            continue
+        }
+
+        let v: u32 = cast[u32] step.cp
+
+        if v < 0x10000 {
+            units[idx] = cast[u16] v
+            idx += 1
+        }
+        else {
+            let rest: u32 = v - 0x10000
+
+            units[idx] = cast[u16] (0xd800 + (rest >> 10))
+            units[idx + 1] = cast[u16] (0xdc00 + (rest & 0x3ff))
+            idx += 2
+        }
+
+        pos += cast[u32] step.adv
+    }
+
+    return sys.abi.list_with_length(units, idx)
+}

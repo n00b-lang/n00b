@@ -38,6 +38,7 @@ package builtin {
     export containers.array.compare_items to sys.abi
     export containers.list.list_with_length to sys.abi
     export string.core
+    export string.core.encoding_of to unicode
     export ffi.Ffi_Bytes
     export ffi.ffi
     export ffi.Ffi_Table

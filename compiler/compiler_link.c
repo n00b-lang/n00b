@@ -1017,12 +1017,14 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
              scope; scope = scope->all_next) {
             for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
                  symbol = symbol->next_in_scope) {
+                parse_tree_t *origin_declaration =
+                    canonical_symbol(symbol)->decl_node;
                 if (symbol->kind == PARSE_SYM_TYPEDEF && symbol->member_scope
                     && symbol->type
-                    && (!symbol->decl_node || !nt_is(grammar,
-                        symbol->decl_node, "alias-stmt")
+                    && (!origin_declaration || !nt_is(grammar,
+                        origin_declaration, "alias-stmt")
                         || !alias_declaration_is_transparent(
-                            symbol->decl_node))
+                            origin_declaration))
                     && th_named_info(th_resolve(symbol->type), nullptr,
                                      nullptr, nullptr, nullptr)
                     && !parse_symtab_bind_nominal_type(
