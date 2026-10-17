@@ -8,6 +8,8 @@ import internal.casemap
 import internal.normalization
 import internal.segmentation
 import internal.linebreak
+import internal.bidi
+import internal.collation
 
 package unicode {
     export internal.types
@@ -20,5 +22,7 @@ package unicode {
     export internal.normalization
     export internal.segmentation
     export internal.linebreak
+    export internal.bidi
+    export internal.collation
     export builtin.encoding_of
 }
