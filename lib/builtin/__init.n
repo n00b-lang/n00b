@@ -70,6 +70,7 @@ package builtin {
     export string.core.__text_byte_array
     export string.core.__text_bytes
     export string.core.adopt
+    export string.core.decode_escapes
     export string.core.as_text
     export string.core.byte_at
     export string.core.byte_index

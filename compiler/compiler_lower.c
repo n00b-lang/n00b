@@ -6277,8 +6277,13 @@ n00bb_lower_user_literal(ir_lower_context_t *context,
         core_string_t spelling = token && core_option_is_set(token->value)
             ? core_option_get(token->value) : (core_string_t){0};
         bool valid = token && decoded && spelling.data;
-        if (valid && quotes)
-            valid = n00bb_decode_string_literal(spelling, decoded);
+        if (valid && quotes) {
+            valid = spelling.u8_bytes >= 2 && spelling.data[0] == '"'
+                && spelling.data[spelling.u8_bytes - 1] == '"';
+            if (valid)
+                core_buffer_append(decoded, spelling.data + 1,
+                                   spelling.u8_bytes - 2);
+        }
         else if (valid) {
             bool hex = core_string_eq(site->registration->kind,
                                       CORE_STRING_STATIC("hex"));

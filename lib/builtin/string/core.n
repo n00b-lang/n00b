@@ -618,40 +618,129 @@ func to_hex(self: string) -> string {
                     encoding = Str_Encoding.ascii, unsafe = true)
 }
 
+private func put_utf8(modify out: Array[u8], at: uint, cp: u32) -> uint {
+    if cp <= 0x7f {
+        out[at] = unsafe_cast[u8] cp
+        return 1
+    }
+    if cp <= 0x7ff {
+        out[at] = unsafe_cast[u8](0xc0 | (cp >> 6))
+        out[at + 1] = unsafe_cast[u8](0x80 | (cp & 0x3f))
+        return 2
+    }
+    if cp <= 0xffff {
+        out[at] = unsafe_cast[u8](0xe0 | (cp >> 12))
+        out[at + 1] = unsafe_cast[u8](0x80 | ((cp >> 6) & 0x3f))
+        out[at + 2] = unsafe_cast[u8](0x80 | (cp & 0x3f))
+        return 3
+    }
+    out[at] = unsafe_cast[u8](0xf0 | (cp >> 18))
+    out[at + 1] = unsafe_cast[u8](0x80 | ((cp >> 12) & 0x3f))
+    out[at + 2] = unsafe_cast[u8](0x80 | ((cp >> 6) & 0x3f))
+    out[at + 3] = unsafe_cast[u8](0x80 | (cp & 0x3f))
+    return 4
+}
+
 func from_char(c: char) -> string {
     let cp: u32 = cast[u32] c
     if cp > 0x10ffff or (cp >= 0xd800 and cp <= 0xdfff) {
         return empty_string()
     }
     var tmp: Array[u8] = new[Array[u8]](cast[int] max_u8_len)
-    var encoded: int = 0
-    if cp <= 0x7f {
-        tmp[0] = unsafe_cast[u8] cp
-        encoded = 1
-    }
-    elif cp <= 0x7ff {
-        tmp[0] = unsafe_cast[u8](0xc0 | (cp >> 6))
-        tmp[1] = unsafe_cast[u8](0x80 | (cp & 0x3f))
-        encoded = 2
-    }
-    elif cp <= 0xffff {
-        tmp[0] = unsafe_cast[u8](0xe0 | (cp >> 12))
-        tmp[1] = unsafe_cast[u8](0x80 | ((cp >> 6) & 0x3f))
-        tmp[2] = unsafe_cast[u8](0x80 | (cp & 0x3f))
-        encoded = 3
-    }
-    else {
-        tmp[0] = unsafe_cast[u8](0xf0 | (cp >> 18))
-        tmp[1] = unsafe_cast[u8](0x80 | ((cp >> 12) & 0x3f))
-        tmp[2] = unsafe_cast[u8](0x80 | ((cp >> 6) & 0x3f))
-        tmp[3] = unsafe_cast[u8](0x80 | (cp & 0x3f))
-        encoded = 4
-    }
+    let encoded: uint = put_utf8(tmp, 0, cp)
     var enc: Str_Encoding = Str_Encoding.utf8
     if cp <= 0x7f {
         enc = Str_Encoding.ascii
     }
-    return from_raw(ref tmp, encoded, encoding = enc, unsafe = true)
+    return from_raw(ref tmp, cast[int] encoded, encoding = enc, unsafe = true)
+}
+
+private func hex_value(b: u8) -> u32? {
+    if b >= 0x30 and b <= 0x39 {
+        return cast[u32] (b - 0x30)
+    }
+    if b >= 0x61 and b <= 0x66 {
+        return cast[u32] (b - 0x61 + 10)
+    }
+    if b >= 0x41 and b <= 0x46 {
+        return cast[u32] (b - 0x41 + 10)
+    }
+    return nil
+}
+
+private func simple_escape(b: u8) -> u8? {
+    switch b {
+        case 0x61 { return 0x07 }
+        case 0x62 { return 0x08 }
+        case 0x66 { return 0x0c }
+        case 0x6e { return 0x0a }
+        case 0x72 { return 0x0d }
+        case 0x74 { return 0x09 }
+        case 0x76 { return 0x0b }
+        case 0x30 { return 0x00 }
+        case 0x5c, 0x22, 0x27 { return b }
+        else { return nil }
+    }
+}
+
+func decode_escapes(raw: string) -> string fail: string {
+    let base: string = text(raw)
+    let n: uint = __string_byte_len(base)
+    var out: Array[u8] = new[Array[u8]](cast[int] n)
+    var len: uint = 0
+    var i: uint = 0
+    while i < n {
+        let c: u8 = __string_byte(base, i)
+        i += 1
+        if c != 0x5c {
+            out[len] = c
+            len += 1
+            continue
+        }
+        if i >= n {
+            fail "a string ends with an unfinished escape"
+        }
+        let e: u8 = __string_byte(base, i)
+        i += 1
+        let simple: u8? = simple_escape(e)
+        if simple != nil {
+            out[len] = simple.get()
+            len += 1
+            continue
+        }
+        var digits: uint = 0
+        if e == 0x78 {
+            digits = 2
+        }
+        elif e == 0x75 {
+            digits = 4
+        }
+        elif e == 0x55 {
+            digits = 8
+        }
+        else {
+            fail "a string contains an unknown escape"
+        }
+        if n - i < digits {
+            fail "a string has a numeric escape with too few hex digits"
+        }
+        var cp: u32 = 0
+        var k: uint = 0
+        while k < digits {
+            let digit: u32? = hex_value(__string_byte(base, i + k))
+            if digit == nil {
+                fail "a string has a numeric escape with a non-hex digit"
+            }
+            cp = (cp << 4) | digit.get()
+            k += 1
+        }
+        i += digits
+        if cp > 0x10ffff or (cp >= 0xd800 and cp <= 0xdfff) {
+            fail "a string escapes a value that is not a Unicode scalar"
+        }
+        len += put_utf8(out, len, cp)
+    }
+    return from_raw(ref out, cast[int] len, copy = false)
 }
 
 func widen_encoding(a: Str_Encoding, b: Str_Encoding) -> Str_Encoding {

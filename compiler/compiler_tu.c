@@ -10216,6 +10216,7 @@ probe_static_literal(parse_grammar_t *grammar, parse_tree_t *node,
             || nt_is(grammar, node, "tuple-or-paren")) {
             probe->literal = node;
             probe->literal_count = 1;
+            probe->valid = !n00bb_node_literal_site(node);
             return;
         }
         bool transparent = false;
