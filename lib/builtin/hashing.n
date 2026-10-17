@@ -1,5 +1,6 @@
 import bitptr
 import string.core
+import string.style
 
 trait Hash {
     func hash(self: `T) -> u128
@@ -375,6 +376,9 @@ inline func hash(self: float) -> u128 {
     return hash_value(self)
 }
 func hash(self: string) -> u128 {
+    if string.core.tag(self) == cast[u8] string.core.str_tag_rich {
+        return string.style.string_hash(self)
+    }
     var base: string = string.core.text(self)
     let len: uint = string.core.byte_len(base)
     if len == 0 {
