@@ -1,7 +1,7 @@
-import hash
+import hashing
 
 package hash {
-    export hash.Hash
-    export hash.hash
-    export hash.xxh3_128
+    export hashing.Hash
+    export hashing.hash
+    export hashing.xxh3_128
 }

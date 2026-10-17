@@ -2,7 +2,7 @@ import string.core
 import containers.list
 import containers.buffer
 import io.format
-import hash
+import hashing
 
 public const index_extends: u32 = 0xffffffff
 
@@ -417,8 +417,8 @@ func cmp_string_value(left: string, right: string) -> int {
 }
 
 private func hash_words(words: Array[u64]) -> u128 {
-    return hash.xxh3_128_at(unsafe_cast[Ref[byte]] ref words[0],
-                            __array_length(words) * 8)
+    return hashing.xxh3_128_at(unsafe_cast[Ref[byte]] ref words[0],
+                               __array_length(words) * 8)
 }
 
 private func hash_chain(acc: u128, next: u128) -> u128 {

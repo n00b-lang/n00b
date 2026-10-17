@@ -4315,7 +4315,7 @@ register_builtin_value_defaults(th_env *defaults, const th_env *base,
                                  n00bb_link_analysis_t *analysis)
 {
     bool hash_available = environment_has_trait(base,
-        "builtin.hash.Hash");
+        "builtin.hashing.Hash");
     for (size_t u = 0; u < analysis->units.len; u++) {
         core_translation_unit_t *unit = analysis->units.data[u];
         n00bb_tu_state_t *state = tu_state(unit);
@@ -4367,7 +4367,7 @@ register_builtin_value_defaults(th_env *defaults, const th_env *base,
                         "__equal", &selected) == TH_ENV_METHOD_FOUND;
                 bool custom_hash = hash_available && candidate &&
                     th_env_method_resolve(probe, candidate,
-                        "builtin.hash.Hash", "hash", &selected)
+                        "builtin.hashing.Hash", "hash", &selected)
                         == TH_ENV_METHOD_FOUND;
                 core_dict_t visiting;
                 core_dict_init(&visiting, nullptr, nullptr);
@@ -4377,7 +4377,7 @@ register_builtin_value_defaults(th_env *defaults, const th_env *base,
                 bool derive_hash = hash_available && !custom_equal
                     && !custom_hash
                     && (scalar || record_default_fields_support(probe,
-                        state->types, receiver, "builtin.hash.Hash",
+                        state->types, receiver, "builtin.hashing.Hash",
                         "hash", &visiting));
                 core_dict_free(&visiting);
                 if (!derive_equal && !derive_hash) continue;

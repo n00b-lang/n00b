@@ -9326,7 +9326,7 @@ n00bb_record_hash_function(ir_lower_context_t *context, th_type *receiver)
         const th_member *field = th_record_member(shape, i);
         th_env_method_t selected = {0};
         if (!field || th_env_method_resolve(state->types, field->type,
-                "builtin.hash.Hash", "hash", &selected)
+                "builtin.hashing.Hash", "hash", &selected)
                 != TH_ENV_METHOD_FOUND
             || (selected.error_type
                 && !th_is_nil(selected.error_type)))
@@ -9392,7 +9392,7 @@ n00bb_scalar_hash_function(ir_lower_context_t *context, th_type *receiver)
         range && range->is_signed ? "i128" : "u128");
     th_env_method_t selected = {0};
     if (th_env_method_resolve(state->types, integer_type,
-            "builtin.hash.Hash", "hash", &selected) != TH_ENV_METHOD_FOUND)
+            "builtin.hashing.Hash", "hash", &selected) != TH_ENV_METHOD_FOUND)
         return nullptr;
     ir_value_t *self = ir_param_add(function, "self", receiver);
     ir_block_t *block = ir_block_add(function, "entry");

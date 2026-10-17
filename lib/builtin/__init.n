@@ -6,7 +6,7 @@ import containers.tree
 import containers.view
 import containers.buffer
 import cursor
-import hash
+import hashing
 import containers.traits
 import io.debug
 import io.raw
@@ -134,7 +134,7 @@ package builtin {
     export containers.tree.Tree
     export containers.view.View
     export cursor.Cursor
-    export hash.Hash
+    export hashing.Hash
     export ffi.Fixup
     export containers.traits.Container
     export containers.traits.Appendable
