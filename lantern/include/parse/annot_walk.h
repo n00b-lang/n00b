@@ -53,6 +53,8 @@ void parse_annot_result_set_diagnostics(
     const core_translation_unit_t *unit);
 size_t parse_annot_resolve_undefined(parse_annot_result_t *result);
 
+void parse_annot_register_declarations(parse_tree_walk_t *w,
+                                       parse_annot_result_t *out);
 void parse_annot_register(parse_tree_walk_t *w, parse_annot_result_t *out,
                         th_ctx *types, ir_module_t *m);
 
