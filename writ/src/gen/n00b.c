@@ -1234,7 +1234,7 @@ emit_cstr_n00b_helpers(const n00b_t *g, writ_emit_t *emit)
     writ_emit_open(emit, "func __ffi_copy_cstr(address: uint, text: Ref[string]) -> bool");
     writ_emit_line(emit, "var bytes: Array[u8] = new[Array[u8]](cast[int]__ffi_cstr_length(address))");
     writ_emit_line(emit, "__ffi_cstr_copy(address, ref bytes)");
-    writ_emit_line(emit, "return __string_from_utf8(bytes, text)");
+    writ_emit_line(emit, "return __string_from_utf8(ref bytes, text)");
     writ_emit_close(emit, nullptr);
 }
 
@@ -3257,8 +3257,8 @@ n00b_text(const n00b_t *g)
     if (takes_bytes && takes_text(g)) {
         writ_emit_line(&emit, "");
         writ_emit_open(&emit, "func __ffi_take_text(bytes: Ref[Ffi_Bytes], text: Ref[string]) -> bool");
-        writ_emit_line(&emit, "let copied = __ffi_take_bytes(bytes)");
-        writ_emit_line(&emit, "return __string_from_utf8(copied, text)");
+        writ_emit_line(&emit, "var copied = __ffi_take_bytes(bytes)");
+        writ_emit_line(&emit, "return __string_from_utf8(ref copied, text)");
         writ_emit_close(&emit, nullptr);
     }
     if (takes_bytes && takes_detail_text(g)) {

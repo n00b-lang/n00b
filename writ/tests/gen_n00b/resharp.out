@@ -1244,8 +1244,8 @@ func __ffi_take_bytes(bytes: Ref[Ffi_Bytes]) -> Array[u8] {
 }
 
 func __ffi_take_text(bytes: Ref[Ffi_Bytes], text: Ref[string]) -> bool {
-    let copied = __ffi_take_bytes(bytes)
-    return __string_from_utf8(copied, text)
+    var copied = __ffi_take_bytes(bytes)
+    return __string_from_utf8(ref copied, text)
 }
 
 func __ffi_take_string(bytes: Ref[Ffi_Bytes]) -> string? {

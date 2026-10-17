@@ -226,7 +226,7 @@ enum Kv_Status {
 func __ffi_copy_cstr(address: uint, text: Ref[string]) -> bool {
     var bytes: Array[u8] = new[Array[u8]](cast[int]__ffi_cstr_length(address))
     __ffi_cstr_copy(address, ref bytes)
-    return __string_from_utf8(bytes, text)
+    return __string_from_utf8(ref bytes, text)
 }
 
 type Export_Hold {
