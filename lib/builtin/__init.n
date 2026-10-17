@@ -92,6 +92,7 @@ package builtin {
     export string.core.utf8_word_is_ascii
     export string.core.widen_encoding
     export string.core.string
+    export string.style.rich
     export string.core.encoding_of to unicode
     export string.core.validate_multibyte to unicode
     export ffi.Ffi_Bytes

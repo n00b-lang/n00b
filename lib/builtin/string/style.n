@@ -896,50 +896,175 @@ func is_empty(self: Text_Style) -> bool {
     return self == empty_style
 }
 
-private func intrinsic(name: string, bold: bool? = nil, italic: bool? = nil,
-                       underline: bool? = nil, double_underline: bool? = nil,
-                       strikethrough: bool? = nil, reverse: bool? = nil,
-                       dim: bool? = nil, blink: bool? = nil,
-                       text_case: Text_Case = Text_Case.none)
-    -> Intrinsic_Tag {
-    var style: Text_Style = empty_style
-    style.bold = bold
-    style.italic = italic
-    style.underline = underline
-    style.double_underline = double_underline
-    style.strikethrough = strikethrough
-    style.reverse = reverse
-    style.dim = dim
-    style.blink = blink
-    style.text_case = text_case
-    return (name = name, style = style)
-}
-
 private const intrinsic_tags: Array[Intrinsic_Tag] = [
-    intrinsic("b", bold = true),
-    intrinsic("bold", bold = true),
-    intrinsic("i", italic = true),
-    intrinsic("italic", italic = true),
-    intrinsic("u", underline = true),
-    intrinsic("underline", underline = true),
-    intrinsic("uu", double_underline = true),
-    intrinsic("2u", double_underline = true),
-    intrinsic("st", strikethrough = true),
-    intrinsic("strike", strikethrough = true),
-    intrinsic("strikethrough", strikethrough = true),
-    intrinsic("r", reverse = true),
-    intrinsic("reverse", reverse = true),
-    intrinsic("dim", dim = true),
-    intrinsic("faint", dim = true),
-    intrinsic("blink", blink = true),
-    intrinsic("upper", text_case = Text_Case.upper),
-    intrinsic("up", text_case = Text_Case.upper),
-    intrinsic("lower", text_case = Text_Case.lower),
-    intrinsic("l", text_case = Text_Case.lower),
-    intrinsic("title", text_case = Text_Case.title),
-    intrinsic("t", text_case = Text_Case.title),
-    intrinsic("caps", text_case = Text_Case.caps),
-    intrinsic("allcaps", text_case = Text_Case.caps)
+    (name = "b", style = (
+        bold = true, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "bold", style = (
+        bold = true, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "i", style = (
+        bold = nil, italic = true, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "italic", style = (
+        bold = nil, italic = true, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "u", style = (
+        bold = nil, italic = nil, underline = true, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "underline", style = (
+        bold = nil, italic = nil, underline = true, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "uu", style = (
+        bold = nil, italic = nil, underline = nil, double_underline = true,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "2u", style = (
+        bold = nil, italic = nil, underline = nil, double_underline = true,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "st", style = (
+        bold = nil, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = true, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "strike", style = (
+        bold = nil, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = true, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "strikethrough", style = (
+        bold = nil, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = true, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "r", style = (
+        bold = nil, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = true, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "reverse", style = (
+        bold = nil, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = true, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "dim", style = (
+        bold = nil, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = true, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "faint", style = (
+        bold = nil, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = true, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "blink", style = (
+        bold = nil, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = true,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "upper", style = (
+        bold = nil, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.upper, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "up", style = (
+        bold = nil, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.upper, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "lower", style = (
+        bold = nil, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.lower, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "l", style = (
+        bold = nil, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.lower, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "title", style = (
+        bold = nil, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.title, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "t", style = (
+        bold = nil, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.title, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "caps", style = (
+        bold = nil, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.caps, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    )),
+    (name = "allcaps", style = (
+        bold = nil, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.caps, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    ))
 ]
 
 func intrinsic_tag_style(tag: string) -> Text_Style {
@@ -1170,7 +1295,7 @@ private func parse_rich_markup(raw: string,
                 classify_tag(segments, numbering,
                     string.core.byte_slice(raw, cast[int] (i + 2),
                                            cast[int] j),
-                    cast[u32] byte_len(text))!
+                    cast[u32] string.core.byte_len(text))!
                 i = j + 2
             }
             else {
@@ -1191,7 +1316,7 @@ private func parse_rich_markup(raw: string,
             }
             classify_tag(segments, numbering,
                 string.core.byte_slice(raw, cast[int] (i + 2), cast[int] j),
-                cast[u32] byte_len(text))!
+                cast[u32] string.core.byte_len(text))!
             i = j + 2
             continue
         }
@@ -1253,14 +1378,14 @@ private func build_style_records(segments: List[Markup_Segment])
         let seg: Markup_Segment = segments[s]
         s += 1
         switch seg.kind {
-            case Markup_Kind.prop_on, Markup_Kind.case_on,
-                 Markup_Kind.style_on, Markup_Kind.role_on {
-                pending.append((kind = seg.kind, name = seg.name,
-                                prop = seg.prop, raw_tag = seg.raw_tag,
-                                start_byte = seg.at))
+            case Markup_Kind.prop_on, Markup_Kind.case_on, Markup_Kind.style_on, Markup_Kind.role_on {
+                let opened: Pending_Style = (kind = seg.kind, name = seg.name,
+                                             prop = seg.prop,
+                                             raw_tag = seg.raw_tag,
+                                             start_byte = seg.at)
+                pending.append(opened)
             }
-            case Markup_Kind.prop_off, Markup_Kind.case_off,
-                 Markup_Kind.style_off, Markup_Kind.role_off {
+            case Markup_Kind.prop_off, Markup_Kind.case_off, Markup_Kind.style_off, Markup_Kind.role_off {
                 var j: int = cast[int] pending.len() - 1
                 while j >= 0 {
                     if closes_pending(pending[j], seg) {
@@ -1277,17 +1402,18 @@ private func build_style_records(segments: List[Markup_Segment])
                     records.append(span_record(pending[j], seg.at))
                     j += 1
                 }
-                pending = []
+                containers.list.clear(pending)
             }
             case Markup_Kind.subst {
                 var substitution: Sub_Spec = (argname = seg.name)
                 if seg.sub_index != nil {
                     substitution = (position = seg.sub_index.get())
                 }
-                records.append((start_ix = seg.at, end_ix = nil,
-                                style_tag = nil,
-                                format_spec = seg.format_spec,
-                                substitution = substitution))
+                let slot: Style_Record = (start_ix = seg.at, end_ix = nil,
+                                          style_tag = nil,
+                                          format_spec = seg.format_spec,
+                                          substitution = substitution)
+                records.append(slot)
             }
         }
     }
