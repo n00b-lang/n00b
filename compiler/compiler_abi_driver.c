@@ -1133,6 +1133,15 @@ abi_graph_slot(void *context, size_t index, n00bb_abi_graph_slot_t *out)
     if (index >= analysis->static_graph_slots.len) return false;
     const n00bb_static_graph_slot_t *slot =
         &analysis->static_graph_slots.data[index];
+    if (slot->table == N00B_ABI_TABLE_NATIVE_BINDING) {
+        *out = (n00bb_abi_graph_slot_t){
+            .node = slot->node,
+            .offset = slot->offset,
+            .table = slot->table,
+            .native = slot->name,
+        };
+        return true;
+    }
     bool type = slot->table == N00B_ABI_TABLE_TYPE;
     ir_func_t *function = type ? nullptr
         : n00bb_baked_function(analysis, slot->module, slot->name);
@@ -1158,7 +1167,8 @@ abi_graph_flags(void *context, size_t index)
     const n00bb_captured_graph_node_t *node =
         &analysis->static_graph_nodes.data[index];
     return (node->immutable ? N00B_ABI_BAKED_NODE_IMMUTABLE : 0)
-        | (node->array_backing ? N00B_ABI_BAKED_NODE_ARRAY_BACKING : 0);
+        | (node->array_backing ? N00B_ABI_BAKED_NODE_ARRAY_BACKING : 0)
+        | (node->foreign ? N00B_ABI_BAKED_NODE_FOREIGN : 0);
 }
 
 bool

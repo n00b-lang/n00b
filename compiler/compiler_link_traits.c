@@ -2250,6 +2250,17 @@ resolve_generic_trait_specializations(core_link_unit_t *link,
                     core_dict_free(&seen_calls);
                     return false;
                 }
+                th_type *requirement_shape = nullptr;
+                th_type *requirement_failure = nullptr;
+                if (!th_env_signature_channels(call_state->types,
+                        requirement->callable_contract
+                            ? requirement->callable_contract
+                            : requirement->type,
+                        &requirement_shape, &requirement_failure))
+                    requirement_failure = nullptr;
+                bool trait_failure_declared = requirement_failure
+                    && !th_is_nil(requirement_failure)
+                    && th_is_closed(call_state->types, requirement_failure);
                 size_t signature_parameter_count =
                     th_func_nparams(function_type);
                 th_type *function_result = th_func_ret(function_type);
@@ -2708,8 +2719,10 @@ resolve_generic_trait_specializations(core_link_unit_t *link,
                 }
                 th_type *target_shape = target_matches
                     ? th_func_with_error(types, copied_trait_result,
-                        copied_function_failure, target_parameters,
-                        target_parameter_count, nullptr, nullptr, 0)
+                        trait_failure_declared ? requirement_failure
+                                               : copied_function_failure,
+                        target_parameters, target_parameter_count, nullptr,
+                        nullptr, 0)
                     : nullptr;
                 th_type *matched_signature = target_shape
                     ? th_unify(types, target_signature, target_shape) : nullptr;
@@ -2718,7 +2731,7 @@ resolve_generic_trait_specializations(core_link_unit_t *link,
                 if (!target_matches)
                     report_call_type_error(call_unit, call_node, types,
                                            target_shape, target_signature);
-                if (target_matches) {
+                if (target_matches && !trait_failure_declared) {
                     th_type *resolved_failure = th_func_error(
                         matched_signature);
                     th_type *combined_failure = specialization

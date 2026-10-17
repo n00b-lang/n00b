@@ -958,7 +958,8 @@ sdk_root(void)
 }
 
 static bool
-run_clang(const char *triple, const char *directory, const char *source, const char *output)
+run_clang(const n00bb_ffi_t *ffi, const char *triple, const char *directory, const char *source,
+          const char *output)
 {
     const char *compiler = getenv("N00BB_CC");
     if (!compiler) {
@@ -966,9 +967,21 @@ run_clang(const char *triple, const char *directory, const char *source, const c
     }
     core_buffer_t target = {0};
     core_buffer_printf(&target, "--target=%s", triple);
-    char *arguments[16] = {(char *)compiler, target.data, "-std=c11", "-O2", "-fPIC", "-c", "-emit-llvm",
-                           "-I", (char *)directory};
-    size_t next = 9;
+    char **arguments = core_alloc_array(char *, 16 + 2 * ffi->contract_dirs.len);
+    if (!arguments) {
+        core_buffer_release(&target);
+        return false;
+    }
+    char *fixed[] = {(char *)compiler, target.data, "-std=c11", "-O2", "-fPIC", "-c", "-emit-llvm",
+                     "-I", (char *)directory};
+    size_t next = 0;
+    for (; next < sizeof(fixed) / sizeof(fixed[0]); next++) {
+        arguments[next] = fixed[next];
+    }
+    for (size_t i = 0; i < ffi->contract_dirs.len; i++) {
+        arguments[next++] = "-I";
+        arguments[next++] = (char *)ffi->contract_dirs.data[i].data;
+    }
     char *sysroot = sdk_root();
     if (sysroot) {
         arguments[next++] = "-isysroot";
@@ -983,6 +996,7 @@ run_clang(const char *triple, const char *directory, const char *source, const c
     bool ok = !posix_spawnp(&child, compiler, nullptr, nullptr, arguments, environ)
            && waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0;
     core_free(sysroot);
+    core_free(arguments);
     core_buffer_release(&target);
     return ok;
 }
@@ -995,6 +1009,9 @@ shim_key(const n00bb_ffi_t *ffi, const n00bb_native_cache_t *cache, const char *
     const ffi_output_t *shim = &ffi->shims.data[index];
     core_buffer_append(&payload, shim->name.data, shim->name.u8_bytes + 1);
     core_buffer_append(&payload, shim->contents.data, shim->contents.u8_bytes + 1);
+    for (size_t i = 0; i < ffi->contract_dirs.len; i++) {
+        core_buffer_append(&payload, ffi->contract_dirs.data[i].data, ffi->contract_dirs.data[i].u8_bytes + 1);
+    }
     for (size_t i = 0; i < ffi->shims.len; i++) {
         if (ends_with(ffi->shims.data[i].name, ".h")) {
             core_buffer_append(&payload, ffi->shims.data[i].name.data, ffi->shims.data[i].name.u8_bytes + 1);
@@ -1032,7 +1049,7 @@ compile_uncached(const n00bb_ffi_t *ffi, const char *triple, size_t index, core_
     core_buffer_printf(&source, "%s/%.*s", directory, (int)ffi->shims.data[index].name.u8_bytes,
                        ffi->shims.data[index].name.data);
     core_buffer_printf(&output, "%s.bc", source.data);
-    ok = ok && run_clang(triple, directory, source.data, output.data) && read_whole_file(output.data, bitcode);
+    ok = ok && run_clang(ffi, triple, directory, source.data, output.data) && read_whole_file(output.data, bitcode);
     unlink(output.data);
     for (size_t i = 0; i < written.len; i++) {
         unlink(written.data[i].data);

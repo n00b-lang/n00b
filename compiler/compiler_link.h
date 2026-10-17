@@ -332,6 +332,7 @@ typedef struct {
     char *type_name;
     bool immutable;
     bool array_backing;
+    bool foreign;
 } n00bb_captured_graph_node_t;
 core_list_decl(n00bb_captured_graph_node_t);
 core_list_decl(n00bb_static_graph_edge_t);
@@ -393,6 +394,9 @@ typedef struct n00bb_link_analysis_t {
     core_list_t(n00bb_static_graph_edge_t) static_graph_edges;
     core_list_t(n00bb_baked_root_t) baked_roots;
     core_list_t(n00bb_static_graph_slot_t) static_graph_slots;
+    char *baked_failure_root;
+    char *baked_failure_path;
+    char *baked_failure_message;
     bool build_time_capture;
     core_dict_t declarations_by_symbol;
     ir_exec_graph_t *execution_graph;

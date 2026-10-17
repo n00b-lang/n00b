@@ -4648,9 +4648,14 @@ native_call_outcome_within(ir_module_t *module, const ir_value_t *value,
     if (instruction->op == IR_OP_COPY || instruction->op == IR_OP_PHI) {
         bool any = false;
         for (uint32_t i = 0; i < instruction->n_operands; i++) {
-            if (instruction->operands[i].kind != IR_OPD_VALUE) continue;
-            if (!native_call_outcome_within(module,
-                    instruction->operands[i].value, depth + 1)) return false;
+            const ir_operand_t *operand = &instruction->operands[i];
+            const ir_value_t *source = operand->kind == IR_OPD_VALUE
+                ? operand->value
+                : operand->kind == IR_OPD_PHI_ARM ? operand->phi.value
+                : nullptr;
+            if (!source) continue;
+            if (!native_call_outcome_within(module, source, depth + 1))
+                return false;
             any = true;
         }
         return any;
@@ -4668,6 +4673,33 @@ static bool
 native_call_outcome(ir_module_t *module, const ir_value_t *value)
 {
     return native_call_outcome_within(module, value, 0);
+}
+
+static th_type *
+native_call_outcome_signature(const ir_value_t *value, unsigned depth)
+{
+    const ir_instr_t *instruction = value ? value->def : nullptr;
+    if (!instruction || depth > 64) return nullptr;
+    if (instruction->op == IR_OP_COPY || instruction->op == IR_OP_PHI) {
+        for (uint32_t i = 0; i < instruction->n_operands; i++) {
+            const ir_operand_t *operand = &instruction->operands[i];
+            const ir_value_t *source = operand->kind == IR_OPD_VALUE
+                ? operand->value
+                : operand->kind == IR_OPD_PHI_ARM ? operand->phi.value
+                : nullptr;
+            th_type *signature = source
+                ? native_call_outcome_signature(source, depth + 1) : nullptr;
+            if (signature) return signature;
+        }
+        return nullptr;
+    }
+    th_type *signature = nullptr;
+    if (instruction->op == IR_OP_CALL
+        || instruction->op == IR_OP_CALLBACK_INVOKE)
+        signature = ir_instr_call_signature(instruction);
+    else if (instruction->op == IR_OP_CALLBACK_CREATE)
+        ir_instr_callback_contract(instruction, nullptr, nullptr, &signature);
+    return signature;
 }
 
 static bool
@@ -7505,8 +7537,13 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
     }
     case IR_OP_PHI: {
         if (!instruction->dest) break;
-        LLVMTypeRef type = value_type(state->function->owner,
-            instruction->dest->type, LLVMGetModuleContext(state->module));
+        LLVMTypeRef type = native_call_outcome(state->function->owner,
+                instruction->dest)
+            ? native_result_type(state->module, state->function->owner,
+                native_call_outcome_signature(instruction->dest, 0),
+                LLVMGetModuleContext(state->module))
+            : value_type(state->function->owner,
+                instruction->dest->type, LLVMGetModuleContext(state->module));
         if (!type || LLVMGetTypeKind(type) == LLVMVoidTypeKind) break;
         result = LLVMBuildPhi(state->builder, type, "merge");
         return save_result(state, instruction, result);

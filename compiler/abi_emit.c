@@ -2127,6 +2127,13 @@ n00bb_abi_emit_unit(
     size_t storage_base_first = (has_pool ? 1 : 0)
         + (has_aggregates ? 1 : 0);
     const char *object_failure = "native object emission";
+    size_t native_first = (has_pool ? 1 : 0) + (has_aggregates ? 1 : 0)
+        + storage_base_symbols + native_bindings.storage_count - 1
+        + (tls_descriptor_count ? tls_descriptor_count + 1 : 0);
+    size_t native_count = 0;
+    const char **native_names = storage_rows.relocation_count
+        ? core_alloc_array(const char *, storage_rows.relocation_count)
+        : nullptr;
     if (valid)
         valid = n00bb_abi_name_pool_relocations(pool, entries,
             sizeof(entries) / sizeof(*entries), &relocations,
@@ -2167,6 +2174,26 @@ n00bb_abi_emit_unit(
                             + (storage_input_indexes[
                                 N00B_ABI_STORAGE_READ_ONLY] != 0))
                         : UINT32_MAX;
+                if (source->target_kind == N00BB_ABI_RELOC_NATIVE) {
+                    size_t found = 0;
+                    while (found < native_count
+                        && strcmp(native_names[found], source->native))
+                        found++;
+                    if (found == native_count)
+                        native_names[native_count++] = source->native;
+                    combined[relocation_count + i] =
+                        (core_object_emit_absolute64_t){
+                            .section_index = section,
+                            .section_offset = source->byte_offset,
+                            .symbol_index = (uint32_t)(native_first + found),
+                        };
+                    if (!section) {
+                        object_failure = "native symbol relocation source";
+                        valid = false;
+                        break;
+                    }
+                    continue;
+                }
                 size_t target_size = source->target_kind
                     == N00BB_ABI_RELOC_STRING_POOL
                     ? n00bb_abi_name_pool_size(pool)
@@ -2224,7 +2251,10 @@ n00bb_abi_emit_unit(
         + (has_aggregates ? 1 : 0)
         + storage_base_symbols
         + native_bindings.storage_count - 1
-        + (tls_descriptor_count ? tls_descriptor_count + 1 : 0);
+        + (tls_descriptor_count ? tls_descriptor_count + 1 : 0)
+        + native_count;
+    char **native_symbol_names = native_count
+        ? core_alloc_array(char *, native_count) : nullptr;
     object_symbols = symbol_count
         ? core_alloc_array(core_object_emit_symbol_t, symbol_count)
         : nullptr;
@@ -2273,7 +2303,8 @@ n00bb_abi_emit_unit(
             memcpy(tls_template_names[ordinal], native_name, length);
             memcpy(tls_template_names[ordinal] + length, "$tlv$init",
                 sizeof("$tlv$init"));
-            object_symbols[symbol_count - tls_descriptor_count - 1
+            object_symbols[symbol_count - native_count
+                           - tls_descriptor_count - 1
                            + ordinal] = (core_object_emit_symbol_t){
                 .name = tls_template_names[ordinal],
                 .section_index = storage_input_indexes[N00B_ABI_STORAGE_TLS],
@@ -2281,8 +2312,20 @@ n00bb_abi_emit_unit(
             };
             ordinal++;
         }
-        object_symbols[symbol_count - 1] = (core_object_emit_symbol_t){
-            .name = "__tlv_bootstrap", .exported = true,
+        object_symbols[symbol_count - native_count - 1] =
+            (core_object_emit_symbol_t){
+                .name = "__tlv_bootstrap", .exported = true,
+            };
+    }
+    bool underscore = target->object_format == CORE_TARGET_OBJECT_MACH_O;
+    for (size_t i = 0; valid && i < native_count; i++) {
+        size_t length = strlen(native_names[i]);
+        native_symbol_names[i] = core_alloc_array(char, length + 2);
+        if (underscore) native_symbol_names[i][0] = '_';
+        memcpy(native_symbol_names[i] + underscore, native_names[i],
+               length + 1);
+        object_symbols[native_first + i] = (core_object_emit_symbol_t){
+            .name = native_symbol_names[i], .exported = true,
         };
     }
     if (valid)
@@ -2291,6 +2334,10 @@ n00bb_abi_emit_unit(
             object_symbols, symbol_count,
             relocations, relocation_count,
             &object, &object_bytes);
+    for (size_t i = 0; native_symbol_names && i < native_count; i++)
+        core_free(native_symbol_names[i]);
+    core_free(native_symbol_names);
+    core_free(native_names);
     if (!valid) {
         core_buffer_t message = {0};
         core_buffer_printf(&message, "could not write ABI object: %s",

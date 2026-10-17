@@ -1852,7 +1852,7 @@ metadata_baked_nodes_valid(const n00b_abi_snapshot_v1 *snapshot,
     uint32_t count = n00b_abi_v1_table_count(snapshot,
         N00B_ABI_TABLE_BAKED_NODE);
     uint32_t known = N00B_ABI_BAKED_NODE_IMMUTABLE
-        | N00B_ABI_BAKED_NODE_ARRAY_BACKING;
+        | N00B_ABI_BAKED_NODE_ARRAY_BACKING | N00B_ABI_BAKED_NODE_FOREIGN;
     for (uint32_t i = 1; i < count; i++) {
         const n00b_abi_baked_node_v1 *node = n00b_abi_v1_baked_node(snapshot,
                                                                     i);

@@ -18,6 +18,7 @@ typedef struct {
     const char *module;
     const char *function;
     th_type *function_type;
+    const char *native;
 } n00bb_abi_graph_slot_t;
 
 typedef struct {
@@ -41,6 +42,7 @@ typedef struct {
     uint64_t byte_offset;
     uint32_t target_kind;
     uint64_t target_offset;
+    const char *native;
 } n00bb_abi_storage_relocation_t;
 
 typedef struct {
@@ -54,6 +56,7 @@ typedef struct {
 enum {
     N00BB_ABI_RELOC_AGGREGATE = N00B_ABI_STORAGE_TLS + 1,
     N00BB_ABI_RELOC_STRING_POOL,
+    N00BB_ABI_RELOC_NATIVE,
 };
 
 typedef struct {

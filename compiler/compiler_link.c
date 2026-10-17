@@ -4118,6 +4118,9 @@ n00bb_link_analysis_free(n00bb_link_analysis_t *analysis)
     }
     core_list_free(analysis->static_graph_nodes);
     core_list_free(analysis->static_graph_edges);
+    core_free(analysis->baked_failure_root);
+    core_free(analysis->baked_failure_path);
+    core_free(analysis->baked_failure_message);
     for (size_t i = 0; i < analysis->baked_roots.len; i++)
         core_free(analysis->baked_roots.data[i].identifier);
     core_list_free(analysis->baked_roots);

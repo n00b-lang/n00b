@@ -87,6 +87,10 @@ read_slot(capture_reader_t *reader, uint64_t node_count,
     if (table == N00B_ABI_TABLE_TYPE)
         return read_word(reader, 8, &slot->typehash)
             && read_type_name(reader, &slot->name) && slot->name;
+    if (table == N00B_ABI_TABLE_NATIVE_BINDING) {
+        slot->name = read_string(reader);
+        return slot->name && *slot->name;
+    }
     slot->module = read_string(reader);
     slot->name = slot->module ? read_string(reader) : nullptr;
     if (table == N00B_ABI_TABLE_FUNCTION && slot->name) return true;
@@ -110,6 +114,36 @@ read_root_identifier(capture_reader_t *reader, core_buffer_t *identifier)
     return identifier->data != nullptr;
 }
 
+static bool
+read_failure(capture_reader_t *reader, n00bb_link_analysis_t *analysis)
+{
+    core_buffer_t root = {0}, path = {0};
+    bool ok = read_root_identifier(reader, &root);
+    uint64_t kind = 1;
+    while (ok && (ok = read_word(reader, 4, &kind)) && kind) {
+        uint64_t index = 0;
+        char *name = kind == 1 ? read_string(reader) : nullptr;
+        if (kind == 1 && name)
+            core_buffer_printf(&path, "%s%s", path.byte_len ? "." : "", name);
+        else if (kind == 2 && read_word(reader, 8, &index))
+            core_buffer_printf(&path, "[%llu]", (unsigned long long)index);
+        else ok = false;
+        core_free(name);
+    }
+    char *message = ok ? read_string(reader) : nullptr;
+    ok = ok && message && reader->offset == reader->size;
+    if (ok) {
+        analysis->baked_failure_root = core_strndup(root.data, root.byte_len);
+        analysis->baked_failure_path = path.byte_len
+            ? core_strndup(path.data, path.byte_len) : core_strndup("", 0);
+        analysis->baked_failure_message = message;
+    }
+    else core_free(message);
+    core_buffer_release(&root);
+    core_buffer_release(&path);
+    return ok;
+}
+
 bool
 n00bb_baked_graph_load(n00bb_link_analysis_t *analysis)
 {
@@ -120,6 +154,7 @@ n00bb_baked_graph_load(n00bb_link_analysis_t *analysis)
     };
     uint64_t node_count = 0, edge_count = 0, root_count = 0;
     bool ok = read_word(&reader, 8, &node_count);
+    if (ok && node_count == UINT64_MAX) return read_failure(&reader, analysis);
     for (uint64_t i = 0; ok && i < node_count; i++) {
         uint64_t size = 0, alignment = 0, typehash = 0, flags = 0;
         const uint8_t *bytes = nullptr;
@@ -143,6 +178,7 @@ n00bb_baked_graph_load(n00bb_link_analysis_t *analysis)
                 .type_name = type_name,
                 .immutable = flags & N00B_ABI_BAKED_NODE_IMMUTABLE,
                 .array_backing = flags & N00B_ABI_BAKED_NODE_ARRAY_BACKING,
+                .foreign = flags & N00B_ABI_BAKED_NODE_FOREIGN,
             }));
     }
     ok = ok && read_word(&reader, 8, &edge_count);

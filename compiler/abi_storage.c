@@ -827,7 +827,8 @@ n00bb_abi_graph_types_collect(
         if (slot.table == N00B_ABI_TABLE_TYPE)
             valid = graph_type_add(index, runtime, slot.type_name,
                                    slot.typehash);
-        else if (strcmp(slot.module, ir_module_name(runtime)))
+        else if (slot.table != N00B_ABI_TABLE_NATIVE_BINDING
+                 && strcmp(slot.module, ir_module_name(runtime)))
             valid = slot.function_type
                 && n00bb_abi_type_index_add(index, slot.function_type,
                                             nullptr);
@@ -1212,6 +1213,8 @@ n00bb_abi_storage_rows_build(
         graph_place_t *place = &graph_places[i];
         if (!(place->reachability & 1)) continue;
         uint32_t kind = place->reachability & 2
+            || (graphs->flags(graphs->context, i)
+                & N00B_ABI_BAKED_NODE_FOREIGN)
             ? N00B_ABI_STORAGE_WRITABLE : N00B_ABI_STORAGE_READ_ONLY;
         if (place->placed) {
             valid = !((place->reachability & 2)
@@ -1268,6 +1271,25 @@ n00bb_abi_storage_rows_build(
         valid = graphs->slot(graphs->context, i, &slot)
             && slot.node < graphs->node_count;
         if (!valid || !graph_places[slot.node].placed) continue;
+        if (slot.table == N00B_ABI_TABLE_NATIVE_BINDING) {
+            uint32_t *unused_alignment = nullptr;
+            const graph_place_t *place = &graph_places[slot.node];
+            core_buffer_t *buffer = graph_segment(&built, place->kind,
+                &unused_alignment);
+            uint64_t offset = place->offset + slot.offset;
+            valid = buffer && slot.native && offset <= buffer->byte_len
+                && buffer->byte_len - offset >= sizeof(uint64_t);
+            if (!valid) break;
+            memset(buffer->data + offset, 0, sizeof(uint64_t));
+            core_list_push(relocations,
+                ((n00bb_abi_storage_relocation_t){
+                    .source_kind = place->kind,
+                    .byte_offset = offset,
+                    .target_kind = N00BB_ABI_RELOC_NATIVE,
+                    .native = slot.native,
+                }));
+            continue;
+        }
         uint32_t table = 0;
         valid = graph_slot_index(types, functions, baked_functions, &slot,
                                  &table, &local_index)

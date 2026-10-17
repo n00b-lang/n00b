@@ -320,6 +320,7 @@ typedef enum {
 typedef enum {
     N00B_ABI_BAKED_NODE_IMMUTABLE = 1u << 0,
     N00B_ABI_BAKED_NODE_ARRAY_BACKING = 1u << 1,
+    N00B_ABI_BAKED_NODE_FOREIGN = 1u << 2,
 } n00b_abi_baked_node_flag_v1;
 
 typedef struct {
