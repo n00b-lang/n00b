@@ -1,0 +1,6 @@
+func pick(t: string) -> string {
+    let s: string = try { = t } else e { = "none" }
+    return s
+}
+
+require pick("abc") == "abc"

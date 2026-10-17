@@ -595,6 +595,19 @@ test(
 )
 
 test(
+    'try-without-failure-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'features'
+               / 'try_without_failure.n',
+           'this `try` has no failure path',
+           'try_without_failure.n:2:21'],
+    timeout: 120,
+    suite: 'slow',
+)
+
+test(
     'let-array-reassign-n00b',
     find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',

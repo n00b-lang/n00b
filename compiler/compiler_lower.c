@@ -1870,6 +1870,12 @@ n00bb_lower_try_scope(ir_lower_context_t *context, parse_visit_t *visit,
                 return false;
             frame->join_reachable = true;
         }
+        if (!frame->error_reachable) {
+            lower_error(context, IR_DIAG_TYPE_CLASS,
+                lower_span_for_tree(context, frame->node),
+                "this `try` has no failure path");
+            return false;
+        }
         context->block = frame->handler;
         context->reachable = frame->error_reachable;
         if (!frame->error_reachable) {
