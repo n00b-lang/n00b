@@ -1791,3 +1791,20 @@ foreach fixture : [
         suite: 'slow',
     )
 endforeach
+
+run_target(
+    'regen-unicode',
+    command: [
+        find_program('python3'),
+        meson.current_source_dir() / 'tools' / 'gen_unicode_tables.py',
+        '--cache-dir', meson.current_build_dir() / 'unicode-cache',
+        '--ucd-version', '18.0.0',
+        '--out-dir', meson.current_source_dir() / 'lib' / 'unicode' / 'generated',
+        '--conformance-dir', meson.current_source_dir() / 'tests' / 'data' / 'unicode',
+        '--conformance-program', meson.current_source_dir() / 'tests' / 'programs'
+            / 'unicode' / 'gen_conformance.n',
+        '--test-data-dir', meson.current_build_dir() / 'unicode-test-data',
+        '--allow-downloads',
+        '--no-strict',
+    ],
+)
