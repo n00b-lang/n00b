@@ -1,0 +1,22 @@
+import second
+
+public var levels: int = 3
+
+public type Token {
+    public weight: int
+}
+
+public func token(weight: int) -> Token {
+    return (weight = weight)
+}
+
+public func weight_of(item: Token) -> int {
+    return item.weight
+}
+
+public func walk(n: int) -> int {
+    if n <= 0 {
+        return 0
+    }
+    return second.step(n - 1) + 1
+}

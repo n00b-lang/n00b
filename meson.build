@@ -713,6 +713,36 @@ test(
     suite: 'slow',
 )
 
+foreach import_cycle : ['two', 'three', 'types']
+    test(
+        'import-cycle-' + import_cycle + '-n00b', find_program('sh'),
+        args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
+               n00bb_exe.full_path(),
+               meson.current_source_dir() / 'tests' / 'programs'
+                   / 'import_cycles' / import_cycle
+                   / import_cycle + '_cycle.n'],
+        env: ['N00B_PATH=' + (meson.current_source_dir() / 'tests'
+            / 'programs' / 'import_cycles' / import_cycle)],
+        timeout: 180,
+        suite: 'slow',
+    )
+endforeach
+
+test(
+    'import-cycle-initializer-n00b', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'import_cycles' / 'initializer' / 'initializer_cycle.n',
+           'N00BB-L0040',
+           'alpha.a -> beta.b -> alpha.a',
+           'modules \'alpha\', \'beta\''],
+    env: ['N00B_PATH=' + (meson.current_source_dir() / 'tests'
+        / 'programs' / 'import_cycles' / 'initializer')],
+    timeout: 120,
+    suite: 'slow',
+)
+
 test(
     'litmod-duplicates', find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'litmod_duplicates.sh',

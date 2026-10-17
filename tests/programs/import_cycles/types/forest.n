@@ -1,0 +1,42 @@
+import tree
+
+public trait Measured {
+    func measure(self: `T) -> int
+}
+
+public type Forest {
+    public size: int
+}
+
+public type Holder {
+    public tree: tree.Tree
+    public count: int
+}
+
+public var planted: Forest = make_forest(4)
+
+public func make_forest(n: int) -> Forest {
+    return (size = n)
+}
+
+public func count(item: Forest) -> int {
+    return item.size
+}
+
+public func measure(self: Forest) -> int {
+    return self.size * 2
+}
+
+public func first_label(item: tree.Tree) -> int {
+    return item.label
+}
+
+public func holder() -> Holder {
+    var inner = tree.make_tree(make_forest(1))
+    inner.label = 9
+    return (tree = inner, count = inner.label)
+}
+
+public func total() -> int {
+    return tree.shared.label + tree.wrapped(planted).left.size + holder().count - 7
+}

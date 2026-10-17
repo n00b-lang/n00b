@@ -457,8 +457,18 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             && !resolve_module_member_site(grammar, unit, node)) return;
         if (type_reference && dotted_symbol_path_node(grammar, node)) {
             parse_node_resolution_t resolution = parse_tree_resolution(node);
-            if (resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
-                && resolution.target.symbol->type) {
+            bool typed = resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
+                && resolution.target.symbol->type;
+            if (!typed && !n00bb_pending_type_reference(state, node)) {
+                core_diagnostics_report_at(
+                    core_translation_unit_diagnostics(unit), unit,
+                    CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0004"),
+                    CORE_STRING_STATIC(
+                        "could not hold the imported type reference until its module is typed"),
+                    link_source_location(node));
+                return;
+            }
+            if (typed) {
                 core_tree_node_value(node).type =
                     resolution.target.symbol->type;
                 if (!parse_sym_add_use(resolution.target.symbol, node)) {

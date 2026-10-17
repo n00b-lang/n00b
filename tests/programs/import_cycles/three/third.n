@@ -1,0 +1,18 @@
+import first
+
+public var depth: int = first.levels
+
+public func same(value: `T) -> `T {
+    return value
+}
+
+public func hop(n: int) -> int {
+    if n <= 0 {
+        return 0
+    }
+    return first.walk(n - 1) + 1
+}
+
+public func weigh(item: first.Token) -> int {
+    return first.weight_of(item) * 2
+}

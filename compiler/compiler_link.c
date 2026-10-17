@@ -1187,6 +1187,21 @@ module_call_exact_arity(parse_grammar_t *grammar, n00bb_tu_state_t *state,
 }
 
 bool
+n00bb_pending_type_reference(n00bb_tu_state_t *state, parse_tree_t *node)
+{
+    th_type *current = core_tree_node_value(node).type;
+    parse_tree_t *receiver = core_tree_num_children(node)
+        ? core_tree_child(node, 0) : nullptr;
+    th_type *receiver_type = receiver && !core_tree_is_leaf(receiver)
+        ? core_tree_node_value(receiver).type : nullptr;
+    if (current && (!receiver_type
+                    || th_resolve(current) != th_resolve(receiver_type)))
+        return true;
+    core_tree_node_value(node).type = th_var(state->types);
+    return core_tree_node_value(node).type != nullptr;
+}
+
+bool
 resolve_module_member_site(parse_grammar_t *grammar,
                            core_translation_unit_t *unit,
                            parse_tree_t *node)
@@ -1289,16 +1304,10 @@ resolve_module_member_site(parse_grammar_t *grammar,
         }
         if (!type && type_reference
             && imported_state->semantic_annotation_started
-            && !imported_state->semantic_annotation_complete) {
-            if (!core_tree_node_value(node).type)
-                core_tree_node_value(node).type = th_var(state->types);
-            return core_tree_node_value(node).type != nullptr;
-        }
-        if (package_export && !state->semantic_annotation_complete) {
-            if (!core_tree_node_value(node).type)
-                core_tree_node_value(node).type = th_var(state->types);
-            return core_tree_node_value(node).type != nullptr;
-        }
+            && !imported_state->semantic_annotation_complete)
+            return n00bb_pending_type_reference(state, node);
+        if (package_export && !state->semantic_annotation_complete)
+            return n00bb_pending_type_reference(state, node);
         core_buffer_t message = {0};
         core_buffer_printf(&message,
             "module '%.*s' has no visible type named '%.*s'",
@@ -2205,12 +2214,33 @@ build_initializer_order(core_link_unit_t *link,
                 core_translation_unit_t *source = blocked_edge.from
                     ? core_link_declaration_owner(blocked_edge.from)
                     : blocked_edge.source_unit;
-                if (source)
+                if (source) {
+                    core_buffer_t message = {0};
+                    core_buffer_puts(&message,
+                        "initializer dependency cycle requires reading an uninitialized global: no initialization order exists for modules ");
+                    size_t listed = 0;
+                    for (size_t m = 0; m < member_count; m++) {
+                        if (selected[m]) continue;
+                        core_string_t name = core_link_unit_scc_member(
+                            link, scc, m)->module.identifier;
+                        core_buffer_printf(&message, "%s'%.*s'",
+                            listed++ ? ", " : "",
+                            (int)name.u8_bytes, name.data);
+                    }
+                    core_buffer_puts(&message, " (");
+                    append_initializer_declaration_name(&message,
+                                                        blocked_edge.from);
+                    core_buffer_puts(&message, " reads ");
+                    append_initializer_declaration_name(&message,
+                                                        blocked_edge.to);
+                    core_buffer_puts(&message, ")");
                     core_diagnostics_report_at(
                         core_translation_unit_diagnostics(source), source,
                         CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-L0040"),
-                        CORE_STRING_STATIC("initializer dependency cycle requires reading an uninitialized global"),
+                        core_string_borrow(message.data, message.byte_len),
                         blocked_edge.source_location);
+                    core_buffer_release(&message);
+                }
                 *state_out = CORE_LINK_CONTRIBUTION_FAILED;
                 valid = false;
                 goto finish;
@@ -2243,6 +2273,21 @@ initializer_declaration_symbol(core_link_declaration_t *declaration)
     n00bb_link_payload_t *payload = declaration
         ? core_link_declaration_payload(declaration) : nullptr;
     return payload ? payload->symbol : nullptr;
+}
+
+void
+append_initializer_declaration_name(core_buffer_t *out,
+                                    core_link_declaration_t *declaration)
+{
+    core_string_t module = declaration
+        ? core_link_declaration_module(declaration) : (core_string_t){0};
+    parse_sym_entry_t *symbol = initializer_declaration_symbol(declaration);
+    core_string_t name = symbol ? symbol->name
+        : declaration ? core_link_declaration_key(declaration)
+                      : CORE_STRING_STATIC("<module initializer>");
+    if (module.u8_bytes)
+        core_buffer_printf(out, "%.*s.", (int)module.u8_bytes, module.data);
+    core_buffer_printf(out, "%.*s", (int)name.u8_bytes, name.data);
 }
 
 static bool

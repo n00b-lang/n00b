@@ -1,0 +1,34 @@
+import forest
+
+public type Tree {
+    public label: int
+    public kids: forest.Forest
+}
+
+public type Pair {
+    public left: `T
+    public right: `T
+}
+
+public var shared: Tree = make_tree(forest.make_forest(2))
+
+public func make_tree(kids: forest.Forest) -> Tree {
+    return (label = 1, kids = kids)
+}
+
+public func depth(item: Tree) -> int {
+    return forest.count(item.kids) - 2
+}
+
+public func measured(item: forest.Forest) -> int {
+    return item.measure()
+}
+
+public func wrapped(item: `T) -> Pair[`T] {
+    return (left = item, right = item)
+}
+
+public func paired(item: forest.Forest) -> int {
+    var pair: Pair[forest.Forest] = wrapped(item)
+    return forest.count(pair.left) + forest.count(pair.right)
+}
