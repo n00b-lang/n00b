@@ -60,6 +60,6 @@ func to_string(self: Char_Buf) -> string {
     if wide {
         declared = Str_Encoding.utf8
     }
-    return from_raw(out, cast[int] pos, copy = false, encoding = declared,
+    return from_raw(ref out, cast[int] pos, copy = false, encoding = declared,
                     unsafe = true)
 }

@@ -489,7 +489,7 @@ func to_string(consume self: Buffer,
     var result: string = string.core.empty_string()
     with Buffer_Write(state) {
         raw_own(state)
-        result = string.core.from_raw(state.store,
+        result = string.core.from_raw(ref state.store,
                                       cast[int] state.byte_len,
                                       copy = false, encoding = encoding)
     }
@@ -518,7 +518,7 @@ func buffer_borrow_begin(self: Buffer) -> string {
         }
         borrowed_top += 1
     }
-    return string.core.from_raw(state.store, cast[int] state.byte_len,
+    return string.core.from_raw(ref state.store, cast[int] state.byte_len,
                                 copy = false)
 }
 

@@ -5,7 +5,7 @@ func make_long() -> string {
         bytes[i] = cast[u8] (0x41 + i % 26)
         i += 1
     }
-    return from_raw(bytes, 4000)
+    return from_raw(ref bytes, 4000)
 }
 
 func churn() {

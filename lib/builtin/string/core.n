@@ -80,8 +80,8 @@ private func __string_byte(s: string, i: uint) -> u8 {
     return cast[u8] stored
 }
 
-private func __string_make(bytes: Array[u8], at: uint, n: uint, encoding: u8,
-                           share: bool) -> string {
+private func __string_make(bytes: Ref[Array[u8]], at: uint, n: uint,
+                           encoding: u8, share: bool) -> string {
     var made: string = ""
     let view: Ref[String_Words] = words(ref made)
     if n <= str_short_cap {
@@ -135,7 +135,7 @@ private func __string_make_rich(body: Ref[`T]) -> string {
 
 private func adopt_bytes(bytes: Array[u8], n: uint, encoding: u8) -> string {
     if n <= str_short_cap {
-        return __string_make(bytes, 0, n, encoding, false)
+        return __string_make(ref bytes, 0, n, encoding, false)
     }
     var made: string = ""
     let view: Ref[String_Words] = words(ref made)
@@ -354,7 +354,7 @@ func __string_from_utf8(bytes: Array[u8], result: Ref[string]) -> bool {
     if ascii {
         encoding = 1
     }
-    ref_write(result, __string_make(bytes, 0, length, encoding, false))
+    ref_write(result, __string_make(ref bytes, 0, length, encoding, false))
     return true
 }
 
@@ -404,7 +404,7 @@ private func __string_with_encoding(s: string, encoding: u8) -> string {
     return out
 }
 
-private func raw_len(src: Array[u8], at: uint, byte_len: int) -> uint {
+private func raw_len(src: Ref[Array[u8]], at: uint, byte_len: int) -> uint {
     require at <= __array_length(src)
     if byte_len >= 0 {
         require cast[uint] byte_len <= __array_length(src) - at
@@ -418,11 +418,11 @@ private func raw_len(src: Array[u8], at: uint, byte_len: int) -> uint {
 }
 
 func empty_string() -> string {
-    return __string_make(new[Array[u8]](0), 0, 0,
-                         cast[u8] Str_Encoding.ascii, false)
+    var none: Array[u8] = new[Array[u8]](0)
+    return __string_make(ref none, 0, 0, cast[u8] Str_Encoding.ascii, false)
 }
 
-func from_raw(src: Array[u8], byte_len: int, at: uint = 0,
+func from_raw(src: Ref[Array[u8]], byte_len: int, at: uint = 0,
               copy: bool = true, encoding: Str_Encoding? = nil,
               unsafe: bool = false) -> string {
     let len: uint = raw_len(src, at, byte_len)
@@ -494,7 +494,7 @@ func to_cstring(self: string, copy: bool = false, buf: Array[u8]? = nil)
 }
 
 func adopt(bytes: Array[u8], len: int) -> string {
-    return from_raw(bytes, len, copy = false)
+    return from_raw(ref bytes, len, copy = false)
 }
 
 func byte_index(self: string, n: int) -> u8 fail: String_Error {
@@ -524,8 +524,9 @@ func byte_slice(self: string, start: int, end: int) -> string {
         last = len
     }
     if first < 0 or last < 0 or first >= len or first >= last {
-        return __string_make(new[Array[u8]](0), 0, 0,
-                             cast[u8] Str_Encoding.binary, false)
+        var none: Array[u8] = new[Array[u8]](0)
+        return __string_make(ref none, 0, 0, cast[u8] Str_Encoding.binary,
+                             false)
     }
     let slice_len: uint = cast[uint](last - first)
     var enc: Str_Encoding = encoding(self)
@@ -545,7 +546,7 @@ func byte_slice(self: string, start: int, end: int) -> string {
             bytes[i] = __string_byte(base, cast[uint] first + i)
             i += 1
         }
-        return __string_make(bytes, 0, slice_len, cast[u8] enc, false)
+        return __string_make(ref bytes, 0, slice_len, cast[u8] enc, false)
     }
     return __string_span(base, cast[uint] first, slice_len, cast[u8] enc)
 }
@@ -611,7 +612,7 @@ func to_hex(self: string) -> string {
         p += 2
         i += 1
     }
-    return from_raw(data, cast[int] hex_len, copy = false,
+    return from_raw(ref data, cast[int] hex_len, copy = false,
                     encoding = Str_Encoding.ascii, unsafe = true)
 }
 
@@ -648,7 +649,7 @@ func from_char(c: char) -> string {
     if cp <= 0x7f {
         enc = Str_Encoding.ascii
     }
-    return from_raw(tmp, encoded, encoding = enc, unsafe = true)
+    return from_raw(ref tmp, encoded, encoding = enc, unsafe = true)
 }
 
 func widen_encoding(a: Str_Encoding, b: Str_Encoding) -> Str_Encoding {
@@ -708,7 +709,7 @@ func join(items: List[string], joiner: string) -> string {
         }
         k += 1
     }
-    return from_raw(data, cast[int] new_len, copy = false, encoding = enc,
+    return from_raw(ref data, cast[int] new_len, copy = false, encoding = enc,
                     unsafe = true)
 }
 

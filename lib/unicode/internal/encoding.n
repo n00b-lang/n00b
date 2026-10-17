@@ -152,7 +152,7 @@ func utf32_to_string(src: List[char]) -> string fail: String_Error {
     }
 
     data[pos] = 0
-    return from_raw(data, cast[int] pos, copy = false)
+    return from_raw(ref data, cast[int] pos, copy = false)
 }
 
 func utf16_to_string(src: List[u16]) -> string fail: String_Error {
@@ -197,7 +197,7 @@ func utf16_to_string(src: List[u16]) -> string fail: String_Error {
     }
 
     data[pos] = 0
-    return from_raw(data, cast[int] pos, copy = false)
+    return from_raw(ref data, cast[int] pos, copy = false)
 }
 
 func utf32_from_string(s: string) -> List[char] fail: String_Error {
