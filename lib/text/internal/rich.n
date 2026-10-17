@@ -1,0 +1,91 @@
+record Style_Span {
+    start: u32
+    end:   u32
+    tag:   string
+}
+
+func rich_string(text: string, spans: List[Style_Span]) -> string {
+    let n: int = cast[int] spans.len()
+    var body: Rich_Body = (s = text, style_info = new[List[Style_Record]](),
+                           base_style = nil, opaque = false)
+    for i from 0 until n {
+        let span: Style_Span = spans[i]
+        let rec: Style_Record = (start_ix = span.start, end_ix = span.end,
+                                 style_tag = span.tag, format_spec = nil,
+                                 substitution = (none = nil))
+        body.style_info.append(rec)
+    }
+    return __string_make_rich(ref body)
+}
+
+private func rebase(v: u64, lo: u64, hi: u64, shift: u64) -> u32 {
+    var clamped: u64 = v
+    if v < lo {
+        clamped = lo
+    }
+    elif v > hi {
+        clamped = hi
+    }
+    return cast[u32](clamped - lo + shift)
+}
+
+func rich_reslice(s: string, since: u64, upto: u64, text: string,
+                  shift: u64) -> string {
+    if cast[u64] tag(s) != str_tag_rich or upto <= since {
+        return text
+    }
+    let src: Ref[Rich_Body] = __string_rich_body(s)
+    var out: Rich_Body = (s = text, style_info = new[List[Style_Record]](),
+                          base_style = src.base_style, opaque = src.opaque)
+    for i from 0 until cast[int] src.style_info.len() {
+        let r: Style_Record = src.style_info[i]
+        if r.start_ix == nil {
+            continue
+        }
+        let rs: u64 = r.start_ix.get()
+        var is_sub: bool = r.end_ix == nil
+        switch r.substitution {
+            case position {
+                is_sub = true
+            }
+            case argname {
+                is_sub = true
+            }
+            case none {
+            }
+        }
+        if is_sub {
+            if rs < since or rs > upto {
+                continue
+            }
+            var rec: Style_Record = r
+            let at: u32 = cast[u32](rs - since + shift)
+            rec.start_ix = at
+            if r.end_ix != nil {
+                rec.end_ix = at
+            }
+            out.style_info.append(rec)
+            continue
+        }
+        let re: u64 = r.end_ix.get_or_else(index_extends)
+        if re == cast[u64] index_extends {
+            if rs > upto {
+                continue
+            }
+            var rec: Style_Record = r
+            rec.start_ix = rebase(rs, since, upto, shift)
+            out.style_info.append(rec)
+            continue
+        }
+        if re <= since or rs >= upto {
+            if !(rs == re and rs >= since and rs <= upto) {
+                continue
+            }
+        }
+        var rec: Style_Record = r
+        rec.start_ix = rebase(rs, since, upto, shift)
+        rec.end_ix = rebase(re, since, upto, shift)
+        out.style_info.append(rec)
+    }
+    return __string_make_rich(ref out)
+}

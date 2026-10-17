@@ -34,6 +34,8 @@ package builtin {
     export string.style.is_empty to text
     export string.style.intrinsic_tag_style to text
     export string.style.raw_repr_string to text
+    export string.core.__string_make_rich to text
+    export string.core.__string_rich_body to text
     export abi.Type_Kind to sys
     export abi.Range to sys
     export abi.String_Bits to sys
