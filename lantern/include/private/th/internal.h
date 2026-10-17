@@ -242,6 +242,8 @@ struct th_ctx {
   const th_env *environment;
   const char *module;
   const char *package;
+  core_dict_t *implements_memo;
+  core_dict_t *method_memo;
 };
 
 struct th_env {
