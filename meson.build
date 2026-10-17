@@ -996,6 +996,18 @@ foreach string_probe : ['core_probe', 'rstr_probe', 'raw_literal_probe',
     )
 endforeach
 
+foreach text_probe : ['color_probe']
+    test(
+        'text-' + text_probe.replace('_', '-'),
+        find_program('sh'),
+        args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+               n00bb_exe.full_path(),
+               meson.current_source_dir() / 'tests' / 'programs' / 'text'
+                   / text_probe + '.n'],
+        suite: 'slow',
+    )
+endforeach
+
 test(
     'comptime-c-record-deferred-array-n00b',
     find_program('sh'),
