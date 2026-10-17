@@ -618,6 +618,7 @@ static void *r_ind_attr(parse_reduce_t *r)
         {CORE_STRING_STATIC("owning"), TH_OWNING},
         {CORE_STRING_STATIC("exclusive"), TH_EXCLUSIVE},
         {CORE_STRING_STATIC("temporary"), TH_TEMPORARY},
+        {CORE_STRING_STATIC("foreign"), TH_FOREIGN},
     };
 
     bctx    *c   = r->thunk;

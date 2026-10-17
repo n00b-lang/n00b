@@ -28,7 +28,7 @@
                  | %"bitint" | %"ubitint" | %"i" | %"u" | %"bits" | %"ptr"
                  | %"ref" | %"mutref" | %"own" | %"gcref" | %"tmpref"
                  | %"nullable" | %"reseatable" | %"indexable" | %"owning"
-                 | %"exclusive" | %"temporary" | %"array" | %"t" | %"fail"
+                 | %"exclusive" | %"temporary" | %"foreign" | %"array" | %"t" | %"fail"
                  | %"where" | %"in" | %"out" | %"inout" | %"consume"
 
 <type-args> @nospace($1) ::= <type-arg> (%"," <type-arg>)*
@@ -60,6 +60,7 @@
              | %"owning"
              | %"exclusive"
              | %"temporary"
+             | %"foreign"
 
 <sequence> @nospace($1) @nospace($2) @nospace($3) @nospace($4) ::= %"array" %"[" <union-type> (%";" %INT_LIT)? %"]"
 

@@ -41,6 +41,7 @@ typedef enum : uint8_t {
     TH_OWNING     = 0x08,
     TH_EXCLUSIVE  = 0x10,
     TH_TEMPORARY  = 0x20,
+    TH_FOREIGN    = 0x40,
 } th_attr;
 
 typedef enum : uint8_t {

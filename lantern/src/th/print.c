@@ -47,6 +47,7 @@ static const struct {
     {"nullable", TH_NULLABLE},   {"reseatable", TH_RESEATABLE},
     {"indexable", TH_INDEXABLE}, {"owning", TH_OWNING},
     {"exclusive", TH_EXCLUSIVE}, {"temporary", TH_TEMPORARY},
+    {"foreign", TH_FOREIGN},
 };
 
 static const char *mode_name(th_mode m)
