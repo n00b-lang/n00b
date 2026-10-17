@@ -1,4 +1,5 @@
 import internal.rich
+import internal.cascade
 import internal.layout
 import internal.string
 
@@ -18,6 +19,7 @@ package text {
     export builtin.raw_repr_string
     export internal.rich.Style_Span
     export internal.rich.rich_string
+    export internal.cascade
     export internal.layout
     export internal.string
 }
