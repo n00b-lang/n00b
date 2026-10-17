@@ -521,13 +521,27 @@ reject_unlowered_record_layout_requests(n00bb_link_analysis_t *analysis)
     return true;
 }
 
+static size_t
+analysis_module_count(const n00bb_link_analysis_t *analysis)
+{
+    return analysis->units.len + analysis->specializations.len;
+}
+
+static ir_module_t *
+analysis_module_at(const n00bb_link_analysis_t *analysis, size_t index)
+{
+    if (index < analysis->units.len)
+        return tu_state(analysis->units.data[index])->ir_module;
+    return analysis->specializations.data[index - analysis->units.len]
+        .instance->owner;
+}
+
 bool
 publish_declared_aggregate_layouts(n00bb_link_analysis_t *analysis)
 {
     bool valid = true;
-    for (size_t u = 0; valid && u < analysis->units.len; u++) {
-        n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
-        ir_module_t *module = state->ir_module;
+    for (size_t u = 0; valid && u < analysis_module_count(analysis); u++) {
+        ir_module_t *module = analysis_module_at(analysis, u);
         if (!module) { valid = false; break; }
         for (size_t f = 0; valid && f < ir_func_count(module); f++) {
             ir_func_t *function = ir_func_at(module, f);
@@ -654,9 +668,8 @@ publish_declared_aggregate_layouts(n00bb_link_analysis_t *analysis)
 bool
 publish_interned_variant_layouts(n00bb_link_analysis_t *analysis)
 {
-    for (size_t u = 0; u < analysis->units.len; u++) {
-        n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
-        ir_module_t *module = state->ir_module;
+    for (size_t u = 0; u < analysis_module_count(analysis); u++) {
+        ir_module_t *module = analysis_module_at(analysis, u);
         for (size_t f = 0; f < ir_func_count(module); f++) {
             ir_func_t *function = ir_func_at(module, f);
             th_type *channels[] = {

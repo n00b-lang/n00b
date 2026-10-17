@@ -554,20 +554,22 @@ test_cycle_selection(char **paths, const char *linked_path)
     n00bb_abi_native_sections_t native_sections = {0};
     assert(n00bb_abi_collect_native_sections(&selected, &target,
         &native_sections));
-    for (size_t i = 0; i < native_sections.count; i++) {
+    for (size_t i = 0; i < native_sections.map_count; i++) {
         const n00bb_abi_native_section_map_t *map =
             &native_sections.maps[i];
         core_object_section_t source;
-        assert(map->input < selected.count
+        const char *name = map->section < native_sections.count
+            ? native_sections.sections[map->section].name : nullptr;
+        assert(name && map->input < selected.count
             && map->local_section_index !=
                 selected.views[map->input].metadata.native_index
             && core_object_section_at(selected.views[map->input].object,
                 selected.views[map->input].object_bytes, target.object_format,
                 map->local_section_index, &source)
-            && source.name_length ==
-                strlen(native_sections.sections[i].name)
-            && !memcmp(source.name, native_sections.sections[i].name,
-                source.name_length));
+            && source.name_length == strlen(name)
+            && !memcmp(source.name, name, source.name_length)
+            && map->base_offset + map->size
+                <= native_sections.sections[map->section].size);
     }
     n00bb_abi_native_sections_release(&native_sections);
     const n00bb_abi_merged_table_t *merged_modules =
@@ -1604,8 +1606,10 @@ test_native_string_pool_consolidation(void)
             && source_offset == 0);
         n00bb_abi_native_sections_t sections = {
             .sections = core_alloc_array(core_object_emit_section_t, 4),
-            .maps = core_alloc_array(n00bb_abi_native_section_map_t, 4),
+            .final_indices = core_alloc_array(uint32_t, 4),
             .count = 4,
+            .maps = core_alloc_array(n00bb_abi_native_section_map_t, 4),
+            .map_count = 4,
         };
         n00bb_abi_native_relocations_t native = {
             .symbols = core_alloc_array(core_object_emit_symbol_t, 2),
@@ -1638,10 +1642,14 @@ test_native_string_pool_consolidation(void)
             sections.maps[data_index] =
                 (n00bb_abi_native_section_map_t){
                     .input = input, .local_section_index = 2,
+                    .section = (uint32_t)data_index,
+                    .size = sizeof(encoded),
                 };
             sections.maps[pool_index] =
                 (n00bb_abi_native_section_map_t){
                     .input = input, .local_section_index = 3,
+                    .section = (uint32_t)pool_index,
+                    .size = value.u8_bytes,
                 };
             native.symbols[input] = (core_object_emit_symbol_t){
                 .name = core_strndup("n00b_string_pool", 16),
@@ -1662,7 +1670,9 @@ test_native_string_pool_consolidation(void)
         first_data[15] = selector;
         assert(n00bb_abi_consolidate_native_strings(&target,
             merged_pool, &sections, &native)
-            && sections.count == 2 && native.symbol_count == 0
+            && sections.count == 2 && sections.map_count == 2
+            && sections.maps[1].section == 1
+            && native.symbol_count == 0
             && native.relocation_count == 2
             && native.relocations[0].section_index == 2
             && native.relocations[1].section_index == 3
@@ -1742,10 +1752,10 @@ test_link_index_patch(void)
         .alignment = 4,
     };
     n00bb_abi_native_section_map_t map = {
-        .input = 1, .local_section_index = 7,
+        .input = 1, .local_section_index = 7, .size = sizeof(copied_bytes),
     };
     n00bb_abi_native_sections_t copied = {
-        .sections = &section, .maps = &map, .count = 1,
+        .sections = &section, .count = 1, .maps = &map, .map_count = 1,
     };
     assert(n00bb_abi_apply_link_patches(&selected, plan, &merged, &copied)
         && core_le_load_u32(copied_bytes) == 2
@@ -1925,10 +1935,10 @@ test_specialization_rebuild(void)
         .alignment = 4,
     };
     n00bb_abi_native_section_map_t map = {
-        .input = 1, .local_section_index = 7,
+        .input = 1, .local_section_index = 7, .size = sizeof(copied_bytes),
     };
     n00bb_abi_native_sections_t copied = {
-        .sections = &section, .maps = &map, .count = 1,
+        .sections = &section, .count = 1, .maps = &map, .map_count = 1,
     };
     assert(n00bb_abi_apply_link_patches(&selected, plan, &merged, &copied)
         && core_le_load_u32(copied_bytes) == 2);
@@ -3879,7 +3889,7 @@ main(int argc, char **argv)
     assert(n00bb_abi_collect_native_relocations(&selected, &native_sections,
         &native_relocations) && native_relocations.relocation_count > 0);
     size_t source_relocation_count = 0;
-    for (size_t i = 0; i < native_sections.count; i++) {
+    for (size_t i = 0; i < native_sections.map_count; i++) {
         core_object_section_t source;
         assert(core_object_section_at(object, length, target.object_format,
             native_sections.maps[i].local_section_index, &source));
@@ -3896,7 +3906,8 @@ main(int argc, char **argv)
     n00bb_abi_merged_rows_t exports_merged = {0};
     assert(n00bb_abi_merge_rows(&selected, plan, &exports_merged)
         && n00bb_abi_rebase_native_references(&exports_merged,
-            native_sections.maps, native_sections.count, nullptr, nullptr));
+            native_sections.maps, native_sections.map_count, nullptr,
+            nullptr));
     const n00bb_abi_merged_table_t *export_bindings =
         n00bb_abi_merged_table(&exports_merged,
             N00B_ABI_TABLE_NATIVE_BINDING);

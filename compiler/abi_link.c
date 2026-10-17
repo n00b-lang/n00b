@@ -397,10 +397,14 @@ n00bb_abi_select_objects(core_link_unit_t *link,
     core_indexed_table_t *modules = core_indexed_table_new(0, UINT32_MAX,
         module_key_hash, module_key_eq);
     n00bb_abi_selected_objects_t selected = {
-        .views = core_alloc_array(n00bb_abi_object_view_t, count),
+        .views = core_alloc_array(n00bb_abi_object_view_t,
+                                  count + candidate_count),
         .count = count,
     };
-    bool valid = modules && selected.views;
+    const n00bb_abi_object_input_t **extra_candidates = core_alloc_array(
+        const n00bb_abi_object_input_t *, candidate_count + 1);
+    size_t extra_count = 0;
+    bool valid = modules && selected.views && extra_candidates;
     for (size_t i = 0; valid && i < count; i++) {
         core_translation_unit_t *unit = core_link_unit_translation_unit(link,
             i);
@@ -413,7 +417,10 @@ n00bb_abi_select_objects(core_link_unit_t *link,
         const n00bb_abi_object_input_t *candidate = &candidates[i];
         const core_indexed_entry_t *entry = candidate->module.data
             ? core_indexed_table_find(modules, &candidate->module) : nullptr;
-        if (!entry) continue;
+        if (!entry) {
+            extra_candidates[extra_count++] = candidate;
+            continue;
+        }
         n00bb_abi_object_view_t *view = &selected.views[entry->index];
         core_translation_unit_t *unit = entry->value;
         valid = !view->directory
@@ -424,6 +431,13 @@ n00bb_abi_select_objects(core_link_unit_t *link,
     for (size_t i = 0; valid && i < count; i++)
         valid = selected.views[i].directory != nullptr;
     if (valid) valid = selected_sccs_match(link, modules, &selected);
+    for (size_t i = 0; valid && i < extra_count; i++) {
+        valid = n00bb_abi_object_open(target, extra_candidates[i]->object,
+            extra_candidates[i]->object_bytes,
+            &selected.views[selected.count]);
+        if (valid) selected.count++;
+    }
+    core_free(extra_candidates);
     core_indexed_table_free(modules);
     if (!valid) {
         n00bb_abi_selected_objects_release(&selected);
@@ -3251,8 +3265,68 @@ n00bb_abi_native_sections_release(n00bb_abi_native_sections_t *sections)
         core_free((void *)sections->sections[i].bytes);
     }
     core_free(sections->sections);
+    core_free(sections->final_indices);
     core_free(sections->maps);
     *sections = (n00bb_abi_native_sections_t){0};
+}
+
+static bool
+same_native_name(const char *left, const char *right)
+{
+    return left && right ? !strcmp(left, right) : left == right;
+}
+
+static bool
+same_native_kind(const core_object_emit_section_t *left,
+                 const core_object_emit_section_t *right)
+{
+    return same_native_name(left->name, right->name)
+        && same_native_name(left->segment, right->segment)
+        && left->writable == right->writable
+        && left->executable == right->executable
+        && left->is_thread_local == right->is_thread_local
+        && left->is_thread_local_descriptor
+            == right->is_thread_local_descriptor;
+}
+
+static bool
+place_native_section(n00bb_abi_native_sections_t *built,
+                     core_object_emit_section_t piece, size_t input,
+                     uint32_t native)
+{
+    size_t section = 0;
+    while (section < built->count
+           && !same_native_kind(&built->sections[section], &piece))
+        section++;
+    uint64_t offset = 0;
+    if (section == built->count) built->sections[built->count++] = piece;
+    else {
+        core_object_emit_section_t *merged = &built->sections[section];
+        uint64_t align = piece.alignment;
+        offset = (merged->size + align - 1) / align * align;
+        if (offset < merged->size || piece.size > SIZE_MAX - offset)
+            return false;
+        uint8_t *bytes = offset + piece.size
+            ? core_realloc((void *)merged->bytes, offset + piece.size)
+            : nullptr;
+        if (offset + piece.size && !bytes) return false;
+        memset(bytes + merged->size, 0, offset - merged->size);
+        if (piece.size) memcpy(bytes + offset, piece.bytes, piece.size);
+        merged->bytes = bytes;
+        merged->size = offset + piece.size;
+        if (piece.alignment > merged->alignment)
+            merged->alignment = piece.alignment;
+        core_free((void *)piece.name);
+        core_free((void *)piece.segment);
+        core_free((void *)piece.bytes);
+    }
+    if (section > UINT32_MAX) return false;
+    built->maps[built->map_count++] = (n00bb_abi_native_section_map_t){
+        .input = input, .local_section_index = native,
+        .section = (uint32_t)section, .base_offset = offset,
+        .size = piece.size,
+    };
+    return true;
 }
 
 static char *
@@ -3328,7 +3402,7 @@ n00bb_abi_collect_native_sections(
             bool executable = mach ? !strcmp(segment, "__TEXT")
                 : coff ? (source.flags & UINT64_C(0x20000000)) != 0
                 : (source.flags & UINT64_C(4)) != 0;
-            built.sections[built.count] = (core_object_emit_section_t){
+            core_object_emit_section_t piece = {
                 .name = name, .segment = segment,
                 .bytes = bytes, .size = source.size,
                 .alignment = (uint32_t)source.alignment,
@@ -3337,18 +3411,20 @@ n00bb_abi_collect_native_sections(
                 .is_thread_local_descriptor = mach
                     && (source.flags & 0xff) == 0x13,
             };
-            built.maps[built.count] = (n00bb_abi_native_section_map_t){
-                .input = input, .local_section_index = native,
-            };
-            built.count++;
-            valid = name && (!mach || segment);
+            valid = name && (!mach || segment)
+                && place_native_section(&built, piece, input, native);
         }
     }
+    built.final_indices = valid
+        ? core_alloc_array(uint32_t, built.count + 1) : nullptr;
+    valid = valid && built.final_indices;
     for (size_t i = 0; valid && i < built.count; i++) {
         valid = core_object_emit_native_section_index(target,
-            1 + built.count, (uint32_t)(2 + i),
-            &built.maps[i].final_section_index);
+            1 + built.count, (uint32_t)(2 + i), &built.final_indices[i]);
     }
+    for (size_t i = 0; valid && i < built.map_count; i++)
+        built.maps[i].final_section_index =
+            built.final_indices[built.maps[i].section];
     if (!valid) {
         n00bb_abi_native_sections_release(&built);
         return false;
@@ -3398,19 +3474,18 @@ native_symbol_eq(const void *left, const void *right)
         && a->is_section == b->is_section;
 }
 
-static bool
-native_section_ordinal(const n00bb_abi_native_sections_t *sections,
-                       size_t input, uint32_t local_index,
-                       uint32_t *out_ordinal)
+static const n00bb_abi_native_section_map_t *
+native_section_piece(const n00bb_abi_native_sections_t *sections,
+                     size_t input, uint32_t local_index)
 {
-    bool found = false;
-    for (size_t i = 0; i < sections->count; i++) {
+    const n00bb_abi_native_section_map_t *found = nullptr;
+    for (size_t i = 0; i < sections->map_count; i++) {
         if (sections->maps[i].input != input
             || sections->maps[i].local_section_index != local_index)
             continue;
-        if (found || i > UINT32_MAX - 2) return false;
-        *out_ordinal = (uint32_t)(i + 2);
-        found = true;
+        if (found || sections->maps[i].section > UINT32_MAX - 2)
+            return nullptr;
+        found = &sections->maps[i];
     }
     return found;
 }
@@ -3422,10 +3497,10 @@ n00bb_abi_collect_native_relocations(
     n00bb_abi_native_relocations_t *out)
 {
     if (!selected || !selected->views || !selected->count || !sections
-        || (sections->count && (!sections->sections || !sections->maps))
+        || (sections->map_count && (!sections->sections || !sections->maps))
         || !out) return false;
     size_t capacity = 0;
-    for (size_t i = 0; i < sections->count; i++) {
+    for (size_t i = 0; i < sections->map_count; i++) {
         const n00bb_abi_native_section_map_t *map = &sections->maps[i];
         if (map->input >= selected->count) return false;
         const n00bb_abi_object_view_t *view = &selected->views[map->input];
@@ -3447,7 +3522,7 @@ n00bb_abi_collect_native_relocations(
     core_indexed_table_t *seen = core_indexed_table_new(0, UINT32_MAX,
         native_symbol_hash, native_symbol_eq);
     bool valid = seen != nullptr;
-    for (size_t i = 0; valid && i < sections->count; i++) {
+    for (size_t i = 0; valid && i < sections->map_count; i++) {
         const n00bb_abi_native_section_map_t *map = &sections->maps[i];
         const n00bb_abi_object_view_t *view = &selected->views[map->input];
         core_object_section_t source;
@@ -3485,10 +3560,14 @@ n00bb_abi_collect_native_relocations(
                     int length = snprintf(name, sizeof(name),
                         "__n00bb_section_%zu_%u", key.input,
                         key.native_index);
+                    const n00bb_abi_native_section_map_t *piece =
+                        native_section_piece(sections, key.input,
+                                             key.native_index);
                     valid = length > 0 && (size_t)length < sizeof(name)
-                        && native_section_ordinal(sections, key.input,
-                            key.native_index, &symbol.section_index);
+                        && piece;
                     if (valid) {
+                        symbol.section_index = piece->section + 2;
+                        symbol.section_offset = piece->base_offset;
                         symbol.name = copy_native_name(
                             (const uint8_t *)name, (size_t)length);
                     }
@@ -3499,21 +3578,29 @@ n00bb_abi_collect_native_relocations(
                         view->object_bytes, view->format, &source,
                         key.native_index, &source_symbol)
                         && source_symbol.name.length;
+                    uint64_t base = 0;
                     if (valid && source_symbol.native_section_index) {
                         core_object_section_t target;
+                        const n00bb_abi_native_section_map_t *piece =
+                            nullptr;
                         valid = core_object_section_at(view->object,
                             view->object_bytes, view->format,
                             source_symbol.native_section_index, &target)
                             && source_symbol.section_offset <= target.size
-                            && native_section_ordinal(sections, key.input,
-                                source_symbol.native_section_index,
-                                &symbol.section_index);
+                            && (piece = native_section_piece(sections,
+                                key.input,
+                                source_symbol.native_section_index));
+                        if (valid) {
+                            symbol.section_index = piece->section + 2;
+                            base = piece->base_offset;
+                        }
                     }
                     if (valid) {
                         symbol.name = copy_native_name(
                             source_symbol.name.bytes,
                             source_symbol.name.length);
-                        symbol.section_offset = source_symbol.section_offset;
+                        symbol.section_offset = base
+                            + source_symbol.section_offset;
                         symbol.exported = source_symbol.exported;
                         valid = symbol.section_index || symbol.exported;
                     }
@@ -3539,8 +3626,9 @@ n00bb_abi_collect_native_relocations(
             }
             built.relocations[built.relocation_count++] =
                 (core_object_emit_absolute64_t){
-                    .section_index = (uint32_t)(i + 2),
-                    .section_offset = relocation.section_offset,
+                    .section_index = map->section + 2,
+                    .section_offset = map->base_offset
+                        + relocation.section_offset,
                     .symbol_index = symbol_index,
                     .addend_bits = relocation.addend_bits,
                     .symbol_relocation = view->format
@@ -3771,7 +3859,7 @@ n00bb_abi_add_native_bindings(
     if (!selected || !selected->views || !merged || !sections || !symbols
         || symbols->symbol_count > UINT32_MAX
         || (symbols->symbol_count && !symbols->symbols)
-        || (sections->count && (!sections->sections || !sections->maps)))
+        || (sections->map_count && (!sections->sections || !sections->maps)))
         return false;
     for (size_t i = 0; i < symbols->symbol_count; i++)
         if (!symbols->symbols[i].name) return false;
@@ -3816,8 +3904,8 @@ n00bb_abi_add_native_bindings(
         if (!valid) break;
         uint32_t ordinal = 0;
         for (size_t j = 0; j < sections->count; j++) {
-            if (sections->maps[j].final_section_index
-                != binding->section_index) continue;
+            if (sections->final_indices[j] != binding->section_index)
+                continue;
             if (ordinal || j > UINT32_MAX - 2
                 || (uint64_t)binding->offset > sections->sections[j].size) {
                 valid = false;

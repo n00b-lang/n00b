@@ -455,6 +455,100 @@ n00bb_build_time_run_needed(const n00bb_link_analysis_t *analysis)
         || n00bb_root_entry(analysis, N00BB_COMPTIME_START_NAME));
 }
 
+typedef struct {
+    n00bb_link_analysis_t *analysis;
+    parse_cmdr_result_t *args;
+    bool debug_enabled;
+    bool native_cpu;
+    bool lto;
+    n00bb_native_cache_t *native_cache;
+    ir_storage_origin_t *storage_origin;
+    const n00bb_llvm_type_index_t *type_indices;
+    size_t type_index_count;
+    const n00bb_llvm_function_binding_t *function_indices;
+    size_t function_index_count;
+    const n00bb_llvm_global_binding_t *global_bindings;
+    size_t global_binding_count;
+    n00bb_native_frames_t *native_frames;
+    core_diagnostics_t *diagnostics;
+} module_emission_t;
+
+typedef struct {
+    const char *const *initializers;
+    size_t initializer_count;
+    size_t metadata_bytes;
+    const n00bb_llvm_finalizer_binding_t *finalizers;
+    size_t finalizer_count;
+} module_entry_t;
+
+static bool
+emit_module_object(const module_emission_t *emission, ir_module_t *module,
+                   core_diagnostics_t *module_diagnostics,
+                   const n00bb_abi_artifact_t *artifact,
+                   const module_entry_t *entry, char **object_path,
+                   core_buffer_t *bitcode)
+{
+    n00bb_link_analysis_t *analysis = emission->analysis;
+    n00bb_llvm_backend_t *backend = n00bb_llvm_backend_prepare(module,
+        emission->debug_enabled, emission->native_cpu, module_diagnostics);
+    if (!backend) return false;
+    n00bb_llvm_backend_bind_native_cache(backend, emission->native_cache);
+    const char *table_symbol = artifact
+        ? artifact->index_table.symbol : nullptr;
+    if (table_symbol && table_symbol[0] == '_'
+        && analysis->target.object_format == CORE_TARGET_OBJECT_MACH_O)
+        table_symbol++;
+    n00bb_llvm_index_table_t index_table = {
+        .symbol = table_symbol,
+        .type_hashes = artifact ? artifact->index_table.type_hashes : nullptr,
+        .type_count = artifact ? artifact->index_table.type_count : 0,
+        .functions = artifact ? artifact->index_table.functions : nullptr,
+        .function_count = artifact
+            ? artifact->index_table.function_count : 0,
+    };
+    bool ok = (!table_symbol
+            || n00bb_llvm_backend_bind_index_table(backend, &index_table))
+        && n00bb_llvm_backend_bind_reachable_functions(backend,
+            analysis->emitted_functions.data,
+            analysis->emitted_functions.len)
+        && n00bb_llvm_backend_bind_storage_origin(backend,
+            emission->storage_origin);
+    if (ok && !parse_cmdr_flag_present(emission->args,
+            CORE_STRING_STATIC("--gc-conservative-stacks")))
+        ok = n00bb_llvm_backend_enable_frame_maps(backend);
+    ok = ok && n00bb_llvm_backend_bind_type_indices(backend,
+            emission->type_indices, emission->type_index_count)
+        && n00bb_llvm_backend_bind_function_indices(backend,
+            emission->function_indices, emission->function_index_count)
+        && n00bb_llvm_backend_bind_globals(backend,
+            emission->global_bindings, emission->global_binding_count)
+        && (!entry || n00bb_llvm_backend_bind_finalizers(backend,
+            entry->finalizers, entry->finalizer_count));
+    core_buffer_t object = {0};
+    const char *const *initializers = entry ? entry->initializers : nullptr;
+    size_t initializer_count = entry ? entry->initializer_count : 0;
+    size_t metadata_bytes = entry ? entry->metadata_bytes : 0;
+    if (ok && emission->lto)
+        ok = n00bb_llvm_backend_emit_linkable_bitcode(backend, initializers,
+            initializer_count, metadata_bytes, &object,
+            emission->diagnostics);
+    else if (ok)
+        ok = n00bb_llvm_backend_emit_object(backend, initializers,
+            initializer_count, metadata_bytes, &object,
+            emission->diagnostics);
+    n00bb_llvm_backend_free(backend);
+    if (ok && emission->lto) {
+        *bitcode = object;
+        return true;
+    }
+    if (ok) ok = n00bb_native_frames_add(emission->native_frames,
+        object.data, object.byte_len);
+    if (ok) *object_path = n00bb_write_temporary_object(object.data,
+        object.byte_len);
+    core_buffer_release(&object);
+    return ok && *object_path;
+}
+
 bool
 n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
                        parse_cmdr_result_t *args, bool debug_enabled,
@@ -494,11 +588,12 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         return false;
     }
     size_t count = order.len;
+    size_t modules = count + analysis->specializations.len;
     bool lto = parse_cmdr_flag_present(args, CORE_STRING_STATIC("--lto"));
     char **names = calloc(2 * count + 2, sizeof(*names));
-    char **objects = calloc(count + 4, sizeof(*objects));
+    char **objects = calloc(modules + 4, sizeof(*objects));
     core_buffer_t *lto_modules = lto
-        ? calloc(count + 1, sizeof(*lto_modules)) : nullptr;
+        ? calloc(modules + 1, sizeof(*lto_modules)) : nullptr;
     ok = names && objects && (!lto || lto_modules);
     uint8_t *linked_abi = nullptr;
     size_t linked_abi_bytes = 0;
@@ -579,9 +674,9 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
                 == CORE_TARGET_OBJECT_COFF ? ".n00b$M"
                                        : ".data.rel.ro.n00b_meta",
         &metadata);
-    if (ok) objects[count] = n00bb_write_temporary_object(
+    if (ok) objects[modules] = n00bb_write_temporary_object(
         linked_abi, linked_abi_bytes);
-    ok = ok && objects[count];
+    ok = ok && objects[modules];
     core_free(linked_abi);
     size_t initializer_count = 0;
     const char *initializers[] = {
@@ -652,107 +747,67 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     n00bb_native_cache_t *native_cache = executable_path
         ? n00bb_native_cache_open(executable_path) : nullptr;
     core_free(executable_path);
+    module_emission_t emission = {
+        .analysis = analysis, .args = args,
+        .debug_enabled = debug_enabled, .native_cpu = native_cpu,
+        .lto = lto, .native_cache = native_cache,
+        .storage_origin = storage_origin,
+        .type_indices = type_indices, .type_index_count = type_index_count,
+        .function_indices = function_indices,
+        .function_index_count = function_index_count,
+        .global_bindings = global_bindings,
+        .global_binding_count = global_binding_count,
+        .native_frames = native_frames, .diagnostics = diagnostics,
+    };
     for (size_t i = 0; ok && i < count; i++) {
-        n00bb_tu_state_t *state = tu_state(order.data[i]);
-        n00bb_llvm_backend_t *backend = n00bb_llvm_backend_prepare(
-            state->ir_module, debug_enabled, native_cpu,
-            core_translation_unit_diagnostics(order.data[i]));
-        if (!backend) {
-            ok = false;
-            break;
-        }
-        n00bb_llvm_backend_bind_native_cache(backend, native_cache);
         core_link_artifact_view_t artifact_view = {0};
         const n00bb_abi_artifact_t *artifact =
             core_link_unit_require_artifact(link,
                 order.data[i]->module.identifier,
                 CORE_STRING_STATIC("n00bb.abi.object"), 1, &artifact_view)
             ? artifact_view.payload : nullptr;
-        const char *table_symbol = artifact
-            ? artifact->index_table.symbol : nullptr;
-        if (table_symbol && table_symbol[0] == '_'
-            && analysis->target.object_format == CORE_TARGET_OBJECT_MACH_O)
-            table_symbol++;
-        n00bb_llvm_index_table_t index_table = {
-            .symbol = table_symbol,
-            .type_hashes = artifact ? artifact->index_table.type_hashes
-                                    : nullptr,
-            .type_count = artifact ? artifact->index_table.type_count : 0,
-            .functions = artifact ? artifact->index_table.functions : nullptr,
-            .function_count = artifact
-                ? artifact->index_table.function_count : 0,
+        module_entry_t root_entry = {
+            .initializers = (const char *const *)names,
+            .initializer_count = initializer_count,
+            .metadata_bytes = metadata.size,
+            .finalizers = finalizers, .finalizer_count = finalizer_count,
         };
-        if (table_symbol
-            && !n00bb_llvm_backend_bind_index_table(backend, &index_table)) {
-            n00bb_llvm_backend_free(backend);
-            ok = false;
-            break;
-        }
-        ok = n00bb_llvm_backend_bind_reachable_functions(backend,
-            analysis->emitted_functions.data,
-            analysis->emitted_functions.len)
-            && n00bb_llvm_backend_bind_storage_origin(backend,
-                storage_origin);
-        if (ok && !parse_cmdr_flag_present(args,
-                CORE_STRING_STATIC("--gc-conservative-stacks")))
-            ok = n00bb_llvm_backend_enable_frame_maps(backend);
-        if (ok && (!n00bb_llvm_backend_bind_type_indices(backend, type_indices,
-                                                      type_index_count)
-            || !n00bb_llvm_backend_bind_function_indices(backend,
-                function_indices, function_index_count)
-            || !n00bb_llvm_backend_bind_globals(backend, global_bindings,
-                                                global_binding_count)
-            || (order.data[i] == core_link_unit_root(link, 0)
-                && !n00bb_llvm_backend_bind_finalizers(backend,
-                    finalizers, finalizer_count)))) {
-            n00bb_llvm_backend_free(backend);
-            ok = false;
-            break;
-        }
-        core_buffer_t object = {0};
-        bool is_root = order.data[i] == core_link_unit_root(link, 0);
-        if (lto)
-            ok = n00bb_llvm_backend_emit_linkable_bitcode(backend,
-                is_root ? (const char *const *)names : nullptr,
-                is_root ? initializer_count : 0,
-                is_root ? metadata.size : 0, &object, diagnostics);
-        else
-            ok = n00bb_llvm_backend_emit_object(backend,
-                is_root ? (const char *const *)names : nullptr,
-                is_root ? initializer_count : 0,
-                is_root ? metadata.size : 0, &object, diagnostics);
-        n00bb_llvm_backend_free(backend);
-        if (ok && lto) {
-            lto_modules[i] = object;
-            object = (core_buffer_t){0};
-        } else if (ok) {
-            ok = n00bb_native_frames_add(native_frames,
-                object.data, object.byte_len);
-            if (ok) objects[i] = n00bb_write_temporary_object(
-                object.data, object.byte_len);
-            ok = ok && objects[i];
-        }
-        core_buffer_release(&object);
+        ok = emit_module_object(&emission, tu_state(order.data[i])->ir_module,
+            core_translation_unit_diagnostics(order.data[i]), artifact,
+            order.data[i] == core_link_unit_root(link, 0)
+                ? &root_entry : nullptr,
+            &objects[i], lto ? &lto_modules[i] : nullptr);
+    }
+    for (size_t i = 0; ok && i < analysis->specializations.len; i++) {
+        ir_module_t *module = analysis->specializations.data[i]
+            .instance->owner;
+        core_link_artifact_view_t artifact_view = {0};
+        ok = core_link_unit_require_artifact(link,
+                core_string_from_cstr(ir_module_name(module)),
+                CORE_STRING_STATIC("n00bb.abi.object"), 1, &artifact_view)
+            && emit_module_object(&emission, module, diagnostics,
+                artifact_view.payload, nullptr, &objects[count + i],
+                lto ? &lto_modules[count + i] : nullptr);
     }
     if (ok && lto) {
         build_stage = "link-time optimization";
         char *runtime_path = n00bb_archive_path(compiler_path,
             "libn00b-abi-runtime.bc");
         ok = runtime_path && n00bb_read_bitcode(runtime_path,
-            &lto_modules[count]);
+            &lto_modules[modules]);
         core_free(runtime_path);
-        size_t input_count = count + 1 + native->bitcode_count;
+        size_t input_count = modules + 1 + native->bitcode_count;
         n00bb_llvm_bitcode_input_t *inputs = ok
             ? calloc(input_count, sizeof(*inputs)) : nullptr;
         ok = ok && inputs;
-        for (size_t i = 0; ok && i < count + 1; i++)
+        for (size_t i = 0; ok && i < modules + 1; i++)
             inputs[i] = (n00bb_llvm_bitcode_input_t){
                 .data = lto_modules[i].data,
                 .length = lto_modules[i].byte_len,
-                .native_support = i == count,
+                .native_support = i == modules,
             };
         for (size_t i = 0; ok && i < native->bitcode_count; i++)
-            inputs[count + 1 + i] = (n00bb_llvm_bitcode_input_t){
+            inputs[modules + 1 + i] = (n00bb_llvm_bitcode_input_t){
                 .data = native->bitcode[i].data,
                 .length = native->bitcode[i].byte_len,
             };
@@ -784,9 +839,9 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         if (ok) ok = n00bb_llvm_backend_link_bitcode(inputs,
             native->bitcode_count, debug_enabled, native_cpu, false,
             &object, diagnostics);
-        if (ok) objects[count + 3] = n00bb_write_temporary_object(
+        if (ok) objects[modules + 3] = n00bb_write_temporary_object(
             object.data, object.byte_len);
-        ok = ok && objects[count + 3];
+        ok = ok && objects[modules + 3];
         core_buffer_release(&object);
         free(inputs);
     }
@@ -795,10 +850,10 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         size_t frame_object_bytes = 0;
         ok = n00bb_native_frames_emit(native_frames, &analysis->target,
             &frame_object, &frame_object_bytes);
-        if (ok) objects[count + 1] = n00bb_write_temporary_object(
+        if (ok) objects[modules + 1] = n00bb_write_temporary_object(
             frame_object, frame_object_bytes);
         core_free(frame_object);
-        ok = ok && objects[count + 1];
+        ok = ok && objects[modules + 1];
     }
     core_string_t requested = parse_cmdr_flag_str(args,
         CORE_STRING_STATIC("--output"));
@@ -827,7 +882,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         int32_t extra_count = parse_cmdr_flag_value_count(args,
             CORE_STRING_STATIC("--link-object"));
         size_t object_count = 0;
-        for (size_t i = 0; i < count + 4; i++)
+        for (size_t i = 0; i < modules + 4; i++)
             if (objects[i]) object_count++;
         size_t native_flags = native->archive_count
             + native->search_path_count + native->library_count
@@ -859,7 +914,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         if (ok) {
             arguments[0] = (char *)linker;
             size_t next = 1;
-            for (size_t i = 0; i < count + 4; i++)
+            for (size_t i = 0; i < modules + 4; i++)
                 if (objects[i]) arguments[next++] = objects[i];
             for (int32_t i = 0; i < extra_count; i++) {
                 core_string_t value = parse_cmdr_flag_str_at(args,
@@ -926,7 +981,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     if (staging) unlink(staging);
     free(staging);
     core_free(archive);
-    for (size_t i = 0; i < count + 4; i++) {
+    for (size_t i = 0; i < modules + 4; i++) {
         if (objects && objects[i]) {
             unlink(objects[i]);
             core_free(objects[i]);
@@ -936,7 +991,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         if (names) core_free(names[i]);
     free(objects);
     if (lto_modules) {
-        for (size_t i = 0; i < count + 1; i++)
+        for (size_t i = 0; i < modules + 1; i++)
             core_buffer_release(&lto_modules[i]);
         free(lto_modules);
     }
@@ -1203,6 +1258,63 @@ abi_graph_flags(void *context, size_t index)
         | (node->foreign ? N00B_ABI_BAKED_NODE_FOREIGN : 0);
 }
 
+static core_translation_unit_t *
+module_unit(n00bb_link_analysis_t *analysis, const ir_module_t *module)
+{
+    for (size_t i = 0; i < analysis->units.len; i++)
+        if (tu_state(analysis->units.data[i])->ir_module == module)
+            return analysis->units.data[i];
+    return nullptr;
+}
+
+static bool
+emit_specialization_abi(core_link_unit_t *link,
+                        n00bb_link_analysis_t *analysis,
+                        const n00bb_specialization_t *specialization,
+                        bool debug_enabled,
+                        n00bb_abi_source_context_t *sources)
+{
+    ir_module_t *module = specialization->instance->owner;
+    core_translation_unit_t *generic = module_unit(analysis,
+        specialization->generic->owner);
+    core_string_t name = core_string_from_cstr(ir_module_name(module));
+    core_source_file_t source = {0};
+    core_translation_unit_t unit = {0};
+    parse_symtab_t *symbols = parse_symtab_new();
+    n00bb_abi_artifact_t *artifact = core_alloc(n00bb_abi_artifact_t);
+    n00bb_tu_state_t *generic_state = generic ? tu_state(generic) : nullptr;
+    bool valid = generic_state && generic_state->lex
+        && generic_state->lex->tokens && symbols && artifact
+        && core_source_file_init(&source,
+            core_source_file_path(&generic->source),
+            core_source_file_contents(&generic->source),
+            core_source_file_size(&generic->source))
+        && core_translation_unit_init(&unit,
+            &(core_module_spec_t){.identifier = name}, &source)
+        && core_translation_unit_finalize_imports(&unit)
+        && n00bb_abi_emit_unit(nullptr, &unit, n00bb_package_id(generic),
+            symbols, generic_state->lex->tokens, module, &analysis->target,
+            debug_enabled ? N00B_ABI_CAP_DEBUG : 0,
+            abi_declaration_for_symbol, analysis, nullptr, nullptr,
+            abi_type_owner, sources, nullptr,
+            &artifact->packed, &artifact->index_table,
+            &artifact->object, &artifact->object_bytes);
+    if (!valid && unit.diagnostics)
+        core_diagnostics_merge(core_link_unit_diagnostics(link),
+                               unit.diagnostics);
+    if (valid) {
+        valid = core_link_unit_add_artifact(link, name,
+            CORE_STRING_STATIC("n00bb.abi.object"), 1, 0, artifact,
+            CORE_LINK_PAYLOAD_OWNED, free_abi_artifact);
+        if (valid) artifact = nullptr;
+    }
+    free_abi_artifact(artifact);
+    core_translation_unit_release(&unit);
+    core_source_file_release(&source);
+    if (symbols) parse_symtab_free(symbols);
+    return valid;
+}
+
 bool
 n00bb_emit_abi_artifacts(core_link_unit_t *link,
                          n00bb_link_analysis_t *analysis,
@@ -1287,6 +1399,10 @@ n00bb_emit_abi_artifacts(core_link_unit_t *link,
             break;
         }
     }
+    for (size_t i = 0; valid && !root_only
+         && i < analysis->specializations.len; i++)
+        valid = emit_specialization_abi(link, analysis,
+            &analysis->specializations.data[i], debug_enabled, &sources);
     core_indexed_table_free(sources.scopes);
     core_dict_free(&sources.type_owners);
     core_dict_free(&sources.callback_type_owners);
@@ -1367,16 +1483,20 @@ n00bb_link_abi_artifact(core_link_unit_t *link,
                         uint8_t **out_object, size_t *out_object_bytes,
                         core_diagnostics_t *diagnostics)
 {
-    size_t count = core_link_unit_translation_unit_count(link);
+    size_t unit_count = core_link_unit_translation_unit_count(link);
+    size_t count = unit_count + analysis->specializations.len;
     n00bb_abi_object_input_t *inputs = core_alloc_array(
         n00bb_abi_object_input_t, count);
-    bool valid = count != 0;
+    bool valid = unit_count != 0;
     for (size_t i = 0; valid && i < count; i++) {
-        core_translation_unit_t *unit = core_link_unit_translation_unit(link,
-            i);
+        core_translation_unit_t *unit = i < unit_count
+            ? core_link_unit_translation_unit(link, i) : nullptr;
+        core_string_t module = unit ? unit->module.identifier
+            : core_string_from_cstr(ir_module_name(analysis->specializations
+                .data[i - unit_count].instance->owner));
         core_link_artifact_view_t view = {0};
-        if (!unit || !core_link_unit_require_artifact(link,
-                unit->module.identifier,
+        if ((i < unit_count && !unit)
+            || !core_link_unit_require_artifact(link, module,
                 CORE_STRING_STATIC("n00bb.abi.object"), 1, &view)
             || !view.payload) {
             valid = false;
@@ -1388,7 +1508,7 @@ n00bb_link_abi_artifact(core_link_unit_t *link,
             break;
         }
         inputs[i] = (n00bb_abi_object_input_t){
-            .module = unit->module.identifier,
+            .module = module,
             .object = artifact->object,
             .object_bytes = artifact->object_bytes,
         };
@@ -1399,6 +1519,11 @@ n00bb_link_abi_artifact(core_link_unit_t *link,
                                                     count);
     if (valid && !modules) valid = false;
     for (size_t i = 0; valid && i < count; i++) {
+        if (i >= unit_count) {
+            modules[i] = analysis->specializations.data[i - unit_count]
+                .instance->owner;
+            continue;
+        }
         core_translation_unit_t *unit = core_link_unit_translation_unit(link,
             i);
         n00bb_tu_state_t *state = unit ? tu_state(unit) : nullptr;

@@ -3487,8 +3487,9 @@ specialize_calls(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
                  core_diagnostics_t *diagnostics)
 {
     core_buffer_t failure = {0};
-    bool ok = n00bb_specialize_calls(&analysis->emitted_functions,
-                                     &failure);
+    bool ok = n00bb_specialize_calls(analysis->ir_context,
+        &analysis->emitted_functions, &analysis->specializations,
+        &analysis->specialization_requests, &failure);
     if (ok) {
         core_list_t(core_translation_unit_ptr_t) order =
             core_list_new(core_translation_unit_ptr_t);

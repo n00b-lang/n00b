@@ -674,7 +674,7 @@ n00bb_abi_apply_link_patches(
 {
     if (!selected || !selected->views || !plan || !merged
         || !merged->tables || !sections
-        || (sections->count && (!sections->sections || !sections->maps)))
+        || (sections->map_count && (!sections->sections || !sections->maps)))
         return false;
     for (size_t input = 0; input < selected->count; input++) {
         const n00bb_abi_object_view_t *view = &selected->views[input];
@@ -690,7 +690,7 @@ n00bb_abi_apply_link_patches(
                 > view->metadata.size - patch_table->file_offset
             || !view->metadata.bytes) return false;
         n00bb_abi_patch_section_t *patch_sections = core_alloc_array(
-            n00bb_abi_patch_section_t, sections->count);
+            n00bb_abi_patch_section_t, sections->map_count + 1);
         n00bb_abi_patch_table_t *patch_tables = core_alloc_array(
             n00bb_abi_patch_table_t, merged->table_count + 1);
         core_index_remap_t *requirement_remap = nullptr;
@@ -715,13 +715,15 @@ n00bb_abi_apply_link_patches(
             return false;
         }
         size_t patch_section_count = 0, patch_table_count = 0;
-        for (size_t i = 0; i < sections->count; i++) {
-            if (sections->maps[i].input != input) continue;
+        for (size_t i = 0; i < sections->map_count; i++) {
+            const n00bb_abi_native_section_map_t *map = &sections->maps[i];
+            if (map->input != input) continue;
             patch_sections[patch_section_count++] =
                 (n00bb_abi_patch_section_t){
-                    .native_index = sections->maps[i].local_section_index,
-                    .bytes = (uint8_t *)sections->sections[i].bytes,
-                    .byte_length = sections->sections[i].size,
+                    .native_index = map->local_section_index,
+                    .bytes = (uint8_t *)sections->sections[map->section].bytes
+                        + map->base_offset,
+                    .byte_length = map->size,
                 };
         }
         for (size_t i = 0; i < merged->table_count; i++) {
@@ -859,7 +861,7 @@ link_selected_objects(
     if (valid) {
         stage = "native reference rebasing";
         valid = n00bb_abi_rebase_native_references(&merged, sections.maps,
-            sections.count, has_pool ? &string_storage : nullptr,
+            sections.map_count, has_pool ? &string_storage : nullptr,
             rebase_failure);
     }
     if (valid) {
@@ -950,7 +952,7 @@ link_selected_objects(
     uint32_t section_base_count = 0;
     size_t addressable_section_count = 0;
     for (size_t i = 0; valid && i < sections.count; i++) {
-        uint32_t index = sections.maps[i].final_section_index;
+        uint32_t index = sections.final_indices[i];
         if (index == UINT32_MAX) valid = false;
         else if (section_base_count <= index) section_base_count = index + 1;
         if (!sections.sections[i].is_thread_local)
@@ -1037,7 +1039,7 @@ link_selected_objects(
                 (core_object_emit_absolute64_t){
                     .section_index = (uint32_t)(map_section + 2),
                     .section_offset = sizeof(uint64_t)
-                        + (uint64_t)sections.maps[i].final_section_index
+                        + (uint64_t)sections.final_indices[i]
                             * sizeof(uint64_t),
                     .symbol_index = (uint32_t)(base_symbols + base_ordinal),
                 };

@@ -195,14 +195,18 @@ void n00bb_abi_merged_rows_release(n00bb_abi_merged_rows_t *merged);
 typedef struct {
     size_t input;
     uint32_t local_section_index;
+    uint32_t section;
     uint32_t final_section_index;
     uint64_t base_offset;
+    uint64_t size;
 } n00bb_abi_native_section_map_t;
 
 typedef struct {
     core_object_emit_section_t *sections;
-    n00bb_abi_native_section_map_t *maps;
+    uint32_t *final_indices;
     size_t count;
+    n00bb_abi_native_section_map_t *maps;
+    size_t map_count;
 } n00bb_abi_native_sections_t;
 
 typedef struct {
@@ -211,10 +215,11 @@ typedef struct {
     uint32_t final_section_index;
 } n00bb_abi_string_storage_rebase_t;
 
-/* Owns copies of selected, file-backed native sections other than each TU's
- * metadata container. Index maps name those sections in a final object whose
- * first section is the rebuilt metadata container. Pointer relocations and
- * exported symbols are transferred by the final link step, not here. */
+/* Owns merged copies of selected, file-backed native sections other than each
+ * TU's metadata container. Input sections with the same name, segment and
+ * flags share one final section; each map places one input section at its
+ * base offset. Pointer relocations and exported symbols are transferred by
+ * the final link step, not here. */
 bool n00bb_abi_collect_native_sections(
     const n00bb_abi_selected_objects_t *selected,
     const core_target_desc_t *target,

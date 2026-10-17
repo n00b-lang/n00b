@@ -4,6 +4,7 @@
 
 #include "specialize.h"
 #include "ir/typelang.h"
+#include "lib/hash.h"
 #include "th/environment.h"
 
 typedef struct {
@@ -228,15 +229,58 @@ concrete_call_signature(ir_instr_t *call, ir_func_t *target, th_ctx *types)
     return signature;
 }
 
-bool n00bb_specialize_calls(
-    core_list_t(n00bb_ir_func_ptr_t) *reachable, core_buffer_t *failure)
+static ir_func_t *
+instantiate(ir_ctx_t *context, ir_func_t *target, th_type *actual,
+            core_list_t(type_binding_t) *bindings, th_ctx *types,
+            core_buffer_t *failure)
 {
-    if (!reachable) return false;
+    const char *owner = ir_module_name(target->owner);
+    core_buffer_t identity = {0};
+    core_buffer_printf(&identity, "%s.%s:%016" PRIx64, owner, target->name,
+                       th_hash(types, actual));
+    core_buffer_t name = {0};
+    if (identity.data)
+        core_buffer_printf(&name, "%s$spec$%016" PRIx64, owner,
+            core_xxh3_64bits_raw(identity.data, identity.byte_len));
+    core_buffer_release(&identity);
+    ir_module_t *module = name.data ? ir_module_new(context, name.data,
+        ir_module_profile(target->owner), ir_module_target(target->owner))
+        : nullptr;
+    core_buffer_release(&name);
+    const th_type **from = core_alloc_array(const th_type *, bindings->len);
+    th_type **to = core_alloc_array(th_type *, bindings->len);
+    const char *clone_failure = nullptr;
+    ir_func_t *copy = nullptr;
+    if (module && from && to) {
+        for (size_t n = 0; n < bindings->len; n++) {
+            from[n] = bindings->data[n].variable;
+            to[n] = bindings->data[n].actual;
+        }
+        copy = ir_func_clone_into(target, module, target->name, from, to,
+                                  bindings->len, &clone_failure);
+    }
+    core_free(from);
+    core_free(to);
+    if (!copy && failure)
+        core_buffer_printf(failure,
+            "could not clone %s.%s for concrete signature %s: %s",
+            owner, target->name, th_print(types, actual), clone_failure
+                ? clone_failure : "allocation failed");
+    return copy;
+}
+
+bool n00bb_specialize_calls(ir_ctx_t *context,
+    core_list_t(n00bb_ir_func_ptr_t) *functions,
+    core_list_t(n00bb_specialization_t) *instances,
+    core_list_t(n00bb_specialization_request_t) *requests,
+    core_buffer_t *failure)
+{
+    if (!context || !functions || !instances || !requests) return false;
     core_list_t(specialization_t) specializations = {0};
     bool valid = true;
-    size_t original_count = reachable->len;
-    for (size_t index = 0; valid && index < reachable->len; index++) {
-        ir_func_t *caller = reachable->data[index];
+    size_t original_count = functions->len;
+    for (size_t index = 0; valid && index < functions->len; index++) {
+        ir_func_t *caller = functions->data[index];
         size_t parent = SIZE_MAX;
         if (index >= original_count)
             parent = index - original_count;
@@ -274,41 +318,24 @@ bool n00bb_specialize_calls(
                         break;
                     }
                 if (!copy) {
-                    size_t name_length = strlen(target->name)
-                        + sizeof("$spec$") + 16;
-                    char name[name_length];
-                    snprintf(name, name_length, "%s$spec$%016" PRIx64,
-                        target->name, hash);
-                    const th_type **from = core_alloc_array(
-                        const th_type *, bindings.len);
-                    th_type **to = core_alloc_array(th_type *, bindings.len);
-                    valid = from && to;
-                    for (size_t n = 0; valid && n < bindings.len; n++) {
-                        from[n] = bindings.data[n].variable;
-                        to[n] = bindings.data[n].actual;
-                    }
-                    const char *clone_failure = nullptr;
-                    if (valid) copy = ir_func_clone_replacing(target,
-                        name, from, to, bindings.len, &clone_failure);
-                    core_free(from);
-                    core_free(to);
+                    copy = instantiate(context, target, actual, &bindings,
+                                       types, failure);
                     valid = copy != nullptr;
-                    if (!valid && failure)
-                        core_buffer_printf(failure,
-                            "could not clone %s.%s for concrete signature %s: %s",
-                            ir_module_name(target->owner), target->name,
-                            th_print(types, actual), clone_failure
-                                ? clone_failure : "allocation failed");
                     if (valid) {
                         core_list_push(specializations,
                             ((specialization_t){target, copy, actual,
                                                 parent}));
-                        core_list_push(*reachable, copy);
+                        core_list_push(*instances,
+                            ((n00bb_specialization_t){target, copy,
+                                                      actual}));
+                        core_list_push(*functions, copy);
                     }
                 }
                 core_list_free(bindings);
                 if (!valid) break;
-                ir_value_t *bound = ir_func_address(target->owner, copy);
+                core_list_push(*requests,
+                    ((n00bb_specialization_request_t){caller->owner, copy}));
+                ir_value_t *bound = ir_func_address(copy->owner, copy);
                 valid = bound != nullptr;
                 if (!valid && failure)
                     core_buffer_printf(failure,
