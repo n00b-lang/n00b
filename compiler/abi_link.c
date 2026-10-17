@@ -1607,6 +1607,10 @@ compatible_type_identity(const abi_link_key_t *first,
         a_flags &= ~N00B_ABI_TYPE_FLAG_PACKABLE;
         b_flags &= ~N00B_ABI_TYPE_FLAG_PACKABLE;
     }
+    if (!a->size_bits || !b->size_bits) {
+        a_flags &= ~N00B_ABI_TYPE_FLAG_PACKABLE;
+        b_flags &= ~N00B_ABI_TYPE_FLAG_PACKABLE;
+    }
     if (a->named_arguments.count != b->named_arguments.count
         || !compatible_string_values(first->view, &a->named_constructor,
             candidate->view, &b->named_constructor))
