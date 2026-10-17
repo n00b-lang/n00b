@@ -147,7 +147,7 @@ typedef struct {
 } effects_t;
 
 typedef struct {
-    effects_t *items;
+    effects_t **items;
     size_t len;
     size_t cap;
     pointer_map_t index;
@@ -330,6 +330,8 @@ effects_table_free(effects_table_t *table)
         free(table->contents[i]);
     free(table->contents);
     free(table->contents_hold_buffer);
+    for (size_t i = 0; i < table->len; i++)
+        free(table->items[i]);
     free(table->items);
     pointer_map_free(&table->index);
     pointer_map_free(&table->contents_index);
@@ -359,10 +361,10 @@ effects_for(effects_table_t *table, ir_func_t *function)
 {
     uint32_t slot = 0;
     if (pointer_map_get(&table->index, function, &slot))
-        return &table->items[slot];
+        return table->items[slot];
     if (table->len == table->cap) {
         size_t cap = table->cap ? table->cap * 2 : 64;
-        effects_t *items = realloc(table->items, cap * sizeof(*items));
+        effects_t **items = realloc(table->items, cap * sizeof(*items));
         if (!items) {
             table->failed = true;
             return nullptr;
@@ -370,7 +372,12 @@ effects_for(effects_table_t *table, ir_func_t *function)
         table->items = items;
         table->cap = cap;
     }
-    effects_t *effects = &table->items[table->len];
+    effects_t *effects = calloc(1, sizeof(*effects));
+    if (!effects) {
+        table->failed = true;
+        return nullptr;
+    }
+    table->items[table->len] = effects;
     *effects = (effects_t){.function = function};
     if (!function->n_blocks && !function_is_native(function)) {
         for (int kind = 0; kind < REACH_KINDS; kind++)
@@ -386,6 +393,7 @@ effects_for(effects_table_t *table, ir_func_t *function)
     }
     if (function_is_write_lock(function)) effects->writes[REACH_SELF] = 1;
     if (!pointer_map_put(&table->index, function, (uint32_t)table->len)) {
+        free(effects);
         table->failed = true;
         return nullptr;
     }
@@ -909,7 +917,7 @@ collect_reachable(effects_table_t *table, ir_func_t *root)
     size_t start = table->len;
     if (!effects_for(table, root)) return false;
     for (size_t at = start; at < table->len; at++) {
-        ir_func_t *function = table->items[at].function;
+        ir_func_t *function = table->items[at]->function;
         for (uint32_t b = 0; b < function->n_blocks; b++) {
             ir_block_t *block = function->blocks[b];
             for (uint32_t i = 0; i < block->n_instrs; i++) {
@@ -928,7 +936,7 @@ solve_effects(effects_table_t *table, th_ctx *types)
     while (changed) {
         changed = false;
         for (size_t i = 0; i < table->len; i++)
-            if (!summarize(table, types, &table->items[i], &changed))
+            if (!summarize(table, types, table->items[i], &changed))
                 return false;
     }
     return true;
@@ -958,19 +966,21 @@ report_borrow(window_t *window, const ir_instr_t *offender,
               const char *label)
 {
     ir_diag_t *diagnostic = ir_diag_begin_at(window->diagnostics,
-        IR_DIAG_VERIFY_LIFETIME, window->conversion,
-        window->conversion->block, window->function,
+        label ? IR_DIAG_VERIFY_LIFETIME : IR_DIAG_INTERNAL,
+        window->conversion, window->conversion->block, window->function,
         "this Buffer is borrowed as a string here");
     char message[512];
-    if (offender && label && offender->span.start_line)
+    if (!label)
+        snprintf(message, sizeof(message),
+                 "the Buffer borrow analysis could not complete for this "
+                 "conversion");
+    else if (offender && offender->span.start_line)
         snprintf(message, sizeof(message), "%s (%s, at line %u, column %u)",
                  borrow_diagnostic_text, label, offender->span.start_line,
                  offender->span.start_col);
-    else if (label)
+    else
         snprintf(message, sizeof(message), "%s (%s)", borrow_diagnostic_text,
                  label);
-    else
-        snprintf(message, sizeof(message), "%s", borrow_diagnostic_text);
     ir_diag_message(diagnostic, window->diagnostics, message);
     if (offender && label)
         ir_diag_secondary(window->diagnostics, diagnostic, offender->span,
@@ -1266,6 +1276,7 @@ split_edge(ir_func_t *function, ir_block_t *from, ir_block_t *to,
 typedef struct {
     ir_local_t *local;
     th_type *type;
+    uint32_t ordinal;
     uint32_t serial;
 } held_t;
 
@@ -1274,7 +1285,8 @@ insert_held_assignment(window_t *window, held_t *held, ir_block_t *block,
                        uint32_t at, ir_value_t *buffer)
 {
     char name[64];
-    snprintf(name, sizeof(name), "__n00bb_borrow_held_%u", held->serial++);
+    snprintf(name, sizeof(name), "__n00bb_borrow_held_%u_%u", held->ordinal,
+             held->serial++);
     ir_instr_t *wrap = ir_instr_generated(block,
         buffer ? IR_OP_OPTION_SOME : IR_OP_OPTION_NONE,
         window->conversion->span, "n00bb.buffer-borrow", at);
@@ -1332,14 +1344,14 @@ insert_ends(window_t *window, end_sites_t *sites, held_t *held)
 static bool
 insert_held_ends(window_t *window, end_sites_t *sites)
 {
-    static uint32_t next_local;
     ir_func_t *function = window->function;
     th_type *type = th_option(ir_module_types(function->owner),
                               window->buffer->type);
+    uint32_t ordinal = function->n_locals;
     char name[64];
-    snprintf(name, sizeof(name), "__n00bb_borrow_held_local_%u",
-             next_local++);
+    snprintf(name, sizeof(name), "__n00bb_borrow_held_local_%u", ordinal);
     held_t held = {
+        .ordinal = ordinal,
         .local = type ? ir_local_add(function, name, type) : nullptr,
         .type = type,
     };
@@ -1739,7 +1751,8 @@ n00bb_buffer_borrow_pass(ir_module_t *module, ir_diags_t *diagnostics)
         if (!count) continue;
         if (!solved) {
             for (size_t g = 0; ok && g < ir_func_count(module); g++)
-                ok = collect_reachable(&table, ir_func_at(module, g));
+                if (collect_conversions(ir_func_at(module, g), nullptr))
+                    ok = collect_reachable(&table, ir_func_at(module, g));
             ok = ok && solve_effects(&table, types);
             solved = true;
         }

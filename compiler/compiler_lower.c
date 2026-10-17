@@ -1684,7 +1684,8 @@ n00bb_store_try_value(ir_lower_context_t *context,
 {
     parse_tree_t *expression = value_body_expression(grammar, body);
     ir_value_t *value = expression
-        ? ir_lower_node_value(context, expression) : nullptr;
+        ? n00bb_result_value(context, expression, frame->result_value)
+        : nullptr;
     ir_instr_t *store = value
         ? ir_lower_emit_instruction(context, IR_OP_COPY,
                                     lower_span_for_tree(context, body))

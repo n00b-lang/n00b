@@ -1013,6 +1013,11 @@ validate_index_dispatch_result(parse_grammar_t *grammar,
     th_type *actual = core_tree_is_leaf(site->node)
         ? nullptr : core_tree_node_value(site->node).type;
     if (actual && expected
+        && n00bb_value_coerces(state->types, expected, actual)) {
+        core_tree_node_value(site->node).type = expected;
+        return validate_enclosing_return_type(grammar, unit, state, site);
+    }
+    if (actual && expected
         && th_unify_in_place(state->types, actual, expected)) {
         core_tree_node_value(site->node).type = actual;
         return validate_enclosing_return_type(grammar, unit, state, site);
@@ -1118,6 +1123,7 @@ constructor_argument_fits(n00bb_tu_state_t *state, parse_tree_t *node,
     if (th_unify_probe(state->types, parameter, argument))
         return th_unify_in_place(state->types, parameter, argument) != nullptr;
     if (optional && th_is_nil(argument)) return true;
+    if (n00bb_value_coerces(state->types, argument, parameter)) return true;
     if (core_tree_node_value(node).integer_literal_origin)
         return n00bb_contextual_integer_literal(state, node,
                                                 optional ? element : parameter);

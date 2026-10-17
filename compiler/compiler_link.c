@@ -4237,6 +4237,8 @@ record_default_fields_support(th_ctx *probe, th_ctx *source,
                               const char *method, core_dict_t *visiting)
 {
     receiver = receiver ? th_resolve(receiver) : nullptr;
+    if (receiver && n00bb_value_coercion_target(source, receiver))
+        return false;
     th_type *shape = receiver
         ? th_type_definition(source, receiver) : nullptr;
     if (!shape || th_kind_of(th_resolve(shape)) != TH_RECORD

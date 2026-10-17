@@ -23,6 +23,79 @@ func distinct_concat() -> uint {
     return byte_len(a)
 }
 
+record Holder {
+    b: Buffer
+}
+
+record Named {
+    n: uint
+}
+
+func __init(modify self: Named, s: string) {
+    self.n = byte_len(s)
+}
+
+func build_from(source: Buffer) -> uint {
+    var out: Buffer = empty_buffer()
+    out += source
+    out += source
+    return byte_len(out)
+}
+
+func loop_borrow() -> uint {
+    var b: Buffer = buffer_from_string("ab")
+    var total: uint = 0
+    var i: int = 0
+    while i < 3 {
+        let view: string = b
+        total += byte_len(view)
+        b += "c"
+        i += 1
+    }
+    return total
+}
+
+func held_field() -> uint {
+    let h: Holder = (b = buffer_from_string("held"))
+    return measure(h.b)
+}
+
+func constructed() -> uint {
+    var b: Buffer = buffer_from_string("named")
+    let x: Named = new[Named](b)
+    return x.n
+}
+
+func indexed() -> uint {
+    var l: List[Buffer] = new[List[Buffer]]()
+    l.append(buffer_from_string("idx"))
+    let view: string = l[0]
+    return byte_len(view)
+}
+
+func interleaved() -> uint {
+    var a: Buffer = buffer_from_string("aa")
+    var b: Buffer = buffer_from_string("bbb")
+    let first: string = a
+    let second: string = b
+    let n: uint = byte_len(first)
+    a += "!"
+    return n + byte_len(second)
+}
+
+func append_in_place() -> uint {
+    var a: Buffer = buffer_from_string("grow")
+    a += "x"
+    return byte_len(a)
+}
+
+require append_in_place() == 5
+require build_from(buffer_from_string("xy")) == 4
+require loop_borrow() == 9
+require held_field() == 4
+require constructed() == 5
+require indexed() == 3
+require interleaved() == 5
 require call_argument() == 8
 require local_then_other_write() == 12
 require distinct_concat() == 9
