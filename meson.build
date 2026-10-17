@@ -646,6 +646,29 @@ test(
 )
 
 test(
+    'folded-consts-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'folded_consts' / 'folded_consts.n'],
+    timeout: 120,
+    suite: 'slow',
+)
+
+test(
+    'folded-const-range-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'folded_consts' / 'folded_const_range.n',
+           'assigned value does not match the local type'],
+    timeout: 120,
+    suite: 'slow',
+)
+
+test(
     'wide-integer-literal-range-n00b',
     find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',

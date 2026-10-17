@@ -6618,6 +6618,33 @@ n00bb_lower_integer_constant_reference(ir_lower_context_t *context,
     return false;
 }
 
+static bool
+n00bb_lower_folded_integer_expression(ir_lower_context_t *context,
+                                      parse_visit_t *visit, bool entering,
+                                      void *state)
+{
+    (void)state;
+    int64_t value = 0;
+    if (!entering || !context->reachable
+        || !n00bb_folded_integer_expression(visit->grammar, visit->node,
+                                            &value)) return true;
+    ir_span_t span = lower_span_for_tree(context, visit->node);
+    th_type *type = core_tree_node_value(visit->node).type;
+    if (!type || !is_integer_type(th_resolve(type))) return true;
+    ir_instr_t *constant = ir_lower_emit_instruction(context, IR_OP_CONST,
+                                                     span);
+    if (constant
+        && ir_lower_set_temp_dest(context, constant, "__n00bb_folded_",
+                                  th_resolve(type))
+        && ir_instr_operand_int(constant, (ir_int_t)value)
+        && ir_lower_set_node_value(context, visit->node, constant->dest)
+        && ir_lower_prune_node(context, visit->node))
+        return true;
+    lower_error(context, IR_DIAG_INTERNAL, span,
+                "could not emit a folded integer constant");
+    return false;
+}
+
 static ir_instr_t *
 n00bb_emit_uint_constant(ir_lower_context_t *context, th_type *uint_type,
                          uint64_t value, ir_span_t span, const char *prefix)
@@ -19785,6 +19812,14 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         "tuple-or-paren", n00bb_lower_static_litmod, nullptr);
     ok = ok && ir_lowerer_register_nt_visit(lowerer,
         "new-expr", n00bb_mark_constructor_lvalues, nullptr);
+    static const char *const folded_kinds[] = {
+        "add-expr", "mul-expr", "shift-expr", "bitand-expr", "bitxor-expr",
+        "bitor-expr",
+    };
+    for (size_t i = 0; ok && i < sizeof(folded_kinds) / sizeof(*folded_kinds);
+         i++)
+        ok = ir_lowerer_register_nt_visit(lowerer, folded_kinds[i],
+            n00bb_lower_folded_integer_expression, nullptr);
     ok = ok && ir_lowerer_register_nt_visit(lowerer,
         "primary", n00bb_lower_integer_constant_reference, nullptr)
         && ir_lowerer_register_nt_visit(lowerer,

@@ -3401,6 +3401,66 @@ n00bb_constrain_integer_fit(n00bb_tu_state_t *state, th_type *type,
 }
 
 static bool
+folded_compound_origin(parse_tree_t *node)
+{
+    return node && !core_tree_is_leaf(node)
+        && core_tree_node_value(node).integer_literal_origin == node
+        && core_tree_num_children(node) == 3
+        && !core_tree_is_leaf(core_tree_child(node, 1))
+        && core_tree_node_value(core_tree_child(node, 0))
+            .integer_literal_origin
+        && core_tree_node_value(core_tree_child(node, 2))
+            .integer_literal_origin;
+}
+
+static bool
+folded_operator_is_bitwise(parse_tree_t *node)
+{
+    core_string_t op = first_token_text(core_tree_child(node, 1));
+    return core_string_eq(op, CORE_STRING_STATIC("&"))
+        || core_string_eq(op, CORE_STRING_STATIC("|"))
+        || core_string_eq(op, CORE_STRING_STATIC("^"))
+        || core_string_eq(op, CORE_STRING_STATIC("<<"))
+        || core_string_eq(op, CORE_STRING_STATIC(">>"));
+}
+
+static bool
+folded_expression_is_bitwise(parse_tree_t *node)
+{
+    if (!folded_compound_origin(node)) return false;
+    if (folded_operator_is_bitwise(node)) return true;
+    for (size_t side = 0; side < 2; side++)
+        if (folded_expression_is_bitwise(core_tree_node_value(
+                core_tree_child(node, side ? 2 : 0)).integer_literal_origin))
+            return true;
+    return false;
+}
+
+static void
+type_folded_operands(n00bb_tu_state_t *state, parse_tree_t *node,
+                     th_type *target)
+{
+    if (!folded_compound_origin(node)) return;
+    core_string_t op = first_token_text(core_tree_child(node, 1));
+    bool shift = core_string_eq(op, CORE_STRING_STATIC("<<"))
+        || core_string_eq(op, CORE_STRING_STATIC(">>"));
+    for (size_t side = 0; side < 2; side++) {
+        parse_tree_t *operand = core_tree_child(node, side ? 2 : 0);
+        parse_tree_t *origin = core_tree_node_value(operand)
+            .integer_literal_origin;
+        th_type *type = shift && side
+            ? n00bb_shift_count_type(state->types, target) : target;
+        if (!origin || !type) continue;
+        for (parse_tree_t *at = origin; at;
+             at = core_tree_node_value(at).parent) {
+            core_tree_node_value(at).type = type;
+            if (at == operand) break;
+        }
+        type_folded_operands(state, origin, type);
+    }
+}
+
+static bool
 unify_literal_operand(parse_grammar_t *grammar, n00bb_tu_state_t *state,
                       parse_tree_t *node, core_string_t trait,
                       core_string_t method)
@@ -3430,13 +3490,15 @@ unify_literal_operand(parse_grammar_t *grammar, n00bb_tu_state_t *state,
         th_type *literal_type = shift ? th_var(state->types)
                                       : th_resolve(other_type);
         if (!literal_type || !n00bb_constrain_literal_fit(grammar, state,
-                origin, operand, literal_type, unsigned_only))
+                origin, operand, literal_type,
+                unsigned_only || folded_expression_is_bitwise(origin)))
             return false;
         for (parse_tree_t *at = origin; at;
              at = core_tree_node_value(at).parent) {
             core_tree_node_value(at).type = literal_type;
             if (at == operand) break;
         }
+        type_folded_operands(state, origin, literal_type);
         if (comparison || assignment || (shift && side == 1)) continue;
         th_type *result = core_tree_node_value(node).type;
         th_type *unified = result
@@ -3485,6 +3547,93 @@ n00bb_integer_constant_reference(parse_grammar_t *grammar, parse_tree_t *node,
                                        value, value);
 }
 
+static bool
+folded_integer_operand(parse_tree_t *operand, int64_t *value)
+{
+    int64_t minimum = 0, maximum = 0;
+    if (!operand || core_tree_is_leaf(operand)
+        || !core_tree_node_value(operand).integer_literal_origin
+        || !parse_tree_integer_range(operand, &minimum, &maximum)
+        || minimum != maximum) return false;
+    *value = minimum;
+    return true;
+}
+
+static bool
+fold_integer_operation(core_string_t op, int64_t left, int64_t right,
+                       int64_t *value)
+{
+    if (core_string_eq(op, CORE_STRING_STATIC("+")))
+        return !__builtin_add_overflow(left, right, value);
+    if (core_string_eq(op, CORE_STRING_STATIC("-")))
+        return !__builtin_sub_overflow(left, right, value);
+    if (core_string_eq(op, CORE_STRING_STATIC("*")))
+        return !__builtin_mul_overflow(left, right, value);
+    if (core_string_eq(op, CORE_STRING_STATIC("/"))
+        || core_string_eq(op, CORE_STRING_STATIC("%"))) {
+        if (!right || (left == INT64_MIN && right == -1)) return false;
+        *value = core_string_eq(op, CORE_STRING_STATIC("/"))
+            ? left / right : left % right;
+        return true;
+    }
+    if (left < 0 || right < 0) return false;
+    if (core_string_eq(op, CORE_STRING_STATIC("<<"))) {
+        if (right >= 63 || left > (INT64_MAX >> right)) return false;
+        *value = left << right;
+        return true;
+    }
+    if (core_string_eq(op, CORE_STRING_STATIC(">>"))) {
+        *value = right >= 63 ? 0 : left >> right;
+        return true;
+    }
+    if (core_string_eq(op, CORE_STRING_STATIC("&"))) *value = left & right;
+    else if (core_string_eq(op, CORE_STRING_STATIC("|")))
+        *value = left | right;
+    else if (core_string_eq(op, CORE_STRING_STATIC("^")))
+        *value = left ^ right;
+    else return false;
+    return true;
+}
+
+static bool
+folded_integer_expression_node(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    static const char *const kinds[] = {
+        "add-expr", "mul-expr", "shift-expr", "bitand-expr", "bitxor-expr",
+        "bitor-expr",
+    };
+    if (!node || core_tree_is_leaf(node) || core_tree_num_children(node) != 3)
+        return false;
+    for (size_t i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++)
+        if (nt_is(grammar, node, kinds[i])) return true;
+    return false;
+}
+
+static bool
+fold_integer_literal_expression(parse_grammar_t *grammar, parse_tree_t *node,
+                                int64_t *value)
+{
+    int64_t left = 0, right = 0;
+    return folded_integer_expression_node(grammar, node)
+        && folded_integer_operand(core_tree_child(node, 0), &left)
+        && folded_integer_operand(core_tree_child(node, 2), &right)
+        && fold_integer_operation(first_token_text(core_tree_child(node, 1)),
+                                  left, right, value);
+}
+
+bool
+n00bb_folded_integer_expression(parse_grammar_t *grammar, parse_tree_t *node,
+                                int64_t *value)
+{
+    int64_t minimum = 0, maximum = 0;
+    if (!folded_integer_expression_node(grammar, node)
+        || core_tree_node_value(node).integer_literal_origin != node
+        || !parse_tree_integer_range(node, &minimum, &maximum)
+        || minimum != maximum) return false;
+    *value = minimum;
+    return true;
+}
+
 bool
 n00bb_cache_contextual_integer(parse_grammar_t *grammar,
                                n00bb_tu_state_t *state, parse_tree_t *node)
@@ -3511,6 +3660,15 @@ n00bb_cache_contextual_integer(parse_grammar_t *grammar,
     int64_t constant = 0;
     if (n00bb_integer_constant_reference(grammar, node, &constant)) {
         parsed->integer_literal_origin = node;
+        return parse_tree_set_integer_range(node, constant, constant);
+    }
+    if (fold_integer_literal_expression(grammar, node, &constant)) {
+        parsed->integer_literal_origin = node;
+        th_type *operand = core_tree_node_value(core_tree_child(node, 0)).type;
+        operand = operand ? th_resolve(operand) : nullptr;
+        if (operand && is_integer_type(operand)
+            && !n00bb_integer_interval_fits_type(operand, constant, constant))
+            type_folded_operands(state, node, th_name(state->types, "int"));
         return parse_tree_set_integer_range(node, constant, constant);
     }
     if (core_tree_num_children(node) == 3
@@ -7785,11 +7943,14 @@ n00bb_contextual_integer_literal(n00bb_tu_state_t *state,
         ? core_tree_node_value(node).integer_literal_origin : nullptr;
     if (!origin) return n00bb_contextual_float_literal(node, target);
     if (!literal_fits_type(state, origin, node, target)) return false;
+    if (folded_expression_is_bitwise(origin) && !n00bb_bitwise_type(target))
+        return false;
     for (parse_tree_t *current = origin; current;
          current = core_tree_node_value(current).parent) {
         core_tree_node_value(current).type = target;
         if (current == node) break;
     }
+    type_folded_operands(state, origin, target);
     return true;
 }
 
