@@ -358,6 +358,15 @@ func __string_from_utf8(bytes: Array[u8], result: Ref[string]) -> bool {
     return true
 }
 
+func string_backing_at(s: string) -> uint {
+    let view: Ref[String_Words] = words(ref s)
+    let tag: u64 = view.selector >> tag_shift
+    if tag != str_tag_long and tag != str_tag_span {
+        return 0
+    }
+    return __abi_ref_address(view.data)
+}
+
 func __string_storage(s: string) -> Array[u8]? {
     let view: Ref[String_Words] = words(ref s)
     if view.selector >> tag_shift != str_tag_long {

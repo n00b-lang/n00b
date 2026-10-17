@@ -486,18 +486,9 @@ func to_string(consume self: Buffer,
     let state: Ref[Buffer_State] = self.state
     var result: string = string.core.empty_string()
     with Buffer_Write(state) {
-        let len: uint = state.byte_len
-
         raw_own(state)
-
-        if state.alloc_len <= len {
-            raw_resize(state, len + 1)
-            state.byte_len = len
-        }
-
-        state.store[len] = 0
-
-        result = string.core.from_raw(state.store, cast[int] len,
+        result = string.core.from_raw(state.store,
+                                      cast[int] state.byte_len,
                                       copy = false, encoding = encoding)
     }
     return result

@@ -19911,15 +19911,6 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         fprintf(stderr, "PROFILE lower-initializers %.3f\n",
             n00bb_profile_seconds() - profile_start);
 
-    if (ok && dump_ir) {
-        for (size_t i = 0; i < units.len; i++) {
-            char *text = ir_module_print(tu_state(units.data[i])->ir_module);
-            if (!text) { ok = false; break; }
-            fputs(text, stdout);
-            core_free(text);
-        }
-    }
-
     for (size_t i = 0; ok && i < units.len; i++) {
         core_translation_unit_t *unit = units.data[i];
         ir_module_t *module = tu_state(unit)->ir_module;
@@ -19983,11 +19974,24 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
     };
     for (size_t i = 0; ok && i < units.len; i++) {
         core_translation_unit_t *unit = units.data[i];
+        ok = n00bb_buffer_borrow_pass(tu_state(unit)->ir_module,
+            ir_diags_new_attached(ir_context, nullptr,
+                core_translation_unit_diagnostics(unit), unit));
+    }
+    if (ok && dump_ir) {
+        for (size_t i = 0; i < units.len; i++) {
+            char *text = ir_module_print(tu_state(units.data[i])->ir_module);
+            if (!text) { ok = false; break; }
+            fputs(text, stdout);
+            core_free(text);
+        }
+    }
+    for (size_t i = 0; ok && i < units.len; i++) {
+        core_translation_unit_t *unit = units.data[i];
         ir_module_t *module = tu_state(unit)->ir_module;
         ir_diags_t *diagnostics = ir_diags_new_attached(
             ir_context, nullptr,
             core_translation_unit_diagnostics(unit), unit);
-        ok = n00bb_buffer_borrow_pass(module, diagnostics);
         for (size_t p = 0; ok
              && p < sizeof(lowering_passes) / sizeof(lowering_passes[0]);
              p++) {

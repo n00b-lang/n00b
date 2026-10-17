@@ -7835,6 +7835,18 @@ n00bb_value_coercion_target(th_ctx *types, th_type *from)
     return n00bb_value_coerces(types, from, view) ? view : nullptr;
 }
 
+bool
+n00bb_blanket_receiver(th_type *contract)
+{
+    th_type *signature = contract ? th_resolve(contract) : nullptr;
+    const th_param *receiver = signature
+        && th_kind_of(signature) == TH_FUNCTION
+        && th_func_nparams(signature)
+        ? th_func_param(signature, 0) : nullptr;
+    return receiver && receiver->type
+        && th_kind_of(th_resolve(receiver->type)) == TH_VAR;
+}
+
 static th_type *
 n00bb_coercion_target_hook(th_ctx *types, th_type *from, void *user)
 {

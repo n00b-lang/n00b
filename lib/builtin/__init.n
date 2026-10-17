@@ -19,6 +19,7 @@ import abi
 package builtin {
     export bitptr.Bitptr
     export bitptr.bitptr
+    export abi.string_backing_at
     export abi.Type_Kind to sys
     export abi.Range to sys
     export abi.String_Bits to sys

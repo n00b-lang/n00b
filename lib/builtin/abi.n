@@ -1,3 +1,5 @@
+import string.core
+
 enum Type_Kind {
     nil_type = 0, primitive_type = 1, record_type, variant_type, enum_type,
     flagset_type,reference_type, option_type,array_type, view_type,
@@ -175,6 +177,10 @@ record Baked_Node_Record layout(c) {
     public reserved_zero: u32
     public byte_offset:   u64
     public byte_length:   u64
+}
+
+func string_backing_at(s: string) -> uint {
+    return string.core.string_backing_at(s)
 }
 
 func __type_has_kind(type_field: u32, kind: u32) -> i32 {

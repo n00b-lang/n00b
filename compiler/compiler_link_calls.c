@@ -444,15 +444,26 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
                     if (method_status == TH_ENV_METHOD_FOUND)
                         receiver_type = promoted;
                 }
+                bool blanket = method_status == TH_ENV_METHOD_FOUND
+                    && n00bb_blanket_receiver(method.contract);
                 th_type *coerced = method_status == TH_ENV_METHOD_NOT_FOUND
+                    || blanket
                     ? n00bb_value_coercion_target(state->types, receiver_type)
                     : nullptr;
                 if (coerced) {
-                    method_status = th_env_method_resolve_by_name(
-                        state->types, coerced, method_name, &method,
-                        &trait_name);
-                    if (method_status == TH_ENV_METHOD_FOUND)
+                    th_env_method_t target = {0};
+                    const char *target_trait = nullptr;
+                    th_env_method_status_t target_status =
+                        th_env_method_resolve_by_name(state->types, coerced,
+                            method_name, &target, &target_trait);
+                    if (target_status == TH_ENV_METHOD_FOUND
+                        && !(blanket
+                             && n00bb_blanket_receiver(target.contract))) {
+                        method_status = target_status;
+                        method = target;
+                        trait_name = target_trait;
                         receiver_type = coerced;
+                    }
                 }
                 if (method_status == TH_ENV_METHOD_FOUND) {
                     signature = call_site_signature(call_sites, label,
