@@ -1520,6 +1520,47 @@ static void test_store_through_forwarded_addresses(void)
     check("an element store writes array contents, not the immutable binding",
           held[0]);
 
+    const char *const global_sources[] = {
+        MOD("  const global @g: array[i32]\n"
+            "  func @f(%slot: i64, %input: i32) -> void {\n"
+            "    block entry:\n"
+            "      %address: ref[array[i32]] = address.of @g\n"
+            "      %element: ref[i32] = index %address, %slot\n"
+            "      store %element, %input\n"
+            "      return\n"
+            "  }\n"),
+        MOD("  immutable global @g: array[i32]\n"
+            "  func @f(%slot: i64, %input: i32) -> void {\n"
+            "    block entry:\n"
+            "      %address: ref[array[i32]] = address.of @g\n"
+            "      %element: ref[i32] = index %address, %slot\n"
+            "      store %element, %input\n"
+            "      return\n"
+            "  }\n"),
+    };
+    bool constant_rejected = false, immutable_held = false;
+    for (size_t i = 0; i < 2; i++) {
+        r = verify(global_sources[i], IR_PROP_PARSED);
+        ir_global_t *global = r->m ? ir_global_find(r->m, "g") : nullptr;
+        configured = global && ir_global_set_phase_access(r->ctx, global,
+            IR_PHASE_ACCESS_RUNTIME, IR_PHASE_ACCESS_NONE,
+            IR_PHASE_ACCESS_RUNTIME);
+        if (configured) {
+            ir_module_establish(r->m, IR_PROP_PARSED | IR_PROP_TYPED);
+            r->held = ir_verify(r->m, r->d);
+        }
+        if (i == 0)
+            constant_rejected = configured && !typed(r)
+                && said(r, "phase.constant-contents-write");
+        else
+            immutable_held = configured && typed(r);
+        done(r);
+    }
+    check("an element store into a constant array is rejected",
+          constant_rejected);
+    check("an element store into an immutable global array is accepted",
+          immutable_held);
+
     r = verify(MOD(
         "  func @f(%condition: bool, %input: i32) -> void {\n"
         "    local $x: i32\n"

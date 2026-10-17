@@ -510,6 +510,7 @@ core_list_decl(verify_instr_ptr_t);
 typedef struct {
     core_list_t(verify_value_ptr_t) pending;
     core_list_t(verify_value_ptr_t) targets;
+    core_list_t(verify_value_ptr_t) containers;
     th_ctx *types;
     bool external_writable;
     bool writable_projection;
@@ -669,6 +670,8 @@ static bool store_target_collect(store_target_set_t *set,
         ir_instr_t *definition = value->def;
         if (!through_contents && ir_value_addresses_sequence_contents(value)) {
             set->contents = true;
+            set->complete = store_target_add(&set->containers,
+                ir_operand_value(&definition->operands[0]));
             continue;
         }
         switch (definition->op) {
@@ -746,6 +749,7 @@ static void store_target_set_free(store_target_set_t *set)
 {
     core_list_free(set->pending);
     core_list_free(set->targets);
+    core_list_free(set->containers);
 }
 
 bool ir_value_visit_store_targets(const ir_value_t *address,
@@ -1148,6 +1152,39 @@ static bool check_binding_write(V *v, ir_instr_t *in, ir_block_t *block,
     return false;
 }
 
+static ir_mutability_t contents_owner_mutability(const ir_value_t *owner,
+                                                 ir_execution_phase_t phase)
+{
+    if (owner->kind == IR_VAL_GLOBAL && owner->global)
+        return phase == IR_PHASE_COMPTIME
+            ? ir_global_comptime_mutability(owner->global)
+            : owner->global->mutability;
+    return owner->local ? owner->local->mutability : IR_MUT_MUTABLE;
+}
+
+static void check_contents_write(V *v, ir_instr_t *in, ir_block_t *block,
+                                 const store_target_set_t *targets)
+{
+    ir_execution_phase_t phase = ir_func_execution_phase(in->block->owner);
+    for (size_t i = 0; i < targets->containers.len; i++) {
+        store_target_set_t owners;
+        bool complete = store_target_collect(&owners,
+            targets->containers.data[i], false, true);
+        for (size_t j = 0; complete && j < owners.targets.len; j++) {
+            ir_value_t *owner = owners.targets.data[j];
+            if (contents_owner_mutability(owner, phase) != IR_MUT_CONST)
+                continue;
+            broke(v, IR_DIAG_VERIFY_PHASE, in, block,
+                  "phase.constant-contents-write",
+                  "the contents of constant %s cannot be written during %s execution",
+                  owner->global ? owner->global->name
+                      : owner->name ? owner->name : "(unnamed)",
+                  phase == IR_PHASE_COMPTIME ? "compile-time" : "runtime");
+        }
+        store_target_set_free(&owners);
+    }
+}
+
 static void check_store_target_write(V *v, ir_instr_t *in,
                                      ir_block_t *block,
                                      ir_value_t *address)
@@ -1164,6 +1201,7 @@ static void check_store_target_write(V *v, ir_instr_t *in,
         store_target_set_free(&targets);
         return;
     }
+    check_contents_write(v, in, block, &targets);
     if (!targets.targets.len) {
         if (!targets.external_writable && !targets.contents)
             check_binding_write(v, in, block, address);
