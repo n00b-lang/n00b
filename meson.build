@@ -620,6 +620,16 @@ test(
     suite: 'slow',
 )
 
+test(
+    'compile-fallible-index-read-n00b', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'compile_module.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'compile_mode',
+           'fallible_index_read'],
+    timeout: 120,
+    suite: 'slow',
+)
+
 foreach static_case : ['static_enum', 'static_option', 'static_nested_import']
     test(
         static_case.replace('_', '-') + '-n00b', find_program('sh'),

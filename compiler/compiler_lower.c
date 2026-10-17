@@ -10563,6 +10563,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     bool option_builtin = n00bb_builtin_option_function(symbol);
     n00bb_link_analysis_t *analysis = caller_state
         ? caller_state->link_analysis : nullptr;
+    parse_sym_entry_t *implementation = symbol;
     if (trait_call && !reference_builtin && !option_builtin) {
         symbol = linkable_trait_requirement(analysis, lower->unit,
                                             dispatch_site, symbol);
@@ -11223,13 +11224,25 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     th_ctx *types = ir_module_types(context->module);
     th_type *fact_failure = nullptr;
     bool fact_failure_conflict = false;
-    if (builtin_trait_call && !lower->tries.len) {
+    th_type *implementation_type = implementation != symbol
+        && implementation && implementation->kind == PARSE_SYM_FUNCTION
+        && implementation->type ? th_resolve(implementation->type) : nullptr;
+    th_type *implementation_failure = implementation_type
+        && th_kind_of(implementation_type) == TH_FUNCTION
+        ? th_func_error(implementation_type) : nullptr;
+    if (implementation_failure
+        && !th_is_closed(types, implementation_failure))
+        implementation_failure = nullptr;
+    if (builtin_trait_call
+        && (implementation_failure || !lower->tries.len)) {
         th_type *current_failure = th_func_error(signature);
         if (current_failure
             && th_kind_of(th_resolve(current_failure)) == TH_VAR) {
-            th_type *enclosing_failure = th_func_error(
-                lower->function_symbol ? lower->function_symbol->type
-                                       : context->function->type);
+            th_type *enclosing_failure = implementation_failure
+                ? implementation_failure
+                : th_func_error(lower->function_symbol
+                    ? lower->function_symbol->type
+                    : context->function->type);
             th_type *bound_failure = enclosing_failure
                 ? th_unify_in_place(types, current_failure,
                     th_type_clone(types, enclosing_failure)) : nullptr;

@@ -1,0 +1,11 @@
+record Entry {
+    value: u64?
+}
+
+func first_value(items: List[Entry]) -> u64 fail: int {
+    if items.len() == 0 {
+        fail 1
+    }
+    let entry: Entry = items[0]
+    return entry.value.get_or_else(0)
+}
