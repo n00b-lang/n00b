@@ -1474,6 +1474,52 @@ static void test_store_through_forwarded_addresses(void)
           configured && !typed(r) && said(r, "phase.binding-write"));
     done(r);
 
+    const char *const element_store = MOD(
+        "  func @f(%items: array[i32], %slot: i64, %input: i32) -> void {\n"
+        "    local $x: array[i32]\n"
+        "    block entry:\n"
+        "      copy $x, %items\n"
+        "      %address: ref[array[i32]] = address.of $x\n"
+        "      %element: ref[i32] = index %address, %slot\n"
+        "      store %element, %input\n"
+        "      return\n"
+        "  }\n");
+    const char *const binding_store = MOD(
+        "  func @f(%items: array[i32], %slot: i64, %input: i32) -> void {\n"
+        "    local $x: array[i32]\n"
+        "    block entry:\n"
+        "      copy $x, %items\n"
+        "      %address: ref[array[i32]] = address.of $x\n"
+        "      store %address, %items\n"
+        "      return\n"
+        "  }\n");
+    const char *const sources[] = {element_store, binding_store};
+    bool held[2] = {0};
+    for (size_t i = 0; i < 2; i++) {
+        r = verify(sources[i], IR_PROP_PARSED);
+        function = r->m ? ir_func_find(r->m, "f") : nullptr;
+        local = function ? ir_local_find(function, "x") : nullptr;
+        ir_instr_t *initializer = function && function->n_blocks
+            && function->blocks[0]->n_instrs
+            ? function->blocks[0]->instrs[0] : nullptr;
+        configured = local && initializer
+            && ir_instr_set_binding_initialization(initializer, true)
+            && ir_value_set_phase_access(r->ctx,
+                ir_local_value(function, local), IR_PHASE_ACCESS_RUNTIME,
+                IR_PHASE_ACCESS_NONE, IR_PHASE_ACCESS_RUNTIME);
+        if (configured) {
+            ir_module_establish(r->m, IR_PROP_PARSED | IR_PROP_TYPED);
+            r->held = ir_verify(r->m, r->d);
+        }
+        held[i] = configured && typed(r);
+        if (i == 1)
+            check("a store over an immutable array binding is a binding write",
+                  configured && !held[i] && said(r, "phase.binding-write"));
+        done(r);
+    }
+    check("an element store writes array contents, not the immutable binding",
+          held[0]);
+
     r = verify(MOD(
         "  func @f(%condition: bool, %input: i32) -> void {\n"
         "    local $x: i32\n"

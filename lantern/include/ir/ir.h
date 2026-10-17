@@ -685,6 +685,7 @@ bool ir_value_visit_store_targets(const ir_value_t *address,
 bool ir_value_visit_store_origins(const ir_value_t *address,
                                   ir_store_target_visitor_fn visitor,
                                   void *context);
+bool ir_value_addresses_sequence_contents(const ir_value_t *address);
 /* Returns LIVE if a direct operand use is reachable after `point`, DEAD only
  * when no reachable future use exists, and UNKNOWN for incomplete CFG facts.
  * PHI operands are conservatively treated as uses in their destination block. */

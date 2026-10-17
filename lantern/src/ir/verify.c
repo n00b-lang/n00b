@@ -513,6 +513,7 @@ typedef struct {
     th_ctx *types;
     bool external_writable;
     bool writable_projection;
+    bool contents;
     bool complete;
 } store_target_set_t;
 
@@ -610,9 +611,24 @@ static bool store_target_root_has_no_known_aliases(
         && complete && complete->kind == IR_ANNOT_BOOL;
 }
 
+bool ir_value_addresses_sequence_contents(const ir_value_t *address)
+{
+    const ir_instr_t *definition = address && address->kind == IR_VAL_INSTR
+        ? address->def : nullptr;
+    ir_value_t *container = definition && definition->op == IR_OP_INDEX
+        && definition->n_operands
+        ? ir_operand_value(&definition->operands[0]) : nullptr;
+    th_type *type = container && container->type
+        ? th_resolve(container->type) : nullptr;
+    th_type *referent = type && th_kind_of(type) == TH_INDIRECTION
+        ? th_ind_referent(type) : nullptr;
+    return referent && th_kind_of(th_resolve(referent)) == TH_SEQUENCE;
+}
+
 static bool store_target_collect(store_target_set_t *set,
                                  ir_value_t *address,
-                                 bool preserve_parameters)
+                                 bool preserve_parameters,
+                                 bool through_contents)
 {
     memset(set, 0, sizeof(*set));
     set->types = address && address->owner && address->owner->owner
@@ -651,6 +667,10 @@ static bool store_target_collect(store_target_set_t *set,
         }
 
         ir_instr_t *definition = value->def;
+        if (!through_contents && ir_value_addresses_sequence_contents(value)) {
+            set->contents = true;
+            continue;
+        }
         switch (definition->op) {
         case IR_OP_ALLOC:
         case IR_OP_ALLOC_USING:
@@ -737,7 +757,8 @@ bool ir_value_visit_store_targets(const ir_value_t *address,
     if (!type || th_kind_of(type) != TH_INDIRECTION || !visitor)
         return false;
     store_target_set_t set;
-    bool complete = store_target_collect(&set, (ir_value_t *)address, false);
+    bool complete = store_target_collect(&set, (ir_value_t *)address, false,
+                                         true);
     for (size_t i = 0; complete && i < set.targets.len; i++)
         complete = visitor(context, set.targets.data[i]);
     store_target_set_free(&set);
@@ -755,7 +776,8 @@ bool ir_value_visit_store_origins(const ir_value_t *address,
             && (!type || th_kind_of(type) != TH_INDIRECTION)))
         return false;
     store_target_set_t set;
-    bool complete = store_target_collect(&set, (ir_value_t *)address, true);
+    bool complete = store_target_collect(&set, (ir_value_t *)address, true,
+                                         true);
     for (size_t i = 0; complete && i < set.targets.len; i++)
         complete = visitor(context, set.targets.data[i]);
     store_target_set_free(&set);
@@ -766,7 +788,8 @@ static bool store_targets_include(const ir_value_t *address,
                                   const ir_value_t *target)
 {
     store_target_set_t set;
-    bool complete = store_target_collect(&set, (ir_value_t *)address, false);
+    bool complete = store_target_collect(&set, (ir_value_t *)address, false,
+                                         false);
     bool found = false;
     for (size_t i = 0; complete && i < set.targets.len; i++)
         found |= set.targets.data[i] == target;
@@ -1130,11 +1153,11 @@ static void check_store_target_write(V *v, ir_instr_t *in,
                                      ir_value_t *address)
 {
     store_target_set_t targets;
-    bool complete = store_target_collect(&targets, address, false);
+    bool complete = store_target_collect(&targets, address, false, false);
     bool pointer_address = address && address->type
         && th_kind_of(address->type) == TH_INDIRECTION;
     if (!complete || (pointer_address && !targets.targets.len
-                      && !targets.external_writable)) {
+                      && !targets.external_writable && !targets.contents)) {
         broke(v, IR_DIAG_VERIFY_PHASE, in, block,
               "phase.store-alias-incomplete",
               "cannot verify a store through an incomplete alias target set");
@@ -1142,7 +1165,7 @@ static void check_store_target_write(V *v, ir_instr_t *in,
         return;
     }
     if (!targets.targets.len) {
-        if (!targets.external_writable)
+        if (!targets.external_writable && !targets.contents)
             check_binding_write(v, in, block, address);
         store_target_set_free(&targets);
         return;
