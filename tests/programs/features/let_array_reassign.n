@@ -1,0 +1,6 @@
+func f() -> u8 {
+    let bytes: Array[u8] = new[Array[u8]](4)
+    bytes = new[Array[u8]](4)
+    return bytes[0]
+}
+require f() == 0
