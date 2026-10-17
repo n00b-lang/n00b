@@ -160,6 +160,8 @@ bool unary_operator_dispatch_for_node(parse_grammar_t *grammar,
 parse_tree_t *member_access_node(parse_grammar_t *grammar, parse_tree_t *node);
 bool index_dispatch_for_node(parse_grammar_t *grammar, parse_tree_t *node,
                              core_string_t *trait, core_string_t *method);
+parse_tree_t *n00bb_index_stored_value(parse_grammar_t *grammar,
+                                       parse_tree_t *node);
 bool n00bb_index_reference_storage(parse_grammar_t *grammar,
                                    parse_tree_t *node);
 parse_tree_t *n00bb_index_expression_node(parse_grammar_t *grammar,
@@ -795,6 +797,8 @@ static constexpr char n00bb_string_to_buffer_text[] =
 static constexpr char n00bb_buffer_type_name[] =
     "builtin.containers.buffer.Buffer";
 bool n00bb_value_coerces(th_ctx *types, th_type *from, th_type *to);
+bool n00bb_string_where_buffer_expected(th_ctx *types, th_type *expected,
+                                        th_type *actual);
 void n00bb_register_value_coercions(th_ctx *types);
 th_type *n00bb_value_coercion_target(th_ctx *types, th_type *from);
 bool n00bb_blanket_receiver(th_type *contract);

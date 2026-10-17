@@ -4328,6 +4328,24 @@ index_dispatch_for_node(parse_grammar_t *grammar, parse_tree_t *node,
     return true;
 }
 
+parse_tree_t *
+n00bb_index_stored_value(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    bool through_receiver = false;
+    parse_tree_t *statement = index_assignment_statement(grammar, node,
+                                                         &through_receiver);
+    if (through_receiver || !nt_is(grammar, statement, "assign-stmt")
+        || core_tree_num_children(statement) < 3
+        || !core_string_eq(first_token_text(core_tree_child(statement, 1)),
+                           CORE_STRING_STATIC("="))) return nullptr;
+    const parse_rule_t *rule = parse_tree_rule(grammar, statement);
+    parse_annotation_t *assign = rule
+        ? parse_rule_find_annot(grammar, rule, PARSE_ANNOT_ASSIGNS) : nullptr;
+    return assign && parse_child_ref_is_set(assign->value_ref)
+        ? parse_tree_resolve_child_ref(grammar, statement, assign->value_ref)
+        : nullptr;
+}
+
 bool
 n00bb_index_reference_storage(parse_grammar_t *grammar, parse_tree_t *node)
 {
@@ -8204,6 +8222,75 @@ n00bb_value_coerces(th_ctx *types, th_type *from, th_type *to)
 }
 
 static bool
+named_arguments_want_buffer(th_ctx *types, th_type *expected, th_type *actual)
+{
+    const char *expected_name = nullptr, *actual_name = nullptr;
+    size_t expected_length = 0, actual_length = 0;
+    size_t expected_args = 0, actual_args = 0;
+    if (!th_named_info(expected, &expected_name, &expected_length, nullptr,
+                       &expected_args)
+        || !th_named_info(actual, &actual_name, &actual_length, nullptr,
+                          &actual_args)
+        || expected_length != actual_length || expected_args != actual_args
+        || memcmp(expected_name, actual_name, expected_length)) return false;
+    for (size_t i = 0; i < expected_args; i++) {
+        const th_arg *want = th_named_arg(expected, i);
+        const th_arg *have = th_named_arg(actual, i);
+        if (want && have && want->kind == TH_ARG_TYPE
+            && have->kind == TH_ARG_TYPE
+            && n00bb_string_where_buffer_expected(types, want->type,
+                                                  have->type)) return true;
+    }
+    return false;
+}
+
+static bool
+record_fields_want_buffer(th_ctx *types, th_type *expected, th_type *actual)
+{
+    for (size_t i = 0; i < th_record_len(expected); i++) {
+        const th_member *member = th_record_member(expected, i);
+        th_type *field = member
+            ? th_record_lookup(actual, member->name) : nullptr;
+        if (field && n00bb_string_where_buffer_expected(types, member->type,
+                                                        field)) return true;
+    }
+    return false;
+}
+
+bool
+n00bb_string_where_buffer_expected(th_ctx *types, th_type *expected,
+                                   th_type *actual)
+{
+    if (!types || !expected || !actual) return false;
+    if (n00bb_value_coerces(types, expected, actual)) return true;
+    expected = th_resolve(expected);
+    actual = th_resolve(actual);
+    th_type *expected_item = nullptr, *actual_item = nullptr;
+    if (n00bb_option_type_element(expected, &expected_item))
+        return n00bb_string_where_buffer_expected(types, expected_item,
+            n00bb_option_type_element(actual, &actual_item)
+                ? actual_item : actual);
+    th_kind kind = th_kind_of(expected);
+    if (kind == TH_NAMED && th_kind_of(actual) != TH_NAMED) {
+        th_type *definition = th_type_definition(types, expected);
+        return definition && definition != expected
+            && n00bb_string_where_buffer_expected(types, definition, actual);
+    }
+    if (kind != th_kind_of(actual)) return false;
+    switch (kind) {
+    case TH_SEQUENCE:
+        return n00bb_string_where_buffer_expected(types, th_seq_elem(expected),
+                                                  th_seq_elem(actual));
+    case TH_NAMED:
+        return named_arguments_want_buffer(types, expected, actual);
+    case TH_RECORD:
+        return record_fields_want_buffer(types, expected, actual);
+    default:
+        return false;
+    }
+}
+
+static bool
 n00bb_coercion_hook(th_ctx *types, th_type *from, th_type *to, void *user)
 {
     (void)user;
@@ -8265,7 +8352,7 @@ n00bb_type_materialize(parse_grammar_t *grammar, n00bb_tu_state_t *state,
         return expected;
     *converted = true;
     if (n00bb_value_coerces(types, actual, expected)) return expected;
-    if (n00bb_value_coerces(types, expected, actual)) {
+    if (n00bb_string_where_buffer_expected(types, expected, actual)) {
         *converted = false;
         core_diagnostics_report_at(
             core_translation_unit_diagnostics(state->unit), state->unit,

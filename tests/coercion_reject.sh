@@ -107,3 +107,29 @@ wrong()
 EOF
 reject string_to_buffer \
     'a string is immutable and does not convert to Buffer; use buffer_from_string(s)'
+
+cat >"$tmp/record_field_literal.n" <<'EOF2'
+record Holder {
+    b: Buffer?
+    n: int
+}
+var h: Holder = (b = "x", n = 1)
+EOF2
+reject record_field_literal \
+    'a string is immutable and does not convert to Buffer; use buffer_from_string(s)'
+grep -Fq 'record_field_literal.n:5:22' "$tmp/record_field_literal.out"
+
+cat >"$tmp/index_store.n" <<'EOF2'
+var l: List[Buffer] = new[List[Buffer]]()
+l.append(buffer_from_string("a"))
+l[0] = "x"
+EOF2
+reject index_store \
+    'a string is immutable and does not convert to Buffer; use buffer_from_string(s)'
+grep -Fq 'index_store.n:3:8' "$tmp/index_store.out"
+
+cat >"$tmp/list_literal.n" <<'EOF2'
+let l: List[Buffer] = ["x"]
+EOF2
+reject list_literal \
+    'a string is immutable and does not convert to Buffer; use buffer_from_string(s)'

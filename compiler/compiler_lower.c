@@ -10264,7 +10264,7 @@ n00bb_materialize(ir_lower_context_t *context, parse_tree_t *node,
         return view && lower && ir_value_set_alias_targets(lower->ir_context,
             view, nullptr, 0, true) ? view : nullptr;
     }
-    if (n00bb_value_coerces(types, target, value->type)) {
+    if (n00bb_string_where_buffer_expected(types, target, value->type)) {
         lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
                     n00bb_string_to_buffer_text);
         return nullptr;
