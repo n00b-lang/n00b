@@ -3399,6 +3399,7 @@ unify_literal_operand(parse_grammar_t *grammar, n00bb_tu_state_t *state,
     bool comparison = core_string_eq(trait, CORE_STRING_STATIC("Equal"))
         || core_string_eq(trait, CORE_STRING_STATIC("Comparable"));
     bool shift = operator && operator->shift;
+    bool assignment = nt_is(grammar, node, "binop-assign-stmt");
     for (size_t side = 0; side < 2; side++) {
         parse_tree_t *operand = core_tree_child(node, side ? 2 : 0);
         parse_tree_t *other = core_tree_child(node, side ? 0 : 2);
@@ -3425,7 +3426,7 @@ unify_literal_operand(parse_grammar_t *grammar, n00bb_tu_state_t *state,
             core_tree_node_value(at).type = literal_type;
             if (at == operand) break;
         }
-        if (comparison || (shift && side == 1)) continue;
+        if (comparison || assignment || (shift && side == 1)) continue;
         th_type *result = core_tree_node_value(node).type;
         th_type *unified = result
             ? th_unify_in_place(state->types, result, literal_type)
@@ -3440,6 +3441,11 @@ bool
 n00bb_cache_contextual_integer(parse_grammar_t *grammar,
                                n00bb_tu_state_t *state, parse_tree_t *node)
 {
+    core_string_t trait = {0}, method = {0};
+    if (nt_is(grammar, node, "binop-assign-stmt"))
+        return !binary_operator_dispatch_for_node(grammar, node, &trait,
+                                                  &method)
+            || unify_literal_operand(grammar, state, node, trait, method);
     if (!n00bb_integer_range_wrapper(grammar, node)
         && !nt_is(grammar, node, "simple-lit")) return true;
     parse_nt_node_t *parsed = &core_tree_node_value(node);
@@ -3454,9 +3460,7 @@ n00bb_cache_contextual_integer(parse_grammar_t *grammar,
         }
         return true;
     }
-    core_string_t trait = {0}, method = {0};
     if (core_tree_num_children(node) == 3
-        && !nt_is(grammar, node, "binop-assign-stmt")
         && binary_operator_dispatch_for_node(grammar, node, &trait, &method)
         && !unify_literal_operand(grammar, state, node, trait, method))
         return false;

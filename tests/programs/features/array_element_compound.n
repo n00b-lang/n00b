@@ -1,0 +1,14 @@
+var counts: Array[u32] = new[Array[u32]](4)
+var bytes: Array[u8] = new[Array[u8]](4)
+var fixed: Array[i16][3] = new[Array[i16][3]]()
+let k: u8 = 2
+let i: u32 = 1
+counts[k] += 1
+counts[2] += 4
+bytes[i] += 3
+bytes[i] |= 8
+fixed[0] -= 7
+require counts[2] == 5
+require bytes[1] == 11
+require fixed[0] == -7
+__fd_write(2, "ok")
