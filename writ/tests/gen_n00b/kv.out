@@ -361,7 +361,7 @@ void writ_kv_kv_entry_take(writ_kv_bytes_t *bytes, void *key, void *val) {
 
 int32_t writ_kv_n00b_kv_open(const void *path, void *out_db, void *detail) {
     size_t path_length = 0;
-    const void *path_borrowed = n00b_ffi_borrow((void *)path, &path_length, 2);
+    const void *path_borrowed = n00b_ffi_borrow((void *)path, &path_length, 0);
     uint8_t *path_data = malloc(path_length + 1);
     if (path_data && path_length) {
         memcpy(path_data, path_borrowed, path_length);
@@ -525,7 +525,7 @@ func __ffi_take_optional_kv_entry(bytes: Ref[Ffi_Bytes]) -> Entry? {
 }
 
 func db_open(path: string) -> Db fail: Error {
-    var path_value = path
+    var path_value: Array[u8] = __text_byte_array(path)
     var out_db: uint = 0
     var detail: i64 = 0
     let outcome = __kv_open(ref path_value, ref out_db, ref detail)
@@ -631,7 +631,7 @@ func next(self: Iter) -> Entry? fail: Error {
 152	tests/gen_n00b/../bind/kv.writ:45:1	kv_iter_next
 library kv
 load static
-extern __kv_open writ_kv_n00b_kv_open (ref[string], ref[uint], ref[int]) -> i32 fail: nil
+extern __kv_open writ_kv_n00b_kv_open (ref[array[u8]], ref[uint], ref[int]) -> i32 fail: nil
 extern __kv_put writ_kv_n00b_kv_put (uint, ref[array[u8]], ref[array[u8]]) -> i32 fail: nil
 extern __kv_get writ_kv_n00b_kv_get (uint, ref[array[u8]], ref[builtin.ffi.Ffi_Bytes]) -> i32 fail: nil
 extern __kv_iter_new writ_kv_n00b_kv_iter_new (uint, ref[array[u8]], ref[uint]) -> i32 fail: nil

@@ -1036,7 +1036,7 @@ int32_t resharp_n00b_regex_options_implicit_captures(uint64_t self, bool yes, vo
 
 int32_t resharp_n00b_regex_is_match(uint64_t self, const void *input, void *out, void *failed_detail, void *panicked_detail) {
     size_t input_length = 0;
-    const void *input_borrowed = n00b_ffi_borrow((void *)input, &input_length, 2);
+    const void *input_borrowed = n00b_ffi_borrow((void *)input, &input_length, 0);
     uint8_t *input_data = malloc(input_length + 1);
     if (input_data && input_length) {
         memcpy(input_data, input_borrowed, input_length);
@@ -1056,7 +1056,7 @@ int32_t resharp_n00b_regex_is_match(uint64_t self, const void *input, void *out,
 
 int32_t resharp_n00b_regex_new(const void *pattern, void *out, void *failed_detail, void *panicked_detail) {
     size_t pattern_length = 0;
-    const void *pattern_borrowed = n00b_ffi_borrow((void *)pattern, &pattern_length, 2);
+    const void *pattern_borrowed = n00b_ffi_borrow((void *)pattern, &pattern_length, 0);
     uint8_t *pattern_data = malloc(pattern_length + 1);
     if (pattern_data && pattern_length) {
         memcpy(pattern_data, pattern_borrowed, pattern_length);
@@ -1076,7 +1076,7 @@ int32_t resharp_n00b_regex_new(const void *pattern, void *out, void *failed_deta
 
 int32_t resharp_n00b_regex_with_options(const void *pattern, uint64_t opts, void *out, void *failed_detail, void *panicked_detail) {
     size_t pattern_length = 0;
-    const void *pattern_borrowed = n00b_ffi_borrow((void *)pattern, &pattern_length, 2);
+    const void *pattern_borrowed = n00b_ffi_borrow((void *)pattern, &pattern_length, 0);
     uint8_t *pattern_data = malloc(pattern_length + 1);
     if (pattern_data && pattern_length) {
         memcpy(pattern_data, pattern_borrowed, pattern_length);
@@ -1144,7 +1144,7 @@ int32_t resharp_n00b_regex_is_full_match(uint64_t self, const void *input, void 
 
 int32_t resharp_n00b_regex_capture_index_for_name(uint64_t self, const void *name, void *out, void *failed_detail, void *panicked_detail) {
     size_t name_length = 0;
-    const void *name_borrowed = n00b_ffi_borrow((void *)name, &name_length, 2);
+    const void *name_borrowed = n00b_ffi_borrow((void *)name, &name_length, 0);
     uint8_t *name_data = malloc(name_length + 1);
     if (name_data && name_length) {
         memcpy(name_data, name_borrowed, name_length);
@@ -1509,7 +1509,7 @@ func implicit_captures(modify self: Regex_Options, yes: bool) -> Regex_Options f
 }
 
 func is_match(self: Regex, input: string) -> bool fail: Error {
-    var input_value = input
+    var input_value: Array[u8] = __text_byte_array(input)
     var out_: bool = false
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
@@ -1534,7 +1534,7 @@ func is_match(self: Regex, input: string) -> bool fail: Error {
 }
 
 func regex_new(pattern: string) -> Regex fail: Error {
-    var pattern_value = pattern
+    var pattern_value: Array[u8] = __text_byte_array(pattern)
     var out_: uint = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
@@ -1563,7 +1563,7 @@ func __init(modify self: Regex, pattern: string) {
 }
 
 func regex_with_options(pattern: string, opts: Regex_Options) -> Regex fail: Error {
-    var pattern_value = pattern
+    var pattern_value: Array[u8] = __text_byte_array(pattern)
     var out_: uint = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
@@ -1675,7 +1675,7 @@ func is_full_match(self: Regex, input: Array[u8]) -> bool fail: Error {
 }
 
 func capture_index_for_name(self: Regex, name: string) -> u64? fail: Error {
-    var name_value = name
+    var name_value: Array[u8] = __text_byte_array(name)
     var out_: u64 = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
@@ -1739,12 +1739,12 @@ extern __regex_options_ignore_whitespace resharp_n00b_regex_options_ignore_white
 extern __regex_options_hardened resharp_n00b_regex_options_hardened (uint, bool, ref[uint], ref[builtin.ffi.Ffi_Bytes], ref[builtin.ffi.Ffi_Bytes]) -> i32 fail: nil
 extern __regex_options_unbounded_size resharp_n00b_regex_options_unbounded_size (uint, bool, ref[uint], ref[builtin.ffi.Ffi_Bytes], ref[builtin.ffi.Ffi_Bytes]) -> i32 fail: nil
 extern __regex_options_implicit_captures resharp_n00b_regex_options_implicit_captures (uint, bool, ref[uint], ref[builtin.ffi.Ffi_Bytes], ref[builtin.ffi.Ffi_Bytes]) -> i32 fail: nil
-extern __regex_is_match resharp_n00b_regex_is_match (uint, ref[string], ref[bool], ref[builtin.ffi.Ffi_Bytes], ref[builtin.ffi.Ffi_Bytes]) -> i32 fail: nil
-extern __regex_new resharp_n00b_regex_new (ref[string], ref[uint], ref[builtin.ffi.Ffi_Bytes], ref[builtin.ffi.Ffi_Bytes]) -> i32 fail: nil
-extern __regex_with_options resharp_n00b_regex_with_options (ref[string], uint, ref[uint], ref[builtin.ffi.Ffi_Bytes], ref[builtin.ffi.Ffi_Bytes]) -> i32 fail: nil
+extern __regex_is_match resharp_n00b_regex_is_match (uint, ref[array[u8]], ref[bool], ref[builtin.ffi.Ffi_Bytes], ref[builtin.ffi.Ffi_Bytes]) -> i32 fail: nil
+extern __regex_new resharp_n00b_regex_new (ref[array[u8]], ref[uint], ref[builtin.ffi.Ffi_Bytes], ref[builtin.ffi.Ffi_Bytes]) -> i32 fail: nil
+extern __regex_with_options resharp_n00b_regex_with_options (ref[array[u8]], uint, ref[uint], ref[builtin.ffi.Ffi_Bytes], ref[builtin.ffi.Ffi_Bytes]) -> i32 fail: nil
 extern __regex_find_all resharp_n00b_regex_find_all (uint, ref[array[u8]], uint, ref[uint], ref[uint], ref[builtin.ffi.Ffi_Bytes], ref[builtin.ffi.Ffi_Bytes]) -> i32 fail: nil
 extern __regex_find_anchored resharp_n00b_regex_find_anchored (uint, ref[array[u8]], ref[Match], ref[builtin.ffi.Ffi_Bytes], ref[builtin.ffi.Ffi_Bytes]) -> i32 fail: nil
 extern __regex_is_full_match resharp_n00b_regex_is_full_match (uint, ref[array[u8]], ref[bool], ref[builtin.ffi.Ffi_Bytes], ref[builtin.ffi.Ffi_Bytes]) -> i32 fail: nil
-extern __regex_capture_index_for_name resharp_n00b_regex_capture_index_for_name (uint, ref[string], ref[uint], ref[builtin.ffi.Ffi_Bytes], ref[builtin.ffi.Ffi_Bytes]) -> i32 fail: nil
+extern __regex_capture_index_for_name resharp_n00b_regex_capture_index_for_name (uint, ref[array[u8]], ref[uint], ref[builtin.ffi.Ffi_Bytes], ref[builtin.ffi.Ffi_Bytes]) -> i32 fail: nil
 extern __ffi_bytes_take resharp_take_bytes (ref[builtin.ffi.Ffi_Bytes], ref[array[u8]]) -> nil fail: nil
 extern __ffi_array_take_Match resharp_take_array_Match (uint, uint, ref[array[Match]]) -> nil fail: nil

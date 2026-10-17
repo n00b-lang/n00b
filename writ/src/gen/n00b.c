@@ -2,7 +2,7 @@
 
 core_list_decl(writ_n00b_extern_t);
 
-enum { N00B_FFI_WRITE = 1, N00B_FFI_STRING = 2 };
+enum { N00B_FFI_WRITE = 1 };
 
 typedef struct {
     writ_handle_view_t        handle;
@@ -151,6 +151,7 @@ typedef struct {
     size_t       parts;
     bool         storage;
     bool         borrow;
+    bool         text;
 } shim_param_t;
 
 core_list_decl(shim_param_t);
@@ -402,7 +403,10 @@ shim_params(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, core_list_
         if (writ_c_is_input(item)) {
             if (count == 2) {
                 param.kind = PARAM_VALUE;
-                param.n00b_type = writ_str_format(g->session, "Ref[%.*s]", S(item_type(g, fn, plan, index)));
+                param.text = writ_str_eq(item_type(g, fn, plan, index), writ_cstr("string"));
+                param.n00b_type = param.text ? writ_cstr("Ref[Array[u8]]")
+                                             : writ_str_format(g->session, "Ref[%.*s]",
+                                                               S(item_type(g, fn, plan, index)));
                 param.borrow = item->after_call == WRIT_AFTER_BORROWED
                             && writ_str_eq(writ_binding_slot_repr(g->b, fn, item->name), writ_cstr("borrow"));
             } else if (writ_c_by_pointer(&g->c, item) || record_target(item)) {
@@ -806,14 +810,12 @@ emit_c_shim(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view_
         const shim_param_t *p = &params.data[i];
         if (p->kind == PARAM_STORAGE || (p->kind == PARAM_VALUE && p->borrow)) {
             writ_emit_line(emit, "size_t %.*s_length = 0;", S(p->name));
-            writ_emit_line(emit, "const void *%.*s_data = n00b_ffi_borrow((void *)%.*s, &%.*s_length, %d);",
-                           S(p->name), S(p->name), S(p->name),
-                           writ_str_eq(p->n00b_type, writ_cstr("Ref[string]")) ? N00B_FFI_STRING : 0);
+            writ_emit_line(emit, "const void *%.*s_data = n00b_ffi_borrow((void *)%.*s, &%.*s_length, 0);",
+                           S(p->name), S(p->name), S(p->name));
         } else if (p->kind == PARAM_VALUE) {
             writ_emit_line(emit, "size_t %.*s_length = 0;", S(p->name));
-            writ_emit_line(emit, "const void *%.*s_borrowed = n00b_ffi_borrow((void *)%.*s, &%.*s_length, %d);",
-                           S(p->name), S(p->name), S(p->name),
-                           writ_str_eq(p->n00b_type, writ_cstr("Ref[string]")) ? N00B_FFI_STRING : 0);
+            writ_emit_line(emit, "const void *%.*s_borrowed = n00b_ffi_borrow((void *)%.*s, &%.*s_length, 0);",
+                           S(p->name), S(p->name), S(p->name));
             writ_emit_line(emit, "uint8_t *%.*s_data = malloc(%.*s_length + 1);", S(p->name), S(p->name));
             writ_emit_open(emit, "if (%.*s_data && %.*s_length)", S(p->name), S(p->name));
             writ_emit_line(emit, "memcpy(%.*s_data, %.*s_borrowed, %.*s_length);", S(p->name), S(p->name),
@@ -2957,7 +2959,10 @@ emit_wrapper(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view
     }
     for (size_t i = 0; i < params.len; i++) {
         const shim_param_t *p = &params.data[i];
-        if (p->kind == PARAM_VALUE && p->item != w.receiver) {
+        if (p->kind == PARAM_VALUE && p->text) {
+            writ_emit_line(emit, "var %.*s_value: Array[u8] = __text_byte_array(%.*s)", S(local_name(&w, p->item)),
+                           S(local_name(&w, p->item)));
+        } else if (p->kind == PARAM_VALUE && p->item != w.receiver) {
             writ_emit_line(emit, "var %.*s_value = %.*s", S(local_name(&w, p->item)), S(local_name(&w, p->item)));
         } else if (p->kind == PARAM_OUT && p->storage) {
             writ_emit_line(emit, "var %.*s = %.*s()", S(local_name(&w, p->item)),
@@ -2997,7 +3002,7 @@ emit_wrapper(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view
         writ_emit_text(emit, "%s", passed ? ", " : "");
         passed = true;
         if (p->kind == PARAM_VALUE) {
-            writ_emit_text(emit, p->item == w.receiver ? "ref %.*s" : "ref %.*s_value", S(name));
+            writ_emit_text(emit, p->item == w.receiver && !p->text ? "ref %.*s" : "ref %.*s_value", S(name));
         } else if (p->kind == PARAM_ADDRESS && (is_handle(&plan->items[p->item]) || p->item == w.receiver)) {
             writ_emit_text(emit, "%.*s", S(raw_of(g, plan->items[p->item].type, name)));
         } else if (p->kind == PARAM_RECORD) {
@@ -3635,12 +3640,6 @@ emit_export_holds(const n00b_t *g, writ_emit_t *emit)
     writ_str_t address[] = {writ_cstr("Ref[Array[u8]]")};
     add_extern(g, writ_cstr("__export_address"), writ_str_format(g->session, "%.*s_export_address", S(g->shim)),
                address, 1, writ_cstr("uint"));
-    writ_str_t text_length[] = {writ_cstr("Ref[string]")};
-    writ_str_t text_copy[] = {writ_cstr("Ref[string]"), writ_cstr("Ref[Array[u8]]")};
-    add_extern(g, writ_cstr("__export_text_length"),
-               writ_str_format(g->session, "%.*s_export_text_length", S(g->shim)), text_length, 1, writ_cstr("uint"));
-    add_extern(g, writ_cstr("__export_text_copy"), writ_str_format(g->session, "%.*s_export_text_copy", S(g->shim)),
-               text_copy, 2, writ_cstr("nil"));
     writ_emit_line(emit, "");
     writ_emit_open(emit, "type Export_Hold");
     writ_emit_line(emit, "handle: uint");
@@ -3682,9 +3681,13 @@ emit_export_holds(const n00b_t *g, writ_emit_t *emit)
     writ_emit_close(emit, nullptr);
     writ_emit_line(emit, "");
     writ_emit_open(emit, "func __export_text(text: string) -> uint");
-    writ_emit_line(emit, "var source = text");
-    writ_emit_line(emit, "var bytes: Array[u8] = new[Array[u8]](cast[int]__export_text_length(ref source) + 1)");
-    writ_emit_line(emit, "__export_text_copy(ref source, ref bytes)");
+    writ_emit_line(emit, "let source: Array[u8] = __text_byte_array(text)");
+    writ_emit_line(emit, "var bytes: Array[u8] = new[Array[u8]](cast[int]source.len() + 1)");
+    writ_emit_line(emit, "var k: uint = 0");
+    writ_emit_open(emit, "while k < source.len()");
+    writ_emit_line(emit, "bytes[k] = source[k]");
+    writ_emit_line(emit, "k += 1");
+    writ_emit_close(emit, nullptr);
     writ_emit_line(emit, "var i = 0");
     writ_emit_open(emit, "while i < cast[int]__export_texts.len()");
     writ_emit_open(emit, "if __export_same(__export_texts[i], bytes)");
@@ -3857,24 +3860,6 @@ export_allocation(const n00b_t *g)
 static void
 emit_export_c_helpers(const n00b_t *g, writ_emit_t *emit)
 {
-    writ_emit_open(emit, "uint64_t %.*s_export_text_length(void *text)", S(g->shim));
-    writ_emit_line(emit, "size_t length = 0;");
-    writ_emit_line(emit, "n00b_ffi_borrow(text, &length, %d);", N00B_FFI_STRING);
-    writ_emit_line(emit, "return length;");
-    writ_emit_close(emit, nullptr);
-    writ_emit_line(emit, "");
-    writ_emit_open(emit, "void %.*s_export_text_copy(void *text, void *out)", S(g->shim));
-    writ_emit_line(emit, "size_t length = 0, capacity = 0;");
-    writ_emit_line(emit, "const uint8_t *data = n00b_ffi_borrow(text, &length, %d);", N00B_FFI_STRING);
-    writ_emit_line(emit, "uint8_t *bytes = n00b_ffi_borrow(out, &capacity, %d);", N00B_FFI_WRITE);
-    writ_emit_open(emit, "if (bytes && capacity > length)");
-    writ_emit_open(emit, "if (data && length)");
-    writ_emit_line(emit, "memcpy(bytes, data, length);");
-    writ_emit_close(emit, nullptr);
-    writ_emit_line(emit, "bytes[length] = 0;");
-    writ_emit_close(emit, nullptr);
-    writ_emit_close(emit, nullptr);
-    writ_emit_line(emit, "");
     writ_emit_open(emit, "uint64_t %.*s_export_address(void *array)", S(g->shim));
     writ_emit_line(emit, "size_t length = 0;");
     writ_emit_line(emit, "return (uint64_t)(uintptr_t)n00b_ffi_borrow(array, &length, 0);");

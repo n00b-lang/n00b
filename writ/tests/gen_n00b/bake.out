@@ -286,7 +286,7 @@ int64_t writ_bake_n00b_bake_multiply(int64_t left, int64_t right) {
 
 int32_t writ_bake_n00b_bake_build(const void *spec, void *result) {
     size_t spec_length = 0;
-    const void *spec_borrowed = n00b_ffi_borrow((void *)spec, &spec_length, 2);
+    const void *spec_borrowed = n00b_ffi_borrow((void *)spec, &spec_length, 0);
     uint8_t *spec_data = malloc(spec_length + 1);
     if (spec_data && spec_length) {
         memcpy(spec_data, spec_borrowed, spec_length);
@@ -467,7 +467,7 @@ func bake_multiply(left: i64, right: i64) -> i64 {
 }
 
 func bake_build(spec: string) -> Bake_Root fail: Error {
-    var spec_value = spec
+    var spec_value: Array[u8] = __text_byte_array(spec)
     var result: uint = 0
     let outcome = __bake_build(ref spec_value, ref result)
     if outcome < 0 {
@@ -578,7 +578,7 @@ func close(modify self: Bake_Root) fail: Error {
 load static
 extern __bake_add writ_bake_n00b_bake_add (int, int) -> int fail: nil
 extern __bake_multiply writ_bake_n00b_bake_multiply (int, int) -> int fail: nil
-extern __bake_build writ_bake_n00b_bake_build (ref[string], ref[uint]) -> i32 fail: nil
+extern __bake_build writ_bake_n00b_bake_build (ref[array[u8]], ref[uint]) -> i32 fail: nil
 extern __bake_query writ_bake_n00b_bake_query (uint, i32) -> int fail: nil
 extern __bake_reopen writ_bake_n00b_bake_reopen (uint) -> i32 fail: nil
 extern __bake_open writ_bake_n00b_bake_open (ref[string], ref[i32]) -> i32 fail: nil

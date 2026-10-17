@@ -198,7 +198,7 @@ void keywords_take_bytes(keywords_bytes_t *bytes, void *out) {
 
 int32_t keywords_n00b_db_open(const void *path, const void *opts, void *result) {
     size_t path_length = 0;
-    const void *path_borrowed = n00b_ffi_borrow((void *)path, &path_length, 2);
+    const void *path_borrowed = n00b_ffi_borrow((void *)path, &path_length, 0);
     uint8_t *path_data = malloc(path_length + 1);
     if (path_data && path_length) {
         memcpy(path_data, path_borrowed, path_length);
@@ -299,7 +299,7 @@ func db_open(path: string, timeout_ms: u32? = nil, readonly: bool? = nil, cache_
         opts_record.cache_kb = cache_kb.get()
         opts_record.present = opts_record.present | 4
     }
-    var path_value = path
+    var path_value: Array[u8] = __text_byte_array(path)
     var result: uint = 0
     let outcome = __db_open(ref path_value, ref opts_record, ref result)
     if outcome < 0 {
@@ -375,7 +375,7 @@ func close(modify self: Db) fail: Error {
 111	tests/gen_n00b/../keywords/keywords.writ:36:1	db_depth
 121	tests/gen_n00b/../keywords/keywords.writ:39:1	db_close
 load static
-extern __db_open keywords_n00b_db_open (ref[string], ref[Open_Opts], ref[uint]) -> i32 fail: nil
+extern __db_open keywords_n00b_db_open (ref[array[u8]], ref[Open_Opts], ref[uint]) -> i32 fail: nil
 extern __db_limit keywords_n00b_db_limit (uint, ref[Limits]) -> int fail: nil
 extern __db_flags keywords_n00b_db_flags (uint, ref[Sized]) -> u32 fail: nil
 extern __db_depth keywords_n00b_db_depth (uint, ref[Plain]) -> i32 fail: nil
