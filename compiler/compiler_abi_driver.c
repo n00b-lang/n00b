@@ -1210,9 +1210,8 @@ abi_source_of_node(void *context, parse_tree_t *node,
     if (!sources || !sources->scopes || !node || !unit || !tokens)
         return false;
     parse_scope_t *scope = parse_node_is_token(node)
-        ? node->num_parents && !parse_node_is_token(node->parents[0])
-            ? core_tree_node_value(node->parents[0]).scope : nullptr
-        : core_tree_node_value(node).scope;
+        ? node->num_parents ? parse_tree_scope(node->parents[0]) : nullptr
+        : parse_tree_scope(node);
     for (; scope; scope = scope->parent) {
         const core_indexed_entry_t *entry = core_indexed_table_find(
             sources->scopes, scope);

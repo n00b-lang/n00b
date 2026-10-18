@@ -539,7 +539,7 @@ declaration_type(n00bb_abi_type_index_t *index,
         if (!core_string_eq(scope->scope_tag,
                             CORE_STRING_STATIC("function"))) continue;
         parse_sym_entry_t *function = scope->node
-            ? core_tree_node_value(scope->node).sym : nullptr;
+            ? parse_tree_sym(scope->node) : nullptr;
         n00bb_body_typevar_map_t *map = function
             ? parse_sym_binding(function, N00BB_BODY_TYPEVAR_MAP_KEY)
             : nullptr;

@@ -564,7 +564,7 @@ n00bb_abi_type_variables_bind(n00bb_abi_type_index_t *index, th_ctx *types,
         if (!variables || !variables->len) continue;
         if (!symbol->decl_node || !variables->data
             || variables->len > UINT32_MAX) return false;
-        parse_scope_t *scope = core_tree_node_value(symbol->decl_node).scope;
+        parse_scope_t *scope = parse_tree_scope(symbol->decl_node);
         uint32_t scope_index = 0;
         if (!n00bb_abi_decl_find_scope(declarations, scope, &scope_index)
             || !scope_index) return false;
@@ -622,8 +622,7 @@ n00bb_abi_type_variables_bind(n00bb_abi_type_index_t *index, th_ctx *types,
                 || row->typevar_owner_type_index
                 || row->typevar_import_requirement_index) continue;
             if (!scope_index) {
-                parse_scope_t *scope = core_tree_node_value(
-                    symbol->decl_node).scope;
+                parse_scope_t *scope = parse_tree_scope(symbol->decl_node);
                 if (!n00bb_abi_decl_find_scope(declarations, scope,
                         &scope_index) || !scope_index) return false;
             }

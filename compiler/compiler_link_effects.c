@@ -412,8 +412,8 @@ bool
 n00bb_use_writes_root(core_translation_unit_t *unit, parse_grammar_t *grammar,
                       parse_tree_t *use, parse_tree_t *region)
 {
-    for (parse_tree_t *at = core_tree_node_value(use).parent;
-         at && at != region; at = core_tree_node_value(at).parent) {
+    for (parse_tree_t *at = parse_tree_parent(use);
+         at && at != region; at = parse_tree_parent(at)) {
         if ((nt_is(grammar, at, "assign-stmt")
              || nt_is(grammar, at, "binop-assign-stmt"))
             && node_is_within(use, core_tree_child(at, 0))) return true;

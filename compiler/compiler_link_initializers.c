@@ -221,8 +221,8 @@ has_initializer_write_candidate(core_link_unit_t *link,
 static core_translation_unit_t *
 unit_owning_node(n00bb_link_analysis_t *analysis, parse_tree_t *node)
 {
-    while (node && core_tree_node_value(node).parent)
-        node = core_tree_node_value(node).parent;
+    while (node && parse_tree_parent(node))
+        node = parse_tree_parent(node);
     for (size_t i = 0; node && i < analysis->units.len; i++)
         if (n00bb_tu_parsed_tree(tu_state(analysis->units.data[i])) == node)
             return analysis->units.data[i];

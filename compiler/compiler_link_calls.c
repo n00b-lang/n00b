@@ -40,7 +40,7 @@ unify_call_node_type(core_translation_unit_t *unit,
 {
     if (!actual || !expected) return true;
     if (n00bb_value_coerces(state->types, expected, actual)) {
-        core_tree_node_value(typed_node).type = expected;
+        parse_tree_set_type(typed_node, expected);
         return true;
     }
     bool converted = false;
@@ -58,7 +58,7 @@ bool
 dotted_receiver_prefix_node(parse_grammar_t *grammar, parse_tree_t *node)
 {
     for (parse_tree_t *at = node; at;) {
-        parse_tree_t *parent = core_tree_node_value(at).parent;
+        parse_tree_t *parent = parse_tree_parent(at);
         if (!parent || core_tree_is_leaf(parent)) return false;
         if (dotted_symbol_path_node(grammar, parent))
             return core_tree_child(parent, 0) == at;
@@ -257,8 +257,8 @@ rebind_call_node(n00bb_tu_state_t *state, parse_tree_t *node,
         parse_tree_set_resolution_symbol(node, to);
         if (parse_sym_remove_use(from, node)) (void)parse_sym_add_use(to, node);
     }
-    if (core_tree_node_value(node).sym == from)
-        core_tree_node_value(node).sym = to;
+    if (parse_tree_sym(node) == from)
+        parse_tree_set_sym(node, to);
     n00bb_link_use_site_t *site = link_use_site_for_node(state, node);
     if (site && site->symbol == from) site->symbol = to;
 }
@@ -282,7 +282,7 @@ unify_call_argument(core_translation_unit_t *unit, n00bb_tu_state_t *state,
                     parse_tree_t *diagnostic_node, parse_tree_t *argument,
                     th_type *expected, bool context_call)
 {
-    th_type *actual = core_tree_node_value(argument).type;
+    th_type *actual = parse_tree_type(argument);
     if (context_call && n00bb_value_coerces(state->types, actual, expected))
         report_call_type_error(unit, argument, state->types, actual,
                                expected);
@@ -436,7 +436,6 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
         if (label->kind != PARSE_CF_CALL || !label->cond ||
             core_tree_is_leaf(label->cond)) continue;
 
-        parse_nt_node_t *callee_node = &core_tree_node_value(label->cond);
         parse_tree_t *member = member_access_node(grammar, label->cond);
         if ((member != nullptr) != resolve_member_calls) continue;
         parse_sym_entry_t *callee_symbol = bound_function_symbol(label->cond);
@@ -472,7 +471,8 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
             && (!callee_symbol
                 || n00bb_is_trait_dispatch_reference(grammar, unit, member));
         th_type *signature = context_call ? context_target->type
-            : callee_symbol ? callee_symbol->type : callee_node->type;
+            : callee_symbol ? callee_symbol->type
+            : parse_tree_type(label->cond);
         bool signature_instantiated = false;
         parse_sym_entry_t *keyword_callee = nullptr;
         if (!member_call && callee_symbol
@@ -488,8 +488,7 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
             n00bb_link_use_site_t *member_site = link_use_site_for_node(
                 state, member);
             th_type *receiver_type = receiver_node
-                && !core_tree_is_leaf(receiver_node)
-                ? core_tree_node_value(receiver_node).type : nullptr;
+                ? parse_tree_type(receiver_node) : nullptr;
             th_type *caller_contract = caller_symbol
                 ? (caller_symbol->callable_contract
                     ? caller_symbol->callable_contract
@@ -684,8 +683,7 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
                 core_free(method_name);
             }
         }
-        th_type *result = label->self && !core_tree_is_leaf(label->self)
-            ? core_tree_node_value(label->self).type : nullptr;
+        th_type *result = label->self ? parse_tree_type(label->self) : nullptr;
         if (!signature || !result) continue;
         bool recursive = call_is_recursive(grammar, call_sites,
                                            caller_symbol, callee_symbol);
@@ -699,8 +697,7 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
             const th_param *receiver = th_func_param(signature, 0);
             parse_tree_t *receiver_node = core_tree_child(member, 0);
             th_type *receiver_type = receiver_node
-                && !core_tree_is_leaf(receiver_node)
-                ? core_tree_node_value(receiver_node).type : nullptr;
+                ? parse_tree_type(receiver_node) : nullptr;
             if (!receiver || !unify_call_node_type(unit, state, label->self,
                     receiver_node, receiver_type, receiver->type))
                 continue;
@@ -771,8 +768,7 @@ call_type_snapshot(core_translation_unit_t *const *units,
             parse_tree_t *nodes[] = {label->cond, label->self};
             for (size_t n = 0; n < 2; n++) {
                 parse_tree_t *node = nodes[n];
-                th_type *type = node && !core_tree_is_leaf(node)
-                    ? core_tree_node_value(node).type : nullptr;
+                th_type *type = node ? parse_tree_type(node) : nullptr;
                 uint64_t identity = type ? th_hash(state->types, type) : 0;
                 core_buffer_append(&snapshot, (const char *)&identity,
                                    sizeof(identity));
@@ -1075,8 +1071,7 @@ publish_link_call_dependencies(core_link_unit_t *link,
                 parse_tree_t *receiver_node = core_tree_num_children(member)
                     ? core_tree_child(member, 0) : nullptr;
                 th_type *receiver_type = receiver_node
-                    && !core_tree_is_leaf(receiver_node)
-                    ? core_tree_node_value(receiver_node).type : nullptr;
+                    ? parse_tree_type(receiver_node) : nullptr;
                 core_string_t method_name =
                     core_tree_num_children(member) >= 3
                         ? first_token_text(core_tree_child(member, 2))

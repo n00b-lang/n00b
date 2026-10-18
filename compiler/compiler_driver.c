@@ -581,7 +581,7 @@ dump_symbols(core_translation_unit_t *unit)
                     printf("->%s", resolution.kind
                             == PARSE_NODE_RESOLUTION_SYMBOL
                         && resolution.target.symbol == symbol
-                        && core_tree_node_value(use).sym == symbol
+                        && parse_tree_sym(use) == symbol
                             ? "self" : "mismatch");
                 }
                 printf("]");
@@ -1215,7 +1215,7 @@ find_string_token(parse_grammar_t *grammar, parse_tree_t *node)
     if (!node) return nullptr;
     for (size_t i = 0; i < core_tree_num_children(node); i++) {
         parse_tree_t *child = core_tree_child(node, i);
-        if (core_tree_node_value(child).group_top) {
+        if (parse_tree_is_group(child)) {
             for (size_t j = 0; j < core_tree_num_children(child); j++) {
                 parse_tree_t *item = core_tree_child(child, j);
                 parse_token_info_t *token = parse_node_token(item);

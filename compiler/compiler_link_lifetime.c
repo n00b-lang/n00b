@@ -288,7 +288,7 @@ returned_source_matches_formal(parse_grammar_t *grammar,
     if (source->kind == N00BB_RETURN_SOURCE_PROJECTION_REFERENCE) {
         parse_tree_t *receiver = source->node;
         th_type *type = receiver
-            ? th_resolve(core_tree_node_value(receiver).type) : nullptr;
+            ? th_resolve(parse_tree_type(receiver)) : nullptr;
         return type && th_kind_of(type) == TH_INDIRECTION
             && returned_source_matches_formal(grammar, analysis, candidates,
                 owner, receiver, formal_index);
@@ -479,8 +479,7 @@ static bool
 tree_depth_from(parse_tree_t *node, parse_tree_t *ancestor, size_t *depth)
 {
     size_t count = 0;
-    for (parse_tree_t *at = node; at;
-         at = core_tree_node_value(at).parent) {
+    for (parse_tree_t *at = node; at; at = parse_tree_parent(at)) {
         if (at == ancestor) {
             if (depth) *depth = count;
             return true;
@@ -510,23 +509,22 @@ call_precedes_in_walk(parse_tree_t *candidate, parse_tree_t *current,
     size_t original_candidate_depth = candidate_depth;
     size_t original_current_depth = current_depth;
     while (candidate_depth > current_depth) {
-        a = core_tree_node_value(a).parent;
+        a = parse_tree_parent(a);
         candidate_depth--;
     }
     while (current_depth > candidate_depth) {
-        b = core_tree_node_value(b).parent;
+        b = parse_tree_parent(b);
         current_depth--;
     }
     if (a == b)
         return original_candidate_depth < original_current_depth;
-    while (core_tree_node_value(a).parent
-           != core_tree_node_value(b).parent) {
-        a = core_tree_node_value(a).parent;
-        b = core_tree_node_value(b).parent;
+    while (parse_tree_parent(a) != parse_tree_parent(b)) {
+        a = parse_tree_parent(a);
+        b = parse_tree_parent(b);
         if (!a || !b) return false;
     }
-    return tree_child_index(core_tree_node_value(a).parent, a)
-        > tree_child_index(core_tree_node_value(b).parent, b);
+    return tree_child_index(parse_tree_parent(a), a)
+        > tree_child_index(parse_tree_parent(b), b);
 }
 
 static parse_tree_t *
@@ -643,7 +641,7 @@ record_function_aggregate_aliases(parse_grammar_t *grammar,
     for (size_t i = 0; i < facts->count; i++) {
         n00bb_alias_edge_t *edge = &facts->edges[i];
         if (edge->kind == N00BB_ALIAS_CALL) {
-            th_type *result_type = core_tree_node_value(edge->node).type;
+            th_type *result_type = parse_tree_type(edge->node);
             if (type_may_contain_reference_alias(state->types, result_type)
                 && !record_returned_call_alias(grammar, analysis, source_unit,
                     holder, edge->node, active)) {
@@ -721,7 +719,7 @@ record_function_return_aliases(parse_grammar_t *grammar,
             : nullptr;
         bool callback_value = owner_state && aliases
             && n00bb_callback_contract_for_type(owner_state,
-                core_tree_node_value(expression).type);
+                parse_tree_type(expression));
         if (aggregate || callback_value)
             complete &= record_function_aggregate_aliases(grammar, analysis,
                 owner, aggregate ? aggregate : expression, holder, function,
@@ -941,7 +939,7 @@ record_call_aggregate_aliases(parse_grammar_t *grammar,
     for (size_t i = 0; i < facts->count; i++) {
         n00bb_alias_edge_t *edge = &facts->edges[i];
         if (edge->kind == N00BB_ALIAS_CALL) {
-            th_type *result_type = core_tree_node_value(edge->node).type;
+            th_type *result_type = parse_tree_type(edge->node);
             if (type_may_contain_reference_alias(state->types, result_type))
                 complete &= record_returned_call_alias(grammar, analysis,
                     unit, holder, edge->node, active);
@@ -1020,7 +1018,7 @@ source_function_parameter(parse_grammar_t *grammar,
         N00BB_PARAMETER_FACTS_KEY);
     parse_tree_t *node = facts && index < facts->param_count
         ? facts->params[index].node : nullptr;
-    return node ? core_tree_node_value(node).sym : nullptr;
+    return node ? parse_tree_sym(node) : nullptr;
 }
 
 static bool

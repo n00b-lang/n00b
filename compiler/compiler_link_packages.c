@@ -694,8 +694,7 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
                                        "callback-decl");
         if (!trait_contract && !callback_contract) continue;
         if (trait_contract) {
-            parse_sym_entry_t *trait_symbol =
-                core_tree_node_value(scope->node).sym;
+            parse_sym_entry_t *trait_symbol = parse_tree_sym(scope->node);
             if (trait_symbol && scope != trait_symbol->member_scope)
                 continue;
             core_buffer_t qualified = {0};
@@ -773,8 +772,7 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
                 qualified.data, qualified.data, module_text, package_text,
                 TH_ENV_PRIVATE, role_record);
             core_buffer_release(&qualified);
-            parse_sym_entry_t *callback_symbol =
-                core_tree_node_value(scope->node).sym;
+            parse_sym_entry_t *callback_symbol = parse_tree_sym(scope->node);
             core_buffer_t type_name = {0};
             core_buffer_printf(&type_name, "%s.%.*s", module_text,
                 (int)scope->name.u8_bytes, scope->name.data);
@@ -792,8 +790,7 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
                 callback_contract ? "%s.__callback_setup__%.*s"
                                   : "%s.%.*s",
                 module_text, (int)scope->name.u8_bytes, scope->name.data);
-            parse_sym_entry_t *trait_symbol =
-                core_tree_node_value(scope->node).sym;
+            parse_sym_entry_t *trait_symbol = parse_tree_sym(scope->node);
             ok = th_env_register_trait_contracts(environment, qualified.data,
                 module_text, package_text, symbol_visibility(trait_symbol),
                 method_record);
@@ -837,7 +834,7 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
                     parse_tree_t *hook = role ? parse_sym_binding(symbol,
                         core_string_borrow(role, strlen(role))) : nullptr;
                     if (!hook) continue;
-                    th_type *hook_type = core_tree_node_value(hook).type;
+                    th_type *hook_type = parse_tree_type(hook);
                     th_type *contract = hook_type
                         ? th_env_signature_contract(state->types, hook_type,
                             th_func_error(hook_type)

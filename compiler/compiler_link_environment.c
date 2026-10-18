@@ -24,7 +24,7 @@ dispatch_argument_nodes(parse_grammar_t *grammar, parse_tree_t *node,
         if (value) core_list_push(*arguments, value);
         return;
     }
-    parse_tree_t *call = core_tree_node_value(node).parent;
+    parse_tree_t *call = parse_tree_parent(node);
     if (!nt_is(grammar, call, "postfix-expr")
         || core_tree_child(call, 0) != node) return;
     collect_positional_nodes(grammar,
@@ -58,7 +58,7 @@ dispatch_string_where_buffer_expected(parse_grammar_t *grammar,
             if (!core_tree_is_leaf(argument)
                 && n00bb_string_where_buffer_expected(types,
                        th_func_param(signature, i + 1)->type,
-                       core_tree_node_value(argument).type))
+                       parse_tree_type(argument)))
                 offending = argument;
         }
     core_list_free(arguments);
@@ -284,8 +284,7 @@ build_import_environment(parse_grammar_t *grammar,
                         && site->node && !core_tree_is_leaf(site->node))
                         receiver = operator_receiver_node(site);
                     th_type *receiver_type = receiver
-                        && !core_tree_is_leaf(receiver)
-                        ? core_tree_node_value(receiver).type : nullptr;
+                        ? parse_tree_type(receiver) : nullptr;
                     if (receiver_type && th_unify_probe(state->types,
                             receiver_type, detail.got)) {
                         failure_site = site->node;

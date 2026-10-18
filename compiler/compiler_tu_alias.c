@@ -107,7 +107,7 @@ reference_is_simple_assignment(parse_grammar_t *grammar,
                                parse_tree_t *reference)
 {
     for (parse_tree_t *at = reference; at;
-         at = core_tree_node_value(at).parent) {
+         at = parse_tree_parent(at)) {
         if (nt_is(grammar, at, "assign-stmt")
             || nt_is(grammar, at, "sym-decl")) {
             const parse_rule_t *rule = parse_tree_rule(grammar, at);
@@ -131,7 +131,7 @@ reference_is_call_argument(parse_grammar_t *grammar,
                            parse_tree_t *reference)
 {
     for (parse_tree_t *at = reference; at;
-         at = core_tree_node_value(at).parent) {
+         at = parse_tree_parent(at)) {
         if (nt_is(grammar, at, "func-def")
             || nt_is(grammar, at, "context-def")) return false;
         const parse_rule_t *rule = parse_tree_rule(grammar, at);
@@ -368,7 +368,7 @@ mark_return_value_aliases_may_escape(parse_grammar_t *grammar,
     n00bb_alias_edges_t *facts = state && node
         ? n00bb_node_alias_edges(node) : nullptr;
     if (!facts) return;
-    th_type *returned = core_tree_node_value(node).type;
+    th_type *returned = parse_tree_type(node);
     if (returned && !type_may_contain_reference_alias(state->types, returned))
         return;
     for (size_t i = 0; i < facts->count; i++) {
@@ -378,7 +378,7 @@ mark_return_value_aliases_may_escape(parse_grammar_t *grammar,
             && th_kind_of(th_resolve(source->type)) == TH_VAR;
         if ((edge->kind == N00BB_ALIAS_CALL
              && type_may_contain_reference_alias(state->types,
-                 core_tree_node_value(edge->node).type))
+                 parse_tree_type(edge->node)))
             || edge->kind == N00BB_ALIAS_REFERENCE
             || (source && (is_reference_symbol(source)
                            || source->alias_count || unresolved)))
@@ -422,9 +422,9 @@ record_reference_facts(parse_grammar_t *grammar,
         : nullptr;
     parse_tree_t *target_lvalue = n00bb_simple_lvalue(target_node);
     parse_sym_entry_t *holder = declaration
-        ? core_tree_node_value(node).sym
+        ? parse_tree_sym(node)
         : target_lvalue && !member_access_node(grammar, target_node)
-            ? core_tree_node_value(target_lvalue).sym : nullptr;
+            ? parse_tree_sym(target_lvalue) : nullptr;
     if (!holder || (holder->kind != PARSE_SYM_VARIABLE
                     && holder->kind != PARSE_SYM_PARAM)) {
         mark_expression_aliases_may_escape(grammar, unit, value_node);
@@ -458,7 +458,7 @@ record_reference_facts(parse_grammar_t *grammar,
     n00bb_alias_edges_t *value_aliases = state && value_node
         ? n00bb_node_alias_edges(value_node) : nullptr;
     th_type *value_type = value_node
-        ? core_tree_node_value(value_node).type : nullptr;
+        ? parse_tree_type(value_node) : nullptr;
     if (value_aliases
         && n00bb_callback_contract_for_type(state, value_type)) {
         if (!record_aggregate_aliases(grammar, unit, value_node, holder))

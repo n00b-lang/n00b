@@ -9,9 +9,8 @@ n00bb_range_new_var(core_csp_store_t *store, parse_tree_t *node,
                    int64_t minimum, int64_t maximum)
 {
     int64_t type_minimum = 0, type_maximum = 0;
-    if (!store || !node || !is_integer_type(
-            core_tree_node_value(node).type)
-        || !n00bb_integer_interval_type(core_tree_node_value(node).type,
+    if (!store || !node || !is_integer_type(parse_tree_type(node))
+        || !n00bb_integer_interval_type(parse_tree_type(node),
             &type_minimum, &type_maximum)) return -1;
     if (minimum < type_minimum) minimum = type_minimum;
     if (maximum > type_maximum) maximum = type_maximum;
@@ -193,8 +192,7 @@ n00bb_range_branch_top(n00bb_tu_state_t *state, parse_tree_t *if_node)
 static parse_tree_t *
 n00bb_range_if_owner(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    for (parse_tree_t *at = node; at;
-         at = core_tree_node_value(at).parent)
+    for (parse_tree_t *at = node; at; at = parse_tree_parent(at))
         if (nt_is(grammar, at, "if-stmt")) return at;
     return nullptr;
 }
@@ -400,9 +398,8 @@ n00bb_range_in_active_branch(parse_grammar_t *grammar,
                              n00bb_tu_state_t *state, parse_tree_t *node)
 {
     parse_tree_t *owner = nullptr;
-    for (parse_tree_t *at = node
-             ? core_tree_node_value(node).parent : nullptr;
-         at; at = core_tree_node_value(at).parent) {
+    for (parse_tree_t *at = node ? parse_tree_parent(node) : nullptr;
+         at; at = parse_tree_parent(at)) {
         if (nt_is(grammar, at, "while-stmt")
             || nt_is(grammar, at, "for-stmt")
             || nt_is(grammar, at, "labeled-while")
@@ -439,9 +436,8 @@ n00bb_range_control_node(parse_grammar_t *grammar, parse_tree_t *node)
 static bool
 n00bb_range_inside_control(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    for (parse_tree_t *parent = node
-             ? core_tree_node_value(node).parent : nullptr;
-         parent; parent = core_tree_node_value(parent).parent)
+    for (parse_tree_t *parent = node ? parse_tree_parent(node) : nullptr;
+         parent; parent = parse_tree_parent(parent))
         if (n00bb_range_control_node(grammar, parent)) return true;
     return false;
 }
@@ -449,9 +445,8 @@ n00bb_range_inside_control(parse_grammar_t *grammar, parse_tree_t *node)
 static bool
 n00bb_range_inside_function(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    for (parse_tree_t *parent = node
-             ? core_tree_node_value(node).parent : nullptr;
-         parent; parent = core_tree_node_value(parent).parent)
+    for (parse_tree_t *parent = node ? parse_tree_parent(node) : nullptr;
+         parent; parent = parse_tree_parent(parent))
         if (nt_is(grammar, parent, "func-def")
             || nt_is(grammar, parent, "context-def")) return true;
     return false;
@@ -476,7 +471,7 @@ n00bb_integer_reference_symbol(parse_tree_t *node)
     parse_node_resolution_t resolution = parse_tree_resolution(node);
     if (resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL)
         return resolution.target.symbol;
-    return core_tree_node_value(node).sym;
+    return parse_tree_sym(node);
 }
 
 static bool
@@ -505,7 +500,7 @@ n00bb_range_constant_uint64(parse_grammar_t *grammar, parse_tree_t *node,
     uint64_t width = 0;
     bool is_signed = true;
     bool unsigned64 = n00bb_integer_representation(
-        core_tree_node_value(node).type, &width, &is_signed)
+        parse_tree_type(node), &width, &is_signed)
         && width == 64 && !is_signed;
     if (unsigned64 && nt_is(grammar, node, "unary-expr") && count == 2
         && parse_tree_leaf_is(core_tree_child(node, 0),
@@ -604,8 +599,7 @@ n00bb_range_update_symbol(parse_grammar_t *grammar, parse_tree_t *node,
         ? parse_rule_find_annot(grammar, rule, PARSE_ANNOT_ASSIGNS) : nullptr;
     if (!assign) return;
 
-    parse_sym_entry_t *symbol = declaration
-        ? core_tree_node_value(node).sym : nullptr;
+    parse_sym_entry_t *symbol = declaration ? parse_tree_sym(node) : nullptr;
     if (!declaration) {
         parse_tree_t *target = parse_tree_resolve_child_ref(grammar, node,
                                                             assign->name_ref);
@@ -685,7 +679,7 @@ n00bb_propagate_integer_range_node(parse_grammar_t *grammar,
         core_list_push(child_ranges, n00bb_range_variable_for_node(state,
             core_tree_child(node, i)));
 
-    parse_nt_node_t *parsed = &core_tree_node_value(node);
+    th_type *node_type = parse_tree_type(node);
     int64_t type_minimum = 0, type_maximum = 0;
     core_csp_var_id_t result = -1;
     parse_sym_entry_t *symbol = nullptr;
@@ -693,12 +687,12 @@ n00bb_propagate_integer_range_node(parse_grammar_t *grammar,
         ir_lit_t literal = {0};
         if (n00bb_parse_switch_integer(first_token_text(node), &literal)
             && literal.mag <= (ir_uint_t)INT64_MAX
-            && (!parsed->type
-                || th_kind_of(th_resolve(parsed->type)) == TH_VAR
-                || is_integer_type(parsed->type))) {
-            parsed->integer_literal_origin = node;
+            && (!node_type
+                || th_kind_of(th_resolve(node_type)) == TH_VAR
+                || is_integer_type(node_type))) {
+            parse_tree_set_integer_literal_origin(node, node);
             int64_t value = (int64_t)literal.mag;
-            if (!n00bb_integer_interval_type(parsed->type,
+            if (!n00bb_integer_interval_type(node_type,
                     &type_minimum, &type_maximum)
                 || (value >= type_minimum && value <= type_maximum))
                 result = core_csp_new_var(store,
@@ -709,8 +703,8 @@ n00bb_propagate_integer_range_node(parse_grammar_t *grammar,
     }
     int64_t constant = 0;
     if (n00bb_integer_constant_reference(grammar, node, &constant)) {
-        parsed->integer_literal_origin = node;
-        if (!n00bb_integer_interval_type(parsed->type,
+        parse_tree_set_integer_literal_origin(node, node);
+        if (!n00bb_integer_interval_type(node_type,
                 &type_minimum, &type_maximum)
             || (constant >= type_minimum && constant <= type_maximum))
             result = core_csp_new_var(store,
@@ -718,11 +712,11 @@ n00bb_propagate_integer_range_node(parse_grammar_t *grammar,
                 core_csp_dom_singleton(constant));
         goto record;
     }
-    if (!is_integer_type(parsed->type)
-        || !n00bb_integer_interval_type(parsed->type,
+    if (!is_integer_type(node_type)
+        || !n00bb_integer_interval_type(node_type,
             &type_minimum, &type_maximum)) {
         int64_t minimum = 0, maximum = 0;
-        if (is_integer_type(parsed->type)
+        if (is_integer_type(node_type)
             && state->integer_range_use_symbol_facts
             && nt_is(grammar, node, "primary")) {
             const n00bb_symbol_range_t *known = n00bb_range_for_symbol(
@@ -731,7 +725,7 @@ n00bb_propagate_integer_range_node(parse_grammar_t *grammar,
                 parse_tree_set_integer_range(node, known->minimum,
                                              known->maximum);
         }
-        else if (is_integer_type(parsed->type) && child_count == 1
+        else if (is_integer_type(node_type) && child_count == 1
                  && n00bb_integer_range_wrapper(grammar, node)
                  && parse_tree_integer_range(core_tree_child(node, 0),
                                              &minimum, &maximum))
@@ -797,11 +791,11 @@ n00bb_propagate_integer_range_node(parse_grammar_t *grammar,
         && child_ranges.data[1] >= 0) {
         core_string_t op = parse_tree_leaf_text(core_tree_child(node, 0));
         parse_tree_t *operand = core_tree_child(node, 1);
-        if (core_tree_node_value(operand).integer_literal_origin
+        if (parse_tree_integer_literal_origin(operand)
             && (core_string_eq(op, CORE_STRING_STATIC("-"))
                 || core_string_eq(op, CORE_STRING_STATIC("+"))))
-            parsed->integer_literal_origin =
-                core_tree_node_value(operand).integer_literal_origin;
+            parse_tree_set_integer_literal_origin(node,
+                parse_tree_integer_literal_origin(operand));
         if (core_string_eq(op, CORE_STRING_STATIC("-"))) {
             result = n00bb_range_new_var(store, node, type_minimum,
                                          type_maximum);
@@ -881,7 +875,7 @@ n00bb_propagate_integer_range_node(parse_grammar_t *grammar,
                     && !core_string_eq(text, CORE_STRING_STATIC(")")))
                     literal_shape = false;
             }
-            else if (core_tree_node_value(member).integer_literal_origin) {
+            else if (parse_tree_integer_literal_origin(member)) {
                 if (literal_child) literal_shape = false;
                 literal_child = member;
             }
@@ -892,8 +886,8 @@ n00bb_propagate_integer_range_node(parse_grammar_t *grammar,
         }
         if (ranged == 1) {
             if (literal_shape && literal_child)
-                parsed->integer_literal_origin =
-                    core_tree_node_value(literal_child).integer_literal_origin;
+                parse_tree_set_integer_literal_origin(node,
+                    parse_tree_integer_literal_origin(literal_child));
             const core_csp_domain_t *domain = core_result_get_ok(
                 core_csp_var_domain(store, child));
             if (domain && !core_csp_dom_is_empty(domain)

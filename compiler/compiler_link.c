@@ -78,11 +78,11 @@ resolve_variant_case_references(core_link_unit_t *link,
         for (size_t s = 0; s < state->link_use_sites.len; s++) {
             n00bb_link_use_site_t *site = &state->link_use_sites.data[s];
             if (!site->variant_case_candidate) continue;
-            parse_tree_t *case_item = core_tree_node_value(site->node).parent;
+            parse_tree_t *case_item = parse_tree_parent(site->node);
             while (case_item
                    && !nt_is(analysis->grammar, case_item,
                              "case-expr-item"))
-                case_item = core_tree_node_value(case_item).parent;
+                case_item = parse_tree_parent(case_item);
             parse_tree_t *expression = case_item
                 ? child_nt(analysis->grammar, case_item, "expression")
                 : nullptr;
@@ -90,12 +90,12 @@ resolve_variant_case_references(core_link_unit_t *link,
                 || child_nt(analysis->grammar, case_item, "range-sep"))
                 continue;
             parse_tree_t *switch_node = case_item
-                ? core_tree_node_value(case_item).parent : nullptr;
+                ? parse_tree_parent(case_item) : nullptr;
             while (switch_node
                    && !nt_is(analysis->grammar, switch_node, "switch-stmt")
                    && !nt_is(analysis->grammar, switch_node,
                              "switch-value-expr"))
-                switch_node = core_tree_node_value(switch_node).parent;
+                switch_node = parse_tree_parent(switch_node);
             if (!switch_node) continue;
             parse_cf_label_t *label = parse_cf_label_lookup(
                 state->annotations, switch_node);
@@ -104,8 +104,7 @@ resolve_variant_case_references(core_link_unit_t *link,
             parse_sym_entry_t *subject_symbol = subject
                 ? attached_symbol(analysis->grammar, unit, subject) : nullptr;
             th_type *subject_type = label && label->cond
-                && !core_tree_is_leaf(label->cond)
-                ? core_tree_node_value(label->cond).type : nullptr;
+                ? parse_tree_type(label->cond) : nullptr;
             if (!subject_type && subject_symbol)
                 subject_type = subject_symbol->type;
             parse_scope_t *variant_scope = n00bb_variant_scope_for_type(
@@ -222,8 +221,7 @@ static th_type *
 field_receiver_type(parse_grammar_t *grammar, core_translation_unit_t *unit,
                     parse_tree_t *receiver)
 {
-    th_type *type = receiver && !core_tree_is_leaf(receiver)
-        ? core_tree_node_value(receiver).type : nullptr;
+    th_type *type = receiver ? parse_tree_type(receiver) : nullptr;
     if (!type || th_kind_of(th_resolve(type)) == TH_VAR) {
         parse_sym_entry_t *symbol = attached_symbol(grammar, unit, receiver);
         if (symbol && symbol->type) type = symbol->type;
@@ -309,13 +307,12 @@ resolve_inferred_field_references(core_link_unit_t *link,
                 parse_tree_t *receiver_node = core_tree_child(node, 0);
                 parse_sym_entry_t *receiver = attached_symbol(
                     analysis->grammar, unit, receiver_node);
-                th_type *receiver_type = !core_tree_is_leaf(receiver_node)
-                    ? core_tree_node_value(receiver_node).type : nullptr;
+                th_type *receiver_type = parse_tree_type(receiver_node);
                 if (!receiver_type && receiver) receiver_type = receiver->type;
                 th_type *payload_type = n00bb_variant_arm_payload_type(
                     state->types, receiver_type, site->symbol);
                 if (!payload_type) return false;
-                core_tree_node_value(node).type = payload_type;
+                parse_tree_set_type(node, payload_type);
                 if (!parse_tree_set_resolution_symbol(node, site->symbol))
                     return false;
                 continue;
@@ -465,8 +462,8 @@ diagnose_known_missing_record_fields(n00bb_link_analysis_t *analysis)
                 || variant_assignment_arm(analysis->grammar, unit, node))
                 continue;
             parse_tree_t *receiver = core_tree_child(node, 0);
-            th_type *receiver_type = receiver && !core_tree_is_leaf(receiver)
-                ? core_tree_node_value(receiver).type : nullptr;
+            th_type *receiver_type = receiver ? parse_tree_type(receiver)
+                                              : nullptr;
             th_type *resolved_receiver = receiver_type
                 ? th_resolve(receiver_type) : nullptr;
             if (!resolved_receiver
@@ -791,13 +788,12 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
                 th_type *builtin = name.data
                     ? th_name(state->types,
                         canonical_builtin_type_name(name.data)) : nullptr;
-                th_type *previous =
-                    core_tree_node_value(reference).type;
+                th_type *previous = parse_tree_type(reference);
                 th_type *resolved = previous && builtin
                     ? th_unify_in_place(state->types, previous, builtin)
                     : builtin;
                 if (!resolved) continue;
-                core_tree_node_value(reference).type = resolved;
+                parse_tree_set_type(reference, resolved);
                 propagate_resolved_type_reference(grammar, unit, reference,
                                                   resolved);
                 refresh_cached_type_path(grammar, unit, reference);
@@ -819,7 +815,7 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
             th_type *target_type = is_trait_type_symbol(grammar, symbol)
                 ? trait_type_reference(grammar, unit, unit, symbol, nullptr)
                 : symbol->type;
-            th_type *previous_type = core_tree_node_value(reference).type;
+            th_type *previous_type = parse_tree_type(reference);
             th_type *resolved_type = previous_type && target_type
                 ? th_unify_in_place(state->types, previous_type, target_type)
                 : target_type ? target_type : previous_type;
@@ -833,7 +829,7 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
                 return false;
             }
             if (resolved_type)
-                core_tree_node_value(reference).type = resolved_type;
+                parse_tree_set_type(reference, resolved_type);
             if (resolved_type)
                 propagate_resolved_type_reference(grammar, unit, reference,
                                                   resolved_type);
@@ -881,7 +877,7 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
                         }
                     }
                     symbol->type = type;
-                    core_tree_node_value(symbol->decl_node).type = type;
+                    parse_tree_set_type(symbol->decl_node, type);
                     if (changed) progress = true;
                     for (size_t use_ix = 0; use_ix < symbol->use_count;
                          use_ix++) {
@@ -895,7 +891,7 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
                             || resolution.target.symbol != symbol)
                             continue;
                         parse_scope_t *reference_scope =
-                            core_tree_node_value(reference).scope;
+                            parse_tree_scope(reference);
                         core_translation_unit_t *owner = reference_scope
                             ? reference_scope->owner_unit : nullptr;
                         n00bb_tu_state_t *owner_state = tu_state(owner);
@@ -908,7 +904,7 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
                             : type;
                         if (!reference_type) continue;
                         th_type *previous_reference_type =
-                            core_tree_node_value(reference).type;
+                            parse_tree_type(reference);
                         bool reference_changed =
                             !previous_reference_type
                             || th_hash(owner_state->types,
@@ -930,8 +926,8 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
                                 link_source_location(reference));
                             return false;
                         }
-                        core_tree_node_value(reference).type =
-                            resolved_reference_type;
+                        parse_tree_set_type(reference,
+                                            resolved_reference_type);
                         propagate_resolved_type_reference(grammar, owner,
                             reference, resolved_reference_type);
                         refresh_cached_type_path(grammar, owner,
@@ -1042,7 +1038,7 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
                 parse_sym_set_storage_duration(symbol,
                     PARSE_SYM_STORAGE_COMPTIME);
                 if (symbol->decl_node)
-                    core_tree_node_value(symbol->decl_node).type = owner->type;
+                    parse_tree_set_type(symbol->decl_node, owner->type);
             }
         }
     }
@@ -1093,8 +1089,7 @@ imported_symbol_is_visible(parse_grammar_t *grammar,
 bool
 module_member_is_call(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    for (parse_tree_t *at = node; at;
-         at = core_tree_node_value(at).parent) {
+    for (parse_tree_t *at = node; at; at = parse_tree_parent(at)) {
         const parse_rule_t *rule = parse_tree_rule(grammar, at);
         const parse_annotation_t *call = rule
             ? parse_rule_find_annot(grammar, rule, PARSE_ANNOT_CALL) : nullptr;
@@ -1143,8 +1138,7 @@ static bool
 overload_argument_fits(n00bb_tu_state_t *state, parse_tree_t *argument,
                        th_type *parameter, bool receiver, bool *typed)
 {
-    th_type *type = argument && !core_tree_is_leaf(argument)
-        ? core_tree_node_value(argument).type : nullptr;
+    th_type *type = argument ? parse_tree_type(argument) : nullptr;
     if (!type || !parameter) {
         *typed = false;
         return true;
@@ -1160,7 +1154,7 @@ overload_argument_fits(n00bb_tu_state_t *state, parse_tree_t *argument,
         || (n00bb_option_type_element(parameter, &element)
             && (th_is_nil(type)
                 || th_unify_probe(state->types, type, element)))
-        || (core_tree_node_value(argument).integer_literal_origin
+        || (parse_tree_integer_literal_origin(argument)
             && is_integer_type(th_resolve(parameter)));
 }
 
@@ -1273,7 +1267,7 @@ n00bb_defer_overloaded_callee(parse_grammar_t *grammar,
         && symbol->kind == PARSE_SYM_FUNCTION
         && n00bb_function_has_overloads(symbol)
         && module_member_is_call(grammar, node))
-        core_tree_node_value(node).type = th_var(state->types);
+        parse_tree_set_type(node, th_var(state->types));
 }
 
 static parse_sym_entry_t *
@@ -1288,16 +1282,15 @@ module_call_exact_arity(parse_grammar_t *grammar, n00bb_tu_state_t *state,
 bool
 n00bb_pending_type_reference(n00bb_tu_state_t *state, parse_tree_t *node)
 {
-    th_type *current = core_tree_node_value(node).type;
+    th_type *current = parse_tree_type(node);
     parse_tree_t *receiver = core_tree_num_children(node)
         ? core_tree_child(node, 0) : nullptr;
-    th_type *receiver_type = receiver && !core_tree_is_leaf(receiver)
-        ? core_tree_node_value(receiver).type : nullptr;
+    th_type *receiver_type = receiver ? parse_tree_type(receiver) : nullptr;
     if (current && (!receiver_type
                     || th_resolve(current) != th_resolve(receiver_type)))
         return true;
-    core_tree_node_value(node).type = th_var(state->types);
-    return core_tree_node_value(node).type != nullptr;
+    parse_tree_set_type(node, th_var(state->types));
+    return parse_tree_type(node) != nullptr;
 }
 
 bool
@@ -1440,7 +1433,7 @@ resolve_module_member_site(parse_grammar_t *grammar,
         if (!parse_tree_set_resolution_symbol(node, symbol)
             || !parse_tree_mark_direct_symbol_reference(node)) return false;
         n00bb_tu_state_t *state = tu_state(unit);
-        th_type *use_type = core_tree_node_value(node).type;
+        th_type *use_type = parse_tree_type(node);
         bool direct_call = module_member_is_call(grammar, node);
         if (direct_call && symbol->kind == PARSE_SYM_FUNCTION && use_type
             && symbol->type && state && state->types
@@ -1482,7 +1475,7 @@ resolve_module_member_site(parse_grammar_t *grammar,
                     link_source_location(node));
                 return false;
             }
-            core_tree_node_value(node).type = unified;
+            parse_tree_set_type(node, unified);
         }
         return true;
     }
@@ -1515,9 +1508,8 @@ site_is_resolved_module_prefix(parse_grammar_t *grammar,
     if (site && site->member_name.data
         && find_direct_import(unit, site->member_name)) return true;
     parse_tree_t *node = site ? site->node : nullptr;
-    for (parse_tree_t *parent = node
-             ? core_tree_node_value(node).parent : nullptr;
-         parent; parent = core_tree_node_value(parent).parent) {
+    for (parse_tree_t *parent = node ? parse_tree_parent(node) : nullptr;
+         parent; parent = parse_tree_parent(parent)) {
         if (!dotted_symbol_path_node(grammar, parent)) continue;
         n00bb_link_use_site_t *parent_site = link_use_site_for_node(state,
                                                                     parent);
@@ -1570,8 +1562,8 @@ implicit_builtin_export(core_translation_unit_t *unit,
 static bool
 names_member_receiver(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    for (parse_tree_t *at = node; at; at = core_tree_node_value(at).parent) {
-        parse_tree_t *parent = core_tree_node_value(at).parent;
+    for (parse_tree_t *at = node; at; at = parse_tree_parent(at)) {
+        parse_tree_t *parent = parse_tree_parent(at);
         if (!parent) return false;
         if (dotted_symbol_path_node(grammar, parent))
             return core_tree_child(parent, 0) == at;
@@ -1583,7 +1575,7 @@ names_member_receiver(parse_grammar_t *grammar, parse_tree_t *node)
 static bool
 names_imported_module(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    return nt_is(grammar, core_tree_node_value(node).parent, "import-stmt");
+    return nt_is(grammar, parse_tree_parent(node), "import-stmt");
 }
 
 static bool
@@ -1681,8 +1673,7 @@ resolve_imported_module_symbols(parse_grammar_t *grammar,
                             ? type_symbol->owner_unit
                             : unit
                         : nullptr;
-                    th_type *previous =
-                        core_tree_node_value(site->node).type;
+                    th_type *previous = parse_tree_type(site->node);
                     th_type *target_type = trait
                         ? trait_type_reference(grammar, unit,
                             declaration_unit, type_symbol, previous)
@@ -1701,7 +1692,7 @@ resolve_imported_module_symbols(parse_grammar_t *grammar,
                         all_resolved = false;
                         continue;
                     }
-                    core_tree_node_value(site->node).type = resolved;
+                    parse_tree_set_type(site->node, resolved);
                     propagate_resolved_type_reference(grammar, unit,
                         site->node, resolved);
                 }
@@ -1714,8 +1705,8 @@ resolve_imported_module_symbols(parse_grammar_t *grammar,
                 parse_tree_resolution(site->node);
             if (resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL)
                 site->symbol = resolution.target.symbol;
-            else if (core_tree_node_value(site->node).sym)
-                site->symbol = core_tree_node_value(site->node).sym;
+            else if (parse_tree_sym(site->node))
+                site->symbol = parse_tree_sym(site->node);
             else if (!site->dotted_path && state->annotations
                      && state->annotations->symtab) {
                 site->symbol = parse_symtab_resolve_node(
@@ -1736,16 +1727,16 @@ resolve_imported_module_symbols(parse_grammar_t *grammar,
                 if (!resolve_prelude_value(grammar, unit, state, site))
                     return false;
                 for (parse_tree_t *at = site->symbol
-                         ? core_tree_node_value(site->node).parent : nullptr;
-                     at; at = core_tree_node_value(at).parent) {
+                         ? parse_tree_parent(site->node) : nullptr;
+                     at; at = parse_tree_parent(at)) {
                     parse_node_resolution_t wrapped =
                         parse_tree_resolution(at);
                     if (wrapped.kind != PARSE_NODE_RESOLUTION_SYMBOL
                         || wrapped.target.symbol != module) break;
                     if (!parse_tree_set_resolution_symbol(at, site->symbol))
                         return false;
-                    if (core_tree_node_value(at).sym == module)
-                        core_tree_node_value(at).sym = site->symbol;
+                    if (parse_tree_sym(at) == module)
+                        parse_tree_set_sym(at, site->symbol);
                 }
             }
             bool bracket_type_name = !site->symbol && !site->dotted_path
@@ -2106,7 +2097,7 @@ link_payload_add_initializer(parse_grammar_t *grammar,
         ((n00bb_initializer_fact_t){
             .site = definition,
             .value = value,
-            .type = core_tree_node_value(value).type,
+            .type = parse_tree_type(value),
             .location = link_source_location(definition),
             .provenance = core_source_file_path(&unit->source),
         }));
@@ -2541,7 +2532,7 @@ dynamic_initializer_declaration(parse_grammar_t *grammar,
     if (!is_module_global_symbol(grammar, symbol) || !expression)
         return false;
     for (parse_tree_t *at = initializer_node; at;
-         at = core_tree_node_value(at).parent) {
+         at = parse_tree_parent(at)) {
         if (!nt_is(grammar, at, "variable-decl")) continue;
         parse_tree_t *prefix = child_nt(grammar, at, "declaration-prefix");
         if (child_nt(grammar, prefix, "storage-class")) return false;
@@ -2630,7 +2621,7 @@ function_global_effect_kind(parse_grammar_t *grammar,
                             parse_sym_entry_t *effect_owner)
 {
     for (parse_tree_t *at = site->node; at && at != effect_owner->decl_node;
-         at = core_tree_node_value(at).parent) {
+         at = parse_tree_parent(at)) {
         if (!nt_is(grammar, at, "unary-expr")) continue;
         if (core_string_eq(first_token_text(at), CORE_STRING_STATIC("ref")))
             return N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_ALIAS;
@@ -2953,8 +2944,8 @@ nested_module_declaration_owner(parse_grammar_t *grammar,
                                parse_tree_t *declaration)
 {
     for (parse_tree_t *parent = declaration
-            ? core_tree_node_value(declaration).parent : nullptr;
-         parent; parent = core_tree_node_value(parent).parent) {
+            ? parse_tree_parent(declaration) : nullptr;
+         parent; parent = parse_tree_parent(parent)) {
         if (nt_is(grammar, parent, "func-def")
             || nt_is(grammar, parent, "context-def")) return nullptr;
         if (field_record_declaration(grammar, parent)
@@ -2973,7 +2964,7 @@ append_link_symbol_base(parse_grammar_t *grammar, parse_sym_entry_t *symbol,
     parse_tree_t *owner = nested_module_declaration_owner(
         grammar, symbol->decl_node);
     parse_sym_entry_t *owner_symbol = owner
-        ? core_tree_node_value(owner).sym : symbol->owner_type;
+        ? parse_tree_sym(owner) : symbol->owner_type;
     core_string_t owner_name = owner_symbol
         ? owner_symbol->name : (core_string_t){0};
     core_buffer_printf(key, "%u:", (unsigned)symbol->kind);
@@ -3590,7 +3581,7 @@ lifetime_function_owner(parse_grammar_t *grammar, parse_sym_entry_t *symbol)
         if (core_string_eq(scope->scope_tag,
                            CORE_STRING_STATIC("function"))) {
             if (scope->node)
-                owner = core_tree_node_value(scope->node).sym;
+                owner = parse_tree_sym(scope->node);
         }
         else if (core_string_eq(scope->scope_tag,
                                 CORE_STRING_STATIC("context-hook"))) {
@@ -3600,7 +3591,7 @@ lifetime_function_owner(parse_grammar_t *grammar, parse_sym_entry_t *symbol)
                 if (!core_string_eq(parent->scope_tag,
                                     CORE_STRING_STATIC("context"))) continue;
                 parse_sym_entry_t *candidate = parent->node
-                    ? core_tree_node_value(parent->node).sym : nullptr;
+                    ? parse_tree_sym(parent->node) : nullptr;
                 if (context_symbol(grammar, candidate)) owner = candidate;
             }
         }
