@@ -2,6 +2,7 @@ import sys.abi
 import internal.encoding
 import internal.runebuf
 import internal.properties
+import internal.blob
 import generated.decomposition
 import generated.composition
 import generated.normprops
@@ -83,7 +84,7 @@ private func hangul_compose(a: char, b: char) -> char {
     return cast[char] 0
 }
 
-private func sparse_lookup(index: Array[Array[u32]], index_len: u32,
+private func sparse_lookup(index: Array[u8], index_len: u32,
                            cp: char) -> u32? {
     let v: u32 = cast[u32] cp
     var lo: u32 = 0
@@ -92,15 +93,15 @@ private func sparse_lookup(index: Array[Array[u32]], index_len: u32,
     while lo < hi {
         let mid: u32 = lo + (hi - lo) / 2
 
-        if index[mid][0] < v {
+        if internal.blob.u32_at(index, mid * 2) < v {
             lo = mid + 1
         }
         else {
-            if index[mid][0] > v {
+            if internal.blob.u32_at(index, mid * 2) > v {
                 hi = mid
             }
             else {
-                return index[mid][1]
+                return internal.blob.u32_at(index, mid * 2 + 1)
             }
         }
     }
@@ -113,7 +114,8 @@ private func get_canon_decomp(cp: char, modify out: Array[char]) -> i32 {
         return hangul_decompose(cp, out)
     }
 
-    let off: u32? = sparse_lookup(generated.decomposition.canon_decomp_index,
+    let off: u32? = sparse_lookup(
+        generated.decomposition.canon_decomp_index_bytes,
         generated.decomposition.canon_decomp_index_len, cp)
 
     if off == nil {
@@ -121,11 +123,11 @@ private func get_canon_decomp(cp: char, modify out: Array[char]) -> i32 {
     }
 
     let at: u32 = off.get()
-    let len: u32 = generated.decomposition.canon_decomp_data[at]
+    let len: u32 = generated.decomposition.canon_decomp_data(at)
 
     var i: u32 = 0
     while i < len and i < cast[u32] generated.decomposition.max_decomp {
-        out[i] = cast[char] generated.decomposition.canon_decomp_data[at + 1 + i]
+        out[i] = cast[char] generated.decomposition.canon_decomp_data(at + 1 + i)
         i += 1
     }
 
@@ -139,7 +141,8 @@ private func get_compat_decomp(cp: char, modify out: Array[char]) -> i32 {
         return n
     }
 
-    let off: u32? = sparse_lookup(generated.decomposition.compat_decomp_index,
+    let off: u32? = sparse_lookup(
+        generated.decomposition.compat_decomp_index_bytes,
         generated.decomposition.compat_decomp_index_len, cp)
 
     if off == nil {
@@ -147,11 +150,11 @@ private func get_compat_decomp(cp: char, modify out: Array[char]) -> i32 {
     }
 
     let at: u32 = off.get()
-    let len: u32 = generated.decomposition.compat_decomp_data[at]
+    let len: u32 = generated.decomposition.compat_decomp_data(at)
 
     var i: u32 = 0
     while i < len and i < cast[u32] generated.decomposition.max_decomp {
-        out[i] = cast[char] generated.decomposition.compat_decomp_data[at + 1 + i]
+        out[i] = cast[char] generated.decomposition.compat_decomp_data(at + 1 + i)
         i += 1
     }
 
@@ -174,14 +177,14 @@ private func compose_pair(a: char, b: char) -> char {
         let ix: u32 = (slot + i) %
             cast[u32] generated.composition.comp_table_size
 
-        if generated.composition.comp_starter[ix] ==
+        if generated.composition.comp_starter(ix) ==
             cast[u32] generated.composition.comp_empty {
             return cast[char] 0
         }
 
-        if generated.composition.comp_starter[ix] == cast[u32] a and
-            generated.composition.comp_combining[ix] == cast[u32] b {
-            return cast[char] generated.composition.comp_result[ix]
+        if generated.composition.comp_starter(ix) == cast[u32] a and
+            generated.composition.comp_combining(ix) == cast[u32] b {
+            return cast[char] generated.composition.comp_result(ix)
         }
         i += 1
     }
@@ -414,7 +417,7 @@ private func nqc_lookup(cp: char) -> u8 {
     }
 
     return generated.normprops.nqc_stage2[
-        cast[u32] generated.normprops.nqc_stage1[v >> 8] * 256 + (v & 0xff)]
+        cast[u32] generated.normprops.nqc_stage1(v >> 8) * 256 + (v & 0xff)]
 }
 
 func is_nfc(s: string) -> bool {

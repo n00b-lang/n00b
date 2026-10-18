@@ -1,5 +1,6 @@
 import internal.types
 import internal.encoding
+import internal.blob
 import generated.categories
 import generated.combining
 import generated.scripts
@@ -13,9 +14,9 @@ import generated.script_extensions
 
 public const max_cp = 0x110000
 
-private inline func stage_ix(stage1: Array[u16], cp: char) -> u32 {
+private inline func stage_ix(stage1: Array[u8], cp: char) -> u32 {
     let v: u32 = cast[u32] cp
-    return cast[u32] stage1[v >> 8] * 256 + (v & 0xff)
+    return cast[u32] internal.blob.u16_at(stage1, v >> 8) * 256 + (v & 0xff)
 }
 
 func general_category(cp: char) -> internal.types.Gc {
@@ -24,7 +25,7 @@ func general_category(cp: char) -> internal.types.Gc {
     }
 
     return cast[internal.types.Gc] generated.categories.gc_stage2[
-        stage_ix(generated.categories.gc_stage1, cp)]
+        stage_ix(generated.categories.gc_stage1_bytes, cp)]
 }
 
 func combining_class(cp: char) -> u8 {
@@ -33,7 +34,7 @@ func combining_class(cp: char) -> u8 {
     }
 
     return generated.combining.ccc_stage2[
-        stage_ix(generated.combining.ccc_stage1, cp)]
+        stage_ix(generated.combining.ccc_stage1_bytes, cp)]
 }
 
 func script(cp: char) -> internal.types.Script {
@@ -42,7 +43,7 @@ func script(cp: char) -> internal.types.Script {
     }
 
     return cast[internal.types.Script] generated.scripts.script_stage2[
-        stage_ix(generated.scripts.script_stage1, cp)]
+        stage_ix(generated.scripts.script_stage1_bytes, cp)]
 }
 
 func script_name(s: internal.types.Script) -> string {
@@ -50,7 +51,7 @@ func script_name(s: internal.types.Script) -> string {
         return "Unknown"
     }
 
-    return generated.scripts.script_names[s]
+    return generated.scripts.script_names(cast[u32] s)
 }
 
 func block(cp: char) -> internal.types.Block {
@@ -61,15 +62,15 @@ func block(cp: char) -> internal.types.Block {
     while lo < hi {
         let mid: u32 = lo + (hi - lo) / 2
 
-        if v < generated.blocks.block_ranges[mid][0] {
+        if v < generated.blocks.block_ranges(mid, 0) {
             hi = mid
         }
         else {
-            if v > generated.blocks.block_ranges[mid][1] {
+            if v > generated.blocks.block_ranges(mid, 1) {
                 lo = mid + 1
             }
             else {
-                return cast[internal.types.Block] generated.blocks.block_ids[mid]
+                return cast[internal.types.Block] generated.blocks.block_ids(mid)
             }
         }
     }
@@ -82,7 +83,7 @@ func block_name(b: internal.types.Block) -> string {
         return "No_Block"
     }
 
-    return generated.blocks.block_names[b]
+    return generated.blocks.block_names(cast[u32] b)
 }
 
 func bidi_class(cp: char) -> internal.types.Bidi_Class {
@@ -91,7 +92,7 @@ func bidi_class(cp: char) -> internal.types.Bidi_Class {
     }
 
     return cast[internal.types.Bidi_Class] generated.bidi_class.bidi_stage2[
-        stage_ix(generated.bidi_class.bidi_stage1, cp)]
+        stage_ix(generated.bidi_class.bidi_stage1_bytes, cp)]
 }
 
 func east_asian_width(cp: char) -> internal.types.Eaw {
@@ -100,7 +101,7 @@ func east_asian_width(cp: char) -> internal.types.Eaw {
     }
 
     return cast[internal.types.Eaw] generated.eaw.eaw_stage2[
-        stage_ix(generated.eaw.eaw_stage1, cp)]
+        stage_ix(generated.eaw.eaw_stage1_bytes, cp)]
 }
 
 func joining_type(cp: char) -> internal.types.Joining_Type {
@@ -109,7 +110,7 @@ func joining_type(cp: char) -> internal.types.Joining_Type {
     }
 
     return cast[internal.types.Joining_Type] generated.joining.jt_stage2[
-        stage_ix(generated.joining.jt_stage1, cp)]
+        stage_ix(generated.joining.jt_stage1_bytes, cp)]
 }
 
 func has_property(cp: char, prop: internal.types.Property) -> bool {
@@ -117,8 +118,8 @@ func has_property(cp: char, prop: internal.types.Property) -> bool {
         return false
     }
 
-    let bits: u64 = generated.proplist.props_stage2[
-        stage_ix(generated.proplist.props_stage1, cp)]
+    let bits: u64 = generated.proplist.props_stage2(
+        stage_ix(generated.proplist.props_stage1_bytes, cp))
 
     return (bits >> cast[u64] prop) & 1 != 0
 }
@@ -129,7 +130,7 @@ func age(cp: char) -> internal.types.Age {
     }
 
     return cast[internal.types.Age] generated.age.age_stage2[
-        stage_ix(generated.age.age_stage1, cp)]
+        stage_ix(generated.age.age_stage1_bytes, cp)]
 }
 
 func age_name(a: internal.types.Age) -> string {
@@ -137,7 +138,7 @@ func age_name(a: internal.types.Age) -> string {
         return "Unassigned"
     }
 
-    return generated.age.age_names[a]
+    return generated.age.age_names(cast[u32] a)
 }
 
 func char_width(cp: char) -> i32 {
@@ -188,7 +189,7 @@ func display_width(s: string) -> i32 {
     return width
 }
 
-private func sparse_lookup(index: Array[Array[u32]], index_len: u32,
+private func sparse_lookup(index: Array[u8], index_len: u32,
                            cp: char) -> u32? {
     let v: u32 = cast[u32] cp
     var lo: u32 = 0
@@ -197,15 +198,15 @@ private func sparse_lookup(index: Array[Array[u32]], index_len: u32,
     while lo < hi {
         let mid: u32 = lo + (hi - lo) / 2
 
-        if index[mid][0] < v {
+        if internal.blob.u32_at(index, mid * 2) < v {
             lo = mid + 1
         }
         else {
-            if index[mid][0] > v {
+            if internal.blob.u32_at(index, mid * 2) > v {
                 hi = mid
             }
             else {
-                return index[mid][1]
+                return internal.blob.u32_at(index, mid * 2 + 1)
             }
         }
     }
@@ -219,7 +220,8 @@ func script_extensions(cp: char, modify scripts: Array[internal.types.Script],
         return 0
     }
 
-    let off: u32? = sparse_lookup(generated.script_extensions.script_ext_index,
+    let off: u32? = sparse_lookup(
+        generated.script_extensions.script_ext_index_bytes,
         generated.script_extensions.script_ext_index_len, cp)
 
     if off == nil {
@@ -228,7 +230,7 @@ func script_extensions(cp: char, modify scripts: Array[internal.types.Script],
     }
 
     let at: u32 = off.get()
-    let count: i32 = cast[i32] generated.script_extensions.script_ext_data[at]
+    let count: i32 = cast[i32] generated.script_extensions.script_ext_data(at)
     var n: i32 = max_scripts
     if count < max_scripts {
         n = count
@@ -236,8 +238,8 @@ func script_extensions(cp: char, modify scripts: Array[internal.types.Script],
 
     var i: i32 = 0
     while i < n {
-        let entry: u32 = generated.script_extensions.script_ext_data[
-            at + 1 + cast[u32] i]
+        let entry: u32 = generated.script_extensions.script_ext_data(
+            at + 1 + cast[u32] i)
         scripts[cast[uint] i] = cast[internal.types.Script] entry
         i += 1
     }

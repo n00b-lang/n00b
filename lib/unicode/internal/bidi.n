@@ -455,15 +455,15 @@ private func find_bracket(cp: char) -> u32? {
     while lo < hi {
         let mid: u32 = lo + (hi - lo) / 2
 
-        if generated.bidi_brackets.bidi_bracket_index[mid][0] < cast[u32] cp {
+        if generated.bidi_brackets.bidi_bracket_index(mid, 0) < cast[u32] cp {
             lo = mid + 1
         }
         else {
-            if generated.bidi_brackets.bidi_bracket_index[mid][0] > cast[u32] cp {
+            if generated.bidi_brackets.bidi_bracket_index(mid, 0) > cast[u32] cp {
                 hi = mid
             }
             else {
-                return generated.bidi_brackets.bidi_bracket_index[mid][1]
+                return generated.bidi_brackets.bidi_bracket_index(mid, 1)
             }
         }
     }
@@ -525,14 +525,14 @@ private func resolve_brackets(cps: Array[char], modify types: Array[u8],
 
         let base: u32 = off.get()
 
-        if generated.bidi_brackets.bidi_bracket_data[base] < 2 {
+        if generated.bidi_brackets.bidi_bracket_data(base) < 2 {
             k += 1
             continue
         }
 
-        let paired: char = cast[char] generated.bidi_brackets.bidi_bracket_data[
-            base + 1]
-        let btype: u32 = generated.bidi_brackets.bidi_bracket_data[base + 2]
+        let paired: char = cast[char] generated.bidi_brackets.bidi_bracket_data(
+            base + 1)
+        let btype: u32 = generated.bidi_brackets.bidi_bracket_data(base + 2)
 
         if btype == 1 {
             if top >= bidi_max_brackets - 1 {
