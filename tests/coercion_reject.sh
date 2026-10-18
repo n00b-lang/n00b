@@ -170,3 +170,19 @@ EOF2
 reject method_argument \
     'N00BB-T0036]: a string is immutable and does not convert to Buffer'
 grep -Fq 'method_argument.n:2:10' "$tmp/method_argument.out"
+
+cat >"$tmp/context_argument.n" <<'EOF2'
+context Label(s: string) {
+    enter() {
+    }
+    ensure() {
+    }
+}
+var b: Buffer = buffer_from_string("abc")
+with Label(b) {
+    b += "x"
+}
+EOF2
+reject context_argument \
+    'N00BB-T0002]: call type does not match its function (builtin.containers.buffer.Buffer vs string)'
+grep -Fq 'context_argument.n:8:12' "$tmp/context_argument.out"
