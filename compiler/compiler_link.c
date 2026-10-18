@@ -1139,65 +1139,112 @@ call_binds_candidate(parse_grammar_t *grammar, parse_sym_entry_t *candidate,
     return binds;
 }
 
+static bool
+overload_argument_fits(n00bb_tu_state_t *state, parse_tree_t *argument,
+                       th_type *parameter, bool *typed)
+{
+    th_type *type = argument && !core_tree_is_leaf(argument)
+        ? core_tree_node_value(argument).type : nullptr;
+    if (!type || !parameter || !th_is_closed(state->types, type)) {
+        *typed = false;
+        return true;
+    }
+    th_type *element = nullptr;
+    return th_unify_probe(state->types, type, parameter)
+        || n00bb_value_coerces(state->types, type, parameter)
+        || n00bb_dereferences_to(state->types, type, parameter)
+        || (n00bb_option_type_element(parameter, &element)
+            && (th_is_nil(type)
+                || th_unify_probe(state->types, type, element)))
+        || (core_tree_node_value(argument).integer_literal_origin
+            && is_integer_type(th_resolve(parameter)));
+}
+
+static bool
+overload_arguments_fit(parse_grammar_t *grammar, n00bb_tu_state_t *state,
+                       parse_sym_entry_t *candidate, th_type *signature,
+                       core_list_t(n00bb_tree_ptr_t) *positional,
+                       core_list_t(n00bb_tree_ptr_t) *keywords, bool *typed)
+{
+    bool fits = true;
+    for (size_t i = 0; fits && i < positional->len; i++) {
+        const th_param *parameter = th_func_param(signature, i);
+        fits = overload_argument_fits(state, positional->data[i],
+                                      parameter ? parameter->type : nullptr,
+                                      typed);
+    }
+    parse_sym_entry_t *declared = canonical_symbol(candidate);
+    parse_tree_t *formals = declared->decl_node
+        ? child_nt(grammar, child_nt(grammar, declared->decl_node,
+                                     "func-type-signature"), "param-decl")
+        : nullptr;
+    for (size_t k = 0; fits && k < keywords->len; k++) {
+        size_t index = 0;
+        const th_param *parameter = function_parameter_named(grammar,
+                declared, formals, call_keyword_name(keywords->data[k]),
+                &index)
+            ? th_func_param(signature, index) : nullptr;
+        fits = overload_argument_fits(state,
+            child_nt(grammar, keywords->data[k], "expression"),
+            parameter ? parameter->type : nullptr, typed);
+    }
+    return fits;
+}
+
 parse_sym_entry_t *
 n00bb_select_call_overload(parse_grammar_t *grammar, n00bb_tu_state_t *state,
                            parse_cf_label_t *call, parse_sym_entry_t *symbol,
                            bool *pending)
 {
     if (pending) *pending = false;
-    if (!symbol || symbol->kind != PARSE_SYM_FUNCTION || !call || !symbol->scope)
+    if (!symbol || symbol->kind != PARSE_SYM_FUNCTION || !call || !symbol->scope
+        || !state || !state->types)
         return symbol;
     parse_sym_entry_t *head = parse_symtab_lookup_in(symbol->scope,
                                                      symbol->name);
     if (head && head->scope == symbol->scope) symbol = head;
-    parse_tree_t *args = call->then_body
-        ? child_nt(grammar, call->then_body, "positional-args") : nullptr;
     core_list_t(n00bb_tree_ptr_t) arguments =
         core_list_new(n00bb_tree_ptr_t);
-    if (args) collect_positional_nodes(grammar, args, &arguments);
-    size_t positional = arguments.len;
-    parse_tree_t *receiver = positional ? arguments.data[0] : nullptr;
-    core_list_free(arguments);
     core_list_t(n00bb_tree_ptr_t) keywords = core_list_new(n00bb_tree_ptr_t);
-    if (call->then_body)
+    if (call->then_body) {
+        collect_positional_nodes(grammar,
+            child_nt(grammar, call->then_body, "positional-args"),
+            &arguments);
         collect_keyword_nodes(grammar,
             child_nt(grammar, call->then_body, "keyword-args"), &keywords);
-    th_type *receiver_type = receiver && !core_tree_is_leaf(receiver)
-        ? core_tree_node_value(receiver).type : nullptr;
-    bool typed_receiver = receiver_type && state && state->types
-        && th_is_closed(state->types, receiver_type);
-    parse_sym_entry_t *match = nullptr, *receiver_match = nullptr;
-    size_t matches = 0, receiver_matches = 0;
+    }
+    bool typed = true;
+    parse_sym_entry_t *match = nullptr, *fitting = nullptr;
+    size_t matches = 0, fits = 0;
     for (parse_sym_entry_t *candidate = symbol; candidate
          && candidate->scope == symbol->scope
          && core_string_eq(candidate->name, symbol->name);
          candidate = candidate->shadowed) {
         th_type *signature = candidate->callable_contract
             ? candidate->callable_contract : candidate->type;
+        signature = signature ? th_resolve(signature) : nullptr;
         if (candidate->kind != PARSE_SYM_FUNCTION || !signature
-            || th_kind_of(th_resolve(signature)) != TH_FUNCTION
-            || !call_binds_candidate(grammar, candidate,
-                                     th_resolve(signature), positional,
-                                     &keywords)) continue;
+            || th_kind_of(signature) != TH_FUNCTION
+            || !call_binds_candidate(grammar, candidate, signature,
+                                     arguments.len, &keywords)) continue;
         matches++;
         match = candidate;
-        const th_param *first = positional
-            ? th_func_param(th_resolve(signature), 0) : nullptr;
-        if (typed_receiver && first && first->type
-            && th_unify_probe(state->types, receiver_type, first->type)) {
-            receiver_matches++;
-            receiver_match = candidate;
+        if (overload_arguments_fit(grammar, state, candidate, signature,
+                                   &arguments, &keywords, &typed)) {
+            fits++;
+            fitting = candidate;
         }
     }
+    core_list_free(arguments);
     core_list_free(keywords);
     if (matches == 1) return match;
-    if (receiver_matches == 1) return receiver_match;
-    if (pending) *pending = matches > 1 && !typed_receiver;
+    if (fits == 1) return fitting;
+    if (pending) *pending = fits > 1 && !typed;
     return symbol;
 }
 
-static bool
-function_has_overloads(parse_sym_entry_t *symbol)
+bool
+n00bb_function_has_overloads(parse_sym_entry_t *symbol)
 {
     parse_sym_entry_t *head = symbol->scope
         ? parse_symtab_lookup_in(symbol->scope, symbol->name) : nullptr;
@@ -1208,6 +1255,21 @@ function_has_overloads(parse_sym_entry_t *symbol)
          candidate = candidate->shadowed)
         count += candidate->kind == PARSE_SYM_FUNCTION;
     return count > 1;
+}
+
+void
+n00bb_defer_overloaded_callee(parse_grammar_t *grammar,
+                              core_translation_unit_t *unit,
+                              parse_tree_t *node)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    parse_sym_entry_t *symbol = nt_is(grammar, node, "primary")
+        ? attached_symbol(grammar, unit, node) : nullptr;
+    if (state && state->types && symbol
+        && symbol->kind == PARSE_SYM_FUNCTION
+        && n00bb_function_has_overloads(symbol)
+        && module_member_is_call(grammar, node))
+        core_tree_node_value(node).type = th_var(state->types);
 }
 
 static parse_sym_entry_t *
@@ -1380,7 +1442,7 @@ resolve_module_member_site(parse_grammar_t *grammar,
             && symbol->type && state && state->types
             && !state->semantic_annotation_complete
             && th_is_closed(state->types, symbol->type)
-            && !function_has_overloads(symbol)) {
+            && !n00bb_function_has_overloads(symbol)) {
             th_type *instance = th_resolve(th_type_clone(state->types,
                                                          symbol->type));
             th_type *use = th_resolve(use_type);

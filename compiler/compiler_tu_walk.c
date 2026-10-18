@@ -256,6 +256,8 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 link_source_location(node));
     }
     else {
+        if (step == SEMANTIC_AFTER_EXIT)
+            n00bb_defer_overloaded_callee(grammar, unit, node);
         if (step == SEMANTIC_AFTER_REFERENCE_EXIT) {
         if (nt_is(grammar, node, "tuple-or-paren")
             && core_tree_num_children(node) == 3) {

@@ -250,8 +250,10 @@ rebind_call_node(n00bb_tu_state_t *state, parse_tree_t *node,
 {
     parse_node_resolution_t resolution = parse_tree_resolution(node);
     if (resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
-        && resolution.target.symbol == from)
+        && resolution.target.symbol == from) {
         parse_tree_set_resolution_symbol(node, to);
+        if (parse_sym_remove_use(from, node)) (void)parse_sym_add_use(to, node);
+    }
     if (core_tree_node_value(node).sym == from)
         core_tree_node_value(node).sym = to;
     n00bb_link_use_site_t *site = link_use_site_for_node(state, node);
