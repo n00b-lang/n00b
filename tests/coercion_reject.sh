@@ -133,3 +133,40 @@ let l: List[Buffer] = ["x"]
 EOF2
 reject list_literal \
     'a string is immutable and does not convert to Buffer; use buffer_from_string(s)'
+grep -Fq 'list_literal.n:1:24' "$tmp/list_literal.out"
+
+cat >"$tmp/array_literal.n" <<'EOF2'
+let a: Array[Buffer] = [buffer_from_string("a"), "x"]
+EOF2
+reject array_literal \
+    'N00BB-T0036]: a string is immutable and does not convert to Buffer'
+grep -Fq 'array_literal.n:1:50' "$tmp/array_literal.out"
+
+cat >"$tmp/array_index_store.n" <<'EOF2'
+var a: Array[Buffer] = [buffer_from_string("a")]
+a[0] = "x"
+EOF2
+reject array_index_store \
+    'N00BB-T0036]: a string is immutable and does not convert to Buffer'
+grep -Fq 'array_index_store.n:2:8' "$tmp/array_index_store.out"
+
+cat >"$tmp/constructor.n" <<'EOF2'
+record Holder {
+    n: int
+}
+func __init(modify self: Holder, b: Buffer) {
+    self.n = 1
+}
+let h: Holder = new[Holder]("x")
+EOF2
+reject constructor \
+    'N00BB-T0036]: a string is immutable and does not convert to Buffer'
+grep -Fq 'constructor.n:7:29' "$tmp/constructor.out"
+
+cat >"$tmp/method_argument.n" <<'EOF2'
+var l: List[Buffer] = new[List[Buffer]]()
+l.append("x")
+EOF2
+reject method_argument \
+    'N00BB-T0036]: a string is immutable and does not convert to Buffer'
+grep -Fq 'method_argument.n:2:10' "$tmp/method_argument.out"

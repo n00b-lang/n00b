@@ -10265,7 +10265,12 @@ n00bb_materialize(ir_lower_context_t *context, parse_tree_t *node,
             view, nullptr, 0, true) ? view : nullptr;
     }
     if (n00bb_string_where_buffer_expected(types, target, value->type)) {
-        lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
+        n00bb_lower_context_t *lower = context->user;
+        parse_tree_t *site = node && lower
+            ? n00bb_string_where_buffer_site(lower->grammar, types, node,
+                                             target) : nullptr;
+        lower_error(context, IR_DIAG_TYPE_MISMATCH,
+                    site ? lower_span_for_tree(context, site) : span,
                     n00bb_string_to_buffer_text);
         return nullptr;
     }

@@ -52,7 +52,7 @@ dispatch_string_where_buffer_expected(parse_grammar_t *grammar,
     core_list_t(n00bb_tree_ptr_t) arguments = core_list_new(n00bb_tree_ptr_t);
     dispatch_argument_nodes(grammar, site, &arguments);
     parse_tree_t *offending = nullptr;
-    if (arguments.len + 1 == th_func_nparams(signature))
+    if (arguments.len < th_func_nparams(signature))
         for (size_t i = 0; !offending && i < arguments.len; i++) {
             parse_tree_t *argument = arguments.data[i];
             if (!core_tree_is_leaf(argument)
@@ -63,6 +63,23 @@ dispatch_string_where_buffer_expected(parse_grammar_t *grammar,
         }
     core_list_free(arguments);
     return offending;
+}
+
+static bool
+detail_spans_unit(const th_error_t *detail, core_translation_unit_t *unit)
+{
+    return detail->span.file && detail->span.start_line
+        && core_string_eq(core_source_file_path(&unit->source),
+                          core_string_from_cstr(detail->span.file));
+}
+
+static bool
+site_dispatches_method(const n00bb_link_use_site_t *site,
+                       const char *method_name)
+{
+    core_string_t name = site->dispatch_method.data ? site->dispatch_method
+        : site->receiver_node ? site->member_name : (core_string_t){0};
+    return core_string_eq(name, core_string_from_cstr(method_name));
 }
 
 th_env *
@@ -248,15 +265,19 @@ build_import_environment(parse_grammar_t *grammar,
             th_type *failure_receiver = nullptr;
             parse_tree_t *open_site = nullptr;
             core_translation_unit_t *open_unit = nullptr;
+            for (size_t pass = 0; pass < 2; pass++)
             for (size_t u = 0; has_detail && detail.constraint && detail.got
                  && !failure_site && u < units->len; u++) {
                 n00bb_tu_state_t *owner = tu_state(units->data[u]);
+                if (!pass && !detail_spans_unit(&detail, units->data[u]))
+                    continue;
                 for (size_t s = 0; owner && s < owner->link_use_sites.len;
                      s++) {
                     n00bb_link_use_site_t *site =
                         &owner->link_use_sites.data[s];
-                    if (!core_string_eq(site->dispatch_method,
-                            core_string_from_cstr(detail.constraint)))
+                    if (!site_dispatches_method(site, detail.constraint)
+                        || (!pass && link_source_location(site->node).line
+                                != detail.span.start_line))
                         continue;
                     parse_tree_t *receiver = site->receiver_node;
                     if (!receiver && site->dispatch_trait.data

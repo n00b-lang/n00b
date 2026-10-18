@@ -799,6 +799,10 @@ static constexpr char n00bb_buffer_type_name[] =
 bool n00bb_value_coerces(th_ctx *types, th_type *from, th_type *to);
 bool n00bb_string_where_buffer_expected(th_ctx *types, th_type *expected,
                                         th_type *actual);
+parse_tree_t *n00bb_string_where_buffer_site(parse_grammar_t *grammar,
+                                             th_ctx *types,
+                                             parse_tree_t *node,
+                                             th_type *expected);
 void n00bb_register_value_coercions(th_ctx *types);
 th_type *n00bb_value_coercion_target(th_ctx *types, th_type *from);
 bool n00bb_blanket_receiver(th_type *contract);

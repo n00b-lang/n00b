@@ -26,12 +26,12 @@ typedef struct {
 } literal_item_group_t;
 
 static bool unify_literal_items(th_ctx *types, literal_item_group_t *group,
-                                th_type **conflict);
+                                size_t *conflict);
 static void report_literal_item_conflict(core_translation_unit_t *unit,
                                          n00bb_tu_state_t *state,
                                          parse_tree_t *node,
                                          literal_item_group_t *group,
-                                         th_type *conflict);
+                                         size_t conflict);
 
 bool
 n00bb_assignment_target(parse_grammar_t *grammar, parse_tree_t *node,
@@ -1820,8 +1820,9 @@ infer_sequence_modifier_type(parse_grammar_t *grammar,
     literal_item_group_t group = {
         .slot = context_element ? context_element : th_var(state->types),
         .items = element_types,
+        .nodes = expressions,
     };
-    th_type *conflict = nullptr;
+    size_t conflict = SIZE_MAX;
     if (collected && !unify_literal_items(state->types, &group, &conflict)) {
         report_literal_item_conflict(unit, state, node, &group, conflict);
         collected = false;
@@ -1938,7 +1939,7 @@ specialize_literal_handler(n00bb_tu_state_t *state, th_type *signature,
 
 static bool
 unify_literal_items(th_ctx *types, literal_item_group_t *group,
-                    th_type **conflict)
+                    size_t *conflict)
 {
     th_type *declared = th_resolve(group->slot);
     if (th_builtin_kind(types, declared) == TH_BUILTIN_ANY) return true;
@@ -1950,7 +1951,7 @@ unify_literal_items(th_ctx *types, literal_item_group_t *group,
                 arm = th_unify_probe(types, th_sum_arm(declared, a),
                                      group->items.data[i]) != nullptr;
             if (!arm) {
-                *conflict = group->items.data[i];
+                *conflict = i;
                 return false;
             }
         }
@@ -1964,7 +1965,7 @@ unify_literal_items(th_ctx *types, literal_item_group_t *group,
         payload = th_var(types);
         if (!th_unify_in_place(types, group->slot,
                                th_option(types, payload))) {
-            *conflict = group->slot;
+            *conflict = SIZE_MAX;
             return false;
         }
     }
@@ -1975,7 +1976,7 @@ unify_literal_items(th_ctx *types, literal_item_group_t *group,
             ? payload : group->slot;
         if (n00bb_value_coerces(types, item, target)) continue;
         if (!th_unify_in_place(types, target, item)) {
-            *conflict = item;
+            *conflict = i;
             return false;
         }
     }
@@ -1985,12 +1986,23 @@ unify_literal_items(th_ctx *types, literal_item_group_t *group,
 static void
 report_literal_item_conflict(core_translation_unit_t *unit,
                              n00bb_tu_state_t *state, parse_tree_t *node,
-                             literal_item_group_t *group, th_type *conflict)
+                             literal_item_group_t *group, size_t conflict)
 {
+    th_type *item = conflict < group->items.len
+        ? group->items.data[conflict] : group->slot;
+    parse_tree_t *item_node = conflict < group->nodes.len
+        ? group->nodes.data[conflict] : node;
+    if (n00bb_string_where_buffer_expected(state->types, group->slot, item)) {
+        core_diagnostics_report_at(core_translation_unit_diagnostics(unit),
+            unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0036"),
+            CORE_STRING_STATIC(n00bb_string_to_buffer_text),
+            link_source_location(item_node));
+        return;
+    }
     core_buffer_t message = {0};
     core_buffer_printf(&message,
         "literal items must share one type, but %s does not match %s",
-        n00bb_print_type(state->types, conflict),
+        n00bb_print_type(state->types, item),
         n00bb_print_type(state->types, group->slot));
     core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit,
         CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0034"),
@@ -2154,7 +2166,7 @@ infer_user_literal_type(parse_grammar_t *grammar,
         else if (ok) groups[0].slot = second->type;
     }
     else if (ok && aggregate) groups[0].slot = element;
-    th_type *conflict = nullptr;
+    size_t conflict = SIZE_MAX;
     for (size_t g = 0; g < group_count; g++) {
         th_type *slot = ok ? th_resolve(groups[g].slot) : nullptr;
         for (size_t i = 0; slot && is_integer_type(slot)
@@ -8290,6 +8302,51 @@ n00bb_string_where_buffer_expected(th_ctx *types, th_type *expected,
     }
 }
 
+static th_type *
+literal_entry_expected_type(th_type *expected, bool dictionary, size_t index)
+{
+    expected = th_resolve(expected);
+    if (th_kind_of(expected) == TH_SEQUENCE) return th_seq_elem(expected);
+    const th_arg *argument = th_kind_of(expected) == TH_NAMED
+        ? th_named_arg(expected, dictionary ? index & 1u : 0) : nullptr;
+    return argument && argument->kind == TH_ARG_TYPE ? argument->type
+                                                     : nullptr;
+}
+
+parse_tree_t *
+n00bb_string_where_buffer_site(parse_grammar_t *grammar, th_ctx *types,
+                               parse_tree_t *node, th_type *expected)
+{
+    parse_tree_t *literal = node;
+    while (literal && !core_tree_is_leaf(literal)
+           && !nt_is(grammar, literal, "list-lit")
+           && !nt_is(grammar, literal, "dict-or-set-lit")
+           && core_tree_num_children(literal) == 1)
+        literal = core_tree_child(literal, 0);
+    parse_tree_t *entries = nt_is(grammar, literal, "list-lit")
+        ? child_nt(grammar, literal, "list-elems")
+        : nt_is(grammar, literal, "dict-or-set-lit")
+        ? child_nt(grammar, literal, "set-entries") : nullptr;
+    parse_tree_t *dictionary = nt_is(grammar, literal, "dict-or-set-lit")
+        ? child_nt(grammar, literal, "dict-entries") : nullptr;
+    if (dictionary) entries = dictionary;
+    core_list_t(parse_tree_ptr_t) items = core_list_new(parse_tree_ptr_t);
+    parse_tree_t *site = node;
+    if (entries && collect_ordered_children(entries, &items))
+        for (size_t i = 0; site == node && i < items.len; i++) {
+            th_type *want = literal_entry_expected_type(expected,
+                                                        dictionary, i);
+            parse_tree_t *item = items.data[i];
+            if (want && !core_tree_is_leaf(item)
+                && n00bb_string_where_buffer_expected(types, want,
+                       core_tree_node_value(item).type))
+                site = n00bb_string_where_buffer_site(grammar, types, item,
+                                                      want);
+        }
+    core_list_free(items);
+    return site;
+}
+
 static bool
 n00bb_coercion_hook(th_ctx *types, th_type *from, th_type *to, void *user)
 {
@@ -8358,7 +8415,10 @@ n00bb_type_materialize(parse_grammar_t *grammar, n00bb_tu_state_t *state,
             core_translation_unit_diagnostics(state->unit), state->unit,
             CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0036"),
             CORE_STRING_STATIC(n00bb_string_to_buffer_text),
-            link_source_location(node));
+            link_source_location(grammar
+                ? n00bb_string_where_buffer_site(grammar, types, node,
+                                                 expected)
+                : node));
         return nullptr;
     }
     if (integer_value_promotes(grammar, state, node, actual, expected)
