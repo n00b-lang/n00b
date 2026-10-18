@@ -1,0 +1,11 @@
+const resharp = [-
+use <resharp.writ>
+
+binding {
+    load dynamic
+}
+-]'ffi
+
+package resharp {
+    export resharp
+}

@@ -877,6 +877,14 @@ test(
     suite: 'slow',
 )
 
+test(
+    'ffi-load-dynamic', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'ffi_load_dynamic.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'ffi_load_dynamic',
+           writ.get_variable(pkgconfig: 'contractdir')],
+)
+
 if cargo.found() and not get_option('rust-transports').disabled()
     test(
         'ffi-resharp', find_program('sh'),
