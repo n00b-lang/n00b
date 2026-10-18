@@ -27,12 +27,14 @@ typedef struct {
 } literal_item_group_t;
 
 static bool unify_literal_items(th_ctx *types, literal_item_group_t *group,
-                                th_type **conflict);
+                                size_t *conflict);
 static void report_literal_item_conflict(core_translation_unit_t *unit,
                                          n00bb_tu_state_t *state,
                                          parse_tree_t *node,
                                          literal_item_group_t *group,
-                                         th_type *conflict);
+                                         size_t conflict);
+static bool n00bb_contextual_method_argument(parse_grammar_t *grammar,
+                                             parse_tree_t *expression);
 
 bool
 n00bb_assignment_target(parse_grammar_t *grammar, parse_tree_t *node,
@@ -1821,8 +1823,9 @@ infer_sequence_modifier_type(parse_grammar_t *grammar,
     literal_item_group_t group = {
         .slot = context_element ? context_element : th_var(state->types),
         .items = element_types,
+        .nodes = expressions,
     };
-    th_type *conflict = nullptr;
+    size_t conflict = SIZE_MAX;
     if (collected && !unify_literal_items(state->types, &group, &conflict)) {
         report_literal_item_conflict(unit, state, node, &group, conflict);
         collected = false;
@@ -1939,7 +1942,7 @@ specialize_literal_handler(n00bb_tu_state_t *state, th_type *signature,
 
 static bool
 unify_literal_items(th_ctx *types, literal_item_group_t *group,
-                    th_type **conflict)
+                    size_t *conflict)
 {
     th_type *declared = th_resolve(group->slot);
     if (th_builtin_kind(types, declared) == TH_BUILTIN_ANY) return true;
@@ -1949,9 +1952,9 @@ unify_literal_items(th_ctx *types, literal_item_group_t *group,
             bool arm = false;
             for (size_t a = 0; !arm && a < th_sum_len(declared); a++)
                 arm = th_unify_probe(types, th_sum_arm(declared, a),
-                                     group->items.data[i]) != nullptr;
+                                     group->items.data[i]);
             if (!arm) {
-                *conflict = group->items.data[i];
+                *conflict = i;
                 return false;
             }
         }
@@ -1965,7 +1968,7 @@ unify_literal_items(th_ctx *types, literal_item_group_t *group,
         payload = th_var(types);
         if (!th_unify_in_place(types, group->slot,
                                th_option(types, payload))) {
-            *conflict = group->slot;
+            *conflict = SIZE_MAX;
             return false;
         }
     }
@@ -1976,7 +1979,7 @@ unify_literal_items(th_ctx *types, literal_item_group_t *group,
             ? payload : group->slot;
         if (n00bb_value_coerces(types, item, target)) continue;
         if (!th_unify_in_place(types, target, item)) {
-            *conflict = item;
+            *conflict = i;
             return false;
         }
     }
@@ -1986,12 +1989,23 @@ unify_literal_items(th_ctx *types, literal_item_group_t *group,
 static void
 report_literal_item_conflict(core_translation_unit_t *unit,
                              n00bb_tu_state_t *state, parse_tree_t *node,
-                             literal_item_group_t *group, th_type *conflict)
+                             literal_item_group_t *group, size_t conflict)
 {
+    th_type *item = conflict < group->items.len
+        ? group->items.data[conflict] : group->slot;
+    parse_tree_t *item_node = conflict < group->nodes.len
+        ? group->nodes.data[conflict] : node;
+    if (n00bb_string_where_buffer_expected(state->types, group->slot, item)) {
+        core_diagnostics_report_at(core_translation_unit_diagnostics(unit),
+            unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0036"),
+            CORE_STRING_STATIC(n00bb_string_to_buffer_text),
+            link_source_location(item_node));
+        return;
+    }
     core_buffer_t message = {0};
     core_buffer_printf(&message,
         "literal items must share one type, but %s does not match %s",
-        n00bb_print_type(state->types, conflict),
+        n00bb_print_type(state->types, item),
         n00bb_print_type(state->types, group->slot));
     core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit,
         CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0034"),
@@ -2156,7 +2170,7 @@ infer_user_literal_type(parse_grammar_t *grammar,
         else if (ok) groups[0].slot = second->type;
     }
     else if (ok && aggregate) groups[0].slot = element;
-    th_type *conflict = nullptr;
+    size_t conflict = SIZE_MAX;
     for (size_t g = 0; g < group_count; g++) {
         th_type *slot = ok ? th_resolve(groups[g].slot) : nullptr;
         for (size_t i = 0; slot && is_integer_type(slot)
@@ -2653,10 +2667,25 @@ infer_anonymous_record(parse_grammar_t *grammar, parse_tree_t *node,
     if (!fields || !state || !state->types) return true;
     n00bb_ordered_nodes_t *cached = n00bb_node_ordered_nodes(fields);
     if (!cached) return false;
+    parse_tree_t *argument = node;
+    for (parse_tree_t *parent = core_tree_node_value(node).parent;
+         parent && !nt_is(grammar, argument, "expression")
+         && core_tree_num_children(parent) == 1;
+         parent = core_tree_node_value(parent).parent)
+        argument = parent;
+    bool open_fields = nt_is(grammar, argument, "expression")
+        && n00bb_contextual_method_argument(grammar, argument);
     core_list_t(th_member) members = core_list_new(th_member);
     for (size_t i = 0; i < cached->count; i++) {
         parse_tree_t *field = cached->nodes[i];
         if (!core_tree_num_children(field)) continue;
+        parse_tree_t *value = core_tree_child(field,
+            core_tree_num_children(field) - 1);
+        th_type *open = open_fields && core_tree_num_children(field) == 3
+            ? th_var(state->types) : nullptr;
+        if (open && n00bb_literal_adopts_open_type(grammar, state, value,
+                                                   open))
+            core_tree_node_value(field).type = open;
         parse_tree_t *name_node = core_tree_child(field, 0);
         parse_token_info_t *name_token = parse_node_token(name_node);
         if (!name_token || !core_string_eq(
@@ -3299,8 +3328,12 @@ function_parameter_info(parse_grammar_t *grammar, parse_sym_entry_t *symbol,
         return true;
     }
     uint8_t archived_mode = 0;
-    if (!function_interface_parameter(symbol, index, name, name_size,
-                                      flags, &archived_mode)) return false;
+    bool archived = context_symbol(grammar, symbol)
+        ? context_interface_parameter(symbol, index, name, name_size, flags,
+                                      &archived_mode)
+        : function_interface_parameter(symbol, index, name, name_size,
+                                       flags, &archived_mode);
+    if (!archived) return false;
     if (formal_out) *formal_out = nullptr;
     if (mode) *mode = (th_mode)archived_mode;
     return true;
@@ -3361,10 +3394,43 @@ function_parameter_named(parse_grammar_t *grammar, parse_sym_entry_t *symbol,
         }
         return false;
     }
+    if (n00bb_builtin_reference_function(symbol)) {
+        bool write = core_string_eq(symbol->name,
+                                    CORE_STRING_STATIC("ref_write"));
+        if ((write || core_string_eq(symbol->name,
+                CORE_STRING_STATIC("ref_read")))
+            && core_string_eq(name, CORE_STRING_STATIC("reference"))) {
+            if (index) *index = 0;
+            return true;
+        }
+        if (write && core_string_eq(name, CORE_STRING_STATIC("value"))) {
+            if (index) *index = 1;
+            return true;
+        }
+        return false;
+    }
     parse_sym_entry_t *formal = formal_symbol_named(grammar, formals, name,
                                                     index);
     if (formal) return true;
+    if (context_symbol(grammar, symbol))
+        return context_interface_parameter_named(symbol, name, index);
     return function_interface_parameter_named(symbol, name, index);
+}
+
+parse_tree_t *
+callable_formal_parameters(parse_grammar_t *grammar,
+                           parse_sym_entry_t *symbol)
+{
+    parse_tree_t *declaration = symbol ? symbol->decl_node : nullptr;
+    if (!declaration) return nullptr;
+    if (nt_is(grammar, declaration, "context-def"))
+        return child_nt(grammar, declaration, "param-decl");
+    parse_tree_t *signature = child_nt(grammar, declaration,
+                                       "func-type-signature");
+    if (signature) return child_nt(grammar, signature, "param-decl");
+    signature = child_nt(grammar, declaration, "trait-func-type-signature");
+    return signature ? child_nt(grammar, signature, "trait-param-decl")
+                     : nullptr;
 }
 
 th_type *
@@ -3650,6 +3716,24 @@ n00bb_constrain_literal_fit(parse_grammar_t *grammar,
 }
 
 bool
+n00bb_literal_adopts_open_type(parse_grammar_t *grammar,
+                               n00bb_tu_state_t *state, parse_tree_t *node,
+                               th_type *type)
+{
+    parse_tree_t *origin = node && !core_tree_is_leaf(node)
+        ? core_tree_node_value(node).integer_literal_origin : nullptr;
+    if (!origin || n00bb_unsigned_literal_origin(origin)
+        || !n00bb_constrain_literal_fit(grammar, state, origin, node, type,
+                                        false)) return false;
+    for (parse_tree_t *current = origin; current;
+         current = core_tree_node_value(current).parent) {
+        core_tree_node_value(current).type = type;
+        if (current == node) break;
+    }
+    return true;
+}
+
+bool
 n00bb_constrain_integer_fit(n00bb_tu_state_t *state, th_type *type,
                             th_type *source, bool range_known,
                             int64_t minimum, int64_t maximum)
@@ -3692,6 +3776,75 @@ n00bb_constrain_integer_fit(n00bb_tu_state_t *state, th_type *type,
 }
 
 static bool
+folded_compound_origin(parse_tree_t *node)
+{
+    return node && !core_tree_is_leaf(node)
+        && core_tree_node_value(node).integer_literal_origin == node
+        && core_tree_num_children(node) == 3
+        && !core_tree_is_leaf(core_tree_child(node, 1))
+        && core_tree_node_value(core_tree_child(node, 0))
+            .integer_literal_origin
+        && core_tree_node_value(core_tree_child(node, 2))
+            .integer_literal_origin;
+}
+
+static bool
+folded_operator_is_bitwise(parse_tree_t *node)
+{
+    core_string_t op = first_token_text(core_tree_child(node, 1));
+    return core_string_eq(op, CORE_STRING_STATIC("&"))
+        || core_string_eq(op, CORE_STRING_STATIC("|"))
+        || core_string_eq(op, CORE_STRING_STATIC("^"))
+        || core_string_eq(op, CORE_STRING_STATIC("<<"))
+        || core_string_eq(op, CORE_STRING_STATIC(">>"));
+}
+
+bool
+n00bb_unsigned_literal_origin(parse_tree_t *origin)
+{
+    n00bb_node_facts_t *facts = n00bb_node_facts(origin);
+    return facts && facts->unsigned_literal;
+}
+
+static bool
+mark_unsigned_literal(parse_grammar_t *grammar, n00bb_tu_state_t *state,
+                      parse_tree_t *node, bool unsigned_literal)
+{
+    if (!unsigned_literal) return true;
+    n00bb_node_facts_t *facts = n00bb_ensure_node_facts(state, node);
+    if (!facts) return false;
+    facts->unsigned_literal = true;
+    th_type *type = core_tree_node_value(node).type;
+    return !type || th_kind_of(th_resolve(type)) != TH_VAR
+        || n00bb_constrain_literal_fit(grammar, state, node, node, type,
+                                       true);
+}
+
+static void
+type_folded_operands(n00bb_tu_state_t *state, parse_tree_t *node,
+                     th_type *target)
+{
+    if (!folded_compound_origin(node)) return;
+    core_string_t op = first_token_text(core_tree_child(node, 1));
+    bool shift = core_string_eq(op, CORE_STRING_STATIC("<<"))
+        || core_string_eq(op, CORE_STRING_STATIC(">>"));
+    for (size_t side = 0; side < 2; side++) {
+        parse_tree_t *operand = core_tree_child(node, side ? 2 : 0);
+        parse_tree_t *origin = core_tree_node_value(operand)
+            .integer_literal_origin;
+        th_type *type = shift && side
+            ? n00bb_shift_count_type(state->types, target) : target;
+        if (!origin || !type) continue;
+        for (parse_tree_t *at = origin; at;
+             at = core_tree_node_value(at).parent) {
+            core_tree_node_value(at).type = type;
+            if (at == operand) break;
+        }
+        type_folded_operands(state, origin, type);
+    }
+}
+
+static bool
 unify_literal_operand(parse_grammar_t *grammar, n00bb_tu_state_t *state,
                       parse_tree_t *node, core_string_t trait,
                       core_string_t method)
@@ -3721,13 +3874,15 @@ unify_literal_operand(parse_grammar_t *grammar, n00bb_tu_state_t *state,
         th_type *literal_type = shift ? th_var(state->types)
                                       : th_resolve(other_type);
         if (!literal_type || !n00bb_constrain_literal_fit(grammar, state,
-                origin, operand, literal_type, unsigned_only))
+                origin, operand, literal_type,
+                unsigned_only || n00bb_unsigned_literal_origin(origin)))
             return false;
         for (parse_tree_t *at = origin; at;
              at = core_tree_node_value(at).parent) {
             core_tree_node_value(at).type = literal_type;
             if (at == operand) break;
         }
+        type_folded_operands(state, origin, literal_type);
         if (comparison || assignment || (shift && side == 1)) continue;
         th_type *result = core_tree_node_value(node).type;
         th_type *unified = result
@@ -3739,10 +3894,8 @@ unify_literal_operand(parse_grammar_t *grammar, n00bb_tu_state_t *state,
     return true;
 }
 
-bool
-n00bb_untyped_integer_const(parse_grammar_t *grammar,
-                            parse_sym_entry_t *symbol,
-                            int64_t *minimum, int64_t *maximum)
+static parse_tree_t *
+untyped_const_initializer(parse_grammar_t *grammar, parse_sym_entry_t *symbol)
 {
     parse_tree_t *declaration = symbol && symbol->kind == PARSE_SYM_VARIABLE
         ? symbol->decl_node : nullptr;
@@ -3758,13 +3911,22 @@ n00bb_untyped_integer_const(parse_grammar_t *grammar,
         ? child_nt(grammar, declaration, "expression") : nullptr;
     return initializer
         && core_tree_node_value(initializer).integer_literal_origin
+        ? initializer : nullptr;
+}
+
+bool
+n00bb_untyped_integer_const(parse_grammar_t *grammar,
+                            parse_sym_entry_t *symbol,
+                            int64_t *minimum, int64_t *maximum)
+{
+    parse_tree_t *initializer = untyped_const_initializer(grammar, symbol);
+    return initializer
         && parse_tree_integer_range(initializer, minimum, maximum)
         && *minimum == *maximum;
 }
 
-bool
-n00bb_integer_constant_reference(parse_grammar_t *grammar, parse_tree_t *node,
-                                 int64_t *value)
+static parse_sym_entry_t *
+integer_constant_symbol(parse_grammar_t *grammar, parse_tree_t *node)
 {
     parse_node_resolution_t resolution = node && !core_tree_is_leaf(node)
         ? parse_tree_resolution(node) : (parse_node_resolution_t){0};
@@ -3772,8 +3934,112 @@ n00bb_integer_constant_reference(parse_grammar_t *grammar, parse_tree_t *node,
             || (nt_is(grammar, node, "postfix-expr")
                 && dotted_symbol_path_node(grammar, node)))
         && resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
-        && n00bb_untyped_integer_const(grammar, resolution.target.symbol,
-                                       value, value);
+        ? resolution.target.symbol : nullptr;
+}
+
+bool
+n00bb_integer_constant_reference(parse_grammar_t *grammar, parse_tree_t *node,
+                                 int64_t *value)
+{
+    parse_sym_entry_t *symbol = integer_constant_symbol(grammar, node);
+    return symbol && n00bb_untyped_integer_const(grammar, symbol, value,
+                                                 value);
+}
+
+static bool
+unsigned_integer_constant(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    parse_tree_t *initializer = untyped_const_initializer(grammar,
+        integer_constant_symbol(grammar, node));
+    return initializer && n00bb_unsigned_literal_origin(
+        core_tree_node_value(initializer).integer_literal_origin);
+}
+
+static bool
+folded_integer_operand(parse_tree_t *operand, int64_t *value)
+{
+    int64_t minimum = 0, maximum = 0;
+    if (!operand || core_tree_is_leaf(operand)
+        || !core_tree_node_value(operand).integer_literal_origin
+        || !parse_tree_integer_range(operand, &minimum, &maximum)
+        || minimum != maximum) return false;
+    *value = minimum;
+    return true;
+}
+
+static bool
+fold_integer_operation(core_string_t op, int64_t left, int64_t right,
+                       int64_t *value)
+{
+    if (core_string_eq(op, CORE_STRING_STATIC("+")))
+        return !__builtin_add_overflow(left, right, value);
+    if (core_string_eq(op, CORE_STRING_STATIC("-")))
+        return !__builtin_sub_overflow(left, right, value);
+    if (core_string_eq(op, CORE_STRING_STATIC("*")))
+        return !__builtin_mul_overflow(left, right, value);
+    if (core_string_eq(op, CORE_STRING_STATIC("/"))
+        || core_string_eq(op, CORE_STRING_STATIC("%"))) {
+        if (!right || (left == INT64_MIN && right == -1)) return false;
+        *value = core_string_eq(op, CORE_STRING_STATIC("/"))
+            ? left / right : left % right;
+        return true;
+    }
+    if (left < 0 || right < 0) return false;
+    if (core_string_eq(op, CORE_STRING_STATIC("<<"))) {
+        if (right >= 63 || left > (INT64_MAX >> right)) return false;
+        *value = left << right;
+        return true;
+    }
+    if (core_string_eq(op, CORE_STRING_STATIC(">>"))) {
+        *value = right >= 63 ? 0 : left >> right;
+        return true;
+    }
+    if (core_string_eq(op, CORE_STRING_STATIC("&"))) *value = left & right;
+    else if (core_string_eq(op, CORE_STRING_STATIC("|")))
+        *value = left | right;
+    else if (core_string_eq(op, CORE_STRING_STATIC("^")))
+        *value = left ^ right;
+    else return false;
+    return true;
+}
+
+static bool
+folded_integer_expression_node(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    static const char *const kinds[] = {
+        "add-expr", "mul-expr", "shift-expr", "bitand-expr", "bitxor-expr",
+        "bitor-expr",
+    };
+    if (!node || core_tree_is_leaf(node) || core_tree_num_children(node) != 3)
+        return false;
+    for (size_t i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++)
+        if (nt_is(grammar, node, kinds[i])) return true;
+    return false;
+}
+
+static bool
+fold_integer_literal_expression(parse_grammar_t *grammar, parse_tree_t *node,
+                                int64_t *value)
+{
+    int64_t left = 0, right = 0;
+    return folded_integer_expression_node(grammar, node)
+        && folded_integer_operand(core_tree_child(node, 0), &left)
+        && folded_integer_operand(core_tree_child(node, 2), &right)
+        && fold_integer_operation(first_token_text(core_tree_child(node, 1)),
+                                  left, right, value);
+}
+
+bool
+n00bb_folded_integer_expression(parse_grammar_t *grammar, parse_tree_t *node,
+                                int64_t *value)
+{
+    int64_t minimum = 0, maximum = 0;
+    if (!folded_integer_expression_node(grammar, node)
+        || core_tree_node_value(node).integer_literal_origin != node
+        || !parse_tree_integer_range(node, &minimum, &maximum)
+        || minimum != maximum) return false;
+    *value = minimum;
+    return true;
 }
 
 bool
@@ -3802,7 +4068,31 @@ n00bb_cache_contextual_integer(parse_grammar_t *grammar,
     int64_t constant = 0;
     if (n00bb_integer_constant_reference(grammar, node, &constant)) {
         parsed->integer_literal_origin = node;
-        return parse_tree_set_integer_range(node, constant, constant);
+        return parse_tree_set_integer_range(node, constant, constant)
+            && mark_unsigned_literal(grammar, state, node,
+                                     unsigned_integer_constant(grammar, node));
+    }
+    if (fold_integer_literal_expression(grammar, node, &constant)) {
+        parsed->integer_literal_origin = node;
+        if (!parse_tree_set_integer_range(node, constant, constant))
+            return false;
+        bool shift = nt_is(grammar, node, "shift-expr");
+        bool unsigned_literal = folded_operator_is_bitwise(node)
+            || n00bb_unsigned_literal_origin(core_tree_node_value(
+                core_tree_child(node, 0)).integer_literal_origin)
+            || (!shift && n00bb_unsigned_literal_origin(core_tree_node_value(
+                core_tree_child(node, 2)).integer_literal_origin));
+        th_type *operand = core_tree_node_value(core_tree_child(node, 0)).type;
+        operand = operand ? th_resolve(operand) : nullptr;
+        int64_t count = 0;
+        bool count_outside = shift
+            && folded_integer_operand(core_tree_child(node, 2), &count)
+            && (uint64_t)count >= n00bb_shift_receiver_width(operand);
+        if (operand && is_integer_type(operand) && !count_outside
+            && !n00bb_integer_interval_fits_type(operand, constant, constant))
+            type_folded_operands(state, node, th_name(state->types,
+                unsigned_literal ? "uint" : "int"));
+        return mark_unsigned_literal(grammar, state, node, unsigned_literal);
     }
     if (core_tree_num_children(node) == 3
         && binary_operator_dispatch_for_node(grammar, node, &trait, &method)
@@ -3864,6 +4154,19 @@ n00bb_cache_contextual_integer(parse_grammar_t *grammar,
     return true;
 }
 
+static parse_tree_t *
+value_construct_of_result(parse_grammar_t *grammar, parse_tree_t *value_stmt)
+{
+    for (parse_tree_t *at = core_tree_node_value(value_stmt).parent; at;
+         at = core_tree_node_value(at).parent) {
+        if (nt_is(grammar, at, "if-value-expr")
+            || nt_is(grammar, at, "try-value-expr")
+            || nt_is(grammar, at, "typecase-value-expr")) return at;
+        if (nt_is(grammar, at, "body-stmt")) return nullptr;
+    }
+    return nullptr;
+}
+
 th_type *
 n00bb_integer_literal_context(parse_grammar_t *grammar,
                               n00bb_tu_state_t *state, parse_tree_t *literal)
@@ -3874,6 +4177,11 @@ n00bb_integer_literal_context(parse_grammar_t *grammar,
     for (parse_tree_t *parent = core_tree_node_value(child).parent;
          parent;
          child = parent, parent = core_tree_node_value(parent).parent) {
+        if (nt_is(grammar, parent, "value-stmt")) {
+            parent = value_construct_of_result(grammar, parent);
+            if (!parent) break;
+            continue;
+        }
         if (nt_is(grammar, parent, "sym-decl")) {
             parse_tree_t *spec = child_nt(grammar, parent, "type-spec");
             th_type *expected = spec ? core_tree_node_value(spec).type : nullptr;
@@ -4319,6 +4627,24 @@ index_dispatch_for_node(parse_grammar_t *grammar, parse_tree_t *node,
         return true;
     }
     return true;
+}
+
+parse_tree_t *
+n00bb_index_stored_value(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    bool through_receiver = false;
+    parse_tree_t *statement = index_assignment_statement(grammar, node,
+                                                         &through_receiver);
+    if (through_receiver || !nt_is(grammar, statement, "assign-stmt")
+        || core_tree_num_children(statement) < 3
+        || !core_string_eq(first_token_text(core_tree_child(statement, 1)),
+                           CORE_STRING_STATIC("="))) return nullptr;
+    const parse_rule_t *rule = parse_tree_rule(grammar, statement);
+    parse_annotation_t *assign = rule
+        ? parse_rule_find_annot(grammar, rule, PARSE_ANNOT_ASSIGNS) : nullptr;
+    return assign && parse_child_ref_is_set(assign->value_ref)
+        ? parse_tree_resolve_child_ref(grammar, statement, assign->value_ref)
+        : nullptr;
 }
 
 bool
@@ -7737,6 +8063,62 @@ n00bb_atomic_member_lvalue_root(parse_grammar_t *grammar,
     return symbol && n00bb_atomic_element_type(symbol->type) ? symbol : nullptr;
 }
 
+bool
+n00bb_reference_target(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    for (parse_tree_t *at = node; at;
+         at = core_tree_node_value(at).parent) {
+        if (!nt_is(grammar, at, "unary-expr")) continue;
+        const parse_rule_t *rule = parse_tree_rule(grammar, at);
+        parse_annotation_t *operator = rule
+            ? parse_rule_find_annot(grammar, rule, PARSE_ANNOT_OPERATOR)
+            : nullptr;
+        if (!operator || !core_string_eq(operator->op_kind,
+                CORE_STRING_STATIC("ref"))) continue;
+        for (size_t i = 0; i < core_tree_num_children(at); i++) {
+            parse_tree_t *operand = core_tree_child(at, i);
+            if (!node_is_within(node, operand)) continue;
+            for (parse_tree_t *path = node; path && path != operand;
+                 path = core_tree_node_value(path).parent) {
+                parse_tree_t *parent = core_tree_node_value(path).parent;
+                core_string_t trait = {0}, method = {0};
+                if (parent && index_dispatch_for_node(grammar, parent,
+                                                       &trait, &method)) {
+                    parse_tree_t *receiver = core_tree_num_children(parent)
+                        ? core_tree_child(parent, 0) : nullptr;
+                    if (!node_is_within(node, receiver)) return false;
+                }
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+parse_sym_entry_t *
+n00bb_atomic_load_symbol(parse_grammar_t *grammar,
+                         core_translation_unit_t *unit, parse_tree_t *node)
+{
+    parse_sym_entry_t *symbol = nt_is(grammar, node, "primary")
+        ? attached_symbol(grammar, unit, node) : nullptr;
+    return symbol && (symbol->kind == PARSE_SYM_VARIABLE
+                      || symbol->kind == PARSE_SYM_PARAM)
+        && n00bb_atomic_element_type(symbol->type)
+        && !n00bb_reference_target(grammar, node)
+        && !n00bb_assignment_target(grammar, node, nullptr)
+        ? symbol : nullptr;
+}
+
+void
+n00bb_apply_atomic_load(parse_grammar_t *grammar,
+                        core_translation_unit_t *unit, parse_tree_t *node)
+{
+    parse_sym_entry_t *symbol = n00bb_atomic_load_symbol(grammar, unit, node);
+    if (symbol)
+        core_tree_node_value(node).type =
+            n00bb_atomic_element_type(symbol->type);
+}
+
 parse_sym_entry_t *
 n00bb_member_chain_root(parse_grammar_t *grammar,
                         core_translation_unit_t *unit, parse_tree_t *node)
@@ -8093,11 +8475,14 @@ n00bb_contextual_integer_literal(n00bb_tu_state_t *state,
         ? core_tree_node_value(node).integer_literal_origin : nullptr;
     if (!origin) return n00bb_contextual_float_literal(node, target);
     if (!literal_fits_type(state, origin, node, target)) return false;
+    if (n00bb_unsigned_literal_origin(origin) && !n00bb_bitwise_type(target))
+        return false;
     for (parse_tree_t *current = origin; current;
          current = core_tree_node_value(current).parent) {
         core_tree_node_value(current).type = target;
         if (current == node) break;
     }
+    type_folded_operands(state, origin, target);
     return true;
 }
 
@@ -8107,6 +8492,8 @@ integer_value_promotes(parse_grammar_t *grammar, n00bb_tu_state_t *state,
 {
     int64_t minimum = 0, maximum = 0;
     return node && is_integer_type(actual) && is_integer_type(expected)
+        && (n00bb_bitwise_type(expected) || !n00bb_unsigned_literal_origin(
+            core_tree_node_value(node).integer_literal_origin))
         && (n00bb_integer_type_promotes_to(actual, expected)
             || n00bb_practical_unsigned_to_signed(grammar, state, node,
                                                   actual, expected)
@@ -8156,12 +8543,16 @@ literal_union_shape(th_ctx *types, uint64_t record_hash, th_type *literal,
 }
 
 static th_type *
-record_literal_as_named(n00bb_tu_state_t *state, parse_tree_t *node,
-                        th_type *actual, th_type *expected)
+record_literal_as_named(parse_grammar_t *grammar, n00bb_tu_state_t *state,
+                        parse_tree_t *node, th_type *actual,
+                        th_type *expected)
 {
     if (!node || core_tree_is_leaf(node)
         || th_kind_of(th_resolve(actual)) != TH_RECORD
         || th_kind_of(th_resolve(expected)) != TH_NAMED) return nullptr;
+    if (grammar && state->unit)
+        return contextualize_record_literal(grammar, state->unit, state, node,
+                                            expected) ? expected : nullptr;
     th_type *definition = th_type_definition(state->types, expected);
     if (!definition || th_kind_of(th_resolve(definition)) != TH_RECORD)
         return nullptr;
@@ -8261,6 +8652,120 @@ n00bb_value_coerces(th_ctx *types, th_type *from, th_type *to)
 }
 
 static bool
+named_arguments_want_buffer(th_ctx *types, th_type *expected, th_type *actual)
+{
+    const char *expected_name = nullptr, *actual_name = nullptr;
+    size_t expected_length = 0, actual_length = 0;
+    size_t expected_args = 0, actual_args = 0;
+    if (!th_named_info(expected, &expected_name, &expected_length, nullptr,
+                       &expected_args)
+        || !th_named_info(actual, &actual_name, &actual_length, nullptr,
+                          &actual_args)
+        || expected_length != actual_length || expected_args != actual_args
+        || memcmp(expected_name, actual_name, expected_length)) return false;
+    for (size_t i = 0; i < expected_args; i++) {
+        const th_arg *want = th_named_arg(expected, i);
+        const th_arg *have = th_named_arg(actual, i);
+        if (want && have && want->kind == TH_ARG_TYPE
+            && have->kind == TH_ARG_TYPE
+            && n00bb_string_where_buffer_expected(types, want->type,
+                                                  have->type)) return true;
+    }
+    return false;
+}
+
+static bool
+record_fields_want_buffer(th_ctx *types, th_type *expected, th_type *actual)
+{
+    for (size_t i = 0; i < th_record_len(expected); i++) {
+        const th_member *member = th_record_member(expected, i);
+        th_type *field = member
+            ? th_record_lookup(actual, member->name) : nullptr;
+        if (field && n00bb_string_where_buffer_expected(types, member->type,
+                                                        field)) return true;
+    }
+    return false;
+}
+
+bool
+n00bb_string_where_buffer_expected(th_ctx *types, th_type *expected,
+                                   th_type *actual)
+{
+    if (!types || !expected || !actual) return false;
+    if (n00bb_value_coerces(types, expected, actual)) return true;
+    expected = th_resolve(expected);
+    actual = th_resolve(actual);
+    th_type *expected_item = nullptr, *actual_item = nullptr;
+    if (n00bb_option_type_element(expected, &expected_item))
+        return n00bb_string_where_buffer_expected(types, expected_item,
+            n00bb_option_type_element(actual, &actual_item)
+                ? actual_item : actual);
+    th_kind kind = th_kind_of(expected);
+    if (kind == TH_NAMED && th_kind_of(actual) != TH_NAMED) {
+        th_type *definition = th_type_definition(types, expected);
+        return definition && definition != expected
+            && n00bb_string_where_buffer_expected(types, definition, actual);
+    }
+    if (kind != th_kind_of(actual)) return false;
+    switch (kind) {
+    case TH_SEQUENCE:
+        return n00bb_string_where_buffer_expected(types, th_seq_elem(expected),
+                                                  th_seq_elem(actual));
+    case TH_NAMED:
+        return named_arguments_want_buffer(types, expected, actual);
+    case TH_RECORD:
+        return record_fields_want_buffer(types, expected, actual);
+    default:
+        return false;
+    }
+}
+
+static th_type *
+literal_entry_expected_type(th_type *expected, bool dictionary, size_t index)
+{
+    expected = th_resolve(expected);
+    if (th_kind_of(expected) == TH_SEQUENCE) return th_seq_elem(expected);
+    const th_arg *argument = th_kind_of(expected) == TH_NAMED
+        ? th_named_arg(expected, dictionary ? index & 1u : 0) : nullptr;
+    return argument && argument->kind == TH_ARG_TYPE ? argument->type
+                                                     : nullptr;
+}
+
+parse_tree_t *
+n00bb_string_where_buffer_site(parse_grammar_t *grammar, th_ctx *types,
+                               parse_tree_t *node, th_type *expected)
+{
+    parse_tree_t *literal = node;
+    while (literal && !core_tree_is_leaf(literal)
+           && !nt_is(grammar, literal, "list-lit")
+           && !nt_is(grammar, literal, "dict-or-set-lit")
+           && core_tree_num_children(literal) == 1)
+        literal = core_tree_child(literal, 0);
+    parse_tree_t *entries = nt_is(grammar, literal, "list-lit")
+        ? child_nt(grammar, literal, "list-elems")
+        : nt_is(grammar, literal, "dict-or-set-lit")
+        ? child_nt(grammar, literal, "set-entries") : nullptr;
+    parse_tree_t *dictionary = nt_is(grammar, literal, "dict-or-set-lit")
+        ? child_nt(grammar, literal, "dict-entries") : nullptr;
+    if (dictionary) entries = dictionary;
+    core_list_t(parse_tree_ptr_t) items = core_list_new(parse_tree_ptr_t);
+    parse_tree_t *site = node;
+    if (entries && collect_ordered_children(entries, &items))
+        for (size_t i = 0; site == node && i < items.len; i++) {
+            th_type *want = literal_entry_expected_type(expected,
+                                                        dictionary, i);
+            parse_tree_t *item = items.data[i];
+            if (want && !core_tree_is_leaf(item)
+                && n00bb_string_where_buffer_expected(types, want,
+                       core_tree_node_value(item).type))
+                site = n00bb_string_where_buffer_site(grammar, types, item,
+                                                      want);
+        }
+    core_list_free(items);
+    return site;
+}
+
+static bool
 n00bb_coercion_hook(th_ctx *types, th_type *from, th_type *to, void *user)
 {
     (void)user;
@@ -8300,6 +8805,61 @@ n00bb_register_value_coercions(th_ctx *types)
     th_register_coercion_target(types, n00bb_coercion_target_hook);
 }
 
+static void
+collect_value_results(parse_grammar_t *grammar, parse_tree_t *construct,
+                      parse_tree_t *at,
+                      core_list_t(parse_tree_ptr_t) *results)
+{
+    if (!at || core_tree_is_leaf(at)) return;
+    if (nt_is(grammar, at, "value-stmt")) {
+        parse_tree_t *expression = child_nt(grammar, at, "expression");
+        if (expression
+            && value_construct_of_result(grammar, at) == construct)
+            core_list_push(*results, expression);
+        return;
+    }
+    for (size_t i = 0; i < core_tree_num_children(at); i++)
+        collect_value_results(grammar, construct, core_tree_child(at, i),
+                              results);
+}
+
+static bool
+contextual_value_results(parse_grammar_t *grammar, n00bb_tu_state_t *state,
+                         parse_tree_t *node, th_type *target)
+{
+    parse_tree_t *construct = node;
+    while (grammar && construct && !core_tree_is_leaf(construct)
+           && !nt_is(grammar, construct, "if-value-expr")
+           && !nt_is(grammar, construct, "try-value-expr")
+           && !nt_is(grammar, construct, "typecase-value-expr")
+           && core_tree_num_children(construct) == 1)
+        construct = core_tree_child(construct, 0);
+    if (!grammar || !construct || core_tree_is_leaf(construct)
+        || core_tree_num_children(construct) == 1
+        || !is_integer_type(target)) return false;
+    core_list_t(parse_tree_ptr_t) results = core_list_new(parse_tree_ptr_t);
+    collect_value_results(grammar, construct, construct, &results);
+    bool contextual = results.len > 0;
+    for (size_t i = 0; contextual && i < results.len; i++) {
+        th_type *result = core_tree_node_value(results.data[i]).type;
+        contextual = (result && th_is_closed(state->types, result)
+                      && th_hash(state->types, result)
+                          == th_hash(state->types, target))
+            || n00bb_contextual_integer_literal(state, results.data[i],
+                                                target)
+            || contextual_value_results(grammar, state, results.data[i],
+                                        target);
+    }
+    core_list_free(results);
+    if (!contextual) return false;
+    for (parse_tree_t *at = construct; at;
+         at = core_tree_node_value(at).parent) {
+        core_tree_node_value(at).type = target;
+        if (at == node) break;
+    }
+    return true;
+}
+
 th_type *
 n00bb_type_materialize(parse_grammar_t *grammar, n00bb_tu_state_t *state,
                        parse_tree_t *node, th_type *actual, th_type *expected,
@@ -8318,17 +8878,21 @@ n00bb_type_materialize(parse_grammar_t *grammar, n00bb_tu_state_t *state,
         *converted = materialized != nullptr;
         return materialized ? expected : nullptr;
     }
-    if (n00bb_contextual_integer_literal(state, node, expected))
+    if (n00bb_contextual_integer_literal(state, node, expected)
+        || contextual_value_results(grammar, state, node, expected))
         return expected;
     *converted = true;
     if (n00bb_value_coerces(types, actual, expected)) return expected;
-    if (n00bb_value_coerces(types, expected, actual)) {
+    if (n00bb_string_where_buffer_expected(types, expected, actual)) {
         *converted = false;
         core_diagnostics_report_at(
             core_translation_unit_diagnostics(state->unit), state->unit,
             CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0036"),
             CORE_STRING_STATIC(n00bb_string_to_buffer_text),
-            link_source_location(node));
+            link_source_location(grammar
+                ? n00bb_string_where_buffer_site(grammar, types, node,
+                                                 expected)
+                : node));
         return nullptr;
     }
     if (integer_value_promotes(grammar, state, node, actual, expected)
@@ -8342,7 +8906,8 @@ n00bb_type_materialize(parse_grammar_t *grammar, n00bb_tu_state_t *state,
     if (materialized && !th_unify_probe(types, actual, expected))
         return materialized;
     *converted = false;
-    materialized = record_literal_as_named(state, node, actual, expected);
+    materialized = record_literal_as_named(grammar, state, node, actual,
+                                           expected);
     if (materialized) return materialized;
     materialized = sequence_literal_as_array(grammar, state, node, expected);
     if (materialized) return materialized;
@@ -9492,13 +10057,14 @@ inferred_binding_scope(parse_scope_t *scope)
     return scope;
 }
 
-void
-initial_symbol_node(parse_visit_t *visit, bool entering, void *context)
+static void
+apply_declaration_defaults(parse_visit_t *visit)
 {
-    if (entering) return;
-    parse_annot_result_t *annotations = context;
-    if (!visit->pn) return;
     parse_sym_entry_t *declared = visit->pn->sym;
+    if (declared && declared->decl_node == visit->node
+        && declared->kind == PARSE_SYM_TYPEDEF)
+        parse_sym_set_phases(declared, PARSE_SYM_PHASE_BOTH,
+            PARSE_SYM_PHASE_NONE, PARSE_SYM_PHASE_NONE);
     if (declared && declared->decl_node == visit->node) {
         if (!declared->visibility.u8_bytes
             && (nt_is(visit->grammar, visit->node, "func-def")
@@ -9521,6 +10087,23 @@ initial_symbol_node(parse_visit_t *visit, bool entering, void *context)
                 if (member->is_field && !member->visibility.u8_bytes)
                     member->visibility = CORE_STRING_STATIC("public");
     }
+}
+
+void
+declared_symbol_node(parse_visit_t *visit, bool entering, void *context)
+{
+    (void)context;
+    if (!entering && visit->pn) apply_declaration_defaults(visit);
+}
+
+void
+initial_symbol_node(parse_visit_t *visit, bool entering, void *context)
+{
+    if (entering) return;
+    parse_annot_result_t *annotations = context;
+    if (!visit->pn) return;
+    parse_sym_entry_t *declared = visit->pn->sym;
+    apply_declaration_defaults(visit);
     if (nt_is(visit->grammar, visit->node, "sym-decl")
         && declared && declared->decl_node == visit->node
         && declared->shadowed
@@ -9533,10 +10116,6 @@ initial_symbol_node(parse_visit_t *visit, bool entering, void *context)
             link_source_location(visit->node));
         return;
     }
-    if (visit->pn->sym && visit->pn->sym->kind == PARSE_SYM_TYPEDEF
-        && visit->pn->sym->decl_node == visit->node)
-        parse_sym_set_phases(visit->pn->sym, PARSE_SYM_PHASE_BOTH,
-            PARSE_SYM_PHASE_NONE, PARSE_SYM_PHASE_NONE);
 
     if (nt_is(visit->grammar, visit->node, "sym-decl")) {
         parse_tree_t *declaration = core_tree_node_value(visit->node).parent;
@@ -9787,6 +10366,7 @@ free_tu_state(void *data)
     core_dict_free(&state->import_alias_index);
     core_list_free(state->literal_site_nodes);
     core_dict_free(&state->flagset_values);
+    core_dict_free(&state->declarations_typed_ahead);
     n00bb_range_state_release(state);
     core_dict_free(&state->integer_range_variables);
     core_csp_store_free(state->integer_range_store);
@@ -9818,6 +10398,7 @@ n00bb_tu_state_new(core_translation_unit_t *unit, n00bb_lex_result_t *lex,
     core_dict_init_string(&state->import_alias_index);
     state->literal_site_nodes = core_list_new(parse_tree_ptr_t);
     core_dict_init(&state->flagset_values, nullptr, nullptr);
+    core_dict_init(&state->declarations_typed_ahead, nullptr, nullptr);
     core_dict_init(&state->integer_symbol_ranges, nullptr, nullptr);
     core_dict_init(&state->integer_range_invalidated_symbols, nullptr, nullptr);
     state->lex = lex;

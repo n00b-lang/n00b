@@ -1,0 +1,22 @@
+inline func u16_at(data: Array[u8], i: u32) -> u16 {
+    let b: u32 = i * 2
+    return cast[u16] data[b] | (cast[u16] data[b + 1] << 8)
+}
+
+inline func u32_at(data: Array[u8], i: u32) -> u32 {
+    let b: u32 = i * 4
+    return cast[u32] data[b] | (cast[u32] data[b + 1] << 8) |
+        (cast[u32] data[b + 2] << 16) | (cast[u32] data[b + 3] << 24)
+}
+
+inline func u64_at(data: Array[u8], i: u32) -> u64 {
+    return cast[u64] u32_at(data, i * 2) |
+        (cast[u64] u32_at(data, i * 2 + 1) << 32)
+}
+
+func str_at(data: Ref[Array[u8]], i: u32) -> string {
+    let start: u32 = u32_at(data, i)
+    let end: u32 = u32_at(data, i + 1)
+    return from_raw(data, cast[int] (end - start), at = cast[uint] start,
+                    copy = false, encoding = Str_Encoding.utf8)
+}

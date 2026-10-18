@@ -1,0 +1,543 @@
+import sys.env
+import unicode
+import gen_conformance
+
+private func name_is(got: string, want: string) -> bool {
+    if byte_len(got) != byte_len(want) {
+        return false
+    }
+
+    for i from 0 until byte_len(got) {
+        if byte_at(got, i) != byte_at(want, i) {
+            return false
+        }
+    }
+
+    return true
+}
+
+private func blob_u32(b: Array[u8], off: u32) -> u32 {
+    return cast[u32] b[off] | (cast[u32] b[off + 1] << 8) |
+        (cast[u32] b[off + 2] << 16) |
+        (cast[u32] b[off + 3] << 24)
+}
+
+private func run_break_suite(blob: Array[u8], kind: unicode.Break_Type)
+    -> u32 {
+    let cases: u32 = blob_u32(blob, 0)
+    var off: u32 = 4
+    var failed: u32 = 0
+
+    for c from 0 until cases {
+        let n: u32 = blob_u32(blob, off)
+
+        off += 4
+
+        var cps: List[char] = []
+
+        var byte_of: Array[u32][256] = new[Array[u32][256]]()
+        var total: u32 = 0
+
+        for i from 0 until n {
+            let cp: char = cast[char] blob_u32(blob, off + i * 4)
+
+            cps.append(cp)
+
+            if i < 256 {
+                byte_of[i] = total
+            }
+
+            let v: u32 = cast[u32] cp
+            if v < 0x80 {
+                total += 1
+            }
+            elif v < 0x800 {
+                total += 2
+            }
+            elif v < 0x10000 {
+                total += 3
+            }
+            else {
+                total += 4
+            }
+        }
+
+        let bounds_off: u32 = off + n * 4
+
+        off = bounds_off + n + 1
+
+        if n > 255 {
+            failed += 1
+
+            continue
+        }
+
+        var s: string = ""
+        try {
+            s = unicode.utf32_to_string(cps)!
+        } else e {
+            failed += 1
+
+            continue
+        }
+
+        var it: unicode.Break_Iter = (text = s, kind = kind, byte_pos = 0,
+            ri_count = 0, after_zwj = false, ep_before_zwj = false,
+            incb_consonant_base = false, incb_linker_seen = false,
+            prev_wb = unicode.Wb.other, prev_prev_wb = unicode.Wb.other,
+            prev_prev_sb = unicode.Sb.other, sb_term_phase = 0,
+            sb_is_aterm = false)
+        var ok: bool = true
+        var bi: u32 = 1
+
+        var nxt: u32? = unicode.next(it)
+
+        while nxt != nil {
+            let got: u32 = nxt.get()
+
+            while bi <= n and blob[bounds_off + bi] == 0 {
+                bi += 1
+            }
+
+            var want: u32 = total
+            if bi < n {
+                want = byte_of[bi]
+            }
+
+            if got != want {
+                ok = false
+            }
+
+            bi += 1
+            nxt = unicode.next(it)
+        }
+
+        while bi <= n and blob[bounds_off + bi] == 0 {
+            bi += 1
+        }
+
+        if bi <= n {
+            ok = false
+        }
+
+        if !ok {
+            failed += 1
+        }
+    }
+
+    return failed
+}
+
+private func run_line_suite(blob: Array[u8]) -> u32 {
+    let cases: u32 = blob_u32(blob, 0)
+    var off: u32 = 4
+    var failed: u32 = 0
+
+    for c from 0 until cases {
+        let n: u32 = blob_u32(blob, off)
+
+        off += 4
+
+        var cps: List[char] = []
+
+        for i from 0 until n {
+            cps.append(cast[char] blob_u32(blob, off + i * 4))
+        }
+
+        let bounds_off: u32 = off + n * 4
+
+        off = bounds_off + n + 1
+
+        var s: string = ""
+        try {
+            s = unicode.utf32_to_string(cps)!
+        } else e {
+            failed += 1
+
+            continue
+        }
+
+        let acts: List[u8] = unicode.linebreaks(s)
+
+        if cast[u32] acts.len() != n {
+            failed += 1
+
+            continue
+        }
+
+        var ok: bool = true
+
+        for i from 1 until n {
+            let a: u8 = acts[cast[int] i]
+            let got_break: bool = a != cast[u8] unicode.Lb_Action.none
+
+            if got_break != (blob[bounds_off + i] != 0) {
+                ok = false
+            }
+        }
+
+        if !ok {
+            failed += 1
+        }
+    }
+
+    return failed
+}
+
+private func same_cps(got: string, want: List[char]) -> bool {
+    var g: List[char] = []
+    try {
+        g = unicode.utf32_from_string(got)!
+    } else e {
+        return false
+    }
+
+    if g.len() != want.len() {
+        return false
+    }
+
+    for i from 0 until g.len() {
+        if g[cast[int] i] != want[cast[int] i] {
+            return false
+        }
+    }
+
+    return true
+}
+
+private func run_norm_suite(blob: Array[u8]) -> u32 {
+    let cases: u32 = blob_u32(blob, 0)
+    var off: u32 = 4
+    var failed: u32 = 0
+
+    for c from 0 until cases {
+        var cols: Array[List[char]][5] = new[Array[List[char]][5]]()
+        var strs: Array[string][5] = new[Array[string][5]]()
+        var ok: bool = true
+
+        for k from 0 until 5 {
+            let n: u32 = blob_u32(blob, off)
+
+            off += 4
+
+            var col: List[char] = []
+
+            for i from 0 until n {
+                col.append(cast[char] blob_u32(blob, off + i * 4))
+            }
+
+            cols[k] = col
+
+            off += n * 4
+
+            try {
+                strs[k] = unicode.utf32_to_string(cols[k])!
+            } else e {
+                ok = false
+            }
+        }
+
+        if !ok {
+            failed += 1
+
+            continue
+        }
+
+        for k from 0 until 3 {
+            let for_nfc: string = strs[k]
+            let for_nfd: string = strs[k]
+
+            if !same_cps(unicode.nfc(for_nfc), cols[1]) {
+                ok = false
+            }
+
+            if !same_cps(unicode.nfd(for_nfd), cols[2]) {
+                ok = false
+            }
+        }
+
+        for k from 0 until 5 {
+            let for_nfkc: string = strs[k]
+            let for_nfkd: string = strs[k]
+
+            if !same_cps(unicode.nfkc(for_nfkc), cols[3]) {
+                ok = false
+            }
+
+            if !same_cps(unicode.nfkd(for_nfkd), cols[4]) {
+                ok = false
+            }
+        }
+
+        if !ok {
+            failed += 1
+        }
+    }
+
+    return failed
+}
+
+private func run_bidi_suite(blob: Array[u8]) -> u32 {
+    let cases: u32 = blob_u32(blob, 0)
+    var off: u32 = 4
+    var failed: u32 = 0
+
+    for c from 0 until cases {
+        let n: u32 = blob_u32(blob, off)
+
+        off += 4
+
+        var cps: List[char] = []
+
+        for i from 0 until n {
+            cps.append(cast[char] blob_u32(blob, off + i * 4))
+        }
+
+        off += n * 4
+
+        let direction: u8 = blob[off]
+        let want_para: u8 = blob[off + 1]
+        let lv_off: u32 = off + 2
+
+        off = lv_off + n
+
+        var s: string = ""
+        try {
+            s = unicode.utf32_to_string(cps)!
+        } else e {
+            failed += 1
+
+            continue
+        }
+
+        var para: u8? = nil
+        if direction == 0 {
+            para = 0
+        }
+        elif direction == 1 {
+            para = 1
+        }
+
+        let p: unicode.Bidi = unicode.bidi_open(s, para_level = para)
+
+        var ok: bool = unicode.paragraph_level(p) == want_para
+
+        let levels: List[u8] = unicode.levels(p)
+
+        if cast[u32] levels.len() != n {
+            ok = false
+        }
+        else {
+            for i from 0 until n {
+                if blob[lv_off + i] == 255 {
+                    continue
+                }
+
+                if levels[cast[int] i] != blob[lv_off + i] {
+                    ok = false
+                }
+            }
+        }
+
+        if !ok {
+            failed += 1
+        }
+    }
+
+    return failed
+}
+
+private func run_collation_suite(blob: Array[u8]) -> u32 {
+    let cases: u32 = blob_u32(blob, 0)
+    var off: u32 = 4
+    var failed: u32 = 0
+    var first: bool = true
+
+    var prev_key: List[u8] = []
+
+    for c from 0 until cases {
+        let n: u32 = blob_u32(blob, off)
+
+        off += 4
+
+        var cps: List[char] = []
+
+        for i from 0 until n {
+            cps.append(cast[char] blob_u32(blob, off + i * 4))
+        }
+
+        off += n * 4
+
+        var s: string = ""
+        try {
+            s = unicode.utf32_to_string(cps)!
+        } else e {
+            failed += 1
+
+            continue
+        }
+
+        let key: List[u8] = unicode.sort_key(s)
+
+        if !first and unicode.sort_key_compare(prev_key, key) > 0 {
+            failed += 1
+        }
+
+        prev_key = key
+        first = false
+    }
+
+    return failed
+}
+
+private func run_idna_suite(blob: Array[u8]) -> u32 {
+    let cases: u32 = blob_u32(blob, 0)
+    var off: u32 = 4
+    var failed: u32 = 0
+
+    for c from 0 until cases {
+        let hdr: u32 = blob_u32(blob, off)
+        let want_fail: bool = (hdr & 0x80000000) != 0
+        let ns: u32 = hdr & 0x7fffffff
+
+        off += 4
+
+        var src: List[char] = []
+
+        for i from 0 until ns {
+            src.append(cast[char] blob_u32(blob, off + i * 4))
+        }
+
+        off += ns * 4
+
+        let nd: u32 = blob_u32(blob, off)
+
+        off += 4
+
+        var dst: List[char] = []
+
+        for i from 0 until nd {
+            dst.append(cast[char] blob_u32(blob, off + i * 4))
+        }
+
+        off += nd * 4
+
+        var source: string = ""
+        try {
+            source = unicode.utf32_to_string(src)!
+        } else e {
+            failed += 1
+
+            continue
+        }
+
+        var got_ok: bool = true
+        var got: string = ""
+        try {
+            got = unicode.idna_to_ascii(source)!
+        } else e {
+            got_ok = false
+        }
+
+        if want_fail {
+            if got_ok {
+                failed += 1
+            }
+
+            continue
+        }
+
+        var dsr_ok: bool = true
+        var want: string = ""
+        try {
+            want = unicode.utf32_to_string(dst)!
+        } else e {
+            dsr_ok = false
+        }
+
+        if !dsr_ok or !got_ok or !name_is(got, want) {
+            failed += 1
+        }
+    }
+
+    return failed
+}
+
+private func suite_is(arg: string, name: string) -> bool {
+    let n: uint = byte_len(name)
+
+    for i from 0 until n {
+        if i >= byte_len(arg) or byte_at(arg, i) != byte_at(name, i) {
+            return false
+        }
+    }
+
+    return byte_len(arg) == n
+}
+
+func main(args: List[string]) -> i32 {
+    if args.len() < 2 {
+        __fd_write(2, "usage: conformance <suite>\n")
+
+        return 2
+    }
+
+    let which: string = args[1]
+    var failed: u32 = 0
+    var label: string = ""
+
+    if suite_is(which, "grapheme") {
+        label = "GraphemeBreakTest"
+        failed = run_break_suite(gen_conformance.conf_grapheme,
+                                 unicode.Break_Type.grapheme)
+    }
+    elif suite_is(which, "word") {
+        label = "WordBreakTest"
+        failed = run_break_suite(gen_conformance.conf_word,
+                                 unicode.Break_Type.word)
+    }
+    elif suite_is(which, "sentence") {
+        label = "SentenceBreakTest"
+        failed = run_break_suite(gen_conformance.conf_sentence,
+                                 unicode.Break_Type.sentence)
+    }
+    elif suite_is(which, "line") {
+        label = "LineBreakTest"
+        failed = run_line_suite(gen_conformance.conf_line)
+    }
+    elif suite_is(which, "normalization") {
+        label = "NormalizationTest"
+        failed = run_norm_suite(gen_conformance.conf_norm)
+    }
+    elif suite_is(which, "bidi") {
+        label = "BidiCharacterTest"
+        failed = run_bidi_suite(gen_conformance.conf_bidi)
+    }
+    elif suite_is(which, "collation") {
+        label = "CollationTest"
+        failed = run_collation_suite(gen_conformance.conf_collate)
+    }
+    elif suite_is(which, "idna") {
+        label = "IdnaTestV2"
+        failed = run_idna_suite(gen_conformance.conf_idna)
+    }
+    else {
+        __fd_write(2, "unknown conformance suite\n")
+
+        return 2
+    }
+
+    if failed != 0 {
+        __fd_write(2, "FAIL conformance " + label + " ")
+        failed.raw_repr(2)
+        __fd_write(2, "\n")
+
+        return 1
+    }
+
+    __fd_write(2, "ok")
+
+    return 0
+}
+
+main(sys.env.args())

@@ -1,0 +1,6 @@
+func f(x: int, y: int = 0) -> int {
+    return x + y
+}
+
+require f(1, 2, 3) == 1
+require f(y = 1) == 1

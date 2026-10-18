@@ -1,3 +1,4 @@
+import sys.abi
 import text
 
 let fancy: string = "«b»Hello«/b» «i»world«/i»"'r
@@ -6,12 +7,9 @@ func repr_of(s: string) -> string {
     var read_fd: int = -1
     var write_fd: int = -1
     require __os_pipe(ref read_fd, ref write_fd) == 0
-    var written: uint = 0
-    try {
-        written = text.raw_repr_string(s, write_fd, nil)!
-    } else failure {
-        require false
-    }
+    let count: i32 = s.raw_repr(cast[i32] write_fd)
+    require count >= 0
+    let written: uint = cast[uint] count
     require __os_close(write_fd) == 0
     var bytes: Array[u8] = new[Array[u8]](cast[int] written)
     let got: int = __os_read(read_fd, unsafe_cast[Ref[byte]] ref bytes[0],
@@ -40,6 +38,52 @@ func local_literals() {
                "r\"x «#0» y «#1:04d» «#a_rather_long_argument_name»\"")
 }
 
+func dispatch() {
+    let bold: string = "«b»Hi«/b»"'r
+    let same: string = "«b»Hi«/b»"'r
+    let italic: string = "«i»Hi«/i»"'r
+    require bold == same
+    require bold != italic
+    require bold != "Hi"
+    require "Hi" < bold
+    require !(bold < same)
+    require bold.hash() == same.hash()
+    require bold.hash() != "Hi".hash()
+    require bold.hash() != italic.hash()
+    require bold <= same and bold >= same
+    require bold > "Hi"
+}
+
+func rich_body_text_offset() -> u64? {
+    let probe: text.Rich_Body? = nil
+    let row: Ref[sys.abi.Type_Record]? = sys.abi.type_for(typeof(probe))
+    if row == nil {
+        return nil
+    }
+    let body: Ref[sys.abi.Type_Record]? = sys.abi.first_component(row.get())
+    if body == nil {
+        return nil
+    }
+    let fields: sys.abi.Range = body.get().fields_or_arms
+    var i: u32 = 0
+    while i < fields.count {
+        let index: i64 = sys.abi.range_index(fields, i)
+        if index >= 0 {
+            let field: Ref[sys.abi.Field_Record]? =
+                sys.abi.field_at(cast[u32] index)
+            if field != nil and field.get().declaration_ordinal == 0 {
+                return field.get().logical_bit_offset
+            }
+        }
+        i += 1
+    }
+    return nil
+}
+
+let text_offset: u64? = rich_body_text_offset()
+require text_offset != nil
+require text_offset.get() == 0
 check_rich(fancy, "Hello world", "r\"«b»Hello«/b» «i»world«/i»\"")
 local_literals()
+dispatch()
 __fd_write(2, "ok")

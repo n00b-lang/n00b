@@ -1876,6 +1876,11 @@ lookup_export_symbol_in_scope(parse_symtab_t *symtab, parse_scope_t *scope,
                               core_string_t name)
 {
     parse_sym_entry_t *value = parse_symtab_lookup_in(scope, name);
+    while (value && value->kind == PARSE_SYM_MODULE
+           && parse_sym_binding(value,
+                  CORE_STRING_STATIC("n00bb.implicit-package")))
+        value = value->shadowed && value->shadowed->scope == scope
+            ? value->shadowed : nullptr;
     parse_scope_t *types = parse_symtab_scope_in_namespace(
         symtab, scope, CORE_STRING_STATIC("type"));
     parse_sym_entry_t *type = parse_symtab_lookup_in(types, name);
@@ -2015,10 +2020,12 @@ resolve_one_package_export(core_translation_unit_t *unit,
         while (end < source.u8_bytes && source.data[end] != '.') end++;
         core_string_t name = core_string_borrow(source.data + component,
                                                 end - component);
-        symbol = lookup_export_symbol_in_scope(
-            tu_state(source_unit)->annotations->symtab, scope, name);
-        if (!symbol && source_unit != unit)
-            symbol = granted_export_symbol(source_unit, name, package->name);
+        symbol = source_unit != unit
+            ? granted_export_symbol(source_unit, name, package->name)
+            : nullptr;
+        if (!symbol)
+            symbol = lookup_export_symbol_in_scope(
+                tu_state(source_unit)->annotations->symtab, scope, name);
         if (!symbol) return 0;
         if (end < source.u8_bytes) {
             scope = symbol->member_scope;
@@ -2118,6 +2125,23 @@ populate_package_interfaces(n00bb_link_analysis_t *analysis)
     return true;
 }
 
+static void
+report_implicit_package_name(core_translation_unit_t *unit,
+                             parse_sym_entry_t *existing, core_string_t name)
+{
+    core_buffer_t message = {0};
+    core_buffer_printf(&message,
+        "'%.*s' cannot be declared here because it names a package this module uses",
+        (int)name.u8_bytes, name.data);
+    core_diag_location_t location = existing->decl_node
+        ? link_source_location(existing->decl_node)
+        : (core_diag_location_t){0};
+    core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit,
+        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-M0012"),
+        core_string_borrow(message.data, message.byte_len), location);
+    core_buffer_release(&message);
+}
+
 static bool
 add_implicit_package_scope(parse_symtab_t *symtab,
                            core_translation_unit_t *unit,
@@ -2125,12 +2149,16 @@ add_implicit_package_scope(parse_symtab_t *symtab,
                            parse_scope_t **out)
 {
     parse_sym_entry_t *existing = parse_symtab_lookup_in(parent, name);
-    if (existing) {
-        *out = existing->kind == PARSE_SYM_MODULE
-            ? parse_sym_binding(existing,
-                CORE_STRING_STATIC("n00bb.implicit-package"))
-            : nullptr;
+    if (existing && existing->kind == PARSE_SYM_MODULE) {
+        *out = parse_sym_binding(existing,
+            CORE_STRING_STATIC("n00bb.implicit-package"));
+        if (!*out) report_implicit_package_name(unit, existing, name);
         return *out != nullptr;
+    }
+    if (existing && !n00bb_declares_litmod(tu_state(unit), existing)) {
+        report_implicit_package_name(unit, existing, name);
+        *out = nullptr;
+        return false;
     }
     parse_symtab_enter_scope_all(symtab, parent);
     parse_symtab_push_scope_all(symtab, name);

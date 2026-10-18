@@ -27,6 +27,12 @@ bool function_interface_parameter(parse_sym_entry_t *symbol, size_t target,
 size_t function_interface_parameter_count(parse_sym_entry_t *symbol);
 bool function_interface_parameter_named(parse_sym_entry_t *symbol,
                                         core_string_t target, size_t *index);
+bool context_interface_parameter(parse_sym_entry_t *symbol, size_t target,
+                                 const char **name, size_t *name_size,
+                                 uint8_t *flags, uint8_t *mode);
+size_t context_interface_parameter_count(parse_sym_entry_t *symbol);
+bool context_interface_parameter_named(parse_sym_entry_t *symbol,
+                                       core_string_t target, size_t *index);
 core_translation_unit_t *unit_for_module_site(
     core_translation_unit_t *unit, n00bb_link_use_site_t *site,
     bool allow_suffix);
@@ -55,6 +61,8 @@ bool resolve_module_member_site(parse_grammar_t *grammar,
                                 parse_tree_t *node);
 bool resolve_imported_module_symbols(parse_grammar_t *grammar,
     core_list_t(core_translation_unit_ptr_t) *units);
+void mark_resolved_flagset_operator_sites(parse_grammar_t *grammar,
+    core_list_t(core_translation_unit_ptr_t) *units);
 bool module_type_universe_is_shared(
     core_list_t(core_translation_unit_ptr_t) *units);
 bool native_root_matches(core_string_t qualified, core_string_t module,
@@ -69,6 +77,16 @@ th_env *build_import_environment(parse_grammar_t *grammar,
     core_link_unit_t *link, n00bb_link_analysis_t *analysis);
 void report_call_type_error(core_translation_unit_t *unit,
     parse_tree_t *call, th_ctx *types, th_type *actual, th_type *expected);
+typedef struct {
+    parse_tree_t *argument;
+    th_type *expected;
+    bool keyword;
+} n00bb_call_binding_t;
+core_list_decl(n00bb_call_binding_t);
+bool n00bb_bind_call_arguments(parse_grammar_t *grammar,
+    core_translation_unit_t *unit, parse_sym_entry_t *callee,
+    th_type *signature, parse_tree_t *call_args, size_t offset,
+    parse_tree_t *site, core_list_t(n00bb_call_binding_t) *bindings);
 bool unify_call_node_type(core_translation_unit_t *unit,
     n00bb_tu_state_t *state, parse_tree_t *diagnostic_node,
     parse_tree_t *typed_node, th_type *actual, th_type *expected);
@@ -136,9 +154,18 @@ bool n00bb_dispatch_fingerprint(th_ctx *types, const th_env *environment,
                                 const char *method_name, uint64_t *out);
 bool has_deferred_method_constraint(th_type *receiver,
     core_string_t method_name);
-bool n00bb_method_requirement_matches(th_type *receiver,
-                                      core_string_t method_name,
-                                      th_type *signature);
+typedef enum {
+    N00BB_REQUIREMENT_DOES_NOT_FIT,
+    N00BB_REQUIREMENT_FITS_WITH_DEFAULTS,
+    N00BB_REQUIREMENT_FITS_EXACTLY,
+} n00bb_requirement_fit_t;
+n00bb_requirement_fit_t n00bb_method_requirement_fit(
+    parse_grammar_t *grammar, th_ctx *types, th_type *receiver,
+    core_string_t method_name, th_type *signature,
+    parse_sym_entry_t *requirement);
+bool n00bb_bind_method_keywords(parse_grammar_t *grammar, th_ctx *types,
+                                th_type *receiver, core_string_t method_name,
+                                parse_sym_entry_t *requirement);
 parse_sym_entry_t *trait_method_requirement_symbol(
     parse_grammar_t *grammar, n00bb_link_analysis_t *analysis,
     core_translation_unit_t *caller, core_string_t qualified_trait,
@@ -322,6 +349,9 @@ bool append_function_contract_identity(core_translation_unit_t *unit,
 parse_sym_entry_t *n00bb_select_call_overload(parse_grammar_t *grammar,
     n00bb_tu_state_t *state, parse_cf_label_t *call,
     parse_sym_entry_t *symbol, bool *pending);
+bool n00bb_function_has_overloads(parse_sym_entry_t *symbol);
+void n00bb_defer_overloaded_callee(parse_grammar_t *grammar,
+    core_translation_unit_t *unit, parse_tree_t *node);
 core_string_t link_symbol_module(core_translation_unit_t *unit,
                                  parse_sym_entry_t *symbol);
 bool n00bb_bind_site_reference(core_translation_unit_t *unit,

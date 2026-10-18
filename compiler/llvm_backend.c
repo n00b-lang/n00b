@@ -2198,7 +2198,9 @@ load_packed_bitptr(lower_state_t *state, LLVMValueRef bitptr,
                    th_type *element)
 {
     uint64_t width = packed_value_width(state->function->owner, element);
-    if (width == 1) return load_bool_bitptr(state, bitptr);
+    if (width == 1)
+        return packed_value_from_bits(state, load_bool_bitptr(state, bitptr),
+                                      width, element);
     if (!width) return nullptr;
     packed_bitptr_io_t io = {0};
     if (!packed_bitptr_prepare(state, bitptr, width, &io)) return nullptr;
@@ -2215,7 +2217,10 @@ store_packed_bitptr(lower_state_t *state, LLVMValueRef bitptr,
                     LLVMValueRef value, th_type *element)
 {
     uint64_t width = packed_value_width(state->function->owner, element);
-    if (width == 1) return store_bool_bitptr(state, bitptr, value);
+    if (width == 1)
+        return store_bool_bitptr(state, bitptr, packed_bits_from_value(state,
+            value, width,
+            LLVMInt1TypeInContext(LLVMGetModuleContext(state->module))));
     if (!width || !value) return false;
     packed_bitptr_io_t io = {0};
     if (!packed_bitptr_prepare(state, bitptr, width, &io)) return false;
@@ -11550,6 +11555,13 @@ fixed_mutator(const ir_func_t *function, bool *mutator)
             active_mutator_classifier->context, function, mutator);
 }
 
+static bool
+is_mutator_allocator(ir_func_t *function)
+{
+    return !strcmp(ir_module_name(function->owner), "sys.internal.gc.alloc")
+        && !strcmp(function->name, "allocate_runtime_known_on_mutator");
+}
+
 static void
 select_mutator_functions(
     const core_list_t(inline_function_ptr_t) *candidates,
@@ -11558,8 +11570,9 @@ select_mutator_functions(
     for (size_t f = 0; f < candidates->len; f++) {
         ir_func_t *function = candidates->data[f];
         bool mutator = false;
-        if (fixed_mutator(function, &mutator)
-                ? mutator : has_dynamic_allocation(function))
+        if (is_mutator_allocator(function)
+            || (fixed_mutator(function, &mutator)
+                ? mutator : has_dynamic_allocation(function)))
             core_list_push(*selected, function);
     }
     bool changed;
@@ -11775,9 +11788,7 @@ lower_module(LLVMModuleRef target, const ir_module_t *source,
     if (inline_ok && needs_allocation_callee && reachable_bound) {
         for (size_t i = 0; i < reachable_count; i++) {
             ir_func_t *function = reachable[i];
-            if (strcmp(ir_module_name(function->owner), "sys.internal.gc.alloc")
-                || strcmp(function->name,
-                    "allocate_runtime_known_on_mutator")
+            if (!is_mutator_allocator(function)
                 || function->owner == source
                 || inline_list_contains(&inline_callees, function))
                 continue;
@@ -13092,12 +13103,27 @@ emit_image(n00bb_llvm_backend_t *backend,
         && !emit_finalizer_bridge(backend, diagnostics)) return false;
     if (initializer_count) {
         LLVMTypeRef result = LLVMInt32TypeInContext(context);
-        LLVMTypeRef signature = LLVMFunctionType(result, nullptr, 0, false);
+        LLVMTypeRef entry_params[] = {
+            result, LLVMPointerTypeInContext(context, 0)
+        };
+        LLVMTypeRef signature = LLVMFunctionType(result, entry_params, 2,
+                                                 false);
         LLVMValueRef entry = LLVMAddFunction(module, "main", signature);
         LLVMBasicBlockRef block = LLVMAppendBasicBlockInContext(context, entry,
             "entry");
         LLVMBuilderRef builder = LLVMCreateBuilderInContext(context);
         LLVMPositionBuilderAtEnd(builder, block);
+        LLVMTypeRef save_args_type = LLVMFunctionType(
+            LLVMVoidTypeInContext(context), entry_params, 2, false);
+        LLVMValueRef save_args = LLVMGetNamedFunction(module,
+                                                      "n00b_os_save_args");
+        if (!save_args)
+            save_args = LLVMAddFunction(module, "n00b_os_save_args",
+                                        save_args_type);
+        LLVMValueRef saved_args[] = {
+            LLVMGetParam(entry, 0), LLVMGetParam(entry, 1)
+        };
+        LLVMBuildCall2(builder, save_args_type, save_args, saved_args, 2, "");
         if (metadata_bytes) {
             LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
             LLVMTypeRef fields[] = {

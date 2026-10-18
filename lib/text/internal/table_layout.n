@@ -1,0 +1,332 @@
+import sys.abi
+import internal.layout
+import internal.string
+import internal.table
+
+const layout_unbounded = 0x7fffffff
+
+private func max_width_of(parts: List[string]) -> i64 {
+    let n: uint = parts.len()
+    var max: i64 = 0
+    for i from 0 until n {
+        let w: i64 = internal.string.width(parts[cast[int] i])
+        if w > max {
+            max = w
+        }
+    }
+    return max
+}
+
+private func longest_line_width(text: string) -> i64 {
+    return max_width_of(internal.string.split(text, "\n"))
+}
+
+private func longest_word_width(text: string) -> i64 {
+    let lines: List[string] = internal.string.split(text, "\n")
+    let n: uint = lines.len()
+    var max: i64 = 0
+    for i from 0 until n {
+        let w: i64 =
+            max_width_of(internal.string.split(lines[cast[int] i], " "))
+        if w > max {
+            max = w
+        }
+    }
+    return max
+}
+
+private func has_hard_break(text: string) -> bool {
+    let n: u64 = byte_len(text)
+    for i from 0 until n {
+        if byte_at(text, i) == 0x0a {
+            return true
+        }
+    }
+    return false
+}
+
+func table_cell_lines(content: string, requested_width: i64, wrap: bool)
+    -> List[string] {
+    var out: List[string] = new[List[string]]()
+    var width: i64 = requested_width
+    if byte_len(content) == 0 {
+        return out
+    }
+    if width < 1 {
+        width = 1
+    }
+    if !has_hard_break(content) and
+        (!wrap or internal.string.width(content) <= width) {
+        out.append(content)
+        return out
+    }
+    if !wrap {
+        return internal.string.split(content, "\n")
+    }
+    return internal.string.wrap(content, width)
+}
+
+func cell_wraps(self: internal.table.Table, cell: internal.table.Table_Cell)
+    -> bool {
+    if cell.wrap.get_or_else(false) {
+        return true
+    }
+    if !cell.wrap.get_or_else(true) {
+        return false
+    }
+    return self.wrap
+}
+
+private func spec_dim(dim: internal.layout.Layout_Dim?, available: i64) -> i64 {
+    if dim == nil {
+        return 0
+    }
+    let d: internal.layout.Layout_Dim = dim.get()
+    return internal.layout.resolve(d, available)
+}
+
+private func table_has_interior_v(table: internal.table.Table) -> bool {
+    return table.table_props.borders.interior_v
+}
+
+private func scan_column_preferences(table: internal.table.Table, width: i64)
+    -> List[internal.table.Table_Col_Spec] {
+    let n_specs: uint = table.col_specs.len()
+    var cloned: Array[internal.table.Table_Col_Spec] =
+        new[Array[internal.table.Table_Col_Spec]](cast[int] n_specs)
+    for k from 0 until n_specs {
+        cloned[k] = table.col_specs[cast[int] k]
+    }
+    var specs: List[internal.table.Table_Col_Spec] =
+        sys.abi.list_with_length(cloned, n_specs)
+    let lr_pad: i64 = cast[i64] table.default_cell_props.pad_left +
+        cast[i64] table.default_cell_props.pad_right
+    let n_rows: i64 = cast[i64] internal.table.row_count(table)
+    let n_cols: i64 = cast[i64] internal.table.col_count(table)
+    for col from 0 until n_cols {
+        var spec: internal.table.Table_Col_Spec = specs[col]
+        if spec.mode != internal.table.Col_Mode.fit or spec.pref != nil {
+            continue
+        }
+        var longest_line: i64 = 0
+        var longest_word: i64 = 0
+        for r from 0 until n_rows {
+            var cell_col: i64 = 0
+            let n_cells: i64 =
+                cast[i64] internal.table.row_cell_count(table, cast[uint] r)
+            for ci from 0 until n_cells {
+                var cell: internal.table.Table_Cell
+                try {
+                    cell = internal.table.cell_index(table, cast[uint] r,
+                                                     cast[uint] ci)!
+                } else e: Container_Err {
+                    continue
+                }
+                var span: i64 = 1
+                if cell.col_span > 0 {
+                    span = cast[i64] cell.col_span
+                }
+                if cell_col + span > col and cell_col <= col {
+                    if byte_len(cell.content) > 0 {
+                        var ll: i64 = longest_line_width(cell.content)
+                        var lw: i64 = ll
+                        if cell_wraps(table, cell) {
+                            lw = longest_word_width(cell.content)
+                        }
+                        if span > 1 {
+                            ll /= span
+                            lw /= span
+                        }
+                        if ll > longest_line {
+                            longest_line = ll
+                        }
+                        if lw > longest_word {
+                            longest_word = lw
+                        }
+                    }
+                    break
+                }
+                cell_col += span
+            }
+        }
+        if longest_line == 0 {
+            spec.mode = internal.table.Col_Mode.flex
+            spec.flex_multiple = 1
+            specs[col] = spec
+            continue
+        }
+        longest_line += lr_pad
+        longest_word += lr_pad
+        var cur_min: i64 = 0
+        let spec_min: internal.layout.Layout_Dim? = spec.min
+        if spec_min != nil {
+            let min_dim: internal.layout.Layout_Dim = spec_min.get()
+            cur_min = internal.layout.resolve(min_dim, width)
+        }
+        if longest_word > cur_min {
+            spec.min = internal.layout.abs_dim(longest_word)
+        }
+        if longest_line < width {
+            spec.pref = internal.layout.abs_dim(longest_line)
+            if spec.max == nil {
+                spec.max = internal.layout.abs_dim(longest_line)
+            }
+        }
+        else {
+            var share: i64 = width
+            if n_cols > 0 {
+                share = width / n_cols
+            }
+            if longest_word > share {
+                spec.pref = internal.layout.abs_dim(longest_word)
+            }
+            else {
+                spec.pref = internal.layout.abs_dim(share)
+            }
+        }
+        specs[col] = spec
+    }
+    return specs
+}
+
+private func build_layout_items(specs: List[internal.table.Table_Col_Spec],
+                                modify items: Array[internal.layout.Layout],
+                                n_cols: i64) {
+    for i from 0 until n_cols {
+        let spec: internal.table.Table_Col_Spec = specs[i]
+        items[i] = (min = spec.min, max = spec.max, pref = spec.pref,
+                    priority = spec.priority,
+                    flex_multiple = spec.flex_multiple, child_gap = 0)
+    }
+}
+
+func cell_width(self: internal.table.Table, col_ix: i64, span: i64) -> i64 {
+    let n_cols: i64 = cast[i64] internal.table.col_count(self)
+    var total: i64 = 0
+    var s: i64 = 0
+    while s < span and col_ix + s < n_cols {
+        total += self.col_results[col_ix + s].size
+        s += 1
+    }
+    if table_has_interior_v(self) and span > 1 {
+        total += span - 1
+    }
+    return total
+}
+
+private func compute_row_heights(modify table: internal.table.Table) {
+    let n_rows: i64 = cast[i64] internal.table.row_count(table)
+    for r from 0 until n_rows {
+        var max_h: i64 = 1
+        var col_ix: i64 = 0
+        let n_cells: i64 =
+            cast[i64] internal.table.row_cell_count(table, cast[uint] r)
+        for ci from 0 until n_cells {
+            var cell: internal.table.Table_Cell
+            try {
+                cell = internal.table.cell_index(table, cast[uint] r,
+                                                 cast[uint] ci)!
+            } else e: Container_Err {
+                continue
+            }
+            var span: i64 = 1
+            if cell.col_span > 0 {
+                span = cast[i64] cell.col_span
+            }
+            let props: internal.table.Box_Props =
+                internal.table.resolve_cell_props(table, r, cast[uint] col_ix,
+                                                  cell = cell)
+            var content_w: i64 = cell_width(table, col_ix, span) -
+                cast[i64] props.pad_left - cast[i64] props.pad_right
+            if content_w < 1 {
+                content_w = 1
+            }
+            let lines: List[string] =
+                table_cell_lines(cell.content, content_w,
+                                 cell_wraps(table, cell))
+            cell.lines = lines
+            cell.lines_width = content_w
+            try {
+                internal.table.put_cell(table, cast[uint] r, cast[uint] ci,
+                                        cell)!
+            } else e: Container_Err {
+            }
+            var n_lines: i64 = cast[i64] lines.len()
+            if n_lines < 1 {
+                n_lines = 1
+            }
+            let total_h: i64 = n_lines + cast[i64] props.pad_top +
+                cast[i64] props.pad_bottom
+            if total_h > max_h {
+                max_h = total_h
+            }
+            col_ix += span
+        }
+        table.row_heights[r] = max_h
+    }
+}
+
+func natural_width(modify self: internal.table.Table) -> i64 {
+    let n_cols: i64 = cast[i64] internal.table.col_count(self)
+    if internal.table.row_count(self) == 0 or n_cols == 0 {
+        return 0
+    }
+    let specs: List[internal.table.Table_Col_Spec] =
+        scan_column_preferences(self, layout_unbounded)
+    var outer_top: i64 = 0
+    var outer_bottom: i64 = 0
+    var outer_left: i64 = 0
+    var outer_right: i64 = 0
+    internal.table.insets(self.table_props, outer_top, outer_bottom, outer_left,
+           outer_right)
+    var total: i64 = outer_left + outer_right
+    if table_has_interior_v(self) {
+        total += n_cols - 1
+    }
+    for i from 0 until n_cols {
+        let spec: internal.table.Table_Col_Spec = specs[i]
+        let pref: i64 = spec_dim(spec.pref, layout_unbounded)
+        let min: i64 = spec_dim(spec.min, layout_unbounded)
+        if pref > min {
+            total += pref
+        }
+        else {
+            total += min
+        }
+    }
+    return total
+}
+
+func compute_layout(modify self: internal.table.Table, width: i64) {
+    if internal.table.row_count(self) == 0 {
+        self.layout_valid = true
+        return
+    }
+    let n_cols: i64 = cast[i64] internal.table.col_count(self)
+    let n_rows: i64 = cast[i64] internal.table.row_count(self)
+    var outer_top: i64 = 0
+    var outer_bottom: i64 = 0
+    var outer_left: i64 = 0
+    var outer_right: i64 = 0
+    internal.table.insets(self.table_props, outer_top, outer_bottom, outer_left,
+           outer_right)
+    var interior_v: i64 = 0
+    if table_has_interior_v(self) {
+        interior_v = n_cols - 1
+    }
+    var avail: i64 = width - outer_left - outer_right - interior_v
+    if avail < n_cols {
+        avail = n_cols
+    }
+    let specs: List[internal.table.Table_Col_Spec] =
+        scan_column_preferences(self, avail)
+    var items: Array[internal.layout.Layout] =
+        new[Array[internal.layout.Layout]](n_cols)
+    build_layout_items(specs, items, n_cols)
+    self.col_results = new[Array[internal.layout.Layout_Result]](n_cols)
+    internal.layout.layout_calculate(items, self.col_results, n_cols, avail)
+    self.row_heights = new[Array[i64]](n_rows)
+    compute_row_heights(self)
+    self.total_width = width
+    self.layout_valid = true
+}

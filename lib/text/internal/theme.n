@@ -1,0 +1,730 @@
+import sys.abi
+
+enum Palette_Ix {
+    background = 0,
+    surface = 1,
+    surface_light = 2,
+    surface_dark = 3,
+    text_primary = 4,
+    text_secondary = 5,
+    text_disabled = 6,
+    text_inverse = 7,
+    primary = 8,
+    primary_light = 9,
+    primary_dark = 10,
+    secondary = 11,
+    accent = 12,
+    success = 13,
+    warning = 14,
+    error_tone = 15,
+    info = 16,
+    focus = 17,
+    hover = 18,
+    active = 19,
+    selected = 20,
+    border = 21,
+    border_light = 22,
+    border_dark = 23,
+    selection_bg = 24,
+    selection_fg = 25,
+    cursor = 26,
+    scrollbar_track = 27,
+    scrollbar_thumb = 28,
+    scrollbar_thumb_hover = 29,
+    placeholder = 30,
+    palette_size = 31
+}
+
+record Style_Binding {
+    name:  string
+    style: Text_Style
+    fg_ix: i8
+    bg_ix: i8
+}
+
+record Theme {
+    name:        string
+    description: string
+    palette:     Array[Color][31]
+    styles:      List[Style_Binding]?
+    roles:       List[Style_Binding]?
+}
+
+private const theme_n00b_dark: Theme = (
+    name        = "n00b-dark",
+    description = "Default dark theme",
+    palette     = [
+        0x1a1b26, 0x24283b, 0x3b4261, 0x16161e, 0xc0caf5, 0xa9b1d6,
+        0x565f89, 0x1a1b26, 0x7aa2f7, 0xb4d0ff, 0x5277c3, 0xbb9af7,
+        0xff9e64, 0x9ece6a, 0xe0af68, 0xf7768e, 0x7dcfff, 0x7aa2f7,
+        0x3b4261, 0x24283b, 0x24283b, 0x3b4261, 0x7aa2f7, 0x16161e,
+        0x3b4261, 0xc0caf5, 0xc0caf5, 0x24283b, 0x3b4261, 0x7aa2f7,
+        0x565f89
+    ],
+    styles      = nil,
+    roles       = nil)
+
+private const theme_n00b_light: Theme = (
+    name        = "n00b-light",
+    description = "Light theme",
+    palette     = [
+        0xf5f5f5, 0xffffff, 0xfafafa, 0xeeeeee, 0x1a1a2e, 0x4a4a5a,
+        0x9e9e9e, 0xffffff, 0x2563eb, 0x60a5fa, 0x1d4ed8, 0x7c3aed,
+        0xea580c, 0x16a34a, 0xca8a04, 0xdc2626, 0x0284c7, 0x2563eb,
+        0xf0f0f0, 0xe5e5e5, 0xe0e7ff, 0xd4d4d4, 0xe5e5e5, 0xa3a3a3,
+        0xdbeafe, 0x1a1a2e, 0x1a1a2e, 0xf0f0f0, 0xc0c0c0, 0x2563eb,
+        0x9e9e9e
+    ],
+    styles      = nil,
+    roles       = nil)
+
+private const theme_catppuccin_mocha: Theme = (
+    name        = "catppuccin-mocha",
+    description = "Catppuccin Mocha - warm dark theme",
+    palette     = [
+        0x1e1e2e, 0x313244, 0x45475a, 0x181825, 0xcdd6f4, 0xbac2de,
+        0x6c7086, 0x1e1e2e, 0x89b4fa, 0xb4d0ff, 0x5e81ac, 0xcba6f7,
+        0xfab387, 0xa6e3a1, 0xf9e2af, 0xf38ba8, 0x89dceb, 0x89b4fa,
+        0x45475a, 0x313244, 0x313244, 0x45475a, 0x89b4fa, 0x181825,
+        0x45475a, 0xcdd6f4, 0xf5e0dc, 0x313244, 0x45475a, 0x89b4fa,
+        0x6c7086
+    ],
+    styles      = nil,
+    roles       = nil)
+
+private const theme_dracula: Theme = (
+    name        = "dracula",
+    description = "Dracula - dark purple theme",
+    palette     = [
+        0x282a36, 0x44475a, 0x6272a4, 0x21222c, 0xf8f8f2, 0xbfbfbf,
+        0x6272a4, 0x282a36, 0xbd93f9, 0xd6bcfa, 0x9a6dd7, 0xff79c6,
+        0xffb86c, 0x50fa7b, 0xf1fa8c, 0xff5555, 0x8be9fd, 0xbd93f9,
+        0x6272a4, 0x44475a, 0x44475a, 0x6272a4, 0xbd93f9, 0x21222c,
+        0x44475a, 0xf8f8f2, 0xf8f8f2, 0x44475a, 0x6272a4, 0xbd93f9,
+        0x6272a4
+    ],
+    styles      = nil,
+    roles       = nil)
+
+private const theme_nord: Theme = (
+    name        = "nord",
+    description = "Nord - arctic blue theme",
+    palette     = [
+        0x2e3440, 0x3b4252, 0x434c5e, 0x242933, 0xeceff4, 0xd8dee9,
+        0x4c566a, 0x2e3440, 0x88c0d0, 0x8fbcbb, 0x5e81ac, 0x81a1c1,
+        0xd08770, 0xa3be8c, 0xebcb8b, 0xbf616a, 0x88c0d0, 0x88c0d0,
+        0x434c5e, 0x3b4252, 0x3b4252, 0x434c5e, 0x88c0d0, 0x242933,
+        0x434c5e, 0xeceff4, 0xeceff4, 0x3b4252, 0x434c5e, 0x88c0d0,
+        0x4c566a
+    ],
+    styles      = nil,
+    roles       = nil)
+
+private const theme_gruvbox_dark: Theme = (
+    name        = "gruvbox-dark",
+    description = "Gruvbox Dark - retro earthy theme",
+    palette     = [
+        0x282828, 0x3c3836, 0x504945, 0x1d2021, 0xebdbb2, 0xd5c4a1,
+        0x665c54, 0x282828, 0xfe8019, 0xfabd2f, 0xd65d0e, 0xb8bb26,
+        0x83a598, 0xb8bb26, 0xfabd2f, 0xfb4934, 0x83a598, 0xfe8019,
+        0x504945, 0x3c3836, 0x3c3836, 0x504945, 0xfe8019, 0x1d2021,
+        0x504945, 0xebdbb2, 0xebdbb2, 0x3c3836, 0x504945, 0xfe8019,
+        0x665c54
+    ],
+    styles      = nil,
+    roles       = nil)
+
+private const theme_tokyo_night: Theme = (
+    name        = "tokyo-night",
+    description = "Tokyo Night - neon city theme",
+    palette     = [
+        0x1a1b26, 0x24283b, 0x414868, 0x16161e, 0xc0caf5, 0xa9b1d6,
+        0x565f89, 0x1a1b26, 0x7aa2f7, 0xb4d0ff, 0x3d59a1, 0xbb9af7,
+        0xff9e64, 0x9ece6a, 0xe0af68, 0xf7768e, 0x7dcfff, 0x7aa2f7,
+        0x414868, 0x24283b, 0x24283b, 0x414868, 0x7aa2f7, 0x16161e,
+        0x414868, 0xc0caf5, 0xc0caf5, 0x24283b, 0x414868, 0x7aa2f7,
+        0x565f89
+    ],
+    styles      = nil,
+    roles       = nil)
+
+private const theme_cyberpunk: Theme = (
+    name        = "cyberpunk",
+    description = "Cyberpunk - neon electric theme",
+    palette     = [
+        0x0d0221, 0x150535, 0x1f0a4a, 0x080116, 0xf0e6ff, 0xb8a9d1,
+        0x5c4d76, 0x0d0221, 0xff2a6d, 0xff6b9d, 0xd4004c, 0x05d9e8,
+        0xd300c5, 0x01ff70, 0xff851b, 0xff2a6d, 0x05d9e8, 0xff2a6d,
+        0x1f0a4a, 0x150535, 0x150535, 0x1f0a4a, 0xff2a6d, 0x080116,
+        0x1f0a4a, 0xf0e6ff, 0x05d9e8, 0x150535, 0x1f0a4a, 0xff2a6d,
+        0x5c4d76
+    ],
+    styles      = nil,
+    roles       = nil)
+
+private const theme_synthwave: Theme = (
+    name        = "synthwave",
+    description = "Synthwave - retro 80s neon theme",
+    palette     = [
+        0x2b213a, 0x382c4f, 0x4a3f65, 0x1f1830, 0xf0e6ff, 0xc8b8e0,
+        0x6e5f8a, 0x2b213a, 0xff7edb, 0xffb2ec, 0xd44eb3, 0x72f1b8,
+        0xfede5d, 0x72f1b8, 0xfede5d, 0xfe4450, 0x36f9f6, 0xff7edb,
+        0x4a3f65, 0x382c4f, 0x382c4f, 0x4a3f65, 0xff7edb, 0x1f1830,
+        0x4a3f65, 0xf0e6ff, 0x36f9f6, 0x382c4f, 0x4a3f65, 0xff7edb,
+        0x6e5f8a
+    ],
+    styles      = nil,
+    roles       = nil)
+
+private const theme_rose_pine: Theme = (
+    name        = "rose-pine",
+    description = "Rose Pine - elegant dark theme",
+    palette     = [
+        0x191724, 0x1f1d2e, 0x26233a, 0x13111e, 0xe0def4, 0x908caa,
+        0x6e6a86, 0x191724, 0xc4a7e7, 0xd6c4f0, 0x9a7ec5, 0xebbcba,
+        0xf6c177, 0x9ccfd8, 0xf6c177, 0xeb6f92, 0x9ccfd8, 0xc4a7e7,
+        0x26233a, 0x1f1d2e, 0x1f1d2e, 0x26233a, 0xc4a7e7, 0x13111e,
+        0x26233a, 0xe0def4, 0xe0def4, 0x1f1d2e, 0x26233a, 0xc4a7e7,
+        0x6e6a86
+    ],
+    styles      = nil,
+    roles       = nil)
+
+private const theme_monokai: Theme = (
+    name        = "monokai",
+    description = "Monokai - classic editor theme",
+    palette     = [
+        0x272822, 0x3e3d32, 0x49483e, 0x1e1f1c, 0xf8f8f2, 0xd6d6d6,
+        0x75715e, 0x272822, 0xa6e22e, 0xc8f06e, 0x86b21e, 0xf92672,
+        0x66d9ef, 0xa6e22e, 0xe6db74, 0xf92672, 0x66d9ef, 0xa6e22e,
+        0x49483e, 0x3e3d32, 0x3e3d32, 0x49483e, 0xa6e22e, 0x1e1f1c,
+        0x49483e, 0xf8f8f2, 0xf8f8f2, 0x3e3d32, 0x49483e, 0xa6e22e,
+        0x75715e
+    ],
+    styles      = nil,
+    roles       = nil)
+
+private const theme_solarized_dark: Theme = (
+    name        = "solarized-dark",
+    description = "Solarized Dark - precision colors theme",
+    palette     = [
+        0x002b36, 0x073642, 0x586e75, 0x00212b, 0x839496, 0x93a1a1,
+        0x586e75, 0x002b36, 0x268bd2, 0x6aaee0, 0x1a6fa8, 0x2aa198,
+        0xcb4b16, 0x859900, 0xb58900, 0xdc322f, 0x268bd2, 0x268bd2,
+        0x586e75, 0x073642, 0x073642, 0x586e75, 0x268bd2, 0x00212b,
+        0x073642, 0x93a1a1, 0x93a1a1, 0x073642, 0x586e75, 0x268bd2,
+        0x586e75
+    ],
+    styles      = nil,
+    roles       = nil)
+
+private const theme_midnight: Theme = (
+    name        = "midnight",
+    description = "Midnight - deep blue dark theme",
+    palette     = [
+        0x0f0f1a, 0x1a1a2e, 0x25254a, 0x0a0a12, 0xe0e0f0, 0xb0b0c8,
+        0x505070, 0x0f0f1a, 0x6366f1, 0x818cf8, 0x4f46e5, 0xa78bfa,
+        0xf472b6, 0x34d399, 0xfbbf24, 0xf87171, 0x38bdf8, 0x6366f1,
+        0x25254a, 0x1a1a2e, 0x1a1a2e, 0x25254a, 0x6366f1, 0x0a0a12,
+        0x25254a, 0xe0e0f0, 0xe0e0f0, 0x1a1a2e, 0x25254a, 0x6366f1,
+        0x505070
+    ],
+    styles      = nil,
+    roles       = nil)
+
+private const theme_ocean: Theme = (
+    name        = "ocean",
+    description = "Ocean - deep sea blue-green theme",
+    palette     = [
+        0x0b2337, 0x122d42, 0x1b3a51, 0x071a2b, 0xd4e5f7, 0x9ab8d0,
+        0x4a6a82, 0x0b2337, 0x0ea5e9, 0x38bdf8, 0x0284c7, 0x14b8a6,
+        0xf97316, 0x22c55e, 0xeab308, 0xef4444, 0x06b6d4, 0x0ea5e9,
+        0x1b3a51, 0x122d42, 0x122d42, 0x1b3a51, 0x0ea5e9, 0x071a2b,
+        0x1b3a51, 0xd4e5f7, 0xd4e5f7, 0x122d42, 0x1b3a51, 0x0ea5e9,
+        0x4a6a82
+    ],
+    styles      = nil,
+    roles       = nil)
+
+private const theme_forest: Theme = (
+    name        = "forest",
+    description = "Forest - deep green nature theme",
+    palette     = [
+        0x1a2e1a, 0x243a24, 0x2f4f2f, 0x122112, 0xd4e8d4, 0xa8c8a8,
+        0x5a7a5a, 0x1a2e1a, 0x4ade80, 0x86efac, 0x22c55e, 0xa3e635,
+        0xfbbf24, 0x4ade80, 0xfbbf24, 0xef4444, 0x67e8f9, 0x4ade80,
+        0x2f4f2f, 0x243a24, 0x243a24, 0x2f4f2f, 0x4ade80, 0x122112,
+        0x2f4f2f, 0xd4e8d4, 0xd4e8d4, 0x243a24, 0x2f4f2f, 0x4ade80,
+        0x5a7a5a
+    ],
+    styles      = nil,
+    roles       = nil)
+
+private const theme_high_contrast: Theme = (
+    name        = "high-contrast",
+    description = "High Contrast - maximum readability",
+    palette     = [
+        0x000000, 0x1a1a1a, 0x333333, 0x000000, 0xffffff, 0xe0e0e0,
+        0x808080, 0x000000, 0xffff00, 0xffff80, 0xcccc00, 0x00ffff,
+        0xff00ff, 0x00ff00, 0xffff00, 0xff0000, 0x00ffff, 0xffff00,
+        0x333333, 0x1a1a1a, 0x1a1a1a, 0xffffff, 0xffff00, 0x808080,
+        0x333333, 0xffffff, 0xffffff, 0x1a1a1a, 0x808080, 0xffffff,
+        0x808080
+    ],
+    styles      = nil,
+    roles       = nil)
+
+private const theme_n00b_bright: Theme = (
+    name        = "n00b-bright",
+    description = "N00b flashy bright accents",
+    palette     = [
+        0x0b1221, 0x232937, 0x3c414d, 0x050610, 0xe6e2dc, 0xeeebe8,
+        0x6d717a, 0x0b1221, 0xbfff33, 0xcfff66, 0xb3ff00, 0xff59a1,
+        0x7561b3, 0xc7ff4c, 0xffbf00, 0xff0800, 0x00bfff, 0xbfff33,
+        0x3c414d, 0x232937, 0x232937, 0x3c414d, 0xbfff33, 0x050610,
+        0x3c414d, 0xe6e2dc, 0xfcfcfb, 0x232937, 0x3c414d, 0xbfff33,
+        0x6d717a
+    ],
+    styles      = nil,
+    roles       = nil)
+
+private const theme_n00b_classic: Theme = (
+    name        = "n00b-classic",
+    description = "N00b classic dark (less flashy)",
+    palette     = [
+        0x0b1221, 0x232937, 0x3c414d, 0x050610, 0xe6e2dc, 0xeeebe8,
+        0x6d717a, 0x0b1221, 0xbfff33, 0xcfff66, 0xb3ff00, 0x7561b3,
+        0xff59a1, 0xc7ff4c, 0xffbf00, 0xff0800, 0x00bfff, 0xbfff33,
+        0x3c414d, 0x232937, 0x232937, 0x3c414d, 0xbfff33, 0x050610,
+        0x3c414d, 0xe6e2dc, 0xfcfcfb, 0x232937, 0x3c414d, 0xbfff33,
+        0x6d717a
+    ],
+    styles      = nil,
+    roles       = nil)
+
+private const builtin_themes: Array[Ref[Theme]] = [
+    ref theme_n00b_dark,
+    ref theme_n00b_light,
+    ref theme_catppuccin_mocha,
+    ref theme_dracula,
+    ref theme_nord,
+    ref theme_gruvbox_dark,
+    ref theme_tokyo_night,
+    ref theme_cyberpunk,
+    ref theme_synthwave,
+    ref theme_rose_pine,
+    ref theme_monokai,
+    ref theme_solarized_dark,
+    ref theme_midnight,
+    ref theme_ocean,
+    ref theme_forest,
+    ref theme_high_contrast,
+    ref theme_n00b_bright,
+    ref theme_n00b_classic
+]
+
+private const default_styles: Array[Style_Binding] = [
+    (name = "em", style = (
+        bold = nil, italic = true, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    ), fg_ix = cast[i8] Palette_Ix.primary, bg_ix = -1),
+    (name = "em1", style = (
+        bold = nil, italic = true, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    ), fg_ix = -1, bg_ix = -1),
+    (name = "em2", style = (
+        bold = true, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    ), fg_ix = cast[i8] Palette_Ix.secondary, bg_ix = -1),
+    (name = "em3", style = (
+        bold = true, italic = true, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    ), fg_ix = cast[i8] Palette_Ix.accent, bg_ix = -1),
+    (name = "h1", style = (
+        bold = true, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.upper, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    ), fg_ix = cast[i8] Palette_Ix.primary, bg_ix = -1),
+    (name = "h2", style = (
+        bold = true, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.upper, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    ), fg_ix = cast[i8] Palette_Ix.secondary, bg_ix = -1),
+    (name = "h3", style = (
+        bold = true, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.upper, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    ), fg_ix = cast[i8] Palette_Ix.accent, bg_ix = -1),
+    (name = "hexdump.offset", style = (
+        bold = nil, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = true, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    ), fg_ix = -1, bg_ix = -1),
+    (name = "hexdump.ascii", style = (
+        bold = true, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    ), fg_ix = -1, bg_ix = -1)
+]
+
+private const default_roles: Array[Style_Binding] = [
+    (name = "@code", style = (
+        bold = nil, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.mono,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    ), fg_ix = cast[i8] Palette_Ix.secondary,
+    bg_ix = cast[i8] Palette_Ix.surface_light),
+    (name = "@mono", style = (
+        bold = nil, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.mono,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    ), fg_ix = -1, bg_ix = -1),
+    (name = "@heading", style = (
+        bold = true, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    ), fg_ix = cast[i8] Palette_Ix.primary, bg_ix = -1),
+    (name = "@body", style = (
+        bold = nil, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    ), fg_ix = cast[i8] Palette_Ix.text_primary, bg_ix = -1),
+    (name = "@error", style = (
+        bold = true, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    ), fg_ix = cast[i8] Palette_Ix.error_tone, bg_ix = -1),
+    (name = "@success", style = (
+        bold = true, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    ), fg_ix = cast[i8] Palette_Ix.success, bg_ix = -1),
+    (name = "@muted", style = (
+        bold = nil, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = true, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    ), fg_ix = cast[i8] Palette_Ix.text_disabled, bg_ix = -1),
+    (name = "@link", style = (
+        bold = nil, italic = nil, underline = true, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    ), fg_ix = cast[i8] Palette_Ix.info, bg_ix = -1),
+    (name = "@label", style = (
+        bold = true, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    ), fg_ix = cast[i8] Palette_Ix.text_secondary, bg_ix = -1),
+    (name = "@button", style = (
+        bold = true, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    ), fg_ix = cast[i8] Palette_Ix.text_inverse,
+    bg_ix = cast[i8] Palette_Ix.primary),
+    (name = "@input", style = (
+        bold = nil, italic = nil, underline = true, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil
+    ), fg_ix = cast[i8] Palette_Ix.text_primary,
+    bg_ix = cast[i8] Palette_Ix.surface_light)
+]
+
+private var registered_themes: Dict[string, Ref[Theme]] = {:}
+private var themes_lock: Atomic[u32] = 0
+private var current: Atomic[Ref[Theme]?] = nil
+
+private const themes_writer_bit: u32 = 0x8000_0000
+
+private func themes_spin_wait(modify attempt: u32) {
+    if attempt < 64 {
+        __os_cpu_relax()
+        attempt += 1
+        return
+    }
+    __gc_enter_blocking()
+    __os_thread_yield()
+    __gc_leave_blocking()
+    attempt = 0
+}
+
+private func themes_read_lock() {
+    var attempt: u32 = 0
+    while true {
+        let seen: u32 = themes_lock
+        if seen & themes_writer_bit == 0 and
+            __atomic_compare_exchange(ref themes_lock, seen, seen + 1) {
+            return
+        }
+        themes_spin_wait(attempt)
+    }
+}
+
+private func themes_read_unlock() {
+    __atomic_fetch_sub(ref themes_lock, 1)
+}
+
+private func themes_write_lock() {
+    var attempt: u32 = 0
+    while !__atomic_compare_exchange(ref themes_lock, 0, themes_writer_bit) {
+        themes_spin_wait(attempt)
+    }
+}
+
+private func themes_write_unlock() {
+    themes_lock = 0
+}
+
+private func name_eq(a: string, b: string) -> bool {
+    let n: u64 = byte_len(a)
+    if n != byte_len(b) {
+        return false
+    }
+    for i from 0 until n {
+        if byte_at(a, i) != byte_at(b, i) {
+            return false
+        }
+    }
+    return true
+}
+
+func install(theme: Ref[Theme]) {
+    themes_write_lock()
+    registered_themes[theme.name] = theme
+    themes_write_unlock()
+}
+
+func theme_lookup(name: string) -> Ref[Theme]? {
+    var hit: Ref[Theme]? = nil
+    themes_read_lock()
+    hit = registered_themes[name]
+    themes_read_unlock()
+    if hit != nil {
+        return hit
+    }
+    for i from 0 until builtin_themes.len() {
+        if name_eq(builtin_themes[i].name, name) {
+            return builtin_themes[i]
+        }
+    }
+    return nil
+}
+
+func theme_current() -> Ref[Theme] {
+    let pinned: Ref[Theme]? = current
+    if pinned != nil {
+        return pinned.get()
+    }
+    let fallback: Ref[Theme]? = theme_lookup("n00b-classic")
+    if fallback != nil {
+        return fallback.get()
+    }
+    return builtin_themes[0]
+}
+
+func theme_set_current(name: string) -> bool {
+    let hit: Ref[Theme]? = theme_lookup(name)
+    if hit == nil {
+        return false
+    }
+    current = hit.get()
+    return true
+}
+
+func theme_builtin_count() -> uint {
+    return builtin_themes.len()
+}
+
+func theme_builtin(i: uint) -> Ref[Theme] {
+    if i >= builtin_themes.len() {
+        return builtin_themes[0]
+    }
+    return builtin_themes[i]
+}
+
+private func theme_is_builtin(theme: Ref[Theme]) -> bool {
+    for i from 0 until builtin_themes.len() {
+        if builtin_themes[i] == theme {
+            return true
+        }
+    }
+    return false
+}
+
+func palette(self: Theme, ix: Palette_Ix) -> Color? {
+    let at: int = cast[int] ix
+    if at < 0 or at >= cast[int] Palette_Ix.palette_size {
+        return nil
+    }
+    return self.palette[cast[uint] at]
+}
+
+private func binding_style(b: Style_Binding) -> Text_Style {
+    var s: Text_Style = b.style
+    if b.fg_ix >= 0 {
+        s.fg_palette_ix = b.fg_ix
+    }
+    if b.bg_ix >= 0 {
+        s.bg_palette_ix = b.bg_ix
+    }
+    return s
+}
+
+private func clone_bindings(src: List[Style_Binding], n: uint,
+                            extra: uint) -> Array[Style_Binding] {
+    var out: Array[Style_Binding] =
+        new[Array[Style_Binding]](cast[int](n + extra))
+    for i from 0 until n {
+        out[i] = src[cast[int] i]
+    }
+    return out
+}
+
+private func put_binding(modify tbl: List[Style_Binding]?, is_role: bool,
+                         name: string, style: Text_Style) {
+    var src: List[Style_Binding]
+    if tbl != nil {
+        src = tbl.get()
+    }
+    elif is_role {
+        src = sys.abi.list_with_length(default_roles, default_roles.len())
+    }
+    else {
+        src = sys.abi.list_with_length(default_styles, default_styles.len())
+    }
+    let src_n: uint = src.len()
+    var at: uint = src_n
+    for i from 0 until src_n {
+        if name_eq(src[cast[int] i].name, name) {
+            at = i
+            break
+        }
+    }
+    let total: uint = if at == src_n { = src_n + 1 } else { = src_n }
+    let extra: uint = if at == src_n { = 1 } else { = 0 }
+    var out: Array[Style_Binding] = clone_bindings(src, src_n, extra)
+    out[at] = (name = name, style = style, fg_ix = -1, bg_ix = -1)
+    tbl = sys.abi.list_with_length(out, total)
+}
+
+func copy(self: Theme, name: string) -> Ref[Theme] {
+    var out: Theme = self
+    out.name = name
+    let base_styles: List[Style_Binding]? = self.styles
+    let base_roles: List[Style_Binding]? = self.roles
+    var styles: List[Style_Binding]
+    if base_styles != nil {
+        styles = base_styles.get()
+    }
+    else {
+        styles = sys.abi.list_with_length(default_styles,
+                                          default_styles.len())
+    }
+    let ns: uint = styles.len()
+    var roles: List[Style_Binding]
+    if base_roles != nil {
+        roles = base_roles.get()
+    }
+    else {
+        roles = sys.abi.list_with_length(default_roles, default_roles.len())
+    }
+    let nr: uint = roles.len()
+    out.styles = sys.abi.list_with_length(clone_bindings(styles, ns, 0), ns)
+    out.roles = sys.abi.list_with_length(clone_bindings(roles, nr, 0), nr)
+    return ref out
+}
+
+func set_role(self: Ref[Theme], role: string, style: Text_Style) {
+    if theme_is_builtin(self) {
+        panic("builtin themes are immutable; copy the theme first")
+    }
+    put_binding(self.roles, true, role, style)
+}
+
+func set_style(self: Ref[Theme], name: string, style: Text_Style) {
+    if theme_is_builtin(self) {
+        panic("builtin themes are immutable; copy the theme first")
+    }
+    put_binding(self.styles, false, name, style)
+}
+
+func style_for_tag(self: Theme, tag: string) -> Text_Style {
+    let intrinsic: Text_Style = intrinsic_tag_style(tag)
+    if !is_empty(intrinsic) {
+        return intrinsic
+    }
+    if byte_len(tag) == 0 {
+        return (bold = nil, italic = nil, underline = nil,
+                double_underline = nil, strikethrough = nil, reverse = nil,
+                dim = nil, blink = nil, text_case = Text_Case.none,
+                font_hint = Font_Hint.default, font_index = nil,
+                fg_palette_ix = nil, bg_palette_ix = nil, fg_rgb = nil,
+                bg_rgb = nil, font_size = nil)
+    }
+    let is_role: bool = byte_at(tag, 0) == 0x40
+    let own: List[Style_Binding]? = if is_role { = self.roles }
+                                    else { = self.styles }
+    var tbl: List[Style_Binding]
+    if own != nil {
+        tbl = own.get()
+    }
+    elif is_role {
+        tbl = sys.abi.list_with_length(default_roles, default_roles.len())
+    }
+    else {
+        tbl = sys.abi.list_with_length(default_styles, default_styles.len())
+    }
+    let n: uint = tbl.len()
+    for i from 0 until n {
+        if name_eq(tbl[cast[int] i].name, tag) {
+            return binding_style(tbl[cast[int] i])
+        }
+    }
+    return (bold = nil, italic = nil, underline = nil, double_underline = nil,
+            strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+            text_case = Text_Case.none, font_hint = Font_Hint.default,
+            font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+            fg_rgb = nil, bg_rgb = nil, font_size = nil)
+}

@@ -243,11 +243,11 @@ func ranges(self: internal.types.Char_Filter)
 
             var i: u32 = 0
             while i < generated.blocks.block_count {
-                if cast[u32] generated.blocks.block_ids[i] == want {
+                if cast[u32] generated.blocks.block_ids(i) == want {
                     internal.runebuf.push(acc,
-                        cast[char] generated.blocks.block_ranges[i][0])
+                        cast[char] generated.blocks.block_ranges(i, 0))
                     internal.runebuf.push(acc,
-                        cast[char] generated.blocks.block_ranges[i][1])
+                        cast[char] generated.blocks.block_ranges(i, 1))
                 }
                 i += 1
             }
@@ -439,7 +439,7 @@ func char_from_name(name: string) -> char? {
 func script_by_name(name: string) -> internal.types.Script? {
     var i: u32 = 0
     while i < generated.scripts.script_count {
-        if generated.scripts.script_names[i] == name {
+        if generated.scripts.script_names(i) == name {
             return cast[internal.types.Script] i
         }
         i += 1
@@ -451,7 +451,7 @@ func script_by_name(name: string) -> internal.types.Script? {
 func block_by_name(name: string) -> internal.types.Block? {
     var i: u32 = 0
     while i <= generated.blocks.block_count {
-        if generated.blocks.block_names[i] == name {
+        if generated.blocks.block_names(i) == name {
             return cast[internal.types.Block] i
         }
         i += 1

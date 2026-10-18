@@ -253,8 +253,10 @@ rebind_call_node(n00bb_tu_state_t *state, parse_tree_t *node,
 {
     parse_node_resolution_t resolution = parse_tree_resolution(node);
     if (resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
-        && resolution.target.symbol == from)
+        && resolution.target.symbol == from) {
         parse_tree_set_resolution_symbol(node, to);
+        if (parse_sym_remove_use(from, node)) (void)parse_sym_add_use(to, node);
+    }
     if (core_tree_node_value(node).sym == from)
         core_tree_node_value(node).sym = to;
     n00bb_link_use_site_t *site = link_use_site_for_node(state, node);
@@ -273,6 +275,136 @@ rebind_call_callee(parse_grammar_t *grammar, n00bb_tu_state_t *state,
     parse_tree_t *member = member_access_node(grammar, label->cond);
     if (member) rebind_call_node(state, member, from, to);
     if (call && !core_tree_is_leaf(call)) rebind_call_node(state, call, from, to);
+}
+
+static void
+unify_call_argument(core_translation_unit_t *unit, n00bb_tu_state_t *state,
+                    parse_tree_t *diagnostic_node, parse_tree_t *argument,
+                    th_type *expected, bool context_call)
+{
+    th_type *actual = core_tree_node_value(argument).type;
+    if (context_call && n00bb_value_coerces(state->types, actual, expected))
+        report_call_type_error(unit, argument, state->types, actual,
+                               expected);
+    else (void)unify_call_node_type(unit, state, diagnostic_node, argument,
+                                    actual, expected);
+    (void)n00bb_contextual_float_literal(argument, expected);
+}
+
+static void
+report_call_binding_error(core_translation_unit_t *unit, parse_tree_t *node,
+                          const char *code, const char *message)
+{
+    core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit,
+        CORE_DIAG_ERROR, core_string_from_cstr(code),
+        core_string_from_cstr(message), link_source_location(node));
+}
+
+static void
+report_missing_parameter(parse_grammar_t *grammar,
+                         core_translation_unit_t *unit,
+                         parse_sym_entry_t *callee, parse_tree_t *formals,
+                         size_t index, parse_tree_t *site)
+{
+    const char *name = nullptr;
+    size_t name_size = 0;
+    (void)function_parameter_info(grammar, callee, formals, index, nullptr,
+                                  &name, &name_size, nullptr, nullptr);
+    core_buffer_t message = {0};
+    core_buffer_printf(&message, "call omits the required parameter '%.*s'",
+                       (int)name_size, name ? name : "");
+    core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit,
+        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0040"),
+        core_string_borrow(message.data, message.byte_len),
+        link_source_location(site));
+    core_buffer_release(&message);
+}
+
+bool
+n00bb_bind_call_arguments(parse_grammar_t *grammar,
+                          core_translation_unit_t *unit,
+                          parse_sym_entry_t *callee, th_type *signature,
+                          parse_tree_t *call_args, size_t offset,
+                          parse_tree_t *site,
+                          core_list_t(n00bb_call_binding_t) *bindings)
+{
+    signature = signature ? th_resolve(signature) : nullptr;
+    if (!signature || th_kind_of(signature) != TH_FUNCTION) return true;
+    size_t parameter_count = th_func_nparams(signature);
+    const th_param *rest = th_func_rest(signature);
+    bool *bound = core_alloc_array(bool,
+                                   parameter_count ? parameter_count : 1);
+    for (size_t i = 0; i < offset && i < parameter_count; i++)
+        bound[i] = true;
+    bool valid = true;
+    core_list_t(n00bb_tree_ptr_t) positional =
+        core_list_new(n00bb_tree_ptr_t);
+    collect_positional_nodes(grammar,
+        child_nt(grammar, call_args, "positional-args"), &positional);
+    for (size_t i = 0; i < positional.len; i++) {
+        size_t index = i + offset;
+        const th_param *parameter = index < parameter_count
+            ? th_func_param(signature, index) : rest;
+        if (!parameter) {
+            report_call_binding_error(unit, positional.data[i],
+                "N00BB-T0039",
+                "call passes more arguments than its function has parameters");
+            valid = false;
+            break;
+        }
+        if (index < parameter_count) bound[index] = true;
+        if (!core_tree_is_leaf(positional.data[i]))
+            core_list_push(*bindings, ((n00bb_call_binding_t){
+                positional.data[i], parameter->type, false}));
+    }
+    core_list_free(positional);
+    parse_tree_t *formals = callee
+        ? callable_formal_parameters(grammar, callee) : nullptr;
+    core_list_t(n00bb_tree_ptr_t) keywords = core_list_new(n00bb_tree_ptr_t);
+    if (callee)
+        collect_keyword_nodes(grammar,
+            child_nt(grammar, call_args, "keyword-args"), &keywords);
+    for (size_t i = 0; i < keywords.len; i++) {
+        parse_tree_t *keyword = keywords.data[i];
+        parse_tree_t *argument = child_nt(grammar, keyword, "expression");
+        size_t index = 0;
+        th_type *expected = nullptr;
+        if (function_parameter_named(grammar, callee, formals,
+                call_keyword_name(keyword), &index)) {
+            const th_param *parameter = th_func_param(signature, index);
+            const th_kwparam *option = index >= parameter_count
+                ? th_func_kw(signature, index - parameter_count) : nullptr;
+            expected = parameter ? parameter->type
+                : option ? option->type : nullptr;
+        }
+        if (!expected) {
+            report_call_binding_error(unit, keyword, "N00BB-T0037",
+                "named argument does not match a parameter");
+            valid = false;
+            continue;
+        }
+        if (index < parameter_count && bound[index]) {
+            report_call_binding_error(unit, keyword, "N00BB-T0038",
+                "a parameter is supplied more than once");
+            valid = false;
+            continue;
+        }
+        if (index < parameter_count) bound[index] = true;
+        if (argument && !core_tree_is_leaf(argument))
+            core_list_push(*bindings, ((n00bb_call_binding_t){
+                argument, expected, true}));
+    }
+    core_list_free(keywords);
+    for (size_t i = 0; valid && callee && i < parameter_count; i++) {
+        uint8_t flags = 0;
+        if (bound[i] || !function_parameter_info(grammar, callee, formals,
+                i, nullptr, nullptr, nullptr, &flags, nullptr)
+            || (flags & 1u)) continue;
+        report_missing_parameter(grammar, unit, callee, formals, i, site);
+        valid = false;
+    }
+    core_free(bound);
+    return valid;
 }
 
 static void
@@ -342,6 +474,7 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
         th_type *signature = context_call ? context_target->type
             : callee_symbol ? callee_symbol->type : callee_node->type;
         bool signature_instantiated = false;
+        parse_sym_entry_t *keyword_callee = nullptr;
         if (!member_call && callee_symbol
             && callee_symbol->callable_contract) {
             signature = call_site_channels(call_sites, label,
@@ -403,21 +536,50 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
                     th_env_method_requirements(state->types, method_name,
                         requirements, requirement_count);
                 size_t matched = SIZE_MAX;
+                parse_sym_entry_t *matched_requirement = nullptr;
+                n00bb_requirement_fit_t best = N00BB_REQUIREMENT_DOES_NOT_FIT;
+                bool ambiguous = false;
+                size_t sole = SIZE_MAX, named_requirements = 0;
+                parse_sym_entry_t *sole_requirement = nullptr;
                 for (size_t r = 0; r < requirement_count; r++) {
-                    if (!has_trait_constraint(receiver_type,
-                                              requirements[r].trait_name)
-                        && !(has_deferred_method_constraint(receiver_type,
-                                method_text)
-                            && n00bb_method_requirement_matches(
-                                receiver_type, method_text,
-                                requirements[r].signature)))
-                        continue;
-                    if (matched != SIZE_MAX) {
-                        matched = SIZE_MAX;
-                        break;
+                    parse_sym_entry_t *requirement =
+                        trait_method_requirement_symbol(grammar,
+                            state->link_analysis, unit,
+                            core_string_from_cstr(requirements[r].trait_name),
+                            method_text);
+                    if (requirement && requirement != sole_requirement) {
+                        sole_requirement = requirement;
+                        sole = r;
+                        named_requirements++;
                     }
+                    n00bb_requirement_fit_t fit = has_trait_constraint(
+                            receiver_type, requirements[r].trait_name)
+                        ? N00BB_REQUIREMENT_FITS_EXACTLY
+                        : has_deferred_method_constraint(receiver_type,
+                                                         method_text)
+                        ? n00bb_method_requirement_fit(grammar, state->types,
+                            receiver_type, method_text,
+                            requirements[r].signature, requirement)
+                        : N00BB_REQUIREMENT_DOES_NOT_FIT;
+                    if (fit == N00BB_REQUIREMENT_DOES_NOT_FIT || fit < best)
+                        continue;
+                    ambiguous = fit == best;
+                    best = fit;
                     matched = r;
+                    matched_requirement = requirement;
                 }
+                if (ambiguous) {
+                    matched = SIZE_MAX;
+                    matched_requirement = nullptr;
+                }
+                if (best == N00BB_REQUIREMENT_DOES_NOT_FIT
+                    && named_requirements == 1
+                    && has_deferred_method_constraint(receiver_type,
+                                                      method_text)) {
+                    matched = sole;
+                    matched_requirement = sole_requirement;
+                }
+                if (!callee_symbol) keyword_callee = matched_requirement;
                 signature = matched != SIZE_MAX
                     ? call_site_requirement_signature(call_sites, label,
                         state->types, requirements[matched].signature,
@@ -532,9 +694,6 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
                 signature = call_site_signature(call_sites, label,
                     state->types, signature);
         }
-        parse_tree_t *positional = child_nt(grammar, label->then_body,
-                                            "positional-args");
-        size_t parameter_count = th_func_nparams(signature);
         size_t parameter_offset = member_call ? 1 : 0;
         if (member_call) {
             const th_param *receiver = th_func_param(signature, 0);
@@ -546,21 +705,20 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
                     receiver_node, receiver_type, receiver->type))
                 continue;
         }
-        core_list_t(n00bb_tree_ptr_t) arguments =
-            core_list_new(n00bb_tree_ptr_t);
-        collect_positional_nodes(grammar, positional, &arguments);
-        for (size_t i = 0; i < arguments.len; i++) {
-            parse_tree_t *argument = arguments.data[i];
-            const th_param *parameter = th_func_param(signature,
-                i + parameter_offset);
-            if (!parameter && i + parameter_offset >= parameter_count)
-                parameter = th_func_rest(signature);
-            if (!parameter || core_tree_is_leaf(argument)) continue;
-            (void)unify_call_node_type(unit, state, label->self, argument,
-                core_tree_node_value(argument).type, parameter->type);
-            (void)n00bb_contextual_float_literal(argument, parameter->type);
+        parse_sym_entry_t *named = context_call ? context_target
+            : keyword_callee ? keyword_callee
+            : member_call ? callee_symbol : canonical_symbol(callee_symbol);
+        core_list_t(n00bb_call_binding_t) bindings =
+            core_list_new(n00bb_call_binding_t);
+        (void)n00bb_bind_call_arguments(grammar, unit, named, signature,
+            label->then_body, parameter_offset, label->self, &bindings);
+        for (size_t i = 0; i < bindings.len; i++) {
+            n00bb_call_binding_t *binding = &bindings.data[i];
+            unify_call_argument(unit, state,
+                binding->keyword ? binding->argument : label->self,
+                binding->argument, binding->expected, context_call);
         }
-        core_list_free(arguments);
+        core_list_free(bindings);
         th_type *return_type = th_func_ret(signature);
         if (return_type && result
             && th_kind_of(th_resolve(result)) == TH_VAR) {

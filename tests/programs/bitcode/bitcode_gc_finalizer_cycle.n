@@ -101,7 +101,7 @@ var marker: sys.gc.core.Marker
 sys.gc.mark.marker_init(marker, heap, false)
 sys.gc.sync.ticket_lock(ref heap.lock)
 sys.gc.finalize.find_dead_locked(ref marker)
-sys.gc.heap.unlock(heap)
+sys.gc.sync.ticket_unlock(ref heap.lock)
 require heap.finq_n == 2
 require sys.gc.finalize.run(heap, 0) == 2
 require finalized == 2

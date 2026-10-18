@@ -1,0 +1,86 @@
+import text
+
+func check(ok: bool, code: string) {
+    if !ok {
+        __fd_write(2, "FAIL style_probe " + code + "\n")
+        require false
+    }
+}
+
+func is_state(v: bool?, want: bool) -> bool {
+    if v == nil {
+        return false
+    }
+    return v.get() == want
+}
+
+func is_color(v: text.Color?, want: text.Color) -> bool {
+    if v == nil {
+        return false
+    }
+    return v.get() == want
+}
+
+func tag_sets_bold(tag: string) -> bool {
+    let s: text.Text_Style = text.intrinsic_tag_style(tag)
+    return is_state(s.bold, true)
+}
+
+func style_probe_main() {
+    var empty: text.Text_Style
+    check(text.is_empty(empty), "1")
+    check(text.merge(empty, empty) == empty, "2")
+
+    var bold: text.Text_Style
+    bold.bold = true
+    var italic: text.Text_Style
+    italic.italic = true
+    let both: text.Text_Style = text.merge(bold, italic)
+    check(is_state(both.bold, true) and is_state(both.italic, true), "3")
+
+    var bold_off: text.Text_Style
+    bold_off.bold = false
+    let off: text.Text_Style = text.merge(bold, bold_off)
+    check(is_state(off.bold, false), "4")
+    check(is_state(text.merge(bold, empty).bold, true), "5")
+
+    var upper: text.Text_Style
+    upper.text_case = text.Text_Case.upper
+    var lower: text.Text_Style
+    lower.text_case = text.Text_Case.lower
+    check(text.merge(upper, lower).text_case == text.Text_Case.lower, "6")
+    check(text.merge(upper, empty).text_case == text.Text_Case.upper, "7")
+
+    var red: text.Text_Style
+    red.fg_rgb = 0xff0000
+    var blue: text.Text_Style
+    blue.fg_rgb = 0x0000ff
+    let won: text.Text_Style = text.merge(red, blue)
+    check(is_color(won.fg_rgb, 0x0000ff), "8")
+    let kept: text.Text_Style = text.merge(red, empty)
+    check(is_color(kept.fg_rgb, 0xff0000), "9")
+
+    check(bold != italic and bold == bold, "10")
+    check(tag_sets_bold("b") and tag_sets_bold("bold"), "11")
+    check(is_state(text.intrinsic_tag_style("2u").double_underline, true) and
+          is_state(text.intrinsic_tag_style("uu").double_underline, true),
+          "12")
+    check(is_state(text.intrinsic_tag_style("faint").dim, true) and
+          is_state(text.intrinsic_tag_style("dim").dim, true), "13")
+    check(is_state(text.intrinsic_tag_style("strikethrough").strikethrough,
+                   true) and
+          is_state(text.intrinsic_tag_style("st").strikethrough, true) and
+          is_state(text.intrinsic_tag_style("strike").strikethrough, true),
+          "14")
+    check(text.intrinsic_tag_style("allcaps").text_case ==
+              text.Text_Case.caps and
+          text.intrinsic_tag_style("t").text_case == text.Text_Case.title and
+          text.intrinsic_tag_style("l").text_case == text.Text_Case.lower and
+          text.intrinsic_tag_style("up").text_case == text.Text_Case.upper,
+          "15")
+    check(text.is_empty(text.intrinsic_tag_style("nosuchtag")), "16")
+    check(text.is_empty(text.intrinsic_tag_style("@error")), "17")
+}
+
+style_probe_main()
+__fd_write(2, "ok")

@@ -595,6 +595,19 @@ test(
 )
 
 test(
+    'try-without-failure-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'features'
+               / 'try_without_failure.n',
+           'this `try` has no failure path',
+           'try_without_failure.n:2:21'],
+    timeout: 120,
+    suite: 'slow',
+)
+
+test(
     'let-array-reassign-n00b',
     find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
@@ -616,6 +629,30 @@ test(
            'contents of constant const_array_write_rejected.bytes',
            'contents of constant const_array_write_rejected.grid',
            'contents of constant const_array_write_rejected.points'],
+    timeout: 120,
+    suite: 'slow',
+)
+
+foreach declared_root : ['shape', 'maker']
+    test(
+        'import-cycle-declared-' + declared_root + '-n00b',
+        find_program('sh'),
+        args: [meson.current_source_dir() / 'tests' / 'compile_module.sh',
+               n00bb_exe.full_path(),
+               meson.current_source_dir() / 'tests' / 'programs'
+                   / 'import_cycles' / 'declared',
+               declared_root],
+        timeout: 120,
+        suite: 'slow',
+    )
+endforeach
+
+test(
+    'compile-fallible-index-read-n00b', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'compile_module.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'compile_mode',
+           'fallible_index_read'],
     timeout: 120,
     suite: 'slow',
 )
@@ -681,6 +718,44 @@ test(
 )
 
 test(
+    'folded-consts-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'folded_consts' / 'folded_consts.n'],
+    timeout: 120,
+    suite: 'slow',
+)
+
+foreach rejected : [
+    ['folded-const-range-n00b', 'folded_const_range.n',
+     'assigned value does not match the local type'],
+    ['folded-bitwise-local-n00b', 'folded_bitwise_local.n',
+     'assigned value does not match the local type'],
+    ['folded-bitwise-argument-n00b', 'folded_bitwise_argument.n',
+     'call type does not match its function (uint vs i16)'],
+    ['folded-bitwise-return-n00b', 'folded_bitwise_return.n',
+     'does not match declared signature'],
+    ['folded-bitwise-assign-n00b', 'folded_bitwise_assign.n',
+     'storing uint in global'],
+    ['folded-bitwise-const-n00b', 'folded_bitwise_const.n',
+     'assigned value does not match the local type'],
+]
+    test(
+        rejected[0],
+        find_program('sh'),
+        args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+               n00bb_exe.full_path(),
+               meson.current_source_dir() / 'tests' / 'programs'
+                   / 'folded_consts' / rejected[1],
+               rejected[2]],
+        timeout: 120,
+        suite: 'slow',
+    )
+endforeach
+
+test(
     'wide-integer-literal-range-n00b',
     find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
@@ -691,6 +766,85 @@ test(
     timeout: 120,
     suite: 'slow',
 )
+
+foreach rejected : [
+    ['free', [
+        'N00BB-T0002]: call type does not match its function (string vs int)',
+        'keyword_argument_free_rejected.n:5:15',
+        'N00BB-T0037]: named argument does not match a parameter',
+        'keyword_argument_free_rejected.n:6:11',
+        'N00BB-T0038]: a parameter is supplied more than once',
+        'keyword_argument_free_rejected.n:7:14']],
+    ['method', [
+        'N00BB-T0002]: call type does not match its function (string vs int)',
+        'keyword_argument_method_rejected.n:14:22']],
+    ['generic', [
+        'N00BB-T0002]: call type does not match its function (string vs int)',
+        'keyword_argument_generic_rejected.n:14:28']],
+    ['constructor', [
+        'N00BB-T0020]: no visible __init matches this constructed type',
+        'keyword_argument_constructor_rejected.n:9:17']],
+    ['context', [
+        'N00BB-T0002]: call type does not match its function (builtin.containers.buffer.Buffer vs string)',
+        'keyword_argument_context_rejected.n:9:16',
+        'N00BB-T0002]: call type does not match its function (int vs string)',
+        'keyword_argument_context_rejected.n:12:16']],
+]
+    test(
+        'keyword-argument-' + rejected[0] + '-rejected',
+        find_program('sh'),
+        args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+               n00bb_exe.full_path(),
+               meson.current_source_dir() / 'tests' / 'programs'
+                   / 'features'
+                   / 'keyword_argument_' + rejected[0] + '_rejected.n']
+            + rejected[1],
+        timeout: 120,
+        suite: 'slow',
+    )
+endforeach
+
+foreach rejected : [
+    ['free', [
+        'N00BB-T0039]: call passes more arguments than its function has parameters',
+        'call_arity_free_rejected.n:5:17',
+        'N00BB-T0040]: call omits the required parameter \'x\'',
+        'call_arity_free_rejected.n:6:9']],
+    ['method', [
+        'N00BB-T0039]: call passes more arguments than its function has parameters',
+        'call_arity_method_rejected.n:14:20',
+        'N00BB-T0040]: call omits the required parameter \'by\'',
+        'call_arity_method_rejected.n:15:9']],
+    ['generic', [
+        'N00BB-T0039]: call passes more arguments than its function has parameters',
+        'call_arity_generic_rejected.n:14:26',
+        'N00BB-T0040]: call omits the required parameter \'by\'',
+        'call_arity_generic_rejected.n:18:12']],
+    ['constructor', [
+        'N00BB-T0039]: call passes more arguments than its function has parameters',
+        'call_arity_constructor_rejected.n:9:35']],
+    ['constructor_missing', [
+        'N00BB-T0040]: call omits the required parameter \'count\'',
+        'call_arity_constructor_missing_rejected.n:9:19']],
+    ['context', [
+        'N00BB-T0039]: call passes more arguments than its function has parameters',
+        'call_arity_context_rejected.n:8:17',
+        'N00BB-T0040]: call omits the required parameter \'s\'',
+        'call_arity_context_rejected.n:10:6']],
+]
+    test(
+        'call-arity-' + rejected[0].replace('_', '-') + '-rejected',
+        find_program('sh'),
+        args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+               n00bb_exe.full_path(),
+               meson.current_source_dir() / 'tests' / 'programs'
+                   / 'features'
+                   / 'call_arity_' + rejected[0] + '_rejected.n']
+            + rejected[1],
+        timeout: 120,
+        suite: 'slow',
+    )
+endforeach
 
 foreach feature : ['fallible_without_result', 'try_error_binding',
                    'builtin_type_record_literal', 'record_literal_nil_option',
@@ -703,7 +857,11 @@ foreach feature : ['fallible_without_result', 'try_error_binding',
                    'initializer_shadowing', 'array_element_shift',
                    'array_element_field_update', 'let_array_elements',
                    'constructor_integer_literal', 'wide_integer_literal',
-                   'quotes_litmod_raw']
+                   'quotes_litmod_raw', 'import_prelude_name',
+                   'atomic_auto_load', 'value_branch_literal_context',
+                   'one_bit_enum_array', 'same_module_overloads',
+                   'range_literal_start', 'record_literal_argument',
+                   'keyword_argument_context']
     test(
         feature.replace('_', '-'), find_program('sh'),
         args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
@@ -716,11 +874,42 @@ foreach feature : ['fallible_without_result', 'try_error_binding',
 endforeach
 
 test(
+    'program-args', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'program_args_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'features'
+               / 'program_args.n',
+           'alpha', 'two words'],
+    timeout: 120,
+    suite: 'slow',
+)
+
+test(
     'buffer-probe', find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'buffer'
                / 'buffer_probe.n'],
+    timeout: 180,
+    suite: 'slow',
+)
+
+test(
+    'buffer-finalizer-borrow', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'buffer'
+               / 'buffer_finalizer_borrow.n'],
+    timeout: 180,
+    suite: 'slow',
+)
+
+test(
+    'buffer-finalizer-borrow-release', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'buffer'
+               / 'buffer_finalizer_borrow.n'],
     timeout: 180,
     suite: 'slow',
 )
@@ -804,11 +993,21 @@ test(
            '\'limit\' cannot be declared here',
            'import_name_clash.n:16:7',
            '\'counter\' cannot be declared here',
-           'import_name_clash.n:18:5',
-           '\'lit\' cannot be declared here',
-           '\'verbatim\' cannot be declared here'],
+           'import_name_clash.n:18:5'],
     env: ['N00B_PATH=' + (meson.current_source_dir() / 'tests'
         / 'programs' / 'import_names')],
+    timeout: 120,
+    suite: 'slow',
+)
+
+test(
+    'implicit-package-name-n00b', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'import_names' / 'implicit_package_name.n',
+           '\'builtin\' cannot be declared here because it names a package this module uses',
+           'implicit_package_name.n:1:1'],
     timeout: 120,
     suite: 'slow',
 )
@@ -979,9 +1178,69 @@ foreach string_probe : ['core_probe', 'rstr_probe', 'raw_literal_probe',
                n00bb_exe.full_path(),
                meson.current_source_dir() / 'tests' / 'programs' / 'string'
                    / string_probe + '.n'],
+        timeout: 180,
         suite: 'slow',
     )
 endforeach
+
+foreach conformance_suite : ['grapheme', 'word', 'sentence', 'line',
+                             'normalization', 'bidi', 'collation', 'idna']
+    test(
+        conformance_suite,
+        find_program('sh'),
+        args: [meson.current_source_dir() / 'tests' / 'program_args_n00b.sh',
+               n00bb_exe.full_path(),
+               meson.current_source_dir() / 'tests' / 'programs' / 'unicode'
+                   / 'conformance.n',
+               conformance_suite],
+        workdir: meson.current_source_dir() / 'tests' / 'programs'
+            / 'unicode',
+        timeout: 600,
+        suite: 'conformance',
+    )
+endforeach
+
+foreach unicode_probe : ['transcode_probe', 'encoding_probe']
+    test(
+        'unicode-' + unicode_probe.replace('_', '-'),
+        find_program('sh'),
+        args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+               n00bb_exe.full_path(),
+               meson.current_source_dir() / 'tests' / 'programs' / 'unicode'
+                   / unicode_probe + '.n'],
+        timeout: 180,
+        suite: 'slow',
+    )
+endforeach
+
+foreach text_probe : ['color_probe', 'capability_probe', 'theme_probe',
+                      'border_probe', 'rich_static_probe', 'rich_build_probe',
+                      'cascade_probe', 'layout_probe', 'text_string_probe',
+                      'style_probe', 'style_fields_probe',
+                      'rich_literal_probe', 'rich_repr_probe', 'table_probe']
+    test(
+        'text-' + text_probe.replace('_', '-'),
+        find_program('sh'),
+        args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+               n00bb_exe.full_path(),
+               meson.current_source_dir() / 'tests' / 'programs' / 'text'
+                   / text_probe + '.n'],
+        timeout: 180,
+        suite: 'slow',
+    )
+endforeach
+
+test(
+    'text-theme-builtin-immutable',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'panic_message_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'text'
+               / 'theme_builtin_immutable.n',
+           'builtin themes are immutable; copy the theme first'],
+    timeout: 180,
+    suite: 'slow',
+)
 
 test(
     'comptime-c-record-deferred-array-n00b',

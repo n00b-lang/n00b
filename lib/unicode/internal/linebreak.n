@@ -14,7 +14,7 @@ private func raw_lb_class(cp: char) -> internal.types.Lb {
     }
 
     return cast[internal.types.Lb] generated.linebreak.lb_stage2[
-        cast[u32] generated.linebreak.lb_stage1[v >> 8] * 256 + (v & 0xff)]
+        cast[u32] generated.linebreak.lb_stage1(v >> 8) * 256 + (v & 0xff)]
 }
 
 private func resolve_lb(cp: char, cls: internal.types.Lb) -> internal.types.Lb {

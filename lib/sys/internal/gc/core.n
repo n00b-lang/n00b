@@ -103,10 +103,8 @@ record Config layout(c) {
     scan_stacks:             bool
     world_timeout_ms:        u32
     finalizer_backlog_limit: uint
-    finalizer_assist:        bool
     on_pause:                Ref[(uint, Ref[byte]?) -> nil]?
     on_cycle:                Ref[(Cycle_Info, Ref[byte]?) -> nil]?
-    finalizers_ready:        Ref[(Ref[byte]?) -> nil]?
     telemetry_user:          Ref[byte]?
 }
 
@@ -226,9 +224,12 @@ record Heap layout(c) {
     final_los:              Ref[Los_Obj]?
     fin:                    Ticket_Lock
     fin_held:               bool
-    fin_assisting:          Atomic[bool]
     fin_notify:             Atomic[bool]
     fin_progress:           Event
+    fin_wake:               Event
+    fin_thread:             Atomic[u32]
+    fin_live:               Atomic[u32]
+    fin_stalled:            Atomic[uint]
     finq:                   Ref[byte]?
     finq_n:                 uint
     finq_cap:               uint
@@ -349,7 +350,6 @@ record Mutator layout(c) {
     stack_hi:           Ref[byte]?
     ctx_valid:          bool
     captured:           internal.threads.Thread_Context
-    in_finalizers:      bool
     pace_wait:          bool
     objects_allocated:  uint
     bytes_allocated:    uint

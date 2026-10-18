@@ -1,0 +1,166 @@
+import sys.env
+import sys.term
+import internal.color
+
+private const forced_depth_unset: u8 = 255
+private const forced_width_set: u32 = 0x8000_0000
+
+private var forced_depth: Atomic[u8] = 255
+private var forced_width: Atomic[u32] = 0
+private var env_ceiling: Atomic[u8] = 0
+private var env_scanned: Atomic[bool] = false
+
+private func env_value(name: string) -> string? {
+    let nlen: u64 = byte_len(name)
+    let cnt: uint = sys.env.count()
+    var i: uint = 0
+    while i < cnt {
+        let e: string = sys.env.at(i).get_or_else("")
+        let elen: u64 = byte_len(e)
+        if elen <= nlen or byte_at(e, nlen) != 0x3d {
+            i += 1
+            continue
+        }
+        var same: bool = true
+        for j from 0 until nlen {
+            if byte_at(e, j) != byte_at(name, j) {
+                same = false
+                break
+            }
+        }
+        if same {
+            return byte_slice(e, cast[int](nlen + 1), cast[int] elen)
+        }
+        i += 1
+    }
+    return nil
+}
+
+private func env_contains(name: string, needle: string) -> bool {
+    let v: string? = env_value(name)
+    if v == nil {
+        return false
+    }
+    return find_bytes(v.get(), needle) != nil
+}
+
+private func env_equals(name: string, want: string) -> bool {
+    let v: string? = env_value(name)
+    if v == nil {
+        return false
+    }
+    let got: string = v.get()
+    if byte_len(got) != byte_len(want) {
+        return false
+    }
+    return find_bytes(got, want) != nil
+}
+
+private func compute_env_ceiling() -> internal.color.Color_Depth {
+    let no_color: string? = env_value("NO_COLOR")
+    if no_color != nil and byte_len(no_color.get()) > 0 {
+        return internal.color.Color_Depth.mono
+    }
+    if env_value("TERM") == nil or env_equals("TERM", "dumb") {
+        return internal.color.Color_Depth.mono
+    }
+    if env_contains("COLORTERM", "truecolor") or
+        env_contains("COLORTERM", "24bit") {
+        return internal.color.Color_Depth.truecolor
+    }
+    if env_contains("TERM", "256color") {
+        return internal.color.Color_Depth.colors_256
+    }
+    return internal.color.Color_Depth.colors_16
+}
+
+func terminal_color_depth(fd: int) -> internal.color.Color_Depth {
+    let forced: u8 = forced_depth
+    if forced != forced_depth_unset {
+        return cast[internal.color.Color_Depth] forced
+    }
+    var ceiling: internal.color.Color_Depth = internal.color.Color_Depth.mono
+    if env_scanned {
+        let scanned: u8 = env_ceiling
+        ceiling = cast[internal.color.Color_Depth] scanned
+    }
+    else {
+        ceiling = compute_env_ceiling()
+        env_ceiling = cast[u8] ceiling
+        env_scanned = true
+    }
+    if ceiling == internal.color.Color_Depth.mono {
+        return internal.color.Color_Depth.mono
+    }
+    try {
+        if !sys.term.fd_is_tty(fd)! {
+            return internal.color.Color_Depth.mono
+        }
+    } else failure {
+        return internal.color.Color_Depth.mono
+    }
+    return ceiling
+}
+
+private func env_columns() -> u16? {
+    let v: string? = env_value("COLUMNS")
+    if v == nil {
+        return nil
+    }
+    let s: string = v.get()
+    let n: u64 = byte_len(s)
+    var w: u32 = 0
+    if n == 0 {
+        return nil
+    }
+    for i from 0 until n {
+        let p: u8 = byte_at(s, i)
+        if p < 0x30 or p > 0x39 {
+            return nil
+        }
+        w = w * 10 + cast[u32](p - 0x30)
+        if w > 0xffff {
+            return nil
+        }
+    }
+    if w == 0 {
+        return nil
+    }
+    return cast[u16] w
+}
+
+func terminal_width(fd: int) -> u16? {
+    let forced: u32 = forced_width
+    if forced & forced_width_set != 0 {
+        return cast[u16](forced & 0xffff)
+    }
+    var rows: u16 = 0
+    var cols: u16 = 0
+    try {
+        sys.term.terminal_size(fd, rows, cols)!
+        if cols > 0 {
+            return cols
+        }
+    } else failure {
+    }
+    return env_columns()
+}
+
+func terminal_force_color_depth(depth: internal.color.Color_Depth?) {
+    var encoded: u8 = forced_depth_unset
+    if depth != nil {
+        encoded = cast[u8] depth.get()
+    }
+    forced_depth = encoded
+    if depth == nil {
+        env_scanned = false
+    }
+}
+
+func terminal_force_width(width: u16?) {
+    var encoded: u32 = 0
+    if width != nil {
+        encoded = forced_width_set | cast[u32] width.get()
+    }
+    forced_width = encoded
+}

@@ -94,6 +94,8 @@ bool function_parameter_named(parse_grammar_t *grammar,
                               parse_sym_entry_t *symbol,
                               parse_tree_t *formals, core_string_t name,
                               size_t *index);
+parse_tree_t *callable_formal_parameters(parse_grammar_t *grammar,
+                                         parse_sym_entry_t *symbol);
 typedef enum {
     N00BB_LITERAL_STRING_SHAPE,
     N00BB_LITERAL_SEQUENCE_SHAPE,
@@ -165,6 +167,8 @@ bool unary_operator_dispatch_for_node(parse_grammar_t *grammar,
 parse_tree_t *member_access_node(parse_grammar_t *grammar, parse_tree_t *node);
 bool index_dispatch_for_node(parse_grammar_t *grammar, parse_tree_t *node,
                              core_string_t *trait, core_string_t *method);
+parse_tree_t *n00bb_index_stored_value(parse_grammar_t *grammar,
+                                       parse_tree_t *node);
 bool n00bb_index_reference_storage(parse_grammar_t *grammar,
                                    parse_tree_t *node);
 parse_tree_t *n00bb_index_expression_node(parse_grammar_t *grammar,
@@ -277,6 +281,13 @@ bool n00bb_builtin_reference_function(parse_sym_entry_t *symbol);
 parse_sym_entry_t *n00bb_atomic_member_lvalue_root(
     parse_grammar_t *grammar, core_translation_unit_t *unit,
     parse_tree_t *target);
+bool n00bb_reference_target(parse_grammar_t *grammar, parse_tree_t *node);
+parse_sym_entry_t *n00bb_atomic_load_symbol(parse_grammar_t *grammar,
+                                            core_translation_unit_t *unit,
+                                            parse_tree_t *node);
+void n00bb_apply_atomic_load(parse_grammar_t *grammar,
+                             core_translation_unit_t *unit,
+                             parse_tree_t *node);
 parse_sym_entry_t *n00bb_member_chain_root(parse_grammar_t *grammar,
                                            core_translation_unit_t *unit,
                                            parse_tree_t *node);
@@ -342,6 +353,7 @@ typedef struct {
     bool static_literal;
     bool selected_when_body;
     bool proven_above_int64;
+    bool unsigned_literal;
 } n00bb_node_facts_t;
 typedef core_translation_unit_t *core_translation_unit_ptr_t;
 core_list_decl(core_translation_unit_ptr_t);
@@ -539,6 +551,7 @@ typedef struct {
     core_list_t(n00bb_option_path_t) option_paths;
     core_list_t(parse_tree_ptr_t) literal_site_nodes;
     core_dict_t flagset_values;
+    core_dict_t declarations_typed_ahead;
     core_link_unit_t *link;
     core_diag_location_t build_time_use;
     n00bb_link_analysis_t *link_analysis;
@@ -629,6 +642,8 @@ bool resolve_forward_literal_sites(core_translation_unit_t *unit,
                                    n00bb_tu_state_t *state);
 bool report_shadowed_litmods(core_translation_unit_t *unit,
                              n00bb_tu_state_t *state);
+bool n00bb_declares_litmod(n00bb_tu_state_t *state,
+                           parse_sym_entry_t *symbol);
 bool collect_ordered_children(parse_tree_t *node,
     core_list_t(parse_tree_ptr_t) *children);
 core_string_t named_field_identifier(parse_grammar_t *grammar,
@@ -782,6 +797,9 @@ bool n00bb_untyped_integer_const(parse_grammar_t *grammar,
                                  int64_t *minimum, int64_t *maximum);
 bool n00bb_integer_constant_reference(parse_grammar_t *grammar,
                                       parse_tree_t *node, int64_t *value);
+bool n00bb_folded_integer_expression(parse_grammar_t *grammar,
+                                     parse_tree_t *node, int64_t *value);
+bool n00bb_unsigned_literal_origin(parse_tree_t *origin);
 th_type *n00bb_integer_literal_context(parse_grammar_t *grammar,
                                        n00bb_tu_state_t *state,
                                        parse_tree_t *literal);
@@ -802,12 +820,21 @@ bool n00bb_range_proven_above_int64(parse_grammar_t *grammar,
                                     parse_tree_t *node);
 bool n00bb_contextual_integer_literal(n00bb_tu_state_t *state,
                                       parse_tree_t *node, th_type *target);
+bool n00bb_literal_adopts_open_type(parse_grammar_t *grammar,
+                                    n00bb_tu_state_t *state,
+                                    parse_tree_t *node, th_type *type);
 static constexpr char n00bb_string_to_buffer_text[] =
     "a string is immutable and does not convert to Buffer; use "
     "buffer_from_string(s)";
 static constexpr char n00bb_buffer_type_name[] =
     "builtin.containers.buffer.Buffer";
 bool n00bb_value_coerces(th_ctx *types, th_type *from, th_type *to);
+bool n00bb_string_where_buffer_expected(th_ctx *types, th_type *expected,
+                                        th_type *actual);
+parse_tree_t *n00bb_string_where_buffer_site(parse_grammar_t *grammar,
+                                             th_ctx *types,
+                                             parse_tree_t *node,
+                                             th_type *expected);
 void n00bb_register_value_coercions(th_ctx *types);
 th_type *n00bb_value_coercion_target(th_ctx *types, th_type *from);
 bool n00bb_blanket_receiver(th_type *contract);
@@ -952,8 +979,6 @@ bool record_aggregate_aliases(parse_grammar_t *grammar,
     parse_sym_entry_t *holder);
 void record_reference_facts(parse_grammar_t *grammar,
     core_translation_unit_t *unit, parse_tree_t *node);
-bool semantic_annotate_tree(parse_grammar_t *grammar, th_ctx *types,
-    core_translation_unit_t *unit, parse_tree_t *root);
 typedef bool (*n00bb_semantic_unit_finish_t)(void *context,
     core_translation_unit_t *unit);
 bool semantic_annotate_closure(parse_grammar_t *grammar, th_ctx *types,
@@ -1094,6 +1119,7 @@ void finalize_callback_contract(parse_grammar_t *grammar,
 th_type *callback_setup_dispatch_contract(th_ctx *types,
     th_type *setup_type);
 void initial_symbol_node(parse_visit_t *visit, bool entering, void *context);
+void declared_symbol_node(parse_visit_t *visit, bool entering, void *context);
 bool prepare_initial_symbols(core_translation_unit_t *unit, th_ctx *types);
 parse_tree_t *n00bb_simple_switch_literal(parse_grammar_t *grammar,
                                           parse_tree_t *node,

@@ -1,0 +1,9 @@
+record Holder {
+    n: int
+}
+
+func __init(modify self: Holder, count: int) {
+    self.n = count
+}
+
+let many: Holder = new[Holder](1, 2)

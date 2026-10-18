@@ -24,11 +24,14 @@ enum {
     N00B_OS_PROT_WRITE = 2,
 };
 
+typedef void *(*n00b_os_thread_entry)(void *);
+
 size_t n00b_os_page_size(void);
 void n00b_os_thread_yield(void);
 void n00b_os_thread_fence(void);
 uint64_t n00b_os_thread_id(void);
 uint64_t n00b_os_thread_is_main(void);
+int32_t n00b_os_thread_start(n00b_os_thread_entry entry, void *argument);
 void *n00b_os_thread_stack_high_self(void);
 size_t n00b_os_stack_red_zone_bytes(void);
 uint64_t n00b_os_now_ns(void);
@@ -42,6 +45,9 @@ int64_t n00b_os_close(int64_t fd);
 int64_t n00b_os_seek(int64_t fd, int64_t offset, int32_t whence);
 uint64_t n00b_os_env_count(void);
 const uint8_t *n00b_os_env_at(uint64_t index);
+void n00b_os_save_args(int32_t argc, char **argv);
+uint64_t n00b_os_arg_count(void);
+const uint8_t *n00b_os_arg_at(uint64_t index);
 int64_t n00b_os_fd_is_tty(int64_t fd);
 int64_t n00b_os_terminal_size(int64_t fd, uint16_t *rows, uint16_t *cols);
 int64_t n00b_os_pipe(int64_t *read_fd, int64_t *write_fd);

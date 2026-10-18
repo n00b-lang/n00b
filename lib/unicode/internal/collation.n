@@ -17,11 +17,11 @@ private func find_contraction_start(cp: char) -> u32? {
     while lo < hi {
         let mid: u32 = lo + (hi - lo) / 2
 
-        if generated.collation.contr_keys[mid][0] < cast[u32] cp {
+        if generated.collation.contr_keys(mid, 0) < cast[u32] cp {
             lo = mid + 1
         }
         else {
-            if generated.collation.contr_keys[mid][0] > cast[u32] cp {
+            if generated.collation.contr_keys(mid, 0) > cast[u32] cp {
                 hi = mid
             }
             else {
@@ -54,8 +54,8 @@ private func try_contraction(cps: Array[char], cccs: Array[u8], num_cps: u32,
 
     var ci: u32 = start.get()
     while ci < generated.collation.contraction_count and
-        generated.collation.contr_keys[ci][0] == cast[u32] cps[ix] {
-        let klen: u32 = generated.collation.contr_key_lens[ci]
+        generated.collation.contr_keys(ci, 0) == cast[u32] cps[ix] {
+        let klen: u32 = generated.collation.contr_key_lens(ci)
 
         if klen < 2 or klen > max_contr_key {
             ci += 1
@@ -72,7 +72,7 @@ private func try_contraction(cps: Array[char], cccs: Array[u8], num_cps: u32,
         var k: u32 = 1
         while k < klen and contiguous {
             if ip < num_cps and
-                cast[u32] cps[ip] == generated.collation.contr_keys[ci][k] {
+                cast[u32] cps[ip] == generated.collation.contr_keys(ci, k) {
                 pos[k] = ip
                 ip += 1
             }
@@ -113,7 +113,7 @@ private func try_contraction(cps: Array[char], cccs: Array[u8], num_cps: u32,
 
         while running and matched_k < klen {
             if ip < num_cps and
-                cast[u32] cps[ip] == generated.collation.contr_keys[ci][matched_k] {
+                cast[u32] cps[ip] == generated.collation.contr_keys(ci, matched_k) {
                 pos[matched_k] = ip
                 ip += 1
                 matched_k += 1
@@ -134,7 +134,7 @@ private func try_contraction(cps: Array[char], cccs: Array[u8], num_cps: u32,
 
         k = matched_k
         while k < klen and discont_ok {
-            let target: u32 = generated.collation.contr_keys[ci][k]
+            let target: u32 = generated.collation.contr_keys(ci, k)
             var found: bool = false
             var s: u32 = scan
             var going: bool = true
@@ -222,8 +222,8 @@ private func try_contraction(cps: Array[char], cccs: Array[u8], num_cps: u32,
         k += 1
     }
 
-    let ce_off: u32 = generated.collation.contr_ce_offsets[best_ci]
-    let count: u16 = generated.collation.contr_ce_data[ce_off]
+    let ce_off: u32 = generated.collation.contr_ce_offsets(best_ci)
+    let count: u16 = generated.collation.contr_ce_data(ce_off)
     var written: i32 = 0
 
     var i: u16 = 0
@@ -231,9 +231,9 @@ private func try_contraction(cps: Array[char], cccs: Array[u8], num_cps: u32,
         let base: u32 = ce_off + 1 + cast[u32] i * 3
         let at: uint = out_at + cast[uint] written * 3
 
-        out[at] = generated.collation.contr_ce_data[base]
-        out[at + 1] = generated.collation.contr_ce_data[base + 1]
-        out[at + 2] = generated.collation.contr_ce_data[base + 2]
+        out[at] = generated.collation.contr_ce_data(base)
+        out[at + 1] = generated.collation.contr_ce_data(base + 1)
+        out[at + 2] = generated.collation.contr_ce_data(base + 2)
         written += 1
         i += 1
     }
@@ -244,8 +244,8 @@ private func try_contraction(cps: Array[char], cccs: Array[u8], num_cps: u32,
 private func is_core_han_block(cp: char) -> bool {
     var i: u32 = 0
     while i < generated.collation.core_han_range_count {
-        if cast[u32] cp >= generated.collation.core_han_ranges[i][0] and
-            cast[u32] cp <= generated.collation.core_han_ranges[i][1] {
+        if cast[u32] cp >= generated.collation.core_han_ranges(i, 0) and
+            cast[u32] cp <= generated.collation.core_han_ranges(i, 1) {
             return true
         }
 
@@ -258,8 +258,8 @@ private func is_core_han_block(cp: char) -> bool {
 private func implicit_range(cp: char) -> u32? {
     var i: u32 = 0
     while i < generated.collation.implicit_range_count {
-        if cast[u32] cp >= generated.collation.implicit_ranges[i][0] and
-            cast[u32] cp <= generated.collation.implicit_ranges[i][1] {
+        if cast[u32] cp >= generated.collation.implicit_ranges(i, 0) and
+            cast[u32] cp <= generated.collation.implicit_ranges(i, 1) {
             return i
         }
 
@@ -274,9 +274,9 @@ private func implicit_range_lo_min(base: u32) -> u32 {
 
     var i: u32 = 0
     while i < generated.collation.implicit_range_count {
-        if generated.collation.implicit_ranges[i][2] == base and
-            generated.collation.implicit_ranges[i][0] < lo_min {
-            lo_min = generated.collation.implicit_ranges[i][0]
+        if generated.collation.implicit_ranges(i, 2) == base and
+            generated.collation.implicit_ranges(i, 0) < lo_min {
+            lo_min = generated.collation.implicit_ranges(i, 0)
         }
 
         i += 1
@@ -306,8 +306,8 @@ private func get_ces(cp: char, modify out: Array[u16], out_at: uint,
         return 0
     }
 
-    let offset: u32 = generated.collation.ducet_stage2[
-        cast[u32] generated.collation.ducet_stage1[v >> 8] * 256 + (v & 0xff)]
+    let offset: u32 = generated.collation.ducet_stage2(
+        cast[u32] generated.collation.ducet_stage1(v >> 8) * 256 + (v & 0xff))
 
     if offset == ce_none {
         if max_ces < 2 {
@@ -318,7 +318,7 @@ private func get_ces(cp: char, modify out: Array[u16], out_at: uint,
 
         if range != nil {
             let r: u32 = range.get()
-            let base: u32 = generated.collation.implicit_ranges[r][2]
+            let base: u32 = generated.collation.implicit_ranges(r, 2)
             let lo_min: u32 = implicit_range_lo_min(base)
 
             out[out_at] = cast[u16] base
@@ -343,7 +343,7 @@ private func get_ces(cp: char, modify out: Array[u16], out_at: uint,
         return 0
     }
 
-    let count: u16 = generated.collation.ce_data[offset]
+    let count: u16 = generated.collation.ce_data(offset)
     var written: i32 = 0
 
     var i: u16 = 0
@@ -356,9 +356,9 @@ private func get_ces(cp: char, modify out: Array[u16], out_at: uint,
 
         let at: uint = out_at + cast[uint] written * 3
 
-        out[at] = generated.collation.ce_data[base]
-        out[at + 1] = generated.collation.ce_data[base + 1]
-        out[at + 2] = generated.collation.ce_data[base + 2]
+        out[at] = generated.collation.ce_data(base)
+        out[at + 1] = generated.collation.ce_data(base + 1)
+        out[at + 2] = generated.collation.ce_data(base + 2)
         written += 1
         i += 1
     }

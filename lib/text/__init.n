@@ -1,3 +1,14 @@
+import internal.color
+import internal.capability
+import internal.theme
+import internal.border
+import internal.rich
+import internal.cascade
+import internal.layout
+import internal.string
+import internal.table
+import internal.table_layout
+
 package text {
     export builtin.index_extends
     export builtin.Text_Case
@@ -8,7 +19,18 @@ package text {
     export builtin.Style_Record
     export builtin.Rich_Body
     export builtin.merge
+    export builtin.__equal
     export builtin.is_empty
     export builtin.intrinsic_tag_style
-    export builtin.raw_repr_string
+    export internal.color
+    export internal.capability
+    export internal.theme
+    export internal.border
+    export internal.rich.Style_Span
+    export internal.rich.rich_string
+    export internal.cascade
+    export internal.layout
+    export internal.string
+    export internal.table
+    export internal.table_layout
 }

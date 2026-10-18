@@ -1,0 +1,384 @@
+const layout_stack_items = 32
+const layout_int64_max = 0x7fffffffffffffff
+
+variant Layout_Dim {
+    abs: i64
+    pct: f64
+}
+
+record Layout {
+    min:           Layout_Dim?
+    max:           Layout_Dim?
+    pref:          Layout_Dim?
+    priority:      i64
+    flex_multiple: i64
+    child_gap:     i64
+}
+
+record Layout_Result {
+    computed_min:  i64
+    computed_max:  i64
+    computed_pref: i64
+    size:          i64
+    has_max:       bool
+}
+
+record Layout_Item {
+    result_ix:     uint
+    flex_multiple: i64
+    priority:      i64
+    order:         i64
+}
+
+enum Layout_Order {
+    size_asc = 0, size_desc, priority_asc
+}
+
+func abs_dim(n: i64) -> Layout_Dim {
+    return (abs = n)
+}
+
+func pct_dim(f: f64) -> Layout_Dim {
+    return (pct = f)
+}
+
+func resolve(self: Layout_Dim, available: i64) -> i64 {
+    switch self {
+        case abs {
+            return self.abs
+        }
+        case pct {
+            return cast[i64](self.pct * cast[f64] available + 0.5)
+        }
+    }
+    return 0
+}
+
+private func resolve_opt_dim(dim: Layout_Dim?, available: i64, unset: i64)
+    -> i64 {
+    if dim == nil {
+        return unset
+    }
+    let d: Layout_Dim = dim.get()
+    return resolve(d, available)
+}
+
+private func imin(a: i64, b: i64) -> i64 {
+    if a < b {
+        return a
+    }
+    return b
+}
+
+private func imax(a: i64, b: i64) -> i64 {
+    if a > b {
+        return a
+    }
+    return b
+}
+
+private func item_before(a: Layout_Item, b: Layout_Item, ord: Layout_Order,
+                         results: Array[Layout_Result]) -> bool {
+    let ra: Layout_Result = results[a.result_ix]
+    let rb: Layout_Result = results[b.result_ix]
+    switch ord {
+        case Layout_Order.size_asc {
+            if ra.size != rb.size {
+                return ra.size < rb.size
+            }
+            return ra.computed_max < rb.computed_max
+        }
+        case Layout_Order.size_desc {
+            if ra.size != rb.size {
+                return ra.size > rb.size
+            }
+            return ra.computed_min > rb.computed_min
+        }
+        else {
+            if a.priority != b.priority {
+                return a.priority < b.priority
+            }
+            return a.order > b.order
+        }
+    }
+    return false
+}
+
+private func item_sort(modify items: Array[Layout_Item], n: i64,
+                       ord: Layout_Order, results: Array[Layout_Result]) {
+    for i from 1 until n {
+        let key: Layout_Item = items[i]
+        var j: i64 = i - 1
+        while j >= 0 and item_before(key, items[j], ord, results) {
+            items[j + 1] = items[j]
+            j -= 1
+        }
+        items[j + 1] = key
+    }
+}
+
+private func expand_to_max(modify sorted: Array[Layout_Item], count: i64,
+                           budget: i64, modify results: Array[Layout_Result])
+    -> i64 {
+    var available: i64 = budget
+    var i: i64 = 0
+    while i < count and available > 0 {
+        let group_start: i64 = i
+        let cur_size: i64 = results[sorted[i].result_ix].size
+        while i < count and results[sorted[i].result_ix].size == cur_size {
+            i += 1
+        }
+        let group_count: i64 = i - group_start
+        var target: i64 = layout_int64_max
+        if i < count {
+            target = results[sorted[i].result_ix].size
+        }
+        var j: i64 = group_start
+        while j < group_start + group_count and available > 0 {
+            let at: uint = sorted[j].result_ix
+            let item_max: i64 = results[at].computed_max
+            var limit: i64 = target
+            if results[at].has_max and item_max < limit {
+                limit = item_max
+            }
+            var grow: i64 = limit - results[at].size
+            if grow > 0 {
+                if grow > available {
+                    grow = available
+                }
+                results[at].size += grow
+                available -= grow
+            }
+            j += 1
+        }
+        if available > 0 {
+            item_sort(sorted, count, Layout_Order.size_asc, results)
+            i = 0
+            while i < count {
+                let mx: i64 = results[sorted[i].result_ix].computed_max
+                if results[sorted[i].result_ix].has_max and
+                    results[sorted[i].result_ix].size >= mx {
+                    i += 1
+                }
+                else {
+                    break
+                }
+            }
+            if i >= count {
+                break
+            }
+        }
+    }
+    return available
+}
+
+private func apply_flex_growth(items: Array[Layout_Item], n: i64,
+                               available: i64,
+                               modify results: Array[Layout_Result]) -> i64 {
+    var total_flex: i64 = 0
+    for i from 0 until n {
+        if items[i].flex_multiple > 0 and
+            !results[items[i].result_ix].has_max {
+            total_flex += items[i].flex_multiple
+        }
+    }
+    if total_flex == 0 or available <= 0 {
+        return available
+    }
+    let flex_unit: i64 = available / total_flex
+    let remainder: i64 = available % total_flex
+    var rem_given: i64 = 0
+    var distributed: i64 = 0
+    for i from 0 until n {
+        if items[i].flex_multiple > 0 and
+            !results[items[i].result_ix].has_max {
+            var add: i64 = flex_unit * items[i].flex_multiple
+            if rem_given < remainder {
+                let extra: i64 = imin(items[i].flex_multiple,
+                                      remainder - rem_given)
+                add += extra
+                rem_given += extra
+            }
+            results[items[i].result_ix].size += add
+            distributed += add
+        }
+    }
+    return available - distributed
+}
+
+private func shrink_to_fit(modify sorted: Array[Layout_Item], count: i64,
+                           shortfall: i64,
+                           modify results: Array[Layout_Result]) -> i64 {
+    var deficit: i64 = shortfall
+    var i: i64 = 0
+    while i < count and deficit > 0 {
+        let group_start: i64 = i
+        let cur_size: i64 = results[sorted[i].result_ix].size
+        while i < count and results[sorted[i].result_ix].size == cur_size {
+            i += 1
+        }
+        let group_count: i64 = i - group_start
+        var target: i64 = 0
+        if i < count {
+            target = results[sorted[i].result_ix].size
+        }
+        var j: i64 = group_start
+        while j < group_start + group_count and deficit > 0 {
+            let at: uint = sorted[j].result_ix
+            let item_min: i64 = results[at].computed_min
+            let limit: i64 = imax(target, item_min)
+            var shrink: i64 = results[at].size - limit
+            if shrink > 0 {
+                if shrink > deficit {
+                    shrink = deficit
+                }
+                results[at].size -= shrink
+                deficit -= shrink
+            }
+            j += 1
+        }
+        if deficit > 0 {
+            item_sort(sorted, count, Layout_Order.size_desc, results)
+            i = 0
+            while i < count {
+                if results[sorted[i].result_ix].size <=
+                    results[sorted[i].result_ix].computed_min {
+                    i += 1
+                }
+                else {
+                    break
+                }
+            }
+            if i >= count {
+                break
+            }
+        }
+    }
+    return deficit
+}
+
+private func crop_by_priority(sorted: Array[Layout_Item], count: i64,
+                              shortfall: i64,
+                              modify results: Array[Layout_Result]) {
+    var deficit: i64 = shortfall
+    var i: i64 = 0
+    while i < count and deficit > 0 {
+        let group_start: i64 = i
+        let cur_pri: i64 = sorted[i].priority
+        while i < count and sorted[i].priority == cur_pri {
+            i += 1
+        }
+        let group_count: i64 = i - group_start
+        var group_total: i64 = 0
+        for j from group_start until group_start + group_count {
+            group_total += results[sorted[j].result_ix].size
+        }
+        if group_total <= deficit {
+            for j from group_start until group_start + group_count {
+                deficit -= results[sorted[j].result_ix].size
+                results[sorted[j].result_ix].size = 0
+            }
+        }
+        else {
+            let per_item: i64 = deficit / group_count
+            let rem: i64 = deficit % group_count
+            for j from group_start until group_start + group_count {
+                var take: i64 = per_item
+                if j - group_start < rem {
+                    take += 1
+                }
+                if take > results[sorted[j].result_ix].size {
+                    take = results[sorted[j].result_ix].size
+                }
+                results[sorted[j].result_ix].size -= take
+            }
+            deficit = 0
+        }
+    }
+}
+
+func layout_calculate(items: Array[Layout], modify results: Array[Layout_Result],
+                      n: i64, available: i64) {
+    if n <= 0 {
+        return
+    }
+    var stack_buf: Array[Layout_Item][layout_stack_items]
+    var work: Array[Layout_Item] = stack_buf
+    if n > layout_stack_items {
+        work = new[Array[Layout_Item]](n)
+    }
+    var total: i64 = 0
+    for i from 0 until n {
+        results[i].computed_min = resolve_opt_dim(items[i].min, available, 0)
+        results[i].has_max = items[i].max != nil
+        results[i].computed_max = resolve_opt_dim(items[i].max, available,
+                                                  layout_int64_max)
+        results[i].computed_pref = resolve_opt_dim(items[i].pref, available, 0)
+        if results[i].has_max and
+            results[i].computed_max < results[i].computed_min {
+            results[i].computed_max = results[i].computed_min
+        }
+        if results[i].computed_pref < results[i].computed_min {
+            results[i].computed_pref = results[i].computed_min
+        }
+        if results[i].has_max and
+            results[i].computed_pref > results[i].computed_max {
+            results[i].computed_pref = results[i].computed_max
+        }
+        results[i].size = imax(results[i].computed_min,
+                               results[i].computed_pref)
+        total += results[i].size
+        work[i] = (result_ix = cast[uint] i,
+                   flex_multiple = items[i].flex_multiple,
+                   priority = items[i].priority, order = i)
+    }
+    var leftover: i64 = available - total
+    if leftover > 0 {
+        var grow_stack: Array[Layout_Item][layout_stack_items]
+        var grow_items: Array[Layout_Item] = grow_stack
+        var grow_count: i64 = 0
+        if n > layout_stack_items {
+            grow_items = new[Array[Layout_Item]](n)
+        }
+        for i from 0 until n {
+            if results[i].has_max and
+                results[i].computed_max > results[i].size {
+                grow_items[grow_count] = work[i]
+                grow_count += 1
+            }
+        }
+        if grow_count > 0 {
+            item_sort(grow_items, grow_count, Layout_Order.size_asc, results)
+            leftover = expand_to_max(grow_items, grow_count, leftover,
+                                     results)
+        }
+    }
+    if leftover > 0 {
+        leftover = apply_flex_growth(work, n, leftover, results)
+    }
+    if leftover < 0 {
+        var deficit: i64 = -leftover
+        var shrink_stack: Array[Layout_Item][layout_stack_items]
+        var shrink_items: Array[Layout_Item] = shrink_stack
+        var shrink_count: i64 = 0
+        if n > layout_stack_items {
+            shrink_items = new[Array[Layout_Item]](n)
+        }
+        for i from 0 until n {
+            if results[i].size > results[i].computed_min {
+                shrink_items[shrink_count] = work[i]
+                shrink_count += 1
+            }
+        }
+        if shrink_count > 0 {
+            item_sort(shrink_items, shrink_count, Layout_Order.size_desc,
+                      results)
+            deficit = shrink_to_fit(shrink_items, shrink_count, deficit,
+                                    results)
+        }
+        if deficit > 0 {
+            item_sort(work, n, Layout_Order.priority_asc, results)
+            crop_by_priority(work, n, deficit, results)
+        }
+    }
+}

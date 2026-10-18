@@ -138,12 +138,19 @@ write_trace(const uintptr_t *frame)
 
 void n00b_ffi_panic_hook(void) __attribute__((weak));
 
+__attribute__((noreturn)) static void
+terminate_with_sigtrap(void)
+{
+    if (n00b_ffi_panic_hook) n00b_ffi_panic_hook();
+    __builtin_debugtrap();
+    __builtin_trap();
+}
+
 __attribute__((noinline, noreturn, cold)) void
 n00bb_runtime_panic_trace(void)
 {
     write_trace((const uintptr_t *)__builtin_frame_address(0));
-    if (n00b_ffi_panic_hook) n00b_ffi_panic_hook();
-    __builtin_trap();
+    terminate_with_sigtrap();
 }
 
 __attribute__((noreturn)) static void
@@ -153,8 +160,7 @@ panic_from(const char *reason, uint64_t length, const uintptr_t *frame)
     write_all(reason, length);
     write_text("\n");
     write_trace(frame);
-    if (n00b_ffi_panic_hook) n00b_ffi_panic_hook();
-    __builtin_trap();
+    terminate_with_sigtrap();
 }
 
 __attribute__((noinline, noreturn, cold)) void

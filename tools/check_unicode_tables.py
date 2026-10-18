@@ -3,6 +3,7 @@
 import argparse
 import os
 import re
+import struct
 import sys
 from pathlib import Path
 
@@ -26,6 +27,11 @@ N_VERSION = re.compile(
     r'^public func version\(\) -> string \{\s*return "([^"]*)"\s*\}', re.M)
 N_DATA_FILE = re.compile(
     r'sys\.fs\.data_file\(source_dir\(\) \+ "([^"]+)"\)')
+N_ACCESSOR = re.compile(
+    r"^public (?:inline )?func (\w+)\([^)]*\) -> \w+ \{\n"
+    r"    return internal\.blob\.(u16|u32|u64|str)_at\((?:ref )?(\w+)_bytes, "
+    r"(?:row \* (\d+) \+ col|i)\)\n\}", re.M)
+BLOB_CODES = {"u16": "H", "u32": "I", "u64": "Q"}
 
 
 def number(text):
@@ -84,7 +90,38 @@ def bracket_end(text, start):
     raise ValueError("unterminated array literal")
 
 
-def parse_n00b(path):
+def decode_blob(data, elem, width):
+    if elem == "str":
+        count = struct.unpack_from("<I", data)[0] // 4
+        offsets = struct.unpack_from(f"<{count}I", data)
+        return ("Array[string]",
+                [data[offsets[i]:offsets[i + 1]].decode("utf-8")
+                 for i in range(count - 1)])
+    size = struct.calcsize(BLOB_CODES[elem])
+    values = list(struct.unpack(f"<{len(data) // size}{BLOB_CODES[elem]}",
+                                data))
+    if width is None:
+        return f"Array[{elem}]", values
+    width = int(width)
+    return (f"Array[Array[{elem}]]",
+            [values[i:i + width] for i in range(0, len(values), width)])
+
+
+def decode_accessors(path, text, tables, referenced):
+    for m in N_ACCESSOR.finditer(text):
+        name, elem, blob_name, width = m.groups()
+        key = f"{name}_bytes"
+        if blob_name != name or key not in tables:
+            continue
+        del tables[key]
+        source = N_DATA_FILE.search(
+            text[text.index(f"public const {key}:"):]).group(1)
+        blob = path.parent / source.lstrip("/")
+        referenced.add(blob.resolve())
+        tables[name] = decode_blob(blob.read_bytes(), elem, width)
+
+
+def parse_n00b(path, referenced):
     text = path.read_text()
     tables = {}
     version = N_VERSION.search(text)
@@ -113,6 +150,7 @@ def parse_n00b(path):
             else:
                 value = number(line)
         tables[name] = (n00b_type, value)
+    decode_accessors(path, text, tables, referenced)
     return tables
 
 
@@ -170,18 +208,7 @@ def main():
                            / "gen_conformance.n")
 
     errors = []
-    bins = {f"gen_{p.name}": p for p in generated.glob("*.bin")}
-    bins.update({p.name: p for p in conformance_dir.glob("gen_conf_*.bin")})
-    baseline_bins = {p.name: p for p in baseline.glob("gen_*.bin")}
-
-    for name in sorted(set(bins) | set(baseline_bins)):
-        if name not in bins:
-            errors.append(f"missing committed blob for baseline {name}")
-        elif name not in baseline_bins:
-            errors.append(f"committed blob {bins[name]} has no baseline")
-        elif bins[name].read_bytes() != baseline_bins[name].read_bytes():
-            errors.append(f"blob {bins[name]} differs from baseline {name}")
-
+    referenced = set()
     modules = {f"gen_{p.stem}.c": p for p in generated.glob("*.n")}
     modules["gen_conformance.c"] = conformance_program
     baseline_modules = {p.name: p for p in baseline.glob("gen_*.c")}
@@ -193,9 +220,23 @@ def main():
             errors.append(f"committed module {modules[name]} has no baseline")
         else:
             compare_tables(str(modules[name].relative_to(root)),
-                           parse_n00b(modules[name]),
+                           parse_n00b(modules[name], referenced),
                            parse_c(baseline_modules[name], baseline),
                            errors)
+
+    bins = {f"gen_{p.name}": p for p in generated.glob("*.bin")}
+    bins.update({p.name: p for p in conformance_dir.glob("gen_conf_*.bin")})
+    baseline_bins = {p.name: p for p in baseline.glob("gen_*.bin")}
+
+    for name in sorted(set(bins) | set(baseline_bins)):
+        if name not in bins:
+            errors.append(f"missing committed blob for baseline {name}")
+        elif name not in baseline_bins:
+            if bins[name].resolve() not in referenced:
+                errors.append(f"committed blob {bins[name]} has no baseline "
+                              f"and no table accessor")
+        elif bins[name].read_bytes() != baseline_bins[name].read_bytes():
+            errors.append(f"blob {bins[name]} differs from baseline {name}")
 
     for line in errors:
         print(f"FAIL {line}")

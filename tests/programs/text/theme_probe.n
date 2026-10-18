@@ -1,0 +1,157 @@
+import text
+
+var override_theme: text.Theme = (
+    name = "", description = "",
+    palette = [
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0
+    ],
+    styles = nil, roles = nil)
+
+func check(ok: bool, code: string) {
+    if !ok {
+        __fd_write(2, "FAIL theme_probe " + code + "\n")
+        require false
+    }
+}
+
+func same_name(t: Ref[text.Theme], want: string) -> bool {
+    return t.name == want
+}
+
+func is_yes(v: bool?) -> bool {
+    return v.get_or_else(false)
+}
+
+func ix_of(v: i8?) -> i8 {
+    return v.get_or_else(-1)
+}
+
+func slot(ix: text.Palette_Ix) -> i8 {
+    return cast[i8] ix
+}
+
+func pal(t: Ref[text.Theme], ix: text.Palette_Ix) -> text.Color {
+    let c: text.Color? = text.palette(t, ix)
+    if c == nil {
+        return -1
+    }
+    return c.get()
+}
+
+func style_of(bold: bool?, italic: bool?, dim: bool?,
+              fg: i8?) -> text.Text_Style {
+    return (bold = bold, italic = italic, underline = nil,
+            double_underline = nil, strikethrough = nil, reverse = nil,
+            dim = dim, blink = nil, text_case = text.Text_Case.none,
+            font_hint = text.Font_Hint.default, font_index = nil,
+            fg_palette_ix = fg, bg_palette_ix = nil, fg_rgb = nil,
+            bg_rgb = nil, font_size = nil)
+}
+
+func builtin_checks() {
+    check(text.theme_builtin_count() == 18, "1")
+    var i: uint = 0
+    while i < text.theme_builtin_count() {
+        let t: Ref[text.Theme] = text.theme_builtin(i)
+        check(byte_len(t.name) != 0 and byte_len(t.description) != 0, "2")
+        check(text.theme_lookup(t.name) != nil, "3")
+        var s: i8 = 0
+        while s < slot(text.Palette_Ix.palette_size) {
+            check(text.palette(t, cast[text.Palette_Ix] s) != nil, "4")
+            s += 1
+        }
+        check(text.palette(t, text.Palette_Ix.palette_size) == nil, "5")
+        i += 1
+    }
+}
+
+func theme_probe_main() {
+    builtin_checks()
+    let dark: Ref[text.Theme]? = text.theme_lookup("n00b-dark")
+    check(dark != nil, "6")
+    let d: Ref[text.Theme] = dark.get_or_else(text.theme_builtin(0))
+    check(pal(d, text.Palette_Ix.background) == 0x1a1b26 and
+          pal(d, text.Palette_Ix.error_tone) == 0xf7768e and
+          pal(d, text.Palette_Ix.text_primary) == 0xc0caf5, "7")
+    check(text.theme_lookup("no-such-theme") == nil, "8")
+    check(same_name(text.theme_current(), "n00b-classic"), "9")
+    check(text.theme_set_current("dracula") and
+          same_name(text.theme_current(), "dracula"), "10")
+    check(!text.theme_set_current("no-such-theme"), "11")
+    check(same_name(text.theme_current(), "dracula"), "12")
+
+    override_theme.name = "n00b-dark"
+    override_theme.description = "registered override"
+    override_theme.palette[cast[uint] text.Palette_Ix.background] = 0x010203
+    text.install(ref override_theme)
+    let after: Ref[text.Theme]? = text.theme_lookup("n00b-dark")
+    check(after != nil and
+          pal(after.get(), text.Palette_Ix.background) == 0x010203, "13")
+    check(pal(d, text.Palette_Ix.background) == 0x1a1b26, "14")
+
+    let cur: Ref[text.Theme] = text.theme_current()
+    check(is_yes(text.style_for_tag(cur, "b").bold), "15")
+    let err: text.Text_Style = text.style_for_tag(cur, "@error")
+    check(is_yes(err.bold) and err.fg_palette_ix != nil and
+          ix_of(err.fg_palette_ix) == slot(text.Palette_Ix.error_tone), "16")
+    let h1: text.Text_Style = text.style_for_tag(cur, "h1")
+    check(is_yes(h1.bold) and h1.text_case == text.Text_Case.upper and
+          ix_of(h1.fg_palette_ix) == slot(text.Palette_Ix.primary), "17")
+    check(text.style_for_tag(cur, "@code").font_hint == text.Font_Hint.mono,
+          "18")
+    check(text.is_empty(text.style_for_tag(cur, "@nope")) and
+          text.is_empty(text.style_for_tag(cur, "nope")) and
+          text.is_empty(text.style_for_tag(cur, "")), "19")
+    let coloured_roles: Array[string] = [
+        "@code",
+        "@heading",
+        "@body",
+        "@error",
+        "@success",
+        "@muted",
+        "@link",
+        "@label",
+        "@button",
+        "@input",
+    ]
+    var i: uint = 0
+    while i < coloured_roles.len() {
+        let rs: text.Text_Style = text.style_for_tag(cur, coloured_roles[i])
+        if rs.fg_palette_ix == nil {
+            __fd_write(2, coloured_roles[i] + "\n")
+        }
+        check(rs.fg_palette_ix != nil, "20")
+        i += 1
+    }
+    check(text.style_for_tag(cur, "@mono").fg_palette_ix == nil, "21")
+
+    let derived: Ref[text.Theme] = text.copy(cur, "probe-derived")
+    text.set_role(derived, "@link",
+                  style_of(true, nil, nil, slot(text.Palette_Ix.accent)))
+    let dlink: text.Text_Style = text.style_for_tag(derived, "@link")
+    check(is_yes(dlink.bold) and
+          ix_of(dlink.fg_palette_ix) == slot(text.Palette_Ix.accent), "22")
+    let olink: text.Text_Style = text.style_for_tag(cur, "@link")
+    check(!is_yes(olink.bold) and
+          ix_of(olink.fg_palette_ix) == slot(text.Palette_Ix.info), "23")
+    text.set_role(derived, "@brandnew", style_of(nil, true, nil, nil))
+    check(is_yes(text.style_for_tag(derived, "@brandnew").italic), "24")
+    text.set_style(derived, "h1", style_of(nil, nil, true, nil))
+    check(is_yes(text.style_for_tag(derived, "h1").dim) and
+          !is_yes(text.style_for_tag(cur, "h1").dim), "25")
+    text.install(derived)
+    check(text.theme_set_current("probe-derived") and
+          same_name(text.theme_current(), "probe-derived"), "26")
+
+    text.set_role(ref override_theme, "@probe", style_of(nil, true, nil, nil))
+    let kept: text.Text_Style = text.style_for_tag(override_theme, "@error")
+    check(is_yes(kept.bold) and
+          ix_of(kept.fg_palette_ix) == slot(text.Palette_Ix.error_tone) and
+          is_yes(text.style_for_tag(override_theme, "@probe").italic), "900")
+
+    require text.theme_set_current("dracula")
+}
+
+theme_probe_main()
+__fd_write(2, "ok")

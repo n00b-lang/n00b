@@ -306,6 +306,7 @@ n00bb_abi_link_semantic_rows(
     if (!facts || !facts->environment || !selected || !plan || !types
         || types->record_bytes != sizeof(n00b_abi_type_v1)) return false;
     th_ctx *ctx = th_ctx_new();
+    th_ctx_set_probe_errors_observable(ctx, false);
     core_list_t(receiver_t) receivers = {0};
     core_list_t(specialization_t) specializations = {0};
     core_list_t(n00b_abi_dispatch_v1) dispatch = {0};

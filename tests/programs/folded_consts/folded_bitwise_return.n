@@ -1,0 +1,5 @@
+func f() -> i32 {
+    return 0xff & 0x0f
+}
+
+f()

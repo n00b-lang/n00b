@@ -13,29 +13,42 @@ type Sample {
     value: int
 }
 
-var finalized: int = 0
-var ready_count: int = 0
-var drain_on_ready: bool = false
-var callback_heap: Ref[sys.gc.core.Heap]? = nil
-
-func finalizers_ready(user: Ref[byte]?) {
-    require user == nil
-    ready_count += 1
-    if drain_on_ready {
-        let heap: Ref[sys.gc.core.Heap]? = callback_heap
-        if heap != nil { sys.gc.finalize.run(heap.get(), 0) }
-    }
-}
+var finalized: Atomic[uint] = 0
+var off_main: Atomic[uint] = 0
+var gate_closed: Atomic[bool] = false
+var blocked: Atomic[bool] = false
 
 func __finalize(consume self: Ref[Sample]) {
     require self.value == 0
-    finalized += 1
+    if __os_thread_is_main() == 0 {
+        __atomic_fetch_add(ref off_main, 1)
+    }
+    while __atomic_load(ref gate_closed) {
+        __atomic_store(ref blocked, true)
+        __os_thread_yield()
+    }
+    __atomic_fetch_add(ref finalized, 1)
+}
+
+func wait_finalized(count: uint) {
+    let deadline: u64 = __os_now_ns() + 30_000_000_000
+    while __atomic_load(ref finalized) < count {
+        require __os_now_ns() < deadline
+        __os_thread_yield()
+    }
+}
+
+func wait_blocked() {
+    let deadline: u64 = __os_now_ns() + 30_000_000_000
+    while !__atomic_load(ref blocked) {
+        require __os_now_ns() < deadline
+        __os_thread_yield()
+    }
 }
 
 let created: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(nil)
 if created != nil {
     let heap: Ref[sys.gc.core.Heap] = created.get()
-    heap.cfg.finalizers_ready = ref finalizers_ready
     let mapped: Ref[byte]? = sys.memory.map_zeroed(
         sys.gc.core.block_bytes, sys.gc.core.block_bytes)
     if mapped != nil {
@@ -81,8 +94,9 @@ if created != nil {
                         sys.gc.mark.marker_init(marker, heap, false)
                         sys.gc.sync.ticket_lock(ref heap.lock)
                         sys.gc.finalize.find_dead_locked(marker)
-                        sys.gc.heap.unlock(heap)
-                        assert ready_count == 1
+                        sys.gc.sync.ticket_unlock(ref heap.lock)
+                        assert __atomic_load(ref heap.fin_notify)
+                        assert __atomic_load(ref heap.fin_thread) == 0
                         assert heap.finq_n == 1
                         assert __atomic_load(ref block.nfinal) == 0
                         assert !__atomic_load(ref block.in_final)
@@ -98,16 +112,15 @@ if created != nil {
                         assert marker.bytes == 123
                         sys.gc.finalize.find_dead_locked(marker)
                         assert heap.finq_n == 1
-                        assert sys.gc.finalize.run(heap, 0) == 1
-                        assert finalized == 1
+                        require sys.gc.finalize.run(heap, 0) == 1
+                        assert __atomic_load(ref finalized) == 1
+                        assert __atomic_load(ref off_main) == 0
                         assert heap.finq_n == 0
                         assert heap.running == nil
-                        assert sys.gc.finalize.run(heap, 0) == 0
-                        assert finalized == 1
-                        assert !__atomic_load(ref heap.fin_notify)
-                        heap.cfg.finalizers_ready = nil
+                        require sys.gc.finalize.run(heap, 0) == 0
+                        assert __atomic_load(ref finalized) == 1
+
                         heap.cfg.finalizer_backlog_limit = 1
-                        heap.cfg.finalizer_assist = true
                         let second: Ref[byte]? = sys.gc.alloc.allocate_reserved(
                             mutator, ref mutator.small, cast[u32] type_index, 8,
                             sys.gc.core.granule_bytes, true)
@@ -116,35 +129,44 @@ if created != nil {
                             mutator, ref mutator.small, cast[u32] type_index, 8,
                             sys.gc.core.granule_bytes, true)
                         require third != nil
+                        sys.gc.sync.ticket_lock(ref heap.lock)
                         sys.gc.finalize.find_dead_locked(marker)
+                        sys.gc.sync.ticket_unlock(ref heap.lock)
                         assert heap.finq_n == 2
-                        assert !__atomic_load(ref heap.fin_notify)
                         sys.gc.finalize.backpressure(mutator)
-                        assert heap.finq_n == 0
-                        assert finalized == 3
-                        assert !mutator.in_finalizers
-                        assert !__atomic_load(ref heap.fin_assisting)
-                        heap.cfg.finalizers_ready = ref finalizers_ready
+                        wait_finalized(3)
+                        assert __atomic_load(ref off_main) == 2
+                        assert __atomic_load(ref heap.fin_stalled) == 0
+
+                        __atomic_store(ref gate_closed, true)
                         let fourth: Ref[byte]? = sys.gc.alloc.allocate_reserved(
                             mutator, ref mutator.small, cast[u32] type_index, 8,
                             sys.gc.core.granule_bytes, true)
                         require fourth != nil
+                        sys.gc.sync.ticket_lock(ref heap.lock)
+                        sys.gc.finalize.find_dead_locked(marker)
+                        sys.gc.heap.unlock(heap)
+                        wait_blocked()
                         let fifth: Ref[byte]? = sys.gc.alloc.allocate_reserved(
                             mutator, ref mutator.small, cast[u32] type_index, 8,
                             sys.gc.core.granule_bytes, true)
                         require fifth != nil
+                        let sixth: Ref[byte]? = sys.gc.alloc.allocate_reserved(
+                            mutator, ref mutator.small, cast[u32] type_index, 8,
+                            sys.gc.core.granule_bytes, true)
+                        require sixth != nil
+                        sys.gc.sync.ticket_lock(ref heap.lock)
                         sys.gc.finalize.find_dead_locked(marker)
+                        sys.gc.heap.unlock(heap)
                         assert heap.finq_n == 2
-                        heap.cfg.finalizer_assist = false
-                        callback_heap = heap
-                        drain_on_ready = true
-                        let before_ready: int = ready_count
                         sys.gc.finalize.backpressure(mutator)
-                        assert ready_count == before_ready + 1
-                        assert heap.finq_n == 0
-                        assert finalized == 5
-                        drain_on_ready = false
-                        callback_heap = nil
+                        assert __atomic_load(ref heap.fin_stalled) == 4
+                        sys.gc.finalize.backpressure(mutator)
+                        assert heap.finq_n == 2
+                        assert __atomic_load(ref finalized) == 3
+                        __atomic_store(ref gate_closed, false)
+                        wait_finalized(6)
+                        assert __atomic_load(ref off_main) == 5
                         sys.memory.unmap(marker, marker_bytes)
                     } else { require false }
                 } else { require false }
@@ -152,7 +174,7 @@ if created != nil {
             sys.gc.mutator.destroy(mutator)
         } else { require false }
         sys.gc.heap.destroy(heap)
-        assert finalized == 5
+        assert __atomic_load(ref finalized) == 6
         __fd_write(2, "ok")
     } else { require false }
 } else { require false }

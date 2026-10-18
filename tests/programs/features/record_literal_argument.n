@@ -1,0 +1,17 @@
+record Cell {
+    width: u8
+    label: string
+}
+
+func weight(c: Cell) -> int {
+    return cast[int] c.width + cast[int] byte_len(c.label)
+}
+
+func total() -> int {
+    var cells: List[Cell] = new[List[Cell]]()
+    cells.append((width = 3, label = "ab"))
+    return weight((width = 1, label = "x")) + weight(cells[0])
+}
+
+require total() == 7
+__fd_write(2, "ok")

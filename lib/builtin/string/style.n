@@ -416,18 +416,13 @@ func cmp_string_value(left: string, right: string) -> int {
     return cmp_rich_bodies(rich_body(left), rich_body(right))
 }
 
-private func hash_words(words: Array[u64]) -> u128 {
-    return hashing.xxh3_128_at(unsafe_cast[Ref[byte]] ref words[0],
-                               __array_length(words) * 8)
-}
-
 private func hash_chain(acc: u128, next: u128) -> u128 {
     var words: Array[u64] = new[Array[u64]](4)
     words[0] = unsafe_cast[u64] acc
     words[1] = unsafe_cast[u64] (acc >> 64)
     words[2] = unsafe_cast[u64] next
     words[3] = unsafe_cast[u64] (next >> 64)
-    return hash_words(words)
+    return words.hash()
 }
 
 private func hash_text(s: string) -> u128 {
@@ -440,7 +435,7 @@ private func hash_opt_u32(o: u32?) -> u128 {
         words[0] = 1
         words[1] = cast[u64] o.get()
     }
-    return hash_words(words)
+    return words.hash()
 }
 
 private func hash_opt_string(o: string?) -> u128 {

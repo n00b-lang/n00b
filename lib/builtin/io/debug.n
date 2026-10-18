@@ -1,7 +1,7 @@
-import io.raw
+import string.core
 
 const stderr_fd: i32 = 2
 
 func raw_debug(s: string) -> nil {
-    s.raw_repr(stderr_fd)
+    string.core.__fd_write(stderr_fd, s)
 }

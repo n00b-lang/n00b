@@ -7,6 +7,81 @@
 typedef th_type *th_type_ptr_t;
 core_list_decl(th_type_ptr_t);
 
+static void
+dispatch_argument_nodes(parse_grammar_t *grammar, parse_tree_t *node,
+                        core_list_t(n00bb_tree_ptr_t) *arguments)
+{
+    core_string_t trait = {0}, method = {0};
+    if (index_dispatch_for_node(grammar, node, &trait, &method)) {
+        parse_tree_t *contents = core_tree_child(node, 2);
+        for (size_t i = 0; !core_tree_is_leaf(contents)
+             && i < core_tree_num_children(contents); i++) {
+            parse_tree_t *child = core_tree_child(contents, i);
+            if (nt_is(grammar, child, "expression"))
+                core_list_push(*arguments, child);
+        }
+        parse_tree_t *value = n00bb_index_stored_value(grammar, node);
+        if (value) core_list_push(*arguments, value);
+        return;
+    }
+    parse_tree_t *call = core_tree_node_value(node).parent;
+    if (!nt_is(grammar, call, "postfix-expr")
+        || core_tree_child(call, 0) != node) return;
+    collect_positional_nodes(grammar,
+        child_nt(grammar, call_arguments_node(grammar, call),
+                 "positional-args"), arguments);
+}
+
+static parse_tree_t *
+dispatch_string_where_buffer_expected(parse_grammar_t *grammar,
+                                      th_ctx *types, parse_tree_t *site,
+                                      th_type *receiver,
+                                      const char *method_name)
+{
+    th_env_method_t method = {0};
+    const char *trait = nullptr;
+    if (!site || core_tree_is_leaf(site) || !method_name
+        || th_env_method_resolve_by_name(types, receiver, method_name,
+               &method, &trait) != TH_ENV_METHOD_FOUND
+        || !method.signature) return nullptr;
+    th_type *signature = th_instantiate(types,
+        th_type_clone(types, method.signature));
+    const th_param *self = signature ? th_func_param(signature, 0) : nullptr;
+    if (!self || !th_unify_in_place(types, self->type, receiver))
+        return nullptr;
+    core_list_t(n00bb_tree_ptr_t) arguments = core_list_new(n00bb_tree_ptr_t);
+    dispatch_argument_nodes(grammar, site, &arguments);
+    parse_tree_t *offending = nullptr;
+    if (arguments.len < th_func_nparams(signature))
+        for (size_t i = 0; !offending && i < arguments.len; i++) {
+            parse_tree_t *argument = arguments.data[i];
+            if (!core_tree_is_leaf(argument)
+                && n00bb_string_where_buffer_expected(types,
+                       th_func_param(signature, i + 1)->type,
+                       core_tree_node_value(argument).type))
+                offending = argument;
+        }
+    core_list_free(arguments);
+    return offending;
+}
+
+static bool
+detail_spans_unit(const th_error_t *detail, core_translation_unit_t *unit)
+{
+    return detail->span.file && detail->span.start_line
+        && core_string_eq(core_source_file_path(&unit->source),
+                          core_string_from_cstr(detail->span.file));
+}
+
+static bool
+site_dispatches_method(const n00bb_link_use_site_t *site,
+                       const char *method_name)
+{
+    core_string_t name = site->dispatch_method.data ? site->dispatch_method
+        : site->receiver_node ? site->member_name : (core_string_t){0};
+    return core_string_eq(name, core_string_from_cstr(method_name));
+}
+
 th_env *
 build_import_environment(parse_grammar_t *grammar,
                          core_link_unit_t *link,
@@ -187,17 +262,22 @@ build_import_environment(parse_grammar_t *grammar,
                 th_error_at(state->types, error_count - 1, &detail);
             parse_tree_t *failure_site = nullptr;
             core_translation_unit_t *failure_unit = nullptr;
+            th_type *failure_receiver = nullptr;
             parse_tree_t *open_site = nullptr;
             core_translation_unit_t *open_unit = nullptr;
+            for (size_t pass = 0; pass < 2; pass++)
             for (size_t u = 0; has_detail && detail.constraint && detail.got
                  && !failure_site && u < units->len; u++) {
                 n00bb_tu_state_t *owner = tu_state(units->data[u]);
+                if (!pass && !detail_spans_unit(&detail, units->data[u]))
+                    continue;
                 for (size_t s = 0; owner && s < owner->link_use_sites.len;
                      s++) {
                     n00bb_link_use_site_t *site =
                         &owner->link_use_sites.data[s];
-                    if (!core_string_eq(site->dispatch_method,
-                            core_string_from_cstr(detail.constraint)))
+                    if (!site_dispatches_method(site, detail.constraint)
+                        || (!pass && link_source_location(site->node).line
+                                != detail.span.start_line))
                         continue;
                     parse_tree_t *receiver = site->receiver_node;
                     if (!receiver && site->dispatch_trait.data
@@ -210,6 +290,7 @@ build_import_environment(parse_grammar_t *grammar,
                             receiver_type, detail.got)) {
                         failure_site = site->node;
                         failure_unit = units->data[u];
+                        failure_receiver = receiver_type;
                         break;
                     }
                     if (!open_site && receiver_type
@@ -232,6 +313,20 @@ build_import_environment(parse_grammar_t *grammar,
                     failure_unit = units->data[u];
             }
             if (failure_unit) unit = failure_unit;
+            parse_tree_t *string_argument = failure_receiver
+                ? dispatch_string_where_buffer_expected(grammar,
+                    state->types, failure_site, failure_receiver,
+                    detail.constraint)
+                : nullptr;
+            if (string_argument) {
+                core_diagnostics_report_at(
+                    core_translation_unit_diagnostics(unit), unit,
+                    CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0036"),
+                    CORE_STRING_STATIC(n00bb_string_to_buffer_text),
+                    link_source_location(string_argument));
+                ok = false;
+                break;
+            }
             core_buffer_t message = {0};
             if (has_detail && detail.constraint) {
                 core_buffer_printf(&message,

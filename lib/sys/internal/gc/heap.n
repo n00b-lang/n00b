@@ -87,9 +87,8 @@ func config_default(out config: internal.gc.core.Config) {
               handshake_timeout_us = default_handshake_timeout_us,
               scan_stacks = false,
               world_timeout_ms = default_world_timeout_ms,
-              finalizer_backlog_limit = 64, finalizer_assist = true,
-              on_pause = nil, on_cycle = nil, finalizers_ready = nil,
-              telemetry_user = nil)
+              finalizer_backlog_limit = 64,
+              on_pause = nil, on_cycle = nil, telemetry_user = nil)
 }
 
 func unlock(heap: Ref[internal.gc.core.Heap]) {
@@ -201,6 +200,7 @@ func destroy(heap: Ref[internal.gc.core.Heap]) {
         internal.gc.sync.event_signal(ref heap.work_progress)
         internal.threads.thread_yield()
     }
+    internal.gc.finalize.stop_thread(heap)
     internal.gc.finalize.run(heap, 0)
     let mutator_probe: Ref[internal.gc.core.Mutator]?      = nil
     let mutator_row:   Ref[internal.abi.Type_Record]? = internal.abi.optional_reference_target(

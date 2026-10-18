@@ -78,6 +78,25 @@ append_padding(core_buffer_t *buffer, size_t alignment)
     return true;
 }
 
+static uint64_t
+storage_bits(ir_module_t *runtime, th_type *type, const n00b_abi_type_v1 *row)
+{
+    const ir_final_layout_t *layout = type
+        ? ir_layout_final_visible(runtime, type, ir_module_target(runtime))
+        : nullptr;
+    return layout ? layout->intrinsic_bits : row->size_bits;
+}
+
+static uint32_t
+storage_alignment(ir_module_t *runtime, th_type *type,
+                  const n00b_abi_type_v1 *row)
+{
+    const ir_final_layout_t *layout = type
+        ? ir_layout_final_visible(runtime, type, ir_module_target(runtime))
+        : nullptr;
+    return layout ? layout->alignment_bytes : row->alignment_bytes;
+}
+
 static bool
 encode_scalar(ir_module_t *module, n00bb_abi_type_index_t *index,
               th_type *type,
@@ -331,7 +350,8 @@ encode_inline_array_member(array_writer_t *writer,
         || !n00bb_abi_type_index_find(writer->index, element, &element_index)
         || element_index >= writer->types->count) return false;
     const n00b_abi_type_v1 *element_type = &writer->types->rows[element_index];
-    uint64_t element_bits = element_type->size_bits;
+    uint64_t element_bits = storage_bits(writer->runtime, element,
+                                         element_type);
     uint64_t stride = member->inline_element_stride_bits;
     if (element_bits > stride || element_bits > SIZE_MAX - 7
         || element_type->kind == N00B_ABI_TYPE_ARRAY
@@ -390,7 +410,8 @@ encode_option_payload(array_writer_t *writer, th_type *type,
                                       &payload_index)
         || payload_index >= writer->types->count) return false;
     const n00b_abi_type_v1 *payload_row = &writer->types->rows[payload_index];
-    if (payload_row->size_bits > (uint64_t)byte_count * 8
+    if (storage_bits(writer->runtime, argument->type, payload_row)
+            > (uint64_t)byte_count * 8
         || !encode_typed_value(writer, argument->type, payload_row, item,
                source_kind, source_bit_offset, bytes, byte_count, depth + 1))
         return false;
@@ -410,7 +431,7 @@ encode_typed_value(array_writer_t *writer, th_type *type,
                    uint32_t source_kind, uint64_t source_bit_offset,
                    uint8_t *bytes, size_t byte_count, size_t depth)
 {
-    uint64_t bits = row->size_bits;
+    uint64_t bits = storage_bits(writer->runtime, type, row);
     size_t pool_offset = 0;
     uint32_t descriptor_index = UINT32_MAX;
     bool valid;
@@ -475,16 +496,8 @@ encode_aggregate_member(array_writer_t *writer,
         || member->bit_offset > UINT64_MAX - source_bit_offset)
         return false;
     const n00b_abi_type_v1 *child_type = &writer->types->rows[child_index];
-    bool composite = child_type->kind == N00B_ABI_TYPE_RECORD
-        || child_type->kind == N00B_ABI_TYPE_VARIANT
-        || child_type->kind == N00B_ABI_TYPE_TUPLE
-        || child_type->kind == N00B_ABI_TYPE_OPTION;
-    const ir_final_layout_t *child_layout = composite
-        ? ir_layout_final_visible(writer->runtime, member->type,
-                                  ir_module_target(writer->runtime))
-        : nullptr;
-    uint64_t child_bits = child_layout ? child_layout->intrinsic_bits
-                                       : child_type->size_bits;
+    uint64_t child_bits = storage_bits(writer->runtime, member->type,
+                                       child_type);
     if (child_bits > SIZE_MAX - 7) return false;
     size_t child_bytes = (size_t)((child_bits + 7) / 8);
     size_t buffer_bytes = child_bytes < 16 ? 16 : child_bytes;
@@ -629,7 +642,8 @@ encode_array_items(array_writer_t *writer,
             : row->kind == N00B_ABI_TYPE_NIL && !row->size_bits
                 ? value->kind == IR_GLOBAL_INIT_NIL
             : encode_scalar(writer->runtime, writer->index, type, value,
-                row->size_bits, bytes, &descriptor_index);
+                storage_bits(writer->runtime, type, row), bytes,
+                &descriptor_index);
         if (!valid) {
             if (heap_bytes) core_free(bytes);
             return false;
@@ -685,9 +699,9 @@ encode_array(array_writer_t *writer, th_type *type,
         item_type, &type_index) && type_index < writer->types->count;
     if (!valid) goto done;
     const n00b_abi_type_v1 *row = &writer->types->rows[type_index];
-    size_t alignment = row->alignment_bytes;
-    size_t extent = (size_t)(row->size_bits / 8
-        + (row->size_bits % 8 != 0));
+    size_t alignment = storage_alignment(writer->runtime, item_type, row);
+    uint64_t item_bits = storage_bits(writer->runtime, item_type, row);
+    size_t extent = (size_t)(item_bits / 8 + (item_bits % 8 != 0));
     size_t stride = alignment && !(alignment & (alignment - 1))
         && extent <= SIZE_MAX - (alignment - 1)
         ? (extent + alignment - 1) & ~(alignment - 1) : 0;
@@ -697,7 +711,7 @@ encode_array(array_writer_t *writer, th_type *type,
             || (row->flags & N00B_ABI_TYPE_FLAG_BITS));
     size_t width = row->semantic_width_bits;
     if (!alignment || (alignment & (alignment - 1))
-        || (!stride && row->size_bits) || (row->kind != N00B_ABI_TYPE_RECORD
+        || (!stride && item_bits) || (row->kind != N00B_ABI_TYPE_RECORD
             && row->kind != N00B_ABI_TYPE_VARIANT
             && row->kind != N00B_ABI_TYPE_TUPLE && stride > 16)
         || (packed && (!width || width > 128

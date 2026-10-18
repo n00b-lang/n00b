@@ -18,6 +18,14 @@ Usage:
                                 [--cache-dir .unicode_cache]
                                 [--allow-downloads] [--strict|--no-strict]
                                 [--check-inputs]
+
+Table data lives in little-endian .bin blobs next to the modules, baked in
+with sys.fs.data_file. A numeric table of u16/u32/u64 elements is the
+packed element array; a table of fixed-width rows is the row-major packed
+array. A string table is (count + 1) u32 byte offsets from the blob start
+followed by the UTF-8 bytes, so string i spans offsets i to i + 1. Each
+module exposes the raw blob as <table>_bytes and a typed accessor named
+after the table that decodes through internal.blob.
 """
 
 import argparse
@@ -25,6 +33,7 @@ import hashlib
 import os
 import re
 import shutil
+import struct
 import sys
 import urllib.request
 import zipfile
@@ -37,6 +46,10 @@ from pathlib import Path
 TABLE_PROLOGUE = ""
 
 DATA_FILE_IMPORT = "import sys.fs\n\n"
+
+TABLE_IMPORTS = "import sys.fs\nimport internal.blob\n\n"
+
+BLOB_CODES = {"u16": "H", "u32": "I", "u64": "Q"}
 
 N00B_TYPES = {"uint8_t": "u8", "uint16_t": "u16", "uint32_t": "u32",
               "uint64_t": "u64", "int8_t": "i8"}
@@ -121,24 +134,88 @@ GENERATED_FILES = [
     "scripts.n",
     "sentbreak.n",
     "wordbreak.n",
+    "age_names.bin",
+    "age_stage1.bin",
     "age_stage2.bin",
+    "bidi_bracket_data.bin",
+    "bidi_bracket_index.bin",
+    "bidi_class_stage1.bin",
     "bidi_class_stage2.bin",
+    "block_ids.bin",
+    "block_names.bin",
+    "block_ranges.bin",
+    "canon_decomp_data.bin",
+    "canon_decomp_index.bin",
+    "casefold_full_data.bin",
+    "casefold_full_index.bin",
+    "casefold_simple_data.bin",
+    "casefold_simple_index.bin",
+    "categories_stage1.bin",
     "categories_stage2.bin",
+    "ce_data.bin",
+    "collation_stage1.bin",
+    "collation_stage2.bin",
+    "combining_stage1.bin",
     "combining_stage2.bin",
+    "comp_combining.bin",
+    "comp_result.bin",
+    "comp_starter.bin",
+    "compat_decomp_data.bin",
+    "compat_decomp_index.bin",
+    "confusable_data.bin",
+    "confusable_index.bin",
+    "contr_ce_data.bin",
+    "contr_ce_offsets.bin",
+    "contr_key_lens.bin",
+    "contr_keys.bin",
+    "core_han_ranges.bin",
+    "eaw_stage1.bin",
     "eaw_stage2.bin",
+    "final_sigma_lower_data.bin",
+    "final_sigma_lower_index.bin",
+    "full_lower_data.bin",
+    "full_lower_index.bin",
+    "full_title_data.bin",
+    "full_title_index.bin",
+    "full_upper_data.bin",
+    "full_upper_index.bin",
+    "grapheme_stage1.bin",
     "grapheme_stage2.bin",
+    "identifiers_stage1.bin",
     "identifiers_stage2.bin",
-    "incb_stage2.bin",
+    "idna_map_data.bin",
+    "idna_map_index.bin",
+    "idna_stage1.bin",
     "idna_stage2.bin",
+    "implicit_ranges.bin",
+    "incb_stage1.bin",
+    "incb_stage2.bin",
+    "joining_stage1.bin",
     "joining_stage2.bin",
+    "linebreak_stage1.bin",
     "linebreak_stage2.bin",
     "names_by_name.bin",
     "names_index.bin",
     "names_pool.bin",
+    "normprops_stage1.bin",
     "normprops_stage2.bin",
+    "proplist_stage1.bin",
+    "proplist_stage2.bin",
+    "script_ext_data.bin",
+    "script_ext_index.bin",
+    "script_names.bin",
     "scripts_recommended.bin",
+    "scripts_stage1.bin",
     "scripts_stage2.bin",
+    "sentbreak_stage1.bin",
     "sentbreak_stage2.bin",
+    "simple_lower_data.bin",
+    "simple_lower_index.bin",
+    "simple_title_data.bin",
+    "simple_title_index.bin",
+    "simple_upper_data.bin",
+    "simple_upper_index.bin",
+    "wordbreak_stage1.bin",
     "wordbreak_stage2.bin",
 ]
 
@@ -599,6 +676,50 @@ BINARY_PROP_MAP = {v: i for i, v in enumerate(BINARY_PROPERTIES)}
 # into one uint8_t
 
 # ---------------------------------------------------------------------------
+# Table blobs
+# ---------------------------------------------------------------------------
+
+def write_blob_const(f, name, bin_path):
+    f.write(f"public const {name}_bytes: Array[u8] = "
+            f'sys.fs.data_file(source_dir() + "/{bin_path.name}")\n\n')
+
+
+def emit_table(f, bin_path, name, elem, values):
+    bin_path.write_bytes(struct.pack(f"<{len(values)}{BLOB_CODES[elem]}",
+                                     *values))
+    write_blob_const(f, name, bin_path)
+    f.write(f"public inline func {name}(i: u32) -> {elem} {{\n"
+            f"    return internal.blob.{elem}_at({name}_bytes, i)\n"
+            f"}}\n\n")
+
+
+def emit_rows(f, bin_path, name, width, rows):
+    flat = []
+    for row in rows:
+        assert len(row) == width
+        flat.extend(row)
+    bin_path.write_bytes(struct.pack(f"<{len(flat)}I", *flat))
+    write_blob_const(f, name, bin_path)
+    f.write(f"public inline func {name}(row: u32, col: u32) -> u32 {{\n"
+            f"    return internal.blob.u32_at({name}_bytes, "
+            f"row * {width} + col)\n"
+            f"}}\n\n")
+
+
+def emit_strings(f, bin_path, name, strings):
+    encoded = [s.encode("utf-8") for s in strings]
+    offsets = [4 * (len(encoded) + 1)]
+    for s in encoded:
+        offsets.append(offsets[-1] + len(s))
+    bin_path.write_bytes(struct.pack(f"<{len(offsets)}I", *offsets)
+                         + b"".join(encoded))
+    write_blob_const(f, name, bin_path)
+    f.write(f"public func {name}(i: u32) -> string {{\n"
+            f"    return internal.blob.str_at(ref {name}_bytes, i)\n"
+            f"}}\n\n")
+
+
+# ---------------------------------------------------------------------------
 # Two-stage table builder
 # ---------------------------------------------------------------------------
 
@@ -651,31 +772,20 @@ class TwoStageTable:
 
         with open(out_path, "w") as f:
             f.write(TABLE_PROLOGUE)
-            if self.c_type == "uint8_t":
-                f.write(DATA_FILE_IMPORT)
+            f.write(TABLE_IMPORTS)
 
             s1_type = "u16" if n_unique < 65536 else "u32"
-            f.write(f"public const {self.name}_stage1: Array[{s1_type}] = [\n")
-            for i in range(0, NUM_BLOCKS, 16):
-                vals = stage1[i:i + 16]
-                f.write("    " + ", ".join(str(v) for v in vals) + ",\n")
-            f.write("]\n\n")
+            emit_table(f, out_path.with_name(out_path.stem + "_stage1.bin"),
+                       f"{self.name}_stage1", s1_type, stage1)
 
+            bin_path = out_path.with_name(out_path.stem + "_stage2.bin")
             if self.c_type == "uint8_t":
-                bin_path = out_path.with_name(out_path.stem + "_stage2.bin")
                 bin_path.write_bytes(bytes(stage2))
                 f.write(f"public const {self.name}_stage2: Array[u8] = "
                         f'sys.fs.data_file(source_dir() + "/{bin_path.name}")\n')
             else:
-                f.write(f"public const {self.name}_stage2: "
-                        f"Array[{N00B_TYPES[self.c_type]}] = [\n")
-                for i in range(0, len(stage2), 16):
-                    vals = stage2[i:i + 16]
-                    if self.c_type == "uint64_t":
-                        f.write("    " + ", ".join(f"0x{v:016x}" for v in vals) + ",\n")
-                    else:
-                        f.write("    " + ", ".join(str(v) for v in vals) + ",\n")
-                f.write("]\n")
+                emit_table(f, bin_path, f"{self.name}_stage2",
+                           N00B_TYPES[self.c_type], stage2)
 
         return n_unique
 
@@ -715,19 +825,16 @@ class SparseMapping:
         with open(out_path, mode) as f:
             if not append:
                 f.write(TABLE_PROLOGUE)
+                f.write(TABLE_IMPORTS)
 
-            f.write(f"public const {self.name}_index: Array[Array[u32]] = [\n")
-            for cp in sorted_cps:
-                f.write(f"    [0x{cp:06X}, {offsets[cp]}],\n")
-            f.write("]\n")
+            emit_rows(f, out_path.with_name(f"{self.name}_index.bin"),
+                      f"{self.name}_index", 2,
+                      [(cp, offsets[cp]) for cp in sorted_cps])
             f.write(f"public const {self.name}_index_len: u32 = {len(sorted_cps)}\n\n")
 
-            f.write(f"public const {self.name}_data: Array[u32] = [\n")
-            for i in range(0, len(data_array), 16):
-                vals = data_array[i:i + 16]
-                f.write("    " + ", ".join(
-                    f"0x{v & 0xFFFFFFFF:08X}" for v in vals) + ",\n")
-            f.write("]\n\n")
+            emit_table(f, out_path.with_name(f"{self.name}_data.bin"),
+                       f"{self.name}_data", "u32",
+                       [v & 0xFFFFFFFF for v in data_array])
 
         print(f"  {self.name}: {len(sorted_cps)} entries, "
               f"{len(data_array)} data words")
@@ -878,10 +985,9 @@ def gen_scripts(cache_dir, out_dir):
                 f'sys.fs.data_file(source_dir() + "/{rec_bin.name}")\n')
 
     with open(out_dir / "scripts.n", "a") as f:
-        f.write(f"\npublic const script_names: Array[string] = [\n")
-        for s in SCRIPT_VALUES:
-            f.write(f'    "{s}",\n')
-        f.write("]\n")
+        f.write("\n")
+        emit_strings(f, out_dir / "script_names.bin", "script_names",
+                     SCRIPT_VALUES)
         f.write(f"public const script_count: u32 = {len(SCRIPT_VALUES)}\n")
 
 
@@ -944,6 +1050,7 @@ def gen_script_extensions(cache_dir, out_dir):
 
     with open(out_dir / "script_extensions.n", "w") as f:
         f.write(TABLE_PROLOGUE)
+        f.write(TABLE_IMPORTS)
         f.write(f"public const script_common = {common_idx}\n")
         f.write(f"public const script_inherited = {inherited_idx}\n\n")
 
@@ -968,21 +1075,16 @@ def gen_blocks(cache_dir, out_dir):
 
     with open(out_dir / "blocks.n", "w") as f:
         f.write(TABLE_PROLOGUE)
+        f.write(TABLE_IMPORTS)
 
-        f.write(f"public const block_ranges: Array[Array[u32]] = [\n")
-        for start, end, name in blocks:
-            f.write(f"    [0x{start:06X}, 0x{end:06X}],\n")
-        f.write("]\n")
-        f.write(f"public const block_ids: Array[u16] = [\n")
-        for start, end, name in blocks:
-            f.write(f"    {BLOCK_MAP[name]},\n")
-        f.write("]\n")
+        emit_rows(f, out_dir / "block_ranges.bin", "block_ranges", 2,
+                  [(start, end) for start, end, name in blocks])
+        emit_table(f, out_dir / "block_ids.bin", "block_ids", "u16",
+                   [BLOCK_MAP[name] for start, end, name in blocks])
         f.write(f"public const block_count: u32 = {len(blocks)}\n\n")
 
-        f.write(f"public const block_names: Array[string] = [\n")
-        for b in BLOCK_VALUES:
-            f.write(f'    "{b}",\n')
-        f.write("]\n")
+        emit_strings(f, out_dir / "block_names.bin", "block_names",
+                     BLOCK_VALUES)
 
     print(f"  blocks: {len(blocks)} block ranges")
 
@@ -1144,10 +1246,8 @@ def gen_age(cache_dir, out_dir):
     table.generate_n00b(out_dir / "age.n")
 
     with open(out_dir / "age.n", "a") as f:
-        f.write(f"\npublic const age_names: Array[string] = [\n")
-        for a in age_list:
-            f.write(f'    "{a}",\n')
-        f.write("]\n")
+        f.write("\n")
+        emit_strings(f, out_dir / "age_names.bin", "age_names", age_list)
         f.write(f"public const age_count: u32 = {len(age_list)}\n")
 
 
@@ -1227,7 +1327,7 @@ def gen_decomposition(cache_dir, out_dir):
                              default=0))
 
     with open(out_dir / "decomposition.n", "a") as f:
-        f.write(f"\npublic const max_decomp = {widest}\n")
+        f.write(f"public const max_decomp = {widest}\n")
 
 
 def gen_composition(cache_dir, out_dir):
@@ -1281,27 +1381,17 @@ def gen_composition(cache_dir, out_dir):
 
     with open(out_dir / "composition.n", "w") as f:
         f.write(TABLE_PROLOGUE)
+        f.write(TABLE_IMPORTS)
 
         f.write(f"public const comp_table_size = {table_size}\n")
         f.write(f"public const comp_empty = 0xFFFFFFFF\n\n")
 
-        f.write(f"public const comp_starter: Array[u32] = [\n")
-        for i in range(0, table_size, 8):
-            vals = [f"0x{keys[j][0]:08X}" for j in range(i, min(i + 8, table_size))]
-            f.write("    " + ", ".join(vals) + ",\n")
-        f.write("]\n\n")
-
-        f.write(f"public const comp_combining: Array[u32] = [\n")
-        for i in range(0, table_size, 8):
-            vals = [f"0x{keys[j][1]:08X}" for j in range(i, min(i + 8, table_size))]
-            f.write("    " + ", ".join(vals) + ",\n")
-        f.write("]\n\n")
-
-        f.write(f"public const comp_result: Array[u32] = [\n")
-        for i in range(0, table_size, 8):
-            vals = [f"0x{values[j]:06X}" for j in range(i, min(i + 8, table_size))]
-            f.write("    " + ", ".join(vals) + ",\n")
-        f.write("]\n")
+        emit_table(f, out_dir / "comp_starter.bin", "comp_starter", "u32",
+                   [k[0] for k in keys])
+        emit_table(f, out_dir / "comp_combining.bin", "comp_combining",
+                   "u32", [k[1] for k in keys])
+        emit_table(f, out_dir / "comp_result.bin", "comp_result", "u32",
+                   values)
 
     print(f"  composition: {n_entries} pairs in {table_size}-slot table "
           f"({n_entries * 100 / table_size:.0f}% load)")
@@ -1406,6 +1496,7 @@ def gen_casemap(cache_dir, out_dir):
 
     with open(out_dir / "casemap.n", "w") as f:
         f.write(TABLE_PROLOGUE)
+        f.write(TABLE_IMPORTS)
 
     simple_upper.generate_n00b(out_dir / "casemap.n", append=True)
     simple_lower.generate_n00b(out_dir / "casemap.n", append=True)
@@ -1990,13 +2081,17 @@ def gen_collation(cache_dir, out_dir):
         table = TwoStageTable("ducet", "uint32_t", 0xFFFFFFFF)
         table.generate_n00b(out_dir / "collation.n")
         with open(out_dir / "collation.n", "a") as f:
-            f.write("\npublic const ce_data: Array[u16] = [0]\n")
+            emit_table(f, out_dir / "ce_data.bin", "ce_data", "u16", [0])
             f.write("public const ce_data_len: u32 = 1\n")
-            f.write("public const contraction_count: u32 = 0\n")
-            f.write("public const contr_keys: Array[Array[u32]] = [[0, 0, 0, 0]]\n")
-            f.write("public const contr_key_lens: Array[u32] = [0]\n")
-            f.write("public const contr_ce_offsets: Array[u32] = [0]\n")
-            f.write("public const contr_ce_data: Array[u16] = [0]\n")
+            f.write("public const contraction_count: u32 = 0\n\n")
+            emit_rows(f, out_dir / "contr_keys.bin", "contr_keys", 4,
+                      [(0, 0, 0, 0)])
+            emit_table(f, out_dir / "contr_key_lens.bin", "contr_key_lens",
+                       "u32", [0])
+            emit_table(f, out_dir / "contr_ce_offsets.bin",
+                       "contr_ce_offsets", "u32", [0])
+            emit_table(f, out_dir / "contr_ce_data.bin", "contr_ce_data",
+                       "u16", [0])
             f.write("public const ducet_count: u32 = 0\n")
         return
 
@@ -2071,11 +2166,7 @@ def gen_collation(cache_dir, out_dir):
     table.generate_n00b(out_dir / "collation.n")
 
     with open(out_dir / "collation.n", "a") as f:
-        f.write(f"\npublic const ce_data: Array[u16] = [\n")
-        for i in range(0, len(ce_data), 16):
-            vals = ce_data[i:i + 16]
-            f.write("    " + ", ".join(f"0x{v:04X}" for v in vals) + ",\n")
-        f.write("]\n")
+        emit_table(f, out_dir / "ce_data.bin", "ce_data", "u16", ce_data)
         f.write(f"public const ce_data_len: u32 = {len(ce_data)}\n\n")
 
         sorted_contr = sorted(contractions.items())
@@ -2093,38 +2184,21 @@ def gen_collation(cache_dir, out_dir):
                 for p, s, t in ces:
                     contr_data.extend([p, s, t])
 
-            f.write(f"public const contr_keys: Array[Array[u32]] = [\n")
-            for cps, offset in contr_index:
-                padded = list(cps) + [0] * (4 - len(cps))
-                padded = padded[:4]
-                f.write("    [{}],\n".format(
-                    ", ".join(f"0x{v:06X}" for v in padded)))
-            f.write("]\n\n")
-
-            f.write(f"public const contr_key_lens: Array[u32] = [\n")
-            for cps, offset in contr_index:
-                f.write(f"    {len(cps)},\n")
-            f.write("]\n\n")
-
-            f.write(f"public const contr_ce_offsets: Array[u32] = [\n")
-            for cps, offset in contr_index:
-                f.write(f"    {offset},\n")
-            f.write("]\n\n")
-
-            f.write(f"public const contr_ce_data: Array[u16] = [\n")
-            for i in range(0, len(contr_data), 16):
-                vals = contr_data[i:i + 16]
-                f.write("    " + ", ".join(f"0x{v:04X}" for v in vals) + ",\n")
-            f.write("]\n\n")
+            emit_rows(f, out_dir / "contr_keys.bin", "contr_keys", 4,
+                      [(list(cps) + [0] * (4 - len(cps)))[:4]
+                       for cps, offset in contr_index])
+            emit_table(f, out_dir / "contr_key_lens.bin", "contr_key_lens",
+                       "u32", [len(cps) for cps, offset in contr_index])
+            emit_table(f, out_dir / "contr_ce_offsets.bin",
+                       "contr_ce_offsets", "u32",
+                       [offset for cps, offset in contr_index])
+            emit_table(f, out_dir / "contr_ce_data.bin", "contr_ce_data",
+                       "u16", contr_data)
 
             implicit_ranges.sort()
 
-            f.write("public const implicit_ranges: Array[Array[u32]] = [\n")
-            for lo, hi, base in implicit_ranges:
-                f.write(f"    [0x{lo:06X}, 0x{hi:06X}, 0x{base:04X}],\n")
-            if not implicit_ranges:
-                f.write("    [0, 0, 0],\n")
-            f.write("]\n\n")
+            emit_rows(f, out_dir / "implicit_ranges.bin", "implicit_ranges",
+                      3, implicit_ranges or [(0, 0, 0)])
 
             f.write("public const implicit_range_count: u32 = "
                     f"{len(implicit_ranges)}\n")
@@ -2144,12 +2218,9 @@ def gen_collation(cache_dir, out_dir):
     core_han.sort()
 
     with open(out_dir / "collation.n", "a") as f:
-        f.write("\npublic const core_han_ranges: Array[Array[u32]] = [\n")
-        for lo, hi in core_han:
-            f.write(f"    [0x{lo:06X}, 0x{hi:06X}],\n")
-        if not core_han:
-            f.write("    [0, 0],\n")
-        f.write("]\n\n")
+        f.write("\n")
+        emit_rows(f, out_dir / "core_han_ranges.bin", "core_han_ranges", 2,
+                  core_han or [(0, 0)])
         f.write("public const core_han_range_count: u32 = "
                 f"{len(core_han)}\n")
 

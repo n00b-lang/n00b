@@ -1,14 +1,15 @@
 import internal.types
 import internal.encoding
 import internal.properties
+import internal.blob
 import generated.grapheme
 import generated.incb
 import generated.wordbreak
 import generated.sentbreak
 
-private inline func break_stage_ix(stage1: Array[u16], cp: char) -> u32 {
+private inline func break_stage_ix(stage1: Array[u8], cp: char) -> u32 {
     let v: u32 = cast[u32] cp
-    return cast[u32] stage1[v >> 8] * 256 + (v & 0xff)
+    return cast[u32] internal.blob.u16_at(stage1, v >> 8) * 256 + (v & 0xff)
 }
 
 func grapheme_break(cp: char) -> internal.types.Gcb {
@@ -17,7 +18,7 @@ func grapheme_break(cp: char) -> internal.types.Gcb {
     }
 
     return cast[internal.types.Gcb] generated.grapheme.gcb_stage2[
-        break_stage_ix(generated.grapheme.gcb_stage1, cp)]
+        break_stage_ix(generated.grapheme.gcb_stage1_bytes, cp)]
 }
 
 func incb(cp: char) -> internal.types.Incb {
@@ -26,7 +27,7 @@ func incb(cp: char) -> internal.types.Incb {
     }
 
     return cast[internal.types.Incb] generated.incb.incb_stage2[
-        break_stage_ix(generated.incb.incb_stage1, cp)]
+        break_stage_ix(generated.incb.incb_stage1_bytes, cp)]
 }
 
 private func is_ep(cp: char) -> bool {
@@ -118,7 +119,7 @@ func word_break(cp: char) -> internal.types.Wb {
     }
 
     return cast[internal.types.Wb] generated.wordbreak.wb_stage2[
-        break_stage_ix(generated.wordbreak.wb_stage1, cp)]
+        break_stage_ix(generated.wordbreak.wb_stage1_bytes, cp)]
 }
 
 func word_iter(s: string) -> internal.types.Break_Iter {
@@ -367,7 +368,7 @@ func sentence_break(cp: char) -> internal.types.Sb {
     }
 
     return cast[internal.types.Sb] generated.sentbreak.sb_stage2[
-        break_stage_ix(generated.sentbreak.sb_stage1, cp)]
+        break_stage_ix(generated.sentbreak.sb_stage1_bytes, cp)]
 }
 
 func sentence_iter(s: string) -> internal.types.Break_Iter {

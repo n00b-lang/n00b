@@ -1,0 +1,196 @@
+import internal.theme
+
+const cascade_max_cover = 32
+
+record Style_Run {
+    start: u32
+    end:   u32
+    style: Text_Style
+}
+
+record Cascade {
+    s:   string
+    pos: u32
+    len: u32
+}
+
+func __init(modify self: Cascade, s: string) {
+    self.s = s
+    self.pos = 0
+    self.len = unsafe_cast[u32] byte_len(s)
+}
+
+private func record_is_span(r: Style_Record) -> bool {
+    return r.start_ix != nil and r.end_ix != nil
+}
+
+private func record_end(r: Style_Record, len: u32) -> u32 {
+    let e: u32 = r.end_ix.get_or_else(index_extends)
+    if e == index_extends or e > len {
+        return len
+    }
+    return e
+}
+
+private func record_covers(r: Style_Record, pos: u32, len: u32,
+                           inclusive: bool) -> bool {
+    if !record_is_span(r) {
+        return false
+    }
+    let start: u32 = r.start_ix.get_or_else(0)
+    let end: u32 = record_end(r, len)
+    if start > pos {
+        return false
+    }
+    if inclusive {
+        return pos <= end
+    }
+    return pos < end
+}
+
+private func order_cover(modify cover: Array[uint], n: i32,
+                         recs: List[Style_Record]) {
+    for i from 1 until n {
+        let key: uint = cover[cast[int] i]
+        var j: i32 = i - 1
+        while j >= 0 {
+            let at: uint = cover[cast[int] j]
+            let js: u32 = recs[cast[int] at].start_ix.get_or_else(0)
+            let ks: u32 = recs[cast[int] key].start_ix.get_or_else(0)
+            let je: u32 = recs[cast[int] at].end_ix.get_or_else(0)
+            let ke: u32 = recs[cast[int] key].end_ix.get_or_else(0)
+            let after: bool = js > ks or (js == ks and je < ke)
+            if !after {
+                break
+            }
+            cover[cast[int](j + 1)] = at
+            j -= 1
+        }
+        cover[cast[int](j + 1)] = key
+    }
+}
+
+private func level_style_index(body: Ref[Rich_Body], pos: u32, len: u32,
+                               start_style: Text_Style, inclusive: bool)
+    -> Text_Style {
+    var acc: Text_Style = start_style
+    var cover_stack: Array[uint][cascade_max_cover]
+    var cover: Array[uint] = cover_stack
+    var cap: i32 = cascade_max_cover
+    var n: i32 = 0
+    for i from 0 until cast[int] body.style_info.len() {
+        if !record_covers(body.style_info[i], pos, len, inclusive) {
+            continue
+        }
+        if n == cap {
+            var grown: Array[uint] = new[Array[uint]](cast[int](cap * 2))
+            for j from 0 until n {
+                grown[cast[int] j] = cover[cast[int] j]
+            }
+            cover = grown
+            cap *= 2
+        }
+        cover[cast[int] n] = cast[uint] i
+        n += 1
+    }
+    order_cover(cover, n, body.style_info)
+    let theme: Ref[internal.theme.Theme] = internal.theme.theme_current()
+    var k: i32 = 0
+    while k < n {
+        let at: uint = cover[cast[int] k]
+        let tag: string? = body.style_info[cast[int] at].style_tag
+        k += 1
+        if tag == nil {
+            continue
+        }
+        acc = merge(acc, internal.theme.style_for_tag(theme, tag.get()))
+    }
+    return acc
+}
+
+private func level_next_boundary(body: Ref[Rich_Body], pos: u32, len: u32,
+                                 start_best: u32) -> u32 {
+    var best: u32 = start_best
+    for i from 0 until cast[int] body.style_info.len() {
+        let r: Style_Record = body.style_info[i]
+        if !record_is_span(r) {
+            continue
+        }
+        let start: u32 = r.start_ix.get_or_else(0)
+        let end: u32 = record_end(r, len)
+        if start > pos and start < best {
+            best = start
+        }
+        if end > pos and end < best {
+            best = end
+        }
+    }
+    return best
+}
+
+func next(modify self: Cascade) -> Style_Run? {
+    if self.pos >= self.len {
+        return nil
+    }
+    var acc: Text_Style = (
+        bold = nil, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil)
+    var next: u32 = self.len
+    var cur: string = self.s
+    while cast[u64] tag(cur) == str_tag_rich {
+        let body: Ref[Rich_Body] = __string_rich_body(cur)
+        if body.opaque {
+            acc = (
+                bold = nil, italic = nil, underline = nil,
+                double_underline = nil, strikethrough = nil, reverse = nil,
+                dim = nil, blink = nil, text_case = Text_Case.none,
+                font_hint = Font_Hint.default, font_index = nil,
+                fg_palette_ix = nil, bg_palette_ix = nil, fg_rgb = nil,
+                bg_rgb = nil, font_size = nil)
+        }
+        let base: Text_Style? = body.base_style
+        if base != nil {
+            acc = merge(acc, base.get())
+        }
+        acc = level_style_index(body, self.pos, self.len, acc, false)
+        next = level_next_boundary(body, self.pos, self.len, next)
+        cur = body.s
+    }
+    let run: Style_Run = (start = self.pos, end = next, style = acc)
+    self.pos = next
+    return run
+}
+
+func cascade_style_index(s: string, pos: u32, inclusive: bool = false)
+    -> Text_Style {
+    var acc: Text_Style = (
+        bold = nil, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil)
+    let len: u32 = unsafe_cast[u32] byte_len(s)
+    var cur: string = s
+    while cast[u64] tag(cur) == str_tag_rich {
+        let body: Ref[Rich_Body] = __string_rich_body(cur)
+        if body.opaque {
+            acc = (
+                bold = nil, italic = nil, underline = nil,
+                double_underline = nil, strikethrough = nil, reverse = nil,
+                dim = nil, blink = nil, text_case = Text_Case.none,
+                font_hint = Font_Hint.default, font_index = nil,
+                fg_palette_ix = nil, bg_palette_ix = nil, fg_rgb = nil,
+                bg_rgb = nil, font_size = nil)
+        }
+        let base: Text_Style? = body.base_style
+        if base != nil {
+            acc = merge(acc, base.get())
+        }
+        acc = level_style_index(body, pos, len, acc, inclusive)
+        cur = body.s
+    }
+    return acc
+}

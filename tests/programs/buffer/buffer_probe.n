@@ -1,3 +1,5 @@
+import text
+
 func view_len(s: string) -> uint {
     return byte_len(s)
 }
@@ -21,6 +23,18 @@ func from_bytes_checks() {
     require byte_len(b) == 5
     let empty: Buffer = empty_buffer()
     require byte_len(empty) == 0
+}
+
+func char_count_checks() {
+    let ascii: Buffer = buffer_from_string("hello")
+    let mixed: Buffer = buffer_from_string("héllo € \U0001f4a9")
+    require text.len(ascii, unit = text.Index_Unit.char) == 5
+    require text.len(mixed, unit = text.Index_Unit.char) == 9
+    require text.len(empty_buffer(), unit = text.Index_Unit.char) == 0
+    var joined: Buffer = buffer_from_string(ascii)
+    joined += mixed
+    require byte_len(joined) == 20
+    require text.len(joined, unit = text.Index_Unit.char) == 14
 }
 
 func literal_checks() {
@@ -97,6 +111,7 @@ func string_behaviour_checks() {
 }
 
 from_bytes_checks()
+char_count_checks()
 literal_checks()
 to_string_checks()
 length_checks()

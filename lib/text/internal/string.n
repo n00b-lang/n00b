@@ -1,0 +1,1199 @@
+import unicode
+import internal.rich
+
+enum Index_Unit {
+    byte = 0, char = 1, cluster = 2
+}
+
+private func crlf_pairs(s: string, len: u64) -> u64 {
+    var n: u64 = 0
+    var i: u64 = 0
+    while i + 1 < len {
+        if byte_at(s, i) == cast[u8] '\r' and byte_at(s, i + 1) == cast[u8] '\n' {
+            n += 1
+        }
+        i += 1
+    }
+    return n
+}
+
+private func char_count_utf8(s: string, len: u64) -> u64 {
+    var n: u64 = 0
+    var i: u64 = 0
+    while i < len {
+        if i + 8 <= len {
+            var w: u64 = 0
+            for k: u64 from 0 until 8 {
+                w = w | (cast[u64] byte_at(s, i + k) << (k * 8))
+            }
+            if utf8_word_is_ascii(w) {
+                n += 8
+                i += 8
+                continue
+            }
+        }
+        if (byte_at(s, i) & 0xc0) != 0x80 {
+            n += 1
+        }
+        i += 1
+    }
+    return n
+}
+
+private func next_char_byte(s: string, len: u64, at: u64) -> u64 {
+    var i: u64 = at
+    i += 1
+    while i < len and (byte_at(s, i) & 0xc0) == 0x80 {
+        i += 1
+    }
+    return i
+}
+
+private func prev_char_byte(s: string, at: u64) -> u64 {
+    var i: u64 = at
+    i -= 1
+    while i > 0 and (byte_at(s, i) & 0xc0) == 0x80 {
+        i -= 1
+    }
+    return i
+}
+
+private func utf8_cluster_after(s: string, since: u64) -> u64 {
+    let len: u64 = byte_len(s)
+    let tail: string = byte_slice(s, cast[int] since, cast[int] len)
+    var it: unicode.Break_Iter = unicode.grapheme_iter(tail)
+    let nxt: u32? = unicode.next(it)
+    if nxt == nil {
+        return len
+    }
+    return since + cast[u64] nxt.get()
+}
+
+private func step_unit(s: string, unit: Index_Unit, enc: Str_Encoding,
+                       len: u64, i: u64) -> u64 {
+    if unit == Index_Unit.byte or enc == Str_Encoding.binary {
+        return i + 1
+    }
+    if enc == Str_Encoding.ascii {
+        if unit == Index_Unit.cluster {
+            if byte_at(s, i) == cast[u8] '\r' and i + 1 < len and
+                byte_at(s, i + 1) == cast[u8] '\n' {
+                return i + 2
+            }
+        }
+        return i + 1
+    }
+    if unit == Index_Unit.char {
+        return next_char_byte(s, len, i)
+    }
+    return utf8_cluster_after(s, i)
+}
+
+private func units_between(s: string, unit: Index_Unit, since: u64,
+                           upto: u64) -> u64 {
+    let len: u64 = byte_len(s)
+    let enc: Str_Encoding = encoding(s)
+    if unit == Index_Unit.byte or enc == Str_Encoding.binary or
+        (enc == Str_Encoding.ascii and unit == Index_Unit.char) {
+        return upto - since
+    }
+    if enc == Str_Encoding.utf8 and unit == Index_Unit.char {
+        return char_count_utf8(byte_slice(s, cast[int] since, cast[int] upto),
+                               upto - since)
+    }
+    var i: u64 = since
+    var n: u64 = 0
+    while i < upto {
+        i = step_unit(s, unit, enc, len, i)
+        n += 1
+    }
+    return n
+}
+
+private func unit_span(s: string, unit: Index_Unit, n0: u64, n1: u64,
+                       out out0: u64, out out1: u64) -> u64 {
+    let len: u64 = byte_len(s)
+    let enc: Str_Encoding = encoding(s)
+    var i: u64 = 0
+    var k: u64 = 0
+    out0 = len
+    out1 = len
+    if unit == Index_Unit.byte or enc == Str_Encoding.binary or
+        (enc == Str_Encoding.ascii and unit == Index_Unit.char) {
+        if n0 < len {
+            out0 = n0
+        }
+        if n1 < len {
+            out1 = n1
+            return n1
+        }
+        return len
+    }
+    if enc == Str_Encoding.utf8 and unit == Index_Unit.cluster {
+        var it: unicode.Break_Iter = unicode.grapheme_iter(s)
+        while true {
+            if k == n0 {
+                out0 = i
+            }
+            if k == n1 {
+                out1 = i
+                return k
+            }
+            let nxt: u32? = unicode.next(it)
+            if nxt == nil {
+                return k
+            }
+            i = cast[u64] nxt.get()
+            k += 1
+        }
+    }
+    while true {
+        if k == n0 {
+            out0 = i
+        }
+        if k == n1 {
+            out1 = i
+            return k
+        }
+        if i >= len {
+            return k
+        }
+        i = step_unit(s, unit, enc, len, i)
+        k += 1
+    }
+    return k
+}
+
+func unit_count(s: string, unit: Index_Unit) -> u64 {
+    let len: u64 = byte_len(s)
+    if unit == Index_Unit.byte or len == 0 {
+        return len
+    }
+    let enc: Str_Encoding = encoding(s)
+    if enc == Str_Encoding.binary {
+        return len
+    }
+    if enc == Str_Encoding.ascii {
+        if unit == Index_Unit.char {
+            return len
+        }
+        return len - crlf_pairs(s, len)
+    }
+    if unit == Index_Unit.char {
+        return char_count_utf8(s, len)
+    }
+    return unicode.grapheme_count(s)
+}
+
+func unit_to_byte(s: string, unit: Index_Unit, n: u64) -> u64 {
+    let len: u64 = byte_len(s)
+    if unit == Index_Unit.byte or len == 0 {
+        if n < len {
+            return n
+        }
+        return len
+    }
+    let enc: Str_Encoding = encoding(s)
+    if enc == Str_Encoding.binary or
+        (enc == Str_Encoding.ascii and unit == Index_Unit.char) {
+        if n < len {
+            return n
+        }
+        return len
+    }
+    if enc == Str_Encoding.ascii {
+        var i: u64 = 0
+        var k: u64 = 0
+        while i < len and k < n {
+            if byte_at(s, i) == cast[u8] '\r' and i + 1 < len and
+                byte_at(s, i + 1) == cast[u8] '\n' {
+                i += 2
+            }
+            else {
+                i += 1
+            }
+            k += 1
+        }
+        return i
+    }
+    if unit == Index_Unit.char {
+        var i: u64 = 0
+        var k: u64 = 0
+        while i < len and k < n {
+            i = next_char_byte(s, len, i)
+            k += 1
+        }
+        return i
+    }
+    var it: unicode.Break_Iter = unicode.grapheme_iter(s)
+    var k: u64 = 0
+    var at: u64 = 0
+    while k < n {
+        let nxt: u32? = unicode.next(it)
+        if nxt == nil {
+            return len
+        }
+        at = cast[u64] nxt.get()
+        k += 1
+    }
+    return at
+}
+
+func byte_to_unit(s: string, unit: Index_Unit, at: u64) -> u64 {
+    let len: u64 = byte_len(s)
+    var b: u64 = at
+    if b > len {
+        b = len
+    }
+    if unit == Index_Unit.byte or len == 0 {
+        return b
+    }
+    let enc: Str_Encoding = encoding(s)
+    if enc == Str_Encoding.binary or
+        (enc == Str_Encoding.ascii and unit == Index_Unit.char) {
+        return b
+    }
+    if enc == Str_Encoding.ascii {
+        return b - crlf_pairs(s, b)
+    }
+    if unit == Index_Unit.char {
+        return char_count_utf8(s, b)
+    }
+    var it: unicode.Break_Iter = unicode.grapheme_iter(s)
+    var k: u64 = 0
+    while true {
+        let nxt: u32? = unicode.next(it)
+        if nxt == nil {
+            return k
+        }
+        if cast[u64] nxt.get() > b {
+            return k
+        }
+        k += 1
+    }
+    return k
+}
+
+func len(self: string, unit: Index_Unit = Index_Unit.char) -> uint {
+    return unit_count(text(self), unit)
+}
+
+private func normalize(n: i64, count: u64) -> i64 {
+    if n < 0 {
+        return n + cast[i64] count
+    }
+    return n
+}
+
+private func resolve_index(s: string, n: i64, unit: Index_Unit,
+                           out b0: u64, out b1: u64) -> bool {
+    var ix: i64 = n
+    if ix < 0 {
+        ix = normalize(ix, unit_count(s, unit))
+    }
+    if ix < 0 {
+        b0 = 0
+        b1 = 0
+        return false
+    }
+    let want: u64 = cast[u64] ix
+    return unit_span(s, unit, want, want + 1, b0, b1) == want + 1
+}
+
+func index(self: string, n: i64, unit: Index_Unit = Index_Unit.char)
+    -> string fail: String_Error {
+    let base: string = text(self)
+    var b0: u64
+    var b1: u64
+    if !resolve_index(base, n, unit, b0, b1) {
+        fail String_Error.index_oob
+    }
+    return byte_slice(base, cast[int] b0, cast[int] b1)
+}
+
+func char_index(self: string, n: i64) -> char fail: String_Error {
+    let base: string = text(self)
+    var b0: u64
+    var b1: u64
+    if !resolve_index(base, n, Index_Unit.char, b0, b1) {
+        fail String_Error.index_oob
+    }
+    if !is_text(base) {
+        return cast[char] byte_at(base, b0)
+    }
+    var pos: u32 = cast[u32] b0
+    return unicode.utf8_decode(base, pos)!
+}
+
+private func text_slice(s: string, base: string, since: u64, upto: u64,
+                        ignore_style: bool) -> string {
+    let text: string = byte_slice(base, cast[int] since, cast[int] upto)
+    if ignore_style {
+        return text
+    }
+    return internal.rich.rich_reslice(s, since, upto, text, 0)
+}
+
+func slice(self: string, start: i64, end: i64,
+           unit: Index_Unit = Index_Unit.char, ignore_style: bool = false)
+    -> string fail: String_Error {
+    let base: string = text(self)
+    var b: i64 = start
+    var e: i64 = end
+    if b < 0 or e < 0 {
+        let count: u64 = unit_count(base, unit)
+        b = normalize(b, count)
+        if end < 0 {
+            e = end + cast[i64] count + 1
+        }
+        else {
+            e = end
+        }
+    }
+    if b < 0 or e < 0 {
+        fail String_Error.index_oob
+    }
+    if e <= b {
+        return empty_string()
+    }
+    var b0: u64
+    var b1: u64
+    let got: u64 = unit_span(base, unit, cast[u64] b, cast[u64] e, b0, b1)
+    if got < cast[u64] b {
+        fail String_Error.index_oob
+    }
+    return text_slice(self, base, b0, b1, ignore_style)
+}
+
+func find(self: string, sub: string, start: uint = 0, end: uint? = nil,
+          unit: Index_Unit = Index_Unit.char) -> uint fail: String_Error {
+    let base: string = text(self)
+    let needle: string = text(sub)
+    let ustart: u64 = start
+    var uend: u64 = 0xffffffffffffffff
+    if end != nil {
+        uend = end.get()
+    }
+    var bstart: u64
+    var bend: u64
+    let got: u64 = unit_span(base, unit, ustart, uend, bstart, bend)
+    if got < ustart {
+        fail String_Error.not_found
+    }
+    let hit: int? = find_bytes(base, needle, start = bstart, end = bend)
+    if hit == nil {
+        fail String_Error.not_found
+    }
+    let at: u64 = cast[u64] hit.get()
+    return ustart + units_between(base, unit, bstart, at)
+}
+
+private func ascii_case(s: string, len: u64, up: bool) -> string {
+    var out: Array[u8] = new[Array[u8]](cast[int] len)
+    for i from 0 until len {
+        let c: u8 = byte_at(s, i)
+        if up {
+            if c >= cast[u8] 'a' and c <= cast[u8] 'z' {
+                out[i] = c - 32
+            }
+            else {
+                out[i] = c
+            }
+        }
+        else {
+            if c >= cast[u8] 'A' and c <= cast[u8] 'Z' {
+                out[i] = c + 32
+            }
+            else {
+                out[i] = c
+            }
+        }
+    }
+    return from_raw(ref out, cast[int] len, copy = false,
+                    encoding = Str_Encoding.ascii, unsafe = true)
+}
+
+private func ascii_title(s: string, len: u64) -> string {
+    var out: Array[u8] = new[Array[u8]](cast[int] len)
+    var at_start: bool = true
+    for i from 0 until len {
+        let c: u8 = byte_at(s, i)
+        let cp: char = cast[char] c
+        let cased: bool = unicode.has_property(cp, unicode.Property.cased)
+        if at_start and cased {
+            if c >= cast[u8] 'a' and c <= cast[u8] 'z' {
+                out[i] = c - 32
+            }
+            else {
+                out[i] = c
+            }
+        }
+        else {
+            if c >= cast[u8] 'A' and c <= cast[u8] 'Z' {
+                out[i] = c + 32
+            }
+            else {
+                out[i] = c
+            }
+        }
+        if cased {
+            at_start = false
+        }
+        else {
+            if !unicode.has_property(cp, unicode.Property.case_ignorable) {
+                at_start = true
+            }
+        }
+    }
+    return from_raw(ref out, cast[int] len, copy = false,
+                    encoding = Str_Encoding.ascii, unsafe = true)
+}
+
+func upper(self: string) -> string fail: String_Error {
+    let base: string = text(self)
+    if !is_text(base) {
+        fail String_Error.not_text
+    }
+    if encoding(base) == Str_Encoding.ascii {
+        return ascii_case(base, byte_len(base), true)
+    }
+    return unicode.toupper(base)
+}
+
+func lower(self: string) -> string fail: String_Error {
+    let base: string = text(self)
+    if !is_text(base) {
+        fail String_Error.not_text
+    }
+    if encoding(base) == Str_Encoding.ascii {
+        return ascii_case(base, byte_len(base), false)
+    }
+    return unicode.tolower(base)
+}
+
+func fold(self: string) -> string fail: String_Error {
+    let base: string = text(self)
+    if !is_text(base) {
+        fail String_Error.not_text
+    }
+    if encoding(base) == Str_Encoding.ascii {
+        return ascii_case(base, byte_len(base), false)
+    }
+    return unicode.casefold(base)
+}
+
+func title(self: string) -> string fail: String_Error {
+    let base: string = text(self)
+    if !is_text(base) {
+        fail String_Error.not_text
+    }
+    if encoding(base) == Str_Encoding.ascii {
+        return ascii_title(base, byte_len(base))
+    }
+    return unicode.totitle(base)
+}
+
+private func byte_order(x: string, y: string) -> i32 {
+    let lx: u64 = byte_len(x)
+    let ly: u64 = byte_len(y)
+    var n: u64 = ly
+    if lx < ly {
+        n = lx
+    }
+    for i from 0 until n {
+        let cx: u8 = byte_at(x, i)
+        let cy: u8 = byte_at(y, i)
+        if cx != cy {
+            if cx < cy {
+                return -1
+            }
+            return 1
+        }
+    }
+    if lx == ly {
+        return 0
+    }
+    if lx < ly {
+        return -1
+    }
+    return 1
+}
+
+func eq(self: string, other: string) -> bool {
+    let x: string = text(self)
+    let y: string = text(other)
+    if byte_len(x) != byte_len(y) {
+        return false
+    }
+    return byte_order(x, y) == 0
+}
+
+func cmp(self: string, other: string) -> i32 {
+    return byte_order(text(self), text(other))
+}
+
+const cursor_cache = 32
+
+record Str_Cursor {
+    text:     string
+    unit:     Index_Unit
+    byte_pos: u64
+    unit_pos: u64
+    cache:    Array[u64][32]
+    cache_n:  u32
+    cache_hi: u64
+}
+
+func cursor(self: string, unit: Index_Unit = Index_Unit.char) -> Str_Cursor {
+    return (text = text(self), unit = unit, byte_pos = 0, unit_pos = 0,
+            cache = new[Array[u64]](cursor_cache), cache_n = 0, cache_hi = 0)
+}
+
+func byte_pos(self: Str_Cursor) -> u64 {
+    return self.byte_pos
+}
+
+func unit_pos(self: Str_Cursor) -> u64 {
+    return self.unit_pos
+}
+
+func at_end(self: Str_Cursor) -> bool {
+    return self.byte_pos >= byte_len(self.text)
+}
+
+private func ascii_cluster_next(s: string, len: u64, i: u64) -> u64 {
+    if byte_at(s, i) == cast[u8] '\r' and i + 1 < len and
+        byte_at(s, i + 1) == cast[u8] '\n' {
+        return i + 2
+    }
+    return i + 1
+}
+
+private func gcb_safe_start(r: unicode.Gcb, p: unicode.Gcb) -> bool {
+    if r == unicode.Gcb.lf or r == unicode.Gcb.extend or
+        r == unicode.Gcb.zwj or r == unicode.Gcb.spacingmark or
+        r == unicode.Gcb.regional_indicator or r == unicode.Gcb.l or
+        r == unicode.Gcb.v or r == unicode.Gcb.t or r == unicode.Gcb.lv or
+        r == unicode.Gcb.lvt {
+        return false
+    }
+    return p != unicode.Gcb.extend and p != unicode.Gcb.zwj and
+        p != unicode.Gcb.prepend
+}
+
+private func char_at_byte(s: string, i: u64) -> char {
+    var pos: u32 = cast[u32] i
+    let decoded: char = try {
+        = unicode.utf8_decode(s, pos)!
+    } else failure {
+        = '\0'
+    }
+    return decoded
+}
+
+private func utf8_safe_start(s: string, target: u64) -> u64 {
+    var i: u64 = target
+    while i > 0 {
+        i = prev_char_byte(s, i)
+        if i == 0 {
+            return 0
+        }
+        let r: unicode.Gcb = unicode.grapheme_break(char_at_byte(s, i))
+        let p: unicode.Gcb =
+            unicode.grapheme_break(char_at_byte(s, prev_char_byte(s, i)))
+        if gcb_safe_start(r, p) {
+            return i
+        }
+    }
+    return 0
+}
+
+private func refill_cluster_cache(modify c: Str_Cursor, target: u64) {
+    let sp: u64 = utf8_safe_start(c.text, target)
+    let len: u64 = byte_len(c.text)
+    c.cache_n = 0
+    c.cache_hi = target
+    if sp >= target {
+        c.cache[0] = sp
+        c.cache_n = 1
+        return
+    }
+    let tail: string = byte_slice(c.text, cast[int] sp, cast[int] len)
+    var it: unicode.Break_Iter = unicode.grapheme_iter(tail)
+    var last: u64 = sp
+    while true {
+        if c.cache_n == cursor_cache {
+            for k from 1 until cursor_cache {
+                c.cache[k - 1] = c.cache[k]
+            }
+            c.cache_n -= 1
+        }
+        c.cache[c.cache_n] = last
+        c.cache_n += 1
+        let nxt: u32? = unicode.next(it)
+        if nxt == nil {
+            return
+        }
+        let at: u64 = sp + cast[u64] nxt.get()
+        if at >= target {
+            return
+        }
+        last = at
+    }
+}
+
+private func cluster_before(modify c: Str_Cursor, target: u64) -> u64 {
+    if c.cache_n == 0 or c.cache_hi != target {
+        refill_cluster_cache(c, target)
+    }
+    c.cache_n -= 1
+    c.cache_hi = c.cache[c.cache_n]
+    return c.cache_hi
+}
+
+func next(modify self: Str_Cursor) -> string? {
+    let len: u64 = byte_len(self.text)
+    if self.byte_pos >= len {
+        return nil
+    }
+    let since: u64 = self.byte_pos
+    var upto: u64
+    let enc: Str_Encoding = encoding(self.text)
+    if self.unit == Index_Unit.byte or enc == Str_Encoding.binary {
+        upto = since + 1
+    }
+    else {
+        if enc == Str_Encoding.ascii {
+            if self.unit == Index_Unit.char {
+                upto = since + 1
+            }
+            else {
+                upto = ascii_cluster_next(self.text, len, since)
+            }
+        }
+        else {
+            if self.unit == Index_Unit.char {
+                upto = next_char_byte(self.text, len, since)
+            }
+            else {
+                upto = utf8_cluster_after(self.text, since)
+            }
+        }
+    }
+    self.byte_pos = upto
+    self.unit_pos += 1
+    return byte_slice(self.text, cast[int] since, cast[int] upto)
+}
+
+func prev(modify self: Str_Cursor) -> string? {
+    if self.byte_pos == 0 {
+        return nil
+    }
+    let upto: u64 = self.byte_pos
+    var since: u64
+    let enc: Str_Encoding = encoding(self.text)
+    if self.unit == Index_Unit.byte or enc == Str_Encoding.binary {
+        since = upto - 1
+    }
+    else {
+        if enc == Str_Encoding.ascii {
+            if self.unit == Index_Unit.cluster and upto >= 2 and
+                byte_at(self.text, upto - 2) == cast[u8] '\r' and
+                byte_at(self.text, upto - 1) == cast[u8] '\n' {
+                since = upto - 2
+            }
+            else {
+                since = upto - 1
+            }
+        }
+        else {
+            if self.unit == Index_Unit.char {
+                since = prev_char_byte(self.text, upto)
+            }
+            else {
+                since = cluster_before(self, upto)
+            }
+        }
+    }
+    self.byte_pos = since
+    self.unit_pos -= 1
+    return byte_slice(self.text, cast[int] since, cast[int] upto)
+}
+
+func seek(modify self: Str_Cursor, n: i64) -> bool fail: String_Error {
+    let count: u64 = unit_count(self.text, self.unit)
+    let ix: i64 = normalize(n, count)
+    if ix < 0 or ix > cast[i64] count {
+        fail String_Error.index_oob
+    }
+    self.unit_pos = cast[u64] ix
+    self.byte_pos = unit_to_byte(self.text, self.unit, self.unit_pos)
+    return true
+}
+
+func slice(self: Str_Cursor, other: Str_Cursor) -> string {
+    var lo: u64 = other.byte_pos
+    var hi: u64 = self.byte_pos
+    if self.byte_pos < other.byte_pos {
+        lo = self.byte_pos
+        hi = other.byte_pos
+    }
+    return byte_slice(self.text, cast[int] lo, cast[int] hi)
+}
+
+enum Split_On {
+    separator = 0, units = 1, lines = 2, words = 3
+}
+
+enum Trim_Side {
+    both = 0, start = 1, end = 2
+}
+
+enum Align {
+    left = 0, right = 1, center = 2
+}
+
+record Text_Range {
+    start: u64
+    end:   u64
+}
+
+func width(self: string) -> i64 {
+    let base: string = text(self)
+    if !is_text(base) {
+        return cast[i64] byte_len(base)
+    }
+    return cast[i64] unicode.display_width(base)
+}
+
+private func bytes_match(a: string, at: u64, b: string, n: u64) -> bool {
+    for i from 0 until n {
+        if byte_at(a, at + i) != byte_at(b, i) {
+            return false
+        }
+    }
+    return true
+}
+
+func starts_with(self: string, prefix: string) -> bool {
+    let base: string = text(self)
+    let pre: string = text(prefix)
+    let n: u64 = byte_len(pre)
+    if n > byte_len(base) {
+        return false
+    }
+    return bytes_match(base, 0, pre, n)
+}
+
+func ends_with(self: string, suffix: string) -> bool {
+    let base: string = text(self)
+    let suf: string = text(suffix)
+    let n: u64 = byte_len(suf)
+    let len: u64 = byte_len(base)
+    if n > len {
+        return false
+    }
+    return bytes_match(base, len - n, suf, n)
+}
+
+private func char_is_space(s: string, at: u64, out adv: u64) -> bool {
+    let c: u8 = byte_at(s, at)
+    if c < 0x80 {
+        adv = 1
+        return c == cast[u8] ' ' or c == cast[u8] '\t' or
+            c == cast[u8] '\n' or c == cast[u8] '\r' or
+            c == cast[u8] '\f' or c == cast[u8] '\v'
+    }
+    var pos: u32 = cast[u32] at
+    var decoded: char? = nil
+    try {
+        decoded = unicode.utf8_decode(s, pos)!
+    } else failure {
+        decoded = nil
+    }
+    adv = cast[u64] pos - at
+    if decoded == nil {
+        return false
+    }
+    return unicode.has_property(decoded.get(), unicode.Property.white_space)
+}
+
+private func trim_bounds(base: string, modify lo_out: u64,
+                         modify hi_out: u64, side: Trim_Side) {
+    var lo: u64 = lo_out
+    var hi: u64 = hi_out
+    if side != Trim_Side.end {
+        var adv: u64 = 0
+        while lo < hi and char_is_space(base, lo, adv) {
+            lo += adv
+        }
+    }
+    if side != Trim_Side.start {
+        while hi > lo {
+            var start: u64 = hi - 1
+            while start > lo and (byte_at(base, start) & 0xc0) == 0x80 {
+                start -= 1
+            }
+            var adv: u64 = 0
+            if !char_is_space(base, start, adv) {
+                break
+            }
+            hi = start
+        }
+    }
+    lo_out = lo
+    hi_out = hi
+}
+
+func trim(self: string, side: Trim_Side = Trim_Side.both,
+          ignore_style: bool = false) -> string {
+    let base: string = text(self)
+    let len: u64 = byte_len(base)
+    if len == 0 or !is_text(base) {
+        return base
+    }
+    var lo: u64 = 0
+    var hi: u64 = len
+    trim_bounds(base, lo, hi, side)
+    return text_slice(self, base, lo, hi, ignore_style)
+}
+
+func split(self: string, sep: string, on: Split_On = Split_On.separator,
+           unit: Index_Unit = Index_Unit.char, crop: bool = false,
+           ignore_style: bool = false) -> List[string] {
+    let base: string = text(self)
+    let len: u64 = byte_len(base)
+    var out: List[string] = new[List[string]]()
+    if len == 0 {
+        return out
+    }
+    var since: u64 = 0
+    if on == Split_On.lines {
+        let acts: List[u8] = unicode.linebreaks(base)
+        let n: u64 = acts.len()
+        var i: u64 = 1
+        while i <= n {
+            let last: bool = i == n
+            var brk: bool = last
+            if !last {
+                let a: u8 = acts[cast[int] i]
+                brk = a == cast[u8] unicode.Lb_Action.mandatory
+            }
+            if !brk {
+                i += 1
+                continue
+            }
+            let piece: string = text_slice(self, base, since, i, ignore_style)
+            if crop {
+                out.append(trim(piece))
+            }
+            else {
+                out.append(piece)
+            }
+            since = i
+            i += 1
+        }
+        return out
+    }
+    if on == Split_On.words or on == Split_On.units {
+        var cursor_unit: Index_Unit = Index_Unit.char
+        if on == Split_On.units {
+            cursor_unit = unit
+        }
+        var c: Str_Cursor = cursor(base, unit = cursor_unit)
+        if on == Split_On.units {
+            while true {
+                let at: u64 = byte_pos(c)
+                let piece: string? = next(c)
+                if piece == nil {
+                    return out
+                }
+                out.append(text_slice(self, base, at, byte_pos(c),
+                                      ignore_style))
+            }
+        }
+        var it: unicode.Break_Iter = unicode.word_iter(base)
+        while true {
+            let nxt: u32? = unicode.next(it)
+            if nxt == nil {
+                return out
+            }
+            let upto: u64 = cast[u64] nxt.get()
+            let piece: string = text_slice(self, base, since, upto,
+                                           ignore_style)
+            if crop {
+                out.append(trim(piece))
+            }
+            else {
+                out.append(piece)
+            }
+            since = upto
+        }
+    }
+    let needle: string = text(sep)
+    let nlen: u64 = byte_len(needle)
+    if nlen == 0 {
+        if crop {
+            out.append(trim(base))
+        }
+        else {
+            out.append(base)
+        }
+        return out
+    }
+    var at: u64 = 0
+    while at + nlen <= len {
+        if !bytes_match(base, at, needle, nlen) {
+            at += 1
+            continue
+        }
+        let piece: string = text_slice(self, base, since, at, ignore_style)
+        if crop {
+            out.append(trim(piece))
+        }
+        else {
+            out.append(piece)
+        }
+        at += nlen
+        since = at
+    }
+    let tail: string = text_slice(self, base, since, len, ignore_style)
+    if crop {
+        out.append(trim(tail))
+    }
+    else {
+        out.append(tail)
+    }
+    return out
+}
+
+func repeat(self: string, count: u64) -> string {
+    let base: string = text(self)
+    let len: u64 = byte_len(base)
+    if len == 0 or count == 0 {
+        return empty_string()
+    }
+    let total: u64 = len * count
+    var out: Array[u8] = new[Array[u8]](cast[int] total)
+    for i from 0 until count {
+        for j from 0 until len {
+            out[i * len + j] = byte_at(base, j)
+        }
+    }
+    return from_raw(ref out, cast[int] total, copy = false,
+                    encoding = encoding(base), unsafe = true)
+}
+
+func reverse(self: string) -> string {
+    let base: string = text(self)
+    let len: u64 = byte_len(base)
+    if len < 2 {
+        return base
+    }
+    var out: Array[u8] = new[Array[u8]](cast[int] len)
+    if !is_text(base) or encoding(base) == Str_Encoding.ascii {
+        for i from 0 until len {
+            out[i] = byte_at(base, len - 1 - i)
+        }
+    }
+    else {
+        var it: unicode.Break_Iter = unicode.grapheme_iter(base)
+        var since: u64 = 0
+        var at: u64 = len
+        while true {
+            let nxt: u32? = unicode.next(it)
+            if nxt == nil {
+                break
+            }
+            let upto: u64 = cast[u64] nxt.get()
+            at -= upto - since
+            for j from 0 until upto - since {
+                out[at + j] = byte_at(base, since + j)
+            }
+            since = upto
+        }
+    }
+    return from_raw(ref out, cast[int] len, copy = false,
+                    encoding = encoding(base), unsafe = true)
+}
+
+func replace(self: string, old_s: string, new_s: string, max: i64 = -1)
+    -> string {
+    let base: string = text(self)
+    let needle: string = text(old_s)
+    let repl: string = text(new_s)
+    let len: u64 = byte_len(base)
+    let nlen: u64 = byte_len(needle)
+    let rlen: u64 = byte_len(repl)
+    if nlen == 0 or nlen > len or max == 0 {
+        return base
+    }
+    var hits: u64 = 0
+    var at: u64 = 0
+    while at + nlen <= len {
+        if bytes_match(base, at, needle, nlen) {
+            hits += 1
+            at += nlen
+            if max > 0 and hits == cast[u64] max {
+                break
+            }
+            continue
+        }
+        at += 1
+    }
+    if hits == 0 {
+        return base
+    }
+    let total: u64 = len + hits * rlen - hits * nlen
+    var out: Array[u8] = new[Array[u8]](cast[int] total)
+    var o: u64 = 0
+    var got: u64 = 0
+    at = 0
+    while at < len {
+        if at + nlen <= len and (max < 0 or got < cast[u64] max) and
+            bytes_match(base, at, needle, nlen) {
+            for j from 0 until rlen {
+                out[o + j] = byte_at(repl, j)
+            }
+            o += rlen
+            at += nlen
+            got += 1
+            continue
+        }
+        out[o] = byte_at(base, at)
+        o += 1
+        at += 1
+    }
+    return from_raw(ref out, cast[int] total, copy = false,
+                    encoding = widen_encoding(encoding(base), encoding(repl)),
+                    unsafe = true)
+}
+
+private func byte_at_width(s: string, want: i64, out got: i64) -> u64 {
+    let len: u64 = byte_len(s)
+    if !is_text(s) {
+        if want < cast[i64] len {
+            got = want
+        }
+        else {
+            got = cast[i64] len
+        }
+        return cast[u64] got
+    }
+    var it: unicode.Break_Iter = unicode.grapheme_iter(s)
+    var since: u64 = 0
+    var w: i64 = 0
+    while since < len {
+        let nxt: u32? = unicode.next(it)
+        if nxt == nil {
+            break
+        }
+        let upto: u64 = cast[u64] nxt.get()
+        let cw: i64 = cast[i64] unicode.display_width(
+            byte_slice(s, cast[int] since, cast[int] upto))
+        if w + cw > want {
+            got = w
+            return since
+        }
+        w += cw
+        since = upto
+    }
+    got = w
+    return len
+}
+
+func fit(self: string, width: i64, align: Align = Align.left,
+         ignore_style: bool = false) -> string {
+    let base: string = text(self)
+    if width <= 0 {
+        return empty_string()
+    }
+    var have: i64 = 0
+    let cut: u64 = byte_at_width(base, width, have)
+    if have >= width {
+        return text_slice(self, base, 0, cut, ignore_style)
+    }
+    let pad: u64 = cast[u64](width - have)
+    var lead: u64 = 0
+    if align == Align.right {
+        lead = pad
+    }
+    elif align == Align.center {
+        lead = pad / 2
+    }
+    let keep: u64 = cut
+    let total: u64 = keep + pad
+    var out: Array[u8] = new[Array[u8]](cast[int] total)
+    for i from 0 until total {
+        out[i] = cast[u8] ' '
+    }
+    for j from 0 until keep {
+        out[lead + j] = byte_at(base, j)
+    }
+    let padded: string = from_raw(ref out, cast[int] total, copy = false,
+        encoding = widen_encoding(encoding(base), Str_Encoding.ascii),
+        unsafe = true)
+    if ignore_style {
+        return padded
+    }
+    return internal.rich.rich_reslice(self, 0, keep, padded, lead)
+}
+
+private func push_trimmed_range(modify out: List[Text_Range], base: string,
+                                start: u64, end: u64) {
+    var lo: u64 = start
+    var hi: u64 = end
+    trim_bounds(base, lo, hi, Trim_Side.both)
+    let r: Text_Range = (start = lo, end = hi)
+    out.append(r)
+}
+
+private func string_wrap_ranges(s: string, limit: i64) -> List[Text_Range] {
+    let base: string = text(s)
+    let len: u64 = byte_len(base)
+    var out: List[Text_Range] = new[List[Text_Range]]()
+    if len == 0 or limit <= 0 {
+        return out
+    }
+    let acts: List[u8] = unicode.linebreaks(base)
+    let n: u64 = acts.len()
+    var since: u64 = 0
+    var last: u64 = 0
+    var i: u64 = 1
+    while i <= n {
+        let last_pos: bool = i == n
+        var a: u8 = cast[u8] unicode.Lb_Action.mandatory
+        if !last_pos {
+            a = acts[cast[int] i]
+        }
+        if a == cast[u8] unicode.Lb_Action.none {
+            i += 1
+            continue
+        }
+        let run: string = byte_slice(base, cast[int] since, cast[int] i)
+        if width(run) > limit and last > since {
+            push_trimmed_range(out, base, since, last)
+            since = last
+        }
+        if a == cast[u8] unicode.Lb_Action.mandatory {
+            push_trimmed_range(out, base, since, i)
+            since = i
+        }
+        last = i
+        i += 1
+    }
+    return out
+}
+
+func wrap(self: string, width: i64, ignore_style: bool = false)
+    -> List[string] {
+    let base: string = text(self)
+    let ranges: List[Text_Range] = string_wrap_ranges(self, width)
+    let n: int = cast[int] ranges.len()
+    var out: List[string] = new[List[string]]()
+    for i from 0 until n {
+        let r: Text_Range = ranges[i]
+        out.append(text_slice(self, base, r.start, r.end, ignore_style))
+    }
+    return out
+}

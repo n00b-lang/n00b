@@ -459,6 +459,41 @@ static int64_t os_pipe_raw(int32_t fds[2])
 #error "builtin/os requires macOS, Linux, or Windows"
 #endif
 
+#if defined(_WIN32)
+
+static int32_t os_thread_start_raw(n00b_os_thread_entry entry, void *argument)
+{
+    HANDLE thread = CreateThread(NULL, 0,
+                                 (LPTHREAD_START_ROUTINE)(void (*)(void))entry,
+                                 argument, 0, NULL);
+    if (!thread) return -1;
+    CloseHandle(thread);
+    return 0;
+}
+
+#else
+
+#include <pthread.h>
+
+static int32_t os_thread_start_raw(n00b_os_thread_entry entry, void *argument)
+{
+    pthread_attr_t attributes;
+    pthread_t thread;
+    if (pthread_attr_init(&attributes)) return -1;
+    int result = pthread_attr_setdetachstate(&attributes,
+                                             PTHREAD_CREATE_DETACHED);
+    if (!result) result = pthread_create(&thread, &attributes, entry, argument);
+    pthread_attr_destroy(&attributes);
+    return result ? -1 : 0;
+}
+
+#endif
+
+int32_t n00b_os_thread_start(n00b_os_thread_entry entry, void *argument)
+{
+    return entry ? os_thread_start_raw(entry, argument) : -1;
+}
+
 int64_t n00b_os_open(const uint8_t *path, int64_t flags, uint32_t mode)
 {
     return path ? os_open_raw(path, flags, mode) : -14;
@@ -493,6 +528,26 @@ const uint8_t *n00b_os_env_at(uint64_t index)
 {
     return index < n00b_os_env_count()
         ? (const uint8_t *)environ[index] : NULL;
+}
+
+static int32_t saved_argc = 0;
+static char **saved_argv = NULL;
+
+void n00b_os_save_args(int32_t argc, char **argv)
+{
+    saved_argc = argc;
+    saved_argv = argv;
+}
+
+uint64_t n00b_os_arg_count(void)
+{
+    return saved_argc < 0 ? 0 : (uint64_t)saved_argc;
+}
+
+const uint8_t *n00b_os_arg_at(uint64_t index)
+{
+    return saved_argv && index < n00b_os_arg_count()
+        ? (const uint8_t *)saved_argv[index] : NULL;
 }
 
 int64_t n00b_os_fd_is_tty(int64_t fd)

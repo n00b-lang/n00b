@@ -1,0 +1,70 @@
+import text
+
+func check(ok: bool, code: string) {
+    if !ok {
+        __fd_write(2, "FAIL rich_repr_probe " + code + "\n")
+        require false
+    }
+}
+
+func repr_matches(s: string, expected: string) -> bool {
+    var read_fd: int = -1
+    var write_fd: int = -1
+    require __os_pipe(ref read_fd, ref write_fd) == 0
+    let count: i32 = s.raw_repr(cast[i32] write_fd)
+    require count >= 0
+    require __os_close(write_fd) == 0
+    var buf: Array[u8] = new[Array[u8]](256)
+    let n: int = __os_read(read_fd, unsafe_cast[Ref[byte]] ref buf[0], 256)
+    require n >= 0
+    require __os_close(read_fd) == 0
+    let got: string = from_raw(ref buf, n)
+    return got == expected
+}
+
+func rich_repr_probe_main() {
+    let shrt: string = "hi"
+    check(repr_matches(shrt, "hi"), "1")
+
+    let lng: string = "abcdefghijklmnopqrstuvwxyz"
+    check(cast[u64] tag(lng) == str_tag_long, "2")
+    check(repr_matches(lng, "abcdefghijklmnopqrstuvwxyz"), "3")
+
+    let slice: string = byte_slice(lng, 3, 8)
+    check(repr_matches(slice, "defgh"), "4")
+
+    let rich: string = "«b»example «#arg:>10»«/b» "'r
+    check(repr_matches(rich, "r\"«b»example «#arg:>10»«/b» \""), "5")
+
+    let indexed: string = "«i»«#»-«#»«/i»"'r
+    check(repr_matches(indexed, "r\"«i»«#0»-«#1»«/i»\""), "6")
+
+    let bold_hi: string = "«b»hi«/b»"'r
+    let bold_too: string = "«b»hi«/b»"'r
+    let ital_hi: string = "«i»hi«/i»"'r
+    let plain_hi: string = "hi"
+    check(bold_hi == bold_too and bold_hi.hash() == bold_too.hash(), "7")
+    check(bold_hi != ital_hi and bold_hi.hash() != ital_hi.hash(), "8")
+    check(bold_hi != plain_hi and bold_hi.hash() != plain_hi.hash(), "9")
+
+    let nested: string = "«b»a«i»b«/i»c«/b»"'r
+    check(repr_matches(nested, "r\"«b»a«i»b«/i»c«/b»\""), "10")
+
+    let crossing: string = "«u»a«b»b«/u»c«/b»"'r
+    check(repr_matches(crossing, "r\"«u»a«b»b«/u»c«/b»\""), "11")
+
+    let open_ended: string = "«b»tail"'r
+    check(repr_matches(open_ended, "r\"«b»tail\""), "12")
+
+    let slotted: string = "x«#0»y«#name:>4»"'r
+    check(repr_matches(slotted, "r\"x«#0»y«#name:>4»\""), "13")
+
+    var spans: List[text.Style_Span] = new[List[text.Style_Span]]()
+    let under: text.Style_Span = (start = 0, end = 5, tag = "u")
+    spans.append(under)
+    let layered: string = text.rich_string("«b»alpha«/b»"'r, spans)
+    check(repr_matches(layered, "r\"«u»«b»alpha«/b»«/u»\""), "14")
+}
+
+rich_repr_probe_main()
+__fd_write(2, "ok")

@@ -5,6 +5,7 @@ import containers.set
 import containers.tree
 import containers.view
 import containers.buffer
+import containers.errors
 import cursor
 import hashing
 import containers.traits
@@ -30,9 +31,11 @@ package builtin {
     export string.style.Style_Record to text
     export string.style.Rich_Body to text
     export string.style.merge to text
+    export string.style.__equal to text
     export string.style.is_empty to text
     export string.style.intrinsic_tag_style to text
-    export string.style.raw_repr_string to text
+    export string.core.__string_make_rich to text
+    export string.core.__string_rich_body to text
     export abi.Type_Kind to sys
     export abi.Range to sys
     export abi.String_Bits to sys
@@ -136,6 +139,7 @@ package builtin {
     export containers.set.set
     export containers.tree.Tree
     export containers.view.View
+    export containers.errors.Container_Err
     export cursor.Cursor
     export hashing.Hash
     export ffi.Fixup
