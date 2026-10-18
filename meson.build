@@ -1065,6 +1065,23 @@ foreach string_probe : ['core_probe', 'rstr_probe', 'raw_literal_probe',
     )
 endforeach
 
+foreach conformance_suite : ['grapheme', 'word', 'sentence', 'line',
+                             'normalization', 'bidi', 'collation', 'idna']
+    test(
+        conformance_suite,
+        find_program('sh'),
+        args: [meson.current_source_dir() / 'tests' / 'program_args_n00b.sh',
+               n00bb_exe.full_path(),
+               meson.current_source_dir() / 'tests' / 'programs' / 'unicode'
+                   / 'conformance.n',
+               conformance_suite],
+        workdir: meson.current_source_dir() / 'tests' / 'programs'
+            / 'unicode',
+        timeout: 600,
+        suite: 'conformance',
+    )
+endforeach
+
 foreach unicode_probe : ['transcode_probe', 'encoding_probe']
     test(
         'unicode-' + unicode_probe.replace('_', '-'),
