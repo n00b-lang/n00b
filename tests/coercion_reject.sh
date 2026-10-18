@@ -219,6 +219,63 @@ ref_local()
 EOF
 reject ref_local 'stored into a field, element or container here, at line 7'
 
+cat >"$tmp/ref_params.n" <<'EOF'
+record Holder { b: Buffer }
+func fill(first: Ref[Holder], second: Ref[Holder]) {
+    let x: Buffer = buffer_from_string("kept")
+    first.b = x
+    second.b = x
+}
+func ref_params() -> uint {
+    var p: Holder = (b = empty_buffer())
+    var q: Holder = (b = empty_buffer())
+    fill(ref p, ref q)
+    let view: string = p.b
+    q.b += "!"
+    return byte_len(view)
+}
+ref_params()
+EOF
+reject ref_params 'this call may write the borrowed Buffer, at line 12'
+
+cat >"$tmp/finalizer_run.n" <<'EOF'
+import sys.gc.finalize
+import sys.gc.alloc
+var g: Buffer = buffer_from_string("kept")
+func drain() -> uint {
+    let m: Ref[sys.gc.core.Mutator]? = sys.gc.alloc.mutator_for_native()
+    if m == nil {
+        return 0
+    }
+    return sys.gc.finalize.run(m.get().heap, 0)
+}
+func finalizer_run() -> uint {
+    let view: string = g
+    let n: uint = drain()
+    return byte_len(view) + n
+}
+finalizer_run()
+EOF
+reject finalizer_run 'this call may write the borrowed Buffer, at line 13'
+
+cat >"$tmp/memcpy_record.n" <<'EOF'
+record Pair {
+    b: Buffer
+    n: int
+}
+func memcpy_record() -> uint {
+    var first: Pair = (b = buffer_from_string("kept"), n = 1)
+    var second: Pair = (b = buffer_from_string("other"), n = 2)
+    let view: string = first.b
+    __gc_memcpy(unsafe_cast[Ref[byte]] ref second,
+                unsafe_cast[Ref[byte]] ref first, 16)
+    second.b += "!"
+    return byte_len(view)
+}
+memcpy_record()
+EOF
+reject memcpy_record 'this call may write the borrowed Buffer, at line 11'
+
 cat >"$tmp/string_to_buffer.n" <<'EOF'
 func wrong() -> Buffer {
     return "text"
