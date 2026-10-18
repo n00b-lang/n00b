@@ -4737,9 +4737,13 @@ trait_type_reference(parse_grammar_t *grammar,
             return type;
         }
     }
+    core_string_t package = n00bb_package_id(use_unit);
     constrained = constrained && th_var_constrain(state->types, type,
         (th_constraint){.kind = TH_CON_IMPLEMENTS,
-                        .iface = qualified.data});
+                        .iface = qualified.data,
+                        .has_scope = true,
+                        .scope_module = use_unit->module.identifier.data,
+                        .scope_package = package.data ? package.data : ""});
     core_buffer_release(&qualified);
     return constrained ? type : nullptr;
 }

@@ -2005,8 +2005,8 @@ reference_bitptr(lower_state_t *state, LLVMValueRef reference,
         bitptr = LLVMBuildInsertValue(state->builder, bitptr, reference, 0,
             "bitptr.from.base");
         bitptr = LLVMBuildInsertValue(state->builder, bitptr,
-            LLVMConstInt(LLVMInt32TypeInContext(context), type_index, false),
-            1, "bitptr.from.type");
+            runtime_type_index_value(state, referent), 1,
+            "bitptr.from.type");
         bitptr = LLVMBuildInsertValue(state->builder, bitptr,
             LLVMConstInt(LLVMInt16TypeInContext(context), 0, false), 2,
             "bitptr.from.start");
@@ -8892,7 +8892,8 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             LLVMConstInt(LLVMTypeOf(actual), UINT32_C(0x7fffffff), false),
             "type.index.masked");
         result = LLVMBuildICmp(state->builder, LLVMIntEQ, actual,
-            LLVMConstInt(LLVMTypeOf(actual), index, false), "type.matches");
+            runtime_type_index_value(state, operands[1].type),
+            "type.matches");
         return save_result(state, instruction, result);
     }
     case IR_OP_TYPE_NARROW: {

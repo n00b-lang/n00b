@@ -269,6 +269,26 @@ instantiate(ir_ctx_t *context, ir_func_t *target, th_type *actual,
     return copy;
 }
 
+static ir_func_t *
+find_instance(const core_list_t(specialization_t) *specializations,
+              ir_func_t *target, uint64_t hash, th_ctx *types)
+{
+    for (size_t n = 0; n < specializations->len; n++)
+        if (specializations->data[n].source == target
+            && th_hash(types, specializations->data[n].signature) == hash)
+            return specializations->data[n].copy;
+    return nullptr;
+}
+
+static bool
+is_instance(const core_list_t(specialization_t) *specializations,
+            const ir_func_t *function)
+{
+    for (size_t n = 0; n < specializations->len; n++)
+        if (specializations->data[n].copy == function) return true;
+    return false;
+}
+
 bool n00bb_specialize_calls(ir_ctx_t *context,
     core_list_t(n00bb_ir_func_ptr_t) *functions,
     core_list_t(n00bb_specialization_t) *instances,
@@ -284,6 +304,8 @@ bool n00bb_specialize_calls(ir_ctx_t *context,
         size_t parent = SIZE_MAX;
         if (index >= original_count)
             parent = index - original_count;
+        if (!th_is_closed(ir_module_types(caller->owner), caller->type)
+            && !is_instance(&specializations, caller)) continue;
         for (uint32_t b = 0; valid && b < caller->n_blocks; b++) {
             ir_block_t *block = caller->blocks[b];
             for (uint32_t i = 0; valid && i < block->n_instrs; i++) {
@@ -293,30 +315,22 @@ bool n00bb_specialize_calls(ir_ctx_t *context,
                 ir_func_t *target = callee && callee->kind == IR_VAL_FUNC
                     ? callee->owner : nullptr;
                 if (!target || !target->n_blocks
-                    || has_callback_operation(target)) continue;
+                    || is_instance(&specializations, target)) continue;
                 th_ctx *types = ir_module_types(target->owner);
-                th_type *actual = concrete_call_signature(call, target,
-                                                          types);
-                if (!actual) continue;
-                if (th_is_closed(types, target->type)
-                    || !th_is_closed(types, actual)) continue;
+                if (th_is_closed(types, target->type)) continue;
+                th_type *actual = has_callback_operation(target) ? nullptr
+                    : concrete_call_signature(call, target, types);
                 core_list_t(type_binding_t) bindings = {0};
-                bool matched = match_type(types, target->type, actual,
-                    &bindings);
-                if (!matched || !bindings.len || has_polymorphic_cycle(
-                        &specializations, parent, target, actual, types)) {
-                    core_list_free(bindings);
-                    continue;
+                bool concrete = actual && th_is_closed(types, actual)
+                    && match_type(types, target->type, actual, &bindings)
+                    && bindings.len && !has_polymorphic_cycle(
+                        &specializations, parent, target, actual, types);
+                if (!concrete) {
+                    actual = target->type;
+                    bindings.len = 0;
                 }
-                uint64_t hash = th_hash(types, actual);
-                ir_func_t *copy = nullptr;
-                for (size_t n = 0; n < specializations.len; n++)
-                    if (specializations.data[n].source == target
-                        && th_hash(types,
-                            specializations.data[n].signature) == hash) {
-                        copy = specializations.data[n].copy;
-                        break;
-                    }
+                ir_func_t *copy = find_instance(&specializations, target,
+                    th_hash(types, actual), types);
                 if (!copy) {
                     copy = instantiate(context, target, actual, &bindings,
                                        types, failure);

@@ -150,6 +150,38 @@ append_node_range(core_indexed_table_t *lookup,
 }
 
 static bool
+node_in_unit(location_context_t *context, parse_tree_t *node)
+{
+    const core_translation_unit_t *unit = context->unit;
+    parse_token_stream_t *tokens = context->tokens;
+    return !context->node_source
+        || (context->node_source(context->source_context, node, &unit,
+                                 &tokens) && unit == context->unit);
+}
+
+static bool
+append_local_node_range(core_indexed_table_t *lookup,
+                        core_list_t(n00b_abi_source_location_v1) *locations,
+                        location_context_t *context,
+                        parse_tree_t *const *nodes, size_t count,
+                        uint32_t stream_base, core_list_t(uint32_t) *stream,
+                        n00b_abi_range_v1 *range)
+{
+    if (!count) return true;
+    if (!nodes) return false;
+    parse_tree_t **local = core_alloc_array(parse_tree_t *, count);
+    if (!local) return false;
+    size_t kept = 0;
+    for (size_t i = 0; i < count; i++)
+        if (nodes[i] && node_in_unit(context, nodes[i]))
+            local[kept++] = nodes[i];
+    bool valid = append_node_range(lookup, locations, context, local, kept,
+                                   stream_base, stream, range);
+    core_free(local);
+    return valid;
+}
+
+static bool
 append_group(core_list_t(uint32_t) *stream, uint32_t base,
              core_list_t(uint32_t) *group, n00b_abi_range_v1 *range)
 {
@@ -334,7 +366,7 @@ n00bb_abi_declarations_build(
             && append_node_range(location_index, &locations, &sources,
                 symbol->definition_nodes, symbol->definition_count,
                 stream_base, &stream, &row->definitions)
-            && append_node_range(location_index, &locations, &sources,
+            && append_local_node_range(location_index, &locations, &sources,
                 symbol->use_nodes, symbol->use_count,
                 stream_base, &stream, &row->uses);
         if (valid && symbol->selected_storage_class.u8_bytes)

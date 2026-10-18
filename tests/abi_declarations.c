@@ -130,7 +130,7 @@ main(void)
         type_index, &type_rows, &unit, tokens, names,
         source_of_node, &sources, 5, &rows));
     assert(rows.scope_count == 3 && rows.symbol_count == 3
-        && rows.location_count == 4 && rows.source_file_count == 3);
+        && rows.location_count == 3 && rows.source_file_count == 2);
     uint32_t module_scope_index = 0, record_scope_index = 0;
     uint32_t type_symbol_index = 0, field_symbol_index = 0;
     uint32_t type_index_value = 0, field_type_index = 0;
@@ -183,19 +183,7 @@ main(void)
         && field_location->start_byte_offset == 12
         && field_location->end_byte_offset == 17
         && field_location->start_column == 13);
-    n00b_abi_range_v1 uses = rows.symbols[field_symbol_index].uses;
-    assert(uses.count == 1 && uses.first >= 5
-        && uses.first - 5 < rows.stream_index_count);
-    uint32_t use_location_index = rows.stream_indexes[uses.first - 5];
-    assert(use_location_index && use_location_index < rows.location_count);
-    const n00b_abi_source_location_v1 *use_location =
-        &rows.locations[use_location_index];
-    assert(use_location->file_index == 2
-        && use_location->start_byte_offset == 0
-        && use_location->end_byte_offset == 5);
-    assert((rows.source_files[2].path.short_value.selector & 15u) == 13
-        && !memcmp(rows.source_files[2].path.short_value.bytes,
-                   "consumer.n00b", 13));
+    assert(!rows.symbols[field_symbol_index].uses.count);
     n00bb_abi_declarations_release(&rows);
     type_symbol->visibility = (core_string_t){0};
     assert(n00bb_abi_declarations_build(declarations, type_index,
