@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <string.h>
 
 #include "private/ir/internal.h"
@@ -23,6 +24,9 @@ typedef struct {
     th_type_writer_t  *types;
     ir_func_t         *function;
     bool               failed;
+    ir_module_t *const *modules;
+    size_t             module_count;
+    core_buffer_t     *references;
 } writer_t;
 
 static void
@@ -58,6 +62,29 @@ static void
 w_text(writer_t *w, const char *text)
 {
     w_bytes(w, text, text ? strlen(text) : 0);
+}
+
+static void
+w_text(writer_t *w, const char *text);
+
+static void
+w_module_ref(writer_t *w, const char *name)
+{
+    w_text(w, name);
+    if (!w->references || !name) return;
+    for (size_t i = 0; i < w->module_count; i++)
+        if (!strcmp(w->modules[i]->name, name)) return;
+    size_t length = strlen(name);
+    const char *at = w->references->data;
+    const char *end = at ? at + w->references->byte_len : nullptr;
+    while (at && at < end) {
+        const char *line = memchr(at, '\n', (size_t)(end - at));
+        size_t span = line ? (size_t)(line - at) : (size_t)(end - at);
+        if (span == length && !memcmp(at, name, length)) return;
+        at = line ? line + 1 : end;
+    }
+    core_buffer_append(w->references, name, length);
+    core_buffer_putc(w->references, '\n');
 }
 
 static void
@@ -119,7 +146,7 @@ w_foreign(writer_t *w, const ir_value_t *value)
         return;
     }
     w_u8(w, REF_FOREIGN);
-    w_text(w, owner->owner->name);
+    w_module_ref(w, owner->owner->name);
     w_text(w, owner->name);
     w_u8(w, (uint8_t)value->kind);
     switch (value->kind) {
@@ -177,14 +204,14 @@ w_value(writer_t *w, const ir_value_t *value)
     case IR_VAL_FUNC:
         if (!value->owner || !value->owner->owner) break;
         w_u8(w, REF_FUNC);
-        w_text(w, value->owner->owner->name);
+        w_module_ref(w, value->owner->owner->name);
         w_text(w, value->owner->name);
         w_type(w, value->type);
         return;
     case IR_VAL_GLOBAL:
         if (!value->global || !value->global->owner) break;
         w_u8(w, REF_GLOBAL);
-        w_text(w, value->global->owner->name);
+        w_module_ref(w, value->global->owner->name);
         w_text(w, value->global->name);
         w_type(w, value->type);
         return;
@@ -193,23 +220,128 @@ w_value(writer_t *w, const ir_value_t *value)
     w_u8(w, REF_NONE);
 }
 
+static bool
+reverse_alias_key(const char *key)
+{
+    return key && !strncmp(key, "ir.aliased_by", 13);
+}
+
+static bool
+value_live(const ir_value_t *value)
+{
+    if (!value) return false;
+    const ir_func_t *owner = value->owner;
+    switch (value->kind) {
+    case IR_VAL_PARAM:
+        return owner && value->index < owner->n_params
+            && owner->params[value->index] == value;
+    case IR_VAL_LOCAL:
+        return owner && value->local && value->local->index < owner->n_locals
+            && owner->locals[value->local->index] == value->local;
+    case IR_VAL_INSTR: {
+        const ir_instr_t *instr = value->def;
+        const ir_block_t *block = instr ? instr->block : nullptr;
+        const ir_func_t *function = block ? block->owner : nullptr;
+        return function && block->index < function->n_blocks
+            && function->blocks[block->index] == block
+            && instr->index < block->n_instrs
+            && block->instrs[instr->index] == instr;
+    }
+    case IR_VAL_FUNC:
+    case IR_VAL_GLOBAL:
+        return true;
+    }
+    return false;
+}
+
+static bool
+alias_index(const char *key, uint32_t *index, bool *escapes)
+{
+    if (strncmp(key, "ir.alias", 8)) return false;
+    const char *at = key + 8;
+    if (*at < '0' || *at > '9') return false;
+    uint32_t value = 0;
+    while (*at >= '0' && *at <= '9') value = value * 10 + (uint32_t)(*at++ - '0');
+    if (*at && strcmp(at, "_escapes")) return false;
+    *index = value;
+    *escapes = *at != '\0';
+    return true;
+}
+
+static void
+w_annot(writer_t *w, const ir_annot_t *annot, const char *key)
+{
+    w_text(w, key);
+    w_u8(w, (uint8_t)annot->kind);
+    w_u32(w, (uint32_t)annot->derived_from);
+    switch (annot->kind) {
+    case IR_ANNOT_BOOL: w_u8(w, annot->b); break;
+    case IR_ANNOT_INT: w_lit(w, annot->i); break;
+    case IR_ANNOT_STR: w_text(w, annot->s); break;
+    case IR_ANNOT_TYPE: w_type(w, annot->t); break;
+    case IR_ANNOT_VALUE: w_value(w, annot->v); break;
+    }
+}
+
 static void
 w_annots(writer_t *w, const ir_annots_t *annots)
 {
-    w_u32(w, annots->n);
+    uint32_t live = 0;
+    uint32_t *renumber = annots->n
+        ? core_alloc_array(uint32_t, annots->n) : nullptr;
+    for (uint32_t i = 0; renumber && i < annots->n; i++)
+        renumber[i] = UINT32_MAX;
+    uint32_t aliases = 0;
     for (uint32_t i = 0; i < annots->n; i++) {
         const ir_annot_t *annot = &annots->a[i];
-        w_text(w, annot->key);
-        w_u8(w, (uint8_t)annot->kind);
-        w_u32(w, (uint32_t)annot->derived_from);
-        switch (annot->kind) {
-        case IR_ANNOT_BOOL: w_u8(w, annot->b); break;
-        case IR_ANNOT_INT: w_lit(w, annot->i); break;
-        case IR_ANNOT_STR: w_text(w, annot->s); break;
-        case IR_ANNOT_TYPE: w_type(w, annot->t); break;
-        case IR_ANNOT_VALUE: w_value(w, annot->v); break;
-        }
+        if (!strcmp(annot->key, "ir.alias_count") && !annot->i.neg)
+            aliases = (uint32_t)annot->i.mag;
     }
+    for (uint32_t a = 0; renumber && a < aliases && a < annots->n; a++) {
+        char key[48];
+        snprintf(key, sizeof(key), "ir.alias%u", a);
+        for (uint32_t i = 0; i < annots->n; i++)
+            if (!strcmp(annots->a[i].key, key)
+                && annots->a[i].kind == IR_ANNOT_VALUE
+                && value_live(annots->a[i].v))
+                renumber[a] = live++;
+    }
+    uint32_t kept = 0;
+    for (uint32_t i = 0; i < annots->n; i++) {
+        const char *key = annots->a[i].key;
+        uint32_t index = 0;
+        bool escapes = false;
+        if (reverse_alias_key(key)) continue;
+        if (alias_index(key, &index, &escapes)
+            && (!renumber || index >= annots->n
+                || renumber[index] == UINT32_MAX)) continue;
+        kept++;
+    }
+    w_u32(w, kept);
+    for (uint32_t i = 0; i < annots->n; i++) {
+        const ir_annot_t *annot = &annots->a[i];
+        uint32_t index = 0;
+        bool escapes = false;
+        if (reverse_alias_key(annot->key)) continue;
+        if (alias_index(annot->key, &index, &escapes)) {
+            if (!renumber || index >= annots->n
+                || renumber[index] == UINT32_MAX) continue;
+            char key[48];
+            snprintf(key, sizeof(key), escapes ? "ir.alias%u_escapes"
+                                               : "ir.alias%u",
+                     renumber[index]);
+            w_annot(w, annot, key);
+            continue;
+        }
+        if (!strcmp(annot->key, "ir.alias_count")) {
+            ir_annot_t count = *annot;
+            count.i = (ir_lit_t){.mag = live};
+            w_annot(w, &count, annot->key);
+            continue;
+        }
+        w_annot(w, annot, annot->key);
+    }
+    core_free(renumber);
 }
 
 static void
@@ -527,9 +659,19 @@ bool
 ir_modules_save(ir_module_t *const *modules, size_t count,
                 core_buffer_t *out)
 {
+    return ir_modules_save_references(modules, count, out, nullptr);
+}
+
+bool
+ir_modules_save_references(ir_module_t *const *modules, size_t count,
+                           core_buffer_t *out, core_buffer_t *references)
+{
     if (!out || (count && !modules)) return false;
     core_buffer_t body = {0};
-    writer_t w = {.out = &body, .types = th_type_writer_new()};
+    writer_t w = {
+        .out = &body, .types = th_type_writer_new(), .modules = modules,
+        .module_count = count, .references = references,
+    };
     if (!w.types) return false;
     w_u32(&w, (uint32_t)count);
     for (size_t m = 0; m < count; m++) {
@@ -613,7 +755,9 @@ ir_modules_save(ir_module_t *const *modules, size_t count,
     return ok;
 }
 
-typedef struct {
+typedef struct reader reader_t;
+
+struct reader {
     ir_ctx_t                 *ctx;
     const uint8_t            *data;
     size_t                    length;
@@ -622,10 +766,14 @@ typedef struct {
     th_type_reader_t         *types;
     ir_module_t             **modules;
     size_t                    count;
+    size_t                   *slot_counts;
+    th_type                ***slot_types;
+    reader_t                 *group;
+    size_t                    group_count;
     ir_module_lookup_fn       lookup;
     void                     *lookup_context;
     ir_func_t                *function;
-} reader_t;
+};
 
 static uint8_t
 r_u8(reader_t *r)
@@ -761,9 +909,11 @@ static ir_module_t *
 r_find_module(reader_t *r, const char *name)
 {
     if (!name) return nullptr;
-    for (size_t i = 0; i < r->count; i++)
-        if (r->modules[i] && !strcmp(r->modules[i]->name, name))
-            return r->modules[i];
+    for (size_t g = 0; g < r->group_count; g++)
+        for (size_t i = 0; i < r->group[g].count; i++)
+            if (r->group[g].modules[i]
+                && !strcmp(r->group[g].modules[i]->name, name))
+                return r->group[g].modules[i];
     return r->lookup ? r->lookup(r->lookup_context, name) : nullptr;
 }
 
@@ -1317,131 +1467,293 @@ r_profile(const char *name, const ir_profile_t *const *profiles,
     return nullptr;
 }
 
-bool
-ir_modules_load(ir_ctx_t *ctx, const uint8_t *data, size_t length,
-                const ir_profile_t *const *profiles, size_t profile_count,
-                ir_module_lookup_fn lookup, void *lookup_context,
-                ir_module_t **out, size_t capacity, size_t *count)
+static void
+load_headers(reader_t *r, const ir_profile_t *const *profiles,
+             size_t profile_count, uint32_t modules)
 {
-    if (!ctx || !data || length < 8 || !count) return false;
+    for (uint32_t m = 0; !r->failed && m < modules; m++) {
+        const char *name = r_text(r);
+        const ir_profile_t *profile = r_profile(r_text(r), profiles,
+                                                profile_count);
+        const char *target = r_text(r);
+        ir_module_t *module = name && profile
+            ? ir_module_new(r->ctx, name, profile, target) : nullptr;
+        if (!module) {
+            r->failed = true;
+            break;
+        }
+        r->modules[m] = module;
+        r->count = m + 1;
+        module->props = (ir_props_t)r_u32(r);
+        module->span = r_span(r);
+        uint64_t files = r_count(r);
+        for (uint64_t i = 0; !r->failed && i < files; i++)
+            ir_file_add(module, r_text(r));
+        uint64_t slots = r_count(r);
+        r->slot_types[m] = slots
+            ? core_alloc_array(th_type *, (size_t)slots) : nullptr;
+        if (slots && !r->slot_types[m]) r->failed = true;
+        for (uint64_t i = 0; !r->failed && i < slots; i++) {
+            th_type *type = r_type(r);
+            r->slot_types[m][i] = type ? ir_type_intern(module, type)
+                                       : nullptr;
+        }
+        r->slot_counts[m] = r->failed ? 0 : (size_t)slots;
+        uint64_t functions = r_count(r);
+        for (uint64_t i = 0; !r->failed && i < functions; i++) {
+            const char *function_name = r_text(r);
+            th_type *type = r_type(r);
+            ir_linkage_t linkage = (ir_linkage_t)r_u8(r);
+            if (!r->failed && !ir_func_add(module, function_name, type,
+                                           linkage))
+                r->failed = true;
+        }
+        uint64_t globals = r_count(r);
+        for (uint64_t i = 0; !r->failed && i < globals; i++) {
+            const char *global_name = r_text(r);
+            th_type *type = r_type(r);
+            if (!r->failed && !ir_global_add(module, global_name, type))
+                r->failed = true;
+        }
+    }
+}
+
+static void
+load_slots(reader_t *r)
+{
+    for (size_t m = 0; !r->failed && m < r->count; m++) {
+        ir_module_t *module = r->modules[m];
+        for (size_t i = 0; !r->failed && i < r->slot_counts[m]; i++) {
+            th_type *type = r->slot_types[m][i];
+            th_type *definition = r_type(r);
+            ir_typeslot_t *slot = type ? ir_type_slot(module, type) : nullptr;
+            if (type && !slot) r->failed = true;
+            if (slot && definition && !ir_type_define(module, type, definition))
+                slot->def = th_resolve(definition);
+            uint64_t descriptors = r_count(r);
+            for (uint64_t d = 0; !r->failed && d < descriptors; d++)
+                r_descriptor(r, module, type);
+        }
+    }
+}
+
+static void
+load_skeletons(reader_t *r)
+{
+    for (size_t m = 0; !r->failed && m < r->count; m++)
+        for (size_t i = 0; !r->failed && i < r->modules[m]->n_funcs; i++)
+            r_function_skeleton(r, r->modules[m]->funcs[i]);
+}
+
+static void
+load_globals(reader_t *r)
+{
+    for (size_t m = 0; !r->failed && m < r->count; m++) {
+        ir_module_t *module = r->modules[m];
+        for (size_t i = 0; !r->failed && i < module->n_globals; i++) {
+            ir_global_t *global = module->globals[i];
+            global->is_static = r_u8(r) != 0;
+            global->is_extern = r_u8(r) != 0;
+            global->mutability = (ir_mutability_t)r_u8(r);
+            global->span = r_span(r);
+            global->origin = r_origin(r);
+            global->shape = r_shape(r);
+            r_annots(r, &global->annots);
+            if (r_u8(r)) {
+                ir_global_init_value_t *init = ir_alloc(r->ctx,
+                                                        sizeof(*init));
+                if (!init) {
+                    r->failed = true;
+                    break;
+                }
+                r_init(r, init);
+                global->static_initializer = init;
+                global->has_static_initializer = !r->failed;
+            }
+        }
+    }
+}
+
+static void
+load_details(reader_t *r)
+{
+    for (size_t m = 0; !r->failed && m < r->count; m++) {
+        for (size_t i = 0; !r->failed && i < r->modules[m]->n_funcs; i++)
+            r_function_details(r, r->modules[m]->funcs[i]);
+        r_annots(r, &r->modules[m]->annots);
+    }
+}
+
+static uint64_t
+annot_count(ir_annots_t *annots, const char *key)
+{
+    ir_annot_t *annotation = ir_annot_get(annots, key);
+    return annotation && annotation->kind == IR_ANNOT_INT
+        && !annotation->i.neg ? annotation->i.mag : 0;
+}
+
+static bool
+restore_reverse_aliases(ir_ctx_t *ctx, ir_value_t *source,
+                        ir_annots_t *annots)
+{
+    uint64_t count = annots ? annot_count(annots, "ir.alias_count") : 0;
+    for (uint64_t i = 0; i < count; i++) {
+        char key[48];
+        snprintf(key, sizeof(key), "ir.alias%llu", (unsigned long long)i);
+        ir_annot_t *target = ir_annot_get(annots, key);
+        snprintf(key, sizeof(key), "ir.alias%llu_escapes",
+                 (unsigned long long)i);
+        ir_annot_t *escapes = ir_annot_get(annots, key);
+        ir_annots_t *reverse = target && target->kind == IR_ANNOT_VALUE
+            ? ir_value_annots(target->v) : nullptr;
+        if (!reverse || !escapes || escapes->kind != IR_ANNOT_BOOL)
+            return false;
+        uint64_t index = annot_count(reverse, "ir.aliased_by_count");
+        snprintf(key, sizeof(key), "ir.aliased_by%llu",
+                 (unsigned long long)index);
+        if (!ir_annot_set(ctx, reverse, (ir_annot_t){
+                .key = ir_strdup(ctx, key), .kind = IR_ANNOT_VALUE,
+                .v = source,
+            })) return false;
+        snprintf(key, sizeof(key), "ir.aliased_by%llu_escapes",
+                 (unsigned long long)index);
+        if (!ir_annot_set(ctx, reverse, (ir_annot_t){
+                .key = ir_strdup(ctx, key), .kind = IR_ANNOT_BOOL,
+                .b = escapes->b,
+            })
+            || !ir_annot_set(ctx, reverse, (ir_annot_t){
+                .key = "ir.aliased_by_count", .kind = IR_ANNOT_INT,
+                .i = {.mag = index + 1},
+            })) return false;
+    }
+    return true;
+}
+
+static void
+load_reverse_aliases(reader_t *r)
+{
+    for (size_t m = 0; !r->failed && m < r->count; m++) {
+        ir_module_t *module = r->modules[m];
+        for (size_t f = 0; !r->failed && f < module->n_funcs; f++) {
+            ir_func_t *function = module->funcs[f];
+            for (uint32_t i = 0; !r->failed && i < function->n_params; i++)
+                r->failed = !restore_reverse_aliases(r->ctx,
+                    function->params[i], &function->params[i]->annots);
+            for (uint32_t i = 0; !r->failed && i < function->n_locals; i++) {
+                ir_local_t *local = function->locals[i];
+                ir_value_t *value = local->value ? local->value
+                                                 : ir_local_value(function,
+                                                                  local);
+                r->failed = !restore_reverse_aliases(r->ctx, value,
+                                                     &local->annots);
+            }
+            for (uint32_t b = 0; !r->failed && b < function->n_blocks; b++)
+                for (uint32_t i = 0; !r->failed
+                         && i < function->blocks[b]->n_instrs; i++) {
+                    ir_instr_t *instr = function->blocks[b]->instrs[i];
+                    if (instr->dest)
+                        r->failed = !restore_reverse_aliases(r->ctx,
+                            instr->dest, &instr->annots);
+                }
+        }
+    }
+}
+
+static bool
+reader_open(reader_t *r, ir_ctx_t *ctx, const ir_archive_input_t *input,
+            ir_module_t **out, size_t capacity, size_t *module_count)
+{
+    const uint8_t *data = input->data;
+    size_t length = input->length;
+    if (!data || length < 8) return false;
     uint32_t magic = 0, version = 0;
     for (int i = 0; i < 4; i++) magic |= (uint32_t)data[i] << (8 * i);
     for (int i = 0; i < 4; i++) version |= (uint32_t)data[4 + i] << (8 * i);
     if (magic != IR_ARCHIVE_MAGIC || version != IR_ARCHIVE_VERSION)
         return false;
     size_t consumed = 0;
-    th_type_reader_t *types = th_type_reader_open(ir_ctx_types(ctx),
-        data + 8, length - 8, &consumed);
-    if (!types) return false;
-    reader_t r = {
-        .ctx = ctx, .data = data, .length = length, .at = 8 + consumed,
-        .types = types, .lookup = lookup, .lookup_context = lookup_context,
-    };
-    uint32_t modules = r_u32(&r);
-    if (r.failed || modules > capacity || (modules && !out)) {
-        th_type_reader_free(types);
+    r->types = th_type_reader_open(ir_ctx_types(ctx), data + 8, length - 8,
+                                   &consumed);
+    if (!r->types) return false;
+    r->ctx = ctx;
+    r->data = data;
+    r->length = length;
+    r->at = 8 + consumed;
+    uint32_t modules = r_u32(r);
+    if (r->failed || modules > capacity || (modules && !out)) return false;
+    r->modules = out;
+    r->slot_counts = core_alloc_array(size_t, modules + 1);
+    r->slot_types = core_alloc_array(th_type **, modules + 1);
+    *module_count = modules;
+    return r->slot_counts && r->slot_types;
+}
+
+static void
+reader_close(reader_t *r, size_t modules)
+{
+    if (r->types) th_type_reader_free(r->types);
+    for (size_t m = 0; r->slot_types && m < modules; m++)
+        core_free(r->slot_types[m]);
+    core_free(r->slot_types);
+    core_free(r->slot_counts);
+}
+
+bool
+ir_archives_load(ir_ctx_t *ctx, const ir_archive_input_t *inputs,
+                 size_t input_count, const ir_profile_t *const *profiles,
+                 size_t profile_count, ir_module_lookup_fn lookup,
+                 void *lookup_context, ir_module_t **out, size_t capacity,
+                 size_t *count)
+{
+    if (!ctx || !count || (input_count && !inputs)) return false;
+    reader_t *readers = core_alloc_array(reader_t, input_count + 1);
+    size_t *declared = core_alloc_array(size_t, input_count + 1);
+    if (!readers || !declared) {
+        core_free(readers);
+        core_free(declared);
         return false;
     }
-    r.modules = out;
-    size_t *slot_counts = modules ? core_alloc_array(size_t, modules) : nullptr;
-    th_type ***slot_types = modules
-        ? core_alloc_array(th_type **, modules) : nullptr;
-    if (modules && (!slot_counts || !slot_types)) r.failed = true;
-    for (uint32_t m = 0; !r.failed && m < modules; m++) {
-        const char *name = r_text(&r);
-        const ir_profile_t *profile = r_profile(r_text(&r), profiles,
-                                                profile_count);
-        const char *target = r_text(&r);
-        ir_module_t *module = name && profile
-            ? ir_module_new(ctx, name, profile, target) : nullptr;
-        if (!module) {
-            r.failed = true;
-            break;
-        }
-        out[m] = module;
-        r.count = m + 1;
-        module->props = (ir_props_t)r_u32(&r);
-        module->span = r_span(&r);
-        uint64_t files = r_count(&r);
-        for (uint64_t i = 0; !r.failed && i < files; i++)
-            ir_file_add(module, r_text(&r));
-        uint64_t slots = r_count(&r);
-        slot_types[m] = slots ? core_alloc_array(th_type *, (size_t)slots)
-                              : nullptr;
-        if (slots && !slot_types[m]) r.failed = true;
-        for (uint64_t i = 0; !r.failed && i < slots; i++) {
-            th_type *type = r_type(&r);
-            slot_types[m][i] = type ? ir_type_intern(module, type) : nullptr;
-        }
-        slot_counts[m] = r.failed ? 0 : (size_t)slots;
-        uint64_t functions = r_count(&r);
-        for (uint64_t i = 0; !r.failed && i < functions; i++) {
-            const char *function_name = r_text(&r);
-            th_type *type = r_type(&r);
-            ir_linkage_t linkage = (ir_linkage_t)r_u8(&r);
-            if (!r.failed && !ir_func_add(module, function_name, type, linkage))
-                r.failed = true;
-        }
-        uint64_t globals = r_count(&r);
-        for (uint64_t i = 0; !r.failed && i < globals; i++) {
-            const char *global_name = r_text(&r);
-            th_type *type = r_type(&r);
-            if (!r.failed && !ir_global_add(module, global_name, type))
-                r.failed = true;
-        }
+    bool ok = true;
+    size_t used = 0;
+    for (size_t i = 0; ok && i < input_count; i++) {
+        readers[i] = (reader_t){
+            .group = readers, .group_count = input_count,
+            .lookup = lookup, .lookup_context = lookup_context,
+        };
+        ok = reader_open(&readers[i], ctx, &inputs[i], out ? out + used
+                                                           : nullptr,
+                         capacity - used, &declared[i]);
+        used += ok ? declared[i] : 0;
     }
-    for (uint32_t m = 0; !r.failed && m < modules; m++) {
-        ir_module_t *module = out[m];
-        size_t slots = slot_counts[m];
-        for (size_t i = 0; !r.failed && i < slots; i++) {
-            th_type *type = slot_types[m][i];
-            th_type *definition = r_type(&r);
-            ir_typeslot_t *slot = type ? ir_type_slot(module, type) : nullptr;
-            if (type && !slot) r.failed = true;
-            if (slot && definition && !ir_type_define(module, type, definition))
-                slot->def = th_resolve(definition);
-            uint64_t descriptors = r_count(&r);
-            for (uint64_t d = 0; !r.failed && d < descriptors; d++)
-                r_descriptor(&r, module, type);
+    for (size_t i = 0; ok && i < input_count; i++) {
+        load_headers(&readers[i], profiles, profile_count,
+                     (uint32_t)declared[i]);
+        ok = !readers[i].failed;
+    }
+    void (*const stages[])(reader_t *) = {
+        load_slots, load_skeletons, load_globals, load_details,
+        load_reverse_aliases,
+    };
+    for (size_t s = 0; ok && s < sizeof(stages) / sizeof(*stages); s++)
+        for (size_t i = 0; ok && i < input_count; i++) {
+            stages[s](&readers[i]);
+            ok = !readers[i].failed;
         }
-    }
-    for (uint32_t m = 0; !r.failed && m < modules; m++)
-        for (size_t i = 0; !r.failed && i < out[m]->n_funcs; i++)
-            r_function_skeleton(&r, out[m]->funcs[i]);
-    for (uint32_t m = 0; !r.failed && m < modules; m++) {
-        ir_module_t *module = out[m];
-        for (size_t i = 0; !r.failed && i < module->n_globals; i++) {
-            ir_global_t *global = module->globals[i];
-            global->is_static = r_u8(&r) != 0;
-            global->is_extern = r_u8(&r) != 0;
-            global->mutability = (ir_mutability_t)r_u8(&r);
-            global->span = r_span(&r);
-            global->origin = r_origin(&r);
-            global->shape = r_shape(&r);
-            r_annots(&r, &global->annots);
-            if (r_u8(&r)) {
-                ir_global_init_value_t *init = ir_alloc(ctx, sizeof(*init));
-                if (!init) {
-                    r.failed = true;
-                    break;
-                }
-                r_init(&r, init);
-                global->static_initializer = init;
-                global->has_static_initializer = !r.failed;
-            }
-        }
-    }
-    for (uint32_t m = 0; !r.failed && m < modules; m++) {
-        for (size_t i = 0; !r.failed && i < out[m]->n_funcs; i++)
-            r_function_details(&r, out[m]->funcs[i]);
-        r_annots(&r, &out[m]->annots);
-    }
-    th_type_reader_free(types);
-    for (uint32_t m = 0; slot_types && m < modules; m++)
-        core_free(slot_types[m]);
-    core_free(slot_types);
-    core_free(slot_counts);
-    if (r.failed) return false;
-    *count = modules;
-    return true;
+    for (size_t i = 0; i < input_count; i++)
+        reader_close(&readers[i], declared[i]);
+    core_free(readers);
+    core_free(declared);
+    if (ok) *count = used;
+    return ok;
+}
+
+bool
+ir_modules_load(ir_ctx_t *ctx, const uint8_t *data, size_t length,
+                const ir_profile_t *const *profiles, size_t profile_count,
+                ir_module_lookup_fn lookup, void *lookup_context,
+                ir_module_t **out, size_t capacity, size_t *count)
+{
+    ir_archive_input_t input = {.data = data, .length = length};
+    return ir_archives_load(ctx, &input, 1, profiles, profile_count, lookup,
+                            lookup_context, out, capacity, count);
 }

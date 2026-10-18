@@ -181,19 +181,24 @@ get_count(cursor_t *c)
 }
 
 th_env *
-th_env_decode(th_ctx *types, const uint8_t *data, size_t length)
+th_env_decode(th_ctx *context, const uint8_t *data, size_t length)
 {
-    if (!types || (length && !data)) return nullptr;
+    if (length && !data) return nullptr;
+    th_env *env = context ? th_env_new_in_context(context) : th_env_new();
+    if (!env) return nullptr;
+    th_ctx *types = env->types;
     size_t consumed = 0;
     th_type_reader_t *reader = th_type_reader_open(types, data, length,
                                                    &consumed);
-    if (!reader) return nullptr;
+    if (!reader) {
+        th_env_free(env);
+        return nullptr;
+    }
     cursor_t c = {
         .data = data, .length = length, .at = consumed, .types = reader,
         .ctx = types,
     };
-    th_env *env = th_env_new_in_context(types);
-    bool ok = env != nullptr;
+    bool ok = true;
     uint64_t count = get_count(&c);
     for (uint64_t i = 0; ok && !c.failed && i < count; i++) {
         const char *name = get_text(&c);

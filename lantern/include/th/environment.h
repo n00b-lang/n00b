@@ -181,7 +181,7 @@ typedef struct {
 
 th_env *th_env_subset(const th_env *source, const th_env_filter_t *filter);
 bool th_env_encode(const th_env *environment, core_buffer_t *out);
-th_env *th_env_decode(th_ctx *types, const uint8_t *data, size_t length);
+th_env *th_env_decode(th_ctx *context, const uint8_t *data, size_t length);
 
 size_t th_env_declaration_count(const th_env *environment);
 bool th_env_declaration_at(const th_env *environment, size_t index,
