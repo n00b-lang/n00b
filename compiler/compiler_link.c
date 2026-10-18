@@ -1335,10 +1335,6 @@ resolve_module_member_site(parse_grammar_t *grammar,
         if (visible) {
             return parse_tree_set_resolution_symbol(node, type);
         }
-        if (!type && type_reference
-            && imported_state->semantic_annotation_started
-            && !imported_state->semantic_annotation_complete)
-            return n00bb_pending_type_reference(state, node);
         if (package_export && !state->semantic_annotation_complete)
             return n00bb_pending_type_reference(state, node);
         core_buffer_t message = {0};

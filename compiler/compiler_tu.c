@@ -9425,13 +9425,14 @@ inferred_binding_scope(parse_scope_t *scope)
     return scope;
 }
 
-void
-initial_symbol_node(parse_visit_t *visit, bool entering, void *context)
+static void
+apply_declaration_defaults(parse_visit_t *visit)
 {
-    if (entering) return;
-    parse_annot_result_t *annotations = context;
-    if (!visit->pn) return;
     parse_sym_entry_t *declared = visit->pn->sym;
+    if (declared && declared->decl_node == visit->node
+        && declared->kind == PARSE_SYM_TYPEDEF)
+        parse_sym_set_phases(declared, PARSE_SYM_PHASE_BOTH,
+            PARSE_SYM_PHASE_NONE, PARSE_SYM_PHASE_NONE);
     if (declared && declared->decl_node == visit->node) {
         if (!declared->visibility.u8_bytes
             && (nt_is(visit->grammar, visit->node, "func-def")
@@ -9454,6 +9455,23 @@ initial_symbol_node(parse_visit_t *visit, bool entering, void *context)
                 if (member->is_field && !member->visibility.u8_bytes)
                     member->visibility = CORE_STRING_STATIC("public");
     }
+}
+
+void
+declared_symbol_node(parse_visit_t *visit, bool entering, void *context)
+{
+    (void)context;
+    if (!entering && visit->pn) apply_declaration_defaults(visit);
+}
+
+void
+initial_symbol_node(parse_visit_t *visit, bool entering, void *context)
+{
+    if (entering) return;
+    parse_annot_result_t *annotations = context;
+    if (!visit->pn) return;
+    parse_sym_entry_t *declared = visit->pn->sym;
+    apply_declaration_defaults(visit);
     if (nt_is(visit->grammar, visit->node, "sym-decl")
         && declared && declared->decl_node == visit->node
         && declared->shadowed
@@ -9466,10 +9484,6 @@ initial_symbol_node(parse_visit_t *visit, bool entering, void *context)
             link_source_location(visit->node));
         return;
     }
-    if (visit->pn->sym && visit->pn->sym->kind == PARSE_SYM_TYPEDEF
-        && visit->pn->sym->decl_node == visit->node)
-        parse_sym_set_phases(visit->pn->sym, PARSE_SYM_PHASE_BOTH,
-            PARSE_SYM_PHASE_NONE, PARSE_SYM_PHASE_NONE);
 
     if (nt_is(visit->grammar, visit->node, "sym-decl")) {
         parse_tree_t *declaration = core_tree_node_value(visit->node).parent;
@@ -9715,6 +9729,7 @@ free_tu_state(void *data)
     core_dict_free(&state->import_alias_index);
     core_list_free(state->literal_site_nodes);
     core_dict_free(&state->flagset_values);
+    core_dict_free(&state->declarations_typed_ahead);
     n00bb_range_state_release(state);
     core_dict_free(&state->integer_range_variables);
     core_csp_store_free(state->integer_range_store);
@@ -9746,6 +9761,7 @@ n00bb_tu_state_new(core_translation_unit_t *unit, n00bb_lex_result_t *lex,
     core_dict_init_string(&state->import_alias_index);
     state->literal_site_nodes = core_list_new(parse_tree_ptr_t);
     core_dict_init(&state->flagset_values, nullptr, nullptr);
+    core_dict_init(&state->declarations_typed_ahead, nullptr, nullptr);
     core_dict_init(&state->integer_symbol_ranges, nullptr, nullptr);
     core_dict_init(&state->integer_range_invalidated_symbols, nullptr, nullptr);
     state->lex = lex;

@@ -1706,6 +1706,11 @@ lookup_export_symbol_in_scope(parse_symtab_t *symtab, parse_scope_t *scope,
                               core_string_t name)
 {
     parse_sym_entry_t *value = parse_symtab_lookup_in(scope, name);
+    while (value && value->kind == PARSE_SYM_MODULE
+           && parse_sym_binding(value,
+                  CORE_STRING_STATIC("n00bb.implicit-package")))
+        value = value->shadowed && value->shadowed->scope == scope
+            ? value->shadowed : nullptr;
     parse_scope_t *types = parse_symtab_scope_in_namespace(
         symtab, scope, CORE_STRING_STATIC("type"));
     parse_sym_entry_t *type = parse_symtab_lookup_in(types, name);
