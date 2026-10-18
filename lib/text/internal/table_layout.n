@@ -8,13 +8,11 @@ const layout_unbounded = 0x7fffffff
 private func max_width_of(parts: List[string]) -> i64 {
     let n: uint = parts.len()
     var max: i64 = 0
-    var i: uint = 0
-    while i < n {
+    for i from 0 until n {
         let w: i64 = internal.string.width(parts[cast[int] i])
         if w > max {
             max = w
         }
-        i += 1
     }
     return max
 }
@@ -27,26 +25,22 @@ private func longest_word_width(text: string) -> i64 {
     let lines: List[string] = internal.string.split(text, "\n")
     let n: uint = lines.len()
     var max: i64 = 0
-    var i: uint = 0
-    while i < n {
+    for i from 0 until n {
         let w: i64 =
             max_width_of(internal.string.split(lines[cast[int] i], " "))
         if w > max {
             max = w
         }
-        i += 1
     }
     return max
 }
 
 private func has_hard_break(text: string) -> bool {
     let n: u64 = byte_len(text)
-    var i: u64 = 0
-    while i < n {
+    for i from 0 until n {
         if byte_at(text, i) == 0x0a {
             return true
         }
-        i += 1
     }
     return false
 }
@@ -100,10 +94,8 @@ private func scan_column_preferences(table: internal.table.Table, width: i64)
     let n_specs: uint = table.col_specs.len()
     var cloned: Array[internal.table.Table_Col_Spec] =
         new[Array[internal.table.Table_Col_Spec]](cast[int] n_specs)
-    var k: uint = 0
-    while k < n_specs {
+    for k from 0 until n_specs {
         cloned[k] = table.col_specs[cast[int] k]
-        k += 1
     }
     var specs: List[internal.table.Table_Col_Spec] =
         sys.abi.list_with_length(cloned, n_specs)

@@ -279,8 +279,7 @@ private func add_col_spec(modify table: Table, spec: Table_Col_Spec) -> uint {
 private func current_row_col_count(table: Table) -> i64 {
     var count: i64 = 0
     let n: uint = table.current_row.cells.len()
-    var i: uint = 0
-    while i < n {
+    for i from 0 until n {
         let cell: Table_Cell = table.current_row.cells[cast[int] i]
         if cell.col_span > 0 {
             count += cast[i64] cell.col_span
@@ -288,7 +287,6 @@ private func current_row_col_count(table: Table) -> i64 {
         else {
             count += 1
         }
-        i += 1
     }
     return count
 }
@@ -327,7 +325,7 @@ func __init(modify self: Table, num_cols: uint = 0, style: Table_Style? = nil,
     }
     else {
         let zero: Box_Props = (
-            border_theme = ref internal.border.border_plain,
+            border_theme = nil,
             border_style = nil, fill_style = nil, text_style = nil,
             borders = internal.border.Border_Set.none, pad_top = 0,
             pad_bottom = 0, pad_left = 0, pad_right = 0,
@@ -355,13 +353,11 @@ func __init(modify self: Table, num_cols: uint = 0, style: Table_Style? = nil,
     self.rows = new[List[Table_Row]]()
     self.col_specs = new[List[Table_Col_Spec]]()
     self.current_row = (cells = new[List[Table_Cell]]())
-    var i: uint = 0
-    while i < num_cols {
+    for i from 0 until num_cols {
         let spec: Table_Col_Spec = (mode = Col_Mode.fit, min = nil, max = nil,
                                     pref = nil, flex_multiple = 1,
                                     priority = 0, col_props = nil)
         self.col_specs.append(spec)
-        i += 1
     }
 }
 
@@ -402,8 +398,7 @@ func end_row(modify self: Table) {
     }
     var used: i64 = 0
     let n: uint = self.current_row.cells.len()
-    var i: uint = 0
-    while i < n {
+    for i from 0 until n {
         var cell: Table_Cell = self.current_row.cells[cast[int] i]
         if cell.col_span == -1 {
             let remaining: i64 = num_cols - used
@@ -416,7 +411,6 @@ func end_row(modify self: Table) {
             self.current_row.cells[cast[int] i] = cell
         }
         used += cast[i64] cell.col_span
-        i += 1
     }
     if self.max_rows > 0 and cast[i64] self.rows.len() >= self.max_rows {
         let slot: i64 = self.total_added % self.max_rows
@@ -433,10 +427,8 @@ func end_row(modify self: Table) {
 
 func add_row(modify self: Table, cells: List[string]) {
     let n: uint = cells.len()
-    var i: uint = 0
-    while i < n {
+    for i from 0 until n {
         add_cell(self, cells[cast[int] i])
-        i += 1
     }
     end_row(self)
 }
@@ -621,14 +613,12 @@ func table_from_string(s: string, row_sep: string = "\n",
     var table: Table = new[Table](style = style)
     let rows: List[string] = internal.string.split(s, row_sep)
     let nr: uint = rows.len()
-    var r: uint = 0
-    while r < nr {
+    for r from 0 until nr {
         let row: string = rows[cast[int] r]
         if byte_len(row) == 0 and r == nr - 1 {
             break
         }
         add_row(table, internal.string.split(row, col_sep))
-        r += 1
     }
     end(table)
     return table
@@ -651,10 +641,8 @@ func table_callout(content: string) -> Table {
 func table_flow(items: List[string]) -> Table {
     var table: Table = new[Table](style = table_style_minimal())
     let n: uint = items.len()
-    var i: uint = 0
-    while i < n {
+    for i from 0 until n {
         col_flex(table, 1)
-        i += 1
     }
     add_row(table, items)
     return table

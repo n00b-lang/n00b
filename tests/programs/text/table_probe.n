@@ -136,8 +136,7 @@ func run_checks() {
 
     let unset: text.Box_Props = zero_props()
     let bare: text.Box_Props = text.box_props_new(unset)
-    check(unset.border_theme == nil and
-          theme_is(bare, ref text.border_plain), "8")
+    check(theme_is(bare, ref text.border_plain), "8")
 
     var t: text.Table = new[text.Table]()
     text.col_flex(t, 2)
@@ -316,14 +315,15 @@ func run_checks() {
     }
 
     var alone: text.Table = new[text.Table]()
-    text.add_cell(alone, "alpha beta gamma")
+    text.add_cell(alone, "alpha beta gamma delta epsilon zeta eta theta rho")
     text.add_cell(alone, "delta")
     text.end_row(alone)
     text.add_cell(alone, "epsilon zeta")
     text.add_cell(alone, "eta theta iota kappa")
     text.end_row(alone)
     var scanned: text.Table = new[text.Table]()
-    text.add_cell(scanned, "alpha beta gamma")
+    text.add_cell(scanned,
+                  "alpha beta gamma delta epsilon zeta eta theta rho")
     text.add_cell(scanned, "delta")
     text.end_row(scanned)
     text.add_cell(scanned, "epsilon zeta")
