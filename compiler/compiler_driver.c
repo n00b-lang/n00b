@@ -3596,10 +3596,14 @@ specialize_calls(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         core_list_new(n00bb_ir_func_ptr_t);
     for (size_t i = 0; i < analysis->emitted_functions.len; i++)
         core_list_push(callers, analysis->emitted_functions.data[i]);
-    n00bb_cache_closed_functions(analysis->cache, &callers);
+    core_list_t(n00bb_specialization_seed_t) seeds =
+        core_list_new(n00bb_specialization_seed_t);
+    n00bb_cache_seeds(analysis->cache, ir_ctx_types(analysis->ir_context),
+                      &seeds);
     bool ok = n00bb_specialize_calls(analysis->ir_context, &callers,
-        &analysis->specializations, &analysis->specialization_requests,
-        &failure);
+        seeds.data, seeds.len, &analysis->specializations,
+        &analysis->specialization_requests, &failure);
+    core_list_free(seeds);
     core_list_free(callers);
     if (ok) {
         core_list_t(core_translation_unit_ptr_t) order =

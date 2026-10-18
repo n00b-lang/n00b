@@ -66,6 +66,17 @@ bool n00bb_llvm_backend_enable_frame_maps(n00bb_llvm_backend_t *backend);
 void n00bb_llvm_backend_bind_native_cache(n00bb_llvm_backend_t *backend,
     n00bb_native_cache_t *cache);
 
+typedef struct {
+    bool (*known)(void *context, const ir_func_t *function, bool *mutator);
+    void *context;
+} n00bb_llvm_mutator_classifier_t;
+
+void n00bb_llvm_backend_bind_mutator_classifier(n00bb_llvm_backend_t *backend,
+    const n00bb_llvm_mutator_classifier_t *classifier);
+size_t n00bb_llvm_backend_mutator_count(const n00bb_llvm_backend_t *backend);
+const char *n00bb_llvm_backend_mutator_name(
+    const n00bb_llvm_backend_t *backend, size_t index);
+
 bool n00bb_llvm_backend_write_bitcode(
     n00bb_llvm_backend_t *backend, core_buffer_t *out,
     core_diagnostics_t *diagnostics);

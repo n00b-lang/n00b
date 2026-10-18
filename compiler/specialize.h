@@ -21,8 +21,14 @@ typedef struct {
 } n00bb_specialization_request_t;
 core_list_decl(n00bb_specialization_request_t);
 
+typedef struct {
+    ir_func_t *generic;
+    th_type *signature;
+} n00bb_specialization_seed_t;
+
 bool n00bb_specialize_calls(ir_ctx_t *context,
     core_list_t(n00bb_ir_func_ptr_t) *functions,
+    const n00bb_specialization_seed_t *seeds, size_t seed_count,
     core_list_t(n00bb_specialization_t) *instances,
     core_list_t(n00bb_specialization_request_t) *requests,
     core_buffer_t *failure);

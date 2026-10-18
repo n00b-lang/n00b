@@ -506,6 +506,8 @@ emit_module_object(const module_emission_t *emission, ir_module_t *module,
         emission->debug_enabled, emission->native_cpu, module_diagnostics);
     if (!backend) return false;
     n00bb_llvm_backend_bind_native_cache(backend, emission->native_cache);
+    n00bb_llvm_backend_bind_mutator_classifier(backend,
+        n00bb_cache_mutator_classifier(analysis->cache));
     const char *table_symbol = artifact
         ? artifact->index_table.symbol : nullptr;
     if (table_symbol && table_symbol[0] == '_'
@@ -549,8 +551,15 @@ emit_module_object(const module_emission_t *emission, ir_module_t *module,
         ok = n00bb_llvm_backend_emit_object(backend, initializers,
             initializer_count, metadata_bytes, &object,
             emission->diagnostics);
+    core_buffer_t mutators = {0};
+    for (size_t i = 0; i < n00bb_llvm_backend_mutator_count(backend); i++) {
+        core_buffer_puts(&mutators, n00bb_llvm_backend_mutator_name(backend,
+                                                                    i));
+        core_buffer_putc(&mutators, '\n');
+    }
     n00bb_llvm_backend_free(backend);
     if (ok && emission->lto) {
+        core_buffer_release(&mutators);
         *bitcode = object;
         return true;
     }
@@ -562,9 +571,13 @@ emit_module_object(const module_emission_t *emission, ir_module_t *module,
                 .module = ir_module_name(module),
                 .native = copy, .native_bytes = object.byte_len,
                 .abi = artifact->object, .abi_bytes = artifact->object_bytes,
+                .mutators = (const uint8_t *)mutators.data,
+                .mutator_bytes = mutators.byte_len,
             }));
+            mutators = (core_buffer_t){0};
         }
     }
+    core_buffer_release(&mutators);
     if (ok) ok = n00bb_native_frames_add(emission->native_frames,
         object.data, object.byte_len);
     if (ok) *object_path = n00bb_write_temporary_object(object.data,
@@ -820,6 +833,16 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     for (size_t i = 0; ok && i < analysis->specializations.len; i++) {
         ir_module_t *module = analysis->specializations.data[i]
             .instance->owner;
+        n00bb_cache_module_object_t cached = {0};
+        if (!lto && n00bb_cache_instance_object(analysis->cache, link,
+                analysis, &analysis->specializations.data[i], &cached)) {
+            ok = n00bb_native_frames_add(native_frames, cached.native,
+                                         cached.native_bytes);
+            if (ok) objects[count + i] = n00bb_write_temporary_object(
+                cached.native, cached.native_bytes);
+            ok = ok && objects[count + i];
+            continue;
+        }
         core_link_artifact_view_t artifact_view = {0};
         ok = core_link_unit_require_artifact(link,
                 core_string_from_cstr(ir_module_name(module)),
@@ -1020,7 +1043,10 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     if (ok && !lto)
         (void)n00bb_cache_store(analysis->cache, link, analysis, kept.data,
                                 kept.len);
-    for (size_t i = 0; i < kept.len; i++) free((void *)kept.data[i].native);
+    for (size_t i = 0; i < kept.len; i++) {
+        free((void *)kept.data[i].native);
+        core_free((void *)kept.data[i].mutators);
+    }
     core_list_free(kept);
     if (staging) unlink(staging);
     free(staging);
@@ -1460,9 +1486,27 @@ n00bb_emit_abi_artifacts(core_link_unit_t *link,
         }
     }
     for (size_t i = 0; valid && !root_only
-         && i < analysis->specializations.len; i++)
-        valid = emit_specialization_abi(link, analysis,
-            &analysis->specializations.data[i], debug_enabled, &sources);
+         && i < analysis->specializations.len; i++) {
+        const n00bb_specialization_t *item =
+            &analysis->specializations.data[i];
+        n00bb_cache_module_object_t cached = {0};
+        if (n00bb_cache_instance_object(analysis->cache, link, analysis,
+                                        item, &cached)) {
+            n00bb_abi_artifact_t *artifact = core_alloc(n00bb_abi_artifact_t);
+            artifact->object = core_alloc_array(uint8_t, cached.abi_bytes);
+            if (artifact->object)
+                memcpy(artifact->object, cached.abi, cached.abi_bytes);
+            artifact->object_bytes = cached.abi_bytes;
+            valid = artifact->object && core_link_unit_add_artifact(link,
+                core_string_from_cstr(ir_module_name(item->instance->owner)),
+                CORE_STRING_STATIC("n00bb.abi.object"), 1, 0, artifact,
+                CORE_LINK_PAYLOAD_OWNED, free_abi_artifact);
+            if (!valid) free_abi_artifact(artifact);
+            continue;
+        }
+        valid = emit_specialization_abi(link, analysis, item, debug_enabled,
+                                        &sources);
+    }
     core_indexed_table_free(sources.scopes);
     core_dict_free(&sources.type_owners);
     core_dict_free(&sources.callback_type_owners);

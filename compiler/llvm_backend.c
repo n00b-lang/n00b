@@ -68,6 +68,10 @@ native_type_key_eq(const void *left, const void *right)
 }
 
 static _Thread_local core_dict_t *active_native_types;
+static _Thread_local const n00bb_llvm_mutator_classifier_t
+    *active_mutator_classifier;
+static _Thread_local core_list_t(core_const_charptr_t)
+    *active_selected_mutators;
 
 typedef struct {
     char *path;
@@ -208,6 +212,8 @@ struct n00bb_llvm_backend_t {
     bool emit_frame_maps;
     n00bb_native_cache_t *native_cache;
     core_list_t(callback_binding_t) callback_bindings;
+    const n00bb_llvm_mutator_classifier_t *mutator_classifier;
+    core_list_t(core_const_charptr_t) selected_mutators;
 };
 
 typedef struct {
@@ -11536,6 +11542,14 @@ collect_mutator_candidates(ir_func_t *function,
     }
 }
 
+static bool
+fixed_mutator(const ir_func_t *function, bool *mutator)
+{
+    return active_mutator_classifier && active_mutator_classifier->known
+        && active_mutator_classifier->known(
+            active_mutator_classifier->context, function, mutator);
+}
+
 static void
 select_mutator_functions(
     const core_list_t(inline_function_ptr_t) *candidates,
@@ -11543,7 +11557,9 @@ select_mutator_functions(
 {
     for (size_t f = 0; f < candidates->len; f++) {
         ir_func_t *function = candidates->data[f];
-        if (has_dynamic_allocation(function))
+        bool mutator = false;
+        if (fixed_mutator(function, &mutator)
+                ? mutator : has_dynamic_allocation(function))
             core_list_push(*selected, function);
     }
     bool changed;
@@ -11551,7 +11567,9 @@ select_mutator_functions(
         changed = false;
         for (size_t f = 0; f < candidates->len; f++) {
             ir_func_t *function = candidates->data[f];
-            if (inline_list_contains(selected, function)) continue;
+            bool fixed = false;
+            if (inline_list_contains(selected, function)
+                || fixed_mutator(function, &fixed)) continue;
             for (uint32_t b = 0; b < function->n_blocks; b++) {
                 ir_block_t *block = function->blocks[b];
                 for (uint32_t i = 0; i < block->n_instrs; i++) {
@@ -11807,6 +11825,11 @@ lower_module(LLVMModuleRef target, const ir_module_t *source,
         collect_mutator_candidates(inline_callees.data[i], &candidates);
     select_mutator_functions(&candidates, &mutator_functions);
     core_list_free(candidates);
+    for (size_t i = 0; active_selected_mutators
+         && i < mutator_functions.len; i++)
+        if (mutator_functions.data[i]->owner == source)
+            core_list_push(*active_selected_mutators,
+                           mutator_functions.data[i]->name);
     for (size_t i = 0; i < mutator_functions.len; i++) {
         ir_func_t *function = mutator_functions.data[i];
         LLVMTypeRef signature = mutator_function_type(target, function);
@@ -11996,6 +12019,7 @@ n00bb_llvm_backend_free(n00bb_llvm_backend_t *backend)
         core_dict_free(&backend->native_types);
     }
     core_list_free(backend->callback_bindings);
+    core_list_free(backend->selected_mutators);
     if (backend->module) LLVMDisposeModule(backend->module);
     if (backend->context) LLVMContextDispose(backend->context);
     if (backend->cpu_name) LLVMDisposeMessage(backend->cpu_name);
@@ -12126,6 +12150,27 @@ n00bb_llvm_backend_bind_native_cache(n00bb_llvm_backend_t *backend,
     if (backend) backend->native_cache = cache;
 }
 
+void
+n00bb_llvm_backend_bind_mutator_classifier(n00bb_llvm_backend_t *backend,
+    const n00bb_llvm_mutator_classifier_t *classifier)
+{
+    if (backend) backend->mutator_classifier = classifier;
+}
+
+size_t
+n00bb_llvm_backend_mutator_count(const n00bb_llvm_backend_t *backend)
+{
+    return backend ? backend->selected_mutators.len : 0;
+}
+
+const char *
+n00bb_llvm_backend_mutator_name(const n00bb_llvm_backend_t *backend,
+                                size_t index)
+{
+    return backend && index < backend->selected_mutators.len
+        ? backend->selected_mutators.data[index] : nullptr;
+}
+
 static bool
 lower_backend(n00bb_llvm_backend_t *backend, core_diagnostics_t *diagnostics)
 {
@@ -12143,6 +12188,12 @@ lower_backend(n00bb_llvm_backend_t *backend, core_diagnostics_t *diagnostics)
     }
     debug_info_t *previous_debug = active_debug;
     active_debug = with_debug ? &debug : nullptr;
+    const n00bb_llvm_mutator_classifier_t *previous_classifier =
+        active_mutator_classifier;
+    core_list_t(core_const_charptr_t) *previous_selected =
+        active_selected_mutators;
+    active_mutator_classifier = backend->mutator_classifier;
+    active_selected_mutators = &backend->selected_mutators;
     bool module_lowered = lower_module(backend->module, backend->source,
         backend->emit_frame_maps, backend->type_indices,
         backend->type_index_count, backend->function_indices,
@@ -12151,6 +12202,8 @@ lower_backend(n00bb_llvm_backend_t *backend, core_diagnostics_t *diagnostics)
         backend->reachable, backend->reachable_count,
         backend->reachable_bound, &backend->callback_bindings,
         backend->index_table, diagnostics);
+    active_mutator_classifier = previous_classifier;
+    active_selected_mutators = previous_selected;
     active_debug = previous_debug;
     if (with_debug) debug_info_end(&debug);
     active_native_types = previous_native_types;

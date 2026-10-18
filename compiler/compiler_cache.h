@@ -7,6 +7,7 @@
 
 #include "compiler_link.h"
 #include "specialize.h"
+#include "llvm_backend.h"
 #include "ir/ir.h"
 #include "lib/link_unit.h"
 #include "lib/list.h"
@@ -19,6 +20,8 @@ typedef struct {
     size_t native_bytes;
     const uint8_t *abi;
     size_t abi_bytes;
+    const uint8_t *mutators;
+    size_t mutator_bytes;
 } n00bb_cache_module_object_t;
 core_list_decl(n00bb_cache_module_object_t);
 
@@ -37,8 +40,14 @@ ir_module_t *n00bb_cache_module(const n00bb_cache_t *cache,
 bool n00bb_cache_module_object(const n00bb_cache_t *cache,
                                const char *module,
                                n00bb_cache_module_object_t *object);
-void n00bb_cache_closed_functions(const n00bb_cache_t *cache,
-    core_list_t(n00bb_ir_func_ptr_t) *functions);
+core_list_decl(n00bb_specialization_seed_t);
+const n00bb_llvm_mutator_classifier_t *n00bb_cache_mutator_classifier(
+    const n00bb_cache_t *cache);
+void n00bb_cache_seeds(const n00bb_cache_t *cache, th_ctx *types,
+    core_list_t(n00bb_specialization_seed_t) *seeds);
+bool n00bb_cache_instance_object(n00bb_cache_t *cache,
+    core_link_unit_t *link, n00bb_link_analysis_t *analysis,
+    const n00bb_specialization_t *item, n00bb_cache_module_object_t *object);
 bool n00bb_cache_snapshot(n00bb_cache_t *cache, core_link_unit_t *link);
 bool n00bb_cache_store(n00bb_cache_t *cache, core_link_unit_t *link,
                        n00bb_link_analysis_t *analysis,

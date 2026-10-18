@@ -300,19 +300,43 @@ is_instance(const core_list_t(specialization_t) *specializations,
 
 bool n00bb_specialize_calls(ir_ctx_t *context,
     core_list_t(n00bb_ir_func_ptr_t) *functions,
+    const n00bb_specialization_seed_t *seeds, size_t seed_count,
     core_list_t(n00bb_specialization_t) *instances,
     core_list_t(n00bb_specialization_request_t) *requests,
     core_buffer_t *failure)
 {
-    if (!context || !functions || !instances || !requests) return false;
+    if (!context || !functions || !instances || !requests
+        || (seed_count && !seeds)) return false;
     core_list_t(specialization_t) specializations = {0};
+    core_list_t(n00bb_ir_func_ptr_t) inline_bodies =
+        core_list_new(n00bb_ir_func_ptr_t);
     bool valid = true;
-    size_t original_count = functions->len;
+    for (size_t s = 0; valid && s < seed_count; s++) {
+        ir_func_t *target = function_body(seeds[s].generic);
+        th_type *actual = seeds[s].signature;
+        th_ctx *types = target ? ir_module_types(target->owner) : nullptr;
+        if (!target || !target->n_blocks || !actual
+            || find_instance(&specializations, target,
+                             th_hash(types, actual), types)) continue;
+        core_list_t(type_binding_t) bindings = {0};
+        bool matched = match_type(types, target->type, actual, &bindings)
+            && bindings.len;
+        ir_func_t *copy = matched ? instantiate(context, target, actual,
+            &bindings, types, failure) : nullptr;
+        core_list_free(bindings);
+        valid = !matched || copy != nullptr;
+        if (!copy) continue;
+        core_list_push(specializations,
+            ((specialization_t){target, copy, actual, SIZE_MAX}));
+        core_list_push(*instances,
+            ((n00bb_specialization_t){target, copy, actual}));
+        core_list_push(*functions, copy);
+    }
     for (size_t index = 0; valid && index < functions->len; index++) {
         ir_func_t *caller = functions->data[index];
         size_t parent = SIZE_MAX;
-        if (index >= original_count)
-            parent = index - original_count;
+        for (size_t s = 0; parent == SIZE_MAX && s < specializations.len; s++)
+            if (specializations.data[s].copy == caller) parent = s;
         if (!th_is_closed(ir_module_types(caller->owner), caller->type)
             && !is_instance(&specializations, caller)) continue;
         for (uint32_t b = 0; valid && b < caller->n_blocks; b++) {
@@ -326,7 +350,16 @@ bool n00bb_specialize_calls(ir_ctx_t *context,
                 if (!target || !target->n_blocks
                     || is_instance(&specializations, target)) continue;
                 th_ctx *types = ir_module_types(target->owner);
-                if (th_is_closed(types, target->type)) continue;
+                if (th_is_closed(types, target->type)) {
+                    bool queued = !ir_func_is_always_inline(target);
+                    for (size_t q = 0; !queued && q < inline_bodies.len; q++)
+                        queued = inline_bodies.data[q] == target;
+                    if (!queued) {
+                        core_list_push(inline_bodies, target);
+                        core_list_push(*functions, target);
+                    }
+                    continue;
+                }
                 th_type *actual = has_callback_operation(target) ? nullptr
                     : concrete_call_signature(call, target, types);
                 core_list_t(type_binding_t) bindings = {0};
@@ -369,5 +402,6 @@ bool n00bb_specialize_calls(ir_ctx_t *context,
         }
     }
     core_list_free(specializations);
+    core_list_free(inline_bodies);
     return valid;
 }
