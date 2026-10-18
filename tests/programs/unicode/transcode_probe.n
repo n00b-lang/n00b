@@ -1,0 +1,148 @@
+import unicode
+
+private func same_string(a: string, b: string) -> bool {
+    if byte_len(a) != byte_len(b) {
+        return false
+    }
+
+    var i: uint = 0
+    while i < byte_len(a) {
+        if byte_at(a, i) != byte_at(b, i) {
+            return false
+        }
+        i += 1
+    }
+
+    return true
+}
+
+private func cp_index(arr: List[char], i: int) -> char {
+    return arr[i]
+}
+
+private func unit_index(arr: List[u16], i: int) -> u16 {
+    return arr[i]
+}
+
+func transcode_probe() -> string? {
+    let mixed: string = "Aé世😀"
+
+    var cps: List[char] = []
+    try {
+        cps = unicode.utf32_from_string(mixed)!
+    } else e {
+        return "1"
+    }
+
+    if cps.len() != 4 or cp_index(cps, 0) != cast[char] 0x41 or
+       cp_index(cps, 1) != cast[char] 0x00e9 or
+       cp_index(cps, 2) != cast[char] 0x4e16 or
+       cp_index(cps, 3) != cast[char] 0x1f600 {
+        return "2"
+    }
+
+    var back32_ok: bool = false
+    try {
+        back32_ok = same_string(unicode.utf32_to_string(cps)!, mixed)
+    } else e {
+        back32_ok = false
+    }
+    if !back32_ok {
+        return "3"
+    }
+
+    var units: List[u16] = []
+    try {
+        units = unicode.utf16_from_string(mixed)!
+    } else e {
+        return "4"
+    }
+
+    if units.len() != 5 or unit_index(units, 0) != 0x41 or
+       unit_index(units, 1) != 0x00e9 or unit_index(units, 2) != 0x4e16 or
+       unit_index(units, 3) != 0xd83d or unit_index(units, 4) != 0xde00 {
+        return "5"
+    }
+
+    var back16_ok: bool = false
+    try {
+        back16_ok = same_string(unicode.utf16_to_string(units)!, mixed)
+    } else e {
+        back16_ok = false
+    }
+    if !back16_ok {
+        return "6"
+    }
+
+    var junk: Array[u8] = new[Array[u8]](2)
+    junk[0] = 0xff
+    junk[1] = 0xfe
+    let binary: string = from_raw(ref junk, 2)
+
+    var transcoded: bool = false
+    try {
+        unicode.utf32_from_string(binary)!
+        transcoded = true
+    } else e {
+        transcoded = false
+    }
+    if !transcoded {
+        try {
+            unicode.utf16_from_string(binary)!
+            transcoded = true
+        } else e {
+            transcoded = false
+        }
+    }
+    if transcoded {
+        return "7"
+    }
+
+    var too_big: List[char] = []
+    too_big.append(cast[char] 0x110000)
+
+    var too_big_ok: bool = false
+    try {
+        unicode.utf32_to_string(too_big)!
+        too_big_ok = true
+    } else e {
+        too_big_ok = false
+    }
+    if too_big_ok {
+        return "8"
+    }
+
+    var lone: List[char] = []
+    lone.append(cast[char] 0xd800)
+
+    var lone_ok: bool = false
+    try {
+        unicode.utf32_to_string(lone)!
+        lone_ok = true
+    } else e {
+        lone_ok = false
+    }
+    if lone_ok {
+        return "9"
+    }
+
+    var empty_ok: bool = false
+    try {
+        empty_ok = unicode.utf32_from_string(empty_string())!.len() == 0
+    } else e {
+        empty_ok = false
+    }
+    if !empty_ok {
+        return "10"
+    }
+
+    return nil
+}
+
+let failed: string? = transcode_probe()
+if failed == nil {
+    __fd_write(2, "ok")
+}
+else {
+    __fd_write(2, "FAIL transcode_probe " + failed.get() + "\n")
+}
