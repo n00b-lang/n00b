@@ -32,6 +32,8 @@ static void report_literal_item_conflict(core_translation_unit_t *unit,
                                          parse_tree_t *node,
                                          literal_item_group_t *group,
                                          size_t conflict);
+static bool n00bb_contextual_method_argument(parse_grammar_t *grammar,
+                                             parse_tree_t *expression);
 
 bool
 n00bb_assignment_target(parse_grammar_t *grammar, parse_tree_t *node,
@@ -2489,10 +2491,25 @@ infer_anonymous_record(parse_grammar_t *grammar, parse_tree_t *node,
     if (!fields || !state || !state->types) return true;
     n00bb_ordered_nodes_t *cached = n00bb_node_ordered_nodes(fields);
     if (!cached) return false;
+    parse_tree_t *argument = node;
+    for (parse_tree_t *parent = core_tree_node_value(node).parent;
+         parent && !nt_is(grammar, argument, "expression")
+         && core_tree_num_children(parent) == 1;
+         parent = core_tree_node_value(parent).parent)
+        argument = parent;
+    bool open_fields = nt_is(grammar, argument, "expression")
+        && n00bb_contextual_method_argument(grammar, argument);
     core_list_t(th_member) members = core_list_new(th_member);
     for (size_t i = 0; i < cached->count; i++) {
         parse_tree_t *field = cached->nodes[i];
         if (!core_tree_num_children(field)) continue;
+        parse_tree_t *value = core_tree_child(field,
+            core_tree_num_children(field) - 1);
+        th_type *open = open_fields && core_tree_num_children(field) == 3
+            ? th_var(state->types) : nullptr;
+        if (open && n00bb_literal_adopts_open_type(grammar, state, value,
+                                                   open))
+            core_tree_node_value(field).type = open;
         parse_tree_t *name_node = core_tree_child(field, 0);
         parse_token_info_t *name_token = parse_node_token(name_node);
         if (!name_token || !core_string_eq(
@@ -8233,13 +8250,17 @@ integer_value_promotes(parse_grammar_t *grammar, n00bb_tu_state_t *state,
 }
 
 static th_type *
-record_literal_as_named(n00bb_tu_state_t *state, parse_tree_t *node,
-                        th_type *actual, th_type *expected)
+record_literal_as_named(parse_grammar_t *grammar, n00bb_tu_state_t *state,
+                        parse_tree_t *node, th_type *actual,
+                        th_type *expected)
 {
     if (!node || core_tree_is_leaf(node)
         || !n00bb_node_record_literal_origin(node)
         || th_kind_of(th_resolve(actual)) != TH_RECORD
         || th_kind_of(th_resolve(expected)) != TH_NAMED) return nullptr;
+    if (grammar && state->unit)
+        return contextualize_record_literal(grammar, state->unit, state, node,
+                                            expected) ? expected : nullptr;
     th_type *definition = th_type_definition(state->types, expected);
     return definition && th_kind_of(th_resolve(definition)) == TH_RECORD
         && th_unify_probe(state->types, actual, definition)
@@ -8580,7 +8601,8 @@ n00bb_type_materialize(parse_grammar_t *grammar, n00bb_tu_state_t *state,
     if (materialized && !th_unify_probe(types, actual, expected))
         return materialized;
     *converted = false;
-    materialized = record_literal_as_named(state, node, actual, expected);
+    materialized = record_literal_as_named(grammar, state, node, actual,
+                                           expected);
     if (materialized) return materialized;
     materialized = sequence_literal_as_array(grammar, state, node, expected);
     if (materialized) return materialized;
