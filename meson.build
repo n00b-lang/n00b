@@ -1036,6 +1036,30 @@ foreach string_probe : ['core_probe', 'rstr_probe', 'raw_literal_probe',
     )
 endforeach
 
+foreach text_probe : ['color_probe', 'capability_probe', 'theme_probe',
+                      'border_probe']
+    test(
+        'text-' + text_probe.replace('_', '-'),
+        find_program('sh'),
+        args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+               n00bb_exe.full_path(),
+               meson.current_source_dir() / 'tests' / 'programs' / 'text'
+                   / text_probe + '.n'],
+        suite: 'slow',
+    )
+endforeach
+
+test(
+    'text-theme-builtin-immutable',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'panic_message_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'text'
+               / 'theme_builtin_immutable.n',
+           'builtin themes are immutable; copy the theme first'],
+    suite: 'slow',
+)
+
 test(
     'comptime-c-record-deferred-array-n00b',
     find_program('sh'),

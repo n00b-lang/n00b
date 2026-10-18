@@ -136,6 +136,7 @@ n00bb_link_stage_semantics(core_link_unit_t *link, uint32_t stage_kind,
         th_env_free(environment);
         return CORE_LINK_STAGE_RESULT_FAILED;
     }
+    mark_resolved_flagset_operator_sites(analysis->grammar, units);
     if (!resolve_inferred_trait_references(analysis->grammar, link,
                                            analysis, environment)) {
         core_diagnostics_report(core_translation_unit_diagnostics(

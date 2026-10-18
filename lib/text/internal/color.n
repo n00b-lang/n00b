@@ -1,0 +1,118 @@
+enum Color_Depth {
+    mono = 0, colors_16, colors_256, truecolor
+}
+
+func color_red(c: Color) -> u8 {
+    return cast[u8]((unsafe_cast[u32] c >> 16) & 0xff)
+}
+
+func color_green(c: Color) -> u8 {
+    return cast[u8]((unsafe_cast[u32] c >> 8) & 0xff)
+}
+
+func color_blue(c: Color) -> u8 {
+    return cast[u8](unsafe_cast[u32] c & 0xff)
+}
+
+func color_rgb(r: u8, g: u8, b: u8) -> Color {
+    return cast[Color]((cast[u32] r << 16) | (cast[u32] g << 8) | cast[u32] b)
+}
+
+private const cube_levels: Array[i32] = [0, 95, 135, 175, 215, 255]
+
+private func cube_index(v: u8) -> u8 {
+    var best: u8 = 0
+    var best_dist: i32 = 0x7fffffff
+    var i: u8 = 0
+    while i < 6 {
+        var d: i32 = cast[i32] v - cube_levels[i]
+        if d < 0 {
+            d = -d
+        }
+        if d < best_dist {
+            best_dist = d
+            best = i
+        }
+        i += 1
+    }
+    return best
+}
+
+private func dist_squared(r1: i32, g1: i32, b1: i32, r2: i32, g2: i32,
+                          b2: i32) -> i32 {
+    let dr: i32 = r1 - r2
+    let dg: i32 = g1 - g2
+    let db: i32 = b1 - b2
+    return dr * dr + dg * dg + db * db
+}
+
+func color_quantize_256(c: Color) -> u8 {
+    let r: u8 = color_red(c)
+    let g: u8 = color_green(c)
+    let b: u8 = color_blue(c)
+    let ri: u8 = cube_index(r)
+    let gi: u8 = cube_index(g)
+    let bi: u8 = cube_index(b)
+    let cube_dist: i32 = dist_squared(r, g, b, cube_levels[ri],
+                                      cube_levels[gi], cube_levels[bi])
+    let avg: i32 = (cast[i32] r + cast[i32] g + cast[i32] b) / 3
+    var gi2: i32 = (avg - 8) / 10
+    if gi2 < 0 {
+        gi2 = 0
+    }
+    if gi2 > 23 {
+        gi2 = 23
+    }
+    let gray: i32 = 8 + gi2 * 10
+    let gray_dist: i32 = dist_squared(r, g, b, gray, gray, gray)
+    if gray_dist < cube_dist {
+        return cast[u8](232 + gi2)
+    }
+    return cast[u8](16 + 36 * ri + 6 * gi + bi)
+}
+
+private const ansi_16: Array[Color] = [
+    0x000000,
+    0x800000,
+    0x008000,
+    0x808000,
+    0x000080,
+    0x800080,
+    0x008080,
+    0xc0c0c0,
+    0x808080,
+    0xff0000,
+    0x00ff00,
+    0xffff00,
+    0x0000ff,
+    0xff00ff,
+    0x00ffff,
+    0xffffff,
+]
+
+func color_quantize_16(c: Color) -> u8 {
+    let r: u8 = color_red(c)
+    let g: u8 = color_green(c)
+    let b: u8 = color_blue(c)
+    var best: u8 = 0
+    var best_dist: i32 = 0x7fffffff
+    var i: u8 = 0
+    while i < 16 {
+        let d: i32 = dist_squared(r, g, b, color_red(ansi_16[i]),
+                                  color_green(ansi_16[i]),
+                                  color_blue(ansi_16[i]))
+        if d < best_dist {
+            best_dist = d
+            best = i
+        }
+        i += 1
+    }
+    return best
+}
+
+func color_for_depth(c: Color?, depth: Color_Depth) -> Color? {
+    if c == nil or depth == Color_Depth.mono {
+        return nil
+    }
+    return c
+}

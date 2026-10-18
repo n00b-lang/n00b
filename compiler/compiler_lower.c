@@ -4887,7 +4887,8 @@ n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
     if (flagset_symbol
         && ((source_flagset && is_integer_type(target))
             || (target_flagset && is_integer_type(from)))) {
-        const n00bb_flagset_info_t *info = parse_sym_binding(flagset_symbol,
+        const n00bb_flagset_info_t *info = parse_sym_binding(
+            canonical_symbol(flagset_symbol),
             CORE_STRING_STATIC("n00bb.flagset-info"));
         th_type *integer_type = source_flagset ? target : from;
         ir_machine_t integer = ir_machine_of(context->module, integer_type);

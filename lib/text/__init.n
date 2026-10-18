@@ -1,3 +1,8 @@
+import internal.color
+import internal.capability
+import internal.theme
+import internal.border
+
 package text {
     export builtin.index_extends
     export builtin.Text_Case
@@ -12,4 +17,8 @@ package text {
     export builtin.is_empty
     export builtin.intrinsic_tag_style
     export builtin.raw_repr_string
+    export internal.color
+    export internal.capability
+    export internal.theme
+    export internal.border
 }

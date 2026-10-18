@@ -1,0 +1,137 @@
+record Border_Theme {
+    horizontal:  char
+    vertical:    char
+    upper_left:  char
+    upper_right: char
+    lower_left:  char
+    lower_right: char
+    cross:       char
+    top_t:       char
+    bottom_t:    char
+    left_t:      char
+    right_t:     char
+}
+
+flagset Border_Set {
+    top, bottom, left, right, interior_h, interior_v,
+    sides = left + right,
+    all = top + bottom + left + right + interior_h + interior_v,
+    none = nil
+}
+
+public const border_plain: Border_Theme = (
+    horizontal  = cast[char] 0x2500,
+    vertical    = cast[char] 0x2502,
+    upper_left  = cast[char] 0x250c,
+    upper_right = cast[char] 0x2510,
+    lower_left  = cast[char] 0x2514,
+    lower_right = cast[char] 0x2518,
+    cross       = cast[char] 0x253c,
+    top_t       = cast[char] 0x252c,
+    bottom_t    = cast[char] 0x2534,
+    left_t      = cast[char] 0x251c,
+    right_t     = cast[char] 0x2524)
+
+public const border_bold: Border_Theme = (
+    horizontal  = cast[char] 0x2501,
+    vertical    = cast[char] 0x2503,
+    upper_left  = cast[char] 0x250f,
+    upper_right = cast[char] 0x2513,
+    lower_left  = cast[char] 0x2517,
+    lower_right = cast[char] 0x251b,
+    cross       = cast[char] 0x254b,
+    top_t       = cast[char] 0x2533,
+    bottom_t    = cast[char] 0x253b,
+    left_t      = cast[char] 0x2523,
+    right_t     = cast[char] 0x252b)
+
+public const border_double: Border_Theme = (
+    horizontal  = cast[char] 0x2550,
+    vertical    = cast[char] 0x2551,
+    upper_left  = cast[char] 0x2554,
+    upper_right = cast[char] 0x2557,
+    lower_left  = cast[char] 0x255a,
+    lower_right = cast[char] 0x255d,
+    cross       = cast[char] 0x256c,
+    top_t       = cast[char] 0x2566,
+    bottom_t    = cast[char] 0x2569,
+    left_t      = cast[char] 0x2560,
+    right_t     = cast[char] 0x2563)
+
+public const border_dash: Border_Theme = (
+    horizontal  = cast[char] 0x2504,
+    vertical    = cast[char] 0x2506,
+    upper_left  = cast[char] 0x250c,
+    upper_right = cast[char] 0x2510,
+    lower_left  = cast[char] 0x2514,
+    lower_right = cast[char] 0x2518,
+    cross       = cast[char] 0x253c,
+    top_t       = cast[char] 0x252c,
+    bottom_t    = cast[char] 0x2534,
+    left_t      = cast[char] 0x251c,
+    right_t     = cast[char] 0x2524)
+
+public const border_bold_dash: Border_Theme = (
+    horizontal  = cast[char] 0x2505,
+    vertical    = cast[char] 0x2507,
+    upper_left  = cast[char] 0x250f,
+    upper_right = cast[char] 0x2513,
+    lower_left  = cast[char] 0x2517,
+    lower_right = cast[char] 0x251b,
+    cross       = cast[char] 0x254b,
+    top_t       = cast[char] 0x2533,
+    bottom_t    = cast[char] 0x253b,
+    left_t      = cast[char] 0x2523,
+    right_t     = cast[char] 0x252b)
+
+public const border_dash2: Border_Theme = (
+    horizontal  = cast[char] 0x2508,
+    vertical    = cast[char] 0x250a,
+    upper_left  = cast[char] 0x250c,
+    upper_right = cast[char] 0x2510,
+    lower_left  = cast[char] 0x2514,
+    lower_right = cast[char] 0x2518,
+    cross       = cast[char] 0x253c,
+    top_t       = cast[char] 0x252c,
+    bottom_t    = cast[char] 0x2534,
+    left_t      = cast[char] 0x251c,
+    right_t     = cast[char] 0x2524)
+
+public const border_bold_dash2: Border_Theme = (
+    horizontal  = cast[char] 0x2509,
+    vertical    = cast[char] 0x250b,
+    upper_left  = cast[char] 0x250f,
+    upper_right = cast[char] 0x2513,
+    lower_left  = cast[char] 0x2517,
+    lower_right = cast[char] 0x251b,
+    cross       = cast[char] 0x254b,
+    top_t       = cast[char] 0x2533,
+    bottom_t    = cast[char] 0x253b,
+    left_t      = cast[char] 0x2523,
+    right_t     = cast[char] 0x252b)
+
+public const border_ascii: Border_Theme = (
+    horizontal  = cast[char] 0x002d,
+    vertical    = cast[char] 0x007c,
+    upper_left  = cast[char] 0x002f,
+    upper_right = cast[char] 0x005c,
+    lower_left  = cast[char] 0x005c,
+    lower_right = cast[char] 0x002f,
+    cross       = cast[char] 0x002b,
+    top_t       = cast[char] 0x002d,
+    bottom_t    = cast[char] 0x002d,
+    left_t      = cast[char] 0x007c,
+    right_t     = cast[char] 0x007c)
+
+public const border_rounded: Border_Theme = (
+    horizontal  = cast[char] 0x2500,
+    vertical    = cast[char] 0x2502,
+    upper_left  = cast[char] 0x256d,
+    upper_right = cast[char] 0x256e,
+    lower_left  = cast[char] 0x2570,
+    lower_right = cast[char] 0x256f,
+    cross       = cast[char] 0x253c,
+    top_t       = cast[char] 0x252c,
+    bottom_t    = cast[char] 0x2534,
+    left_t      = cast[char] 0x251c,
+    right_t     = cast[char] 0x2524)

@@ -1501,6 +1501,39 @@ resolve_prelude_value(parse_grammar_t *grammar,
             && parse_tree_mark_direct_symbol_reference(site->node));
 }
 
+static bool
+mark_flagset_operator_site(parse_grammar_t *grammar,
+                           core_translation_unit_t *unit,
+                           n00bb_tu_state_t *state,
+                           n00bb_link_use_site_t *site)
+{
+    if (!site->operator_dispatch
+        || !n00bb_flagset_operator_site(grammar, unit, state, site->node))
+        return false;
+    if (site->symbol) parse_sym_remove_use(site->symbol, site->node);
+    site->symbol = nullptr;
+    site->reference = nullptr;
+    site->dispatch_trait = (core_string_t){0};
+    site->dispatch_method = (core_string_t){0};
+    site->operator_dispatch = false;
+    site->intrinsic_operator = true;
+    return true;
+}
+
+void
+mark_resolved_flagset_operator_sites(parse_grammar_t *grammar,
+    core_list_t(core_translation_unit_ptr_t) *units)
+{
+    for (size_t i = 0; i < units->len; i++) {
+        core_translation_unit_t *unit = units->data[i];
+        n00bb_tu_state_t *state = tu_state(unit);
+        if (!state || !state->annotations) continue;
+        for (size_t s = 0; s < state->link_use_sites.len; s++)
+            mark_flagset_operator_site(grammar, unit, state,
+                                       &state->link_use_sites.data[s]);
+    }
+}
+
 bool
 resolve_imported_module_symbols(parse_grammar_t *grammar,
     core_list_t(core_translation_unit_ptr_t) *units)
@@ -1515,19 +1548,8 @@ resolve_imported_module_symbols(parse_grammar_t *grammar,
         for (size_t s = 0; s < state->link_use_sites.len; s++) {
             n00bb_link_use_site_t *site = &state->link_use_sites.data[s];
             if (site->intrinsic_operator) continue;
-            if (site->operator_dispatch
-                && n00bb_flagset_operator_site(grammar, unit, state,
-                                                site->node)) {
-                if (site->symbol) parse_sym_remove_use(site->symbol,
-                                                       site->node);
-                site->symbol = nullptr;
-                site->reference = nullptr;
-                site->dispatch_trait = (core_string_t){0};
-                site->dispatch_method = (core_string_t){0};
-                site->operator_dispatch = false;
-                site->intrinsic_operator = true;
+            if (mark_flagset_operator_site(grammar, unit, state, site))
                 continue;
-            }
             if (site->variant_case_candidate) continue;
             if (site->constructor_call) continue;
             if (site->trait_reference && !site->symbol) {
