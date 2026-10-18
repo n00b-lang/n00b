@@ -519,26 +519,6 @@ n00bb_method_requirement_fit(parse_grammar_t *grammar, th_ctx *types,
     return N00BB_REQUIREMENT_FITS_EXACTLY;
 }
 
-static bool
-method_obligation_has_keywords(th_type *receiver, core_string_t method_name)
-{
-    receiver = th_resolve(receiver);
-    for (size_t i = 0; receiver && i < th_var_constraint_count(receiver);
-         i++) {
-        th_constraint constraint;
-        if (!th_var_constraint_at(receiver, i, &constraint)
-            || constraint.kind != TH_CON_METHOD
-            || !constraint.method.name
-            || strlen(constraint.method.name) != method_name.u8_bytes
-            || memcmp(constraint.method.name, method_name.data,
-                      method_name.u8_bytes)) continue;
-        th_type *call = th_resolve(constraint.method.call);
-        if (call && th_kind_of(call) == TH_FUNCTION && th_func_nkw(call))
-            return true;
-    }
-    return false;
-}
-
 bool
 n00bb_bind_method_keywords(parse_grammar_t *grammar, th_ctx *types,
                            th_type *receiver, core_string_t method_name,
@@ -857,10 +837,7 @@ deferred_trait_method_requirement(parse_grammar_t *grammar,
     if (ambiguous) found = nullptr;
     core_free(requirements);
     core_free(method_text);
-    if (!found && named == 1
-        && method_obligation_has_keywords(receiver_type, method_name))
-        return sole;
-    return found;
+    return found ? found : named == 1 ? sole : nullptr;
 }
 
 
@@ -1374,6 +1351,9 @@ resolve_constructor_use_site(parse_grammar_t *grammar, core_link_unit_t *link,
     th_type *failed_constraint_type = nullptr;
     size_t constraint_failures = 0;
     parse_tree_t *string_argument = nullptr;
+    parse_sym_entry_t *sole_pattern = nullptr;
+    th_type *sole_signature = nullptr;
+    size_t pattern_matches = 0;
     for (size_t i = 0; i < analysis->units.len; i++) {
         core_translation_unit_t *candidate_unit = analysis->units.data[i];
         n00bb_tu_state_t *candidate_state = tu_state(candidate_unit);
@@ -1398,6 +1378,10 @@ resolve_constructor_use_site(parse_grammar_t *grammar, core_link_unit_t *link,
                         receiver->type, target)) continue;
                 th_type *argument_signature =
                     constructor_signature_instance(state->types, symbol);
+                pattern_matches++;
+                sole_pattern = symbol;
+                sole_signature = constructor_signature_instance(state->types,
+                                                                symbol);
                 size_t errors_before = th_error_count(state->types);
                 if (!argument_signature
                     || !constructor_arguments_match(grammar, unit,
@@ -1441,6 +1425,17 @@ resolve_constructor_use_site(parse_grammar_t *grammar, core_link_unit_t *link,
             parse_tree_set_resolution_symbol(site->node, flagset_symbol);
             core_list_free(candidates);
             return true;
+        }
+        core_list_t(n00bb_call_binding_t) bindings =
+            core_list_new(n00bb_call_binding_t);
+        bool binds = pattern_matches != 1
+            || n00bb_bind_call_arguments(grammar, unit, sole_pattern,
+                sole_signature, call_args, site->init_call ? 0 : 1,
+                site->node, &bindings);
+        core_list_free(bindings);
+        if (!binds) {
+            core_list_free(candidates);
+            return false;
         }
         if (string_argument) {
             core_diagnostics_report_at(

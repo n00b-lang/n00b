@@ -1,0 +1,11 @@
+context Label(s: string) {
+    enter() {
+    }
+    ensure() {
+    }
+}
+
+with Label("a", "b") {
+}
+with Label() {
+}

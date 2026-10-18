@@ -3129,8 +3129,12 @@ function_parameter_info(parse_grammar_t *grammar, parse_sym_entry_t *symbol,
         return true;
     }
     uint8_t archived_mode = 0;
-    if (!function_interface_parameter(symbol, index, name, name_size,
-                                      flags, &archived_mode)) return false;
+    bool archived = context_symbol(grammar, symbol)
+        ? context_interface_parameter(symbol, index, name, name_size, flags,
+                                      &archived_mode)
+        : function_interface_parameter(symbol, index, name, name_size,
+                                       flags, &archived_mode);
+    if (!archived) return false;
     if (formal_out) *formal_out = nullptr;
     if (mode) *mode = (th_mode)archived_mode;
     return true;

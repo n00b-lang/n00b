@@ -804,6 +804,48 @@ foreach rejected : [
     )
 endforeach
 
+foreach rejected : [
+    ['free', [
+        'N00BB-T0039]: call passes more arguments than its function has parameters',
+        'call_arity_free_rejected.n:5:17',
+        'N00BB-T0040]: call omits the required parameter \'x\'',
+        'call_arity_free_rejected.n:6:9']],
+    ['method', [
+        'N00BB-T0039]: call passes more arguments than its function has parameters',
+        'call_arity_method_rejected.n:14:20',
+        'N00BB-T0040]: call omits the required parameter \'by\'',
+        'call_arity_method_rejected.n:15:9']],
+    ['generic', [
+        'N00BB-T0039]: call passes more arguments than its function has parameters',
+        'call_arity_generic_rejected.n:14:26',
+        'N00BB-T0040]: call omits the required parameter \'by\'',
+        'call_arity_generic_rejected.n:18:12']],
+    ['constructor', [
+        'N00BB-T0039]: call passes more arguments than its function has parameters',
+        'call_arity_constructor_rejected.n:9:35']],
+    ['constructor_missing', [
+        'N00BB-T0040]: call omits the required parameter \'count\'',
+        'call_arity_constructor_missing_rejected.n:9:19']],
+    ['context', [
+        'N00BB-T0039]: call passes more arguments than its function has parameters',
+        'call_arity_context_rejected.n:8:17',
+        'N00BB-T0040]: call omits the required parameter \'s\'',
+        'call_arity_context_rejected.n:10:6']],
+]
+    test(
+        'call-arity-' + rejected[0].replace('_', '-') + '-rejected',
+        find_program('sh'),
+        args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+               n00bb_exe.full_path(),
+               meson.current_source_dir() / 'tests' / 'programs'
+                   / 'features'
+                   / 'call_arity_' + rejected[0] + '_rejected.n']
+            + rejected[1],
+        timeout: 120,
+        suite: 'slow',
+    )
+endforeach
+
 foreach feature : ['fallible_without_result', 'try_error_binding',
                    'builtin_type_record_literal', 'record_literal_nil_option',
                    'option_literal_argument', 'record_literal_return',
