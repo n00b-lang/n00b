@@ -1,19 +1,100 @@
 import internal.abi
+import internal.clock
+import internal.gc.alloc
 import internal.gc.core
 import internal.gc.heap
 import internal.gc.mark
 import internal.gc.sync
 import internal.gc.handshake
+import internal.threads
+
+const thread_idle:    u32  = 0
+const thread_running: u32  = 1
+const thread_closed:  u32  = 2
+const idle_linger_ns: u64  = 50_000_000
+const stall_wait_ns:  u64  = 10_000_000
+
+thread var in_finalizers: bool = false
 
 func notify(heap: Ref[internal.gc.core.Heap]) {
-    if !__atomic_exchange(ref heap.fin_notify, false) {
+    if !__atomic_load(ref heap.fin_notify) or
+        !__atomic_exchange(ref heap.fin_notify, false) {
         return
     }
-    let ready: Ref[(Ref[byte]?) -> nil]? = heap.cfg.finalizers_ready
-    if ready != nil {
-        let handler: Ref[(Ref[byte]?) -> nil] = ready.get()
-        handler.call(heap.cfg.telemetry_user)
+    wake(heap)
+}
+
+func wake(heap: Ref[internal.gc.core.Heap]) {
+    internal.gc.sync.event_signal(ref heap.fin_wake)
+    if __atomic_load(ref heap.fin_thread) != thread_idle or
+        __atomic_load(ref heap.shutdown) or
+        !__atomic_compare_exchange(ref heap.fin_thread, thread_idle, thread_running) {
+        return
     }
+    __atomic_fetch_add(ref heap.fin_live, 1)
+    if !internal.threads.thread_start(ref thread_main, unsafe_cast[Ref[byte]] heap) {
+        __atomic_fetch_sub(ref heap.fin_live, 1)
+        __atomic_store(ref heap.fin_thread, thread_idle)
+    }
+}
+
+func thread_main(argument: Ref[byte]) -> Ref[byte] {
+    let heap: Ref[internal.gc.core.Heap] = unsafe_cast[Ref[internal.gc.core.Heap]] argument
+    while true {
+        while !__atomic_load(ref heap.shutdown) and
+            run(heap, internal.gc.core.final_batch) != 0 {
+        }
+        if !linger(heap) and retire(heap) {
+            break
+        }
+    }
+    internal.gc.alloc.detach_runtime_mutator()
+    __atomic_fetch_sub(ref heap.fin_live, 1)
+    return argument
+}
+
+func linger(heap: Ref[internal.gc.core.Heap]) -> bool {
+    let deadline: u64  = internal.clock.now_ns() + idle_linger_ns
+    var found:    bool = false
+    internal.gc.alloc.attached_enter_blocking()
+    while true {
+        let seq: u32 = internal.gc.sync.event_enter(ref heap.fin_wake)
+        if __atomic_load(ref heap.shutdown) or internal.clock.now_ns() >= deadline {
+            internal.gc.sync.event_leave(ref heap.fin_wake)
+            break
+        }
+        if pending(heap) != 0 {
+            found = true
+            internal.gc.sync.event_leave(ref heap.fin_wake)
+            break
+        }
+        internal.gc.sync.event_sleep(ref heap.fin_wake, seq)
+        internal.gc.sync.event_leave(ref heap.fin_wake)
+    }
+    internal.gc.alloc.attached_leave_blocking()
+    return found
+}
+
+func retire(heap: Ref[internal.gc.core.Heap]) -> bool {
+    internal.gc.sync.ticket_lock(ref heap.fin)
+    let done: bool = heap.finq_n == 0 or __atomic_load(ref heap.shutdown)
+    if done {
+        __atomic_store(ref heap.fin_thread, thread_idle)
+    }
+    internal.gc.sync.ticket_unlock(ref heap.fin)
+    return done
+}
+
+func stop_thread(heap: Ref[internal.gc.core.Heap]) {
+    internal.gc.alloc.attached_enter_blocking()
+    while !__atomic_compare_exchange(ref heap.fin_thread, thread_idle, thread_closed) {
+        internal.gc.sync.event_signal(ref heap.fin_wake)
+        internal.threads.thread_yield()
+    }
+    while __atomic_load(ref heap.fin_live) != 0 {
+        internal.threads.thread_yield()
+    }
+    internal.gc.alloc.attached_leave_blocking()
 }
 
 func list_push(heap: Ref[internal.gc.core.Heap], block: Ref[internal.gc.core.Block_Metadata]) {
@@ -68,9 +149,6 @@ func enqueue(heap: Ref[internal.gc.core.Heap], payload: Ref[byte]) {
     if storage != nil {
         final_entry_at(storage.get(), heap.finq_n).payload = payload
         heap.finq_n += 1
-        if heap.finq_n == 1 and heap.cfg.finalizers_ready != nil {
-            __atomic_store(ref heap.fin_notify, true)
-        }
         return
     }
     require false
@@ -152,6 +230,9 @@ func find_dead_locked(marker: Ref[internal.gc.core.Marker]) {
             index += 1
         }
     }
+    if heap.finq_n != first {
+        __atomic_store(ref heap.fin_notify, true)
+    }
     if locked {
         internal.gc.sync.ticket_unlock(ref heap.fin)
     }
@@ -192,8 +273,10 @@ func mark_locked(marker: Ref[internal.gc.core.Marker]) {
 }
 
 func run(heap: Ref[internal.gc.core.Heap], maximum: uint) -> uint {
-    var batch: internal.gc.core.Final_Batch
-    var done:  uint = 0
+    var batch:  internal.gc.core.Final_Batch
+    var done:   uint = 0
+    let nested: bool = in_finalizers
+    in_finalizers = true
     while maximum == 0 or done < maximum {
         var count: uint = internal.gc.core.final_batch
         if maximum != 0 and maximum - done < count {
@@ -259,8 +342,10 @@ func run(heap: Ref[internal.gc.core.Heap], maximum: uint) -> uint {
         heap.running_n -= count
         heap.finalizers_run += cast[u64]count
         internal.gc.sync.ticket_unlock(ref heap.fin)
+        internal.gc.sync.event_signal(ref heap.fin_progress)
         done += count
     }
+    in_finalizers = nested
     return done
 }
 
@@ -271,56 +356,40 @@ func pending(heap: Ref[internal.gc.core.Heap]) -> uint {
     return count
 }
 
+func completed(heap: Ref[internal.gc.core.Heap]) -> uint {
+    internal.gc.sync.ticket_lock(ref heap.fin)
+    let count: uint = heap.finalizers_run
+    internal.gc.sync.ticket_unlock(ref heap.fin)
+    return count
+}
+
 func backpressure(mutator: Ref[internal.gc.core.Mutator]) {
     let heap:  Ref[internal.gc.core.Heap] = mutator.heap
     let limit: uint                 = heap.cfg.finalizer_backlog_limit
-    if limit == 0 or mutator.in_finalizers or pending(heap) <= limit {
+    if limit == 0 or in_finalizers or pending(heap) <= limit {
+        return
+    }
+    wake(heap)
+    let start: uint = completed(heap)
+    if __atomic_load(ref heap.fin_stalled) == start + 1 {
         return
     }
 
-    let assist:  bool = heap.cfg.finalizer_assist
-    let maximum: uint = ~cast[uint](0)
-    var target:  uint = limit / 2
-    if assist {
-        target = maximum
-        if limit <= maximum / 2 {
-            target = 2 * limit
-        }
-    }
-
-    if !assist {
-        let ready: Ref[(Ref[byte]?) -> nil]? = heap.cfg.finalizers_ready
-        if ready != nil {
-            let handler: Ref[(Ref[byte]?) -> nil] = ready.get()
-            handler.call(heap.cfg.telemetry_user)
-        }
-    }
-
+    let deadline: u64 = internal.clock.now_ns() + stall_wait_ns
+    internal.gc.handshake.enter_blocking(mutator)
     while true {
-        if assist and !__atomic_exchange(ref heap.fin_assisting, true) {
-            mutator.in_finalizers = true
-            while pending(heap) > limit / 2 and run(heap, internal.gc.core.final_batch) != 0 {
-            }
-            mutator.in_finalizers = false
-            __atomic_store(ref heap.fin_assisting, false)
-            internal.gc.sync.event_signal(ref heap.fin_progress)
-            return
-        }
-        if pending(heap) <= target {
-            return
-        }
-
-        internal.gc.handshake.enter_blocking(mutator)
-        while true {
-            let seq: u32 = internal.gc.sync.event_enter(ref heap.fin_progress)
-            if pending(heap) <= target or
-                (assist and !__atomic_load(ref heap.fin_assisting)) {
-                internal.gc.sync.event_leave(ref heap.fin_progress)
-                break
-            }
-            internal.gc.sync.event_sleep(ref heap.fin_progress, seq)
+        let seq: u32 = internal.gc.sync.event_enter(ref heap.fin_progress)
+        if pending(heap) <= limit or completed(heap) != start {
             internal.gc.sync.event_leave(ref heap.fin_progress)
+            break
         }
-        internal.gc.handshake.leave_blocking(mutator)
+        if internal.clock.now_ns() >= deadline {
+            __atomic_store(ref heap.fin_stalled, start + 1)
+            internal.gc.sync.event_leave(ref heap.fin_progress)
+            break
+        }
+        internal.gc.sync.event_sleep(ref heap.fin_progress, seq)
+        internal.gc.sync.event_leave(ref heap.fin_progress)
     }
+    internal.gc.handshake.leave_blocking(mutator)
 }

@@ -589,6 +589,28 @@ func leave_blocking_runtime() {
     }
 }
 
+func attached_enter_blocking() {
+    let mutator: Ref[internal.gc.core.Mutator]? = runtime_mutator
+    if mutator != nil {
+        internal.gc.handshake.enter_blocking(mutator.get())
+    }
+}
+
+func attached_leave_blocking() {
+    let mutator: Ref[internal.gc.core.Mutator]? = runtime_mutator
+    if mutator != nil {
+        internal.gc.handshake.leave_blocking(mutator.get())
+    }
+}
+
+func detach_runtime_mutator() {
+    let mutator: Ref[internal.gc.core.Mutator]? = runtime_mutator
+    if mutator != nil {
+        internal.gc.mutator.destroy(mutator.get())
+        runtime_mutator = nil
+    }
+}
+
 func native_root_depth() -> uint {
     let mutator: Ref[internal.gc.core.Mutator]? = active_mutator()
     require mutator != nil

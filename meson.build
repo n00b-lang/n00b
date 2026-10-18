@@ -815,6 +815,26 @@ test(
 )
 
 test(
+    'buffer-finalizer-borrow', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'buffer'
+               / 'buffer_finalizer_borrow.n'],
+    timeout: 180,
+    suite: 'slow',
+)
+
+test(
+    'buffer-finalizer-borrow-release', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'buffer'
+               / 'buffer_finalizer_borrow.n'],
+    timeout: 180,
+    suite: 'slow',
+)
+
+test(
     'coercion-borrow', find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'coercion_borrow.sh',
            n00bb_exe.full_path(),
