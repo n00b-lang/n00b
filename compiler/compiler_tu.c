@@ -7757,6 +7757,62 @@ n00bb_atomic_member_lvalue_root(parse_grammar_t *grammar,
     return symbol && n00bb_atomic_element_type(symbol->type) ? symbol : nullptr;
 }
 
+bool
+n00bb_reference_target(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    for (parse_tree_t *at = node; at;
+         at = core_tree_node_value(at).parent) {
+        if (!nt_is(grammar, at, "unary-expr")) continue;
+        const parse_rule_t *rule = parse_tree_rule(grammar, at);
+        parse_annotation_t *operator = rule
+            ? parse_rule_find_annot(grammar, rule, PARSE_ANNOT_OPERATOR)
+            : nullptr;
+        if (!operator || !core_string_eq(operator->op_kind,
+                CORE_STRING_STATIC("ref"))) continue;
+        for (size_t i = 0; i < core_tree_num_children(at); i++) {
+            parse_tree_t *operand = core_tree_child(at, i);
+            if (!node_is_within(node, operand)) continue;
+            for (parse_tree_t *path = node; path && path != operand;
+                 path = core_tree_node_value(path).parent) {
+                parse_tree_t *parent = core_tree_node_value(path).parent;
+                core_string_t trait = {0}, method = {0};
+                if (parent && index_dispatch_for_node(grammar, parent,
+                                                       &trait, &method)) {
+                    parse_tree_t *receiver = core_tree_num_children(parent)
+                        ? core_tree_child(parent, 0) : nullptr;
+                    if (!node_is_within(node, receiver)) return false;
+                }
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+parse_sym_entry_t *
+n00bb_atomic_load_symbol(parse_grammar_t *grammar,
+                         core_translation_unit_t *unit, parse_tree_t *node)
+{
+    parse_sym_entry_t *symbol = nt_is(grammar, node, "primary")
+        ? attached_symbol(grammar, unit, node) : nullptr;
+    return symbol && (symbol->kind == PARSE_SYM_VARIABLE
+                      || symbol->kind == PARSE_SYM_PARAM)
+        && n00bb_atomic_element_type(symbol->type)
+        && !n00bb_reference_target(grammar, node)
+        && !n00bb_assignment_target(grammar, node, nullptr)
+        ? symbol : nullptr;
+}
+
+void
+n00bb_apply_atomic_load(parse_grammar_t *grammar,
+                        core_translation_unit_t *unit, parse_tree_t *node)
+{
+    parse_sym_entry_t *symbol = n00bb_atomic_load_symbol(grammar, unit, node);
+    if (symbol)
+        core_tree_node_value(node).type =
+            n00bb_atomic_element_type(symbol->type);
+}
+
 parse_sym_entry_t *
 n00bb_member_chain_root(parse_grammar_t *grammar,
                         core_translation_unit_t *unit, parse_tree_t *node)

@@ -289,6 +289,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 link_source_location(node));
             return;
         }
+        n00bb_apply_atomic_load(grammar, unit, node);
         if (!bind_builtin_reference(grammar, state, node)) {
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit), unit,

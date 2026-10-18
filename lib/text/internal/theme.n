@@ -493,7 +493,7 @@ private func themes_spin_wait(modify attempt: u32) {
 private func themes_read_lock() {
     var attempt: u32 = 0
     while true {
-        let seen: u32 = __atomic_load(ref themes_lock)
+        let seen: u32 = themes_lock
         if seen & themes_writer_bit == 0 and
             __atomic_compare_exchange(ref themes_lock, seen, seen + 1) {
             return
@@ -514,7 +514,7 @@ private func themes_write_lock() {
 }
 
 private func themes_write_unlock() {
-    __atomic_store(ref themes_lock, 0)
+    themes_lock = 0
 }
 
 private func name_eq(a: string, b: string) -> bool {
@@ -557,7 +557,7 @@ func theme_lookup(name: string) -> Ref[Theme]? {
 }
 
 func theme_current() -> Ref[Theme] {
-    let pinned: Ref[Theme]? = __atomic_load(ref current)
+    let pinned: Ref[Theme]? = current
     if pinned != nil {
         return pinned.get()
     }
@@ -573,7 +573,7 @@ func theme_set_current(name: string) -> bool {
     if hit == nil {
         return false
     }
-    __atomic_store(ref current, hit.get())
+    current = hit.get()
     return true
 }
 

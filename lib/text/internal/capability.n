@@ -77,19 +77,19 @@ private func compute_env_ceiling() -> internal.color.Color_Depth {
 }
 
 func terminal_color_depth(fd: int) -> internal.color.Color_Depth {
-    let forced: u8 = __atomic_load(ref forced_depth)
+    let forced: u8 = forced_depth
     if forced != forced_depth_unset {
         return cast[internal.color.Color_Depth] forced
     }
     var ceiling: internal.color.Color_Depth = internal.color.Color_Depth.mono
-    if __atomic_load(ref env_scanned) {
-        let scanned: u8 = __atomic_load(ref env_ceiling)
+    if env_scanned {
+        let scanned: u8 = env_ceiling
         ceiling = cast[internal.color.Color_Depth] scanned
     }
     else {
         ceiling = compute_env_ceiling()
-        __atomic_store(ref env_ceiling, cast[u8] ceiling)
-        __atomic_store(ref env_scanned, true)
+        env_ceiling = cast[u8] ceiling
+        env_scanned = true
     }
     if ceiling == internal.color.Color_Depth.mono {
         return internal.color.Color_Depth.mono
@@ -134,7 +134,7 @@ private func env_columns() -> u16? {
 }
 
 func terminal_width(fd: int) -> u16? {
-    let forced: u32 = __atomic_load(ref forced_width)
+    let forced: u32 = forced_width
     if forced & forced_width_set != 0 {
         return cast[u16](forced & 0xffff)
     }
@@ -155,9 +155,9 @@ func terminal_force_color_depth(depth: internal.color.Color_Depth?) {
     if depth != nil {
         encoded = cast[u8] depth.get()
     }
-    __atomic_store(ref forced_depth, encoded)
+    forced_depth = encoded
     if depth == nil {
-        __atomic_store(ref env_scanned, false)
+        env_scanned = false
     }
 }
 
@@ -166,5 +166,5 @@ func terminal_force_width(width: u16?) {
     if width != nil {
         encoded = forced_width_set | cast[u32] width.get()
     }
-    __atomic_store(ref forced_width, encoded)
+    forced_width = encoded
 }

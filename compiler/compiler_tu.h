@@ -274,6 +274,13 @@ bool n00bb_builtin_reference_function(parse_sym_entry_t *symbol);
 parse_sym_entry_t *n00bb_atomic_member_lvalue_root(
     parse_grammar_t *grammar, core_translation_unit_t *unit,
     parse_tree_t *target);
+bool n00bb_reference_target(parse_grammar_t *grammar, parse_tree_t *node);
+parse_sym_entry_t *n00bb_atomic_load_symbol(parse_grammar_t *grammar,
+                                            core_translation_unit_t *unit,
+                                            parse_tree_t *node);
+void n00bb_apply_atomic_load(parse_grammar_t *grammar,
+                             core_translation_unit_t *unit,
+                             parse_tree_t *node);
 parse_sym_entry_t *n00bb_member_chain_root(parse_grammar_t *grammar,
                                            core_translation_unit_t *unit,
                                            parse_tree_t *node);

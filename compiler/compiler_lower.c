@@ -258,8 +258,6 @@ static bool n00bb_failure_channel_accepts(ir_lower_context_t *context,
                                            th_type *failure);
 static bool n00bb_reject_runtime_initializer_failure(
     ir_lower_context_t *context, ir_span_t span);
-static bool n00bb_reference_target(parse_grammar_t *grammar,
-                                   parse_tree_t *node);
 
 
 static bool n00bb_register_callback_representation(ir_module_t *module,
@@ -272,8 +270,6 @@ static bool n00bb_static_value_to_ir_initializer(
 
 static bool n00bb_simple_assignment_field_target(
     parse_grammar_t *grammar, parse_tree_t *node);
-static bool n00bb_reference_target(parse_grammar_t *grammar,
-                                   parse_tree_t *node);
 static ir_value_t *n00bb_select_trait_method(
     ir_lower_context_t *context, parse_grammar_t *grammar,
     core_translation_unit_t *owner, parse_sym_entry_t *requirement,
@@ -779,32 +775,14 @@ n00bb_lower_atomic_reference(ir_lower_context_t *context,
     if (!entering) return true;
     n00bb_lower_context_t *lower = context->user;
     parse_sym_entry_t *symbol = lower
-        ? attached_symbol(visit->grammar, lower->unit, visit->node) : nullptr;
-    if (!symbol || (symbol->kind != PARSE_SYM_VARIABLE
-                    && symbol->kind != PARSE_SYM_PARAM)
-        || !n00bb_atomic_element_type(symbol->type)) return true;
-    if (n00bb_reference_target(visit->grammar, visit->node)) return true;
-    if (n00bb_assignment_target(visit->grammar, visit->node, nullptr))
-        return true;
+        ? n00bb_atomic_load_symbol(visit->grammar, lower->unit, visit->node)
+        : nullptr;
+    if (!symbol) return true;
     ir_span_t span = lower_span_for_tree(context, visit->node);
     ir_value_t *address = n00bb_atomic_binding_address(context, symbol, span);
     ir_value_t *value = address
         ? n00bb_emit_indirect_read(context, address, symbol->type, span)
         : nullptr;
-    th_type *contextual_type = core_tree_is_leaf(visit->node) ? nullptr
-        : core_tree_node_value(visit->node).type;
-    for (parse_tree_t *parent = core_tree_node_value(visit->node).parent;
-         parent; parent = core_tree_node_value(parent).parent) {
-        if (!nt_is(visit->grammar, parent, "expression")
-            || core_tree_is_leaf(parent)) continue;
-        th_type *parent_type = core_tree_node_value(parent).type;
-        if (parent_type) {
-            contextual_type = parent_type;
-            break;
-        }
-    }
-    if (value && n00bb_atomic_element_type(contextual_type))
-        value = n00bb_emit_atomic_wrap(context, value, contextual_type, span);
     if (!value || !ir_lower_set_node_value(context, visit->node, value)) {
         lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
             "atomic binding has no addressable storage for an atomic load");
@@ -14389,38 +14367,6 @@ n00bb_simple_assignment_field_target(parse_grammar_t *grammar,
             ? parse_tree_resolve_child_ref(grammar, parent,
                                            assign->name_ref) : nullptr;
         return member_access_node(grammar, target) == node;
-    }
-    return false;
-}
-
-static bool
-n00bb_reference_target(parse_grammar_t *grammar, parse_tree_t *node)
-{
-    for (parse_tree_t *at = node; at;
-         at = core_tree_node_value(at).parent) {
-        if (!nt_is(grammar, at, "unary-expr")) continue;
-        const parse_rule_t *rule = parse_tree_rule(grammar, at);
-        parse_annotation_t *operator = rule
-            ? parse_rule_find_annot(grammar, rule, PARSE_ANNOT_OPERATOR)
-            : nullptr;
-        if (!operator || !core_string_eq(operator->op_kind,
-                CORE_STRING_STATIC("ref"))) continue;
-        for (size_t i = 0; i < core_tree_num_children(at); i++) {
-            parse_tree_t *operand = core_tree_child(at, i);
-            if (!node_is_within(node, operand)) continue;
-            for (parse_tree_t *path = node; path && path != operand;
-                 path = core_tree_node_value(path).parent) {
-                parse_tree_t *parent = core_tree_node_value(path).parent;
-                core_string_t trait = {0}, method = {0};
-                if (parent && index_dispatch_for_node(grammar, parent,
-                                                       &trait, &method)) {
-                    parse_tree_t *receiver = core_tree_num_children(parent)
-                        ? core_tree_child(parent, 0) : nullptr;
-                    if (!node_is_within(node, receiver)) return false;
-                }
-            }
-            return true;
-        }
     }
     return false;
 }
