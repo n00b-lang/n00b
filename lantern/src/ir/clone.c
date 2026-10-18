@@ -6,17 +6,14 @@
 typedef struct {
     ir_func_t *source;
     ir_func_t *copy;
-    const th_type *const *from;
-    th_type *const *to;
-    size_t count;
+    th_type_cloner_t *cloner;
     const char **failure;
 } clone_t;
 
 static th_type *clone_type(clone_t *c, th_type *type)
 {
     if (!type) return nullptr;
-    th_type *result = th_type_clone_replacing(ir_ctx_types(c->copy->owner->ctx),
-        type, c->from, c->to, c->count);
+    th_type *result = th_type_cloner_clone(c->cloner, type);
     if (!result) {
         if (c->failure) *c->failure = "type substitution";
         return nullptr;
@@ -26,9 +23,7 @@ static th_type *clone_type(clone_t *c, th_type *type)
         || result == type) return result;
     th_type *definition = ir_type_definition(c->source->owner, type);
     if (!definition) return result;
-    th_type *bound = th_type_clone_replacing(
-        ir_ctx_types(c->copy->owner->ctx), definition,
-        c->from, c->to, c->count);
+    th_type *bound = th_type_cloner_clone(c->cloner, definition);
     if (!bound) {
         if (c->failure) *c->failure = "record definition substitution";
         return nullptr;
@@ -187,20 +182,13 @@ ir_func_t *ir_func_clone_replacing(ir_func_t *source, const char *name,
                               from, to, count, failure);
 }
 
-ir_func_t *ir_func_clone_into(ir_func_t *source, ir_module_t *module,
-                              const char *name, const th_type *const *from,
-                              th_type *const *to, size_t count,
-                              const char **failure)
+static ir_func_t *clone_function(ir_func_t *source, ir_module_t *module,
+                                 const char *name, th_type_cloner_t *cloner,
+                                 const char **failure)
 {
-    if (failure) *failure = "invalid clone request";
-    if (!source || !module || module->ctx != source->owner->ctx || !name
-        || !*name || (count && (!from || !to)))
-        return nullptr;
-    clone_t c = {.source = source, .from = from, .to = to,
-                 .count = count, .failure = failure};
+    clone_t c = {.source = source, .cloner = cloner, .failure = failure};
     if (failure) *failure = "function signature";
-    th_type *signature = th_type_clone_replacing(
-        ir_ctx_types(source->owner->ctx), source->type, from, to, count);
+    th_type *signature = th_type_cloner_clone(cloner, source->type);
     if (!signature) return nullptr;
     c.copy = ir_func_add(module, name, signature, IR_LINK_INTERNAL);
     if (!c.copy) return nullptr;
@@ -317,4 +305,21 @@ ir_func_t *ir_func_clone_into(ir_func_t *source, ir_module_t *module,
     }
     if (failure) *failure = nullptr;
     return c.copy;
+}
+
+ir_func_t *ir_func_clone_into(ir_func_t *source, ir_module_t *module,
+                              const char *name, const th_type *const *from,
+                              th_type *const *to, size_t count,
+                              const char **failure)
+{
+    if (failure) *failure = "invalid clone request";
+    if (!source || !module || module->ctx != source->owner->ctx || !name
+        || !*name || (count && (!from || !to)))
+        return nullptr;
+    th_type_cloner_t *cloner = th_type_cloner_new(
+        ir_ctx_types(source->owner->ctx), from, to, count);
+    if (!cloner) return nullptr;
+    ir_func_t *copy = clone_function(source, module, name, cloner, failure);
+    th_type_cloner_free(cloner);
+    return copy;
 }

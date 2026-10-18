@@ -237,6 +237,13 @@ uint64_t th_type_graph_revision(th_type *const *roots, size_t count);
 /* Deep-copy a type graph into another type context, preserving graph sharing. */
 th_type *th_type_clone(th_ctx *destination, const th_type *source);
 th_type *th_type_clone_fresh(th_ctx *destination, const th_type *source);
+typedef struct th_type_cloner th_type_cloner_t;
+th_type_cloner_t *th_type_cloner_new(th_ctx *destination,
+                                     const th_type *const *from,
+                                     th_type *const *to, size_t count);
+th_type *th_type_cloner_clone(th_type_cloner_t *cloner,
+                              const th_type *source);
+void th_type_cloner_free(th_type_cloner_t *cloner);
 /* Clone related roots with one graph map, retaining shared variables and
  * constraint references between roots. */
 bool th_type_clone_many(th_ctx *destination, const th_type *const *sources,

@@ -394,6 +394,58 @@ th_type_clone_many(th_ctx *destination, const th_type *const *sources,
     return ok;
 }
 
+struct th_type_cloner {
+    th_ctx *destination;
+    core_list_t(th_clone_entry_t) seen;
+};
+
+th_type_cloner_t *
+th_type_cloner_new(th_ctx *destination, const th_type *const *from,
+                   th_type *const *to, size_t count)
+{
+    if (!destination || (count && (!from || !to))) return nullptr;
+    th_type_cloner_t *cloner = core_alloc(th_type_cloner_t);
+    if (!cloner) return nullptr;
+    cloner->destination = destination;
+    cloner->seen = core_list_new(th_clone_entry_t);
+    for (size_t i = 0; i < count; i++) {
+        bool duplicate = false;
+        for (size_t j = 0; j < i && from[i] && to[i]; j++) {
+            if (from[i] != from[j]) continue;
+            if (to[i] != to[j]) {
+                th_type_cloner_free(cloner);
+                return nullptr;
+            }
+            duplicate = true;
+            break;
+        }
+        if (!from[i] || !to[i]) {
+            th_type_cloner_free(cloner);
+            return nullptr;
+        }
+        if (!duplicate)
+            core_list_push(cloner->seen,
+                           ((th_clone_entry_t){from[i], to[i], true}));
+    }
+    return cloner;
+}
+
+th_type *
+th_type_cloner_clone(th_type_cloner_t *cloner, const th_type *source)
+{
+    return cloner && source
+        ? clone_type_graph(cloner->destination, source, &cloner->seen)
+        : nullptr;
+}
+
+void
+th_type_cloner_free(th_type_cloner_t *cloner)
+{
+    if (!cloner) return;
+    core_list_free(cloner->seen);
+    core_free(cloner);
+}
+
 th_type *
 th_type_clone_replacing(th_ctx *destination, const th_type *source,
                         const th_type *const *from, th_type *const *to,
