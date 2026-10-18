@@ -517,7 +517,8 @@ th_type *th_apply_subst(th_ctx *ctx, th_type *type);
 /* Unifies fresh copies of both inputs; neither input is constrained. */
 th_type *th_unify(th_ctx *ctx, th_type *a, th_type *b);
 /* Probes unification on fresh copies without retaining failure diagnostics. */
-th_type *th_unify_probe(th_ctx *ctx, th_type *a, th_type *b);
+bool th_unify_probe(th_ctx *ctx, th_type *a, th_type *b);
+bool th_unifies(th_ctx *ctx, th_type *a, th_type *b);
 /* Constrains the original monomorphic variables; failure may leave bindings. */
 th_type *th_unify_in_place(th_ctx *ctx, th_type *a, th_type *b);
 th_type *th_instantiate(th_ctx *ctx, th_type *type);

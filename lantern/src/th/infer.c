@@ -362,7 +362,7 @@ static bool th_var_constrain_seen(th_ctx *ctx, th_type *var,
         th_type *want = c.kind == TH_CON_HAS_FIELD ? c.field.type
                                                    : c.param.type;
 
-        if (have && want && !th_unify(ctx, have, want)) {
+        if (have && want && !th_unifies(ctx, have, want)) {
             th_err(ctx, TH_ERR_CONSTRAINT,
                    c.kind == TH_CON_HAS_FIELD ? "has_field" : "has_param",
                    have, want,
@@ -808,24 +808,21 @@ static const th_iface *iface_named(th_ctx *ctx, const char *name)
 
 static bool satisfies(th_ctx *ctx, th_type *type, th_type *methods)
 {
-    size_t n = th_record_len(methods);
+    size_t     n         = th_record_len(methods);
+    th_probe_t probe     = th_probe_begin(ctx);
+    bool       satisfied = true;
 
-    for (size_t i = 0; i < n; i++) {
-        const th_member *m = th_record_member(methods, i);
-        th_type         *have;
+    for (size_t i = 0; satisfied && i < n; i++) {
+        const th_member *m    = th_record_member(methods, i);
+        th_type         *have = m ? th_record_lookup_in(ctx, type, m->name)
+                                  : nullptr;
 
-        if (!m) {
-            return false;
-        }
-
-        have = th_record_lookup_in(ctx, type, m->name);
-
-        if (!have || !th_unify(ctx, have, m->type)) {
-            return false;
-        }
+        satisfied = have && th_unify(ctx, have, m->type);
     }
 
-    return true;
+    th_probe_end(ctx, &probe);
+
+    return satisfied;
 }
 
 bool th_implements(th_ctx *ctx, th_type *type, const char *iface)
@@ -1093,7 +1090,7 @@ th_type *th_coerce(th_ctx *ctx, th_type *from, th_coerce_policy policy)
         return bottom;
     }
 
-    if (th_unify(ctx, from, policy.target)) {
+    if (th_unifies(ctx, from, policy.target)) {
         return policy.target;
     }
 
@@ -1124,7 +1121,7 @@ th_type *th_coerce(th_ctx *ctx, th_type *from, th_coerce_policy policy)
     if (policy.allow & TH_COERCE_OPTION_WRAP) {
         th_type *inner = th_option_item(policy.target);
 
-        if (inner && th_unify(ctx, from, inner)) {
+        if (inner && th_unifies(ctx, from, inner)) {
             record_coercion(ctx, TH_COERCE_OPTION_WRAP, from, policy.target);
 
             return policy.target;
@@ -1222,16 +1219,15 @@ static bool con_check_constraints(th_ctx *ctx, const th_type *var,
                 else {
                     matched = bt == cand;
                     if (!matched) {
-                        size_t error_count = ctx->errors.len;
-                        size_t pending_count =
-                            ctx->pending_environment_constraints.len;
-                        const char *previous_error = ctx->err;
+                        th_probe_t probe = th_probe_begin(ctx);
                         matched = th_unify(ctx, (th_type *)bt,
                                             (th_type *)cand) != nullptr;
-                        ctx->errors.len = error_count;
+                        ctx->errors.len = probe.errors;
                         if (!matched)
-                            ctx->pending_environment_constraints.len = pending_count;
-                        ctx->err = previous_error;
+                            ctx->pending_environment_constraints.len =
+                                probe.pending_environment_constraints;
+                        ctx->err = probe.err;
+                        th_probe_end(ctx, &probe);
                     }
                 }
             }
@@ -2579,13 +2575,28 @@ th_type *th_unify(th_ctx *ctx, th_type *a, th_type *b)
     return r;
 }
 
-th_type *th_unify_probe(th_ctx *ctx, th_type *a, th_type *b)
+bool th_unifies(th_ctx *ctx, th_type *a, th_type *b)
 {
-    if (!ctx || !a || !b) return nullptr;
-    size_t before = th_error_count(ctx);
-    th_type *result = th_unify(ctx, a, b);
-    if (!result) ctx->errors.len = before;
-    return result;
+    if (!ctx || !a || !b) return false;
+    th_probe_t probe = th_probe_begin(ctx);
+    bool unified = th_unify(ctx, a, b) != nullptr;
+    th_probe_end(ctx, &probe);
+    return unified;
+}
+
+bool th_unify_probe(th_ctx *ctx, th_type *a, th_type *b)
+{
+    if (!ctx || !a || !b) return false;
+    th_probe_t probe = th_probe_begin(ctx);
+    bool unified = th_unify(ctx, a, b) != nullptr;
+    const char *err = ctx->err;
+    if (!unified) {
+        ctx->errors.len = probe.errors;
+        ctx->err = probe.err;
+    }
+    th_probe_end(ctx, &probe);
+    ctx->err = err;
+    return unified;
 }
 
 th_type *th_unify_in_place(th_ctx *ctx, th_type *a, th_type *b)

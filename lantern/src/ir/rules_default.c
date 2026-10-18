@@ -2030,7 +2030,7 @@ static bool type_test_source(ir_module_t *m, th_type *source,
     if (!source || !target) return false;
     if (ir_type_eq(m, source, target)) return true;
     if (th_kind_of(th_resolve(source)) == TH_VAR)
-        return th_unify(ir_ctx_types(m->ctx), source, target) != nullptr;
+        return th_unifies(ir_ctx_types(m->ctx), source, target);
     th_comb target_comb;
     if (th_sum_comb(target, &target_comb) && target_comb == TH_UNION) {
         for (size_t i = 0; i < th_sum_len(target); i++)
@@ -2362,7 +2362,7 @@ static bool call_arg_matches(ir_module_t *m, th_mode mode, th_type *want,
     if (!want || !got) return false;
     (void)mode;
     return same(m, ir_type_intern(m, want), ir_type_intern(m, got))
-        || th_unify(ir_ctx_types(m->ctx), want, got) != nullptr;
+        || th_unifies(ir_ctx_types(m->ctx), want, got);
 }
 
 static ir_rule_result_t rule_trait_method(ir_module_t *m, ir_instr_t *in,
@@ -2385,7 +2385,7 @@ static ir_rule_result_t rule_trait_method(ir_module_t *m, ir_instr_t *in,
                  "trait.method needs names, a receiver, and a function requirement with a self parameter");
         return REJECT;
     }
-    if (!th_unify(ir_ctx_types(m->ctx), signature, contract)) {
+    if (!th_unifies(ir_ctx_types(m->ctx), signature, contract)) {
         complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this trait method",
                  "selected method type %s does not match its requirement %s",
                  typed(m, signature), typed(m, contract));
@@ -2436,7 +2436,7 @@ static ir_rule_result_t rule_call(ir_module_t *m, ir_instr_t *in,
                      "a generic call requires its instantiated call signature");
             return REJECT;
         }
-        if (!th_unify(ir_ctx_types(m->ctx), instance, call_signature)) {
+        if (!th_unifies(ir_ctx_types(m->ctx), instance, call_signature)) {
             complain(m, d, IR_DIAG_TYPE_ARGS, in, "this call",
                      "the call-site signature is not an instance of the callee contract");
             return REJECT;
@@ -2640,7 +2640,7 @@ static ir_rule_result_t rule_call(ir_module_t *m, ir_instr_t *in,
     }
 
     if (generic_contract && !same(m, declared(in), outcome_type)) {
-        if (!th_unify(ir_ctx_types(m->ctx), outcome_type, declared(in))) {
+        if (!th_unifies(ir_ctx_types(m->ctx), outcome_type, declared(in))) {
             complain(m, d, IR_DIAG_VERIFY_TYPED, in, "this call",
                      "the call result does not match the instantiated return type %s",
                      typed(m, outcome_type));
