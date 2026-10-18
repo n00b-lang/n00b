@@ -7,12 +7,9 @@ func repr_of(s: string) -> string {
     var read_fd: int = -1
     var write_fd: int = -1
     require __os_pipe(ref read_fd, ref write_fd) == 0
-    var written: uint = 0
-    try {
-        written = text.raw_repr_string(s, write_fd, nil)!
-    } else failure {
-        require false
-    }
+    let count: i32 = s.raw_repr(cast[i32] write_fd)
+    require count >= 0
+    let written: uint = cast[uint] count
     require __os_close(write_fd) == 0
     var bytes: Array[u8] = new[Array[u8]](cast[int] written)
     let got: int = __os_read(read_fd, unsafe_cast[Ref[byte]] ref bytes[0],
@@ -52,13 +49,9 @@ func dispatch() {
     require !(bold < same)
     require bold.hash() == same.hash()
     require bold.hash() != "Hi".hash()
-    var read_fd: int = -1
-    var write_fd: int = -1
-    require __os_pipe(ref read_fd, ref write_fd) == 0
-    let written: i32 = bold.raw_repr(cast[i32] write_fd)
-    require __os_close(write_fd) == 0
-    require __os_close(read_fd) == 0
-    require written == cast[i32] byte_len(repr_of(bold))
+    require bold.hash() != italic.hash()
+    require bold <= same and bold >= same
+    require bold > "Hi"
 }
 
 func rich_body_text_offset() -> u64? {

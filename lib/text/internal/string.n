@@ -2,7 +2,7 @@ import unicode
 import internal.rich
 
 enum Index_Unit {
-    byte, char, cluster
+    byte = 0, char = 1, cluster = 2
 }
 
 private func crlf_pairs(s: string, len: u64) -> u64 {
@@ -750,15 +750,15 @@ func slice(self: Str_Cursor, other: Str_Cursor) -> string {
 }
 
 enum Split_On {
-    separator, units, lines, words
+    separator = 0, units = 1, lines = 2, words = 3
 }
 
 enum Trim_Side {
-    both, start, end
+    both = 0, start = 1, end = 2
 }
 
 enum Align {
-    left, right, center
+    left = 0, right = 1, center = 2
 }
 
 record Text_Range {

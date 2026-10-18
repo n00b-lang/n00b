@@ -26,7 +26,7 @@ private func rebase(v: u64, lo: u64, hi: u64, shift: u64) -> u32 {
     elif v > hi {
         clamped = hi
     }
-    return cast[u32](clamped - lo + shift)
+    return unsafe_cast[u32](clamped - lo + shift)
 }
 
 func rich_reslice(s: string, since: u64, upto: u64, text: string,
@@ -59,7 +59,7 @@ func rich_reslice(s: string, since: u64, upto: u64, text: string,
                 continue
             }
             var rec: Style_Record = r
-            let at: u32 = cast[u32](rs - since + shift)
+            let at: u32 = unsafe_cast[u32](rs - since + shift)
             rec.start_ix = at
             if r.end_ix != nil {
                 rec.end_ix = at

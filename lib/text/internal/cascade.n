@@ -17,7 +17,7 @@ record Cascade {
 func __init(modify self: Cascade, s: string) {
     self.s = s
     self.pos = 0
-    self.len = cast[u32] byte_len(s)
+    self.len = unsafe_cast[u32] byte_len(s)
 }
 
 private func record_is_span(r: Style_Record) -> bool {
@@ -176,7 +176,7 @@ func cascade_style_index(s: string, pos: u32, inclusive: bool = false)
         text_case = Text_Case.none, font_hint = Font_Hint.default,
         font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
         fg_rgb = nil, bg_rgb = nil, font_size = nil)
-    let len: u32 = cast[u32] byte_len(s)
+    let len: u32 = unsafe_cast[u32] byte_len(s)
     var cur: string = s
     while cast[u64] tag(cur) == str_tag_rich {
         let body: Ref[Rich_Body] = __string_rich_body(cur)

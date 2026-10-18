@@ -9,16 +9,5 @@ func bold_is_empty(tag: string) -> bool {
     return text.is_empty(style)
 }
 
-func written(s: string) -> uint {
-    var count: uint = 0
-    try {
-        count = text.raw_repr_string(s, 2, nil)!
-    } else failure {
-        require false
-    }
-    return count
-}
-
 require plain_length("abc") == 3
 require !bold_is_empty("b")
-require written("x") > 0

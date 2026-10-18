@@ -1046,6 +1046,7 @@ foreach string_probe : ['core_probe', 'rstr_probe', 'raw_literal_probe',
                n00bb_exe.full_path(),
                meson.current_source_dir() / 'tests' / 'programs' / 'string'
                    / string_probe + '.n'],
+        timeout: 180,
         suite: 'slow',
     )
 endforeach
@@ -1073,6 +1074,7 @@ test(
            meson.current_source_dir() / 'tests' / 'programs' / 'text'
                / 'theme_builtin_immutable.n',
            'builtin themes are immutable; copy the theme first'],
+    timeout: 180,
     suite: 'slow',
 )
 

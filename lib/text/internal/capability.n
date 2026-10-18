@@ -5,10 +5,10 @@ import internal.color
 private const forced_depth_unset: u8 = 255
 private const forced_width_set: u32 = 0x8000_0000
 
-var forced_depth: Atomic[u8] = 255
-var forced_width: Atomic[u32] = 0
-var env_ceiling: Atomic[u8] = 0
-var env_scanned: Atomic[bool] = false
+private var forced_depth: Atomic[u8] = 255
+private var forced_width: Atomic[u32] = 0
+private var env_ceiling: Atomic[u8] = 0
+private var env_scanned: Atomic[bool] = false
 
 private func env_value(name: string) -> string? {
     let nlen: u64 = byte_len(name)

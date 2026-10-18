@@ -20,7 +20,6 @@ package text {
     export builtin.__equal
     export builtin.is_empty
     export builtin.intrinsic_tag_style
-    export builtin.raw_repr_string
     export internal.color
     export internal.capability
     export internal.theme
