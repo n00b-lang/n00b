@@ -16,7 +16,12 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends llvm-22-dev \
  && rm -rf /var/lib/apt/lists/*
 
-ENV PATH=/usr/lib/llvm-22/bin:$PATH
+ENV RUSTUP_HOME=/opt/rustup
+ENV CARGO_HOME=/opt/cargo
+
+RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.95.0
+
+ENV PATH=/opt/cargo/bin:/usr/lib/llvm-22/bin:$PATH
 ENV LLVM_CONFIG=/usr/lib/llvm-22/bin/llvm-config
 ENV CC=/usr/lib/llvm-22/bin/clang
 ENV CXX=/usr/lib/llvm-22/bin/clang++
