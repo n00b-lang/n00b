@@ -1044,11 +1044,11 @@ validate_enclosing_return_type(parse_grammar_t *grammar,
             ? core_tree_node_value(expression).type : nullptr;
         if (!expected || !actual || !th_is_closed(state->types, expected))
             return true;
-        if (th_unify(state->types, expected, actual)) return true;
+        if (th_unifies(state->types, expected, actual)) return true;
         th_type *element = nullptr;
         if (n00bb_option_type_element(expected, &element)
             && (th_is_nil(actual)
-                || th_unify(state->types, element, actual))) return true;
+                || th_unifies(state->types, element, actual))) return true;
         core_diagnostics_report_at(
             core_translation_unit_diagnostics(unit), unit, CORE_DIAG_ERROR,
             CORE_STRING_STATIC("N00BB-T0001"),
