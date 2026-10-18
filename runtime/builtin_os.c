@@ -459,6 +459,41 @@ static int64_t os_pipe_raw(int32_t fds[2])
 #error "builtin/os requires macOS, Linux, or Windows"
 #endif
 
+#if defined(_WIN32)
+
+static int32_t os_thread_start_raw(n00b_os_thread_entry entry, void *argument)
+{
+    HANDLE thread = CreateThread(NULL, 0,
+                                 (LPTHREAD_START_ROUTINE)(void (*)(void))entry,
+                                 argument, 0, NULL);
+    if (!thread) return -1;
+    CloseHandle(thread);
+    return 0;
+}
+
+#else
+
+#include <pthread.h>
+
+static int32_t os_thread_start_raw(n00b_os_thread_entry entry, void *argument)
+{
+    pthread_attr_t attributes;
+    pthread_t thread;
+    if (pthread_attr_init(&attributes)) return -1;
+    int result = pthread_attr_setdetachstate(&attributes,
+                                             PTHREAD_CREATE_DETACHED);
+    if (!result) result = pthread_create(&thread, &attributes, entry, argument);
+    pthread_attr_destroy(&attributes);
+    return result ? -1 : 0;
+}
+
+#endif
+
+int32_t n00b_os_thread_start(n00b_os_thread_entry entry, void *argument)
+{
+    return entry ? os_thread_start_raw(entry, argument) : -1;
+}
+
 int64_t n00b_os_open(const uint8_t *path, int64_t flags, uint32_t mode)
 {
     return path ? os_open_raw(path, flags, mode) : -14;

@@ -236,6 +236,12 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
     th_type *env_at_args[] = {uint};
     th_type *terminal_size_args[] = {integer, u16_reference, u16_reference};
     th_type *pipe_args[] = {integer_reference, integer_reference};
+    th_type *entry_item = th_var(types);
+    th_type *argument_item = th_var(types);
+    th_type *thread_start_args[] = {
+        entry_item ? th_ind(types, 0, entry_item) : nullptr,
+        argument_item ? th_ind(types, 0, argument_item) : nullptr,
+    };
     return register_builtin_native_function(symtab, types, nil_type,
             "__os_page_size", "n00b_os_page_size", uint, nullptr, 0)
         && register_builtin_native_function(symtab, types, nil_type,
@@ -282,6 +288,9 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
             "__os_thread_id", "n00b_os_thread_id", uint, nullptr, 0)
         && register_builtin_native_function(symtab, types, nil_type,
             "__os_thread_is_main", "n00b_os_thread_is_main", uint, nullptr, 0)
+        && register_builtin_native_function(symtab, types, nil_type,
+            "__os_thread_start", "n00b_os_thread_start", i32,
+            thread_start_args, 2)
         && register_builtin_native_function(symtab, types, nil_type,
             "__os_thread_stack_high_self", "n00b_os_thread_stack_high_self",
             optional_reference, nullptr, 0)

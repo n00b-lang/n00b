@@ -23,6 +23,10 @@ func thread_id() -> uint {
     return __os_thread_id()
 }
 
+func thread_start(entry: Ref[(Ref[byte]) -> Ref[byte]], argument: Ref[byte]) -> bool {
+    return __os_thread_start(entry, argument) == 0
+}
+
 func thread_stack_high_self() -> Ref[byte]? {
     return __os_thread_stack_high_self()
 }
