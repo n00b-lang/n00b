@@ -501,7 +501,7 @@ static ir_member_layout_t *member_slot(ir_module_t *m, ir_descriptor_t *d,
         return &d->members[at];
     }
 
-    size_t cap = d->n_members;
+    size_t cap = d->cap_members;
 
     d->members = ir_grow(m->ctx, d->members, &cap, (size_t)d->n_members + 1,
                          sizeof(ir_member_layout_t));
@@ -509,6 +509,8 @@ static ir_member_layout_t *member_slot(ir_module_t *m, ir_descriptor_t *d,
     if (!d->members) {
         return nullptr;
     }
+
+    d->cap_members = (uint32_t)cap;
 
     ir_member_layout_t *slot = &d->members[d->n_members];
 
