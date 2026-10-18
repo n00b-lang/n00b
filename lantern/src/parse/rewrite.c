@@ -22,9 +22,11 @@ parse_tree_clone(const parse_tree_t *tree)
     }
 
     parse_nt_node_t     pn  = core_tree_node_value(tree);
+    pn.semantic.facts = nullptr;
     parse_tree_t *out = core_tree_node(parse_nt_node_t,
                                           parse_token_info_ptr_t,
                                           pn);
+    parse_tree_copy_semantic(out, tree);
     size_t            nc  = core_tree_num_children(tree);
 
     for (size_t i = 0; i < nc; i++) {
@@ -237,7 +239,8 @@ materialize_node(type_materialization_t *m, parse_tree_t *node)
         return false;
     }
 
-    th_type *type = pn->type ? th_resolve(pn->type) : nullptr;
+    th_type *type = parse_tree_type(node)
+        ? th_resolve(parse_tree_type(node)) : nullptr;
 
     if (!type || !th_is_closed(m->types, type)) {
         materialization_error(m,

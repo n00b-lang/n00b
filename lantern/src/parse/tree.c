@@ -113,8 +113,47 @@ parse_tree_free(parse_tree_t *t)
             parse_token_free_from_tree(core_tree_leaf_value(n));
         }
 
-        core_tree_free_node(n);
+        parse_tree_free_node(n);
     }
 
     core_list_free(stack);
+}
+
+void
+parse_tree_free_node(parse_tree_t *t)
+{
+    if (!t) return;
+    parse_node_semantic_t *semantic = parse_tree_semantic(t);
+    if (semantic) {
+        core_free(semantic->facts);
+        semantic->facts = nullptr;
+    }
+    core_tree_free_node(t);
+}
+
+parse_node_facts_t *
+parse_tree_facts_for_update(parse_tree_t *node)
+{
+    parse_node_semantic_t *semantic = parse_tree_semantic(node);
+    if (!semantic) return nullptr;
+    if (!semantic->facts) semantic->facts = core_alloc(parse_node_facts_t);
+    return semantic->facts;
+}
+
+void
+parse_tree_copy_semantic(parse_tree_t *dst, const parse_tree_t *src)
+{
+    parse_node_semantic_t *to = parse_tree_semantic(dst);
+    parse_node_semantic_t *from = parse_tree_semantic(src);
+    if (!to || !from || to == from) return;
+    parse_node_facts_t *facts = to->facts;
+    *to = *from;
+    to->facts = facts;
+    if (!from->facts) {
+        core_free(to->facts);
+        to->facts = nullptr;
+        return;
+    }
+    if (!to->facts) to->facts = core_alloc(parse_node_facts_t);
+    *to->facts = *from->facts;
 }

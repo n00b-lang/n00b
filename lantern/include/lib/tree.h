@@ -2,10 +2,13 @@
 
 #include "core.h"
 #include "lib/alloc.h"
+#include <assert.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <string.h>
 
 #ifndef CORE_TREE_INITIAL_CAPACITY
-#define CORE_TREE_INITIAL_CAPACITY 4
+#define CORE_TREE_INITIAL_CAPACITY 2
 #endif
 
 #define core_tree_tid(N, L) typeid(core_tree, N, __, L)
@@ -13,18 +16,18 @@
 
 #define core_tree_decl(N, L)                                                   \
     struct core_tree_tid(N, L) {                                               \
-        bool is_leaf;                                                          \
         struct core_tree_tid(N, L) *first_leaf;                                \
         struct core_tree_tid(N, L) **parents;                                  \
-        size_t num_parents;                                                    \
-        size_t parent_capacity;                                                \
         void (*refresh_first_leaf)(void *);                                    \
+        uint32_t num_parents;                                                  \
+        uint32_t parent_capacity;                                              \
+        bool is_leaf;                                                          \
         union {                                                                \
             struct {                                                           \
                 N value;                                                       \
                 struct core_tree_tid(N, L) * *children;                        \
-                size_t num_children;                                           \
-                size_t capacity;                                               \
+                uint32_t num_children;                                         \
+                uint32_t capacity;                                             \
             } node;                                                            \
             L leaf;                                                            \
         };                                                                     \
@@ -74,9 +77,13 @@
         _bt;                                                                   \
     })
 
+#define core_tree_leaf_size(N, L)                                              \
+    (offsetof(core_tree_t(N, L), leaf) + sizeof(L))
+
 #define core_tree_leaf(N, L, val)                                              \
     ({                                                                         \
-        core_tree_t(N, L) *_bt = core_alloc(core_tree_t(N, L));               \
+        core_tree_t(N, L) *_bt =                                               \
+            _core_calloc(1, core_tree_leaf_size(N, L));                        \
         if (_bt) {                                                             \
             _bt->is_leaf = true;                                               \
             _bt->leaf    = (val);                                              \
@@ -113,7 +120,7 @@
         if (!_ap_found) {                                                      \
             if (_ap_c->num_parents == _ap_c->parent_capacity) {                \
                 size_t _ap_cap = _ap_c->parent_capacity                        \
-                    ? _ap_c->parent_capacity * 2 : 4;                          \
+                    ? _ap_c->parent_capacity * 2 : 1;                          \
                 _ap_c->parents = core_realloc(_ap_c->parents,                  \
                     _ap_cap * sizeof(*_ap_c->parents));                        \
                 _ap_c->parent_capacity = _ap_cap;                              \
@@ -288,7 +295,12 @@
 #define core_tree_is_leaf(t)        ((t)->is_leaf)
 #define core_tree_is_node(t)        (!(t)->is_leaf)
 #define core_tree_leaf_value(t)     ((t)->leaf)
-#define core_tree_node_value(t)     ((t)->node.value)
+#define core_tree_node_value(t)                                                \
+    (*({                                                                       \
+        auto _nv_t = (t);                                                      \
+        assert(!_nv_t->is_leaf);                                               \
+        &_nv_t->node.value;                                                    \
+    }))
 #define core_tree_num_children(t)   ((t)->is_leaf ? 0 : (t)->node.num_children)
 #define core_tree_child(t, i)       ((t)->node.children[i])
 #define core_tree_first_leaf_node(t) ((t)->first_leaf)

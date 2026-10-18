@@ -57,9 +57,8 @@ static bool node_is(parse_grammar_t *grammar, parse_tree_t *node,
 static th_type *node_type(ictx *c, parse_tree_t *node)
 {
     if (!node || core_tree_is_leaf(node)) return nullptr;
-    parse_nt_node_t *pn = &core_tree_node_value(node);
-    if (!pn->type) pn->type = fresh(c);
-    return pn->type;
+    if (!parse_tree_type(node)) parse_tree_set_type(node, fresh(c));
+    return parse_tree_type(node);
 }
 
 static core_string_t
@@ -67,9 +66,10 @@ node_identifier_name(parse_tree_t *node)
 {
     if (!node) return (core_string_t){0};
     if (core_tree_is_leaf(node)) return parse_tree_leaf_text(node);
-    parse_nt_node_t *pn = &core_tree_node_value(node);
-    if (pn->unresolved_name.data) return pn->unresolved_name;
-    if (pn->sym && pn->sym->name.data) return pn->sym->name;
+    core_string_t unresolved = parse_tree_unresolved_name(node);
+    if (unresolved.data) return unresolved;
+    parse_sym_entry_t *sym = parse_tree_sym(node);
+    if (sym && sym->name.data) return sym->name;
     if (core_tree_num_children(node) == 1) {
         parse_tree_t *child = core_tree_child(node, 0);
         if (core_tree_is_leaf(child)) return parse_tree_leaf_text(child);
@@ -80,10 +80,10 @@ node_identifier_name(parse_tree_t *node)
 static th_type *transparent_expression_type(ictx *c, parse_tree_t *node)
 {
     if (!node || core_tree_is_leaf(node)) return nullptr;
-    parse_nt_node_t *pn = &core_tree_node_value(node);
-    if (pn->sym && pn->sym->type) return pn->sym->type;
+    parse_sym_entry_t *sym = parse_tree_sym(node);
+    if (sym && sym->type) return sym->type;
 
-    th_type *type = pn->type;
+    th_type *type = parse_tree_type(node);
     if (type && th_kind_of(th_resolve(type)) != TH_VAR) return type;
 
     parse_tree_t *only_child = nullptr;
@@ -134,8 +134,8 @@ static th_type *call_shape(ictx *c, parse_tree_t *call, th_type *result)
             if (!node_is(c->v->grammar, arg, "expression")) continue;
             core_list_push(params, ((th_param){
                 .mode = TH_IN,
-                .type = core_tree_node_value(arg).argument_type
-                    ? core_tree_node_value(arg).argument_type
+                .type = parse_tree_argument_type(arg)
+                    ? parse_tree_argument_type(arg)
                     : node_type(c, arg),
             }));
         }
@@ -171,8 +171,8 @@ static th_type *call_shape(ictx *c, parse_tree_t *call, th_type *result)
         core_list_push(kwparams, ((th_kwparam){
             .name = th_strdup(c->tc, name.data, name.u8_bytes),
             .mode = TH_IN,
-            .type = core_tree_node_value(value).argument_type
-                ? core_tree_node_value(value).argument_type
+            .type = parse_tree_argument_type(value)
+                ? parse_tree_argument_type(value)
                 : node_type(c, value),
         }));
     }
@@ -319,8 +319,8 @@ static th_type *index_store_call_shape(ictx *c, th_type *result,
 
     th_param parameters[] = {
         {.mode = TH_IN, .type = node_type(c, contents)},
-        {.mode = TH_IN, .type = core_tree_node_value(value).argument_type
-            ? core_tree_node_value(value).argument_type
+        {.mode = TH_IN, .type = parse_tree_argument_type(value)
+            ? parse_tree_argument_type(value)
             : node_type(c, value)},
     };
     return th_func(c->tc, result, parameters, 2, nullptr, nullptr, 0);
@@ -498,13 +498,11 @@ type_of(ictx *c, int32_t ix)
         return nullptr;
     }
 
-    parse_nt_node_t *pn = &core_tree_node_value(k);
-
-    if (!pn->type) {
-        pn->type = fresh(c);
+    if (!parse_tree_type(k)) {
+        parse_tree_set_type(k, fresh(c));
     }
 
-    return pn->type;
+    return parse_tree_type(k);
 }
 
 static bool
@@ -529,12 +527,13 @@ unify_children(ictx *c, parse_tree_t *node, th_type **joined)
             continue;
         }
 
-        if (!pn->type) {
-            pn->type = fresh(c);
+        if (!parse_tree_type(k)) {
+            parse_tree_set_type(k, fresh(c));
         }
 
-        *joined = *joined ? th_unify_in_place(c->tc, *joined, pn->type)
-                          : pn->type;
+        *joined = *joined
+            ? th_unify_in_place(c->tc, *joined, parse_tree_type(k))
+            : parse_tree_type(k);
 
         if (!*joined) {
             return false;
@@ -604,8 +603,8 @@ symbol_type(ictx *c, int32_t ix)
         return nullptr;
     }
 
-    parse_scope_t *scope = c->v->pn->scope
-                           ? c->v->pn->scope
+    parse_scope_t *scope = parse_tree_scope(c->v->node)
+                           ? parse_tree_scope(c->v->node)
                            : parse_symtab_current_scope(c->st,
                                                       core_string_empty());
     parse_sym_entry_t *sym = parse_symtab_lookup_visible(c->st, scope,
@@ -795,7 +794,7 @@ project(ictx *c, parse_infer_proj_t op, th_type *t,
     case PARSE_INFER_ELEMENT_OF: {
         parse_tree_t *result_node = c->v->node;
         th_type *result = node_type(c, result_node);
-        if (core_tree_node_value(result_node).index_address_access) {
+        if (parse_tree_is_index_address_access(result_node)) {
             th_type *container = th_resolve(t);
             if (container && th_kind_of(container) == TH_INDIRECTION)
                 container = th_resolve(th_ind_referent(container));
@@ -1047,7 +1046,7 @@ spread_args(ictx *c, int32_t ix, core_list_t(th_arg) * out)
             ? c->type_node_resolver(c->tc, c->v->grammar, k,
                                     c->type_node_resolver_context)
             : nullptr;
-        if (!t) t = core_tree_node_value(k).type;
+        if (!t) t = parse_tree_type(k);
 
         if (!t) {
             c->failed = true;
@@ -1107,11 +1106,11 @@ eval(ictx *c, const parse_infer_expr_t *e)
     }
 
     case PARSE_INFER_SELF:
-        if (!c->v->pn->type) {
-            c->v->pn->type = fresh(c);
+        if (!parse_tree_type(c->v->node)) {
+            parse_tree_set_type(c->v->node, fresh(c));
         }
 
-        return c->v->pn->type;
+        return parse_tree_type(c->v->node);
 
     case PARSE_INFER_RETURN: {
         parse_sym_entry_t *sym
@@ -1200,8 +1199,8 @@ eval(ictx *c, const parse_infer_expr_t *e)
         }
         th_type *comparison = nullptr;
         if (e->other_name.data) {
-            parse_scope_t *scope = c->v->pn->scope
-                ? c->v->pn->scope
+            parse_scope_t *scope = parse_tree_scope(c->v->node)
+                ? parse_tree_scope(c->v->node)
                 : c->st
                     ? parse_symtab_current_scope(c->st, core_string_empty())
                     : nullptr;

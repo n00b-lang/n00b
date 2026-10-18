@@ -121,37 +121,43 @@ typedef struct {
     } target;
 } parse_node_resolution_t;
 
-typedef struct parse_nt_node_t {
-    core_string_t name;
-    int64_t       noscan;
-    int64_t       id;
-    int64_t       hv;
-    int32_t       start;
-    int32_t       end;
-    int32_t       rule_index;
-    uint32_t      penalty;
-    uint32_t      cost;
-    uint16_t      penalty_location;
-    bool          group_item;
-    bool          group_top;
-    bool          missing;
-    bool          bad_prefix;
-    void         *parent;
-    parse_scope_t     *scope;
-    parse_sym_entry_t *sym;
-    th_type         *type;
-    th_type         *argument_type;
-    th_type         *error_type;
-    core_string_t unresolved_name;
+typedef struct parse_node_facts_t {
+    parse_sym_entry_t      *sym;
+    th_type                *argument_type;
+    th_type                *error_type;
+    parse_sym_entry_t      *reference_target;
+    void                   *integer_literal_origin;
+    core_string_t           unresolved_name;
     parse_node_resolution_t resolution;
-    parse_sym_entry_t *reference_target;
-    bool direct_symbol_reference;
-    bool index_address_access;
-    bool integer_range_known;
-    int64_t integer_range_minimum;
-    int64_t integer_range_maximum;
-    void *integer_literal_origin;
-    void *frontend_data;
+    int64_t                 integer_range_minimum;
+    int64_t                 integer_range_maximum;
+    bool                    integer_range_known;
+    bool                    direct_symbol_reference;
+    bool                    index_address_access;
+} parse_node_facts_t;
+
+typedef struct {
+    void               *parent;
+    parse_scope_t      *scope;
+    th_type            *type;
+    void               *frontend_data;
+    parse_node_facts_t *facts;
+} parse_node_semantic_t;
+
+typedef struct parse_nt_node_t {
+    core_string_t         name;
+    int64_t               id;
+    int32_t               start;
+    int32_t               end;
+    int32_t               rule_index;
+    uint32_t              penalty;
+    uint32_t              cost;
+    uint16_t              penalty_location;
+    bool                  group_item;
+    bool                  group_top;
+    bool                  missing;
+    bool                  bad_prefix;
+    parse_node_semantic_t semantic;
 } parse_nt_node_t;
 
 typedef void *(*parse_walk_action_t)(parse_nt_node_t *node,

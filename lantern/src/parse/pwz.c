@@ -1202,7 +1202,7 @@ add_child_flattening_same_group(parse_tree_t *parent,
             core_free(parent->node.children);
             core_tree_replace_children(child, nullptr, 0);
             core_tree_replace_children(parent, children, count);
-            core_free(child);
+            parse_tree_free_node(child);
             return;
         }
 
@@ -1212,7 +1212,7 @@ add_child_flattening_same_group(parse_tree_t *parent,
             (void)core_tree_add_child(parent, core_tree_child(child, i));
         }
 
-        core_tree_free_node(child);
+        parse_tree_free_node(child);
         return;
     }
 
@@ -1240,7 +1240,7 @@ identity_chain_child(parse_grammar_t *g, parse_tree_t *tree,
     if (!tree_is_identity_unit(g, tree) || !tree_is_identity_unit(g, kid)
         || core_tree_num_children(kid) != 1) return kid;
     parse_tree_t *inner = core_tree_child(kid, 0);
-    core_tree_free_node(kid);
+    parse_tree_free_node(kid);
     return inner;
 }
 

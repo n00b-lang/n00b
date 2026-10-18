@@ -362,7 +362,7 @@ main(void)
         check("parsed tokens retain source provenance",
               source_token && source_token->origin == PARSE_TOKEN_SOURCE);
 
-        core_tree_node_value(decl).type = th_name(types, "int");
+        parse_tree_set_type(decl, th_name(types, "int"));
 
         const parse_type_materialization_rule_t type_rules[] = {
             {
@@ -404,7 +404,7 @@ main(void)
         parse_tree_free(explicit);
         core_free(type_err);
 
-        core_tree_node_value(decl).type = th_var(types);
+        parse_tree_set_type(decl, th_var(types));
         explicit = parse_tree_materialize_types(
             g, types, implicit, type_rules, 1, build_type_syntax, types,
             &type_err);

@@ -1323,7 +1323,7 @@ parse_sym_visible_at(const parse_sym_entry_t *symbol, parse_tree_t *use)
 {
     if (!symbol || !symbol->initializer_node) return true;
     for (parse_tree_t *at = use; at && !core_tree_is_leaf(at);
-         at = core_tree_node_value(at).parent)
+         at = parse_tree_parent(at))
         if (at == symbol->initializer_node) return false;
     return true;
 }
@@ -1346,20 +1346,20 @@ parse_symtab_resolve_node(parse_symtab_t *st, parse_tree_t *node,
 {
     if (!st || !node || core_tree_is_leaf(node)) return nullptr;
 
-    parse_nt_node_t *pn = &core_tree_node_value(node);
     parse_node_resolution_t resolution = parse_tree_resolution(node);
     if (resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL)
         return resolution.target.symbol;
-    if (resolution.kind != PARSE_NODE_RESOLUTION_SCOPE && pn->sym) {
-        parse_tree_set_resolution_symbol(node, pn->sym);
-        return pn->sym;
+    parse_sym_entry_t *bound = parse_tree_sym(node);
+    if (resolution.kind != PARSE_NODE_RESOLUTION_SCOPE && bound) {
+        parse_tree_set_resolution_symbol(node, bound);
+        return bound;
     }
 
-    core_string_t name = pn->unresolved_name;
+    core_string_t name = parse_tree_unresolved_name(node);
     if (!name.data || !name.u8_bytes) return nullptr;
 
     parse_scope_t *scope = resolution.kind == PARSE_NODE_RESOLUTION_SCOPE
-        ? resolution.target.scope : pn->scope;
+        ? resolution.target.scope : parse_tree_scope(node);
     if (!scope) scope = parse_symtab_scope_for_node(st, node);
     parse_sym_entry_t *symbol = parse_symtab_lookup_visible(
         st, scope, ns_name, name, node);
@@ -1404,7 +1404,7 @@ parse_symtab_scope_for_node(parse_symtab_t *st, parse_tree_t *node)
         return nullptr;
     }
 
-    parse_scope_t *scope = core_tree_node_value(node).scope;
+    parse_scope_t *scope = parse_tree_scope(node);
     if (scope) return scope;
 
     bool  found = false;

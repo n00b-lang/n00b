@@ -78,7 +78,8 @@ test_tree_resolution_is_scope_or_symbol_without_replacing_lexical_scope(void)
     parse_scope_t module_scope = {0};
     parse_sym_entry_t symbol = {0};
     parse_tree_t *node = core_tree_node(parse_nt_node_t,
-        parse_token_info_ptr_t, ((parse_nt_node_t){.scope = &lexical_scope}));
+        parse_token_info_ptr_t, ((parse_nt_node_t){0}));
+    parse_tree_set_scope(node, &lexical_scope);
     parse_symtab_t *symtab = parse_symtab_new();
     bool scope_set = node
         && parse_tree_set_resolution_scope(node, &module_scope);
@@ -88,22 +89,19 @@ test_tree_resolution_is_scope_or_symbol_without_replacing_lexical_scope(void)
     bool scope_ok = scope_set
         && scope_ref.kind == PARSE_NODE_RESOLUTION_SCOPE
         && scope_ref.target.scope == &module_scope
-        && core_tree_node_value(node).scope == &lexical_scope;
+        && parse_tree_scope(node) == &lexical_scope;
     bool symbol_set = node
         && parse_tree_set_resolution_symbol(node, &symbol);
     parse_node_resolution_t symbol_ref = parse_tree_resolution(node);
     bool symbol_ok = symbol_set
         && symbol_ref.kind == PARSE_NODE_RESOLUTION_SYMBOL
         && symbol_ref.target.symbol == &symbol
-        && core_tree_node_value(node).sym == &symbol
-        && core_tree_node_value(node).scope == &lexical_scope;
+        && parse_tree_sym(node) == &symbol
+        && parse_tree_scope(node) == &lexical_scope;
     check("tree resolution stores either a target scope or symbol independently of lexical scope",
           scope_ok && symbol_ok && lexical_scope_lookup);
     parse_symtab_free(symtab);
-    if (node) {
-        core_free(node->node.children);
-        core_free(node);
-    }
+    parse_tree_free_node(node);
 }
 
 static void
@@ -120,10 +118,7 @@ test_tree_integer_range_fact(void)
     check("tree stores integer range analysis separately from inferred type",
           unset && set && invalid_rejected && read
           && minimum == 2 && maximum == 7);
-    if (node) {
-        core_free(node->node.children);
-        core_free(node);
-    }
+    parse_tree_free_node(node);
 }
 
 static bool
@@ -655,7 +650,7 @@ saw_block(parse_visit_t *v)
     probe_t *p = (probe_t *)v->thunk;
 
     p->block_node  = v->node;
-    p->block_scope = v->pn->scope;
+    p->block_scope = parse_tree_scope(v->node);
 
     return true;
 }
@@ -663,7 +658,7 @@ saw_block(parse_visit_t *v)
 static bool
 saw_prog(parse_visit_t *v)
 {
-    ((probe_t *)v->thunk)->module_scope = v->pn->scope;
+    ((probe_t *)v->thunk)->module_scope = parse_tree_scope(v->node);
 
     return true;
 }
@@ -1004,7 +999,7 @@ test_the_walk_builds_a_symbol_table(parse_grammar_t *g)
     }
     check("a subtree walk preserves its structural parent",
           subtree && subtree_walk && parent_probe.saw_parent
-              && core_tree_node_value(subtree).parent == tree);
+              && parse_tree_parent(subtree) == tree);
     parse_tree_walk_free(subtree_walk);
 
     check("a caller's visitor fires once per matching node",
@@ -1045,19 +1040,17 @@ test_the_walk_builds_a_symbol_table(parse_grammar_t *g)
           a_from_block == a);
     parse_tree_t *decl = find_node(g, tree, "decl");
     parse_tree_t *name_node = decl ? find_node(g, decl, "name") : nullptr;
-    if (name_node && !core_tree_is_leaf(name_node))
-        core_tree_node_value(name_node).scope = probe.module_scope;
+    parse_tree_set_scope(name_node, probe.module_scope);
     check("a reference test has a nonterminal name node",
           name_node && !core_tree_is_leaf(name_node));
-    if (name_node)
-        core_tree_node_value(name_node).unresolved_name = S("a");
+    parse_tree_set_unresolved_name(name_node, S("a"));
     check("a reference test uses the declared name",
           name_node && core_string_eq(
               parse_tree_leaf_text(core_tree_first_leaf_node(name_node)), S("a")));
     check("a reference node resolves and retains its symbol",
           name_node && parse_symtab_resolve_node(
               st, name_node, core_string_empty()) == a
-              && core_tree_node_value(name_node).sym == a);
+              && parse_tree_sym(name_node) == a);
     bool deferred_scope_resolves = name_node
         && parse_tree_set_resolution_scope(name_node, probe.block_scope)
         && parse_symtab_resolve_node(st, name_node,
@@ -1068,7 +1061,7 @@ test_the_walk_builds_a_symbol_table(parse_grammar_t *g)
           deferred_scope_resolves
           && resolved_scope.kind == PARSE_NODE_RESOLUTION_SYMBOL
           && resolved_scope.target.symbol == a
-          && core_tree_node_value(name_node).scope == probe.module_scope);
+          && parse_tree_scope(name_node) == probe.module_scope);
     check("a scope is still searchable after the walk popped it",
           b_from_block != nullptr && b_from_block->scope == probe.block_scope);
     check("every declaration was recorded", c != nullptr);
@@ -1564,7 +1557,7 @@ test_the_repr_annotations_reach_the_layout_descriptor(void)
               && return_name_len == 3 && !memcmp(return_name, "int", 3));
 
     parse_tree_t *access = find_node(g, tree, "access");
-    th_type *access_type = access ? core_tree_node_value(access).type : nullptr;
+    th_type *access_type = access ? parse_tree_type(access) : nullptr;
     const char *access_name = nullptr;
     size_t access_name_len = 0;
 
@@ -1640,8 +1633,8 @@ test_trait_method_inference_uses_visible_requirement(void)
     if (attached) annotate_once(g, tree, annotations, inference, nullptr);
     parse_tree_t *access = tree;
     parse_tree_t *use = find_node(g, tree, "use");
-    th_type *actual = access ? core_tree_node_value(access).type : nullptr;
-    th_type *receiver = use ? core_tree_node_value(use).type : nullptr;
+    th_type *actual = access ? parse_tree_type(access) : nullptr;
+    th_type *receiver = use ? parse_tree_type(use) : nullptr;
     const char *obligations[1] = {0};
     check("unique trait method infers its return and retains receiver obligation",
           attached && actual && receiver &&
@@ -1698,9 +1691,9 @@ test_trait_method_inference_uses_visible_requirement(void)
     parse_tree_t *multi_access = multi_tree;
     parse_tree_t *multi_use = find_node(g, multi_tree, "use");
     th_type *multi_actual = multi_access
-        ? core_tree_node_value(multi_access).type : nullptr;
+        ? parse_tree_type(multi_access) : nullptr;
     th_type *multi_receiver = multi_use
-        ? core_tree_node_value(multi_use).type : nullptr;
+        ? parse_tree_type(multi_use) : nullptr;
     check("ambiguous visible method names retain a deferred result obligation",
           multi_attached && multi_actual && multi_receiver &&
               th_unify_in_place(multi_inference, multi_receiver,
@@ -1784,7 +1777,7 @@ test_ordering_inference_uses_comparable_trait(void)
     if (attached) annotate_once(g, tree, annotations, inference, nullptr);
     parse_tree_t *comparison = find_node(g, tree, "comparison");
     th_type *actual = comparison
-        ? core_tree_node_value(comparison).type : nullptr;
+        ? parse_tree_type(comparison) : nullptr;
     check("Comparable test declarations register", registered);
     check("Comparable return type parses as i:2", compare_code != nullptr);
     check("Comparable trait registers", trait_registered);
@@ -1875,7 +1868,7 @@ check_index_load_result(const char *what, const char *top,
     parse_annot_result_t *annotations = parse_annot_result_new(nullptr);
     if (attached) annotate_once(g, tree, annotations, inference, nullptr);
     parse_tree_t *access = find_node(g, tree, "access");
-    th_type *actual = access ? core_tree_node_value(access).type : nullptr;
+    th_type *actual = access ? parse_tree_type(access) : nullptr;
     check(what, attached && actual &&
               th_hash(inference, actual) ==
                   th_hash(inference, th_name(inference, "string")));
@@ -1968,7 +1961,7 @@ test_slice_inference_uses_index_slice_trait(void)
         bool ok = tree != nullptr;
         if (ok) annotate_once(g, tree, annotations, inference, nullptr);
         parse_tree_t *access = tree ? find_node(g, tree, "access") : nullptr;
-        th_type *actual = access ? core_tree_node_value(access).type : nullptr;
+        th_type *actual = access ? parse_tree_type(access) : nullptr;
         all_inferred = all_inferred && ok && actual &&
             th_hash(inference, actual) == th_hash(inference, view_of_int);
         parse_annot_result_free(annotations);
@@ -2082,16 +2075,15 @@ test_initial_symbol_walk_callback(parse_grammar_t *g)
     check("annotation walk visits each nonterminal on entry and exit",
           probe.enters > 0 && probe.enters == probe.exits);
     check("annotation walk creates its module scope",
-          core_tree_node_value(tree).scope != nullptr);
+          parse_tree_scope(tree) != nullptr);
     parse_tree_t *decl = find_node(g, tree, "decl");
     check("ordinary nodes retain their enclosing lexical scope",
-          decl && core_tree_node_value(decl).scope
-              == core_tree_node_value(tree).scope);
+          decl && parse_tree_scope(decl) == parse_tree_scope(tree));
     check("annotation walk records the declared name",
           parse_symtab_lookup_scoped(result->symtab,
-              core_tree_node_value(tree).scope, S(""), S("a")) != nullptr);
+              parse_tree_scope(tree), S(""), S("a")) != nullptr);
     parse_sym_entry_t *inferred = parse_symtab_lookup_scoped(
-        result->symtab, core_tree_node_value(tree).scope, S(""), S("a"));
+        result->symtab, parse_tree_scope(tree), S(""), S("a"));
     parse_sym_mark_type_inferred(inferred);
     check("inferred type state is stored on its symbol",
           inferred && inferred->type_is_inferred);
@@ -2137,7 +2129,7 @@ test_selected_type_annotations_per_node(parse_grammar_t *g)
                                           sizeof(kinds) / sizeof(kinds[0])));
     parse_tree_walk_run(walk, tree);
 
-    parse_scope_t *scope = core_tree_node_value(tree).scope;
+    parse_scope_t *scope = parse_tree_scope(tree);
     parse_sym_entry_t *symbol = parse_symtab_lookup_scoped(
         result->symtab, scope, S(""), S("b"));
     check("selected declaration and type annotations bind an explicitly typed symbol",
@@ -2187,12 +2179,12 @@ test_frontend_type_node_resolver(void)
     check("frontend type-node resolver supplies the annotation type",
           resolver_type);
     th_type *cached_type = th_name(tc, "cached_type");
-    if (type_node) core_tree_node_value(type_node).type = cached_type;
+    parse_tree_set_type(type_node, cached_type);
     parse_annot_result_set_type_node_resolver(result, nullptr, nullptr);
     resolved = parse_annot_resolve_type_node(result, tc, grammar, type_node);
     check("frontend type-node resolution uses the node's cached type",
           resolved && th_hash(tc, resolved) == th_hash(tc, cached_type));
-    if (type_node) core_tree_node_value(type_node).type = nullptr;
+    parse_tree_set_type(type_node, nullptr);
     resolved = parse_annot_resolve_type_node(result, tc, grammar, type_node);
     check("frontend type-node resolution does not re-walk uncached syntax",
           resolved == nullptr);
@@ -2242,7 +2234,7 @@ test_inference_result_is_propagated(void)
                                           sizeof(kinds) / sizeof(kinds[0])));
     parse_tree_walk_run(walk, tree);
 
-    parse_scope_t *scope = core_tree_node_value(tree).scope;
+    parse_scope_t *scope = parse_tree_scope(tree);
     parse_sym_entry_t *symbol = parse_symtab_lookup_scoped(
         result->symtab, scope, S(""), S("a"));
     check("the infer annotation's unified result reaches its symbol",
@@ -2282,7 +2274,7 @@ test_symbol_records_declaration_definition_and_use_nodes(void)
     check("symbol site sample parses", tree != nullptr);
     if (tree) {
         parse_annot_result_t *result = annotate_new(grammar, tree, nullptr);
-        parse_scope_t *scope = core_tree_node_value(tree).scope;
+        parse_scope_t *scope = parse_tree_scope(tree);
         parse_sym_entry_t *symbol = parse_symtab_lookup_scoped(
             result->symtab, scope, S(""), S("a"));
         parse_tree_t *declaration = find_node(grammar, tree, "decl");
@@ -2404,7 +2396,7 @@ test_symbol_lookup_instantiates_schemes(void)
 
     th_ctx *tc = th_ctx_new();
     parse_annot_result_t *result = annotate_new(g, tree, tc);
-    parse_scope_t *scope = core_tree_node_value(tree).scope;
+    parse_scope_t *scope = parse_tree_scope(tree);
     parse_tree_t *expr_node = find_node(g, tree, "expr");
     th_type *variable = th_var(tc);
     th_param param = {.mode = TH_IN, .type = variable};
@@ -2420,7 +2412,7 @@ test_symbol_lookup_instantiates_schemes(void)
         .node = expr_node,
         .pn = &core_tree_node_value(expr_node),
     };
-    visit.pn->scope = scope;
+    parse_tree_set_scope(expr_node, scope);
     bool ok_a = false, ok_b = false;
     th_type *use_a = parse_infer_eval(lookup, &visit, tc, result->symtab,
                                      &ok_a);
@@ -2494,10 +2486,9 @@ test_generic_call_result_tracks_argument_type(void)
     };
     bool lookup_valid = false;
     if (attached && lookup)
-        core_tree_node_value(callee).type = parse_infer_eval(lookup,
-            &callee_visit, types, symbols, &lookup_valid);
-    if (argument)
-        core_tree_node_value(argument).type = argument_type;
+        parse_tree_set_type(callee, parse_infer_eval(lookup,
+            &callee_visit, types, symbols, &lookup_valid));
+    parse_tree_set_type(argument, argument_type);
     parse_infer_expr_t *inference = parse_infer_parse(S("return_of($0)"));
     parse_visit_t visit = {
         .grammar = g,
@@ -2548,8 +2539,7 @@ test_error_propagation_preserves_return_type(void)
     parse_tree_t *postfix = find_node(g, tree, "postfix");
     parse_tree_t *inner = postfix && core_tree_num_children(postfix)
         ? core_tree_child(postfix, 0) : nullptr;
-    if (inner && !core_tree_is_leaf(inner))
-        core_tree_node_value(inner).type = th_name(tc, "i32");
+    parse_tree_set_type(inner, th_name(tc, "i32"));
     parse_visit_t visit = {
         .grammar = g,
         .node = postfix,
@@ -2598,8 +2588,7 @@ test_indirection_inference_constructors(void)
     parse_tree_t *tree = loaded ? parse_toy(g, "top", "x", &p, &ts) : nullptr;
     th_ctx *tc = th_ctx_new();
     parse_tree_t *inner = tree ? core_tree_child(tree, 0) : nullptr;
-    if (inner && !core_tree_is_leaf(inner))
-        core_tree_node_value(inner).type = th_name(tc, "int");
+    parse_tree_set_type(inner, th_name(tc, "int"));
     parse_visit_t visit = {
         .grammar = g,
         .node = tree,
@@ -2648,10 +2637,8 @@ test_binary_method_result_inference(void)
     th_type *receiver = th_var(tc);
     parse_tree_t *left = tree ? core_tree_child(tree, 0) : nullptr;
     parse_tree_t *right = tree ? core_tree_child(tree, 2) : nullptr;
-    if (left && !core_tree_is_leaf(left))
-        core_tree_node_value(left).type = receiver;
-    if (right && !core_tree_is_leaf(right))
-        core_tree_node_value(right).type = th_name(tc, "string");
+    parse_tree_set_type(left, receiver);
+    parse_tree_set_type(right, th_name(tc, "string"));
     parse_visit_t visit = {
         .grammar = g,
         .node = tree,
@@ -2706,7 +2693,7 @@ test_function_visibility_does_not_leak_to_parameters(void)
         ? annotate_new(grammar, tree, types) : nullptr;
     parse_tree_t *func_node = result ? find_node(grammar, tree, "func") : nullptr;
     parse_sym_entry_t *function = func_node
-        ? core_tree_node_value(func_node).sym : nullptr;
+        ? parse_tree_sym(func_node) : nullptr;
     check("function-prelude visibility binds to the function declaration",
           loaded && tree && function
               && core_string_eq(function->visibility, S("public")));
@@ -2739,7 +2726,7 @@ test_visibility_prefix_binds_to_non_function_declaration(void)
         ? annotate_new(grammar, tree, types) : nullptr;
     parse_tree_t *trait_node = tree ? find_node(grammar, tree, "trait") : nullptr;
     parse_sym_entry_t *trait = trait_node
-        ? core_tree_node_value(trait_node).sym : nullptr;
+        ? parse_tree_sym(trait_node) : nullptr;
     check("non-function visibility grammar loads", loaded);
     check("non-function visibility sample parses", tree != nullptr);
     check("non-function declaration symbol is attached", trait != nullptr);
@@ -2777,7 +2764,7 @@ test_field_visibility_in_non_type_tagged_scope(void)
     parse_annot_result_t *result = tree
         ? annotate_new(grammar, tree, types) : nullptr;
     parse_scope_t *module_scope = tree
-        ? core_tree_node_value(tree).scope : nullptr;
+        ? parse_tree_scope(tree) : nullptr;
     parse_sym_entry_t *record = result && module_scope
         ? parse_symtab_lookup_scoped(result->symtab, module_scope, S("type"),
                                      S("r")) : nullptr;
@@ -2824,15 +2811,14 @@ test_scoped_declaration_is_bound_outside_its_body(void)
     parse_tree_walk_run(walk, tree);
     parse_tree_t *func = find_node(g, tree, "func");
     parse_sym_entry_t *symbol = func
-        ? core_tree_node_value(func).sym : nullptr;
+        ? parse_tree_sym(func) : nullptr;
 
     check("function symbol is provisionally stored in its enclosing module",
           symbol && symbol->kind == PARSE_SYM_FUNCTION
-              && symbol->scope == core_tree_node_value(tree).scope);
+              && symbol->scope == parse_tree_scope(tree));
     check("function body still has its own scope",
-          func && core_tree_node_value(func).scope
-              && core_tree_node_value(func).scope
-                     != core_tree_node_value(tree).scope);
+          func && parse_tree_scope(func)
+              && parse_tree_scope(func) != parse_tree_scope(tree));
 
     parse_tree_walk_free(walk);
     parse_annot_result_free(result);

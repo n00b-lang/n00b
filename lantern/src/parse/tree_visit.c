@@ -502,7 +502,7 @@ fill(parse_tree_walk_t *w, parse_visit_t *v, frame_t *f)
     }
 
     v->pn = &core_tree_node_value(f->node);
-    v->pn->parent = f->parent;
+    parse_tree_set_parent(f->node, f->parent);
 
     if (v->pn->id < 0 || v->pn->id == PARSE_EMPTY_STRING || v->pn->group_top) {
         return;

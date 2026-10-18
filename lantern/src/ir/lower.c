@@ -395,7 +395,7 @@ ir_lower_finish_assignment(ir_lower_context_t *context,
     ir_lower_tree_state_t *state = lower_active_tree(context);
     if (!state || !assignment || !completed_node) return false;
     for (parse_tree_t *node = completed_node; node;
-         node = core_tree_node_value(node).parent) {
+         node = parse_tree_parent(node)) {
         if (node != assignment) continue;
         core_dict_put(&state->handled_assignments, assignment, (void *)1);
         return true;
@@ -959,7 +959,7 @@ lower_builtin_action(ir_lower_context_t *context, const char *action,
         parse_sym_entry_t *symbol = resolution.kind
                 == PARSE_NODE_RESOLUTION_SYMBOL
             ? resolution.target.symbol
-            : visit && visit->pn ? visit->pn->sym : nullptr;
+            : visit ? parse_tree_sym(visit->node) : nullptr;
         ir_lower_symbol_binding_t *binding =
             lower_find_binding(context, symbol);
         if (!binding && symbol
@@ -1278,7 +1278,7 @@ static parse_tree_t *
 lower_tree_simple_lvalue(parse_tree_t *node)
 {
     while (node && !core_tree_is_leaf(node)) {
-        parse_sym_entry_t *symbol = core_tree_node_value(node).sym;
+        parse_sym_entry_t *symbol = parse_tree_sym(node);
         if (symbol) return node;
         if (core_tree_num_children(node) != 1) return nullptr;
         node = core_tree_child(node, 0);
@@ -1302,7 +1302,7 @@ lower_tree_is_suppressed_value(ir_lower_tree_state_t *state,
     for (ir_lower_skip_frame_t *target = state->skip_values;
          target; target = target->next)
         for (parse_tree_t *ancestor = node; ancestor;
-             ancestor = core_tree_node_value(ancestor).parent)
+             ancestor = parse_tree_parent(ancestor))
             if (target->reference == ancestor) return true;
     return false;
 }
@@ -1344,11 +1344,11 @@ lower_tree_assignment(ir_lower_tree_state_t *state, parse_visit_t *visit,
         parse_tree_nt_name(visit->grammar, visit->node),
         CORE_STRING_STATIC("sym-decl"));
     if (initializes)
-        symbol = core_tree_node_value(visit->node).sym;
+        symbol = parse_tree_sym(visit->node);
     else {
         parse_tree_t *lvalue = lower_tree_simple_lvalue(target);
-        symbol = lvalue ? core_tree_node_value(lvalue).sym : nullptr;
-        if (!symbol && visit->pn) symbol = visit->pn->sym;
+        symbol = lvalue ? parse_tree_sym(lvalue) : nullptr;
+        if (!symbol) symbol = parse_tree_sym(visit->node);
     }
     initializes = initializes
         || (symbol && (symbol->decl_node == visit->node
@@ -1573,7 +1573,7 @@ lower_tree_node(parse_visit_t *visit)
 
     ir_lower_result_t result = ir_lower_emit(
         state->lowerer, state->context, annotation, visit, operands, count,
-        visit->pn ? visit->pn->type : nullptr,
+        parse_tree_type(visit->node),
         span_of_tree(state->context, visit->node));
     core_free(operands);
     if (result.status == IR_LOWER_FAILED) {
@@ -1778,7 +1778,7 @@ ir_lower_tree(ir_lowerer_t *lowerer, ir_lower_context_t *context,
     int32_t child_index = -1;
     int32_t depth = 0;
     if (!core_tree_is_leaf(root)) {
-        parent = core_tree_node_value(root).parent;
+        parent = parse_tree_parent(root);
         if (parent && !core_tree_is_leaf(parent)) {
             for (size_t i = 0; i < core_tree_num_children(parent); i++) {
                 if (core_tree_child(parent, i) == root) {
@@ -1787,9 +1787,7 @@ ir_lower_tree(ir_lowerer_t *lowerer, ir_lower_context_t *context,
                 }
             }
             if (child_index < 0) parent = nullptr;
-            for (parse_tree_t *at = parent; at;
-                 at = core_tree_is_leaf(at)
-                     ? nullptr : core_tree_node_value(at).parent)
+            for (parse_tree_t *at = parent; at; at = parse_tree_parent(at))
                 depth++;
         }
     }

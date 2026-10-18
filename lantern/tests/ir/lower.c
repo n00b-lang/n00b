@@ -220,8 +220,8 @@ test_nonterminal_lowering_callbacks(void)
     parse_tree_t *literal = parsed
         ? core_tree_child(tree, 0) : nullptr;
     if (parsed) {
-        core_tree_node_value(tree).type = i32;
-        core_tree_node_value(literal).type = i32;
+        parse_tree_set_type(tree, i32);
+        parse_tree_set_type(literal, i32);
     }
     nt_visit_state_t publish_state = {0};
     bool publish_registered = parsed
@@ -269,8 +269,8 @@ test_nonterminal_lowering_callbacks(void)
                                   &tokens, &tree);
     literal = parsed ? core_tree_child(tree, 0) : nullptr;
     if (parsed) {
-        core_tree_node_value(tree).type = i32;
-        core_tree_node_value(literal).type = i32;
+        parse_tree_set_type(tree, i32);
+        parse_tree_set_type(literal, i32);
     }
     nt_visit_state_t suppressed_state = {0};
     bool suppressed_registered = parsed
@@ -441,8 +441,8 @@ main(void)
     parse_sym_set_alias_analysis_complete(&right_symbol, true);
     parse_tree_t *left_node = find_nonterminal(grammar, tree, "left");
     parse_tree_t *right_node = find_nonterminal(grammar, tree, "right");
-    if (left_node) core_tree_node_value(left_node).sym = &left_symbol;
-    if (right_node) core_tree_node_value(right_node).sym = &right_symbol;
+    parse_tree_set_sym(left_node, &left_symbol);
+    parse_tree_set_sym(right_node, &right_symbol);
     visit_counts_t visit_counts = {0};
     check("symbols bind to IR values and locals",
           alias_fact_added
@@ -690,7 +690,7 @@ main(void)
     check("scoped bindings do not overwrite durable symbol facts",
           right_phases && right_phases->kind == IR_ANNOT_INT
               && right_phases->i.mag == PARSE_SYM_PHASE_RUNTIME);
-    if (tree) core_tree_node_value(tree).type = i32;
+    parse_tree_set_type(tree, i32);
     ir_lower_result_t tree_sum = tree
         ? ir_lower_tree(lowerer, &lower, grammar, tree)
         : (ir_lower_result_t){.status = IR_LOWER_FAILED};
@@ -702,14 +702,14 @@ main(void)
         parse_sym_entry_t unbound_symbol = {
             .name = CORE_STRING_STATIC("unbound"), .type = i32,
         };
-        parse_sym_entry_t *saved = core_tree_node_value(right_node).sym;
+        parse_sym_entry_t *saved = parse_tree_sym(right_node);
         ir_diags_t *unbound_diags = ir_diags_new(ctx, nullptr);
         ir_lower_context_t unbound_context = lower;
         unbound_context.diagnostics = unbound_diags;
-        core_tree_node_value(right_node).sym = &unbound_symbol;
+        parse_tree_set_sym(right_node, &unbound_symbol);
         ir_lower_result_t unbound = ir_lower_tree(lowerer, &unbound_context,
                                                   grammar, right_node);
-        core_tree_node_value(right_node).sym = saved;
+        parse_tree_set_sym(right_node, saved);
         const ir_diag_t *diagnostic = ir_diags_at(unbound_diags, 0);
         check("an unbound reference fails without emitting a value",
               unbound.status == IR_LOWER_FAILED && !unbound.value);
@@ -759,10 +759,8 @@ main(void)
     parsed = parser && parse_pwz_parse(parser, tokens);
     tree = parsed ? parse_pwz_get_tree(parser) : nullptr;
     left_node = find_nonterminal(grammar, tree, "left");
-    if (left_node) {
-        core_tree_node_value(left_node).sym = &left_symbol;
-        core_tree_node_value(left_node).type = i32;
-    }
+    parse_tree_set_sym(left_node, &left_symbol);
+    parse_tree_set_type(left_node, i32);
     ir_lower_result_t published = tree
         ? ir_lower_tree(lowerer, &lower, grammar, tree)
         : (ir_lower_result_t){.status = IR_LOWER_FAILED};
@@ -778,15 +776,11 @@ main(void)
     tree = parsed ? parse_pwz_get_tree(parser) : nullptr;
     parse_tree_t *callee_node = find_nonterminal(grammar, tree, "callee");
     parse_tree_t *argument_node = find_nonterminal(grammar, tree, "argument");
-    if (callee_node) {
-        core_tree_node_value(callee_node).sym = &callee_symbol;
-        core_tree_node_value(callee_node).type = callee_signature;
-    }
-    if (argument_node) {
-        core_tree_node_value(argument_node).sym = &left_symbol;
-        core_tree_node_value(argument_node).type = i32;
-    }
-    if (tree) core_tree_node_value(tree).type = i32;
+    parse_tree_set_sym(callee_node, &callee_symbol);
+    parse_tree_set_type(callee_node, callee_signature);
+    parse_tree_set_sym(argument_node, &left_symbol);
+    parse_tree_set_type(argument_node, i32);
+    parse_tree_set_type(tree, i32);
     ir_lower_result_t called = tree
         ? ir_lower_tree(lowerer, &lower, grammar, tree)
         : (ir_lower_result_t){.status = IR_LOWER_FAILED};
@@ -801,7 +795,7 @@ main(void)
     tokens = scan_token_stream_from_codepoints(CORE_STRING_STATIC("7"));
     parsed = parser && parse_pwz_parse(parser, tokens);
     tree = parsed ? parse_pwz_get_tree(parser) : nullptr;
-    if (tree) core_tree_node_value(tree).type = i32;
+    parse_tree_set_type(tree, i32);
     ir_lower_result_t literal = tree
         ? ir_lower_tree(lowerer, &lower, grammar, tree)
         : (ir_lower_result_t){.status = IR_LOWER_FAILED};
@@ -818,9 +812,9 @@ main(void)
     parsed = parser && parse_pwz_parse(parser, tokens);
     tree = parsed ? parse_pwz_get_tree(parser) : nullptr;
     parse_tree_t *target_node = find_nonterminal(grammar, tree, "target");
-    if (target_node) core_tree_node_value(target_node).sym = &local_symbol;
+    parse_tree_set_sym(target_node, &local_symbol);
     parse_tree_t *assigned_literal = find_nonterminal(grammar, tree, "literal");
-    if (assigned_literal) core_tree_node_value(assigned_literal).type = i32;
+    parse_tree_set_type(assigned_literal, i32);
     size_t assignment_start = block->n_instrs;
     ir_lower_result_t assigned = tree
         ? ir_lower_tree(lowerer, &lower, grammar, tree)
@@ -838,9 +832,9 @@ main(void)
     tokens = scan_token_stream_from_codepoints(CORE_STRING_STATIC("x=7"));
     parsed = parser && parse_pwz_parse(parser, tokens);
     tree = parsed ? parse_pwz_get_tree(parser) : nullptr;
-    if (tree) core_tree_node_value(tree).sym = &local_symbol;
+    parse_tree_set_sym(tree, &local_symbol);
     assigned_literal = find_nonterminal(grammar, tree, "literal");
-    if (assigned_literal) core_tree_node_value(assigned_literal).type = i32;
+    parse_tree_set_type(assigned_literal, i32);
     assignment_start = block->n_instrs;
     assigned = tree ? ir_lower_tree(lowerer, &lower, grammar, tree)
         : (ir_lower_result_t){.status = IR_LOWER_FAILED};
@@ -869,7 +863,7 @@ main(void)
     parsed = parser && parse_pwz_parse(parser, tokens);
     tree = parsed ? parse_pwz_get_tree(parser) : nullptr;
     parse_tree_t *return_literal = find_nonterminal(grammar, tree, "literal");
-    if (return_literal) core_tree_node_value(return_literal).type = i32;
+    parse_tree_set_type(return_literal, i32);
     ir_lower_result_t returned = tree
         ? ir_lower_tree(lowerer, &return_context, grammar, tree)
         : (ir_lower_result_t){.status = IR_LOWER_FAILED};
@@ -1020,9 +1014,8 @@ main(void)
     parsed = parser && parse_pwz_parse(parser, tokens);
     tree = parsed ? parse_pwz_get_tree(parser) : nullptr;
     parse_tree_t *storage_target = find_nonterminal(grammar, tree, "target");
-    if (storage_target)
-        core_tree_node_value(storage_target).sym = &storage_symbol;
-    if (tree) core_tree_node_value(tree).type = i32;
+    parse_tree_set_sym(storage_target, &storage_symbol);
+    parse_tree_set_type(tree, i32);
     ir_lower_result_t storage_read = tree
         ? ir_lower_tree(lowerer, &storage_lower, grammar, tree)
         : (ir_lower_result_t){.status = IR_LOWER_FAILED};
@@ -1040,9 +1033,8 @@ main(void)
     tree = parsed ? parse_pwz_get_tree(parser) : nullptr;
     storage_target = find_nonterminal(grammar, tree, "target");
     parse_tree_t *storage_literal = find_nonterminal(grammar, tree, "literal");
-    if (storage_target)
-        core_tree_node_value(storage_target).sym = &storage_symbol;
-    if (storage_literal) core_tree_node_value(storage_literal).type = i32;
+    parse_tree_set_sym(storage_target, &storage_symbol);
+    parse_tree_set_type(storage_literal, i32);
     ir_lower_result_t storage_write = tree
         ? ir_lower_tree(lowerer, &storage_lower, grammar, tree)
         : (ir_lower_result_t){.status = IR_LOWER_FAILED};
@@ -1080,7 +1072,7 @@ main(void)
     parsed = parser && parse_pwz_parse(parser, tokens);
     tree = parsed ? parse_pwz_get_tree(parser) : nullptr;
     parse_tree_t *base_node = find_nonterminal(grammar, tree, "base");
-    if (base_node) core_tree_node_value(base_node).sym = &local_symbol;
+    parse_tree_set_sym(base_node, &local_symbol);
     assigned = tree ? ir_lower_tree(lowerer, &lower, grammar, tree)
         : (ir_lower_result_t){.status = IR_LOWER_FAILED};
     check("unsupported compound lvalues are rejected",
