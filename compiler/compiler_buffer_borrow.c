@@ -549,6 +549,19 @@ seed_value(origins_t *state, ir_value_t *value, root_set_t *into,
 }
 
 static bool
+is_location(const ir_value_t *root)
+{
+    return is_allocation(root)
+        || (root && root->kind == IR_VAL_LOCAL && root->local);
+}
+
+static root_set_t *
+location_memory(origins_t *state, const ir_value_t *root)
+{
+    return origin_slot(state, root, is_allocation(root));
+}
+
+static bool
 expand_contents(origins_t *state, root_set_t *roots)
 {
     bool changed = true;
@@ -556,8 +569,8 @@ expand_contents(origins_t *state, root_set_t *roots)
         changed = false;
         uint32_t len = roots->len;
         for (uint32_t i = 0; i < len; i++) {
-            if (!is_allocation(roots->items[i])) continue;
-            root_set_t *memory = origin_slot(state, roots->items[i], true);
+            if (!is_location(roots->items[i])) continue;
+            root_set_t *memory = location_memory(state, roots->items[i]);
             if (!memory || !root_set_union(roots, memory, &changed))
                 return false;
         }
@@ -570,8 +583,8 @@ load_roots(origins_t *state, const root_set_t *address, root_set_t *into)
 {
     for (uint32_t i = 0; i < address->len; i++) {
         ir_value_t *root = address->items[i];
-        if (is_allocation(root)) {
-            root_set_t *memory = origin_slot(state, root, true);
+        if (is_location(root)) {
+            root_set_t *memory = location_memory(state, root);
             if (!memory || !root_set_union(into, memory, nullptr))
                 return false;
         }
@@ -583,6 +596,17 @@ load_roots(origins_t *state, const root_set_t *address, root_set_t *into)
         }
         else if (!root_set_add(into, root, nullptr)) return false;
     }
+    return true;
+}
+
+static bool
+reached_roots(origins_t *state, const root_set_t *roots, root_set_t *into)
+{
+    if (!load_roots(state, roots, into)) return false;
+    for (uint32_t i = 0; i < roots->len; i++)
+        if (!is_location(roots->items[i])
+            && !root_set_add(into, roots->items[i], nullptr))
+            return false;
     return true;
 }
 
@@ -613,6 +637,24 @@ record_escape(origins_t *state, const root_set_t *roots, bool *changed)
 }
 
 static bool
+escape_into(origins_t *state, ir_value_t *target, const root_set_t *stored,
+            bool *changed)
+{
+    ir_value_t *contents = target == &nonlocal_root
+        || is_contents_root(state->effects, target)
+        ? target : contents_root(state->effects, target);
+    if (!contents) return false;
+    root_set_t leaving = {0};
+    bool ok = true;
+    for (uint32_t i = 0; ok && i < stored->len; i++)
+        if (stored->items[i] != target && stored->items[i] != contents)
+            ok = root_set_add(&leaving, stored->items[i], nullptr);
+    ok = ok && record_escape(state, &leaving, changed);
+    free(leaving.items);
+    return ok;
+}
+
+static bool
 call_effects(origins_t *state, const ir_instr_t *call, effects_t **effects)
 {
     ir_func_t *callee = direct_callee(call);
@@ -636,7 +678,7 @@ call_carried(origins_t *state, const ir_instr_t *call, uint32_t slot,
         root_set_t roots = {0};
         root_set_t contents = {0};
         ok = seed_value(state, argument, &roots, nullptr)
-            && load_roots(state, &roots, &contents);
+            && reached_roots(state, &roots, &contents);
         uint32_t index = i - first;
         if (ok && (!carried
                    || effect_bit(carried->from, index, REACH_SELF)))
@@ -696,7 +738,7 @@ transfer_call(origins_t *state, ir_instr_t *instruction, root_set_t *result,
         root_set_t roots = {0};
         root_set_t contents = {0};
         ok = seed_value(state, argument, &roots, nullptr)
-            && load_roots(state, &roots, &contents);
+            && reached_roots(state, &roots, &contents);
         uint32_t index = i - first;
         bool carry = contents_carry_references(state, argument);
         for (int kind = 0; ok && kind < REACH_KINDS; kind++) {
@@ -714,8 +756,8 @@ transfer_call(origins_t *state, ir_instr_t *instruction, root_set_t *result,
         root_set_t roots = {0};
         ok = seed_value(state, operand_at(instruction, i), &roots, nullptr);
         for (uint32_t r = 0; ok && r < roots.len; r++) {
-            if (!is_allocation(roots.items[r])) continue;
-            root_set_t *memory = origin_slot(state, roots.items[r], true);
+            if (!is_location(roots.items[r])) continue;
+            root_set_t *memory = location_memory(state, roots.items[r]);
             ok = memory && root_set_union(memory, &kept, changed)
                 && root_set_add(memory, roots.items[r], changed);
         }
@@ -775,11 +817,11 @@ transfer(origins_t *state, ir_instr_t *instruction, bool *changed)
         }
         for (uint32_t i = 0; ok && i < address.len; i++) {
             ir_value_t *root = address.items[i];
-            if (is_allocation(root)) {
-                root_set_t *memory = origin_slot(state, root, true);
+            if (is_location(root)) {
+                root_set_t *memory = location_memory(state, root);
                 ok = memory && root_set_union(memory, &stored, changed);
             }
-            else ok = record_escape(state, &stored, changed);
+            else ok = escape_into(state, root, &stored, changed);
         }
         free(address.items);
         free(stored.items);
@@ -791,6 +833,14 @@ transfer(origins_t *state, ir_instr_t *instruction, bool *changed)
         ok = seed_value(state, operand_at(instruction, 1), &stored, nullptr)
             && record_escape(state, &stored, changed);
         free(stored.items);
+        break;
+    }
+    case IR_OP_ADDRESS_OF: {
+        ir_value_t *target = instruction->n_operands
+            ? operand_at(instruction, 0) : nullptr;
+        ok = is_location(target)
+            ? root_set_add(&gathered, target, nullptr)
+            : seed_value(state, target, &gathered, nullptr);
         break;
     }
     case IR_OP_RETURN:
@@ -885,7 +935,7 @@ call_write_roots(origins_t *state, ir_instr_t *instruction,
         bool ok = seed_value(state, operand_at(instruction, i), &roots,
                              nullptr)
             && (!self || root_set_union(written, &roots, nullptr))
-            && (!contents || load_roots(state, &roots, written));
+            && (!contents || reached_roots(state, &roots, written));
         free(roots.items);
         if (!ok) return false;
     }
@@ -1157,17 +1207,25 @@ collect_tracked(window_t *window)
 {
     ir_value_t *view = window->conversion->dest;
     origins_t *origins = window->origins;
-    for (size_t i = 0; i < origins->slots.cap; i++) {
-        const ir_value_t *value = origins->slots.keys[i];
-        if (!value) continue;
-        uint32_t slot = origins->slots.slots[i];
-        if ((root_set_has(&origins->origins[slot], view)
-             && value->kind != IR_VAL_PARAM)
-            || (is_allocation(value)
-                && root_set_has(&origins->memory[slot], view)))
-            if (!track(window, (ir_value_t *)value)) return false;
+    size_t count = origins->slots.len;
+    ir_value_t **values = calloc(count ? count : 1, sizeof(*values));
+    if (!values) return false;
+    size_t len = 0;
+    for (size_t i = 0; i < origins->slots.cap && len < count; i++)
+        if (origins->slots.keys[i]
+            && ((const ir_value_t *)origins->slots.keys[i])->kind
+                != IR_VAL_PARAM)
+            values[len++] = (ir_value_t *)origins->slots.keys[i];
+    bool ok = true;
+    for (size_t i = 0; ok && i < len; i++) {
+        root_set_t reached = {0};
+        ok = seed_value(origins, values[i], &reached, nullptr)
+            && expand_contents(origins, &reached)
+            && (!root_set_has(&reached, view) || track(window, values[i]));
+        free(reached.items);
     }
-    if (!track(window, view)) return false;
+    free(values);
+    if (!ok || !track(window, view)) return false;
     for (uint32_t b = 0; b < window->function->n_blocks; b++) {
         ir_block_t *block = window->function->blocks[b];
         for (uint32_t i = 0; i < block->n_instrs; i++) {
