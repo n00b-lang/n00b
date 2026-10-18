@@ -119,6 +119,30 @@ func reassign_global() -> uint {
     return byte_len(view)
 }
 
+record Tagged {
+    b: Buffer
+    n: int
+}
+
+func field_writes(t: Ref[Tagged]) -> uint {
+    let view: string = t.b
+    t.n = 5
+    t.b = buffer_from_string("replaced")
+    return byte_len(view)
+}
+
+func freed() -> uint {
+    var b: Buffer = buffer_from_string("gone")
+    free(b)
+    b += "x"
+    return byte_len(b)
+}
+
+var tagged: Tagged = (b = buffer_from_string("tag"), n = 0)
+require field_writes(ref tagged) == 3
+require tagged.n == 5
+require byte_len(tagged.b) == 8
+require freed() == 1
 var previous: Buffer = swapped
 require reassign_global() == 6
 swapped += "!"

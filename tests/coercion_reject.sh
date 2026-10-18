@@ -166,6 +166,59 @@ escape_site()
 EOF
 reject escape_site 'may be kept, at line 9'
 
+cat >"$tmp/fresh_global.n" <<'EOF'
+var g: Buffer = empty_buffer()
+func make() -> Buffer {
+    let x: Buffer = buffer_from_string("kept")
+    g = x
+    return x
+}
+func grow() {
+    g += "!"
+}
+func fresh_global() -> uint {
+    let b: Buffer = make()
+    let view: string = b
+    grow()
+    return byte_len(view)
+}
+fresh_global()
+EOF
+reject fresh_global 'this call may write the borrowed Buffer, at line 13'
+
+cat >"$tmp/fresh_out.n" <<'EOF'
+func make(out c: Buffer) -> Buffer {
+    let x: Buffer = buffer_from_string("kept")
+    c = x
+    return x
+}
+func fresh_out() -> uint {
+    var c: Buffer = empty_buffer()
+    let b: Buffer = make(c)
+    let view: string = b
+    c += "!"
+    return byte_len(view)
+}
+fresh_out()
+EOF
+reject fresh_out 'this call may write the borrowed Buffer, at line 10'
+
+cat >"$tmp/ref_local.n" <<'EOF'
+func hold(s: string) -> Ref[string] {
+    var h: string = s
+    return ref h
+}
+func ref_local() -> uint {
+    var b: Buffer = buffer_from_string("kept")
+    let r: Ref[string] = hold(b)
+    b += "!"
+    let t: string = r
+    return byte_len(t)
+}
+ref_local()
+EOF
+reject ref_local 'stored into a field, element or container here, at line 7'
+
 cat >"$tmp/string_to_buffer.n" <<'EOF'
 func wrong() -> Buffer {
     return "text"
