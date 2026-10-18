@@ -136,13 +136,18 @@ root_set_union(root_set_t *into, const root_set_t *from, bool *changed)
 enum { REACH_SELF, REACH_CONTENTS, REACH_KINDS };
 
 typedef struct {
+    uint64_t from[REACH_KINDS];
+    bool nonlocal;
+    bool fresh;
+} carried_t;
+
+typedef struct {
     ir_func_t *function;
     uint64_t writes[REACH_KINDS];
     uint64_t escapes[REACH_KINDS];
-    uint64_t returns[REACH_KINDS];
+    carried_t *carried;
+    uint32_t n_carried;
     bool writes_nonlocal;
-    bool returns_nonlocal;
-    bool returns_fresh;
     bool opaque;
 } effects_t;
 
@@ -153,6 +158,7 @@ typedef struct {
     pointer_map_t index;
     pointer_map_t contents_index;
     ir_value_t **contents;
+    ir_value_t **contents_base;
     bool *contents_hold_buffer;
     uint32_t contents_len;
     uint32_t contents_cap;
@@ -285,8 +291,11 @@ contents_root(effects_table_t *table, ir_value_t *base)
         if (contents) table->contents = contents;
         bool *holds = contents ? realloc(table->contents_hold_buffer,
                                          cap * sizeof(*holds)) : nullptr;
-        if (!contents || !holds) return nullptr;
-        table->contents_hold_buffer = holds;
+        if (holds) table->contents_hold_buffer = holds;
+        ir_value_t **bases = holds ? realloc(table->contents_base,
+                                             cap * sizeof(*bases)) : nullptr;
+        if (!bases) return nullptr;
+        table->contents_base = bases;
         table->contents_cap = cap;
     }
     ir_value_t *root = calloc(1, sizeof(*root));
@@ -296,7 +305,6 @@ contents_root(effects_table_t *table, ir_value_t *base)
         .name = "<contents>",
         .type = base->type,
         .owner = base->owner,
-        .index = base->index,
     };
     uint32_t at = table->contents_len;
     if (!pointer_map_put(&table->contents_index, root, at)) {
@@ -308,6 +316,7 @@ contents_root(effects_table_t *table, ir_value_t *base)
         return nullptr;
     }
     table->contents[at] = root;
+    table->contents_base[at] = base;
     table->contents_hold_buffer[at] = contents_may_hold_buffer(table->types,
         base->type, 0);
     table->contents_len++;
@@ -323,15 +332,27 @@ is_contents_root(const effects_table_t *table, const ir_value_t *root)
         && table->contents[slot] == root;
 }
 
+static ir_value_t *
+contents_base(const effects_table_t *table, const ir_value_t *root)
+{
+    uint32_t slot = 0;
+    return is_contents_root(table, root)
+        && pointer_map_get(&table->contents_index, root, &slot)
+        ? table->contents_base[slot] : nullptr;
+}
+
 static void
 effects_table_free(effects_table_t *table)
 {
     for (uint32_t i = 0; i < table->contents_len; i++)
         free(table->contents[i]);
     free(table->contents);
+    free(table->contents_base);
     free(table->contents_hold_buffer);
-    for (size_t i = 0; i < table->len; i++)
+    for (size_t i = 0; i < table->len; i++) {
+        free(table->items[i]->carried);
         free(table->items[i]);
+    }
     free(table->items);
     pointer_map_free(&table->index);
     pointer_map_free(&table->contents_index);
@@ -356,6 +377,22 @@ function_is_write_lock(const ir_func_t *function)
         && !strcmp(write_lock_name + module_len + 1, function->name);
 }
 
+static th_type *
+function_signature(const ir_func_t *function)
+{
+    th_type *signature = function && function->type
+        ? th_resolve(function->type) : nullptr;
+    return signature && th_kind_of(signature) == TH_FUNCTION ? signature
+                                                             : nullptr;
+}
+
+static uint32_t
+carried_count(const ir_func_t *function)
+{
+    th_type *signature = function_signature(function);
+    return 1 + (signature ? (uint32_t)ir_call_output_count(signature) : 0);
+}
+
 static effects_t *
 effects_for(effects_table_t *table, ir_func_t *function)
 {
@@ -373,26 +410,35 @@ effects_for(effects_table_t *table, ir_func_t *function)
         table->cap = cap;
     }
     effects_t *effects = calloc(1, sizeof(*effects));
-    if (!effects) {
+    uint32_t n_carried = carried_count(function);
+    carried_t *carried = effects ? calloc(n_carried, sizeof(*carried))
+                                 : nullptr;
+    if (!carried) {
+        free(effects);
         table->failed = true;
         return nullptr;
     }
     table->items[table->len] = effects;
-    *effects = (effects_t){.function = function};
-    if (!function->n_blocks && !function_is_native(function)) {
+    *effects = (effects_t){
+        .function = function, .carried = carried, .n_carried = n_carried,
+    };
+    bool opaque = !function->n_blocks && !function_is_native(function);
+    if (opaque) {
         for (int kind = 0; kind < REACH_KINDS; kind++)
-            effects->writes[kind] = effects->escapes[kind]
-                = effects->returns[kind] = UINT64_MAX;
-        effects->writes_nonlocal = effects->returns_nonlocal = true;
+            effects->writes[kind] = effects->escapes[kind] = UINT64_MAX;
+        effects->writes_nonlocal = true;
         effects->opaque = true;
     }
-    else if (!function->n_blocks) {
-        effects->returns[REACH_SELF] = UINT64_MAX;
-        effects->returns[REACH_CONTENTS] = UINT64_MAX;
-        effects->returns_fresh = true;
-    }
+    for (uint32_t slot = 0; !function->n_blocks && slot < n_carried;
+         slot++)
+        carried[slot] = (carried_t){
+            .from = {UINT64_MAX, UINT64_MAX},
+            .nonlocal = opaque,
+            .fresh = !opaque,
+        };
     if (function_is_write_lock(function)) effects->writes[REACH_SELF] = 1;
     if (!pointer_map_put(&table->index, function, (uint32_t)table->len)) {
+        free(carried);
         free(effects);
         table->failed = true;
         return nullptr;
@@ -503,6 +549,19 @@ seed_value(origins_t *state, ir_value_t *value, root_set_t *into,
 }
 
 static bool
+is_location(const ir_value_t *root)
+{
+    return is_allocation(root)
+        || (root && root->kind == IR_VAL_LOCAL && root->local);
+}
+
+static root_set_t *
+location_memory(origins_t *state, const ir_value_t *root)
+{
+    return origin_slot(state, root, is_allocation(root));
+}
+
+static bool
 expand_contents(origins_t *state, root_set_t *roots)
 {
     bool changed = true;
@@ -510,8 +569,8 @@ expand_contents(origins_t *state, root_set_t *roots)
         changed = false;
         uint32_t len = roots->len;
         for (uint32_t i = 0; i < len; i++) {
-            if (!is_allocation(roots->items[i])) continue;
-            root_set_t *memory = origin_slot(state, roots->items[i], true);
+            if (!is_location(roots->items[i])) continue;
+            root_set_t *memory = location_memory(state, roots->items[i]);
             if (!memory || !root_set_union(roots, memory, &changed))
                 return false;
         }
@@ -524,8 +583,8 @@ load_roots(origins_t *state, const root_set_t *address, root_set_t *into)
 {
     for (uint32_t i = 0; i < address->len; i++) {
         ir_value_t *root = address->items[i];
-        if (is_allocation(root)) {
-            root_set_t *memory = origin_slot(state, root, true);
+        if (is_location(root)) {
+            root_set_t *memory = location_memory(state, root);
             if (!memory || !root_set_union(into, memory, nullptr))
                 return false;
         }
@@ -537,6 +596,17 @@ load_roots(origins_t *state, const root_set_t *address, root_set_t *into)
         }
         else if (!root_set_add(into, root, nullptr)) return false;
     }
+    return true;
+}
+
+static bool
+reached_roots(origins_t *state, const root_set_t *roots, root_set_t *into)
+{
+    if (!load_roots(state, roots, into)) return false;
+    for (uint32_t i = 0; i < roots->len; i++)
+        if (!is_location(roots->items[i])
+            && !root_set_add(into, roots->items[i], nullptr))
+            return false;
     return true;
 }
 
@@ -567,13 +637,97 @@ record_escape(origins_t *state, const root_set_t *roots, bool *changed)
 }
 
 static bool
+escape_into(origins_t *state, ir_value_t *target, const root_set_t *stored,
+            bool *changed)
+{
+    ir_value_t *contents = target == &nonlocal_root
+        || is_contents_root(state->effects, target)
+        ? target : contents_root(state->effects, target);
+    if (!contents) return false;
+    root_set_t leaving = {0};
+    bool ok = true;
+    for (uint32_t i = 0; ok && i < stored->len; i++)
+        if (stored->items[i] != target && stored->items[i] != contents)
+            ok = root_set_add(&leaving, stored->items[i], nullptr);
+    ok = ok && record_escape(state, &leaving, changed);
+    free(leaving.items);
+    return ok;
+}
+
+static bool
+call_effects(origins_t *state, const ir_instr_t *call, effects_t **effects)
+{
+    ir_func_t *callee = direct_callee(call);
+    *effects = callee ? effects_for(state->effects, callee) : nullptr;
+    return !callee || *effects;
+}
+
+static bool
+call_carried(origins_t *state, const ir_instr_t *call, uint32_t slot,
+             ir_value_t *fresh, root_set_t *into)
+{
+    effects_t *effects = nullptr;
+    if (!call_effects(state, call, &effects)) return false;
+    const carried_t *carried = effects && !effects->opaque
+        && slot < effects->n_carried ? &effects->carried[slot] : nullptr;
+    uint32_t first = call->op == IR_OP_CALL ? 1 : 0;
+    bool ok = true;
+    for (uint32_t i = first; ok && i < call->n_operands; i++) {
+        ir_value_t *argument = operand_at(call, i);
+        if (!argument) continue;
+        root_set_t roots = {0};
+        root_set_t contents = {0};
+        ok = seed_value(state, argument, &roots, nullptr)
+            && reached_roots(state, &roots, &contents);
+        uint32_t index = i - first;
+        if (ok && (!carried
+                   || effect_bit(carried->from, index, REACH_SELF)))
+            ok = root_set_union(into, &roots, nullptr);
+        if (ok && contents_carry_references(state, argument)
+            && (!carried
+                || effect_bit(carried->from, index, REACH_CONTENTS)))
+            ok = root_set_union(into, &contents, nullptr);
+        free(roots.items);
+        free(contents.items);
+    }
+    if (ok && (!carried || carried->nonlocal))
+        ok = root_set_add(into, &nonlocal_root, nullptr);
+    if (ok && fresh && carried && carried->fresh)
+        ok = root_set_add(into, fresh, nullptr);
+    return ok;
+}
+
+static ir_instr_t *
+output_call(const ir_instr_t *output)
+{
+    ir_value_t *source = output->n_operands ? operand_at(output, 0)
+                                            : nullptr;
+    ir_instr_t *call = source && source->kind == IR_VAL_INSTR ? source->def
+                                                              : nullptr;
+    if (call && call->op == IR_OP_VARIANT_PAYLOAD && call->n_operands) {
+        source = operand_at(call, 0);
+        call = source && source->kind == IR_VAL_INSTR ? source->def
+                                                      : nullptr;
+    }
+    return call && is_call(call) ? call : nullptr;
+}
+
+static uint32_t
+output_slot(const ir_instr_t *output)
+{
+    if (output->n_operands < 2 || output->operands[1].kind != IR_OPD_CONST
+        || output->operands[1].lit.i.neg
+        || output->operands[1].lit.i.mag >= UINT32_MAX)
+        return UINT32_MAX;
+    return 1 + (uint32_t)output->operands[1].lit.i.mag;
+}
+
+static bool
 transfer_call(origins_t *state, ir_instr_t *instruction, root_set_t *result,
               bool *changed)
 {
-    ir_func_t *callee = direct_callee(instruction);
-    effects_t *effects = callee ? effects_for(state->effects, callee)
-                                : nullptr;
-    if (callee && !effects) return false;
+    effects_t *effects = nullptr;
+    if (!call_effects(state, instruction, &effects)) return false;
     bool opaque = !effects || effects->opaque;
     uint32_t first = instruction->op == IR_OP_CALL ? 1 : 0;
     root_set_t kept = {0};
@@ -584,20 +738,16 @@ transfer_call(origins_t *state, ir_instr_t *instruction, root_set_t *result,
         root_set_t roots = {0};
         root_set_t contents = {0};
         ok = seed_value(state, argument, &roots, nullptr)
-            && load_roots(state, &roots, &contents);
+            && reached_roots(state, &roots, &contents);
         uint32_t index = i - first;
         bool carry = contents_carry_references(state, argument);
         for (int kind = 0; ok && kind < REACH_KINDS; kind++) {
             if (kind == REACH_CONTENTS && !carry) continue;
             root_set_t *reached = kind == REACH_SELF ? &roots : &contents;
-            bool escapes = opaque
-                || effect_bit(effects->escapes, index, kind);
-            bool returned = opaque
-                || effect_bit(effects->returns, index, kind);
-            if (ok && escapes) ok = record_escape(state, reached, changed);
-            if (ok && escapes) ok = root_set_union(&kept, reached, nullptr);
-            if (ok && returned)
-                ok = root_set_union(result, reached, nullptr);
+            if (!opaque && !effect_bit(effects->escapes, index, kind))
+                continue;
+            ok = record_escape(state, reached, changed)
+                && root_set_union(&kept, reached, nullptr);
         }
         free(roots.items);
         free(contents.items);
@@ -606,41 +756,16 @@ transfer_call(origins_t *state, ir_instr_t *instruction, root_set_t *result,
         root_set_t roots = {0};
         ok = seed_value(state, operand_at(instruction, i), &roots, nullptr);
         for (uint32_t r = 0; ok && r < roots.len; r++) {
-            if (!is_allocation(roots.items[r])) continue;
-            root_set_t *memory = origin_slot(state, roots.items[r], true);
+            if (!is_location(roots.items[r])) continue;
+            root_set_t *memory = location_memory(state, roots.items[r]);
             ok = memory && root_set_union(memory, &kept, changed)
                 && root_set_add(memory, roots.items[r], changed);
         }
         free(roots.items);
     }
     free(kept.items);
-    if (!ok) return false;
-    if (opaque || effects->returns_nonlocal)
-        if (!root_set_add(result, &nonlocal_root, nullptr)) return false;
-    if (instruction->dest && effects && effects->returns_fresh)
-        if (!root_set_add(result, instruction->dest, nullptr)) return false;
-    return true;
-}
-
-static ir_value_t *
-output_argument(const ir_instr_t *output, const ir_instr_t *call)
-{
-    ir_func_t *callee = call ? direct_callee(call) : nullptr;
-    th_type *signature = callee && callee->type
-        ? th_resolve(callee->type) : nullptr;
-    if (!signature || th_kind_of(signature) != TH_FUNCTION
-        || output->n_operands < 2
-        || output->operands[1].kind != IR_OPD_CONST) return nullptr;
-    uint64_t wanted = output->operands[1].lit.i.mag;
-    uint64_t seen = 0;
-    for (size_t i = 0; i < th_func_nparams(signature); i++) {
-        const th_param *formal = th_func_param(signature, i);
-        if (!formal || !th_mode_produces_output(formal->mode)) continue;
-        if (seen++ != wanted) continue;
-        return i + 1 < call->n_operands ? operand_at(call, (uint32_t)i + 1)
-                                        : nullptr;
-    }
-    return nullptr;
+    return ok && call_carried(state, instruction, 0, instruction->dest,
+                              result);
 }
 
 static bool
@@ -667,16 +792,18 @@ transfer(origins_t *state, ir_instr_t *instruction, bool *changed)
     case IR_OP_SEQUENCE_SET:
     case IR_OP_ATOMIC_RMW:
     case IR_OP_ATOMIC_CAS:
-    case IR_OP_MEMCPY: {
-        uint32_t value_at = instruction->op == IR_OP_STORE
-            || instruction->op == IR_OP_MEMCPY ? 1 : 2;
+    case IR_OP_MEMCPY:
+    case IR_OP_MEMMOVE: {
+        bool copies = instruction->op == IR_OP_MEMCPY
+            || instruction->op == IR_OP_MEMMOVE;
+        uint32_t value_at = copies || instruction->op == IR_OP_STORE ? 1 : 2;
         if (instruction->n_operands <= value_at) break;
         root_set_t address = {0};
         root_set_t stored = {0};
         ok = seed_value(state, operand_at(instruction, 0), &address, nullptr)
             && seed_value(state, operand_at(instruction, value_at), &stored,
                           nullptr);
-        if (ok && instruction->op == IR_OP_MEMCPY) {
+        if (ok && copies) {
             ir_value_t *destination = operand_at(instruction, 0);
             th_type *pointer = destination && destination->type
                 ? th_resolve(destination->type) : nullptr;
@@ -692,11 +819,11 @@ transfer(origins_t *state, ir_instr_t *instruction, bool *changed)
         }
         for (uint32_t i = 0; ok && i < address.len; i++) {
             ir_value_t *root = address.items[i];
-            if (is_allocation(root)) {
-                root_set_t *memory = origin_slot(state, root, true);
+            if (is_location(root)) {
+                root_set_t *memory = location_memory(state, root);
                 ok = memory && root_set_union(memory, &stored, changed);
             }
-            else ok = record_escape(state, &stored, changed);
+            else ok = escape_into(state, root, &stored, changed);
         }
         free(address.items);
         free(stored.items);
@@ -710,26 +837,28 @@ transfer(origins_t *state, ir_instr_t *instruction, bool *changed)
         free(stored.items);
         break;
     }
+    case IR_OP_ADDRESS_OF: {
+        ir_value_t *target = instruction->n_operands
+            ? operand_at(instruction, 0) : nullptr;
+        ok = is_location(target)
+            ? root_set_add(&gathered, target, nullptr)
+            : seed_value(state, target, &gathered, nullptr);
+        break;
+    }
     case IR_OP_RETURN:
+    case IR_OP_FAIL:
         break;
     case IR_OP_CALL:
     case IR_OP_CALLBACK_INVOKE:
         ok = transfer_call(state, instruction, &gathered, changed);
         break;
     case IR_OP_CALL_OUTPUT: {
-        ir_value_t *call_value = instruction->n_operands
-            ? operand_at(instruction, 0) : nullptr;
-        ir_instr_t *call = call_value && call_value->kind == IR_VAL_INSTR
-            ? call_value->def : nullptr;
-        uint32_t first = call && call->op == IR_OP_CALL ? 1 : 0;
-        ir_value_t *argument = output_argument(instruction, call);
-        if (argument)
-            ok = seed_value(state, argument, &gathered, nullptr);
-        else
-            for (uint32_t i = first; ok && call && i < call->n_operands; i++)
-                ok = seed_value(state, operand_at(call, i), &gathered,
-                                nullptr);
-        ok = ok && root_set_add(&gathered, instruction->dest, nullptr);
+        ir_instr_t *call = output_call(instruction);
+        ok = call ? call_carried(state, call, output_slot(instruction),
+                                 instruction->dest, &gathered)
+                  : instruction->n_operands
+                && seed_value(state, operand_at(instruction, 0), &gathered,
+                              nullptr);
         break;
     }
     default: {
@@ -808,32 +937,107 @@ call_write_roots(origins_t *state, ir_instr_t *instruction,
         bool ok = seed_value(state, operand_at(instruction, i), &roots,
                              nullptr)
             && (!self || root_set_union(written, &roots, nullptr))
-            && (!contents || load_roots(state, &roots, written));
+            && (!contents || reached_roots(state, &roots, written));
         free(roots.items);
         if (!ok) return false;
     }
     return expand_contents(state, written);
 }
 
-static uint64_t
-parameter_bit(const ir_value_t *root)
+static bool
+writes_memory(const ir_instr_t *instruction)
 {
-    return root->index < 64 ? UINT64_C(1) << root->index : UINT64_MAX;
+    switch (instruction->op) {
+    case IR_OP_STORE:
+        return !ir_instr_has_mod(instruction, "atomic");
+    case IR_OP_SEQUENCE_SET:
+    case IR_OP_MEMCPY:
+    case IR_OP_MEMMOVE:
+    case IR_OP_MEMSET:
+        return true;
+    default:
+        return false;
+    }
 }
 
 static bool
-reach_kind(const effects_table_t *table, const ir_value_t *root, int *kind)
+instruction_write_roots(origins_t *state, ir_instr_t *instruction,
+                        root_set_t *written, bool *writes_nonlocal)
 {
-    if (root == &nonlocal_root) return false;
+    if (is_call(instruction))
+        return call_write_roots(state, instruction, written,
+                                writes_nonlocal);
+    if (!writes_memory(instruction) || !instruction->n_operands) return true;
+    root_set_t address = {0};
+    bool ok = seed_value(state, operand_at(instruction, 0), &address,
+                         nullptr);
+    for (uint32_t r = 0; ok && r < address.len; r++) {
+        ir_value_t *root = address.items[r];
+        if (is_location(root)) continue;
+        if (root == &nonlocal_root) *writes_nonlocal = true;
+        ok = root_set_add(written, root, nullptr);
+    }
+    free(address.items);
+    return ok;
+}
+
+static uint64_t
+parameter_bit(const ir_value_t *root)
+{
+    th_type *signature = function_signature(root->owner);
+    if (!signature || root->is_keyword || root->is_rest) return UINT64_MAX;
+    uint32_t inputs = 0;
+    for (size_t i = 0; i < th_func_nparams(signature) && i < 64; i++) {
+        const th_param *formal = th_func_param(signature, i);
+        if (!formal || !th_mode_accepts_input(formal->mode)) continue;
+        if (inputs++ == root->index) return UINT64_C(1) << i;
+    }
+    return UINT64_MAX;
+}
+
+static const ir_value_t *
+reached_parameter(const effects_table_t *table, const ir_value_t *root,
+                  int *kind)
+{
+    if (root == &nonlocal_root) return nullptr;
     if (root->kind == IR_VAL_PARAM) {
         *kind = REACH_SELF;
-        return true;
+        return root;
     }
-    if (is_contents_root(table, root)) {
+    const ir_value_t *base = contents_base(table, root);
+    if (base && base->kind == IR_VAL_PARAM) {
         *kind = REACH_CONTENTS;
-        return true;
+        return base;
     }
-    return false;
+    return nullptr;
+}
+
+static bool
+summarize_carried(origins_t *state, const ir_instr_t *exit,
+                  carried_t *carried, uint32_t n_carried)
+{
+    uint32_t outputs = exit->op == IR_OP_RETURN ? n_carried - 1 : 0;
+    uint32_t result_at = exit->n_operands > outputs
+        ? exit->n_operands - outputs : 0;
+    bool ok = true;
+    for (uint32_t o = 0; ok && o < exit->n_operands; o++) {
+        uint32_t slot = o < result_at ? 0 : 1 + o - result_at;
+        if (slot >= n_carried) slot = 0;
+        root_set_t roots = {0};
+        ok = seed_value(state, operand_at(exit, o), &roots, nullptr);
+        int kind = 0;
+        for (uint32_t r = 0; ok && r < roots.len; r++) {
+            ir_value_t *root = roots.items[r];
+            const ir_value_t *parameter = reached_parameter(state->effects,
+                                                            root, &kind);
+            if (root == &nonlocal_root) carried[slot].nonlocal = true;
+            else if (parameter)
+                carried[slot].from[kind] |= parameter_bit(parameter);
+            else carried[slot].fresh = true;
+        }
+        free(roots.items);
+    }
+    return ok;
 }
 
 static bool
@@ -850,64 +1054,55 @@ summarize(effects_table_t *table, th_ctx *types, effects_t *effects,
         effects->writes[REACH_SELF], effects->writes[REACH_CONTENTS],
     };
     uint64_t escapes[REACH_KINDS] = {0};
-    uint64_t returns[REACH_KINDS] = {0};
+    carried_t *carried = calloc(effects->n_carried, sizeof(*carried));
+    ok = ok && carried;
     bool writes_nonlocal = false;
-    bool returns_nonlocal = false;
-    bool returns_fresh = false;
     int kind = 0;
     for (uint32_t b = 0; ok && b < function->n_blocks; b++) {
         ir_block_t *block = function->blocks[b];
         for (uint32_t i = 0; ok && i < block->n_instrs; i++) {
             ir_instr_t *instruction = block->instrs[i];
             root_set_t roots = {0};
-            if (is_call(instruction)) {
-                bool nonlocal = false;
-                ok = call_write_roots(&state, instruction, &roots,
-                                      &nonlocal);
-                if (nonlocal) writes_nonlocal = true;
-                for (uint32_t r = 0; ok && r < roots.len; r++) {
-                    ir_value_t *root = roots.items[r];
-                    if (root == &nonlocal_root) writes_nonlocal = true;
-                    else if (reach_kind(table, root, &kind))
-                        writes[kind] |= parameter_bit(root);
-                }
+            bool nonlocal = false;
+            ok = instruction_write_roots(&state, instruction, &roots,
+                                         &nonlocal);
+            if (nonlocal) writes_nonlocal = true;
+            for (uint32_t r = 0; ok && r < roots.len; r++) {
+                const ir_value_t *parameter
+                    = reached_parameter(table, roots.items[r], &kind);
+                if (roots.items[r] == &nonlocal_root) writes_nonlocal = true;
+                else if (parameter) writes[kind] |= parameter_bit(parameter);
             }
-            else if (instruction->op == IR_OP_RETURN) {
-                for (uint32_t o = 0; ok && o < instruction->n_operands; o++)
-                    ok = seed_value(&state, operand_at(instruction, o),
-                                    &roots, nullptr);
-                for (uint32_t r = 0; ok && r < roots.len; r++) {
-                    ir_value_t *root = roots.items[r];
-                    if (root == &nonlocal_root) returns_nonlocal = true;
-                    else if (reach_kind(table, root, &kind))
-                        returns[kind] |= parameter_bit(root);
-                    else returns_fresh = true;
-                }
-            }
+            if (ok && (instruction->op == IR_OP_RETURN
+                       || instruction->op == IR_OP_FAIL))
+                ok = summarize_carried(&state, instruction, carried,
+                                       effects->n_carried);
             free(roots.items);
         }
     }
     for (uint32_t r = 0; ok && r < state.escaped.len; r++) {
-        ir_value_t *root = state.escaped.items[r];
-        if (reach_kind(table, root, &kind))
-            escapes[kind] |= parameter_bit(root);
+        const ir_value_t *parameter
+            = reached_parameter(table, state.escaped.items[r], &kind);
+        if (parameter) escapes[kind] |= parameter_bit(parameter);
     }
     origins_free(&state);
-    if (!ok) return false;
+    if (!ok) {
+        free(carried);
+        return false;
+    }
     if (memcmp(writes, effects->writes, sizeof(writes))
         || memcmp(escapes, effects->escapes, sizeof(escapes))
-        || memcmp(returns, effects->returns, sizeof(returns))
-        || writes_nonlocal != effects->writes_nonlocal
-        || returns_nonlocal != effects->returns_nonlocal
-        || returns_fresh != effects->returns_fresh) {
+        || memcmp(carried, effects->carried,
+                  effects->n_carried * sizeof(*carried))
+        || writes_nonlocal != effects->writes_nonlocal) {
         memcpy(effects->writes, writes, sizeof(writes));
         memcpy(effects->escapes, escapes, sizeof(escapes));
-        memcpy(effects->returns, returns, sizeof(returns));
+        free(effects->carried);
+        effects->carried = carried;
         effects->writes_nonlocal = writes_nonlocal;
-        effects->returns_nonlocal = returns_nonlocal;
-        effects->returns_fresh = returns_fresh;
         *changed = true;
     }
+    else free(carried);
     return true;
 }
 
@@ -1033,31 +1228,48 @@ track(window_t *window, ir_value_t *value)
     return true;
 }
 
-static ir_value_t *
-defined_value(window_t *window, const ir_instr_t *instruction)
-{
-    if (instruction->dest) return instruction->dest;
-    if (instruction->dest_local)
-        return ir_local_value(window->function, instruction->dest_local);
-    return nullptr;
-}
-
 static bool
 collect_tracked(window_t *window)
 {
     ir_value_t *view = window->conversion->dest;
     origins_t *origins = window->origins;
-    for (size_t i = 0; i < origins->slots.cap; i++) {
-        const ir_value_t *value = origins->slots.keys[i];
-        if (!value) continue;
-        uint32_t slot = origins->slots.slots[i];
-        if ((root_set_has(&origins->origins[slot], view)
-             && value->kind != IR_VAL_PARAM)
-            || (is_allocation(value)
-                && root_set_has(&origins->memory[slot], view)))
-            if (!track(window, (ir_value_t *)value)) return false;
+    size_t count = origins->slots.len;
+    ir_value_t **values = calloc(count ? count : 1, sizeof(*values));
+    if (!values) return false;
+    size_t len = 0;
+    for (size_t i = 0; i < origins->slots.cap && len < count; i++)
+        if (origins->slots.keys[i]
+            && ((const ir_value_t *)origins->slots.keys[i])->kind
+                != IR_VAL_PARAM)
+            values[len++] = (ir_value_t *)origins->slots.keys[i];
+    bool ok = true;
+    for (size_t i = 0; ok && i < len; i++) {
+        root_set_t reached = {0};
+        ok = seed_value(origins, values[i], &reached, nullptr)
+            && expand_contents(origins, &reached)
+            && (!root_set_has(&reached, view) || track(window, values[i]));
+        free(reached.items);
     }
-    return track(window, view);
+    free(values);
+    if (!ok || !track(window, view)) return false;
+    for (uint32_t b = 0; b < window->function->n_blocks; b++) {
+        ir_block_t *block = window->function->blocks[b];
+        for (uint32_t i = 0; i < block->n_instrs; i++) {
+            ir_instr_t *output = block->instrs[i];
+            uint32_t index = 0;
+            if (output->op != IR_OP_CALL_OUTPUT
+                || !tracked_index(window, output->dest, &index))
+                continue;
+            ir_value_t *source = operand_at(output, 0);
+            if (!source || !track(window, source)) return false;
+            if (source->kind == IR_VAL_INSTR && source->def
+                && source->def->op == IR_OP_VARIANT_PAYLOAD
+                && source->def->n_operands
+                && !track(window, operand_at(source->def, 0)))
+                return false;
+        }
+    }
+    return true;
 }
 
 static void
@@ -1077,19 +1289,6 @@ uses_and_defs(window_t *window, const ir_instr_t *instruction,
     for (uint32_t o = 0; o < instruction->n_operands; o++)
         if (tracked_index(window, operand_at(instruction, o), &index))
             bitset_set(live, index);
-}
-
-static bool
-instruction_touches(window_t *window, const ir_instr_t *instruction)
-{
-    uint32_t index = 0;
-    if (instruction == window->conversion) return true;
-    if (tracked_index(window, defined_value(window, instruction), &index))
-        return true;
-    for (uint32_t o = 0; o < instruction->n_operands; o++)
-        if (tracked_index(window, operand_at(instruction, o), &index))
-            return true;
-    return false;
 }
 
 static void
@@ -1465,6 +1664,7 @@ stores_into_aggregate(window_t *window, const ir_instr_t *instruction)
     case IR_OP_ATOMIC_CAS:
     case IR_OP_GLOBAL_STORE:
     case IR_OP_MEMCPY:
+    case IR_OP_MEMMOVE:
         for (uint32_t o = 0; o < instruction->n_operands; o++)
             if (tracked_index(window, operand_at(instruction, o), &index))
                 return true;
@@ -1475,40 +1675,79 @@ stores_into_aggregate(window_t *window, const ir_instr_t *instruction)
 }
 
 static bool
+carries_view(window_t *window, ir_value_t *value)
+{
+    root_set_t roots = {0};
+    bool carries = seed_value(window->origins, value, &roots, nullptr)
+        && root_set_has(&roots, window->conversion->dest);
+    free(roots.items);
+    return carries;
+}
+
+static bool
+is_view_type(window_t *window, th_type *type)
+{
+    return type && ir_type_eq(window->function->owner, type,
+                              window->conversion->dest->type);
+}
+
+static bool
+call_wraps_view(window_t *window, const ir_instr_t *instruction)
+{
+    if (!instruction->dest || !carries_view(window, instruction->dest))
+        return false;
+    if (instruction->op == IR_OP_CALL_OUTPUT)
+        return !is_view_type(window, instruction->dest->type);
+    if (!is_call(instruction)) return false;
+    th_type *signature = ir_instr_call_signature(instruction);
+    signature = signature ? th_resolve(signature) : nullptr;
+    if (!signature || th_kind_of(signature) != TH_FUNCTION)
+        signature = function_signature(direct_callee(instruction));
+    if (!signature) return false;
+    return !is_view_type(window, th_func_ret(signature))
+        && !is_view_type(window, th_func_error(signature));
+}
+
+static bool
 check_instruction(walk_t *walk, ir_instr_t *instruction)
 {
     window_t *window = walk->window;
-    if (stores_into_aggregate(window, instruction))
+    if (stores_into_aggregate(window, instruction)
+        || call_wraps_view(window, instruction))
         blame(walk, instruction,
               "the borrowed string is stored into a field, element or "
               "container here");
-    if (instruction->op == IR_OP_RETURN) {
+    if (instruction->op == IR_OP_RETURN || instruction->op == IR_OP_FAIL) {
         uint32_t index = 0;
         for (uint32_t o = 0; o < instruction->n_operands; o++)
             if (tracked_index(window, operand_at(instruction, o), &index))
-                blame(walk, instruction,
-                      "the borrowed string is returned here");
+                blame(walk, instruction, instruction->op == IR_OP_RETURN
+                      ? "the borrowed string is returned here"
+                      : "the borrowed string is the failure value here");
         return true;
     }
-    if (!is_call(instruction)) return true;
-    ir_func_t *callee = direct_callee(instruction);
+    bool call = is_call(instruction);
+    if (!call && !writes_memory(instruction)) return true;
+    ir_func_t *callee = call ? direct_callee(instruction) : nullptr;
     effects_t *effects = callee
         ? effects_for(window->origins->effects, callee) : nullptr;
-    if (!effects || effects->opaque) {
+    if (call && (!effects || effects->opaque)) {
         blame(walk, instruction,
               "this indirect or unknown call may write the borrowed Buffer");
         return true;
     }
     root_set_t written = {0};
     bool writes_nonlocal = false;
-    bool ok = call_write_roots(window->origins, instruction, &written,
-                               &writes_nonlocal);
+    bool ok = instruction_write_roots(window->origins, instruction, &written,
+                                      &writes_nonlocal);
     if (ok && (buffer_roots_meet(window->origins->effects, &written,
                                  &walk->source)
                || (walk->source_global
                    && (writes_nonlocal
                        || roots_reach_global(walk, &written)))))
-        blame(walk, instruction, "this call may write the borrowed Buffer");
+        blame(walk, instruction, call
+              ? "this call may write the borrowed Buffer"
+              : "this store may write the borrowed Buffer");
     free(written.items);
     return ok;
 }
@@ -1625,31 +1864,63 @@ walk_window(walk_t *walk)
     return ok && check_joins(walk);
 }
 
-static void
-check_escapes(window_t *window, walk_t *walk)
+static bool
+escapes_at(window_t *window, ir_instr_t *instruction, bool *escapes)
 {
     origins_t *origins = window->origins;
-    if (!root_set_has(&origins->escaped, window->conversion->dest)) return;
+    root_set_t escaped = origins->escaped;
+    origins->escaped = (root_set_t){0};
+    bool changed = false;
+    bool ok = transfer(origins, instruction, &changed);
+    *escapes = ok && root_set_has(&origins->escaped,
+                                  window->conversion->dest);
+    free(origins->escaped.items);
+    origins->escaped = escaped;
+    return ok;
+}
+
+static bool
+check_escapes(window_t *window, walk_t *walk)
+{
+    if (!root_set_has(&window->origins->escaped, window->conversion->dest))
+        return true;
     for (uint32_t b = 0; b < window->function->n_blocks; b++) {
         ir_block_t *block = window->function->blocks[b];
         for (uint32_t i = 0; i < block->n_instrs; i++) {
-            ir_instr_t *instruction = block->instrs[i];
-            if ((instruction->op == IR_OP_STORE
-                 || instruction->op == IR_OP_GLOBAL_STORE
-                 || instruction->op == IR_OP_SEQUENCE_SET
-                 || instruction->op == IR_OP_ATOMIC_RMW
-                 || instruction->op == IR_OP_ATOMIC_CAS
-                 || instruction->op == IR_OP_MEMCPY || is_call(instruction))
-                && instruction != window->conversion
-                && instruction_touches(window, instruction)) {
-                blame(walk, instruction,
-                      "the borrowed string is stored or passed where it "
-                      "may be kept");
-                return;
-            }
+            bool escapes = false;
+            if (!escapes_at(window, block->instrs[i], &escapes))
+                return false;
+            if (!escapes) continue;
+            blame(walk, block->instrs[i],
+                  "the borrowed string is stored or passed where it may be "
+                  "kept");
+            return true;
         }
     }
     blame(walk, window->conversion, "the borrowed string may be kept");
+    return true;
+}
+
+static bool
+capture_buffer(window_t *window)
+{
+    ir_value_t *buffer = window->buffer;
+    ir_instr_t *conversion = window->conversion;
+    if (buffer->kind != IR_VAL_GLOBAL && buffer->kind != IR_VAL_LOCAL)
+        return true;
+    uint32_t at = instruction_position(conversion);
+    char name[64];
+    snprintf(name, sizeof(name), "__n00bb_borrow_source_%u_%u",
+             conversion->block->index, at);
+    ir_instr_t *copy = ir_instr_generated(conversion->block, IR_OP_COPY,
+        conversion->span, "n00bb.buffer-borrow", at);
+    if (!copy || !ir_instr_set_dest(copy, name, buffer->type)
+        || !ir_instr_operand_value(copy, buffer)) return false;
+    conversion->operands[0] = (ir_operand_t){
+        .kind = IR_OPD_VALUE, .value = copy->dest,
+    };
+    window->buffer = copy->dest;
+    return true;
 }
 
 static bool
@@ -1671,15 +1942,16 @@ borrow_conversion(ir_diags_t *diagnostics, ir_func_t *function,
         && expand_contents(origins, &walk.source);
     if (ok) {
         walk.source_global = roots_reach_global(&walk, &walk.source);
-        check_escapes(&window, &walk);
-        if (!walk.offender) ok = walk_window(&walk);
+        ok = check_escapes(&window, &walk);
+        if (ok && !walk.offender) ok = walk_window(&walk);
     }
     if (ok && walk.offender)
         report_borrow(&window, walk.offender, walk.reason);
     else if (ok && walk.conditional)
-        ok = insert_held_ends(&window, &walk.sites);
+        ok = capture_buffer(&window) && insert_held_ends(&window, &walk.sites);
     else if (ok)
-        ok = insert_ends(&window, &walk.sites, nullptr);
+        ok = capture_buffer(&window)
+            && insert_ends(&window, &walk.sites, nullptr);
     if (!ok)
         report_borrow(&window, nullptr, nullptr);
     bool accepted = ok && !walk.offender;

@@ -46,6 +46,10 @@ ordered call_argument 'buffer.as_string' 'call @measure' 'buffer.borrow_end'
 ordered local_then_other_write 'buffer.as_string' 'call @byte_len' \
     'buffer.borrow_end' 'call @__add_assign'
 ordered distinct_concat 'buffer.as_string' 'call @concat' 'buffer.borrow_end'
+ordered out_view 'buffer.as_string' 'call @forward' 'call.output' \
+    'call @byte_len' 'buffer.borrow_end' 'call @__add_assign'
+ordered reassign_global 'buffer.as_string %__n00bb_borrow_source' \
+    'global.store' 'buffer.borrow_end %__n00bb_borrow_source'
 
 body append_in_place >"$tmp/body"
 if [ "$(grep -c 'call @__add_assign' "$tmp/body")" != 1 ] \
@@ -55,7 +59,8 @@ if [ "$(grep -c 'call @__add_assign' "$tmp/body")" != 1 ] \
     exit 1
 fi
 
-for function_name in call_argument local_then_other_write distinct_concat; do
+for function_name in call_argument local_then_other_write distinct_concat \
+        out_view reassign_global; do
     body "$function_name" >"$tmp/body"
     begins=$(grep -c 'buffer.as_string' "$tmp/body" || true)
     ends=$(grep -c 'buffer.borrow_end' "$tmp/body" || true)

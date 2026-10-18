@@ -89,6 +89,44 @@ func append_in_place() -> uint {
     return byte_len(a)
 }
 
+func forward(s: string, out t: string) {
+    t = s
+}
+
+func out_view() -> uint {
+    var b: Buffer = buffer_from_string("forward")
+    var t: string = ""
+    forward(b, t)
+    let n: uint = byte_len(t)
+    b += "!"
+    return n + byte_len(b)
+}
+
+func detached() -> uint {
+    var b: Buffer = buffer_from_string("detach")
+    var shared: Buffer = b
+    let s: string = to_string(b)
+    let emptied: uint = byte_len(shared)
+    shared += "zz"
+    return emptied * 100 + byte_len(s) * 10 + byte_len(shared)
+}
+
+var swapped: Buffer = buffer_from_string("global")
+
+func reassign_global() -> uint {
+    let view: string = swapped
+    swapped = buffer_from_string("other")
+    return byte_len(view)
+}
+
+var previous: Buffer = swapped
+require reassign_global() == 6
+swapped += "!"
+previous += "!"
+require byte_len(swapped) == 6
+require byte_len(previous) == 7
+require out_view() == 15
+require detached() == 62
 require append_in_place() == 5
 require build_from(buffer_from_string("xy")) == 4
 require loop_borrow() == 9
