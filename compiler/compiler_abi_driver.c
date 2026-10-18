@@ -16,6 +16,7 @@ extern char **environ;
 #include "compiler_lower.h"
 #include "compiler_phases.h"
 #include "compiler_abi_driver.h"
+#include "compiler_cache.h"
 #include "compiler_object_io.h"
 #include "abi_emit.h"
 #include "abi_link.h"
@@ -471,6 +472,7 @@ typedef struct {
     size_t global_binding_count;
     n00bb_native_frames_t *native_frames;
     core_diagnostics_t *diagnostics;
+    core_list_t(n00bb_cache_module_object_t) *kept;
 } module_emission_t;
 
 typedef struct {
@@ -540,6 +542,17 @@ emit_module_object(const module_emission_t *emission, ir_module_t *module,
     if (ok && emission->lto) {
         *bitcode = object;
         return true;
+    }
+    if (ok && emission->kept && artifact) {
+        uint8_t *copy = malloc(object.byte_len ? object.byte_len : 1);
+        if (copy) {
+            if (object.byte_len) memcpy(copy, object.data, object.byte_len);
+            core_list_push(*emission->kept, ((n00bb_cache_module_object_t){
+                .module = ir_module_name(module),
+                .native = copy, .native_bytes = object.byte_len,
+                .abi = artifact->object, .abi_bytes = artifact->object_bytes,
+            }));
+        }
     }
     if (ok) ok = n00bb_native_frames_add(emission->native_frames,
         object.data, object.byte_len);
@@ -747,7 +760,10 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     n00bb_native_cache_t *native_cache = executable_path
         ? n00bb_native_cache_open(executable_path) : nullptr;
     core_free(executable_path);
+    core_list_t(n00bb_cache_module_object_t) kept =
+        core_list_new(n00bb_cache_module_object_t);
     module_emission_t emission = {
+        .kept = lto ? nullptr : &kept,
         .analysis = analysis, .args = args,
         .debug_enabled = debug_enabled, .native_cpu = native_cpu,
         .lto = lto, .native_cache = native_cache,
@@ -978,6 +994,11 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         free(native_arguments);
         free(arguments);
     } else ok = false;
+    if (ok && !lto && !getenv("N00BB_NO_OBJECT_CACHE"))
+        (void)n00bb_cache_store(link, analysis, args, compiler_path,
+                                kept.data, kept.len);
+    for (size_t i = 0; i < kept.len; i++) free((void *)kept.data[i].native);
+    core_list_free(kept);
     if (staging) unlink(staging);
     free(staging);
     core_free(archive);

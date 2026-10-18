@@ -17554,7 +17554,7 @@ collect_module_initializer_roots(parse_grammar_t *grammar,
 
 static ir_func_t *
 add_module_initializer(ir_ctx_t *ir_context, core_translation_unit_t *unit,
-                       const char *name, bool initializer, uint64_t order)
+                       const char *name, bool initializer)
 {
     n00bb_tu_state_t *state = tu_state(unit);
     ir_module_t *module = unit_module(state);
@@ -17579,11 +17579,7 @@ add_module_initializer(ir_ctx_t *ir_context, core_translation_unit_t *unit,
             ? IR_LINK_EXTERN : IR_LINK_INTERNAL) : nullptr;
     bool annotated = function
         && (!initializer
-            || ir_func_set_initializer(ir_context, function, true))
-        && ir_annot_set(ir_context, &function->annots,
-            (ir_annot_t){.key = "n00bb.initializer_order",
-                         .kind = IR_ANNOT_INT,
-                         .i = {.mag = order}});
+            || ir_func_set_initializer(ir_context, function, true));
     return annotated ? function : nullptr;
 }
 
@@ -17676,12 +17672,12 @@ lower_module_initializer(ir_lowerer_t *lowerer,
                          parse_grammar_t *grammar,
                          core_translation_unit_t *unit,
                          core_list_t(core_translation_unit_ptr_t) *units,
-                         ir_ctx_t *ir_context, uint64_t order)
+                         ir_ctx_t *ir_context)
 {
     n00bb_tu_state_t *state = tu_state(unit);
     if (!n00bb_tu_parsed_tree(state)) return false;
     ir_func_t *function = add_module_initializer(ir_context, unit,
-        N00BB_MODULE_INIT_NAME, true, order);
+        N00BB_MODULE_INIT_NAME, true);
     if (!function) return false;
     if (state->interface_module) return true;
     if (!validate_script_root(grammar, unit)) return false;
@@ -17690,7 +17686,7 @@ lower_module_initializer(ir_lowerer_t *lowerer,
             function, N00BB_MODULE_INIT_NAME, script)) return false;
     if (!script) return true;
     ir_func_t *literals = add_module_initializer(ir_context, unit,
-        N00BB_SCRIPT_BODY_NAME, false, order);
+        N00BB_SCRIPT_BODY_NAME, false);
     return literals && lower_initializer_body(lowerer, grammar, unit, units,
         ir_context, literals, N00BB_SCRIPT_BODY_NAME, false);
 }
@@ -17758,8 +17754,7 @@ literal_constant_order(core_translation_unit_t *unit, size_t index,
 }
 
 static bool
-lower_literal_initializer(ir_ctx_t *ir_context, core_translation_unit_t *unit,
-                          uint64_t order)
+lower_literal_initializer(ir_ctx_t *ir_context, core_translation_unit_t *unit)
 {
     n00bb_tu_state_t *state = tu_state(unit);
     if (!state->literal_constants.len
@@ -17775,7 +17770,7 @@ lower_literal_initializer(ir_ctx_t *ir_context, core_translation_unit_t *unit,
         return false;
     }
     ir_func_t *function = add_module_initializer(ir_context, unit,
-        N00BB_LITERAL_INIT_NAME, false, order);
+        N00BB_LITERAL_INIT_NAME, false);
     ir_block_t *block = function ? ir_block_add(function, "entry") : nullptr;
     bool ok = block != nullptr;
     for (size_t s = 0; ok && s < sequence.len; s++) {
@@ -18735,8 +18730,8 @@ lower_ordered_module_initializers(
 {
     for (size_t i = 0; i < order->len; i++)
         if (!lower_module_initializer(lowerer, grammar, order->data[i],
-                units, ir_context, i)
-            || !lower_literal_initializer(ir_context, order->data[i], i))
+                units, ir_context)
+            || !lower_literal_initializer(ir_context, order->data[i]))
             return false;
     return true;
 }
