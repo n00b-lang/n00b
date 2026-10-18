@@ -1878,6 +1878,28 @@ check_escapes(window_t *window, walk_t *walk)
 }
 
 static bool
+capture_buffer(window_t *window)
+{
+    ir_value_t *buffer = window->buffer;
+    ir_instr_t *conversion = window->conversion;
+    if (buffer->kind != IR_VAL_GLOBAL && buffer->kind != IR_VAL_LOCAL)
+        return true;
+    uint32_t at = instruction_position(conversion);
+    char name[64];
+    snprintf(name, sizeof(name), "__n00bb_borrow_source_%u_%u",
+             conversion->block->index, at);
+    ir_instr_t *copy = ir_instr_generated(conversion->block, IR_OP_COPY,
+        conversion->span, "n00bb.buffer-borrow", at);
+    if (!copy || !ir_instr_set_dest(copy, name, buffer->type)
+        || !ir_instr_operand_value(copy, buffer)) return false;
+    conversion->operands[0] = (ir_operand_t){
+        .kind = IR_OPD_VALUE, .value = copy->dest,
+    };
+    window->buffer = copy->dest;
+    return true;
+}
+
+static bool
 borrow_conversion(ir_diags_t *diagnostics, ir_func_t *function,
                   origins_t *origins, ir_instr_t *conversion)
 {
@@ -1902,9 +1924,10 @@ borrow_conversion(ir_diags_t *diagnostics, ir_func_t *function,
     if (ok && walk.offender)
         report_borrow(&window, walk.offender, walk.reason);
     else if (ok && walk.conditional)
-        ok = insert_held_ends(&window, &walk.sites);
+        ok = capture_buffer(&window) && insert_held_ends(&window, &walk.sites);
     else if (ok)
-        ok = insert_ends(&window, &walk.sites, nullptr);
+        ok = capture_buffer(&window)
+            && insert_ends(&window, &walk.sites, nullptr);
     if (!ok)
         report_borrow(&window, nullptr, nullptr);
     bool accepted = ok && !walk.offender;
