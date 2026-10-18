@@ -14,6 +14,9 @@ static const char borrow_diagnostic_text[] =
 
 static const char write_lock_name[] = "builtin.containers.buffer.write_lock";
 
+static const char buffer_state_type_name[] =
+    "builtin.containers.buffer.Buffer_State";
+
 static ir_value_t nonlocal_root;
 
 typedef struct {
@@ -189,6 +192,19 @@ is_buffer_type(th_type *type)
         && th_named_info(type, &name, &length, nullptr, &args) && !args
         && length == sizeof(n00bb_buffer_type_name) - 1
         && !memcmp(name, n00bb_buffer_type_name, length);
+}
+
+static bool
+may_be_buffer_state(th_type *type)
+{
+    type = type ? th_resolve(type) : nullptr;
+    if (!type || th_kind_of(type) == TH_VAR) return true;
+    const char *name = nullptr;
+    size_t length = 0, args = 0;
+    return th_kind_of(type) == TH_NAMED
+        && th_named_info(type, &name, &length, nullptr, &args) && !args
+        && length == sizeof(buffer_state_type_name) - 1
+        && !memcmp(name, buffer_state_type_name, length);
 }
 
 
@@ -1047,13 +1063,34 @@ writes_memory(const ir_instr_t *instruction)
 }
 
 static bool
+inside_buffer_state(const ir_value_t *address)
+{
+    for (uint32_t depth = 0; address && depth < 64; depth++) {
+        th_type *type = address->type ? th_resolve(address->type) : nullptr;
+        if (!type || (th_kind_of(type) == TH_INDIRECTION
+                      && may_be_buffer_state(th_ind_referent(type))))
+            return true;
+        const ir_instr_t *step = address->kind == IR_VAL_INSTR
+            ? address->def : nullptr;
+        if (!step || !step->n_operands
+            || (step->op != IR_OP_FIELD && step->op != IR_OP_INDEX
+                && step->op != IR_OP_OFFSET))
+            return false;
+        address = operand_at(step, 0);
+    }
+    return true;
+}
+
+static bool
 instruction_write_roots(origins_t *state, ir_instr_t *instruction,
                         root_set_t *written, bool *writes_nonlocal)
 {
     if (is_call(instruction))
         return call_write_roots(state, instruction, written,
                                 writes_nonlocal);
-    if (!writes_memory(instruction) || !instruction->n_operands) return true;
+    if (!writes_memory(instruction) || !instruction->n_operands
+        || !inside_buffer_state(operand_at(instruction, 0)))
+        return true;
     root_set_t address = {0};
     bool ok = seed_value(state, operand_at(instruction, 0), &address,
                          nullptr);
