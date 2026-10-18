@@ -1,4 +1,5 @@
 #include "private/th/internal.h"
+#include "lib/dict.h"
 
 #include <stdalign.h>
 #include <string.h>
@@ -17,6 +18,20 @@ static uint64_t environment_archive_abi(void) {
 
 static uint64_t type_archive_id(th_kind kind) {
   return TH_TYPE_ARCHIVE_BASE | (uint64_t)kind + 1;
+}
+
+static _Thread_local core_dict_t *saving_var_indices;
+
+static uint64_t saved_var_index(uint64_t index) {
+  if (!saving_var_indices) return index;
+  bool found = false;
+  void *slot = core_dict_get(saving_var_indices, (void *)(uintptr_t)(index + 1),
+                             &found);
+  if (found) return (uint64_t)(uintptr_t)slot;
+  uint64_t next = core_dict_len(saving_var_indices);
+  core_dict_put(saving_var_indices, (void *)(uintptr_t)(index + 1),
+                (void *)(uintptr_t)next);
+  return next;
 }
 
 static bool write_count(core_object_writer_t *writer, size_t count) {
@@ -283,7 +298,7 @@ static bool save_type(core_object_writer_t *writer, const void *object,
       if (!write_type_ref(writer, type->sum.arms[i])) return false;
     return true;
   case TH_VAR:
-    if (!core_object_writer_u64(writer, type->var.index) ||
+    if (!core_object_writer_u64(writer, saved_var_index(type->var.index)) ||
         !core_object_writer_u32(writer, type->var.has_index) ||
         !write_type_ref(writer, type->var.ref) ||
         !core_object_writer_string(writer, type->var.name) ||
@@ -867,9 +882,14 @@ bool th_env_save(const th_env *env, const char *path, size_t mapping_capacity,
   core_object_archive_registry_t *registry =
       core_object_archive_registry_new();
   bool registered = register_environment_codecs(registry);
+  core_dict_t var_indices;
+  core_dict_init(&var_indices, nullptr, nullptr);
+  saving_var_indices = &var_indices;
   bool ok = registered && core_object_archive_save(
       path, mapping_capacity, environment_archive_abi(), registry,
       TH_ENV_ARCHIVE_ROOT_TYPE, env, error);
+  saving_var_indices = nullptr;
+  core_dict_free(&var_indices);
   if (!registered && error)
     *error = CORE_OBJECT_ARCHIVE_CALLBACK_FAILED;
   core_object_archive_registry_free(registry);

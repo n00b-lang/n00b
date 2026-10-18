@@ -7,13 +7,28 @@
 struct th_type_writer {
     core_list_t(th_type_ptr_t) nodes;
     core_dict_t                index;
+    core_dict_t                var_indices;
+    core_dict_t                var_origins;
 };
 
 struct th_type_reader {
     th_ctx   *ctx;
     th_type **nodes;
     size_t    count;
+    core_dict_t var_indices;
+    core_dict_t var_origins;
 };
+
+static uint64_t
+dense_id(core_dict_t *map, uint64_t value)
+{
+    bool found = false;
+    void *slot = core_dict_get(map, (void *)(uintptr_t)(value + 1), &found);
+    if (found) return (uint64_t)(uintptr_t)slot;
+    uint64_t next = core_dict_len(map) + 1;
+    core_dict_put(map, (void *)(uintptr_t)(value + 1), (void *)(uintptr_t)next);
+    return next;
+}
 
 th_type_writer_t *
 th_type_writer_new(void)
@@ -22,6 +37,8 @@ th_type_writer_new(void)
     if (!writer) return nullptr;
     writer->nodes = core_list_new(th_type_ptr_t);
     core_dict_init(&writer->index, nullptr, nullptr);
+    core_dict_init(&writer->var_indices, nullptr, nullptr);
+    core_dict_init(&writer->var_origins, nullptr, nullptr);
     return writer;
 }
 
@@ -31,6 +48,8 @@ th_type_writer_free(th_type_writer_t *writer)
     if (!writer) return;
     core_list_free(writer->nodes);
     core_dict_free(&writer->index);
+    core_dict_free(&writer->var_indices);
+    core_dict_free(&writer->var_origins);
     core_free(writer);
 }
 
@@ -315,8 +334,9 @@ put_node(th_type_writer_t *writer, core_buffer_t *out, const th_type *type)
             put_ref(writer, out, type->sum.arms[i]);
         break;
     case TH_VAR:
-        put_u64(out, type->var.index);
-        put_u64(out, type->var.origin);
+        put_u64(out, dense_id(&writer->var_indices, type->var.index));
+        put_u64(out, type->var.origin
+            ? dense_id(&writer->var_origins, type->var.origin) : 0);
         put_u32(out, type->var.has_index);
         put_text(out, type->var.name);
         put_ref(writer, out, type->var.ref);
@@ -608,8 +628,29 @@ get_node(cursor_t *cursor, th_type_reader_t *reader, th_type *type)
         break;
     }
     case TH_VAR: {
-        type->var.index = get_u64(cursor);
-        type->var.origin = get_u64(cursor);
+        uint64_t index = get_u64(cursor);
+        uint64_t origin = get_u64(cursor);
+        bool found = false;
+        void *slot = core_dict_get(&reader->var_indices,
+                                   (void *)(uintptr_t)index, &found);
+        if (!found) {
+            slot = (void *)(uintptr_t)(ctx->next_var++);
+            core_dict_put(&reader->var_indices, (void *)(uintptr_t)index,
+                          slot);
+        }
+        type->var.index = (uint64_t)(uintptr_t)slot;
+        type->var.origin = 0;
+        if (origin) {
+            found = false;
+            slot = core_dict_get(&reader->var_origins,
+                                 (void *)(uintptr_t)origin, &found);
+            if (!found) {
+                slot = (void *)(uintptr_t)th_var_fresh_origin();
+                core_dict_put(&reader->var_origins,
+                              (void *)(uintptr_t)origin, slot);
+            }
+            type->var.origin = (uint64_t)(uintptr_t)slot;
+        }
         type->var.has_index = get_u32(cursor) != 0;
         type->var.name = get_bytes(cursor, ctx, nullptr);
         type->var.ref = get_ref(cursor, reader);
@@ -643,6 +684,8 @@ th_type_reader_open(th_ctx *ctx, const uint8_t *data, size_t length,
     if (!reader) return nullptr;
     reader->ctx = ctx;
     reader->count = (size_t)count;
+    core_dict_init(&reader->var_indices, nullptr, nullptr);
+    core_dict_init(&reader->var_origins, nullptr, nullptr);
     reader->nodes = count ? core_alloc_array(th_type *, (size_t)count)
                           : nullptr;
     bool valid = !count || reader->nodes;
@@ -676,6 +719,8 @@ void
 th_type_reader_free(th_type_reader_t *reader)
 {
     if (!reader) return;
+    core_dict_free(&reader->var_indices);
+    core_dict_free(&reader->var_origins);
     core_free(reader->nodes);
     core_free(reader);
 }

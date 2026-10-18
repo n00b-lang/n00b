@@ -53,6 +53,7 @@ th_sources = files(
     'th/environment.c',
     'th/environment_archive.c',
     'th/environment_subset.c',
+    'th/environment_codec.c',
     'th/infer.c',
     'th/print.c',
 )

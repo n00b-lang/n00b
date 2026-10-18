@@ -226,8 +226,8 @@ static bool same_method_obligation(th_ctx *ctx, const th_constraint *a,
                                  b_call->fn.error, b_owner)) return false;
     for (size_t i = 0; i < a_call->fn.np; i++)
         if (a_call->fn.params[i].mode != b_call->fn.params[i].mode
-            || !same_method_type_ref(ctx, a_call->fn.params[i].type, a_owner,
-                                     b_call->fn.params[i].type, b_owner))
+            || !same_method_output(ctx, a_call->fn.params[i].type, a_owner,
+                                   b_call->fn.params[i].type, b_owner))
             return false;
     if (a_call->fn.rest
         && (a_call->fn.rest->mode != b_call->fn.rest->mode
@@ -2404,7 +2404,9 @@ static bool uni(th_ctx *ctx, th_type *a0, th_type *b0, core_dict_t *seen)
         }
         core_dict_put(rhs, b, b);
 
-        if (a->kind != TH_VAR && b->kind == TH_VAR) {
+        if ((a->kind != TH_VAR && b->kind == TH_VAR)
+            || (a->kind == TH_VAR && b->kind == TH_VAR && a->var.name
+                && (!b->var.name || strcmp(a->var.name, b->var.name) < 0))) {
             th_type *t = a;
 
             a = b;

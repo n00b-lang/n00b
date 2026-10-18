@@ -269,6 +269,7 @@ void th_err(th_ctx *ctx, th_err_kind kind, const char *constraint,
             th_type *expected, th_type *got, const char *message);
 
 void *th_alloc(th_ctx *ctx, size_t n);
+uint64_t th_var_fresh_origin(void);
 char *th_strdup(th_ctx *ctx, const char *s, size_t n);
 int th_cmp_slice(const void *a, const void *b);
 int th_cmp_member(const void *a, const void *b);

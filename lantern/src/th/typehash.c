@@ -1684,6 +1684,11 @@ th_type *th_bound(th_ctx *ctx, uint64_t d, uint64_t p)
     return t;
 }
 
+uint64_t th_var_fresh_origin(void)
+{
+    return atomic_fetch_add(&next_var_origin, 1);
+}
+
 th_type *th_var(th_ctx *ctx)
 {
     th_type *t = node(ctx, TH_VAR);
