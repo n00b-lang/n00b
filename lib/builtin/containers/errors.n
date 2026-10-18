@@ -1,0 +1,3 @@
+enum Container_Err {
+    range = 0, full
+}

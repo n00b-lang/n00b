@@ -13,7 +13,7 @@ func cell_is(t: text.Table, row: uint, col: uint, want: string) -> bool {
     var cell: text.Table_Cell
     try {
         cell = text.cell_index(t, row, col)!
-    } else e: text.Container_Err {
+    } else e: Container_Err {
         return false
     }
     return cell.content == want
@@ -57,8 +57,16 @@ func is_pct(d: text.Layout_Dim?) -> bool {
     }
 }
 
+func theme_is(p: text.Box_Props, want: Ref[text.Border_Theme]) -> bool {
+    let have: Ref[text.Border_Theme]? = p.border_theme
+    if have == nil {
+        return false
+    }
+    return have.get() == want
+}
+
 func zero_props() -> text.Box_Props {
-    return (border_theme = ref text.border_plain, border_style = nil,
+    return (border_theme = nil, border_style = nil,
             fill_style = nil, text_style = nil,
             borders = text.Border_Set.none, pad_top = 0, pad_bottom = 0,
             pad_left = 0, pad_right = 0, alignment = text.Align.left,
@@ -82,7 +90,7 @@ func spec_unchanged(t: text.Table, col: uint) -> bool {
     var spec: text.Table_Col_Spec
     try {
         spec = text.col_spec(t, col)!
-    } else e: text.Container_Err {
+    } else e: Container_Err {
         return false
     }
     return spec.mode == text.Col_Mode.fit and spec.min == nil and
@@ -91,7 +99,7 @@ func spec_unchanged(t: text.Table, col: uint) -> bool {
 
 func run_checks() {
     let std: text.Table_Style = text.table_style_default()
-    check(std.table_props.border_theme == ref text.border_rounded and
+    check(theme_is(std.table_props, ref text.border_rounded) and
           std.table_props.borders == text.Border_Set.all and
           std.alt_cell_props != nil, "1")
     check(std.cell_props.pad_left == 1 and std.cell_props.pad_right == 1 and
@@ -108,14 +116,14 @@ func run_checks() {
     check(head_ok, "3")
 
     let simple: text.Table_Style = text.table_style_simple()
-    check(simple.table_props.border_theme == ref text.border_plain and
+    check(theme_is(simple.table_props, ref text.border_plain) and
           simple.table_props.borders ==
           text.Border_Set.top + text.Border_Set.bottom +
           text.Border_Set.interior_h and
           simple.alt_cell_props == nil, "4")
 
     let ornate: text.Table_Style = text.table_style_ornate()
-    check(ornate.table_props.border_theme == ref text.border_double and
+    check(theme_is(ornate.table_props, ref text.border_double) and
           ornate.alt_cell_props != nil, "5")
 
     let minimal: text.Table_Style = text.table_style_minimal()
@@ -123,11 +131,13 @@ func run_checks() {
           minimal.alt_cell_props == nil, "6")
 
     let ascii: text.Table_Style = text.table_style_ascii()
-    check(ascii.table_props.border_theme == ref text.border_ascii and
+    check(theme_is(ascii.table_props, ref text.border_ascii) and
           ascii.table_props.borders == text.Border_Set.all, "7")
 
-    let bare: text.Box_Props = text.box_props_new(zero_props())
-    check(bare.border_theme == ref text.border_plain, "8")
+    let unset: text.Box_Props = zero_props()
+    let bare: text.Box_Props = text.box_props_new(unset)
+    check(unset.border_theme == nil and
+          theme_is(bare, ref text.border_plain), "8")
 
     var t: text.Table = new[text.Table]()
     text.col_flex(t, 2)
@@ -151,7 +161,7 @@ func run_checks() {
     try {
         c0 = text.col_spec(t, 0)!
         c2 = text.col_spec(t, 2)!
-    } else e: text.Container_Err {
+    } else e: Container_Err {
         specs_ok = false
     }
     check(specs_ok, "11")
@@ -174,7 +184,7 @@ func run_checks() {
     var wide_ok: bool = false
     try {
         wide_ok = text.cell_index(spanned, 0, 0)!.col_span == 3
-    } else e: text.Container_Err {
+    } else e: Container_Err {
         wide_ok = false
     }
     check(wide_ok, "14")
@@ -205,12 +215,12 @@ func run_checks() {
     var styled: text.Table_Cell
     try {
         styled = text.cell_index(casc, 1, 1)!
-    } else e: text.Container_Err {
+    } else e: Container_Err {
         require false
     }
     let rc: text.Box_Props = text.resolve_cell_props(casc, 1, 1,
                                                      cell = styled)
-    check(rc.border_theme == ref text.border_plain and rc.pad_left == 0,
+    check(theme_is(rc, ref text.border_plain) and rc.pad_left == 0,
           "19")
 
     var right: text.Box_Props = zero_props()
@@ -220,7 +230,7 @@ func run_checks() {
     try {
         text.set_col_props(casc, 0, colp)!
         text.set_col_priority(casc, 0, 7)!
-    } else e: text.Container_Err {
+    } else e: Container_Err {
         over_ok = false
     }
     check(over_ok, "20")
@@ -231,7 +241,7 @@ func run_checks() {
     try {
         pri_ok = text.col_spec(casc, 0)!.priority == 7 and
             !casc.layout_valid
-    } else e: text.Container_Err {
+    } else e: Container_Err {
         pri_ok = false
     }
     check(pri_ok, "22")
@@ -244,7 +254,7 @@ func run_checks() {
     try {
         rspec = text.col_spec(ranged, 0)!
         pspec = text.col_spec(ranged, 1)!
-    } else e: text.Container_Err {
+    } else e: Container_Err {
         require false
     }
     require rspec.min != nil and rspec.max != nil
@@ -277,7 +287,7 @@ func run_checks() {
     var flow_flex: bool = false
     try {
         flow_flex = text.col_spec(flow, 2)!.mode == text.Col_Mode.flex
-    } else e: text.Container_Err {
+    } else e: Container_Err {
         require false
     }
     check(flow_flex, "29")
@@ -291,7 +301,7 @@ func run_checks() {
     var second_ok: bool = true
     try {
         second_cells = text.row_index(bulk, 1)!.cells.len()
-    } else e: text.Container_Err {
+    } else e: Container_Err {
         second_ok = false
     }
     check(second_ok, "31")
@@ -299,7 +309,7 @@ func run_checks() {
         var past_end: bool = false
         try {
             text.row_index(bulk, 2)!
-        } else e: text.Container_Err {
+        } else e: Container_Err {
             past_end = true
         }
         check(second_cells == 3 and past_end, "32")

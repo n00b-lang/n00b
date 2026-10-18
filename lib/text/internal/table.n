@@ -11,12 +11,8 @@ enum Valign {
     top = 0, middle, bottom
 }
 
-enum Container_Err {
-    range = 0, full
-}
-
 record Box_Props {
-    border_theme: Ref[internal.border.Border_Theme]
+    border_theme: Ref[internal.border.Border_Theme]?
     border_style: Text_Style?
     fill_style:   Text_Style?
     text_style:   Text_Style?
@@ -86,7 +82,11 @@ record Table {
 }
 
 func box_props_new(value: Box_Props) -> Box_Props {
-    return value
+    var p: Box_Props = value
+    if p.border_theme == nil {
+        p.border_theme = ref internal.border.border_plain
+    }
+    return p
 }
 
 func insets(self: Box_Props, out top: i64, out bottom: i64, out left: i64,
@@ -559,6 +559,11 @@ func put_cell(modify self: Table, row: uint, cell_ix: uint, cell: Table_Cell)
         fail Container_Err.range
     }
     row_val.cells[cast[int] cell_ix] = cell
+    var slot: uint = row
+    if self.max_rows > 0 and cast[i64] self.rows.len() >= self.max_rows {
+        slot = cast[uint]((self.ring_base + cast[i64] row) % self.max_rows)
+    }
+    self.rows[cast[int] slot] = row_val
 }
 
 func set_col_priority(modify self: Table, col: uint, priority: i64)
