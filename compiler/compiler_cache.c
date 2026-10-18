@@ -404,18 +404,20 @@ append_flags(core_buffer_t *out, parse_cmdr_result_t *args)
 {
     static const char *const flags[] = {
         "--release", "--native", "--generic", "--lto",
-        "--gc-conservative-stacks",
+        "--gc-conservative-stacks", "--no-specialize",
     };
     for (size_t i = 0; i < sizeof(flags) / sizeof(*flags); i++)
         put_u32(out, parse_cmdr_flag_present(args,
             core_string_from_cstr(flags[i])));
-    int32_t defines = parse_cmdr_flag_value_count(args,
-        CORE_STRING_STATIC("--define"));
-    put_u32(out, (uint32_t)(defines > 0 ? defines : 0));
-    for (int32_t i = 0; i < defines; i++) {
-        core_string_t value = parse_cmdr_flag_str_at(args,
-            CORE_STRING_STATIC("--define"), i);
-        put_bytes(out, value.data, value.u8_bytes);
+    static const char *const valued[] = {"--define", "--native-root"};
+    for (size_t f = 0; f < sizeof(valued) / sizeof(*valued); f++) {
+        core_string_t flag = core_string_from_cstr(valued[f]);
+        int32_t count = parse_cmdr_flag_value_count(args, flag);
+        put_u32(out, (uint32_t)(count > 0 ? count : 0));
+        for (int32_t i = 0; i < count; i++) {
+            core_string_t value = parse_cmdr_flag_str_at(args, flag, i);
+            put_bytes(out, value.data, value.u8_bytes);
+        }
     }
 }
 
@@ -583,6 +585,7 @@ typedef struct {
     bool fresh;
     bool deferred;
     bool loaded;
+    bool dispatch_stale;
     entry_state_t state;
     entry_state_t load;
     th_env *interface;
@@ -853,6 +856,21 @@ entry_fresh(const n00bb_cache_t *cache, const cache_entry_t *entry)
 }
 
 static bool
+entry_excluded(const cache_entry_t *entry, const char *excluded)
+{
+    for (const char *at = excluded; at && *at;) {
+        const char *end = strchr(at, ',');
+        size_t length = end ? (size_t)(end - at) : strlen(at);
+        for (size_t m = 0; m < entry->members.len; m++)
+            if (strlen(entry->members.data[m].name) == length
+                && !memcmp(entry->members.data[m].name, at, length))
+                return true;
+        at = end ? end + 1 : nullptr;
+    }
+    return false;
+}
+
+static bool
 entry_validate(n00bb_cache_t *cache, cache_entry_t *entry)
 {
     if (entry->state == ENTRY_VALID) return true;
@@ -1012,9 +1030,11 @@ n00bb_cache_open(const char *root_path, parse_cmdr_result_t *args,
     };
     read_module_keys(cache);
     read_entries(cache);
+    const char *excluded = getenv("N00BB_CACHE_EXCLUDE");
     for (size_t e = 0; e < cache->entries.len; e++)
         cache->entries.data[e].fresh = entry_fresh(cache,
-                                                   &cache->entries.data[e]);
+                                                   &cache->entries.data[e])
+            && !entry_excluded(&cache->entries.data[e], excluded);
     for (size_t e = 0; e < cache->entries.len; e++)
         (void)entry_validate(cache, &cache->entries.data[e]);
     bool changed = true;
@@ -1205,6 +1225,71 @@ n00bb_cache_load_ir(n00bb_cache_t *cache, ir_module_lookup_fn lookup,
     core_free(modules);
     core_free(inputs);
     return ok;
+}
+
+static core_translation_unit_t *
+analysis_unit(n00bb_link_analysis_t *analysis, const char *module)
+{
+    for (size_t i = 0; module && i < analysis->units.len; i++) {
+        core_translation_unit_t *unit = analysis->units.data[i];
+        if (strlen(module) == unit->module.identifier.u8_bytes
+            && !memcmp(module, unit->module.identifier.data,
+                       unit->module.identifier.u8_bytes)) return unit;
+    }
+    return nullptr;
+}
+
+bool
+n00bb_cache_check_dispatch(n00bb_cache_t *cache,
+                           n00bb_link_analysis_t *analysis,
+                           const th_env *environment)
+{
+    if (!cache || !analysis || !environment) return true;
+    for (size_t e = 0; e < cache->entries.len; e++) {
+        cache_entry_t *entry = &cache->entries.data[e];
+        if (entry->load != ENTRY_VALID) continue;
+        const cache_section_t *section = phase_section(entry, "dispatch",
+                                                       nullptr);
+        if (!section) continue;
+        manifest_reader_t r = {section->data, section->length, 0, false};
+        uint32_t count = read_u32(&r);
+        bool matches = true;
+        for (uint32_t i = 0; !r.failed && matches && i < count; i++) {
+            char *module = read_text(&r);
+            char *package = read_text(&r);
+            char *trait = read_text(&r);
+            char *method = read_text(&r);
+            uint64_t recorded = read_u64(&r);
+            core_translation_unit_t *unit = r.failed ? nullptr
+                : analysis_unit(analysis, module);
+            n00bb_tu_state_t *state = unit ? tu_state(unit) : nullptr;
+            uint64_t current = 0;
+            if (state && state->types)
+                matches = th_ctx_set_environment_scope(state->types,
+                        module, package)
+                    && n00bb_dispatch_fingerprint(state->types, environment,
+                        trait, method, &current)
+                    && current == recorded;
+            core_free(module);
+            core_free(package);
+            core_free(trait);
+            core_free(method);
+        }
+        entry->dispatch_stale = r.failed || !matches;
+    }
+    return true;
+}
+
+void
+n00bb_cache_stale_modules(const n00bb_cache_t *cache, core_buffer_t *out)
+{
+    for (size_t e = 0; cache && e < cache->entries.len; e++) {
+        const cache_entry_t *entry = &cache->entries.data[e];
+        if (!entry->dispatch_stale) continue;
+        for (size_t m = 0; m < entry->members.len; m++)
+            core_buffer_printf(out, "%s%s", out->byte_len ? "," : "",
+                               entry->members.data[m].name);
+    }
 }
 
 bool
@@ -1668,6 +1753,32 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
                             requests.byte_len);
     core_buffer_release(&name);
     core_buffer_release(&requests);
+    core_buffer_t dispatch = {0};
+    uint32_t dispatch_count = 0;
+    for (size_t m = 0; m < scc->members.len; m++)
+        dispatch_count += (uint32_t)tu_state(scc->members.data[m])
+            ->dispatch_records.len;
+    put_u32(&dispatch, dispatch_count);
+    for (size_t m = 0; m < scc->members.len; m++) {
+        core_translation_unit_t *member = scc->members.data[m];
+        n00bb_tu_state_t *member_state = tu_state(member);
+        for (size_t d = 0; d < member_state->dispatch_records.len; d++) {
+            const n00bb_dispatch_record_t *record =
+                &member_state->dispatch_records.data[d];
+            core_string_t package = n00bb_package_id(member);
+            put_bytes(&dispatch, member->module.identifier.data,
+                      member->module.identifier.u8_bytes);
+            put_bytes(&dispatch, package.data, package.u8_bytes);
+            put_text(&dispatch, record->trait);
+            put_text(&dispatch, record->method);
+            put_u64(&dispatch, record->fingerprint);
+        }
+    }
+    core_buffer_printf(&name, "%s.dispatch", phase);
+    ok = ok && sections_set(&sections, name.data, dispatch.data,
+                            dispatch.byte_len);
+    core_buffer_release(&name);
+    core_buffer_release(&dispatch);
     for (size_t m = 0; ok && m < scc->members.len; m++) {
         core_string_t module = scc->members.data[m]->module.identifier;
         const n00bb_cache_module_object_t *object = module_object(objects,
@@ -1832,6 +1943,30 @@ compare_indices(const void *left, const void *right)
 }
 
 static bool
+scc_ir_hash(const n00bb_cache_t *cache, const cache_scc_t *scc,
+            uint64_t *out)
+{
+    core_string_t first = scc->members.data[0]->module.identifier;
+    const cache_entry_t *entry = nullptr;
+    if (scc->cached
+        && loaded_member(cache, first.data, first.u8_bytes, &entry)) {
+        const cache_section_t *ir = phase_section(entry, "ir", nullptr);
+        if (!ir) return false;
+        *out = core_xxh3_64bits_raw(ir->data, ir->length);
+        return true;
+    }
+    for (size_t i = 0; i < cache->snapshots.len; i++) {
+        const cache_snapshot_t *snapshot = &cache->snapshots.data[i];
+        if (strlen(snapshot->module) == first.u8_bytes
+            && !memcmp(snapshot->module, first.data, first.u8_bytes)) {
+            *out = buffer_hash(&snapshot->ir);
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool
 instance_key(n00bb_cache_t *cache, const n00bb_specialization_t *item,
              uint64_t *key)
 {
@@ -1843,9 +1978,12 @@ instance_key(n00bb_cache_t *cache, const n00bb_specialization_t *item,
     collect_type_owners(sccs, item->signature, &owners, 0);
     if (owners.len)
         qsort(owners.data, owners.len, sizeof(*owners.data), compare_indices);
+    uint64_t generic_ir = 0;
+    bool saved = scc_ir_hash(cache, &sccs->data[generic], &generic_ir);
     core_buffer_t input = {0};
-    core_buffer_puts(&input, "n00b.instance.key.v1");
+    core_buffer_puts(&input, "n00b.instance.key.v2");
     put_u64(&input, sccs->data[generic].key);
+    put_u64(&input, generic_ir);
     put_text(&input, ir_module_name(item->instance->owner));
     put_text(&input, item->instance->name);
     put_u32(&input, (uint32_t)owners.len);
@@ -1854,7 +1992,7 @@ instance_key(n00bb_cache_t *cache, const n00bb_specialization_t *item,
     *key = buffer_hash(&input);
     core_buffer_release(&input);
     core_list_free(owners);
-    return true;
+    return saved;
 }
 
 static void
@@ -1911,18 +2049,14 @@ n00bb_cache_instance_object(n00bb_cache_t *cache, core_link_unit_t *link,
     const cache_section_t *native = section_named(&found->sections,
                                                   name.data);
     core_buffer_release(&name);
-    core_buffer_printf(&name, "%s.abi", phase_name());
-    const cache_section_t *abi = section_named(&found->sections, name.data);
-    core_buffer_release(&name);
     core_buffer_printf(&name, "%s.mutators", phase_name());
     const cache_section_t *mutators = section_named(&found->sections,
                                                     name.data);
     core_buffer_release(&name);
-    if (!native || !abi || !mutators) return false;
+    if (!native || !mutators) return false;
     *object = (n00bb_cache_module_object_t){
         .module = ir_module_name(module),
         .native = native->data, .native_bytes = native->length,
-        .abi = abi->data, .abi_bytes = abi->length,
         .mutators = mutators->data, .mutator_bytes = mutators->length,
     };
     return true;
@@ -1949,10 +2083,6 @@ store_instance(n00bb_cache_t *cache, const n00bb_specialization_t *item,
     core_buffer_printf(&name, "%s.native", phase_name());
     bool ok = sections_set(&sections, name.data, object->native,
                            object->native_bytes);
-    core_buffer_release(&name);
-    core_buffer_printf(&name, "%s.abi", phase_name());
-    ok = ok && sections_set(&sections, name.data, object->abi,
-                            object->abi_bytes);
     core_buffer_release(&name);
     core_buffer_printf(&name, "%s.mutators", phase_name());
     ok = ok && sections_set(&sections, name.data,
@@ -2009,7 +2139,7 @@ n00bb_cache_store(n00bb_cache_t *cache, core_link_unit_t *link,
         const n00bb_cache_module_object_t *object = module_object(objects,
             object_count, core_string_from_cstr(
                 ir_module_name(item->instance->owner)));
-        if (object && object->native && object->abi)
+        if (object && object->native)
             ok = store_instance(cache, item, object);
         if (object && ok)
             cache_log("%s store instance %s.%s", phase_name(),

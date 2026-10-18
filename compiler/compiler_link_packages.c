@@ -773,6 +773,16 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
                 qualified.data, qualified.data, module_text, package_text,
                 TH_ENV_PRIVATE, role_record);
             core_buffer_release(&qualified);
+            parse_sym_entry_t *callback_symbol =
+                core_tree_node_value(scope->node).sym;
+            core_buffer_t type_name = {0};
+            core_buffer_printf(&type_name, "%s.%.*s", module_text,
+                (int)scope->name.u8_bytes, scope->name.data);
+            ok = ok && callback_symbol && type_name.data
+                && register_typevar_order(state->types, environment,
+                    callback_symbol, role_record, TH_ENV_METADATA_TYPE,
+                    type_name.data, "n00b.type-typevars");
+            core_buffer_release(&type_name);
         }
         if (ok && methods.len) {
             th_type *method_record = th_record(state->types, methods.data,

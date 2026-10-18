@@ -156,6 +156,50 @@ interface_callback_contract(n00bb_interface_context_t *loader,
 }
 
 static bool
+restore_interface_typevars(n00bb_interface_context_t *loader,
+                           n00bb_tu_state_t *state,
+                           parse_sym_entry_t *symbol,
+                           th_env_metadata_owner_t owner_kind,
+                           const char *qualified_name, const char *key,
+                           th_type *contract)
+{
+    size_t size = 0;
+    const uint8_t *data = interface_owned_metadata(loader, owner_kind,
+        qualified_name, key, 1, &size);
+    if (!data) return true;
+    if (size < 4) return false;
+    uint32_t count = read_u32_le(data);
+    th_type **free_vars = nullptr;
+    size_t free_count = th_free_vars(state->types, contract, &free_vars);
+    n00bb_signature_typevars_t *variables = core_arena_alloc(
+        &state->semantic_values, sizeof(*variables));
+    n00bb_typevar_binding_t *bindings = count ? core_arena_alloc(
+        &state->semantic_values, count * sizeof(*bindings)) : nullptr;
+    if (!variables || (count && !bindings)) return false;
+    size_t offset = 4;
+    for (uint32_t i = 0; i < count; i++) {
+        if (size - offset < 8) return false;
+        uint32_t position = read_u32_le(data + offset);
+        uint32_t name_size = read_u32_le(data + offset + 4);
+        offset += 8;
+        if (position >= free_count || name_size > size - offset)
+            return false;
+        bindings[i] = (n00bb_typevar_binding_t){
+            .name = store_semantic_string(state, core_string_borrow(
+                (const char *)data + offset, name_size)),
+            .type = free_vars[position],
+        };
+        offset += name_size;
+    }
+    if (offset != size) return false;
+    *variables = (n00bb_signature_typevars_t){
+        .data = bindings, .len = count, .cap = count,
+    };
+    return parse_sym_set_binding(symbol, N00BB_SIGNATURE_TYPEVARS_KEY,
+                                 variables);
+}
+
+static bool
 materialize_interface_callback(n00bb_interface_context_t *loader,
                                n00bb_tu_state_t *state,
                                parse_symtab_t *symtab,
@@ -228,6 +272,7 @@ materialize_interface_callback(n00bb_interface_context_t *loader,
             entry->error_type = error_type;
             entry->callable_contract = role_contract;
             entry->visibility = symbol->visibility;
+            entry->owner_type = symbol;
             core_buffer_t key = {0};
             core_buffer_printf(&key, "n00b.callback-params.%s",
                                role_names[i]);
@@ -247,6 +292,12 @@ materialize_interface_callback(n00bb_interface_context_t *loader,
         return false;
     }
 
+    if (!restore_interface_typevars(loader, state, symbol,
+            TH_ENV_METADATA_TYPE, qualified_name, "n00b.type-typevars",
+            roles)) {
+        if (failure) *failure = "interface callback has invalid type variables";
+        return false;
+    }
     th_type *handler = th_resolve(role_symbols[1]->type);
     const th_param *state_parameter = setup_contract && handler
         && th_kind_of(handler) == TH_FUNCTION
@@ -674,41 +725,9 @@ restore_interface_function_typevars(n00bb_interface_context_t *loader,
                                     parse_sym_entry_t *symbol,
                                     const char *qualified_name)
 {
-    size_t size = 0;
-    const uint8_t *data = interface_owned_metadata(loader,
-        TH_ENV_METADATA_FUNCTION, qualified_name, "n00b.function-typevars", 1,
-        &size);
-    if (!data) return true;
-    if (size < 4) return false;
-    uint32_t count = read_u32_le(data);
-    th_type **free_vars = nullptr;
-    size_t free_count = th_free_vars(state->types, symbol->type, &free_vars);
-    n00bb_signature_typevars_t *variables = core_arena_alloc(
-        &state->semantic_values, sizeof(*variables));
-    n00bb_typevar_binding_t *bindings = count ? core_arena_alloc(
-        &state->semantic_values, count * sizeof(*bindings)) : nullptr;
-    if (!variables || (count && !bindings)) return false;
-    size_t offset = 4;
-    for (uint32_t i = 0; i < count; i++) {
-        if (size - offset < 8) return false;
-        uint32_t position = read_u32_le(data + offset);
-        uint32_t name_size = read_u32_le(data + offset + 4);
-        offset += 8;
-        if (position >= free_count || name_size > size - offset)
-            return false;
-        bindings[i] = (n00bb_typevar_binding_t){
-            .name = store_semantic_string(state, core_string_borrow(
-                (const char *)data + offset, name_size)),
-            .type = free_vars[position],
-        };
-        offset += name_size;
-    }
-    if (offset != size) return false;
-    *variables = (n00bb_signature_typevars_t){
-        .data = bindings, .len = count, .cap = count,
-    };
-    return parse_sym_set_binding(symbol, N00BB_SIGNATURE_TYPEVARS_KEY,
-                                 variables);
+    return restore_interface_typevars(loader, state, symbol,
+        TH_ENV_METADATA_FUNCTION, qualified_name, "n00b.function-typevars",
+        symbol->type);
 }
 
 static th_type *

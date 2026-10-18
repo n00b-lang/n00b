@@ -9764,6 +9764,11 @@ free_tu_state(void *data)
     for (size_t i = 0; i < state->link_use_sites.len; i++)
         core_free(state->link_use_sites.data[i].trait_path_parts);
     core_list_free(state->link_use_sites);
+    for (size_t i = 0; i < state->dispatch_records.len; i++) {
+        core_free(state->dispatch_records.data[i].trait);
+        core_free(state->dispatch_records.data[i].method);
+    }
+    core_list_free(state->dispatch_records);
     for (size_t i = 0; i < state->option_paths.len; i++)
         core_free(state->option_paths.data[i].path.data);
     core_list_free(state->option_paths);

@@ -418,6 +418,13 @@ typedef struct {
     bool direct;
 } n00bb_trait_dispatch_plan_t;
 
+typedef struct {
+    char *trait;
+    char *method;
+    uint64_t fingerprint;
+} n00bb_dispatch_record_t;
+core_list_decl(n00bb_dispatch_record_t);
+
 struct n00bb_iteration_plan_t {
     size_t iter_site;
     size_t next_site;
@@ -528,6 +535,7 @@ typedef struct {
     core_list_t(n00bb_import_alias_t) import_aliases;
     core_dict_t import_alias_index;
     core_list_t(n00bb_link_use_site_t) link_use_sites;
+    core_list_t(n00bb_dispatch_record_t) dispatch_records;
     core_list_t(n00bb_option_path_t) option_paths;
     core_list_t(parse_tree_ptr_t) literal_site_nodes;
     core_dict_t flagset_values;

@@ -131,6 +131,9 @@ core_link_declaration_t *register_builtin_method_declaration(
     core_translation_unit_t *unit, const char *trait_name,
     const th_env_method_t *method);
 bool has_trait_constraint(th_type *receiver, const char *trait_name);
+bool n00bb_dispatch_fingerprint(th_ctx *types, const th_env *environment,
+                                const char *trait_name,
+                                const char *method_name, uint64_t *out);
 bool has_deferred_method_constraint(th_type *receiver,
     core_string_t method_name);
 bool n00bb_method_requirement_matches(th_type *receiver,

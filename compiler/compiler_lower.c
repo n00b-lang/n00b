@@ -9591,6 +9591,7 @@ n00bb_generate_value_methods(n00bb_link_analysis_t *analysis)
     for (size_t u = 0; u < analysis->units.len; u++) {
         core_translation_unit_t *unit = analysis->units.data[u];
         n00bb_tu_state_t *state = tu_state(unit);
+        if (state->interface_module) continue;
         core_list_t(parse_scope_ptr_t) scopes = module_scopes(state);
         for (size_t s = 0; s < scopes.len; s++) {
             for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
@@ -9835,6 +9836,24 @@ n00bb_emit_closed_trait_arm(ir_lower_context_t *context,
     result.result = last;
     result.signature = call_signature;
     return result;
+}
+
+static th_type *
+closed_receiver_failure(th_ctx *types, const n00bb_link_use_site_t *site,
+                        th_type *receiver)
+{
+    if (!types || !site || !site->resolved_trait_name
+        || !site->dispatch_method.data) return nullptr;
+    receiver = receiver ? th_resolve(receiver) : nullptr;
+    while (receiver && th_kind_of(receiver) == TH_INDIRECTION)
+        receiver = th_resolve(th_ind_referent(receiver));
+    if (!receiver || !th_is_closed(types, receiver)) return nullptr;
+    th_env_method_t method = {0};
+    if (th_env_method_resolve(types, receiver, site->resolved_trait_name,
+            site->dispatch_method.data, &method) != TH_ENV_METHOD_FOUND
+        || !method.signature) return nullptr;
+    th_type *failure = th_func_error(method.signature);
+    return failure ? th_type_clone(types, failure) : th_name(types, "nil");
 }
 
 static ir_instr_t *
@@ -11433,6 +11452,21 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     th_ctx *types = ir_module_types(context->module);
     th_type *fact_failure = nullptr;
     bool fact_failure_conflict = false;
+    th_type *closed_failure = builtin_trait_call
+        ? closed_receiver_failure(types, dispatch_site,
+              values.len && values.data[0] ? values.data[0]->type : nullptr)
+        : nullptr;
+    if (closed_failure
+        && th_kind_of(th_resolve(th_func_error(signature))) == TH_VAR) {
+        signature = function_with_error_channel(types, signature,
+                                                closed_failure);
+        if (!signature) {
+            core_list_free(values);
+            core_list_free(copyouts);
+            return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
+                "builtin trait failure does not match its implementation");
+        }
+    }
     if (builtin_trait_call && !lower->tries.len) {
         th_type *current_failure = th_func_error(signature);
         if (current_failure
@@ -16455,8 +16489,8 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
                     continue;
                 bool definition = function_symbol_at(grammar,
                         symbol->decl_node)
-                    || parse_sym_binding(symbol,
-                        CORE_STRING_STATIC("n00bb.generated-value-method"));
+                    || (!state->interface_module && parse_sym_binding(symbol,
+                        CORE_STRING_STATIC("n00bb.generated-value-method")));
                 parse_tree_t *prelude = definition
                     ? child_nt(grammar, symbol->decl_node, "func-prelude")
                     : nullptr;
@@ -16472,6 +16506,8 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
                         ? interface_function_semantic_type(state->types,
                                                            symbol)
                         : interface_context_hook_symbol(symbol)
+                            || parse_sym_binding(symbol, CORE_STRING_STATIC(
+                                "n00bb.generated-value-method"))
                             ? symbol->type
                             : nullptr
                     : function_semantic_type(grammar, unit, symbol);
@@ -18187,6 +18223,13 @@ n00bb_root_entry(const n00bb_link_analysis_t *analysis, const char *name)
     return function && function->n_blocks ? function : nullptr;
 }
 
+static bool
+function_has_body(ir_func_t *function)
+{
+    return function->n_blocks
+        || ir_annot_get(&function->annots, "n00bb.cached_body");
+}
+
 ir_func_t *
 n00bb_baked_function(const n00bb_link_analysis_t *analysis,
                      const char *module, const char *name)
@@ -18196,9 +18239,7 @@ n00bb_baked_function(const n00bb_link_analysis_t *analysis,
         ir_module_t *candidate = unit_module(tu_state(analysis->units.data[i]));
         if (!candidate || strcmp(ir_module_name(candidate), module)) continue;
         ir_func_t *function = ir_func_find(candidate, name);
-        return function && (function->n_blocks
-            || ir_annot_get(&function->annots, "n00bb.cached_body"))
-            ? function : nullptr;
+        return function && function_has_body(function) ? function : nullptr;
     }
     return nullptr;
 }
@@ -18239,7 +18280,7 @@ build_reachable_functions(
         if (!module_name) continue;
         for (size_t j = 0; j < ir_func_count(module); j++) {
             ir_func_t *function = ir_func_at(module, j);
-            if (!function || !function->n_blocks) continue;
+            if (!function || !function_has_body(function)) continue;
             if (!strcmp(function->name, "__finalize")
                 || !strncmp(function->name, "__finalize#", 11))
                 core_list_push(roots, function);
@@ -18251,7 +18292,7 @@ build_reachable_functions(
                                                      &cursor))) {
             ir_func_t *function = ir_func_find(module,
                 n00bb_native_root_function(native, prefix));
-            if (function && function->n_blocks)
+            if (function && function_has_body(function))
                 core_list_push(roots, function);
         }
     }
@@ -18266,7 +18307,7 @@ build_reachable_functions(
             core_string_t owner = core_string_from_cstr(module_name);
             for (size_t j = 0; j < ir_func_count(module); j++) {
                 ir_func_t *function = ir_func_at(module, j);
-                if (!function || !function->n_blocks
+                if (!function || !function_has_body(function)
                     || !native_root_matches(analysis->native_roots[r],
                         owner, core_string_from_cstr(function->name)))
                     continue;
@@ -18301,7 +18342,7 @@ build_reachable_functions(
             ir_func_t *function = prefix && !strncmp(name, module_name, prefix)
                 && name[prefix] == '.'
                 ? ir_func_find(module, name + prefix + 1) : nullptr;
-            found = function && function->n_blocks;
+            found = function && function_has_body(function);
         }
         if (!found) {
             core_buffer_t message = {0};
@@ -18353,7 +18394,14 @@ build_emitted_functions(n00bb_link_analysis_t *analysis)
     for (size_t i = 0; i < analysis->specializations.len; i++)
         core_list_push(roots, analysis->specializations.data[i].instance);
     for (size_t i = 0; i < analysis->units.len; i++) {
-        ir_module_t *module = unit_module(tu_state(analysis->units.data[i]));
+        core_translation_unit_t *unit = analysis->units.data[i];
+        n00bb_tu_state_t *state = tu_state(unit);
+        core_string_t path = core_source_file_path(&unit->source);
+        bool generated = path.data && !strncmp(path.data, "<generated:", 11);
+        bool root = state && state->link
+            && unit == core_link_unit_root(state->link, 0);
+        if (generated || root) continue;
+        ir_module_t *module = unit_module(state);
         for (size_t j = 0; module && j < ir_func_count(module); j++) {
             ir_func_t *function = ir_func_at(module, j);
             if (function && function->n_blocks

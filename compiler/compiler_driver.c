@@ -1893,8 +1893,9 @@ load_interface_imports(import_driver_t *driver, parse_grammar_t *grammar,
                        core_translation_unit_t *unit)
 {
     core_string_t module = unit->module.identifier;
-    if (!interface_restore_package_declarations(&driver->loader->interfaces,
-                                                unit)) {
+    if (n00bb_cache_has_module(driver->loader->cache, module)
+        && !interface_restore_package_declarations(
+            &driver->loader->interfaces, unit)) {
         import_error(unit, nullptr,
                      "interface module has malformed package declarations");
         return false;
@@ -2345,6 +2346,7 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
                 program_interface_count, native_roots, native_root_count,
                 may_link_further, resolver);
             core_free(program_interfaces);
+            if (analysis) analysis->cache = (n00bb_cache_t *)cache;
             success = link != nullptr;
             for (size_t i = 0; i < root_request_count; i++) {
                 if (!requests->ordered.data[i].root_input) continue;
@@ -3471,6 +3473,17 @@ wait_for_child(pid_t child)
         && WEXITSTATUS(status) == 0;
 }
 
+static int build_time_capture = -1;
+
+static void
+pass_build_time_capture(void)
+{
+    if (build_time_capture < 0) return;
+    char descriptor[16];
+    snprintf(descriptor, sizeof(descriptor), "%d", build_time_capture);
+    setenv("N00BB_BUILD_TIME_CAPTURE_FD", descriptor, 1);
+}
+
 static void
 restart_with_strict_cache(char **argv)
 {
@@ -3479,6 +3492,26 @@ restart_with_strict_cache(char **argv)
         core_free(compiler);
         return;
     }
+    pass_build_time_capture();
+    fflush(stdout);
+    fflush(stderr);
+    execv(compiler, argv);
+    core_free(compiler);
+}
+
+static void
+restart_excluding_cached(char **argv, const core_buffer_t *stale)
+{
+    const char *previous = getenv("N00BB_CACHE_EXCLUDE");
+    core_buffer_t excluded = {0};
+    core_buffer_printf(&excluded, "%s%s%.*s", previous ? previous : "",
+        previous && *previous ? "," : "", (int)stale->byte_len, stale->data);
+    char *compiler = excluded.data
+        && !setenv("N00BB_CACHE_EXCLUDE", excluded.data, 1)
+        ? n00bb_executable_path(argv[0]) : nullptr;
+    core_buffer_release(&excluded);
+    if (!compiler) return;
+    pass_build_time_capture();
     fflush(stdout);
     fflush(stderr);
     execv(compiler, argv);
@@ -3569,6 +3602,14 @@ read_capture(int capture_fd)
 static bool
 run_build_time_stage(int argc, char **argv, core_diagnostics_t *diagnostics)
 {
+    const char *inherited = getenv("N00BB_BUILD_TIME_CAPTURE_FD");
+    if (inherited) {
+        build_time_capture = atoi(inherited);
+        unsetenv("N00BB_BUILD_TIME_CAPTURE_FD");
+        return read_capture(build_time_capture)
+            || build_time_failure(diagnostics,
+                "could not read the build-time capture");
+    }
     char executable[] = "/tmp/n00bb-build-time-XXXXXX";
     int executable_fd = mkstemp(executable);
     if (executable_fd < 0)
@@ -3591,7 +3632,8 @@ run_build_time_stage(int argc, char **argv, core_diagnostics_t *diagnostics)
     if (ok && !read_capture(capture_fd))
         ok = build_time_failure(diagnostics,
             "could not read the build-time capture");
-    if (capture_fd >= 0) close(capture_fd);
+    if (ok) build_time_capture = capture_fd;
+    else if (capture_fd >= 0) close(capture_fd);
     unlink(executable);
     return ok;
 }
@@ -3939,6 +3981,12 @@ n00bb_compiler_main(int argc, char **argv)
     if (optimistic_cache && (!located
             || !n00bb_cache_assumptions_hold(cache, link, link_analysis)))
         restart_with_strict_cache(argv);
+    if (cache && located) {
+        core_buffer_t stale = {0};
+        n00bb_cache_stale_modules(cache, &stale);
+        if (stale.byte_len) restart_excluding_cached(argv, &stale);
+        core_buffer_release(&stale);
+    }
     if (parse_cmdr_flag_present(args, CORE_STRING_STATIC("--show-ffi"))
         && !show_module_literal(resolver, CORE_STRING_STATIC("ffi"),
                parse_cmdr_flag_str(args, CORE_STRING_STATIC("--show-ffi")))) {

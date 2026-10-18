@@ -2778,7 +2778,9 @@ append_function_contract_identity(core_translation_unit_t *unit,
     for (size_t i = 0; state && i < state->literal_modifiers.len; i++) {
         n00bb_user_litmod_t *registration =
             &state->literal_modifiers.data[i];
-        if (registration->declaration != symbol->decl_node) continue;
+        if (registration->declaration
+                ? registration->declaration != symbol->decl_node
+                : registration->function != symbol) continue;
         core_buffer_printf(key, "#litmod_%.*s",
             (int)registration->kind.u8_bytes, registration->kind.data);
         return true;
@@ -4358,7 +4360,12 @@ register_builtin_value_defaults(th_env *defaults, const th_env *base,
              scope = scope->all_next) {
             for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
                  symbol = symbol->next_in_scope) {
-                if (!is_named_type_declaration(grammar, symbol)
+                bool interface_type = state->interface_module
+                    && symbol->kind == PARSE_SYM_TYPEDEF
+                    && parse_sym_binding(symbol,
+                        CORE_STRING_STATIC("n00bb.export-origin"));
+                if (!(interface_type
+                        || is_named_type_declaration(grammar, symbol))
                     || !symbol->type) continue;
                 th_type *receiver = th_resolve(symbol->type);
                 if (th_kind_of(receiver) != TH_NAMED) continue;

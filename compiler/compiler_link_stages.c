@@ -1,3 +1,4 @@
+#include "compiler_cache.h"
 #include "compiler_link.h"
 #include "compiler_link_lifetime.h"
 #include "compiler_ir_setup.h"
@@ -142,6 +143,11 @@ n00bb_link_stage_semantics(core_link_unit_t *link, uint32_t stage_kind,
             units->data[0]), units->data[0], CORE_DIAG_FATAL,
             CORE_STRING_STATIC("N00BB-L0052"),
             CORE_STRING_STATIC("trait reference resolution failed"));
+        th_env_free(environment);
+        return CORE_LINK_STAGE_RESULT_FAILED;
+    }
+    if (!n00bb_cache_check_dispatch(analysis->cache, analysis,
+                                    environment)) {
         th_env_free(environment);
         return CORE_LINK_STAGE_RESULT_FAILED;
     }

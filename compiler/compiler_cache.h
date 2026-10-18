@@ -39,6 +39,11 @@ const th_env *n00bb_cache_interface(const n00bb_cache_t *cache,
 bool n00bb_cache_has_module(const n00bb_cache_t *cache,
                             core_string_t module);
 bool n00bb_cache_optimistic(const n00bb_cache_t *cache);
+bool n00bb_cache_check_dispatch(n00bb_cache_t *cache,
+                                n00bb_link_analysis_t *analysis,
+                                const th_env *environment);
+void n00bb_cache_stale_modules(const n00bb_cache_t *cache,
+                               core_buffer_t *out);
 bool n00bb_cache_assumptions_hold(const n00bb_cache_t *cache,
                                   core_link_unit_t *link,
                                   n00bb_link_analysis_t *analysis);

@@ -480,24 +480,33 @@ n00bb_abi_type_variables_bind(n00bb_abi_type_index_t *index, th_ctx *types,
         if (!th_env_declaration_at(environment, i, &declaration)) return false;
         if (declaration.kind != TH_ENV_DECLARATION_TRAIT
             || !declaration.module
-            || strcmp(declaration.module, "builtins")
             || !declaration.contract
             || th_kind_of(th_resolve(declaration.contract)) != TH_TRAIT)
             continue;
+        bool builtin = !strcmp(declaration.module, "builtins");
         uint32_t owner_index = 0;
         if (!n00bb_abi_type_index_find(index, declaration.contract,
-                                       &owner_index)) return false;
+                                       &owner_index)) {
+            if (builtin) return false;
+            continue;
+        }
         th_type **variables = nullptr;
         size_t count = th_free_vars(types, declaration.contract, &variables);
         if (count > UINT32_MAX) return false;
         for (size_t ordinal = 0; ordinal < count; ordinal++) {
             uint32_t type_index = 0;
             if (!n00bb_abi_type_index_find(index, variables[ordinal],
-                                           &type_index)) return false;
+                                           &type_index)) {
+                if (builtin) return false;
+                continue;
+            }
             n00b_abi_type_v1 *row = &rows->rows[type_index];
-            if (row->kind != N00B_ABI_TYPE_VARIABLE
-                || row->typevar_owner_scope_index
-                || row->typevar_import_requirement_index) return false;
+            if (row->kind != N00B_ABI_TYPE_VARIABLE) return false;
+            if (row->typevar_owner_scope_index
+                || row->typevar_import_requirement_index) {
+                if (builtin) return false;
+                continue;
+            }
             if (row->typevar_owner_type_index) continue;
             row->typevar_owner_type_index = owner_index;
             row->typevar_ordinal = (uint32_t)ordinal;

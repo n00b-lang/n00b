@@ -1255,6 +1255,65 @@ collect_environment_traits(ir_module_t *module,
 }
 
 static bool
+collect_constrained_traits(const th_env *environment,
+                           n00bb_abi_type_index_t *index, th_type *type,
+                           unsigned depth)
+{
+    type = type ? th_resolve(type) : nullptr;
+    if (!type || depth > 64) return true;
+    switch (th_kind_of(type)) {
+    case TH_VAR:
+        for (size_t i = 0; i < th_var_constraint_count(type); i++) {
+            th_constraint constraint;
+            if (!th_var_constraint_at(type, i, &constraint)) return false;
+            if (constraint.kind != TH_CON_IMPLEMENTS || !constraint.iface)
+                continue;
+            for (size_t d = 0; d < th_env_declaration_count(environment);
+                 d++) {
+                th_env_declaration_view_t declaration;
+                if (!th_env_declaration_at(environment, d, &declaration))
+                    return false;
+                if (declaration.kind == TH_ENV_DECLARATION_TRAIT
+                    && declaration.qualified_name && declaration.contract
+                    && !strcmp(declaration.qualified_name, constraint.iface)
+                    && th_kind_of(th_resolve(declaration.contract))
+                        == TH_TRAIT
+                    && !n00bb_abi_type_index_add_imported_trait(index,
+                        declaration.contract)) return false;
+            }
+        }
+        return true;
+    case TH_NAMED:
+        for (size_t i = 0; i < th_named_nargs(type); i++) {
+            const th_arg *argument = th_named_arg(type, i);
+            if (argument && argument->kind == TH_ARG_TYPE
+                && !collect_constrained_traits(environment, index,
+                    argument->type, depth + 1)) return false;
+        }
+        return true;
+    case TH_SEQUENCE:
+        return collect_constrained_traits(environment, index,
+            th_seq_elem(type), depth + 1);
+    case TH_INDIRECTION:
+        return collect_constrained_traits(environment, index,
+            th_ind_referent(type), depth + 1);
+    default:
+        return true;
+    }
+}
+
+static bool
+collect_module_constraint_traits(ir_module_t *module,
+                                 n00bb_abi_type_index_t *index)
+{
+    const th_env *environment = th_ctx_environment(ir_module_types(module));
+    for (size_t i = 0; environment && i < ir_type_count(module); i++)
+        if (!collect_constrained_traits(environment, index,
+                ir_type_at(module, i), 0)) return false;
+    return true;
+}
+
+static bool
 collect_imported_nominal_declarations(n00bb_abi_type_index_t *index,
     n00bb_abi_type_owner_lookup_fn type_owner, void *context)
 {
@@ -1262,9 +1321,12 @@ collect_imported_nominal_declarations(n00bb_abi_type_index_t *index,
     for (size_t i = 1; i < n00bb_abi_type_index_count(index); i++) {
         th_type *type = n00bb_abi_type_index_at(index, (uint32_t)i);
         parse_sym_entry_t *owner = type ? type_owner(context, type) : nullptr;
-        if (owner && (owner->decl_node || owner->owner_unit) && owner->type
-            && !n00bb_abi_type_index_add(index, owner->type, nullptr))
-            return false;
+        if (!owner || !(owner->decl_node || owner->owner_unit)
+            || !owner->type) continue;
+        bool added = th_kind_of(th_resolve(owner->type)) == TH_TRAIT
+            ? n00bb_abi_type_index_add_imported_trait(index, owner->type)
+            : n00bb_abi_type_index_add(index, owner->type, nullptr);
+        if (!added) return false;
     }
     return true;
 }
@@ -1704,6 +1766,9 @@ n00bb_abi_emit_unit(
         && ABI_STAGE("trait type collection",
             collect_environment_traits((ir_module_t *)runtime_ir,
                                        type_index))
+        && ABI_STAGE("constraint trait collection",
+            collect_module_constraint_traits((ir_module_t *)runtime_ir,
+                                             type_index))
         && ABI_STAGE("imported nominal declarations",
             collect_imported_nominal_declarations(type_index, type_owner,
                 type_owner_context))

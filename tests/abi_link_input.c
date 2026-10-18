@@ -549,11 +549,11 @@ test_cycle_selection(char **paths, const char *linked_path)
     n00bb_abi_manifest_rows_release(&manifests);
     n00bb_abi_merged_rows_t merged = {0};
     assert(n00bb_abi_merge_rows(&selected, plan, &merged));
-    assert(n00bb_abi_rebase_native_references(&merged, nullptr, 0,
-                                               nullptr, nullptr));
     n00bb_abi_native_sections_t native_sections = {0};
     assert(n00bb_abi_collect_native_sections(&selected, &target,
         &native_sections));
+    assert(n00bb_abi_rebase_native_references(&merged, native_sections.maps,
+        native_sections.map_count, nullptr, nullptr));
     for (size_t i = 0; i < native_sections.map_count; i++) {
         const n00bb_abi_native_section_map_t *map =
             &native_sections.maps[i];

@@ -1503,25 +1503,8 @@ n00bb_emit_abi_artifacts(core_link_unit_t *link,
     }
     for (size_t i = 0; valid && !root_only
          && i < analysis->specializations.len; i++) {
-        const n00bb_specialization_t *item =
-            &analysis->specializations.data[i];
-        n00bb_cache_module_object_t cached = {0};
-        if (n00bb_cache_instance_object(analysis->cache, link, analysis,
-                                        item, &cached)) {
-            n00bb_abi_artifact_t *artifact = core_alloc(n00bb_abi_artifact_t);
-            artifact->object = core_alloc_array(uint8_t, cached.abi_bytes);
-            if (artifact->object)
-                memcpy(artifact->object, cached.abi, cached.abi_bytes);
-            artifact->object_bytes = cached.abi_bytes;
-            valid = artifact->object && core_link_unit_add_artifact(link,
-                core_string_from_cstr(ir_module_name(item->instance->owner)),
-                CORE_STRING_STATIC("n00bb.abi.object"), 1, 0, artifact,
-                CORE_LINK_PAYLOAD_OWNED, free_abi_artifact);
-            if (!valid) free_abi_artifact(artifact);
-            continue;
-        }
-        valid = emit_specialization_abi(link, analysis, item, debug_enabled,
-                                        &sources);
+        valid = emit_specialization_abi(link, analysis,
+            &analysis->specializations.data[i], debug_enabled, &sources);
     }
     core_indexed_table_free(sources.scopes);
     core_dict_free(&sources.type_owners);

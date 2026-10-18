@@ -1,3 +1,4 @@
+#include <stdlib.h>
 #include <string.h>
 
 #include "compiler_link.h"
@@ -5,6 +6,8 @@
 #include "parse/tree_util.h"
 #include "compiler_native_roots.h"
 #include "record_layout_request.h"
+#include "lib/buffer.h"
+#include "lib/hash.h"
 
 typedef th_type *th_type_ptr_t;
 core_list_decl(th_type_ptr_t);
@@ -247,6 +250,94 @@ append_unique_dispatch_type(th_ctx *types,
     core_list_push(*receiver_types, candidate);
 }
 
+static int
+compare_hashes(const void *left, const void *right)
+{
+    uint64_t a = *(const uint64_t *)left, b = *(const uint64_t *)right;
+    return (a > b) - (a < b);
+}
+
+static int
+compare_texts(const void *left, const void *right)
+{
+    return strcmp(*(const char *const *)left, *(const char *const *)right);
+}
+
+bool
+n00bb_dispatch_fingerprint(th_ctx *types, const th_env *environment,
+                           const char *trait_name, const char *method_name,
+                           uint64_t *out)
+{
+    if (!types || !environment || !trait_name || !method_name || !out)
+        return false;
+    size_t declarations = th_env_declaration_count(environment);
+    uint64_t *receivers = core_alloc_array(uint64_t, declarations + 1);
+    size_t receiver_count = 0;
+    for (size_t i = 0; receivers && i < declarations; i++) {
+        th_env_declaration_view_t declaration = {0};
+        if (!th_env_declaration_at(environment, i, &declaration)
+            || declaration.kind != TH_ENV_DECLARATION_TYPE
+            || declaration.type_shape_kind == TH_ENV_TYPE_SHAPE_ALIAS
+            || !declaration.qualified_name
+            || !th_env_type_visible(types, declaration.qualified_name))
+            continue;
+        th_type *candidate = th_name(types, declaration.qualified_name);
+        if (candidate && th_is_closed(types, candidate)
+            && th_env_implements(types, candidate, trait_name))
+            receivers[receiver_count++] = th_hash(types, candidate);
+    }
+    size_t method_count = th_env_method_candidates(types, trait_name,
+                                                    method_name, nullptr, 0);
+    th_env_method_t *methods = method_count
+        ? core_alloc_array(th_env_method_t, method_count) : nullptr;
+    const char **names = method_count
+        ? core_alloc_array(const char *, method_count) : nullptr;
+    bool ok = receivers && (!method_count || (methods && names
+        && th_env_method_candidates(types, trait_name, method_name,
+               methods, method_count) == method_count));
+    for (size_t i = 0; ok && i < method_count; i++)
+        names[i] = methods[i].qualified_name ? methods[i].qualified_name : "";
+    if (ok) {
+        qsort(receivers, receiver_count, sizeof(*receivers), compare_hashes);
+        if (method_count)
+            qsort(names, method_count, sizeof(*names), compare_texts);
+        core_buffer_t input = {0};
+        core_buffer_puts(&input, "n00b.dispatch.v1");
+        core_buffer_append(&input, (const char *)receivers,
+                           receiver_count * sizeof(*receivers));
+        for (size_t i = 0; i < method_count; i++) {
+            core_buffer_puts(&input, names[i]);
+            core_buffer_putc(&input, 0);
+        }
+        *out = core_xxh3_64bits_raw(input.data ? input.data : "",
+                                    input.byte_len);
+        core_buffer_release(&input);
+    }
+    core_free(names);
+    core_free(methods);
+    core_free(receivers);
+    return ok;
+}
+
+static bool
+record_dispatch(n00bb_tu_state_t *state, const th_env *environment,
+                const char *trait_name, const char *method_name)
+{
+    for (size_t i = 0; i < state->dispatch_records.len; i++)
+        if (!strcmp(state->dispatch_records.data[i].trait, trait_name)
+            && !strcmp(state->dispatch_records.data[i].method, method_name))
+            return true;
+    uint64_t fingerprint = 0;
+    if (!n00bb_dispatch_fingerprint(state->types, environment, trait_name,
+                                    method_name, &fingerprint)) return false;
+    core_list_push(state->dispatch_records, ((n00bb_dispatch_record_t){
+        .trait = core_strdup(trait_name),
+        .method = core_strdup(method_name),
+        .fingerprint = fingerprint,
+    }));
+    return true;
+}
+
 static bool
 plan_closed_trait_dispatch(core_link_unit_t *link,
                            n00bb_link_analysis_t *analysis,
@@ -259,7 +350,9 @@ plan_closed_trait_dispatch(core_link_unit_t *link,
     if (!link || !analysis || !environment || !unit || !site || !trait_name
         || !method_name || analysis->may_link_further) return true;
     n00bb_tu_state_t *state = tu_state(unit);
-    if (!state || !state->types) return false;
+    if (!state || !state->types
+        || !record_dispatch(state, environment, trait_name, method_name))
+        return false;
     core_list_t(th_type_ptr_t) receiver_types =
         core_list_new(th_type_ptr_t);
     for (size_t i = 0; i < th_env_declaration_count(environment); i++) {
