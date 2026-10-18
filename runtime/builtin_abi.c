@@ -56,6 +56,16 @@ n00b_builtin_abi_tag_extractor(uint32_t index)
     return bytes == sizeof(*row) ? row : NULL;
 }
 
+const n00b_abi_layout_v1 *
+n00b_builtin_abi_layout(uint32_t index)
+{
+    const n00b_abi_snapshot_v1 *snapshot = n00b_abi_v1_current_snapshot();
+    uint32_t bytes = 0;
+    const n00b_abi_layout_v1 *row = n00b_abi_v1_record(snapshot,
+        N00B_ABI_TABLE_LAYOUT, index, &bytes);
+    return bytes == sizeof(*row) ? row : NULL;
+}
+
 const n00b_abi_frame_layout_v1 *
 n00b_builtin_abi_frame_layout(uint32_t index)
 {

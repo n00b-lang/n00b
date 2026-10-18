@@ -301,7 +301,8 @@ void n00bb_bootstrap_aggregate_literal_box(uint32_t type_index,
     const n00b_abi_type_v1 *type = snapshot
         ? n00b_abi_v1_type(snapshot, type_index) : NULL;
     if (!type || (type->kind != N00B_ABI_TYPE_RECORD
-        && type->kind != N00B_ABI_TYPE_TUPLE))
+        && type->kind != N00B_ABI_TYPE_TUPLE
+        && type->kind != N00B_ABI_TYPE_VARIANT))
         __builtin_trap();
     n00bb_bootstrap_new_box(type_index, allocate, result);
     size_t bytes = (size_t)((type->size_bits + 7) / 8);
@@ -1131,7 +1132,8 @@ field_location(const n00b_abi_box_v1 *box,
         base = n00bb_bootstrap_ref_address_box(box);
     }
     if (!record || (record->kind != N00B_ABI_TYPE_RECORD
-        && record->kind != N00B_ABI_TYPE_TUPLE)
+        && record->kind != N00B_ABI_TYPE_TUPLE
+        && record->kind != N00B_ABI_TYPE_VARIANT)
         || (!name && ordinal == UINT32_MAX))
         __builtin_trap();
     if (!base) base = record->size_bits <= 64
@@ -1147,8 +1149,12 @@ field_location(const n00b_abi_box_v1 *box,
         uint32_t field_index = 0;
         if (n00b_abi_v1_index_at(snapshot, record->fields_or_arms, i,
                                 &field_index) != 1) __builtin_trap();
-        const n00b_abi_field_v1 *field = n00b_abi_v1_field(snapshot,
-                                                           field_index);
+        const n00b_abi_arm_v1 *arm = record->kind == N00B_ABI_TYPE_VARIANT
+            ? n00b_abi_v1_record(snapshot, N00B_ABI_TABLE_ARM, field_index,
+                                 NULL) : NULL;
+        const n00b_abi_field_v1 *field = record->kind == N00B_ABI_TYPE_VARIANT
+            ? (arm ? &arm->field : NULL)
+            : n00b_abi_v1_field(snapshot, field_index);
         if (!field) __builtin_trap();
         if (name) {
             const uint8_t *field_name = NULL;
@@ -1303,4 +1309,33 @@ void n00bb_bootstrap_field_read_box_index(const n00b_abi_box_v1 *box,
 {
     if (!allocate) __builtin_trap();
     field_read_box(box, NULL, ordinal, result);
+}
+
+void n00bb_bootstrap_field_write_box(const n00b_abi_box_v1 *box,
+                                     const char *name,
+                                     const n00b_abi_box_v1 *value)
+{
+    n00bb_field_location_t field = field_location(box, name, UINT32_MAX);
+    if (!value || (value->type_field & UINT32_C(0x7fffffff))
+            != field.type_index) __builtin_trap();
+    if (!field.bit_offset && field.width == field.type->size_bits
+        && !(field.width & 7)) {
+        n00bb_bootstrap_store_box((void *)field.address, field.type_index,
+                                  value);
+        return;
+    }
+    size_t bytes = (size_t)((field.type->size_bits + 7) / 8);
+    const uint8_t *bits = bytes <= sizeof(uint64_t)
+        ? (const uint8_t *)&value->payload.inline_bits
+        : value->payload.out_of_line;
+    if (!bits || field.width > UINT64_MAX - field.bit_offset)
+        __builtin_trap();
+    uint8_t *data = (uint8_t *)field.address;
+    for (uint64_t bit = 0; bit < field.width; bit++) {
+        uint64_t target_bit = field.bit_offset + bit;
+        uint8_t mask = (uint8_t)(1u << (target_bit & 7));
+        if ((bits[bit / 8] >> (bit & 7)) & 1u)
+            data[target_bit / 8] |= mask;
+        else data[target_bit / 8] &= (uint8_t)~mask;
+    }
 }

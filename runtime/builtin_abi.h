@@ -10,6 +10,7 @@ const n00b_abi_trace_v1 *n00b_builtin_abi_trace(uint32_t index);
 const n00b_abi_trace_child_v1 *n00b_builtin_abi_trace_child(uint32_t index);
 const n00b_abi_trace_arm_v1 *n00b_builtin_abi_trace_arm(uint32_t index);
 const n00b_abi_tag_extractor_v1 *n00b_builtin_abi_tag_extractor(uint32_t index);
+const n00b_abi_layout_v1 *n00b_builtin_abi_layout(uint32_t index);
 const n00b_abi_frame_layout_v1 *n00b_builtin_abi_frame_layout(uint32_t index);
 uint32_t n00b_builtin_abi_storage_count(void);
 const n00b_abi_storage_v1 *n00b_builtin_abi_storage(uint32_t index);
