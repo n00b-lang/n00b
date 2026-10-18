@@ -7,10 +7,10 @@ typedef struct Event {
 } Event;
 
 typedef int (*Compare)(const void *a, const void *b);
-typedef void (*Handler)(const void *context, const Event *event);
+typedef void (*Handler)(void *context, Event *event);
 
 static Handler subscribed;
-static const void *subscribed_context;
+static void *subscribed_context;
 
 int
 sort_bytes(const uint8_t *items, size_t count, Compare compare)
@@ -29,7 +29,7 @@ sort_bytes(const uint8_t *items, size_t count, Compare compare)
 }
 
 uint64_t
-bus_subscribe(Handler handler, const void *context)
+bus_subscribe(Handler handler, void *context)
 {
     subscribed = handler;
     subscribed_context = context;
