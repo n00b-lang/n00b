@@ -2335,8 +2335,8 @@ n00bb_abi_emit_unit(
                 + native_bindings.storage_count - 1;
             size_t bootstrap_symbol = template_symbols
                 + tls_descriptor_count;
-            for (size_t i = 1; valid && i < native_bindings.storage_count;
-                 i++) {
+            for (size_t i = 1; valid && tls_descriptor_count
+                 && i < native_bindings.storage_count; i++) {
                 const n00b_abi_storage_v1 *row = &storage_rows.rows[i];
                 if (row->segment_kind != N00B_ABI_STORAGE_TLS) continue;
                 size_t at = relocation_count + storage_rows.relocation_count
