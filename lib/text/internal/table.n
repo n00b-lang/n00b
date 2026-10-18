@@ -1,0 +1,656 @@
+import internal.theme
+import internal.border
+import internal.layout
+import internal.string
+
+enum Col_Mode {
+    fit = 0, flex = 1, fixed = 2
+}
+
+enum Valign {
+    top = 0, middle, bottom
+}
+
+enum Container_Err {
+    range = 0, full
+}
+
+record Box_Props {
+    border_theme: Ref[internal.border.Border_Theme]
+    border_style: Text_Style?
+    fill_style:   Text_Style?
+    text_style:   Text_Style?
+    borders:      internal.border.Border_Set
+    pad_top:      i8
+    pad_bottom:   i8
+    pad_left:     i8
+    pad_right:    i8
+    alignment:    internal.string.Align
+    valignment:   Valign
+}
+
+record Table_Cell {
+    content:     string
+    cell_props:  Box_Props?
+    col_span:    i32
+    row_span:    i32
+    wrap:        bool?
+    lines:       List[string]?
+    lines_width: i64
+}
+
+record Table_Row {
+    cells: List[Table_Cell]
+}
+
+record Table_Col_Spec {
+    mode:          Col_Mode
+    min:           internal.layout.Layout_Dim?
+    max:           internal.layout.Layout_Dim?
+    pref:          internal.layout.Layout_Dim?
+    flex_multiple: i64
+    priority:      i64
+    col_props:     Box_Props?
+}
+
+record Table_Style {
+    table_props:    Box_Props
+    cell_props:     Box_Props
+    header_props:   Box_Props
+    alt_cell_props: Box_Props?
+}
+
+record Table {
+    rows:        List[Table_Row]
+    current_row: Table_Row
+    col_specs:   List[Table_Col_Spec]
+    cols_locked: bool
+
+    table_props:        Box_Props
+    default_cell_props: Box_Props
+    header_props:       Box_Props?
+    alt_cell_props:     Box_Props?
+
+    title:   string
+    caption: string
+    wrap:    bool
+
+    col_results:  Array[internal.layout.Layout_Result]
+    row_heights:  Array[i64]
+    total_width:  i64
+    layout_valid: bool
+
+    ring_base:   i64
+    max_rows:    i64
+    total_added: i64
+}
+
+func box_props_new(value: Box_Props) -> Box_Props {
+    return value
+}
+
+func insets(self: Box_Props, out top: i64, out bottom: i64, out left: i64,
+            out right: i64) {
+    top = cast[i64] self.pad_top
+    if self.borders.top {
+        top += 1
+    }
+    bottom = cast[i64] self.pad_bottom
+    if self.borders.bottom {
+        bottom += 1
+    }
+    left = cast[i64] self.pad_left
+    if self.borders.left {
+        left += 1
+    }
+    right = cast[i64] self.pad_right
+    if self.borders.right {
+        right += 1
+    }
+}
+
+private func palette_style(fg_ix: i8, bg_ix: i8, bold: bool,
+                           which: Text_Case) -> Text_Style {
+    var s: Text_Style = (
+        bold = nil, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = Text_Case.none, font_hint = Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil)
+    if fg_ix >= 0 {
+        s.fg_palette_ix = fg_ix
+    }
+    if bg_ix >= 0 {
+        s.bg_palette_ix = bg_ix
+    }
+    if bold {
+        s.bold = true
+    }
+    s.text_case = which
+    return s
+}
+
+private func cell_shape(align: internal.string.Align) -> Box_Props {
+    return (border_theme = ref internal.border.border_plain,
+            border_style = nil, fill_style = nil, text_style = nil,
+            borders = internal.border.Border_Set.none, pad_top = 0,
+            pad_bottom = 0, pad_left = 1, pad_right = 1, alignment = align,
+            valignment = Valign.top)
+}
+
+func table_style_default() -> Table_Style {
+    let frame: Box_Props = (
+        border_theme = ref internal.border.border_rounded,
+        border_style = palette_style(
+            cast[i8] internal.theme.Palette_Ix.border_light,
+            cast[i8] internal.theme.Palette_Ix.surface, false, Text_Case.none),
+        fill_style = nil, text_style = nil,
+        borders = internal.border.Border_Set.all, pad_top = 0,
+        pad_bottom = 0, pad_left = 0, pad_right = 0,
+        alignment = internal.string.Align.left, valignment = Valign.top)
+    var cell: Box_Props = cell_shape(internal.string.Align.left)
+    cell.text_style = palette_style(
+        cast[i8] internal.theme.Palette_Ix.text_primary, -1, false,
+        Text_Case.none)
+    cell.fill_style = palette_style(
+        -1, cast[i8] internal.theme.Palette_Ix.surface, false, Text_Case.none)
+    var head: Box_Props = cell_shape(internal.string.Align.center)
+    head.text_style = palette_style(
+        cast[i8] internal.theme.Palette_Ix.text_inverse, -1, true,
+        Text_Case.upper)
+    head.fill_style = palette_style(
+        -1, cast[i8] internal.theme.Palette_Ix.primary, false, Text_Case.none)
+    var alt: Box_Props = cell_shape(internal.string.Align.left)
+    alt.text_style = palette_style(
+        cast[i8] internal.theme.Palette_Ix.text_primary, -1, false,
+        Text_Case.none)
+    alt.fill_style = palette_style(
+        -1, cast[i8] internal.theme.Palette_Ix.surface_dark, false,
+        Text_Case.none)
+    return (table_props = box_props_new(frame),
+            cell_props = box_props_new(cell),
+            header_props = box_props_new(head),
+            alt_cell_props = box_props_new(alt))
+}
+
+func table_style_simple() -> Table_Style {
+    let frame: Box_Props = (
+        border_theme = ref internal.border.border_plain,
+        border_style = palette_style(
+            cast[i8] internal.theme.Palette_Ix.border, -1, false,
+            Text_Case.none),
+        fill_style = nil, text_style = nil,
+        borders = internal.border.Border_Set.top +
+            internal.border.Border_Set.bottom +
+            internal.border.Border_Set.interior_h,
+        pad_top = 0, pad_bottom = 0, pad_left = 0, pad_right = 0,
+        alignment = internal.string.Align.left, valignment = Valign.top)
+    var cell: Box_Props = cell_shape(internal.string.Align.left)
+    cell.text_style = palette_style(
+        cast[i8] internal.theme.Palette_Ix.text_primary, -1, false,
+        Text_Case.none)
+    var head: Box_Props = cell_shape(internal.string.Align.center)
+    head.text_style = palette_style(
+        cast[i8] internal.theme.Palette_Ix.primary, -1, true, Text_Case.none)
+    return (table_props = box_props_new(frame),
+            cell_props = box_props_new(cell),
+            header_props = box_props_new(head),
+            alt_cell_props = nil)
+}
+
+func table_style_ornate() -> Table_Style {
+    let frame: Box_Props = (
+        border_theme = ref internal.border.border_double,
+        border_style = palette_style(
+            cast[i8] internal.theme.Palette_Ix.border_light,
+            cast[i8] internal.theme.Palette_Ix.surface, false, Text_Case.none),
+        fill_style = nil, text_style = nil,
+        borders = internal.border.Border_Set.all, pad_top = 0,
+        pad_bottom = 0, pad_left = 0, pad_right = 0,
+        alignment = internal.string.Align.left, valignment = Valign.top)
+    var cell: Box_Props = cell_shape(internal.string.Align.left)
+    cell.text_style = palette_style(
+        cast[i8] internal.theme.Palette_Ix.text_primary, -1, false,
+        Text_Case.none)
+    cell.fill_style = palette_style(
+        -1, cast[i8] internal.theme.Palette_Ix.surface, false, Text_Case.none)
+    var head: Box_Props = cell_shape(internal.string.Align.center)
+    head.text_style = palette_style(
+        cast[i8] internal.theme.Palette_Ix.text_inverse, -1, true,
+        Text_Case.upper)
+    head.fill_style = palette_style(
+        -1, cast[i8] internal.theme.Palette_Ix.primary, false, Text_Case.none)
+    var alt: Box_Props = cell_shape(internal.string.Align.left)
+    alt.text_style = palette_style(
+        cast[i8] internal.theme.Palette_Ix.text_primary, -1, false,
+        Text_Case.none)
+    alt.fill_style = palette_style(
+        -1, cast[i8] internal.theme.Palette_Ix.surface_dark, false,
+        Text_Case.none)
+    return (table_props = box_props_new(frame),
+            cell_props = box_props_new(cell),
+            header_props = box_props_new(head),
+            alt_cell_props = box_props_new(alt))
+}
+
+func table_style_minimal() -> Table_Style {
+    let frame: Box_Props = (
+        border_theme = ref internal.border.border_plain, border_style = nil,
+        fill_style = nil, text_style = nil,
+        borders = internal.border.Border_Set.none, pad_top = 0,
+        pad_bottom = 0, pad_left = 0, pad_right = 0,
+        alignment = internal.string.Align.left, valignment = Valign.top)
+    var head: Box_Props = cell_shape(internal.string.Align.center)
+    head.text_style = palette_style(-1, -1, true, Text_Case.none)
+    return (table_props = box_props_new(frame),
+            cell_props =
+                box_props_new(cell_shape(internal.string.Align.left)),
+            header_props = box_props_new(head),
+            alt_cell_props = nil)
+}
+
+func table_style_ascii() -> Table_Style {
+    let frame: Box_Props = (
+        border_theme = ref internal.border.border_ascii,
+        border_style = palette_style(
+            cast[i8] internal.theme.Palette_Ix.border, -1, false,
+            Text_Case.none),
+        fill_style = nil, text_style = nil,
+        borders = internal.border.Border_Set.all, pad_top = 0,
+        pad_bottom = 0, pad_left = 0, pad_right = 0,
+        alignment = internal.string.Align.left, valignment = Valign.top)
+    var head: Box_Props = cell_shape(internal.string.Align.center)
+    head.text_style = palette_style(-1, -1, true, Text_Case.none)
+    return (table_props = box_props_new(frame),
+            cell_props =
+                box_props_new(cell_shape(internal.string.Align.left)),
+            header_props = box_props_new(head),
+            alt_cell_props = nil)
+}
+
+private func add_col_spec(modify table: Table, spec: Table_Col_Spec) -> uint {
+    if table.cols_locked {
+        panic("cannot add column specs after the first row")
+    }
+    table.col_specs.append(spec)
+    return table.col_specs.len() - 1
+}
+
+private func current_row_col_count(table: Table) -> i64 {
+    var count: i64 = 0
+    let n: uint = table.current_row.cells.len()
+    var i: uint = 0
+    while i < n {
+        let cell: Table_Cell = table.current_row.cells[cast[int] i]
+        if cell.col_span > 0 {
+            count += cast[i64] cell.col_span
+        }
+        else {
+            count += 1
+        }
+        i += 1
+    }
+    return count
+}
+
+func __init(modify self: Table, num_cols: uint = 0, style: Table_Style? = nil,
+            cells: Box_Props? = nil, header: Box_Props? = nil,
+            alt: Box_Props? = nil, frame: Box_Props? = nil, title: string = "",
+            caption: string = "", max_rows: i64 = 0, wrap: bool = true) {
+    var style_opt: Table_Style? = style
+    var cells_opt: Box_Props? = cells
+    var header_opt: Box_Props? = header
+    var alt_opt: Box_Props? = alt
+    var frame_opt: Box_Props? = frame
+    let bare: bool = style_opt == nil and cells_opt == nil and
+        header_opt == nil and alt_opt == nil and frame_opt == nil
+    if bare {
+        style_opt = table_style_default()
+    }
+    if style_opt != nil {
+        let preset: Table_Style = style_opt.get()
+        if frame_opt == nil {
+            frame_opt = preset.table_props
+        }
+        if cells_opt == nil {
+            cells_opt = preset.cell_props
+        }
+        if header_opt == nil {
+            header_opt = preset.header_props
+        }
+        if alt_opt == nil {
+            alt_opt = preset.alt_cell_props
+        }
+    }
+    if frame_opt != nil {
+        self.table_props = frame_opt.get()
+    }
+    else {
+        let zero: Box_Props = (
+            border_theme = ref internal.border.border_plain,
+            border_style = nil, fill_style = nil, text_style = nil,
+            borders = internal.border.Border_Set.none, pad_top = 0,
+            pad_bottom = 0, pad_left = 0, pad_right = 0,
+            alignment = internal.string.Align.left, valignment = Valign.top)
+        self.table_props = box_props_new(zero)
+    }
+    if cells_opt != nil {
+        self.default_cell_props = cells_opt.get()
+    }
+    else {
+        self.default_cell_props =
+            box_props_new(cell_shape(internal.string.Align.left))
+    }
+    self.header_props = header_opt
+    self.alt_cell_props = alt_opt
+    self.title = title
+    self.caption = caption
+    self.wrap = wrap
+    self.max_rows = max_rows
+    self.cols_locked = false
+    self.total_width = 0
+    self.layout_valid = false
+    self.ring_base = 0
+    self.total_added = 0
+    self.rows = new[List[Table_Row]]()
+    self.col_specs = new[List[Table_Col_Spec]]()
+    self.current_row = (cells = new[List[Table_Cell]]())
+    var i: uint = 0
+    while i < num_cols {
+        let spec: Table_Col_Spec = (mode = Col_Mode.fit, min = nil, max = nil,
+                                    pref = nil, flex_multiple = 1,
+                                    priority = 0, col_props = nil)
+        self.col_specs.append(spec)
+        i += 1
+    }
+}
+
+func add_cell(modify self: Table, content: string, col_span: i32 = 1,
+              row_span: i32 = 1, cell_props: Box_Props? = nil,
+              wrap: bool? = nil) {
+    if row_span != 1 {
+        panic("multi-row spanning is not supported")
+    }
+    let cell: Table_Cell = (content = content, cell_props = cell_props,
+                            col_span = col_span, row_span = row_span,
+                            wrap = wrap, lines = nil, lines_width = 0)
+    self.current_row.cells.append(cell)
+}
+
+func empty_cell(modify self: Table) {
+    add_cell(self, "")
+}
+
+func end_row(modify self: Table) {
+    if self.current_row.cells.len() == 0 {
+        return
+    }
+    var num_cols: i64 = cast[i64] self.col_specs.len()
+    if !self.cols_locked {
+        if num_cols == 0 {
+            let row_cols: i64 = current_row_col_count(self)
+            while cast[i64] self.col_specs.len() < row_cols {
+                let spec: Table_Col_Spec = (mode = Col_Mode.fit, min = nil,
+                                            max = nil, pref = nil,
+                                            flex_multiple = 1, priority = 0,
+                                            col_props = nil)
+                self.col_specs.append(spec)
+            }
+            num_cols = cast[i64] self.col_specs.len()
+        }
+        self.cols_locked = true
+    }
+    var used: i64 = 0
+    let n: uint = self.current_row.cells.len()
+    var i: uint = 0
+    while i < n {
+        var cell: Table_Cell = self.current_row.cells[cast[int] i]
+        if cell.col_span == -1 {
+            let remaining: i64 = num_cols - used
+            if remaining > 0 {
+                cell.col_span = cast[i32] remaining
+            }
+            else {
+                cell.col_span = 1
+            }
+            self.current_row.cells[cast[int] i] = cell
+        }
+        used += cast[i64] cell.col_span
+        i += 1
+    }
+    if self.max_rows > 0 and cast[i64] self.rows.len() >= self.max_rows {
+        let slot: i64 = self.total_added % self.max_rows
+        self.rows[cast[int] slot] = self.current_row
+        self.ring_base = (self.total_added + 1) % self.max_rows
+    }
+    else {
+        self.rows.append(self.current_row)
+    }
+    self.total_added += 1
+    self.layout_valid = false
+    self.current_row.cells = new[List[Table_Cell]]()
+}
+
+func add_row(modify self: Table, cells: List[string]) {
+    let n: uint = cells.len()
+    var i: uint = 0
+    while i < n {
+        add_cell(self, cells[cast[int] i])
+        i += 1
+    }
+    end_row(self)
+}
+
+func end(modify self: Table) {
+    if self.current_row.cells.len() > 0 {
+        end_row(self)
+    }
+}
+
+func col_fit(modify self: Table) -> uint {
+    let spec: Table_Col_Spec = (mode = Col_Mode.fit, min = nil, max = nil,
+                                pref = nil, flex_multiple = 1, priority = 0,
+                                col_props = nil)
+    return add_col_spec(self, spec)
+}
+
+func col_flex(modify self: Table, factor: i64) -> uint {
+    var multiple: i64 = 1
+    if factor > 0 {
+        multiple = factor
+    }
+    let spec: Table_Col_Spec = (mode = Col_Mode.flex, min = nil, max = nil,
+                                pref = nil, flex_multiple = multiple,
+                                priority = 0, col_props = nil)
+    return add_col_spec(self, spec)
+}
+
+func col_range(modify self: Table, min: i64, max: i64) -> uint {
+    var spec: Table_Col_Spec = (mode = Col_Mode.fit, min = nil, max = nil,
+                                pref = nil, flex_multiple = 1, priority = 0,
+                                col_props = nil)
+    spec.min = internal.layout.abs_dim(min)
+    spec.max = internal.layout.abs_dim(max)
+    return add_col_spec(self, spec)
+}
+
+func col_pct(modify self: Table, min: f64, max: f64) -> uint {
+    var spec: Table_Col_Spec = (mode = Col_Mode.fit, min = nil, max = nil,
+                                pref = nil, flex_multiple = 1, priority = 0,
+                                col_props = nil)
+    spec.min = internal.layout.pct_dim(min)
+    spec.max = internal.layout.pct_dim(max)
+    return add_col_spec(self, spec)
+}
+
+func col_fixed(modify self: Table, width: i64) -> uint {
+    var spec: Table_Col_Spec = (mode = Col_Mode.fixed, min = nil, max = nil,
+                                pref = nil, flex_multiple = 0, priority = 0,
+                                col_props = nil)
+    spec.min = internal.layout.abs_dim(width)
+    spec.max = internal.layout.abs_dim(width)
+    spec.pref = internal.layout.abs_dim(width)
+    return add_col_spec(self, spec)
+}
+
+func invalidate(modify self: Table) {
+    self.layout_valid = false
+}
+
+func row_count(self: Table) -> uint {
+    return self.rows.len()
+}
+
+func col_count(self: Table) -> uint {
+    return self.col_specs.len()
+}
+
+func row_index(self: Table, requested_row: uint)
+    -> Table_Row fail: Container_Err {
+    var row: uint = requested_row
+    let n: uint = self.rows.len()
+    if row >= n {
+        fail Container_Err.range
+    }
+    if self.max_rows > 0 and cast[i64] n >= self.max_rows {
+        row = cast[uint]((self.ring_base + cast[i64] row) % self.max_rows)
+    }
+    return self.rows[cast[int] row]
+}
+
+func cell_index(self: Table, row: uint, cell_ix: uint)
+    -> Table_Cell fail: Container_Err {
+    let row_val: Table_Row = row_index(self, row)!
+    if cell_ix >= row_val.cells.len() {
+        fail Container_Err.range
+    }
+    return row_val.cells[cast[int] cell_ix]
+}
+
+func row_cell_count(self: Table, row: uint) -> uint {
+    var row_val: Table_Row
+    try {
+        row_val = row_index(self, row)!
+    } else e: Container_Err {
+        return 0
+    }
+    return row_val.cells.len()
+}
+
+func col_spec(self: Table, col: uint) -> Table_Col_Spec fail: Container_Err {
+    if col >= self.col_specs.len() {
+        fail Container_Err.range
+    }
+    return self.col_specs[cast[int] col]
+}
+
+func put_col_spec(modify self: Table, col: uint, spec: Table_Col_Spec)
+    -> nil fail: Container_Err {
+    if col >= self.col_specs.len() {
+        fail Container_Err.range
+    }
+    self.col_specs[cast[int] col] = spec
+}
+
+func put_cell(modify self: Table, row: uint, cell_ix: uint, cell: Table_Cell)
+    -> nil fail: Container_Err {
+    var row_val: Table_Row = row_index(self, row)!
+    if cell_ix >= row_val.cells.len() {
+        fail Container_Err.range
+    }
+    row_val.cells[cast[int] cell_ix] = cell
+}
+
+func set_col_priority(modify self: Table, col: uint, priority: i64)
+    -> nil fail: Container_Err {
+    if col >= self.col_specs.len() {
+        fail Container_Err.range
+    }
+    var spec: Table_Col_Spec = self.col_specs[cast[int] col]
+    spec.priority = priority
+    invalidate(self)
+    self.col_specs[cast[int] col] = spec
+}
+
+func set_col_props(modify self: Table, col: uint, props: Box_Props)
+    -> nil fail: Container_Err {
+    if col >= self.col_specs.len() {
+        fail Container_Err.range
+    }
+    var spec: Table_Col_Spec = self.col_specs[cast[int] col]
+    spec.col_props = props
+    invalidate(self)
+    self.col_specs[cast[int] col] = spec
+}
+
+func resolve_cell_props(self: Table, row_ix: i64, col_ix: uint,
+                        cell: Table_Cell? = nil) -> Box_Props {
+    if cell != nil {
+        let c: Table_Cell = cell.get()
+        let own: Box_Props? = c.cell_props
+        if own != nil {
+            return own.get()
+        }
+    }
+    if col_ix < self.col_specs.len() {
+        let spec: Table_Col_Spec = self.col_specs[cast[int] col_ix]
+        let col_props: Box_Props? = spec.col_props
+        if col_props != nil {
+            return col_props.get()
+        }
+    }
+    let header: Box_Props? = self.header_props
+    if row_ix == 0 and header != nil {
+        return header.get()
+    }
+    let alt: Box_Props? = self.alt_cell_props
+    if unsafe_and(row_ix, 1) != 0 and alt != nil {
+        return alt.get()
+    }
+    return self.default_cell_props
+}
+
+func table_from_string(s: string, row_sep: string = "\n",
+                       col_sep: string = ",", style: Table_Style? = nil)
+    -> Table {
+    var table: Table = new[Table](style = style)
+    let rows: List[string] = internal.string.split(s, row_sep)
+    let nr: uint = rows.len()
+    var r: uint = 0
+    while r < nr {
+        let row: string = rows[cast[int] r]
+        if byte_len(row) == 0 and r == nr - 1 {
+            break
+        }
+        add_row(table, internal.string.split(row, col_sep))
+        r += 1
+    }
+    end(table)
+    return table
+}
+
+func table_callout(content: string) -> Table {
+    var pad: Box_Props = cell_shape(internal.string.Align.left)
+    pad.pad_left = 2
+    pad.pad_right = 2
+    pad.pad_top = 1
+    pad.pad_bottom = 1
+    var table: Table = new[Table](num_cols = 1,
+                                  style = table_style_default(),
+                                  cells = box_props_new(pad))
+    add_cell(table, content)
+    end_row(table)
+    return table
+}
+
+func table_flow(items: List[string]) -> Table {
+    var table: Table = new[Table](style = table_style_minimal())
+    let n: uint = items.len()
+    var i: uint = 0
+    while i < n {
+        col_flex(table, 1)
+        i += 1
+    }
+    add_row(table, items)
+    return table
+}

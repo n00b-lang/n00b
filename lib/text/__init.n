@@ -6,6 +6,8 @@ import internal.rich
 import internal.cascade
 import internal.layout
 import internal.string
+import internal.table
+import internal.table_layout
 
 package text {
     export builtin.index_extends
@@ -30,4 +32,6 @@ package text {
     export internal.cascade
     export internal.layout
     export internal.string
+    export internal.table
+    export internal.table_layout
 }
