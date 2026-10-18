@@ -58,10 +58,9 @@ let packed = zlib.compress(data, 6)
 - `binding { … }` imports; `binding export { … }` makes n00b functions
   available as the contract's C API. The contract and the language are
   implied.
-- Binding happens when the preprocessor evaluates the literal. Its value
-  is a `Module`, a builtin type. Written as a `const` initializer or as
-  `import zlib from [- … -]'ffi`, `zlib` is a module known at compile
-  time, and the bound API's namespace: `zlib.compress`, `zlib.Error`.
+- Binding happens when the preprocessor evaluates the literal. The
+  `const` it initializes becomes an import of the generated module, so
+  `zlib` is the bound API's namespace: `zlib.compress`, `zlib.Error`.
 
 `zlib.compress(data, 6)` returns the compressed bytes or fails with a
 status. Everything the call needs (the extern declaration, the
@@ -82,27 +81,27 @@ package `zlib` whose `__init.n` holds the literal gives consumers
 
 ## 2. Where it runs in the compiler
 
-n00b has two compile-time evaluators. Only one of them can create
-declarations:
+A `build` runs two compiles of the same program:
 
-| Evaluator | Where | Can create declarations? |
-|---|---|---|
-| Preprocessor (`preprocessor.c:eval_expr`, `eval_builtin`) | In the compiler process, on the parse tree, before semantic analysis | Yes: it is the stage that decides what the program contains |
-| `comptime` (`n00bb_execute_comptime`) | A separate native process, linked and spawned per compilation | No: results come back as values only |
+| Compile | What it does |
+|---|---|
+| Build-time (`--build-time`) | `comptime()` is true and `const` is writable. The program is linked and run on the real runtime and GC, with the same shims and native inputs as the shipped build. A capture of every `const` value is written back to the compiler. |
+| Shipped | `comptime()` is false. `const` values come from the capture; nothing else from the build-time run reaches the program. |
 
-writ therefore runs **in the preprocessor**:
+writ runs **in the preprocessor** of each compile:
 
 - `'ffi` is a **builtin literal modifier whose behaviour the compiler
-  supplies** (§4.2). Its function is never called, and the literal is
-  never sent to the comptime process. The preprocessor hands the
-  literal's contents straight to libwrit.
+  supplies** (§4.2). Its function is never called. The preprocessor
+  hands the literal's contents straight to libwrit.
 - Evaluating an `'ffi` literal binds it. The preprocessor resolves the
-  contract for the target platform, checks the binding against it,
-  generates n00b declarations as source, and parses that source with the
-  n00b grammar as a module of its own. The const or import that the
-  literal initializes names that module, before typing.
-- The comptime process never needs libwrit, so nothing writ-related is
-  added to its link line.
+  contract for the host platform, checks the binding against it,
+  generates n00b declarations as source, and loads that source as a
+  module of its own. The const that the literal initializes becomes an
+  import of that module, before typing.
+- Both compiles bind the literal the same way. Shim bitcode and Rust
+  transport builds are cached on disk, so the second binding reuses the
+  first one's native work.
+- libwrit is linked only into the compiler. Programs never link it.
 
 ---
 
@@ -116,40 +115,55 @@ writ therefore runs **in the preprocessor**:
 | `bool` | n00b `bool` |
 | `layout c` records | `type X layout(c) { ... }` |
 | Records n00b's `layout(c)` can't express (bitfields, `layout explicit`) | Opaque storage with generated accessors |
-| `handle` | A generated wrapper type holding the C value (`uptr` or integer), with `close()` |
-| `bytes[n]`, `utf8[n]`, `cstr` | n00b `string` / byte buffers in, copied across the boundary by the shim |
+| `handle` | A generated `X_Cell` record holding the C value, used through `alias X = Ref[X_Cell]`, with `close()` and a finalizer (§4.5) |
+| `bytes[n]`, `utf8[n]`, `cstr` | n00b `string` or `Array[u8]`, copied across the boundary by the shim; a `borrow` slot passes the array's storage directly |
 | `out` and `inout` promoted to results | Multiple return values or a result record |
 | `error ...` | n00b `fail:` results (`-> T fail: E`) |
-| Rest packs | n00b lists |
-| Keyword packs | n00b keyword arguments, where n00b has them; otherwise a generated options record |
-| Callbacks with `userdata` | n00b `callback[T]` values, through generated trampolines (§4.6) |
+| Rest packs | `List[T]` by default, or `Array[T]` |
+| Keyword packs | n00b keyword arguments by default; a binding that chooses `record` gets a generated `<Fn>_Options` record |
+| Callbacks | n00b callback values, through generated trampolines (§4.6) |
 | `unknown` | No safe binding is generated, and the compile fails unless the binding says `raw` |
-| Memory model | Tracing GC. Pinning and rooting use `n00b_gc_root_push` / `n00b_gc_root_pop`. |
+| Memory model | Non-moving tracing GC (`memory gc nonmoving`); borrows go through `n00b_ffi_borrow` / `n00b_ffi_release` (§4.5) |
 
 ### 3.2 `writ_gen_n00b`
 
-A new generator in libwrit's gen component. Given a model and an n00b import or export
-binding, it produces:
+A generator in libwrit's gen component (`include/writ/gen.h`). Its request
+is `writ_gen_n00b_request_t`: the binding, the generated module's name, a
+shim prefix, and a type namespace. For an import binding it produces:
 
-- **n00b source text**: extern declarations (§4.3), wrapper functions,
-  handle types and records. Each declaration has a span mapping back to the
-  writ declaration that caused it, so errors in the generated code report
-  at the `'ffi` literal, or in the contract file it `use`s.
-- **C shim source** (through `writ_gen_c`): one C function per imported
-  function, with an n00b-friendly signature (§4.4).
-- **Link requirements**: the libraries and frameworks from the contract's
-  `link`, resolved per platform.
+- **n00b source text** (`<module>.n`): wrapper functions, handle types,
+  records, enums, constants and the generated `Error` type, with a line
+  map (`<module>.n.map`) back to the writ declarations, so errors in
+  generated code report at the `'ffi` literal or in the contract file it
+  `use`s.
+- **Extern declarations as data** (`writ_n00b_extern_t`: n00b name, C
+  symbol, scalar-and-pointer signature). They are not part of the n00b
+  text (§4.3).
+- **C shim source** (`<prefix>_n00b.c`, through `writ_gen_c`): one C
+  function per imported function, plus callback trampolines and their
+  argument structs (§4.4, §4.6).
+- **Link requirements** (`writ_link_requirements_t`): libraries,
+  frameworks and search paths from the contract and binding, resolved
+  per platform, and the load mode.
+
+For an export binding it produces the entry shims
+(`<prefix>_n00b_export.c`), the exported symbols as data
+(`writ_n00b_export_t`), and the C header for the contract (§4.8).
+
+`writ gen n00b --embedded FILE -o DIR` writes the same outputs, and
+`writ --embedded NAME bind FILE --profile FILE` prints the binding's
+decisions.
 
 ### 3.3 Shims that normalize the calling convention
 
-`writ_gen_c` gains a **pointer-normalized shim** mode. Each shim takes only
-scalars and pointers. Aggregates passed or returned by value in C are
-passed through pointers in the shim, and the shim makes the real C call.
-n00b's backend then never has to classify C aggregates (§4.4).
+`writ_gen_c` has a **pointer-normalized shim** mode
+(`writ_gen_c_request_t.pointer_normalized`). Each shim takes only scalars
+and pointers. Aggregates passed or returned by value in C are passed
+through pointers in the shim, and the shim makes the real C call. n00b's
+backend then never has to classify C aggregates (§4.4).
 
-Shims, callback trampolines and export entry points are emitted as C, and
-compiled by clang to **LLVM bitcode** for the target. They are not
-compiled to object files.
+Shims, callback trampolines and export entry points are emitted as C and
+compiled by clang to **LLVM bitcode** for the target.
 
 ---
 
@@ -157,87 +171,83 @@ compiled to object files.
 
 ### 4.1 Linking libwrit into the compiler
 
-- `meson.build` adds `dependency('writ-core')` and `dependency('writ-gen')` to
-  `n00bb_exe`. `writ-clang` is linked only when a binding asks for
-  verification against headers.
+- `meson.build` adds `dependency('writ')` to `n00bb_exe`, found through
+  writ's uninstalled pkg-config files. Its `profiledir` variable locates
+  `profiles/n00b.writ`.
 - The compiler already links a static lantern (`libir.a`). libwrit carries
   its own pinned lantern with every non-`writ_*` symbol localized
-  (`implementation.md` §4.2), so the two never collide. A n00bb test links
-  both and parses an `'ffi` literal and an n00b file in one process.
+  (`implementation.md` §4.2), so the two never collide.
+  `tests/writ_coexistence.c` resolves an `'ffi` literal through libwrit and
+  parses an n00b file through lantern in one process.
 
 ### 4.2 The `'ffi` literal modifier
 
-- `Module` is a builtin type. At run time a `Module` value is a reference
-  to the module's reflection entry.
-  - A `const` of type `Module` is a module: member access, `export`, and
-    package flattening treat it exactly as an imported module.
-  - `import NAME from EXPR` accepts a `Module` expression known at compile
-    time, as well as a string.
-  - Static member access, `export` and `import … from` on a `Module` not
-    known at compile time are compile errors; such a value is used
-    through reflection.
-- A user literal modifier may not shadow a builtin one.
-- `'ffi` is declared in the builtin library as
-  `litmod<fence> ffi(source: string) -> Module`. The preprocessor
-  recognizes that builtin declaration and binds the literal itself; the
-  modifier's function is never called.
+- `'ffi` is declared in the builtin library (`lib/builtin/ffi.n`) as a
+  `litmod<fence>` whose body fails if it is ever called. The preprocessor
+  recognizes the modifier and binds the literal itself.
+- An `'ffi` literal is the initializer of a module-level `const`:
+
+  ```
+  const zlib = [- use <zlib.writ> -]'ffi
+  ```
+
+  The preprocessor replaces the const with `import zlib`, aliased to the
+  generated module `<parent>.__ffi_<leaf>_<name>`, named from the
+  importing module and the const. An `'ffi` literal anywhere else is an
+  error at the literal.
 - The preprocessor passes the literal's bytes, from `content_start_byte`
   to `content_end_byte`, to `writ_unit_add_embedded` with the language
-  `n00b`:
-  - The origin is the n00b file. Line and column are computed from
-    `content_start_byte`, because tokens only store line and column for the
-    `[-`.
+  `n00b`, then calls `writ_resolve`, `writ_bind` with the n00b profile,
+  and `writ_gen_n00b`:
+  - The origin is the n00b file. Line and column are computed by scanning
+    the source up to `content_start_byte`, because tokens only store line
+    and column for the `[-`.
   - Quoted `use` paths resolve relative to the n00b file.
-  - Before the first `'ffi` literal, the compiler adds its contract
-    directories to the search path with `writ_session_add_contract_dir`:
-    each `--contract-dir` from the command line, then `contracts/` in the
-    package being compiled.
-- After binding, every file in `writ_unit_file_at` is added to the
-  compilation's dependencies, so editing a used contract rebuilds the
-  modules that bind it.
-- At compile time the `Module` value also holds a handle to the writ
-  unit, kept only for run-time binding (§4.9).
-- The unit and its libwrit session are discarded after compilation.
-  Nothing from them is emitted unless run-time binding asks for the spec
-  text (§4.9).
-- `n00bb --show-ffi MODULE.NAME` prints the generated n00b declarations
-  for one `'ffi` module, and go-to-definition on a bound name lands in
-  them.
-- libwrit diagnostics are forwarded through `core_diagnostics_report_at`
-  with the writ code in the message and the mapped line and column.
-  Diagnostics in a used contract report in that file.
+  - The compiler opens one writ session per process. When the session
+    opens, it adds each `--contract-dir` to the contract search path;
+    each binding then adds `contracts/` in the package being compiled.
+- The generated module is never cached, so every build binds the literal
+  again, and editing a used contract takes effect on the next build.
+- `n00bb --show-ffi MODULE.NAME` prints the generated n00b source for one
+  `'ffi` module.
+- libwrit diagnostics are reported through `core_diagnostics_report_at`
+  with the writ code as the diagnostic code and the mapped line and
+  column. Diagnostics in a used contract report in that file.
+- The writ session is freed when the compiler exits. Nothing from it is
+  emitted into the program.
 
 ### 4.3 Extern functions
 
-n00b calls C today only through the hardcoded builtin table
-(`register_builtin_native_function`, binding `n00bb.abi.native`). Generated
-bindings need the same thing for arbitrary symbols:
+There is no `extern` syntax. Extern declarations exist only in generated
+modules:
 
-- Generated declarations carry an extern annotation naming the C symbol.
-  They lower through the existing `ir_func_add(..., IR_LINK_EXTERN)` path
-  with that annotation.
-- Whether this is a **user-visible syntax** or an annotation only generated
-  code can produce is a language decision (§6).
+- `writ_gen_n00b` returns them as data (§3.2). n00bb registers each one as
+  a native function of the generated module, with the binding
+  `n00bb.generated-extern`.
+- They lower through `ir_func_add(..., IR_LINK_EXTERN)` with the symbol
+  annotation, and `llvm_backend.c` types them as their scalar-and-pointer
+  signatures.
+- User code can't name them: the generated wrappers are the only callers.
 
 ### 4.4 C calling convention
 
-`llvm_backend.c:native_function_type` maps parameters directly to LLVM types
-and passes structs as LLVM aggregates. It does no `byval`/`sret` handling and
-no SysV, AAPCS or Win64 classification. That works for scalars and
-pointers, but not for C structs passed by value.
-
-n00b's backend never classifies C arguments. Instead:
+n00b's backend never classifies C arguments:
 
 1. Every C call goes through a pointer-normalized shim (§3.3), so n00b
-   only ever calls functions whose parameters are scalars and pointers.
-2. The shims are clang-compiled bitcode. n00bb already links LLVM's
-   bitreader and linker, so it links that bitcode into the n00b module
-   (`LLVMLinkModules2`) before optimization, and the optimizer inlines
-   the shims.
+   only calls functions whose parameters are scalars and pointers.
+2. Shims are clang-compiled bitcode, cached in the native cache by
+   content, contract directories and headers. Only the shims of literals
+   whose externs are reachable are compiled; export shims are always
+   compiled.
+   - With `--lto`, the shim bitcode is linked into the program's bitcode
+     with `LLVMLinkModules2` before optimization, and the optimizer
+     inlines the shims.
+   - Without `--lto`, the shims are linked together into one native
+     object of their own.
 
-clang therefore owns C argument passing for every platform, permanently,
-and the shim costs nothing after inlining. The backend needs no SysV,
-AAPCS or Win64 rules. When writ adds a platform, n00b gets it for free.
+clang therefore owns C argument passing for every platform, and the
+backend needs no SysV, AAPCS or Win64 rules. When writ adds a platform,
+n00b gets it for free.
 
 The run-time `ffi` module (§4.9) can't use clang at run time. It uses
 writ's `abi_class` facts, which writ derives from the start
@@ -250,80 +260,92 @@ writ's `abi_class` facts, which writ derives from the start
   - A `cstr` parameter gets a NUL-terminated copy.
   - `out` buffers are allocated by the shim at the declared capacity and
     copied into a new n00b string or buffer at the reported length.
-- **Borrowed n00b memory goes through one runtime API.** Generated code
-  never touches the GC directly. It calls:
+    Bytes returned as `string` are decoded as UTF-8; invalid text fails
+    with `Error`.
+- **Borrowed n00b memory goes through one runtime API**
+  (`runtime/runtime_ffi.c`):
 
   ```c
   void *n00b_ffi_borrow(void *object, size_t *length, uint32_t access);
   void  n00b_ffi_release(void *object);
   ```
 
-  - `for call` spans wrap the call in a borrow and a release.
-  - `keep` spans hold the borrow in the handle wrapper until the event.
-
-  Whether the GC moves objects, and therefore whether a borrow roots,
-  pins or copies, is a decision inside these two functions (§6). Changing
-  that decision changes no generated code.
-- **Handles.** Generated wrapper types hold the C value and expose
-  `close()`. Release at collection time needs finalizer support from the
-  GC (§6). Until that exists, handles must be closed explicitly, and
-  leaked handles are reported in debug builds.
+  The collector does not move objects, so `n00b_ffi_borrow` returns the
+  array's storage and length, and `n00b_ffi_release` does nothing. The
+  borrowed object stays live through the caller's frame across the call.
+  `for call` spans wrap the call in a borrow and a release; `keep until
+  EVENT` spans hold the borrow in the handle wrapper until the event.
+- **Handles.** A handle is a generated `X_Cell` record holding the C
+  value, used through `alias X = Ref[X_Cell]`:
+  - `close()` calls the release function and marks the handle closed. A
+    call on a closed handle fails with `Error`; `consume` closes it too.
+  - `with x` results keep `x`'s wrapper alive.
+  - The cell has a `__finalize`. In debug builds, a handle collected
+    while open is reported ("collected while open; releasing it") and
+    released.
 
 ### 4.6 Callbacks
 
-An n00b `callback` value is a function index plus an environment
-(`n00b_abi_callback_value_v1`). It is not a C function pointer. Two
-choices are fixed up front, so callbacks never need pinning and the
-runtime grows exactly one entry point:
+An n00b callback value is a function index, a callback type index and an
+environment (`sys.internal.abi.Callback_Value`). It is not a C function
+pointer, and C never holds a GC pointer:
 
-- **`userdata` carries a handle, never a GC pointer.** Registering a
-  callback stores the n00b callback value in a runtime **handle table** and
-  passes the table index to C as the `userdata`. C can hold the index for
-  any span (`for call`, `keep until ...`, `once`) without affecting the
-  GC. The handle is freed when the span ends, at the event the contract
-  names.
-- **One dispatch entry point.** For each callback type in a contract,
-  `writ_gen_c` emits a typed C trampoline (as bitcode, §3.3). The
-  trampoline packs the C arguments into a struct whose layout writ
-  computes, and calls:
-
-  ```c
-  int32_t n00b_ffi_dispatch(uint64_t handle, const void *arguments, void *result);
-  ```
-
-  The runtime looks up the callback, unpacks the arguments with the same
-  layout, and calls it.
-
-The handle table and `n00b_ffi_dispatch` are new runtime work in
-`builtin_abi.c`. Callbacks without a `userdata` slot can't carry a handle.
-For those, the binding requires a `static` n00b function, and the
-trampoline calls its symbol directly.
+- **`userdata` carries a handle.** For each callback type, the generated
+  module has a handle table (`builtin.ffi.Ffi_Table`). Registering a
+  callback stores the callback value in the table and passes the table
+  index to C as the `userdata`. The handle is freed when the span ends,
+  at the event the contract names, or after the call for `once`.
+- **One dispatch function per callback type.** The generated module
+  defines `__<type>_dispatch(handle, arguments, result)` and exports it
+  as `<prefix>___<type>_dispatch`. The C trampoline packs the C arguments
+  into a struct whose layout writ computes and calls that function; the
+  dispatcher unpacks them with the same layout and calls the callback.
+- **Callbacks without `userdata`** call the `provide`d n00b function by
+  its symbol, through a generated trampoline.
 
 ### 4.7 Linking
 
-The final link has `--link-object` but no library flags. Linking gains:
+The final link takes, from every `'ffi` module in the program,
+deduplicated:
 
-- the shim bitcode, linked into the module before optimization (§4.4);
-- libraries from the contract's `link`, as `-l`, `-framework`, or
-  `.lib`, chosen per platform;
-- library search paths from the binding or the command line.
+- the shims (§4.4);
+- libraries from the contract's `link` as `-l` or `-framework`, and
+  archives, chosen per platform;
+- library search paths from the binding.
 
-These come from `writ_gen_n00b`'s link requirements, not from user flags.
+Each required library is probed with a test link before the program is
+built; a missing one is N00BB-F0001.
+
+A Rust contract's transport crate is generated with `writ_gen_rust` and
+built with cargo by n00bb, cached in the native cache; its static library
+and the native libraries cargo reports join the link.
 
 ### 4.8 Export direction
 
 An `'ffi` literal with a `binding export { … }` part:
 
-- generates C-ABI entry points, through `writ_gen_c`, that convert
-  arguments, root GC values, and call the n00b function by its symbol
-  (`module.function`);
-- names the exported symbols as the contract says, generalizing today's
-  static `c_alias` table in `runtime_native_roots.c`;
-- emits a C header for the contract through `writ_gen_c`, so C callers get
-  a header that matches by construction;
-- keeps every exported function reachable (`--native-root` behavior).
+- generates C-ABI entry shims that convert arguments and call an n00b
+  adapter for the `provide`d function. An entry shim saves an unwind
+  point: a panic inside the call returns to the shim, which applies the
+  binding's `on_panic` (`abort` traps; `error EXPR` returns `EXPR`).
+- A foreign thread becomes a runtime mutator the first time it touches
+  the runtime, so entry shims need no explicit attach. Values handed to C
+  stay live because the generated module holds them in its handle tables
+  and export holds.
+- Contract `thread` constraints (main-thread functions, thread-affine
+  handles) are checked in debug builds.
+- `own` results are copied into the binding's named allocator.
+- Symbols follow the contract names and `symbol` clauses, and every
+  exported function is a native root.
+- The C header for the contract is written next to the build output, so C
+  callers get a header that matches by construction. A `provide` whose
+  signature doesn't match its contract function is reported at the
+  `provide` item.
 
 ### 4.9 Binding at run time
+
+Binding at run time is Phase 2 (§5). Until then a binding that asks for
+`load dynamic` is rejected with E0901 ("not supported yet").
 
 Binding at compile time is the default, but programs can also bind at
 run time. There are two levels.
@@ -389,8 +411,8 @@ An `'ffi` module is exported from a `package` statement like any module
 - A subpackage that exports the module keeps the bound names under the
   subpackage's name.
 
-Package export resolution reaches a `const` of type `Module` through the
-same path as an imported module. The bound names are ordinary
+Package export resolution reaches an `'ffi` const through its import
+alias, the same path as an imported module. The bound names are ordinary
 declarations by then, so nothing else in package linking changes.
 
 ### 4.11 Baking C objects built at comptime
@@ -404,19 +426,24 @@ const config = settings.load("app.conf")
 ```
 
 - **Description.** Every struct reachable from the value must be fully
-  described by its contract. writ's layout facts become n00b record
-  types with descriptors: counted pointers carry their count field,
-  zero-terminated arrays their sentinel, unions their discriminant, and
-  function pointers are marked as such. A pointer the contract doesn't
-  describe is a compile error at the `const`, naming the field path.
-- **Copy.** The comptime copier follows foreign pointers using those
-  descriptors. Shared targets are copied once, and pointers into the
-  middle of a block stay pointers into the copy. Function pointers are
-  recorded by symbol and relocated.
+  described by its contract. writ's layout facts become `layout(c)`
+  n00b records whose pointer fields are `Foreign[T]` or `Foreign_Fn[...]`,
+  with field clauses: `count FIELD` for a counted pointer, `until EXPR`
+  for a sentinel-terminated array, and `union by FIELD { … }` for a
+  union and its discriminant (N00BB-T0037 rejects malformed clauses).
+  A pointer the contract doesn't describe fails the capture, naming the
+  field path.
+- **Copy.** The copier (`sys.internal.marshal`) runs in the build-time
+  program and follows foreign pointers using those descriptors.
+  Overlapping blocks are merged, so shared targets are copied once and
+  pointers into the middle of a block stay pointers into the copy.
+  Function pointers are recorded by their native symbol and relocated; a
+  function without a symbol fails the capture.
 - **Placement.** A baked foreign graph is emitted once into a writable
   section and used in place. It is not cloned per evaluation.
 - **Ownership.** Baked objects are never released. A release or `close()`
-  on one fails with `Error`.
+  on one fails with `Error` ("a baked object cannot be released"), and
+  handle finalizers skip baked objects.
 - **Hashing.** A table keyed by object address stays valid when its keys
   cache their hash; the key type implements `Hash` by returning the
   cached value.
@@ -430,8 +457,36 @@ const config = settings.load("app.conf")
   ```
 
   A baked object whose type implements `Fixup` runs `fixup` once, before
-  its first use. If it fails, that use fails with the fixup's error and
-  the object stays unfixed, so a later use tries again.
+  the first foreign call that takes it. If it fails, that call fails with
+  the fixup's error and the object stays unfixed, so a later call tries
+  again.
+
+### 4.12 Incremental builds
+
+`n00bb build` with one input caches each strongly connected component of
+the module graph (an SCC) as one object in `<root>/.n00b-cache/obj/`. An
+object holds the SCC's native code, ABI metadata, semantic interface,
+runtime and comptime IR, and recorded specialization requests.
+
+- **Keys.** An SCC's key covers its members' sources, the interface
+  identities of the SCCs it imports, the freshness of the SCCs whose
+  inline bodies it uses, the compiler, the flags that change code, and
+  the target.
+- **Reuse.** A cached SCC skips every stage up to codegen. It feeds the
+  link stages through its interface, and its cached IR supplies the
+  bodies that inlining, specialization and comptime execution need. A
+  compile only sees the cached SCCs of modules it imports, so programs
+  can share a cache directory.
+- **Body edits.** When an import is rebuilt, a dependent SCC stays cached
+  as long as the import's interface identity is unchanged. The compiler
+  checks that once the rebuilt interfaces are known, and reruns the build
+  without the assumption (`N00BB_CACHE_STRICT`) when it fails.
+- **Instantiations** are cached separately, keyed by the generic's SCC
+  and the type arguments.
+- `--lto` and `N00BB_NO_OBJECT_CACHE` turn the cache off.
+  `N00BB_CACHE_LOG=FILE` records each reuse and store.
+- The generated module of an `'ffi` literal and the root SCC are never
+  cached.
 
 ---
 
@@ -444,9 +499,9 @@ const config = settings.load("app.conf")
 | W1 | `profiles/n00b.writ`, `writ_gen_n00b`, pointer-normalized shims and trampolines as bitcode | Golden n00b and C output for the zlib and resharp literals |
 | N1 | libwrit linked into n00bb; symbol coexistence test | A test compiles an n00b program in a compiler that parsed an `'ffi` literal, with no symbol clash |
 | N2 | The `'ffi` literal, compile-time const values, contract directories, dependency recording, diagnostic forwarding, `--show-ffi` | A malformed literal reports at the right n00b line and column, an error in a used contract reports in that file, editing a used contract rebuilds the module, and no spec state appears in the output binary |
-| N3 | `Module` type, `import … from` a `Module`, extern declarations from generated code, the generated module, package export, shim bitcode linking, library linking | An n00b test calls zlib `compress2` / `uncompress` through a `zlib` package and round-trips data on Mach-O and Linux |
+| N3 | The generated module and its import alias, extern declarations from generated code, package export, shim linking, library linking | An n00b test calls zlib `compress2` / `uncompress` through a `zlib` package and round-trips data on Mach-O and Linux |
 | N4 | Strings and buffers through `n00b_ffi_borrow`, out-params, handles with `close()`, error channels | An n00b program compiles resharp patterns, matches, finds all spans, and reports a compile error from `resharp_last_error` |
-| N5 | Handle table, callback trampolines, `n00b_ffi_dispatch` | `qsort` with an n00b comparator; a registered callback kept until unregistered |
+| N5 | Handle tables, callback trampolines, per-type dispatch functions | `qsort` with an n00b comparator; a registered callback kept until unregistered |
 | N6 | `binding export`: entry shims, symbol naming, generated header | A C program includes the generated header and calls an n00b implementation of the `kv` contract |
 | N7 | Late loading (`load dynamic`) | The resharp test passes with the library loaded through `open()`; a missing feature-gated symbol fails only when called |
 | N8 | Run-time `ffi` module: `load_spec`, `bind` returning a `Module` with a reflection entry built at run time, generic calls | A program loads `plugin.writ` at run time and calls into a plugin library, including a variadic call |
@@ -454,8 +509,9 @@ const config = settings.load("app.conf")
 The work runs in two phases. Phase 1 is S1, W0, W1 and N1–N6: binding at
 compile time and linking statically. It also makes `'ffi` modules
 callable from comptime code, and lets a C object graph built at comptime
-be baked into the program and used at run time (§4.11). Phase 2 is N7
-and N8: dynamic loading. Until Phase 2, `load dynamic` is rejected as not yet supported.
+be baked into the program and used at run time (§4.11), and adds the
+incremental build cache (§4.12). Phase 2 is N7 and N8: dynamic
+loading. Until Phase 2, `load dynamic` is rejected as not yet supported.
 
 N1 can run before S1, since it only links libwrit and has no binding
 content. Everything else waits for S1. W0 comes first after S1, and W1
@@ -513,17 +569,17 @@ binding spec can express.
 
 ## 6. Decisions for n00b
 
-1. **Extern syntax.** Should n00b get a user-visible `extern` declaration
-   that generated bindings also use, or should extern stay an annotation
-   only generated code produces?
-2. **GC movement.** Does the n00b collector move objects? The answer
-   decides what `n00b_ffi_borrow` does: root, pin or copy (§4.5).
-   Generated code is the same either way.
-3. **Finalizers.** Will the GC support finalizers for handle wrappers, or
-   is explicit `close()` the model?
-4. **Keyword arguments.** Do keyword packs map to n00b keyword arguments, or
-   to generated options records?
-5. **Dynamic calls.** Should the run-time `ffi` module's generic call path
-   use libffi, or call thunks that writ generates from `abi_class` facts?
-   libffi is ready now. writ's own thunks avoid an extra dependency, and
-   are checked by the same conformance tests as the static path.
+1. **Extern syntax.** Extern declarations are generated only; n00b has no
+   `extern` syntax (§4.3).
+2. **GC movement.** The collector does not move objects, so
+   `n00b_ffi_borrow` hands C the object's storage directly (§4.5).
+3. **Finalizers.** Handle wrappers have finalizers; debug builds report
+   and release handles collected while open. `close()` is the release
+   model (§4.5).
+4. **Keyword arguments.** Keyword packs map to n00b keyword arguments; a
+   binding can choose a generated options record instead.
+5. **Dynamic calls.** Open until Phase 2: the run-time `ffi` module's
+   generic call path uses either libffi or call thunks that writ generates
+   from `abi_class` facts. libffi is ready now. writ's own thunks avoid an
+   extra dependency, and are checked by the same conformance tests as the
+   static path.

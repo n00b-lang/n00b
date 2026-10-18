@@ -1219,14 +1219,19 @@ The writ side of `n00b-integration.md`:
 
 | Module | Adds |
 |---|---|
-| `profiles/n00b.writ` | The n00b profile |
-| `gen/n00b.c` | `writ_gen_n00b`: n00b declarations printed from plans, plus link requirements |
-| `gen/c.c` | Shims and trampolines emitted for bitcode compilation; the same printer as Slice 1 |
+| `include/writ/writ.h`, `core/syntax/parse.c`, `core/session.c` | Embedded units: `WRIT_SOURCE_EMBEDDED`, `writ_unit_add_embedded`, `use <name.writ>` resolved through `writ_session_add_contract_dir` and `WRIT_CONTRACT_PATH`, and `writ_unit_file_count` / `writ_unit_file_at`; E0514 |
+| `profiles/n00b.writ` | The n00b profile: a non-moving GC with borrows through `n00b_ffi_borrow` / `n00b_ffi_release`, string and buffer representations, list and array rest packs, keyword arguments or options records, result-style errors, closure callbacks, `close` for handles |
 | `core/model/expr.c` | The n00b row of the operator table |
+| `include/writ/gen.h`, `gen/n00b.c` | `writ_gen_n00b`: the n00b module source and its line map, externs as data (`writ_n00b_extern_t`), exports as data (`writ_n00b_export_t`), link requirements (`writ_link_requirements_t`: libraries, frameworks, search paths, load mode), handle cells with finalizers, per-callback-type handle tables and dispatch functions, export entry shims and the export header, and `Foreign` record fields with `count`, `until` and `union by` clauses for baking |
+| `gen/c.c` | `writ_gen_c_request_t.pointer_normalized`: shims that take only scalars and pointers, callback trampolines, the same printer as Slice 1 |
+| `gen/binding.c` | `load dynamic` reports E0901 until late loading (Phase 2) |
+| `cli/main.c` | `writ gen n00b --embedded FILE [--profile FILE] [--prefix NAME] [--module NAME] [-o DIR]`, and `writ --embedded NAME bind FILE --profile FILE` for an embedded unit |
 
-n00bb reads the same call plans through `writ_model_fn_plan`, so the
-compiler never re-derives shapes. n00bb's phases N1–N4 run with zlib and
-resharp as the test libraries.
+`writ_gen_n00b` reads the call plans through `writ_model_fn_plan`, so
+n00bb never re-derives shapes. n00bb consumes the generator's outputs:
+it parses the generated source as a module, registers the externs,
+compiles the shims with clang, and links the requirements. n00bb's
+phases N1–N6 run with zlib, resharp and kv as the test libraries.
 
 **Done when** an n00b program compresses data with zlib and matches text
 with resharp, on Mach-O and Linux.
