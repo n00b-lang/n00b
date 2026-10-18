@@ -16327,6 +16327,21 @@ source_unit_module(void *context, const char *name)
     return nullptr;
 }
 
+static bool
+program_interface_module(void *context, const char *name)
+{
+    n00bb_link_analysis_t *analysis = context;
+    for (size_t i = 0; name && i < analysis->units.len; i++) {
+        core_translation_unit_t *unit = analysis->units.data[i];
+        if (tu_state(unit)->interface_module
+            && strlen(name) == unit->module.identifier.u8_bytes
+            && !memcmp(name, unit->module.identifier.data,
+                       unit->module.identifier.u8_bytes))
+            return true;
+    }
+    return false;
+}
+
 bool
 initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
                       core_link_unit_t *link,
@@ -16417,11 +16432,11 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
 
     for (size_t k = 0; k <= units->len; k++) {
         if (k == source_count) {
-            if (!n00bb_cache_load_deferred(analysis->cache,
-                    source_unit_module, analysis))
+            if (!n00bb_cache_load_ir(analysis->cache, source_unit_module,
+                    program_interface_module, analysis))
                 return ir_initialization_error(
                     units->len ? units->data[0] : nullptr, "N00BB-L0028",
-                    "could not load cached SCCs that reference rebuilt modules");
+                    "could not load the IR of cached SCCs");
             if (!bind_cached_global_identities(ir_context, analysis))
                 return ir_initialization_error(
                     units->len ? units->data[0] : nullptr, "N00BB-L0028",
@@ -18181,7 +18196,9 @@ n00bb_baked_function(const n00bb_link_analysis_t *analysis,
         ir_module_t *candidate = unit_module(tu_state(analysis->units.data[i]));
         if (!candidate || strcmp(ir_module_name(candidate), module)) continue;
         ir_func_t *function = ir_func_find(candidate, name);
-        return function && function->n_blocks ? function : nullptr;
+        return function && (function->n_blocks
+            || ir_annot_get(&function->annots, "n00bb.cached_body"))
+            ? function : nullptr;
     }
     return nullptr;
 }

@@ -190,6 +190,15 @@ n00bb_linked_global_bindings(const n00bb_abi_object_view_t *view,
     return true;
 }
 
+static ir_func_t *
+linked_body(ir_func_t *function)
+{
+    if (function->n_blocks) return function;
+    ir_annot_t *body = ir_annot_get(&function->annots, "n00bb.cached_body");
+    return body && body->kind == IR_ANNOT_VALUE && body->v
+        && body->v->kind == IR_VAL_FUNC ? body->v->owner : function;
+}
+
 static bool
 n00bb_linked_function_indices(const n00bb_abi_object_view_t *view,
                               core_translation_unit_t *const *units,
@@ -232,15 +241,16 @@ n00bb_linked_function_indices(const n00bb_abi_object_view_t *view,
                 continue;
             for (size_t f = 0; f < ir_func_count(runtime); f++) {
                 ir_func_t *candidate = ir_func_at(runtime, f);
+                ir_func_t *body = linked_body(candidate);
                 size_t length = strlen(candidate->name);
-                if (!candidate->n_blocks
+                if (!body->n_blocks
                     || strstr(candidate->name, "$spec$")
                     || length < function_name.length
                     || memcmp(candidate->name, function_name.bytes,
                               function_name.length)
                     || (length != function_name.length
                         && candidate->name[function_name.length] != '#')
-                    || th_hash(ir_module_types(runtime), candidate->type)
+                    || th_hash(ir_module_types(runtime), body->type)
                         != signature->typehash) continue;
                 if (matched) { free(bindings); return false; }
                 matched = candidate;
@@ -302,14 +312,15 @@ n00bb_linked_finalizers(const n00bb_abi_object_view_t *view,
                 continue;
             for (size_t f = 0; f < ir_func_count(runtime); f++) {
                 ir_func_t *candidate = ir_func_at(runtime, f);
+                ir_func_t *body = linked_body(candidate);
                 size_t length = strlen(candidate->name);
-                if (!candidate->n_blocks
+                if (!body->n_blocks
                     || length < function_name.length
                     || memcmp(candidate->name, function_name.bytes,
                               function_name.length)
                     || (length != function_name.length
                         && candidate->name[function_name.length] != '#')
-                    || th_hash(ir_module_types(runtime), candidate->type)
+                    || th_hash(ir_module_types(runtime), body->type)
                         != signature->typehash) continue;
                 if (matched) { valid = false; break; }
                 matched = candidate;
@@ -1303,6 +1314,11 @@ abi_graph_slot(void *context, size_t index, n00bb_abi_graph_slot_t *out)
     ir_func_t *function = type ? nullptr
         : n00bb_baked_function(analysis, slot->module, slot->name);
     if (!type && !function) return false;
+    ir_annot_t *body = function && !function->n_blocks
+        ? ir_annot_get(&function->annots, "n00bb.cached_body") : nullptr;
+    if (body && body->kind == IR_ANNOT_VALUE && body->v
+        && body->v->kind == IR_VAL_FUNC)
+        function = body->v->owner;
     *out = (n00bb_abi_graph_slot_t){
         .node = slot->node,
         .offset = slot->offset,

@@ -4157,6 +4157,10 @@ n00bb_link_analysis_new(parse_grammar_t *grammar, ir_ctx_t *ir_context,
     bool may_link_further, n00bb_resolver_t *resolver)
 {
     n00bb_link_analysis_t *analysis = core_alloc(n00bb_link_analysis_t);
+    const th_env **interfaces = core_alloc_array(const th_env *,
+                                                 linked_interface_count + 1);
+    for (size_t i = 0; i < linked_interface_count; i++)
+        interfaces[i] = linked_interfaces[i];
     *analysis = (n00bb_link_analysis_t){
         .grammar = grammar,
         .ir_context = ir_context,
@@ -4169,7 +4173,7 @@ n00bb_link_analysis_new(parse_grammar_t *grammar, ir_ctx_t *ir_context,
         .specialization_requests =
             core_list_new(n00bb_specialization_request_t),
         .baked_roots = core_list_new(n00bb_baked_root_t),
-        .linked_interfaces = linked_interfaces,
+        .linked_interfaces = interfaces,
         .linked_interface_count = linked_interface_count,
         .native_roots = native_roots,
         .native_root_count = native_root_count,
@@ -4188,6 +4192,7 @@ void
 n00bb_link_analysis_free(n00bb_link_analysis_t *analysis)
 {
     if (!analysis) return;
+    core_free((void *)analysis->linked_interfaces);
     th_env_free(analysis->export_environment);
     th_env_free(analysis->interface_environment);
     for (size_t i = 0; i < analysis->trait_specializations.len; i++)

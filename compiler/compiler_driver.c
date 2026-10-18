@@ -2318,11 +2318,33 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
             profile_tick = now;
         }
         if (success) {
+            size_t cached_count = n00bb_cache_interface_count(cache);
+            size_t first_cached = linked_interface_count - cached_count;
+            size_t program_interface_count = first_cached;
+            const th_env **program_interfaces = core_alloc_array(
+                const th_env *, linked_interface_count + 1);
+            for (size_t i = 0; program_interfaces && i < first_cached; i++)
+                program_interfaces[i] = linked_interfaces[i];
+            for (size_t c = 0; program_interfaces && c < cached_count;
+                 c++) {
+                bool used = false;
+                for (size_t r = 0; !used && r < requests->ordered.len;
+                     r++) {
+                    core_translation_unit_t *unit = core_work_job_result(
+                        queue, requests->ordered.data[r].job);
+                    used = unit && n00bb_cache_interface_has_module(cache,
+                        c, unit->module.identifier);
+                }
+                if (used)
+                    program_interfaces[program_interface_count++] =
+                        linked_interfaces[first_cached + c];
+            }
             core_link_unit_t *link = core_link_unit_new();
             n00bb_link_analysis_t *analysis = n00bb_link_analysis_new(
-                grammar, ir_context, linked_interfaces,
-                linked_interface_count, native_roots, native_root_count,
+                grammar, ir_context, program_interfaces,
+                program_interface_count, native_roots, native_root_count,
                 may_link_further, resolver);
+            core_free(program_interfaces);
             success = link != nullptr;
             for (size_t i = 0; i < root_request_count; i++) {
                 if (!requests->ordered.data[i].root_input) continue;

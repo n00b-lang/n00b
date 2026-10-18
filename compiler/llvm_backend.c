@@ -13029,10 +13029,13 @@ runtime_function_address_table(n00bb_llvm_backend_t *backend,
         addresses[i] = LLVMConstNull(pointer);
     for (size_t i = 0; i < backend->function_index_count; i++) {
         ir_func_t *function = backend->function_indices[i].function;
-        if (!function_body_emitted(function,
-                backend->reachable, backend->reachable_count,
-                backend->reachable_bound)) continue;
-        LLVMTypeRef signature = function_type(module, function);
+        ir_func_t *body = cached_function_body(function);
+        if (body == function
+            ? !function_body_emitted(function, backend->reachable,
+                  backend->reachable_count, backend->reachable_bound)
+            : !th_is_closed(ir_module_types(body->owner), body->type))
+            continue;
+        LLVMTypeRef signature = function_type(module, body);
         core_buffer_t name = {0};
         core_buffer_printf(&name, "%s.%s", ir_module_name(function->owner),
                            function->name);

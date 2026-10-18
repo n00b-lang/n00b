@@ -42,9 +42,12 @@ bool n00bb_cache_optimistic(const n00bb_cache_t *cache);
 bool n00bb_cache_assumptions_hold(const n00bb_cache_t *cache,
                                   core_link_unit_t *link,
                                   n00bb_link_analysis_t *analysis);
-bool n00bb_cache_load_deferred(n00bb_cache_t *cache,
-                               ir_module_lookup_fn lookup,
-                               void *lookup_context);
+typedef bool (*n00bb_cache_module_used_fn)(void *context,
+                                           const char *module);
+bool n00bb_cache_load_ir(n00bb_cache_t *cache, ir_module_lookup_fn lookup,
+                         n00bb_cache_module_used_fn used, void *context);
+bool n00bb_cache_interface_has_module(const n00bb_cache_t *cache,
+                                      size_t index, core_string_t module);
 ir_module_t *n00bb_cache_module(const n00bb_cache_t *cache,
                                 core_string_t module);
 bool n00bb_cache_module_object(const n00bb_cache_t *cache,
