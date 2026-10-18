@@ -24,8 +24,9 @@ func no_records() -> List[text.Style_Record] {
     return new[List[text.Style_Record]]()
 }
 
-var plain_body: text.Rich_Body = (s = "hello", style_info = no_records(),
-                                  base_style = nil, opaque = false)
+var plain_body: text.Rich_Body
+plain_body.s = "hello"
+plain_body.style_info = no_records()
 var based_body: text.Rich_Body = (s = "hello", style_info = no_records(),
                                   base_style = nil, opaque = false)
 var opaque_body: text.Rich_Body = (s = "hello", style_info = no_records(),
