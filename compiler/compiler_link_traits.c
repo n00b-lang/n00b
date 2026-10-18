@@ -2049,8 +2049,11 @@ call_label_for_expression(parse_grammar_t *grammar, n00bb_tu_state_t *state,
     if (!grammar || !state || !state->annotations || !unit || !call
         || !callee)
         return nullptr;
-    core_dict_foreach(state->annotations->cf_labels, item) {
-        parse_cf_label_t *label = item->value;
+    for (size_t label_index = 0;
+         label_index < state->annotations->cf_label_order.len;
+         label_index++) {
+        parse_cf_label_t *label =
+            state->annotations->cf_label_order.data[label_index];
         if (!label || label->kind != PARSE_CF_CALL || !label->cond
             || enclosing_call_expression(grammar, label->cond) != call
             || bound_function_symbol(label->cond)
@@ -2295,9 +2298,11 @@ resolve_generic_trait_specializations(core_link_unit_t *link,
                     trait_result = th_name(call_state->types, "Comparison");
                 core_list_t(th_type_ptr_t) return_expression_types =
                     core_list_new(th_type_ptr_t);
-                core_dict_foreach(function_state->annotations->cf_labels,
-                                  exit_item) {
-                    parse_cf_label_t *exit = exit_item->value;
+                for (size_t exit_index = 0;
+                     exit_index < function_state->annotations->cf_label_order.len;
+                     exit_index++) {
+                    parse_cf_label_t *exit =
+                        function_state->annotations->cf_label_order.data[exit_index];
                     if (!exit || exit->kind != PARSE_CF_JUMP
                         || !core_string_eq(exit->jump_kind,
                                            CORE_STRING_STATIC("return"))

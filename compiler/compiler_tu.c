@@ -5812,7 +5812,19 @@ array_shape_from_declaration(parse_grammar_t *grammar,
         flat_prefix_rank++;
     }
     ok = ok && ir_shape_set_storage(shape, flat_prefix_rank, true);
-    bool static_prefix = ok && flat_prefix_rank != 0;
+    ok = ok && measure_static_shape_prefix(shape, flat_prefix_rank);
+    core_list_free(dimensions);
+    if (!ok || !parse_sym_set_binding(symbol,
+            CORE_STRING_STATIC("ir.array-shape"), shape)) return nullptr;
+    *complete = true;
+    return shape;
+}
+
+bool
+measure_static_shape_prefix(ir_shape_t *shape, uint32_t flat_prefix_rank)
+{
+    bool ok = true;
+    bool static_prefix = flat_prefix_rank != 0;
     uint64_t element_count = 1;
     for (uint32_t i = 0; ok && static_prefix && i < flat_prefix_rank; i++) {
         ir_shape_extent_t extent;
@@ -5847,11 +5859,7 @@ array_shape_from_declaration(parse_grammar_t *grammar,
                 .static_value = element_count,
             });
     }
-    core_list_free(dimensions);
-    if (!ok || !parse_sym_set_binding(symbol,
-            CORE_STRING_STATIC("ir.array-shape"), shape)) return nullptr;
-    *complete = true;
-    return shape;
+    return ok;
 }
 
 th_type *

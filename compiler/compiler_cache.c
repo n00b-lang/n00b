@@ -1,4 +1,5 @@
 #include <dirent.h>
+#include <stdarg.h>
 #include <errno.h>
 #include <limits.h>
 #include <stdio.h>
@@ -132,6 +133,20 @@ write_file_atomic(const char *path, const void *data, size_t length)
     else if (temporary.data) unlink(temporary.data);
     core_buffer_release(&temporary);
     return ok;
+}
+
+static void
+cache_log(const char *format, ...)
+{
+    const char *path = getenv("N00BB_CACHE_LOG");
+    FILE *log = path && *path ? fopen(path, "a") : nullptr;
+    if (!log) return;
+    va_list arguments;
+    va_start(arguments, format);
+    vfprintf(log, format, arguments);
+    va_end(arguments);
+    fputc('\n', log);
+    fclose(log);
 }
 
 static void
@@ -1044,9 +1059,17 @@ n00bb_cache_open(const char *root_path, parse_cmdr_result_t *args,
     }
     if (load_entries(cache))
         for (size_t e = 0; e < cache->entries.len; e++)
-            if (cache->entries.data[e].load == ENTRY_VALID)
+            if (cache->entries.data[e].load == ENTRY_VALID) {
                 core_list_push(cache->interfaces,
                                cache->entries.data[e].interface);
+                core_buffer_t members = {0};
+                for (size_t m = 0; m < cache->entries.data[e].members.len;
+                     m++)
+                    core_buffer_printf(&members, "%s%s", m ? "," : "",
+                        cache->entries.data[e].members.data[m].name);
+                cache_log("%s reuse scc %s", phase_name(), members.data);
+                core_buffer_release(&members);
+            }
     return cache;
 }
 
@@ -1293,6 +1316,36 @@ requested_by(const n00bb_link_analysis_t *analysis, const cache_scc_t *scc,
     return false;
 }
 
+typedef struct {
+    const n00bb_specialization_t *item;
+    core_buffer_t                 key;
+} cache_request_t;
+
+static int
+compare_requests(const void *left, const void *right)
+{
+    const cache_request_t *a = left;
+    const cache_request_t *b = right;
+    size_t length = a->key.byte_len < b->key.byte_len
+        ? a->key.byte_len : b->key.byte_len;
+    int order = length ? memcmp(a->key.data, b->key.data, length) : 0;
+    if (order) return order;
+    return (a->key.byte_len > b->key.byte_len)
+        - (a->key.byte_len < b->key.byte_len);
+}
+
+static bool
+request_key(const n00bb_specialization_t *item, core_buffer_t *key)
+{
+    put_text(key, ir_module_name(item->generic->owner));
+    put_text(key, item->generic->name);
+    th_type_writer_t *writer = th_type_writer_new();
+    bool ok = writer && th_type_writer_add(writer, item->signature)
+        && th_type_writer_finish(writer, key);
+    th_type_writer_free(writer);
+    return ok;
+}
+
 static void
 scc_requests(const n00bb_link_analysis_t *analysis, const cache_scc_t *scc,
              core_buffer_t *out)
@@ -1314,20 +1367,33 @@ scc_requests(const n00bb_link_analysis_t *analysis, const cache_scc_t *scc,
             changed = true;
         }
     }
-    th_type_writer_t *writer = th_type_writer_new();
-    core_buffer_t entries = {0};
+    cache_request_t *requests = closure.len
+        ? core_alloc_array(cache_request_t, closure.len) : nullptr;
     uint32_t count = 0;
-    for (size_t i = 0; writer && i < closure.len; i++)
+    for (size_t i = 0; (requests || !closure.len) && i < closure.len; i++)
         for (size_t s = 0; s < analysis->specializations.len; s++) {
             const n00bb_specialization_t *item =
                 &analysis->specializations.data[s];
             if (item->instance != closure.data[i]) continue;
-            put_text(&entries, ir_module_name(item->generic->owner));
-            put_text(&entries, item->generic->name);
-            put_u32(&entries, th_type_writer_add(writer, item->signature));
-            count++;
+            requests[count] = (cache_request_t){.item = item};
+            if (request_key(item, &requests[count].key)) count++;
+            else core_buffer_release(&requests[count].key);
             break;
         }
+    if (count)
+        qsort(requests, count, sizeof(*requests), compare_requests);
+    th_type_writer_t *writer = th_type_writer_new();
+    core_buffer_t entries = {0};
+    for (uint32_t i = 0; writer && i < count; i++) {
+        const n00bb_specialization_t *item = requests[i].item;
+        put_text(&entries, ir_module_name(item->generic->owner));
+        put_text(&entries, item->generic->name);
+        put_u32(&entries, th_type_writer_add(writer, item->signature));
+    }
+    for (uint32_t i = 0; i < count; i++)
+        core_buffer_release(&requests[i].key);
+    core_free(requests);
+    if (!writer) count = 0;
     core_buffer_t blob = {0};
     if (writer) th_type_writer_finish(writer, &blob);
     put_u64(out, blob.byte_len);
@@ -1725,6 +1791,8 @@ n00bb_cache_instance_object(n00bb_cache_t *cache, core_link_unit_t *link,
         }
         core_list_push(cache->instances, loaded);
         found = &cache->instances.data[cache->instances.len - 1];
+        cache_log("%s reuse instance %s.%s", phase_name(),
+            ir_module_name(item->generic->owner), item->generic->name);
     }
     core_buffer_t name = {0};
     core_buffer_printf(&name, "%s.native", phase_name());
@@ -1811,6 +1879,16 @@ n00bb_cache_store(n00bb_cache_t *cache, core_link_unit_t *link,
         if (snapshot)
             ok = store_scc(cache, analysis, sccs, scc, snapshot, objects,
                            object_count);
+        if (snapshot && ok) {
+            core_buffer_t members = {0};
+            for (size_t m = 0; m < scc->members.len; m++) {
+                core_string_t name = scc->members.data[m]->module.identifier;
+                core_buffer_printf(&members, "%s%.*s", m ? "," : "",
+                                   (int)name.u8_bytes, name.data);
+            }
+            cache_log("%s store scc %s", phase_name(), members.data);
+            core_buffer_release(&members);
+        }
     }
     for (size_t i = 0; ok && i < analysis->specializations.len; i++) {
         const n00bb_specialization_t *item =
@@ -1821,6 +1899,9 @@ n00bb_cache_store(n00bb_cache_t *cache, core_link_unit_t *link,
                 ir_module_name(item->instance->owner)));
         if (object && object->native && object->abi)
             ok = store_instance(cache, item, object);
+        if (object && ok)
+            cache_log("%s store instance %s.%s", phase_name(),
+                ir_module_name(item->generic->owner), item->generic->name);
     }
     return ok;
 }

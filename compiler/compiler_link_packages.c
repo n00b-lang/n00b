@@ -4,6 +4,7 @@
 #include "compiler_link.h"
 #include "signature_typevars.h"
 #include "compiler_tu.h"
+#include "record_layout_request.h"
 #include "enum_value.h"
 #include "flagset_value.h"
 #include "global_metadata.h"
@@ -656,6 +657,14 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
                 ok = register_typevar_order(state->types, environment,
                     symbol, shape, TH_ENV_METADATA_TYPE, qualified.data,
                     "n00b.type-typevars");
+            n00bb_record_layout_request_t *layout = parse_sym_binding(symbol,
+                CORE_STRING_STATIC("n00bb.record-layout-request"));
+            if (ok && layout && !layout->alignment_expression) {
+                uint8_t policy = (uint8_t)layout->policy;
+                ok = th_env_register_metadata(environment,
+                    TH_ENV_METADATA_TYPE, qualified.data,
+                    "n00b.record-layout", 1, &policy, sizeof(policy));
+            }
             if (ok && shape_kind == TH_ENV_TYPE_SHAPE_ENUM)
                 ok = register_enum_values_metadata(grammar, unit,
                     environment, symbol, qualified.data);

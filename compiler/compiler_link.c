@@ -1137,6 +1137,7 @@ n00bb_select_call_overload(parse_grammar_t *grammar, n00bb_tu_state_t *state,
         ? core_tree_node_value(receiver).type : nullptr;
     bool typed_receiver = receiver_type && state && state->types
         && th_is_closed(state->types, receiver_type);
+    if (!state || !state->types) receiver_type = nullptr;
     parse_sym_entry_t *match = nullptr, *receiver_match = nullptr;
     size_t matches = 0, receiver_matches = 0;
     for (parse_sym_entry_t *candidate = symbol; candidate
@@ -1151,7 +1152,7 @@ n00bb_select_call_overload(parse_grammar_t *grammar, n00bb_tu_state_t *state,
         matches++;
         match = candidate;
         const th_param *first = count ? th_func_param(signature, 0) : nullptr;
-        if (typed_receiver && first && first->type
+        if (receiver_type && first && first->type
             && th_unify_probe(state->types, receiver_type, first->type)) {
             receiver_matches++;
             receiver_match = candidate;
@@ -2350,8 +2351,11 @@ bind_return_call_sources(n00bb_link_analysis_t *analysis)
         core_translation_unit_t *unit = analysis->units.data[i];
         n00bb_tu_state_t *state = tu_state(unit);
         if (!state || !state->annotations) continue;
-        core_dict_foreach(state->annotations->cf_labels, entry) {
-            parse_cf_label_t *label = entry->value;
+        for (size_t label_index = 0;
+             label_index < state->annotations->cf_label_order.len;
+             label_index++) {
+            parse_cf_label_t *label =
+                state->annotations->cf_label_order.data[label_index];
             if (!label || label->kind != PARSE_CF_CALL || !label->cond)
                 continue;
             n00bb_return_source_t *source = n00bb_node_return_source(
@@ -2417,8 +2421,11 @@ function_global_effect_kind(parse_grammar_t *grammar,
     }
 
     if (!annotations) return N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_READ;
-    core_dict_foreach(annotations->cf_labels, item) {
-        parse_cf_label_t *label = item->value;
+    for (size_t label_index = 0;
+         label_index < annotations->cf_label_order.len;
+         label_index++) {
+        parse_cf_label_t *label =
+            annotations->cf_label_order.data[label_index];
         if (!label || label->kind != PARSE_CF_ASSIGNS || !label->cond
             || !node_is_within(site->node, label->cond)
             || link_effect_owner_symbol(grammar, label->self)

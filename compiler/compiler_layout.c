@@ -378,8 +378,10 @@ publish_c_record_symbol(n00bb_link_analysis_t *analysis,
     valid = valid && members;
     for (size_t i = 0; valid && i < fields.len; i++) {
         parse_sym_entry_t *field = fields.data[i];
-        th_type *declared = declared_type_from_node(
-            analysis->grammar, owner, field->decl_node);
+        th_type *declared = field->decl_node
+            ? declared_type_from_node(analysis->grammar, owner,
+                                      field->decl_node)
+            : field->type;
         th_type *type = declared ? th_apply_subst(
             ir_module_types(module), declared) : nullptr;
         th_type *inline_element = nullptr;

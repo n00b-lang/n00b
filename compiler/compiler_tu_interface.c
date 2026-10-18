@@ -351,6 +351,7 @@ decode_interface_flagset_value(const uint8_t *data, size_t size,
 static bool
 decode_interface_member_metadata(const uint8_t *data, size_t size,
                                  const char *member_name,
+                                 uint32_t *position,
                                  uint32_t *visibility, uint32_t *flags,
                                  uint64_t *bit_offset, uint64_t *bit_width)
 {
@@ -380,6 +381,7 @@ decode_interface_member_metadata(const uint8_t *data, size_t size,
         if (member_visibility > 2 || member_flags > 3) return false;
         if (strlen(member_name) == name_size &&
             !memcmp(name, member_name, name_size)) {
+            if (position) *position = i;
             if (visibility) *visibility = member_visibility;
             if (flags) *flags = member_flags;
             if (bit_offset) *bit_offset = member_offset;
@@ -507,7 +509,8 @@ decode_interface_array_shape(n00bb_interface_context_t *loader,
         }
         if (!ir_shape_set_extent(shape, i, extent)) return false;
     }
-    if (offset != size || known_prefix != flat_prefix) return false;
+    if (offset != size || known_prefix != flat_prefix
+        || !measure_static_shape_prefix(shape, flat_prefix)) return false;
     *shape_out = shape;
     return true;
 }
@@ -1356,8 +1359,9 @@ materialize_interface_type_members(n00bb_interface_context_t *loader,
     member_scope->adt_kind = core_string_dup(
         core_string_from_cstr(scope_tag));
     type_symbol->member_scope = member_scope;
-    type_symbol->adt_kind = core_string_dup(
-        core_string_from_cstr(scope_tag));
+    type_symbol->adt_kind = core_string_dup(core_string_from_cstr(
+        declaration->type_shape_kind == TH_ENV_TYPE_SHAPE_RECORD
+            ? "record" : scope_tag));
 
     size_t metadata_size = 0;
     const uint8_t *metadata = interface_owned_metadata(loader,
@@ -1398,8 +1402,29 @@ materialize_interface_type_members(n00bb_interface_context_t *loader,
 
     bool ok = true;
     n00bb_enum_range_t range = {0};
-    for (size_t i = 0; i < th_record_len(declaration->type_shape); i++) {
+    size_t member_count = th_record_len(declaration->type_shape);
+    size_t *order = member_count
+        ? core_alloc_array(size_t, member_count) : nullptr;
+    uint32_t *positions = member_count
+        ? core_alloc_array(uint32_t, member_count) : nullptr;
+    ok = !member_count || (order && positions);
+    for (size_t i = 0; ok && i < member_count; i++) {
         const th_member *member = th_record_member(declaration->type_shape, i);
+        positions[i] = (uint32_t)i;
+        if (metadata && member && member->name)
+            (void)decode_interface_member_metadata(metadata, metadata_size,
+                member->name, &positions[i], nullptr, nullptr, nullptr,
+                nullptr);
+        size_t at = i;
+        while (at && positions[order[at - 1]] > positions[i]) {
+            order[at] = order[at - 1];
+            at--;
+        }
+        order[at] = i;
+    }
+    for (size_t i = 0; ok && i < member_count; i++) {
+        const th_member *member = th_record_member(declaration->type_shape,
+                                                   order[i]);
         if (!member || !member->name || !member->type) {
             ok = false;
             break;
@@ -1481,7 +1506,7 @@ materialize_interface_type_members(n00bb_interface_context_t *loader,
             uint32_t visibility = 0, flags = 0;
             uint64_t bit_offset = 0, bit_width = 0;
             if (!decode_interface_member_metadata(metadata, metadata_size,
-                    member->name, &visibility, &flags, &bit_offset,
+                    member->name, nullptr, &visibility, &flags, &bit_offset,
                     &bit_width)) {
                 ok = false;
                 break;
@@ -1493,6 +1518,8 @@ materialize_interface_type_members(n00bb_interface_context_t *loader,
             entry->bit_width = bit_width;
         }
     }
+    core_free(order);
+    core_free(positions);
     if (ok && declaration->type_shape_kind == TH_ENV_TYPE_SHAPE_ENUM)
         ok = n00bb_bind_enum_range(state->types, &state->semantic_values,
                              type_symbol, range);
@@ -1946,7 +1973,30 @@ materialize_interface_module_symbols(n00bb_interface_context_t *loader,
                         ? CORE_STRING_STATIC("alias")
                     : declaration.type_shape_kind == TH_ENV_TYPE_SHAPE_NOMINAL
                         ? CORE_STRING_STATIC("nominal")
+                    : declaration.type_shape_kind == TH_ENV_TYPE_SHAPE_RECORD
+                        ? CORE_STRING_STATIC("record")
                         : CORE_STRING_STATIC("type");
+                size_t layout_size = 0;
+                const uint8_t *layout = interface_owned_metadata(loader,
+                    TH_ENV_METADATA_TYPE, declaration.qualified_name,
+                    "n00b.record-layout", 1, &layout_size);
+                if (layout) {
+                    n00bb_record_layout_request_t *request = layout_size == 1
+                        && layout[0] <= N00BB_RECORD_C
+                        ? core_arena_alloc(&state->semantic_values,
+                                           sizeof(*request)) : nullptr;
+                    if (request)
+                        *request = (n00bb_record_layout_request_t){
+                            .policy = (n00bb_record_policy_t)layout[0],
+                        };
+                    if (!request || !parse_sym_set_binding(symbol,
+                            CORE_STRING_STATIC("n00bb.record-layout-request"),
+                            request)) {
+                        if (failure) *failure =
+                            "interface type has invalid record layout metadata";
+                        return false;
+                    }
+                }
                 size_t exposure_size = 0;
                 const uint8_t *exposure = interface_owned_metadata(loader,
                     TH_ENV_METADATA_TYPE, declaration.qualified_name,
@@ -1973,7 +2023,6 @@ materialize_interface_module_symbols(n00bb_interface_context_t *loader,
                     }
                 }
                 if (defined_shape && (!shape || !definition_key
-                        || !th_type_define(state->types, symbol->type, shape)
                         || !th_type_define(state->types, definition_key,
                                            shape))) {
                     if (failure) *failure =

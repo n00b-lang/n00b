@@ -44,6 +44,8 @@ typedef struct {
 } n00bb_loop_binding_projection_t;
 void collect_for_bindings(parse_grammar_t *grammar, parse_tree_t *node,
                           core_list_t(parse_tree_ptr_t) *bindings);
+bool measure_static_shape_prefix(ir_shape_t *shape,
+                                 uint32_t flat_prefix_rank);
 th_type *record_template_type(th_ctx *types, const char *name,
                               parse_sym_entry_t *symbol);
 th_type *variant_template_type(th_ctx *types, const char *name,

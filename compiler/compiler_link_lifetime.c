@@ -1441,8 +1441,11 @@ record_call_argument_escape_facts_once(n00bb_link_analysis_t *analysis)
         core_translation_unit_t *unit = analysis->units.data[u];
         n00bb_tu_state_t *state = tu_state(unit);
         if (!state || !state->annotations) continue;
-        core_dict_foreach(state->annotations->cf_labels, item) {
-            parse_cf_label_t *label = item->value;
+        for (size_t label_index = 0;
+             label_index < state->annotations->cf_label_order.len;
+             label_index++) {
+            parse_cf_label_t *label =
+                state->annotations->cf_label_order.data[label_index];
             if (!label || label->kind != PARSE_CF_CALL || !label->cond
                 || core_tree_is_leaf(label->cond)) continue;
             parse_tree_t *member = member_access_node(grammar, label->cond);

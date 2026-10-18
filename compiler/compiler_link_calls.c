@@ -117,7 +117,7 @@ call_site_signature_instance(n00bb_call_site_index_t *index,
         if (!th_env_signature_channels(types, source, &instance, nullptr))
             return nullptr;
     }
-    else instance = th_type_clone(types, source);
+    else instance = th_type_clone_fresh(types, source);
     if (!instance) return nullptr;
     if (cached) {
         cached->source = source;
@@ -175,8 +175,11 @@ call_site_index_init(n00bb_call_site_index_t *index,
     for (size_t i = 0; i < member_count; i++) {
         n00bb_tu_state_t *state = tu_state(members[i]);
         if (!state || !state->annotations) continue;
-        core_dict_foreach(state->annotations->cf_labels, entry) {
-            parse_cf_label_t *label = entry->value;
+        for (size_t label_index = 0;
+             label_index < state->annotations->cf_label_order.len;
+             label_index++) {
+            parse_cf_label_t *label =
+                state->annotations->cf_label_order.data[label_index];
             if (!label || label->kind != PARSE_CF_CALL || !label->cond
                 || core_tree_is_leaf(label->cond)) continue;
             parse_sym_entry_t *caller = enclosing_function_symbol(grammar,
@@ -292,8 +295,11 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
         return;
     }
 
-    core_dict_foreach(state->annotations->cf_labels, item) {
-        parse_cf_label_t *label = item->value;
+    for (size_t label_index = 0;
+         label_index < state->annotations->cf_label_order.len;
+         label_index++) {
+        parse_cf_label_t *label =
+            state->annotations->cf_label_order.data[label_index];
         if (!label) continue;
         if (label->kind != PARSE_CF_CALL || !label->cond ||
             core_tree_is_leaf(label->cond)) continue;
@@ -323,7 +329,7 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
                 continue;
             }
             if (selected && selected != callee_symbol) {
-                rebind_call_callee(grammar, state, item->key, label,
+                rebind_call_callee(grammar, state, label->self, label,
                                    callee_symbol, selected);
                 callee_symbol = selected;
             }
@@ -598,8 +604,11 @@ call_type_snapshot(core_translation_unit_t *const *units,
         n00bb_tu_state_t *state = tu_state(units[i]);
         if (!state || !state->types || !state->annotations) continue;
         core_buffer_t roots = {0};
-        core_dict_foreach(state->annotations->cf_labels, item) {
-            parse_cf_label_t *label = item->value;
+        for (size_t label_index = 0;
+             label_index < state->annotations->cf_label_order.len;
+             label_index++) {
+            parse_cf_label_t *label =
+                state->annotations->cf_label_order.data[label_index];
             if (!label || label->kind != PARSE_CF_CALL) continue;
             parse_tree_t *nodes[] = {label->cond, label->self};
             for (size_t n = 0; n < 2; n++) {
@@ -658,8 +667,11 @@ unify_calls_until_stable(parse_grammar_t *grammar, core_link_unit_t *link,
     for (size_t i = 0; i < unit_count; i++) {
         n00bb_tu_state_t *state = tu_state(units[i]);
         if (!state || !state->annotations) continue;
-        core_dict_foreach(state->annotations->cf_labels, item) {
-            parse_cf_label_t *label = item->value;
+        for (size_t label_index = 0;
+             label_index < state->annotations->cf_label_order.len;
+             label_index++) {
+            parse_cf_label_t *label =
+                state->annotations->cf_label_order.data[label_index];
             call_count += label && label->kind == PARSE_CF_CALL;
         }
     }
@@ -874,8 +886,11 @@ publish_link_call_dependencies(core_link_unit_t *link,
         core_translation_unit_t *unit = analysis->units.data[i];
         n00bb_tu_state_t *state = tu_state(unit);
         if (!state || !state->annotations) continue;
-        core_dict_foreach(state->annotations->cf_labels, item) {
-            parse_cf_label_t *label = item->value;
+        for (size_t label_index = 0;
+             label_index < state->annotations->cf_label_order.len;
+             label_index++) {
+            parse_cf_label_t *label =
+                state->annotations->cf_label_order.data[label_index];
             if (!label || label->kind != PARSE_CF_CALL || !label->cond)
                 continue;
             parse_tree_t *member = member_access_node(analysis->grammar,
