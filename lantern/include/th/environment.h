@@ -170,6 +170,16 @@ bool th_env_save(const th_env *environment, const char *path,
                  core_object_archive_error_t *error);
 th_env *th_env_load(const char *path, core_object_archive_error_t *error);
 
+typedef struct {
+  bool (*module)(void *context, const char *module);
+  bool (*metadata)(void *context, th_env_metadata_owner_t kind,
+                   const char *owner);
+  bool (*intrinsic)(void *context, const char *trait, const th_type *receiver);
+  void *context;
+} th_env_filter_t;
+
+th_env *th_env_subset(const th_env *source, const th_env_filter_t *filter);
+
 size_t th_env_declaration_count(const th_env *environment);
 bool th_env_declaration_at(const th_env *environment, size_t index,
                            th_env_declaration_view_t *out);

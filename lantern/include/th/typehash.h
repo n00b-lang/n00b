@@ -1,6 +1,7 @@
 #ifndef TYPEHASH_H
 #define TYPEHASH_H
 
+#include "lib/buffer.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -238,6 +239,17 @@ th_type *th_type_clone(th_ctx *destination, const th_type *source);
  * constraint references between roots. */
 bool th_type_clone_many(th_ctx *destination, const th_type *const *sources,
                         th_type **copies, size_t count);
+
+typedef struct th_type_writer th_type_writer_t;
+typedef struct th_type_reader th_type_reader_t;
+th_type_writer_t *th_type_writer_new(void);
+uint32_t th_type_writer_add(th_type_writer_t *writer, const th_type *type);
+bool th_type_writer_finish(th_type_writer_t *writer, core_buffer_t *out);
+void th_type_writer_free(th_type_writer_t *writer);
+th_type_reader_t *th_type_reader_open(th_ctx *ctx, const uint8_t *data,
+                                      size_t length, size_t *consumed);
+th_type *th_type_reader_get(const th_type_reader_t *reader, uint32_t index);
+void th_type_reader_free(th_type_reader_t *reader);
 /* Clone a graph while replacing selected source nodes with existing nodes.
  * Replacements are borrowed and must outlive the result. */
 th_type *th_type_clone_replacing(th_ctx *destination, const th_type *source,

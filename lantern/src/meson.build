@@ -47,10 +47,12 @@ ir_generated = [annot_bnf_h, infer_bnf_h, lex_bnf_h, default_lex_h, typelang_bnf
 
 th_sources = files(
     'th/typehash.c',
+    'th/serialize.c',
     'th/access.c',
     'th/error.c',
     'th/environment.c',
     'th/environment_archive.c',
+    'th/environment_subset.c',
     'th/infer.c',
     'th/print.c',
 )
@@ -137,6 +139,7 @@ ir_sources = files(
     'ir/fmt.c',
     'ir/func.c',
     'ir/clone.c',
+    'ir/archive.c',
     'ir/grammar.c',
     'ir/layout.c',
     'ir/lifetime.c',
