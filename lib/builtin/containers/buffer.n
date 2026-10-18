@@ -492,6 +492,9 @@ func to_string(consume self: Buffer,
         result = string.core.from_raw(ref state.store,
                                       cast[int] state.byte_len,
                                       copy = false, encoding = encoding)
+        state.store = new[Array[u8]](0)
+        state.byte_len = 0
+        state.alloc_len = 0
     }
     return result
 }
