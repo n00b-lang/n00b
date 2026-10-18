@@ -1052,7 +1052,8 @@ endforeach
 
 foreach text_probe : ['color_probe', 'capability_probe', 'theme_probe',
                       'border_probe', 'rich_static_probe', 'rich_build_probe',
-                      'cascade_probe', 'layout_probe', 'text_string_probe']
+                      'cascade_probe', 'layout_probe', 'text_string_probe',
+                      'table_probe']
     test(
         'text-' + text_probe.replace('_', '-'),
         find_program('sh'),
