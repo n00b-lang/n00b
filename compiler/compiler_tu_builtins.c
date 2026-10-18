@@ -813,7 +813,10 @@ register_builtin_gc_symbols(parse_symtab_t *symtab, th_ctx *types,
         PARSE_SYM_FUNCTION, nullptr) : nullptr;
     if (!invoke || !parse_sym_set_binding(invoke,
             CORE_STRING_STATIC("n00bb.abi.native"),
-            "n00b_gc_finalize")) return false;
+            "n00b_gc_finalize")
+        || !parse_sym_set_binding(invoke,
+            CORE_STRING_STATIC("n00bb.native.calls-n00b"), invoke))
+        return false;
     invoke->type = invoke_signature;
     invoke->error_type = nil_type;
     invoke->callable_contract = invoke_contract;

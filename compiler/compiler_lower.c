@@ -10744,6 +10744,15 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                     .b = true,
                 })) return lower_error(context, IR_DIAG_INTERNAL, span,
                     "could not annotate a collection-free native");
+        if (function && parse_sym_binding(symbol,
+                CORE_STRING_STATIC("n00bb.native.calls-n00b"))
+            && !ir_annot_set(lower->ir_context, &function->annots,
+                (ir_annot_t){
+                    .key = "n00bb.native.calls-n00b",
+                    .kind = IR_ANNOT_BOOL,
+                    .b = true,
+                })) return lower_error(context, IR_DIAG_INTERNAL, span,
+                    "could not annotate a native that calls n00b code");
         callee_value = function
             ? ir_func_address(context->module, function) : nullptr;
         if (!callee_value)

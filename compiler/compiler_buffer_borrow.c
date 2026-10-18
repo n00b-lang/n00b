@@ -388,6 +388,13 @@ function_is_native(const ir_func_t *function)
 }
 
 static bool
+native_calls_n00b(const ir_func_t *function)
+{
+    return ir_annot_get((ir_annots_t *)&function->annots,
+                        "n00bb.native.calls-n00b") != nullptr;
+}
+
+static bool
 function_is_write_lock(const ir_func_t *function)
 {
     const char *module = function->owner ? ir_module_name(function->owner)
@@ -444,7 +451,8 @@ effects_for(effects_table_t *table, ir_func_t *function)
     *effects = (effects_t){
         .function = function, .carried = carried, .n_carried = n_carried,
     };
-    bool opaque = !function->n_blocks && !function_is_native(function);
+    bool opaque = !function->n_blocks
+        && (!function_is_native(function) || native_calls_n00b(function));
     if (opaque) {
         for (int kind = 0; kind < REACH_KINDS; kind++)
             effects->writes[kind] = effects->escapes[kind]
