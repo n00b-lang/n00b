@@ -792,16 +792,18 @@ transfer(origins_t *state, ir_instr_t *instruction, bool *changed)
     case IR_OP_SEQUENCE_SET:
     case IR_OP_ATOMIC_RMW:
     case IR_OP_ATOMIC_CAS:
-    case IR_OP_MEMCPY: {
-        uint32_t value_at = instruction->op == IR_OP_STORE
-            || instruction->op == IR_OP_MEMCPY ? 1 : 2;
+    case IR_OP_MEMCPY:
+    case IR_OP_MEMMOVE: {
+        bool copies = instruction->op == IR_OP_MEMCPY
+            || instruction->op == IR_OP_MEMMOVE;
+        uint32_t value_at = copies || instruction->op == IR_OP_STORE ? 1 : 2;
         if (instruction->n_operands <= value_at) break;
         root_set_t address = {0};
         root_set_t stored = {0};
         ok = seed_value(state, operand_at(instruction, 0), &address, nullptr)
             && seed_value(state, operand_at(instruction, value_at), &stored,
                           nullptr);
-        if (ok && instruction->op == IR_OP_MEMCPY) {
+        if (ok && copies) {
             ir_value_t *destination = operand_at(instruction, 0);
             th_type *pointer = destination && destination->type
                 ? th_resolve(destination->type) : nullptr;
@@ -942,6 +944,43 @@ call_write_roots(origins_t *state, ir_instr_t *instruction,
     return expand_contents(state, written);
 }
 
+static bool
+writes_memory(const ir_instr_t *instruction)
+{
+    switch (instruction->op) {
+    case IR_OP_STORE:
+        return !ir_instr_has_mod(instruction, "atomic");
+    case IR_OP_SEQUENCE_SET:
+    case IR_OP_MEMCPY:
+    case IR_OP_MEMMOVE:
+    case IR_OP_MEMSET:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool
+instruction_write_roots(origins_t *state, ir_instr_t *instruction,
+                        root_set_t *written, bool *writes_nonlocal)
+{
+    if (is_call(instruction))
+        return call_write_roots(state, instruction, written,
+                                writes_nonlocal);
+    if (!writes_memory(instruction) || !instruction->n_operands) return true;
+    root_set_t address = {0};
+    bool ok = seed_value(state, operand_at(instruction, 0), &address,
+                         nullptr);
+    for (uint32_t r = 0; ok && r < address.len; r++) {
+        ir_value_t *root = address.items[r];
+        if (is_location(root)) continue;
+        if (root == &nonlocal_root) *writes_nonlocal = true;
+        ok = root_set_add(written, root, nullptr);
+    }
+    free(address.items);
+    return ok;
+}
+
 static uint64_t
 parameter_bit(const ir_value_t *root)
 {
@@ -1024,22 +1063,18 @@ summarize(effects_table_t *table, th_ctx *types, effects_t *effects,
         for (uint32_t i = 0; ok && i < block->n_instrs; i++) {
             ir_instr_t *instruction = block->instrs[i];
             root_set_t roots = {0};
-            if (is_call(instruction)) {
-                bool nonlocal = false;
-                ok = call_write_roots(&state, instruction, &roots,
-                                      &nonlocal);
-                if (nonlocal) writes_nonlocal = true;
-                for (uint32_t r = 0; ok && r < roots.len; r++) {
-                    ir_value_t *root = roots.items[r];
-                    const ir_value_t *parameter
-                        = reached_parameter(table, root, &kind);
-                    if (root == &nonlocal_root) writes_nonlocal = true;
-                    else if (parameter)
-                        writes[kind] |= parameter_bit(parameter);
-                }
+            bool nonlocal = false;
+            ok = instruction_write_roots(&state, instruction, &roots,
+                                         &nonlocal);
+            if (nonlocal) writes_nonlocal = true;
+            for (uint32_t r = 0; ok && r < roots.len; r++) {
+                const ir_value_t *parameter
+                    = reached_parameter(table, roots.items[r], &kind);
+                if (roots.items[r] == &nonlocal_root) writes_nonlocal = true;
+                else if (parameter) writes[kind] |= parameter_bit(parameter);
             }
-            else if (instruction->op == IR_OP_RETURN
-                     || instruction->op == IR_OP_FAIL)
+            if (ok && (instruction->op == IR_OP_RETURN
+                       || instruction->op == IR_OP_FAIL))
                 ok = summarize_carried(&state, instruction, carried,
                                        effects->n_carried);
             free(roots.items);
@@ -1677,25 +1712,28 @@ check_instruction(walk_t *walk, ir_instr_t *instruction)
                       : "the borrowed string is the failure value here");
         return true;
     }
-    if (!is_call(instruction)) return true;
-    ir_func_t *callee = direct_callee(instruction);
+    bool call = is_call(instruction);
+    if (!call && !writes_memory(instruction)) return true;
+    ir_func_t *callee = call ? direct_callee(instruction) : nullptr;
     effects_t *effects = callee
         ? effects_for(window->origins->effects, callee) : nullptr;
-    if (!effects || effects->opaque) {
+    if (call && (!effects || effects->opaque)) {
         blame(walk, instruction,
               "this indirect or unknown call may write the borrowed Buffer");
         return true;
     }
     root_set_t written = {0};
     bool writes_nonlocal = false;
-    bool ok = call_write_roots(window->origins, instruction, &written,
-                               &writes_nonlocal);
+    bool ok = instruction_write_roots(window->origins, instruction, &written,
+                                      &writes_nonlocal);
     if (ok && (buffer_roots_meet(window->origins->effects, &written,
                                  &walk->source)
                || (walk->source_global
                    && (writes_nonlocal
                        || roots_reach_global(walk, &written)))))
-        blame(walk, instruction, "this call may write the borrowed Buffer");
+        blame(walk, instruction, call
+              ? "this call may write the borrowed Buffer"
+              : "this store may write the borrowed Buffer");
     free(written.items);
     return ok;
 }
