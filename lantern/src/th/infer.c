@@ -474,6 +474,90 @@ bool th_method_obligation_set_error(th_ctx *ctx, th_type *receiver,
     return updated;
 }
 
+static size_t formal_named(const th_formal_name *formals, size_t count,
+                           const char *name)
+{
+    for (size_t i = 0; name && i < count; i++)
+        if (formals[i].name && !strcmp(formals[i].name, name)) return i;
+    return SIZE_MAX;
+}
+
+th_type *th_call_shape_bind_keywords(th_ctx *ctx, th_type *call,
+                                     const th_formal_name *formals,
+                                     size_t formal_count)
+{
+    call = th_resolve(call);
+    if (!ctx || !call || call->kind != TH_FUNCTION
+        || (formal_count && !formals)) return nullptr;
+    size_t positional = call->fn.np;
+    if (positional > formal_count && call->fn.nkw) return nullptr;
+    size_t capacity = positional > formal_count ? positional : formal_count;
+    th_param *params = core_alloc_array(th_param, capacity ? capacity : 1);
+    bool *bound = core_alloc_array(bool, capacity ? capacity : 1);
+    if (!params || !bound) {
+        core_free(params);
+        core_free(bound);
+        return nullptr;
+    }
+    for (size_t i = 0; i < positional; i++) {
+        params[i] = call->fn.params[i];
+        bound[i] = true;
+    }
+    size_t count = positional;
+    bool valid = true;
+    for (size_t i = 0; valid && i < call->fn.nkw; i++) {
+        const th_kwparam *keyword = &call->fn.kw[i];
+        size_t index = formal_named(formals, formal_count, keyword->name);
+        if (index == SIZE_MAX || bound[index]) {
+            valid = false;
+            break;
+        }
+        params[index] = (th_param){.mode = keyword->mode,
+                                   .type = keyword->type};
+        bound[index] = true;
+        if (index + 1 > count) count = index + 1;
+    }
+    for (size_t i = 0; valid && i < formal_count; i++) {
+        if (bound[i]) continue;
+        if (!formals[i].optional) valid = false;
+        else if (i < count)
+            params[i] = (th_param){.mode = TH_IN, .type = th_var(ctx)};
+    }
+    th_type *shape = valid
+        ? th_func_with_error(ctx, call->fn.ret, call->fn.error, params,
+                             count, call->fn.rest, nullptr, 0)
+        : nullptr;
+    core_free(params);
+    core_free(bound);
+    return shape;
+}
+
+bool th_method_obligation_bind_keywords(th_ctx *ctx, th_type *receiver,
+                                        const char *name,
+                                        const th_formal_name *formals,
+                                        size_t formal_count)
+{
+    if (!ctx || !receiver || !name || !*name) return false;
+    th_type *variable = th_resolve(receiver);
+    if (th_kind_of(variable) != TH_VAR) return false;
+    bool updated = false;
+    for (size_t i = 0; i < variable->var.cons.len; i++) {
+        th_constraint *constraint = &variable->var.cons.data[i];
+        th_type *call = constraint->kind == TH_CON_METHOD
+            && !strcmp(constraint->method.name, name)
+            ? th_resolve(constraint->method.call) : nullptr;
+        if (!call || th_kind_of(call) != TH_FUNCTION || !call->fn.nkw)
+            continue;
+        th_type *shape = th_call_shape_bind_keywords(ctx, call, formals,
+                                                     formal_count);
+        if (!shape) return false;
+        constraint->method.call = shape;
+        updated = true;
+    }
+    if (updated) variable->revision++;
+    return true;
+}
+
 size_t th_var_constraint_count(const th_type *var)
 {
     return var && var->kind == TH_VAR ? var->var.cons.len : 0;

@@ -432,6 +432,17 @@ bool   th_require_method_in_place(th_ctx *ctx, th_type *receiver,
 bool   th_method_obligation_set_error(th_ctx *ctx, th_type *receiver,
                                       const char *name, th_type *result,
                                       th_type *error);
+typedef struct {
+    const char *name;
+    bool        optional;
+} th_formal_name;
+th_type *th_call_shape_bind_keywords(th_ctx *ctx, th_type *call,
+                                     const th_formal_name *formals,
+                                     size_t formal_count);
+bool   th_method_obligation_bind_keywords(th_ctx *ctx, th_type *receiver,
+                                          const char *name,
+                                          const th_formal_name *formals,
+                                          size_t formal_count);
 size_t th_var_constraint_count(const th_type *var);
 bool   th_var_constraint_at(const th_type *var, size_t i, th_constraint *out);
 /* Recheck method obligations deferred until an environment is attached.
