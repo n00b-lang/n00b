@@ -653,10 +653,7 @@ private func put_binding(modify tbl: List[Style_Binding]?, is_role: bool,
         i += 1
     }
     let total: uint = if at == src_n { = src_n + 1 } else { = src_n }
-    var extra: uint = 0
-    if at == src_n {
-        extra = 1
-    }
+    let extra: uint = if at == src_n { = 1 } else { = 0 }
     var out: Array[Style_Binding] = clone_bindings(src, src_n, extra)
     out[at] = (name = name, style = style, fg_ix = -1, bg_ix = -1)
     tbl = sys.abi.list_with_length(out, total)

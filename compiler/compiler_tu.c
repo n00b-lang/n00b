@@ -3883,6 +3883,19 @@ n00bb_cache_contextual_integer(parse_grammar_t *grammar,
     return true;
 }
 
+static parse_tree_t *
+value_construct_of_result(parse_grammar_t *grammar, parse_tree_t *value_stmt)
+{
+    for (parse_tree_t *at = core_tree_node_value(value_stmt).parent; at;
+         at = core_tree_node_value(at).parent) {
+        if (nt_is(grammar, at, "if-value-expr")
+            || nt_is(grammar, at, "try-value-expr")
+            || nt_is(grammar, at, "typecase-value-expr")) return at;
+        if (nt_is(grammar, at, "body-stmt")) return nullptr;
+    }
+    return nullptr;
+}
+
 th_type *
 n00bb_integer_literal_context(parse_grammar_t *grammar,
                               n00bb_tu_state_t *state, parse_tree_t *literal)
@@ -3893,6 +3906,11 @@ n00bb_integer_literal_context(parse_grammar_t *grammar,
     for (parse_tree_t *parent = core_tree_node_value(child).parent;
          parent;
          child = parent, parent = core_tree_node_value(parent).parent) {
+        if (nt_is(grammar, parent, "value-stmt")) {
+            parent = value_construct_of_result(grammar, parent);
+            if (!parent) break;
+            continue;
+        }
         if (nt_is(grammar, parent, "sym-decl")) {
             parse_tree_t *spec = child_nt(grammar, parent, "type-spec");
             th_type *expected = spec ? core_tree_node_value(spec).type : nullptr;
@@ -8443,6 +8461,61 @@ n00bb_register_value_coercions(th_ctx *types)
     th_register_coercion_target(types, n00bb_coercion_target_hook);
 }
 
+static void
+collect_value_results(parse_grammar_t *grammar, parse_tree_t *construct,
+                      parse_tree_t *at,
+                      core_list_t(parse_tree_ptr_t) *results)
+{
+    if (!at || core_tree_is_leaf(at)) return;
+    if (nt_is(grammar, at, "value-stmt")) {
+        parse_tree_t *expression = child_nt(grammar, at, "expression");
+        if (expression
+            && value_construct_of_result(grammar, at) == construct)
+            core_list_push(*results, expression);
+        return;
+    }
+    for (size_t i = 0; i < core_tree_num_children(at); i++)
+        collect_value_results(grammar, construct, core_tree_child(at, i),
+                              results);
+}
+
+static bool
+contextual_value_results(parse_grammar_t *grammar, n00bb_tu_state_t *state,
+                         parse_tree_t *node, th_type *target)
+{
+    parse_tree_t *construct = node;
+    while (grammar && construct && !core_tree_is_leaf(construct)
+           && !nt_is(grammar, construct, "if-value-expr")
+           && !nt_is(grammar, construct, "try-value-expr")
+           && !nt_is(grammar, construct, "typecase-value-expr")
+           && core_tree_num_children(construct) == 1)
+        construct = core_tree_child(construct, 0);
+    if (!grammar || !construct || core_tree_is_leaf(construct)
+        || core_tree_num_children(construct) == 1
+        || !is_integer_type(target)) return false;
+    core_list_t(parse_tree_ptr_t) results = core_list_new(parse_tree_ptr_t);
+    collect_value_results(grammar, construct, construct, &results);
+    bool contextual = results.len > 0;
+    for (size_t i = 0; contextual && i < results.len; i++) {
+        th_type *result = core_tree_node_value(results.data[i]).type;
+        contextual = (result && th_is_closed(state->types, result)
+                      && th_hash(state->types, result)
+                          == th_hash(state->types, target))
+            || n00bb_contextual_integer_literal(state, results.data[i],
+                                                target)
+            || contextual_value_results(grammar, state, results.data[i],
+                                        target);
+    }
+    core_list_free(results);
+    if (!contextual) return false;
+    for (parse_tree_t *at = construct; at;
+         at = core_tree_node_value(at).parent) {
+        core_tree_node_value(at).type = target;
+        if (at == node) break;
+    }
+    return true;
+}
+
 th_type *
 n00bb_type_materialize(parse_grammar_t *grammar, n00bb_tu_state_t *state,
                        parse_tree_t *node, th_type *actual, th_type *expected,
@@ -8461,7 +8534,8 @@ n00bb_type_materialize(parse_grammar_t *grammar, n00bb_tu_state_t *state,
         *converted = materialized != nullptr;
         return materialized ? expected : nullptr;
     }
-    if (n00bb_contextual_integer_literal(state, node, expected))
+    if (n00bb_contextual_integer_literal(state, node, expected)
+        || contextual_value_results(grammar, state, node, expected))
         return expected;
     *converted = true;
     if (n00bb_value_coerces(types, actual, expected)) return expected;
