@@ -1,5 +1,4 @@
 import text
-import rich_static_base
 
 record String_Words layout(c) {
     data:     Ref[byte]
@@ -54,12 +53,12 @@ func run_checks() {
     check(body_of(rs) == ref rs_body, "2")
     check(byte_len(rs_body.s) == 11, "3")
     check(rs_body.style_info.len() == 1, "4")
-    let base: string = rich_static_base.base_of(rs)
+    let base: string = builtin.text(rs)
     check(!is_rich(base) and byte_len(base) == 11, "5")
     check(is_rich(rs_outer) and is_rich(rs_outer_body.s), "6")
-    let nested: string = rich_static_base.base_of(rs_outer)
+    let nested: string = builtin.text(rs_outer)
     check(!is_rich(nested) and byte_len(nested) == 11, "7")
-    let plain: string = rich_static_base.base_of("not rich")
+    let plain: string = builtin.text("not rich")
     check(!is_rich(plain) and byte_len(plain) == 8, "8")
     check(byte_len(rs) == 11 and byte_len(rs_outer) == 11, "9")
     check(byte_at(rs, 0) == cast[u8] 'h' and byte_at(rs_outer, 0) == cast[u8] 'h',

@@ -1,3 +1,0 @@
-func base_of(s: string) -> string {
-    return text(s)
-}
