@@ -3463,6 +3463,24 @@ n00bb_constrain_literal_fit(parse_grammar_t *grammar,
 }
 
 bool
+n00bb_literal_adopts_open_type(parse_grammar_t *grammar,
+                               n00bb_tu_state_t *state, parse_tree_t *node,
+                               th_type *type)
+{
+    parse_tree_t *origin = node && !core_tree_is_leaf(node)
+        ? core_tree_node_value(node).integer_literal_origin : nullptr;
+    if (!origin || n00bb_unsigned_literal_origin(origin)
+        || !n00bb_constrain_literal_fit(grammar, state, origin, node, type,
+                                        false)) return false;
+    for (parse_tree_t *current = origin; current;
+         current = core_tree_node_value(current).parent) {
+        core_tree_node_value(current).type = type;
+        if (current == node) break;
+    }
+    return true;
+}
+
+bool
 n00bb_constrain_integer_fit(n00bb_tu_state_t *state, th_type *type,
                             th_type *source, bool range_known,
                             int64_t minimum, int64_t maximum)

@@ -1,0 +1,21 @@
+func sum(n: uint, m: i32, items: Array[u8]) -> uint {
+    var total: uint = 0
+    for i from 0 until n step 2 {
+        total += i
+    }
+    var k: i32 = 0
+    for j from 0 to m {
+        k += j
+    }
+    for i from 0 until items.len() {
+        total += cast[uint] items[i]
+    }
+    var best: u8 = 0
+    for i: u8 from 0 until 6 {
+        best = i
+    }
+    return total + cast[uint] k + cast[uint] best
+}
+
+require sum(5, 3, [1, 2]) == 6 + 6 + 3 + 5
+__fd_write(2, "ok")

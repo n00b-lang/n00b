@@ -23,8 +23,7 @@ private const cube_levels: Array[i32] = [0, 95, 135, 175, 215, 255]
 private func cube_index(v: u8) -> u8 {
     var best: u8 = 0
     var best_dist: i32 = 0x7fffffff
-    var i: u8 = 0
-    while i < 6 {
+    for i: u8 from 0 until 6 {
         var d: i32 = cast[i32] v - cube_levels[i]
         if d < 0 {
             d = -d
@@ -33,7 +32,6 @@ private func cube_index(v: u8) -> u8 {
             best_dist = d
             best = i
         }
-        i += 1
     }
     return best
 }
@@ -96,8 +94,7 @@ func color_quantize_16(c: Color) -> u8 {
     let b: u8 = color_blue(c)
     var best: u8 = 0
     var best_dist: i32 = 0x7fffffff
-    var i: u8 = 0
-    while i < 16 {
+    for i: u8 from 0 until 16 {
         let d: i32 = dist_squared(r, g, b, color_red(ansi_16[i]),
                                   color_green(ansi_16[i]),
                                   color_blue(ansi_16[i]))
@@ -105,7 +102,6 @@ func color_quantize_16(c: Color) -> u8 {
             best_dist = d
             best = i
         }
-        i += 1
     }
     return best
 }

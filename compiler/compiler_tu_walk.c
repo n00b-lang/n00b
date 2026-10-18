@@ -54,6 +54,18 @@ untyped_module_name(n00bb_tu_state_t *state, parse_tree_t *import)
     return module->type != nullptr;
 }
 
+static th_type *
+range_binding_type(parse_grammar_t *grammar, parse_tree_t *parts)
+{
+    parse_tree_t *loop = core_tree_node_value(parts).parent;
+    parse_tree_t *statement = nt_is(grammar, loop, "range-loop")
+        ? core_tree_node_value(loop).parent : nullptr;
+    parse_tree_t *binding = child_nt(grammar,
+        child_nt(grammar, statement, "for-range-var"), "for-binding");
+    parse_tree_t *spec = child_nt(grammar, binding, "type-spec");
+    return spec ? core_tree_node_value(spec).type : nullptr;
+}
+
 static void
 report_literal_failure(core_translation_unit_t *unit, parse_tree_t *node,
                        size_t before, const char *code, const char *message)
@@ -340,9 +352,43 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             if (expected && is_float_type(expected))
                 n00bb_contextual_float_literal(node, expected);
         }
+        if (nt_is(grammar, node, "range-loop")) {
+            parse_tree_t *parts = child_nt(grammar, node, "range-parts");
+            parse_tree_t *step = child_nt(grammar,
+                child_nt(grammar, node, "range-step"), "expression");
+            th_type *bound = parts ? core_tree_node_value(parts).type
+                                   : nullptr;
+            if (step && bound && is_integer_type(th_resolve(bound)))
+                (void)n00bb_contextual_integer_literal(state, step, bound);
+        }
+        th_type *declared = nt_is(grammar, node, "range-parts")
+            ? range_binding_type(grammar, node) : nullptr;
+        if (declared && is_integer_type(th_resolve(declared))
+            && core_tree_num_children(node) == 3) {
+            (void)n00bb_contextual_integer_literal(state,
+                core_tree_child(node, 0), declared);
+            (void)n00bb_contextual_integer_literal(state,
+                core_tree_child(node, 2), declared);
+        }
+        if (nt_is(grammar, node, "range-parts")
+            && core_tree_num_children(node) == 3) {
+            parse_tree_t *start = core_tree_child(node, 0);
+            parse_tree_t *bound = core_tree_child(node, 2);
+            th_type *start_type = core_tree_node_value(start).type;
+            th_type *bound_type = core_tree_node_value(bound).type;
+            if (bound_type && th_kind_of(th_resolve(bound_type)) == TH_VAR)
+                (void)n00bb_literal_adopts_open_type(grammar, state, start,
+                                                     bound_type);
+            else if (start_type
+                     && th_kind_of(th_resolve(start_type)) == TH_VAR)
+                (void)n00bb_literal_adopts_open_type(grammar, state, bound,
+                                                     start_type);
+        }
         if (core_tree_num_children(node) == 3
-            && ((nt_is(grammar, node, "compare-expr")
-                 && nt_is(grammar, core_tree_child(node, 1), "compare-op"))
+            && (nt_is(grammar, node, "range-parts")
+                || (nt_is(grammar, node, "compare-expr")
+                    && nt_is(grammar, core_tree_child(node, 1),
+                             "compare-op"))
                 || (nt_is(grammar, node, "equality-expr")
                     && nt_is(grammar, core_tree_child(node, 1),
                              "equality-op")))) {

@@ -23,10 +23,8 @@ private func char_count_utf8(s: string, len: u64) -> u64 {
     while i < len {
         if i + 8 <= len {
             var w: u64 = 0
-            var k: u64 = 0
-            while k < 8 {
+            for k: u64 from 0 until 8 {
                 w = w | (cast[u64] byte_at(s, i + k) << (k * 8))
-                k += 1
             }
             if utf8_word_is_ascii(w) {
                 n += 8
@@ -392,8 +390,7 @@ func find(self: string, sub: string, start: uint = 0, end: uint? = nil,
 
 private func ascii_case(s: string, len: u64, up: bool) -> string {
     var out: Array[u8] = new[Array[u8]](cast[int] len)
-    var i: u64 = 0
-    while i < len {
+    for i from 0 until len {
         let c: u8 = byte_at(s, i)
         if up {
             if c >= cast[u8] 'a' and c <= cast[u8] 'z' {
@@ -411,7 +408,6 @@ private func ascii_case(s: string, len: u64, up: bool) -> string {
                 out[i] = c
             }
         }
-        i += 1
     }
     return from_raw(ref out, cast[int] len, copy = false,
                     encoding = Str_Encoding.ascii, unsafe = true)
@@ -420,8 +416,7 @@ private func ascii_case(s: string, len: u64, up: bool) -> string {
 private func ascii_title(s: string, len: u64) -> string {
     var out: Array[u8] = new[Array[u8]](cast[int] len)
     var at_start: bool = true
-    var i: u64 = 0
-    while i < len {
+    for i from 0 until len {
         let c: u8 = byte_at(s, i)
         let cp: char = cast[char] c
         let cased: bool = unicode.has_property(cp, unicode.Property.cased)
@@ -449,7 +444,6 @@ private func ascii_title(s: string, len: u64) -> string {
                 at_start = true
             }
         }
-        i += 1
     }
     return from_raw(ref out, cast[int] len, copy = false,
                     encoding = Str_Encoding.ascii, unsafe = true)
@@ -506,8 +500,7 @@ private func byte_order(x: string, y: string) -> i32 {
     if lx < ly {
         n = lx
     }
-    var i: u64 = 0
-    while i < n {
+    for i from 0 until n {
         let cx: u8 = byte_at(x, i)
         let cy: u8 = byte_at(y, i)
         if cx != cy {
@@ -516,7 +509,6 @@ private func byte_order(x: string, y: string) -> i32 {
             }
             return 1
         }
-        i += 1
     }
     if lx == ly {
         return 0
@@ -775,12 +767,10 @@ func width(self: string) -> i64 {
 }
 
 private func bytes_match(a: string, at: u64, b: string, n: u64) -> bool {
-    var i: u64 = 0
-    while i < n {
+    for i from 0 until n {
         if byte_at(a, at + i) != byte_at(b, i) {
             return false
         }
-        i += 1
     }
     return true
 }
@@ -985,14 +975,10 @@ func repeat(self: string, count: u64) -> string {
     }
     let total: u64 = len * count
     var out: Array[u8] = new[Array[u8]](cast[int] total)
-    var i: u64 = 0
-    while i < count {
-        var j: u64 = 0
-        while j < len {
+    for i from 0 until count {
+        for j from 0 until len {
             out[i * len + j] = byte_at(base, j)
-            j += 1
         }
-        i += 1
     }
     return from_raw(ref out, cast[int] total, copy = false,
                     encoding = encoding(base), unsafe = true)
@@ -1006,10 +992,8 @@ func reverse(self: string) -> string {
     }
     var out: Array[u8] = new[Array[u8]](cast[int] len)
     if !is_text(base) or encoding(base) == Str_Encoding.ascii {
-        var i: u64 = 0
-        while i < len {
+        for i from 0 until len {
             out[i] = byte_at(base, len - 1 - i)
-            i += 1
         }
     }
     else {
@@ -1023,10 +1007,8 @@ func reverse(self: string) -> string {
             }
             let upto: u64 = cast[u64] nxt.get()
             at -= upto - since
-            var j: u64 = 0
-            while j < upto - since {
+            for j from 0 until upto - since {
                 out[at + j] = byte_at(base, since + j)
-                j += 1
             }
             since = upto
         }
@@ -1070,10 +1052,8 @@ func replace(self: string, old_s: string, new_s: string, max: i64 = -1)
     while at < len {
         if at + nlen <= len and (max < 0 or got < cast[u64] max) and
             bytes_match(base, at, needle, nlen) {
-            var j: u64 = 0
-            while j < rlen {
+            for j from 0 until rlen {
                 out[o + j] = byte_at(repl, j)
-                j += 1
             }
             o += rlen
             at += nlen
@@ -1144,15 +1124,11 @@ func fit(self: string, width: i64, align: Align = Align.left,
     let keep: u64 = cut
     let total: u64 = keep + pad
     var out: Array[u8] = new[Array[u8]](cast[int] total)
-    var i: u64 = 0
-    while i < total {
+    for i from 0 until total {
         out[i] = cast[u8] ' '
-        i += 1
     }
-    var j: u64 = 0
-    while j < keep {
+    for j from 0 until keep {
         out[lead + j] = byte_at(base, j)
-        j += 1
     }
     let padded: string = from_raw(ref out, cast[int] total, copy = false,
         encoding = widen_encoding(encoding(base), Str_Encoding.ascii),

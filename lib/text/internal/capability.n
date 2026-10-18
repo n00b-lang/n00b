@@ -22,13 +22,11 @@ private func env_value(name: string) -> string? {
             continue
         }
         var same: bool = true
-        var j: u64 = 0
-        while j < nlen {
+        for j from 0 until nlen {
             if byte_at(e, j) != byte_at(name, j) {
                 same = false
                 break
             }
-            j += 1
         }
         if same {
             return byte_slice(e, cast[int](nlen + 1), cast[int] elen)
@@ -115,8 +113,7 @@ private func env_columns() -> u16? {
     if n == 0 {
         return nil
     }
-    var i: u64 = 0
-    while i < n {
+    for i from 0 until n {
         let p: u8 = byte_at(s, i)
         if p < 0x30 or p > 0x39 {
             return nil
@@ -125,7 +122,6 @@ private func env_columns() -> u16? {
         if w > 0xffff {
             return nil
         }
-        i += 1
     }
     if w == 0 {
         return nil
