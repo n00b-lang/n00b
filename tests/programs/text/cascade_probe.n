@@ -1,0 +1,154 @@
+import text
+
+record String_Words layout(c) {
+    data:     Ref[byte]
+    selector: u64
+}
+
+const max_runs = 16
+
+var failures: int = 0
+
+func check(ok: bool, code: string) {
+    if !ok {
+        __fd_write(2, "FAIL cascade_probe " + code + "\n")
+        failures += 1
+    }
+}
+
+func yes(v: bool?) -> bool {
+    if v == nil {
+        return false
+    }
+    return v.get()
+}
+
+func rich_over(body: Ref[text.Rich_Body]) -> string {
+    var words: String_Words = (data = unsafe_cast[Ref[byte]] body,
+                               selector = str_tag_rich << 62)
+    let view: Ref[string] = unsafe_cast[Ref[string]] ref words
+    let s: string = view
+    return s
+}
+
+func styled(bold: bool?, italic: bool?) -> text.Text_Style {
+    return (bold = bold, italic = italic, underline = nil,
+            double_underline = nil, strikethrough = nil, reverse = nil,
+            dim = nil, blink = nil, text_case = text.Text_Case.none,
+            font_hint = text.Font_Hint.default, font_index = nil,
+            fg_palette_ix = nil, bg_palette_ix = nil, fg_rgb = nil,
+            bg_rgb = nil, font_size = nil)
+}
+
+func run_list(s: string) -> List[text.Style_Run] {
+    var c: text.Cascade = new[text.Cascade](s)
+    var runs: List[text.Style_Run] = new[List[text.Style_Run]]()
+    while runs.len() < max_runs {
+        let run: text.Style_Run? = text.next(c)
+        if run == nil {
+            break
+        }
+        runs.append(run.get())
+    }
+    return runs
+}
+
+func tiles(runs: List[text.Style_Run], len: u32) -> bool {
+    let n: int = cast[int] runs.len()
+    if n == 0 {
+        return len == 0
+    }
+    if runs[0].start != 0 or runs[n - 1].end != len {
+        return false
+    }
+    for i from 1 until n {
+        if runs[i].start != runs[i - 1].end {
+            return false
+        }
+    }
+    return true
+}
+
+var outer_body: text.Rich_Body = (s = "",
+                                  style_info = new[List[text.Style_Record]](),
+                                  base_style = nil, opaque = false)
+let outer: string = rich_over(ref outer_body)
+var mid_body: text.Rich_Body = (s = "hi",
+                                style_info = new[List[text.Style_Record]](),
+                                base_style = nil, opaque = false)
+let mid: string = rich_over(ref mid_body)
+
+func nested_spans() -> string {
+    var spans: List[text.Style_Span] = new[List[text.Style_Span]]()
+    for k from 0 until 40 {
+        var tag: string = "i"
+        if k == 39 {
+            tag = "b"
+        }
+        let span: text.Style_Span = (start = 0, end = cast[u32](40 - k),
+                                     tag = tag)
+        spans.append(span)
+    }
+    return text.rich_string(text.repeat("x", 40), spans)
+}
+
+func run_checks() {
+    var runs: List[text.Style_Run] = run_list("plain")
+    check(runs.len() == 1 and runs[0].start == 0 and runs[0].end == 5 and
+          text.is_empty(runs[0].style), "1")
+
+    runs = run_list("«b»hi«/b»"'r)
+    check(runs.len() == 1 and runs[0].end == 2 and yes(runs[0].style.bold),
+          "2")
+
+    runs = run_list("«b»a«i»b«/i»c«/b»"'r)
+    check(runs.len() == 3 and tiles(runs, 3), "3")
+    if runs.len() == 3 {
+        check(yes(runs[0].style.bold) and !yes(runs[0].style.italic) and
+              yes(runs[1].style.bold) and yes(runs[1].style.italic) and
+              yes(runs[2].style.bold) and !yes(runs[2].style.italic), "4")
+    }
+
+    runs = run_list("«u»a«b»b«/u»c«/b»"'r)
+    check(runs.len() == 3 and tiles(runs, 3), "5")
+    if runs.len() == 3 {
+        check(yes(runs[0].style.underline) and !yes(runs[0].style.bold) and
+              yes(runs[1].style.underline) and yes(runs[1].style.bold) and
+              !yes(runs[2].style.underline) and yes(runs[2].style.bold),
+              "6")
+    }
+
+    runs = run_list("«b»text"'r)
+    check(runs.len() == 1 and runs[0].end == 4 and yes(runs[0].style.bold),
+          "7")
+
+    mid_body.base_style = styled(nil, true)
+    mid_body.opaque = false
+    outer_body.s = mid
+    outer_body.base_style = styled(true, nil)
+    runs = run_list(outer)
+    check(runs.len() == 1 and yes(runs[0].style.bold) and
+          yes(runs[0].style.italic), "8")
+
+    mid_body.opaque = true
+    runs = run_list(outer)
+    check(runs.len() == 1 and yes(runs[0].style.italic), "9")
+    check(runs.len() == 1 and !yes(runs[0].style.bold), "10")
+
+    let slotted: string = "«b»«#0»«/b»x"'r
+    check(byte_len(slotted) == 1, "11")
+    check(!yes(text.cascade_style_index(slotted, 0, inclusive = false).bold),
+          "12")
+    check(yes(text.cascade_style_index(slotted, 0, inclusive = true).bold),
+          "13")
+    check(yes(text.cascade_style_index("«b»hi«/b»"'r, 0).bold) and
+          !yes(text.cascade_style_index("«b»hi«/b»"'r, 2).bold), "14")
+
+    let deep: text.Text_Style = text.cascade_style_index(nested_spans(), 0)
+    check(yes(deep.bold) and yes(deep.italic), "900")
+}
+
+run_checks()
+if failures == 0 {
+    __fd_write(2, "ok")
+}

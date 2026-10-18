@@ -1037,7 +1037,8 @@ foreach string_probe : ['core_probe', 'rstr_probe', 'raw_literal_probe',
 endforeach
 
 foreach text_probe : ['color_probe', 'capability_probe', 'theme_probe',
-                      'border_probe']
+                      'border_probe', 'rich_static_probe', 'rich_build_probe',
+                      'cascade_probe', 'layout_probe', 'text_string_probe']
     test(
         'text-' + text_probe.replace('_', '-'),
         find_program('sh'),
@@ -1045,6 +1046,9 @@ foreach text_probe : ['color_probe', 'capability_probe', 'theme_probe',
                n00bb_exe.full_path(),
                meson.current_source_dir() / 'tests' / 'programs' / 'text'
                    / text_probe + '.n'],
+        env: ['N00B_PATH=' + (meson.current_source_dir() / 'tests'
+            / 'programs' / 'text')],
+        timeout: 180,
         suite: 'slow',
     )
 endforeach

@@ -2,6 +2,10 @@ import internal.color
 import internal.capability
 import internal.theme
 import internal.border
+import internal.rich
+import internal.cascade
+import internal.layout
+import internal.string
 
 package text {
     export builtin.index_extends
@@ -21,4 +25,9 @@ package text {
     export internal.capability
     export internal.theme
     export internal.border
+    export internal.rich.Style_Span
+    export internal.rich.rich_string
+    export internal.cascade
+    export internal.layout
+    export internal.string
 }

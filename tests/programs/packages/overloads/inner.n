@@ -22,6 +22,14 @@ public func shut(modify self: Second) {
     self.raw = 2
 }
 
+public func span(self: First, other: First) -> uint {
+    return self.raw + other.raw
+}
+
+public func span(self: string, scale: uint = 1) -> string {
+    return byte_slice(self, 0, cast[int] scale)
+}
+
 public func second() -> Second {
     return (raw = 0)
 }
