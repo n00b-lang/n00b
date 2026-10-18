@@ -1228,15 +1228,6 @@ track(window_t *window, ir_value_t *value)
     return true;
 }
 
-static ir_value_t *
-defined_value(window_t *window, const ir_instr_t *instruction)
-{
-    if (instruction->dest) return instruction->dest;
-    if (instruction->dest_local)
-        return ir_local_value(window->function, instruction->dest_local);
-    return nullptr;
-}
-
 static bool
 collect_tracked(window_t *window)
 {
@@ -1298,19 +1289,6 @@ uses_and_defs(window_t *window, const ir_instr_t *instruction,
     for (uint32_t o = 0; o < instruction->n_operands; o++)
         if (tracked_index(window, operand_at(instruction, o), &index))
             bitset_set(live, index);
-}
-
-static bool
-instruction_touches(window_t *window, const ir_instr_t *instruction)
-{
-    uint32_t index = 0;
-    if (instruction == window->conversion) return true;
-    if (tracked_index(window, defined_value(window, instruction), &index))
-        return true;
-    for (uint32_t o = 0; o < instruction->n_operands; o++)
-        if (tracked_index(window, operand_at(instruction, o), &index))
-            return true;
-    return false;
 }
 
 static void
@@ -1686,6 +1664,7 @@ stores_into_aggregate(window_t *window, const ir_instr_t *instruction)
     case IR_OP_ATOMIC_CAS:
     case IR_OP_GLOBAL_STORE:
     case IR_OP_MEMCPY:
+    case IR_OP_MEMMOVE:
         for (uint32_t o = 0; o < instruction->n_operands; o++)
             if (tracked_index(window, operand_at(instruction, o), &index))
                 return true;
@@ -1696,10 +1675,45 @@ stores_into_aggregate(window_t *window, const ir_instr_t *instruction)
 }
 
 static bool
+carries_view(window_t *window, ir_value_t *value)
+{
+    root_set_t roots = {0};
+    bool carries = seed_value(window->origins, value, &roots, nullptr)
+        && root_set_has(&roots, window->conversion->dest);
+    free(roots.items);
+    return carries;
+}
+
+static bool
+is_view_type(window_t *window, th_type *type)
+{
+    return type && ir_type_eq(window->function->owner, type,
+                              window->conversion->dest->type);
+}
+
+static bool
+call_wraps_view(window_t *window, const ir_instr_t *instruction)
+{
+    if (!instruction->dest || !carries_view(window, instruction->dest))
+        return false;
+    if (instruction->op == IR_OP_CALL_OUTPUT)
+        return !is_view_type(window, instruction->dest->type);
+    if (!is_call(instruction)) return false;
+    th_type *signature = ir_instr_call_signature(instruction);
+    signature = signature ? th_resolve(signature) : nullptr;
+    if (!signature || th_kind_of(signature) != TH_FUNCTION)
+        signature = function_signature(direct_callee(instruction));
+    if (!signature) return false;
+    return !is_view_type(window, th_func_ret(signature))
+        && !is_view_type(window, th_func_error(signature));
+}
+
+static bool
 check_instruction(walk_t *walk, ir_instr_t *instruction)
 {
     window_t *window = walk->window;
-    if (stores_into_aggregate(window, instruction))
+    if (stores_into_aggregate(window, instruction)
+        || call_wraps_view(window, instruction))
         blame(walk, instruction,
               "the borrowed string is stored into a field, element or "
               "container here");
@@ -1850,31 +1864,41 @@ walk_window(walk_t *walk)
     return ok && check_joins(walk);
 }
 
-static void
-check_escapes(window_t *window, walk_t *walk)
+static bool
+escapes_at(window_t *window, ir_instr_t *instruction, bool *escapes)
 {
     origins_t *origins = window->origins;
-    if (!root_set_has(&origins->escaped, window->conversion->dest)) return;
+    root_set_t escaped = origins->escaped;
+    origins->escaped = (root_set_t){0};
+    bool changed = false;
+    bool ok = transfer(origins, instruction, &changed);
+    *escapes = ok && root_set_has(&origins->escaped,
+                                  window->conversion->dest);
+    free(origins->escaped.items);
+    origins->escaped = escaped;
+    return ok;
+}
+
+static bool
+check_escapes(window_t *window, walk_t *walk)
+{
+    if (!root_set_has(&window->origins->escaped, window->conversion->dest))
+        return true;
     for (uint32_t b = 0; b < window->function->n_blocks; b++) {
         ir_block_t *block = window->function->blocks[b];
         for (uint32_t i = 0; i < block->n_instrs; i++) {
-            ir_instr_t *instruction = block->instrs[i];
-            if ((instruction->op == IR_OP_STORE
-                 || instruction->op == IR_OP_GLOBAL_STORE
-                 || instruction->op == IR_OP_SEQUENCE_SET
-                 || instruction->op == IR_OP_ATOMIC_RMW
-                 || instruction->op == IR_OP_ATOMIC_CAS
-                 || instruction->op == IR_OP_MEMCPY || is_call(instruction))
-                && instruction != window->conversion
-                && instruction_touches(window, instruction)) {
-                blame(walk, instruction,
-                      "the borrowed string is stored or passed where it "
-                      "may be kept");
-                return;
-            }
+            bool escapes = false;
+            if (!escapes_at(window, block->instrs[i], &escapes))
+                return false;
+            if (!escapes) continue;
+            blame(walk, block->instrs[i],
+                  "the borrowed string is stored or passed where it may be "
+                  "kept");
+            return true;
         }
     }
     blame(walk, window->conversion, "the borrowed string may be kept");
+    return true;
 }
 
 static bool
@@ -1918,8 +1942,8 @@ borrow_conversion(ir_diags_t *diagnostics, ir_func_t *function,
         && expand_contents(origins, &walk.source);
     if (ok) {
         walk.source_global = roots_reach_global(&walk, &walk.source);
-        check_escapes(&window, &walk);
-        if (!walk.offender) ok = walk_window(&walk);
+        ok = check_escapes(&window, &walk);
+        if (ok && !walk.offender) ok = walk_window(&walk);
     }
     if (ok && walk.offender)
         report_borrow(&window, walk.offender, walk.reason);
