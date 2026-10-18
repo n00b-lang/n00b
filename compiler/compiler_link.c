@@ -1577,6 +1577,12 @@ names_member_receiver(parse_grammar_t *grammar, parse_tree_t *node)
 }
 
 static bool
+names_imported_module(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    return nt_is(grammar, core_tree_node_value(node).parent, "import-stmt");
+}
+
+static bool
 resolve_prelude_value(parse_grammar_t *grammar,
                       core_translation_unit_t *unit,
                       n00bb_tu_state_t *state, n00bb_link_use_site_t *site)
@@ -1719,7 +1725,8 @@ resolve_imported_module_symbols(parse_grammar_t *grammar,
             }
             if (site->symbol && site->symbol->kind == PARSE_SYM_MODULE
                 && !site->dotted_path
-                && !names_member_receiver(grammar, site->node)) {
+                && !names_member_receiver(grammar, site->node)
+                && !names_imported_module(grammar, site->node)) {
                 parse_sym_entry_t *module = site->symbol;
                 site->symbol = nullptr;
                 if (!resolve_prelude_value(grammar, unit, state, site))
