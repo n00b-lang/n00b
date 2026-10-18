@@ -2110,7 +2110,9 @@ load_packed_bitptr(lower_state_t *state, LLVMValueRef bitptr,
                    th_type *element)
 {
     uint64_t width = packed_value_width(state->function->owner, element);
-    if (width == 1) return load_bool_bitptr(state, bitptr);
+    if (width == 1)
+        return packed_value_from_bits(state, load_bool_bitptr(state, bitptr),
+                                      width, element);
     if (!width) return nullptr;
     packed_bitptr_io_t io = {0};
     if (!packed_bitptr_prepare(state, bitptr, width, &io)) return nullptr;
@@ -2127,7 +2129,10 @@ store_packed_bitptr(lower_state_t *state, LLVMValueRef bitptr,
                     LLVMValueRef value, th_type *element)
 {
     uint64_t width = packed_value_width(state->function->owner, element);
-    if (width == 1) return store_bool_bitptr(state, bitptr, value);
+    if (width == 1)
+        return store_bool_bitptr(state, bitptr, packed_bits_from_value(state,
+            value, width,
+            LLVMInt1TypeInContext(LLVMGetModuleContext(state->module))));
     if (!width || !value) return false;
     packed_bitptr_io_t io = {0};
     if (!packed_bitptr_prepare(state, bitptr, width, &io)) return false;
