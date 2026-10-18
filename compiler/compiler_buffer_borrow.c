@@ -794,6 +794,7 @@ transfer(origins_t *state, ir_instr_t *instruction, bool *changed)
         break;
     }
     case IR_OP_RETURN:
+    case IR_OP_FAIL:
         break;
     case IR_OP_CALL:
     case IR_OP_CALLBACK_INVOKE:
@@ -926,7 +927,7 @@ static bool
 summarize_carried(origins_t *state, const ir_instr_t *exit,
                   carried_t *carried, uint32_t n_carried)
 {
-    uint32_t outputs = n_carried - 1;
+    uint32_t outputs = exit->op == IR_OP_RETURN ? n_carried - 1 : 0;
     uint32_t result_at = exit->n_operands > outputs
         ? exit->n_operands - outputs : 0;
     bool ok = true;
@@ -987,7 +988,8 @@ summarize(effects_table_t *table, th_ctx *types, effects_t *effects,
                         writes[kind] |= parameter_bit(parameter);
                 }
             }
-            else if (instruction->op == IR_OP_RETURN)
+            else if (instruction->op == IR_OP_RETURN
+                     || instruction->op == IR_OP_FAIL)
                 ok = summarize_carried(&state, instruction, carried,
                                        effects->n_carried);
             free(roots.items);
@@ -1608,12 +1610,13 @@ check_instruction(walk_t *walk, ir_instr_t *instruction)
         blame(walk, instruction,
               "the borrowed string is stored into a field, element or "
               "container here");
-    if (instruction->op == IR_OP_RETURN) {
+    if (instruction->op == IR_OP_RETURN || instruction->op == IR_OP_FAIL) {
         uint32_t index = 0;
         for (uint32_t o = 0; o < instruction->n_operands; o++)
             if (tracked_index(window, operand_at(instruction, o), &index))
-                blame(walk, instruction,
-                      "the borrowed string is returned here");
+                blame(walk, instruction, instruction->op == IR_OP_RETURN
+                      ? "the borrowed string is returned here"
+                      : "the borrowed string is the failure value here");
         return true;
     }
     if (!is_call(instruction)) return true;
