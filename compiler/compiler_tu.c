@@ -1951,7 +1951,7 @@ unify_literal_items(th_ctx *types, literal_item_group_t *group,
             bool arm = false;
             for (size_t a = 0; !arm && a < th_sum_len(declared); a++)
                 arm = th_unify_probe(types, th_sum_arm(declared, a),
-                                     group->items.data[i]) != nullptr;
+                                     group->items.data[i]);
             if (!arm) {
                 *conflict = i;
                 return false;
