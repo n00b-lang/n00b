@@ -5,6 +5,7 @@ import containers.set
 import containers.tree
 import containers.view
 import containers.buffer
+import containers.errors
 import cursor
 import hashing
 import containers.traits
@@ -136,6 +137,7 @@ package builtin {
     export containers.set.set
     export containers.tree.Tree
     export containers.view.View
+    export containers.errors.Container_Err
     export cursor.Cursor
     export hashing.Hash
     export ffi.Fixup
