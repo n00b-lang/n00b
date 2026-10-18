@@ -241,6 +241,7 @@ struct th_ctx {
   th_span_t span;
   th_span_t related;
   bool has_related;
+  bool probe_errors_discarded;
   const th_env *environment;
   const char *module;
   const char *package;

@@ -62,6 +62,10 @@ th_probe_t th_probe_begin(th_ctx *ctx)
 
 bool th_probe_end(th_ctx *ctx, const th_probe_t *probe)
 {
+    if (ctx->probe_errors_discarded) {
+        ctx->errors.len = probe->errors;
+        ctx->err        = probe->err;
+    }
     bool observable = ctx->err != probe->err
         || ctx->errors.len != probe->errors
         || ctx->coercions.len != probe->coercions

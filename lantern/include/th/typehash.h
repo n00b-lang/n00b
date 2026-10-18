@@ -369,6 +369,7 @@ th_span_t th_ctx_span(const th_ctx *ctx);
 size_t      th_error_count(const th_ctx *ctx);
 bool        th_error_at(const th_ctx *ctx, size_t i, th_error_t *out);
 void        th_errors_clear(th_ctx *ctx);
+void        th_ctx_set_probe_errors_observable(th_ctx *ctx, bool observable);
 const char *th_err_kind_name(th_err_kind kind);
 
 bool   th_named_info(const th_type *type, const char **name, size_t *nlen,
