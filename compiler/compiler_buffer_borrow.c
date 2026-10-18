@@ -953,16 +953,8 @@ transfer(origins_t *state, ir_instr_t *instruction, bool *changed)
             && seed_value(state, operand_at(instruction, value_at), &stored,
                           nullptr);
         if (ok && copies) {
-            ir_value_t *destination = operand_at(instruction, 0);
-            th_type *pointer = destination && destination->type
-                ? th_resolve(destination->type) : nullptr;
-            th_type *element = pointer
-                && th_kind_of(pointer) == TH_INDIRECTION
-                ? th_ind_referent(pointer) : nullptr;
             root_set_t contents = {0};
-            if (!element
-                || type_may_contain_reference_alias(state->types, element))
-                ok = load_roots(state, &stored, &contents);
+            ok = load_roots(state, &stored, &contents);
             free(stored.items);
             stored = contents;
         }
