@@ -416,6 +416,7 @@ typedef struct n00bb_link_analysis_t {
     bool may_link_further;
     bool returned_parameters_computed;
     n00bb_resolver_t *resolver;
+    struct n00bb_cache_t *cache;
 } n00bb_link_analysis_t;
 
 static inline bool

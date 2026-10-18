@@ -22,6 +22,7 @@ double n00bb_profile_seconds(void);
 #include "compiler_buffer_borrow.h"
 #include "compiler_ir_setup.h"
 #include "compiler_lower.h"
+#include "compiler_cache.h"
 #include "compiler_layout.h"
 #include "compiler_tu_interface.h"
 #include "abi_layout.h"
@@ -140,8 +141,8 @@ typedef struct {
 core_list_decl(n00bb_call_actual_t);
 
 
-static bool
-host_target_profile(core_target_desc_t *target)
+bool
+n00bb_host_target_profile(core_target_desc_t *target)
 {
 #if defined(__APPLE__) && defined(__aarch64__)
     return core_target_profile("arm64-macos", 0, target);
@@ -15958,6 +15959,43 @@ bind_module_global_identities(ir_ctx_t *ir_context,
     return true;
 }
 
+static ir_global_t *
+canonical_unit_global(n00bb_link_analysis_t *analysis, const char *name)
+{
+    for (size_t u = 0; name && u < analysis->units.len; u++) {
+        ir_module_t *module = unit_module(tu_state(analysis->units.data[u]));
+        const char *module_name = module ? ir_module_name(module) : nullptr;
+        size_t prefix = module_name ? strlen(module_name) : 0;
+        if (!prefix || strncmp(name, module_name, prefix)
+            || name[prefix] != '.') continue;
+        ir_global_t *global = ir_global_find(module, name);
+        if (global) return ir_global_identity(global);
+    }
+    return nullptr;
+}
+
+static bool
+bind_cached_global_identities(ir_ctx_t *ir_context,
+                              n00bb_link_analysis_t *analysis)
+{
+    for (size_t u = 0; u < analysis->units.len; u++) {
+        core_translation_unit_t *unit = analysis->units.data[u];
+        n00bb_tu_state_t *state = tu_state(unit);
+        ir_module_t *cached = state && state->interface_module
+            ? n00bb_cache_module(analysis->cache, unit->module.identifier)
+            : nullptr;
+        for (size_t g = 0; cached && g < ir_global_count(cached); g++) {
+            ir_global_t *global = ir_global_at(cached, g);
+            ir_global_t *canonical = canonical_unit_global(analysis,
+                                                           global->name);
+            if (canonical && canonical != global
+                && !ir_global_set_identity(ir_context, global, canonical))
+                return false;
+        }
+    }
+    return true;
+}
+
 static th_type *
 lowered_rest_type(th_ctx *types, const th_param *source, th_mode mode,
                   th_param *lowered)
@@ -16233,6 +16271,46 @@ register_optional_parameter_metadata(parse_grammar_t *grammar,
     return true;
 }
 
+static ir_func_t *
+cached_function_body(n00bb_link_analysis_t *analysis,
+                     core_translation_unit_t *unit, const char *semantic_name,
+                     bool overloaded, core_string_t declaration_key)
+{
+    ir_module_t *cached = analysis
+        ? n00bb_cache_module(analysis->cache, unit->module.identifier)
+        : nullptr;
+    if (!cached || !semantic_name) return nullptr;
+    core_buffer_t local = {0};
+    const char *separator = overloaded && declaration_key.data
+        ? memchr(declaration_key.data, ':', declaration_key.u8_bytes)
+        : nullptr;
+    if (separator)
+        core_buffer_append(&local, separator + 1, declaration_key.u8_bytes
+            - (size_t)(separator + 1 - declaration_key.data));
+    else {
+        size_t prefix = unit->module.identifier.u8_bytes;
+        const char *start = semantic_name;
+        if (!strncmp(start, unit->module.identifier.data, prefix)
+            && start[prefix] == '.')
+            start += prefix + 1;
+        const char *identity = strchr(start, '#');
+        core_buffer_append(&local, start,
+            identity ? (size_t)(identity - start) : strlen(start));
+    }
+    ir_func_t *body = local.data ? ir_func_find(cached, local.data) : nullptr;
+    core_buffer_release(&local);
+    return body && body->n_blocks ? body : nullptr;
+}
+
+static bool
+attach_cached_body(ir_ctx_t *ir_context, ir_func_t *function, ir_func_t *body)
+{
+    ir_value_t *address = body ? ir_func_address(body->owner, body) : nullptr;
+    return !body || (address && ir_annot_set(ir_context, &function->annots,
+        (ir_annot_t){.key = "n00bb.cached_body", .kind = IR_ANNOT_VALUE,
+                     .v = address}));
+}
+
 bool
 initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
                       core_link_unit_t *link,
@@ -16241,7 +16319,7 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
 {
     core_list_t(core_translation_unit_ptr_t) *units = &analysis->units;
     core_target_desc_t target;
-    if (!host_target_profile(&target)) {
+    if (!n00bb_host_target_profile(&target)) {
         if (units->len)
             ir_initialization_error(units->data[0], "N00BB-L0024",
                 "the host is not an ABI v0.1 target");
@@ -16311,6 +16389,10 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
         return ir_initialization_error(units->len ? units->data[0] : nullptr,
             "N00BB-L0028",
             "could not bind module-local global views to their canonical identities");
+    if (!bind_cached_global_identities(ir_context, analysis))
+        return ir_initialization_error(units->len ? units->data[0] : nullptr,
+            "N00BB-L0028",
+            "could not bind cached globals to their canonical identities");
 
     for (size_t i = 0; i < units->len; i++) {
         core_translation_unit_t *unit = units->data[i];
@@ -16372,8 +16454,15 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
                         CORE_STRING_STATIC("n00bb.ir.function"))
                     : nullptr;
                 bool new_function = function == nullptr;
+                ir_func_t *cached_body = new_function
+                    && state->interface_module
+                    ? cached_function_body(analysis, unit, semantic_name,
+                                           overloaded, declaration_key)
+                    : nullptr;
                 if (new_function && semantic_type)
-                    function = ir_func_add(state->ir_module, semantic_name,
+                    function = ir_func_add(state->ir_module, cached_body
+                                               ? cached_body->name
+                                               : semantic_name,
                                            semantic_type, linkage);
                 if (always_inline && function
                     && !ir_func_set_always_inline(ir_context, function, true)) {
@@ -16387,6 +16476,13 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
                     core_list_free(scopes);
                     return ir_initialization_error(unit, "N00BB-L0029",
                         "could not attach optional parameter semantics to a function");
+                }
+                if (function && cached_body
+                    && !attach_cached_body(ir_context, function,
+                                           cached_body)) {
+                    core_list_free(scopes);
+                    return ir_initialization_error(unit, "N00BB-L0029",
+                        "could not attach a cached body to a function");
                 }
                 bool polymorphic_contract = symbol->callable_contract
                     && !th_is_closed(state->types,
@@ -16435,8 +16531,12 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
                     (int)scope->name.u8_bytes, scope->name.data,
                     (int)symbol->name.u8_bytes, symbol->name.data);
                 th_type *contract = nullptr;
-                th_type *semantic_type = trait_method_semantic_type(grammar, unit,
-                                                           symbol, &contract);
+                th_type *semantic_type = state->interface_module
+                    && !symbol->decl_node ? symbol->type
+                    : trait_method_semantic_type(grammar, unit, symbol,
+                                                 &contract);
+                if (state->interface_module && !symbol->decl_node)
+                    contract = symbol->callable_contract;
                 ir_func_t *function = semantic_type
                     ? ir_func_add(state->ir_module, name.data, semantic_type,
                                   IR_LINK_EXTERN) : nullptr;
@@ -16447,7 +16547,8 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
                 if (function && polymorphic_contract
                     && !ir_func_set_callable_contract(function, contract))
                     function = nullptr;
-                if (function && !register_optional_parameter_metadata(
+                if (function && symbol->decl_node
+                    && !register_optional_parameter_metadata(
                         grammar, symbol, function)) function = nullptr;
                 core_link_declaration_t *declaration =
                     link_declaration_for_symbol(analysis, symbol);
@@ -18198,6 +18299,8 @@ build_emitted_functions(n00bb_link_analysis_t *analysis)
         core_list_new(n00bb_ir_func_ptr_t);
     for (size_t i = 0; i < analysis->reachable_functions.len; i++)
         core_list_push(roots, analysis->reachable_functions.data[i]);
+    for (size_t i = 0; i < analysis->specializations.len; i++)
+        core_list_push(roots, analysis->specializations.data[i].instance);
     for (size_t i = 0; i < analysis->units.len; i++) {
         ir_module_t *module = unit_module(tu_state(analysis->units.data[i]));
         for (size_t j = 0; module && j < ir_func_count(module); j++) {

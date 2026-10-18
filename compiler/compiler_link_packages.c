@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include "compiler_link.h"
+#include "signature_typevars.h"
 #include "compiler_tu.h"
 #include "enum_value.h"
 #include "flagset_value.h"
@@ -281,8 +282,12 @@ register_callable_parameter_metadata(parse_grammar_t *grammar,
     if (!signature || th_kind_of(signature) != TH_FUNCTION) return false;
     parse_tree_t *signature_node = child_nt(grammar, declaration,
                                              "func-type-signature");
-    parse_tree_t *param_decl = child_nt(grammar,
-        signature_node ? signature_node : declaration, "param-decl");
+    parse_tree_t *trait_signature = signature_node ? nullptr
+        : child_nt(grammar, declaration, "trait-func-type-signature");
+    parse_tree_t *param_decl = trait_signature
+        ? child_nt(grammar, trait_signature, "trait-param-decl")
+        : child_nt(grammar, signature_node ? signature_node : declaration,
+                   "param-decl");
     if (!param_decl)
         param_decl = child_nt(grammar, declaration, "context-hook-params");
     core_list_t(parse_sym_entry_ptr_t) parameters =
@@ -323,6 +328,44 @@ register_callable_parameter_metadata(parse_grammar_t *grammar,
             metadata.data, metadata.byte_len);
     core_buffer_release(&metadata);
     core_list_free(parameters);
+    return ok;
+}
+
+static bool
+register_typevar_order(th_ctx *types, th_env *environment,
+                       parse_sym_entry_t *symbol, th_type *contract,
+                       th_env_metadata_owner_t owner_kind,
+                       const char *qualified_name, const char *key)
+{
+    n00bb_signature_typevars_t *variables = parse_sym_binding(symbol,
+        N00BB_SIGNATURE_TYPEVARS_KEY);
+    if (!variables || !variables->len) return true;
+    th_type **free_vars = nullptr;
+    size_t free_count = th_free_vars(types, contract, &free_vars);
+    core_buffer_t metadata = {0};
+    uint32_t count = 0;
+    core_buffer_t entries = {0};
+    for (size_t i = 0; i < variables->len; i++) {
+        th_type *variable = variables->data[i].type
+            ? th_resolve(variables->data[i].type) : nullptr;
+        size_t position = 0;
+        while (variable && position < free_count
+               && th_resolve(free_vars[position]) != variable) position++;
+        core_string_t name = variables->data[i].name;
+        if (!variable || position == free_count || position > UINT32_MAX
+            || name.u8_bytes > UINT32_MAX) continue;
+        append_u32_le(&entries, (uint32_t)position);
+        append_u32_le(&entries, (uint32_t)name.u8_bytes);
+        core_buffer_append(&entries, name.data, name.u8_bytes);
+        count++;
+    }
+    append_u32_le(&metadata, count);
+    if (entries.byte_len)
+        core_buffer_append(&metadata, entries.data, entries.byte_len);
+    bool ok = !count || th_env_register_metadata(environment, owner_kind,
+        qualified_name, key, 1, metadata.data, metadata.byte_len);
+    core_buffer_release(&entries);
+    core_buffer_release(&metadata);
     return ok;
 }
 
@@ -609,6 +652,10 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
             if (ok && shape_kind != TH_ENV_TYPE_SHAPE_NONE)
                 ok = register_type_member_metadata(grammar, unit,
                     environment, symbol, qualified.data);
+            if (ok && shape)
+                ok = register_typevar_order(state->types, environment,
+                    symbol, shape, TH_ENV_METADATA_TYPE, qualified.data,
+                    "n00b.type-typevars");
             if (ok && shape_kind == TH_ENV_TYPE_SHAPE_ENUM)
                 ok = register_enum_values_metadata(grammar, unit,
                     environment, symbol, qualified.data);
@@ -650,6 +697,20 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
                 && th_env_register_trait_contracts(environment,
                     qualified.data, module_text, package_text,
                     symbol_visibility(trait_symbol), trait_symbol->type);
+            for (parse_sym_entry_t *method = scope->first_in_scope;
+                 ok && method; method = method->next_in_scope) {
+                if (method->kind != PARSE_SYM_FUNCTION || !method->type
+                    || !method->decl_node) continue;
+                core_buffer_t key = {0};
+                core_buffer_printf(&key, "n00b.trait-method-params.%.*s",
+                    (int)method->name.u8_bytes, method->name.data);
+                ok = register_callable_parameter_metadata(grammar,
+                    environment, method->decl_node,
+                    method->callable_contract ? method->callable_contract
+                                              : method->type,
+                    TH_ENV_METADATA_TRAIT, qualified.data, key.data);
+                core_buffer_release(&key);
+            }
             core_buffer_release(&qualified);
             continue;
         }
@@ -966,6 +1027,12 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
                     environment, symbol->decl_node, symbol->type,
                     qualified.data);
             }
+            if (ok) {
+                export_failure = "function type-variable metadata";
+                ok = register_typevar_order(state->types, environment,
+                    symbol, contract, TH_ENV_METADATA_FUNCTION,
+                    qualified.data, "n00b.function-typevars");
+            }
             core_buffer_release(&qualified);
             if (!ok && !core_diagnostics_failed(
                     core_translation_unit_diagnostics(unit))) {
@@ -1181,8 +1248,10 @@ register_package_export_declaration(n00bb_link_analysis_t *analysis,
     bool ok = external.data != nullptr
         && append_function_contract_identity(source_unit, binding, &external);
     if (ok && source->kind == PARSE_SYM_TYPEDEF) {
-        if (source->decl_node && nt_is(analysis->grammar, source->decl_node,
-                                      "trait-decl")) {
+        if ((source->decl_node && nt_is(analysis->grammar, source->decl_node,
+                                       "trait-decl"))
+            || (!source->decl_node && core_string_eq(source->adt_kind,
+                                                     CORE_STRING_STATIC("trait")))) {
             size_t method_count = th_trait_len(source->type);
             const th_member *methods = method_count
                 ? th_trait_method(source->type, 0) : nullptr;
@@ -1271,6 +1340,15 @@ register_package_export_declaration(n00bb_link_analysis_t *analysis,
     return ok;
 }
 
+static bool
+append_text_le(core_buffer_t *out, core_string_t text)
+{
+    if (text.u8_bytes > UINT32_MAX
+        || !append_u32_le(out, (uint32_t)text.u8_bytes)) return false;
+    if (text.u8_bytes) core_buffer_append(out, text.data, text.u8_bytes);
+    return true;
+}
+
 bool
 register_package_context_effect_metadata(n00bb_link_analysis_t *analysis)
 {
@@ -1305,6 +1383,54 @@ register_package_context_effect_metadata(n00bb_link_analysis_t *analysis)
                 registered = th_env_register_metadata(environment,
                     TH_ENV_METADATA_ENVIRONMENT, module_name,
                     "n00b.module-imports", 1, imports.data, imports.byte_len);
+            core_buffer_t aliases = {0};
+            if (registered && state->import_aliases.len <= UINT32_MAX)
+                registered = append_u32_le(&aliases,
+                    (uint32_t)state->import_aliases.len);
+            for (size_t i = 0; registered && i < state->import_aliases.len;
+                 i++) {
+                n00bb_import_alias_t *alias = &state->import_aliases.data[i];
+                registered = append_text_le(&aliases, alias->name)
+                    && append_text_le(&aliases,
+                                      alias->unit->module.identifier);
+            }
+            if (registered && state->import_aliases.len)
+                registered = th_env_register_metadata(environment,
+                    TH_ENV_METADATA_ENVIRONMENT, module_name,
+                    "n00b.module-import-aliases", 1, aliases.data,
+                    aliases.byte_len);
+            core_buffer_release(&aliases);
+            core_buffer_t litmods = {0};
+            uint32_t litmod_count = 0;
+            for (size_t i = 0; registered
+                 && i < state->literal_modifiers.len; i++) {
+                n00bb_user_litmod_t *registration =
+                    &state->literal_modifiers.data[i];
+                if (!registration->function) continue;
+                core_buffer_t qualified = {0};
+                registered = append_environment_symbol_name(
+                        analysis->grammar, unit, registration->function,
+                        &qualified)
+                    && append_text_le(&litmods, registration->modifier)
+                    && append_text_le(&litmods, registration->kind)
+                    && append_text_le(&litmods, core_string_borrow(
+                        qualified.data, qualified.byte_len));
+                core_buffer_release(&qualified);
+                litmod_count++;
+            }
+            if (registered && litmod_count) {
+                core_buffer_t payload = {0};
+                registered = append_u32_le(&payload, litmod_count);
+                if (registered)
+                    core_buffer_append(&payload, litmods.data,
+                                       litmods.byte_len);
+                registered = registered && th_env_register_metadata(
+                    environment, TH_ENV_METADATA_ENVIRONMENT, module_name,
+                    "n00b.module-litmods", 1, payload.data,
+                    payload.byte_len);
+                core_buffer_release(&payload);
+            }
+            core_buffer_release(&litmods);
             for (size_t p = 0; registered
                  && p < state->package_declarations.len; p++) {
                 core_string_t package =
@@ -1403,6 +1529,31 @@ register_package_grants(n00bb_link_analysis_t *analysis, th_env *environment,
     return ok;
 }
 
+static bool
+register_package_manifest(th_env *environment, core_translation_unit_t *unit,
+                          n00bb_package_declaration_t *package)
+{
+    core_buffer_t payload = {0};
+    bool ok = append_text_le(&payload, unit->module.identifier)
+        && package->exports.len <= UINT32_MAX
+        && append_u32_le(&payload, (uint32_t)package->exports.len);
+    for (size_t e = 0; ok && e < package->exports.len; e++) {
+        n00bb_package_export_t *export = &package->exports.data[e];
+        uint8_t flags = (uint8_t)((export->renamed ? 1u : 0u)
+            | (export->subpackage ? 2u : 0u)
+            | (export->grantee.data ? 4u : 0u));
+        ok = append_text_le(&payload, export->source_name)
+            && append_text_le(&payload, export->export_name)
+            && append_text_le(&payload, export->grantee);
+        if (ok) core_buffer_putc(&payload, (char)flags);
+    }
+    ok = ok && th_env_register_metadata(environment,
+        TH_ENV_METADATA_ENVIRONMENT, package->name.data,
+        "n00b.package-manifest", 1, payload.data, payload.byte_len);
+    core_buffer_release(&payload);
+    return ok;
+}
+
 bool
 register_package_interfaces(n00bb_link_analysis_t *analysis,
                             th_env *environment)
@@ -1419,8 +1570,8 @@ register_package_interfaces(n00bb_link_analysis_t *analysis,
                     TH_ENV_METADATA_ENVIRONMENT,
                     package->name.data, "n00b.package-interface", 1,
                     package_id.data, package_id.u8_bytes + 1)) return false;
-            if (!register_package_grants(analysis, environment, package))
-                return false;
+            if (!register_package_grants(analysis, environment, package)) return false;
+            if (!register_package_manifest(environment, unit, package)) return false;
             parse_scope_t *scopes[] = {
                 package->scope,
                 parse_symtab_scope_in_namespace(state->annotations->symtab,
@@ -1756,6 +1907,17 @@ granted_to(core_translation_unit_t *provider, parse_sym_entry_t *symbol,
     return false;
 }
 
+static bool
+interface_module_declares(core_translation_unit_t *unit,
+                          parse_sym_entry_t *symbol)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    n00bb_export_origin_t *origin = state && state->interface_module
+        ? parse_sym_binding(symbol, CORE_STRING_STATIC("n00bb.export-origin"))
+        : nullptr;
+    return origin && core_string_eq(origin->module, unit->module.identifier);
+}
+
 static int
 resolve_one_package_export(core_translation_unit_t *unit,
                            n00bb_package_declaration_t *package,
@@ -1799,7 +1961,9 @@ resolve_one_package_export(core_translation_unit_t *unit,
         for (size_t s = 0; ok && s < scopes.len; s++)
             for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
                  ok && symbol; symbol = symbol->next_in_scope) {
-                if (!symbol->decl_node || !symbol_is_public_declaration(symbol))
+                if ((!symbol->decl_node
+                     && !interface_module_declares(source_unit, symbol))
+                    || !symbol_is_public_declaration(symbol))
                     continue;
                 n00bb_package_export_t item = *export;
                 item.export_name = symbol->name;
@@ -1808,7 +1972,9 @@ resolve_one_package_export(core_translation_unit_t *unit,
         for (size_t s = 0; ok && s < type_scopes.len; s++)
             for (parse_sym_entry_t *symbol = type_scopes.data[s]->first_in_scope;
                  ok && symbol; symbol = symbol->next_in_scope) {
-                if (!symbol->decl_node || !symbol_is_public_declaration(symbol))
+                if ((!symbol->decl_node
+                     && !interface_module_declares(source_unit, symbol))
+                    || !symbol_is_public_declaration(symbol))
                     continue;
                 n00bb_package_export_t item = *export;
                 item.export_name = symbol->name;

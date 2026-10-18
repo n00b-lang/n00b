@@ -305,8 +305,10 @@ n00bb_abi_type_identity_rows_build(
             && declaration_owner->kind == PARSE_SYM_TYPEDEF
             ? parse_sym_binding(declaration_owner, N00BB_SIGNATURE_TYPEVARS_KEY)
             : nullptr;
+        th_type *definition = th_type_definition(types, type);
         if (!th_is_closed(types, type)
-            || (type_parameters && type_parameters->len))
+            || (type_parameters && type_parameters->len)
+            || (definition && !th_is_closed(types, definition)))
             row->flags |= N00B_ABI_TYPE_FLAG_NON_CONCRETE;
         ir_module_t *definition_owner = ir_type_definition_owner(runtime,
             type);

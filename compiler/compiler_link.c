@@ -2481,8 +2481,11 @@ unit_trait_symbol(parse_grammar_t *grammar, core_translation_unit_t *unit,
     if (!symtab) return nullptr;
     parse_sym_entry_t *symbol = parse_symtab_lookup_scoped(
         symtab, type_module_scope(state), CORE_STRING_STATIC("type"), name);
-    if (!symbol || !symbol->decl_node
-        || !nt_is(grammar, symbol->decl_node, "trait-decl")) return nullptr;
+    bool interface_trait = symbol && !symbol->decl_node
+        && state->interface_module && symbol->member_scope
+        && core_string_eq(symbol->adt_kind, CORE_STRING_STATIC("trait"));
+    if (!symbol || (!interface_trait && (!symbol->decl_node
+        || !nt_is(grammar, symbol->decl_node, "trait-decl")))) return nullptr;
     if (imported && !symbol_is_public_declaration(symbol))
         return nullptr;
     return symbol;

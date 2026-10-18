@@ -665,6 +665,100 @@ restore_interface_function_semantics(n00bb_interface_context_t *loader,
     return restore_function_semantics_data(symbol, data, size);
 }
 
+static bool
+restore_interface_function_typevars(n00bb_interface_context_t *loader,
+                                    n00bb_tu_state_t *state,
+                                    parse_sym_entry_t *symbol,
+                                    const char *qualified_name)
+{
+    size_t size = 0;
+    const uint8_t *data = interface_owned_metadata(loader,
+        TH_ENV_METADATA_FUNCTION, qualified_name, "n00b.function-typevars", 1,
+        &size);
+    if (!data) return true;
+    if (size < 4) return false;
+    uint32_t count = read_u32_le(data);
+    th_type **free_vars = nullptr;
+    size_t free_count = th_free_vars(state->types, symbol->type, &free_vars);
+    n00bb_signature_typevars_t *variables = core_arena_alloc(
+        &state->semantic_values, sizeof(*variables));
+    n00bb_typevar_binding_t *bindings = count ? core_arena_alloc(
+        &state->semantic_values, count * sizeof(*bindings)) : nullptr;
+    if (!variables || (count && !bindings)) return false;
+    size_t offset = 4;
+    for (uint32_t i = 0; i < count; i++) {
+        if (size - offset < 8) return false;
+        uint32_t position = read_u32_le(data + offset);
+        uint32_t name_size = read_u32_le(data + offset + 4);
+        offset += 8;
+        if (position >= free_count || name_size > size - offset)
+            return false;
+        bindings[i] = (n00bb_typevar_binding_t){
+            .name = store_semantic_string(state, core_string_borrow(
+                (const char *)data + offset, name_size)),
+            .type = free_vars[position],
+        };
+        offset += name_size;
+    }
+    if (offset != size) return false;
+    *variables = (n00bb_signature_typevars_t){
+        .data = bindings, .len = count, .cap = count,
+    };
+    return parse_sym_set_binding(symbol, N00BB_SIGNATURE_TYPEVARS_KEY,
+                                 variables);
+}
+
+static th_type *
+interface_type_template(n00bb_interface_context_t *loader,
+                        n00bb_tu_state_t *state, parse_sym_entry_t *symbol,
+                        const char *qualified_name, const char *name,
+                        th_type *shape, bool variant)
+{
+    size_t size = 0;
+    const uint8_t *data = shape ? interface_owned_metadata(loader,
+        TH_ENV_METADATA_TYPE, qualified_name, "n00b.type-typevars", 1, &size)
+        : nullptr;
+    uint32_t count = data && size >= 4 ? read_u32_le(data) : 0;
+    th_type **free_vars = nullptr;
+    size_t free_count = count ? th_free_vars(state->types, shape, &free_vars)
+                              : 0;
+    th_arg *args = count ? core_alloc_array(th_arg, count) : nullptr;
+    n00bb_signature_typevars_t *variables = count ? core_arena_alloc(
+        &state->semantic_values, sizeof(*variables)) : nullptr;
+    n00bb_typevar_binding_t *bindings = count ? core_arena_alloc(
+        &state->semantic_values, count * sizeof(*bindings)) : nullptr;
+    bool ok = !count || (args && variables && bindings);
+    size_t offset = 4;
+    for (uint32_t i = 0; ok && i < count; i++) {
+        ok = size - offset >= 8;
+        uint32_t position = ok ? read_u32_le(data + offset) : 0;
+        uint32_t name_size = ok ? read_u32_le(data + offset + 4) : 0;
+        offset += 8;
+        ok = ok && position < free_count && name_size <= size - offset;
+        if (!ok) break;
+        args[i] = (th_arg){.kind = TH_ARG_TYPE, .type = free_vars[position]};
+        bindings[i] = (n00bb_typevar_binding_t){
+            .name = store_semantic_string(state, core_string_borrow(
+                (const char *)data + offset, name_size)),
+            .type = free_vars[position],
+        };
+        offset += name_size;
+    }
+    th_type *type = !ok ? nullptr
+        : variant ? th_variant(state->types, name, args, count)
+        : count ? th_apply(state->types, name, args, count)
+        : th_name(state->types, name);
+    core_free(args);
+    if (type && count) {
+        *variables = (n00bb_signature_typevars_t){
+            .data = bindings, .len = count, .cap = count,
+        };
+        if (!parse_sym_set_binding(symbol, N00BB_SIGNATURE_TYPEVARS_KEY,
+                                   variables)) return nullptr;
+    }
+    return type;
+}
+
 static th_type *
 interface_static_record_shape(n00bb_interface_context_t *loader,
                               n00bb_tu_state_t *state, th_type *type,
@@ -1019,6 +1113,79 @@ interface_package_for_module(const n00bb_interface_context_t *context,
     return package;
 }
 
+static bool
+read_manifest_text(n00bb_tu_state_t *state, const uint8_t *data, size_t size,
+                   size_t *at, core_string_t *out)
+{
+    if (size - *at < 4) return false;
+    uint32_t length = read_u32_le(data + *at);
+    *at += 4;
+    if (length > size - *at) return false;
+    *out = length ? store_semantic_string(state, core_string_borrow(
+            (const char *)data + *at, length)) : (core_string_t){0};
+    *at += length;
+    return !length || out->data;
+}
+
+bool
+interface_restore_package_declarations(
+    const n00bb_interface_context_t *context, core_translation_unit_t *unit)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    if (!state || !state->interface_module) return true;
+    for (size_t i = 0; i < context->linked_interface_count; i++) {
+        const th_env *environment = context->linked_interfaces[i];
+        for (size_t m = 0; m < th_env_metadata_count(environment); m++) {
+            th_env_metadata_view_t metadata = {0};
+            if (!th_env_metadata_at(environment, m, &metadata)
+                || metadata.owner_kind != TH_ENV_METADATA_ENVIRONMENT
+                || strcmp(metadata.key, "n00b.package-manifest")
+                || metadata.version != 1) continue;
+            const uint8_t *data = metadata.data;
+            size_t size = metadata.size, at = 0;
+            core_string_t declarer = {0};
+            if (!read_manifest_text(state, data, size, &at, &declarer))
+                return false;
+            if (!core_string_eq(declarer, unit->module.identifier)
+                || find_package_declaration(unit,
+                       core_string_from_cstr(metadata.owner_name)))
+                continue;
+            if (size - at < 4) return false;
+            uint32_t count = read_u32_le(data + at);
+            at += 4;
+            n00bb_package_declaration_t package = {
+                .name = store_semantic_string(state,
+                    core_string_from_cstr(metadata.owner_name)),
+                .exports = core_list_new(n00bb_package_export_t),
+            };
+            bool ok = package.name.data != nullptr;
+            for (uint32_t e = 0; ok && e < count; e++) {
+                n00bb_package_export_t export = {0};
+                ok = read_manifest_text(state, data, size, &at,
+                                        &export.source_name)
+                    && read_manifest_text(state, data, size, &at,
+                                          &export.export_name)
+                    && read_manifest_text(state, data, size, &at,
+                                          &export.grantee)
+                    && at < size;
+                if (!ok) break;
+                uint8_t flags = data[at++];
+                export.renamed = (flags & 1u) != 0;
+                export.subpackage = (flags & 2u) != 0;
+                if (!(flags & 4u)) export.grantee = (core_string_t){0};
+                core_list_push(package.exports, export);
+            }
+            if (!ok || at != size) {
+                core_list_free(package.exports);
+                return false;
+            }
+            core_list_push(state->package_declarations, package);
+            state->package_manifest_restored = true;
+        }
+    }
+    return true;
+}
+
 
 static core_string_t
 interface_visibility_name(th_env_visibility_t visibility)
@@ -1095,6 +1262,62 @@ ensure_interface_package_scope(n00bb_interface_context_t *loader,
     binding->exposed_scope = scope;
     binding->visibility = CORE_STRING_STATIC("public");
     return scope;
+}
+
+static bool
+materialize_interface_trait_members(n00bb_interface_context_t *loader,
+                                    n00bb_tu_state_t *state,
+                                    parse_symtab_t *symtab,
+                                    parse_scope_t *module_type_scope,
+                                    parse_sym_entry_t *trait_symbol,
+                                    const char *qualified_name)
+{
+    th_type *contract = th_resolve(trait_symbol->type);
+    if (!state || !symtab || !module_type_scope || !contract
+        || th_kind_of(contract) != TH_TRAIT) return false;
+    parse_scope_t *type_namespace_scope = parse_symtab_scope_in_namespace(
+        symtab, module_type_scope, CORE_STRING_STATIC("type"));
+    if (!type_namespace_scope) return false;
+    parse_symtab_enter_scope_all(symtab, type_namespace_scope);
+    parse_symtab_push_scope_all(symtab,
+        core_string_from_cstr(trait_symbol->name.data));
+    parse_scope_t *member_scope = parse_symtab_current_scope(
+        symtab, CORE_STRING_STATIC(""));
+    bool ok = member_scope != nullptr;
+    if (ok) {
+        member_scope->scope_tag = CORE_STRING_STATIC("trait");
+        member_scope->adt_kind = CORE_STRING_STATIC("trait");
+        trait_symbol->member_scope = member_scope;
+    }
+    for (size_t i = 0; ok && i < th_trait_len(contract); i++) {
+        const th_member *method = th_trait_method(contract, i);
+        ok = method && method->name && method->type;
+        parse_sym_entry_t *entry = ok ? parse_symtab_add(symtab,
+            CORE_STRING_STATIC(""), core_string_from_cstr(method->name),
+            PARSE_SYM_FUNCTION, nullptr) : nullptr;
+        ok = entry != nullptr;
+        if (!ok) break;
+        entry->type = method->type;
+        entry->owner_type = trait_symbol;
+        entry->callable_contract = method->type;
+        entry->error_type = th_kind_of(th_resolve(method->type)) == TH_FUNCTION
+            ? th_func_error(th_resolve(method->type)) : nullptr;
+        entry->visibility = trait_symbol->visibility;
+        parse_sym_set_phases(entry, PARSE_SYM_PHASE_BOTH,
+                             PARSE_SYM_PHASE_NONE, PARSE_SYM_PHASE_NONE);
+        core_buffer_t key = {0};
+        core_buffer_printf(&key, "n00b.trait-method-params.%s", method->name);
+        size_t parameter_bytes = 0;
+        const uint8_t *parameters = interface_owned_metadata(loader,
+            TH_ENV_METADATA_TRAIT, qualified_name, key.data,
+            1, &parameter_bytes);
+        ok = !parameters || restore_function_semantics_data(entry,
+            parameters, parameter_bytes);
+        core_buffer_release(&key);
+    }
+    parse_symtab_pop_scope_all(symtab);
+    parse_symtab_leave_scope_all(symtab);
+    return ok;
 }
 
 static bool
@@ -1635,6 +1858,12 @@ materialize_interface_module_symbols(n00bb_interface_context_t *loader,
                         "interface function has invalid or missing parameter metadata";
                     return false;
                 }
+                if (!restore_interface_function_typevars(loader, state,
+                        symbol, declaration.qualified_name)) {
+                    if (failure) *failure =
+                        "interface function has invalid type-variable metadata";
+                    return false;
+                }
                 if (!restore_interface_function_shapes(loader, state,
                         symbol, declaration.qualified_name)) {
                     if (failure) *failure =
@@ -1672,10 +1901,21 @@ materialize_interface_module_symbols(n00bb_interface_context_t *loader,
                 parse_sym_set_phases(symbol, PARSE_SYM_PHASE_BOTH,
                                      PARSE_SYM_PHASE_NONE,
                                      PARSE_SYM_PHASE_NONE);
+                bool defined_shape = declaration.type_shape
+                    && declaration.type_shape_kind != TH_ENV_TYPE_SHAPE_ALIAS
+                    && declaration.type_shape_kind != TH_ENV_TYPE_SHAPE_ENUM
+                    && declaration.type_shape_kind != TH_ENV_TYPE_SHAPE_BITSET;
+                th_type *shape = defined_shape
+                    ? th_type_clone(state->types, declaration.type_shape)
+                    : nullptr;
+                th_type *definition_key = nullptr;
                 if (declaration.type_shape_kind ==
                     TH_ENV_TYPE_SHAPE_VARIANT) {
                     symbol->type = th_variant(state->types,
                         origin->declaration.data, nullptr, 0);
+                    definition_key = interface_type_template(loader, state,
+                        symbol, declaration.qualified_name,
+                        origin->declaration.data, shape, true);
                 }
                 else if (declaration.type_shape_kind ==
                          TH_ENV_TYPE_SHAPE_ALIAS)
@@ -1685,9 +1925,13 @@ materialize_interface_module_symbols(n00bb_interface_context_t *loader,
                             th_kind_of(th_resolve(declaration.contract))
                                 == TH_TRAIT
                         ? declaration.contract : nullptr;
-                else
+                else {
                     symbol->type = th_name(state->types,
                                            origin->declaration.data);
+                    definition_key = interface_type_template(loader, state,
+                        symbol, declaration.qualified_name,
+                        origin->declaration.data, shape, false);
+                }
                 symbol->adt_kind = declaration.kind ==
                         TH_ENV_DECLARATION_TRAIT
                     ? CORE_STRING_STATIC("trait")
@@ -1728,24 +1972,41 @@ materialize_interface_module_symbols(n00bb_interface_context_t *loader,
                         return false;
                     }
                 }
-                if (declaration.type_shape &&
-                    declaration.type_shape_kind !=
-                        TH_ENV_TYPE_SHAPE_ALIAS &&
-                    declaration.type_shape_kind !=
-                        TH_ENV_TYPE_SHAPE_ENUM &&
-                    declaration.type_shape_kind !=
-                        TH_ENV_TYPE_SHAPE_BITSET &&
-                    !th_type_define(state->types, symbol->type,
-                                    declaration.type_shape)) {
+                if (defined_shape && (!shape || !definition_key
+                        || !th_type_define(state->types, symbol->type, shape)
+                        || !th_type_define(state->types, definition_key,
+                                           shape))) {
                     if (failure) *failure =
                         "interface aliases disagree on a canonical type representation";
                     return false;
+                }
+                if (declaration.kind == TH_ENV_DECLARATION_TYPE
+                    && declaration.type_shape_kind != TH_ENV_TYPE_SHAPE_NONE) {
+                    n00bb_interface_type_shape_t *recorded = core_arena_alloc(
+                        &state->semantic_values, sizeof(*recorded));
+                    if (!recorded) return false;
+                    *recorded = (n00bb_interface_type_shape_t){
+                        .kind = declaration.type_shape_kind,
+                        .shape = shape ? shape : declaration.type_shape,
+                    };
+                    if (!parse_sym_set_binding(symbol,
+                            CORE_STRING_STATIC("n00bb.interface-type-shape"),
+                            recorded)) return false;
                 }
                 if (declaration.kind == TH_ENV_DECLARATION_TYPE
                     && !materialize_interface_callback(loader, state,
                         symtab, symbol, declaration.qualified_name,
                         failure))
                     return false;
+                if (declaration.kind == TH_ENV_DECLARATION_TRAIT
+                    && symbol->type
+                    && !materialize_interface_trait_members(loader, state,
+                        symtab, types, symbol, declaration.qualified_name)) {
+                    if (failure) *failure = interface_metadata_failure(state,
+                        declaration.qualified_name, nullptr,
+                        "could not materialize interface trait methods");
+                    return false;
+                }
                 if (declaration.kind == TH_ENV_DECLARATION_TYPE) {
                     const char *member_failure = nullptr;
                     if (!materialize_interface_type_members(loader, state,
@@ -1784,6 +2045,67 @@ materialize_interface_module_symbols(n00bb_interface_context_t *loader,
 }
 
 
+static parse_sym_entry_t *
+interface_function_named(n00bb_tu_state_t *state, core_string_t qualified)
+{
+    parse_symtab_t *symtab = state->annotations
+        ? state->annotations->symtab : nullptr;
+    for (parse_scope_t *scope = symtab ? symtab->all_scopes : nullptr;
+         scope; scope = scope->all_next)
+        for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
+             symbol = symbol->next_in_scope) {
+            const char *name = symbol->kind == PARSE_SYM_FUNCTION
+                ? parse_sym_binding(symbol,
+                    CORE_STRING_STATIC("n00bb.interface-qualified-name"))
+                : nullptr;
+            if (name && strlen(name) == qualified.u8_bytes
+                && !memcmp(name, qualified.data, qualified.u8_bytes))
+                return symbol;
+        }
+    return nullptr;
+}
+
+static bool
+restore_interface_litmods(n00bb_interface_context_t *loader,
+                          core_translation_unit_t *unit)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    char *module_name = core_strndup(unit->module.identifier.data,
+                                     unit->module.identifier.u8_bytes);
+    size_t size = 0;
+    const uint8_t *data = module_name
+        ? interface_owned_metadata(loader, TH_ENV_METADATA_ENVIRONMENT,
+            module_name, "n00b.module-litmods", 1, &size)
+        : nullptr;
+    core_free(module_name);
+    if (!data) return true;
+    if (size < 4) return false;
+    uint32_t count = read_u32_le(data);
+    size_t at = 4;
+    for (uint32_t i = 0; i < count; i++) {
+        core_string_t modifier = {0}, kind = {0}, qualified = {0};
+        if (!read_manifest_text(state, data, size, &at, &modifier)
+            || !read_manifest_text(state, data, size, &at, &kind)
+            || !read_manifest_text(state, data, size, &at, &qualified)
+            || !modifier.data || !kind.data || !qualified.data)
+            return false;
+        parse_sym_entry_t *function = interface_function_named(state,
+                                                               qualified);
+        if (!function) return false;
+        n00bb_user_litmod_t registration = {
+            .modifier = core_string_from_raw(modifier.data,
+                                             (int64_t)modifier.u8_bytes),
+            .kind = core_string_from_raw(kind.data, (int64_t)kind.u8_bytes),
+            .function = function,
+            .module = unit->module.identifier,
+        };
+        if (!registration.modifier.data || !registration.kind.data)
+            return false;
+        core_list_push(state->literal_modifiers, registration);
+    }
+    return at == size;
+}
+
 bool
 finish_semantic_unit(void *context, core_translation_unit_t *unit)
 {
@@ -1791,7 +2113,13 @@ finish_semantic_unit(void *context, core_translation_unit_t *unit)
     n00bb_tu_state_t *state = tu_state(unit);
     if (state->interface_module) {
         const char *failure = nullptr;
-        if (!materialize_interface_module_symbols(loader, unit, &failure)) {
+        bool restored = materialize_interface_module_symbols(loader, unit,
+                                                             &failure);
+        if (restored && !restore_interface_litmods(loader, unit)) {
+            restored = false;
+            failure = "interface module has malformed literal modifiers";
+        }
+        if (!restored) {
             core_diagnostics_report(
                 core_translation_unit_diagnostics(unit), unit,
                 CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0046"),
@@ -1801,7 +2129,7 @@ finish_semantic_unit(void *context, core_translation_unit_t *unit)
         }
     }
     if (!initialize_unit_package_interfaces(unit)
-        || (!state->interface_module
+        || ((!state->interface_module || state->package_manifest_restored)
             && !populate_unit_package_interfaces(unit)))
         return false;
     return true;

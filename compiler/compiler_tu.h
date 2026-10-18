@@ -487,6 +487,11 @@ typedef struct n00bb_package_declaration_t {
     parse_scope_t *scope;
     core_list_t(n00bb_package_export_t) exports;
 } n00bb_package_declaration_t;
+
+typedef struct {
+    th_env_type_shape_kind_t kind;
+    th_type *shape;
+} n00bb_interface_type_shape_t;
 core_list_decl(n00bb_package_declaration_t);
 
 typedef struct {
@@ -539,6 +544,8 @@ typedef struct {
     bool integer_range_use_symbol_facts;
     bool inference_finalized;
     bool interface_module;
+    bool package_interface;
+    bool package_manifest_restored;
     bool semantic_annotation_started;
     bool semantic_annotation_complete;
     parse_tree_t *flagset_scope;

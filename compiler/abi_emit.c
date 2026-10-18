@@ -1262,7 +1262,7 @@ collect_imported_nominal_declarations(n00bb_abi_type_index_t *index,
     for (size_t i = 1; i < n00bb_abi_type_index_count(index); i++) {
         th_type *type = n00bb_abi_type_index_at(index, (uint32_t)i);
         parse_sym_entry_t *owner = type ? type_owner(context, type) : nullptr;
-        if (owner && owner->decl_node && owner->type
+        if (owner && (owner->decl_node || owner->owner_unit) && owner->type
             && !n00bb_abi_type_index_add(index, owner->type, nullptr))
             return false;
     }

@@ -22,6 +22,7 @@ double n00bb_profile_seconds(void);
 #include "compiler_link_lifetime.h"
 #include "compiler_ir_setup.h"
 #include "compiler_lower.h"
+#include "compiler_cache.h"
 #include "compiler_layout.h"
 #include "compiler_phases.h"
 #include "compiler_abi_driver.h"
@@ -111,6 +112,7 @@ typedef struct {
     parse_grammar_t *grammar;
     th_ctx *types;
     n00bb_interface_context_t interfaces;
+    const n00bb_cache_t *cache;
     bool lex;
     bool parse;
 } locate_worker_context_t;
@@ -1027,10 +1029,14 @@ process_locate_job(locate_worker_context_t *context, core_work_job_t *job)
     core_module_spec_t resolved = {0};
     core_source_file_t source = {0};
     const core_module_spec_t *module = core_work_job_module(job);
+    bool interface_allowed = !context->cache
+        || (module && n00bb_cache_module(context->cache, module->identifier));
     bool logical_import = !root_input && module && operand
-        && strlen(operand) == module->identifier.u8_bytes
-        && !memcmp(operand, module->identifier.data,
-                   module->identifier.u8_bytes);
+        && interface_allowed
+        && ((strlen(operand) == module->identifier.u8_bytes
+             && !memcmp(operand, module->identifier.data,
+                        module->identifier.u8_bytes))
+            || context->cache);
     core_module_resolve_status_t status = CORE_MODULE_NOT_FOUND;
     if (logical_import
         && make_interface_module_source(context, module, &source)) {
@@ -1043,7 +1049,7 @@ process_locate_job(locate_worker_context_t *context, core_work_job_t *job)
     }
     else status = n00bb_locate_operand(context->resolver, operand,
                                       &resolved, &source);
-    if (status == CORE_MODULE_NOT_FOUND && !root_input) {
+    if (status == CORE_MODULE_NOT_FOUND && !root_input && interface_allowed) {
         if (module && make_interface_module_source(context, module, &source)) {
             core_module_spec_release(&resolved);
             if (core_module_spec_init(&resolved, module->identifier))
@@ -1479,8 +1485,9 @@ discover_package_import(import_driver_t *driver,
             core_buffer_release(&names);
         }
         if (!unit || !tree
-            || !package_tree_may_declare(driver->grammar, tree,
-                                         logical->identifier)
+            || (!state->interface_module
+                && !package_tree_may_declare(driver->grammar, tree,
+                                             logical->identifier))
             || !ensure_preprocessed_import(driver, driver->grammar,
                                            job, unit, tree)
             || !find_package_declaration(unit, logical->identifier))
@@ -1663,6 +1670,12 @@ load_import_module(import_driver_t *driver, parse_grammar_t *grammar,
         && !load_parent_package_dependencies(driver, importer, statement,
                                               imported, imported_name))
         return false;
+    if (state && state->interface_module && state->package_interface
+        && !record_import_alias(importer, imported_name, imported)) {
+        import_error(importer, statement,
+                     "cannot retain package interface import");
+        return false;
+    }
 
     *imported_out = imported;
     *tree_out = tree;
@@ -1824,10 +1837,67 @@ process_postprune_package_syntax(import_driver_t *driver,
 }
 
 static bool
+read_alias_text(const uint8_t *data, size_t size, size_t *at,
+                core_string_t *out)
+{
+    if (size - *at < 4) return false;
+    uint32_t length = read_u32_le(data + *at);
+    *at += 4;
+    if (length > size - *at) return false;
+    *out = core_string_borrow((const char *)data + *at, length);
+    *at += length;
+    return true;
+}
+
+static bool
+restore_interface_import_aliases(import_driver_t *driver,
+                                 core_translation_unit_t *unit)
+{
+    char *module_name = core_strndup(unit->module.identifier.data,
+                                     unit->module.identifier.u8_bytes);
+    size_t size = 0;
+    const uint8_t *data = module_name
+        ? interface_owned_metadata(&driver->loader->interfaces,
+            TH_ENV_METADATA_ENVIRONMENT, module_name,
+            "n00b.module-import-aliases", 1, &size)
+        : nullptr;
+    core_free(module_name);
+    if (!data) return true;
+    if (size < 4) return false;
+    uint32_t count = read_u32_le(data);
+    size_t at = 4;
+    for (uint32_t i = 0; i < count; i++) {
+        core_string_t alias = {0}, target = {0};
+        if (!read_alias_text(data, size, &at, &alias)
+            || !read_alias_text(data, size, &at, &target)) return false;
+        core_translation_unit_t *imported = nullptr;
+        for (size_t k = 0; !imported
+             && k < core_translation_unit_import_count(unit); k++) {
+            core_translation_unit_t *candidate =
+                core_translation_unit_import(unit, k);
+            if (core_string_eq(candidate->module.identifier, target))
+                imported = candidate;
+        }
+        if (!imported || !record_import_alias(unit, alias, imported)) {
+            import_error(unit, nullptr,
+                         "interface module has an unresolved import alias");
+            return false;
+        }
+    }
+    return at == size;
+}
+
+static bool
 load_interface_imports(import_driver_t *driver, parse_grammar_t *grammar,
                        core_translation_unit_t *unit)
 {
     core_string_t module = unit->module.identifier;
+    if (!interface_restore_package_declarations(&driver->loader->interfaces,
+                                                unit)) {
+        import_error(unit, nullptr,
+                     "interface module has malformed package declarations");
+        return false;
+    }
     char *module_name = core_strndup(module.data, module.u8_bytes);
     size_t size = 0;
     const uint8_t *data = module_name
@@ -1839,10 +1909,12 @@ load_interface_imports(import_driver_t *driver, parse_grammar_t *grammar,
         data = interface_owned_metadata(&driver->loader->interfaces,
             TH_ENV_METADATA_ENVIRONMENT, module_name,
             "n00b.package-imports", 1, &size);
-    bool package_only = !data && module_name
-        && !interface_owned_metadata(&driver->loader->interfaces,
+    bool module_interface = module_name
+        && interface_owned_metadata(&driver->loader->interfaces,
             TH_ENV_METADATA_ENVIRONMENT, module_name,
             "n00b.module-interface", 1, nullptr);
+    bool package_only = !data && module_name && !module_interface;
+    tu_state(unit)->package_interface = !module_interface;
     core_free(module_name);
     if (package_only) return true;
     if (!data || size < 4) {
@@ -1870,9 +1942,11 @@ load_interface_imports(import_driver_t *driver, parse_grammar_t *grammar,
         core_free(operand);
         if (!ok) return false;
         offset += length;
-        if (i + 1 == count && offset == size) return true;
+        if (i + 1 == count && offset == size)
+            return restore_interface_import_aliases(driver, unit);
     }
-    if (!count && offset == size) return true;
+    if (!count && offset == size)
+        return restore_interface_import_aliases(driver, unit);
     import_error(unit, nullptr, "interface module has malformed import graph");
     return false;
 }
@@ -2004,6 +2078,8 @@ load_implicit_builtin(void *opaque, parse_grammar_t *grammar,
 {
     core_string_t name = importer->module.identifier;
     if (core_string_eq(name, module_name)) return true;
+    n00bb_tu_state_t *importer_state = tu_state(importer);
+    if (importer_state && importer_state->interface_module) return true;
     if (name.u8_bytes >= sizeof("builtin.") - 1
         && !memcmp(name.data, "builtin.", sizeof("builtin.") - 1))
         return true;
@@ -2036,7 +2112,7 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
                 bool native_build,
                 const core_string_t *native_roots, size_t native_root_count,
                 const th_env *const *linked_interfaces,
-                size_t linked_interface_count,
+                size_t linked_interface_count, const n00bb_cache_t *cache,
                 const n00bb_preprocessor_options_t *preprocessor_options,
                 ir_ctx_t *ir_context, th_ctx *types, size_t worker_limit,
                 th_env **environment_out, core_link_unit_t **link_out,
@@ -2064,6 +2140,7 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
             .linked_interfaces = linked_interfaces,
             .linked_interface_count = linked_interface_count,
         },
+        .cache = cache,
         .lex = lex,
         .parse = parse,
     };
@@ -3482,14 +3559,48 @@ run_build_time_stage(int argc, char **argv, core_diagnostics_t *diagnostics)
     return ok;
 }
 
+static n00bb_cache_t *
+open_object_cache(n00bb_resolver_t *resolver, parse_cmdr_result_t *args,
+                  const char *argv0, ir_ctx_t *ir_context)
+{
+    core_target_desc_t target;
+    core_string_t input = parse_cmdr_arg_str(args, 0);
+    char *operand = core_strndup(input.data, input.u8_bytes);
+    core_module_spec_t module = {0};
+    core_source_file_t source = {0};
+    bool located = operand && resolver && n00bb_host_target_profile(&target)
+        && n00bb_locate_operand(resolver, operand, &module, &source)
+            == CORE_MODULE_RESOLVED;
+    core_free(operand);
+    n00bb_cache_t *cache = nullptr;
+    if (located) {
+        core_string_t path = core_source_file_path(&source);
+        char *root = core_strndup(path.data, path.u8_bytes);
+        char *compiler = n00bb_executable_path(argv0);
+        cache = n00bb_cache_open(root, args, compiler, target.triple,
+                                 ir_context);
+        core_free(compiler);
+        core_free(root);
+        core_source_file_release(&source);
+        core_module_spec_release(&module);
+    }
+    return cache;
+}
+
 static bool
 specialize_calls(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
                  core_diagnostics_t *diagnostics)
 {
     core_buffer_t failure = {0};
-    bool ok = n00bb_specialize_calls(analysis->ir_context,
-        &analysis->emitted_functions, &analysis->specializations,
-        &analysis->specialization_requests, &failure);
+    core_list_t(n00bb_ir_func_ptr_t) callers =
+        core_list_new(n00bb_ir_func_ptr_t);
+    for (size_t i = 0; i < analysis->emitted_functions.len; i++)
+        core_list_push(callers, analysis->emitted_functions.data[i]);
+    n00bb_cache_closed_functions(analysis->cache, &callers);
+    bool ok = n00bb_specialize_calls(analysis->ir_context, &callers,
+        &analysis->specializations, &analysis->specialization_requests,
+        &failure);
+    core_list_free(callers);
     if (ok) {
         core_list_t(core_translation_unit_ptr_t) order =
             core_list_new(core_translation_unit_ptr_t);
@@ -3719,6 +3830,22 @@ n00bb_compiler_main(int argc, char **argv)
     ir_ctx_t *ir_context = ir_ctx_new();
     th_ctx *types = ir_ctx_types(ir_context);
     th_install_nfc(types);
+    n00bb_cache_t *cache = build_command && scheduled && options_valid
+        && input_count == 1 && !interface_count
+        ? open_object_cache(resolver, args, argv[0], ir_context) : nullptr;
+    size_t linked_count = (size_t)interface_count
+        + n00bb_cache_interface_count(cache);
+    if (linked_count > (size_t)interface_count) {
+        const th_env **combined = core_alloc_array(const th_env *,
+                                                   linked_count);
+        for (int32_t i = 0; i < interface_count; i++)
+            combined[i] = linked_interfaces[i];
+        for (size_t i = (size_t)interface_count; i < linked_count; i++)
+            combined[i] = n00bb_cache_interface(cache,
+                                                i - (size_t)interface_count);
+        core_free(linked_interfaces);
+        linked_interfaces = combined;
+    }
     if (!locate_only) {
         grammar = parse_grammar_new();
         parse_grammar_set_error_recovery(grammar, false);
@@ -3762,10 +3889,11 @@ n00bb_compiler_main(int argc, char **argv)
         library_command || compile_command,
         build_command,
         native_roots, (size_t)native_root_count,
-        linked_interfaces, (size_t)interface_count,
+        linked_interfaces, linked_count, cache,
         &preprocessor_options,
         ir_context, types, (size_t)requested_jobs, &environment, &link,
         &link_analysis);
+    if (link_analysis) link_analysis->cache = cache;
     if (parse_cmdr_flag_present(args, CORE_STRING_STATIC("--show-ffi"))
         && !show_module_literal(resolver, CORE_STRING_STATIC("ffi"),
                parse_cmdr_flag_str(args, CORE_STRING_STATIC("--show-ffi")))) {
@@ -3845,6 +3973,8 @@ n00bb_compiler_main(int argc, char **argv)
     bool emit_program = located && build_command
         && (n00bb_compile_phase() == PARSE_SYM_PHASE_RUNTIME
             || n00bb_build_time_run_needed(link_analysis));
+    if (located && emit_program && cache)
+        (void)n00bb_cache_snapshot(cache, link);
     if (emit_program && specialize)
         located = specialize_calls(link, link_analysis, cli_diagnostics);
     if (located && build_command
@@ -3973,6 +4103,7 @@ n00bb_compiler_main(int argc, char **argv)
     core_link_unit_free(link);
     th_env_free(environment);
     n00bb_link_analysis_free(link_analysis);
+    n00bb_cache_free(cache);
     release_requests(queue, &requests);
     for (int32_t i = 0; i < interface_count; i++)
         th_env_free((th_env *)linked_interfaces[i]);

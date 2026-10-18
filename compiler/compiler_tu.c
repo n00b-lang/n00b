@@ -2129,7 +2129,8 @@ infer_user_literal_type(parse_grammar_t *grammar,
             no_payload ? nullptr : &param, no_payload ? 0 : 1,
             nullptr, nullptr, 0) : nullptr;
     parse_sym_entry_t *function = registration->declaration
-        ? core_tree_node_value(registration->declaration).sym : nullptr;
+        ? core_tree_node_value(registration->declaration).sym
+        : registration->function;
     th_type *signature = function && function->type
         ? th_resolve(function->type) : nullptr;
     bool deferred = !signature;
@@ -2222,7 +2223,7 @@ resolve_forward_literal_sites(core_translation_unit_t *unit,
         if (!site || !site->deferred) continue;
         parse_sym_entry_t *function = site->registration->declaration
             ? core_tree_node_value(site->registration->declaration).sym
-            : nullptr;
+            : site->registration->function;
         th_type *signature = function && function->type
             ? th_resolve(function->type) : nullptr;
         th_type *specialized = nullptr;
@@ -4633,7 +4634,10 @@ is_named_type_symbol(parse_grammar_t *grammar, parse_sym_entry_t *symbol)
 {
     return is_named_type_declaration(grammar, symbol)
         || (symbol && parse_sym_binding(symbol,
-            CORE_STRING_STATIC("n00bb.builtin-type")));
+            CORE_STRING_STATIC("n00bb.builtin-type")))
+        || (symbol && symbol->kind == PARSE_SYM_TYPEDEF && !symbol->decl_node
+            && parse_sym_binding(symbol,
+                CORE_STRING_STATIC("n00bb.export-origin")));
 }
 
 bool
@@ -4641,8 +4645,10 @@ is_trait_type_symbol(parse_grammar_t *grammar, parse_sym_entry_t *symbol)
 {
     return symbol && ((symbol->decl_node
         && nt_is(grammar, symbol->decl_node, "trait-decl"))
-        || (parse_sym_binding(symbol,
+        || ((parse_sym_binding(symbol,
                 CORE_STRING_STATIC("n00bb.builtin-type"))
+             || (!symbol->decl_node && parse_sym_binding(symbol,
+                    CORE_STRING_STATIC("n00bb.export-origin"))))
             && core_string_eq(symbol->adt_kind,
                 CORE_STRING_STATIC("trait"))));
 }
@@ -8827,6 +8833,16 @@ exported_type_shape(parse_grammar_t *grammar, core_translation_unit_t *unit,
     n00bb_tu_state_t *state = tu_state(unit);
     if (shape_kind) *shape_kind = TH_ENV_TYPE_SHAPE_NONE;
     if (shape) *shape = nullptr;
+    n00bb_interface_type_shape_t *recorded = symbol && !symbol->decl_node
+        && state && state->interface_module
+        ? parse_sym_binding(symbol,
+            CORE_STRING_STATIC("n00bb.interface-type-shape"))
+        : nullptr;
+    if (recorded && shape_kind && shape) {
+        *shape_kind = recorded->kind;
+        *shape = recorded->shape;
+        return true;
+    }
     if (!state || !state->types || !symbol || !symbol->decl_node ||
         !shape_kind || !shape) return false;
 
@@ -10316,6 +10332,7 @@ validate_user_litmod_signatures(parse_grammar_t *grammar,
     for (size_t i = 0; i < state->literal_modifiers.len; i++) {
         n00bb_user_litmod_t *registration =
             &state->literal_modifiers.data[i];
+        if (!registration->declaration && registration->function) continue;
         bool seen = false;
         for (size_t j = 0; j < i; j++) {
             n00bb_user_litmod_t *prior = &state->literal_modifiers.data[j];
@@ -11659,7 +11676,7 @@ imported_user_litmod(n00bb_tu_state_t *state, core_string_t modifier,
                         tu_state(export->source_unit), modifier, kind);
                     parse_sym_entry_t *handler = exported && exported->declaration
                         ? core_tree_node_value(exported->declaration).sym
-                        : nullptr;
+                        : exported ? exported->function : nullptr;
                     if (!handler || (!export->module_export
                             && handler != canonical_symbol(export->symbol)))
                         continue;

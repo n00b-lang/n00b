@@ -51,6 +51,7 @@ typedef struct {
 
 static bool
 n00bb_linked_global_bindings(const n00bb_abi_object_view_t *view,
+                             const n00bb_cache_t *cache,
                              core_translation_unit_t *const *units,
                              size_t unit_count,
                              n00bb_llvm_global_binding_t **out,
@@ -67,6 +68,10 @@ n00bb_linked_global_bindings(const n00bb_abi_object_view_t *view,
             || ir_global_count(state->ir_module) > SIZE_MAX - capacity)
             return false;
         capacity += ir_global_count(state->ir_module);
+        ir_module_t *cached = state->interface_module && cache
+            ? n00bb_cache_module(cache, units[i]->module.identifier)
+            : nullptr;
+        if (cached) capacity += ir_global_count(cached);
     }
     n00bb_llvm_global_binding_t *bindings = calloc(capacity ? capacity : 1,
                                                     sizeof(*bindings));
@@ -94,8 +99,14 @@ n00bb_linked_global_bindings(const n00bb_abi_object_view_t *view,
                                        &native_name);
         if (!valid) break;
         ir_global_t *matched = nullptr;
-        for (size_t u = 0; valid && u < unit_count; u++) {
-            ir_module_t *runtime = tu_state(units[u])->ir_module;
+        for (size_t u = 0; valid && !matched && u < 2 * unit_count; u++) {
+            n00bb_tu_state_t *unit_state = tu_state(units[u % unit_count]);
+            ir_module_t *runtime = u < unit_count ? unit_state->ir_module
+                : unit_state->interface_module && cache
+                    ? n00bb_cache_module(cache,
+                        units[u % unit_count]->module.identifier)
+                    : nullptr;
+            if (!runtime) continue;
             const char *name = ir_module_name(runtime);
             if (strlen(name) != module_name.length
                 || memcmp(name, module_name.bytes, module_name.length))
@@ -650,9 +661,9 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             }
             if (ok) {
                 read_stage = "matching global bindings";
-                ok = n00bb_linked_global_bindings(&view, order.data,
-                    count, &global_bindings, &global_binding_count,
-                    diagnostics);
+                ok = n00bb_linked_global_bindings(&view, analysis->cache,
+                    order.data, count, &global_bindings,
+                    &global_binding_count, diagnostics);
             }
             if (ok) {
                 read_stage = "matching finalizers";
@@ -704,6 +715,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             ok = false;
             break;
         }
+        if (state->interface_module && state->package_interface) continue;
         for (size_t k = 0; ok && k < 2; k++) {
             if (!ir_func_find(state->ir_module, initializers[k])) continue;
             core_buffer_t name = {0};
@@ -788,6 +800,17 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             .metadata_bytes = metadata.size,
             .finalizers = finalizers, .finalizer_count = finalizer_count,
         };
+        n00bb_cache_module_object_t cached = {0};
+        if (tu_state(order.data[i])->interface_module
+            && n00bb_cache_module_object(analysis->cache,
+                ir_module_name(tu_state(order.data[i])->ir_module), &cached)) {
+            ok = n00bb_native_frames_add(native_frames, cached.native,
+                                         cached.native_bytes);
+            if (ok) objects[i] = n00bb_write_temporary_object(cached.native,
+                                                              cached.native_bytes);
+            ok = ok && objects[i];
+            continue;
+        }
         ok = emit_module_object(&emission, tu_state(order.data[i])->ir_module,
             core_translation_unit_diagnostics(order.data[i]), artifact,
             order.data[i] == core_link_unit_root(link, 0)
@@ -994,9 +1017,9 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         free(native_arguments);
         free(arguments);
     } else ok = false;
-    if (ok && !lto && !getenv("N00BB_NO_OBJECT_CACHE"))
-        (void)n00bb_cache_store(link, analysis, args, compiler_path,
-                                kept.data, kept.len);
+    if (ok && !lto)
+        (void)n00bb_cache_store(analysis->cache, link, analysis, kept.data,
+                                kept.len);
     for (size_t i = 0; i < kept.len; i++) free((void *)kept.data[i].native);
     core_list_free(kept);
     if (staging) unlink(staging);
@@ -1282,9 +1305,14 @@ abi_graph_flags(void *context, size_t index)
 static core_translation_unit_t *
 module_unit(n00bb_link_analysis_t *analysis, const ir_module_t *module)
 {
-    for (size_t i = 0; i < analysis->units.len; i++)
-        if (tu_state(analysis->units.data[i])->ir_module == module)
+    const char *name = ir_module_name(module);
+    for (size_t i = 0; i < analysis->units.len; i++) {
+        core_string_t identifier = analysis->units.data[i]->module.identifier;
+        if (tu_state(analysis->units.data[i])->ir_module == module
+            || (identifier.u8_bytes == strlen(name)
+                && !memcmp(identifier.data, name, identifier.u8_bytes)))
             return analysis->units.data[i];
+    }
     return nullptr;
 }
 
@@ -1397,7 +1425,18 @@ n00bb_emit_abi_artifacts(core_link_unit_t *link,
             break;
         }
         n00bb_abi_artifact_t *artifact = core_alloc(n00bb_abi_artifact_t);
-        bool emitted = n00bb_abi_emit_unit(link, unit,
+        n00bb_cache_module_object_t cached = {0};
+        bool from_cache = state->interface_module
+            && n00bb_cache_module_object(analysis->cache,
+                ir_module_name(state->ir_module), &cached);
+        if (from_cache) {
+            artifact->object = core_alloc_array(uint8_t, cached.abi_bytes);
+            if (artifact->object)
+                memcpy(artifact->object, cached.abi, cached.abi_bytes);
+            artifact->object_bytes = cached.abi_bytes;
+        }
+        bool emitted = from_cache ? artifact->object != nullptr
+            : n00bb_abi_emit_unit(link, unit,
             n00bb_package_id(unit),
             state->annotations->symtab, state->lex->tokens,
             state->ir_module,

@@ -6,9 +6,12 @@
 #include <stdint.h>
 
 #include "compiler_link.h"
+#include "specialize.h"
+#include "ir/ir.h"
 #include "lib/link_unit.h"
 #include "lib/list.h"
 #include "parse/commander.h"
+#include "th/environment.h"
 
 typedef struct {
     const char *module;
@@ -19,9 +22,26 @@ typedef struct {
 } n00bb_cache_module_object_t;
 core_list_decl(n00bb_cache_module_object_t);
 
-bool n00bb_cache_store(core_link_unit_t *link,
+typedef struct n00bb_cache_t n00bb_cache_t;
+
+n00bb_cache_t *n00bb_cache_open(const char *root_path,
+                                parse_cmdr_result_t *args,
+                                const char *compiler_path,
+                                const char *triple, ir_ctx_t *ir_context);
+void n00bb_cache_free(n00bb_cache_t *cache);
+size_t n00bb_cache_interface_count(const n00bb_cache_t *cache);
+const th_env *n00bb_cache_interface(const n00bb_cache_t *cache,
+                                    size_t index);
+ir_module_t *n00bb_cache_module(const n00bb_cache_t *cache,
+                                core_string_t module);
+bool n00bb_cache_module_object(const n00bb_cache_t *cache,
+                               const char *module,
+                               n00bb_cache_module_object_t *object);
+void n00bb_cache_closed_functions(const n00bb_cache_t *cache,
+    core_list_t(n00bb_ir_func_ptr_t) *functions);
+bool n00bb_cache_snapshot(n00bb_cache_t *cache, core_link_unit_t *link);
+bool n00bb_cache_store(n00bb_cache_t *cache, core_link_unit_t *link,
                        n00bb_link_analysis_t *analysis,
-                       parse_cmdr_result_t *args, const char *compiler_path,
                        const n00bb_cache_module_object_t *objects,
                        size_t object_count);
 

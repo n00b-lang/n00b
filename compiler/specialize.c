@@ -270,6 +270,15 @@ instantiate(ir_ctx_t *context, ir_func_t *target, th_type *actual,
 }
 
 static ir_func_t *
+function_body(ir_func_t *function)
+{
+    if (!function || function->n_blocks) return function;
+    ir_annot_t *body = ir_annot_get(&function->annots, "n00bb.cached_body");
+    return body && body->kind == IR_ANNOT_VALUE && body->v
+        && body->v->kind == IR_VAL_FUNC ? body->v->owner : function;
+}
+
+static ir_func_t *
 find_instance(const core_list_t(specialization_t) *specializations,
               ir_func_t *target, uint64_t hash, th_ctx *types)
 {
@@ -313,7 +322,7 @@ bool n00bb_specialize_calls(ir_ctx_t *context,
                 if (call->op != IR_OP_CALL || !call->n_operands) continue;
                 ir_value_t *callee = ir_operand_value(&call->operands[0]);
                 ir_func_t *target = callee && callee->kind == IR_VAL_FUNC
-                    ? callee->owner : nullptr;
+                    ? function_body(callee->owner) : nullptr;
                 if (!target || !target->n_blocks
                     || is_instance(&specializations, target)) continue;
                 th_ctx *types = ir_module_types(target->owner);

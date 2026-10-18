@@ -266,6 +266,15 @@ inline_list_contains(const core_list_t(inline_function_ptr_t) *functions,
 }
 
 static ir_func_t *
+cached_function_body(ir_func_t *function)
+{
+    if (!function || function->n_blocks) return function;
+    ir_annot_t *body = ir_annot_get(&function->annots, "n00bb.cached_body");
+    return body && body->kind == IR_ANNOT_VALUE && body->v
+        && body->v->kind == IR_VAL_FUNC ? body->v->owner : function;
+}
+
+static ir_func_t *
 direct_call_target(const ir_instr_t *instruction)
 {
     if (instruction->op != IR_OP_CALL || !instruction->n_operands
@@ -273,7 +282,7 @@ direct_call_target(const ir_instr_t *instruction)
         || !instruction->operands[0].value
         || instruction->operands[0].value->kind != IR_VAL_FUNC)
         return nullptr;
-    return instruction->operands[0].value->owner;
+    return cached_function_body(instruction->operands[0].value->owner);
 }
 
 typedef struct {
@@ -9979,7 +9988,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         if (!count || operands[0].kind != IR_OPD_VALUE
             || !operands[0].value) break;
         ir_func_t *target = operands[0].value->kind == IR_VAL_FUNC
-            ? operands[0].value->owner : nullptr;
+            ? cached_function_body(operands[0].value->owner) : nullptr;
         ir_annot_t *native_call = target
             ? ir_annot_get(&target->annots, "n00bb.abi.native") : nullptr;
         if (native_call && native_call->kind == IR_ANNOT_STR
@@ -11470,7 +11479,7 @@ collect_inline_callees(ir_func_t *function,
                 const ir_operand_t *used = &instruction->operands[operand];
                 ir_func_t *value = used->kind == IR_OPD_VALUE && used->value
                     && used->value->kind == IR_VAL_FUNC
-                    ? used->value->owner : nullptr;
+                    ? cached_function_body(used->value->owner) : nullptr;
                 if (value && ir_func_is_always_inline(value)
                     && (instruction->op != IR_OP_CALL || operand != 0))
                     return inline_error(diagnostics, value,
