@@ -5,12 +5,10 @@ private func name_is(got: string, want: string) -> bool {
         return false
     }
 
-    var i: uint = 0
-    while i < byte_len(got) {
+    for i from 0 until byte_len(got) {
         if byte_at(got, i) != byte_at(want, i) {
             return false
         }
-        i += 1
     }
 
     return true

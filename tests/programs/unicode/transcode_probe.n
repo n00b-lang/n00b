@@ -5,23 +5,21 @@ private func same_string(a: string, b: string) -> bool {
         return false
     }
 
-    var i: uint = 0
-    while i < byte_len(a) {
+    for i from 0 until byte_len(a) {
         if byte_at(a, i) != byte_at(b, i) {
             return false
         }
-        i += 1
     }
 
     return true
 }
 
-private func cp_index(arr: List[char], i: int) -> char {
-    return arr[i]
+private func cp_index(arr: List[char], i: uint) -> char {
+    return arr[cast[int] i]
 }
 
-private func unit_index(arr: List[u16], i: int) -> u16 {
-    return arr[i]
+private func unit_index(arr: List[u16], i: uint) -> u16 {
+    return arr[cast[int] i]
 }
 
 func transcode_probe() -> string? {
