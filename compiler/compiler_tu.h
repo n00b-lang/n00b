@@ -522,6 +522,7 @@ typedef struct {
     core_list_t(n00bb_option_path_t) option_paths;
     core_list_t(parse_tree_ptr_t) literal_site_nodes;
     core_dict_t flagset_values;
+    core_dict_t declarations_typed_ahead;
     core_link_unit_t *link;
     core_diag_location_t build_time_use;
     n00bb_link_analysis_t *link_analysis;
@@ -938,8 +939,6 @@ bool record_aggregate_aliases(parse_grammar_t *grammar,
     parse_sym_entry_t *holder);
 void record_reference_facts(parse_grammar_t *grammar,
     core_translation_unit_t *unit, parse_tree_t *node);
-bool semantic_annotate_tree(parse_grammar_t *grammar, th_ctx *types,
-    core_translation_unit_t *unit, parse_tree_t *root);
 typedef bool (*n00bb_semantic_unit_finish_t)(void *context,
     core_translation_unit_t *unit);
 bool semantic_annotate_closure(parse_grammar_t *grammar, th_ctx *types,
@@ -1080,6 +1079,7 @@ void finalize_callback_contract(parse_grammar_t *grammar,
 th_type *callback_setup_dispatch_contract(th_ctx *types,
     th_type *setup_type);
 void initial_symbol_node(parse_visit_t *visit, bool entering, void *context);
+void declared_symbol_node(parse_visit_t *visit, bool entering, void *context);
 bool prepare_initial_symbols(core_translation_unit_t *unit, th_ctx *types);
 parse_tree_t *n00bb_simple_switch_literal(parse_grammar_t *grammar,
                                           parse_tree_t *node,

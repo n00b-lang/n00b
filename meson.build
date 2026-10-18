@@ -633,6 +633,20 @@ test(
     suite: 'slow',
 )
 
+foreach declared_root : ['shape', 'maker']
+    test(
+        'import-cycle-declared-' + declared_root + '-n00b',
+        find_program('sh'),
+        args: [meson.current_source_dir() / 'tests' / 'compile_module.sh',
+               n00bb_exe.full_path(),
+               meson.current_source_dir() / 'tests' / 'programs'
+                   / 'import_cycles' / 'declared',
+               declared_root],
+        timeout: 120,
+        suite: 'slow',
+    )
+endforeach
+
 test(
     'compile-fallible-index-read-n00b', find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'compile_module.sh',
