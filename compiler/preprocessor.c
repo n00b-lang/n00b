@@ -1976,10 +1976,6 @@ replace_builtin(pp_context_t *ctx, parse_visit_t *visit)
         || core_string_eq(name, CORE_STRING_STATIC("compile_warning"))
         || core_string_eq(name, CORE_STRING_STATIC("compile_error")))
         return false;
-    if (core_string_eq(name, CORE_STRING_STATIC("comptime"))) {
-        pp_error(ctx, node, "comptime() may only be used in a when condition");
-        return false;
-    }
     pp_value_t value;
     if (!eval_builtin(ctx, node, &value)) return false;
     parse_tree_t *primary = make_value_literal(ctx, value);

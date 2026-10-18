@@ -1,0 +1,13 @@
+func phase() -> string {
+    if comptime() {
+        return "build"
+    }
+    return "ship"
+}
+
+const at_build: string = phase()
+
+func start() -> nil {
+    require at_build == "build"
+    require phase() == "ship"
+}

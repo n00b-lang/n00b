@@ -94,3 +94,6 @@ fi
 N00B_PATH="$program_dir" "$compiler" build --output "$tmp/baked_slots" \
     "$program_dir/bitcode_baked_slots.n"
 "$tmp/baked_slots"
+"$compiler" build --output "$tmp/comptime_expression" \
+    "$program_dir/bitcode_comptime_expression.n00b"
+"$tmp/comptime_expression"
