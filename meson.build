@@ -767,6 +767,40 @@ test(
     suite: 'slow',
 )
 
+foreach rejected : [
+    ['free', [
+        'N00BB-T0002]: call type does not match its function (string vs int)',
+        'keyword_argument_free_rejected.n:5:15',
+        'N00BB-T0037]: named argument does not match a parameter',
+        'keyword_argument_free_rejected.n:6:11',
+        'N00BB-T0038]: a parameter is supplied more than once',
+        'keyword_argument_free_rejected.n:7:14']],
+    ['method', [
+        'N00BB-T0002]: call type does not match its function (string vs int)',
+        'keyword_argument_method_rejected.n:14:22']],
+    ['constructor', [
+        'N00BB-T0020]: no visible __init matches this constructed type',
+        'keyword_argument_constructor_rejected.n:9:17']],
+    ['context', [
+        'N00BB-T0002]: call type does not match its function (builtin.containers.buffer.Buffer vs string)',
+        'keyword_argument_context_rejected.n:9:16',
+        'N00BB-T0002]: call type does not match its function (int vs string)',
+        'keyword_argument_context_rejected.n:12:16']],
+]
+    test(
+        'keyword-argument-' + rejected[0] + '-rejected',
+        find_program('sh'),
+        args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+               n00bb_exe.full_path(),
+               meson.current_source_dir() / 'tests' / 'programs'
+                   / 'features'
+                   / 'keyword_argument_' + rejected[0] + '_rejected.n']
+            + rejected[1],
+        timeout: 120,
+        suite: 'slow',
+    )
+endforeach
+
 foreach feature : ['fallible_without_result', 'try_error_binding',
                    'builtin_type_record_literal', 'record_literal_nil_option',
                    'option_literal_argument', 'record_literal_return',
@@ -781,7 +815,8 @@ foreach feature : ['fallible_without_result', 'try_error_binding',
                    'quotes_litmod_raw', 'import_prelude_name',
                    'atomic_auto_load', 'value_branch_literal_context',
                    'one_bit_enum_array', 'same_module_overloads',
-                   'range_literal_start', 'record_literal_argument']
+                   'range_literal_start', 'record_literal_argument',
+                   'keyword_argument_context']
     test(
         feature.replace('_', '-'), find_program('sh'),
         args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',

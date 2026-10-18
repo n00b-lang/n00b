@@ -1,0 +1,13 @@
+context Label(s: string) {
+    enter() {
+    }
+    ensure() {
+    }
+}
+
+var b: Buffer = buffer_from_string("abc")
+with Label(s = b) {
+    b += "x"
+}
+with Label(s = 1) {
+}

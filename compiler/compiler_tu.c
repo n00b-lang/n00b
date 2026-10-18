@@ -3191,10 +3191,43 @@ function_parameter_named(parse_grammar_t *grammar, parse_sym_entry_t *symbol,
         }
         return false;
     }
+    if (n00bb_builtin_reference_function(symbol)) {
+        bool write = core_string_eq(symbol->name,
+                                    CORE_STRING_STATIC("ref_write"));
+        if ((write || core_string_eq(symbol->name,
+                CORE_STRING_STATIC("ref_read")))
+            && core_string_eq(name, CORE_STRING_STATIC("reference"))) {
+            if (index) *index = 0;
+            return true;
+        }
+        if (write && core_string_eq(name, CORE_STRING_STATIC("value"))) {
+            if (index) *index = 1;
+            return true;
+        }
+        return false;
+    }
     parse_sym_entry_t *formal = formal_symbol_named(grammar, formals, name,
                                                     index);
     if (formal) return true;
+    if (context_symbol(grammar, symbol))
+        return context_interface_parameter_named(symbol, name, index);
     return function_interface_parameter_named(symbol, name, index);
+}
+
+parse_tree_t *
+callable_formal_parameters(parse_grammar_t *grammar,
+                           parse_sym_entry_t *symbol)
+{
+    parse_tree_t *declaration = symbol ? symbol->decl_node : nullptr;
+    if (!declaration) return nullptr;
+    if (nt_is(grammar, declaration, "context-def"))
+        return child_nt(grammar, declaration, "param-decl");
+    parse_tree_t *signature = child_nt(grammar, declaration,
+                                       "func-type-signature");
+    if (signature) return child_nt(grammar, signature, "param-decl");
+    signature = child_nt(grammar, declaration, "trait-func-type-signature");
+    return signature ? child_nt(grammar, signature, "trait-param-decl")
+                     : nullptr;
 }
 
 th_type *

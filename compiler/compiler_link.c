@@ -1863,6 +1863,70 @@ function_interface_parameter_named(parse_sym_entry_t *symbol,
     return false;
 }
 
+bool
+context_interface_parameter(parse_sym_entry_t *symbol, size_t target,
+                            const char **name, size_t *name_size,
+                            uint8_t *flags, uint8_t *mode)
+{
+    const uint8_t *data = symbol ? symbol->user_data : nullptr;
+    if (!data || (data[0] & 0x70u)) return false;
+    bool extended = (data[0] & 0x80u) != 0;
+    uint32_t count = read_u32_le(data + 1);
+    if (target >= count) return false;
+    size_t offset = 5;
+    for (size_t i = 0; i < count; i++) {
+        if (offset > SIZE_MAX - 4) return false;
+        uint16_t current_size = (uint16_t)data[offset]
+            | (uint16_t)data[offset + 1] << 8;
+        uint8_t current_flags = data[offset + 2];
+        uint8_t current_mode = data[offset + 3];
+        offset += 4;
+        if (!current_size || current_size > SIZE_MAX - offset) return false;
+        if (i == target) {
+            if (name) *name = (const char *)data + offset;
+            if (name_size) *name_size = current_size;
+            if (flags) *flags = current_flags;
+            if (mode) *mode = current_mode;
+            return true;
+        }
+        offset += current_size;
+        if (extended && (current_flags & 4u)) {
+            if (offset > SIZE_MAX - 2) return false;
+            uint16_t dependencies = (uint16_t)data[offset]
+                | (uint16_t)data[offset + 1] << 8;
+            offset += 2;
+            if (dependencies > (SIZE_MAX - offset) / 2) return false;
+            offset += (size_t)dependencies * 2;
+        }
+    }
+    return false;
+}
+
+size_t
+context_interface_parameter_count(parse_sym_entry_t *symbol)
+{
+    const uint8_t *data = symbol ? symbol->user_data : nullptr;
+    return data ? read_u32_le(data + 1) : 0;
+}
+
+bool
+context_interface_parameter_named(parse_sym_entry_t *symbol,
+                                  core_string_t target, size_t *index)
+{
+    for (size_t i = 0; i < context_interface_parameter_count(symbol); i++) {
+        const char *name = nullptr;
+        size_t name_size = 0;
+        if (!context_interface_parameter(symbol, i, &name, &name_size,
+                                         nullptr, nullptr)) return false;
+        if (name_size == target.u8_bytes && target.data
+            && !memcmp(name, target.data, name_size)) {
+            if (index) *index = i;
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool
 module_path_matches_site(n00bb_tu_state_t *state,
                          n00bb_link_use_site_t *site,

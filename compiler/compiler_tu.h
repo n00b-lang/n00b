@@ -89,6 +89,8 @@ bool function_parameter_named(parse_grammar_t *grammar,
                               parse_sym_entry_t *symbol,
                               parse_tree_t *formals, core_string_t name,
                               size_t *index);
+parse_tree_t *callable_formal_parameters(parse_grammar_t *grammar,
+                                         parse_sym_entry_t *symbol);
 typedef enum {
     N00BB_LITERAL_STRING_SHAPE,
     N00BB_LITERAL_SEQUENCE_SHAPE,

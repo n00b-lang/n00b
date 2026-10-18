@@ -27,6 +27,12 @@ bool function_interface_parameter(parse_sym_entry_t *symbol, size_t target,
 size_t function_interface_parameter_count(parse_sym_entry_t *symbol);
 bool function_interface_parameter_named(parse_sym_entry_t *symbol,
                                         core_string_t target, size_t *index);
+bool context_interface_parameter(parse_sym_entry_t *symbol, size_t target,
+                                 const char **name, size_t *name_size,
+                                 uint8_t *flags, uint8_t *mode);
+size_t context_interface_parameter_count(parse_sym_entry_t *symbol);
+bool context_interface_parameter_named(parse_sym_entry_t *symbol,
+                                       core_string_t target, size_t *index);
 core_translation_unit_t *unit_for_module_site(
     core_translation_unit_t *unit, n00bb_link_use_site_t *site,
     bool allow_suffix);

@@ -275,6 +275,75 @@ rebind_call_callee(parse_grammar_t *grammar, n00bb_tu_state_t *state,
 }
 
 static void
+unify_call_argument(core_translation_unit_t *unit, n00bb_tu_state_t *state,
+                    parse_tree_t *diagnostic_node, parse_tree_t *argument,
+                    th_type *expected, bool context_call)
+{
+    th_type *actual = core_tree_node_value(argument).type;
+    if (context_call && n00bb_value_coerces(state->types, actual, expected))
+        report_call_type_error(unit, argument, state->types, actual,
+                               expected);
+    else (void)unify_call_node_type(unit, state, diagnostic_node, argument,
+                                    actual, expected);
+    (void)n00bb_contextual_float_literal(argument, expected);
+}
+
+static void
+report_keyword_binding_error(core_translation_unit_t *unit,
+                             parse_tree_t *keyword, core_string_t code,
+                             core_string_t message)
+{
+    core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit,
+        CORE_DIAG_ERROR, code, message, link_source_location(keyword));
+}
+
+static void
+unify_keyword_arguments(parse_grammar_t *grammar,
+                        core_translation_unit_t *unit,
+                        n00bb_tu_state_t *state, parse_cf_label_t *label,
+                        parse_sym_entry_t *callee, th_type *signature,
+                        bool *bound, bool context_call)
+{
+    core_list_t(n00bb_tree_ptr_t) keywords = core_list_new(n00bb_tree_ptr_t);
+    collect_keyword_nodes(grammar,
+        child_nt(grammar, label->then_body, "keyword-args"), &keywords);
+    parse_tree_t *formals = callable_formal_parameters(grammar, callee);
+    size_t parameter_count = th_func_nparams(signature);
+    for (size_t i = 0; i < keywords.len; i++) {
+        parse_tree_t *keyword = keywords.data[i];
+        parse_tree_t *argument = child_nt(grammar, keyword, "expression");
+        size_t index = 0;
+        th_type *expected = nullptr;
+        if (function_parameter_named(grammar, callee, formals,
+                call_keyword_name(keyword), &index)) {
+            const th_param *parameter = th_func_param(signature, index);
+            const th_kwparam *option = index >= parameter_count
+                ? th_func_kw(signature, index - parameter_count) : nullptr;
+            expected = parameter ? parameter->type
+                : option ? option->type : nullptr;
+        }
+        if (!expected) {
+            report_keyword_binding_error(unit, keyword,
+                CORE_STRING_STATIC("N00BB-T0037"),
+                CORE_STRING_STATIC(
+                    "named argument does not match a parameter"));
+            continue;
+        }
+        if (index < parameter_count && bound[index]) {
+            report_keyword_binding_error(unit, keyword,
+                CORE_STRING_STATIC("N00BB-T0038"),
+                CORE_STRING_STATIC("a parameter is supplied more than once"));
+            continue;
+        }
+        if (index < parameter_count) bound[index] = true;
+        if (argument && !core_tree_is_leaf(argument))
+            unify_call_argument(unit, state, argument, argument, expected,
+                                context_call);
+    }
+    core_list_free(keywords);
+}
+
+static void
 unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
                    core_link_unit_t *link,
                    n00bb_call_site_index_t *call_sites,
@@ -542,6 +611,9 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
                     receiver_node, receiver_type, receiver->type))
                 continue;
         }
+        bool *bound = core_alloc_array(bool,
+                                       parameter_count ? parameter_count : 1);
+        if (member_call && parameter_count) bound[0] = true;
         core_list_t(n00bb_tree_ptr_t) arguments =
             core_list_new(n00bb_tree_ptr_t);
         collect_positional_nodes(grammar, positional, &arguments);
@@ -549,19 +621,20 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
             parse_tree_t *argument = arguments.data[i];
             const th_param *parameter = th_func_param(signature,
                 i + parameter_offset);
+            if (parameter) bound[i + parameter_offset] = true;
             if (!parameter && i + parameter_offset >= parameter_count)
                 parameter = th_func_rest(signature);
             if (!parameter || core_tree_is_leaf(argument)) continue;
-            th_type *argument_type = core_tree_node_value(argument).type;
-            if (context_call && n00bb_value_coerces(state->types,
-                    argument_type, parameter->type))
-                report_call_type_error(unit, argument, state->types,
-                                       argument_type, parameter->type);
-            else (void)unify_call_node_type(unit, state, label->self,
-                argument, argument_type, parameter->type);
-            (void)n00bb_contextual_float_literal(argument, parameter->type);
+            unify_call_argument(unit, state, label->self, argument,
+                                parameter->type, context_call);
         }
         core_list_free(arguments);
+        parse_sym_entry_t *named = context_call ? context_target
+            : member_call ? callee_symbol : canonical_symbol(callee_symbol);
+        if (named)
+            unify_keyword_arguments(grammar, unit, state, label, named,
+                                    signature, bound, context_call);
+        core_free(bound);
         th_type *return_type = th_func_ret(signature);
         if (return_type && result
             && th_kind_of(th_resolve(result)) == TH_VAR) {

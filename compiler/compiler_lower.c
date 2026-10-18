@@ -200,17 +200,9 @@ static bool context_hook_ir_name(parse_grammar_t *grammar,
                                  parse_tree_t *hook,
                                  char *buffer, size_t buffer_size);
 static bool context_default_role(size_t index, char *buffer, size_t size);
-static bool context_interface_parameter(parse_sym_entry_t *symbol,
-                                        size_t target, const char **name,
-                                        size_t *name_size, uint8_t *flags,
-                                        uint8_t *mode);
 static bool context_interface_dependencies(parse_sym_entry_t *symbol,
                                            size_t target, size_t *indices,
                                            size_t capacity, size_t *count);
-static bool context_interface_parameter_named(parse_sym_entry_t *symbol,
-                                              core_string_t target,
-                                              size_t *index);
-static size_t context_interface_parameter_count(parse_sym_entry_t *symbol);
 static const char *context_hook_binding_role(parse_grammar_t *grammar,
                                               parse_tree_t *hook);
 static bool n00bb_context_has_hook(parse_grammar_t *grammar,
@@ -8586,16 +8578,8 @@ n00bb_mark_call_lvalues(ir_lower_context_t *context, parse_visit_t *visit,
         ? th_func_nparams(callable) : 0;
     const th_param *rest = callable && th_kind_of(callable) == TH_FUNCTION
         ? th_func_rest(callable) : nullptr;
-    parse_tree_t *formal_signature = child_nt(visit->grammar,
-        symbol->decl_node, "func-type-signature");
-    if (!formal_signature)
-        formal_signature = child_nt(visit->grammar, symbol->decl_node,
-                                    "trait-func-type-signature");
-    parse_tree_t *formals = child_nt(visit->grammar, formal_signature,
-                                     "param-decl");
-    if (!formals)
-        formals = child_nt(visit->grammar, formal_signature,
-                            "trait-param-decl");
+    parse_tree_t *formals = callable_formal_parameters(visit->grammar,
+                                                       symbol);
     bool ok = true;
     for (size_t i = 0; ok && i < actuals.len; i++) {
         size_t index = 0;
@@ -8916,28 +8900,6 @@ n00bb_lower_module_member(ir_lower_context_t *context, parse_visit_t *visit,
         return lower_error(context, IR_DIAG_INTERNAL, span,
                            "could not emit a module variable read");
     return (ir_lower_result_t){IR_LOWER_VALUE, copy->dest};
-}
-
-static bool
-n00bb_builtin_parameter_named(parse_sym_entry_t *function,
-                              core_string_t name, size_t *index)
-{
-    if (core_string_eq(function->name, CORE_STRING_STATIC("ref_read"))
-        && core_string_eq(name, CORE_STRING_STATIC("reference"))) {
-        *index = 0;
-        return true;
-    }
-    if (!core_string_eq(function->name,
-                        CORE_STRING_STATIC("ref_write"))) return false;
-    if (core_string_eq(name, CORE_STRING_STATIC("reference"))) {
-        *index = 0;
-        return true;
-    }
-    if (core_string_eq(name, CORE_STRING_STATIC("value"))) {
-        *index = 1;
-        return true;
-    }
-    return false;
 }
 
 static bool
@@ -10772,16 +10734,8 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     core_list_t(n00bb_copyout_t) copyouts =
         core_list_new(n00bb_copyout_t);
     size_t parameter_count = th_func_nparams(signature);
-    parse_tree_t *formal_signature = child_nt(visit->grammar,
-        symbol->decl_node, "func-type-signature");
-    if (!formal_signature)
-        formal_signature = child_nt(visit->grammar, symbol->decl_node,
-                                    "trait-func-type-signature");
-    parse_tree_t *formal_params = child_nt(visit->grammar,
-        formal_signature, "param-decl");
-    if (!formal_params)
-        formal_params = child_nt(visit->grammar, formal_signature,
-                                 "trait-param-decl");
+    parse_tree_t *formal_params = callable_formal_parameters(visit->grammar,
+                                                             symbol);
     parse_tree_t **argument_by_parameter = core_alloc_array(
         parse_tree_t *, parameter_count);
     ir_value_t **value_by_parameter = core_alloc_array(
@@ -10869,10 +10823,8 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     for (size_t i = 0; mapped && i < keyword_nodes.len; i++) {
         core_string_t name = call_keyword_name(keyword_nodes.data[i]);
         size_t index = 0;
-        bool has_formal = reference_builtin
-            ? n00bb_builtin_parameter_named(symbol, name, &index)
-            : function_parameter_named(visit->grammar, symbol,
-                formal_params, name, &index);
+        bool has_formal = function_parameter_named(visit->grammar, symbol,
+            formal_params, name, &index);
         parse_tree_t *argument = child_nt(visit->grammar,
             keyword_nodes.data[i], "expression");
         if (!has_formal || !argument || index >= parameter_count) {
@@ -13281,16 +13233,8 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
     for (size_t i = 0; i < argument_count; i++) {
         const th_param *parameter = th_func_param(signature, i);
         th_mode mode = parameter ? parameter->mode : TH_IN;
-        parse_tree_t *formal_signature = child_nt(grammar,
-            symbol->decl_node, "func-type-signature");
-        if (!formal_signature)
-            formal_signature = child_nt(grammar, symbol->decl_node,
-                                        "trait-func-type-signature");
-        parse_tree_t *formal_params = child_nt(grammar,
-            formal_signature, "param-decl");
-        if (!formal_params)
-            formal_params = child_nt(grammar, formal_signature,
-                                     "trait-param-decl");
+        parse_tree_t *formal_params = callable_formal_parameters(grammar,
+                                                                 symbol);
         function_parameter_info(grammar, symbol, formal_params, i,
                                 nullptr, nullptr, nullptr, nullptr, &mode);
         if (i > 0 && parameter && th_mode_is_input_only(mode)) {
@@ -14626,45 +14570,6 @@ context_default_role(size_t index, char *buffer, size_t size)
 }
 
 static bool
-context_interface_parameter(parse_sym_entry_t *symbol, size_t target,
-                            const char **name, size_t *name_size,
-                            uint8_t *flags, uint8_t *mode)
-{
-    const uint8_t *data = symbol ? symbol->user_data : nullptr;
-    if (!data || (data[0] & 0x70u)) return false;
-    bool extended = (data[0] & 0x80u) != 0;
-    uint32_t count = read_u32_le(data + 1);
-    if (target >= count) return false;
-    size_t offset = 5;
-    for (size_t i = 0; i < count; i++) {
-        if (offset > SIZE_MAX - 4) return false;
-        uint16_t current_size = (uint16_t)data[offset]
-            | (uint16_t)data[offset + 1] << 8;
-        uint8_t current_flags = data[offset + 2];
-        uint8_t current_mode = data[offset + 3];
-        offset += 4;
-        if (!current_size || current_size > SIZE_MAX - offset) return false;
-        if (i == target) {
-            if (name) *name = (const char *)data + offset;
-            if (name_size) *name_size = current_size;
-            if (flags) *flags = current_flags;
-            if (mode) *mode = current_mode;
-            return true;
-        }
-        offset += current_size;
-        if (extended && (current_flags & 4u)) {
-            if (offset > SIZE_MAX - 2) return false;
-            uint16_t dependencies = (uint16_t)data[offset]
-                | (uint16_t)data[offset + 1] << 8;
-            offset += 2;
-            if (dependencies > (SIZE_MAX - offset) / 2) return false;
-            offset += (size_t)dependencies * 2;
-        }
-    }
-    return false;
-}
-
-static bool
 context_interface_dependencies(parse_sym_entry_t *symbol, size_t target,
                                 size_t *indices, size_t capacity,
                                 size_t *count)
@@ -14701,34 +14606,6 @@ context_interface_dependencies(parse_sym_entry_t *symbol, size_t target,
         }
         if (i == target) {
             if (count) *count = dependency_count;
-            return true;
-        }
-    }
-    return false;
-}
-
-static size_t
-context_interface_parameter_count(parse_sym_entry_t *symbol)
-{
-    const uint8_t *data = symbol ? symbol->user_data : nullptr;
-    return data ? read_u32_le(data + 1) : 0;
-}
-
-static bool
-context_interface_parameter_named(parse_sym_entry_t *symbol,
-                                  core_string_t target, size_t *index)
-{
-    const uint8_t *data = symbol ? symbol->user_data : nullptr;
-    if (!data) return false;
-    uint32_t count = read_u32_le(data + 1);
-    for (size_t i = 0; i < count; i++) {
-        const char *name = nullptr;
-        size_t name_size = 0;
-        if (!context_interface_parameter(symbol, i, &name, &name_size,
-                                         nullptr, nullptr)) return false;
-        if (name_size == target.u8_bytes
-            && !memcmp(name, target.data, name_size)) {
-            if (index) *index = i;
             return true;
         }
     }
