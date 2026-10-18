@@ -140,16 +140,15 @@ ref_view()
 EOF
 reject ref_view 'this call may write the borrowed Buffer, at line 6'
 
-cat >"$tmp/state_store.n" <<'EOF'
-func state_store() -> uint {
-    var b: Buffer = buffer_from_string("kept")
+cat >"$tmp/private_state.n" <<'EOF'
+func private_state(b: Buffer) -> uint {
     let view: string = b
-    b.state.store[0] = 0x58
+    __atomic_store(ref b.state.lock, 0)
     return byte_len(view)
 }
-state_store()
+private_state(buffer_from_string("kept"))
 EOF
-reject state_store 'this store may write the borrowed Buffer, at line 4'
+reject private_state 'record field is not visible from this module'
 
 cat >"$tmp/escape_site.n" <<'EOF'
 var kept: List[string] = new[List[string]]()

@@ -11,7 +11,7 @@ record Buffer_State {
 }
 
 record Buffer {
-    state: Ref[Buffer_State]
+    private state: Ref[Buffer_State]
 }
 
 public const empty_buffer_alloc: uint = 16
