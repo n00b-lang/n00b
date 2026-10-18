@@ -1028,7 +1028,15 @@ cf_label(parse_visit_t *v, parse_cf_kind_t kind)
     label->kind = kind;
     label->self = v->node;
 
+    bool found = false;
+    parse_cf_label_t *previous = core_dict_get(a->out->cf_labels, v->node,
+                                               &found);
     core_dict_put(a->out->cf_labels, v->node, label);
+    core_list_t(parse_cf_label_ptr_t) *order = &a->out->cf_label_order;
+    size_t at = 0;
+    while (found && at < order->len && order->data[at] != previous) at++;
+    if (found && at < order->len) order->data[at] = label;
+    else core_list_push(*order, label);
 
     return label;
 }
@@ -1411,6 +1419,7 @@ parse_annot_result_new(parse_symtab_t *borrowed)
     r->cf_labels       = core_alloc(core_dict_t);
 
     core_dict_init(r->cf_labels, core_hash_word, nullptr);
+    r->cf_label_order = core_list_new(parse_cf_label_ptr_t);
 
     return r;
 }
@@ -1630,6 +1639,7 @@ parse_annot_result_free(parse_annot_result_t *r)
 
     core_dict_free(r->cf_labels);
     core_free(r->cf_labels);
+    core_list_free(r->cf_label_order);
 
     if (!r->borrowed_symtab) {
         parse_symtab_free(r->symtab);

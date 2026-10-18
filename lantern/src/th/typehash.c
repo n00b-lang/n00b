@@ -352,6 +352,30 @@ th_type_clone(th_ctx *destination, const th_type *source)
     return th_type_clone_replacing(destination, source, nullptr, nullptr, 0);
 }
 
+th_type *
+th_type_clone_fresh(th_ctx *destination, const th_type *source)
+{
+    if (!destination || !source) return nullptr;
+    core_list_t(th_clone_entry_t) seen = core_list_new(th_clone_entry_t);
+    th_type *copy = clone_type_graph(destination, source, &seen);
+    core_dict_t origins;
+    core_dict_init(&origins, nullptr, nullptr);
+    for (size_t i = 0; copy && i < seen.len; i++) {
+        th_type *variable = seen.data[i].copy;
+        if (variable->kind != TH_VAR || !variable->var.origin) continue;
+        bool found = false;
+        void *fresh = core_dict_get(&origins, variable->var.origin, &found);
+        if (!found) {
+            fresh = (void *)(uintptr_t)th_var_fresh_origin();
+            core_dict_put(&origins, variable->var.origin, fresh);
+        }
+        variable->var.origin = (uint64_t)(uintptr_t)fresh;
+    }
+    core_dict_free(&origins);
+    core_list_free(seen);
+    return copy;
+}
+
 bool
 th_type_clone_many(th_ctx *destination, const th_type *const *sources,
                    th_type **copies, size_t count)

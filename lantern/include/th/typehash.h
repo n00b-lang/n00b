@@ -189,6 +189,7 @@ typedef struct {
             th_type *result;
             th_type *call;
             const char *in_place;
+            const void *site;
         } method;
     };
 } th_constraint;
@@ -235,6 +236,7 @@ void    th_ctx_free(th_ctx *ctx);
 uint64_t th_type_graph_revision(th_type *const *roots, size_t count);
 /* Deep-copy a type graph into another type context, preserving graph sharing. */
 th_type *th_type_clone(th_ctx *destination, const th_type *source);
+th_type *th_type_clone_fresh(th_ctx *destination, const th_type *source);
 /* Clone related roots with one graph map, retaining shared variables and
  * constraint references between roots. */
 bool th_type_clone_many(th_ctx *destination, const th_type *const *sources,
@@ -440,6 +442,9 @@ bool   th_require_method(th_ctx *ctx, th_type *receiver, const char *name,
 bool   th_require_method_in_place(th_ctx *ctx, th_type *receiver,
                                   const char *name, const char *in_place,
                                   th_type *result, th_type *call);
+bool   th_require_method_at(th_ctx *ctx, th_type *receiver, const char *name,
+                            const char *in_place, th_type *result,
+                            th_type *call, const void *site);
 /* Connect an existing deferred method-call obligation to its enclosing
  * failure channel without adding a second method constraint. */
 bool   th_method_obligation_set_error(th_ctx *ctx, th_type *receiver,

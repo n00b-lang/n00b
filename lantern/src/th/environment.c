@@ -750,7 +750,7 @@ static th_type *fresh_pattern(th_ctx *ctx, th_type *type) {
   if (!ctx || !type) return nullptr;
   return th_kind_of(th_resolve(type)) == TH_BINDER
       ? th_instantiate(ctx, type)
-      : th_type_clone(ctx, type);
+      : th_type_clone_fresh(ctx, type);
 }
 
 th_type *th_env_signature_contract(th_ctx *ctx, th_type *signature,

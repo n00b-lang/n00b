@@ -210,6 +210,7 @@ static bool same_method_obligation(th_ctx *ctx, const th_constraint *a,
                                    th_type *a_owner,
                                    const th_constraint *b, th_type *b_owner)
 {
+    if (a->method.site && a->method.site == b->method.site) return true;
     if (!same_method_output(ctx, a->method.result, a_owner,
                               b->method.result, b_owner)) return false;
     th_type *a_call = th_resolve(a->method.call);
@@ -226,8 +227,8 @@ static bool same_method_obligation(th_ctx *ctx, const th_constraint *a,
                                  b_call->fn.error, b_owner)) return false;
     for (size_t i = 0; i < a_call->fn.np; i++)
         if (a_call->fn.params[i].mode != b_call->fn.params[i].mode
-            || !same_method_output(ctx, a_call->fn.params[i].type, a_owner,
-                                   b_call->fn.params[i].type, b_owner))
+            || !same_method_type_ref(ctx, a_call->fn.params[i].type, a_owner,
+                                     b_call->fn.params[i].type, b_owner))
             return false;
     if (a_call->fn.rest
         && (a_call->fn.rest->mode != b_call->fn.rest->mode
@@ -408,9 +409,9 @@ bool th_var_constrain(th_ctx *ctx, th_type *var, th_constraint c)
     return result;
 }
 
-bool th_require_method_in_place(th_ctx *ctx, th_type *receiver,
-                                const char *name, const char *in_place,
-                                th_type *result, th_type *call)
+bool th_require_method_at(th_ctx *ctx, th_type *receiver, const char *name,
+                          const char *in_place, th_type *result,
+                          th_type *call, const void *site)
 {
     if (!ctx || !receiver || !name || !*name || !result ||
         (in_place && !*in_place) ||
@@ -424,10 +425,19 @@ bool th_require_method_in_place(th_ctx *ctx, th_type *receiver,
                                           .method = {.name = name,
                                                      .result = result,
                                                      .call = call,
-                                                     .in_place = in_place}}))
+                                                     .in_place = in_place,
+                                                     .site = site}}))
         return false;
     return is_variable ||
            th_unify_in_place(ctx, obligation, receiver) != nullptr;
+}
+
+bool th_require_method_in_place(th_ctx *ctx, th_type *receiver,
+                                const char *name, const char *in_place,
+                                th_type *result, th_type *call)
+{
+    return th_require_method_at(ctx, receiver, name, in_place, result, call,
+                                nullptr);
 }
 
 bool th_require_method(th_ctx *ctx, th_type *receiver, const char *name,

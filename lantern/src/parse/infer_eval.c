@@ -334,7 +334,8 @@ static th_type *infer_method_obligation(ictx *c, th_type *receiver,
                                         const char *method_name,
                                         th_type *result, th_type *call_shape)
 {
-    if (!th_require_method(c->tc, receiver, method_name, result, call_shape))
+    if (!th_require_method_at(c->tc, receiver, method_name, nullptr, result,
+                              call_shape, c->v->node))
         c->failed = true;
     return result;
 }
@@ -1219,8 +1220,9 @@ eval(ictx *c, const parse_infer_expr_t *e)
             c->failed = true;
             return result;
         }
-        if (!th_require_method_in_place(c->tc, receiver, e->name.data,
-                                        e->other_name.data, result, call))
+        if (!th_require_method_at(c->tc, receiver, e->name.data,
+                                  e->other_name.data, result, call,
+                                  c->v->node))
             c->failed = true;
         return result;
     }
@@ -1273,6 +1275,7 @@ parse_infer_eval_with_type_node_resolver(
         return nullptr;
     }
 
+    th_span_t outer_span = th_ctx_span(tc);
     parse_tree_t *first_leaf = parse_tree_scan_leaves(v->node, false, nullptr,
                                                        nullptr);
     parse_tree_t *last_leaf  = parse_tree_scan_leaves(v->node, true, nullptr,
@@ -1311,6 +1314,7 @@ parse_infer_eval_with_type_node_resolver(
     };
 
     th_type *t = eval(&c, e);
+    th_ctx_set_span(tc, outer_span);
 
     if (ok) {
         *ok = !c.failed && t != nullptr;

@@ -19,10 +19,13 @@ typedef void (*parse_annot_node_callback_fn)(parse_visit_t *visit,
 typedef parse_sym_entry_t *parse_sym_entry_ptr_t;
 core_list_decl(parse_sym_entry_ptr_t);
 core_list_decl(parse_tree_ptr_t);
+typedef parse_cf_label_t *parse_cf_label_ptr_t;
+core_list_decl(parse_cf_label_ptr_t);
 
 typedef struct {
     parse_symtab_t *symtab;
     core_dict_t   *cf_labels;
+    core_list_t(parse_cf_label_ptr_t) cf_label_order;
     core_list_t(parse_tree_ptr_t) undefined;
     void *impl;
     bool  borrowed_symtab;

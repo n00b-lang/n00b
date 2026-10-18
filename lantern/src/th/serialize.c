@@ -56,6 +56,7 @@ th_type_writer_free(th_type_writer_t *writer)
 static uint32_t
 writer_node(th_type_writer_t *writer, const th_type *type)
 {
+    type = th_resolve_c(type);
     if (!type) return 0;
     bool found = false;
     void *slot = core_dict_get(&writer->index, (void *)type, &found);
