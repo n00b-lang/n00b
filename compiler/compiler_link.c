@@ -4538,6 +4538,7 @@ register_builtin_value_defaults(th_env *defaults, const th_env *base,
             ? state->annotations->symtab : nullptr;
         if (!symbols || !module_scope(state)) continue;
         th_ctx *probe = th_ctx_new();
+        th_ctx_set_probe_errors_observable(probe, false);
         core_string_t package = n00bb_package_id(unit);
         char *package_name = core_strndup(package.data, package.u8_bytes);
         bool ready = probe && package_name && th_ctx_set_environment(probe,
