@@ -151,6 +151,8 @@ typedef struct {
     uint64_t escapes[REACH_KINDS];
     uint64_t leaks[REACH_KINDS];
     uint64_t receives;
+    bool receives_fresh;
+    bool receives_nonlocal;
     carried_t *carried;
     uint32_t n_carried;
     bool writes_nonlocal;
@@ -448,6 +450,7 @@ effects_for(effects_table_t *table, ir_func_t *function)
             effects->writes[kind] = effects->escapes[kind]
                 = effects->leaks[kind] = UINT64_MAX;
         effects->receives = UINT64_MAX;
+        effects->receives_fresh = effects->receives_nonlocal = true;
         effects->writes_nonlocal = true;
         effects->opaque = true;
     }
@@ -504,6 +507,7 @@ typedef struct {
     size_t cap;
     root_set_t escaped;
     root_set_t leaked;
+    root_set_t received;
     uint64_t receives;
     bool failed;
 } origins_t;
@@ -562,7 +566,8 @@ seed_value(origins_t *state, ir_value_t *value, root_set_t *into,
     case IR_VAL_PARAM:
         return root_set_add(into, value, changed);
     case IR_VAL_GLOBAL:
-        return root_set_add(into, &nonlocal_root, changed);
+        return !value_carries_references(state, value)
+            || root_set_add(into, &nonlocal_root, changed);
     case IR_VAL_FUNC:
         return true;
     default: {
@@ -695,18 +700,6 @@ reached_parameter(const effects_table_t *table, const ir_value_t *root,
     return nullptr;
 }
 
-static void
-record_receivers(origins_t *state, const root_set_t *targets)
-{
-    int kind = 0;
-    for (uint32_t i = 0; i < targets->len; i++) {
-        const ir_value_t *parameter = reached_parameter(state->effects,
-                                                        targets->items[i],
-                                                        &kind);
-        if (parameter) state->receives |= parameter_bit(parameter);
-    }
-}
-
 static bool
 record_escape(origins_t *state, const root_set_t *roots, bool leak,
               bool *changed)
@@ -716,6 +709,17 @@ record_escape(origins_t *state, const root_set_t *roots, bool leak,
         && expand_contents(state, &expanded)
         && root_set_union(&state->escaped, &expanded, changed)
         && (!leak || root_set_union(&state->leaked, &expanded, changed));
+    free(expanded.items);
+    return ok;
+}
+
+static bool
+record_received(origins_t *state, const root_set_t *roots, bool *changed)
+{
+    root_set_t expanded = {0};
+    bool ok = root_set_union(&expanded, roots, nullptr)
+        && expand_contents(state, &expanded)
+        && root_set_union(&state->received, &expanded, changed);
     free(expanded.items);
     return ok;
 }
@@ -736,7 +740,10 @@ escape_into(origins_t *state, ir_value_t *target, const root_set_t *stored,
     int kind = 0;
     const ir_value_t *parameter = reached_parameter(state->effects, target,
                                                     &kind);
-    if (parameter && leaving.len) state->receives |= parameter_bit(parameter);
+    if (parameter && leaving.len) {
+        state->receives |= parameter_bit(parameter);
+        ok = ok && record_received(state, &leaving, changed);
+    }
     if (parameter || target == &nonlocal_root)
         ok = ok && record_escape(state, &leaving, target == &nonlocal_root,
                                  changed);
@@ -745,6 +752,34 @@ escape_into(origins_t *state, ir_value_t *target, const root_set_t *stored,
         ok = ok && held && root_set_union(held, &leaving, changed);
     }
     free(leaving.items);
+    return ok;
+}
+
+static bool
+receive_into(origins_t *state, const root_set_t *targets,
+             const root_set_t *incoming, bool *changed)
+{
+    bool ok = true;
+    int kind = 0;
+    for (uint32_t i = 0; ok && incoming->len && i < targets->len; i++) {
+        ir_value_t *target = targets->items[i];
+        const ir_value_t *parameter = reached_parameter(state->effects,
+                                                        target, &kind);
+        if (target == &nonlocal_root)
+            ok = record_escape(state, incoming, true, changed);
+        else if (is_location(target)) {
+            root_set_t *memory = location_memory(state, target);
+            ok = memory && root_set_union(memory, incoming, changed);
+        }
+        else if (parameter) {
+            state->receives |= parameter_bit(parameter);
+            ok = record_received(state, incoming, changed);
+        }
+        else {
+            root_set_t *held = origin_slot(state, target, true);
+            ok = held && root_set_union(held, incoming, changed);
+        }
+    }
     return ok;
 }
 
@@ -837,10 +872,6 @@ transfer_call(origins_t *state, ir_instr_t *instruction, root_set_t *result,
             && reached_roots(state, &roots, &contents);
         uint32_t index = i - first;
         bool carry = contents_carry_references(state, argument);
-        if (opaque || effect_bit(&effects->receives, index, 0)) {
-            record_receivers(state, &roots);
-            record_receivers(state, &contents);
-        }
         for (int kind = 0; ok && kind < REACH_KINDS; kind++) {
             if (kind == REACH_CONTENTS && !carry) continue;
             root_set_t *reached = kind == REACH_SELF ? &roots : &contents;
@@ -853,6 +884,12 @@ transfer_call(origins_t *state, ir_instr_t *instruction, root_set_t *result,
         free(roots.items);
         free(contents.items);
     }
+    root_set_t incoming = {0};
+    ok = ok && root_set_union(&incoming, &kept, nullptr)
+        && (!(opaque || effects->receives_fresh) || !instruction->dest
+            || root_set_add(&incoming, instruction->dest, nullptr))
+        && (!(opaque || effects->receives_nonlocal)
+            || root_set_add(&incoming, &nonlocal_root, nullptr));
     for (uint32_t i = first; ok && i < instruction->n_operands; i++) {
         root_set_t roots = {0};
         ok = seed_value(state, operand_at(instruction, i), &roots, nullptr);
@@ -862,8 +899,11 @@ transfer_call(origins_t *state, ir_instr_t *instruction, root_set_t *result,
             ok = memory && root_set_union(memory, &kept, changed)
                 && root_set_add(memory, roots.items[r], changed);
         }
+        if (ok && (opaque || effect_bit(&effects->receives, i - first, 0)))
+            ok = receive_into(state, &roots, &incoming, changed);
         free(roots.items);
     }
+    free(incoming.items);
     free(kept.items);
     return ok && call_carried(state, instruction, 0, instruction->dest,
                               result);
@@ -997,6 +1037,7 @@ origins_free(origins_t *state)
     free(state->memory);
     free(state->escaped.items);
     free(state->leaked.items);
+    free(state->received.items);
     pointer_map_free(&state->slots);
 }
 
@@ -1133,6 +1174,8 @@ summarize_carried(origins_t *state, const ir_instr_t *exit,
                     carried[slot].from[REACH_CONTENTS] |= state->receives;
                 if (root_set_has(&state->leaked, root))
                     carried[slot].nonlocal = true;
+                if (root_set_has(&state->received, root))
+                    carried[slot].shared = true;
             }
         }
         free(roots.items);
@@ -1205,6 +1248,17 @@ summarize(effects_table_t *table, th_ctx *types, effects_t *effects,
         if (parameter) leaks[kind] |= parameter_bit(parameter);
     }
     uint64_t receives = state.receives;
+    bool receives_fresh = false;
+    bool receives_nonlocal = false;
+    for (uint32_t r = 0; ok && r < state.received.len; r++) {
+        ir_value_t *root = state.received.items[r];
+        if (root == &nonlocal_root
+            || root_set_has(&state.leaked, root))
+            receives_nonlocal = true;
+        if (root != &nonlocal_root
+            && !reached_parameter(table, root, &kind))
+            receives_fresh = true;
+    }
     if (ok) mark_shared(carried, fresh, effects->n_carried);
     for (uint32_t s = 0; fresh && s < effects->n_carried; s++)
         free(fresh[s].items);
@@ -1220,12 +1274,15 @@ summarize(effects_table_t *table, th_ctx *types, effects_t *effects,
                   effects->n_carried * sizeof(*carried))
         || memcmp(leaks, effects->leaks, sizeof(leaks))
         || receives != effects->receives
+        || receives_fresh != effects->receives_fresh
+        || receives_nonlocal != effects->receives_nonlocal
         || writes_nonlocal != effects->writes_nonlocal) {
         memcpy(effects->writes, writes, sizeof(writes));
         memcpy(effects->escapes, escapes, sizeof(escapes));
         memcpy(effects->leaks, leaks, sizeof(leaks));
         effects->receives = receives;
-        free(effects->carried);
+        effects->receives_fresh = receives_fresh;
+        effects->receives_nonlocal = receives_nonlocal;        free(effects->carried);
         effects->carried = carried;
         effects->writes_nonlocal = writes_nonlocal;
         *changed = true;
@@ -1722,8 +1779,7 @@ root_is_buffer(const effects_table_t *table, const ir_value_t *root)
     if (is_contents_root(table, root)
         && pointer_map_get(&table->contents_index, root, &slot))
         return table->contents_hold_buffer[slot];
-    if (root->kind == IR_VAL_INSTR && root->def && is_call(root->def)
-        && carried_count(direct_callee(root->def)) > 1)
+    if (root->kind == IR_VAL_INSTR && root->def && is_call(root->def))
         return true;
     return type_may_hold_buffer(table->types, root->type, 0);
 }
