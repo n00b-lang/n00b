@@ -1054,7 +1054,7 @@ foreach string_probe : ['core_probe', 'rstr_probe', 'raw_literal_probe',
     )
 endforeach
 
-foreach unicode_probe : ['transcode_probe']
+foreach unicode_probe : ['transcode_probe', 'encoding_probe']
     test(
         'unicode-' + unicode_probe.replace('_', '-'),
         find_program('sh'),
