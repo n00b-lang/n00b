@@ -11,7 +11,7 @@ record Buffer_State {
 }
 
 record Buffer {
-    state: Ref[Buffer_State]
+    private state: Ref[Buffer_State]
 }
 
 public const empty_buffer_alloc: uint = 16
@@ -502,14 +502,11 @@ func to_string(consume self: Buffer,
 func free(self: Buffer) {
     let state: Ref[Buffer_State] = self.state
     with Buffer_Write(state) {
-        if !state.borrowed {
-            state.store = new[Array[u8]](0)
-        }
+        state.store = new[Array[u8]](0)
+        state.byte_len = 0
+        state.alloc_len = 0
+        state.borrowed = false
     }
-
-    state.store = new[Array[u8]](0)
-    state.byte_len = 0
-    state.alloc_len = 0
 }
 
 func buffer_borrow_begin(self: Buffer) -> string {
