@@ -794,6 +794,17 @@ foreach feature : ['fallible_without_result', 'try_error_binding',
 endforeach
 
 test(
+    'program-args', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'program_args_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'features'
+               / 'program_args.n',
+           'alpha', 'two words'],
+    timeout: 120,
+    suite: 'slow',
+)
+
+test(
     'buffer-probe', find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
            n00bb_exe.full_path(),

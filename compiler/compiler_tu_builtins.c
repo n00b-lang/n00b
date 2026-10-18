@@ -250,6 +250,11 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
             "__os_env_at", "n00b_os_env_at", optional_reference,
             env_at_args, 1)
         && register_builtin_native_function(symtab, types, nil_type,
+            "__os_arg_count", "n00b_os_arg_count", uint, nullptr, 0)
+        && register_builtin_native_function(symtab, types, nil_type,
+            "__os_arg_at", "n00b_os_arg_at", optional_reference,
+            env_at_args, 1)
+        && register_builtin_native_function(symtab, types, nil_type,
             "__os_fd_is_tty", "n00b_os_fd_is_tty", integer, close_args, 1)
         && register_builtin_native_function(symtab, types, nil_type,
             "__os_terminal_size", "n00b_os_terminal_size", integer,

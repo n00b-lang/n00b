@@ -12440,12 +12440,27 @@ emit_image(n00bb_llvm_backend_t *backend,
         && !emit_finalizer_bridge(backend, diagnostics)) return false;
     if (initializer_count) {
         LLVMTypeRef result = LLVMInt32TypeInContext(context);
-        LLVMTypeRef signature = LLVMFunctionType(result, nullptr, 0, false);
+        LLVMTypeRef entry_params[] = {
+            result, LLVMPointerTypeInContext(context, 0)
+        };
+        LLVMTypeRef signature = LLVMFunctionType(result, entry_params, 2,
+                                                 false);
         LLVMValueRef entry = LLVMAddFunction(module, "main", signature);
         LLVMBasicBlockRef block = LLVMAppendBasicBlockInContext(context, entry,
             "entry");
         LLVMBuilderRef builder = LLVMCreateBuilderInContext(context);
         LLVMPositionBuilderAtEnd(builder, block);
+        LLVMTypeRef save_args_type = LLVMFunctionType(
+            LLVMVoidTypeInContext(context), entry_params, 2, false);
+        LLVMValueRef save_args = LLVMGetNamedFunction(module,
+                                                      "n00b_os_save_args");
+        if (!save_args)
+            save_args = LLVMAddFunction(module, "n00b_os_save_args",
+                                        save_args_type);
+        LLVMValueRef saved_args[] = {
+            LLVMGetParam(entry, 0), LLVMGetParam(entry, 1)
+        };
+        LLVMBuildCall2(builder, save_args_type, save_args, saved_args, 2, "");
         if (metadata_bytes) {
             LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
             LLVMTypeRef fields[] = {
