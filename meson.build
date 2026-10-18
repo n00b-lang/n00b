@@ -778,6 +778,9 @@ foreach rejected : [
     ['method', [
         'N00BB-T0002]: call type does not match its function (string vs int)',
         'keyword_argument_method_rejected.n:14:22']],
+    ['generic', [
+        'N00BB-T0002]: call type does not match its function (string vs int)',
+        'keyword_argument_generic_rejected.n:14:28']],
     ['constructor', [
         'N00BB-T0020]: no visible __init matches this constructed type',
         'keyword_argument_constructor_rejected.n:9:17']],

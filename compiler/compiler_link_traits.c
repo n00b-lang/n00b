@@ -444,14 +444,47 @@ has_deferred_method_constraint(th_type *receiver, core_string_t method_name)
     return false;
 }
 
-bool
-n00bb_method_requirement_matches(th_type *receiver,
-                                 core_string_t method_name,
-                                 th_type *signature)
+static th_formal_name *
+requirement_formal_names(parse_grammar_t *grammar,
+                         parse_sym_entry_t *requirement, th_type *signature,
+                         size_t *count)
+{
+    size_t total = th_func_nparams(signature);
+    *count = total ? total - 1 : 0;
+    th_formal_name *names = core_alloc_array(th_formal_name, *count);
+    parse_tree_t *formals = callable_formal_parameters(grammar, requirement);
+    for (size_t i = 0; names && requirement && i < *count; i++) {
+        const char *name = nullptr;
+        size_t name_size = 0;
+        uint8_t flags = 0;
+        if (function_parameter_info(grammar, requirement, formals, i + 1,
+                nullptr, &name, &name_size, &flags, nullptr) && name)
+            names[i] = (th_formal_name){
+                .name = core_strndup(name, name_size),
+                .optional = (flags & 1u) != 0,
+            };
+    }
+    return names;
+}
+
+static void
+free_formal_names(th_formal_name *names, size_t count)
+{
+    for (size_t i = 0; names && i < count; i++)
+        core_free((char *)names[i].name);
+    core_free(names);
+}
+
+n00bb_requirement_fit_t
+n00bb_method_requirement_fit(parse_grammar_t *grammar, th_ctx *types,
+                             th_type *receiver, core_string_t method_name,
+                             th_type *signature,
+                             parse_sym_entry_t *requirement)
 {
     receiver = th_resolve(receiver);
+    signature = signature ? th_resolve(signature) : nullptr;
     if (!receiver || th_kind_of(receiver) != TH_VAR || !signature)
-        return true;
+        return N00BB_REQUIREMENT_FITS_EXACTLY;
     for (size_t i = 0; i < th_var_constraint_count(receiver); i++) {
         th_constraint constraint;
         if (!th_var_constraint_at(receiver, i, &constraint)
@@ -460,12 +493,73 @@ n00bb_method_requirement_matches(th_type *receiver,
             || strlen(constraint.method.name) != method_name.u8_bytes
             || memcmp(constraint.method.name, method_name.data,
                       method_name.u8_bytes)) continue;
-        th_type *call = constraint.method.call;
-        return call && th_kind_of(th_resolve(call)) == TH_FUNCTION
-            && th_func_nparams(signature) == th_func_nparams(call) + 1
-            && th_func_nkw(signature) == th_func_nkw(call);
+        th_type *call = th_resolve(constraint.method.call);
+        if (!call || th_kind_of(call) != TH_FUNCTION)
+            return N00BB_REQUIREMENT_DOES_NOT_FIT;
+        size_t supplied = th_func_nparams(call) + th_func_nkw(call);
+        if (th_func_nkw(signature))
+            return th_func_nparams(signature) == th_func_nparams(call) + 1
+                && th_func_nkw(signature) == th_func_nkw(call)
+                ? N00BB_REQUIREMENT_FITS_EXACTLY
+                : N00BB_REQUIREMENT_DOES_NOT_FIT;
+        size_t count = 0;
+        th_formal_name *names = requirement_formal_names(grammar,
+            requirement, signature, &count);
+        th_type *bound = names ? th_call_shape_bind_keywords(types, call,
+                                                             names, count)
+                               : nullptr;
+        free_formal_names(names, count);
+        if (!bound || (th_func_nparams(bound) + 1
+                > th_func_nparams(signature) && !th_func_rest(signature)))
+            return N00BB_REQUIREMENT_DOES_NOT_FIT;
+        return supplied + 1 == th_func_nparams(signature)
+            ? N00BB_REQUIREMENT_FITS_EXACTLY
+            : N00BB_REQUIREMENT_FITS_WITH_DEFAULTS;
     }
-    return true;
+    return N00BB_REQUIREMENT_FITS_EXACTLY;
+}
+
+static bool
+method_obligation_has_keywords(th_type *receiver, core_string_t method_name)
+{
+    receiver = th_resolve(receiver);
+    for (size_t i = 0; receiver && i < th_var_constraint_count(receiver);
+         i++) {
+        th_constraint constraint;
+        if (!th_var_constraint_at(receiver, i, &constraint)
+            || constraint.kind != TH_CON_METHOD
+            || !constraint.method.name
+            || strlen(constraint.method.name) != method_name.u8_bytes
+            || memcmp(constraint.method.name, method_name.data,
+                      method_name.u8_bytes)) continue;
+        th_type *call = th_resolve(constraint.method.call);
+        if (call && th_kind_of(call) == TH_FUNCTION && th_func_nkw(call))
+            return true;
+    }
+    return false;
+}
+
+bool
+n00bb_bind_method_keywords(parse_grammar_t *grammar, th_ctx *types,
+                           th_type *receiver, core_string_t method_name,
+                           parse_sym_entry_t *requirement)
+{
+    th_type *variable = receiver ? th_resolve(receiver) : nullptr;
+    th_type *signature = requirement
+        ? th_resolve(requirement->callable_contract
+            ? requirement->callable_contract : requirement->type) : nullptr;
+    if (!variable || th_kind_of(variable) != TH_VAR || !signature
+        || th_kind_of(signature) != TH_FUNCTION || th_func_nkw(signature))
+        return true;
+    size_t count = 0;
+    th_formal_name *names = requirement_formal_names(grammar, requirement,
+                                                     signature, &count);
+    char *method = core_strndup(method_name.data, method_name.u8_bytes);
+    bool bound = names && method && th_method_obligation_bind_keywords(types,
+        variable, method, names, count);
+    core_free(method);
+    free_formal_names(names, count);
+    return bound;
 }
 
 static bool
@@ -735,23 +829,37 @@ deferred_trait_method_requirement(parse_grammar_t *grammar,
     if (count)
         th_env_method_requirements(state->types, method_text, requirements,
                                    count);
+    parse_sym_entry_t *sole = nullptr;
+    size_t named = 0;
+    n00bb_requirement_fit_t best = N00BB_REQUIREMENT_DOES_NOT_FIT;
+    bool ambiguous = false;
     for (size_t i = 0; i < count; i++) {
         if (!requirements[i].trait_name) continue;
-        if (!n00bb_method_requirement_matches(receiver_type, method_name,
-                                               requirements[i].signature))
-            continue;
         parse_sym_entry_t *method = trait_method_requirement_symbol(
             grammar, analysis, unit,
             core_string_from_cstr(requirements[i].trait_name), method_name);
-        if (!method) continue;
-        if (found && found != method) {
-            found = nullptr;
-            break;
+        if (method && sole != method) {
+            sole = method;
+            named++;
         }
-        found = method;
+        n00bb_requirement_fit_t fit = method
+            ? n00bb_method_requirement_fit(grammar, state->types,
+                receiver_type, method_name, requirements[i].signature, method)
+            : N00BB_REQUIREMENT_DOES_NOT_FIT;
+        if (fit == N00BB_REQUIREMENT_DOES_NOT_FIT || fit < best) continue;
+        if (fit > best) {
+            best = fit;
+            found = method;
+            ambiguous = false;
+        }
+        else if (found != method) ambiguous = true;
     }
+    if (ambiguous) found = nullptr;
     core_free(requirements);
     core_free(method_text);
+    if (!found && named == 1
+        && method_obligation_has_keywords(receiver_type, method_name))
+        return sole;
     return found;
 }
 
@@ -1924,6 +2032,16 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
                     if (!bind_deferred_method_failure(unit, state,
                             site->node, receiver_type, method_name,
                             requirement)) return false;
+                    if (!n00bb_bind_method_keywords(grammar, state->types,
+                            receiver_type, method_name, requirement)) {
+                        core_diagnostics_report_at(
+                            core_translation_unit_diagnostics(unit), unit,
+                            CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0037"),
+                            CORE_STRING_STATIC(
+                                "named arguments do not bind to the trait method's parameters"),
+                            link_source_location(site->node));
+                        return false;
+                    }
                     site->symbol = requirement;
                     parse_sym_add_use(requirement, site->node);
                     if (!parse_tree_set_resolution_symbol(site->node,

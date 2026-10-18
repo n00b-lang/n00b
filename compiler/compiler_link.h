@@ -141,9 +141,18 @@ core_link_declaration_t *register_builtin_method_declaration(
 bool has_trait_constraint(th_type *receiver, const char *trait_name);
 bool has_deferred_method_constraint(th_type *receiver,
     core_string_t method_name);
-bool n00bb_method_requirement_matches(th_type *receiver,
-                                      core_string_t method_name,
-                                      th_type *signature);
+typedef enum {
+    N00BB_REQUIREMENT_DOES_NOT_FIT,
+    N00BB_REQUIREMENT_FITS_WITH_DEFAULTS,
+    N00BB_REQUIREMENT_FITS_EXACTLY,
+} n00bb_requirement_fit_t;
+n00bb_requirement_fit_t n00bb_method_requirement_fit(
+    parse_grammar_t *grammar, th_ctx *types, th_type *receiver,
+    core_string_t method_name, th_type *signature,
+    parse_sym_entry_t *requirement);
+bool n00bb_bind_method_keywords(parse_grammar_t *grammar, th_ctx *types,
+                                th_type *receiver, core_string_t method_name,
+                                parse_sym_entry_t *requirement);
 parse_sym_entry_t *trait_method_requirement_symbol(
     parse_grammar_t *grammar, n00bb_link_analysis_t *analysis,
     core_translation_unit_t *caller, core_string_t qualified_trait,

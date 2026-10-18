@@ -407,6 +407,7 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
         th_type *signature = context_call ? context_target->type
             : callee_symbol ? callee_symbol->type : callee_node->type;
         bool signature_instantiated = false;
+        parse_sym_entry_t *keyword_callee = nullptr;
         if (!member_call && callee_symbol
             && callee_symbol->callable_contract) {
             signature = call_site_channels(call_sites, label,
@@ -468,21 +469,36 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
                     th_env_method_requirements(state->types, method_name,
                         requirements, requirement_count);
                 size_t matched = SIZE_MAX;
+                parse_sym_entry_t *matched_requirement = nullptr;
+                n00bb_requirement_fit_t best = N00BB_REQUIREMENT_DOES_NOT_FIT;
+                bool ambiguous = false;
                 for (size_t r = 0; r < requirement_count; r++) {
-                    if (!has_trait_constraint(receiver_type,
-                                              requirements[r].trait_name)
-                        && !(has_deferred_method_constraint(receiver_type,
-                                method_text)
-                            && n00bb_method_requirement_matches(
-                                receiver_type, method_text,
-                                requirements[r].signature)))
+                    parse_sym_entry_t *requirement =
+                        trait_method_requirement_symbol(grammar,
+                            state->link_analysis, unit,
+                            core_string_from_cstr(requirements[r].trait_name),
+                            method_text);
+                    n00bb_requirement_fit_t fit = has_trait_constraint(
+                            receiver_type, requirements[r].trait_name)
+                        ? N00BB_REQUIREMENT_FITS_EXACTLY
+                        : has_deferred_method_constraint(receiver_type,
+                                                         method_text)
+                        ? n00bb_method_requirement_fit(grammar, state->types,
+                            receiver_type, method_text,
+                            requirements[r].signature, requirement)
+                        : N00BB_REQUIREMENT_DOES_NOT_FIT;
+                    if (fit == N00BB_REQUIREMENT_DOES_NOT_FIT || fit < best)
                         continue;
-                    if (matched != SIZE_MAX) {
-                        matched = SIZE_MAX;
-                        break;
-                    }
+                    ambiguous = fit == best;
+                    best = fit;
                     matched = r;
+                    matched_requirement = requirement;
                 }
+                if (ambiguous) {
+                    matched = SIZE_MAX;
+                    matched_requirement = nullptr;
+                }
+                if (!callee_symbol) keyword_callee = matched_requirement;
                 signature = matched != SIZE_MAX
                     ? call_site_requirement_signature(call_sites, label,
                         state->types, requirements[matched].signature,
@@ -630,6 +646,7 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
         }
         core_list_free(arguments);
         parse_sym_entry_t *named = context_call ? context_target
+            : keyword_callee ? keyword_callee
             : member_call ? callee_symbol : canonical_symbol(callee_symbol);
         if (named)
             unify_keyword_arguments(grammar, unit, state, label, named,

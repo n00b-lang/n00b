@@ -11,6 +11,26 @@ func measure(self: Point, scale: u8) -> u8 {
     return scale
 }
 
+trait Scaled {
+    func scale(self: `T, by: int, offset: int = 0) -> int
+}
+
+func scale(self: Point, by: int, offset: int = 0) -> int {
+    return self.x * by + offset
+}
+
+func shifted(item: `T) -> int {
+    return item.scale(offset = 1, by = 2)
+}
+
+func doubled(item: `T) -> int {
+    return item.scale(by = 2)
+}
+
+func measured(item: `T) -> u8 {
+    return item.measure(scale = 200)
+}
+
 func narrow(value: u8, ratio: f64 = 0.5) -> u8 {
     return value
 }
@@ -59,6 +79,9 @@ require size(text = b) == 3
 require maybe(value = 5) == 5
 require maybe(value = nil) == 7
 require p.measure(scale = 255) == 255
+require shifted(p) == 3
+require doubled(p) == 2
+require measured(p) == 200
 require h.n == 200
 with Label(width = 255, origin = (x = 0, y = 0)) {
 }
