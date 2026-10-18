@@ -1132,12 +1132,25 @@ constructor_argument_fits(n00bb_tu_state_t *state, parse_tree_t *node,
 }
 
 static bool
+constructor_argument_accepts(n00bb_tu_state_t *state, parse_tree_t *node,
+                             th_type *parameter, th_type *argument,
+                             parse_tree_t **string_argument)
+{
+    if (constructor_argument_fits(state, node, parameter, argument))
+        return true;
+    if (n00bb_string_where_buffer_expected(state->types, parameter, argument))
+        *string_argument = node;
+    return false;
+}
+
+static bool
 constructor_arguments_match(parse_grammar_t *grammar,
                             core_translation_unit_t *unit,
                             parse_tree_t *construction,
                             parse_tree_t *existing_target,
                             parse_sym_entry_t *symbol,
-                            th_type *signature)
+                            th_type *signature,
+                            parse_tree_t **string_argument)
 {
     n00bb_tu_state_t *state = tu_state(unit);
     if (!grammar || !state || !state->types || !construction || !symbol
@@ -1182,8 +1195,8 @@ constructor_arguments_match(parse_grammar_t *grammar,
             : core_tree_node_value(argument).type;
         if (!parameter || !argument_type
             || (index < parameter_count && provided[index])
-            || !constructor_argument_fits(state, argument, parameter->type,
-                                          argument_type)) {
+            || !constructor_argument_accepts(state, argument, parameter->type,
+                                             argument_type, string_argument)) {
             valid = false;
             break;
         }
@@ -1208,8 +1221,8 @@ constructor_arguments_match(parse_grammar_t *grammar,
             ? th_func_param(signature, index) : nullptr;
         if (!named || index == 0 || !parameter || !argument_type
             || provided[index]
-            || !constructor_argument_fits(state, argument, parameter->type,
-                                          argument_type)) {
+            || !constructor_argument_accepts(state, argument, parameter->type,
+                                             argument_type, string_argument)) {
             valid = false;
             break;
         }
@@ -1252,6 +1265,7 @@ resolve_constructor_use_site(parse_grammar_t *grammar, core_link_unit_t *link,
     const char *failed_constraint = nullptr;
     th_type *failed_constraint_type = nullptr;
     size_t constraint_failures = 0;
+    parse_tree_t *string_argument = nullptr;
     for (size_t i = 0; i < analysis->units.len; i++) {
         core_translation_unit_t *candidate_unit = analysis->units.data[i];
         n00bb_tu_state_t *candidate_state = tu_state(candidate_unit);
@@ -1281,7 +1295,7 @@ resolve_constructor_use_site(parse_grammar_t *grammar, core_link_unit_t *link,
                     || !constructor_arguments_match(grammar, unit,
                         site->node,
                         site->init_call ? site->receiver_node : nullptr,
-                        symbol, argument_signature)) {
+                        symbol, argument_signature, &string_argument)) {
                     th_error_t detail = {0};
                     if (th_error_count(state->types) > errors_before
                         && th_error_at(state->types,
@@ -1319,6 +1333,15 @@ resolve_constructor_use_site(parse_grammar_t *grammar, core_link_unit_t *link,
             parse_tree_set_resolution_symbol(site->node, flagset_symbol);
             core_list_free(candidates);
             return true;
+        }
+        if (string_argument) {
+            core_diagnostics_report_at(
+                core_translation_unit_diagnostics(unit), unit,
+                CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0036"),
+                CORE_STRING_STATIC(n00bb_string_to_buffer_text),
+                link_source_location(string_argument));
+            core_list_free(candidates);
+            return false;
         }
         core_buffer_t message = {0};
         if (constraint_failures == 1)

@@ -160,6 +160,8 @@ bool unary_operator_dispatch_for_node(parse_grammar_t *grammar,
 parse_tree_t *member_access_node(parse_grammar_t *grammar, parse_tree_t *node);
 bool index_dispatch_for_node(parse_grammar_t *grammar, parse_tree_t *node,
                              core_string_t *trait, core_string_t *method);
+parse_tree_t *n00bb_index_stored_value(parse_grammar_t *grammar,
+                                       parse_tree_t *node);
 bool n00bb_index_reference_storage(parse_grammar_t *grammar,
                                    parse_tree_t *node);
 parse_tree_t *n00bb_index_expression_node(parse_grammar_t *grammar,
@@ -272,6 +274,13 @@ bool n00bb_builtin_reference_function(parse_sym_entry_t *symbol);
 parse_sym_entry_t *n00bb_atomic_member_lvalue_root(
     parse_grammar_t *grammar, core_translation_unit_t *unit,
     parse_tree_t *target);
+bool n00bb_reference_target(parse_grammar_t *grammar, parse_tree_t *node);
+parse_sym_entry_t *n00bb_atomic_load_symbol(parse_grammar_t *grammar,
+                                            core_translation_unit_t *unit,
+                                            parse_tree_t *node);
+void n00bb_apply_atomic_load(parse_grammar_t *grammar,
+                             core_translation_unit_t *unit,
+                             parse_tree_t *node);
 parse_sym_entry_t *n00bb_member_chain_root(parse_grammar_t *grammar,
                                            core_translation_unit_t *unit,
                                            parse_tree_t *node);
@@ -789,12 +798,21 @@ bool n00bb_range_proven_above_int64(parse_grammar_t *grammar,
                                     parse_tree_t *node);
 bool n00bb_contextual_integer_literal(n00bb_tu_state_t *state,
                                       parse_tree_t *node, th_type *target);
+bool n00bb_literal_adopts_open_type(parse_grammar_t *grammar,
+                                    n00bb_tu_state_t *state,
+                                    parse_tree_t *node, th_type *type);
 static constexpr char n00bb_string_to_buffer_text[] =
     "a string is immutable and does not convert to Buffer; use "
     "buffer_from_string(s)";
 static constexpr char n00bb_buffer_type_name[] =
     "builtin.containers.buffer.Buffer";
 bool n00bb_value_coerces(th_ctx *types, th_type *from, th_type *to);
+bool n00bb_string_where_buffer_expected(th_ctx *types, th_type *expected,
+                                        th_type *actual);
+parse_tree_t *n00bb_string_where_buffer_site(parse_grammar_t *grammar,
+                                             th_ctx *types,
+                                             parse_tree_t *node,
+                                             th_type *expected);
 void n00bb_register_value_coercions(th_ctx *types);
 th_type *n00bb_value_coercion_target(th_ctx *types, th_type *from);
 bool n00bb_blanket_receiver(th_type *contract);

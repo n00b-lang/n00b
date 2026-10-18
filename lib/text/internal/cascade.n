@@ -50,8 +50,7 @@ private func record_covers(r: Style_Record, pos: u32, len: u32,
 
 private func order_cover(modify cover: Array[uint], n: i32,
                          recs: List[Style_Record]) {
-    var i: i32 = 1
-    while i < n {
+    for i from 1 until n {
         let key: uint = cover[cast[int] i]
         var j: i32 = i - 1
         while j >= 0 {
@@ -68,7 +67,6 @@ private func order_cover(modify cover: Array[uint], n: i32,
             j -= 1
         }
         cover[cast[int](j + 1)] = key
-        i += 1
     }
 }
 
@@ -86,10 +84,8 @@ private func level_style_index(body: Ref[Rich_Body], pos: u32, len: u32,
         }
         if n == cap {
             var grown: Array[uint] = new[Array[uint]](cast[int](cap * 2))
-            var j: i32 = 0
-            while j < n {
+            for j from 0 until n {
                 grown[cast[int] j] = cover[cast[int] j]
-                j += 1
             }
             cover = grown
             cap *= 2

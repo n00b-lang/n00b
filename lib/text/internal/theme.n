@@ -493,7 +493,7 @@ private func themes_spin_wait(modify attempt: u32) {
 private func themes_read_lock() {
     var attempt: u32 = 0
     while true {
-        let seen: u32 = __atomic_load(ref themes_lock)
+        let seen: u32 = themes_lock
         if seen & themes_writer_bit == 0 and
             __atomic_compare_exchange(ref themes_lock, seen, seen + 1) {
             return
@@ -514,7 +514,7 @@ private func themes_write_lock() {
 }
 
 private func themes_write_unlock() {
-    __atomic_store(ref themes_lock, 0)
+    themes_lock = 0
 }
 
 private func name_eq(a: string, b: string) -> bool {
@@ -522,12 +522,10 @@ private func name_eq(a: string, b: string) -> bool {
     if n != byte_len(b) {
         return false
     }
-    var i: u64 = 0
-    while i < n {
+    for i from 0 until n {
         if byte_at(a, i) != byte_at(b, i) {
             return false
         }
-        i += 1
     }
     return true
 }
@@ -546,18 +544,16 @@ func theme_lookup(name: string) -> Ref[Theme]? {
     if hit != nil {
         return hit
     }
-    var i: uint = 0
-    while i < builtin_themes.len() {
+    for i from 0 until builtin_themes.len() {
         if name_eq(builtin_themes[i].name, name) {
             return builtin_themes[i]
         }
-        i += 1
     }
     return nil
 }
 
 func theme_current() -> Ref[Theme] {
-    let pinned: Ref[Theme]? = __atomic_load(ref current)
+    let pinned: Ref[Theme]? = current
     if pinned != nil {
         return pinned.get()
     }
@@ -573,7 +569,7 @@ func theme_set_current(name: string) -> bool {
     if hit == nil {
         return false
     }
-    __atomic_store(ref current, hit.get())
+    current = hit.get()
     return true
 }
 
@@ -589,12 +585,10 @@ func theme_builtin(i: uint) -> Ref[Theme] {
 }
 
 private func theme_is_builtin(theme: Ref[Theme]) -> bool {
-    var i: uint = 0
-    while i < builtin_themes.len() {
+    for i from 0 until builtin_themes.len() {
         if builtin_themes[i] == theme {
             return true
         }
-        i += 1
     }
     return false
 }
@@ -622,10 +616,8 @@ private func clone_bindings(src: List[Style_Binding], n: uint,
                             extra: uint) -> Array[Style_Binding] {
     var out: Array[Style_Binding] =
         new[Array[Style_Binding]](cast[int](n + extra))
-    var i: uint = 0
-    while i < n {
+    for i from 0 until n {
         out[i] = src[cast[int] i]
-        i += 1
     }
     return out
 }
@@ -644,19 +636,14 @@ private func put_binding(modify tbl: List[Style_Binding]?, is_role: bool,
     }
     let src_n: uint = src.len()
     var at: uint = src_n
-    var i: uint = 0
-    while i < src_n {
+    for i from 0 until src_n {
         if name_eq(src[cast[int] i].name, name) {
             at = i
             break
         }
-        i += 1
     }
     let total: uint = if at == src_n { = src_n + 1 } else { = src_n }
-    var extra: uint = 0
-    if at == src_n {
-        extra = 1
-    }
+    let extra: uint = if at == src_n { = 1 } else { = 0 }
     var out: Array[Style_Binding] = clone_bindings(src, src_n, extra)
     out[at] = (name = name, style = style, fg_ix = -1, bg_ix = -1)
     tbl = sys.abi.list_with_length(out, total)
@@ -730,12 +717,10 @@ func style_for_tag(self: Theme, tag: string) -> Text_Style {
         tbl = sys.abi.list_with_length(default_styles, default_styles.len())
     }
     let n: uint = tbl.len()
-    var i: uint = 0
-    while i < n {
+    for i from 0 until n {
         if name_eq(tbl[cast[int] i].name, tag) {
             return binding_style(tbl[cast[int] i])
         }
-        i += 1
     }
     return (bold = nil, italic = nil, underline = nil, double_underline = nil,
             strikethrough = nil, reverse = nil, dim = nil, blink = nil,

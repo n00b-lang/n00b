@@ -250,8 +250,10 @@ rebind_call_node(n00bb_tu_state_t *state, parse_tree_t *node,
 {
     parse_node_resolution_t resolution = parse_tree_resolution(node);
     if (resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
-        && resolution.target.symbol == from)
+        && resolution.target.symbol == from) {
         parse_tree_set_resolution_symbol(node, to);
+        if (parse_sym_remove_use(from, node)) (void)parse_sym_add_use(to, node);
+    }
     if (core_tree_node_value(node).sym == from)
         core_tree_node_value(node).sym = to;
     n00bb_link_use_site_t *site = link_use_site_for_node(state, node);
@@ -550,8 +552,13 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
             if (!parameter && i + parameter_offset >= parameter_count)
                 parameter = th_func_rest(signature);
             if (!parameter || core_tree_is_leaf(argument)) continue;
-            (void)unify_call_node_type(unit, state, label->self, argument,
-                core_tree_node_value(argument).type, parameter->type);
+            th_type *argument_type = core_tree_node_value(argument).type;
+            if (context_call && n00bb_value_coerces(state->types,
+                    argument_type, parameter->type))
+                report_call_type_error(unit, argument, state->types,
+                                       argument_type, parameter->type);
+            else (void)unify_call_node_type(unit, state, label->self,
+                argument, argument_type, parameter->type);
             (void)n00bb_contextual_float_literal(argument, parameter->type);
         }
         core_list_free(arguments);

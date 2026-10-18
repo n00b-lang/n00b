@@ -321,6 +321,9 @@ bool append_function_contract_identity(core_translation_unit_t *unit,
 parse_sym_entry_t *n00bb_select_call_overload(parse_grammar_t *grammar,
     n00bb_tu_state_t *state, parse_cf_label_t *call,
     parse_sym_entry_t *symbol, bool *pending);
+bool n00bb_function_has_overloads(parse_sym_entry_t *symbol);
+void n00bb_defer_overloaded_callee(parse_grammar_t *grammar,
+    core_translation_unit_t *unit, parse_tree_t *node);
 core_string_t link_symbol_module(core_translation_unit_t *unit,
                                  parse_sym_entry_t *symbol);
 bool n00bb_bind_site_reference(core_translation_unit_t *unit,
