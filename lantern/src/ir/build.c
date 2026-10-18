@@ -154,20 +154,43 @@ static ir_span_t tok_span(B *b, const parse_token_info_t *t)
         return IR_SPAN_UNKNOWN;
     }
 
-    uint32_t end_line = t->endline ? t->endline : t->line;
-    uint32_t end_col  = t->endcol;
+    uint32_t line     = parse_token_line(t);
+    uint32_t column   = parse_token_column(t);
+    uint32_t end_line = parse_token_endline(t);
+    uint32_t end_col  = parse_token_endcol(t);
+
+    if (!end_line) {
+        end_line = line;
+    }
 
     if (!end_col) {
-        end_col = t->column + 1;
+        end_col = column + 1;
     }
 
     ir_span_t s =
-        ir_span_make(b->file, (uint32_t)t->start_byte, (uint32_t)t->end_byte,
-                     t->line, t->column, end_line, end_col);
+        ir_span_make(b->file, (uint32_t)parse_token_start_byte(t),
+                     (uint32_t)parse_token_end_byte(t), line, column,
+                     end_line, end_col);
 
     s.implied = true;
 
     return s;
+}
+
+static char *text_cstr(B *b, core_string_t s)
+{
+    if (!s.data) {
+        return nullptr;
+    }
+
+    char *copy = ir_alloc(b->ctx, s.u8_bytes + 1);
+
+    if (copy) {
+        if (s.u8_bytes) memcpy(copy, s.data, s.u8_bytes);
+        copy[s.u8_bytes] = '\0';
+    }
+
+    return copy;
 }
 
 static ib_node *nd(B *b, ib_kind kind, ir_span_t span)
@@ -187,7 +210,7 @@ static bool is_spanning(parse_tree_t *leaf, void *arg)
 
     parse_token_info_t *t = parse_node_token(leaf);
 
-    return t && t->tid != ir_grammar_tid("NEWLINE");
+    return t && parse_token_tid(t) != ir_grammar_tid("NEWLINE");
 }
 
 static parse_token_info_t *edge_tok(parse_tree_t *n, bool last)
@@ -404,10 +427,12 @@ static ib_node *leaf_ib(B *b, parse_tree_t *c)
     parse_token_info_t *t = parse_node_token(c);
     core_string_t       s = parse_tree_leaf_text(c);
     ib_node *n = nd(b, IB_NAME,
-                    t && t->tid == ir_grammar_tid("NEWLINE") ? IR_SPAN_UNKNOWN
-                                                             : tok_span(b, t));
+                    t && parse_token_tid(t) == ir_grammar_tid("NEWLINE")
+                        ? IR_SPAN_UNKNOWN
+                        : tok_span(b, t));
 
-    if (s.data || (t && t->tid == ir_grammar_tid("STRING_LIT"))) {
+    if (s.data
+        || (t && parse_token_tid(t) == ir_grammar_tid("STRING_LIT"))) {
         char *copy = ir_alloc(b->ctx, s.u8_bytes + 1);
         if (copy) {
             if (s.u8_bytes) memcpy(copy, s.data, s.u8_bytes);
@@ -415,8 +440,8 @@ static ib_node *leaf_ib(B *b, parse_tree_t *c)
             n->text = copy;
         }
         n->text_length = s.u8_bytes;
-    } else if (t && t->tid > 0 && t->tid < 128) {
-        char one[2] = {(char)t->tid, 0};
+    } else if (t && parse_token_tid(t) > 0 && parse_token_tid(t) < 128) {
+        char one[2] = {(char)parse_token_tid(t), 0};
 
         n->text = ir_strdup(b->ctx, one);
     }
@@ -465,13 +490,14 @@ static void attach_comment(B *b, parse_tree_t *node, ir_annots_t *a)
 {
     parse_token_info_t *t = parse_tree_find_first_terminal(node);
 
-    if (!t || !t->leading_trivia) {
+    if (!t || !parse_token_leading_trivia(t)) {
         return;
     }
 
     core_buffer_t *sb = core_buffer_empty();
 
-    for (parse_trivia_t *tv = t->leading_trivia; tv; tv = tv->next) {
+    for (parse_trivia_t *tv = parse_token_leading_trivia(t); tv;
+         tv = tv->next) {
         const char *s = tv->text.data;
 
         if (!s || *s != '#') {
@@ -629,9 +655,9 @@ static bool spell_leaf(parse_tree_t *leaf, void *arg)
     core_string_t       s = parse_tree_leaf_text(leaf);
 
     if (s.data) {
-        core_buffer_puts(w->sb, s.data);
-    } else if (t && t->tid > 0 && t->tid < 128) {
-        char one[2] = {(char)t->tid, 0};
+        core_buffer_append(w->sb, s.data, s.u8_bytes);
+    } else if (t && parse_token_tid(t) > 0 && parse_token_tid(t) < 128) {
+        char one[2] = {(char)parse_token_tid(t), 0};
 
         core_buffer_puts(w->sb, one);
     }
@@ -746,8 +772,10 @@ static bool open_module(parse_visit_t *v)
         nt_child(v->grammar, pd, CORE_STRING_STATIC("name")));
 
     for (size_t i = 0; want.data && i < b->n_profiles; i++) {
-        if (!strcmp(b->profiles[i]->name, want.data)) {
-            b->m = ir_module_new(b->ctx, name.data ? name.data : "",
+        if (strlen(b->profiles[i]->name) == want.u8_bytes
+            && !memcmp(b->profiles[i]->name, want.data, want.u8_bytes)) {
+            char *module_name = text_cstr(b, name);
+            b->m = ir_module_new(b->ctx, module_name ? module_name : "",
                                  b->profiles[i], nullptr);
             break;
         }
@@ -1744,7 +1772,8 @@ static void *r_layout_decl(parse_reduce_t *r)
                                        ? parse_tree_leaf_text(target_string)
                                        : (core_string_t){0};
     ir_descriptor_t *d = target_string
-                             ? ir_layout_ensure(b->m, t, target_text.data)
+                             ? ir_layout_ensure(b->m, t,
+                                                text_cstr(b, target_text))
                              : ir_layout_ensure_targetless(b->m, t);
 
     if (!d) {
@@ -1884,12 +1913,14 @@ static void *r_operand(parse_reduce_t *r)
 
     if (t) {
         parse_token_info_t *first = parse_tree_find_first_terminal(r->node);
-        core_string_t word = first && core_option_is_set(first->value)
-            ? core_option_get(first->value) : (core_string_t){0};
+        core_option_t(core_string_t) first_value = first
+            ? parse_token_value(first) : core_option_none(core_string_t);
+        core_string_t word = core_option_is_set(first_value)
+            ? core_option_get(first_value) : (core_string_t){0};
 
         n->how  = OP_TYPE;
         n->type = ir_type_intern(b->m, t);
-        n->text = word.data ? ir_strdup(b->ctx, word.data) : nullptr;
+        n->text = text_cstr(b, word);
 
         return n;
     }
@@ -2687,9 +2718,12 @@ ir_module_t *ir_module_parse(ir_ctx_t *ctx, const char *text, int32_t file,
                 ? scan_stream_get(ts, error_pos)
                 : nullptr;
         ir_span_t span =
-            token ? ir_span_make(file, (uint32_t)token->start_byte,
-                                 (uint32_t)token->end_byte, token->line,
-                                 token->column, token->endline, token->endcol)
+            token ? ir_span_make(file, (uint32_t)parse_token_start_byte(token),
+                                 (uint32_t)parse_token_end_byte(token),
+                                 parse_token_line(token),
+                                 parse_token_column(token),
+                                 parse_token_endline(token),
+                                 parse_token_endcol(token))
                   : ir_span_make(file, 0, 0, 1, 1, 1, 1);
         ir_diag_t *dg = ir_diag_begin(d, IR_DIAG_PARSE, span, "here");
 

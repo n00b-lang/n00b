@@ -16,3 +16,5 @@ extern core_string_t core_string_borrow(const char *src, size_t byte_len);
 extern core_string_t core_string_dup(core_string_t s);
 extern core_string_t core_string_empty(void);
 extern bool         core_string_eq(core_string_t a, core_string_t b);
+extern long long    core_string_strtoll(core_string_t s, int base);
+extern unsigned long long core_string_strtoull(core_string_t s, int base);

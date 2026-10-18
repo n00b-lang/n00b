@@ -28,18 +28,21 @@ print_node(parse_grammar_t *g, parse_tree_t *node, core_buffer_t *b,
 
         print_indent(b, depth);
 
-        if (core_option_is_set(tok->value)) {
-            core_string_t val = core_option_get(tok->value);
+        core_option_t(core_string_t) value = parse_token_value(tok);
+
+        if (core_option_is_set(value)) {
+            core_string_t val = core_option_get(value);
 
             if (val.data) {
                 core_buffer_printf(b, "TOKEN[%d] \"%.*s\"\n",
-                                  tok->tid, (int)val.u8_bytes, val.data);
+                                  parse_token_tid(tok), (int)val.u8_bytes,
+                                  val.data);
 
                 return;
             }
         }
 
-        core_buffer_printf(b, "TOKEN[%d]\n", tok->tid);
+        core_buffer_printf(b, "TOKEN[%d]\n", parse_token_tid(tok));
 
         return;
     }

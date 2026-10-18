@@ -457,11 +457,13 @@ static void test_lexer_files_are_relative_to_the_grammar(void) {
   parse_token_info_t *word2 = scan_stream_next(ts);
 
   assert(word != nullptr);
-  assert(word->tid == parse_terminal_id(g, CORE_STRING_STATIC("WORD")));
+  assert(parse_token_tid(word)
+         == parse_terminal_id(g, CORE_STRING_STATIC("WORD")));
   assert(op != nullptr);
-  assert(op->tid == parse_terminal_id(g, CORE_STRING_STATIC("??")));
+  assert(parse_token_tid(op) == parse_terminal_id(g, CORE_STRING_STATIC("??")));
   assert(word2 != nullptr);
-  assert(word2->tid == parse_terminal_id(g, CORE_STRING_STATIC("WORD")));
+  assert(parse_token_tid(word2)
+         == parse_terminal_id(g, CORE_STRING_STATIC("WORD")));
   assert(scan_stream_next(ts) == nullptr);
   assert(scan_status(sc) == SCAN_STATUS_COMPLETE);
 

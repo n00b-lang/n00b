@@ -96,8 +96,9 @@ static bool token_overlaps_line(const parse_token_stream_t *stream,
                                 uint32_t line) {
   for (int32_t i = 0; i < stream->token_count; i++) {
     const parse_token_info_t *token = stream->tokens[i];
-    if (token->tid != PARSE_TOK_EOF
-        && token->line <= line && token->endline >= line) {
+    if (parse_token_tid(token) != PARSE_TOK_EOF
+        && parse_token_line(token) <= line
+        && parse_token_endline(token) >= line) {
       return true;
     }
   }
@@ -108,8 +109,9 @@ static bool token_between(const parse_token_stream_t *stream,
                           size_t start_byte, size_t end_byte) {
   for (int32_t i = 0; i < stream->token_count; i++) {
     const parse_token_info_t *token = stream->tokens[i];
-    if (token->tid != PARSE_TOK_EOF && token->end_byte > start_byte
-        && token->start_byte < end_byte) {
+    if (parse_token_tid(token) != PARSE_TOK_EOF
+        && parse_token_end_byte(token) > start_byte
+        && parse_token_start_byte(token) < end_byte) {
       return true;
     }
   }
@@ -172,9 +174,11 @@ bool scan_lex_finalize_regions(parse_scanner_t *s) {
 
   size_t count = 0;
   for (int32_t i = 0; i < stream->token_count; i++) {
-    for (parse_trivia_t *t = stream->tokens[i]->leading_trivia; t; t = t->next)
+    for (parse_trivia_t *t = parse_token_leading_trivia(stream->tokens[i]); t;
+         t = t->next)
       count++;
-    for (parse_trivia_t *t = stream->tokens[i]->trailing_trivia; t; t = t->next)
+    for (parse_trivia_t *t = parse_token_trailing_trivia(stream->tokens[i]); t;
+         t = t->next)
       count++;
   }
   for (parse_trivia_t *t = s->pending_leading; t; t = t->next) count++;
@@ -184,8 +188,10 @@ bool scan_lex_finalize_regions(parse_scanner_t *s) {
   parse_trivia_t **items = core_alloc_array(parse_trivia_t *, count);
   size_t at = 0;
   for (int32_t i = 0; i < stream->token_count; i++) {
-    at = append_trivia_ptrs(stream->tokens[i]->leading_trivia, items, at);
-    at = append_trivia_ptrs(stream->tokens[i]->trailing_trivia, items, at);
+    at = append_trivia_ptrs(parse_token_leading_trivia(stream->tokens[i]),
+                            items, at);
+    at = append_trivia_ptrs(parse_token_trailing_trivia(stream->tokens[i]),
+                            items, at);
   }
   at = append_trivia_ptrs(s->pending_leading, items, at);
   at = append_trivia_ptrs(s->pending_trailing, items, at);
@@ -1324,12 +1330,14 @@ static bool ends_a_statement(const scan_lex_t *lex, parse_scanner_t *s) {
     return false;
   }
 
-  if (is_literal_tid(lex, prev->tid)) {
+  if (is_literal_tid(lex, parse_token_tid(prev))) {
     return true;
   }
 
-  if (core_option_is_set(prev->value)) {
-    core_string_t v = core_option_get(prev->value);
+  core_option_t(core_string_t) prev_value = parse_token_value(prev);
+
+  if (core_option_is_set(prev_value)) {
+    core_string_t v = core_option_get(prev_value);
 
     if (v.u8_bytes == 1 &&
         (v.data[0] == ')' || v.data[0] == ']' || v.data[0] == '}')) {
@@ -1429,77 +1437,7 @@ scan_lex_session_t *scan_lex_session_new(const scan_lex_t *program) {
 
 static parse_token_info_t *
 clone_pending_recovery_token(const parse_token_info_t *source) {
-  if (!source) {
-    return nullptr;
-  }
-
-  parse_token_info_t *copy = core_alloc(parse_token_info_t);
-  *copy = *source;
-  copy->leading_trivia = nullptr;
-  copy->trailing_trivia = nullptr;
-
-  parse_trivia_t **leading = &copy->leading_trivia;
-  for (const parse_trivia_t *item = source->leading_trivia; item;
-       item = item->next) {
-    *leading = core_alloc(parse_trivia_t);
-    **leading = *item;
-    (*leading)->text = core_string_dup(item->text);
-    (*leading)->region_name = item->region_name.data
-        ? core_string_dup(item->region_name) : (core_string_t){0};
-    (*leading)->regions = nullptr;
-    parse_trivia_region_link_t **leading_region = &(*leading)->regions;
-    for (const parse_trivia_region_link_t *link = item->regions;
-         link; link = link->next) {
-      *leading_region = core_alloc(parse_trivia_region_link_t);
-      **leading_region = *link;
-      (*leading_region)->next = nullptr;
-      leading_region = &(*leading_region)->next;
-    }
-    (*leading)->owns_text = true;
-    (*leading)->owns_region_name = (*leading)->region_name.data != nullptr;
-    (*leading)->next = nullptr;
-    leading = &(*leading)->next;
-  }
-  parse_trivia_t **trailing = &copy->trailing_trivia;
-  for (const parse_trivia_t *item = source->trailing_trivia; item;
-       item = item->next) {
-    *trailing = core_alloc(parse_trivia_t);
-    **trailing = *item;
-    (*trailing)->text = core_string_dup(item->text);
-    (*trailing)->region_name = item->region_name.data
-        ? core_string_dup(item->region_name) : (core_string_t){0};
-    (*trailing)->regions = nullptr;
-    parse_trivia_region_link_t **trailing_region = &(*trailing)->regions;
-    for (const parse_trivia_region_link_t *link = item->regions;
-         link; link = link->next) {
-      *trailing_region = core_alloc(parse_trivia_region_link_t);
-      **trailing_region = *link;
-      (*trailing_region)->next = nullptr;
-      trailing_region = &(*trailing_region)->next;
-    }
-    (*trailing)->owns_text = true;
-    (*trailing)->owns_region_name = (*trailing)->region_name.data != nullptr;
-    (*trailing)->next = nullptr;
-    trailing = &(*trailing)->next;
-  }
-  if (source->owns_value && core_option_is_set(source->value)) {
-    copy->value = core_option_set(
-        core_string_t, core_string_dup(core_option_get(source->value)));
-  }
-  if (source->owns_file && core_option_is_set(source->file)) {
-    copy->file = core_option_set(
-        core_string_t, core_string_dup(core_option_get(source->file)));
-  }
-  if (source->owns_literal_type && core_option_is_set(source->literal_type)) {
-    copy->literal_type = core_option_set(
-        core_string_t, core_string_dup(core_option_get(source->literal_type)));
-  }
-  if (source->owns_postfix_modifier
-      && core_option_is_set(source->postfix_modifier)) {
-    copy->postfix_modifier = core_option_set(core_string_t,
-        core_string_dup(core_option_get(source->postfix_modifier)));
-  }
-  return copy;
+  return parse_token_copy(source, true);
 }
 
 static scan_lex_session_t *
@@ -1671,13 +1609,17 @@ static bool scan_lex_session_equal_frame(const scan_lex_session_t *left,
   if (left->pending_recovery_token) {
     const parse_token_info_t *x = left->pending_recovery_token;
     const parse_token_info_t *y = right->pending_recovery_token;
-    bool x_value = core_option_is_set(x->value);
-    bool y_value = core_option_is_set(y->value);
+    core_option_t(core_string_t) x_option = parse_token_value(x);
+    core_option_t(core_string_t) y_option = parse_token_value(y);
+    bool x_value = core_option_is_set(x_option);
+    bool y_value = core_option_is_set(y_option);
 
-    if (x->tid != y->tid || x->start_byte != y->start_byte ||
-        x->end_byte != y->end_byte || x_value != y_value ||
-        (x_value && !core_string_eq(core_option_get(x->value),
-                                    core_option_get(y->value)))) {
+    if (parse_token_tid(x) != parse_token_tid(y)
+        || parse_token_start_byte(x) != parse_token_start_byte(y)
+        || parse_token_end_byte(x) != parse_token_end_byte(y)
+        || x_value != y_value
+        || (x_value && !core_string_eq(core_option_get(x_option),
+                                       core_option_get(y_option)))) {
       return false;
     }
   }
@@ -1792,22 +1734,7 @@ static void free_pending_recovery_token(parse_token_info_t *token) {
   if (!token) {
     return;
   }
-  parse_trivia_free(token->leading_trivia);
-  parse_trivia_free(token->trailing_trivia);
-  if (token->owns_value && core_option_is_set(token->value)) {
-    core_free(core_option_get(token->value).data);
-  }
-  if (token->owns_file && core_option_is_set(token->file)) {
-    core_free(core_option_get(token->file).data);
-  }
-  if (token->owns_literal_type && core_option_is_set(token->literal_type)) {
-    core_free(core_option_get(token->literal_type).data);
-  }
-  if (token->owns_postfix_modifier
-      && core_option_is_set(token->postfix_modifier)) {
-    core_free(core_option_get(token->postfix_modifier).data);
-  }
-  core_free(token);
+  parse_token_free(token);
 }
 
 static void scan_lex_session_free_frame(scan_lex_session_t *session) {
@@ -2321,14 +2248,12 @@ static bool scan_fence_body(parse_scanner_t *s, const scan_lex_fence_t *f,
       if (close_cursor < content_start) {
         content_start = close_cursor;
       }
-      tok->content_start_byte = s->source_base + content_start;
-      tok->content_end_byte = s->source_base + close_cursor;
-      tok->has_content_span = true;
+      parse_token_set_content_span(tok, s->source_base + content_start,
+                                   s->source_base + close_cursor);
 
       if (label_end > label_start) {
-        tok->label_start_byte = s->source_base + label_start;
-        tok->label_end_byte = s->source_base + label_end;
-        tok->has_label_span = true;
+        parse_token_set_label_span(tok, s->source_base + label_start,
+                                   s->source_base + label_end);
       }
     }
 
@@ -2559,16 +2484,17 @@ static bool resume_fence(parse_scanner_t *s) {
 static void literal_hook_invalid(parse_scanner_t *s, core_string_t message,
                                  size_t relative_start, size_t relative_end) {
   parse_token_info_t *token = scan_prev_token(s);
-  size_t local_start = token->start_byte - s->source_base + relative_start;
+  size_t local_start = parse_token_start_byte(token) - s->source_base
+                     + relative_start;
 
   scan_set_invalid(s, message, local_start);
-  s->status_end_byte = token->start_byte + relative_end;
+  s->status_end_byte = parse_token_start_byte(token) + relative_end;
 }
 
 static void previous_token_invalid(parse_scanner_t *s, core_string_t message) {
   parse_token_info_t *token = scan_prev_token(s);
-  size_t start = token && token->start_byte >= s->source_base
-                     ? token->start_byte - s->source_base
+  size_t start = token && parse_token_start_byte(token) >= s->source_base
+                     ? parse_token_start_byte(token) - s->source_base
                      : s->mark;
 
   scan_set_invalid(s, message, start);
@@ -2628,18 +2554,19 @@ static void apply_literal_hook(parse_scanner_t *s) {
   const scan_lex_t *lex = run->program;
   parse_token_info_t *token = scan_prev_token(s);
 
-  if (!lex->literal_hook_count || !token || !core_option_is_set(token->value)) {
+  if (!lex->literal_hook_count || !token || !parse_token_has_value(token)) {
     return;
   }
 
-  const lex_literal_hook_t *compiled = literal_hook_for(lex, token->tid);
+  const lex_literal_hook_t *compiled =
+      literal_hook_for(lex, parse_token_tid(token));
   if (!compiled) {
     return;
   }
 
   const scan_lex_literal_hook_t *recipe = compiled->recipe;
   scan_lex_literal_input_t input = {
-      .spelling = core_option_get(token->value),
+      .spelling = core_option_get(parse_token_value(token)),
       .token = recipe->token,
       .modifier = recipe->modifier,
   };
@@ -2679,22 +2606,17 @@ static void apply_literal_hook(parse_scanner_t *s) {
   }
 
   if (result.token.data) {
-    token->tid = tid_for(lex->g, result.token, token->tid);
+    parse_token_set_tid(token,
+                        tid_for(lex->g, result.token, parse_token_tid(token)));
   }
   if (result.value.data) {
-    if (token->owns_value) {
-      core_free(core_option_get(token->value).data);
-    }
-    token->value = core_option_set(core_string_t, result.value);
-    token->owns_value = true;
+    parse_token_set_value(token, core_option_set(core_string_t, result.value),
+                          true);
     result.value = (core_string_t){0};
   }
   if (result.type.data) {
-    if (token->owns_literal_type && core_option_is_set(token->literal_type)) {
-      core_free(core_option_get(token->literal_type).data);
-    }
-    token->literal_type = core_option_set(core_string_t, result.type);
-    token->owns_literal_type = true;
+    parse_token_set_literal_type(
+        token, core_option_set(core_string_t, result.type), true);
     result.type = (core_string_t){0};
   }
   scan_lex_literal_result_free(&result);
@@ -2831,9 +2753,8 @@ static bool resume_embed_token(parse_scanner_t *s) {
   parse_token_info_t *tok = scan_prev_token(s);
 
   if (tok) {
-    tok->content_start_byte = s->source_base + content_start;
-    tok->content_end_byte = s->source_base + close_at;
-    tok->has_content_span = true;
+    parse_token_set_content_span(tok, s->source_base + content_start,
+                                 s->source_base + close_at);
   }
 
   run->line_start = false;
@@ -3074,11 +2995,9 @@ static void emit_dedent(parse_scanner_t *s, scan_lex_session_t *run) {
   scan_emit_marked(s, lex->tid_dedent);
   parse_token_info_t *token = scan_prev_token(s);
   if (token) {
-    token->layout_depth = depth;
-    token->layout_column = column;
-    token->has_layout_info = true;
-    token->layout_mismatch = mismatch;
-    token->ignore_if_no_match = !in_block;
+    parse_token_set_layout(token, depth, column);
+    parse_token_set_layout_mismatch(token, mismatch);
+    parse_token_set_ignore_if_no_match(token, !in_block);
   }
 }
 
@@ -3086,7 +3005,7 @@ static void emit_layout_newline(parse_scanner_t *s, scan_lex_session_t *run) {
   const scan_lex_t *lex = run->program;
   parse_token_info_t *previous = scan_prev_token(s);
   int64_t colon = parse_terminal_id(lex->g, CORE_STRING_STATIC(":"));
-  bool block_header = previous && colon && previous->tid == colon;
+  bool block_header = previous && colon && parse_token_tid(previous) == colon;
 
   scan_mark(s);
   scan_emit_marked(s, lex->tid_newline);
@@ -4182,9 +4101,9 @@ static bool try_sigil(parse_scanner_t *s, bool before_string) {
     if (g->attach_previous) {
       parse_token_info_t *previous = scan_prev_token(s);
       if (!previous
-          || previous->end_byte != s->source_base + s->cursor
+          || parse_token_end_byte(previous) != s->source_base + s->cursor
           || (g->prefix.u8_bytes == 1
-              && previous->tid == (uint8_t)g->prefix.data[0]))
+              && parse_token_tid(previous) == (uint8_t)g->prefix.data[0]))
         continue;
     }
 
@@ -4266,7 +4185,8 @@ static bool try_sigil(parse_scanner_t *s, bool before_string) {
 
   if (best->attach_previous) {
     parse_token_info_t *previous = scan_prev_token(s);
-    if (!previous || core_option_is_set(previous->postfix_modifier)) {
+    if (!previous
+        || core_option_is_set(parse_token_postfix_modifier(previous))) {
       scan_set_invalid(s, CORE_STRING_STATIC("invalid postfix modifier"),
                        s->mark);
       return false;
@@ -4274,8 +4194,8 @@ static bool try_sigil(parse_scanner_t *s, bool before_string) {
     core_string_t name = core_string_from_raw(
         s->input + s->mark + best->prefix.u8_bytes,
         (int64_t)(s->cursor - s->mark - best->prefix.u8_bytes));
-    previous->postfix_modifier = core_option_set(core_string_t, name);
-    previous->owns_postfix_modifier = true;
+    parse_token_set_postfix_modifier(
+        previous, core_option_set(core_string_t, name), true);
     return scan_lex_scan(s);
   }
 
@@ -4293,7 +4213,7 @@ static bool regex_may_start(const scan_lex_t *lex, const scan_lex_regex_t *r,
   }
 
   size_t index = (size_t)(r - lex->spec->regexes);
-  return !tid_set_contains(&lex->regex_not_after[index], prev->tid);
+  return !tid_set_contains(&lex->regex_not_after[index], parse_token_tid(prev));
 }
 
 static body_stop scan_regex_body(parse_scanner_t *s, const scan_lex_regex_t *r,
@@ -4498,12 +4418,10 @@ static void emit_heredoc(parse_scanner_t *s, const scan_lex_heredoc_t *h,
 
   parse_token_info_t *tok = scan_prev_token(s);
   if (tok) {
-    tok->content_start_byte = s->source_base + body;
-    tok->content_end_byte = s->source_base + body_end;
-    tok->label_start_byte = s->source_base + tag_a;
-    tok->label_end_byte = s->source_base + tag_b;
-    tok->has_content_span = true;
-    tok->has_label_span = true;
+    parse_token_set_content_span(tok, s->source_base + body,
+                                 s->source_base + body_end);
+    parse_token_set_label_span(tok, s->source_base + tag_a,
+                               s->source_base + tag_b);
   }
 }
 
@@ -4720,15 +4638,13 @@ static bool continue_heredoc_header(parse_scanner_t *s) {
 
     parse_token_info_t *token = scan_prev_token(s);
     if (token) {
-      token->label_start_byte = label_start;
-      token->label_end_byte = label_end;
-      token->has_label_span = true;
+      parse_token_set_label_span(token, label_start, label_end);
     }
     core_list_push(run->heredoc_queue,
                    ((lex_heredoc_queue_t){
                        .recipe = h,
                        .tag = tag,
-                       .token_index = token ? token->index : -1,
+                       .token_index = token ? parse_token_index(token) : -1,
                        .quote_kind = run->pending_heredoc_quote_kind,
                    }));
     run->pending_heredoc = nullptr;
@@ -4911,11 +4827,11 @@ static void apply_identifier_profile(parse_scanner_t *s) {
   const scan_lex_t *lex = run->program;
   parse_token_info_t *token = scan_prev_token(s);
 
-  if (!lex->identifier_profile || !token || !core_option_is_set(token->value)) {
+  if (!lex->identifier_profile || !token || !parse_token_has_value(token)) {
     return;
   }
 
-  core_string_t spelling = core_option_get(token->value);
+  core_string_t spelling = core_option_get(parse_token_value(token));
   scan_unicode_identifier_result_t result;
 
   if (!scan_unicode_profile_process(lex->identifier_profile, spelling,
@@ -4923,19 +4839,21 @@ static void apply_identifier_profile(parse_scanner_t *s) {
     return;
   }
 
-  if (result.normalized.data) {
-    if (token->owns_value) {
-      core_free(spelling.data);
-    }
-    token->value = core_option_set(core_string_t, result.normalized);
-    token->owns_value = true;
+  if (result.normalized.data && core_string_eq(result.normalized, spelling)) {
+    core_free(result.normalized.data);
+  }
+  else if (result.normalized.data) {
+    parse_token_set_value(token,
+                          core_option_set(core_string_t, result.normalized),
+                          true);
   }
 
   if (result.diagnostic.data) {
-    size_t local_start =
-        token->start_byte - s->source_base + result.diagnostic_start;
+    size_t local_start = parse_token_start_byte(token) - s->source_base
+                       + result.diagnostic_start;
     scan_set_invalid(s, result.diagnostic, local_start);
-    s->status_end_byte = token->start_byte + result.diagnostic_end;
+    s->status_end_byte = parse_token_start_byte(token)
+                       + result.diagnostic_end;
   }
 }
 
@@ -5222,10 +5140,9 @@ static layout_result_t do_layout(parse_scanner_t *s) {
     scan_emit_marked(s, lex->tid_indent);
     parse_token_info_t *token = scan_prev_token(s);
     if (token) {
-      token->layout_depth = (uint32_t)run->indents.len;
-      token->layout_column = (uint32_t)m.column;
-      token->has_layout_info = true;
-      token->ignore_if_no_match = run->layout_blocks.len == 0;
+      parse_token_set_layout(token, (uint32_t)run->indents.len,
+                             (uint32_t)m.column);
+      parse_token_set_ignore_if_no_match(token, run->layout_blocks.len == 0);
     }
     run->line_start = false;
 
@@ -5352,22 +5269,19 @@ static bool process_queued_heredocs(parse_scanner_t *s) {
     core_string_t value = heredoc_body_value(s, h, body, body_end);
     parse_token_info_t *token = nullptr;
     if (s->stream && s->stream->token_count && s->stream->tokens[0]) {
-      int32_t slot = queued->token_index - s->stream->tokens[0]->index;
+      int32_t slot = queued->token_index
+                   - parse_token_index(s->stream->tokens[0]);
       if (slot >= 0 && slot < s->stream->token_count &&
           s->stream->tokens[slot] &&
-          s->stream->tokens[slot]->index == queued->token_index) {
+          parse_token_index(s->stream->tokens[slot]) == queued->token_index) {
         token = s->stream->tokens[slot];
       }
     }
     if (token) {
-      if (token->owns_value && core_option_is_set(token->value)) {
-        core_free(core_option_get(token->value).data);
-      }
-      token->value = core_option_set(core_string_t, value);
-      token->owns_value = true;
-      token->content_start_byte = s->source_base + body;
-      token->content_end_byte = s->source_base + body_end;
-      token->has_content_span = true;
+      parse_token_set_value(token, core_option_set(core_string_t, value),
+                            true);
+      parse_token_set_content_span(token, s->source_base + body,
+                                   s->source_base + body_end);
     } else {
       core_free(value.data);
     }
@@ -5423,23 +5337,28 @@ static bool finish_recovery(parse_scanner_t *s, scan_lex_session_t *run) {
   parse_token_info_t *token = run->pending_recovery_token;
 
   if (token) {
-    token->tid = recovery->replacement_tid;
-    token->end_byte = s->source_base + s->cursor;
-    token->endline = s->line;
-    token->endcol = s->column;
-    token->has_content_span = false;
-    token->has_label_span = false;
+    size_t token_start = parse_token_start_byte(token);
 
-    if (token->start_byte >= s->source_base &&
-        token->start_byte - s->source_base <= s->cursor) {
-      size_t start = token->start_byte - s->source_base;
-      if (token->owns_value && core_option_is_set(token->value)) {
-        core_free(core_option_get(token->value).data);
-      }
-      token->value =
-          core_option_set(core_string_t, core_string_borrow(s->input + start,
-                                                            s->cursor - start));
-      token->owns_value = false;
+    parse_token_set_tid(token, recovery->replacement_tid);
+    parse_token_set_span(token, token_start, s->source_base + s->cursor);
+    if (!parse_source_slice(parse_token_source(token), token_start,
+                            s->source_base + s->cursor, nullptr)) {
+      parse_token_set_position(token, parse_token_line(token),
+                               parse_token_column(token), s->line, s->column);
+    }
+    parse_token_clear_content_span(token);
+    parse_token_clear_label_span(token);
+
+    if (token_start >= s->source_base
+        && token_start - s->source_base <= s->cursor
+        && !parse_token_use_source_value(token)) {
+      size_t start = token_start - s->source_base;
+      parse_token_set_value(
+          token,
+          core_option_set(core_string_t,
+                          core_string_from_raw(s->input + start,
+                                               (int64_t)(s->cursor - start))),
+          true);
     }
   }
 
@@ -5512,7 +5431,7 @@ static bool continue_recovery(parse_scanner_t *s, scan_lex_session_t *run) {
 static bool begin_recovery(parse_scanner_t *s, scan_lex_session_t *run) {
   parse_token_info_t *token = scan_prev_token(s);
   const lex_recovery_t *recovery =
-      token ? recovery_for(run->program, token->tid) : nullptr;
+      token ? recovery_for(run->program, parse_token_tid(token)) : nullptr;
 
   if (!recovery) {
     return false;
@@ -5580,7 +5499,8 @@ static bool scan_lex_scan_one(parse_scanner_t *s) {
     }
     run->pending_attached_sigil = nullptr;
     parse_token_info_t *previous = scan_prev_token(s);
-    if (!previous || core_option_is_set(previous->postfix_modifier)) {
+    if (!previous
+        || core_option_is_set(parse_token_postfix_modifier(previous))) {
       scan_set_invalid(s, CORE_STRING_STATIC("invalid postfix modifier"),
                        s->mark);
       return false;
@@ -5588,8 +5508,8 @@ static bool scan_lex_scan_one(parse_scanner_t *s) {
     core_string_t name = core_string_from_raw(
         s->input + s->mark + sigil->prefix.u8_bytes,
         (int64_t)(s->cursor - s->mark - sigil->prefix.u8_bytes));
-    previous->postfix_modifier = core_option_set(core_string_t, name);
-    previous->owns_postfix_modifier = true;
+    parse_token_set_postfix_modifier(
+        previous, core_option_set(core_string_t, name), true);
     return scan_lex_scan(s);
   }
 

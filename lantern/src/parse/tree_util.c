@@ -201,11 +201,17 @@ core_string_t parse_tree_leaf_text(parse_tree_t *n)
 
     parse_token_info_t *tok = core_tree_leaf_value(n);
 
-    if (!tok || !core_option_is_set(tok->value)) {
+    if (!tok) {
         return none;
     }
 
-    return core_option_get(tok->value);
+    core_option_t(core_string_t) value = parse_token_value(tok);
+
+    if (!core_option_is_set(value)) {
+        return none;
+    }
+
+    return core_option_get(value);
 }
 
 int64_t parse_tree_leaf_tid(parse_tree_t *n)
@@ -216,7 +222,7 @@ int64_t parse_tree_leaf_tid(parse_tree_t *n)
 
     parse_token_info_t *tok = core_tree_leaf_value(n);
 
-    return tok ? tok->tid : 0;
+    return tok ? parse_token_tid(tok) : 0;
 }
 
 bool parse_tree_leaf_is(parse_tree_t *n, core_string_t text)

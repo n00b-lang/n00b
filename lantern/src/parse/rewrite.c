@@ -83,17 +83,17 @@ parse_tree_make_nt_with(parse_grammar_t     *g,
 parse_tree_t *
 parse_tree_make_synthetic_token(int64_t tid, core_string_t text)
 {
-    parse_token_info_t *tok = core_alloc(parse_token_info_t);
+    parse_token_info_t *tok = parse_token_new();
 
-    memset(tok, 0, sizeof(*tok));
-
-    tok->tid    = (int32_t)tid;
-    tok->origin = PARSE_TOKEN_SYNTHETIC;
-    tok->tree_owned = true;
+    parse_token_set_tid(tok, (int32_t)tid);
+    parse_token_set_origin(tok, PARSE_TOKEN_SYNTHETIC);
+    parse_token_set_tree_owned(tok, true);
 
     if (text.data) {
-        tok->value = core_option_set(core_string_t, core_string_dup(text));
-        tok->owns_value = true;
+        parse_token_set_value(tok,
+                              core_option_set(core_string_t,
+                                              core_string_dup(text)),
+                              true);
     }
 
     return core_tree_leaf(parse_nt_node_t, parse_token_info_ptr_t, tok);
@@ -175,14 +175,28 @@ mark_synthetic(parse_tree_t *tree)
         parse_token_info_t *token = core_tree_leaf_value(tree);
 
         if (token) {
-            token->origin          = PARSE_TOKEN_SYNTHETIC;
-            token->line            = 0;
-            token->column          = 0;
-            token->endline         = 0;
-            token->endcol          = 0;
-            token->start_byte      = 0;
-            token->end_byte        = 0;
-            token->system_header   = false;
+            core_option_t(core_string_t) value = parse_token_value(token);
+            core_option_t(core_string_t) file = parse_token_file(token);
+
+            if (parse_token_value_is_source(token)) {
+                parse_token_set_value(
+                    token,
+                    core_option_set(core_string_t,
+                                    core_string_dup(core_option_get(value))),
+                    true);
+            }
+            if (core_option_is_set(file)) {
+                parse_token_set_file(
+                    token,
+                    core_option_set(core_string_t,
+                                    core_string_dup(core_option_get(file))),
+                    true);
+            }
+            parse_token_set_origin(token, PARSE_TOKEN_SYNTHETIC);
+            parse_token_set_source(token, 0);
+            parse_token_set_span(token, 0, 0);
+            parse_token_set_position(token, 0, 0, 0, 0);
+            parse_token_set_system_header(token, false);
         }
 
         return;

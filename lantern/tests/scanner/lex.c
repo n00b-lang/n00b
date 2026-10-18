@@ -19,6 +19,66 @@
 
 #define HEX "0123456789abcdefABCDEF"
 
+static size_t
+content_start(const parse_token_info_t *token)
+{
+  size_t start = 0;
+  parse_token_content_span(token, &start, nullptr);
+  return start;
+}
+
+static size_t
+content_end(const parse_token_info_t *token)
+{
+  size_t end = 0;
+  parse_token_content_span(token, nullptr, &end);
+  return end;
+}
+
+static bool
+has_content(const parse_token_info_t *token)
+{
+  return parse_token_content_span(token, nullptr, nullptr);
+}
+
+static size_t
+label_start(const parse_token_info_t *token)
+{
+  size_t start = 0;
+  parse_token_label_span(token, &start, nullptr);
+  return start;
+}
+
+static size_t
+label_end(const parse_token_info_t *token)
+{
+  size_t end = 0;
+  parse_token_label_span(token, nullptr, &end);
+  return end;
+}
+
+static bool
+has_label(const parse_token_info_t *token)
+{
+  return parse_token_label_span(token, nullptr, nullptr);
+}
+
+static uint32_t
+layout_depth(const parse_token_info_t *token)
+{
+  uint32_t depth = 0;
+  parse_token_layout(token, &depth, nullptr);
+  return depth;
+}
+
+static uint32_t
+layout_column(const parse_token_info_t *token)
+{
+  uint32_t column = 0;
+  parse_token_layout(token, nullptr, &column);
+  return column;
+}
+
 static const scan_lex_string_t JSON_STRINGS[] = {
     {.opener = S("\""), .closer = S("\""), .escape = S("\\"),
      .tok = S("STRING")},
@@ -526,7 +586,7 @@ static char *render(parse_grammar_t *g, const char *src) {
     const char *nm = nullptr;
 
     for (size_t i = 0; i < core_list_len(g->named_terms); i++) {
-      if (g->named_terms.data[i].id == tok->tid) {
+      if (g->named_terms.data[i].id == parse_token_tid(tok)) {
         nm = g->named_terms.data[i].value.data;
 
         break;
@@ -536,12 +596,12 @@ static char *render(parse_grammar_t *g, const char *src) {
     if (nm) {
       at += (size_t)snprintf(out + at, sizeof(out) - at, "%s%s", at ? " " : "",
                              nm);
-    } else if (tok->tid > 0 && tok->tid < 128) {
+    } else if (parse_token_tid(tok) > 0 && parse_token_tid(tok) < 128) {
       at += (size_t)snprintf(out + at, sizeof(out) - at, "%s%c", at ? " " : "",
-                             (char)tok->tid);
+                             (char)parse_token_tid(tok));
     } else {
       at += (size_t)snprintf(out + at, sizeof(out) - at, "%s?%d", at ? " " : "",
-                             tok->tid);
+                             parse_token_tid(tok));
     }
   }
 
@@ -639,30 +699,30 @@ static void test_indentation_becomes_tokens(void) {
   size_t dedent_count = 0;
   parse_token_info_t *tok;
   while ((tok = scan_stream_next(ts))) {
-    if (tok->tid == parse_terminal_id(layout, S("DEDENT")) &&
+    if (parse_token_tid(tok) == parse_terminal_id(layout, S("DEDENT")) &&
         dedent_count < 4) {
       dedents[dedent_count++] = tok;
     }
   }
   check("each dedent records its resulting depth and column",
-        dedent_count == 2 && dedents[0]->has_layout_info &&
-            dedents[0]->layout_depth == 1 && dedents[0]->layout_column == 4 &&
-            dedents[1]->layout_depth == 0 && dedents[1]->layout_column == 0);
+        dedent_count == 2 && parse_token_layout(dedents[0], nullptr, nullptr) &&
+            layout_depth(dedents[0]) == 1 && layout_column(dedents[0]) == 4 &&
+            layout_depth(dedents[1]) == 0 && layout_column(dedents[1]) == 0);
   scan_token_stream_free(ts);
 
   static const char *const MISALIGNED = "a\n    b\n        c\n  x\n";
   ts = scan_tokenize_owned(layout, MISALIGNED, strlen(MISALIGNED));
   dedent_count = 0;
   while ((tok = scan_stream_next(ts))) {
-    if (tok->tid == parse_terminal_id(layout, S("DEDENT")) &&
+    if (parse_token_tid(tok) == parse_terminal_id(layout, S("DEDENT")) &&
         dedent_count < 4) {
       dedents[dedent_count++] = tok;
     }
   }
   check("only the final dedent carries the unmatched-target marker",
-        dedent_count == 2 && !dedents[0]->layout_mismatch &&
-            dedents[1]->layout_mismatch && dedents[1]->layout_depth == 0 &&
-            dedents[1]->layout_column == 0);
+        dedent_count == 2 && !parse_token_layout_mismatch(dedents[0]) &&
+            parse_token_layout_mismatch(dedents[1]) &&
+            layout_depth(dedents[1]) == 0 && layout_column(dedents[1]) == 0);
   scan_token_stream_free(ts);
   parse_grammar_free(layout);
 }
@@ -850,17 +910,19 @@ static void test_layout_tokens_ignore_only_when_unmatched(void) {
   parse_token_info_t *block_indent = nullptr;
   parse_token_info_t *block_dedent = nullptr;
   while ((tok = scan_stream_next(ts))) {
-    if (tok->tid == parse_terminal_id(g, S("INDENT"))) {
+    if (parse_token_tid(tok) == parse_terminal_id(g, S("INDENT"))) {
       block_indent = tok;
-    } else if (tok->tid == parse_terminal_id(g, S("DEDENT"))) {
+    } else if (parse_token_tid(tok) == parse_terminal_id(g, S("DEDENT"))) {
       block_dedent = tok;
     }
   }
   parser = parse_pwz_new_for_start(
       g, parse_nonterm_id(parse_find_nonterm(g, S("file"))));
   check("a colon-newline block keeps both layout tokens significant",
-        block_indent && block_dedent && !block_indent->ignore_if_no_match &&
-            !block_dedent->ignore_if_no_match && parse_pwz_parse(parser, ts));
+        block_indent && block_dedent &&
+            !parse_token_ignore_if_no_match(block_indent) &&
+            !parse_token_ignore_if_no_match(block_dedent) &&
+            parse_pwz_parse(parser, ts));
   parse_pwz_free(parser);
   scan_token_stream_free(ts);
   parse_grammar_free(g);
@@ -898,7 +960,7 @@ static void test_incremental_indentation_waits_for_content(void) {
 
   parse_token_info_t *b = scan_stream_next(ts);
   check("content follows the resumed indent token",
-        b && b->tid == parse_terminal_id(g, S("IDENTIFIER")));
+        b && parse_token_tid(b) == parse_terminal_id(g, S("IDENTIFIER")));
 
   scan_stream_finish(ts);
   while (scan_stream_next(ts)) {
@@ -1026,11 +1088,14 @@ static void test_embedded_lexer_switching(void) {
 
   while ((tok = scan_stream_next(ts))) {
     if (count == 1) {
-      spans = tok->start_byte == 7 && tok->end_byte == 9;
+      spans = parse_token_start_byte(tok) == 7
+              && parse_token_end_byte(tok) == 9;
     } else if (count == 2) {
-      spans = spans && tok->start_byte == 9 && tok->end_byte == 10;
+      spans = spans && parse_token_start_byte(tok) == 9
+              && parse_token_end_byte(tok) == 10;
     } else if (count == 4) {
-      spans = spans && tok->start_byte == 14 && tok->end_byte == 16;
+      spans = spans && parse_token_start_byte(tok) == 14
+              && parse_token_end_byte(tok) == 16;
     }
     count++;
   }
@@ -1074,10 +1139,11 @@ static void test_embedded_lexer_switching(void) {
   parse_token_info_t *block = scan_stream_next(ts);
 
   check("single-token embedding includes delimiters and records its body",
-        outer && block && block->tid == parse_terminal_id(single, S("EMBED")) &&
-            block->start_byte == 2 && block->end_byte == 7 &&
-            block->has_content_span && block->content_start_byte == 4 &&
-            block->content_end_byte == 5);
+        outer && block &&
+            parse_token_tid(block) == parse_terminal_id(single, S("EMBED")) &&
+            parse_token_start_byte(block) == 2 &&
+            parse_token_end_byte(block) == 7 && has_content(block) &&
+            content_start(block) == 4 && content_end(block) == 5);
   scan_token_stream_free(ts);
 
   ts = scan_tokenize_owned(single, "x {{\"open}} y", 13);
@@ -1150,8 +1216,10 @@ static void test_interpolation_pushes_a_mode(void) {
   parse_token_info_t *string = ts ? scan_stream_next(ts) : nullptr;
 
   check("a multiline token records both endpoint lines",
-        string && string->line == 1 && string->column == 1 &&
-            string->endline == 2 && string->endcol == 5);
+        string && parse_token_line(string) == 1 &&
+            parse_token_column(string) == 1 &&
+            parse_token_endline(string) == 2 &&
+            parse_token_endcol(string) == 5);
 
   scan_token_stream_free(ts);
   scan_scanner_free(sc);
@@ -1248,25 +1316,25 @@ static void test_attached_postfix_sigil(void) {
   tokens[count++] = scan_stream_next(stream);
   tokens[count++] = scan_stream_next(stream);
   check("closing token is finalized before delivery",
-        tokens[2] && core_option_is_set(tokens[2]->postfix_modifier)
-        && core_string_eq(core_option_get(tokens[2]->postfix_modifier),
+        tokens[2] && core_option_is_set(parse_token_postfix_modifier(tokens[2]))
+        && core_string_eq(core_option_get(parse_token_postfix_modifier(tokens[2])),
                           S("array")));
   for (parse_token_info_t *token; count < 16
        && (token = scan_stream_next(stream));)
     tokens[count++] = token;
   check("postfix sigils attach without emitting tokens", count == 9);
   check("closing delimiter carries its modifier",
-        count > 2 && core_option_is_set(tokens[2]->postfix_modifier)
-        && core_string_eq(core_option_get(tokens[2]->postfix_modifier),
+        count > 2 && core_option_is_set(parse_token_postfix_modifier(tokens[2]))
+        && core_string_eq(core_option_get(parse_token_postfix_modifier(tokens[2])),
                           S("array")));
   check("string carries its modifier",
-        count > 3 && core_option_is_set(tokens[3]->postfix_modifier)
-        && core_string_eq(core_option_get(tokens[3]->postfix_modifier),
+        count > 3 && core_option_is_set(parse_token_postfix_modifier(tokens[3]))
+        && core_string_eq(core_option_get(parse_token_postfix_modifier(tokens[3])),
                           S("rich")));
   check("closed character literal stays a character token",
-        count > 4 && tokens[4]->tid == parse_terminal_id(g, S("CHAR")));
+        count > 4 && parse_token_tid(tokens[4]) == parse_terminal_id(g, S("CHAR")));
   check("ordinary indexing does not acquire a modifier",
-        count > 8 && !core_option_is_set(tokens[8]->postfix_modifier));
+        count > 8 && !core_option_is_set(parse_token_postfix_modifier(tokens[8])));
   scan_token_stream_free(stream);
   scan_scanner_free(scanner);
   parse_grammar_free(g);
@@ -1304,19 +1372,19 @@ static void test_heredoc_families(void) {
 
   check("queued heredocs retain source order",
         call && first && second && after && !scan_stream_next(ts) &&
-            first->tid == parse_terminal_id(g, S("INTERPOLATED")) &&
-            second->tid == parse_terminal_id(g, S("RAW")));
+            parse_token_tid(first) == parse_terminal_id(g, S("INTERPOLATED")) &&
+            parse_token_tid(second) == parse_terminal_id(g, S("RAW")));
   check("queued bodies receive quote-sensitive policies",
-        core_option_is_set(first->value) &&
-            core_string_eq(core_option_get(first->value), S("one\n")) &&
-            core_option_is_set(second->value) &&
-            core_string_eq(core_option_get(second->value), S("two\n")));
+        parse_token_has_value(first) &&
+            core_string_eq(core_option_get(parse_token_value(first)), S("one\n")) &&
+            parse_token_has_value(second) &&
+            core_string_eq(core_option_get(parse_token_value(second)), S("two\n")));
   check("heredoc tokens retain body and label spans",
-        first->has_content_span && first->has_label_span &&
-            second->has_content_span && second->has_label_span);
+        has_content(first) && has_label(first) &&
+            has_content(second) && has_label(second));
   check("queued heredoc scanning resumes with following source",
-        core_option_is_set(after->value) &&
-            core_string_eq(core_option_get(after->value), S("after")) &&
+        parse_token_has_value(after) &&
+            core_string_eq(core_option_get(parse_token_value(after)), S("after")) &&
             scan_status(ts->scanner) == SCAN_STATUS_COMPLETE);
 
   scan_token_stream_free(ts);
@@ -1438,14 +1506,14 @@ static void test_literal_postprocessing_hooks(void) {
 
   check("a hook may decode a value and select a declared token",
         first && second && !scan_stream_next(ts) &&
-            first->tid == parse_terminal_id(g, S("SPECIAL")) &&
-            second->tid == parse_terminal_id(g, S("SPECIAL")) &&
-            core_option_is_set(first->value) &&
-            core_string_eq(core_option_get(first->value), S("decoded")));
+            parse_token_tid(first) == parse_terminal_id(g, S("SPECIAL")) &&
+            parse_token_tid(second) == parse_terminal_id(g, S("SPECIAL")) &&
+            parse_token_has_value(first) &&
+            core_string_eq(core_option_get(parse_token_value(first)), S("decoded")));
   check(
       "a hook may attach owned declared type metadata",
-      core_option_is_set(first->literal_type) &&
-          core_string_eq(core_option_get(first->literal_type), S("duration")));
+      core_option_is_set(parse_token_literal_type(first)) &&
+          core_string_eq(core_option_get(parse_token_literal_type(first)), S("duration")));
   check("identical cacheable hook inputs execute once",
         literal_hook_calls == 1);
   scan_token_stream_free(ts);
@@ -1602,7 +1670,7 @@ static void test_comment_region_anchors_are_trivia(void) {
   parse_token_info_t *name = scan_stream_next(stream);
   while (scan_stream_next(stream)) {
   }
-  parse_trivia_t *open = name ? name->leading_trivia : nullptr;
+  parse_trivia_t *open = name ? parse_token_leading_trivia(name) : nullptr;
   parse_trivia_t *comment = open ? open->next : nullptr;
   parse_trivia_t *close = comment ? comment->next : nullptr;
   check("region anchors remain trivia ahead of ordinary comments",
@@ -1623,7 +1691,7 @@ static void test_comment_region_anchors_are_trivia(void) {
         comment && parse_trivia_region_count(comment) == 1
             && parse_trivia_in_region(comment, open->region_id));
   parse_token_info_t *tree_token = parse_token_clone_for_tree(name);
-  parse_trivia_t *tree_comment = tree_token->leading_trivia->next;
+  parse_trivia_t *tree_comment = parse_token_leading_trivia(tree_token)->next;
   check("parse-tree token clones preserve comment-region metadata",
         tree_comment && parse_trivia_in_region(tree_comment, open->region_id));
   parse_token_free_from_tree(tree_token);
@@ -1648,7 +1716,7 @@ static void test_comment_region_anchors_are_trivia(void) {
   while (scan_stream_next(stream)) {
   }
   name = scan_stream_get(stream, 0);
-  open = name->leading_trivia;
+  open = parse_token_leading_trivia(name);
   parse_trivia_t *open_b = open->next;
   comment = open_b->next;
   parse_trivia_t *close_a = comment->next;
@@ -1677,7 +1745,7 @@ static void test_comment_region_anchors_are_trivia(void) {
   while (scan_stream_next(stream)) {
   }
   name = scan_stream_get(stream, 0);
-  parse_trivia_t *before = name->leading_trivia;
+  parse_trivia_t *before = parse_token_leading_trivia(name);
   open = before->next;
   comment = open->next;
   close = comment->next;
@@ -1708,7 +1776,7 @@ static void test_comment_region_anchors_are_trivia(void) {
             && scan_stream_get(stream, 100) == nullptr
             && scan_status(stream->scanner) == SCAN_STATUS_COMPLETE);
   name = scan_stream_get(stream, 0);
-  open = name->leading_trivia;
+  open = parse_token_leading_trivia(name);
   close = open->next->next;
   check("incremental recomputation retains membership metadata",
         open->region_id != 0 && open->region_id == close->region_id
@@ -2309,13 +2377,13 @@ static void test_symmetric_fences_preserve_source_spans(void) {
   check("a parameterized symmetric fence is one token",
         tok && scan_stream_next(ts) == nullptr);
   check("a fence retains its exact body span",
-        tok && tok->has_content_span &&
-            tok->content_end_byte - tok->content_start_byte == 11 &&
-            !memcmp(src + tok->content_start_byte, "one ]=] two", 11));
+        tok && has_content(tok) &&
+            content_end(tok) - content_start(tok) == 11 &&
+            !memcmp(src + content_start(tok), "one ]=] two", 11));
   check("a fence retains its optional label span",
-        tok && tok->has_label_span &&
-            tok->label_end_byte - tok->label_start_byte == 5 &&
-            !memcmp(src + tok->label_start_byte, "codec", 5));
+        tok && has_label(tok) &&
+            label_end(tok) - label_start(tok) == 5 &&
+            !memcmp(src + label_start(tok), "codec", 5));
   check("a closed fence is complete", scan_status(sc) == SCAN_STATUS_COMPLETE);
 
   scan_token_stream_free(ts);
@@ -2347,8 +2415,8 @@ static void test_fence_padding_requires_both_boundaries(void) {
   parse_token_stream_t *ts = scan_tokenize(g, "[- -]", 5, &buf, &sc);
   parse_token_info_t *tok = scan_stream_next(ts);
   check("required padding accepts a space-padded empty literal",
-        tok && tok->has_content_span &&
-            tok->content_start_byte == tok->content_end_byte &&
+        tok && has_content(tok) &&
+            content_start(tok) == content_end(tok) &&
             scan_stream_next(ts) == nullptr);
   scan_token_stream_free(ts);
   scan_scanner_free(sc);
@@ -2359,7 +2427,7 @@ static void test_fence_padding_requires_both_boundaries(void) {
   ts = scan_tokenize(g, "[- f-]", 6, &buf, &sc);
   bool emitted_fence = false;
   while ((tok = scan_stream_next(ts))) {
-    emitted_fence |= tok->tid == parse_terminal_id(g, S("FENCE"));
+    emitted_fence |= parse_token_tid(tok) == parse_terminal_id(g, S("FENCE"));
   }
   check("required padding rejects a closing fence without boundary space",
         !emitted_fence && scan_status(sc) == SCAN_STATUS_INCOMPLETE);
@@ -2391,9 +2459,9 @@ static void test_incomplete_fences_resume_after_append(void) {
         tok && scan_stream_next(ts) == nullptr &&
             scan_stream_token_count(ts) == 1);
   check("the resumed fence retains its complete body span",
-        tok && tok->has_content_span &&
-            tok->content_end_byte - tok->content_start_byte == 4 &&
-            !memcmp(buf->data + tok->content_start_byte, "body", 4));
+        tok && has_content(tok) &&
+            content_end(tok) - content_start(tok) == 4 &&
+            !memcmp(buf->data + content_start(tok), "body", 4));
   check("the resumed stream completes",
         scan_status(sc) == SCAN_STATUS_COMPLETE);
   check("a complete stream rejects further append",
@@ -2427,9 +2495,9 @@ static void test_incomplete_strings_and_comments_resume(void) {
   parse_token_info_t *string = scan_stream_next(ts);
 
   check("the resumed string contains both source fragments",
-        string && core_option_is_set(string->value) &&
-            core_option_get(string->value).u8_bytes == 7 &&
-            !memcmp(core_option_get(string->value).data, "\"hello\"", 7));
+        string && parse_token_has_value(string) &&
+            core_option_get(parse_token_value(string)).u8_bytes == 7 &&
+            !memcmp(core_option_get(parse_token_value(string)).data, "\"hello\"", 7));
 
   scan_token_stream_free(ts);
   scan_scanner_free(sc);
@@ -2448,11 +2516,11 @@ static void test_incomplete_strings_and_comments_resume(void) {
   parse_token_info_t *name = scan_stream_next(ts);
 
   check("scanning continues after a resumed block comment",
-        name && core_option_is_set(name->value) &&
-            core_string_eq(core_option_get(name->value),
+        name && parse_token_has_value(name) &&
+            core_string_eq(core_option_get(parse_token_value(name)),
                            CORE_STRING_STATIC("name")) &&
-            name->leading_trivia &&
-            core_string_eq(name->leading_trivia->text,
+            parse_token_leading_trivia(name) &&
+            core_string_eq(parse_token_leading_trivia(name)->text,
                            CORE_STRING_STATIC("/* open */")));
 
   while (scan_stream_next(ts)) {
@@ -2490,10 +2558,10 @@ static void test_filled_block_comment_delimiters(void) {
       scan_tokenize(g, source, strlen(source), &buf, &sc);
   parse_token_info_t *name = scan_stream_next(ts);
   check("the closing star count matches the opening star count",
-        name && core_option_is_set(name->value) &&
-            core_string_eq(core_option_get(name->value), S("name")) &&
-            name->leading_trivia &&
-            core_string_eq(name->leading_trivia->text, S("/** /* Hi! */ **/")));
+        name && parse_token_has_value(name) &&
+            core_string_eq(core_option_get(parse_token_value(name)), S("name")) &&
+            parse_token_leading_trivia(name) &&
+            core_string_eq(parse_token_leading_trivia(name)->text, S("/** /* Hi! */ **/")));
   scan_token_stream_free(ts);
   scan_scanner_free(sc);
   core_buffer_free(buf);
@@ -2518,8 +2586,8 @@ static void test_filled_block_comment_delimiters(void) {
             scan_stream_append(ts, "/ name", 6));
   name = scan_stream_next(ts);
   check("the resumed filled comment closes at the matching count",
-        name && core_option_is_set(name->value) &&
-            core_string_eq(core_option_get(name->value), S("name")));
+        name && parse_token_has_value(name) &&
+            core_string_eq(core_option_get(parse_token_value(name)), S("name")));
   scan_token_stream_free(ts);
   scan_scanner_free(sc);
   core_buffer_free(buf);
@@ -2601,8 +2669,8 @@ static void test_interpolation_regex_and_heredoc_resume(void) {
 
   check("the resumed heredoc preserves following source",
         heredoc && next && scan_stream_next(ts) == nullptr &&
-            core_option_is_set(next->value) &&
-            core_string_eq(core_option_get(next->value),
+            parse_token_has_value(next) &&
+            core_string_eq(core_option_get(parse_token_value(next)),
                            CORE_STRING_STATIC("next")));
 
   scan_token_stream_free(ts);
@@ -2641,7 +2709,7 @@ static void test_incremental_stream_accepts_arbitrary_chunks(void) {
   check("a radix number ends when a delimiter arrives",
         scan_stream_append(ts, "f ", 2) &&
             (hex = scan_stream_next(ts)) != nullptr &&
-            core_option_get(hex->value).u8_bytes == 4);
+            core_option_get(parse_token_value(hex)).u8_bytes == 4);
 
   check("an exponent resumes after its sign",
         scan_stream_append(ts, "1.2e", 4) && scan_stream_next(ts) == nullptr &&
@@ -2685,8 +2753,8 @@ static void test_incremental_utf8_and_source_compaction(void) {
 
   parse_token_info_t *first = scan_stream_next(ts);
   check("the resumed Unicode token preserves its complete spelling",
-        first && core_option_is_set(first->value) &&
-            core_string_eq(core_option_get(first->value),
+        first && parse_token_has_value(first) &&
+            core_string_eq(core_option_get(parse_token_value(first)),
                            core_string_borrow(lambda, 2)));
   check("consumed incremental source can be discarded",
         scan_stream_discard_consumed(ts) && sc->source_base == 2 &&
@@ -2697,7 +2765,8 @@ static void test_incremental_utf8_and_source_compaction(void) {
         scan_stream_append(ts, "name ", 5) &&
             (second = scan_stream_next(ts)) != nullptr);
   check("a post-compaction token uses the original byte coordinate space",
-        second && second->start_byte == 3 && second->end_byte == 7);
+        second && parse_token_start_byte(second) == 3 &&
+            parse_token_end_byte(second) == 7);
   check("discarding consumed input also bounds the rewind cache",
         scan_stream_discard_consumed(ts) && ts->token_count <= 1);
 
@@ -2747,10 +2816,10 @@ static void test_source_compaction_is_amortized(void) {
 }
 
 static bool token_value_is(parse_token_info_t *token, const char *text) {
-  if (!token || !core_option_is_set(token->value)) {
+  if (!token || !parse_token_has_value(token)) {
     return false;
   }
-  core_string_t value = core_option_get(token->value);
+  core_string_t value = core_option_get(parse_token_value(token));
   return value.u8_bytes == strlen(text) &&
          !memcmp(value.data, text, value.u8_bytes);
 }
@@ -2941,7 +3010,7 @@ static void test_incremental_source_edits(void) {
   parse_token_info_t *fence = scan_stream_get(ts, 0);
   scan_stream_get(ts, 1000);
   check("fence state and content spans recover after an edit",
-        fence && fence->has_content_span &&
+        fence && has_content(fence) &&
             scan_status(ts->scanner) == SCAN_STATUS_COMPLETE);
   scan_token_stream_free(ts);
   parse_grammar_free(g);
@@ -2997,13 +3066,13 @@ static size_t count_one_byte_chunk_tokens(parse_grammar_t *g,
     scan_stream_append(ts, source + i, 1);
     parse_token_info_t *tok = nullptr;
     while ((tok = scan_stream_next(ts))) {
-      count += tok->tid == wanted_tid;
+      count += parse_token_tid(tok) == wanted_tid;
     }
   }
   scan_stream_finish(ts);
   parse_token_info_t *tok = nullptr;
   while ((tok = scan_stream_next(ts))) {
-    count += tok->tid == wanted_tid;
+    count += parse_token_tid(tok) == wanted_tid;
   }
   scan_token_stream_free(ts);
   return count;
@@ -3107,8 +3176,8 @@ static void test_terminals_have_no_byte_width_limit(void) {
       scan_tokenize(g, op->data, op->byte_len, nullptr, nullptr);
   parse_token_info_t *tok = scan_stream_next(ts);
   check("the terminal trie matches a terminal longer than 255 bytes",
-        tok && core_option_is_set(tok->value) &&
-            core_option_get(tok->value).u8_bytes == 1024);
+        tok && parse_token_has_value(tok) &&
+            core_option_get(parse_token_value(tok)).u8_bytes == 1024);
 
   scan_token_stream_free(ts);
   parse_grammar_free(g);
@@ -3204,12 +3273,12 @@ static void test_malformed_token_recovery(void) {
   int64_t semicolon_tid = parse_lookup_terminal(editor, S(";"));
 
   check("editor recovery replaces the malformed token",
-        error && error->tid == error_tid && core_option_is_set(error->value) &&
-            core_option_get(error->value).u8_bytes == 7 &&
-            !memcmp(core_option_get(error->value).data, "1__oops", 7));
+        error && parse_token_tid(error) == error_tid && parse_token_has_value(error) &&
+            core_option_get(parse_token_value(error)).u8_bytes == 7 &&
+            !memcmp(core_option_get(parse_token_value(error)).data, "1__oops", 7));
   check("recovery stops before an unconsumed synchronization token",
-        semicolon && semicolon->tid == semicolon_tid && identifier &&
-            identifier->tid == parse_lookup_terminal(editor, S("IDENTIFIER")));
+        semicolon && parse_token_tid(semicolon) == semicolon_tid && identifier &&
+            parse_token_tid(identifier) == parse_lookup_terminal(editor, S("IDENTIFIER")));
   check("recovered input reaches EOF with a distinct status",
         !end && scan_status(scanner) == SCAN_STATUS_RECOVERED);
 
@@ -3236,10 +3305,10 @@ static void test_malformed_token_recovery(void) {
   end = scan_stream_next(ts);
 
   check("string recovery synchronizes without consuming later lines",
-        error && error->tid == parse_lookup_terminal(editor, S("ERROR")) &&
-            error->end_byte == 16 && identifier &&
-            core_option_is_set(identifier->value) &&
-            core_string_eq(core_option_get(identifier->value), S("next")) &&
+        error && parse_token_tid(error) == parse_lookup_terminal(editor, S("ERROR")) &&
+            parse_token_end_byte(error) == 16 && identifier &&
+            parse_token_has_value(identifier) &&
+            core_string_eq(core_option_get(parse_token_value(identifier)), S("next")) &&
             !end && scan_status(scanner) == SCAN_STATUS_RECOVERED);
 
   scan_token_stream_free(ts);
@@ -3264,9 +3333,9 @@ static void test_malformed_token_recovery(void) {
   }
   check("recovery resumes across a split synchronization delimiter",
         second_chunk && finished && error &&
-            error->tid == parse_lookup_terminal(incremental, S("ERROR")) &&
-            core_option_is_set(error->value) &&
-            core_option_get(error->value).u8_bytes == 7 &&
+            parse_token_tid(error) == parse_lookup_terminal(incremental, S("ERROR")) &&
+            parse_token_has_value(error) &&
+            core_option_get(parse_token_value(error)).u8_bytes == 7 &&
             scan_status(scanner) == SCAN_STATUS_RECOVERED);
   scan_token_stream_free(ts);
   scan_scanner_free(scanner);
@@ -3283,10 +3352,10 @@ static void test_malformed_token_recovery(void) {
   identifier = scan_stream_next(ts);
   end = scan_stream_next(ts);
   check("a recovery recipe may consume its synchronization delimiter",
-        error && error->tid == parse_lookup_terminal(consuming, S("ERROR")) &&
-            error->end_byte == 8 && identifier &&
-            core_option_is_set(identifier->value) &&
-            core_string_eq(core_option_get(identifier->value), S("next")) &&
+        error && parse_token_tid(error) == parse_lookup_terminal(consuming, S("ERROR")) &&
+            parse_token_end_byte(error) == 8 && identifier &&
+            parse_token_has_value(identifier) &&
+            core_string_eq(core_option_get(parse_token_value(identifier)), S("next")) &&
             !end && scan_status(scanner) == SCAN_STATUS_RECOVERED);
   scan_token_stream_free(ts);
   scan_scanner_free(scanner);
@@ -3373,7 +3442,7 @@ static void test_malformed_token_recovery(void) {
   }
   check("BNF lexer specifications accept declarative recovery recipes",
         grammar_loaded && error &&
-            error->tid == parse_lookup_terminal(declared, S("ERROR")) &&
+            parse_token_tid(error) == parse_lookup_terminal(declared, S("ERROR")) &&
             scan_status(scanner) == SCAN_STATUS_RECOVERED);
   scan_token_stream_free(ts);
   scan_scanner_free(scanner);
@@ -3637,9 +3706,9 @@ static void test_soft_keywords(void) {
 
     check("soft keywords retain the ordinary identifier token kind",
           match && case_word && ordinary &&
-              match->tid == PARSE_TOK_IDENTIFIER &&
-              case_word->tid == PARSE_TOK_IDENTIFIER &&
-              ordinary->tid == PARSE_TOK_IDENTIFIER);
+              parse_token_tid(match) == PARSE_TOK_IDENTIFIER &&
+              parse_token_tid(case_word) == PARSE_TOK_IDENTIFIER &&
+              parse_token_tid(ordinary) == PARSE_TOK_IDENTIFIER);
     scan_token_stream_free(tokens);
 
     parse_nonterm_t *statement = parse_find_nonterm(g, S("statement"));
@@ -3676,9 +3745,9 @@ static void test_soft_keywords(void) {
         parsed ? parse_tree_find_first_terminal(parse_pwz_get_tree(parser))
                : nullptr;
     check("parse trees preserve the original soft-keyword token",
-          first && first->tid == PARSE_TOK_IDENTIFIER &&
-              core_option_is_set(first->value) &&
-              core_string_eq(core_option_get(first->value), S("match")));
+          first && parse_token_tid(first) == PARSE_TOK_IDENTIFIER &&
+              parse_token_has_value(first) &&
+              core_string_eq(core_option_get(parse_token_value(first)), S("match")));
     parse_pwz_free(parser);
     scan_token_stream_free(ts);
   }
@@ -3753,9 +3822,9 @@ static void test_reject_fallback_accepts_declared_codepoints_only(void) {
   parse_token_info_t *unknown = scan_stream_next(ts);
 
   check("reject fallback retains declared codepoint terminals",
-        declared && declared->tid == '+');
+        declared && parse_token_tid(declared) == '+');
   check("reject fallback emits progress for an undeclared codepoint",
-        unknown && unknown->tid == PARSE_TOK_OTHER);
+        unknown && parse_token_tid(unknown) == PARSE_TOK_OTHER);
   check("reject fallback reports invalid input",
         scan_status(sc) == SCAN_STATUS_INVALID && sc->status_start_byte == 1);
 
@@ -3833,14 +3902,15 @@ static void test_unicode_identifier_profiles(void) {
   parse_token_stream_t *ts =
       scan_tokenize(g, decomposed, sizeof(decomposed) - 1, &buf, &sc);
   parse_token_info_t *tok = scan_stream_next(ts);
-  core_string_t value = tok && core_option_is_set(tok->value)
-                            ? core_option_get(tok->value)
+  core_string_t value = tok && parse_token_has_value(tok)
+                            ? core_option_get(parse_token_value(tok))
                             : (core_string_t){0};
   scan_stream_next(ts);
   check("identifier normalization preserves original source spans",
-        tok && tok->start_byte == 0 && tok->end_byte == 3 &&
-            value.u8_bytes == 2 && !memcmp(value.data, "\xC3\xA9", 2) &&
-            tok->owns_value && scan_status(sc) == SCAN_STATUS_COMPLETE);
+        tok && parse_token_start_byte(tok) == 0 &&
+            parse_token_end_byte(tok) == 3 && value.u8_bytes == 2 &&
+            !memcmp(value.data, "\xC3\xA9", 2) &&
+            scan_status(sc) == SCAN_STATUS_COMPLETE);
   scan_token_stream_free(ts);
   scan_scanner_free(sc);
   core_buffer_free(buf);
@@ -3851,8 +3921,9 @@ static void test_unicode_identifier_profiles(void) {
       scan_stream_append(ts, "\xCC", 1) && scan_stream_next(ts) == nullptr &&
       scan_stream_append(ts, "\x81 ", 2);
   tok = resumed ? scan_stream_next(ts) : nullptr;
-  value = tok && core_option_is_set(tok->value) ? core_option_get(tok->value)
-                                                : (core_string_t){0};
+  value = tok && parse_token_has_value(tok)
+              ? core_option_get(parse_token_value(tok))
+              : (core_string_t){0};
   check("Unicode identifiers resume across one-byte UTF-8 chunks",
         tok && value.u8_bytes == 2 && !memcmp(value.data, "\xC3\xA9", 2));
   scan_token_stream_free(ts);
@@ -3952,15 +4023,15 @@ static void *tokenize_concurrently(void *arg) {
     while ((token = scan_stream_next(ts))) {
       count++;
       if ((run->expected_token.data &&
-           token->tid != parse_terminal_id(run->grammar,
+           parse_token_tid(token) != parse_terminal_id(run->grammar,
                                            run->expected_token)) ||
           (run->expected_value.data &&
-           (!core_option_is_set(token->value) ||
-            !core_string_eq(core_option_get(token->value),
+           (!parse_token_has_value(token) ||
+            !core_string_eq(core_option_get(parse_token_value(token)),
                             run->expected_value))) ||
           (run->expected_type.data &&
-           (!core_option_is_set(token->literal_type) ||
-            !core_string_eq(core_option_get(token->literal_type),
+           (!core_option_is_set(parse_token_literal_type(token)) ||
+            !core_string_eq(core_option_get(parse_token_literal_type(token)),
                             run->expected_type)))) {
         run->ok = false;
       }

@@ -67,7 +67,6 @@ restart:
     if (unicode_cp_is_ascii_digit(c)) {
         if (scan_number(s, scan_terminal_id(s, S("INTEGER")),
                        scan_terminal_id(s, S("FLOAT")))) {
-            scan_prev_token(s)->owns_value = true;
             return true;
         }
     }
@@ -149,7 +148,7 @@ run(parse_grammar_t *g, core_buffer_t *source, size_t repetitions)
         while ((tok = scan_stream_next(ts))) {
             result.tokens++;
             result.checksum = result.checksum * UINT64_C(1099511628211)
-                            ^ (uint64_t)(uint32_t)tok->tid;
+                            ^ (uint64_t)(uint32_t)parse_token_tid(tok);
         }
         scan_token_stream_free(ts);
     }

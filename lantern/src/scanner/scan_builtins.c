@@ -358,7 +358,7 @@ scan_number(parse_scanner_t *s, int32_t int_tid, int32_t float_tid)
     core_option_t(core_string_t) fval = scan_float(s);
 
     if (core_option_is_set(fval)) {
-        scan_emit(s, float_tid, fval);
+        scan_emit_owned(s, float_tid, fval);
         return true;
     }
 
@@ -371,7 +371,7 @@ scan_number(parse_scanner_t *s, int32_t int_tid, int32_t float_tid)
     core_option_t(core_string_t) ival = scan_integer(s);
 
     if (core_option_is_set(ival)) {
-        scan_emit(s, int_tid, ival);
+        scan_emit_owned(s, int_tid, ival);
         return true;
     }
 

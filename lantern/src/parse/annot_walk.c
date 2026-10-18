@@ -667,12 +667,18 @@ annot_repr(parse_visit_t *v)
                                                          an->val_ref);
         parse_token_info_t *t = k ? parse_tree_find_first_terminal(k) : nullptr;
 
-        if (t && core_option_is_set(t->value)) {
-            core_string_t s = core_option_get(t->value);
+        core_option_t(core_string_t) value = t
+            ? parse_token_value(t) : core_option_none(core_string_t);
+
+        if (core_option_is_set(value)) {
+            core_string_t s = core_option_get(value);
 
             if (s.data) {
-                val  = strtoll(s.data, nullptr, 10);
+                char *digits = core_strndup(s.data, s.u8_bytes);
+
+                val  = strtoll(digits, nullptr, 10);
                 have = true;
+                core_free(digits);
             }
         }
     }
@@ -971,10 +977,14 @@ annot_implements(parse_visit_t *v)
         return true;
     }
 
-    if (!th_implements(a->types, sym->type, nm.data)) {
+    char *interface = core_strndup(nm.data, nm.u8_bytes);
+
+    if (!th_implements(a->types, sym->type, interface)) {
         th_err(a->types, TH_ERR_CONSTRAINT, "implements", sym->type,
                nullptr, "the declared type does not satisfy the interface");
     }
+
+    core_free(interface);
 
     return true;
 }
@@ -1211,11 +1221,11 @@ cf_notrivia(parse_visit_t *v)
                                       : nullptr;
 
     if (tok) {
-        parse_trivia_free(tok->leading_trivia);
-        parse_trivia_free(tok->trailing_trivia);
-        tok->leading_trivia  = nullptr;
-        tok->trailing_trivia = nullptr;
-        tok->no_trivia       = true;
+        parse_trivia_free(parse_token_leading_trivia(tok));
+        parse_trivia_free(parse_token_trailing_trivia(tok));
+        parse_token_set_leading_trivia(tok, nullptr);
+        parse_token_set_trailing_trivia(tok, nullptr);
+        parse_token_set_no_trivia(tok, true);
     }
 
     return true;
@@ -1238,9 +1248,10 @@ annot_report_infer_failure(parse_visit_t *v, actx_t *a, size_t errors_before)
         CORE_STRING_STATIC("LANTERN-T0001"),
         message,
         token ? (core_diag_location_t){
-            .line = token->line, .column = token->column,
-            .end_line = token->endline,
-            .end_column = token->endcol, .has_location = true,
+            .line = parse_token_line(token),
+            .column = parse_token_column(token),
+            .end_line = parse_token_endline(token),
+            .end_column = parse_token_endcol(token), .has_location = true,
         } : (core_diag_location_t){0});
 }
 

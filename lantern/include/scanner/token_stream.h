@@ -7,6 +7,7 @@ typedef struct scan_stream_checkpoint_t scan_stream_checkpoint_t;
 struct parse_token_stream_t {
     parse_scanner_t    *scanner;
     bool                owns_scanner;
+    uint32_t            source;
 
     parse_token_info_t **tokens;
     int32_t             token_cap;

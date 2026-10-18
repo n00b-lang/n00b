@@ -104,6 +104,7 @@ parse_sources = files(
     'parse/tree.c',
     'parse/pwz.c',
     'parse/rewrite.c',
+    'parse/source.c',
     'parse/symtab.c',
     'parse/token.c',
     'parse/tree_dump.c',

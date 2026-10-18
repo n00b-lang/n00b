@@ -131,7 +131,7 @@ kid_index(parse_reduce_t *r, size_t i)
         return -1;
     }
 
-    return (int32_t)strtol(n->text.data, nullptr, 10);
+    return (int32_t)core_string_strtoll(n->text, 10);
 }
 
 static core_string_t

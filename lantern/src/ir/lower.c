@@ -1000,11 +1000,12 @@ lower_builtin_action(ir_lower_context_t *context, const char *action,
             lower_find_annotation(visit, PARSE_ANNOT_LITERAL);
         parse_token_info_t *token = parse_tree_find_first_terminal(
             visit ? visit->node : nullptr);
-        if (!literal_annotation || !token
-            || !core_option_is_set(token->value))
+        core_option_t(core_string_t) token_value = token
+            ? parse_token_value(token) : core_option_none(core_string_t);
+        if (!literal_annotation || !core_option_is_set(token_value))
             return lower_failure(context, IR_DIAG_TYPE_LITERAL, span,
                                  "literal metadata or token value is missing");
-        core_string_t text = core_option_get(token->value);
+        core_string_t text = core_option_get(token_value);
         ir_instr_t *instruction = ir_lower_emit_instruction(
             context, IR_OP_CONST, span);
         if (!instruction) return (ir_lower_result_t){.status = IR_LOWER_FAILED};
@@ -1266,12 +1267,14 @@ span_of_tree(ir_lower_context_t *context, parse_tree_t *node)
     if (!context || context->file_id < 0) return IR_SPAN_UNKNOWN;
     parse_token_info_t *first = parse_tree_find_first_terminal(node);
     parse_token_info_t *last = last_terminal(node);
-    if (!first || !last || first->start_byte > UINT32_MAX
-        || last->end_byte > UINT32_MAX)
+    if (!first || !last || parse_token_start_byte(first) > UINT32_MAX
+        || parse_token_end_byte(last) > UINT32_MAX)
         return IR_SPAN_UNKNOWN;
-    return ir_span_make(context->file_id, (uint32_t)first->start_byte,
-                        (uint32_t)last->end_byte, first->line, first->column,
-                        last->endline, last->endcol);
+    return ir_span_make(context->file_id,
+                        (uint32_t)parse_token_start_byte(first),
+                        (uint32_t)parse_token_end_byte(last),
+                        parse_token_line(first), parse_token_column(first),
+                        parse_token_endline(last), parse_token_endcol(last));
 }
 
 static parse_tree_t *

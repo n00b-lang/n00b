@@ -355,10 +355,11 @@ int main(int argc, char **argv)
         parse_token_info_t   *tk;
 
         for (int i = 0; (tk = scan_stream_get(ts, i)); i++) {
-            printf("%2d tid=%-11d [%zu,%zu) %s\n", i, tk->tid,
-                   tk->start_byte, tk->end_byte,
-                   core_option_is_set(tk->value)
-                     ? core_option_get(tk->value).data : "");
+            core_string_t text = core_option_get_or_else(
+                parse_token_value(tk), (core_string_t){0});
+            printf("%2d tid=%-11d [%zu,%zu) %.*s\n", i, parse_token_tid(tk),
+                   parse_token_start_byte(tk), parse_token_end_byte(tk),
+                   (int)text.u8_bytes, text.data ? text.data : "");
         }
 
         printf("grammar: %s\n",

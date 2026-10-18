@@ -586,28 +586,32 @@ static void *reduce_leaf(parse_reduce_t *r)
     size_t      len = 0;
     char        one[2];
 
-    if (core_option_is_set(t->value)) {
-        core_string_t v = core_option_get(t->value);
+    core_option_t(core_string_t) value = parse_token_value(t);
+    size_t start = parse_token_start_byte(t);
+    size_t end   = parse_token_end_byte(t);
+    int32_t tid  = parse_token_tid(t);
+
+    if (core_option_is_set(value)) {
+        core_string_t v = core_option_get(value);
 
         s   = v.data;
         len = v.u8_bytes;
 
-        if (p->source.data && t->end_byte > t->start_byte
-            && t->end_byte <= p->source.u8_bytes) {
-            s   = p->source.data + t->start_byte;
-            len = t->end_byte - t->start_byte;
+        if (p->source.data && end > start && end <= p->source.u8_bytes) {
+            s   = p->source.data + start;
+            len = end - start;
         }
     }
 
-    if (!s && !core_option_is_set(t->value) && t->tid > 0 && t->tid < 128) {
-        one[0] = (char)t->tid;
+    if (!s && !core_option_is_set(value) && tid > 0 && tid < 128) {
+        one[0] = (char)tid;
         one[1] = '\0';
         s      = one;
         len    = 1;
     }
 
-    bool leading_comments  = has_comment(t->leading_trivia);
-    bool trailing_comments = has_comment(t->trailing_trivia);
+    bool leading_comments  = has_comment(parse_token_leading_trivia(t));
+    bool trailing_comments = has_comment(parse_token_trailing_trivia(t));
 
     if (!leading_comments && !trailing_comments) {
         return doc_text(p, s, len);
@@ -616,13 +620,13 @@ static void *reduce_leaf(parse_reduce_t *r)
     core_list_t(doc_ptr_t) parts = core_list_new(doc_ptr_t);
 
     if (leading_comments) {
-        put_leading_trivia(p, &parts, t->leading_trivia);
+        put_leading_trivia(p, &parts, parse_token_leading_trivia(t));
     }
 
     core_list_push(parts, doc_text(p, s, len));
 
     if (trailing_comments) {
-        put_trailing_trivia(p, &parts, t->trailing_trivia);
+        put_trailing_trivia(p, &parts, parse_token_trailing_trivia(t));
     }
 
     doc_t *d = doc_seq(p, D_SEQ, parts.data, parts.len);

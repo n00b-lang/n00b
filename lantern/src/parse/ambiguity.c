@@ -253,7 +253,8 @@ static void append_derivation_tree(parse_grammar_t *grammar, parse_tree_t *tree,
   if (parse_node_is_token(tree)) {
     parse_token_info_t *token = parse_node_token(tree);
     core_string_t label =
-        witness_for_token(grammar, token ? token->tid : PARSE_TOK_OTHER);
+        witness_for_token(grammar,
+                          token ? parse_token_tid(token) : PARSE_TOK_OTHER);
     core_buffer_printf(buffer, "%*s%s\n", (int)(depth * 2), "",
                        label.data ? label.data : "<terminal>");
     core_free(label.data);
@@ -299,12 +300,10 @@ static bool confirm_terminal_sequence(
       sequence->len ? core_alloc_array(parse_token_info_t *, sequence->len)
                     : nullptr;
   for (size_t i = 0; i < sequence->len; i++) {
-    parse_token_info_t *token = core_alloc(parse_token_info_t);
-    *token = (parse_token_info_t){
-        .tid = (int32_t)sequence->data[i],
-        .index = (int32_t)i,
-        .origin = PARSE_TOKEN_SYNTHETIC,
-    };
+    parse_token_info_t *token = parse_token_new();
+    parse_token_set_tid(token, (int32_t)sequence->data[i]);
+    parse_token_set_index(token, (int32_t)i);
+    parse_token_set_origin(token, PARSE_TOKEN_SYNTHETIC);
     raw[i] = token;
   }
 
@@ -346,7 +345,7 @@ static bool confirm_terminal_sequence(
   parse_pwz_free(parser);
   scan_token_stream_free(stream);
   for (size_t i = 0; i < sequence->len; i++) {
-    core_free(raw[i]);
+    parse_token_free(raw[i]);
   }
   core_free(raw);
   if (!ambiguous && out_derivations) {

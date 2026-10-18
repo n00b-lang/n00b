@@ -163,7 +163,7 @@ static void test_external_lexers_cover_distinct_recipe_families(const char *dir)
                     int64_t tid = parse_terminal_id(
                         g, core_string_borrow(CASES[i].tokens[k],
                                               strlen(CASES[i].tokens[k])));
-                    counts[k] += tid && tok->tid == tid;
+                    counts[k] += tid && parse_token_tid(tok) == tid;
                 }
             }
         }
@@ -348,14 +348,14 @@ static void test_every_grammar_tokenizes_its_own_language(const char *dir,
         scan_stream_foreach(ts, tok) {
             n++;
 
-            if (tok->tid > 0 && tok->tid < 128) {
+            if (parse_token_tid(tok) > 0 && parse_token_tid(tok) < 128) {
                 continue;
             }
 
             bool known = false;
 
             for (size_t k = 0; k < core_list_len(g->named_terms); k++) {
-                if (g->named_terms.data[k].id == tok->tid) {
+                if (g->named_terms.data[k].id == parse_token_tid(tok)) {
                     known = true;
 
                     break;

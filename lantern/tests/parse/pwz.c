@@ -13,29 +13,28 @@
 #define TOK_PLUS (PARSE_TOK_START_ID + 10)
 #define TOK_ID   (PARSE_TOK_START_ID + 11)
 
-static const char *
+static core_string_t
 leaf_text(parse_tree_t *node)
 {
     if (!node || !core_tree_is_leaf(node)) {
-        return nullptr;
+        return (core_string_t){0};
     }
 
     parse_token_info_t *tok = core_tree_leaf_value(node);
 
-    if (!tok || !core_option_is_set(tok->value)) {
-        return nullptr;
+    if (!tok) {
+        return (core_string_t){0};
     }
 
-    core_string_t s = core_option_get(tok->value);
-
-    return s.data;
+    return core_option_get_or_else(parse_token_value(tok),
+                                   (core_string_t){0});
 }
 
-static const char *
+static core_string_t
 first_leaf_text(parse_tree_t *node)
 {
     if (!node) {
-        return nullptr;
+        return (core_string_t){0};
     }
 
     if (core_tree_is_leaf(node)) {
@@ -45,14 +44,33 @@ first_leaf_text(parse_tree_t *node)
     size_t nc = core_tree_num_children(node);
 
     for (size_t i = 0; i < nc; i++) {
-        const char *t = first_leaf_text(core_tree_child(node, i));
+        core_string_t t = first_leaf_text(core_tree_child(node, i));
 
-        if (t) {
+        if (t.data) {
             return t;
         }
     }
 
-    return nullptr;
+    return (core_string_t){0};
+}
+
+static parse_token_info_t *
+make_token(int32_t tid, int32_t index, size_t start, size_t end,
+           uint32_t line, uint32_t column, const char *text)
+{
+    parse_token_info_t *tok = parse_token_new();
+
+    parse_token_set_tid(tok, tid);
+    parse_token_set_index(tok, index);
+    parse_token_set_span(tok, start, end);
+    parse_token_set_position(tok, line, column, 0, 0);
+    if (text) {
+        parse_token_set_value(tok,
+                              core_option_set(core_string_t,
+                                              core_string_from_cstr(text)),
+                              false);
+    }
+    return tok;
 }
 
 
@@ -81,16 +99,11 @@ test_basic_parse(void)
     parse_add_rule_v(g, T_id, 1, rule3);
 
 
-    parse_token_info_t tokens[3] = {
-        { .tid = TOK_ID,   .index = 0, .line = 1, .column = 1,
-          .value = core_option_set(core_string_t, CORE_STRING_STATIC("a")) },
-        { .tid = TOK_PLUS, .index = 1, .line = 1, .column = 3,
-          .value = core_option_set(core_string_t, CORE_STRING_STATIC("+")) },
-        { .tid = TOK_ID,   .index = 2, .line = 1, .column = 5,
-          .value = core_option_set(core_string_t, CORE_STRING_STATIC("b")) },
+    parse_token_info_t *ptrs[3] = {
+        make_token(TOK_ID, 0, 0, 0, 1, 1, "a"),
+        make_token(TOK_PLUS, 1, 0, 0, 1, 3, "+"),
+        make_token(TOK_ID, 2, 0, 0, 1, 5, "b"),
     };
-
-    parse_token_info_t *ptrs[3] = { &tokens[0], &tokens[1], &tokens[2] };
 
     parse_token_stream_t *ts = scan_token_stream_from_array(ptrs, 3);
     assert(ts);
@@ -116,6 +129,9 @@ test_basic_parse(void)
 
     parse_pwz_free(p);
     scan_token_stream_free(ts);
+    for (size_t i = 0; i < 3; i++) {
+        parse_token_free(ptrs[i]);
+    }
     parse_grammar_free(g);
 }
 
@@ -168,9 +184,10 @@ test_repetition_group_flattening(void)
     assert(core_tree_num_children(group) == 4);
 
     for (size_t i = 0; i < 4; i++) {
-        const char *text
+        core_string_t text
             = first_leaf_text(core_tree_child(group, i));
-        assert(text && text[0] == "abcd"[i] && text[1] == 0);
+        assert(text.data && text.u8_bytes == 1
+               && text.data[0] == "abcd"[i]);
     }
 
     printf("PASS: ordered repetition group flattening\n");
@@ -240,17 +257,14 @@ test_set_match(void)
 
     parse_add_rule_v(g, S, 2, rule);
 
-    parse_token_info_t ok[2] = {
-        {.tid = TOK_ID, .index = 0, .line = 1, .column = 1},
-        {.tid = TOK_PLUS, .index = 1, .line = 1, .column = 2},
+    parse_token_info_t *okp[2] = {
+        make_token(TOK_ID, 0, 0, 0, 1, 1, nullptr),
+        make_token(TOK_PLUS, 1, 0, 0, 1, 2, nullptr),
     };
-    parse_token_info_t bad[2] = {
-        {.tid = TOK_PLUS, .index = 0, .line = 1, .column = 1},
-        {.tid = TOK_PLUS, .index = 1, .line = 1, .column = 2},
+    parse_token_info_t *badp[2] = {
+        make_token(TOK_PLUS, 0, 0, 0, 1, 1, nullptr),
+        make_token(TOK_PLUS, 1, 0, 0, 1, 2, nullptr),
     };
-
-    parse_token_info_t *okp[2]  = {&ok[0], &ok[1]};
-    parse_token_info_t *badp[2] = {&bad[0], &bad[1]};
 
     parse_token_stream_t *ts = scan_token_stream_from_array(okp, 2);
     parse_pwz_parser_t   *p  = parse_pwz_new_for_start(g, S);
@@ -265,6 +279,10 @@ test_set_match(void)
     assert(!parse_pwz_parse(p, ts) && "an excluded token does not match");
     parse_pwz_free(p);
     scan_token_stream_free(ts);
+    for (size_t i = 0; i < 2; i++) {
+        parse_token_free(okp[i]);
+        parse_token_free(badp[i]);
+    }
 
     parse_grammar_free(g);
 
@@ -426,27 +444,25 @@ test_adjacency_annotation(void)
         g, parse_nonterm_id(parse_find_nonterm(g, CORE_STRING_STATIC("S"))));
     assert(p);
 
-    parse_token_info_t adjacent_tokens[2] = {
-        {.tid = '(', .index = 0, .start_byte = 0, .end_byte = 1},
-        {.tid = 'x', .index = 1, .start_byte = 1, .end_byte = 2},
-    };
     parse_token_info_t *adjacent_ptrs[2] = {
-        &adjacent_tokens[0], &adjacent_tokens[1],
+        make_token('(', 0, 0, 1, 0, 0, nullptr),
+        make_token('x', 1, 1, 2, 0, 0, nullptr),
     };
     parse_token_stream_t *ts = scan_token_stream_from_array(adjacent_ptrs, 2);
     assert(ts && parse_pwz_parse(p, ts));
     scan_token_stream_free(ts);
 
-    parse_token_info_t spaced_tokens[2] = {
-        {.tid = '(', .index = 0, .start_byte = 0, .end_byte = 1},
-        {.tid = 'x', .index = 1, .start_byte = 2, .end_byte = 3},
-    };
     parse_token_info_t *spaced_ptrs[2] = {
-        &spaced_tokens[0], &spaced_tokens[1],
+        make_token('(', 0, 0, 1, 0, 0, nullptr),
+        make_token('x', 1, 2, 3, 0, 0, nullptr),
     };
     ts = scan_token_stream_from_array(spaced_ptrs, 2);
     assert(ts && !parse_pwz_parse(p, ts));
     scan_token_stream_free(ts);
+    for (size_t i = 0; i < 2; i++) {
+        parse_token_free(adjacent_ptrs[i]);
+        parse_token_free(spaced_ptrs[i]);
+    }
 
     parse_pwz_free(p);
     parse_grammar_free(g);
@@ -467,16 +483,18 @@ test_nullable_nonterminal_before_following_token(void)
         g, parse_nonterm_id(parse_find_nonterm(g, CORE_STRING_STATIC("S"))));
     assert(p);
 
-    parse_token_info_t tokens[3] = {
-        {.tid = 'a', .index = 0},
-        {.tid = 'b', .index = 1},
-        {.tid = 'c', .index = 2},
+    parse_token_info_t *ptrs[3] = {
+        make_token('a', 0, 0, 0, 0, 0, nullptr),
+        make_token('b', 1, 0, 0, 0, 0, nullptr),
+        make_token('c', 2, 0, 0, 0, 0, nullptr),
     };
-    parse_token_info_t *ptrs[3] = {&tokens[0], &tokens[1], &tokens[2]};
     parse_token_stream_t *ts = scan_token_stream_from_array(ptrs, 3);
     assert(ts && parse_pwz_parse(p, ts));
 
     scan_token_stream_free(ts);
+    for (size_t i = 0; i < 3; i++) {
+        parse_token_free(ptrs[i]);
+    }
     parse_pwz_free(p);
     parse_grammar_free(g);
     printf("PASS: nullable nonterminal before following token\n");

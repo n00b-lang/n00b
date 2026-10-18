@@ -134,14 +134,15 @@ test_stream_token_to_trivia(void)
     parse_token_info_t *next = scan_stream_get(stream, 1);
     bool neighbor_after_edit =
         scan_stream_previous_token(stream, next) == first;
-    parse_trivia_t *trivia = next ? next->leading_trivia : nullptr;
+    parse_trivia_t *trivia = next ? parse_token_leading_trivia(next) : nullptr;
 
     check("a stream token can be converted to trivia",
           converted && scan_stream_token_count(stream) == 2
               && last && next == last);
     check("token-neighbor lookup survives stable-index gaps",
           neighbors_before_edit && neighbor_after_edit
-              && next && next->index > first->index + 1);
+              && next
+              && parse_token_index(next) > parse_token_index(first) + 1);
     check("token conversion preserves the token spelling as trivia",
           trivia && core_string_eq(trivia->text, S("+")));
 

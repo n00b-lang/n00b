@@ -500,11 +500,17 @@ static bool bnf_scan(parse_scanner_t *s) {
 }
 
 static core_string_t tok_str(parse_token_info_t *tok) {
-  if (!tok || !core_option_is_set(tok->value)) {
+  if (!tok) {
     return (core_string_t){0};
   }
 
-  return core_option_get(tok->value);
+  core_option_t(core_string_t) value = parse_token_value(tok);
+
+  if (!core_option_is_set(value)) {
+    return (core_string_t){0};
+  }
+
+  return core_option_get(value);
 }
 
 static core_string_t tok_str_or(parse_token_info_t *tok,
@@ -595,7 +601,7 @@ static void *bnf_walk_atom(parse_nt_node_t *pn, void *children, void *thunk) {
     result = core_alloc_array(char, len + 3);
     result[0] = 'L';
     result[1] = ':';
-    memcpy(result + 2, val.data, len + 1);
+    memcpy(result + 2, val.data, len);
   } else if (pn->rule_index == 1) {
     parse_token_info_t *tok = (parse_token_info_t *)kids[1];
     core_string_t val = tok_str_or(tok, CORE_STRING_STATIC(""));
@@ -603,7 +609,7 @@ static void *bnf_walk_atom(parse_nt_node_t *pn, void *children, void *thunk) {
     result = core_alloc_array(char, len + 3);
     result[0] = 'N';
     result[1] = ':';
-    memcpy(result + 2, val.data, len + 1);
+    memcpy(result + 2, val.data, len);
   } else if (pn->rule_index == 2) {
     parse_token_info_t *tok = (parse_token_info_t *)kids[0];
     core_string_t val = tok_str_or(tok, CORE_STRING_STATIC(""));
@@ -611,7 +617,7 @@ static void *bnf_walk_atom(parse_nt_node_t *pn, void *children, void *thunk) {
     result = core_alloc_array(char, len + 3);
     result[0] = 'C';
     result[1] = ':';
-    memcpy(result + 2, val.data, len + 1);
+    memcpy(result + 2, val.data, len);
   } else if (pn->rule_index == 3) {
     parse_token_info_t *tok = (parse_token_info_t *)kids[0];
     core_string_t val = tok_str_or(tok, CORE_STRING_STATIC(""));
@@ -619,7 +625,7 @@ static void *bnf_walk_atom(parse_nt_node_t *pn, void *children, void *thunk) {
     result = core_alloc_array(char, len + 3);
     result[0] = 'T';
     result[1] = ':';
-    memcpy(result + 2, val.data, len + 1);
+    memcpy(result + 2, val.data, len);
   } else if (pn->rule_index == 4) {
     parse_token_info_t *tok = (parse_token_info_t *)kids[0];
     core_string_t val = tok_str_or(tok, CORE_STRING_STATIC(""));
@@ -627,7 +633,7 @@ static void *bnf_walk_atom(parse_nt_node_t *pn, void *children, void *thunk) {
     result = core_alloc_array(char, len + 3);
     result[0] = 'K';
     result[1] = ':';
-    memcpy(result + 2, val.data, len + 1);
+    memcpy(result + 2, val.data, len);
   } else {
     result = core_alloc_array(char, 3);
     result[0] = 'E';
@@ -813,12 +819,17 @@ static void bnf_error_at_token(parse_token_info_t *tok) {
     return;
   }
 
-  bnf_error_location.start_byte = tok->start_byte;
-  bnf_error_location.end_byte = tok->end_byte;
-  bnf_error_location.start_line = tok->line;
-  bnf_error_location.start_col = tok->column;
-  bnf_error_location.end_line = tok->endline ? tok->endline : tok->line;
-  bnf_error_location.end_col = tok->endcol ? tok->endcol : tok->column + 1;
+  uint32_t line = parse_token_line(tok);
+  uint32_t column = parse_token_column(tok);
+  uint32_t endline = parse_token_endline(tok);
+  uint32_t endcol = parse_token_endcol(tok);
+
+  bnf_error_location.start_byte = parse_token_start_byte(tok);
+  bnf_error_location.end_byte = parse_token_end_byte(tok);
+  bnf_error_location.start_line = line;
+  bnf_error_location.start_col = column;
+  bnf_error_location.end_line = endline ? endline : line;
+  bnf_error_location.end_col = endcol ? endcol : column + 1;
 }
 
 static void *bnf_walk_arg_ignore(parse_nt_node_t *pn, void *children,
@@ -852,16 +863,19 @@ static void *bnf_walk_annotation(parse_nt_node_t *pn, void *children,
     parse_token_info_t *rp = (parse_token_info_t *)kids[4];
     core_string_t region = {0};
 
-    if (lp && rp && bnf_src && rp->start_byte >= lp->end_byte &&
-        rp->start_byte <= bnf_src_len) {
-      region = core_string_from_raw(bnf_src + lp->end_byte,
-                                    (int64_t)(rp->start_byte - lp->end_byte));
+    if (lp && rp && bnf_src
+        && parse_token_start_byte(rp) >= parse_token_end_byte(lp)
+        && parse_token_start_byte(rp) <= bnf_src_len) {
+      region = core_string_from_raw(
+          bnf_src + parse_token_end_byte(lp),
+          (int64_t)(parse_token_start_byte(rp) - parse_token_end_byte(lp)));
     }
 
     bool args_ok = parse_annot_parse_args(info, region);
 
     if (!args_ok && !bnf_bad_annot[0]) {
-      snprintf(bnf_bad_annot, sizeof(bnf_bad_annot), "@%s(%.*s)",
+      snprintf(bnf_bad_annot, sizeof(bnf_bad_annot), "@%.*s(%.*s)",
+               spelling.data ? (int)spelling.u8_bytes : 1,
                spelling.data ? spelling.data : "?", (int)region.u8_bytes,
                region.data ? region.data : "");
     }
@@ -869,7 +883,9 @@ static void *bnf_walk_annotation(parse_nt_node_t *pn, void *children,
     core_free(region.data);
   } else if (pn->rule_index == 1 && !parse_annot_building() &&
              parse_annot_arg_grammar(info->kind).data && !bnf_bad_annot[0]) {
-    snprintf(bnf_bad_annot, sizeof(bnf_bad_annot), "@%s() with no arguments",
+    snprintf(bnf_bad_annot, sizeof(bnf_bad_annot),
+             "@%.*s() with no arguments",
+             spelling.data ? (int)spelling.u8_bytes : 1,
              spelling.data ? spelling.data : "?");
   }
 
@@ -1501,10 +1517,10 @@ static bool preflight_grammar(parse_grammar_t *user_g, bnf_result_t *result,
     if (existing && core_list_len(existing->rule_ids) > 0 &&
         !existing->defined_here) {
       snprintf(bnf_error, sizeof(bnf_error),
-               "<%s> is already defined by a grammar loaded earlier; "
+               "<%.*s> is already defined by a grammar loaded earlier; "
                "composing would merge two productions that share a "
                "name",
-               name->data);
+               (int)name->u8_bytes, name->data);
 
       return false;
     }
@@ -1626,9 +1642,10 @@ static bool populate_grammar(parse_grammar_t *user_g, bnf_result_t *result,
 
     if (core_list_len(lhs->rule_ids) > 0 && !lhs->defined_here) {
       snprintf(bnf_error, sizeof(bnf_error),
-               "<%s> is already defined by a grammar loaded earlier; "
+               "<%.*s> is already defined by a grammar loaded earlier; "
                "composing would merge two productions that share a "
                "name",
+               name->data ? (int)name->u8_bytes : 1,
                name->data ? name->data : "?");
 
       return false;

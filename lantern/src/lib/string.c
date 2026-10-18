@@ -1,5 +1,6 @@
 #include "lib/string.h"
 #include "lib/alloc.h"
+#include <stdlib.h>
 #include <string.h>
 
 core_string_t
@@ -78,4 +79,40 @@ core_string_eq(core_string_t a, core_string_t b)
     }
 
     return memcmp(a.data, b.data, a.u8_bytes) == 0;
+}
+
+static char *
+bounded_copy(core_string_t s, char *small, size_t small_size)
+{
+    char *text = s.u8_bytes < small_size ? small
+                                         : core_alloc_size(1, s.u8_bytes + 1);
+    if (s.u8_bytes && s.data) {
+        memcpy(text, s.data, s.u8_bytes);
+    }
+    text[s.data ? s.u8_bytes : 0] = '\0';
+    return text;
+}
+
+long long
+core_string_strtoll(core_string_t s, int base)
+{
+    char small[64];
+    char *text = bounded_copy(s, small, sizeof(small));
+    long long value = strtoll(text, nullptr, base);
+    if (text != small) {
+        core_free(text);
+    }
+    return value;
+}
+
+unsigned long long
+core_string_strtoull(core_string_t s, int base)
+{
+    char small[64];
+    char *text = bounded_copy(s, small, sizeof(small));
+    unsigned long long value = strtoull(text, nullptr, base);
+    if (text != small) {
+        core_free(text);
+    }
+    return value;
 }

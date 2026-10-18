@@ -693,8 +693,13 @@ leaf_has_text(parse_tree_t *leaf, void *arg)
 
     parse_token_info_t *tok = core_tree_leaf_value(leaf);
 
-    return tok && core_option_is_set(tok->value)
-        && core_option_get(tok->value).u8_bytes;
+    if (!tok) {
+        return false;
+    }
+
+    core_option_t(core_string_t) value = parse_token_value(tok);
+
+    return core_option_is_set(value) && core_option_get(value).u8_bytes;
 }
 
 static core_string_t
@@ -703,7 +708,7 @@ last_text(parse_tree_t *node)
     parse_tree_t *leaf = parse_tree_scan_leaves(node, true, leaf_has_text,
                                                  nullptr);
 
-    return leaf ? core_option_get(core_tree_leaf_value(leaf)->value)
+    return leaf ? core_option_get(parse_token_value(core_tree_leaf_value(leaf)))
                 : (core_string_t){0};
 }
 
@@ -1301,22 +1306,25 @@ parse_infer_eval_with_type_node_resolver(
                                           : first;
 
     if (first) {
-        const char *file = core_option_is_set(first->file)
-                               ? core_option_get(first->file).data
+        core_option_t(core_string_t) first_file = parse_token_file(first);
+        const char *file = core_option_is_set(first_file)
+                               ? core_option_get(first_file).data
                                : nullptr;
+        uint32_t first_line   = parse_token_line(first);
+        uint32_t first_column = parse_token_column(first);
+        uint32_t last_line    = parse_token_line(last);
+        uint32_t last_column  = parse_token_column(last);
+        uint32_t last_endline = parse_token_endline(last);
+        uint32_t last_endcol  = parse_token_endcol(last);
 
         th_ctx_set_span(tc,
                         (th_span_t){.file = file,
-                                    .start_line = first->line,
-                                    .start_col = first->column,
-                                    .end_line = last && last->endline
-                                                    ? last->endline
-                                                    : last ? last->line
-                                                           : first->line,
-                                    .end_col = last && last->endcol
-                                                   ? last->endcol
-                                                   : last ? last->column + 1
-                                                          : first->column + 1});
+                                    .start_line = first_line,
+                                    .start_col = first_column,
+                                    .end_line = last_endline ? last_endline
+                                                             : last_line,
+                                    .end_col = last_endcol ? last_endcol
+                                                           : last_column + 1});
     }
 
     ictx c = {

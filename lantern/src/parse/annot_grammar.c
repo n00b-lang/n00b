@@ -205,7 +205,7 @@ after_tick(parse_scanner_t *s)
 {
     parse_token_info_t *prev = scan_prev_token(s);
 
-    return prev && prev->tid == '`';
+    return prev && parse_token_tid(prev) == '`';
 }
 
 static bool

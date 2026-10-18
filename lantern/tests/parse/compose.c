@@ -35,12 +35,14 @@ static int64_t nt_id(parse_grammar_t *g, const char *name)
 
 static parse_token_info_t *tk(int64_t tid, const char *text, int i)
 {
-    parse_token_info_t *t = core_alloc(typeof(*t));
+    parse_token_info_t *t = parse_token_new();
 
-    t->tid   = tid;
-    t->index = i;
-    t->line  = 1;
-    t->value = core_option_set(core_string_t, core_string_from_cstr(text));
+    parse_token_set_tid(t, (int32_t)tid);
+    parse_token_set_index(t, i);
+    parse_token_set_position(t, 1, 0, 0, 0);
+    parse_token_set_value(t, core_option_set(core_string_t,
+                                             core_string_from_cstr(text)),
+                          false);
 
     return t;
 }

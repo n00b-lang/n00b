@@ -260,22 +260,24 @@ static int
 write_tokens(parse_grammar_t *g, parse_token_stream_t *ts, FILE *out)
 {
     scan_stream_foreach(ts, tok) {
-        core_string_t spelling = parse_terminal_name(g, tok->tid);
-        core_string_t value    = core_option_is_set(tok->value)
-                                  ? core_option_get(tok->value)
+        int32_t       tid      = parse_token_tid(tok);
+        core_string_t spelling = parse_terminal_name(g, tid);
+        core_option_t(core_string_t) token_value = parse_token_value(tok);
+        core_string_t value    = core_option_is_set(token_value)
+                                  ? core_option_get(token_value)
                                   : (core_string_t){0};
 
         if (spelling.data) {
             fprintf(out, "%-22.*s", (int)spelling.u8_bytes, spelling.data);
         }
-        else if (tok->tid > 0 && tok->tid < 128) {
-            fprintf(out, "%-22c", (char)tok->tid);
+        else if (tid > 0 && tid < 128) {
+            fprintf(out, "%-22c", (char)tid);
         }
         else {
-            fprintf(out, "%-22d", tok->tid);
+            fprintf(out, "%-22d", tid);
         }
 
-        fprintf(out, " %u:%u", tok->line, tok->column);
+        fprintf(out, " %u:%u", parse_token_line(tok), parse_token_column(tok));
 
         if (value.data && value.u8_bytes) {
             fprintf(out, "  %.*s", (int)value.u8_bytes, value.data);
@@ -481,25 +483,27 @@ main(int argc, char **argv)
                                             : nullptr;
 
             if (tok) {
-                core_string_t name = parse_terminal_name(g, tok->tid);
-                core_string_t text = core_option_is_set(tok->value)
-                                      ? core_option_get(tok->value)
+                int32_t       tid  = parse_token_tid(tok);
+                core_string_t name = parse_terminal_name(g, tid);
+                core_option_t(core_string_t) value = parse_token_value(tok);
+                core_string_t text = core_option_is_set(value)
+                                      ? core_option_get(value)
                                       : (core_string_t){0};
 
                 fprintf(stderr,
                         "pp: %s:%u:%u: no rule accepts ",
                         path,
-                        tok->line,
-                        tok->column);
+                        parse_token_line(tok),
+                        parse_token_column(tok));
 
                 if (name.data) {
                     fprintf(stderr, "%%%.*s", (int)name.u8_bytes, name.data);
                 }
-                else if (tok->tid > 0 && tok->tid < 128) {
-                    fprintf(stderr, "'%c'", (char)tok->tid);
+                else if (tid > 0 && tid < 128) {
+                    fprintf(stderr, "'%c'", (char)tid);
                 }
                 else {
-                    fprintf(stderr, "token %d", tok->tid);
+                    fprintf(stderr, "token %d", tid);
                 }
 
                 if (text.data && text.u8_bytes && text.data[0] != '\n') {

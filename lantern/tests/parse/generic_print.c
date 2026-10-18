@@ -230,7 +230,7 @@ test_a_comment_the_caller_marks_as_leading_is_kept(void)
     tv->text = CORE_STRING_STATIC("# why");
     tv->kind = PARSE_TRIVIA_COMMENT;
 
-    tok->leading_trivia = tv;
+    parse_token_set_leading_trivia(tok, tv);
 
     parse_print_opts_t o = {.width = 200, .indent = 4};
     char            *s = parse_tree_print(r.g, r.tree, &o);
@@ -297,7 +297,7 @@ test_a_comment_attached_to_the_previous_token_is_kept(void)
     tv->kind = PARSE_TRIVIA_COMMENT;
 
     if (tok) {
-        tok->trailing_trivia = tv;
+        parse_token_set_trailing_trivia(tok, tv);
     }
 
     parse_print_opts_t o = {.width = 200, .indent = 4};
@@ -393,13 +393,15 @@ comments_of(const char *src, scan_trivia_attach_t how, size_t *n_lead,
     for (int32_t i = 0; i < scan_stream_token_count(ts); i++) {
         t = scan_stream_get(ts, i);
 
-        for (parse_trivia_t *tv = t->leading_trivia; tv; tv = tv->next) {
+        for (parse_trivia_t *tv = parse_token_leading_trivia(t); tv;
+             tv = tv->next) {
             if (tv->kind == PARSE_TRIVIA_COMMENT) {
                 (*n_lead)++;
             }
         }
 
-        for (parse_trivia_t *tv = t->trailing_trivia; tv; tv = tv->next) {
+        for (parse_trivia_t *tv = parse_token_trailing_trivia(t); tv;
+             tv = tv->next) {
             if (tv->kind == PARSE_TRIVIA_COMMENT) {
                 (*n_trail)++;
             }
@@ -450,7 +452,8 @@ test_final_trivia_attaches_to_the_last_token(void)
     parse_token_info_t *tok = scan_stream_get(ts, 0);
     size_t comments = 0;
 
-    for (parse_trivia_t *tv = tok ? tok->trailing_trivia : nullptr; tv;
+    for (parse_trivia_t *tv = tok ? parse_token_trailing_trivia(tok) : nullptr;
+         tv;
          tv = tv->next) {
         if (tv->kind == PARSE_TRIVIA_COMMENT) {
             comments++;
@@ -510,8 +513,9 @@ test_notrivia_clears_it(void)
 
     check("the @notrivia child was found", tok != nullptr);
     check("and @notrivia left it with no trivia attached",
-          tok && !tok->leading_trivia && !tok->trailing_trivia
-              && tok->no_trivia);
+          tok && !parse_token_leading_trivia(tok)
+              && !parse_token_trailing_trivia(tok)
+              && parse_token_no_trivia(tok));
 
     parse_annot_result_free(r);
     parse_pwz_free(p);

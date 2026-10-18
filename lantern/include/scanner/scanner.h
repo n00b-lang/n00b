@@ -53,6 +53,7 @@ struct parse_scanner_t {
     uint32_t                       line;
     uint32_t                       column;
     core_option_t(core_string_t)   file;
+    uint32_t                       source;
 
     size_t            mark;
     uint32_t          mark_line;

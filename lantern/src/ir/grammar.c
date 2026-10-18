@@ -119,11 +119,12 @@ static bool after_sigil(parse_scanner_t *s)
 {
     parse_token_info_t *prev = scan_prev_token(s);
 
-    if (!prev || (prev->tid != '%' && prev->tid != '$' && prev->tid != '@')) {
+    if (!prev || (parse_token_tid(prev) != '%' && parse_token_tid(prev) != '$'
+                  && parse_token_tid(prev) != '@')) {
         return false;
     }
 
-    return prev->end_byte == (size_t)scan_offset(s);
+    return parse_token_end_byte(prev) == (size_t)scan_offset(s);
 }
 
 static bool ir_scan(parse_scanner_t *s)
@@ -174,7 +175,7 @@ restart:
     core_codepoint_t c = scan_peek(s, 0);
 
     if (c == '"') {
-        scan_emit(s, tid_str, scan_string_double(s));
+        scan_emit_owned(s, tid_str, scan_string_double(s));
 
         return true;
     }
@@ -194,9 +195,9 @@ restart:
             int64_t      kw   = name ? PARSE_TOK_OTHER
                                      : scan_terminal_id(s, text);
 
-            scan_emit(s, kw != PARSE_TOK_OTHER ? (int32_t)kw
-                                                 : PARSE_TOK_IDENTIFIER,
-                          id);
+            scan_emit_owned(s, kw != PARSE_TOK_OTHER ? (int32_t)kw
+                                                       : PARSE_TOK_IDENTIFIER,
+                            id);
 
             return true;
         }

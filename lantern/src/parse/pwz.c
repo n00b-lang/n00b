@@ -702,25 +702,26 @@ token_matches(parse_token_info_t *tok, pwz_exp_t *exp)
 
     switch (exp->kind) {
     case PWZ_TOK: {
-        if (tok->tid != exp->match_tid) {
+        if (parse_token_tid(tok) != exp->match_tid) {
             return false;
         }
         if (!exp->contextual_spelling.data) {
             return true;
         }
-        return core_option_is_set(tok->value)
-            && core_string_eq(core_option_get(tok->value),
+        core_option_t(core_string_t) value = parse_token_value(tok);
+        return core_option_is_set(value)
+            && core_string_eq(core_option_get(value),
                               exp->contextual_spelling);
     }
 
     case PWZ_CLASS:
-        return parse_codepoint_matches_class(tok->tid, exp->cc);
+        return parse_codepoint_matches_class(parse_token_tid(tok), exp->cc);
 
     case PWZ_ANY:
         return true;
 
     case PWZ_SET:
-        return parse_match_set_holds(exp->set, tok->tid);
+        return parse_match_set_holds(exp->set, parse_token_tid(tok));
 
     default:
         return false;
@@ -765,8 +766,8 @@ run_ddp(parse_pwz_parser_t *p, int32_t pos, parse_token_info_t *tok,
             pwz_exp_t *result = alloc_result_exp(p);
 
             result->kind    = exp->kind;
-            result->tid     = tok->tid;
-            result->match_tid = tok->tid;
+            result->tid     = parse_token_tid(tok);
+            result->match_tid = parse_token_tid(tok);
 
             core_list_push(p->worklist_swap,
                            ((pwz_zipper_t){.result = result,
@@ -834,7 +835,8 @@ run_ddp(parse_pwz_parser_t *p, int32_t pos, parse_token_info_t *tok,
                     int32_t            rix  = nt->rule_ids.data[alt_child->rule_ix];
                     parse_rule_t *rule = parse_get_rule(p->grammar, rix);
 
-                    if (rule && !rule_first_matches(rule, tok->tid)) {
+                    if (rule && !rule_first_matches(rule,
+                                                    parse_token_tid(tok))) {
                         continue;
                     }
                 }
@@ -1058,7 +1060,7 @@ run_parse(parse_pwz_parser_t *p)
         if (wl_len == 0) {
             int32_t trailing = pos;
             parse_token_info_t *tok = get_token(p, trailing);
-            while (tok && tok->ignore_if_no_match) {
+            while (tok && parse_token_ignore_if_no_match(tok)) {
                 tok = get_token(p, ++trailing);
             }
             if (!tok && p->longest_top && p->longest_end == pos) {
@@ -1080,7 +1082,7 @@ run_parse(parse_pwz_parser_t *p)
             size_t before = p->worklist_swap.len;
             size_t before_tops = p->tops.len;
             d_u(p, complete_pos, z->result, z->mem);
-            if (input && input->ignore_if_no_match
+            if (input && parse_token_ignore_if_no_match(input)
                 && p->worklist_swap.len == before
                 && p->tops.len == before_tops) {
                 core_list_push(p->worklist_swap,
@@ -1506,7 +1508,9 @@ score_exp(parse_pwz_parser_t *p, pwz_exp_t *root, int32_t *pos)
             }
             parse_token_info_t *first = get_token(p, f->from);
             parse_token_info_t *second = get_token(p, f->from + 1);
-            if (!first || !second || first->end_byte != second->start_byte) {
+            if (!first || !second
+                || parse_token_end_byte(first)
+                       != parse_token_start_byte(second)) {
                 f->cost = INT32_MAX / 4;
             }
             break;

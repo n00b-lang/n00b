@@ -80,7 +80,7 @@ static bool after_tick(parse_scanner_t *s)
 {
     parse_token_info_t *prev = scan_prev_token(s);
 
-    return prev && prev->tid == '`';
+    return prev && parse_token_tid(prev) == '`';
 }
 
 static bool tl_scan(parse_scanner_t *s)
@@ -96,13 +96,13 @@ static bool tl_scan(parse_scanner_t *s)
     core_codepoint_t c = scan_peek(s, 0);
 
     if (c == '"') {
-        scan_emit(s, (int32_t)tid_str, scan_string_double(s));
+        scan_emit_owned(s, (int32_t)tid_str, scan_string_double(s));
 
         return true;
     }
 
     if (c >= '0' && c <= '9') {
-        scan_emit(s, (int32_t)tid_int, scan_integer(s));
+        scan_emit_owned(s, (int32_t)tid_int, scan_integer(s));
 
         return true;
     }
@@ -116,7 +116,7 @@ static bool tl_scan(parse_scanner_t *s)
             int64_t kw = name ? PARSE_TOK_OTHER
                               : scan_terminal_id(s, core_option_get(id));
 
-            scan_emit(
+            scan_emit_owned(
                 s, kw != PARSE_TOK_OTHER ? (int32_t)kw : PARSE_TOK_IDENTIFIER,
                 id);
 
@@ -496,9 +496,12 @@ static void *r_tvar(parse_reduce_t *r)
         return nullptr;
     }
 
+    char *spelled = core_strndup(name.data, name.u8_bytes);
+
     for (size_t d = c->binders.len; d > 0; d--) {
         for (size_t i = 0; i < c->binders.data[d - 1].n; i++) {
-            if (!strcmp(c->binders.data[d - 1].names[i], name.data)) {
+            if (!strcmp(c->binders.data[d - 1].names[i], spelled)) {
+                core_free(spelled);
                 return node_type(c, th_bound(c->th, c->binders.len - d + 1, i));
             }
         }
@@ -506,16 +509,16 @@ static void *r_tvar(parse_reduce_t *r)
 
     bool   found = false;
     size_t at =
-        (size_t)(uintptr_t)core_dict_get(&c->fv_index, name.data, &found);
+        (size_t)(uintptr_t)core_dict_get(&c->fv_index, spelled, &found);
 
     if (found) {
+        core_free(spelled);
         return node_type(c, c->free_vars.data[at].type);
     }
 
     th_type *t = th_var(c->th);
 
-    core_list_push(c->free_vars,
-                   ((freev){.name = core_strdup(name.data), .type = t}));
+    core_list_push(c->free_vars, ((freev){.name = spelled, .type = t}));
     core_dict_put(&c->fv_index, c->free_vars.data[c->free_vars.len - 1].name,
                   c->free_vars.len - 1);
 
@@ -541,7 +544,7 @@ static void collect_tvar_names(parse_grammar_t *g, parse_tree_t *n,
         core_string_t s = parse_tree_leaf_text(core_tree_child(n, 1));
 
         if (s.data) {
-            core_list_push(*found, core_strdup(s.data));
+            core_list_push(*found, core_strndup(s.data, s.u8_bytes));
         }
 
         return;
@@ -759,8 +762,13 @@ static void *r_anon_site(parse_reduce_t *r)
         return nullptr;
     }
 
-    return node_type(
-        c, th_name(c->th, th_anon_name(c->th, path.data, line->u, col->u)));
+    char    *spelled = core_strndup(path.data, path.u8_bytes);
+    th_type *named   = th_name(c->th, th_anon_name(c->th, spelled, line->u,
+                                                   col->u));
+
+    core_free(spelled);
+
+    return node_type(c, named);
 }
 
 static void *r_field(parse_reduce_t *r)
@@ -777,7 +785,7 @@ static void *r_field(parse_reduce_t *r)
 
     tl_node *n = node_new(c, TL_MEMBER);
 
-    n->member.name = core_strdup(name.data);
+    n->member.name = core_strndup(name.data, name.u8_bytes);
     n->member.type = type;
 
     return n;
@@ -971,7 +979,8 @@ static void *r_param(parse_reduce_t *r)
             }
         }
 
-        n->param.name = core_strdup(named.data);
+        n->param.name = named.data ? core_strndup(named.data, named.u8_bytes)
+                                   : nullptr;
     }
 
     n->param.mode = mode;
@@ -1053,7 +1062,8 @@ static void *r_function_constraint(parse_reduce_t *r)
     }
     if (!subject.data)
         return nullptr;
-    const char *variable = subject.data;
+    char       *spelled  = core_strndup(subject.data, subject.u8_bytes);
+    const char *variable = spelled;
     th_type    *type     = function_tvar(c, variable);
     for (size_t i = 0; i < r->n_kids; i++) {
         parse_tree_t *child = core_tree_child(r->node, i);
@@ -1063,6 +1073,7 @@ static void *r_function_constraint(parse_reduce_t *r)
             continue;
         constrain_function_items(c, kid(r, i), &variable, &type);
     }
+    core_free(spelled);
     return nullptr;
 }
 
@@ -1210,7 +1221,10 @@ static void *r_int_leaf_or_str(parse_reduce_t *r)
     if (tid == tid_int) {
         tl_node *n = node_new(c, TL_INT);
 
-        n->u = strtoull(text.data, nullptr, 10);
+        char *digits = core_strndup(text.data, text.u8_bytes);
+
+        n->u = strtoull(digits, nullptr, 10);
+        core_free(digits);
 
         return n;
     }
@@ -1218,7 +1232,7 @@ static void *r_int_leaf_or_str(parse_reduce_t *r)
     if (tid == tid_str || tid == tid_ident) {
         tl_node *n = node_new(c, TL_NAME);
 
-        n->name = core_strdup(text.data);
+        n->name = core_strndup(text.data, text.u8_bytes);
 
         return n;
     }
@@ -1362,7 +1376,7 @@ static th_type *run(th_ctx *ctx, const char *src, size_t len, size_t *consumed,
         parse_token_info_t *last =
             used > 0 ? scan_stream_get(ts, used - 1) : nullptr;
 
-        *consumed = last ? last->end_byte : 0;
+        *consumed = last ? parse_token_end_byte(last) : 0;
     }
 
     parse_pwz_free(p);

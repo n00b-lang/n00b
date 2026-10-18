@@ -169,7 +169,8 @@ desugar_with(parse_visit_t *v)
         if (core_tree_is_leaf(kid)) {
             parse_token_info_t *tok = core_tree_leaf_value(kid);
 
-            if (tok && tok->tid == PARSE_TOK_IDENTIFIER && !name) {
+            if (tok && parse_token_tid(tok) == PARSE_TOK_IDENTIFIER
+                && !name) {
                 name = kid;
             }
         }
@@ -183,13 +184,14 @@ desugar_with(parse_visit_t *v)
     }
 
     parse_token_info_t *nt = core_tree_leaf_value(name);
+    core_string_t     word = core_option_get(parse_token_value(nt));
     char              src[128];
 
     snprintf(src,
              sizeof(src),
-             "context_init(%s); q; context_end(%s);",
-             core_option_get(nt->value).data,
-             core_option_get(nt->value).data);
+             "context_init(%.*s); q; context_end(%.*s);",
+             (int)word.u8_bytes, word.data,
+             (int)word.u8_bytes, word.data);
 
     char           *err = nullptr;
     parse_template_t *t   = parse_template_parse(g, S("stmts"), S(src),
@@ -288,22 +290,22 @@ main(void)
 
     source_comment->text = CORE_STRING_STATIC("# retained");
     source_comment->kind = PARSE_TRIVIA_COMMENT;
-    source_token->leading_trivia = source_comment;
+    parse_token_set_leading_trivia(source_token, source_comment);
 
     parse_tree_t *commented = parse_tree_clone(tree);
     parse_token_info_t *cloned_token
         = parse_tree_find_first_terminal(commented);
 
     check("a clone owns an independent copy of comment trivia",
-          cloned_token && cloned_token->leading_trivia
-              && cloned_token->leading_trivia != source_comment
-              && core_string_eq(cloned_token->leading_trivia->text,
+          cloned_token && parse_token_leading_trivia(cloned_token)
+              && parse_token_leading_trivia(cloned_token) != source_comment
+              && core_string_eq(parse_token_leading_trivia(cloned_token)->text,
                                 source_comment->text));
     same("a cloned tree retains its comments",
          render(commented),
          "# retained\nwith ( r ) { a ; b ; }");
 
-    source_token->leading_trivia = nullptr;
+    parse_token_set_leading_trivia(source_token, nullptr);
     parse_trivia_free(source_comment);
     parse_tree_free(commented);
 
@@ -360,7 +362,8 @@ main(void)
         parse_token_info_t *source_token = parse_tree_find_first_terminal(decl);
 
         check("parsed tokens retain source provenance",
-              source_token && source_token->origin == PARSE_TOKEN_SOURCE);
+              source_token
+                  && parse_token_origin(source_token) == PARSE_TOKEN_SOURCE);
 
         parse_tree_set_type(decl, th_name(types, "int"));
 
@@ -387,7 +390,8 @@ main(void)
 
         check("the inserted separator is synthetic",
               explicit_decl
-                  && parse_node_token(core_tree_child(explicit_decl, 2))->origin
+                  && parse_token_origin(parse_node_token(
+                         core_tree_child(explicit_decl, 2)))
                          == PARSE_TOKEN_SYNTHETIC);
 
         parse_tree_t *explicit_type = explicit_decl
@@ -399,7 +403,8 @@ main(void)
                                          : nullptr;
 
         check("the inserted type syntax is synthetic",
-              type_token && type_token->origin == PARSE_TOKEN_SYNTHETIC);
+              type_token
+                  && parse_token_origin(type_token) == PARSE_TOKEN_SYNTHETIC);
 
         parse_tree_free(explicit);
         core_free(type_err);

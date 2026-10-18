@@ -60,12 +60,12 @@ leaf_span(parse_tree_t *n, size_t *lo, size_t *hi)
         parse_token_info_t *t = parse_node_token(n);
 
         if (t) {
-            if (t->start_byte < *lo) {
-                *lo = t->start_byte;
+            if (parse_token_start_byte(t) < *lo) {
+                *lo = parse_token_start_byte(t);
             }
 
-            if (t->end_byte > *hi) {
-                *hi = t->end_byte;
+            if (parse_token_end_byte(t) > *hi) {
+                *hi = parse_token_end_byte(t);
             }
         }
 
@@ -160,7 +160,7 @@ r_ref(parse_reduce_t *r)
         fail(r);
     }
     else if (what->i == PARSE_TOK_INTEGER) {
-        n->ref = PARSE_CHILD_IX((int32_t)strtol(what->str.data, nullptr, 10));
+        n->ref = PARSE_CHILD_IX((int32_t)core_string_strtoll(what->str, 10));
     }
     else {
         n->ref = PARSE_CHILD_NT(dup(what->str));
@@ -186,7 +186,7 @@ r_int(parse_reduce_t *r)
     aa_node *n  = aa_new(r, AA_INT);
     aa_node *lf = kid(r, 0);
 
-    n->i = lf && lf->str.data ? (int32_t)strtol(lf->str.data, nullptr, 10) : 0;
+    n->i = lf && lf->str.data ? (int32_t)core_string_strtoll(lf->str, 10) : 0;
 
     return n;
 }
@@ -350,7 +350,7 @@ r_con(parse_reduce_t *r)
             n->owns_str = true;
         }
         else if (n->i == (int32_t)TH_CON_HAS_PARAM && k->str.data) {
-            n->index = (uint64_t)strtoull(k->str.data, nullptr, 10);
+            n->index = (uint64_t)core_string_strtoull(k->str, 10);
         }
     }
 

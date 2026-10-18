@@ -771,20 +771,18 @@ classify_word(parse_cmdr_t *c, const char *s)
 static parse_token_info_t *
 make_token(const char *value, int64_t tid, int32_t index)
 {
-    parse_token_info_t *tok = core_alloc(parse_token_info_t);
+    parse_token_info_t *tok = parse_token_new();
 
     if (value && *value) {
         core_string_t s = cmdr_intern(argv_str(value));
-        tok->value = core_option_set(core_string_t, s);
+        parse_token_set_value(tok, core_option_set(core_string_t, s), true);
     }
 
-    tok->tid    = (int32_t)tid;
-    tok->index  = index;
-    tok->line   = 1;
-    tok->column = 1;
-    tok->endline = 1;
-    tok->endcol  = value ? (uint32_t)strlen(value) + 1 : 1;
-    tok->origin = PARSE_TOKEN_SOURCE;
+    parse_token_set_tid(tok, (int32_t)tid);
+    parse_token_set_index(tok, index);
+    parse_token_set_position(tok, 1, 1, 1,
+                             value ? (uint32_t)strlen(value) + 1 : 1);
+    parse_token_set_origin(tok, PARSE_TOKEN_SOURCE);
 
     return tok;
 }
@@ -1028,12 +1026,17 @@ get_token_text(parse_tree_t *node)
 
     parse_token_info_t *tok = core_tree_leaf_value(node);
 
-    if (!tok || !core_option_is_set(tok->value)) {
+    if (!tok) {
         return nullptr;
     }
 
-    core_string_t val = core_option_get(tok->value);
-    return val.data;
+    core_option_t(core_string_t) value = parse_token_value(tok);
+
+    if (!core_option_is_set(value)) {
+        return nullptr;
+    }
+
+    return core_option_get(value).data;
 }
 
 static bool
@@ -1229,11 +1232,7 @@ free_tokens(parse_token_info_t **tokens, int32_t n_tokens)
 
     for (int32_t i = 0; i < n_tokens; i++) {
         if (tokens[i]) {
-            if (core_option_is_set(tokens[i]->value)) {
-                core_string_t val = core_option_get(tokens[i]->value);
-                core_free(val.data);
-            }
-            core_free(tokens[i]);
+            parse_token_free(tokens[i]);
         }
     }
 
@@ -1380,8 +1379,10 @@ parse_cmdr_parse(parse_cmdr_t *c, int nargs, const char **args)
         int32_t             at    = parse_pwz_error_pos(pp);
         parse_token_info_t *token = at >= 0 && at < n_tokens ? tokens[at] : nullptr;
         core_buffer_t       message = {0};
-        if (token && core_option_is_set(token->value)) {
-            core_string_t value = core_option_get(token->value);
+        core_option_t(core_string_t) token_value = token
+            ? parse_token_value(token) : core_option_none(core_string_t);
+        if (core_option_is_set(token_value)) {
+            core_string_t value = core_option_get(token_value);
             core_buffer_printf(&message, "unexpected argument '%.*s'",
                                (int)value.u8_bytes, value.data);
             if (scope && scope->name.data) {

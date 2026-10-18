@@ -178,7 +178,8 @@ scan_scanner_new(core_buffer_t                *buf,
     s->mark      = 0;
     s->mark_line = 1;
     s->mark_col  = 1;
-
+    s->source    = parse_source_new(file);
+    parse_source_append(s->source, buf->data, buf->byte_len);
 
     return s;
 }
@@ -201,6 +202,7 @@ scan_scanner_free(parse_scanner_t *s)
         core_buffer_free(s->buffer);
     }
 
+    parse_source_release(s->source);
     core_free(s);
 }
 
@@ -271,24 +273,6 @@ scan_scanner_discard_consumed(parse_scanner_t *s)
     if (!s || !s->buffer || s->source_final || s->append_closed
         || !s->mark || s->mark > s->cursor || s->mark > s->input_len) {
         return false;
-    }
-
-    if (s->stream) {
-        uintptr_t lo = (uintptr_t)s->input;
-        uintptr_t hi = lo + s->input_len;
-
-        for (int32_t i = 0; i < s->stream->token_count; i++) {
-            parse_token_info_t *tok = s->stream->tokens[i];
-
-            if (!tok || tok->owns_value || !core_option_is_set(tok->value)) {
-                continue;
-            }
-
-            uintptr_t value = (uintptr_t)core_option_get(tok->value).data;
-            if (value >= lo && value <= hi) {
-                return false;
-            }
-        }
     }
 
     size_t removed  = s->mark;
@@ -422,34 +406,8 @@ scan_scanner_append(parse_scanner_t *s, const char *data, size_t len)
         return false;
     }
 
-    uintptr_t old_storage = (uintptr_t)s->buffer->data;
-    uintptr_t old_start   = (uintptr_t)s->input;
-    size_t    old_len     = s->input_len;
-
     core_buffer_append(s->buffer, data, len);
-
-    if (s->stream && old_storage != (uintptr_t)s->buffer->data) {
-        uintptr_t old_end = old_start + old_len;
-
-        for (int32_t i = 0; i < s->stream->token_count; i++) {
-            parse_token_info_t *tok = s->stream->tokens[i];
-
-            if (!tok || tok->owns_value || !core_option_is_set(tok->value)) {
-                continue;
-            }
-
-            core_string_t value = core_option_get(tok->value);
-            uintptr_t     at    = (uintptr_t)value.data;
-
-            if (at < old_start || at > old_end) {
-                continue;
-            }
-
-            value.data = s->buffer->data + s->input_offset
-                         + (at - old_start);
-            tok->value = core_option_set(core_string_t, value);
-        }
-    }
+    parse_source_append(s->source, data, len);
 
     s->input             = s->buffer->data + s->input_offset;
     s->input_len         = s->buffer->byte_len - s->input_offset;
@@ -845,8 +803,44 @@ scan_mark_len(parse_scanner_t *s)
     return s->cursor - s->mark;
 }
 
-void
-scan_emit(parse_scanner_t *s, int32_t tid, core_option_t(core_string_t) value)
+static void
+take_token_value(parse_scanner_t *s, parse_token_info_t *tok,
+                 core_option_t(core_string_t) value, bool owned)
+{
+    if (!core_option_is_set(value)) {
+        return;
+    }
+
+    core_string_t text = core_option_get(value);
+    core_string_t span = {0};
+
+    if (parse_source_slice(s->source, parse_token_start_byte(tok),
+                           parse_token_end_byte(tok), &span)
+        && span.u8_bytes == text.u8_bytes
+        && (!text.u8_bytes || memcmp(span.data, text.data, text.u8_bytes) == 0)
+        && parse_token_use_source_value(tok)) {
+        if (owned) {
+            core_free(text.data);
+        }
+        return;
+    }
+
+    uintptr_t at = (uintptr_t)text.data;
+    uintptr_t buffer_start = s->buffer ? (uintptr_t)s->buffer->data : 0;
+    uintptr_t buffer_end = buffer_start
+                         + (s->buffer ? s->buffer->byte_len : 0);
+
+    if (!owned && text.data && at >= buffer_start && at <= buffer_end) {
+        value = core_option_set(core_string_t, core_string_dup(text));
+        owned = true;
+    }
+
+    parse_token_set_value(tok, value, owned);
+}
+
+static void
+emit_token(parse_scanner_t *s, int32_t tid,
+           core_option_t(core_string_t) value, bool owned)
 {
     assert(s->stream);
 
@@ -866,22 +860,22 @@ scan_emit(parse_scanner_t *s, int32_t tid, core_option_t(core_string_t) value)
         ts->token_cap = new_cap;
     }
 
-    parse_token_info_t *tok = core_alloc(parse_token_info_t);
-    memset(tok, 0, sizeof(*tok));
+    parse_token_info_t *tok = parse_token_new();
 
-    tok->tid             = tid;
-    tok->value           = value;
-    tok->file            = s->file;
-    tok->line            = s->mark_line;
-    tok->column          = s->mark_col;
-    tok->endline         = s->line;
-    tok->endcol          = s->column;
-    tok->start_byte      = s->source_base + s->mark;
-    tok->end_byte        = s->source_base + s->cursor;
-    tok->index           = ts->next_index++;
-    tok->origin          = PARSE_TOKEN_SOURCE;
-    tok->leading_trivia  = s->pending_leading;
-    tok->trailing_trivia = s->pending_trailing;
+    parse_token_set_tid(tok, tid);
+    parse_token_set_stream_source(tok, s->source);
+    parse_token_set_span(tok, s->source_base + s->mark,
+                         s->source_base + s->cursor);
+    parse_token_set_index(tok, ts->next_index++);
+    parse_token_set_origin(tok, PARSE_TOKEN_SOURCE);
+    take_token_value(s, tok, value, owned);
+    if (!parse_source_slice(s->source, parse_token_start_byte(tok),
+                            parse_token_end_byte(tok), nullptr)) {
+        parse_token_set_position(tok, s->mark_line, s->mark_col, s->line,
+                                 s->column);
+    }
+    parse_token_set_leading_trivia(tok, s->pending_leading);
+    parse_token_set_trailing_trivia(tok, s->pending_trailing);
 
     s->last_trailing_tail = s->pending_trailing_tail;
 
@@ -898,19 +892,27 @@ scan_emit(parse_scanner_t *s, int32_t tid, core_option_t(core_string_t) value)
 }
 
 void
+scan_emit(parse_scanner_t *s, int32_t tid, core_option_t(core_string_t) value)
+{
+    emit_token(s, tid, value, false);
+}
+
+void
 scan_emit_owned(parse_scanner_t *s, int32_t tid,
                 core_option_t(core_string_t) value)
 {
-    scan_emit(s, tid, value);
-    scan_prev_token(s)->owns_value = core_option_is_set(value);
+    emit_token(s, tid, value, true);
 }
 
 void
 scan_emit_marked(parse_scanner_t *s, int32_t tid)
 {
-    core_string_t val = scan_extract(s);
+    core_string_t val = {
+        .data = (char *)s->input + s->mark,
+        .u8_bytes = s->cursor - s->mark,
+    };
 
-    scan_emit_owned(s, tid, core_option_set(core_string_t, val));
+    emit_token(s, tid, core_option_set(core_string_t, val), false);
 }
 
 void
@@ -961,21 +963,23 @@ scan_add_trivia(parse_scanner_t *s, core_string_t text,
 
         t->kind = kind;
 
-        if (prev && !prev->no_trivia) {
+        if (prev && !parse_token_no_trivia(prev)) {
+            parse_trivia_t *trailing = parse_token_trailing_trivia(prev);
+
             if (s->pending_leading) {
                 if (s->last_trailing_tail) {
                     s->last_trailing_tail->next = s->pending_leading;
                 }
                 else {
-                    prev->trailing_trivia = s->pending_leading;
+                    trailing = s->pending_leading;
                 }
                 s->last_trailing_tail = s->pending_leading_tail;
                 s->pending_leading = nullptr;
                 s->pending_leading_tail = nullptr;
             }
 
-            append_trivia(&prev->trailing_trivia,
-                          &s->last_trailing_tail, t);
+            append_trivia(&trailing, &s->last_trailing_tail, t);
+            parse_token_set_trailing_trivia(prev, trailing);
         }
         else if (!prev) {
             append_trivia(&s->pending_leading,
