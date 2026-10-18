@@ -10961,6 +10961,13 @@ collect_mutator_candidates(ir_func_t *function,
     }
 }
 
+static bool
+is_mutator_allocator(ir_func_t *function)
+{
+    return !strcmp(ir_module_name(function->owner), "sys.internal.gc.alloc")
+        && !strcmp(function->name, "allocate_runtime_known_on_mutator");
+}
+
 static void
 select_mutator_functions(
     const core_list_t(inline_function_ptr_t) *candidates,
@@ -10968,7 +10975,7 @@ select_mutator_functions(
 {
     for (size_t f = 0; f < candidates->len; f++) {
         ir_func_t *function = candidates->data[f];
-        if (has_dynamic_allocation(function))
+        if (is_mutator_allocator(function) || has_dynamic_allocation(function))
             core_list_push(*selected, function);
     }
     bool changed;
@@ -11172,9 +11179,7 @@ lower_module(LLVMModuleRef target, const ir_module_t *source,
     if (inline_ok && needs_allocation_callee && reachable_bound) {
         for (size_t i = 0; i < reachable_count; i++) {
             ir_func_t *function = reachable[i];
-            if (strcmp(ir_module_name(function->owner), "sys.internal.gc.alloc")
-                || strcmp(function->name,
-                    "allocate_runtime_known_on_mutator")
+            if (!is_mutator_allocator(function)
                 || function->owner == source
                 || inline_list_contains(&inline_callees, function))
                 continue;
