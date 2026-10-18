@@ -1384,17 +1384,21 @@ static bool function_matches(th_ctx *ctx, th_type *receiver,
 static bool function_matches_with_promotion(
     th_ctx *ctx, th_type *receiver, const th_env_trait_t *trait,
     const th_env_function_t *function, const char *method_name) {
-  if (function_matches(ctx, receiver, trait, function, method_name))
-    return true;
-  th_type *signature = nullptr;
-  th_env_signature_channels(ctx, fresh_pattern(ctx, function->contract),
-                            &signature, nullptr);
-  th_type *promoted_receiver = first_parameter(signature);
-  bool promoted = promoted_receiver &&
-                  th_type_promotes_to(ctx, receiver, promoted_receiver) &&
-                  function_matches(ctx, promoted_receiver, trait, function,
-                                   method_name);
-  return promoted;
+  th_probe_t probe = th_probe_begin(ctx);
+  bool matched = function_matches(ctx, receiver, trait, function,
+                                  method_name);
+  if (!matched) {
+    th_type *signature = nullptr;
+    th_env_signature_channels(ctx, fresh_pattern(ctx, function->contract),
+                              &signature, nullptr);
+    th_type *promoted_receiver = first_parameter(signature);
+    matched = promoted_receiver &&
+              th_type_promotes_to(ctx, receiver, promoted_receiver) &&
+              function_matches(ctx, promoted_receiver, trait, function,
+                               method_name);
+  }
+  th_probe_end(ctx, &probe);
+  return matched;
 }
 
 static bool function_can_match(th_ctx *ctx, const th_env_trait_t *trait,
@@ -1625,10 +1629,13 @@ bool th_env_implements(th_ctx *ctx, th_type *receiver, const char *trait_name) {
   const th_env_trait_t *trait = visible_trait(ctx, trait_name);
   if (!trait)
     return false;
+  th_probe_t probe = th_probe_begin(ctx);
   th_type *methods = fresh_pattern(ctx, trait->contracts);
-  if (!contract_len(methods))
-    return intrinsic_type_matches(ctx, trait, receiver);
-  return trait_methods_match(ctx, receiver, trait, methods, 0);
+  bool implemented = contract_len(methods)
+      ? trait_methods_match(ctx, receiver, trait, methods, 0)
+      : intrinsic_type_matches(ctx, trait, receiver);
+  th_probe_end(ctx, &probe);
+  return implemented;
 }
 
 th_env_method_status_t th_env_method_resolve(th_ctx *ctx, th_type *receiver,

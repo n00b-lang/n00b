@@ -517,6 +517,7 @@ static bool restore_type(core_object_reader_t *reader, void *object,
     type->var.cons.data = read_array(reader, count, sizeof(th_constraint),
                                      alignof(th_constraint));
     type->var.cons.len = type->var.cons.cap = count;
+    type->var.cons_borrowed = true;
     if (count && !type->var.cons.data) return false;
     for (size_t i = 0; i < count; i++)
       if (!read_constraint(reader, &type->var.cons.data[i],

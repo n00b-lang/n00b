@@ -347,7 +347,7 @@ static bool th_var_constrain_seen(th_ctx *ctx, th_type *var,
                 return merge_method_obligation(ctx, var, slot, &c, seen);
             }
         }
-        core_list_push(var->var.cons, c);
+        th_var_cons_push(var, c);
         var->revision++;
         return true;
     }
@@ -393,7 +393,7 @@ static bool th_var_constrain_seen(th_ctx *ctx, th_type *var,
         c.iface = th_strdup(ctx, c.iface, strlen(c.iface));
     }
 
-    core_list_push(var->var.cons, c);
+    th_var_cons_push(var, c);
     var->revision++;
 
     return true;
