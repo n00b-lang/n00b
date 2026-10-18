@@ -1229,6 +1229,15 @@ test(
 )
 
 test(
+    'incremental-cache',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'incremental_cache.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'incremental'],
+    timeout: 900,
+)
+
+test(
     'gc-collect-n00b',
     find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',

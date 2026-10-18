@@ -1,0 +1,9 @@
+import helper
+import user
+import ping
+import boxes
+
+require helper.helper_value() == 42
+require user.user_value() == 42
+require ping.ping(5) == 0
+require boxes.pick(1, 2, true) == 1

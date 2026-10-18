@@ -1,0 +1,6 @@
+public func pick(left: `T, right: `T, first: bool) -> `T {
+    if first {
+        return left
+    }
+    return right
+}

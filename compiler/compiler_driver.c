@@ -1030,7 +1030,8 @@ process_locate_job(locate_worker_context_t *context, core_work_job_t *job)
     core_source_file_t source = {0};
     const core_module_spec_t *module = core_work_job_module(job);
     bool interface_allowed = !context->cache
-        || (module && n00bb_cache_module(context->cache, module->identifier));
+        || (module && n00bb_cache_has_module(context->cache,
+                                             module->identifier));
     bool logical_import = !root_input && module && operand
         && interface_allowed
         && ((strlen(operand) == module->identifier.u8_bytes
@@ -2423,8 +2424,8 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
     }
 
     n00bb_preprocessor_free(preprocessor);
-    bool diagnostics_have_outer_owner = defer_diagnostics
-        && analysis_out && *analysis_out;
+    bool diagnostics_have_outer_owner = (defer_diagnostics
+        && analysis_out && *analysis_out) || n00bb_cache_optimistic(cache);
     if (!diagnostics_have_outer_owner && core_diagnostics_count(diags)) {
         fflush(stdout);
         n00bb_resolver_remap_diagnostics(resolver, diags);
@@ -3448,6 +3449,20 @@ wait_for_child(pid_t child)
         && WEXITSTATUS(status) == 0;
 }
 
+static void
+restart_with_strict_cache(char **argv)
+{
+    char *compiler = n00bb_executable_path(argv[0]);
+    if (!compiler || setenv("N00BB_CACHE_STRICT", "1", 1)) {
+        core_free(compiler);
+        return;
+    }
+    fflush(stdout);
+    fflush(stderr);
+    execv(compiler, argv);
+    core_free(compiler);
+}
+
 static bool
 compile_build_time_program(int argc, char **argv, const char *executable)
 {
@@ -3898,6 +3913,10 @@ n00bb_compiler_main(int argc, char **argv)
         ir_context, types, (size_t)requested_jobs, &environment, &link,
         &link_analysis);
     if (link_analysis) link_analysis->cache = cache;
+    bool optimistic_cache = n00bb_cache_optimistic(cache);
+    if (optimistic_cache && (!located
+            || !n00bb_cache_assumptions_hold(cache, link, link_analysis)))
+        restart_with_strict_cache(argv);
     if (parse_cmdr_flag_present(args, CORE_STRING_STATIC("--show-ffi"))
         && !show_module_literal(resolver, CORE_STRING_STATIC("ffi"),
                parse_cmdr_flag_str(args, CORE_STRING_STATIC("--show-ffi")))) {
@@ -4113,6 +4132,7 @@ n00bb_compiler_main(int argc, char **argv)
         th_env_free((th_env *)linked_interfaces[i]);
     core_free(linked_interfaces);
     core_free(native_roots);
+    if (optimistic_cache && !located) restart_with_strict_cache(argv);
     if (core_diagnostics_count(cli_diagnostics)) {
         n00bb_resolver_remap_diagnostics(resolver, cli_diagnostics);
         char *text = core_diagnostics_render_text(cli_diagnostics);

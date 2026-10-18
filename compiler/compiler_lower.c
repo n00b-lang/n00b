@@ -16311,6 +16311,22 @@ attach_cached_body(ir_ctx_t *ir_context, ir_func_t *function, ir_func_t *body)
                      .v = address}));
 }
 
+static ir_module_t *
+source_unit_module(void *context, const char *name)
+{
+    n00bb_link_analysis_t *analysis = context;
+    for (size_t i = 0; name && i < analysis->units.len; i++) {
+        core_translation_unit_t *unit = analysis->units.data[i];
+        n00bb_tu_state_t *state = tu_state(unit);
+        if (!state->interface_module
+            && strlen(name) == unit->module.identifier.u8_bytes
+            && !memcmp(name, unit->module.identifier.data,
+                       unit->module.identifier.u8_bytes))
+            return state->ir_module;
+    }
+    return nullptr;
+}
+
 bool
 initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
                       core_link_unit_t *link,
@@ -16389,12 +16405,30 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
         return ir_initialization_error(units->len ? units->data[0] : nullptr,
             "N00BB-L0028",
             "could not bind module-local global views to their canonical identities");
-    if (!bind_cached_global_identities(ir_context, analysis))
-        return ir_initialization_error(units->len ? units->data[0] : nullptr,
-            "N00BB-L0028",
-            "could not bind cached globals to their canonical identities");
+    size_t declaration_order[units->len + 1];
+    size_t source_count = 0;
+    for (int pass = 0; pass < 2; pass++)
+        for (size_t i = 0; i < units->len; i++)
+            if (tu_state(units->data[i])->interface_module == (pass == 1))
+                declaration_order[source_count++] = i;
+    source_count = 0;
+    for (size_t i = 0; i < units->len; i++)
+        source_count += !tu_state(units->data[i])->interface_module;
 
-    for (size_t i = 0; i < units->len; i++) {
+    for (size_t k = 0; k <= units->len; k++) {
+        if (k == source_count) {
+            if (!n00bb_cache_load_deferred(analysis->cache,
+                    source_unit_module, analysis))
+                return ir_initialization_error(
+                    units->len ? units->data[0] : nullptr, "N00BB-L0028",
+                    "could not load cached SCCs that reference rebuilt modules");
+            if (!bind_cached_global_identities(ir_context, analysis))
+                return ir_initialization_error(
+                    units->len ? units->data[0] : nullptr, "N00BB-L0028",
+                    "could not bind cached globals to their canonical identities");
+        }
+        if (k == units->len) break;
+        size_t i = declaration_order[k];
         core_translation_unit_t *unit = units->data[i];
         n00bb_tu_state_t *state = tu_state(unit);
         core_list_t(parse_scope_ptr_t) scopes = link_declaration_scopes(

@@ -1,0 +1,4 @@
+import boxes
+
+require boxes.pick(1, 2, false) == 2
+require boxes.pick("a", "b", true) == "a"

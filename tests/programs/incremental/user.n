@@ -1,0 +1,5 @@
+import shapes
+
+public func user_value() -> int {
+    return shapes.twice(21)
+}

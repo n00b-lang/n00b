@@ -492,7 +492,8 @@ sccs_release(core_list_t(cache_scc_t) *sccs)
 }
 
 static bool
-collect_sccs(core_link_unit_t *link, core_list_t(cache_scc_t) *sccs)
+collect_sccs(core_link_unit_t *link, core_list_t(cache_scc_t) *sccs,
+             bool lowered)
 {
     core_translation_unit_t *root = core_link_unit_root(link, 0);
     for (size_t g = 0; g < core_link_unit_scc_count(link); g++) {
@@ -506,7 +507,7 @@ collect_sccs(core_link_unit_t *link, core_list_t(cache_scc_t) *sccs)
             core_translation_unit_t *unit = core_link_unit_scc_member(link,
                                                                       g, m);
             n00bb_tu_state_t *state = unit ? tu_state(unit) : nullptr;
-            if (!state || !state->ir_module) {
+            if (!state || (lowered && !state->ir_module)) {
                 core_list_free(scc.members);
                 core_list_free(scc.imports);
                 core_list_free(scc.inlined);
@@ -536,7 +537,7 @@ collect_sccs(core_link_unit_t *link, core_list_t(cache_scc_t) *sccs)
             }
         }
         scc_freshness(scc);
-        inline_dependencies(sccs, scc, &scc->inlined);
+        if (lowered) inline_dependencies(sccs, scc, &scc->inlined);
     }
     return true;
 }
@@ -578,7 +579,9 @@ typedef struct {
     core_list_t(cache_link_t) inlined;
     core_list_t(cache_text_t) references;
     core_list_t(cache_section_t) sections;
+    core_list_t(size_t) assumed;
     bool fresh;
+    bool deferred;
     entry_state_t state;
     entry_state_t load;
     th_env *interface;
@@ -613,6 +616,7 @@ struct n00bb_cache_t {
     core_list_t(cache_scc_t) sccs;
     bool prepared;
     bool prepare_failed;
+    bool strict;
     core_list_t(cache_instance_t) instances;
 };
 
@@ -752,6 +756,7 @@ entry_release(cache_entry_t *entry)
     for (size_t i = 0; i < entry->references.len; i++)
         core_free(entry->references.data[i]);
     core_list_free(entry->references);
+    core_list_free(entry->assumed);
     sections_release(&entry->sections);
     if (entry->interface) th_env_free(entry->interface);
 }
@@ -865,8 +870,10 @@ entry_validate(n00bb_cache_t *cache, cache_entry_t *entry)
     for (size_t i = 0; ok && i < entry->imports.len; i++) {
         cache_entry_t *imported = entry_for_module(cache,
             entry->imports.data[i].name);
-        ok = imported && entry_validate(cache, imported)
+        bool current = imported && entry_validate(cache, imported);
+        ok = imported && (current || !cache->strict)
             && imported->interface_identity == entry->imports.data[i].value;
+        if (ok && !current) core_list_push(entry->assumed, i);
         if (ok) imports[i] = imported->interface_identity;
     }
     for (size_t i = 0; ok && i < entry->inlined.len; i++) {
@@ -895,7 +902,8 @@ load_entries(n00bb_cache_t *cache)
     for (size_t e = 0; e < cache->entries.len; e++) {
         cache_entry_t *entry = &cache->entries.data[e];
         const cache_section_t *ir = entry->state == ENTRY_VALID
-            ? phase_section(entry, "ir", nullptr) : nullptr;
+            && !entry->deferred ? phase_section(entry, "ir", nullptr)
+            : nullptr;
         if (!ir) continue;
         inputs[inputs_used++] = (ir_archive_input_t){ir->data, ir->length};
         module_count += entry->members.len;
@@ -911,7 +919,8 @@ load_entries(n00bb_cache_t *cache)
     for (size_t e = 0; ok && e < cache->entries.len; e++) {
         cache_entry_t *entry = &cache->entries.data[e];
         if (entry->state != ENTRY_VALID) continue;
-        for (size_t m = 0; ok && m < entry->members.len; m++) {
+        for (size_t m = 0; ok && !entry->deferred
+             && m < entry->members.len; m++) {
             ir_module_t *module = modules[next++];
             ok = !strcmp(ir_module_name(module), entry->members.data[m].name);
             entry->members.data[m].module = module;
@@ -1025,6 +1034,7 @@ n00bb_cache_open(const char *root_path, parse_cmdr_result_t *args,
     cache->snapshots = core_list_new(cache_snapshot_t);
     cache->sccs = core_list_new(cache_scc_t);
     cache->instances = core_list_new(cache_instance_t);
+    cache->strict = getenv("N00BB_CACHE_STRICT") != nullptr;
     cache->mutator_classifier = (n00bb_llvm_mutator_classifier_t){
         .known = cached_mutator, .context = cache,
     };
@@ -1049,9 +1059,12 @@ n00bb_cache_open(const char *root_path, parse_cmdr_result_t *args,
                     member = !strcmp(entry->members.data[m].name,
                                      entry->references.data[i]);
                 if (member || (referenced
-                               && referenced->state == ENTRY_VALID))
+                               && referenced->state == ENTRY_VALID
+                               && (!referenced->deferred || entry->deferred)))
                     continue;
-                entry->state = ENTRY_INVALID;
+                if (cache->strict) entry->state = ENTRY_INVALID;
+                else if (!entry->deferred) entry->deferred = true;
+                else continue;
                 changed = true;
                 break;
             }
@@ -1131,6 +1144,105 @@ loaded_member(const n00bb_cache_t *cache, const char *module, size_t length,
         }
     }
     return nullptr;
+}
+
+bool
+n00bb_cache_has_module(const n00bb_cache_t *cache, core_string_t module)
+{
+    return loaded_member(cache, module.data, module.u8_bytes, nullptr)
+        != nullptr;
+}
+
+bool
+n00bb_cache_optimistic(const n00bb_cache_t *cache)
+{
+    for (size_t e = 0; cache && e < cache->entries.len; e++) {
+        const cache_entry_t *entry = &cache->entries.data[e];
+        if (entry->load == ENTRY_VALID
+            && (entry->deferred || entry->assumed.len)) return true;
+    }
+    return false;
+}
+
+bool
+n00bb_cache_load_deferred(n00bb_cache_t *cache, ir_module_lookup_fn lookup,
+                          void *lookup_context)
+{
+    size_t inputs_used = 0, module_count = 0;
+    ir_archive_input_t *inputs = cache
+        ? core_alloc_array(ir_archive_input_t, cache->entries.len + 1)
+        : nullptr;
+    if (!inputs) return !cache;
+    for (size_t e = 0; e < cache->entries.len; e++) {
+        cache_entry_t *entry = &cache->entries.data[e];
+        if (entry->load != ENTRY_VALID || !entry->deferred) continue;
+        const cache_section_t *ir = phase_section(entry, "ir", nullptr);
+        if (!ir) {
+            core_free(inputs);
+            return false;
+        }
+        inputs[inputs_used++] = (ir_archive_input_t){ir->data, ir->length};
+        module_count += entry->members.len;
+    }
+    ir_module_t **modules = core_alloc_array(ir_module_t *,
+                                             module_count + 1);
+    const ir_profile_t *profiles[] = {n00bb_type_profile()};
+    size_t loaded = 0;
+    bool ok = modules && (!inputs_used || (ir_archives_load(cache->ir_context,
+        inputs, inputs_used, profiles, 1, lookup, lookup_context, modules,
+        module_count, &loaded) && loaded == module_count));
+    size_t next = 0;
+    for (size_t e = 0; ok && e < cache->entries.len; e++) {
+        cache_entry_t *entry = &cache->entries.data[e];
+        if (entry->load != ENTRY_VALID || !entry->deferred) continue;
+        for (size_t m = 0; ok && m < entry->members.len; m++) {
+            ir_module_t *module = modules[next++];
+            ok = !strcmp(ir_module_name(module), entry->members.data[m].name);
+            entry->members.data[m].module = module;
+        }
+        if (ok) entry->deferred = false;
+    }
+    core_free(modules);
+    core_free(inputs);
+    return ok;
+}
+
+bool
+n00bb_cache_assumptions_hold(const n00bb_cache_t *cache,
+                             core_link_unit_t *link,
+                             n00bb_link_analysis_t *analysis)
+{
+    if (!cache || !link || !analysis) return false;
+    core_list_t(cache_scc_t) sccs = core_list_new(cache_scc_t);
+    bool ok = collect_sccs(link, &sccs, false);
+    for (size_t e = 0; ok && e < cache->entries.len; e++) {
+        const cache_entry_t *entry = &cache->entries.data[e];
+        if (entry->load != ENTRY_VALID) continue;
+        for (size_t a = 0; ok && a < entry->assumed.len; a++) {
+            const cache_link_t *import =
+                &entry->imports.data[entry->assumed.data[a]];
+            size_t found = SIZE_MAX;
+            for (size_t s = 0; found == SIZE_MAX && s < sccs.len; s++)
+                for (size_t m = 0; m < sccs.data[s].members.len; m++) {
+                    core_string_t name =
+                        sccs.data[s].members.data[m]->module.identifier;
+                    if (strlen(import->name) == name.u8_bytes
+                        && !memcmp(import->name, name.data, name.u8_bytes))
+                        found = s;
+                }
+            cache_scc_t *scc = found != SIZE_MAX ? &sccs.data[found]
+                                                 : nullptr;
+            ok = scc && !scc->cached && interface_bytes(analysis, &sccs, scc);
+            if (!ok) break;
+            core_buffer_t identity = {0};
+            core_buffer_puts(&identity, "n00b.scc.interface.v1");
+            put_bytes(&identity, scc->interface, scc->interface_bytes);
+            ok = buffer_hash(&identity) == import->value;
+            core_buffer_release(&identity);
+        }
+    }
+    sccs_release(&sccs);
+    return ok;
 }
 
 ir_module_t *
@@ -1412,7 +1524,7 @@ n00bb_cache_snapshot(n00bb_cache_t *cache, core_link_unit_t *link)
 {
     if (!cache || !link) return false;
     core_list_t(cache_scc_t) sccs = core_list_new(cache_scc_t);
-    bool ok = collect_sccs(link, &sccs);
+    bool ok = collect_sccs(link, &sccs, true);
     for (size_t s = 0; ok && s < sccs.len; s++) {
         cache_scc_t *scc = &sccs.data[s];
         if (scc->root || scc->cached) continue;
@@ -1609,7 +1721,7 @@ prepare_sccs(n00bb_cache_t *cache, core_link_unit_t *link,
     if (cache->prepared) return !cache->prepare_failed;
     cache->prepared = true;
     core_list_t(cache_scc_t) *sccs = &cache->sccs;
-    bool ok = collect_sccs(link, sccs);
+    bool ok = collect_sccs(link, sccs, true);
     for (size_t s = 0; ok && s < sccs->len; s++) {
         core_string_t first = sccs->data[s].members.data[0]->module.identifier;
         const cache_entry_t *entry = nullptr;

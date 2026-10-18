@@ -8,6 +8,7 @@
 #include "compiler_link.h"
 #include "specialize.h"
 #include "llvm_backend.h"
+#include "ir/archive.h"
 #include "ir/ir.h"
 #include "lib/link_unit.h"
 #include "lib/list.h"
@@ -35,6 +36,15 @@ void n00bb_cache_free(n00bb_cache_t *cache);
 size_t n00bb_cache_interface_count(const n00bb_cache_t *cache);
 const th_env *n00bb_cache_interface(const n00bb_cache_t *cache,
                                     size_t index);
+bool n00bb_cache_has_module(const n00bb_cache_t *cache,
+                            core_string_t module);
+bool n00bb_cache_optimistic(const n00bb_cache_t *cache);
+bool n00bb_cache_assumptions_hold(const n00bb_cache_t *cache,
+                                  core_link_unit_t *link,
+                                  n00bb_link_analysis_t *analysis);
+bool n00bb_cache_load_deferred(n00bb_cache_t *cache,
+                               ir_module_lookup_fn lookup,
+                               void *lookup_context);
 ir_module_t *n00bb_cache_module(const n00bb_cache_t *cache,
                                 core_string_t module);
 bool n00bb_cache_module_object(const n00bb_cache_t *cache,
