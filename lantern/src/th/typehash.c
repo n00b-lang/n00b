@@ -28,12 +28,68 @@ char *th_strdup(th_ctx *ctx, const char *s, size_t n)
     return d;
 }
 
+void th_var_cons_push(th_type *var, th_constraint constraint)
+{
+    if (var->var.cons_borrowed) {
+        core_list_t(th_constraint) owned =
+            core_list_new_cap(th_constraint, var->var.cons.len + 1);
+        for (size_t i = 0; i < var->var.cons.len; i++)
+            core_list_push(owned, var->var.cons.data[i]);
+        var->var.cons = owned;
+        var->var.cons_borrowed = false;
+    }
+    core_list_push(var->var.cons, constraint);
+}
+
+th_probe_t th_probe_begin(th_ctx *ctx)
+{
+    return (th_probe_t){
+        .arena     = core_arena_mark(&ctx->arena),
+        .err       = ctx->err,
+        .errors    = ctx->errors.len,
+        .coercions = ctx->coercions.len,
+        .pending_environment_constraints =
+            ctx->pending_environment_constraints.len,
+        .active_environment_constraints =
+            ctx->active_environment_constraints.len,
+        .type_records     = ctx->type_records.len,
+        .methods          = ctx->methods.len,
+        .method_resolvers = ctx->method_resolvers.len,
+        .promos           = ctx->promos.len,
+        .ifaces           = ctx->ifaces.len,
+    };
+}
+
+bool th_probe_end(th_ctx *ctx, const th_probe_t *probe)
+{
+    if (ctx->probe_errors_discarded) {
+        ctx->errors.len = probe->errors;
+        ctx->err        = probe->err;
+    }
+    bool observable = ctx->err != probe->err
+        || ctx->errors.len != probe->errors
+        || ctx->coercions.len != probe->coercions
+        || ctx->pending_environment_constraints.len
+            != probe->pending_environment_constraints
+        || ctx->active_environment_constraints.len
+            != probe->active_environment_constraints
+        || ctx->type_records.len != probe->type_records
+        || ctx->methods.len != probe->methods
+        || ctx->method_resolvers.len != probe->method_resolvers
+        || ctx->promos.len != probe->promos
+        || ctx->ifaces.len != probe->ifaces;
+    if (observable) return false;
+    core_arena_rewind(&ctx->arena, probe->arena);
+    return true;
+}
+
 th_ctx *th_ctx_new(void)
 {
     th_ctx *ctx = core_alloc(th_ctx);
 
     memset(ctx, 0, sizeof(*ctx));
     core_arena_init(&ctx->arena, 0);
+    core_arena_init(&ctx->memo_arena, 0);
     ctx->type_records = core_list_new(th_type_record_t);
     th_builtin_defaults_apply(ctx);
 
@@ -87,6 +143,7 @@ void th_ctx_free(th_ctx *ctx)
     core_list_free(ctx->pending_environment_constraints);
     core_list_free(ctx->active_environment_constraints);
     core_arena_free(&ctx->arena);
+    core_arena_free(&ctx->memo_arena);
     core_buffer_release(&ctx->scratch);
     core_free(ctx);
 }
@@ -103,6 +160,9 @@ clone_string(th_ctx *destination, const char *source)
 {
     return source ? th_strdup(destination, source, strlen(source)) : nullptr;
 }
+
+#define clone_array(destination, T, n) \
+    ((T *)th_alloc((destination), sizeof(T) * (n)))
 
 static th_type *clone_type_graph(th_ctx *destination, const th_type *source,
                                  core_list_t(th_clone_entry_t) *seen);
@@ -126,7 +186,8 @@ clone_constraint_graph(th_ctx *destination, const th_constraint *source,
         return !source->target || copy->target;
     case TH_CON_ONE_OF:
         copy->one_of.types = source->one_of.n
-            ? core_alloc_array(th_type *, source->one_of.n) : nullptr;
+            ? clone_array(destination, th_type *, source->one_of.n)
+            : nullptr;
         for (size_t i = 0; i < source->one_of.n; i++) {
             copy->one_of.types[i] = clone_type_graph(destination,
                 source->one_of.types[i], seen);
@@ -189,7 +250,8 @@ clone_type_graph(th_ctx *destination, const th_type *source,
         if (!copy->named.builtin_known)
             (void)th_builtin_type(destination, copy);
         copy->named.args = source->named.nargs
-            ? core_alloc_array(th_arg, source->named.nargs) : nullptr;
+            ? clone_array(destination, th_arg, source->named.nargs)
+            : nullptr;
         for (size_t i = 0; i < source->named.nargs; i++) {
             copy->named.args[i] = source->named.args[i];
             if (source->named.args[i].kind == TH_ARG_TYPE) {
@@ -221,7 +283,8 @@ clone_type_graph(th_ctx *destination, const th_type *source,
     case TH_RECORD:
         copy->record.n = source->record.n;
         copy->record.members = source->record.n
-            ? core_alloc_array(th_member, source->record.n) : nullptr;
+            ? clone_array(destination, th_member, source->record.n)
+            : nullptr;
         for (size_t i = 0; i < source->record.n; i++) {
             copy->record.members[i].name = clone_string(destination,
                 source->record.members[i].name);
@@ -237,9 +300,11 @@ clone_type_graph(th_ctx *destination, const th_type *source,
         copy->trait.n = source->trait.n;
         copy->trait.nr = source->trait.nr;
         copy->trait.methods = source->trait.n
-            ? core_alloc_array(th_member, source->trait.n) : nullptr;
+            ? clone_array(destination, th_member, source->trait.n)
+            : nullptr;
         copy->trait.requirements = source->trait.nr
-            ? core_alloc_array(th_trait_requirement, source->trait.nr)
+            ? clone_array(destination, th_trait_requirement,
+                          source->trait.nr)
             : nullptr;
         if (!copy->trait.name) return nullptr;
         for (size_t i = 0; i < source->trait.n; i++) {
@@ -271,7 +336,7 @@ clone_type_graph(th_ctx *destination, const th_type *source,
         copy->fn.error = clone_type_graph(destination, source->fn.error, seen);
         copy->fn.np = source->fn.np;
         copy->fn.params = source->fn.np
-            ? core_alloc_array(th_param, source->fn.np) : nullptr;
+            ? clone_array(destination, th_param, source->fn.np) : nullptr;
         for (size_t i = 0; i < source->fn.np; i++) {
             copy->fn.params[i] = source->fn.params[i];
             copy->fn.params[i].type = clone_type_graph(destination,
@@ -288,7 +353,8 @@ clone_type_graph(th_ctx *destination, const th_type *source,
         }
         copy->fn.nkw = source->fn.nkw;
         copy->fn.kw = source->fn.nkw
-            ? core_alloc_array(th_kwparam, source->fn.nkw) : nullptr;
+            ? clone_array(destination, th_kwparam, source->fn.nkw)
+            : nullptr;
         for (size_t i = 0; i < source->fn.nkw; i++) {
             copy->fn.kw[i] = source->fn.kw[i];
             copy->fn.kw[i].name = clone_string(destination,
@@ -304,7 +370,7 @@ clone_type_graph(th_ctx *destination, const th_type *source,
         copy->binder.body = clone_type_graph(destination,
             source->binder.body, seen);
         if (source->binder.qvars) {
-            copy->binder.qvars = core_alloc_array(th_type *,
+            copy->binder.qvars = clone_array(destination, th_type *,
                 (size_t)source->binder.arity);
             for (uint64_t i = 0; i < source->binder.arity; i++) {
                 copy->binder.qvars[i] = clone_type_graph(destination,
@@ -320,7 +386,7 @@ clone_type_graph(th_ctx *destination, const th_type *source,
         copy->sum.comb = source->sum.comb;
         copy->sum.n = source->sum.n;
         copy->sum.arms = source->sum.n
-            ? core_alloc_array(th_type *, source->sum.n) : nullptr;
+            ? clone_array(destination, th_type *, source->sum.n) : nullptr;
         for (size_t i = 0; i < source->sum.n; i++) {
             copy->sum.arms[i] = clone_type_graph(destination,
                 source->sum.arms[i], seen);
@@ -333,13 +399,20 @@ clone_type_graph(th_ctx *destination, const th_type *source,
         copy->var.has_index = source->var.has_index;
         copy->var.name = clone_string(destination, source->var.name);
         copy->var.ref = clone_type_graph(destination, source->var.ref, seen);
-        copy->var.cons = (core_list_t(th_constraint)){0};
+        copy->var.cons = (core_list_t(th_constraint)){
+            .data = source->var.cons.len
+                ? clone_array(destination, th_constraint,
+                              source->var.cons.len)
+                : nullptr,
+            .cap = source->var.cons.len,
+        };
+        copy->var.cons_borrowed = true;
         for (size_t i = 0; i < source->var.cons.len; i++) {
-            th_constraint constraint;
             if (!clone_constraint_graph(destination,
-                    &source->var.cons.data[i], &constraint, seen))
+                    &source->var.cons.data[i],
+                    &copy->var.cons.data[i], seen))
                 return nullptr;
-            core_list_push(copy->var.cons, constraint);
+            copy->var.cons.len = i + 1;
         }
         return copy;
     }

@@ -148,6 +148,36 @@ core_arena_reset(core_arena_t *a)
     a->current = a->first;
 }
 
+typedef struct {
+    core_arena_block_t *block;
+    size_t             used;
+} core_arena_mark_t;
+
+static inline core_arena_mark_t
+core_arena_mark(const core_arena_t *a)
+{
+    return (core_arena_mark_t){
+        .block = a->current,
+        .used  = a->current ? a->current->used : 0,
+    };
+}
+
+static inline void
+core_arena_rewind(core_arena_t *a, core_arena_mark_t mark)
+{
+    if (!mark.block) {
+        core_arena_reset(a);
+        return;
+    }
+
+    for (core_arena_block_t *b = mark.block->next; b; b = b->next) {
+        b->used = 0;
+    }
+
+    mark.block->used = mark.used;
+    a->current       = mark.block;
+}
+
 static inline void
 core_arena_free(core_arena_t *a)
 {

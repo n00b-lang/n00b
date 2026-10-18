@@ -188,6 +188,7 @@ struct th_type {
       uint64_t index;
       uint64_t origin;
       bool has_index;
+      bool cons_borrowed;
       th_type *ref;
       const char *name;
       core_list_t(th_constraint) cons;
@@ -240,11 +241,13 @@ struct th_ctx {
   th_span_t span;
   th_span_t related;
   bool has_related;
+  bool probe_errors_discarded;
   const th_env *environment;
   const char *module;
   const char *package;
   core_dict_t *implements_memo;
   core_dict_t *method_memo;
+  core_arena_t memo_arena;
 };
 
 struct th_env {
@@ -264,6 +267,24 @@ struct th_env {
   bool owns_types;
   bool frozen;
 };
+
+typedef struct {
+  core_arena_mark_t arena;
+  const char *err;
+  size_t errors;
+  size_t coercions;
+  size_t pending_environment_constraints;
+  size_t active_environment_constraints;
+  size_t type_records;
+  size_t methods;
+  size_t method_resolvers;
+  size_t promos;
+  size_t ifaces;
+} th_probe_t;
+
+void th_var_cons_push(th_type *var, th_constraint constraint);
+th_probe_t th_probe_begin(th_ctx *ctx);
+bool th_probe_end(th_ctx *ctx, const th_probe_t *probe);
 
 void th_err(th_ctx *ctx, th_err_kind kind, const char *constraint,
             th_type *expected, th_type *got, const char *message);

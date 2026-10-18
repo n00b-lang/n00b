@@ -876,6 +876,72 @@ test_annotation_cache_is_thread_safe(parse_grammar_t *g)
     check("annotation cache lookups are safe across threads", ok);
 }
 
+static size_t
+symbols_in_scope(parse_scope_t *scope)
+{
+    size_t count = 0;
+    for (parse_sym_entry_t *e = scope ? scope->first_in_scope : nullptr; e;
+         e = e->next_in_scope)
+        count++;
+    return count;
+}
+
+static void
+test_a_declaration_walk_is_reentered_by_the_full_walk(parse_grammar_t *g)
+{
+    parse_pwz_parser_t   *p;
+    parse_token_stream_t *ts;
+    parse_tree_t *tree = parse_toy(g, "prog", "vaT;{vbU;}?xyztcV;", &p, &ts);
+    if (!tree) {
+        check("the toy program parses for the two-pass walk", false);
+        return;
+    }
+    th_ctx *context = th_ctx_new();
+    parse_annot_result_t *r = parse_annot_result_new(nullptr);
+
+    probe_t declared = {0};
+    parse_tree_walk_t *w = parse_tree_walk_new(g, r);
+    parse_annot_register_declarations(w, r);
+    parse_walk_on_nt(w, S("block"), nullptr, saw_block, &declared);
+    parse_walk_on_nt(w, S("prog"), nullptr, saw_prog, &declared);
+    parse_tree_walk_run(w, tree);
+    parse_tree_walk_free(w);
+
+    parse_sym_entry_t *a_declared = parse_symtab_lookup_scoped(r->symtab,
+        declared.module_scope, core_string_empty(), S("a"));
+    parse_sym_entry_t *c_declared = parse_symtab_lookup_scoped(r->symtab,
+        declared.module_scope, core_string_empty(), S("c"));
+    size_t module_symbols = symbols_in_scope(declared.module_scope);
+    check("the declaration walk builds the module scope and its symbols",
+          declared.module_scope && a_declared && module_symbols > 0);
+    check("the declaration walk does not type its symbols",
+          a_declared && !a_declared->type);
+
+    probe_t full = {0};
+    w = parse_tree_walk_new(g, r);
+    parse_annot_register(w, r, context, nullptr);
+    parse_walk_on_nt(w, S("block"), nullptr, saw_block, &full);
+    parse_walk_on_nt(w, S("prog"), nullptr, saw_prog, &full);
+    parse_tree_walk_run(w, tree);
+    parse_tree_walk_free(w);
+
+    parse_sym_entry_t *a_full = parse_symtab_lookup_scoped(r->symtab,
+        full.module_scope, core_string_empty(), S("a"));
+    check("the full walk re-enters the declared scopes",
+          full.module_scope == declared.module_scope
+              && full.block_scope == declared.block_scope);
+    check("the full walk reuses the declared symbols",
+          a_full == a_declared
+              && symbols_in_scope(full.module_scope) == module_symbols);
+    parse_sym_entry_t *c_full = parse_symtab_lookup_scoped(r->symtab,
+        full.module_scope, core_string_empty(), S("c"));
+    check("the full walk types the reused symbols",
+          c_declared && c_full == c_declared && is_type(c_full->type, "int"));
+
+    parse_annot_result_free(r);
+    th_ctx_free(context);
+}
+
 static void
 test_the_walk_builds_a_symbol_table(parse_grammar_t *g)
 {
@@ -2868,6 +2934,7 @@ main(void)
     test_annotations_are_retained_on_the_grammar(g);
     test_annotation_cache_is_thread_safe(g);
     test_the_walk_builds_a_symbol_table(g);
+    test_a_declaration_walk_is_reentered_by_the_full_walk(g);
     test_symtab_phase_lifetime_and_alias_facts();
     test_symbol_namespaces_share_lexical_scopes();
     test_symbol_namespace_scope_iteration();

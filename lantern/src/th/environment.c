@@ -399,15 +399,16 @@ bool th_env_type_pattern_accepts(th_ctx *context, const th_type *pattern,
   core_list_free(seen);
   if (!concrete || !th_env_type_pattern_subsumes(pattern, candidate))
     return false;
-  size_t error_count = context->errors.len;
-  size_t pending_count = context->pending_environment_constraints.len;
-  const char *previous_error = context->err;
-  bool accepted = th_unify_probe(context, (th_type *)pattern,
-                                 (th_type *)candidate) != nullptr &&
-                  context->pending_environment_constraints.len == pending_count;
-  context->errors.len = error_count;
-  context->pending_environment_constraints.len = pending_count;
-  context->err = previous_error;
+  th_probe_t probe = th_probe_begin(context);
+  bool accepted = th_unify(context, (th_type *)pattern,
+                           (th_type *)candidate) != nullptr &&
+                  context->pending_environment_constraints.len ==
+                      probe.pending_environment_constraints;
+  context->errors.len = probe.errors;
+  context->pending_environment_constraints.len =
+      probe.pending_environment_constraints;
+  context->err = probe.err;
+  th_probe_end(context, &probe);
   return accepted;
 }
 
@@ -763,7 +764,7 @@ th_type *th_env_signature_contract(th_ctx *ctx, th_type *signature,
   if (!signature || th_kind_of(signature) != TH_FUNCTION || !error_type)
     return nullptr;
   if (signature->fn.error &&
-      !th_unify(ctx, signature->fn.error, error_type)) return nullptr;
+      !th_unifies(ctx, signature->fn.error, error_type)) return nullptr;
   th_type *failure = signature->fn.error ? signature->fn.error : error_type;
   th_type *paired = th_func_with_error(
       ctx, signature->fn.ret, failure, signature->fn.params,
@@ -1385,22 +1386,27 @@ static bool function_matches(th_ctx *ctx, th_type *receiver,
 static bool function_matches_with_promotion(
     th_ctx *ctx, th_type *receiver, const th_env_trait_t *trait,
     const th_env_function_t *function, const char *method_name) {
-  if (function_matches(ctx, receiver, trait, function, method_name))
-    return true;
-  th_type *signature = nullptr;
-  th_env_signature_channels(ctx, fresh_pattern(ctx, function->contract),
-                            &signature, nullptr);
-  th_type *promoted_receiver = first_parameter(signature);
-  bool promoted = promoted_receiver &&
-                  th_type_promotes_to(ctx, receiver, promoted_receiver) &&
-                  function_matches(ctx, promoted_receiver, trait, function,
-                                   method_name);
-  return promoted;
+  th_probe_t probe = th_probe_begin(ctx);
+  bool matched = function_matches(ctx, receiver, trait, function,
+                                  method_name);
+  if (!matched) {
+    th_type *signature = nullptr;
+    th_env_signature_channels(ctx, fresh_pattern(ctx, function->contract),
+                              &signature, nullptr);
+    th_type *promoted_receiver = first_parameter(signature);
+    matched = promoted_receiver &&
+              th_type_promotes_to(ctx, receiver, promoted_receiver) &&
+              function_matches(ctx, promoted_receiver, trait, function,
+                               method_name);
+  }
+  th_probe_end(ctx, &probe);
+  return matched;
 }
 
 static bool function_can_match(th_ctx *ctx, const th_env_trait_t *trait,
                                const th_env_function_t *function,
                                const char *method_name) {
+  th_probe_t probe = th_probe_begin(ctx);
   th_type *trait_contracts = fresh_pattern(ctx, trait->contracts);
   th_type *function_contract = fresh_pattern(ctx, function->contract);
   th_type *required_contract =
@@ -1418,6 +1424,7 @@ static bool function_can_match(th_ctx *ctx, const th_env_trait_t *trait,
   if (matches) {
     matches = th_unify(ctx, required_contract, function_contract) != nullptr;
   }
+  th_probe_end(ctx, &probe);
   return matches;
 }
 
@@ -1537,7 +1544,7 @@ static bool collect_intrinsic_type(const core_datalog_symbol_t *tuple,
   th_type *pattern = fresh_pattern(query->context,
                                    fact->receiver_pattern);
   query->matched = pattern && th_unify_probe(query->context, pattern,
-                                             query->receiver) != nullptr;
+                                             query->receiver);
   return true;
 }
 
@@ -1638,10 +1645,13 @@ static bool implements_uncached(th_ctx *ctx, th_type *receiver,
   const th_env_trait_t *trait = visible_trait(ctx, trait_name);
   if (!trait)
     return false;
+  th_probe_t probe = th_probe_begin(ctx);
   th_type *methods = fresh_pattern(ctx, trait->contracts);
-  if (!contract_len(methods))
-    return intrinsic_type_matches(ctx, trait, receiver);
-  return trait_methods_match(ctx, receiver, trait, methods, 0);
+  bool implemented = contract_len(methods)
+      ? trait_methods_match(ctx, receiver, trait, methods, 0)
+      : intrinsic_type_matches(ctx, trait, receiver);
+  th_probe_end(ctx, &probe);
+  return implemented;
 }
 
 bool th_env_implements(th_ctx *ctx, th_type *receiver, const char *trait_name) {
@@ -1737,10 +1747,13 @@ static th_env_method_status_t
 method_resolve_best(th_ctx *ctx, th_type *receiver, const char *trait_name,
                     const char *method_name,
                     const th_env_function_t **best_out) {
+  th_probe_t probe = th_probe_begin(ctx);
   const th_env_trait_t *trait = visible_trait(ctx, trait_name);
   th_type *trait_methods = trait ? fresh_pattern(ctx, trait->contracts) : nullptr;
-  if (!trait_methods || !contract_lookup(trait_methods, method_name))
+  if (!trait_methods || !contract_lookup(trait_methods, method_name)) {
+    th_probe_end(ctx, &probe);
     return TH_ENV_METHOD_NOT_FOUND;
+  }
   th_env_type_origin_t *origin = receiver_origin(ctx->environment, receiver);
   typedef struct {
     const th_env_function_t *function;
@@ -1825,6 +1838,7 @@ method_resolve_best(th_ctx *ctx, th_type *receiver, const char *trait_name,
   }
   core_free(maximal);
   core_list_free(matches);
+  th_probe_end(ctx, &probe);
   if (ambiguous || best_origin_count > 1)
     return TH_ENV_METHOD_AMBIGUOUS;
   if (!best)
@@ -1856,6 +1870,7 @@ static th_env_method_status_t method_resolve_by_name_choice(
   } name_match_t;
   core_list_decl(name_match_t);
   core_list_t(name_match_t) matches = core_list_new(name_match_t);
+  th_probe_t probe = th_probe_begin(ctx);
   for (size_t i = 0; i < ctx->environment->traits.len; i++) {
     const th_env_trait_t *trait = &ctx->environment->traits.data[i];
     if (!visible_to(ctx, trait->visibility, trait->module, trait->package) ||
@@ -1880,6 +1895,7 @@ static th_env_method_status_t method_resolve_by_name_choice(
   }
   if (!matches.len) {
     core_list_free(matches);
+    th_probe_end(ctx, &probe);
     return TH_ENV_METHOD_NOT_FOUND;
   }
 
@@ -1929,6 +1945,7 @@ static th_env_method_status_t method_resolve_by_name_choice(
                strcmp(candidate->function->module, best->function->module))
       tied_functions = true;
   }
+  th_probe_end(ctx, &probe);
   th_env_method_status_t status = TH_ENV_METHOD_NOT_FOUND;
   if (incomparable || tied_functions)
     status = TH_ENV_METHOD_AMBIGUOUS;
@@ -1970,7 +1987,7 @@ th_env_method_status_t th_env_method_resolve_by_name(
     if (found)
       choice = known;
     else {
-      choice = core_arena_alloc(&ctx->arena, sizeof(*choice));
+      choice = core_arena_alloc(&ctx->memo_arena, sizeof(*choice));
       if (!choice) return TH_ENV_METHOD_NOT_FOUND;
       choice->status = method_resolve_by_name_choice(ctx, receiver,
                                                      method_name, choice);
@@ -2008,8 +2025,11 @@ size_t th_env_method_candidates(th_ctx *ctx, const char *trait_name,
   if (!ctx || !ctx->environment || !trait_name || !method_name)
     return 0;
   const th_env_trait_t *trait = visible_trait(ctx, trait_name);
+  th_probe_t probe = th_probe_begin(ctx);
   th_type *methods = trait ? fresh_pattern(ctx, trait->contracts) : nullptr;
-  if (!methods || !contract_lookup(methods, method_name))
+  bool declared = methods && contract_lookup(methods, method_name);
+  th_probe_end(ctx, &probe);
+  if (!declared)
     return 0;
   core_list_t(th_env_function_ptr_t) candidates =
       candidate_functions(ctx, trait, method_name);

@@ -21,6 +21,7 @@ core_list_decl(tvar_t);
 core_list_decl(th_arg);
 core_list_decl(th_param);
 core_list_decl(th_kwparam);
+core_list_decl(parse_tree_ptr_t);
 
 typedef struct {
     th_ctx       *tc;
@@ -139,28 +140,43 @@ static th_type *call_shape(ictx *c, parse_tree_t *call, th_type *result)
             }));
         }
     }
-    if (keywords) {
-        for (size_t i = 0; i < core_tree_num_children(keywords); i++) {
-            parse_tree_t *arg = core_tree_child(keywords, i);
-            if (!node_is(c->v->grammar, arg, "call-kw-arg")) continue;
-            parse_tree_t *value = parse_tree_find_direct_child_by_nt_name(
-                c->v->grammar, arg, CORE_STRING_STATIC("expression"));
-            parse_tree_t *name_node = core_tree_num_children(arg)
-                ? core_tree_child(arg, 0) : nullptr;
-            core_string_t name = node_identifier_name(name_node);
-            if (!name.data || !value) {
-                c->failed = true;
-                continue;
-            }
-            core_list_push(kwparams, ((th_kwparam){
-                .name = name.data,
-                .mode = TH_IN,
-                .type = core_tree_node_value(value).argument_type
-                    ? core_tree_node_value(value).argument_type
-                    : node_type(c, value),
-            }));
+    core_list_t(parse_tree_ptr_t) keyword_nodes =
+        core_list_new(parse_tree_ptr_t);
+    for (size_t i = 0; keywords && i < core_tree_num_children(keywords);
+         i++) {
+        parse_tree_t *arg = core_tree_child(keywords, i);
+        if (node_is(c->v->grammar, arg, "call-kw-arg")) {
+            core_list_push(keyword_nodes, arg);
+            continue;
+        }
+        if (core_tree_is_leaf(arg) || !core_tree_node_value(arg).group_top)
+            continue;
+        for (size_t j = 0; j < core_tree_num_children(arg); j++) {
+            parse_tree_t *item = core_tree_child(arg, j);
+            if (node_is(c->v->grammar, item, "call-kw-arg"))
+                core_list_push(keyword_nodes, item);
         }
     }
+    for (size_t i = 0; i < keyword_nodes.len; i++) {
+        parse_tree_t *arg = keyword_nodes.data[i];
+        parse_tree_t *value = parse_tree_find_direct_child_by_nt_name(
+            c->v->grammar, arg, CORE_STRING_STATIC("expression"));
+        parse_tree_t *name_node = core_tree_num_children(arg)
+            ? core_tree_child(arg, 0) : nullptr;
+        core_string_t name = node_identifier_name(name_node);
+        if (!name.data || !value) {
+            c->failed = true;
+            continue;
+        }
+        core_list_push(kwparams, ((th_kwparam){
+            .name = th_strdup(c->tc, name.data, name.u8_bytes),
+            .mode = TH_IN,
+            .type = core_tree_node_value(value).argument_type
+                ? core_tree_node_value(value).argument_type
+                : node_type(c, value),
+        }));
+    }
+    core_list_free(keyword_nodes);
     th_type *shape = th_func(c->tc, result, params.data, params.len, nullptr,
                              kwparams.data, kwparams.len);
     core_list_free(params);

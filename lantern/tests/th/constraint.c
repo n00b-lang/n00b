@@ -958,10 +958,8 @@ static void test_unification_probe(void)
     th_type *variable = th_var(ctx);
     th_type *integer = th_name(ctx, "int");
     th_type *string = th_name(ctx, "string");
-    th_type *specialized = th_unify_probe(ctx, variable, integer);
-    check("a unification probe returns a specialized copy",
-          specialized
-              && th_hash(ctx, specialized) == th_hash(ctx, integer)
+    check("a unification probe leaves its inputs unbound",
+          th_unify_probe(ctx, variable, integer)
               && th_kind_of(th_resolve(variable)) == TH_VAR);
     size_t errors = th_error_count(ctx);
     check("a failed unification probe retains no diagnostic",

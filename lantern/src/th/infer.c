@@ -348,7 +348,7 @@ static bool th_var_constrain_seen(th_ctx *ctx, th_type *var,
                 return merge_method_obligation(ctx, var, slot, &c, seen);
             }
         }
-        core_list_push(var->var.cons, c);
+        th_var_cons_push(var, c);
         var->revision++;
         return true;
     }
@@ -363,7 +363,7 @@ static bool th_var_constrain_seen(th_ctx *ctx, th_type *var,
         th_type *want = c.kind == TH_CON_HAS_FIELD ? c.field.type
                                                    : c.param.type;
 
-        if (have && want && !th_unify(ctx, have, want)) {
+        if (have && want && !th_unifies(ctx, have, want)) {
             th_err(ctx, TH_ERR_CONSTRAINT,
                    c.kind == TH_CON_HAS_FIELD ? "has_field" : "has_param",
                    have, want,
@@ -394,7 +394,7 @@ static bool th_var_constrain_seen(th_ctx *ctx, th_type *var,
         c.iface = th_strdup(ctx, c.iface, strlen(c.iface));
     }
 
-    core_list_push(var->var.cons, c);
+    th_var_cons_push(var, c);
     var->revision++;
 
     return true;
@@ -482,6 +482,90 @@ bool th_method_obligation_set_error(th_ctx *ctx, th_type *receiver,
     uni_seen_free(&seen);
     if (updated) variable->revision++;
     return updated;
+}
+
+static size_t formal_named(const th_formal_name *formals, size_t count,
+                           const char *name)
+{
+    for (size_t i = 0; name && i < count; i++)
+        if (formals[i].name && !strcmp(formals[i].name, name)) return i;
+    return SIZE_MAX;
+}
+
+th_type *th_call_shape_bind_keywords(th_ctx *ctx, th_type *call,
+                                     const th_formal_name *formals,
+                                     size_t formal_count)
+{
+    call = th_resolve(call);
+    if (!ctx || !call || call->kind != TH_FUNCTION
+        || (formal_count && !formals)) return nullptr;
+    size_t positional = call->fn.np;
+    if (positional > formal_count && call->fn.nkw) return nullptr;
+    size_t capacity = positional > formal_count ? positional : formal_count;
+    th_param *params = core_alloc_array(th_param, capacity ? capacity : 1);
+    bool *bound = core_alloc_array(bool, capacity ? capacity : 1);
+    if (!params || !bound) {
+        core_free(params);
+        core_free(bound);
+        return nullptr;
+    }
+    for (size_t i = 0; i < positional; i++) {
+        params[i] = call->fn.params[i];
+        bound[i] = true;
+    }
+    size_t count = positional;
+    bool valid = true;
+    for (size_t i = 0; valid && i < call->fn.nkw; i++) {
+        const th_kwparam *keyword = &call->fn.kw[i];
+        size_t index = formal_named(formals, formal_count, keyword->name);
+        if (index == SIZE_MAX || bound[index]) {
+            valid = false;
+            break;
+        }
+        params[index] = (th_param){.mode = keyword->mode,
+                                   .type = keyword->type};
+        bound[index] = true;
+        if (index + 1 > count) count = index + 1;
+    }
+    for (size_t i = 0; valid && i < formal_count; i++) {
+        if (bound[i]) continue;
+        if (!formals[i].optional) valid = false;
+        else if (i < count)
+            params[i] = (th_param){.mode = TH_IN, .type = th_var(ctx)};
+    }
+    th_type *shape = valid
+        ? th_func_with_error(ctx, call->fn.ret, call->fn.error, params,
+                             count, call->fn.rest, nullptr, 0)
+        : nullptr;
+    core_free(params);
+    core_free(bound);
+    return shape;
+}
+
+bool th_method_obligation_bind_keywords(th_ctx *ctx, th_type *receiver,
+                                        const char *name,
+                                        const th_formal_name *formals,
+                                        size_t formal_count)
+{
+    if (!ctx || !receiver || !name || !*name) return false;
+    th_type *variable = th_resolve(receiver);
+    if (th_kind_of(variable) != TH_VAR) return false;
+    bool updated = false;
+    for (size_t i = 0; i < variable->var.cons.len; i++) {
+        th_constraint *constraint = &variable->var.cons.data[i];
+        th_type *call = constraint->kind == TH_CON_METHOD
+            && !strcmp(constraint->method.name, name)
+            ? th_resolve(constraint->method.call) : nullptr;
+        if (!call || th_kind_of(call) != TH_FUNCTION || !call->fn.nkw)
+            continue;
+        th_type *shape = th_call_shape_bind_keywords(ctx, call, formals,
+                                                     formal_count);
+        if (!shape) return false;
+        constraint->method.call = shape;
+        updated = true;
+    }
+    if (updated) variable->revision++;
+    return true;
 }
 
 size_t th_var_constraint_count(const th_type *var)
@@ -734,24 +818,21 @@ static const th_iface *iface_named(th_ctx *ctx, const char *name)
 
 static bool satisfies(th_ctx *ctx, th_type *type, th_type *methods)
 {
-    size_t n = th_record_len(methods);
+    size_t     n         = th_record_len(methods);
+    th_probe_t probe     = th_probe_begin(ctx);
+    bool       satisfied = true;
 
-    for (size_t i = 0; i < n; i++) {
-        const th_member *m = th_record_member(methods, i);
-        th_type         *have;
+    for (size_t i = 0; satisfied && i < n; i++) {
+        const th_member *m    = th_record_member(methods, i);
+        th_type         *have = m ? th_record_lookup_in(ctx, type, m->name)
+                                  : nullptr;
 
-        if (!m) {
-            return false;
-        }
-
-        have = th_record_lookup_in(ctx, type, m->name);
-
-        if (!have || !th_unify(ctx, have, m->type)) {
-            return false;
-        }
+        satisfied = have && th_unify(ctx, have, m->type);
     }
 
-    return true;
+    th_probe_end(ctx, &probe);
+
+    return satisfied;
 }
 
 bool th_implements(th_ctx *ctx, th_type *type, const char *iface)
@@ -1019,7 +1100,7 @@ th_type *th_coerce(th_ctx *ctx, th_type *from, th_coerce_policy policy)
         return bottom;
     }
 
-    if (th_unify(ctx, from, policy.target)) {
+    if (th_unifies(ctx, from, policy.target)) {
         return policy.target;
     }
 
@@ -1050,7 +1131,7 @@ th_type *th_coerce(th_ctx *ctx, th_type *from, th_coerce_policy policy)
     if (policy.allow & TH_COERCE_OPTION_WRAP) {
         th_type *inner = th_option_item(policy.target);
 
-        if (inner && th_unify(ctx, from, inner)) {
+        if (inner && th_unifies(ctx, from, inner)) {
             record_coercion(ctx, TH_COERCE_OPTION_WRAP, from, policy.target);
 
             return policy.target;
@@ -1148,16 +1229,15 @@ static bool con_check_constraints(th_ctx *ctx, const th_type *var,
                 else {
                     matched = bt == cand;
                     if (!matched) {
-                        size_t error_count = ctx->errors.len;
-                        size_t pending_count =
-                            ctx->pending_environment_constraints.len;
-                        const char *previous_error = ctx->err;
+                        th_probe_t probe = th_probe_begin(ctx);
                         matched = th_unify(ctx, (th_type *)bt,
                                             (th_type *)cand) != nullptr;
-                        ctx->errors.len = error_count;
+                        ctx->errors.len = probe.errors;
                         if (!matched)
-                            ctx->pending_environment_constraints.len = pending_count;
-                        ctx->err = previous_error;
+                            ctx->pending_environment_constraints.len =
+                                probe.pending_environment_constraints;
+                        ctx->err = probe.err;
+                        th_probe_end(ctx, &probe);
                     }
                 }
             }
@@ -1325,7 +1405,9 @@ static bool con_check_constraints(th_ctx *ctx, const th_type *var,
                 receiver_errors = ctx->errors.len;
                 bool self_result = c->method.result == var
                     && method_result == receiver->type;
-                if (matches && !self_result)
+                if (matches && !self_result
+                    && !custom_coerces(ctx, th_resolve(method_result),
+                                       th_resolve(c->method.result)))
                     matches = uni(ctx, c->method.result, method_result, seen);
             }
             th_type *call = c->method.call;
@@ -2505,13 +2587,28 @@ th_type *th_unify(th_ctx *ctx, th_type *a, th_type *b)
     return r;
 }
 
-th_type *th_unify_probe(th_ctx *ctx, th_type *a, th_type *b)
+bool th_unifies(th_ctx *ctx, th_type *a, th_type *b)
 {
-    if (!ctx || !a || !b) return nullptr;
-    size_t before = th_error_count(ctx);
-    th_type *result = th_unify(ctx, a, b);
-    if (!result) ctx->errors.len = before;
-    return result;
+    if (!ctx || !a || !b) return false;
+    th_probe_t probe = th_probe_begin(ctx);
+    bool unified = th_unify(ctx, a, b) != nullptr;
+    th_probe_end(ctx, &probe);
+    return unified;
+}
+
+bool th_unify_probe(th_ctx *ctx, th_type *a, th_type *b)
+{
+    if (!ctx || !a || !b) return false;
+    th_probe_t probe = th_probe_begin(ctx);
+    bool unified = th_unify(ctx, a, b) != nullptr;
+    const char *err = ctx->err;
+    if (!unified) {
+        ctx->errors.len = probe.errors;
+        ctx->err = probe.err;
+    }
+    th_probe_end(ctx, &probe);
+    ctx->err = err;
+    return unified;
 }
 
 th_type *th_unify_in_place(th_ctx *ctx, th_type *a, th_type *b)

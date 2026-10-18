@@ -2058,9 +2058,15 @@ parse_pwz_release_parse_state(parse_pwz_parser_t *p)
     core_arena_free(&p->parse_arena);
     p->free_mems = nullptr;
     drop_released_cxts(p);
-    core_list_clear(p->worklist);
-    core_list_clear(p->worklist_swap);
-    core_list_clear(p->tops);
+    core_list_free(p->free_cxts);
+    core_list_free(p->pending_cxts);
+    core_list_free(p->arena_mems);
+    core_list_free(p->mark_stack);
+    core_list_free(p->worklist);
+    core_list_free(p->worklist_swap);
+    core_list_free(p->tops);
+    core_list_free(p->steps);
+    score_cache_free(p);
 }
 
 void
