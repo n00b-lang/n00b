@@ -140,9 +140,11 @@ check_target(const char *triple,
     CHECK(n00bb_llvm_stack_maps_visit(LLVMGetBufferStart(object),
         LLVMGetBufferSize(object), format, check_location, &count, &found));
     CHECK(found && count == 4);
-    const char *profile = format == CORE_TARGET_OBJECT_MACH_O
-        ? "arm64-macos" : format == CORE_TARGET_OBJECT_COFF
-            ? "x86_64-windows" : "x86_64-linux";
+    core_string_t profile = format == CORE_TARGET_OBJECT_MACH_O
+        ? CORE_STRING_STATIC("arm64-macos")
+        : format == CORE_TARGET_OBJECT_COFF
+            ? CORE_STRING_STATIC("x86_64-windows")
+            : CORE_STRING_STATIC("x86_64-linux");
     core_target_desc_t target_desc;
     CHECK(core_target_profile(profile, 0, &target_desc));
     n00bb_native_frames_t *frames = n00bb_native_frames_new(format);
@@ -154,10 +156,13 @@ check_target(const char *triple,
                                    &companion, &companion_bytes));
     core_object_section_t section;
     CHECK(core_object_section_find(companion, companion_bytes, format,
-        format == CORE_TARGET_OBJECT_MACH_O ? "__DATA_CONST" : NULL,
-        format == CORE_TARGET_OBJECT_MACH_O ? "__n00b_frames"
-            : format == CORE_TARGET_OBJECT_COFF ? ".n00b$F"
-                                            : ".data.rel.ro.n00b_frames",
+        format == CORE_TARGET_OBJECT_MACH_O
+            ? CORE_STRING_STATIC("__DATA_CONST") : (core_string_t){},
+        format == CORE_TARGET_OBJECT_MACH_O
+            ? CORE_STRING_STATIC("__n00b_frames")
+            : format == CORE_TARGET_OBJECT_COFF
+                ? CORE_STRING_STATIC(".n00b$F")
+                : CORE_STRING_STATIC(".data.rel.ro.n00b_frames"),
         &section));
     CHECK(core_le_load_u32(section.bytes) == 2);
     CHECK(core_le_load_u32(section.bytes + 4) == 1);

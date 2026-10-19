@@ -50,26 +50,33 @@ read_bytes(capture_reader_t *reader, uint64_t size, const uint8_t **out)
 }
 
 
-static char *
+static core_string_t
 read_string(capture_reader_t *reader)
 {
     uint64_t length = 0;
     const uint8_t *bytes = nullptr;
-    return read_word(reader, 8, &length) && read_bytes(reader, length, &bytes)
-        ? core_strndup((const char *)bytes, (size_t)length) : nullptr;
+    if (!read_word(reader, 8, &length) || !read_bytes(reader, length, &bytes))
+        return (core_string_t){};
+    return (core_string_t){
+        .data = core_strndup((const char *)bytes, (size_t)length),
+        .u8_bytes = (size_t)length,
+    };
 }
 
 static bool
-read_type_name(capture_reader_t *reader, char **out)
+read_type_name(capture_reader_t *reader, core_string_t *out)
 {
     uint64_t length = 0;
     const uint8_t *bytes = nullptr;
-    *out = nullptr;
+    *out = (core_string_t){};
     if (!read_word(reader, 8, &length) || !read_bytes(reader, length, &bytes))
         return false;
     if (!length) return true;
-    *out = core_strndup((const char *)bytes, (size_t)length);
-    return *out != nullptr;
+    *out = (core_string_t){
+        .data = core_strndup((const char *)bytes, (size_t)length),
+        .u8_bytes = (size_t)length,
+    };
+    return out->data != nullptr;
 }
 
 static bool
@@ -86,16 +93,16 @@ read_slot(capture_reader_t *reader, uint64_t node_count,
     };
     if (table == N00B_ABI_TABLE_TYPE)
         return read_word(reader, 8, &slot->typehash)
-            && read_type_name(reader, &slot->name) && slot->name;
+            && read_type_name(reader, &slot->name) && slot->name.data;
     if (table == N00B_ABI_TABLE_NATIVE_BINDING) {
         slot->name = read_string(reader);
-        return slot->name && *slot->name;
+        return slot->name.data && slot->name.u8_bytes;
     }
     slot->module = read_string(reader);
-    slot->name = slot->module ? read_string(reader) : nullptr;
-    if (table == N00B_ABI_TABLE_FUNCTION && slot->name) return true;
-    core_free(slot->module);
-    core_free(slot->name);
+    slot->name = slot->module.data ? read_string(reader) : (core_string_t){};
+    if (table == N00B_ABI_TABLE_FUNCTION && slot->name.data) return true;
+    core_free(slot->module.data);
+    core_free(slot->name.data);
     return false;
 }
 
@@ -122,23 +129,30 @@ read_failure(capture_reader_t *reader, n00bb_link_analysis_t *analysis)
     uint64_t kind = 1;
     while (ok && (ok = read_word(reader, 4, &kind)) && kind) {
         uint64_t index = 0;
-        char *name = kind == 1 ? read_string(reader) : nullptr;
-        if (kind == 1 && name)
-            core_buffer_printf(&path, "%s%s", path.byte_len ? "." : "", name);
+        core_string_t name = kind == 1 ? read_string(reader)
+                                       : (core_string_t){};
+        if (kind == 1 && name.data)
+            core_buffer_printf(&path, "%s%.*s", path.byte_len ? "." : "",
+                               (int)name.u8_bytes, name.data);
         else if (kind == 2 && read_word(reader, 8, &index))
             core_buffer_printf(&path, "[%llu]", (unsigned long long)index);
         else ok = false;
-        core_free(name);
+        core_free(name.data);
     }
-    char *message = ok ? read_string(reader) : nullptr;
-    ok = ok && message && reader->offset == reader->size;
+    core_string_t message = ok ? read_string(reader) : (core_string_t){};
+    ok = ok && message.data && reader->offset == reader->size;
     if (ok) {
-        analysis->baked_failure_root = core_strndup(root.data, root.byte_len);
-        analysis->baked_failure_path = path.byte_len
-            ? core_strndup(path.data, path.byte_len) : core_strndup("", 0);
+        analysis->baked_failure_root = (core_string_t){
+            .data = core_strndup(root.data, root.byte_len),
+            .u8_bytes = root.byte_len,
+        };
+        analysis->baked_failure_path = (core_string_t){
+            .data = core_strndup(path.byte_len ? path.data : "", path.byte_len),
+            .u8_bytes = path.byte_len,
+        };
         analysis->baked_failure_message = message;
     }
-    else core_free(message);
+    else core_free(message.data);
     core_buffer_release(&root);
     core_buffer_release(&path);
     return ok;
@@ -158,7 +172,7 @@ n00bb_baked_graph_load(n00bb_link_analysis_t *analysis)
     for (uint64_t i = 0; ok && i < node_count; i++) {
         uint64_t size = 0, alignment = 0, typehash = 0, flags = 0;
         const uint8_t *bytes = nullptr;
-        char *type_name = nullptr;
+        core_string_t type_name = {};
         ok = read_word(&reader, 8, &size) && read_word(&reader, 4, &alignment)
             && read_word(&reader, 8, &typehash)
             && read_type_name(&reader, &type_name)
@@ -203,10 +217,12 @@ n00bb_baked_graph_load(n00bb_link_analysis_t *analysis)
         uint64_t node = 0;
         ok = read_root_identifier(&reader, &identifier)
             && read_word(&reader, 4, &node) && node < node_count;
-        char *name = ok
-            ? core_strndup(identifier.data, identifier.byte_len) : nullptr;
+        core_string_t name = ok ? (core_string_t){
+            .data = core_strndup(identifier.data, identifier.byte_len),
+            .u8_bytes = identifier.byte_len,
+        } : (core_string_t){};
         core_buffer_release(&identifier);
-        ok = ok && name;
+        ok = ok && name.data;
         if (ok) core_list_push(analysis->baked_roots, ((n00bb_baked_root_t){
             .identifier = name,
             .root_index = (size_t)node,
@@ -222,19 +238,17 @@ n00bb_baked_graph_load(n00bb_link_analysis_t *analysis)
     return ok && reader.offset == reader.size;
 }
 
-const char *
+core_string_t
 n00bb_baked_root_identifier(const n00bb_link_analysis_t *analysis,
                             core_string_t module, core_string_t name)
 {
     for (size_t i = 0; analysis && i < analysis->baked_roots.len; i++) {
-        const char *identifier = analysis->baked_roots.data[i].identifier;
-        size_t length = strlen(identifier);
-        if (length == module.u8_bytes + 1 + name.u8_bytes
-            && !memcmp(identifier, module.data, module.u8_bytes)
-            && identifier[module.u8_bytes] == ':'
-            && !memcmp(identifier + module.u8_bytes + 1, name.data,
-                       name.u8_bytes))
+        core_string_t identifier = analysis->baked_roots.data[i].identifier;
+        if (identifier.u8_bytes == module.u8_bytes + 1 + name.u8_bytes
+            && core_string_starts_with(identifier, module)
+            && identifier.data[module.u8_bytes] == ':'
+            && core_string_ends_with(identifier, name))
             return identifier;
     }
-    return nullptr;
+    return (core_string_t){};
 }

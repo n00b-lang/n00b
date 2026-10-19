@@ -23,8 +23,7 @@ typedef struct {
     uint32_t parameter_count;
     n00bb_return_alias_kind_t return_kind;
     uint32_t return_parameter;
-    const char *return_global;
-    size_t return_global_size;
+    core_string_t return_global;
 } n00bb_function_lifetime_effects_t;
 
 bool function_lifetime_effects_for_symbol(
@@ -43,4 +42,4 @@ bool simple_returned_global(parse_grammar_t *grammar,
     core_buffer_t *global_name);
 parse_sym_entry_t *global_symbol_from_qualified_name(
     parse_grammar_t *grammar, n00bb_link_analysis_t *analysis,
-    const char *name, size_t name_size);
+    core_string_t name);

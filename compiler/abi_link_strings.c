@@ -16,13 +16,16 @@ static bool
 is_tu_string_pool(const core_target_desc_t *target,
                   const core_object_emit_section_t *section)
 {
-    const char *name = target->object_format == CORE_TARGET_OBJECT_MACH_O
-        ? "__n00b_strings"
+    core_string_t name = target->object_format == CORE_TARGET_OBJECT_MACH_O
+        ? CORE_STRING_STATIC("__n00b_strings")
         : target->object_format == CORE_TARGET_OBJECT_COFF
-            ? ".rdata$S" : ".rodata.n00b_strings";
-    return section->name && !strcmp(section->name, name)
+            ? CORE_STRING_STATIC(".rdata$S")
+            : CORE_STRING_STATIC(".rodata.n00b_strings");
+    return section->name.data && core_string_eq(section->name, name)
         && (target->object_format != CORE_TARGET_OBJECT_MACH_O
-            || (section->segment && !strcmp(section->segment, "__TEXT")));
+            || (section->segment.data
+                && core_string_eq(section->segment,
+                                  CORE_STRING_STATIC("__TEXT"))));
 }
 
 bool
@@ -150,13 +153,13 @@ n00bb_abi_consolidate_native_strings(
     if (valid) {
         for (size_t i = 0; i < sections->count; i++) {
             if (!is_tu_string_pool(target, &sections->sections[i])) continue;
-            core_free((void *)sections->sections[i].name);
-            core_free((void *)sections->sections[i].segment);
+            core_free(sections->sections[i].name.data);
+            core_free(sections->sections[i].segment.data);
             core_free((void *)sections->sections[i].bytes);
         }
         for (size_t i = 0; i < native->symbol_count; i++)
             if (symbol_indexes[i] == UINT32_MAX)
-                core_free((void *)native->symbols[i].name);
+                core_free(native->symbols[i].name.data);
         core_free(sections->sections);
         core_free(sections->final_indices);
         core_free(sections->maps);

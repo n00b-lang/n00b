@@ -188,16 +188,15 @@ encode_string(n00bb_abi_name_pool_t *pool,
 {
     if (!value) return true;
     if (value->kind != IR_GLOBAL_INIT_STRING
-        || (value->string.length && !value->string.bytes)) return false;
+        || (value->string.u8_bytes && !value->string.data)) return false;
     n00b_abi_string_encoding_v1 encoding = N00B_ABI_STRING_ASCII;
-    for (size_t i = 0; i < value->string.length; i++)
-        if ((uint8_t)value->string.bytes[i] >= 0x80) {
+    for (size_t i = 0; i < value->string.u8_bytes; i++)
+        if ((uint8_t)value->string.data[i] >= 0x80) {
             encoding = N00B_ABI_STRING_UTF8;
             break;
         }
     n00b_abi_string_v1 encoded = {0};
-    if (!n00bb_abi_name_pool_value(pool,
-        core_string_borrow(value->string.bytes, value->string.length),
+    if (!n00bb_abi_name_pool_value(pool, value->string,
         encoding, &encoded, pool_offset)) return false;
     memcpy(bytes, &encoded, sizeof encoded);
     return true;
@@ -449,7 +448,7 @@ encode_typed_value(array_writer_t *writer, th_type *type,
         valid = bits == sizeof(n00b_abi_string_v1) * 8
             && byte_count >= sizeof(n00b_abi_string_v1)
             && encode_string(writer->pool, item, bytes, &pool_offset);
-        if (valid && item->string.length
+        if (valid && item->string.u8_bytes
             > N00BB_ABI_STRING_SHORT_CAPACITY) {
             valid = source_bit_offset % 8 == 0
                 && source_kind != N00B_ABI_STORAGE_TLS;
@@ -554,11 +553,11 @@ encode_aggregate(array_writer_t *writer, th_type *type,
         const ir_global_init_value_t *item = &value->aggregate.items[i];
         size_t slot = tuple ? i : 0;
         while (!tuple && slot < layout->n_members
-            && (!item->member || !layout->members[slot].name
-                || strcmp(item->member, layout->members[slot].name)))
+            && (!item->member.data || !layout->members[slot].name.data
+                || !core_string_eq(item->member, layout->members[slot].name)))
             slot++;
         if (slot == layout->n_members || (!variant && seen[slot])
-            || (tuple && (item->member
+            || (tuple && (item->member.data
                 || layout->members[slot].ordinal != i))) {
             valid = false;
             break;
@@ -658,7 +657,7 @@ encode_array_items(array_writer_t *writer,
         }
         else {
             memcpy(writer->built->aggregates.data + at, bytes, stride);
-            if (string && value->string.length
+            if (string && value->string.u8_bytes
                 > N00BB_ABI_STRING_SHORT_CAPACITY)
                 core_list_push(*writer->relocations,
                     ((n00bb_abi_storage_relocation_t){
@@ -926,9 +925,9 @@ graph_placement_plan(const n00bb_abi_graph_source_t *graphs,
 
 static bool
 graph_type_add(n00bb_abi_type_index_t *index, ir_module_t *runtime,
-               const char *name, uint64_t typehash)
+               core_string_t name, uint64_t typehash)
 {
-    if (!name) return !typehash;
+    if (!name.data) return !typehash;
     th_type *type = ir_type_parse(runtime, name);
     return type && th_hash(ir_module_types(runtime), type) == typehash
         && n00bb_abi_type_index_add(index, type, nullptr);
@@ -966,7 +965,7 @@ n00bb_abi_graph_types_collect(
             valid = graph_type_add(index, runtime, slot.type_name,
                                    slot.typehash);
         else if (slot.table != N00B_ABI_TABLE_NATIVE_BINDING
-                 && strcmp(slot.module, ir_module_name(runtime)))
+                 && !core_string_eq(slot.module, ir_module_name(runtime)))
             valid = slot.function_type
                 && n00bb_abi_type_index_add(index, slot.function_type,
                                             nullptr);
@@ -976,26 +975,29 @@ n00bb_abi_graph_types_collect(
     return valid;
 }
 
-static char *
+static core_string_t
 graph_function_path(const n00bb_abi_graph_slot_t *slot)
 {
     core_buffer_t path = {0};
-    core_buffer_printf(&path, "%s.%s", slot->module, slot->function);
-    return path.data;
+    core_buffer_printf(&path, "%.*s.%.*s", (int)slot->module.u8_bytes,
+                       slot->module.data, (int)slot->function.u8_bytes,
+                       slot->function.data);
+    return core_buffer_string(&path);
 }
 
 static bool
 baked_function_row(const n00bb_abi_baked_functions_t *baked,
                    const n00bb_abi_graph_slot_t *slot, uint32_t *out)
 {
-    char *path = baked ? graph_function_path(slot) : nullptr;
+    core_string_t path = baked ? graph_function_path(slot)
+                               : (core_string_t){};
     bool found = false;
-    for (size_t i = 0; path && i < baked->count && !found; i++)
-        if (!strcmp(baked->paths[i], path)) {
+    for (size_t i = 0; path.data && i < baked->count && !found; i++)
+        if (core_string_eq(baked->paths[i], path)) {
             *out = baked->first_requirement + (uint32_t)i;
             found = true;
         }
-    core_free(path);
+    core_free(path.data);
     return found;
 }
 
@@ -1025,11 +1027,11 @@ n00bb_abi_graph_function_requirements(
             && slot.node < graphs->node_count;
         if (!valid || !(places[slot.node].reachability & 1)
             || slot.table != N00B_ABI_TABLE_FUNCTION
-            || !strcmp(slot.module, ir_module_name(runtime))
+            || core_string_eq(slot.module, ir_module_name(runtime))
             || baked_function_row(out, &slot, &existing)) continue;
         uint32_t type_index = 0;
-        char *path = graph_function_path(&slot);
-        valid = path && slot.function_type
+        core_string_t path = graph_function_path(&slot);
+        valid = path.data && slot.function_type
             && n00bb_abi_type_index_find(index, slot.function_type,
                                          &type_index)
             && type_index < types->count
@@ -1039,14 +1041,14 @@ n00bb_abi_graph_function_requirements(
             ? core_realloc(*requirements,
                 (*requirement_count + 2) * sizeof(**requirements))
             : nullptr;
-        char **paths = grown
-            ? core_realloc(out->paths, (out->count + 1) * sizeof(char *))
+        core_string_t *paths = grown
+            ? core_realloc(out->paths, (out->count + 1) * sizeof(core_string_t))
             : nullptr;
         if (grown) *requirements = grown;
         if (paths) out->paths = paths;
         valid = grown && paths;
         if (!valid) {
-            core_free(path);
+            core_free(path.data);
             break;
         }
         size_t next = ++*requirement_count;
@@ -1057,8 +1059,7 @@ n00bb_abi_graph_function_requirements(
             .flags = N00B_ABI_REQUIREMENT_FLAG_BAKED,
         };
         out->paths[out->count++] = path;
-        valid = n00bb_abi_name_pool_encode(pool,
-            core_string_borrow(path, strlen(path)),
+        valid = n00bb_abi_name_pool_encode(pool, path,
             N00B_ABI_TABLE_REQUIREMENT, (uint32_t)next,
             offsetof(n00b_abi_requirement_v1, full_path),
             &grown[next].full_path);
@@ -1072,7 +1073,7 @@ void
 n00bb_abi_baked_functions_release(n00bb_abi_baked_functions_t *baked)
 {
     for (size_t i = 0; baked && i < baked->count; i++)
-        core_free(baked->paths[i]);
+        core_free(baked->paths[i].data);
     if (baked) core_free(baked->paths);
     if (baked) *baked = (n00bb_abi_baked_functions_t){0};
 }
@@ -1089,9 +1090,9 @@ graph_slot_index(const n00bb_abi_type_identity_rows_t *types,
         return graph_type_index(types, slot->typehash, out) && *out;
     for (size_t i = 1; functions && i < functions->function_count; i++) {
         ir_func_t *function = functions->ir_functions[i];
-        if (function && function->name && function->owner
-            && !strcmp(function->name, slot->function)
-            && !strcmp(ir_module_name(function->owner), slot->module)) {
+        if (function && function->name.data && function->owner
+            && core_string_eq(function->name, slot->function)
+            && core_string_eq(ir_module_name(function->owner), slot->module)) {
             *out = (uint32_t)i;
             return true;
         }
@@ -1262,7 +1263,7 @@ n00bb_abi_storage_rows_build(
                 : N00B_ABI_STORAGE_WRITABLE;
         bool long_string = is_string && initializer
             && initializer->kind == IR_GLOBAL_INIT_STRING
-            && initializer->string.length
+            && initializer->string.u8_bytes
                 > N00BB_ABI_STRING_SHORT_CAPACITY;
         core_buffer_t *buffer = kind == N00B_ABI_STORAGE_TLS
             ? &built.tls : kind == N00B_ABI_STORAGE_READ_ONLY
@@ -1419,7 +1420,7 @@ n00bb_abi_storage_rows_build(
             core_buffer_t *buffer = graph_segment(&built, place->kind,
                 &unused_alignment);
             uint64_t offset = place->offset + slot.offset;
-            valid = buffer && slot.native && offset <= buffer->byte_len
+            valid = buffer && slot.native.data && offset <= buffer->byte_len
                 && buffer->byte_len - offset >= sizeof(uint64_t);
             if (!valid) break;
             memset(buffer->data + offset, 0, sizeof(uint64_t));

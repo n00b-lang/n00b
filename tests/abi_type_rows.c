@@ -10,6 +10,8 @@
 #include "ir/typelang.h"
 #include "lib/alloc.h"
 
+#define S(x) CORE_STRING_STATIC(x)
+
 int
 main(void)
 {
@@ -27,19 +29,19 @@ main(void)
         && invalid_offset == offsetof(n00b_abi_type_v1, flags));
 
     ir_ctx_t *context = ir_ctx_new();
-    const ir_profile_t profile = {.name = "n00b"};
-    ir_module_t *runtime = ir_module_new(context, "example", &profile,
-                                          "x86_64-linux");
+    const ir_profile_t profile = {.name = S("n00b")};
+    ir_module_t *runtime = ir_module_new(context, S("example"), &profile,
+                                          S("x86_64-linux"));
     assert(runtime);
     th_ctx *types = ir_ctx_types(context);
-    th_type *string = th_name(types, "string");
+    th_type *string = th_name(types, S("string"));
     th_type *record = th_name(types,
-        "example.package.AVeryLongRecordTypeName");
+        S("example.package.AVeryLongRecordTypeName"));
     ir_final_layout_t string_layout = {
         .intrinsic_bits = 128,
         .alignment_bytes = 8,
     };
-    assert(ir_layout_publish_final(runtime, string, "x86_64-linux",
+    assert(ir_layout_publish_final(runtime, string, S("x86_64-linux"),
                                    &string_layout));
     n00bb_abi_type_index_t *index = n00bb_abi_type_index_new(runtime);
     uint32_t string_index = 0, record_index = 0;
@@ -73,11 +75,11 @@ main(void)
         (const uint8_t *)&rows.rows[record_index].canonical_name,
         sizeof(n00b_abi_string_v1), &decoded));
     assert(decoded.tag == N00BB_ABI_STRING_LONG);
-    const char *spelling = th_print(types, record);
-    assert(decoded.length == strlen(spelling)
-        && n00bb_abi_name_pool_size(names) == strlen(spelling)
-        && !memcmp(n00bb_abi_name_pool_bytes(names), spelling,
-                   strlen(spelling)));
+    core_string_t spelling = th_print(types, record);
+    assert(decoded.length == spelling.u8_bytes
+        && n00bb_abi_name_pool_size(names) == spelling.u8_bytes
+        && !memcmp(n00bb_abi_name_pool_bytes(names), spelling.data,
+                   spelling.u8_bytes));
     n00bb_abi_directory_entry_t directory = {
         .kind = N00B_ABI_TABLE_TYPE,
         .record_bytes = sizeof(n00b_abi_type_v1),
@@ -100,7 +102,9 @@ main(void)
     n00bb_abi_type_index_t *handles = n00bb_abi_type_index_new(runtime);
     n00bb_abi_name_pool_t *handle_names = n00bb_abi_name_pool_new();
     th_arg item = {.kind = TH_ARG_TYPE, .type = string};
-    const char *handle_names_interned[] = {TH_OPTION, "Atomic", "Array"};
+    const core_string_t handle_names_interned[] = {
+        S(TH_OPTION), S("Atomic"), S("Array"),
+    };
     const uint32_t handle_kinds[] = {
         N00B_ABI_TYPE_OPTION, N00B_ABI_TYPE_ATOMIC, N00B_ABI_TYPE_ARRAY,
     };
@@ -131,21 +135,21 @@ main(void)
         {.kind = TH_ARG_TYPE, .type = string},
         {.kind = TH_ARG_UINT, .u = 7},
         {.kind = TH_ARG_SINT, .s = -3},
-        {.kind = TH_ARG_STR, .str = {.p = "fmt", .n = 3}},
+        {.kind = TH_ARG_STR, .str = S("fmt")},
     };
-    th_type *named = th_apply(types, "example.Dict", named_args, 4);
+    th_type *named = th_apply(types, S("example.Dict"), named_args, 4);
     uint32_t named_index = 0;
     assert(named && n00bb_abi_type_index_add(handles, named,
                                               &named_index));
-    th_type *generic_record = th_apply(types, "example.Box", &item, 1);
-    th_member field = {.name = "value", .type = string};
+    th_type *generic_record = th_apply(types, S("example.Box"), &item, 1);
+    th_member field = {.name = S("value"), .type = string};
     th_type *record_definition = th_record(types, &field, 1);
     uint32_t generic_record_index = 0;
     assert(generic_record && record_definition
         && ir_type_define(runtime, generic_record, record_definition)
         && n00bb_abi_type_index_add(handles, generic_record,
                                     &generic_record_index));
-    assert(ir_layout_publish_final(runtime, bits3, "x86_64-linux",
+    assert(ir_layout_publish_final(runtime, bits3, S("x86_64-linux"),
                                    &bits3_layout));
     n00bb_abi_type_identity_rows_t handle_rows = {0};
     assert(n00bb_abi_type_identity_rows_build(handles, runtime,

@@ -4,17 +4,20 @@
 #include <stdio.h>
 #include <string.h>
 
+#define S(x) CORE_STRING_STATIC(x)
+#define TH_NAME(types, lit) th_name((types), S(lit))
+
 static const ir_scalar_t SCALARS[] = {
-    {"bool", IR_CLASS_BOOL, 1, IR_ROLE_NONE},
-    {"byte", IR_CLASS_UINT, 8, IR_ROLE_NONE},
-    {"char", IR_CLASS_UINT, 24, IR_ROLE_CHAR},
-    {"f64", IR_CLASS_FLOAT, 64, IR_ROLE_NONE},
-    {"nil", IR_CLASS_VOID, 0, IR_ROLE_NONE},
-    {"u32", IR_CLASS_UINT, 32, IR_ROLE_NONE},
+    {S("bool"), IR_CLASS_BOOL, 1, IR_ROLE_NONE},
+    {S("byte"), IR_CLASS_UINT, 8, IR_ROLE_NONE},
+    {S("char"), IR_CLASS_UINT, 24, IR_ROLE_CHAR},
+    {S("f64"), IR_CLASS_FLOAT, 64, IR_ROLE_NONE},
+    {S("nil"), IR_CLASS_VOID, 0, IR_ROLE_NONE},
+    {S("u32"), IR_CLASS_UINT, 32, IR_ROLE_NONE},
 };
 
 static const ir_profile_t PROFILE = {
-    .name = "n00bb-abi-layout-test",
+    .name = S("n00bb-abi-layout-test"),
     .n_scalars = sizeof(SCALARS) / sizeof(SCALARS[0]),
     .scalars = SCALARS,
 };
@@ -72,9 +75,9 @@ check_structural_record(ir_module_t *module,
                         const core_target_desc_t *target, th_ctx *types)
 {
     th_member members[] = {
-        {.name = "left", .type = th_bitint(types, 64, true)},
-        {.name = "flag", .type = th_name(types, "bool")},
-        {.name = "right", .type = th_name(types, "string")},
+        {.name = S("left"), .type = th_bitint(types, 64, true)},
+        {.name = S("flag"), .type = TH_NAME(types, "bool")},
+        {.name = S("right"), .type = TH_NAME(types, "string")},
     };
     th_type *record = th_record(types, members,
                                 sizeof members / sizeof(*members));
@@ -88,9 +91,9 @@ check_structural_record(ir_module_t *module,
         return 0;
     for (size_t i = 0; i < final->n_members; i++) {
         const ir_final_member_layout_t *member = &final->members[i];
-        uint64_t expected = !strcmp(member->name, "right") ? 0
-            : !strcmp(member->name, "left") ? 128
-            : !strcmp(member->name, "flag") ? 192 : UINT64_MAX;
+        uint64_t expected = core_string_eq(member->name, S("right")) ? 0
+            : core_string_eq(member->name, S("left")) ? 128
+            : core_string_eq(member->name, S("flag")) ? 192 : UINT64_MAX;
         if (member->bit_offset != expected) return 0;
     }
     return 1;
@@ -100,7 +103,7 @@ static int
 check_union_box(ir_module_t *module, const core_target_desc_t *target,
                 th_ctx *types)
 {
-    th_type *arms[] = {th_name(types, "u32"), th_name(types, "string")};
+    th_type *arms[] = {TH_NAME(types, "u32"), TH_NAME(types, "string")};
     th_type *union_type = th_sum(types, TH_UNION, arms, 2);
     bool handled = false;
     if (!union_type || !n00bb_abi_publish_direct_layout(module, union_type,
@@ -118,16 +121,16 @@ check_nested_value_stride(ir_module_t *module,
                           const core_target_desc_t *target, th_ctx *types)
 {
     th_type *word = th_bitint(types, 64, false);
-    th_type *child = th_name(types, "StrideChild");
-    th_type *parent = th_name(types, "StrideParent");
+    th_type *child = TH_NAME(types, "StrideChild");
+    th_type *parent = TH_NAME(types, "StrideParent");
     bool handled = false;
     n00bb_abi_record_member_t child_members[] = {
-        {.name = "word", .type = word, .ordinal = 0},
-        {.name = "half", .type = th_name(types, "u32"), .ordinal = 1},
+        {.name = S("word"), .type = word, .ordinal = 0},
+        {.name = S("half"), .type = TH_NAME(types, "u32"), .ordinal = 1},
     };
     n00bb_abi_record_member_t parent_members[] = {
-        {.name = "child", .type = child, .ordinal = 0},
-        {.name = "flag", .type = th_name(types, "bool"),
+        {.name = S("child"), .type = child, .ordinal = 0},
+        {.name = S("flag"), .type = TH_NAME(types, "bool"),
          .ordinal = 1, .packed = true},
     };
     if (!n00bb_abi_publish_direct_layout(module, word, target, &handled)
@@ -150,7 +153,7 @@ static int
 check_variant(const core_target_desc_t *target)
 {
     ir_ctx_t *context = ir_ctx_new();
-    ir_module_t *module = ir_module_new(context, "variant", &PROFILE,
+    ir_module_t *module = ir_module_new(context, S("variant"), &PROFILE,
                                         target->triple);
     th_ctx *types = ir_ctx_types(context);
     th_type *wide = th_bitint(types, 64, false);
@@ -159,14 +162,14 @@ check_variant(const core_target_desc_t *target)
         {.kind = TH_ARG_TYPE, .type = wide},
         {.kind = TH_ARG_TYPE, .type = small},
     };
-    th_type *variant = th_variant(types, "variant.Value", args, 2);
+    th_type *variant = th_variant(types, S("variant.Value"), args, 2);
     th_member members[] = {
-        {.name = "number", .type = wide},
-        {.name = "small", .type = small},
+        {.name = S("number"), .type = wide},
+        {.name = S("small"), .type = small},
     };
     n00bb_abi_variant_arm_t arms[] = {
-        {.name = "number", .type = wide, .ordinal = 0},
-        {.name = "small", .type = small, .ordinal = 1},
+        {.name = S("number"), .type = wide, .ordinal = 0},
+        {.name = S("small"), .type = small, .ordinal = 1},
     };
     bool handled = false;
     int ok = module && variant
@@ -194,14 +197,14 @@ check_variant(const core_target_desc_t *target)
         {.kind = TH_ARG_TYPE, .type = bit1},
         {.kind = TH_ARG_TYPE, .type = bit2},
     };
-    th_type *padded = th_variant(types, "variant.Padded", small_args, 2);
+    th_type *padded = th_variant(types, S("variant.Padded"), small_args, 2);
     th_member small_members[] = {
-        {.name = "first", .type = bit1},
-        {.name = "second", .type = bit2},
+        {.name = S("first"), .type = bit1},
+        {.name = S("second"), .type = bit2},
     };
     n00bb_abi_variant_arm_t small_arms[] = {
-        {.name = "first", .type = bit1, .ordinal = 0},
-        {.name = "second", .type = bit2, .ordinal = 1},
+        {.name = S("first"), .type = bit1, .ordinal = 0},
+        {.name = S("second"), .type = bit2, .ordinal = 1},
     };
     ok = ok && n00bb_abi_publish_direct_layout(module, bit1, target,
                                                   &handled)
@@ -221,18 +224,18 @@ check_variant(const core_target_desc_t *target)
 int main(void)
 {
     n00bb_register_builtin_types();
-    static const char *triples[] = {
-        "x86_64-linux", "arm64-macos", "x86_64-windows",
+    static const core_string_t triples[] = {
+        S("x86_64-linux"), S("arm64-macos"), S("x86_64-windows"),
     };
     for (size_t i = 0; i < sizeof(triples) / sizeof(triples[0]); i++) {
         core_target_desc_t target;
         if (!core_target_profile(triples[i], 0, &target)) return 1;
         ir_ctx_t *context = ir_ctx_new();
-        ir_module_t *module = ir_module_new(context, "scalar", &PROFILE,
+        ir_module_t *module = ir_module_new(context, S("scalar"), &PROFILE,
                                             target.triple);
         th_ctx *types = ir_ctx_types(context);
-        th_type *wide = th_name(types, "Wide");
-        th_type *wider = th_name(types, "Wider");
+        th_type *wide = TH_NAME(types, "Wide");
+        th_type *wider = TH_NAME(types, "Wider");
         int ok = module && types
             && check_variant(&target)
             && check_scalar(module, &target, th_bitint(types, 1, true),
@@ -243,28 +246,28 @@ int main(void)
                             17, 32, 4)
             && check_scalar(module, &target, th_bitint(types, 65, true),
                             65, 128, 16)
-            && check_scalar(module, &target, th_name(types, "bool"),
+            && check_scalar(module, &target, TH_NAME(types, "bool"),
                             1, 8, 1)
-            && check_scalar(module, &target, th_name(types, "char"),
+            && check_scalar(module, &target, TH_NAME(types, "char"),
                             24, 32, 4)
-            && check_scalar(module, &target, th_name(types, "f64"),
+            && check_scalar(module, &target, TH_NAME(types, "f64"),
                             64, 64, 8)
-            && check_scalar(module, &target, th_name(types, "nil"),
+            && check_scalar(module, &target, TH_NAME(types, "nil"),
                             0, 0, 1)
-            && check_scalar(module, &target, th_name(types, "string"),
+            && check_scalar(module, &target, TH_NAME(types, "string"),
                             128, 128, 8)
-            && check_scalar(module, &target, th_name(types, "Allocator"),
+            && check_scalar(module, &target, TH_NAME(types, "Allocator"),
                             32, 32, 4)
-            && check_scalar(module, &target, th_name(types, "typespec"),
+            && check_scalar(module, &target, TH_NAME(types, "typespec"),
                             32, 32, 4)
-            && check_scalar(module, &target, th_name(types, "Any"),
+            && check_scalar(module, &target, TH_NAME(types, "Any"),
                             128, 128, 8)
             && ir_type_define(module, wide, th_bitint(types, 65, true))
             && ir_type_define(module, wider, wide)
             && check_scalar(module, &target, wider, 65, 128, 16)
             && check_scalar(module, &target, wide, 65, 128, 16);
         th_arg handle_element = {
-            .kind = TH_ARG_TYPE, .type = th_name(types, "int"),
+            .kind = TH_ARG_TYPE, .type = TH_NAME(types, "int"),
         };
         ok = ok && check_scalar(module, &target,
                 th_array(types, handle_element.type),
@@ -272,13 +275,13 @@ int main(void)
         ok = ok && check_scalar(module, &target,
                 th_ind(types, 0, th_bitint(types, 64, false)), 64, 64, 8)
             && check_scalar(module, &target,
-                th_ind(types, 0, th_name(types, "bool")), 128, 128, 8)
+                th_ind(types, 0, TH_NAME(types, "bool")), 128, 128, 8)
             && check_scalar(module, &target,
                 th_ind(types, 0, th_bits(types, 127)), 128, 128, 8)
             && check_scalar(module, &target,
                 th_ind(types, 0, th_bits(types, 128)), 128, 128, 8);
         th_type *unresolved_ref = th_ind(types, 0,
-            th_name(types, "foreign.Unknown"));
+            TH_NAME(types, "foreign.Unknown"));
         bool unresolved_handled = true;
         ok = ok && unresolved_ref
             && n00bb_abi_publish_direct_layout(module, unresolved_ref,
@@ -286,41 +289,41 @@ int main(void)
             && !unresolved_handled
             && !ir_layout_final(module, unresolved_ref, target.triple);
         th_arg byte_arg = {
-            .kind = TH_ARG_TYPE, .type = th_name(types, "byte"),
+            .kind = TH_ARG_TYPE, .type = TH_NAME(types, "byte"),
         };
-        th_type *one_byte = th_apply(types, TH_OPTION, &byte_arg, 1);
+        th_type *one_byte = th_apply(types, S(TH_OPTION), &byte_arg, 1);
         th_arg nested_byte_arg = {.kind = TH_ARG_TYPE, .type = one_byte};
-        th_type *two_byte = th_apply(types, TH_OPTION, &nested_byte_arg, 1);
+        th_type *two_byte = th_apply(types, S(TH_OPTION), &nested_byte_arg, 1);
         th_arg pointer_arg = {
             .kind = TH_ARG_TYPE,
             .type = th_ind(types, 0, th_bitint(types, 64, false)),
         };
-        th_type *one_pointer = th_apply(types, TH_OPTION, &pointer_arg, 1);
+        th_type *one_pointer = th_apply(types, S(TH_OPTION), &pointer_arg, 1);
         th_arg nested_pointer_arg = {
             .kind = TH_ARG_TYPE, .type = one_pointer,
         };
         th_arg bitptr_arg = {
             .kind = TH_ARG_TYPE,
-            .type = th_ind(types, 0, th_name(types, "bool")),
+            .type = th_ind(types, 0, TH_NAME(types, "bool")),
         };
-        th_type *one_bitptr = th_apply(types, TH_OPTION, &bitptr_arg, 1);
+        th_type *one_bitptr = th_apply(types, S(TH_OPTION), &bitptr_arg, 1);
         th_arg nested_bitptr_arg = {
             .kind = TH_ARG_TYPE, .type = one_bitptr,
         };
-        th_type *two_bitptr = th_apply(types, TH_OPTION, &nested_bitptr_arg,
+        th_type *two_bitptr = th_apply(types, S(TH_OPTION), &nested_bitptr_arg,
                                        1);
         ok = ok && check_option(module, &target, one_byte, 9, 8, 0, false)
             && check_option(module, &target, two_byte, 10, 8, 1, false)
             && check_option(module, &target, one_pointer, 64, 0, 0, true)
             && check_option(module, &target,
-                th_apply(types, TH_OPTION, &nested_pointer_arg, 1),
+                th_apply(types, S(TH_OPTION), &nested_pointer_arg, 1),
                 65, 64, 0, false)
             && check_option(module, &target, one_bitptr, 128, 64, 0, true)
             && check_option(module, &target, two_bitptr, 128, 64, 0, true);
         th_arg atomic_option_arg = {
             .kind = TH_ARG_TYPE, .type = one_byte,
         };
-        th_type *atomic_option = th_apply(types, "Atomic",
+        th_type *atomic_option = th_apply(types, S("Atomic"),
                                           &atomic_option_arg, 1);
         bool atomic_handled = false;
         ok = ok && atomic_option
@@ -345,15 +348,15 @@ int main(void)
             .kind = TH_ARG_TYPE, .type = atomic_option,
         };
         ok = ok && check_option(module, &target,
-                th_apply(types, TH_OPTION, &option_atomic_arg, 1),
+                th_apply(types, S(TH_OPTION), &option_atomic_arg, 1),
                 17, 16, 0, false);
         bool handled = false;
         ok = ok && n00bb_abi_publish_direct_layout(module,
-                th_name(types, "user.string"), &target, &handled)
+                TH_NAME(types, "user.string"), &target, &handled)
             && !handled;
         handled = false;
         ok = ok && n00bb_abi_publish_direct_layout(module,
-                th_name(types, "Array"), &target, &handled)
+                TH_NAME(types, "Array"), &target, &handled)
             && !handled;
         handled = false;
         th_type *record = th_record(types, nullptr, 0);
@@ -382,7 +385,7 @@ int main(void)
         th_arg atomic_element = {
             .kind = TH_ARG_TYPE, .type = th_bits(types, 17),
         };
-        th_type *atomic = th_apply(types, "Atomic", &atomic_element, 1);
+        th_type *atomic = th_apply(types, S("Atomic"), &atomic_element, 1);
         handled = false;
         ok = ok && atomic
             && ir_type_define(module, atomic, atomic_element.type)
@@ -399,7 +402,7 @@ int main(void)
             && atomic_layout->n_reserved == 1
             && atomic_layout->reserved[0].offset == 17
             && atomic_layout->reserved[0].width == 15;
-        th_type *atomic_alias = th_name(types, "AtomicAlias");
+        th_type *atomic_alias = TH_NAME(types, "AtomicAlias");
         handled = false;
         ok = ok && ir_type_define(module, atomic_alias, atomic)
             && n00bb_abi_publish_direct_layout(module, atomic_alias,
@@ -413,9 +416,9 @@ int main(void)
             && alias_layout->n_reserved == 1
             && alias_layout->reserved[0].offset == 17
             && alias_layout->reserved[0].width == 15;
-        th_type *unsigned_enum = th_name(types, "UnsignedEnum");
-        th_type *signed_enum = th_name(types, "SignedEnum");
-        th_type *wide_enum = th_name(types, "WideEnum");
+        th_type *unsigned_enum = TH_NAME(types, "UnsignedEnum");
+        th_type *signed_enum = TH_NAME(types, "SignedEnum");
+        th_type *wide_enum = TH_NAME(types, "WideEnum");
         ok = ok && n00bb_abi_publish_integer_like_layout(
                 module, unsigned_enum, &target, 2)
             && n00bb_abi_publish_integer_like_layout(
@@ -435,13 +438,13 @@ int main(void)
             && wide_layout && wide_layout->intrinsic_bits == 16
             && wide_layout->alignment_bytes == 2
             && wide_layout->occupied[0].width == 9;
-        th_type *u32 = th_name(types, "u32");
-        th_type *bool_type = th_name(types, "bool");
-        th_type *c_record = th_name(types, "CRecord");
+        th_type *u32 = TH_NAME(types, "u32");
+        th_type *bool_type = TH_NAME(types, "bool");
+        th_type *c_record = TH_NAME(types, "CRecord");
         n00bb_abi_record_member_t c_members[] = {
-            {.name = "count", .type = u32, .ordinal = 0,
+            {.name = S("count"), .type = u32, .ordinal = 0,
              .c_compatible = true},
-            {.name = "active", .type = bool_type, .ordinal = 1,
+            {.name = S("active"), .type = bool_type, .ordinal = 1,
              .c_compatible = true},
         };
         handled = false;
@@ -470,12 +473,12 @@ int main(void)
             && ir_layout_compute(module, c_record, nullptr)
             && c_descriptor->size.value == 8
             && c_descriptor->align.value == 4;
-        th_type *byte = th_name(types, "byte");
+        th_type *byte = TH_NAME(types, "byte");
         th_type *byte_array = th_array(types, byte);
         n00bb_abi_record_member_t inline_members[] = {
-            {.name = "count", .type = u32, .ordinal = 0,
+            {.name = S("count"), .type = u32, .ordinal = 0,
              .c_compatible = true},
-            {.name = "bytes", .type = byte_array, .ordinal = 1,
+            {.name = S("bytes"), .type = byte_array, .ordinal = 1,
              .c_compatible = true, .inline_element_type = byte,
              .inline_element_count = 4},
         };
@@ -483,8 +486,10 @@ int main(void)
         for (int policy = N00BB_RECORD_DEFAULT;
              ok && policy <= N00BB_RECORD_C; policy++) {
             char type_name[48];
-            snprintf(type_name, sizeof(type_name), "InlineBytes%d", policy);
-            th_type *array_record = th_name(types, type_name);
+            int type_name_bytes = snprintf(type_name, sizeof(type_name),
+                                           "InlineBytes%d", policy);
+            th_type *array_record = th_name(types, core_string_borrow(
+                type_name, (size_t)type_name_bytes));
             ok = n00bb_abi_publish_record_layout(module, array_record,
                 &target, (n00bb_record_policy_t)policy, false,
                 inline_members, 2);
@@ -502,12 +507,12 @@ int main(void)
                 && array_layout->members[1].occupied[0].width == 32;
         }
         n00bb_abi_record_member_t bool_array_member = {
-            .name = "flags", .type = th_array(types, bool_type),
+            .name = S("flags"), .type = th_array(types, bool_type),
             .inline_element_type = bool_type, .inline_element_count = 9,
             .c_compatible = true,
         };
-        th_type *packed_array = th_name(types, "PackedBoolArray");
-        th_type *c_bool_array = th_name(types, "CBoolArray");
+        th_type *packed_array = TH_NAME(types, "PackedBoolArray");
+        th_type *c_bool_array = TH_NAME(types, "CBoolArray");
         ok = ok && n00bb_abi_publish_record_layout(module, packed_array,
             &target, N00BB_RECORD_DEFAULT, false, &bool_array_member, 1)
             && n00bb_abi_publish_c_record_layout(module, c_bool_array,
@@ -522,11 +527,11 @@ int main(void)
             && c_bool_array_layout
             && c_bool_array_layout->intrinsic_bits == 72
             && c_bool_array_layout->members[0].inline_element_stride_bits == 8;
-        th_type *nested_record = th_name(types, "NestedCRecord");
+        th_type *nested_record = TH_NAME(types, "NestedCRecord");
         n00bb_abi_record_member_t nested_members[] = {
-            {.name = "tag", .type = bool_type, .ordinal = 0,
+            {.name = S("tag"), .type = bool_type, .ordinal = 0,
              .c_compatible = true},
-            {.name = "payload", .type = c_record, .ordinal = 1,
+            {.name = S("payload"), .type = c_record, .ordinal = 1,
              .c_compatible = true},
         };
         ok = ok && n00bb_abi_publish_c_record_layout(module,
@@ -545,19 +550,19 @@ int main(void)
             && nested_layout->occupied[1].width == 32
             && nested_layout->occupied[2].offset == 64
             && nested_layout->occupied[2].width == 1;
-        th_type *rejected_record = th_name(types, "RejectedCRecord");
+        th_type *rejected_record = TH_NAME(types, "RejectedCRecord");
         c_members[1].c_compatible = false;
         ok = ok && !n00bb_abi_publish_c_record_layout(module,
             rejected_record, &target, c_members,
             sizeof(c_members) / sizeof(c_members[0]));
         th_type *bits3 = th_bits(types, 3);
-        th_type *default_record = th_name(types, "DefaultRecord");
-        th_type *ordered_record = th_name(types, "OrderedRecord");
+        th_type *default_record = TH_NAME(types, "DefaultRecord");
+        th_type *ordered_record = TH_NAME(types, "OrderedRecord");
         n00bb_abi_record_member_t packed_members[] = {
-            {.name = "tag", .type = bool_type, .ordinal = 0,
+            {.name = S("tag"), .type = bool_type, .ordinal = 0,
              .packed = true},
-            {.name = "count", .type = u32, .ordinal = 1},
-            {.name = "bits", .type = bits3, .ordinal = 2,
+            {.name = S("count"), .type = u32, .ordinal = 1},
+            {.name = S("bits"), .type = bits3, .ordinal = 2,
              .packed = true},
         };
         handled = false;
@@ -602,7 +607,7 @@ int main(void)
             && ordered_layout->members[1].bit_offset == 32
             && ordered_layout->members[2].bit_offset == 64
             && ordered_descriptor && ordered_descriptor->size.value == 9;
-        th_type *empty_record = th_name(types, "EmptyRecord");
+        th_type *empty_record = TH_NAME(types, "EmptyRecord");
         ok = ok && n00bb_abi_publish_record_layout(module, empty_record,
                 &target, N00BB_RECORD_DEFAULT, false, nullptr, 0);
         const ir_final_layout_t *empty_layout = ir_layout_final(
@@ -610,7 +615,7 @@ int main(void)
         ok = ok && empty_layout && !empty_layout->intrinsic_bits
             && empty_layout->alignment_bytes == 1
             && !empty_layout->n_members;
-        th_type *aligned_empty = th_name(types, "AlignedEmpty");
+        th_type *aligned_empty = TH_NAME(types, "AlignedEmpty");
         ir_final_layout_t aligned_empty_layout = {
             .intrinsic_bits = 0, .alignment_bytes = 8,
         };
@@ -619,11 +624,11 @@ int main(void)
             && ir_layout_publish_final(module, aligned_empty,
                                        target.triple, &aligned_empty_layout);
         n00bb_abi_record_member_t zero_members[] = {
-            {.name = "flag", .type = bool_type, .ordinal = 0,
+            {.name = S("flag"), .type = bool_type, .ordinal = 0,
              .packed = true},
-            {.name = "empty", .type = aligned_empty, .ordinal = 1},
+            {.name = S("empty"), .type = aligned_empty, .ordinal = 1},
         };
-        th_type *zero_record = th_name(types, "ZeroMemberRecord");
+        th_type *zero_record = TH_NAME(types, "ZeroMemberRecord");
         ok = ok && n00bb_abi_publish_record_layout(module, zero_record,
             &target, N00BB_RECORD_ORDERED, false, zero_members, 2);
         const ir_final_layout_t *zero_layout = ir_layout_final(module,
@@ -634,13 +639,13 @@ int main(void)
             && zero_layout->n_members == 2
             && zero_layout->members[1].bit_offset == 64
             && !zero_layout->members[1].n_occupied;
-        th_type *rejected_packed_c = th_name(types, "RejectedPackedC");
+        th_type *rejected_packed_c = TH_NAME(types, "RejectedPackedC");
         packed_members[0].c_compatible = true;
         ok = ok && !n00bb_abi_publish_c_record_layout(module,
             rejected_packed_c, &target, packed_members, 3);
         ok = ok && !n00bb_abi_publish_c_record_layout(module,
-            th_name(types, "EmptyCRecord"), &target, nullptr, 0);
-        th_type *rejected_packed_atomic = th_name(types,
+            TH_NAME(types, "EmptyCRecord"), &target, nullptr, 0);
+        th_type *rejected_packed_atomic = TH_NAME(types,
                                                    "RejectedPackedAtomic");
         packed_members[0].type = atomic;
         ok = ok && !n00bb_abi_publish_record_layout(module,
@@ -651,7 +656,8 @@ int main(void)
                    th_bits(types, 129), &target, &handled) && handled;
         ir_ctx_free(context);
         if (!ok) {
-            fprintf(stderr, "scalar ABI layout failed for %s\n", triples[i]);
+            fprintf(stderr, "scalar ABI layout failed for %.*s\n",
+                    (int)triples[i].u8_bytes, triples[i].data);
             return 1;
         }
     }

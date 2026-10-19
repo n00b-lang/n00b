@@ -16,13 +16,13 @@ const char *const n00bb_system_libraries[N00BB_SYSTEM_LIBRARY_COUNT + 1] = {null
 const char *const n00bb_system_libraries[N00BB_SYSTEM_LIBRARY_COUNT + 1] = {"-lm", nullptr};
 #endif
 
-char *
+core_string_t
 n00bb_write_temporary_object(const void *bytes, size_t length)
 {
-    if (!bytes || !length) return nullptr;
+    if (!bytes || !length) return (core_string_t){};
     char path[] = "/tmp/n00bb-code-XXXXXX";
     int fd = mkstemp(path);
-    if (fd < 0) return nullptr;
+    if (fd < 0) return (core_string_t){};
     bool ok = true;
     size_t offset = 0;
     while (offset < length) {
@@ -37,32 +37,35 @@ n00bb_write_temporary_object(const void *bytes, size_t length)
     if (close(fd)) ok = false;
     if (!ok) {
         unlink(path);
-        return nullptr;
+        return (core_string_t){};
     }
-    char *result = core_strdup(path);
-    if (!result) unlink(path);
+    core_string_t result = core_string_from_raw(path, sizeof(path) - 1);
+    if (!result.data) unlink(path);
     return result;
 }
 
-char *
-n00bb_archive_path(const char *compiler_path, const char *archive_name)
+core_string_t
+n00bb_archive_path(core_string_t compiler_path, core_string_t archive_name)
 {
-    char *executable = n00bb_executable_path(compiler_path);
-    const char *slash = executable ? strrchr(executable, '/') : nullptr;
+    core_string_t executable = n00bb_executable_path(compiler_path);
+    int64_t slash = executable.data
+        ? core_string_rfind_byte(executable, '/') : -1;
     core_buffer_t archive = {0};
-    if (slash) {
-        core_buffer_printf(&archive, "%.*s/%s",
-            (int)(slash - executable), executable, archive_name);
+    if (slash >= 0) {
+        core_buffer_printf(&archive, "%.*s/%.*s",
+            (int)slash, executable.data,
+            (int)archive_name.u8_bytes, archive_name.data);
         if (access(archive.data, R_OK)) {
             core_buffer_release(&archive);
-            core_buffer_printf(&archive, "%.*s/../lib/%s",
-                (int)(slash - executable), executable, archive_name);
+            core_buffer_printf(&archive, "%.*s/../lib/%.*s",
+                (int)slash, executable.data,
+                (int)archive_name.u8_bytes, archive_name.data);
         }
     }
-    char *path = archive.data && !access(archive.data, R_OK)
-        ? core_strdup(archive.data) : nullptr;
+    core_string_t path = archive.data && !access(archive.data, R_OK)
+        ? core_string_dup(core_buffer_string(&archive)) : (core_string_t){};
     core_buffer_release(&archive);
-    core_free(executable);
+    core_free(executable.data);
     return path;
 }
 
@@ -79,9 +82,12 @@ n00bb_read_exact(int fd, void *data, size_t length)
 }
 
 bool
-n00bb_read_bitcode(const char *path, core_buffer_t *out)
+n00bb_read_bitcode(core_string_t path, core_buffer_t *out)
 {
-    int fd = open(path, O_RDONLY);
+    if (!path.data) return false;
+    char *native_path = core_string_to_cstr(path);
+    int fd = open(native_path, O_RDONLY);
+    core_free(native_path);
     if (fd < 0) return false;
     struct stat info;
     bool ok = !fstat(fd, &info) && info.st_size > 0

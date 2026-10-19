@@ -8,12 +8,12 @@ typedef struct {
     ir_ctx_t *ir_context;
 } n00bb_interface_context_t;
 
-const char *interface_package_for_module(
+core_string_t interface_package_for_module(
     const n00bb_interface_context_t *context, core_string_t module);
 const uint8_t *interface_owned_metadata(
     const n00bb_interface_context_t *context,
-    th_env_metadata_owner_t owner_kind, const char *owner_name,
-    const char *key, uint32_t version, size_t *size);
+    th_env_metadata_owner_t owner_kind, core_string_t owner_name,
+    core_string_t key, uint32_t version, size_t *size);
 bool interface_restore_package_declarations(
     const n00bb_interface_context_t *context, core_translation_unit_t *unit);
 bool finish_semantic_unit(void *context, core_translation_unit_t *unit);

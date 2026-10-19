@@ -37,10 +37,10 @@ type_index(const n00bb_abi_merged_table_t *types, uint64_t hash)
 }
 
 static bool
-same_string(n00bb_abi_string_view_t value, const char *text)
+same_string(n00bb_abi_string_view_t value, core_string_t text)
 {
-    return text && value.length == strlen(text)
-        && !memcmp(value.bytes, text, value.length);
+    return text.data && core_string_eq(core_string_borrow(
+        (const char *)value.bytes, value.length), text);
 }
 
 static bool
@@ -89,14 +89,18 @@ function_index_for_method(th_ctx *ctx,
             n00bb_abi_string_view_t name;
             if (!n00bb_abi_object_string(view, &function->name, &name))
                 return false;
-            const char *qualified_leaf = method->qualified_name
-                ? strrchr(method->qualified_name, '.') : nullptr;
-            qualified_leaf = qualified_leaf ? qualified_leaf + 1 : nullptr;
-            size_t leaf_length = qualified_leaf
-                ? strcspn(qualified_leaf, "#") : 0;
+            int64_t dot = method->qualified_name.data
+                ? core_string_rfind_byte(method->qualified_name, '.') : -1;
+            core_string_t qualified_leaf = dot >= 0
+                ? core_string_slice(method->qualified_name, (size_t)dot + 1,
+                    method->qualified_name.u8_bytes - (size_t)dot - 1)
+                : (core_string_t){};
+            int64_t hash_mark = qualified_leaf.data
+                ? core_string_find_byte(qualified_leaf, '#') : -1;
+            if (hash_mark >= 0) qualified_leaf.u8_bytes = (size_t)hash_mark;
             bool named = same_string(name, method->root_name)
-                || (qualified_leaf && name.length == leaf_length
-                    && !memcmp(name.bytes, qualified_leaf, leaf_length));
+                || (qualified_leaf.data
+                    && same_string(name, qualified_leaf));
             if (!named) continue;
             const n00b_abi_symbol_v1 *symbol = n00bb_abi_object_row(view,
                 N00B_ABI_TABLE_SYMBOL, function->symbol_index);
@@ -138,15 +142,12 @@ scope_for_type_owner(th_ctx *ctx,
                                          &module_name)
             || !n00bb_abi_object_string(view, &package->name,
                                          &package_name)) return false;
-        char *module_text = core_strndup((const char *)module_name.bytes,
-                                         module_name.length);
-        char *package_text = core_strndup((const char *)package_name.bytes,
-                                          package_name.length);
-        bool result = module_text && package_text
-            && th_ctx_set_environment_scope(ctx, module_text, package_text);
-        core_free(module_text);
-        core_free(package_text);
-        return result;
+        return th_ctx_set_environment_scope(ctx,
+            core_string_borrow(module_name.bytes
+                ? (const char *)module_name.bytes : "", module_name.length),
+            core_string_borrow(package_name.bytes
+                ? (const char *)package_name.bytes : "",
+                package_name.length));
     }
     return false;
 }
@@ -315,7 +316,8 @@ n00bb_abi_link_semantic_rows(
     core_list_push(entries, ((n00b_abi_dispatch_entry_v1){0}));
     bool valid = ctx != nullptr;
     size_t declarations = th_env_declaration_count(facts->environment);
-    const char *initial_module = "", *initial_package = "";
+    core_string_t initial_module = CORE_STRING_STATIC("");
+    core_string_t initial_package = CORE_STRING_STATIC("");
     for (size_t i = 0; i < declarations; i++) {
         th_env_declaration_view_t declaration;
         if (!th_env_declaration_at(facts->environment, i, &declaration)) {
@@ -375,7 +377,7 @@ n00bb_abi_link_semantic_rows(
         for (size_t ordinal = 0; valid && ordinal < methods; ordinal++) {
             const th_member *method = th_trait_method(trait.contract,
                                                       ordinal);
-            if (!method || !method->name || dispatch.len >= UINT32_MAX) {
+            if (!method || !method->name.data || dispatch.len >= UINT32_MAX) {
                 valid = false; break;
             }
             n00b_abi_dispatch_v1 row = {
@@ -392,7 +394,8 @@ n00bb_abi_link_semantic_rows(
                     trait.qualified_name, method->name, &chosen)
                         == TH_ENV_METHOD_FOUND;
                 if (!valid) break;
-                if (chosen.module && !strcmp(chosen.module, "builtins"))
+                if (chosen.module.data && core_string_eq(chosen.module,
+                        CORE_STRING_STATIC("builtins")))
                     continue;
                 valid = function_index_for_method(ctx, selected, plan,
                     &chosen, &function_index) && entries.len < UINT32_MAX;
@@ -420,7 +423,8 @@ n00bb_abi_link_semantic_rows(
         }
         th_env_method_t method = {0};
         th_env_method_status_t status = th_env_method_resolve(ctx, reference,
-            "Finalize", "__finalize", &method);
+            CORE_STRING_STATIC("Finalize"), CORE_STRING_STATIC("__finalize"),
+            &method);
         if (status == TH_ENV_METHOD_NOT_FOUND) continue;
         uint32_t function_index = 0;
         valid = status == TH_ENV_METHOD_FOUND

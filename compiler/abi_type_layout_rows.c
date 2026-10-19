@@ -612,11 +612,11 @@ build_member_row(n00bb_abi_type_index_t *index,
             .visibility = N00B_ABI_VISIBILITY_PRIVATE,
         };
         parse_sym_entry_t *field = owner && owner->member_scope
-            && member->name ? parse_symtab_lookup_in(owner->member_scope,
-                core_string_borrow(member->name, strlen(member->name)))
+            && member->name.data
+            ? parse_symtab_lookup_in(owner->member_scope, member->name)
             : nullptr;
         bool arm = table_kind == N00B_ABI_TABLE_ARM;
-        if (owner && member->name
+        if (owner && member->name.data
             && (!field || (arm ? (field->kind != PARSE_SYM_TAG
                                    && field->kind != PARSE_SYM_VARIABLE)
                                   : !field->is_field)
@@ -642,9 +642,8 @@ build_member_row(n00bb_abi_type_index_t *index,
                     || !n00bb_abi_type_index_find(index,
                         member->inline_element_type,
                         &row->inline_element_type_index)))
-            || (member->name && !n00bb_abi_name_pool_encode(names,
-                core_string_borrow(member->name, strlen(member->name)),
-                table_kind, row_index,
+            || (member->name.data && !n00bb_abi_name_pool_encode(names,
+                member->name, table_kind, row_index,
                 offsetof(n00b_abi_field_v1, name), &row->name))
             || !append_accesses(member->accesses, member->n_accesses,
                 final->intrinsic_bits, stream_base, packed, indexes,
@@ -735,7 +734,7 @@ n00bb_abi_type_layout_rows_build(
     n00bb_abi_type_layout_rows_t *out, uint32_t *failed_type_index)
 {
     if (failed_type_index) *failed_type_index = UINT32_MAX;
-    if (!index || !runtime || !ir_module_target(runtime) || !types
+    if (!index || !runtime || !ir_module_target(runtime).data || !types
         || !types->rows || !out
         || types->count != n00bb_abi_type_index_count(index))
         return false;
@@ -769,7 +768,7 @@ n00bb_abi_type_layout_rows_build(
             runtime, type, ir_module_target(runtime));
         size_t named_arguments = 0;
         bool specialization = th_named_info(th_resolve(type), nullptr,
-            nullptr, nullptr, &named_arguments) && named_arguments != 0;
+            nullptr, &named_arguments) && named_arguments != 0;
         if (!include_external_definitions
             && (!types->owners || !types->owners[i])
             && definition_owner && definition_owner != runtime

@@ -40,14 +40,12 @@ static bool match_type(th_ctx *types, th_type *pattern, th_type *actual,
     if (kind != th_kind_of(actual)) return false;
     switch (kind) {
     case TH_NAMED: {
-        const char *left = nullptr, *right = nullptr;
-        size_t left_len = 0, right_len = 0, left_count = 0, right_count = 0;
+        core_string_t left = {}, right = {};
+        size_t left_count = 0, right_count = 0;
         bool left_variant = false, right_variant = false;
-        if (!th_named_info(pattern, &left, &left_len, &left_variant,
-                &left_count)
-            || !th_named_info(actual, &right, &right_len, &right_variant,
-                &right_count)
-            || left_len != right_len || memcmp(left, right, left_len)
+        if (!th_named_info(pattern, &left, &left_variant, &left_count)
+            || !th_named_info(actual, &right, &right_variant, &right_count)
+            || !core_string_eq(left, right)
             || left_variant != right_variant || left_count != right_count)
             return false;
         for (size_t i = 0; i < left_count; i++) {
@@ -66,8 +64,7 @@ static bool match_type(th_ctx *types, th_type *pattern, th_type *actual,
                 if (a->s != b->s) return false;
                 break;
             case TH_ARG_STR:
-                if (a->str.n != b->str.n
-                    || memcmp(a->str.p, b->str.p, a->str.n)) return false;
+                if (!core_string_eq(a->str, b->str)) return false;
                 break;
             }
         }
@@ -115,7 +112,7 @@ static bool match_type(th_ctx *types, th_type *pattern, th_type *actual,
         for (size_t i = 0; i < th_func_nkw(pattern); i++) {
             const th_kwparam *a = th_func_kw(pattern, i);
             const th_kwparam *b = th_func_kw(actual, i);
-            if (!a || !b || strcmp(a->name, b->name)
+            if (!a || !b || !core_string_eq(a->name, b->name)
                 || a->mode != b->mode
                 || !match_type(types, a->type, b->type, bindings))
                 return false;
@@ -137,7 +134,7 @@ static bool match_type(th_ctx *types, th_type *pattern, th_type *actual,
         for (size_t i = 0; i < th_record_len(pattern); i++) {
             const th_member *a = th_record_member(pattern, i);
             const th_member *b = th_record_member(actual, i);
-            if (!a || !b || strcmp(a->name, b->name)
+            if (!a || !b || !core_string_eq(a->name, b->name)
                 || !match_type(types, a->type, b->type, bindings))
                 return false;
         }
@@ -234,22 +231,26 @@ instantiate(ir_ctx_t *context, ir_func_t *target, th_type *actual,
             core_list_t(type_binding_t) *bindings, th_ctx *types,
             core_buffer_t *failure)
 {
-    const char *owner = ir_module_name(target->owner);
+    core_string_t owner = ir_module_name(target->owner);
     core_buffer_t identity = {0};
-    core_buffer_printf(&identity, "%s.%s:%016" PRIx64, owner, target->name,
+    core_buffer_printf(&identity, "%.*s.%.*s:%016" PRIx64,
+                       (int)owner.u8_bytes, owner.data,
+                       (int)target->name.u8_bytes, target->name.data,
                        th_hash(types, actual));
     core_buffer_t name = {0};
     if (identity.data)
-        core_buffer_printf(&name, "%s$spec$%016" PRIx64, owner,
+        core_buffer_printf(&name, "%.*s$spec$%016" PRIx64,
+            (int)owner.u8_bytes, owner.data,
             core_xxh3_64bits_raw(identity.data, identity.byte_len));
     core_buffer_release(&identity);
-    ir_module_t *module = name.data ? ir_module_new(context, name.data,
+    ir_module_t *module = name.data ? ir_module_new(context,
+        core_buffer_string(&name),
         ir_module_profile(target->owner), ir_module_target(target->owner))
         : nullptr;
     core_buffer_release(&name);
     const th_type **from = core_alloc_array(const th_type *, bindings->len);
     th_type **to = core_alloc_array(th_type *, bindings->len);
-    const char *clone_failure = nullptr;
+    core_string_t clone_failure = {};
     ir_func_t *copy = nullptr;
     if (module && from && to) {
         for (size_t n = 0; n < bindings->len; n++) {
@@ -261,11 +262,17 @@ instantiate(ir_ctx_t *context, ir_func_t *target, th_type *actual,
     }
     core_free(from);
     core_free(to);
-    if (!copy && failure)
+    if (!copy && failure) {
+        core_string_t printed = th_print(types, actual);
+        core_string_t reason = clone_failure.data ? clone_failure
+            : CORE_STRING_STATIC("allocation failed");
         core_buffer_printf(failure,
-            "could not clone %s.%s for concrete signature %s: %s",
-            owner, target->name, th_print(types, actual), clone_failure
-                ? clone_failure : "allocation failed");
+            "could not clone %.*s.%.*s for concrete signature %.*s: %.*s",
+            (int)owner.u8_bytes, owner.data,
+            (int)target->name.u8_bytes, target->name.data,
+            (int)printed.u8_bytes, printed.data,
+            (int)reason.u8_bytes, reason.data);
+    }
     return copy;
 }
 
@@ -273,7 +280,8 @@ static ir_func_t *
 function_body(ir_func_t *function)
 {
     if (!function || function->n_blocks) return function;
-    ir_annot_t *body = ir_annot_get(&function->annots, "n00bb.cached_body");
+    ir_annot_t *body = ir_annot_get(&function->annots,
+        CORE_STRING_STATIC("n00bb.cached_body"));
     return body && body->kind == IR_ANNOT_VALUE && body->v
         && body->v->kind == IR_VAL_FUNC ? body->v->owner : function;
 }
@@ -393,10 +401,13 @@ bool n00bb_specialize_calls(ir_ctx_t *context,
                     ((n00bb_specialization_request_t){caller->owner, copy}));
                 ir_value_t *bound = ir_func_address(copy->owner, copy);
                 valid = bound != nullptr;
-                if (!valid && failure)
+                if (!valid && failure) {
+                    core_string_t module = ir_module_name(copy->owner);
                     core_buffer_printf(failure,
-                        "could not bind specialized function %s.%s",
-                        ir_module_name(copy->owner), copy->name);
+                        "could not bind specialized function %.*s.%.*s",
+                        (int)module.u8_bytes, module.data,
+                        (int)copy->name.u8_bytes, copy->name.data);
+                }
                 if (valid) call->operands[0].value = bound;
             }
         }

@@ -18,7 +18,7 @@ typedef struct {
     n00b_abi_type_argument_v1 *arguments;
     size_t argument_count;
     uint32_t failed_type_index;
-    const char *failed_reason;
+    core_string_t failed_reason;
 } n00bb_abi_type_identity_rows_t;
 
 typedef struct {
@@ -46,17 +46,17 @@ void n00bb_abi_type_identity_rows_release(
 bool n00bb_abi_type_variables_bind(
     n00bb_abi_type_index_t *index, th_ctx *types,
     const n00bb_abi_decl_index_t *declarations,
-    n00bb_abi_type_identity_rows_t *rows, const char **reason);
+    n00bb_abi_type_identity_rows_t *rows, core_string_t *reason);
 
 bool n00bb_abi_type_variables_bind_import(
     n00bb_abi_type_index_t *index, th_ctx *types,
     const parse_sym_entry_t *symbol, th_type *signature,
     uint32_t requirement_index, n00bb_abi_type_identity_rows_t *rows,
-    const char **reason);
+    core_string_t *reason);
 
 /* Run after both local and imported identities have been assigned. */
 bool n00bb_abi_type_variables_validate(
-    const n00bb_abi_type_identity_rows_t *rows, const char **reason);
+    const n00bb_abi_type_identity_rows_t *rows, core_string_t *reason);
 
 /* Adds TYPE component ranges to the shared U32 stream at stream_base. */
 bool n00bb_abi_type_components_build(

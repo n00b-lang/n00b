@@ -24,17 +24,17 @@ n00bb_abi_object_open(const core_target_desc_t *target,
     n00bb_abi_image_key_t key;
     if (!out || !object || !object_bytes
         || !n00bb_abi_image_key_for_target(target, &key)) return false;
-    const char *segment = nullptr, *name = nullptr;
+    core_string_t segment = {}, name = {};
     switch (target->object_format) {
     case CORE_TARGET_OBJECT_ELF:
-        name = ".data.rel.ro.n00b_meta";
+        name = CORE_STRING_STATIC(".data.rel.ro.n00b_meta");
         break;
     case CORE_TARGET_OBJECT_MACH_O:
-        segment = "__DATA_CONST";
-        name = "__n00b_meta";
+        segment = CORE_STRING_STATIC("__DATA_CONST");
+        name = CORE_STRING_STATIC("__n00b_meta");
         break;
     case CORE_TARGET_OBJECT_COFF:
-        name = ".n00b$M";
+        name = CORE_STRING_STATIC(".n00b$M");
         break;
     default:
         return false;
@@ -187,11 +187,13 @@ n00bb_abi_object_string(const n00bb_abi_object_view_t *view,
     if (header.tag != N00BB_ABI_STRING_LONG
         && header.tag != N00BB_ABI_STRING_SPAN) return false;
 
-    const char *segment = view->format == CORE_TARGET_OBJECT_MACH_O
-        ? "__TEXT" : nullptr;
-    const char *name = view->format == CORE_TARGET_OBJECT_MACH_O
-        ? "__n00b_strings" : view->format == CORE_TARGET_OBJECT_COFF
-            ? ".rdata$S" : ".rodata.n00b_strings";
+    core_string_t segment = view->format == CORE_TARGET_OBJECT_MACH_O
+        ? CORE_STRING_STATIC("__TEXT") : (core_string_t){};
+    core_string_t name = view->format == CORE_TARGET_OBJECT_MACH_O
+        ? CORE_STRING_STATIC("__n00b_strings")
+        : view->format == CORE_TARGET_OBJECT_COFF
+            ? CORE_STRING_STATIC(".rdata$S")
+            : CORE_STRING_STATIC(".rodata.n00b_strings");
     bool found = false;
     uint64_t pool_offset = 0;
     core_object_section_t pool = {0};
@@ -225,10 +227,11 @@ n00bb_abi_object_string(const n00bb_abi_object_view_t *view,
                 return false;
             pool_offset = relocation.addend_bits;
         }
-        if (pool.name_length != strlen(name)
-            || memcmp(pool.name, name, pool.name_length)
-            || (segment && (pool.segment_length != strlen(segment)
-                || memcmp(pool.segment, segment, pool.segment_length))))
+        if (!core_string_eq(core_string_borrow((const char *)pool.name,
+                                               pool.name_length), name)
+            || (segment.data && !core_string_eq(core_string_borrow(
+                    (const char *)pool.segment, pool.segment_length),
+                    segment)))
             return false;
         found = true;
     }
@@ -1618,9 +1621,9 @@ declared_function_constraints_valid(
 static bool
 compatible_type_identity(const abi_link_key_t *first,
                          const abi_link_key_t *candidate,
-                         const char **reason)
+                         core_string_t *reason)
 {
-#define TYPE_MISMATCH(message) do { if (reason) *reason = message; return false; } while (0)
+#define TYPE_MISMATCH(message) do { if (reason) *reason = CORE_STRING_STATIC(message); return false; } while (0)
     const n00b_abi_type_v1 *a = first->row, *b = candidate->row;
     n00bb_abi_string_view_t a_name, b_name;
     bool a_import = type_is_import_reference(a);
@@ -1810,11 +1813,12 @@ n00bb_abi_index_plan_build_detailed(
     if (failure) *failure = (n00bb_abi_index_plan_failure_t){0};
     if (!selected || !selected->views || !selected->count) return nullptr;
     if (!declared_function_constraints_valid(selected)) {
-        if (failure) failure->reason = "invalid declared function constraints";
+        if (failure) failure->reason =
+            CORE_STRING_STATIC("invalid declared function constraints");
         return nullptr;
     }
     if (!selected_call_shapes_valid(selected)) {
-        if (failure) failure->reason = "invalid call shapes";
+        if (failure) failure->reason = CORE_STRING_STATIC("invalid call shapes");
         return nullptr;
     }
     size_t schema_count = 0;
@@ -1832,7 +1836,8 @@ n00bb_abi_index_plan_build_detailed(
         const n00bb_abi_object_view_t *view = &selected->views[i];
         if (!view->directory) {
             if (failure) *failure = (n00bb_abi_index_plan_failure_t){
-                .input = i, .reason = "missing ABI directory",
+                .input = i,
+                .reason = CORE_STRING_STATIC("missing ABI directory"),
             };
             return nullptr;
         }
@@ -1867,7 +1872,8 @@ n00bb_abi_index_plan_build_detailed(
                 && !directory->record_count)) {
                 if (failure) *failure = (n00bb_abi_index_plan_failure_t){
                     .input = input, .table_kind = kind,
-                    .reason = "invalid table kind or row count",
+                    .reason = CORE_STRING_STATIC(
+                        "invalid table kind or row count"),
                 };
                 valid = false;
                 break;
@@ -1906,7 +1912,7 @@ n00bb_abi_index_plan_build_detailed(
                 if (!valid && failure)
                     *failure = (n00bb_abi_index_plan_failure_t){
                         .input = input, .table_kind = kind,
-                        .reason = "invalid reserved row",
+                        .reason = CORE_STRING_STATIC("invalid reserved row"),
                     };
                 first = 1;
             }
@@ -1925,7 +1931,7 @@ n00bb_abi_index_plan_build_detailed(
                 const core_indexed_entry_t *entry = key_valid
                     ? core_indexed_table_intern(tables[kind], key, key,
                         &inserted) : nullptr;
-                const char *identity_reason = nullptr;
+                core_string_t identity_reason = {};
                 bool compatible = entry && (inserted
                     || kind != N00B_ABI_TABLE_TYPE
                     || compatible_type_identity(entry->value, key,
@@ -1942,11 +1948,14 @@ n00bb_abi_index_plan_build_detailed(
                         .prior_row_index = entry && !inserted
                             ? ((const abi_link_key_t *)entry->value)->local_index
                             : 0,
-                        .reason = !key_valid ? "invalid row identity"
-                            : !entry ? "could not intern row identity"
-                            : !compatible ? (identity_reason
-                                ? identity_reason : "conflicting type identity")
-                            : "could not remap row",
+                        .reason = !key_valid
+                            ? CORE_STRING_STATIC("invalid row identity")
+                            : !entry
+                            ? CORE_STRING_STATIC("could not intern row identity")
+                            : !compatible ? (identity_reason.data
+                                ? identity_reason
+                                : CORE_STRING_STATIC("conflicting type identity"))
+                            : CORE_STRING_STATIC("could not remap row"),
                     };
                 if (!valid && failure && kind == N00B_ABI_TABLE_LAYOUT) {
                     const n00b_abi_layout_v1 *layout = row;
@@ -3272,8 +3281,8 @@ n00bb_abi_native_sections_release(n00bb_abi_native_sections_t *sections)
 {
     if (!sections) return;
     for (size_t i = 0; i < sections->count; i++) {
-        core_free((void *)sections->sections[i].name);
-        core_free((void *)sections->sections[i].segment);
+        core_free(sections->sections[i].name.data);
+        core_free(sections->sections[i].segment.data);
         core_free((void *)sections->sections[i].bytes);
     }
     core_free(sections->sections);
@@ -3283,9 +3292,10 @@ n00bb_abi_native_sections_release(n00bb_abi_native_sections_t *sections)
 }
 
 static bool
-same_native_name(const char *left, const char *right)
+same_native_name(core_string_t left, core_string_t right)
 {
-    return left && right ? !strcmp(left, right) : left == right;
+    return left.data && right.data ? core_string_eq(left, right)
+                                   : left.data == right.data;
 }
 
 static bool
@@ -3328,8 +3338,8 @@ place_native_section(n00bb_abi_native_sections_t *built,
         merged->size = offset + piece.size;
         if (piece.alignment > merged->alignment)
             merged->alignment = piece.alignment;
-        core_free((void *)piece.name);
-        core_free((void *)piece.segment);
+        core_free(piece.name.data);
+        core_free(piece.segment.data);
         core_free((void *)piece.bytes);
     }
     if (section > UINT32_MAX) return false;
@@ -3341,14 +3351,11 @@ place_native_section(n00bb_abi_native_sections_t *built,
     return true;
 }
 
-static char *
+static core_string_t
 copy_native_name(const uint8_t *data, size_t length)
 {
-    if (!data || !length || length == SIZE_MAX) return nullptr;
-    char *copy = core_alloc_size(1, length + 1);
-    memcpy(copy, data, length);
-    copy[length] = 0;
-    return copy;
+    if (!data || !length || length >= INT64_MAX) return (core_string_t){};
+    return core_string_from_raw((const char *)data, (int64_t)length);
 }
 
 bool
@@ -3395,10 +3402,11 @@ n00bb_abi_collect_native_sections(
                 && source.alignment <= UINT32_MAX
                 && (source.alignment & (source.alignment - 1)) == 0;
             if (!valid) break;
-            char *name = copy_native_name(source.name, source.name_length);
-            char *segment = source.segment_length
+            core_string_t name = copy_native_name(source.name,
+                                                  source.name_length);
+            core_string_t segment = source.segment_length
                 ? copy_native_name(source.segment, source.segment_length)
-                : nullptr;
+                : (core_string_t){};
             uint8_t *bytes = source.size
                 ? core_alloc_size(1, source.size) : nullptr;
             if (source.size) memcpy(bytes, source.bytes, source.size);
@@ -3407,11 +3415,13 @@ n00bb_abi_collect_native_sections(
                     && !memcmp(source.name, ".tls$", 5)
                 : (source.flags & UINT64_C(0x400)) != 0;
             bool writable = mach
-                ? strcmp(segment, "__TEXT")
-                    && strcmp(segment, "__DATA_CONST")
+                ? !core_string_eq(segment, CORE_STRING_STATIC("__TEXT"))
+                    && !core_string_eq(segment,
+                                       CORE_STRING_STATIC("__DATA_CONST"))
                 : coff ? (source.flags & UINT64_C(0x80000000)) != 0
                 : (source.flags & UINT64_C(1)) != 0;
-            bool executable = mach ? !strcmp(segment, "__TEXT")
+            bool executable = mach
+                ? core_string_eq(segment, CORE_STRING_STATIC("__TEXT"))
                 : coff ? (source.flags & UINT64_C(0x20000000)) != 0
                 : (source.flags & UINT64_C(4)) != 0;
             core_object_emit_section_t piece = {
@@ -3423,7 +3433,7 @@ n00bb_abi_collect_native_sections(
                 .is_thread_local_descriptor = mach
                     && (source.flags & 0xff) == 0x13,
             };
-            valid = name && (!mach || segment)
+            valid = name.data && (!mach || segment.data)
                 && place_native_section(&built, piece, input, native);
         }
     }
@@ -3451,7 +3461,7 @@ n00bb_abi_native_relocations_release(
 {
     if (!relocations) return;
     for (size_t i = 0; i < relocations->symbol_count; i++)
-        core_free((void *)relocations->symbols[i].name);
+        core_free(relocations->symbols[i].name.data);
     core_free(relocations->symbols);
     core_free(relocations->relocations);
     *relocations = (n00bb_abi_native_relocations_t){0};
@@ -3617,8 +3627,8 @@ n00bb_abi_collect_native_relocations(
                         valid = symbol.section_index || symbol.exported;
                     }
                 }
-                if (!valid || !symbol.name) {
-                    core_free((void *)symbol.name);
+                if (!valid || !symbol.name.data) {
+                    core_free(symbol.name.data);
                     break;
                 }
                 symbol_index = (uint32_t)built.symbol_count;
@@ -3626,7 +3636,7 @@ n00bb_abi_collect_native_relocations(
                 entry = core_indexed_table_intern(seen, &keys[symbol_index],
                     &built.symbols[symbol_index], nullptr);
                 if (!entry || entry->index != symbol_index) {
-                    core_free((void *)symbol.name);
+                    core_free(symbol.name.data);
                     valid = false;
                     break;
                 }
@@ -3714,11 +3724,13 @@ n00bb_abi_rebase_native_references(
             || table->record_count > SIZE_MAX - capacity) {
             if (failure) *failure = (n00bb_abi_native_rebase_failure_t){
                 .table_kind = table->kind,
-                .reason = !table->records ? "missing merged row bytes"
-                    : !table->origins ? "missing merged row origins"
+                .reason = !table->records
+                    ? CORE_STRING_STATIC("missing merged row bytes")
+                    : !table->origins
+                    ? CORE_STRING_STATIC("missing merged row origins")
                     : table->record_bytes != row_bytes
-                        ? "merged row width mismatch"
-                        : "merged row count overflow",
+                        ? CORE_STRING_STATIC("merged row width mismatch")
+                        : CORE_STRING_STATIC("merged row count overflow"),
             };
             return false;
         }
@@ -3743,15 +3755,17 @@ n00bb_abi_rebase_native_references(
             uint32_t local_section = *rebased_section(table->kind, row);
             const n00bb_abi_native_section_map_t *match = nullptr;
             valid = origin->present && local_section != 0;
-            const char *reason = valid ? "no matching native section"
-                : "missing row origin or local section";
+            core_string_t reason = valid
+                ? CORE_STRING_STATIC("no matching native section")
+                : CORE_STRING_STATIC("missing row origin or local section");
             for (size_t i = 0; valid && i < map_count; i++) {
                 if (maps[i].input != origin->input
                     || maps[i].local_section_index != local_section)
                     continue;
                 if (match) {
                     valid = false;
-                    reason = "multiple native section matches";
+                    reason = CORE_STRING_STATIC(
+                        "multiple native section matches");
                 }
                 else match = &maps[i];
             }
@@ -3764,10 +3778,12 @@ n00bb_abi_rebase_native_references(
                 const n00bb_abi_object_view_t *view =
                     &string_storage->selected->views[origin->input];
                 core_object_section_t pool_section;
-                const char *pool_name = view->format
-                    == CORE_TARGET_OBJECT_MACH_O ? "__n00b_strings"
+                core_string_t pool_name = view->format
+                    == CORE_TARGET_OBJECT_MACH_O
+                    ? CORE_STRING_STATIC("__n00b_strings")
                     : view->format == CORE_TARGET_OBJECT_COFF
-                        ? ".rdata$S" : ".rodata.n00b_strings";
+                        ? CORE_STRING_STATIC(".rdata$S")
+                        : CORE_STRING_STATIC(".rodata.n00b_strings");
                 valid = !storage->symbol_index && !storage->type_index
                     && storage->segment_kind == N00B_ABI_STORAGE_READ_ONLY
                     && !storage->instance_shape_index
@@ -3775,7 +3791,7 @@ n00bb_abi_rebase_native_references(
                     && core_object_section_find(view->object,
                         view->object_bytes, view->format,
                         view->format == CORE_TARGET_OBJECT_MACH_O
-                            ? "__TEXT" : nullptr,
+                            ? CORE_STRING_STATIC("__TEXT") : (core_string_t){},
                         pool_name, &pool_section)
                     && pool_section.native_index == local_section
                     && storage->byte_offset <= pool_section.size
@@ -3804,7 +3820,8 @@ n00bb_abi_rebase_native_references(
                         };
                         continue;
                     }
-                    reason = "string storage has no merged pool entry";
+                    reason = CORE_STRING_STATIC(
+                        "string storage has no merged pool entry");
                 }
             }
             valid = valid && match && match->final_section_index;
@@ -3842,7 +3859,7 @@ n00bb_abi_rebase_native_references(
                 .row_index = row_index,
                 .input = origin->input,
                 .local_section = local_section,
-                .reason = "native section offset overflow",
+                .reason = CORE_STRING_STATIC("native section offset overflow"),
             };
         }
     }
@@ -3874,7 +3891,7 @@ n00bb_abi_add_native_bindings(
         || (sections->map_count && (!sections->sections || !sections->maps)))
         return false;
     for (size_t i = 0; i < symbols->symbol_count; i++)
-        if (!symbols->symbols[i].name) return false;
+        if (!symbols->symbols[i].name.data) return false;
     const n00bb_abi_merged_table_t *table = n00bb_abi_merged_table(
         merged, N00B_ABI_TABLE_NATIVE_BINDING);
     if (!table || table->record_bytes != sizeof(n00b_abi_native_binding_v1)
@@ -3931,8 +3948,8 @@ n00bb_abi_add_native_bindings(
         }
         bool found = false;
         for (size_t j = 0; j < count; j++) {
-            if (strlen(updated[j].name) != name.length
-                || memcmp(updated[j].name, name.bytes, name.length))
+            if (!core_string_eq(updated[j].name, core_string_borrow(
+                    (const char *)name.bytes, name.length)))
                 continue;
             if (updated[j].section_index
                 && (updated[j].section_index != ordinal
@@ -3956,7 +3973,7 @@ n00bb_abi_add_native_bindings(
     }
     if (!valid) {
         for (size_t i = symbols->symbol_count; i < count; i++)
-            core_free((void *)updated[i].name);
+            core_free(updated[i].name.data);
         core_free(updated);
         return false;
     }

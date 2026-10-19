@@ -4,24 +4,26 @@
 #include "abi_type_index.h"
 #include "ir/typelang.h"
 
+#define S(x) CORE_STRING_STATIC(x)
+
 int
 main(void)
 {
     ir_ctx_t *context = ir_ctx_new();
     assert(context);
-    const ir_profile_t profile = {.name = "n00b"};
-    ir_module_t *runtime = ir_module_new(context, "example", &profile,
-                                          "x86_64-linux");
-    ir_module_t *comptime = ir_module_new(context, "example$comptime",
-                                           &profile, "x86_64-linux");
+    const ir_profile_t profile = {.name = S("n00b")};
+    ir_module_t *runtime = ir_module_new(context, S("example"), &profile,
+                                          S("x86_64-linux"));
+    ir_module_t *comptime = ir_module_new(context, S("example$comptime"),
+                                           &profile, S("x86_64-linux"));
     assert(runtime && comptime);
     th_ctx *types = ir_ctx_types(context);
-    th_type *nil = th_name(types, "nil");
-    th_type *integer = th_name(types, "int");
-    th_type *boolean = th_name(types, "bool");
-    th_type *node = th_name(types, "example.Node");
+    th_type *nil = th_name(types, S("nil"));
+    th_type *integer = th_name(types, S("int"));
+    th_type *boolean = th_name(types, S("bool"));
+    th_type *node = th_name(types, S("example.Node"));
     th_type *node_ref = th_ind(types, 0, node);
-    th_member member = {.name = "next", .type = node_ref};
+    th_member member = {.name = S("next"), .type = node_ref};
     th_type *record = th_record(types, &member, 1);
     assert(nil && integer && boolean && node_ref && record);
     assert(ir_type_define(runtime, node, record));
@@ -46,8 +48,8 @@ main(void)
     assert(n00bb_abi_type_index_add(index, node, &node_index));
     assert(n00bb_abi_type_index_count(index) == recursive_count);
 
-    th_type *first_var = th_var_named(types, "value");
-    th_type *second_var = th_var_named(types, "value");
+    th_type *first_var = th_var_named(types, S("value"));
+    th_type *second_var = th_var_named(types, S("value"));
     assert(first_var && second_var);
     th_type *choices[] = {integer, boolean};
     th_constraint one_of = {
@@ -96,10 +98,11 @@ main(void)
         CORE_STRING_STATIC(""), CORE_STRING_STATIC("generated"),
         PARSE_SYM_VARIABLE, &declaration);
     assert(declared && unused_builtin && module_alias && synthetic);
-    th_type *string = th_name(types, "string");
-    th_type *unused = th_name(types, "only_unused_builtin");
-    th_type *module_placeholder = th_var_named(types, "module_placeholder");
-    th_type *synthetic_type = th_name(types, "only_synthetic");
+    th_type *string = th_name(types, S("string"));
+    th_type *unused = th_name(types, S("only_unused_builtin"));
+    th_type *module_placeholder = th_var_named(types,
+                                               S("module_placeholder"));
+    th_type *synthetic_type = th_name(types, S("only_synthetic"));
     declared->type = string;
     unused_builtin->type = unused;
     module_alias->type = module_placeholder;

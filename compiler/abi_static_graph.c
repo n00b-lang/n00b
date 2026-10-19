@@ -19,19 +19,20 @@ edge_order(const void *left, const void *right)
     return 0;
 }
 
-static const char *
-native_symbol_name(const core_target_desc_t *target, const char *name,
+static core_string_t
+native_symbol_name(const core_target_desc_t *target, core_string_t name,
                    char **owned)
 {
     if (target->object_format != CORE_TARGET_OBJECT_MACH_O) return name;
-    size_t length = strlen(name);
-    if (length > SIZE_MAX - 2) return nullptr;
+    size_t length = name.u8_bytes;
+    if (length > SIZE_MAX - 2) return (core_string_t){};
     char *prefixed = core_alloc_size(1, length + 2);
-    if (!prefixed) return nullptr;
+    if (!prefixed) return (core_string_t){};
     prefixed[0] = '_';
-    memcpy(prefixed + 1, name, length + 1);
+    if (length) memcpy(prefixed + 1, name.data, length);
+    prefixed[length + 1] = 0;
     *owned = prefixed;
-    return prefixed;
+    return (core_string_t){.data = prefixed, .u8_bytes = length + 1};
 }
 
 bool
@@ -44,18 +45,18 @@ n00bb_static_graph_emit(const core_target_desc_t *target,
         || !object || !object_size || node_count > UINT32_MAX)
         return false;
 
-    const char *section_name = nullptr;
-    const char *segment = nullptr;
+    core_string_t section_name = {};
+    core_string_t segment = {};
     switch (target->object_format) {
     case CORE_TARGET_OBJECT_ELF:
-        section_name = ".data.rel.ro.n00b_lit";
+        section_name = CORE_STRING_STATIC(".data.rel.ro.n00b_lit");
         break;
     case CORE_TARGET_OBJECT_MACH_O:
-        section_name = "__n00b_lits";
-        segment = "__DATA_CONST";
+        section_name = CORE_STRING_STATIC("__n00b_lits");
+        segment = CORE_STRING_STATIC("__DATA_CONST");
         break;
     case CORE_TARGET_OBJECT_COFF:
-        section_name = ".rdata$n00b";
+        section_name = CORE_STRING_STATIC(".rdata$n00b");
         break;
     default:
         return false;
@@ -64,12 +65,11 @@ n00bb_static_graph_emit(const core_target_desc_t *target,
     size_t *offsets = core_alloc_array(size_t, node_count);
     size_t exported_count = 0;
     for (size_t i = 0; i < node_count; i++) {
-        size_t primary = nodes[i].symbol != nullptr;
+        size_t primary = nodes[i].symbol.data != nullptr;
         if (exported_count > SIZE_MAX - primary
             || nodes[i].alias_count > SIZE_MAX - exported_count - primary)
             return false;
-        exported_count += nodes[i].alias_count
-            + (nodes[i].symbol != nullptr);
+        exported_count += nodes[i].alias_count + primary;
     }
     if (exported_count == SIZE_MAX) return false;
     core_object_emit_symbol_t *symbols = core_alloc_array(
@@ -92,7 +92,7 @@ n00bb_static_graph_emit(const core_target_desc_t *target,
     uint32_t section_alignment = 1;
     size_t symbol_count = 1;
     if (valid) symbols[0] = (core_object_emit_symbol_t){
-        .name = "__n00bb_graph_data", .section_index = 1,
+        .name = CORE_STRING_STATIC("__n00bb_graph_data"), .section_index = 1,
     };
     for (size_t i = 0; valid && i < node_count; i++) {
         const n00bb_static_graph_node_t *node = &nodes[i];
@@ -111,10 +111,10 @@ n00bb_static_graph_emit(const core_target_desc_t *target,
         offsets[i] = start;
         total = start + node->size;
         if (alignment > section_alignment) section_alignment = alignment;
-        if (node->symbol) {
-            const char *name = native_symbol_name(target, node->symbol,
+        if (node->symbol.data) {
+            core_string_t name = native_symbol_name(target, node->symbol,
                 &owned_names[symbol_count - 1]);
-            if (!name) { valid = false; break; }
+            if (!name.data) { valid = false; break; }
             symbols[symbol_count++] = (core_object_emit_symbol_t){
                 .name = name,
                 .section_index = 1,
@@ -123,13 +123,13 @@ n00bb_static_graph_emit(const core_target_desc_t *target,
             };
         }
         for (size_t a = 0; a < node->alias_count; a++) {
-            if (!node->aliases || !node->aliases[a]) {
+            if (!node->aliases || !node->aliases[a].data) {
                 valid = false;
                 break;
             }
-            const char *name = native_symbol_name(target, node->aliases[a],
+            core_string_t name = native_symbol_name(target, node->aliases[a],
                 &owned_names[symbol_count - 1]);
-            if (!name) { valid = false; break; }
+            if (!name.data) { valid = false; break; }
             symbols[symbol_count++] = (core_object_emit_symbol_t){
                 .name = name,
                 .section_index = 1,

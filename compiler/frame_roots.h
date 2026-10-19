@@ -184,11 +184,13 @@ n00bb_frame_member(void *opaque, n00bb_frame_root_kind_t kind, size_t index,
     if (!type) return false;
     int length;
     if (index == 0) {
-        const char *module = ir_module_name(context->function->owner);
-        const char *function = context->function->name;
-        if (!module || !function || !context->function->type) return false;
-        uint64_t module_hash = core_hash_raw(module, strlen(module));
-        uint64_t function_hash = core_hash_raw(function, strlen(function));
+        core_string_t module = ir_module_name(context->function->owner);
+        core_string_t function = context->function->name;
+        if (!module.data || !function.data || !context->function->type)
+            return false;
+        uint64_t module_hash = core_hash_raw(module.data, module.u8_bytes);
+        uint64_t function_hash = core_hash_raw(function.data,
+                                               function.u8_bytes);
         uint64_t signature_hash = th_hash(ir_module_types(
             context->function->owner), context->function->type);
         length = snprintf(context->names[index], 96,
@@ -200,12 +202,14 @@ n00bb_frame_member(void *opaque, n00bb_frame_root_kind_t kind, size_t index,
     if (length < 0 || length >= 96)
         return false;
     context->members[index] = (th_member){
-        .name = context->names[index],
+        .name = core_string_borrow(context->names[index], (size_t)length),
         .type = n00bb_frame_native_pointer(context->function->owner, type)
-            ? th_name(ir_module_types(context->function->owner), "u64")
+            ? th_name(ir_module_types(context->function->owner),
+                      CORE_STRING_STATIC("u64"))
             : th_kind_of(th_resolve(type)) == TH_VAR
                 || th_kind_of(th_resolve(type)) == TH_TRAIT
-                ? th_name(ir_module_types(context->function->owner), "Any")
+                ? th_name(ir_module_types(context->function->owner),
+                          CORE_STRING_STATIC("Any"))
                 : type,
     };
     return context->members[index].type != nullptr;

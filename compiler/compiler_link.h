@@ -22,13 +22,13 @@ typedef struct {
 bool append_u32_le(core_buffer_t *buffer, uint32_t value);
 uint32_t read_u32_le(const uint8_t *data);
 bool function_interface_parameter(parse_sym_entry_t *symbol, size_t target,
-                                  const char **name, size_t *name_size,
+                                  core_string_t *name,
                                   uint8_t *flags, uint8_t *mode);
 size_t function_interface_parameter_count(parse_sym_entry_t *symbol);
 bool function_interface_parameter_named(parse_sym_entry_t *symbol,
                                         core_string_t target, size_t *index);
 bool context_interface_parameter(parse_sym_entry_t *symbol, size_t target,
-                                 const char **name, size_t *name_size,
+                                 core_string_t *name,
                                  uint8_t *flags, uint8_t *mode);
 size_t context_interface_parameter_count(parse_sym_entry_t *symbol);
 bool context_interface_parameter_named(parse_sym_entry_t *symbol,
@@ -146,12 +146,12 @@ core_link_declaration_t *linked_method_declaration(core_link_unit_t *link,
     const th_env_method_t *method);
 core_link_declaration_t *register_builtin_method_declaration(
     core_link_unit_t *link, n00bb_link_analysis_t *analysis,
-    core_translation_unit_t *unit, const char *trait_name,
+    core_translation_unit_t *unit, core_string_t trait_name,
     const th_env_method_t *method);
-bool has_trait_constraint(th_type *receiver, const char *trait_name);
+bool has_trait_constraint(th_type *receiver, core_string_t trait_name);
 bool n00bb_dispatch_fingerprint(th_ctx *types, const th_env *environment,
-                                const char *trait_name,
-                                const char *method_name, uint64_t *out);
+                                core_string_t trait_name,
+                                core_string_t method_name, uint64_t *out);
 bool has_deferred_method_constraint(th_type *receiver,
     core_string_t method_name);
 typedef enum {
@@ -364,7 +364,7 @@ typedef struct {
     n00bb_static_graph_node_t node;
     uint64_t address;
     uint64_t typehash;
-    char *type_name;
+    core_string_t type_name;
     bool immutable;
     bool array_backing;
     bool foreign;
@@ -373,7 +373,7 @@ core_list_decl(n00bb_captured_graph_node_t);
 core_list_decl(n00bb_static_graph_edge_t);
 
 typedef struct {
-    char *identifier;
+    core_string_t identifier;
     size_t root_index;
 } n00bb_baked_root_t;
 core_list_decl(n00bb_baked_root_t);
@@ -384,8 +384,8 @@ typedef struct {
     uint32_t table;
     uint32_t kind;
     uint64_t typehash;
-    char *module;
-    char *name;
+    core_string_t module;
+    core_string_t name;
 } n00bb_static_graph_slot_t;
 core_list_decl(n00bb_static_graph_slot_t);
 
@@ -432,9 +432,9 @@ typedef struct n00bb_link_analysis_t {
     core_list_t(n00bb_static_graph_edge_t) static_graph_edges;
     core_list_t(n00bb_baked_root_t) baked_roots;
     core_list_t(n00bb_static_graph_slot_t) static_graph_slots;
-    char *baked_failure_root;
-    char *baked_failure_path;
-    char *baked_failure_message;
+    core_string_t baked_failure_root;
+    core_string_t baked_failure_path;
+    core_string_t baked_failure_message;
     bool baked_failure_reported;
     bool build_time_capture;
     core_dict_t declarations_by_symbol;
@@ -526,6 +526,6 @@ parse_sym_entry_t *granted_export_symbol(core_translation_unit_t *provider,
 bool bind_imported_module_scopes(
     core_list_t(core_translation_unit_ptr_t) *units);
 void package_diagnostic(core_translation_unit_t *unit, parse_tree_t *node,
-                        const char *code, const char *message);
+                        core_string_t code, core_string_t message);
 bool initialize_unit_package_interfaces(core_translation_unit_t *unit);
 bool populate_unit_package_interfaces(core_translation_unit_t *unit);

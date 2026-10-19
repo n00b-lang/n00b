@@ -13,12 +13,11 @@ core_list_decl(n00b_abi_parameter_v1);
 core_list_decl(uint32_t);
 
 static bool
-encode_name(n00bb_abi_name_pool_t *names, const char *text,
+encode_name(n00bb_abi_name_pool_t *names, core_string_t text,
             uint32_t row_index, size_t offset, n00b_abi_string_v1 *out)
 {
-    if (!text) return false;
-    return n00bb_abi_name_pool_encode(names,
-        core_string_borrow(text, strlen(text)), N00B_ABI_TABLE_CONSTRAINT,
+    if (!text.data) return false;
+    return n00bb_abi_name_pool_encode(names, text, N00B_ABI_TABLE_CONSTRAINT,
         row_index, offset, out);
 }
 
@@ -33,7 +32,7 @@ shape_parameter(n00bb_abi_type_index_t *index,
                 n00bb_abi_name_pool_t *names,
                 core_list_t(n00b_abi_parameter_v1) *parameters,
                 uint32_t parameter_base, th_type *type, th_mode mode,
-                const char *name, uint32_t flags, uint32_t ordinal,
+                core_string_t name, uint32_t flags, uint32_t ordinal,
                 uint32_t *out)
 {
     if (!type || !out || parameters->len >= UINT32_MAX - parameter_base)
@@ -52,9 +51,8 @@ shape_parameter(n00bb_abi_type_index_t *index,
     default: return false;
     }
     uint32_t row_index = parameter_base + (uint32_t)parameters->len;
-    if (name && (!name[0] || !n00bb_abi_name_pool_encode(names,
-            core_string_borrow(name, strlen(name)),
-            N00B_ABI_TABLE_PARAMETER, row_index,
+    if (name.data && (!name.u8_bytes || !n00bb_abi_name_pool_encode(names,
+            name, N00B_ABI_TABLE_PARAMETER, row_index,
             offsetof(n00b_abi_parameter_v1, name), &row.name))) return false;
     core_list_push(*parameters, row);
     *out = row_index;
@@ -89,7 +87,7 @@ append_call_shape(n00bb_abi_type_index_t *index,
         const th_param *param = th_func_param(call, i);
         uint32_t parameter = 0;
         if (!param || !shape_parameter(index, names, parameters,
-                parameter_base, param->type, param->mode, nullptr, 0,
+                parameter_base, param->type, param->mode, (core_string_t){}, 0,
                 (uint32_t)i, &parameter)
             || stream->len >= UINT32_MAX - stream_base) return false;
         core_list_push(*stream, parameter);
@@ -101,7 +99,7 @@ append_call_shape(n00bb_abi_type_index_t *index,
     for (size_t i = 0; i < keywords; i++) {
         const th_kwparam *param = th_func_kw(call, i);
         uint32_t parameter = 0;
-        if (!param || !param->name
+        if (!param || !param->name.data
             || !shape_parameter(index, names, parameters, parameter_base,
                 param->type, param->mode, param->name, 0,
                 (uint32_t)(positional + (rest ? 1 : 0) + i), &parameter)
@@ -112,7 +110,7 @@ append_call_shape(n00bb_abi_type_index_t *index,
         (n00b_abi_range_v1){stream_base + (uint32_t)first,
                             (uint32_t)(stream->len - first)};
     if (rest && !shape_parameter(index, names, parameters, parameter_base,
-            rest->type, rest->mode, nullptr,
+            rest->type, rest->mode, (core_string_t){},
             N00B_ABI_PARAMETER_FLAG_VARIADIC, (uint32_t)positional,
             &row.rest_parameter_index)) return false;
     *out = (uint32_t)shapes->len;
@@ -140,12 +138,13 @@ append_constraint(n00bb_abi_type_index_t *index,
     };
     if (source.has_scope) {
         row.flags = N00B_ABI_CONSTRAINT_FLAG_HAS_SCOPE;
-        if (!encode_name(names, source.scope_module ? source.scope_module : "",
+        if (!encode_name(names, source.scope_module.data
+                    ? source.scope_module : CORE_STRING_STATIC(""),
                 row_index, offsetof(n00b_abi_constraint_v1,
                                     scope_module_name),
                 &row.scope_module_name)
-            || !encode_name(names,
-                source.scope_package ? source.scope_package : "",
+            || !encode_name(names, source.scope_package.data
+                    ? source.scope_package : CORE_STRING_STATIC(""),
                 row_index, offsetof(n00b_abi_constraint_v1,
                                     scope_package_name),
                 &row.scope_package_name)) return false;
@@ -184,14 +183,14 @@ append_constraint(n00bb_abi_type_index_t *index,
         break;
     case TH_CON_IMPLEMENTS:
         row.kind = N00B_ABI_CONSTRAINT_IMPLEMENTS;
-        if (!source.iface || !source.iface[0]
+        if (!source.iface.data || !source.iface.u8_bytes
             || !encode_name(names, source.iface, row_index,
                 offsetof(n00b_abi_constraint_v1, name), &row.name))
             return false;
         break;
     case TH_CON_HAS_FIELD:
         row.kind = N00B_ABI_CONSTRAINT_HAS_FIELD;
-        if (!source.field.name || !source.field.name[0]
+        if (!source.field.name.data || !source.field.name.u8_bytes
             || !encode_name(names, source.field.name, row_index,
                 offsetof(n00b_abi_constraint_v1, name), &row.name)
             || !type_index(index, source.field.type,
@@ -205,7 +204,7 @@ append_constraint(n00bb_abi_type_index_t *index,
         break;
     case TH_CON_METHOD:
         row.kind = N00B_ABI_CONSTRAINT_METHOD;
-        if (!source.method.name || !source.method.name[0]
+        if (!source.method.name.data || !source.method.name.u8_bytes
             || !source.method.result
             || !encode_name(names, source.method.name, row_index,
                 offsetof(n00b_abi_constraint_v1, name), &row.name)

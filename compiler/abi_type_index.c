@@ -230,7 +230,7 @@ n00bb_abi_type_index_new(ir_module_t *module)
     index->table = core_indexed_table_new(1, UINT32_MAX >> 1,
                                           type_key_hash, type_key_equal);
     core_dict_init(&index->symbol_types, nullptr, nullptr);
-    th_type *nil = th_name(ir_module_types(module), "nil");
+    th_type *nil = th_name(ir_module_types(module), CORE_STRING_STATIC("nil"));
     if (!index->table || !nil) {
         n00bb_abi_type_index_free(index);
         return nullptr;
@@ -305,8 +305,9 @@ add_string_backing(n00bb_abi_type_index_t *index)
 {
     th_ctx *types = ir_module_types(index->module);
     uint32_t found = 0;
-    return !n00bb_abi_type_index_find(index, th_name(types, "string"), &found)
-        || add_type(index, th_name(types, "u8"), nullptr);
+    return !n00bb_abi_type_index_find(index,
+            th_name(types, CORE_STRING_STATIC("string")), &found)
+        || add_type(index, th_name(types, CORE_STRING_STATIC("u8")), nullptr);
 }
 
 bool
@@ -381,11 +382,11 @@ match_call_type(th_ctx *types, th_type *pattern, th_type *actual,
         return match_call_type(types, th_ind_referent(pattern),
             th_ind_referent(actual), bindings, depth + 1);
     if (kind == TH_NAMED) {
-        const char *left = nullptr, *right = nullptr;
+        core_string_t left = {}, right = {};
         size_t left_count = 0, right_count = 0;
-        if (!th_named_info(pattern, &left, nullptr, nullptr, &left_count)
-            || !th_named_info(actual, &right, nullptr, nullptr, &right_count)
-            || !left || !right || strcmp(left, right)
+        if (!th_named_info(pattern, &left, nullptr, &left_count)
+            || !th_named_info(actual, &right, nullptr, &right_count)
+            || !left.data || !right.data || !core_string_eq(left, right)
             || left_count != right_count) return false;
         for (size_t i = 0; i < left_count; i++) {
             const th_arg *a = th_named_arg(pattern, i);

@@ -438,7 +438,7 @@ publish_direct_or_alias(ir_module_t *module, th_type *type,
                                                 seen, handled);
     else if (th_kind_of(type) == TH_NAMED) {
         size_t arguments = 0;
-        th_named_info(type, nullptr, nullptr, nullptr, &arguments);
+        th_named_info(type, nullptr, nullptr, &arguments);
         th_builtin_kind_t builtin = th_builtin_kind_of(type);
         if (builtin == TH_BUILTIN_TUPLE)
             return publish_tuple_layout(module, type, target, seen,
@@ -505,8 +505,9 @@ n00bb_abi_publish_direct_layout(ir_module_t *module, th_type *type,
                                 bool *handled)
 {
     if (handled) *handled = false;
-    if (!module || !type || !target || !target->triple || !handled
-        || strcmp(ir_module_target(module), target->triple)) return false;
+    if (!module || !type || !target || !target->triple.data || !handled
+        || !core_string_eq(ir_module_target(module), target->triple))
+        return false;
     core_dict_t seen;
     core_dict_init(&seen, nullptr, nullptr);
     bool ok = publish_direct_or_alias(module, type, target, &seen, handled);
@@ -538,8 +539,9 @@ n00bb_abi_publish_integer_like_layout(
     ir_module_t *module, th_type *type, const core_target_desc_t *target,
     uint32_t semantic_bits)
 {
-    if (!module || !type || !target || !target->triple || !semantic_bits
-        || strcmp(ir_module_target(module), target->triple)) return false;
+    if (!module || !type || !target || !target->triple.data || !semantic_bits
+        || !core_string_eq(ir_module_target(module), target->triple))
+        return false;
     const core_target_scalar_t *storage =
         core_target_integer_for_bits(target, semantic_bits);
     return storage
@@ -564,9 +566,9 @@ n00bb_abi_publish_record_layout(
     n00bb_record_policy_t policy, bool structural,
     const n00bb_abi_record_member_t *members, size_t count)
 {
-    if (!module || !type || !target || !target->triple
+    if (!module || !type || !target || !target->triple.data
         || (count && !members)
-        || strcmp(ir_module_target(module), target->triple)
+        || !core_string_eq(ir_module_target(module), target->triple)
         || ir_layout_final(module, type, target->triple)) return false;
 
     n00bb_record_field_t *fields = count
@@ -590,7 +592,7 @@ n00bb_abi_publish_record_layout(
             ? ir_layout_final(module, storage_type, target->triple) : nullptr;
         const ir_final_layout_t *child = children[i];
         bool packed = members[i].packed;
-        if (!members[i].name || !members[i].type || !child
+        if (!members[i].name.data || !members[i].type || !child
             || (inline_array != (members[i].inline_element_type != nullptr))
             || (inline_array && packed)
             || (policy == N00BB_RECORD_C
@@ -862,7 +864,8 @@ publish_tuple_layout(ir_module_t *module, th_type *type,
             break;
         }
         members[i] = (n00bb_abi_record_member_t){
-            .name = names[i], .type = child, .ordinal = (uint32_t)i,
+            .name = core_string_borrow(names[i], (size_t)written),
+            .type = child, .ordinal = (uint32_t)i,
         };
     }
     if (valid && ready) {
@@ -894,7 +897,7 @@ publish_structural_record_layout(ir_module_t *module, th_type *type,
     for (size_t i = 0; valid && i < count; i++) {
         const th_member *member = th_record_member(type, i);
         bool direct = false;
-        if (!member || !member->name || !member->type
+        if (!member || !member->name.data || !member->type
             || !publish_direct_or_alias(module, member->type, target,
                                         seen, &direct)) {
             valid = false;
@@ -1012,10 +1015,10 @@ n00bb_abi_publish_variant_layout(
     ir_module_t *module, th_type *type, const core_target_desc_t *target,
     const n00bb_abi_variant_arm_t *arms, size_t count)
 {
-    if (!module || !type || !target || !target->triple || !arms || !count
+    if (!module || !type || !target || !target->triple.data || !arms || !count
         || count >= UINT32_MAX || !core_target_validate(target)
         || target->endian != CORE_TARGET_LITTLE_ENDIAN
-        || strcmp(ir_module_target(module), target->triple)
+        || !core_string_eq(ir_module_target(module), target->triple)
         || ir_layout_final(module, type, target->triple)) return false;
 
     ir_final_member_layout_t *members = core_alloc_array(
@@ -1037,7 +1040,7 @@ n00bb_abi_publish_variant_layout(
     for (size_t i = 0; valid && i < count; i++) {
         children[i] = ir_layout_final(module, arms[i].type, target->triple);
         const ir_final_layout_t *child = children[i];
-        if (!arms[i].name || !arms[i].type || arms[i].ordinal != i
+        if (!arms[i].name.data || !arms[i].type || arms[i].ordinal != i
             || !child || !child->alignment_bytes
             || child->intrinsic_bits > UINT64_MAX - 7) {
             valid = false;

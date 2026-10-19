@@ -26,7 +26,7 @@ passing_mode(th_mode mode, uint32_t *out)
 static bool
 add_parameter(n00bb_abi_type_index_t *index, n00bb_abi_name_pool_t *names,
               core_list_t(n00b_abi_parameter_v1) *parameters,
-              th_type *type, th_mode mode, const char *name, uint32_t flags,
+              th_type *type, th_mode mode, core_string_t name, uint32_t flags,
               uint32_t formal_ordinal,
               uint32_t *out_index)
 {
@@ -36,9 +36,8 @@ add_parameter(n00bb_abi_type_index_t *index, n00bb_abi_name_pool_t *names,
         || !passing_mode(mode, &row.passing_mode)) return false;
     uint32_t row_index = (uint32_t)parameters->len;
     row.declaration_ordinal = formal_ordinal;
-    if (name && (!name[0]
-        || !n00bb_abi_name_pool_encode(names,
-            core_string_borrow(name, strlen(name)),
+    if (name.data && (!name.u8_bytes
+        || !n00bb_abi_name_pool_encode(names, name,
             N00B_ABI_TABLE_PARAMETER, row_index,
             offsetof(n00b_abi_parameter_v1, name), &row.name))) return false;
     core_list_push(*parameters, row);
@@ -82,7 +81,7 @@ add_signature(n00bb_abi_type_index_t *index, th_type *type,
         const th_param *param = th_func_param(type, i);
         uint32_t param_index = 0;
         if (!param || !add_parameter(index, names, parameters,
-                param->type, param->mode, nullptr, 0, (uint32_t)i,
+                param->type, param->mode, (core_string_t){}, 0, (uint32_t)i,
                 &param_index)
             || !add_stream_index(stream, stream_base, param_index))
             return false;
@@ -96,7 +95,7 @@ add_signature(n00bb_abi_type_index_t *index, th_type *type,
     for (size_t i = 0; i < nkw; i++) {
         const th_kwparam *param = th_func_kw(type, i);
         uint32_t param_index = 0;
-        if (!param || !param->name
+        if (!param || !param->name.data
             || !add_parameter(index, names, parameters,
                 param->type, param->mode, param->name, 0,
                 (uint32_t)(npos + (rest ? 1 : 0) + i), &param_index)
@@ -109,7 +108,7 @@ add_signature(n00bb_abi_type_index_t *index, th_type *type,
             .count = (uint32_t)(stream->len - first),
         };
     if (rest && !add_parameter(index, names, parameters,
-            rest->type, rest->mode, nullptr,
+            rest->type, rest->mode, (core_string_t){},
             N00B_ABI_PARAMETER_FLAG_VARIADIC, (uint32_t)npos,
             &row.rest_parameter_index))
         return false;

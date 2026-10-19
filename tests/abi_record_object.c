@@ -9,6 +9,16 @@
 #include "lib/byteorder.h"
 #include "lib/object_section.h"
 
+#define S(x) CORE_STRING_STATIC(x)
+#define SHORT_NAME_IS(value, lit) short_name_is((value), S(lit))
+#define IS(s, lit) core_string_eq((s), S(lit))
+#define NONE ((core_string_t){})
+#define TH_NAME(context, lit) th_name((context), S(lit))
+#define STORAGE_NAMED(metadata, entries, count, lit) \
+    storage_named((metadata), (entries), (count), S(lit))
+#define RECORD_FIELD_NAMED(metadata, entries, count, type_index, lit) \
+    record_field_named((metadata), (entries), (count), (type_index), S(lit))
+
 static const n00bb_abi_directory_entry_t *
 entry_for(const n00bb_abi_directory_entry_t *entries, size_t count,
           uint32_t kind)
@@ -28,13 +38,13 @@ row_at(const core_object_section_t *section,
 }
 
 static bool
-short_name_is(const n00b_abi_string_v1 *value, const char *name)
+short_name_is(const n00b_abi_string_v1 *value, core_string_t name)
 {
-    size_t length = strlen(name);
+    size_t length = name.u8_bytes;
     return length <= 14
         && (value->short_value.selector & 15u) == length
         && !(value->short_value.selector & 0xc0u)
-        && !memcmp(value->short_value.bytes, name, length);
+        && (!length || !memcmp(value->short_value.bytes, name.data, length));
 }
 
 static bool
@@ -43,12 +53,12 @@ find_metadata(const uint8_t *object, size_t length,
 {
     struct {
         core_target_object_format_t format;
-        const char *segment;
-        const char *name;
+        core_string_t segment;
+        core_string_t name;
     } locations[] = {
-        {CORE_TARGET_OBJECT_ELF, nullptr, ".data.rel.ro.n00b_meta"},
-        {CORE_TARGET_OBJECT_MACH_O, "__DATA_CONST", "__n00b_meta"},
-        {CORE_TARGET_OBJECT_COFF, nullptr, ".n00b$M"},
+        {CORE_TARGET_OBJECT_ELF, {}, S(".data.rel.ro.n00b_meta")},
+        {CORE_TARGET_OBJECT_MACH_O, S("__DATA_CONST"), S("__n00b_meta")},
+        {CORE_TARGET_OBJECT_COFF, {}, S(".n00b$M")},
     };
     for (size_t i = 0; i < sizeof(locations) / sizeof(*locations); i++)
         if (core_object_section_find(object, length, locations[i].format,
@@ -99,9 +109,11 @@ cycle_fact(const core_object_section_t *metadata,
 }
 
 static cycle_fact_t
-cycle_fact_from_file(const char *path)
+cycle_fact_from_file(core_string_t path)
 {
-    FILE *file = fopen(path, "rb");
+    char *c_path = core_string_to_cstr(path);
+    FILE *file = fopen(c_path, "rb");
+    core_free(c_path);
     assert(file && !fseek(file, 0, SEEK_END));
     long length = ftell(file);
     assert(length > 0 && !fseek(file, 0, SEEK_SET));
@@ -139,7 +151,7 @@ check_enum_item(const core_object_section_t *metadata,
                 const n00bb_abi_directory_entry_t *symbols,
                 const n00bb_abi_directory_entry_t *locations,
                 const n00b_abi_type_v1 *type, uint32_t type_index,
-                uint32_t ordinal, const char *name,
+                uint32_t ordinal, core_string_t name,
                 uint64_t low, uint64_t high)
 {
     assert(ordinal < type->fields_or_arms.count);
@@ -187,7 +199,7 @@ check_flagset(const core_object_section_t *metadata,
     for (uint32_t i = 1; i < symbols->record_count; i++) {
         const n00b_abi_symbol_v1 *symbol = row_at(metadata, symbols, i);
         if (symbol->kind == N00B_ABI_SYMBOL_TYPE
-            && short_name_is(&symbol->name, "FilePerms")) {
+            && SHORT_NAME_IS(&symbol->name, "FilePerms")) {
             assert(!type_index);
             type_index = symbol->type_index;
         }
@@ -201,7 +213,9 @@ check_flagset(const core_object_section_t *metadata,
     assert(type->fields_or_arms.count == 4);
     assert(!(type->flags & N00B_ABI_TYPE_FLAG_SIGNED));
 
-    const char *names[] = {"read", "write", "read_write", "none"};
+    const core_string_t names[] = {
+        S("read"), S("write"), S("read_write"), S("none"),
+    };
     const uint64_t masks[] = {1, 2, 3, 0};
     for (uint32_t i = 0; i < 4; i++) {
         check_enum_item(metadata, stream, items, symbols, locations,
@@ -236,14 +250,14 @@ check_function(const core_object_section_t *metadata,
     assert(functions && functions->record_count == 3 && types
         && signatures && parameters && symbols && locations && stream);
     const n00b_abi_function_v1 *function = row_at(metadata, functions, 1);
-    assert(short_name_is(&function->name, "add"));
+    assert(SHORT_NAME_IS(&function->name, "add"));
     assert(function->module_index == 1 && function->scope_index
         && function->symbol_index && function->symbol_index
             < symbols->record_count);
     const n00b_abi_symbol_v1 *symbol = row_at(metadata, symbols,
         function->symbol_index);
     assert(symbol->kind == N00B_ABI_SYMBOL_FUNCTION
-        && short_name_is(&symbol->name, "add")
+        && SHORT_NAME_IS(&symbol->name, "add")
         && symbol->declaration_location_index
         && symbol->declaration_location_index < locations->record_count);
     const n00b_abi_source_location_v1 *location = row_at(metadata, locations,
@@ -293,12 +307,12 @@ check_import(const core_object_section_t *metadata,
     for (uint32_t i = 1; i < requirements->record_count; i++) {
         const n00b_abi_requirement_v1 *entry = row_at(metadata,
             requirements, i);
-        if (short_name_is(&entry->full_path, "import_dep")) {
+        if (SHORT_NAME_IS(&entry->full_path, "import_dep")) {
             assert(!import);
             import = entry;
         }
     }
-    assert(import && short_name_is(&module->full_path, "import_root")
+    assert(import && SHORT_NAME_IS(&module->full_path, "import_root")
         && !module->imports.count
         && import->symbol_kind == N00B_ABI_SYMBOL_MODULE
         && import->requesting_module_index == 1
@@ -325,7 +339,7 @@ check_imported_record(const core_object_section_t *metadata,
     for (uint32_t i = 1; i < requirements->record_count; i++) {
         const n00b_abi_requirement_v1 *entry = row_at(metadata,
             requirements, i);
-        if (short_name_is(&entry->full_path, "record_dep")) {
+        if (SHORT_NAME_IS(&entry->full_path, "record_dep")) {
             assert(!import);
             import = entry;
         }
@@ -335,9 +349,9 @@ check_imported_record(const core_object_section_t *metadata,
     th_ctx *type_context = th_ctx_new();
     assert(type_context);
     uint64_t local_hash = th_hash(type_context,
-        th_name(type_context, "record_root.SharedRecord"));
+        TH_NAME(type_context, "record_root.SharedRecord"));
     uint64_t imported_hash = th_hash(type_context,
-        th_name(type_context, "record_dep.SharedRecord"));
+        TH_NAME(type_context, "record_dep.SharedRecord"));
     uint32_t local_records = 0, imported_records = 0;
     uint32_t imported_index = 0;
     for (uint32_t i = 1; i < types->record_count; i++) {
@@ -373,14 +387,14 @@ check_imported_record(const core_object_section_t *metadata,
     bool found_reader = false;
     for (uint32_t i = 1; i < functions->record_count; i++) {
         const n00b_abi_function_v1 *function = row_at(metadata, functions, i);
-        if (!short_name_is(&function->name, "read_remote")) continue;
+        if (!SHORT_NAME_IS(&function->name, "read_remote")) continue;
         assert(!found_reader && function->module_index == 1
             && function->symbol_index
             && function->symbol_index < symbols->record_count);
         const n00b_abi_symbol_v1 *symbol = row_at(metadata, symbols,
             function->symbol_index);
         assert(symbol->kind == N00B_ABI_SYMBOL_FUNCTION
-            && short_name_is(&symbol->name, "read_remote"));
+            && SHORT_NAME_IS(&symbol->name, "read_remote"));
         found_reader = true;
     }
     assert(found_reader);
@@ -405,7 +419,7 @@ check_imported_enum(const core_object_section_t *metadata,
         const n00b_abi_requirement_v1 *row = row_at(metadata,
             requirements, i);
         if (row->symbol_kind == N00B_ABI_SYMBOL_MODULE
-            && short_name_is(&row->full_path, "foreign_enum")) {
+            && SHORT_NAME_IS(&row->full_path, "foreign_enum")) {
             assert(!import);
             import = row;
         }
@@ -414,9 +428,9 @@ check_imported_enum(const core_object_section_t *metadata,
     th_ctx *type_context = th_ctx_new();
     assert(type_context);
     uint64_t choice_hash = th_hash(type_context,
-        th_name(type_context, "foreign_enum.Choice"));
+        TH_NAME(type_context, "foreign_enum.Choice"));
     uint64_t comparison_hash = th_hash(type_context,
-        th_name(type_context, "Comparison"));
+        TH_NAME(type_context, "Comparison"));
     uint32_t imported_enums = 0, builtin_enums = 0;
     uint32_t imported_index = 0;
     for (uint32_t i = 1; i < types->record_count; i++) {
@@ -468,7 +482,7 @@ check_imported_flagset(const core_object_section_t *metadata,
     th_ctx *type_context = th_ctx_new();
     assert(type_context);
     uint64_t hash = th_hash(type_context,
-        th_name(type_context, "flagset_archive_dep.impl.FilePerms"));
+        TH_NAME(type_context, "flagset_archive_dep.impl.FilePerms"));
     uint32_t type_index = 0;
     for (uint32_t i = 1; i < types->record_count; i++) {
         const n00b_abi_type_v1 *type = row_at(metadata, types, i);
@@ -536,7 +550,7 @@ check_variant(const core_object_section_t *metadata,
         && tag->unit_byte_offset == 8 && tag->unit_width_bits == 8
         && tag->lsb_position == 0 && tag->tag_width_bits == 2
         && tag->mask == 3);
-    const char *names[] = {"number", "small"};
+    const core_string_t names[] = {S("number"), S("small")};
     for (uint32_t i = 0; i < 2; i++) {
         uint32_t position = variant->fields_or_arms.first + i;
         assert(position < stream->record_count);
@@ -563,8 +577,8 @@ check_variant(const core_object_section_t *metadata,
 static void
 check_generic(const core_object_section_t *metadata,
               const n00bb_abi_directory_entry_t *entries, size_t count,
-              const char *function_name, const char *parameter_name,
-              const char *local_name, uint32_t passing_mode)
+              core_string_t function_name, core_string_t parameter_name,
+              core_string_t local_name, uint32_t passing_mode)
 {
     const n00bb_abi_directory_entry_t *types = entry_for(entries, count,
         N00B_ABI_TABLE_TYPE);
@@ -607,12 +621,12 @@ check_generic(const core_object_section_t *metadata,
         && !type->typevar_ordinal);
     const n00b_abi_scope_v1 *scope = row_at(metadata, scopes,
         type->typevar_owner_scope_index);
-    assert(short_name_is(&scope->kind_name, "function"));
+    assert(SHORT_NAME_IS(&scope->kind_name, "function"));
     uint32_t parameter_symbol = 0;
     uint32_t local_symbol = 0;
     for (uint32_t i = 1; i < symbols->record_count; i++) {
         const n00b_abi_symbol_v1 *symbol = row_at(metadata, symbols, i);
-        if (local_name && symbol->module_index == 1
+        if (local_name.data && symbol->module_index == 1
             && symbol->type_index == variable_index
             && short_name_is(&symbol->name, local_name)) {
             assert(!local_symbol);
@@ -626,7 +640,7 @@ check_generic(const core_object_section_t *metadata,
         parameter_symbol = i;
     }
     assert(parameter_symbol);
-    assert(!local_name || local_symbol);
+    assert(!local_name.data || local_symbol);
 }
 
 static void
@@ -644,7 +658,7 @@ check_constraint(const core_object_section_t *metadata,
     assert(functions && functions->record_count == 3 && constraints
         && constraints->record_count > 1 && types && stream);
     const n00b_abi_function_v1 *function = row_at(metadata, functions, 1);
-    assert(short_name_is(&function->name, "keep")
+    assert(SHORT_NAME_IS(&function->name, "keep")
         && function->constraints.count == 1);
     uint32_t position = function->constraints.first;
     assert(position < stream->record_count);
@@ -710,13 +724,13 @@ check_trait_methods(const core_object_section_t *metadata,
     for (uint32_t i = 1; i < symbols->record_count; i++) {
         const n00b_abi_symbol_v1 *symbol = row_at(metadata, symbols, i);
         if (symbol->type_index == trait_index
-            && short_name_is(&symbol->name, "Readable")) {
+            && SHORT_NAME_IS(&symbol->name, "Readable")) {
             assert(symbol->kind == N00B_ABI_SYMBOL_TYPE);
             found_owner = true;
         }
     }
     assert(found_owner);
-    const char *names[] = {"read", "reset"};
+    const core_string_t names[] = {S("read"), S("reset")};
     bool found_methods[2] = {false, false};
     for (uint32_t index = 1; index < methods->record_count; index++) {
         const n00b_abi_trait_method_v1 *method = row_at(metadata, methods,
@@ -820,7 +834,9 @@ check_callbacks(const core_object_section_t *metadata,
         N00B_ABI_TABLE_FUNCTION);
     assert(types && symbols && stream && signatures && parameters
         && functions && functions->record_count >= 2);
-    const char *names[] = {"Event_Call", "State_Call", "Transform_Call"};
+    const core_string_t names[] = {
+        S("Event_Call"), S("State_Call"), S("Transform_Call"),
+    };
     const uint32_t role_counts[] = {2, 3, 2};
     const uint32_t arg_counts[][3] = {
         {1, 1, 0}, {1, 2, 2}, {1, 1, 0},
@@ -931,24 +947,28 @@ check_storage(const uint8_t *object, size_t length,
         ? CORE_TARGET_OBJECT_MACH_O
         : target_id == N00BB_ABI_TARGET_X86_64_WINDOWS
             ? CORE_TARGET_OBJECT_COFF : CORE_TARGET_OBJECT_ELF;
-    const char *names[] = {"fixed_value", "shared_value", "thread_seed"};
+    const core_string_t names[] = {
+        S("fixed_value"), S("shared_value"), S("thread_seed"),
+    };
     const uint32_t kinds[] = {N00B_ABI_STORAGE_READ_ONLY,
         N00B_ABI_STORAGE_WRITABLE, N00B_ABI_STORAGE_TLS};
     const uint64_t values[] = {42, 3, 7};
-    const char *elf_names[] = {".rodata.n00b_static", ".data.n00b_static",
-        ".tdata.n00b_static"};
-    const char *mach_names[] = {"__n00b_ro", "__n00b_data", "__n00b_tls"};
-    const char *coff_names[] = {".rdata$N", ".data$N", ".tls$N"};
-    const char *native_names[] = {"$storage$fixed_value",
-        "_$storage$shared_value", "_$storage$thread_seed"};
-    const char *mach_native_names[] = {"_$storage$fixed_value",
-        "__$storage$shared_value", "__$storage$thread_seed"};
+    const core_string_t elf_names[] = {S(".rodata.n00b_static"),
+        S(".data.n00b_static"), S(".tdata.n00b_static")};
+    const core_string_t mach_names[] = {S("__n00b_ro"), S("__n00b_data"),
+        S("__n00b_tls")};
+    const core_string_t coff_names[] = {S(".rdata$N"), S(".data$N"),
+        S(".tls$N")};
+    const core_string_t native_names[] = {S("$storage$fixed_value"),
+        S("_$storage$shared_value"), S("_$storage$thread_seed")};
+    const core_string_t mach_native_names[] = {S("_$storage$fixed_value"),
+        S("__$storage$shared_value"), S("__$storage$thread_seed")};
     core_object_section_t pool;
     assert(core_object_section_find(object, length, format,
-        format == CORE_TARGET_OBJECT_MACH_O ? "__TEXT" : NULL,
-        format == CORE_TARGET_OBJECT_MACH_O ? "__n00b_strings"
-        : format == CORE_TARGET_OBJECT_COFF ? ".rdata$S"
-        : ".rodata.n00b_strings", &pool));
+        format == CORE_TARGET_OBJECT_MACH_O ? S("__TEXT") : NONE,
+        format == CORE_TARGET_OBJECT_MACH_O ? S("__n00b_strings")
+        : format == CORE_TARGET_OBJECT_COFF ? S(".rdata$S")
+        : S(".rodata.n00b_strings"), &pool));
     bool row_seen[4] = {0}, name_seen[3] = {0};
     for (uint32_t i = 1; i < storage->record_count; i++) {
         const n00b_abi_storage_v1 *row = row_at(metadata, storage, i);
@@ -969,13 +989,13 @@ check_storage(const uint8_t *object, size_t length,
                 == (expected == 0));
         const n00b_abi_native_binding_v1 *binding = row_at(metadata,
             bindings, symbol->native_binding_index);
-        const char *expected_native = format == CORE_TARGET_OBJECT_MACH_O
+        core_string_t expected_native = format == CORE_TARGET_OBJECT_MACH_O
             ? mach_native_names[expected] : native_names[expected];
-        size_t native_length = strlen(expected_native);
+        size_t native_length = expected_native.u8_bytes;
         size_t pool_offset = 0;
         while (pool_offset <= pool.size
             && native_length <= pool.size - pool_offset
-            && memcmp(pool.bytes + pool_offset, expected_native,
+            && memcmp(pool.bytes + pool_offset, expected_native.data,
                       native_length)) pool_offset++;
         assert(pool_offset <= pool.size
             && native_length <= pool.size - pool_offset);
@@ -1006,11 +1026,11 @@ check_storage(const uint8_t *object, size_t length,
         assert(found_name);
         name_seen[expected] = true;
         row_seen[i] = true;
-        const char *name = format == CORE_TARGET_OBJECT_MACH_O
+        core_string_t name = format == CORE_TARGET_OBJECT_MACH_O
             ? mach_names[expected] : format == CORE_TARGET_OBJECT_COFF
                 ? coff_names[expected] : elf_names[expected];
-        const char *segment = format != CORE_TARGET_OBJECT_MACH_O
-            ? NULL : expected ? "__DATA" : "__DATA_CONST";
+        core_string_t segment = format != CORE_TARGET_OBJECT_MACH_O
+            ? NONE : expected ? S("__DATA") : S("__DATA_CONST");
         core_object_section_t section;
         assert(core_object_section_find(object, length, format, segment,
             name, &section));
@@ -1066,7 +1086,7 @@ check_string_storage(const uint8_t *object, size_t length,
     uint32_t module_index = 0;
     for (uint32_t i = 1; i < modules->record_count; i++) {
         const n00b_abi_module_v1 *module = row_at(metadata, modules, i);
-        if (!short_name_is(&module->full_path, "string_storage")) continue;
+        if (!SHORT_NAME_IS(&module->full_path, "string_storage")) continue;
         assert(!module_index);
         module_index = i;
     }
@@ -1077,17 +1097,18 @@ check_string_storage(const uint8_t *object, size_t length,
             ? CORE_TARGET_OBJECT_COFF : CORE_TARGET_OBJECT_ELF;
     core_object_section_t pool;
     assert(core_object_section_find(object, length, format,
-        format == CORE_TARGET_OBJECT_MACH_O ? "__TEXT" : NULL,
-        format == CORE_TARGET_OBJECT_MACH_O ? "__n00b_strings"
-        : format == CORE_TARGET_OBJECT_COFF ? ".rdata$S"
-        : ".rodata.n00b_strings", &pool));
-    const char *long_text = "a longer immutable string value";
-    const char *other_text = "a different long TLS string value";
-    size_t long_length = strlen(long_text);
+        format == CORE_TARGET_OBJECT_MACH_O ? S("__TEXT") : NONE,
+        format == CORE_TARGET_OBJECT_MACH_O ? S("__n00b_strings")
+        : format == CORE_TARGET_OBJECT_COFF ? S(".rdata$S")
+        : S(".rodata.n00b_strings"), &pool));
+    const core_string_t long_text = S("a longer immutable string value");
+    const core_string_t other_text = S("a different long TLS string value");
+    size_t long_length = long_text.u8_bytes;
     size_t backing_matches = 0;
     for (size_t i = 0; i <= pool.size
          && long_length <= pool.size - i; i++)
-        backing_matches += !memcmp(pool.bytes + i, long_text, long_length);
+        backing_matches += !memcmp(pool.bytes + i, long_text.data,
+                                   long_length);
     assert(backing_matches == 1);
 
     uint64_t long_addends[7] = {0};
@@ -1095,9 +1116,10 @@ check_string_storage(const uint8_t *object, size_t length,
     uint32_t pool_storage_indexes[2] = {0};
     uint32_t tls_storage_indexes[2] = {0};
     bool seen[7] = {0};
-    const char *names[] = {"short_label", "long_label", "repeated_label",
-                           "thread_label", "empty_label",
-                           "tls_long_label", "tls_other"};
+    const core_string_t names[] = {S("short_label"), S("long_label"),
+                                   S("repeated_label"), S("thread_label"),
+                                   S("empty_label"), S("tls_long_label"),
+                                   S("tls_other")};
     for (uint32_t i = 1; i < storage->record_count; i++) {
         const n00b_abi_storage_v1 *row = row_at(metadata, storage, i);
         if (row->module_index != module_index) continue;
@@ -1106,12 +1128,12 @@ check_string_storage(const uint8_t *object, size_t length,
                 && row->byte_offset <= pool.size
                 && row->byte_length <= pool.size - row->byte_offset
                 && !memcmp(pool.bytes + row->byte_offset,
-                    long_text, long_length);
-            bool other = row->byte_length == strlen(other_text)
+                    long_text.data, long_length);
+            bool other = row->byte_length == other_text.u8_bytes
                 && row->byte_offset <= pool.size
                 && row->byte_length <= pool.size - row->byte_offset
                 && !memcmp(pool.bytes + row->byte_offset,
-                    other_text, strlen(other_text));
+                    other_text.data, other_text.u8_bytes);
             assert(primary != other
                 && row->segment_kind == N00B_ABI_STORAGE_READ_ONLY
                 && row->segment_index == pool.native_index);
@@ -1137,27 +1159,29 @@ check_string_storage(const uint8_t *object, size_t length,
         core_object_section_t section;
         assert(core_object_section_find(object, length, format,
             format == CORE_TARGET_OBJECT_MACH_O
-                ? (tls ? "__DATA" : "__DATA_CONST") : NULL,
+                ? (tls ? S("__DATA") : S("__DATA_CONST")) : NONE,
             format == CORE_TARGET_OBJECT_MACH_O
-                ? (tls ? "__n00b_tls" : "__n00b_ro")
+                ? (tls ? S("__n00b_tls") : S("__n00b_ro"))
                 : format == CORE_TARGET_OBJECT_COFF
-                    ? (tls ? ".tls$N" : ".rdata$N")
-                    : (tls ? ".tdata.n00b_static"
-                           : ".rodata.n00b_static"), &section));
+                    ? (tls ? S(".tls$N") : S(".rdata$N"))
+                    : (tls ? S(".tdata.n00b_static")
+                           : S(".rodata.n00b_static")), &section));
         assert(row->segment_index == section.native_index
             && row->byte_offset <= section.size
             && row->byte_length <= section.size - row->byte_offset);
         const n00b_abi_string_v1 *value =
             (const void *)(section.bytes + row->byte_offset);
         if (kind == 0 || kind == 3 || kind == 4) {
-            const char *text = kind == 0 ? "hello" : kind == 3 ? "worker" : "";
-            size_t text_length = strlen(text);
+            core_string_t text = kind == 0 ? S("hello")
+                : kind == 3 ? S("worker") : S("");
+            size_t text_length = text.u8_bytes;
             assert(value->short_value.selector ==
                     (text_length | (N00B_ABI_STRING_ASCII << 4))
-                && !memcmp(value->short_value.bytes, text, text_length));
+                && !memcmp(value->short_value.bytes, text.data, text_length));
             continue;
         }
-        size_t expected_length = kind == 6 ? strlen(other_text) : long_length;
+        size_t expected_length = kind == 6 ? other_text.u8_bytes
+                                           : long_length;
         assert(value->long_value.selector ==
             ((uint64_t)expected_length
                 | ((uint64_t)N00B_ABI_STRING_ASCII
@@ -1177,7 +1201,7 @@ check_string_storage(const uint8_t *object, size_t length,
                 core_object_symbol_name_t target;
                 assert(core_object_symbol_name_at(object, length, format,
                     &section, relocation.native_symbol_index, &target)
-                    && target.length == strlen("n00b_string_pool")
+                    && target.length == sizeof("n00b_string_pool") - 1
                     && !memcmp(target.bytes, "n00b_string_pool",
                                target.length));
             }
@@ -1247,17 +1271,17 @@ check_array_storage(const uint8_t *object, size_t length,
         ? CORE_TARGET_OBJECT_MACH_O
         : target_id == N00BB_ABI_TARGET_X86_64_WINDOWS
             ? CORE_TARGET_OBJECT_COFF : CORE_TARGET_OBJECT_ELF;
-    const char *segment = format == CORE_TARGET_OBJECT_MACH_O
-        ? "__DATA_CONST" : nullptr;
+    core_string_t segment = format == CORE_TARGET_OBJECT_MACH_O
+        ? S("__DATA_CONST") : NONE;
     core_object_section_t backing, value;
     assert(core_object_section_find(object, length, format, segment,
-        format == CORE_TARGET_OBJECT_MACH_O ? "__n00b_aggregate"
-        : format == CORE_TARGET_OBJECT_COFF ? ".rdata$A"
-        : ".rodata.n00b_aggregate", &backing));
+        format == CORE_TARGET_OBJECT_MACH_O ? S("__n00b_aggregate")
+        : format == CORE_TARGET_OBJECT_COFF ? S(".rdata$A")
+        : S(".rodata.n00b_aggregate"), &backing));
     assert(core_object_section_find(object, length, format, segment,
-        format == CORE_TARGET_OBJECT_MACH_O ? "__n00b_ro"
-        : format == CORE_TARGET_OBJECT_COFF ? ".rdata$N"
-        : ".rodata.n00b_static", &value));
+        format == CORE_TARGET_OBJECT_MACH_O ? S("__n00b_ro")
+        : format == CORE_TARGET_OBJECT_COFF ? S(".rdata$N")
+        : S(".rodata.n00b_static"), &value));
     assert(backing.size == 48 && value.size == 16
         && row->segment_index == value.native_index
         && core_le_load_u64(backing.bytes) == 1
@@ -1278,7 +1302,7 @@ check_array_storage(const uint8_t *object, size_t length,
             core_object_symbol_name_t target;
             assert(core_object_symbol_name_at(object, length, format,
                 &value, pointers[i].native_symbol_index, &target)
-                && target.length == strlen("n00b_aggregate_pool")
+                && target.length == sizeof("n00b_aggregate_pool") - 1
                 && !memcmp(target.bytes, "n00b_aggregate_pool",
                            target.length));
         }
@@ -1312,7 +1336,7 @@ aggregate_pointer_addend(const uint8_t *object, size_t length,
             core_object_symbol_name_t target;
             assert(core_object_symbol_name_at(object, length, format,
                 source, relocation.native_symbol_index, &target)
-                && target.length == strlen("n00b_aggregate_pool")
+                && target.length == sizeof("n00b_aggregate_pool") - 1
                 && !memcmp(target.bytes, "n00b_aggregate_pool",
                            target.length));
         }
@@ -1356,17 +1380,17 @@ check_nested_array_storage(const uint8_t *object, size_t length,
         ? CORE_TARGET_OBJECT_MACH_O
         : target_id == N00BB_ABI_TARGET_X86_64_WINDOWS
             ? CORE_TARGET_OBJECT_COFF : CORE_TARGET_OBJECT_ELF;
-    const char *segment = format == CORE_TARGET_OBJECT_MACH_O
-        ? "__DATA_CONST" : nullptr;
+    core_string_t segment = format == CORE_TARGET_OBJECT_MACH_O
+        ? S("__DATA_CONST") : NONE;
     core_object_section_t backing, value;
     assert(core_object_section_find(object, length, format, segment,
-        format == CORE_TARGET_OBJECT_MACH_O ? "__n00b_aggregate"
-        : format == CORE_TARGET_OBJECT_COFF ? ".rdata$A"
-        : ".rodata.n00b_aggregate", &backing));
+        format == CORE_TARGET_OBJECT_MACH_O ? S("__n00b_aggregate")
+        : format == CORE_TARGET_OBJECT_COFF ? S(".rdata$A")
+        : S(".rodata.n00b_aggregate"), &backing));
     assert(core_object_section_find(object, length, format, segment,
-        format == CORE_TARGET_OBJECT_MACH_O ? "__n00b_ro"
-        : format == CORE_TARGET_OBJECT_COFF ? ".rdata$N"
-        : ".rodata.n00b_static", &value));
+        format == CORE_TARGET_OBJECT_MACH_O ? S("__n00b_ro")
+        : format == CORE_TARGET_OBJECT_COFF ? S(".rdata$N")
+        : S(".rodata.n00b_static"), &value));
     assert(row->segment_index == value.native_index
         && value.size == 16 && value.relocation_count == 2
         && backing.size == (ragged ? 160u : 72u)
@@ -1412,7 +1436,7 @@ check_nested_array_storage(const uint8_t *object, size_t length,
 static const n00b_abi_storage_v1 *
 storage_named(const core_object_section_t *metadata,
               const n00bb_abi_directory_entry_t *entries, size_t count,
-              const char *name)
+              core_string_t name)
 {
     const n00bb_abi_directory_entry_t *storages = entry_for(entries, count,
         N00B_ABI_TABLE_STORAGE);
@@ -1437,7 +1461,7 @@ check_typespec_storage(const core_object_section_t *metadata,
 {
     const n00bb_abi_directory_entry_t *types = entry_for(entries, count,
         N00B_ABI_TABLE_TYPE);
-    const n00b_abi_storage_v1 *storage = storage_named(metadata, entries,
+    const n00b_abi_storage_v1 *storage = STORAGE_NAMED(metadata, entries,
         count, "selected_type");
     assert(types && storage->type_index < types->record_count);
     const n00b_abi_type_v1 *type = row_at(metadata, types,
@@ -1452,7 +1476,7 @@ check_typespec_storage(const core_object_section_t *metadata,
 static const n00b_abi_field_v1 *
 record_field_named(const core_object_section_t *metadata,
                    const n00bb_abi_directory_entry_t *entries, size_t count,
-                   uint32_t type_index, const char *name)
+                   uint32_t type_index, core_string_t name)
 {
     const n00bb_abi_directory_entry_t *types = entry_for(entries, count,
         N00B_ABI_TABLE_TYPE);
@@ -1538,27 +1562,27 @@ check_c_foreign(const core_object_section_t *metadata,
     th_ctx *context = th_ctx_new();
     assert(context);
     uint64_t holder_hash = th_hash(context,
-                                   th_name(context, "c_foreign.Holder"));
-    uint64_t item_hash = th_hash(context, th_name(context, "c_foreign.Item"));
+                                   TH_NAME(context, "c_foreign.Holder"));
+    uint64_t item_hash = th_hash(context, TH_NAME(context, "c_foreign.Item"));
     th_ctx_free(context);
     uint32_t holder_index = 0;
     for (uint32_t i = 1; i < types->record_count; i++)
         if (((const n00b_abi_type_v1 *)row_at(metadata, types,
                 i))->typehash == holder_hash) holder_index = i;
     assert(holder_index);
-    const n00b_abi_field_v1 *items = record_field_named(metadata, entries,
+    const n00b_abi_field_v1 *items = RECORD_FIELD_NAMED(metadata, entries,
         count, holder_index, "items");
-    const n00b_abi_field_v1 *total = record_field_named(metadata, entries,
+    const n00b_abi_field_v1 *total = RECORD_FIELD_NAMED(metadata, entries,
         count, holder_index, "total");
-    const n00b_abi_field_v1 *name = record_field_named(metadata, entries,
+    const n00b_abi_field_v1 *name = RECORD_FIELD_NAMED(metadata, entries,
         count, holder_index, "name");
-    const n00b_abi_field_v1 *op = record_field_named(metadata, entries,
+    const n00b_abi_field_v1 *op = RECORD_FIELD_NAMED(metadata, entries,
         count, holder_index, "op");
-    const n00b_abi_field_v1 *kind = record_field_named(metadata, entries,
+    const n00b_abi_field_v1 *kind = RECORD_FIELD_NAMED(metadata, entries,
         count, holder_index, "kind");
-    const n00b_abi_field_v1 *number = record_field_named(metadata, entries,
+    const n00b_abi_field_v1 *number = RECORD_FIELD_NAMED(metadata, entries,
         count, holder_index, "number");
-    const n00b_abi_field_v1 *text = record_field_named(metadata, entries,
+    const n00b_abi_field_v1 *text = RECORD_FIELD_NAMED(metadata, entries,
         count, holder_index, "text");
     assert(foreign_target(metadata, entries, count, items)->typehash
         == item_hash);
@@ -1666,12 +1690,12 @@ check_generic_record(const core_object_section_t *metadata,
     assert(types && symbols && requirements && layouts);
     th_ctx *context = th_ctx_new();
     assert(context);
-    th_type *bare = th_name(context, "generic_record_dep.Generic_Link");
+    th_type *bare = TH_NAME(context, "generic_record_dep.Generic_Link");
     th_arg args[] = {
-        {.kind = TH_ARG_TYPE, .type = th_name(context, "int")},
-        {.kind = TH_ARG_TYPE, .type = th_name(context, "string")},
+        {.kind = TH_ARG_TYPE, .type = TH_NAME(context, "int")},
+        {.kind = TH_ARG_TYPE, .type = TH_NAME(context, "string")},
     };
-    th_type *concrete = th_apply(context, "generic_record_dep.Generic_Link",
+    th_type *concrete = th_apply(context, S("generic_record_dep.Generic_Link"),
         args, 2);
     uint64_t bare_hash = th_hash(context, bare);
     uint64_t concrete_hash = th_hash(context, concrete);
@@ -1699,7 +1723,7 @@ check_generic_record(const core_object_section_t *metadata,
     bool provides = false;
     for (uint32_t i = 1; i < symbols->record_count; i++) {
         const n00b_abi_symbol_v1 *symbol = row_at(metadata, symbols, i);
-        if (!short_name_is(&symbol->name, "Generic_Link")) continue;
+        if (!SHORT_NAME_IS(&symbol->name, "Generic_Link")) continue;
         assert(!provides && symbol->kind == N00B_ABI_SYMBOL_TYPE
             && symbol->type_index == bare_index);
         provides = true;
@@ -1719,9 +1743,9 @@ check_generic_record(const core_object_section_t *metadata,
             matches++;
         }
         assert(matches == 1);
-        const n00b_abi_field_v1 *text = record_field_named(metadata, entries,
+        const n00b_abi_field_v1 *text = RECORD_FIELD_NAMED(metadata, entries,
             count, concrete_index, "second");
-        const n00b_abi_field_v1 *address = record_field_named(metadata,
+        const n00b_abi_field_v1 *address = RECORD_FIELD_NAMED(metadata,
             entries, count, concrete_index, "address");
         const n00b_abi_trace_v1 *trace = trace_for_type(metadata, entries,
             count, concrete_index);
@@ -1756,15 +1780,15 @@ record_bits(const uint8_t *bytes, uint64_t offset, unsigned width)
 static void
 check_record_string_relocation(const uint8_t *object, size_t length,
     core_target_object_format_t format, const core_object_section_t *source,
-    uint64_t pointer_offset, const char *expected)
+    uint64_t pointer_offset, core_string_t expected)
 {
     core_object_section_t pool;
     assert(core_object_section_find(object, length, format,
-        format == CORE_TARGET_OBJECT_MACH_O ? "__TEXT" : nullptr,
-        format == CORE_TARGET_OBJECT_MACH_O ? "__n00b_strings"
-        : format == CORE_TARGET_OBJECT_COFF ? ".rdata$S"
-        : ".rodata.n00b_strings", &pool));
-    size_t text_length = strlen(expected);
+        format == CORE_TARGET_OBJECT_MACH_O ? S("__TEXT") : NONE,
+        format == CORE_TARGET_OBJECT_MACH_O ? S("__n00b_strings")
+        : format == CORE_TARGET_OBJECT_COFF ? S(".rdata$S")
+        : S(".rodata.n00b_strings"), &pool));
+    size_t text_length = expected.u8_bytes;
     bool found = false;
     for (uint32_t i = 0; i < source->relocation_count; i++) {
         core_object_absolute64_relocation_t relocation;
@@ -1779,7 +1803,7 @@ check_record_string_relocation(const uint8_t *object, size_t length,
             core_object_symbol_name_t target;
             assert(core_object_symbol_name_at(object, length, format,
                 source, relocation.native_symbol_index, &target)
-                && target.length == strlen("n00b_string_pool")
+                && target.length == sizeof("n00b_string_pool") - 1
                 && !memcmp(target.bytes, "n00b_string_pool",
                     target.length));
         }
@@ -1788,7 +1812,7 @@ check_record_string_relocation(const uint8_t *object, size_t length,
             : relocation.addend_bits;
         assert(offset <= pool.size
             && text_length <= pool.size - offset
-            && !memcmp(pool.bytes + offset, expected, text_length));
+            && !memcmp(pool.bytes + offset, expected.data, text_length));
         found = true;
     }
     assert(found);
@@ -1815,11 +1839,11 @@ check_zero_element_arrays(const uint8_t *object, size_t length,
     core_object_section_t backing;
     assert(types && shapes && stream && extents
         && core_object_section_find(object, length, format,
-            format == CORE_TARGET_OBJECT_MACH_O ? "__DATA_CONST" : nullptr,
-            format == CORE_TARGET_OBJECT_MACH_O ? "__n00b_aggregate"
-            : format == CORE_TARGET_OBJECT_COFF ? ".rdata$A"
-            : ".rodata.n00b_aggregate", &backing));
-    const char *names[] = {"elements", "nothing"};
+            format == CORE_TARGET_OBJECT_MACH_O ? S("__DATA_CONST") : NONE,
+            format == CORE_TARGET_OBJECT_MACH_O ? S("__n00b_aggregate")
+            : format == CORE_TARGET_OBJECT_COFF ? S(".rdata$A")
+            : S(".rodata.n00b_aggregate"), &backing));
+    const core_string_t names[] = {S("elements"), S("nothing")};
     for (size_t i = 0; i < sizeof names / sizeof(*names); i++) {
         const n00b_abi_storage_v1 *storage = storage_named(metadata,
             entries, count, names[i]);
@@ -1861,15 +1885,15 @@ static void
 check_record_aggregate_storage(const uint8_t *object, size_t length,
     const core_object_section_t *metadata,
     const n00bb_abi_directory_entry_t *entries, size_t count,
-    uint32_t target_id, const char *mode)
+    uint32_t target_id, core_string_t mode)
 {
     core_target_object_format_t format = target_id == N00BB_ABI_TARGET_ARM64_MACOS
         ? CORE_TARGET_OBJECT_MACH_O
         : target_id == N00BB_ABI_TARGET_X86_64_WINDOWS
             ? CORE_TARGET_OBJECT_COFF : CORE_TARGET_OBJECT_ELF;
     const n00b_abi_storage_v1 *storage = storage_named(metadata, entries,
-        count, !strcmp(mode, "record-bits-storage") ? "flags"
-            : !strcmp(mode, "record-nested-storage") ? "group" : "point");
+        count, IS(mode, "record-bits-storage") ? S("flags")
+            : IS(mode, "record-nested-storage") ? S("group") : S("point"));
     core_object_section_t section;
     assert(storage->segment_kind == N00B_ABI_STORAGE_READ_ONLY
         && core_object_section_at(object, length, format,
@@ -1877,12 +1901,12 @@ check_record_aggregate_storage(const uint8_t *object, size_t length,
         && storage->byte_offset <= section.size
         && storage->byte_length <= section.size - storage->byte_offset);
     const uint8_t *bytes = section.bytes + storage->byte_offset;
-    if (!strcmp(mode, "record-bits-storage")) {
-        const n00b_abi_field_v1 *first = record_field_named(metadata,
+    if (IS(mode, "record-bits-storage")) {
+        const n00b_abi_field_v1 *first = RECORD_FIELD_NAMED(metadata,
             entries, count, storage->type_index, "first");
-        const n00b_abi_field_v1 *second = record_field_named(metadata,
+        const n00b_abi_field_v1 *second = RECORD_FIELD_NAMED(metadata,
             entries, count, storage->type_index, "second");
-        const n00b_abi_field_v1 *code = record_field_named(metadata,
+        const n00b_abi_field_v1 *code = RECORD_FIELD_NAMED(metadata,
             entries, count, storage->type_index, "code");
         assert(storage->byte_length == 1
             && record_bits(bytes, first->logical_bit_offset, 1) == 1
@@ -1890,14 +1914,14 @@ check_record_aggregate_storage(const uint8_t *object, size_t length,
             && record_bits(bytes, code->logical_bit_offset, 3) == 5);
         return;
     }
-    if (!strcmp(mode, "record-nested-storage")) {
-        const n00b_abi_field_v1 *lead = record_field_named(metadata,
+    if (IS(mode, "record-nested-storage")) {
+        const n00b_abi_field_v1 *lead = RECORD_FIELD_NAMED(metadata,
             entries, count, storage->type_index, "lead");
-        const n00b_abi_field_v1 *members = record_field_named(metadata,
+        const n00b_abi_field_v1 *members = RECORD_FIELD_NAMED(metadata,
             entries, count, storage->type_index, "members");
-        const n00b_abi_field_v1 *flag = record_field_named(metadata,
+        const n00b_abi_field_v1 *flag = RECORD_FIELD_NAMED(metadata,
             entries, count, lead->child_type_index, "flag");
-        const n00b_abi_field_v1 *name = record_field_named(metadata,
+        const n00b_abi_field_v1 *name = RECORD_FIELD_NAMED(metadata,
             entries, count, lead->child_type_index, "name");
         const n00b_abi_trace_v1 *group_trace = trace_for_type(metadata,
             entries, count, storage->type_index);
@@ -1931,10 +1955,10 @@ check_record_aggregate_storage(const uint8_t *object, size_t length,
         assert(!memcmp(lead_name->short_value.bytes, "lead", 4));
         core_object_section_t backing;
         assert(core_object_section_find(object, length, format,
-            format == CORE_TARGET_OBJECT_MACH_O ? "__DATA_CONST" : nullptr,
-            format == CORE_TARGET_OBJECT_MACH_O ? "__n00b_aggregate"
-            : format == CORE_TARGET_OBJECT_COFF ? ".rdata$A"
-            : ".rodata.n00b_aggregate", &backing));
+            format == CORE_TARGET_OBJECT_MACH_O ? S("__DATA_CONST") : NONE,
+            format == CORE_TARGET_OBJECT_MACH_O ? S("__n00b_aggregate")
+            : format == CORE_TARGET_OBJECT_COFF ? S(".rdata$A")
+            : S(".rodata.n00b_aggregate"), &backing));
         uint64_t pointer_offset = storage->byte_offset
             + members->logical_bit_offset / 8;
         uint64_t data_offset = aggregate_pointer_addend(object, length,
@@ -1962,12 +1986,12 @@ check_record_aggregate_storage(const uint8_t *object, size_t length,
             + name->logical_bit_offset / 8);
         const n00b_abi_string_v1 *second_name = (const void *)(second
             + name->logical_bit_offset / 8);
-        const char *long_text = "a long nested record string value";
+        core_string_t long_text = S("a long nested record string value");
         assert(first_name->short_value.selector
                 == (5 | (N00B_ABI_STRING_ASCII << 4))
             && !memcmp(first_name->short_value.bytes, "first", 5)
             && second_name->long_value.selector
-                == ((uint64_t)strlen(long_text)
+                == ((uint64_t)long_text.u8_bytes
                     | ((uint64_t)N00B_ABI_STRING_ASCII
                         << N00B_ABI_STRING_ENCODING_SHIFT)
                     | ((uint64_t)N00B_ABI_STRING_LONG
@@ -1977,9 +2001,9 @@ check_record_aggregate_storage(const uint8_t *object, size_t length,
             long_text);
         return;
     }
-    const n00b_abi_field_v1 *label = record_field_named(metadata, entries,
+    const n00b_abi_field_v1 *label = RECORD_FIELD_NAMED(metadata, entries,
         count, storage->type_index, "label");
-    const n00b_abi_field_v1 *x = record_field_named(metadata, entries,
+    const n00b_abi_field_v1 *x = RECORD_FIELD_NAMED(metadata, entries,
         count, storage->type_index, "x");
     assert(storage->byte_length >= 24
         && label->logical_bit_offset % 8 == 0
@@ -1987,8 +2011,8 @@ check_record_aggregate_storage(const uint8_t *object, size_t length,
         && core_le_load_u64(bytes + x->logical_bit_offset / 8) == 7);
     const n00b_abi_string_v1 *text = (const void *)(bytes
         + label->logical_bit_offset / 8);
-    const char *expected = "record storage has a long string value";
-    size_t text_length = strlen(expected);
+    core_string_t expected = S("record storage has a long string value");
+    size_t text_length = expected.u8_bytes;
     assert(text->long_value.selector == ((uint64_t)text_length
         | ((uint64_t)N00B_ABI_STRING_ASCII
             << N00B_ABI_STRING_ENCODING_SHIFT)
@@ -2013,13 +2037,13 @@ check_variant_storage(const uint8_t *object, size_t length,
         N00B_ABI_TABLE_LAYOUT);
     const n00bb_abi_directory_entry_t *extractors = entry_for(entries, count,
         N00B_ABI_TABLE_TAG_EXTRACTOR);
-    const n00b_abi_storage_v1 *number = storage_named(metadata, entries,
+    const n00b_abi_storage_v1 *number = STORAGE_NAMED(metadata, entries,
         count, "number_choice");
-    const n00b_abi_storage_v1 *text = storage_named(metadata, entries,
+    const n00b_abi_storage_v1 *text = STORAGE_NAMED(metadata, entries,
         count, "text_choice");
-    const n00b_abi_storage_v1 *empty = storage_named(metadata, entries,
+    const n00b_abi_storage_v1 *empty = STORAGE_NAMED(metadata, entries,
         count, "empty_choice");
-    const n00b_abi_storage_v1 *choices = storage_named(metadata, entries,
+    const n00b_abi_storage_v1 *choices = STORAGE_NAMED(metadata, entries,
         count, "choices");
     assert(types && layouts && extractors
         && number->type_index < types->record_count
@@ -2078,10 +2102,10 @@ check_variant_storage(const uint8_t *object, size_t length,
             + tag->lsb_position, tag->tag_width_bits) == i + 1);
         if (i == 0) assert(core_le_load_u64(bytes) == 7);
         if (i == 1) {
-            const char *expected = "a long variant string value";
+            core_string_t expected = S("a long variant string value");
             const n00b_abi_string_v1 *value = (const void *)bytes;
             assert(value->long_value.selector ==
-                ((uint64_t)strlen(expected)
+                ((uint64_t)expected.u8_bytes
                     | ((uint64_t)N00B_ABI_STRING_ASCII
                         << N00B_ABI_STRING_ENCODING_SHIFT)
                     | ((uint64_t)N00B_ABI_STRING_LONG
@@ -2093,9 +2117,9 @@ check_variant_storage(const uint8_t *object, size_t length,
             for (size_t j = 0; j < tag->unit_byte_offset; j++)
                 assert(bytes[j] == 0);
     }
-    const n00b_abi_storage_v1 *holder = storage_named(metadata, entries,
+    const n00b_abi_storage_v1 *holder = STORAGE_NAMED(metadata, entries,
         count, "holder");
-    const n00b_abi_field_v1 *field = record_field_named(metadata, entries,
+    const n00b_abi_field_v1 *field = RECORD_FIELD_NAMED(metadata, entries,
         count, holder->type_index, "choice");
     const n00b_abi_trace_v1 *holder_trace = trace_for_type(metadata,
         entries, count, holder->type_index);
@@ -2117,15 +2141,15 @@ check_variant_storage(const uint8_t *object, size_t length,
         + tag->lsb_position, tag->tag_width_bits) == 2);
     check_record_string_relocation(object, length, format, &holder_section,
         holder->byte_offset + field->logical_bit_offset / 8,
-        "a long variant string value");
+        S("a long variant string value"));
     core_object_section_t source, backing;
     assert(core_object_section_at(object, length, format,
         choices->segment_index, &source)
         && core_object_section_find(object, length, format,
-            format == CORE_TARGET_OBJECT_MACH_O ? "__DATA_CONST" : nullptr,
-            format == CORE_TARGET_OBJECT_MACH_O ? "__n00b_aggregate"
-            : format == CORE_TARGET_OBJECT_COFF ? ".rdata$A"
-            : ".rodata.n00b_aggregate", &backing));
+            format == CORE_TARGET_OBJECT_MACH_O ? S("__DATA_CONST") : NONE,
+            format == CORE_TARGET_OBJECT_MACH_O ? S("__n00b_aggregate")
+            : format == CORE_TARGET_OBJECT_COFF ? S(".rdata$A")
+            : S(".rodata.n00b_aggregate"), &backing));
     uint64_t data_offset = aggregate_pointer_addend(object, length, format,
         &source, &backing, choices->byte_offset);
     uint64_t descriptor_offset = aggregate_pointer_addend(object, length,
@@ -2149,7 +2173,7 @@ check_variant_storage(const uint8_t *object, size_t length,
         && record_bits(third, tag->unit_byte_offset * 8
             + tag->lsb_position, tag->tag_width_bits) == 2);
     check_record_string_relocation(object, length, format, &backing,
-        data_offset + 2 * stride, "a long variant string value");
+        data_offset + 2 * stride, S("a long variant string value"));
 }
 
 static void
@@ -2162,7 +2186,7 @@ check_tuple_storage(const uint8_t *object, size_t length,
         ? CORE_TARGET_OBJECT_MACH_O
         : target_id == N00BB_ABI_TARGET_X86_64_WINDOWS
             ? CORE_TARGET_OBJECT_COFF : CORE_TARGET_OBJECT_ELF;
-    const n00b_abi_storage_v1 *pair = storage_named(metadata, entries,
+    const n00b_abi_storage_v1 *pair = STORAGE_NAMED(metadata, entries,
         count, "pair");
     const n00bb_abi_directory_entry_t *types = entry_for(entries, count,
         N00B_ABI_TABLE_TYPE);
@@ -2176,9 +2200,9 @@ check_tuple_storage(const uint8_t *object, size_t length,
     const n00b_abi_layout_v1 *layout = row_at(metadata, layouts,
         type->layout_index);
     assert(layout->policy == N00B_ABI_LAYOUT_ORDERED);
-    const n00b_abi_field_v1 *text = record_field_named(metadata, entries,
+    const n00b_abi_field_v1 *text = RECORD_FIELD_NAMED(metadata, entries,
         count, pair->type_index, "0");
-    const n00b_abi_field_v1 *flag = record_field_named(metadata, entries,
+    const n00b_abi_field_v1 *flag = RECORD_FIELD_NAMED(metadata, entries,
         count, pair->type_index, "1");
     assert(text->declaration_ordinal == 0 && text->logical_bit_offset == 0
         && flag->declaration_ordinal == 1 && flag->logical_bit_offset == 128);
@@ -2200,11 +2224,11 @@ check_tuple_storage(const uint8_t *object, size_t length,
     assert(record_bits(section.bytes + pair->byte_offset,
                        flag->logical_bit_offset, 1) == 1);
     check_record_string_relocation(object, length, format, &section,
-        pair->byte_offset, "a long ordered tuple string value");
+        pair->byte_offset, S("a long ordered tuple string value"));
 
-    const n00b_abi_storage_v1 *holder = storage_named(metadata, entries,
+    const n00b_abi_storage_v1 *holder = STORAGE_NAMED(metadata, entries,
         count, "holder");
-    const n00b_abi_field_v1 *item = record_field_named(metadata, entries,
+    const n00b_abi_field_v1 *item = RECORD_FIELD_NAMED(metadata, entries,
         count, holder->type_index, "item");
     core_object_section_t holder_section;
     assert(item->child_type_index == pair->type_index
@@ -2216,18 +2240,18 @@ check_tuple_storage(const uint8_t *object, size_t length,
     assert(record_bits(nested, flag->logical_bit_offset, 1) == 0);
     check_record_string_relocation(object, length, format, &holder_section,
         holder->byte_offset + item->logical_bit_offset / 8,
-        "a long nested tuple string value");
+        S("a long nested tuple string value"));
 
-    const n00b_abi_storage_v1 *pairs = storage_named(metadata, entries,
+    const n00b_abi_storage_v1 *pairs = STORAGE_NAMED(metadata, entries,
         count, "pairs");
     core_object_section_t source, backing;
     assert(core_object_section_at(object, length, format,
         pairs->segment_index, &source)
         && core_object_section_find(object, length, format,
-            format == CORE_TARGET_OBJECT_MACH_O ? "__DATA_CONST" : nullptr,
-            format == CORE_TARGET_OBJECT_MACH_O ? "__n00b_aggregate"
-            : format == CORE_TARGET_OBJECT_COFF ? ".rdata$A"
-            : ".rodata.n00b_aggregate", &backing));
+            format == CORE_TARGET_OBJECT_MACH_O ? S("__DATA_CONST") : NONE,
+            format == CORE_TARGET_OBJECT_MACH_O ? S("__n00b_aggregate")
+            : format == CORE_TARGET_OBJECT_COFF ? S(".rdata$A")
+            : S(".rodata.n00b_aggregate"), &backing));
     uint64_t data_offset = aggregate_pointer_addend(object, length,
         format, &source, &backing, pairs->byte_offset);
     uint64_t descriptor_offset = aggregate_pointer_addend(object, length,
@@ -2243,9 +2267,9 @@ check_tuple_storage(const uint8_t *object, size_t length,
         && record_bits(backing.bytes + data_offset + stride,
             flag->logical_bit_offset, 1) == 0);
     check_record_string_relocation(object, length, format, &backing,
-        data_offset, "a long first tuple array value");
+        data_offset, S("a long first tuple array value"));
     check_record_string_relocation(object, length, format, &backing,
-        data_offset + stride, "a long second tuple array value");
+        data_offset + stride, S("a long second tuple array value"));
 }
 
 static void
@@ -2258,11 +2282,11 @@ check_anonymous_record_storage(const uint8_t *object, size_t length,
         ? CORE_TARGET_OBJECT_MACH_O
         : target_id == N00BB_ABI_TARGET_X86_64_WINDOWS
             ? CORE_TARGET_OBJECT_COFF : CORE_TARGET_OBJECT_ELF;
-    const n00b_abi_storage_v1 *first = storage_named(metadata, entries,
+    const n00b_abi_storage_v1 *first = STORAGE_NAMED(metadata, entries,
         count, "first");
-    const n00b_abi_storage_v1 *second = storage_named(metadata, entries,
+    const n00b_abi_storage_v1 *second = STORAGE_NAMED(metadata, entries,
         count, "second");
-    const n00b_abi_storage_v1 *nested = storage_named(metadata, entries,
+    const n00b_abi_storage_v1 *nested = STORAGE_NAMED(metadata, entries,
         count, "nested");
     const n00bb_abi_directory_entry_t *types = entry_for(entries, count,
         N00B_ABI_TABLE_TYPE);
@@ -2278,16 +2302,16 @@ check_anonymous_record_storage(const uint8_t *object, size_t length,
     const n00b_abi_layout_v1 *layout = row_at(metadata, layouts,
         type->layout_index);
     assert(layout->policy == N00B_ABI_LAYOUT_DEFAULT);
-    const n00b_abi_field_v1 *left = record_field_named(metadata, entries,
+    const n00b_abi_field_v1 *left = RECORD_FIELD_NAMED(metadata, entries,
         count, first->type_index, "left");
-    const n00b_abi_field_v1 *right = record_field_named(metadata, entries,
+    const n00b_abi_field_v1 *right = RECORD_FIELD_NAMED(metadata, entries,
         count, first->type_index, "right");
-    const n00b_abi_field_v1 *flag = record_field_named(metadata, entries,
+    const n00b_abi_field_v1 *flag = RECORD_FIELD_NAMED(metadata, entries,
         count, first->type_index, "flag");
     assert(right->logical_bit_offset % 8 == 0);
     const n00b_abi_storage_v1 *values[] = {first, second};
-    const char *texts[] = {"a long anonymous record string",
-                            "another anonymous record string"};
+    const core_string_t texts[] = {S("a long anonymous record string"),
+                                   S("another anonymous record string")};
     for (size_t i = 0; i < 2; i++) {
         core_object_section_t section;
         const n00b_abi_storage_v1 *value = values[i];
@@ -2303,7 +2327,7 @@ check_anonymous_record_storage(const uint8_t *object, size_t length,
         check_record_string_relocation(object, length, format, &section,
             value->byte_offset + right->logical_bit_offset / 8, texts[i]);
     }
-    const n00b_abi_field_v1 *item = record_field_named(metadata, entries,
+    const n00b_abi_field_v1 *item = RECORD_FIELD_NAMED(metadata, entries,
         count, nested->type_index, "item");
     assert(item->child_type_index == first->type_index
         && item->logical_bit_offset % 8 == 0);
@@ -2317,7 +2341,7 @@ check_anonymous_record_storage(const uint8_t *object, size_t length,
     check_record_string_relocation(object, length, format, &section,
         nested->byte_offset + item->logical_bit_offset / 8
             + right->logical_bit_offset / 8,
-        "a nested anonymous record string");
+        S("a nested anonymous record string"));
 }
 
 static void
@@ -2423,11 +2447,11 @@ check_record_wrapper(const core_object_section_t *metadata,
     uint32_t base_index = 0, wrapper_index = 0, synonym_index = 0;
     for (uint32_t i = 1; i < symbols->record_count; i++) {
         const n00b_abi_symbol_v1 *symbol = row_at(metadata, symbols, i);
-        if (short_name_is(&symbol->name, "Base"))
+        if (SHORT_NAME_IS(&symbol->name, "Base"))
             base_index = symbol->type_index;
-        if (short_name_is(&symbol->name, "Distinct"))
+        if (SHORT_NAME_IS(&symbol->name, "Distinct"))
             wrapper_index = symbol->type_index;
-        if (short_name_is(&symbol->name, "Synonym"))
+        if (SHORT_NAME_IS(&symbol->name, "Synonym"))
             synonym_index = symbol->type_index;
     }
     assert(base_index && wrapper_index && synonym_index == base_index
@@ -2764,45 +2788,46 @@ check_atomic_aggregates(const core_object_section_t *metadata,
 int
 main(int argc, char **argv)
 {
-    bool cycle_mode = argc >= 3 && !strcmp(argv[2], "cycle");
+    core_string_t mode = argc >= 3 ? core_string_from_cstr(argv[2]) : NONE;
+    bool cycle_mode = argc >= 3 && IS(mode, "cycle");
     assert(argc == 2 || cycle_mode || (argc == 3
-        && (!strcmp(argv[2], "enum") || !strcmp(argv[2], "function")
-            || !strcmp(argv[2], "import")
-            || !strcmp(argv[2], "import-record")
-            || !strcmp(argv[2], "import-enum")
-            || !strcmp(argv[2], "import-flagset")
-            || !strcmp(argv[2], "variant")
-            || !strcmp(argv[2], "c-foreign")
-            || !strcmp(argv[2], "constraint")
-            || !strcmp(argv[2], "trait-methods")
-            || !strcmp(argv[2], "trait-dispatch")
-            || !strcmp(argv[2], "partial-call-shape")
-            || !strcmp(argv[2], "callback")
-            || !strcmp(argv[2], "storage")
-            || !strcmp(argv[2], "typespec-storage")
-            || !strcmp(argv[2], "string-storage")
-            || !strcmp(argv[2], "array-storage")
-            || !strcmp(argv[2], "zero-element-array-storage")
-            || !strcmp(argv[2], "nested-array-storage")
-            || !strcmp(argv[2], "ragged-array-storage")
-            || !strcmp(argv[2], "record-storage")
-            || !strcmp(argv[2], "record-bits-storage")
-            || !strcmp(argv[2], "record-nested-storage")
-            || !strcmp(argv[2], "variant-storage")
-            || !strcmp(argv[2], "tuple-storage")
-            || !strcmp(argv[2], "anonymous-record-storage")
-            || !strcmp(argv[2], "alias")
-            || !strcmp(argv[2], "record-wrapper")
-            || !strcmp(argv[2], "flagset")
-            || !strcmp(argv[2], "generic")
-            || !strcmp(argv[2], "generic-local")
-            || !strcmp(argv[2], "generic-record")
-            || !strcmp(argv[2], "atomic")
-            || !strcmp(argv[2], "atomic-option")
-            || !strcmp(argv[2], "atomic-aggregates")
-            || !strcmp(argv[2], "reference-layout")
-            || !strcmp(argv[2], "option-layout")
-            || !strcmp(argv[2], "unary-trace"))));
+        && (IS(mode, "enum") || IS(mode, "function")
+            || IS(mode, "import")
+            || IS(mode, "import-record")
+            || IS(mode, "import-enum")
+            || IS(mode, "import-flagset")
+            || IS(mode, "variant")
+            || IS(mode, "c-foreign")
+            || IS(mode, "constraint")
+            || IS(mode, "trait-methods")
+            || IS(mode, "trait-dispatch")
+            || IS(mode, "partial-call-shape")
+            || IS(mode, "callback")
+            || IS(mode, "storage")
+            || IS(mode, "typespec-storage")
+            || IS(mode, "string-storage")
+            || IS(mode, "array-storage")
+            || IS(mode, "zero-element-array-storage")
+            || IS(mode, "nested-array-storage")
+            || IS(mode, "ragged-array-storage")
+            || IS(mode, "record-storage")
+            || IS(mode, "record-bits-storage")
+            || IS(mode, "record-nested-storage")
+            || IS(mode, "variant-storage")
+            || IS(mode, "tuple-storage")
+            || IS(mode, "anonymous-record-storage")
+            || IS(mode, "alias")
+            || IS(mode, "record-wrapper")
+            || IS(mode, "flagset")
+            || IS(mode, "generic")
+            || IS(mode, "generic-local")
+            || IS(mode, "generic-record")
+            || IS(mode, "atomic")
+            || IS(mode, "atomic-option")
+            || IS(mode, "atomic-aggregates")
+            || IS(mode, "reference-layout")
+            || IS(mode, "option-layout")
+            || IS(mode, "unary-trace"))));
     FILE *file = fopen(argv[1], "rb");
     assert(file);
     assert(!fseek(file, 0, SEEK_END));
@@ -2850,20 +2875,20 @@ main(int argc, char **argv)
     assert(types && fields && symbols && layouts && runs && locations_table
         && stream);
 
-    if (argc == 3 && !strcmp(argv[2], "generic-record")) {
+    if (argc == 3 && IS(mode, "generic-record")) {
         check_generic_record(&metadata, entries, header.directory_count);
         free(entries);
         free(object);
         return 0;
     }
 
-    if (argc == 3 && !strcmp(argv[2], "alias")) {
+    if (argc == 3 && IS(mode, "alias")) {
         const n00b_abi_symbol_v1 *alias = nullptr;
         const n00b_abi_symbol_v1 *answer = nullptr;
         for (uint32_t i = 1; i < symbols->record_count; i++) {
             const n00b_abi_symbol_v1 *symbol = row_at(&metadata, symbols, i);
-            if (short_name_is(&symbol->name, "Number")) alias = symbol;
-            if (short_name_is(&symbol->name, "answer")) answer = symbol;
+            if (SHORT_NAME_IS(&symbol->name, "Number")) alias = symbol;
+            if (SHORT_NAME_IS(&symbol->name, "answer")) answer = symbol;
         }
         assert(alias && answer
             && alias->kind == N00B_ABI_SYMBOL_TYPE
@@ -2871,14 +2896,14 @@ main(int argc, char **argv)
             && alias->type_index < types->record_count);
         const n00b_abi_type_v1 *type = row_at(&metadata, types,
                                                alias->type_index);
-        assert(short_name_is(&type->canonical_name, "int")
+        assert(SHORT_NAME_IS(&type->canonical_name, "int")
             && !type->owner_module_index);
         free(entries);
         free(object);
         return 0;
     }
 
-    if (argc == 3 && !strcmp(argv[2], "record-wrapper")) {
+    if (argc == 3 && IS(mode, "record-wrapper")) {
         check_record_wrapper(&metadata, entries, header.directory_count);
         free(entries);
         free(object);
@@ -2894,7 +2919,9 @@ main(int argc, char **argv)
         assert(first.ordinal < member_count);
         seen[first.ordinal] = true;
         for (int i = 3; i < argc; i++) {
-            cycle_fact_t member = cycle_fact_from_file(argv[i]);
+            core_string_t path = core_string_from_cstr(argv[i]);
+            cycle_fact_t member = cycle_fact_from_file(path);
+            core_free(path.data);
             assert(member.interface_identity == first.interface_identity
                 && member.freshness_identity == first.freshness_identity
                 && member.ordinal < member_count && !seen[member.ordinal]);
@@ -2908,111 +2935,111 @@ main(int argc, char **argv)
     }
 
 
-    if (argc == 3 && !strcmp(argv[2], "function")) {
+    if (argc == 3 && IS(mode, "function")) {
         check_function(&metadata, entries, header.directory_count);
         free(entries);
         free(object);
         return 0;
     }
 
-    if (argc == 3 && !strcmp(argv[2], "constraint")) {
+    if (argc == 3 && IS(mode, "constraint")) {
         check_constraint(&metadata, entries, header.directory_count);
         free(entries);
         free(object);
         return 0;
     }
-    if (argc == 3 && !strcmp(argv[2], "trait-methods")) {
+    if (argc == 3 && IS(mode, "trait-methods")) {
         check_trait_methods(&metadata, entries, header.directory_count);
         free(entries);
         free(object);
         return 0;
     }
-    if (argc == 3 && !strcmp(argv[2], "trait-dispatch")) {
+    if (argc == 3 && IS(mode, "trait-dispatch")) {
         check_trait_dispatch(&metadata, entries, header.directory_count);
         free(entries);
         free(object);
         return 0;
     }
-    if (argc == 3 && !strcmp(argv[2], "partial-call-shape")) {
+    if (argc == 3 && IS(mode, "partial-call-shape")) {
         check_partial_call_shape(&metadata, entries,
                                  header.directory_count);
         free(entries);
         free(object);
         return 0;
     }
-    if (argc == 3 && !strcmp(argv[2], "callback")) {
+    if (argc == 3 && IS(mode, "callback")) {
         check_callbacks(&metadata, entries, header.directory_count);
         free(entries);
         free(object);
         return 0;
     }
-    if (argc == 3 && !strcmp(argv[2], "storage")) {
+    if (argc == 3 && IS(mode, "storage")) {
         check_storage(object, (size_t)length, &metadata, entries,
             header.directory_count, header.key.target_id);
         free(entries);
         free(object);
         return 0;
     }
-    if (argc == 3 && !strcmp(argv[2], "typespec-storage")) {
+    if (argc == 3 && IS(mode, "typespec-storage")) {
         check_typespec_storage(&metadata, entries, header.directory_count);
         free(entries);
         free(object);
         return 0;
     }
-    if (argc == 3 && !strcmp(argv[2], "string-storage")) {
+    if (argc == 3 && IS(mode, "string-storage")) {
         check_string_storage(object, (size_t)length, &metadata, entries,
             header.directory_count, header.key.target_id);
         free(entries);
         free(object);
         return 0;
     }
-    if (argc == 3 && !strcmp(argv[2], "array-storage")) {
+    if (argc == 3 && IS(mode, "array-storage")) {
         check_array_storage(object, (size_t)length, &metadata, entries,
             header.directory_count, header.key.target_id);
         free(entries);
         free(object);
         return 0;
     }
-    if (argc == 3 && !strcmp(argv[2], "zero-element-array-storage")) {
+    if (argc == 3 && IS(mode, "zero-element-array-storage")) {
         check_zero_element_arrays(object, (size_t)length, &metadata, entries,
             header.directory_count, header.key.target_id);
         free(entries);
         free(object);
         return 0;
     }
-    if (argc == 3 && (!strcmp(argv[2], "nested-array-storage")
-                      || !strcmp(argv[2], "ragged-array-storage"))) {
+    if (argc == 3 && (IS(mode, "nested-array-storage")
+                      || IS(mode, "ragged-array-storage"))) {
         check_nested_array_storage(object, (size_t)length, &metadata, entries,
             header.directory_count, header.key.target_id,
-            !strcmp(argv[2], "ragged-array-storage"));
+            IS(mode, "ragged-array-storage"));
         free(entries);
         free(object);
         return 0;
     }
-    if (argc == 3 && (!strcmp(argv[2], "record-storage")
-                    || !strcmp(argv[2], "record-bits-storage")
-                    || !strcmp(argv[2], "record-nested-storage"))) {
+    if (argc == 3 && (IS(mode, "record-storage")
+                    || IS(mode, "record-bits-storage")
+                    || IS(mode, "record-nested-storage"))) {
         check_record_aggregate_storage(object, (size_t)length, &metadata,
-            entries, header.directory_count, header.key.target_id, argv[2]);
+            entries, header.directory_count, header.key.target_id, mode);
         free(entries);
         free(object);
         return 0;
     }
-    if (argc == 3 && !strcmp(argv[2], "variant-storage")) {
+    if (argc == 3 && IS(mode, "variant-storage")) {
         check_variant_storage(object, (size_t)length, &metadata,
             entries, header.directory_count, header.key.target_id);
         free(entries);
         free(object);
         return 0;
     }
-    if (argc == 3 && !strcmp(argv[2], "tuple-storage")) {
+    if (argc == 3 && IS(mode, "tuple-storage")) {
         check_tuple_storage(object, (size_t)length, &metadata, entries,
             header.directory_count, header.key.target_id);
         free(entries);
         free(object);
         return 0;
     }
-    if (argc == 3 && !strcmp(argv[2], "anonymous-record-storage")) {
+    if (argc == 3 && IS(mode, "anonymous-record-storage")) {
         check_anonymous_record_storage(object, (size_t)length, &metadata,
             entries, header.directory_count, header.key.target_id);
         free(entries);
@@ -3020,103 +3047,103 @@ main(int argc, char **argv)
         return 0;
     }
 
-    if (argc == 3 && !strcmp(argv[2], "import")) {
+    if (argc == 3 && IS(mode, "import")) {
         check_import(&metadata, entries, header.directory_count);
         free(entries);
         free(object);
         return 0;
     }
 
-    if (argc == 3 && !strcmp(argv[2], "import-record")) {
+    if (argc == 3 && IS(mode, "import-record")) {
         check_imported_record(&metadata, entries, header.directory_count);
         free(entries);
         free(object);
         return 0;
     }
 
-    if (argc == 3 && !strcmp(argv[2], "import-enum")) {
+    if (argc == 3 && IS(mode, "import-enum")) {
         check_imported_enum(&metadata, entries, header.directory_count);
         free(entries);
         free(object);
         return 0;
     }
-    if (argc == 3 && !strcmp(argv[2], "import-flagset")) {
+    if (argc == 3 && IS(mode, "import-flagset")) {
         check_imported_flagset(&metadata, entries, header.directory_count);
         free(entries);
         free(object);
         return 0;
     }
-    if (argc == 3 && !strcmp(argv[2], "c-foreign")) {
+    if (argc == 3 && IS(mode, "c-foreign")) {
         check_c_foreign(&metadata, entries, header.directory_count);
         free(entries);
         free(object);
         return 0;
     }
-    if (argc == 3 && !strcmp(argv[2], "variant")) {
+    if (argc == 3 && IS(mode, "variant")) {
         check_variant(&metadata, entries, header.directory_count);
         free(entries);
         free(object);
         return 0;
     }
-    if (argc == 3 && !strcmp(argv[2], "generic")) {
+    if (argc == 3 && IS(mode, "generic")) {
         check_generic(&metadata, entries, header.directory_count,
-            "assign_same", "item", nullptr, N00B_ABI_PASS_MODIFY);
+            S("assign_same"), S("item"), NONE, N00B_ABI_PASS_MODIFY);
         free(entries);
         free(object);
         return 0;
     }
 
-    if (argc == 3 && !strcmp(argv[2], "generic-local")) {
+    if (argc == 3 && IS(mode, "generic-local")) {
         check_generic(&metadata, entries, header.directory_count,
-            "hold_same", "item", "saved", N00B_ABI_PASS_IN);
+            S("hold_same"), S("item"), S("saved"), N00B_ABI_PASS_IN);
         free(entries);
         free(object);
         return 0;
     }
 
-    if (argc == 3 && !strcmp(argv[2], "flagset")) {
+    if (argc == 3 && IS(mode, "flagset")) {
         check_flagset(&metadata, entries, header.directory_count);
         free(entries);
         free(object);
         return 0;
     }
 
-    if (argc == 3 && !strcmp(argv[2], "atomic")) {
+    if (argc == 3 && IS(mode, "atomic")) {
         check_atomic(&metadata, entries, header.directory_count);
         free(entries);
         free(object);
         return 0;
     }
 
-    if (argc == 3 && !strcmp(argv[2], "atomic-option")) {
+    if (argc == 3 && IS(mode, "atomic-option")) {
         check_atomic_option(&metadata, entries, header.directory_count);
         free(entries);
         free(object);
         return 0;
     }
 
-    if (argc == 3 && !strcmp(argv[2], "atomic-aggregates")) {
+    if (argc == 3 && IS(mode, "atomic-aggregates")) {
         check_atomic_aggregates(&metadata, entries, header.directory_count);
         free(entries);
         free(object);
         return 0;
     }
 
-    if (argc == 3 && !strcmp(argv[2], "reference-layout")) {
+    if (argc == 3 && IS(mode, "reference-layout")) {
         check_reference_layout(&metadata, entries, header.directory_count);
         free(entries);
         free(object);
         return 0;
     }
 
-    if (argc == 3 && !strcmp(argv[2], "option-layout")) {
+    if (argc == 3 && IS(mode, "option-layout")) {
         check_option_layout(&metadata, entries, header.directory_count);
         free(entries);
         free(object);
         return 0;
     }
 
-    if (argc == 3 && !strcmp(argv[2], "unary-trace")) {
+    if (argc == 3 && IS(mode, "unary-trace")) {
         check_unary_trace(&metadata, entries, header.directory_count);
         free(entries);
         free(object);
@@ -3130,9 +3157,9 @@ main(int argc, char **argv)
         uint32_t zero_index = 0, signed_index = 0;
         for (uint32_t i = 1; i < types->record_count; i++) {
             const n00b_abi_type_v1 *type = row_at(&metadata, types, i);
-            if (short_name_is(&type->canonical_name, "enum.Zero"))
+            if (SHORT_NAME_IS(&type->canonical_name, "enum.Zero"))
                 zero_index = i;
-            if (short_name_is(&type->canonical_name, "enum.Signed"))
+            if (SHORT_NAME_IS(&type->canonical_name, "enum.Signed"))
                 signed_index = i;
         }
         assert(zero_index && signed_index && zero_index != signed_index);
@@ -3154,15 +3181,15 @@ main(int argc, char **argv)
             && signed_type->layout_index < layouts->record_count
             && (signed_type->flags & N00B_ABI_TYPE_FLAG_SIGNED));
         check_enum_item(&metadata, stream, items, symbols, locations_table,
-            zero, zero_index, 0, "only", 0, 0);
+            zero, zero_index, 0, S("only"), 0, 0);
         check_enum_item(&metadata, stream, items, symbols, locations_table,
-            signed_type, signed_index, 0, "negative", UINT64_MAX - 6,
+            signed_type, signed_index, 0, S("negative"), UINT64_MAX - 6,
             UINT64_MAX);
         check_enum_item(&metadata, stream, items, symbols, locations_table,
-            signed_type, signed_index, 1, "following", UINT64_MAX - 5,
+            signed_type, signed_index, 1, S("following"), UINT64_MAX - 5,
             UINT64_MAX);
         check_enum_item(&metadata, stream, items, symbols, locations_table,
-            signed_type, signed_index, 2, "positive", 7, 0);
+            signed_type, signed_index, 2, S("positive"), 7, 0);
         free(entries);
         free(object);
         return 0;
@@ -3189,7 +3216,7 @@ main(int argc, char **argv)
                                                      record->fields_or_arms.first);
     assert(field_index && field_index < fields->record_count);
     const n00b_abi_field_v1 *field = row_at(&metadata, fields, field_index);
-    assert(short_name_is(&field->name, "reading"));
+    assert(SHORT_NAME_IS(&field->name, "reading"));
     assert(field->parent_type_index == record_index);
     assert(field->child_type_index < types->record_count);
     assert(field->physical_runs.count);
@@ -3202,7 +3229,7 @@ main(int argc, char **argv)
     assert(field->symbol_index && field->symbol_index < symbols->record_count);
     const n00b_abi_symbol_v1 *field_symbol = row_at(&metadata, symbols,
                                                       field->symbol_index);
-    assert(short_name_is(&field_symbol->name, "reading"));
+    assert(SHORT_NAME_IS(&field_symbol->name, "reading"));
     assert(field_symbol->type_index == field->child_type_index);
     assert(field_symbol->declaration_location_index
         && field_symbol->declaration_location_index

@@ -108,8 +108,8 @@ reference_is_simple_assignment(parse_grammar_t *grammar,
 {
     for (parse_tree_t *at = reference; at;
          at = parse_tree_parent(at)) {
-        if (nt_is(grammar, at, "assign-stmt")
-            || nt_is(grammar, at, "sym-decl")) {
+        if (nt_is(grammar, at, CORE_STRING_STATIC("assign-stmt"))
+            || nt_is(grammar, at, CORE_STRING_STATIC("sym-decl"))) {
             const parse_rule_t *rule = parse_tree_rule(grammar, at);
             parse_annotation_t *assign = rule
                 ? parse_rule_find_annot(grammar, rule, PARSE_ANNOT_ASSIGNS)
@@ -120,8 +120,9 @@ reference_is_simple_assignment(parse_grammar_t *grammar,
             return value && direct_ref_expression(grammar, value)
                 && node_is_within(reference, value);
         }
-        if (nt_is(grammar, at, "func-def")
-            || nt_is(grammar, at, "context-def")) return false;
+        if (nt_is(grammar, at, CORE_STRING_STATIC("func-def"))
+            || nt_is(grammar, at, CORE_STRING_STATIC("context-def")))
+            return false;
     }
     return false;
 }
@@ -132,8 +133,9 @@ reference_is_call_argument(parse_grammar_t *grammar,
 {
     for (parse_tree_t *at = reference; at;
          at = parse_tree_parent(at)) {
-        if (nt_is(grammar, at, "func-def")
-            || nt_is(grammar, at, "context-def")) return false;
+        if (nt_is(grammar, at, CORE_STRING_STATIC("func-def"))
+            || nt_is(grammar, at, CORE_STRING_STATIC("context-def")))
+            return false;
         const parse_rule_t *rule = parse_tree_rule(grammar, at);
         parse_annotation_t *call = rule
             ? parse_rule_find_annot(grammar, rule, PARSE_ANNOT_CALL) : nullptr;
@@ -261,7 +263,8 @@ mark_expression_aliases_may_escape(parse_grammar_t *grammar,
             core_list_t(n00bb_tree_ptr_t) positional =
                 core_list_new(n00bb_tree_ptr_t);
             collect_positional_nodes(grammar,
-                child_nt(grammar, arguments, "positional-args"),
+                child_nt(grammar, arguments,
+                         CORE_STRING_STATIC("positional-args")),
                 &positional);
             parse_tree_t *argument = positional.len
                 ? positional.data[0] : nullptr;
@@ -296,10 +299,12 @@ aggregate_literal_root(parse_grammar_t *grammar, parse_tree_t *expression)
 {
     parse_tree_t *node = expression;
     while (node && !core_tree_is_leaf(node)) {
-        if (nt_is(grammar, node, "list-lit")
-            || nt_is(grammar, node, "dict-or-set-lit")) return node;
-        if (nt_is(grammar, node, "tuple-or-paren")) {
-            if (child_nt(grammar, node, "named-field-list")) return node;
+        if (nt_is(grammar, node, CORE_STRING_STATIC("list-lit"))
+            || nt_is(grammar, node, CORE_STRING_STATIC("dict-or-set-lit")))
+            return node;
+        if (nt_is(grammar, node, CORE_STRING_STATIC("tuple-or-paren"))) {
+            if (child_nt(grammar, node,
+                         CORE_STRING_STATIC("named-field-list"))) return node;
             for (size_t i = 0; i < core_tree_num_children(node); i++)
                 if (core_tree_is_leaf(core_tree_child(node, i))
                     && parse_tree_leaf_is(core_tree_child(node, i),
@@ -394,11 +399,12 @@ record_reference_facts(parse_grammar_t *grammar,
 
     n00bb_tu_state_t *state = tu_state(unit);
     const parse_rule_t *rule = parse_tree_rule(grammar, node);
-    if (nt_is(grammar, node, "return-stmt"))
+    if (nt_is(grammar, node, CORE_STRING_STATIC("return-stmt")))
         mark_return_value_aliases_may_escape(
-            grammar, unit, child_nt(grammar, node, "expression"));
+            grammar, unit,
+            child_nt(grammar, node, CORE_STRING_STATIC("expression")));
 
-    if (nt_is(grammar, node, "unary-expr")
+    if (nt_is(grammar, node, CORE_STRING_STATIC("unary-expr"))
         && core_string_eq(first_token_text(node), CORE_STRING_STATIC("ref"))
         && !reference_is_simple_assignment(grammar, node)
         && !reference_is_call_argument(grammar, node)) {
@@ -408,9 +414,9 @@ record_reference_facts(parse_grammar_t *grammar,
             mark_expression_symbols_may_escape(state, node);
     }
 
-    bool declaration = nt_is(grammar, node, "sym-decl");
-    bool assignment = nt_is(grammar, node, "assign-stmt")
-        || nt_is(grammar, node, "binop-assign-stmt");
+    bool declaration = nt_is(grammar, node, CORE_STRING_STATIC("sym-decl"));
+    bool assignment = nt_is(grammar, node, CORE_STRING_STATIC("assign-stmt"))
+        || nt_is(grammar, node, CORE_STRING_STATIC("binop-assign-stmt"));
     if (!declaration && !assignment) return;
     parse_annotation_t *assign = rule
         ? parse_rule_find_annot(grammar, rule, PARSE_ANNOT_ASSIGNS) : nullptr;

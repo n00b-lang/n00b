@@ -8,10 +8,12 @@
 #include "lib/alloc.h"
 #include "lib/object_section.h"
 
+#define S(x) CORE_STRING_STATIC(x)
+
 static void
-check_target(const char *triple, uint32_t target_id,
-             const char *metadata_name, const char *metadata_segment,
-             const char *data_name, const char *data_segment)
+check_target(core_string_t triple, uint32_t target_id,
+             core_string_t metadata_name, core_string_t metadata_segment,
+             core_string_t data_name, core_string_t data_segment)
 {
     core_target_desc_t target;
     assert(core_target_profile(triple, 0, &target));
@@ -42,7 +44,7 @@ check_target(const char *triple, uint32_t target_id,
     core_target_desc_t other_target;
     assert(core_target_profile(
         target_id == N00BB_ABI_TARGET_X86_64_LINUX
-            ? "arm64-macos" : "x86_64-linux", 0, &other_target));
+            ? S("arm64-macos") : S("x86_64-linux"), 0, &other_target));
     uint8_t *wrong_object = nullptr;
     size_t wrong_bytes = 0;
     assert(!n00bb_abi_write_object(&other_target, &packed,
@@ -67,7 +69,7 @@ check_target(const char *triple, uint32_t target_id,
         .alignment = _Alignof(uint64_t), .writable = true,
     };
     core_object_emit_symbol_t external = {
-        .name = "external", .section_index = 0, .exported = true,
+        .name = S("external"), .section_index = 0, .exported = true,
     };
     core_object_emit_absolute64_t relocation = {
         .section_index = 2, .symbol_index = 0,
@@ -109,11 +111,14 @@ check_target(const char *triple, uint32_t target_id,
 int
 main(void)
 {
-    check_target("x86_64-linux", N00BB_ABI_TARGET_X86_64_LINUX,
-                 ".data.rel.ro.n00b_meta", nullptr, ".data", nullptr);
-    check_target("arm64-macos", N00BB_ABI_TARGET_ARM64_MACOS,
-                 "__n00b_meta", "__DATA_CONST", "__data", "__DATA");
-    check_target("x86_64-windows", N00BB_ABI_TARGET_X86_64_WINDOWS,
-                 ".n00b$M", nullptr, ".data", nullptr);
+    check_target(S("x86_64-linux"), N00BB_ABI_TARGET_X86_64_LINUX,
+                 S(".data.rel.ro.n00b_meta"), (core_string_t){}, S(".data"),
+                 (core_string_t){});
+    check_target(S("arm64-macos"), N00BB_ABI_TARGET_ARM64_MACOS,
+                 S("__n00b_meta"), S("__DATA_CONST"), S("__data"),
+                 S("__DATA"));
+    check_target(S("x86_64-windows"), N00BB_ABI_TARGET_X86_64_WINDOWS,
+                 S(".n00b$M"), (core_string_t){}, S(".data"),
+                 (core_string_t){});
     return 0;
 }

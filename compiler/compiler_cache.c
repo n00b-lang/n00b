@@ -25,7 +25,7 @@
 core_list_decl(size_t);
 
 typedef struct {
-    char *name;
+    core_string_t name;
     uint8_t *data;
     size_t length;
 } cache_section_t;
@@ -70,9 +70,9 @@ put_bytes(core_buffer_t *out, const void *data, size_t length)
 }
 
 static void
-put_text(core_buffer_t *out, const char *text)
+put_text(core_buffer_t *out, core_string_t text)
 {
-    put_bytes(out, text, text ? strlen(text) : 0);
+    put_bytes(out, text.data, text.data ? text.u8_bytes : 0);
 }
 
 static uint64_t
@@ -83,9 +83,9 @@ buffer_hash(const core_buffer_t *buffer)
 }
 
 static bool
-make_directories(const char *path)
+make_directories(core_string_t path)
 {
-    char *copy = core_strdup(path);
+    char *copy = core_string_to_cstr(path);
     if (!copy) return false;
     bool ok = true;
     for (char *at = copy + 1; ok && *at; at++) {
@@ -100,11 +100,13 @@ make_directories(const char *path)
 }
 
 static bool
-read_file(const char *path, uint8_t **data, size_t *length)
+read_file(core_string_t path, uint8_t **data, size_t *length)
 {
     *data = nullptr;
     *length = 0;
-    FILE *file = fopen(path, "rb");
+    char *native = core_string_to_cstr(path);
+    FILE *file = native ? fopen(native, "rb") : nullptr;
+    core_free(native);
     if (!file) return false;
     bool ok = !fseek(file, 0, SEEK_END);
     long size = ok ? ftell(file) : -1;
@@ -122,15 +124,19 @@ read_file(const char *path, uint8_t **data, size_t *length)
 }
 
 static bool
-write_file_atomic(const char *path, const void *data, size_t length)
+write_file_atomic(core_string_t path, const void *data, size_t length)
 {
     core_buffer_t temporary = {0};
-    core_buffer_printf(&temporary, "%s.tmp.%ld", path, (long)getpid());
-    FILE *file = temporary.data ? fopen(temporary.data, "wb") : nullptr;
+    core_buffer_append_string(&temporary, path);
+    core_buffer_printf(&temporary, ".tmp.%ld", (long)getpid());
+    char *native = core_string_to_cstr(path);
+    FILE *file = temporary.data && native ? fopen(temporary.data, "wb")
+                                          : nullptr;
     bool ok = file && (!length || fwrite(data, 1, length, file) == length);
     if (file && fclose(file)) ok = false;
-    if (ok) ok = !rename(temporary.data, path);
+    if (ok) ok = !rename(temporary.data, native);
     else if (temporary.data) unlink(temporary.data);
+    core_free(native);
     core_buffer_release(&temporary);
     return ok;
 }
@@ -153,7 +159,7 @@ static void
 sections_release(core_list_t(cache_section_t) *sections)
 {
     for (size_t i = 0; i < sections->len; i++) {
-        core_free(sections->data[i].name);
+        core_free(sections->data[i].name.data);
         free(sections->data[i].data);
     }
     core_list_free(*sections);
@@ -186,11 +192,16 @@ sections_parse(const uint8_t *data, size_t length,
             at += (size_t)size;
         }
         cache_section_t section = {
-            .name = core_strndup((const char *)starts[0], fields[0]),
+            .name = core_string_dup(core_string_borrow(
+                (const char *)starts[0], fields[0])),
             .data = malloc(fields[1] ? fields[1] : 1),
             .length = fields[1],
         };
-        if (!section.name || !section.data) return false;
+        if (!section.name.data || !section.data) {
+            core_free(section.name.data);
+            free(section.data);
+            return false;
+        }
         if (fields[1]) memcpy(section.data, starts[1], fields[1]);
         core_list_push(*sections, section);
     }
@@ -211,21 +222,21 @@ sections_serialize(const core_list_t(cache_section_t) *sections,
 }
 
 static bool
-sections_set(core_list_t(cache_section_t) *sections, const char *name,
+sections_set(core_list_t(cache_section_t) *sections, core_string_t name,
              const void *data, size_t length)
 {
     uint8_t *copy = malloc(length ? length : 1);
     if (!copy) return false;
     if (length) memcpy(copy, data, length);
     for (size_t i = 0; i < sections->len; i++) {
-        if (strcmp(sections->data[i].name, name)) continue;
+        if (!core_string_eq(sections->data[i].name, name)) continue;
         free(sections->data[i].data);
         sections->data[i].data = copy;
         sections->data[i].length = length;
         return true;
     }
-    char *owned = core_strdup(name);
-    if (!owned) {
+    core_string_t owned = core_string_dup(name);
+    if (!owned.data) {
         free(copy);
         return false;
     }
@@ -233,11 +244,11 @@ sections_set(core_list_t(cache_section_t) *sections, const char *name,
     return true;
 }
 
-static const char *
+static core_string_t
 phase_name(void)
 {
     return n00bb_compile_phase() == PARSE_SYM_PHASE_COMPTIME
-        ? "comptime" : "runtime";
+        ? CORE_STRING_STATIC("comptime") : CORE_STRING_STATIC("runtime");
 }
 
 static int
@@ -245,14 +256,7 @@ compare_units(const void *left, const void *right)
 {
     const core_translation_unit_t *a = *(core_translation_unit_t *const *)left;
     const core_translation_unit_t *b = *(core_translation_unit_t *const *)right;
-    size_t length = a->module.identifier.u8_bytes
-        < b->module.identifier.u8_bytes
-        ? a->module.identifier.u8_bytes : b->module.identifier.u8_bytes;
-    int order = memcmp(a->module.identifier.data, b->module.identifier.data,
-                       length);
-    if (order) return order;
-    return (a->module.identifier.u8_bytes > b->module.identifier.u8_bytes)
-        - (a->module.identifier.u8_bytes < b->module.identifier.u8_bytes);
+    return core_string_cmp(a->module.identifier, b->module.identifier);
 }
 
 static size_t
@@ -266,27 +270,23 @@ scc_of_unit(const core_list_t(cache_scc_t) *sccs,
 }
 
 static size_t
-scc_of_module_name(const core_list_t(cache_scc_t) *sccs, const char *name)
+scc_of_module_name(const core_list_t(cache_scc_t) *sccs, core_string_t name)
 {
-    size_t length = name ? strlen(name) : 0;
     for (size_t s = 0; s < sccs->len; s++)
         for (size_t m = 0; m < sccs->data[s].members.len; m++) {
             core_string_t identifier =
                 sccs->data[s].members.data[m]->module.identifier;
-            if (identifier.u8_bytes == length
-                && !memcmp(identifier.data, name, length)) return s;
+            if (core_string_eq(identifier, name)) return s;
         }
     return SIZE_MAX;
 }
 
 static bool
-module_member(const cache_scc_t *scc, const char *module, size_t length)
+module_member(const cache_scc_t *scc, core_string_t module)
 {
-    for (size_t m = 0; module && m < scc->members.len; m++) {
-        core_string_t identifier = scc->members.data[m]->module.identifier;
-        if (identifier.u8_bytes == length
-            && !memcmp(identifier.data, module, length)) return true;
-    }
+    for (size_t m = 0; module.data && m < scc->members.len; m++)
+        if (core_string_eq(scc->members.data[m]->module.identifier, module))
+            return true;
     return false;
 }
 
@@ -296,69 +296,62 @@ typedef struct {
 } interface_filter_t;
 
 static size_t
-owner_module_length(const core_list_t(cache_scc_t) *sccs, const char *owner)
+owner_module_length(const core_list_t(cache_scc_t) *sccs, core_string_t owner)
 {
     size_t best = 0;
-    size_t length = owner ? strlen(owner) : 0;
+    size_t length = owner.data ? owner.u8_bytes : 0;
     for (size_t s = 0; s < sccs->len; s++)
         for (size_t m = 0; m < sccs->data[s].members.len; m++) {
             core_string_t identifier =
                 sccs->data[s].members.data[m]->module.identifier;
             if (identifier.u8_bytes < length && identifier.u8_bytes > best
-                && owner[identifier.u8_bytes] == '.'
-                && !memcmp(identifier.data, owner, identifier.u8_bytes))
+                && owner.data[identifier.u8_bytes] == '.'
+                && !memcmp(identifier.data, owner.data, identifier.u8_bytes))
                 best = identifier.u8_bytes;
         }
     return best;
 }
 
 static bool
-scc_declares_package(const cache_scc_t *scc, const char *name)
+scc_declares_package(const cache_scc_t *scc, core_string_t name)
 {
-    size_t length = strlen(name);
     for (size_t m = 0; m < scc->members.len; m++) {
         n00bb_tu_state_t *state = tu_state(scc->members.data[m]);
-        for (size_t p = 0; state && p < state->package_declarations.len; p++) {
-            core_string_t package = state->package_declarations.data[p].name;
-            if (package.u8_bytes == length
-                && !memcmp(package.data, name, length))
+        for (size_t p = 0; state && p < state->package_declarations.len; p++)
+            if (core_string_eq(state->package_declarations.data[p].name, name))
                 return true;
-        }
     }
     return false;
 }
 
 static bool
-filter_module(void *context, const char *module)
+filter_module(void *context, core_string_t module)
 {
     interface_filter_t *filter = context;
-    return module && module_member(filter->scc, module, strlen(module));
+    return module.data && module_member(filter->scc, module);
 }
 
 static bool
 filter_metadata(void *context, th_env_metadata_owner_t kind,
-                const char *owner)
+                core_string_t owner)
 {
     interface_filter_t *filter = context;
-    if (!owner || kind != TH_ENV_METADATA_ENVIRONMENT) return false;
-    return module_member(filter->scc, owner, strlen(owner))
+    if (!owner.data || kind != TH_ENV_METADATA_ENVIRONMENT) return false;
+    return module_member(filter->scc, owner)
         || scc_declares_package(filter->scc, owner);
 }
 
 static bool
-filter_intrinsic(void *context, const char *trait, const th_type *receiver)
+filter_intrinsic(void *context, core_string_t trait, const th_type *receiver)
 {
     interface_filter_t *filter = context;
     (void)trait;
-    const char *name = nullptr;
-    size_t length = 0;
-    if (!receiver || !th_named_info((th_type *)receiver, &name, &length,
-                                    nullptr, nullptr) || !name) return false;
-    char *owned = core_strndup(name, length);
-    size_t module = owned ? owner_module_length(filter->sccs, owned) : 0;
-    bool keep = module && module_member(filter->scc, owned, module);
-    core_free(owned);
-    return keep;
+    core_string_t name = {0};
+    if (!receiver || !th_named_info((th_type *)receiver, &name, nullptr,
+                                    nullptr) || !name.data) return false;
+    size_t module = owner_module_length(filter->sccs, name);
+    return module
+        && module_member(filter->scc, core_string_slice(name, 0, module));
 }
 
 static bool
@@ -388,12 +381,12 @@ interface_bytes(n00bb_link_analysis_t *analysis,
 }
 
 static uint64_t
-compiler_identity(const char *compiler_path)
+compiler_identity(core_string_t compiler_path)
 {
     uint8_t *bytes = nullptr;
     size_t length = 0;
     uint64_t identity = 0;
-    if (compiler_path && read_file(compiler_path, &bytes, &length))
+    if (compiler_path.data && read_file(compiler_path, &bytes, &length))
         identity = core_xxh3_64bits_raw(bytes, length);
     free(bytes);
     return identity;
@@ -402,16 +395,19 @@ compiler_identity(const char *compiler_path)
 static void
 append_flags(core_buffer_t *out, parse_cmdr_result_t *args)
 {
-    static const char *const flags[] = {
-        "--release", "--native", "--generic", "--lto",
-        "--gc-conservative-stacks", "--no-specialize",
+    static const core_string_t flags[] = {
+        CORE_STRING_STATIC("--release"), CORE_STRING_STATIC("--native"),
+        CORE_STRING_STATIC("--generic"), CORE_STRING_STATIC("--lto"),
+        CORE_STRING_STATIC("--gc-conservative-stacks"),
+        CORE_STRING_STATIC("--no-specialize"),
     };
     for (size_t i = 0; i < sizeof(flags) / sizeof(*flags); i++)
-        put_u32(out, parse_cmdr_flag_present(args,
-            core_string_from_cstr(flags[i])));
-    static const char *const valued[] = {"--define", "--native-root"};
+        put_u32(out, parse_cmdr_flag_present(args, flags[i]));
+    static const core_string_t valued[] = {
+        CORE_STRING_STATIC("--define"), CORE_STRING_STATIC("--native-root"),
+    };
     for (size_t f = 0; f < sizeof(valued) / sizeof(*valued); f++) {
-        core_string_t flag = core_string_from_cstr(valued[f]);
+        core_string_t flag = valued[f];
         int32_t count = parse_cmdr_flag_value_count(args, flag);
         put_u32(out, (uint32_t)(count > 0 ? count : 0));
         for (int32_t i = 0; i < count; i++) {
@@ -438,7 +434,7 @@ scc_freshness(cache_scc_t *scc)
         core_translation_unit_t *unit = scc->members.data[m];
         freshness_member(&input, unit->module.identifier.data,
                          unit->module.identifier.u8_bytes,
-                         core_source_file_contents(&unit->source),
+                         core_source_file_contents(&unit->source).data,
                          core_source_file_size(&unit->source));
         for (size_t i = 0; i < core_translation_unit_import_count(unit);
              i++) {
@@ -544,23 +540,20 @@ collect_sccs(core_link_unit_t *link, core_list_t(cache_scc_t) *sccs,
     return true;
 }
 
-typedef char *cache_text_t;
-core_list_decl(cache_text_t);
-
 typedef const th_env *cache_environment_t;
 core_list_decl(cache_environment_t);
 
 typedef struct {
-    char *name;
-    char *path;
+    core_string_t name;
+    core_string_t path;
     uint64_t source_hash;
-    core_list_t(cache_text_t) imports;
+    core_list_t(core_string_t) imports;
     ir_module_t *module;
 } cache_member_t;
 core_list_decl(cache_member_t);
 
 typedef struct {
-    char *name;
+    core_string_t name;
     uint64_t value;
 } cache_link_t;
 core_list_decl(cache_link_t);
@@ -579,7 +572,7 @@ typedef struct {
     core_list_t(cache_member_t) members;
     core_list_t(cache_link_t) imports;
     core_list_t(cache_link_t) inlined;
-    core_list_t(cache_text_t) references;
+    core_list_t(core_string_t) references;
     core_list_t(cache_section_t) sections;
     core_list_t(size_t) assumed;
     bool fresh;
@@ -593,7 +586,7 @@ typedef struct {
 core_list_decl(cache_entry_t);
 
 typedef struct {
-    char *module;
+    core_string_t module;
     core_buffer_t ir;
     core_buffer_t references;
 } cache_snapshot_t;
@@ -606,9 +599,9 @@ typedef struct {
 core_list_decl(cache_instance_t);
 
 struct n00bb_cache_t {
-    char *directory;
-    char *root_path;
-    char *triple;
+    core_string_t directory;
+    core_string_t root_path;
+    core_string_t triple;
     uint64_t compiler;
     core_buffer_t flags;
     ir_ctx_t *ir_context;
@@ -644,36 +637,48 @@ scc_key(const n00bb_cache_t *cache, uint64_t freshness,
     return result;
 }
 
-static char *
-canonical_path(const char *path, size_t length)
+static core_string_t
+canonical_path(core_string_t path)
 {
-    char *owned = core_strndup(path, length);
+    char *owned = core_string_to_cstr(path);
+    if (!owned) return (core_string_t){0};
     char resolved[PATH_MAX];
-    char *result = owned && realpath(owned, resolved)
-        ? core_strdup(resolved) : nullptr;
-    if (!result) result = owned;
-    else core_free(owned);
+    core_string_t result = realpath(owned, resolved)
+        ? core_string_from_cstr(resolved) : core_string_dup(path);
+    core_free(owned);
     return result;
 }
 
 static const cache_section_t *
-section_named(const core_list_t(cache_section_t) *sections, const char *name)
+section_named(const core_list_t(cache_section_t) *sections,
+              core_string_t name)
 {
     for (size_t i = 0; i < sections->len; i++)
-        if (!strcmp(sections->data[i].name, name)) return &sections->data[i];
+        if (core_string_eq(sections->data[i].name, name))
+            return &sections->data[i];
     return nullptr;
 }
 
+static void
+phase_name_into(core_buffer_t *out, core_string_t kind)
+{
+    core_buffer_append_string(out, phase_name());
+    core_buffer_putc(out, '.');
+    core_buffer_append_string(out, kind);
+}
+
 static const cache_section_t *
-phase_section(const cache_entry_t *entry, const char *kind,
-              const char *module)
+phase_section(const cache_entry_t *entry, core_string_t kind,
+              core_string_t module)
 {
     core_buffer_t name = {0};
-    if (module) core_buffer_printf(&name, "%s.%s.%s", phase_name(), kind,
-                                   module);
-    else core_buffer_printf(&name, "%s.%s", phase_name(), kind);
+    phase_name_into(&name, kind);
+    if (module.data) {
+        core_buffer_putc(&name, '.');
+        core_buffer_append_string(&name, module);
+    }
     const cache_section_t *section = section_named(&entry->sections,
-                                                   name.data);
+        core_buffer_string(&name));
     core_buffer_release(&name);
     return section;
 }
@@ -713,17 +718,18 @@ read_u32(manifest_reader_t *r)
     return value;
 }
 
-static char *
+static core_string_t
 read_text(manifest_reader_t *r)
 {
     uint64_t length = read_u64(r);
     if (r->failed || length > r->length - r->at) {
         r->failed = true;
-        return nullptr;
+        return (core_string_t){0};
     }
-    char *text = core_strndup((const char *)r->data + r->at, (size_t)length);
+    core_string_t text = core_string_dup(core_string_borrow(
+        (const char *)r->data + r->at, (size_t)length));
     r->at += (size_t)length;
-    if (!text) r->failed = true;
+    if (!text.data) r->failed = true;
     return text;
 }
 
@@ -732,10 +738,10 @@ read_links(manifest_reader_t *r, core_list_t(cache_link_t) *links)
 {
     uint32_t count = read_u32(r);
     for (uint32_t i = 0; !r->failed && i < count; i++) {
-        char *name = read_text(r);
+        core_string_t name = read_text(r);
         uint64_t value = read_u64(r);
         if (!r->failed) core_list_push(*links, ((cache_link_t){name, value}));
-        else core_free(name);
+        else core_free(name.data);
     }
 }
 
@@ -744,21 +750,21 @@ entry_release(cache_entry_t *entry)
 {
     for (size_t m = 0; m < entry->members.len; m++) {
         cache_member_t *member = &entry->members.data[m];
-        core_free(member->name);
-        core_free(member->path);
+        core_free(member->name.data);
+        core_free(member->path.data);
         for (size_t i = 0; i < member->imports.len; i++)
-            core_free(member->imports.data[i]);
+            core_free(member->imports.data[i].data);
         core_list_free(member->imports);
     }
     core_list_free(entry->members);
     for (size_t i = 0; i < entry->imports.len; i++)
-        core_free(entry->imports.data[i].name);
+        core_free(entry->imports.data[i].name.data);
     core_list_free(entry->imports);
     for (size_t i = 0; i < entry->inlined.len; i++)
-        core_free(entry->inlined.data[i].name);
+        core_free(entry->inlined.data[i].name.data);
     core_list_free(entry->inlined);
     for (size_t i = 0; i < entry->references.len; i++)
-        core_free(entry->references.data[i]);
+        core_free(entry->references.data[i].data);
     core_list_free(entry->references);
     core_list_free(entry->assumed);
     sections_release(&entry->sections);
@@ -771,13 +777,13 @@ entry_parse(cache_entry_t *entry, const uint8_t *data, size_t length)
     entry->members = core_list_new(cache_member_t);
     entry->imports = core_list_new(cache_link_t);
     entry->inlined = core_list_new(cache_link_t);
-    entry->references = core_list_new(cache_text_t);
+    entry->references = core_list_new(core_string_t);
     entry->sections = core_list_new(cache_section_t);
     if (!sections_parse(data, length, &entry->sections)) return false;
     core_buffer_t manifest_name = {0};
-    core_buffer_printf(&manifest_name, "%s.manifest", phase_name());
+    phase_name_into(&manifest_name, CORE_STRING_STATIC("manifest"));
     const cache_section_t *manifest = section_named(&entry->sections,
-                                                    manifest_name.data);
+        core_buffer_string(&manifest_name));
     core_buffer_release(&manifest_name);
     if (!manifest) return false;
     manifest_reader_t r = {.data = manifest->data,
@@ -789,13 +795,13 @@ entry_parse(cache_entry_t *entry, const uint8_t *data, size_t length)
     for (uint32_t m = 0; !r.failed && m < members; m++) {
         cache_member_t member = {
             .name = read_text(&r), .path = read_text(&r),
-            .imports = core_list_new(cache_text_t),
+            .imports = core_list_new(core_string_t),
         };
         member.source_hash = read_u64(&r);
         uint32_t imports = read_u32(&r);
         for (uint32_t i = 0; !r.failed && i < imports; i++) {
-            char *name = read_text(&r);
-            if (name) core_list_push(member.imports, name);
+            core_string_t name = read_text(&r);
+            if (name.data) core_list_push(member.imports, name);
         }
         core_list_push(entry->members, member);
     }
@@ -803,23 +809,23 @@ entry_parse(cache_entry_t *entry, const uint8_t *data, size_t length)
     read_links(&r, &entry->inlined);
     uint32_t references = read_u32(&r);
     for (uint32_t i = 0; !r.failed && i < references; i++) {
-        char *name = read_text(&r);
-        if (name) core_list_push(entry->references, name);
+        core_string_t name = read_text(&r);
+        if (name.data) core_list_push(entry->references, name);
     }
     return !r.failed && r.at == r.length && key == entry->key;
 }
 
 static uint64_t
-module_key(const n00bb_cache_t *cache, const char *module)
+module_key(const n00bb_cache_t *cache, core_string_t module)
 {
-    for (size_t i = 0; module && i < cache->module_keys.len; i++)
-        if (!strcmp(cache->module_keys.data[i].name, module))
+    for (size_t i = 0; module.data && i < cache->module_keys.len; i++)
+        if (core_string_eq(cache->module_keys.data[i].name, module))
             return cache->module_keys.data[i].value;
     return 0;
 }
 
 static cache_entry_t *
-entry_for_module(n00bb_cache_t *cache, const char *module)
+entry_for_module(n00bb_cache_t *cache, core_string_t module)
 {
     uint64_t key = module_key(cache, module);
     for (size_t i = 0; key && i < cache->entries.len; i++)
@@ -838,13 +844,14 @@ entry_fresh(const n00bb_cache_t *cache, const cache_entry_t *entry)
         uint8_t *source = nullptr;
         size_t source_bytes = 0;
         ok = module_key(cache, member->name) == entry->key
-            && (!cache->root_path || strcmp(member->path, cache->root_path))
+            && (!cache->root_path.data
+                || !core_string_eq(member->path, cache->root_path))
             && read_file(member->path, &source, &source_bytes)
             && core_xxh3_64bits_raw(source ? (const void *)source : "",
                                     source_bytes) == member->source_hash;
         if (ok) {
-            freshness_member(&freshness, member->name, strlen(member->name),
-                             source, source_bytes);
+            freshness_member(&freshness, member->name.data,
+                             member->name.u8_bytes, source, source_bytes);
             for (size_t i = 0; i < member->imports.len; i++)
                 put_text(&freshness, member->imports.data[i]);
         }
@@ -856,16 +863,19 @@ entry_fresh(const n00bb_cache_t *cache, const cache_entry_t *entry)
 }
 
 static bool
-entry_excluded(const cache_entry_t *entry, const char *excluded)
+entry_excluded(const cache_entry_t *entry, core_string_t excluded)
 {
-    for (const char *at = excluded; at && *at;) {
-        const char *end = strchr(at, ',');
-        size_t length = end ? (size_t)(end - at) : strlen(at);
+    size_t at = 0;
+    while (excluded.data && at < excluded.u8_bytes) {
+        core_string_t rest = core_string_slice(excluded, at,
+                                               excluded.u8_bytes - at);
+        int64_t comma = core_string_find_byte(rest, ',');
+        core_string_t item = core_string_slice(rest, 0,
+            comma >= 0 ? (size_t)comma : rest.u8_bytes);
         for (size_t m = 0; m < entry->members.len; m++)
-            if (strlen(entry->members.data[m].name) == length
-                && !memcmp(entry->members.data[m].name, at, length))
+            if (core_string_eq(entry->members.data[m].name, item))
                 return true;
-        at = end ? end + 1 : nullptr;
+        at = comma >= 0 ? at + (size_t)comma + 1 : excluded.u8_bytes;
     }
     return false;
 }
@@ -876,11 +886,15 @@ entry_validate(n00bb_cache_t *cache, cache_entry_t *entry)
     if (entry->state == ENTRY_VALID) return true;
     if (entry->state != ENTRY_UNKNOWN) return false;
     entry->state = ENTRY_VISITING;
-    bool ok = entry->fresh && phase_section(entry, "ir", nullptr)
-        && phase_section(entry, "interface", nullptr);
+    bool ok = entry->fresh
+        && phase_section(entry, CORE_STRING_STATIC("ir"), (core_string_t){0})
+        && phase_section(entry, CORE_STRING_STATIC("interface"),
+                         (core_string_t){0});
     for (size_t m = 0; ok && m < entry->members.len; m++)
-        ok = phase_section(entry, "native", entry->members.data[m].name)
-            && phase_section(entry, "abi", entry->members.data[m].name);
+        ok = phase_section(entry, CORE_STRING_STATIC("native"),
+                           entry->members.data[m].name)
+            && phase_section(entry, CORE_STRING_STATIC("abi"),
+                             entry->members.data[m].name);
     uint64_t *imports = core_alloc_array(uint64_t,
                                          entry->imports.len + 1);
     uint64_t *inlined = core_alloc_array(uint64_t,
@@ -917,8 +931,8 @@ decode_interfaces(n00bb_cache_t *cache)
     for (size_t e = 0; ok && e < cache->entries.len; e++) {
         cache_entry_t *entry = &cache->entries.data[e];
         if (entry->state != ENTRY_VALID) continue;
-        const cache_section_t *interface = phase_section(entry, "interface",
-                                                         nullptr);
+        const cache_section_t *interface = phase_section(entry,
+            CORE_STRING_STATIC("interface"), (core_string_t){0});
         entry->interface = interface ? th_env_decode(nullptr,
             interface->data, interface->length) : nullptr;
         ok = entry->interface != nullptr;
@@ -934,37 +948,56 @@ static void
 read_module_keys(n00bb_cache_t *cache)
 {
     core_buffer_t path = {0};
-    core_buffer_printf(&path, "%s/modules", cache->directory);
-    DIR *directory = opendir(path.data);
+    core_buffer_append_string(&path, cache->directory);
+    core_buffer_puts(&path, "/modules");
+    DIR *directory = path.data ? opendir(path.data) : nullptr;
+    core_buffer_t suffix = {0};
+    core_buffer_putc(&suffix, '.');
+    core_buffer_append_string(&suffix, phase_name());
+    core_buffer_puts(&suffix, ".key");
     for (struct dirent *item = directory ? readdir(directory) : nullptr;
          item; item = readdir(directory)) {
-        size_t length = strlen(item->d_name);
-        core_buffer_t suffix = {0};
-        core_buffer_printf(&suffix, ".%s.key", phase_name());
-        bool matches = length > suffix.byte_len
-            && !strcmp(item->d_name + length - suffix.byte_len, suffix.data);
-        size_t suffix_bytes = suffix.byte_len;
-        core_buffer_release(&suffix);
-        if (!matches) continue;
+        core_string_t entry_name = core_string_from_cstr(item->d_name);
+        bool matches = entry_name.u8_bytes > suffix.byte_len
+            && core_string_ends_with(entry_name, core_buffer_string(&suffix));
+        if (!matches) {
+            core_free(entry_name.data);
+            continue;
+        }
         core_buffer_t file = {0};
-        core_buffer_printf(&file, "%s/%s", path.data, item->d_name);
+        core_buffer_append_string(&file, core_buffer_string(&path));
+        core_buffer_putc(&file, '/');
+        core_buffer_append_string(&file, entry_name);
         uint8_t *bytes = nullptr;
         size_t byte_count = 0;
-        if (read_file(file.data, &bytes, &byte_count) && byte_count >= 16) {
-            char text[17] = {0};
-            memcpy(text, bytes, 16);
-            uint64_t key = strtoull(text, nullptr, 16);
-            char *name = core_strndup(item->d_name, length - suffix_bytes);
-            if (key && name)
+        if (read_file(core_buffer_string(&file), &bytes, &byte_count)
+            && byte_count >= 16) {
+            core_string_t text = core_string_borrow((const char *)bytes, 16);
+            int64_t terminator = core_string_find_byte(text, '\0');
+            if (terminator >= 0) text.u8_bytes = (size_t)terminator;
+            uint64_t key = core_string_strtoull(text, 16);
+            core_string_t name = core_string_dup(core_string_slice(entry_name,
+                0, entry_name.u8_bytes - suffix.byte_len));
+            if (key && name.data)
                 core_list_push(cache->module_keys,
                                ((cache_link_t){name, key}));
-            else core_free(name);
+            else core_free(name.data);
         }
         free(bytes);
         core_buffer_release(&file);
+        core_free(entry_name.data);
     }
     if (directory) closedir(directory);
+    core_buffer_release(&suffix);
     core_buffer_release(&path);
+}
+
+static void
+object_path(const n00bb_cache_t *cache, uint64_t key, core_buffer_t *path)
+{
+    core_buffer_printf(path, "%.*s/%016llx.n00bo",
+                       (int)cache->directory.u8_bytes, cache->directory.data,
+                       (unsigned long long)key);
 }
 
 static void
@@ -977,12 +1010,11 @@ read_entries(n00bb_cache_t *cache)
             seen |= cache->entries.data[e].key == key;
         if (seen) continue;
         core_buffer_t path = {0};
-        core_buffer_printf(&path, "%s/%016llx.n00bo", cache->directory,
-                           (unsigned long long)key);
+        object_path(cache, key, &path);
         uint8_t *bytes = nullptr;
         size_t length = 0;
         cache_entry_t entry = {.key = key};
-        bool ok = read_file(path.data, &bytes, &length)
+        bool ok = read_file(core_buffer_string(&path), &bytes, &length)
             && entry_parse(&entry, bytes, length);
         free(bytes);
         core_buffer_release(&path);
@@ -994,27 +1026,37 @@ read_entries(n00bb_cache_t *cache)
 static bool cached_mutator(void *context, const ir_func_t *function,
                            bool *mutator);
 
+static void
+member_names(const cache_entry_t *entry, core_buffer_t *out)
+{
+    for (size_t m = 0; m < entry->members.len; m++) {
+        if (m) core_buffer_putc(out, ',');
+        core_buffer_append_string(out, entry->members.data[m].name);
+    }
+}
+
 n00bb_cache_t *
-n00bb_cache_open(const char *root_path, parse_cmdr_result_t *args,
-                 const char *compiler_path, const char *triple,
+n00bb_cache_open(core_string_t root_path, parse_cmdr_result_t *args,
+                 core_string_t compiler_path, core_string_t triple,
                  ir_ctx_t *ir_context)
 {
-    if (!root_path || !root_path[0] || root_path[0] == '<' || !triple
+    if (!root_path.data || !root_path.u8_bytes || root_path.data[0] == '<'
+        || !triple.data
         || getenv("N00BB_NO_OBJECT_CACHE")
         || parse_cmdr_flag_present(args, CORE_STRING_STATIC("--lto")))
         return nullptr;
     n00bb_cache_t *cache = core_alloc(n00bb_cache_t);
     if (!cache) return nullptr;
-    cache->root_path = canonical_path(root_path, strlen(root_path));
-    const char *slash = cache->root_path
-        ? strrchr(cache->root_path, '/') : nullptr;
+    cache->root_path = canonical_path(root_path);
+    int64_t slash = cache->root_path.data
+        ? core_string_rfind_byte(cache->root_path, '/') : -1;
     core_buffer_t directory = {0};
-    if (slash) core_buffer_append(&directory, cache->root_path,
-                                  (size_t)(slash - cache->root_path));
+    if (slash >= 0) core_buffer_append(&directory, cache->root_path.data,
+                                       (size_t)slash);
     else core_buffer_puts(&directory, ".");
     core_buffer_puts(&directory, "/.n00b-cache/obj");
-    cache->directory = directory.data;
-    cache->triple = core_strdup(triple);
+    cache->directory = core_buffer_string(&directory);
+    cache->triple = core_string_dup(triple);
     cache->compiler = compiler_identity(compiler_path);
     append_flags(&cache->flags, args);
     cache->ir_context = ir_context;
@@ -1030,11 +1072,13 @@ n00bb_cache_open(const char *root_path, parse_cmdr_result_t *args,
     };
     read_module_keys(cache);
     read_entries(cache);
-    const char *excluded = getenv("N00BB_CACHE_EXCLUDE");
+    core_string_t excluded = core_string_from_cstr(
+        getenv("N00BB_CACHE_EXCLUDE"));
     for (size_t e = 0; e < cache->entries.len; e++)
         cache->entries.data[e].fresh = entry_fresh(cache,
                                                    &cache->entries.data[e])
             && !entry_excluded(&cache->entries.data[e], excluded);
+    core_free(excluded.data);
     for (size_t e = 0; e < cache->entries.len; e++)
         (void)entry_validate(cache, &cache->entries.data[e]);
     bool changed = true;
@@ -1048,8 +1092,8 @@ n00bb_cache_open(const char *root_path, parse_cmdr_result_t *args,
                     entry->references.data[i]);
                 bool member = false;
                 for (size_t m = 0; !member && m < entry->members.len; m++)
-                    member = !strcmp(entry->members.data[m].name,
-                                     entry->references.data[i]);
+                    member = core_string_eq(entry->members.data[m].name,
+                                            entry->references.data[i]);
                 if (member || (referenced
                                && referenced->state == ENTRY_VALID
                                && (!referenced->deferred || entry->deferred)))
@@ -1068,11 +1112,12 @@ n00bb_cache_open(const char *root_path, parse_cmdr_result_t *args,
                 core_list_push(cache->interfaces,
                                cache->entries.data[e].interface);
                 core_buffer_t members = {0};
-                for (size_t m = 0; m < cache->entries.data[e].members.len;
-                     m++)
-                    core_buffer_printf(&members, "%s%s", m ? "," : "",
-                        cache->entries.data[e].members.data[m].name);
-                cache_log("%s reuse scc %s", phase_name(), members.data);
+                member_names(&cache->entries.data[e], &members);
+                core_string_t phase = phase_name();
+                cache_log("%.*s reuse scc %.*s",
+                          (int)phase.u8_bytes, phase.data,
+                          (int)members.byte_len,
+                          members.data ? members.data : "");
                 core_buffer_release(&members);
             }
     return cache;
@@ -1086,11 +1131,11 @@ n00bb_cache_free(n00bb_cache_t *cache)
         entry_release(&cache->entries.data[e]);
     core_list_free(cache->entries);
     for (size_t i = 0; i < cache->module_keys.len; i++)
-        core_free(cache->module_keys.data[i].name);
+        core_free(cache->module_keys.data[i].name.data);
     core_list_free(cache->module_keys);
     core_list_free(cache->interfaces);
     for (size_t i = 0; i < cache->snapshots.len; i++) {
-        core_free(cache->snapshots.data[i].module);
+        core_free(cache->snapshots.data[i].module.data);
         core_buffer_release(&cache->snapshots.data[i].ir);
         core_buffer_release(&cache->snapshots.data[i].references);
     }
@@ -1100,9 +1145,9 @@ n00bb_cache_free(n00bb_cache_t *cache)
         sections_release(&cache->instances.data[i].sections);
     core_list_free(cache->instances);
     core_buffer_release(&cache->flags);
-    core_free(cache->directory);
-    core_free(cache->root_path);
-    core_free(cache->triple);
+    core_free(cache->directory.data);
+    core_free(cache->root_path.data);
+    core_free(cache->triple.data);
     core_free(cache);
 }
 
@@ -1128,25 +1173,23 @@ n00bb_cache_interface_has_module(const n00bb_cache_t *cache, size_t index,
         const cache_entry_t *entry = &cache->entries.data[e];
         if (entry->interface != interface) continue;
         for (size_t m = 0; m < entry->members.len; m++)
-            if (strlen(entry->members.data[m].name) == module.u8_bytes
-                && !memcmp(entry->members.data[m].name, module.data,
-                           module.u8_bytes)) return true;
+            if (core_string_eq(entry->members.data[m].name, module))
+                return true;
         return false;
     }
     return false;
 }
 
 static const cache_member_t *
-loaded_member(const n00bb_cache_t *cache, const char *module, size_t length,
+loaded_member(const n00bb_cache_t *cache, core_string_t module,
               const cache_entry_t **owner)
 {
-    for (size_t e = 0; cache && module && e < cache->entries.len; e++) {
+    for (size_t e = 0; cache && module.data && e < cache->entries.len; e++) {
         const cache_entry_t *entry = &cache->entries.data[e];
         if (entry->load != ENTRY_VALID) continue;
         for (size_t m = 0; m < entry->members.len; m++) {
             const cache_member_t *member = &entry->members.data[m];
-            if (strlen(member->name) == length
-                && !memcmp(member->name, module, length)) {
+            if (core_string_eq(member->name, module)) {
                 if (owner) *owner = entry;
                 return member;
             }
@@ -1158,8 +1201,7 @@ loaded_member(const n00bb_cache_t *cache, const char *module, size_t length,
 bool
 n00bb_cache_has_module(const n00bb_cache_t *cache, core_string_t module)
 {
-    return loaded_member(cache, module.data, module.u8_bytes, nullptr)
-        != nullptr;
+    return loaded_member(cache, module, nullptr) != nullptr;
 }
 
 bool
@@ -1195,7 +1237,8 @@ n00bb_cache_load_ir(n00bb_cache_t *cache, ir_module_lookup_fn lookup,
         cache_entry_t *entry = &cache->entries.data[e];
         if (entry->load != ENTRY_VALID || entry->loaded
             || !entry_used(entry, used, context)) continue;
-        const cache_section_t *ir = phase_section(entry, "ir", nullptr);
+        const cache_section_t *ir = phase_section(entry,
+            CORE_STRING_STATIC("ir"), (core_string_t){0});
         if (!ir) {
             core_free(inputs);
             return false;
@@ -1217,7 +1260,8 @@ n00bb_cache_load_ir(n00bb_cache_t *cache, ir_module_lookup_fn lookup,
             || !entry_used(entry, used, context)) continue;
         for (size_t m = 0; ok && m < entry->members.len; m++) {
             ir_module_t *module = modules[next++];
-            ok = !strcmp(ir_module_name(module), entry->members.data[m].name);
+            ok = core_string_eq(ir_module_name(module),
+                                entry->members.data[m].name);
             entry->members.data[m].module = module;
         }
         entry->loaded = ok;
@@ -1228,13 +1272,11 @@ n00bb_cache_load_ir(n00bb_cache_t *cache, ir_module_lookup_fn lookup,
 }
 
 static core_translation_unit_t *
-analysis_unit(n00bb_link_analysis_t *analysis, const char *module)
+analysis_unit(n00bb_link_analysis_t *analysis, core_string_t module)
 {
-    for (size_t i = 0; module && i < analysis->units.len; i++) {
+    for (size_t i = 0; module.data && i < analysis->units.len; i++) {
         core_translation_unit_t *unit = analysis->units.data[i];
-        if (strlen(module) == unit->module.identifier.u8_bytes
-            && !memcmp(module, unit->module.identifier.data,
-                       unit->module.identifier.u8_bytes)) return unit;
+        if (core_string_eq(module, unit->module.identifier)) return unit;
     }
     return nullptr;
 }
@@ -1248,17 +1290,17 @@ n00bb_cache_check_dispatch(n00bb_cache_t *cache,
     for (size_t e = 0; e < cache->entries.len; e++) {
         cache_entry_t *entry = &cache->entries.data[e];
         if (entry->load != ENTRY_VALID) continue;
-        const cache_section_t *section = phase_section(entry, "dispatch",
-                                                       nullptr);
+        const cache_section_t *section = phase_section(entry,
+            CORE_STRING_STATIC("dispatch"), (core_string_t){0});
         if (!section) continue;
         manifest_reader_t r = {section->data, section->length, 0, false};
         uint32_t count = read_u32(&r);
         bool matches = true;
         for (uint32_t i = 0; !r.failed && matches && i < count; i++) {
-            char *module = read_text(&r);
-            char *package = read_text(&r);
-            char *trait = read_text(&r);
-            char *method = read_text(&r);
+            core_string_t module = read_text(&r);
+            core_string_t package = read_text(&r);
+            core_string_t trait = read_text(&r);
+            core_string_t method = read_text(&r);
             uint64_t recorded = read_u64(&r);
             core_translation_unit_t *unit = r.failed ? nullptr
                 : analysis_unit(analysis, module);
@@ -1270,10 +1312,10 @@ n00bb_cache_check_dispatch(n00bb_cache_t *cache,
                     && n00bb_dispatch_fingerprint(state->types, environment,
                         trait, method, &current)
                     && current == recorded;
-            core_free(module);
-            core_free(package);
-            core_free(trait);
-            core_free(method);
+            core_free(module.data);
+            core_free(package.data);
+            core_free(trait.data);
+            core_free(method.data);
         }
         entry->dispatch_stale = r.failed || !matches;
     }
@@ -1286,9 +1328,10 @@ n00bb_cache_stale_modules(const n00bb_cache_t *cache, core_buffer_t *out)
     for (size_t e = 0; cache && e < cache->entries.len; e++) {
         const cache_entry_t *entry = &cache->entries.data[e];
         if (!entry->dispatch_stale) continue;
-        for (size_t m = 0; m < entry->members.len; m++)
-            core_buffer_printf(out, "%s%s", out->byte_len ? "," : "",
-                               entry->members.data[m].name);
+        for (size_t m = 0; m < entry->members.len; m++) {
+            if (out->byte_len) core_buffer_putc(out, ',');
+            core_buffer_append_string(out, entry->members.data[m].name);
+        }
     }
 }
 
@@ -1311,9 +1354,7 @@ n00bb_cache_assumptions_hold(const n00bb_cache_t *cache,
                 for (size_t m = 0; m < sccs.data[s].members.len; m++) {
                     core_string_t name =
                         sccs.data[s].members.data[m]->module.identifier;
-                    if (strlen(import->name) == name.u8_bytes
-                        && !memcmp(import->name, name.data, name.u8_bytes))
-                        found = s;
+                    if (core_string_eq(import->name, name)) found = s;
                 }
             cache_scc_t *scc = found != SIZE_MAX ? &sccs.data[found]
                                                  : nullptr;
@@ -1333,22 +1374,23 @@ n00bb_cache_assumptions_hold(const n00bb_cache_t *cache,
 ir_module_t *
 n00bb_cache_module(const n00bb_cache_t *cache, core_string_t module)
 {
-    const cache_member_t *member = loaded_member(cache, module.data,
-                                                 module.u8_bytes, nullptr);
+    const cache_member_t *member = loaded_member(cache, module, nullptr);
     return member ? member->module : nullptr;
 }
 
 bool
-n00bb_cache_module_object(const n00bb_cache_t *cache, const char *module,
+n00bb_cache_module_object(const n00bb_cache_t *cache, core_string_t module,
                           n00bb_cache_module_object_t *object)
 {
     const cache_entry_t *entry = nullptr;
-    const cache_member_t *member = module
-        ? loaded_member(cache, module, strlen(module), &entry) : nullptr;
+    const cache_member_t *member = module.data
+        ? loaded_member(cache, module, &entry) : nullptr;
     const cache_section_t *native = member
-        ? phase_section(entry, "native", member->name) : nullptr;
+        ? phase_section(entry, CORE_STRING_STATIC("native"), member->name)
+        : nullptr;
     const cache_section_t *abi = member
-        ? phase_section(entry, "abi", member->name) : nullptr;
+        ? phase_section(entry, CORE_STRING_STATIC("abi"), member->name)
+        : nullptr;
     if (!native || !abi) return false;
     *object = (n00bb_cache_module_object_t){
         .module = member->name,
@@ -1362,17 +1404,17 @@ static const cache_instance_t *loaded_instance(const n00bb_cache_t *cache,
                                                const ir_module_t *module);
 
 static bool
-mutator_listed(const cache_section_t *section, const char *name,
+mutator_listed(const cache_section_t *section, core_string_t name,
                bool *mutator)
 {
-    size_t length = strlen(name);
+    size_t length = name.u8_bytes;
     const char *at = (const char *)section->data;
     const char *end = at + section->length;
     *mutator = false;
     while (at < end) {
         const char *line = memchr(at, '\n', (size_t)(end - at));
         size_t span = line ? (size_t)(line - at) : (size_t)(end - at);
-        if (span == length && !memcmp(at, name, length)) {
+        if (span == length && (!length || !memcmp(at, name.data, length))) {
             *mutator = true;
             break;
         }
@@ -1389,9 +1431,9 @@ cached_mutator(void *context, const ir_func_t *function, bool *mutator)
         ? loaded_instance(cache, function->owner) : nullptr;
     if (instance) {
         core_buffer_t name = {0};
-        core_buffer_printf(&name, "%s.mutators", phase_name());
+        phase_name_into(&name, CORE_STRING_STATIC("mutators"));
         const cache_section_t *section = section_named(&instance->sections,
-                                                       name.data);
+            core_buffer_string(&name));
         core_buffer_release(&name);
         return section && mutator_listed(section, function->name, mutator);
     }
@@ -1401,22 +1443,9 @@ cached_mutator(void *context, const ir_func_t *function, bool *mutator)
         for (size_t m = 0; m < entry->members.len; m++) {
             if (entry->members.data[m].module != function->owner) continue;
             const cache_section_t *section = phase_section(entry,
-                "mutators", entry->members.data[m].name);
+                CORE_STRING_STATIC("mutators"), entry->members.data[m].name);
             if (!section) return false;
-            size_t length = strlen(function->name);
-            const char *at = (const char *)section->data;
-            const char *end = at + section->length;
-            *mutator = false;
-            while (at < end) {
-                const char *line = memchr(at, '\n', (size_t)(end - at));
-                size_t span = line ? (size_t)(line - at) : (size_t)(end - at);
-                if (span == length && !memcmp(at, function->name, length)) {
-                    *mutator = true;
-                    break;
-                }
-                at = line ? line + 1 : end;
-            }
-            return true;
+            return mutator_listed(section, function->name, mutator);
         }
     }
     return false;
@@ -1447,8 +1476,8 @@ static bool
 entry_seeds(const n00bb_cache_t *cache, const cache_entry_t *entry,
             th_ctx *types, core_list_t(n00bb_specialization_seed_t) *seeds)
 {
-    const cache_section_t *section = phase_section(entry, "requests",
-                                                   nullptr);
+    const cache_section_t *section = phase_section(entry,
+        CORE_STRING_STATIC("requests"), (core_string_t){0});
     if (!section) return true;
     const uint8_t *data = section->data;
     size_t size = section->length, consumed = 0;
@@ -1473,10 +1502,8 @@ entry_seeds(const n00bb_cache_t *cache, const cache_entry_t *entry,
         for (int i = 0; i < 4; i++) index |= (uint32_t)data[at + i] << (8 * i);
         at += 4;
         ir_module_t *owner = n00bb_cache_module(cache, module);
-        char *function_name = core_strndup(name.data, name.u8_bytes);
-        ir_func_t *generic = owner && function_name
-            ? ir_func_find(owner, function_name) : nullptr;
-        core_free(function_name);
+        ir_func_t *generic = owner && name.data
+            ? ir_func_find(owner, name) : nullptr;
         th_type *signature = th_type_reader_get(reader, index);
         ok = signature != nullptr;
         if (ok && generic)
@@ -1523,12 +1550,8 @@ compare_requests(const void *left, const void *right)
 {
     const cache_request_t *a = left;
     const cache_request_t *b = right;
-    size_t length = a->key.byte_len < b->key.byte_len
-        ? a->key.byte_len : b->key.byte_len;
-    int order = length ? memcmp(a->key.data, b->key.data, length) : 0;
-    if (order) return order;
-    return (a->key.byte_len > b->key.byte_len)
-        - (a->key.byte_len < b->key.byte_len);
+    return core_string_cmp(core_buffer_string(&a->key),
+                           core_buffer_string(&b->key));
 }
 
 static bool
@@ -1618,16 +1641,16 @@ n00bb_cache_snapshot(n00bb_cache_t *cache, core_link_unit_t *link)
         for (size_t m = 0; m < scc->members.len; m++)
             modules[m] = tu_state(scc->members.data[m])->ir_module;
         cache_snapshot_t snapshot = {
-            .module = core_strndup(scc->members.data[0]->module.identifier.data,
-                scc->members.data[0]->module.identifier.u8_bytes),
+            .module = core_string_dup(
+                scc->members.data[0]->module.identifier),
         };
-        ok = snapshot.module
+        ok = snapshot.module.data
             && ir_modules_save_references(modules, scc->members.len,
                                           &snapshot.ir, &snapshot.references);
         core_free(modules);
         if (ok) core_list_push(cache->snapshots, snapshot);
         else {
-            core_free(snapshot.module);
+            core_free(snapshot.module.data);
             core_buffer_release(&snapshot.ir);
             core_buffer_release(&snapshot.references);
         }
@@ -1640,9 +1663,7 @@ static const cache_snapshot_t *
 snapshot_for(const n00bb_cache_t *cache, core_string_t module)
 {
     for (size_t i = 0; i < cache->snapshots.len; i++)
-        if (strlen(cache->snapshots.data[i].module) == module.u8_bytes
-            && !memcmp(cache->snapshots.data[i].module, module.data,
-                       module.u8_bytes))
+        if (core_string_eq(cache->snapshots.data[i].module, module))
             return &cache->snapshots.data[i];
     return nullptr;
 }
@@ -1652,8 +1673,8 @@ module_object(const n00bb_cache_module_object_t *objects, size_t count,
               core_string_t module)
 {
     for (size_t i = 0; i < count; i++)
-        if (objects[i].module && strlen(objects[i].module) == module.u8_bytes
-            && !memcmp(objects[i].module, module.data, module.u8_bytes))
+        if (objects[i].module.data
+            && core_string_eq(objects[i].module, module))
             return &objects[i];
     return nullptr;
 }
@@ -1672,13 +1693,30 @@ put_links(core_buffer_t *out, const core_list_t(cache_scc_t) *sccs,
     }
 }
 
+static void
+module_section_name(core_buffer_t *out, core_string_t kind,
+                    core_string_t module)
+{
+    out->byte_len = 0;
+    phase_name_into(out, kind);
+    core_buffer_putc(out, '.');
+    core_buffer_append_string(out, module);
+}
+
+static void
+phase_section_name(core_buffer_t *out, core_string_t kind)
+{
+    out->byte_len = 0;
+    phase_name_into(out, kind);
+}
+
 static bool
 store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
           const core_list_t(cache_scc_t) *sccs,
           const cache_scc_t *scc, const cache_snapshot_t *snapshot,
           const n00bb_cache_module_object_t *objects, size_t object_count)
 {
-    const char *phase = phase_name();
+    core_string_t phase = phase_name();
     core_buffer_t manifest = {0};
     put_u64(&manifest, scc->key);
     put_u64(&manifest, scc->freshness);
@@ -1687,13 +1725,13 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
     for (size_t m = 0; m < scc->members.len; m++) {
         core_translation_unit_t *unit = scc->members.data[m];
         core_string_t path = core_source_file_path(&unit->source);
-        char *canonical = canonical_path(path.data, path.u8_bytes);
+        core_string_t canonical = canonical_path(path);
         put_bytes(&manifest, unit->module.identifier.data,
                   unit->module.identifier.u8_bytes);
         put_text(&manifest, canonical);
-        core_free(canonical);
+        core_free(canonical.data);
         put_u64(&manifest, core_xxh3_64bits_raw(
-            core_source_file_contents(&unit->source),
+            core_source_file_contents(&unit->source).data,
             core_source_file_size(&unit->source)));
         put_u32(&manifest,
                 (uint32_t)core_translation_unit_import_count(unit));
@@ -1723,35 +1761,31 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
         core_buffer_append(&manifest, references.data, references.byte_len);
     core_buffer_release(&references);
     core_buffer_t path = {0};
-    core_buffer_printf(&path, "%s/%016llx.n00bo", cache->directory,
-                       (unsigned long long)scc->key);
+    object_path(cache, scc->key, &path);
     core_list_t(cache_section_t) sections = core_list_new(cache_section_t);
     uint8_t *existing = nullptr;
     size_t existing_bytes = 0;
-    if (read_file(path.data, &existing, &existing_bytes)
+    if (read_file(core_buffer_string(&path), &existing, &existing_bytes)
         && !sections_parse(existing, existing_bytes, &sections)) {
         sections_release(&sections);
         sections = core_list_new(cache_section_t);
     }
     free(existing);
     core_buffer_t name = {0};
-    core_buffer_printf(&name, "%s.manifest", phase);
-    bool ok = sections_set(&sections, name.data, manifest.data,
-                           manifest.byte_len);
-    core_buffer_release(&name);
-    core_buffer_printf(&name, "%s.ir", phase);
-    ok = ok && sections_set(&sections, name.data, ir->data, ir->byte_len);
-    core_buffer_release(&name);
-    core_buffer_printf(&name, "%s.interface", phase);
-    ok = ok && sections_set(&sections, name.data, scc->interface,
-                            scc->interface_bytes);
-    core_buffer_release(&name);
+    phase_section_name(&name, CORE_STRING_STATIC("manifest"));
+    bool ok = sections_set(&sections, core_buffer_string(&name),
+                           manifest.data, manifest.byte_len);
+    phase_section_name(&name, CORE_STRING_STATIC("ir"));
+    ok = ok && sections_set(&sections, core_buffer_string(&name), ir->data,
+                            ir->byte_len);
+    phase_section_name(&name, CORE_STRING_STATIC("interface"));
+    ok = ok && sections_set(&sections, core_buffer_string(&name),
+                            scc->interface, scc->interface_bytes);
     core_buffer_t requests = {0};
     scc_requests(analysis, scc, &requests);
-    core_buffer_printf(&name, "%s.requests", phase);
-    ok = ok && sections_set(&sections, name.data, requests.data,
-                            requests.byte_len);
-    core_buffer_release(&name);
+    phase_section_name(&name, CORE_STRING_STATIC("requests"));
+    ok = ok && sections_set(&sections, core_buffer_string(&name),
+                            requests.data, requests.byte_len);
     core_buffer_release(&requests);
     core_buffer_t dispatch = {0};
     uint32_t dispatch_count = 0;
@@ -1774,10 +1808,9 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
             put_u64(&dispatch, record->fingerprint);
         }
     }
-    core_buffer_printf(&name, "%s.dispatch", phase);
-    ok = ok && sections_set(&sections, name.data, dispatch.data,
-                            dispatch.byte_len);
-    core_buffer_release(&name);
+    phase_section_name(&name, CORE_STRING_STATIC("dispatch"));
+    ok = ok && sections_set(&sections, core_buffer_string(&name),
+                            dispatch.data, dispatch.byte_len);
     core_buffer_release(&dispatch);
     for (size_t m = 0; ok && m < scc->members.len; m++) {
         core_string_t module = scc->members.data[m]->module.identifier;
@@ -1785,36 +1818,35 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
             object_count, module);
         ok = object && object->native && object->abi;
         if (!ok) break;
-        core_buffer_printf(&name, "%s.native.%.*s", phase,
-                           (int)module.u8_bytes, module.data);
-        ok = sections_set(&sections, name.data, object->native,
-                          object->native_bytes);
-        core_buffer_release(&name);
-        core_buffer_printf(&name, "%s.abi.%.*s", phase,
-                           (int)module.u8_bytes, module.data);
-        ok = ok && sections_set(&sections, name.data, object->abi,
-                                object->abi_bytes);
-        core_buffer_release(&name);
-        core_buffer_printf(&name, "%s.mutators.%.*s", phase,
-                           (int)module.u8_bytes, module.data);
-        ok = ok && sections_set(&sections, name.data,
+        module_section_name(&name, CORE_STRING_STATIC("native"), module);
+        ok = sections_set(&sections, core_buffer_string(&name),
+                          object->native, object->native_bytes);
+        module_section_name(&name, CORE_STRING_STATIC("abi"), module);
+        ok = ok && sections_set(&sections, core_buffer_string(&name),
+                                object->abi, object->abi_bytes);
+        module_section_name(&name, CORE_STRING_STATIC("mutators"), module);
+        ok = ok && sections_set(&sections, core_buffer_string(&name),
                                 object->mutators ? object->mutators
                                                  : (const uint8_t *)"",
                                 object->mutator_bytes);
-        core_buffer_release(&name);
     }
+    core_buffer_release(&name);
     core_buffer_t serialized = {0};
     if (ok) sections_serialize(&sections, &serialized);
-    ok = ok && write_file_atomic(path.data, serialized.data,
+    ok = ok && write_file_atomic(core_buffer_string(&path), serialized.data,
                                  serialized.byte_len);
     for (size_t m = 0; ok && m < scc->members.len; m++) {
         core_string_t module = scc->members.data[m]->module.identifier;
         core_buffer_t index = {0};
         core_buffer_t key = {0};
-        core_buffer_printf(&index, "%s/modules/%.*s.%s.key", cache->directory,
-                           (int)module.u8_bytes, module.data, phase);
+        core_buffer_printf(&index, "%.*s/modules/%.*s.%.*s.key",
+                           (int)cache->directory.u8_bytes,
+                           cache->directory.data,
+                           (int)module.u8_bytes, module.data,
+                           (int)phase.u8_bytes, phase.data);
         core_buffer_printf(&key, "%016llx\n", (unsigned long long)scc->key);
-        ok = write_file_atomic(index.data, key.data, key.byte_len);
+        ok = write_file_atomic(core_buffer_string(&index), key.data,
+                               key.byte_len);
         core_buffer_release(&index);
         core_buffer_release(&key);
     }
@@ -1836,8 +1868,7 @@ prepare_sccs(n00bb_cache_t *cache, core_link_unit_t *link,
     for (size_t s = 0; ok && s < sccs->len; s++) {
         core_string_t first = sccs->data[s].members.data[0]->module.identifier;
         const cache_entry_t *entry = nullptr;
-        if (sccs->data[s].cached
-            && loaded_member(cache, first.data, first.u8_bytes, &entry)) {
+        if (sccs->data[s].cached && loaded_member(cache, first, &entry)) {
             sccs->data[s].freshness = entry->freshness;
             sccs->data[s].interface_identity = entry->interface_identity;
             sccs->data[s].key = entry->key;
@@ -1880,20 +1911,18 @@ collect_type_owners(const core_list_t(cache_scc_t) *sccs, th_type *type,
     if (!type || depth > 64) return;
     switch (th_kind_of(type)) {
     case TH_NAMED: {
-        const char *name = nullptr;
-        size_t length = 0, count = 0;
-        if (!th_named_info(type, &name, &length, nullptr, &count)) return;
-        char *owned = core_strndup(name, length);
-        size_t prefix = owned ? owner_module_length(sccs, owned) : 0;
+        core_string_t name = {0};
+        size_t count = 0;
+        if (!th_named_info(type, &name, nullptr, &count)) return;
+        size_t prefix = name.data ? owner_module_length(sccs, name) : 0;
         if (prefix) {
-            owned[prefix] = '\0';
-            size_t scc = scc_of_module_name(sccs, owned);
+            size_t scc = scc_of_module_name(sccs,
+                core_string_slice(name, 0, prefix));
             bool seen = scc == SIZE_MAX;
             for (size_t i = 0; !seen && i < owners->len; i++)
                 seen = owners->data[i] == scc;
             if (!seen) core_list_push(*owners, scc);
         }
-        core_free(owned);
         for (size_t i = 0; i < count; i++) {
             const th_arg *arg = th_named_arg(type, i);
             if (arg && arg->kind == TH_ARG_TYPE)
@@ -1948,22 +1977,17 @@ scc_ir_hash(const n00bb_cache_t *cache, const cache_scc_t *scc,
 {
     core_string_t first = scc->members.data[0]->module.identifier;
     const cache_entry_t *entry = nullptr;
-    if (scc->cached
-        && loaded_member(cache, first.data, first.u8_bytes, &entry)) {
-        const cache_section_t *ir = phase_section(entry, "ir", nullptr);
+    if (scc->cached && loaded_member(cache, first, &entry)) {
+        const cache_section_t *ir = phase_section(entry,
+            CORE_STRING_STATIC("ir"), (core_string_t){0});
         if (!ir) return false;
         *out = core_xxh3_64bits_raw(ir->data, ir->length);
         return true;
     }
-    for (size_t i = 0; i < cache->snapshots.len; i++) {
-        const cache_snapshot_t *snapshot = &cache->snapshots.data[i];
-        if (strlen(snapshot->module) == first.u8_bytes
-            && !memcmp(snapshot->module, first.data, first.u8_bytes)) {
-            *out = buffer_hash(&snapshot->ir);
-            return true;
-        }
-    }
-    return false;
+    const cache_snapshot_t *snapshot = snapshot_for(cache, first);
+    if (!snapshot) return false;
+    *out = buffer_hash(&snapshot->ir);
+    return true;
 }
 
 static bool
@@ -1995,13 +2019,6 @@ instance_key(n00bb_cache_t *cache, const n00bb_specialization_t *item,
     return saved;
 }
 
-static void
-instance_path(const n00bb_cache_t *cache, uint64_t key, core_buffer_t *path)
-{
-    core_buffer_printf(path, "%s/%016llx.n00bo", cache->directory,
-                       (unsigned long long)key);
-}
-
 static const cache_instance_t *
 loaded_instance(const n00bb_cache_t *cache, const ir_module_t *module)
 {
@@ -2009,6 +2026,19 @@ loaded_instance(const n00bb_cache_t *cache, const ir_module_t *module)
         if (cache->instances.data[i].module == module)
             return &cache->instances.data[i];
     return nullptr;
+}
+
+static void
+log_instance(core_string_t action, const n00bb_specialization_t *item)
+{
+    core_string_t phase = phase_name();
+    core_string_t module = ir_module_name(item->generic->owner);
+    core_string_t function = item->generic->name;
+    cache_log("%.*s %.*s instance %.*s.%.*s",
+              (int)phase.u8_bytes, phase.data,
+              (int)action.u8_bytes, action.data,
+              (int)module.u8_bytes, module.data ? module.data : "",
+              (int)function.u8_bytes, function.data ? function.data : "");
 }
 
 bool
@@ -2025,13 +2055,13 @@ n00bb_cache_instance_object(n00bb_cache_t *cache, core_link_unit_t *link,
         if (!prepare_sccs(cache, link, analysis)
             || !instance_key(cache, item, &key)) return false;
         core_buffer_t path = {0};
-        instance_path(cache, key, &path);
+        object_path(cache, key, &path);
         uint8_t *bytes = nullptr;
         size_t length = 0;
         cache_instance_t loaded = {
             .module = module, .sections = core_list_new(cache_section_t),
         };
-        bool ok = read_file(path.data, &bytes, &length)
+        bool ok = read_file(core_buffer_string(&path), &bytes, &length)
             && sections_parse(bytes, length, &loaded.sections);
         free(bytes);
         core_buffer_release(&path);
@@ -2041,17 +2071,15 @@ n00bb_cache_instance_object(n00bb_cache_t *cache, core_link_unit_t *link,
         }
         core_list_push(cache->instances, loaded);
         found = &cache->instances.data[cache->instances.len - 1];
-        cache_log("%s reuse instance %s.%s", phase_name(),
-            ir_module_name(item->generic->owner), item->generic->name);
+        log_instance(CORE_STRING_STATIC("reuse"), item);
     }
     core_buffer_t name = {0};
-    core_buffer_printf(&name, "%s.native", phase_name());
+    phase_section_name(&name, CORE_STRING_STATIC("native"));
     const cache_section_t *native = section_named(&found->sections,
-                                                  name.data);
-    core_buffer_release(&name);
-    core_buffer_printf(&name, "%s.mutators", phase_name());
+        core_buffer_string(&name));
+    phase_section_name(&name, CORE_STRING_STATIC("mutators"));
     const cache_section_t *mutators = section_named(&found->sections,
-                                                    name.data);
+        core_buffer_string(&name));
     core_buffer_release(&name);
     if (!native || !mutators) return false;
     *object = (n00bb_cache_module_object_t){
@@ -2069,30 +2097,29 @@ store_instance(n00bb_cache_t *cache, const n00bb_specialization_t *item,
     uint64_t key = 0;
     if (!instance_key(cache, item, &key)) return true;
     core_buffer_t path = {0};
-    instance_path(cache, key, &path);
+    object_path(cache, key, &path);
     core_list_t(cache_section_t) sections = core_list_new(cache_section_t);
     uint8_t *existing = nullptr;
     size_t existing_bytes = 0;
-    if (read_file(path.data, &existing, &existing_bytes)
+    if (read_file(core_buffer_string(&path), &existing, &existing_bytes)
         && !sections_parse(existing, existing_bytes, &sections)) {
         sections_release(&sections);
         sections = core_list_new(cache_section_t);
     }
     free(existing);
     core_buffer_t name = {0};
-    core_buffer_printf(&name, "%s.native", phase_name());
-    bool ok = sections_set(&sections, name.data, object->native,
-                           object->native_bytes);
-    core_buffer_release(&name);
-    core_buffer_printf(&name, "%s.mutators", phase_name());
-    ok = ok && sections_set(&sections, name.data,
+    phase_section_name(&name, CORE_STRING_STATIC("native"));
+    bool ok = sections_set(&sections, core_buffer_string(&name),
+                           object->native, object->native_bytes);
+    phase_section_name(&name, CORE_STRING_STATIC("mutators"));
+    ok = ok && sections_set(&sections, core_buffer_string(&name),
                             object->mutators ? object->mutators
                                              : (const uint8_t *)"",
                             object->mutator_bytes);
     core_buffer_release(&name);
     core_buffer_t serialized = {0};
     if (ok) sections_serialize(&sections, &serialized);
-    ok = ok && write_file_atomic(path.data, serialized.data,
+    ok = ok && write_file_atomic(core_buffer_string(&path), serialized.data,
                                  serialized.byte_len);
     core_buffer_release(&serialized);
     sections_release(&sections);
@@ -2108,8 +2135,9 @@ n00bb_cache_store(n00bb_cache_t *cache, core_link_unit_t *link,
 {
     if (!cache || !link || !analysis) return false;
     core_buffer_t modules_directory = {0};
-    core_buffer_printf(&modules_directory, "%s/modules", cache->directory);
-    bool ok = make_directories(modules_directory.data)
+    core_buffer_append_string(&modules_directory, cache->directory);
+    core_buffer_puts(&modules_directory, "/modules");
+    bool ok = make_directories(core_buffer_string(&modules_directory))
         && prepare_sccs(cache, link, analysis);
     core_buffer_release(&modules_directory);
     core_list_t(cache_scc_t) *sccs = &cache->sccs;
@@ -2124,11 +2152,14 @@ n00bb_cache_store(n00bb_cache_t *cache, core_link_unit_t *link,
         if (snapshot && ok) {
             core_buffer_t members = {0};
             for (size_t m = 0; m < scc->members.len; m++) {
-                core_string_t name = scc->members.data[m]->module.identifier;
-                core_buffer_printf(&members, "%s%.*s", m ? "," : "",
-                                   (int)name.u8_bytes, name.data);
+                if (m) core_buffer_putc(&members, ',');
+                core_buffer_append_string(&members,
+                    scc->members.data[m]->module.identifier);
             }
-            cache_log("%s store scc %s", phase_name(), members.data);
+            core_string_t phase = phase_name();
+            cache_log("%.*s store scc %.*s", (int)phase.u8_bytes, phase.data,
+                      (int)members.byte_len,
+                      members.data ? members.data : "");
             core_buffer_release(&members);
         }
     }
@@ -2137,13 +2168,11 @@ n00bb_cache_store(n00bb_cache_t *cache, core_link_unit_t *link,
             &analysis->specializations.data[i];
         if (loaded_instance(cache, item->instance->owner)) continue;
         const n00bb_cache_module_object_t *object = module_object(objects,
-            object_count, core_string_from_cstr(
-                ir_module_name(item->instance->owner)));
+            object_count, ir_module_name(item->instance->owner));
         if (object && object->native)
             ok = store_instance(cache, item, object);
         if (object && ok)
-            cache_log("%s store instance %s.%s", phase_name(),
-                ir_module_name(item->generic->owner), item->generic->name);
+            log_instance(CORE_STRING_STATIC("store"), item);
     }
     return ok;
 }

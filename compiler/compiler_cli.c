@@ -179,8 +179,12 @@ n00bb_make_cli(void)
 bool
 n00bb_is_help_request(int argc, char **argv)
 {
-    for (int i = 1; i < argc; i++)
-        if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h"))
-            return true;
+    for (int i = 1; i < argc; i++) {
+        core_string_t arg = core_string_from_cstr(argv[i]);
+        bool help = core_string_eq(arg, CORE_STRING_STATIC("--help"))
+            || core_string_eq(arg, CORE_STRING_STATIC("-h"));
+        core_free(arg.data);
+        if (help) return true;
+    }
     return false;
 }

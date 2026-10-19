@@ -4,6 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "lib/string.h"
+
 typedef enum {
     N00BB_RECORD_DEFAULT,
     N00BB_RECORD_ORDERED,
@@ -11,7 +13,7 @@ typedef enum {
 } n00bb_record_policy_t;
 
 typedef struct {
-    const char *normalized_name;
+    core_string_t normalized_name;
     uint64_t child_typehash;
     uint32_t declaration_ordinal;
     uint64_t extent_bits;

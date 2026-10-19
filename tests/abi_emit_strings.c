@@ -6,6 +6,8 @@
 #include "abi_string.h"
 #include "lib/alloc.h"
 
+#define ARRAY_STRING(a) core_string_borrow((a), sizeof(a) - 1)
+
 int
 main(void)
 {
@@ -16,18 +18,18 @@ main(void)
     assert(pool);
     n00b_abi_type_v1 types[2] = {0};
     n00b_abi_symbol_v1 symbols[2] = {0};
-    assert(n00bb_abi_name_pool_encode(pool, CORE_STRING_STATIC(first),
+    assert(n00bb_abi_name_pool_encode(pool, ARRAY_STRING(first),
         N00B_ABI_TABLE_TYPE, 0,
         offsetof(n00b_abi_type_v1, canonical_name),
         &types[0].canonical_name));
-    assert(n00bb_abi_name_pool_encode(pool, CORE_STRING_STATIC(first),
+    assert(n00bb_abi_name_pool_encode(pool, ARRAY_STRING(first),
         N00B_ABI_TABLE_TYPE, 1,
         offsetof(n00b_abi_type_v1, canonical_name),
         &types[1].canonical_name));
-    assert(n00bb_abi_name_pool_encode(pool, CORE_STRING_STATIC(second),
+    assert(n00bb_abi_name_pool_encode(pool, ARRAY_STRING(second),
         N00B_ABI_TABLE_SYMBOL, 1,
         offsetof(n00b_abi_symbol_v1, name), &symbols[1].name));
-    assert(n00bb_abi_name_pool_encode(pool, CORE_STRING_STATIC(third),
+    assert(n00bb_abi_name_pool_encode(pool, ARRAY_STRING(third),
         N00B_ABI_TABLE_SYMBOL, 0,
         offsetof(n00b_abi_symbol_v1, name), &symbols[0].name));
     assert(n00bb_abi_name_pool_size(pool) == sizeof(first) - 1
@@ -35,7 +37,7 @@ main(void)
     assert(!memcmp(n00bb_abi_name_pool_bytes(pool), first, sizeof(first) - 1));
     n00b_abi_string_v1 value = {0};
     size_t pool_offset = SIZE_MAX;
-    assert(n00bb_abi_name_pool_value(pool, CORE_STRING_STATIC(first),
+    assert(n00bb_abi_name_pool_value(pool, ARRAY_STRING(first),
         N00B_ABI_STRING_ASCII, &value, &pool_offset));
     assert(pool_offset == 0 && value.long_value.selector
         == ((uint64_t)(sizeof(first) - 1)
@@ -160,7 +162,7 @@ main(void)
         N00B_ABI_STRING_SHORT, N00B_ABI_TABLE_STATIC_STRING, 2,
         offsetof(n00b_abi_static_string_v1, value), &tagged_rows[2].value));
     assert(!n00bb_abi_name_pool_value_tagged(tagged_pool,
-        CORE_STRING_STATIC(first), N00B_ABI_STRING_ASCII,
+        ARRAY_STRING(first), N00B_ABI_STRING_ASCII,
         N00B_ABI_STRING_SHORT, &value, &pool_offset));
     assert(n00bb_abi_string_decode((const uint8_t *)&tagged_rows[0].value,
         sizeof(tagged_rows[0].value), &header)

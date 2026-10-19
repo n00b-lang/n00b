@@ -61,10 +61,11 @@ n00bb_llvm_stack_maps_visit(const void *object, size_t object_bytes,
     if (!object || !visit || !found) return false;
     *found = false;
     core_object_section_t section;
-    const char *segment = format == CORE_TARGET_OBJECT_MACH_O
-        ? "__LLVM_STACKMAPS" : nullptr;
-    const char *name = format == CORE_TARGET_OBJECT_MACH_O
-        ? "__llvm_stackmaps" : ".llvm_stackmaps";
+    core_string_t segment = format == CORE_TARGET_OBJECT_MACH_O
+        ? CORE_STRING_STATIC("__LLVM_STACKMAPS") : (core_string_t){};
+    core_string_t name = format == CORE_TARGET_OBJECT_MACH_O
+        ? CORE_STRING_STATIC("__llvm_stackmaps")
+        : CORE_STRING_STATIC(".llvm_stackmaps");
     if (!core_object_section_find(object, object_bytes, format, segment,
                                   name, &section)) return true;
     *found = true;

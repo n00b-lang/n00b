@@ -97,8 +97,7 @@ n00bb_link_stage_semantics(core_link_unit_t *link, uint32_t stage_kind,
         n00bb_tu_state_t *state = tu_state(unit);
         if (!state || !state->types) continue;
         if (!th_ctx_set_environment_scope(state->types,
-                unit->module.identifier.data,
-                n00bb_package_id(unit).data)) {
+                unit->module.identifier, n00bb_package_id(unit))) {
             core_diagnostics_report(core_translation_unit_diagnostics(unit),
                 unit, CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0059"),
                 CORE_STRING_STATIC("could not set module type-environment scope"));
@@ -293,14 +292,14 @@ n00bb_link_stage_contributions(core_link_unit_t *link, uint32_t stage_kind,
         payload->storage_class_required = symbol->storage_class_required;
         payload->storage_duration = symbol->storage_duration;
     }
-    static const char *unavailable_domains[] = {
-        "n00bb.finalization",
+    static const core_string_t unavailable_domains[] = {
+        CORE_STRING_STATIC("n00bb.finalization"),
     };
     for (size_t i = 0;
          i < sizeof(unavailable_domains) / sizeof(unavailable_domains[0]);
          i++) {
         if (!core_link_unit_set_contribution(link, (core_string_t){0},
-                core_string_from_cstr(unavailable_domains[i]), 1, stage_kind,
+                unavailable_domains[i], 1, stage_kind,
                 CORE_LINK_CONTRIBUTION_UNAVAILABLE,
                 CORE_STRING_STATIC("n00bb.analysis-coverage"), 1, nullptr,
                 CORE_LINK_PAYLOAD_BORROWED, nullptr))
@@ -323,17 +322,18 @@ n00bb_link_stage_contributions(core_link_unit_t *link, uint32_t stage_kind,
         array_shapes_complete &= payload && payload->array_shape_complete;
     }
     const struct {
-        const char *domain;
+        core_string_t domain;
         bool complete;
     } semantic_domains[] = {
-        {"n00bb.phase-values", phase_values_complete},
-        {"n00bb.array-shapes", array_shapes_complete},
-        {"n00bb.storage-lifetimes", storage_lifetimes_complete},
+        {CORE_STRING_STATIC("n00bb.phase-values"), phase_values_complete},
+        {CORE_STRING_STATIC("n00bb.array-shapes"), array_shapes_complete},
+        {CORE_STRING_STATIC("n00bb.storage-lifetimes"),
+         storage_lifetimes_complete},
     };
     for (size_t i = 0;
          i < sizeof(semantic_domains) / sizeof(semantic_domains[0]); i++) {
         if (!core_link_unit_set_contribution(link, (core_string_t){0},
-                core_string_from_cstr(semantic_domains[i].domain), 1,
+                semantic_domains[i].domain, 1,
                 stage_kind,
                 semantic_domains[i].complete
                     ? CORE_LINK_CONTRIBUTION_COMPLETE

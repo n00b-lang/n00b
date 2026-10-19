@@ -5,7 +5,7 @@
 #include "lib/target.h"
 
 typedef struct {
-    const char *name;
+    core_string_t name;
     th_type *type;
     uint32_t ordinal;
     bool c_compatible;
@@ -16,7 +16,7 @@ typedef struct {
 } n00bb_abi_record_member_t;
 
 typedef struct {
-    const char *name;
+    core_string_t name;
     th_type *type;
     uint32_t ordinal;
 } n00bb_abi_variant_arm_t;

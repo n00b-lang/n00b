@@ -5,10 +5,13 @@
 
 #include "lib/byteorder.h"
 
+#define EXPECT(lit, condition) expect(CORE_STRING_STATIC(lit), (condition))
+
 static bool
-expect(const char *label, bool condition)
+expect(core_string_t label, bool condition)
 {
-    if (!condition) fprintf(stderr, "%s failed\n", label);
+    if (!condition)
+        fprintf(stderr, "%.*s failed\n", (int)label.u8_bytes, label.data);
     return condition;
 }
 
@@ -43,10 +46,10 @@ int main(void)
     };
     for (size_t i = 0; i < 8; i++) image[120 + i] = (uint8_t)(i + 1);
     bool ok = true;
-    ok &= expect("container writes complete payload and directory",
+    ok &= EXPECT("container writes complete payload and directory",
         n00bb_abi_container_write(image, sizeof(image), &authored,
                                   &entry, &schema, 1, false));
-    ok &= expect("header prefix is byte exact",
+    ok &= EXPECT("header prefix is byte exact",
         !memcmp(image, prefix, sizeof(prefix))
         && core_le_load_u64(image + 32) == 2
         && core_le_load_u32(image + 56) == 8
@@ -55,81 +58,81 @@ int main(void)
         && core_le_load_u64(image + 72) == 128);
     n00bb_abi_image_header_t decoded = {0};
     n00bb_abi_directory_entry_t decoded_entry = {0};
-    ok &= expect("valid container read with exact key",
+    ok &= EXPECT("valid container read with exact key",
         n00bb_abi_container_read(image, sizeof(image), &authored.key,
             &schema, 1, false, &decoded, &decoded_entry, 1)
         && decoded.payload_checksum == core_le_load_u64(image + 80)
         && decoded.artifact_capabilities == N00BB_ABI_CAP_DEBUG
         && decoded_entry.file_offset == 120);
-    ok &= expect("byte-exact payload checksum vector",
+    ok &= EXPECT("byte-exact payload checksum vector",
         core_le_load_u64(image + 80) == UINT64_C(0xc1fa374c74473860));
     n00bb_abi_image_key_t wrong_key = authored.key;
     wrong_key.target_id = N00BB_ABI_TARGET_X86_64_LINUX;
-    ok &= expect("target key mismatch rejected",
+    ok &= EXPECT("target key mismatch rejected",
         !n00bb_abi_container_read(image, sizeof(image), &wrong_key,
             &schema, 1, false, &decoded, &decoded_entry, 1));
     wrong_key = authored.key;
     wrong_key.cpu_profile = N00BB_ABI_CPU_NATIVE_ATOMIC128;
-    ok &= expect("CPU guarantee is part of exact key",
+    ok &= EXPECT("CPU guarantee is part of exact key",
         !n00bb_abi_container_read(image, sizeof(image), &wrong_key,
             &schema, 1, false, &decoded, &decoded_entry, 1));
-    ok &= expect("reader capacity checked before directory write",
+    ok &= EXPECT("reader capacity checked before directory write",
         !n00bb_abi_container_read(image, sizeof(image), &authored.key,
             &schema, 1, false, &decoded, &decoded_entry, 0));
     image[120] ^= 1;
-    ok &= expect("payload corruption rejected by checksum",
+    ok &= EXPECT("payload corruption rejected by checksum",
         !n00bb_abi_container_read(image, sizeof(image), &authored.key,
             &schema, 1, false, &decoded, &decoded_entry, 1));
     uint64_t before_relink = core_le_load_u64(image + 80);
-    ok &= expect("producer finalizes changed payload with a new checksum",
+    ok &= EXPECT("producer finalizes changed payload with a new checksum",
         n00bb_abi_container_write(image, sizeof(image), &authored,
             &entry, &schema, 1, false)
         && core_le_load_u64(image + 80) != before_relink
         && n00bb_abi_container_read(image, sizeof(image), &authored.key,
             &schema, 1, false, &decoded, &decoded_entry, 1));
     image[120] ^= 1;
-    ok &= expect("finalizing restored payload restores its checksum",
+    ok &= EXPECT("finalizing restored payload restores its checksum",
         n00bb_abi_container_write(image, sizeof(image), &authored,
             &entry, &schema, 1, false)
         && core_le_load_u64(image + 80) == before_relink);
     image[0] ^= 1;
-    ok &= expect("magic rejected before directory access",
+    ok &= EXPECT("magic rejected before directory access",
         !n00bb_abi_container_read(image, sizeof(image), &authored.key,
             &schema, 1, false, &decoded, &decoded_entry, 1));
     image[0] ^= 1;
     core_le_store_u32(image + 12, 87);
-    ok &= expect("header width mismatch rejected",
+    ok &= EXPECT("header width mismatch rejected",
         !n00bb_abi_container_read(image, sizeof(image), &authored.key,
             &schema, 1, false, &decoded, &decoded_entry, 1));
     core_le_store_u32(image + 12, 88);
     core_le_store_u64(image + 24, 1);
-    ok &= expect("unknown public feature rejected",
+    ok &= EXPECT("unknown public feature rejected",
         !n00bb_abi_container_read(image, sizeof(image), &authored.key,
             &schema, 1, false, &decoded, &decoded_entry, 1));
     core_le_store_u64(image + 24, 0);
     core_le_store_u64(image + 32, N00BB_ABI_CAPABILITY_MASK + 1);
-    ok &= expect("unknown capability rejected",
+    ok &= EXPECT("unknown capability rejected",
         !n00bb_abi_container_read(image, sizeof(image), &authored.key,
             &schema, 1, false, &decoded, &decoded_entry, 1));
     core_le_store_u64(image + 32, N00BB_ABI_CAP_DEBUG);
     core_le_store_u32(image + 56, 3);
-    ok &= expect("section alignment must be a power of two",
+    ok &= EXPECT("section alignment must be a power of two",
         !n00bb_abi_container_read(image, sizeof(image), &authored.key,
             &schema, 1, false, &decoded, &decoded_entry, 1));
     core_le_store_u32(image + 56, 8);
     core_le_store_u64(image + 72, UINT64_MAX);
-    ok &= expect("total extent checked before checksum",
+    ok &= EXPECT("total extent checked before checksum",
         !n00bb_abi_container_read(image, sizeof(image), &authored.key,
             &schema, 1, false, &decoded, &decoded_entry, 1));
 
     n00bb_abi_image_header_t invalid = authored;
     invalid.directory_count = UINT32_MAX;
-    ok &= expect("writer rejects directory outside image",
+    ok &= EXPECT("writer rejects directory outside image",
         !n00bb_abi_container_write(image, sizeof(image), &invalid,
                                    &entry, &schema, 1, false));
     invalid = authored;
     invalid.key.target_id = N00BB_ABI_TARGET_X86_64_WINDOWS + 1;
-    ok &= expect("writer rejects unsupported target",
+    ok &= EXPECT("writer rejects unsupported target",
         !n00bb_abi_container_write(image, sizeof(image), &invalid,
                                    &entry, &schema, 1, false));
 
@@ -138,7 +141,7 @@ int main(void)
     empty_header.directory_count = 0;
     empty_header.directory_offset = N00BB_ABI_HEADER_BYTES;
     empty_header.total_extent = N00BB_ABI_HEADER_BYTES;
-    ok &= expect("empty container has a valid zero-length payload",
+    ok &= EXPECT("empty container has a valid zero-length payload",
         n00bb_abi_container_write(empty_image, sizeof(empty_image),
             &empty_header, nullptr, &schema, 1, false)
         && n00bb_abi_container_read(empty_image, sizeof(empty_image),
@@ -148,7 +151,7 @@ int main(void)
     memset(image, 0, sizeof(image));
     n00bb_abi_directory_entry_t unknown = entry;
     unknown.kind = 99;
-    ok &= expect("unknown table is optional under exact key",
+    ok &= EXPECT("unknown table is optional under exact key",
         n00bb_abi_container_write(image, sizeof(image), &authored,
             &unknown, &schema, 1, true)
         && !n00bb_abi_container_read(image, sizeof(image), &authored.key,

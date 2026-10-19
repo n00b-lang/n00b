@@ -336,8 +336,9 @@ report_initializer_cycle(core_list_t(n00bb_initializer_graph_node_t) *nodes,
                                     nodes->data[target].declaration);
     core_buffer_t message = {0};
     core_buffer_printf(&message,
-        "initializer dependency cycle requires reading an uninitialized global: %s (module%s %s)",
-        chain.data ? chain.data : "", seen.len == 1 ? "" : "s",
+        "initializer dependency cycle requires reading an uninitialized global: %.*s (module%s %.*s)",
+        (int)chain.byte_len, chain.data ? chain.data : "",
+        seen.len == 1 ? "" : "s", (int)modules.byte_len,
         modules.data ? modules.data : "");
     core_diagnostics_report_at(
         core_translation_unit_diagnostics(edge->source_unit),

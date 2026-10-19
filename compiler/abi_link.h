@@ -100,7 +100,7 @@ typedef struct {
     bool prior_imported_type_variable;
     n00bb_abi_string_view_t name;
     n00bb_abi_string_view_t prior_name;
-    const char *reason;
+    core_string_t reason;
 } n00bb_abi_index_plan_failure_t;
 n00bb_abi_index_plan_t *n00bb_abi_index_plan_build_detailed(
     const n00bb_abi_selected_objects_t *selected,
@@ -253,7 +253,7 @@ typedef struct {
     uint32_t row_index;
     size_t input;
     uint32_t local_section;
-    const char *reason;
+    core_string_t reason;
 } n00bb_abi_native_rebase_failure_t;
 
 bool n00bb_abi_rebase_native_references(
@@ -314,7 +314,7 @@ bool n00bb_abi_link_objects_with_semantics(
     n00bb_abi_link_semantics_fn semantics, void *context,
     n00bb_abi_link_validation_fn validate, void *validation_context,
     uint8_t **out_object, size_t *out_object_bytes,
-    const char **failure_stage,
+    core_string_t *failure_stage,
     n00bb_abi_index_plan_failure_t *plan_failure,
     n00bb_abi_native_rebase_failure_t *rebase_failure);
 

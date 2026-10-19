@@ -55,8 +55,9 @@ n00bb_abi_trait_method_rows_build(
                     break;
                 }
                 if (declaration.kind == TH_ENV_DECLARATION_TRAIT
-                    && declaration.module
-                    && !strcmp(declaration.module, "builtins")
+                    && declaration.module.data
+                    && core_string_eq(declaration.module,
+                                      CORE_STRING_STATIC("builtins"))
                     && declaration.contract
                     && n00bb_abi_type_index_find(index,
                         declaration.contract, &declaration_index)
@@ -139,16 +140,15 @@ n00bb_abi_trait_method_rows_build(
             for (size_t j = 0; j < th_trait_len(trait); j++) {
                 const th_member *method = th_trait_method(trait, j);
                 uint32_t signature_index = 0;
-                if (!method || !method->name || !method->type
+                if (!method || !method->name.data || !method->type
                     || !n00bb_abi_type_index_find(index, method->type,
                                                    &signature_index)) {
                     valid = false;
                     break;
                 }
                 if (signature_index == source->signature_type_index
-                    && core_string_eq(source->symbol->name,
-                        core_string_borrow(method->name,
-                                           strlen(method->name)))) matches++;
+                    && core_string_eq(source->symbol->name, method->name))
+                    matches++;
             }
             if (!valid || matches != 1) {
                 valid = false;

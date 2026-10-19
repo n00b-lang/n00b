@@ -89,8 +89,10 @@ struct n00bb_preprocessor_t {
     pp_context_t context;
 };
 
-static void pp_error(pp_context_t *ctx, parse_tree_t *at,
-                     const char *message);
+static void pp_report(pp_context_t *ctx, parse_tree_t *at,
+                      core_string_t message);
+#define pp_error(ctx, at, lit) \
+    pp_report((ctx), (at), CORE_STRING_STATIC(lit))
 static void pp_warn_cycle_dependency(pp_context_t *ctx,
                                     parse_tree_t *at,
                                     core_string_t module);
@@ -217,11 +219,12 @@ node_name(parse_grammar_t *g, parse_tree_t *node)
 }
 
 static bool
-is_name(parse_grammar_t *g, parse_tree_t *node, const char *name)
+node_named(parse_grammar_t *g, parse_tree_t *node, core_string_t name)
 {
-    return core_string_eq(node_name(g, node),
-                          core_string_borrow(name, strlen(name)));
+    return core_string_eq(node_name(g, node), name);
 }
+
+#define is_name(g, node, lit) node_named((g), (node), CORE_STRING_STATIC(lit))
 
 static core_string_t leaf_text(pp_context_t *ctx, parse_tree_t *node);
 
@@ -260,13 +263,13 @@ leaf_text(pp_context_t *ctx, parse_tree_t *node)
     core_option_t(core_string_t) value = parse_token_value(token);
     if (core_option_is_set(value))
         return core_option_get(value);
-    const char *source = core_source_file_contents(&ctx->unit->source);
+    core_string_t source = core_source_file_contents(&ctx->unit->source);
     size_t size = core_source_file_size(&ctx->unit->source);
     size_t start = parse_token_start_byte(token);
     size_t end = parse_token_end_byte(token);
     if (start > end || end > size)
         return (core_string_t){0};
-    return core_string_from_raw(source + start, (int64_t)(end - start));
+    return core_string_from_raw(source.data + start, (int64_t)(end - start));
 }
 
 static core_string_t
@@ -277,19 +280,21 @@ first_leaf_text(pp_context_t *ctx, parse_tree_t *node)
 }
 
 static void
-pp_error(pp_context_t *ctx, parse_tree_t *at, const char *message)
+pp_report(pp_context_t *ctx, parse_tree_t *at, core_string_t message)
 {
     parse_token_info_t *token = parse_tree_find_first_terminal(at);
-    char text[320];
-    if (token) {
-        snprintf(text, sizeof(text), "%s at line %u, column %u", message,
-                 parse_token_line(token), parse_token_column(token));
-    }
-    else snprintf(text, sizeof(text), "%s", message);
+    core_buffer_t text = {0};
+    core_buffer_append_string(&text, message);
+    if (token)
+        core_buffer_printf(&text, " at line %u, column %u",
+                           parse_token_line(token), parse_token_column(token));
+    core_string_t report = core_buffer_string(&text);
+    if (report.u8_bytes > 319) report.u8_bytes = 319;
     core_diagnostics_report(core_translation_unit_diagnostics(ctx->unit),
                             ctx->unit, CORE_DIAG_ERROR,
                             CORE_STRING_STATIC("N00BB-PP0001"),
-                            core_string_from_cstr(text));
+                            report.data ? report : CORE_STRING_STATIC(""));
+    core_buffer_release(&text);
     ctx->failed = true;
 }
 
@@ -531,14 +536,12 @@ collect_name_chain(pp_context_t *ctx, parse_tree_t *node, core_buffer_t *name)
 }
 
 static bool
-postfix_has_token(parse_tree_t *node, const char *token)
+postfix_has_token(parse_tree_t *node, core_string_t token)
 {
     if (!node || core_tree_is_leaf(node)) return false;
     for (size_t i = 0; i < core_tree_num_children(node); i++) {
         parse_tree_t *part = core_tree_child(node, i);
-        if (core_tree_is_leaf(part)
-            && parse_tree_leaf_is(part,
-                                  core_string_borrow(token, strlen(token))))
+        if (core_tree_is_leaf(part) && parse_tree_leaf_is(part, token))
             return true;
     }
     return false;
@@ -553,15 +556,16 @@ qualified_binding_lookup(pp_context_t *ctx, parse_tree_t *node,
         core_buffer_free(chain);
         return PP_LOOKUP_NONE;
     }
-    char *last_dot = strrchr(chain->data, '.');
-    if (!last_dot) {
+    core_string_t chain_text = core_buffer_string(chain);
+    int64_t last_dot = core_string_rfind_byte(chain_text, '.');
+    if (last_dot < 0) {
         core_buffer_free(chain);
         return PP_LOOKUP_NONE;
     }
-    core_string_t module = core_string_borrow(chain->data,
-        (size_t)(last_dot - chain->data));
-    core_string_t member = core_string_borrow(last_dot + 1,
-        chain->byte_len - (size_t)(last_dot + 1 - chain->data));
+    core_string_t module = core_string_slice(chain_text, 0,
+                                             (size_t)last_dot);
+    core_string_t member = core_string_slice(chain_text,
+        (size_t)last_dot + 1, chain_text.u8_bytes - (size_t)last_dot - 1);
     core_string_t target_module = {0};
     bool ambiguous = false;
     core_string_t current = ctx->unit->module.identifier;
@@ -640,7 +644,7 @@ register_litmod_name(pp_context_t *ctx, parse_tree_t *function,
     core_buffer_printf(&message,
         "literal modifier '%.*s' for %.*s literals is already declared in this module",
         (int)name.u8_bytes, name.data, (int)kind.u8_bytes, kind.data);
-    pp_error(ctx, node, message.data);
+    pp_report(ctx, node, core_buffer_string(&message));
     core_buffer_release(&message);
     return false;
 }
@@ -708,12 +712,15 @@ find_external_definition(pp_context_t *ctx, core_string_t name,
 {
     for (size_t i = ctx->options ? ctx->options->definition_count : 0;
          i > 0; i--) {
-        const char *definition = ctx->options->definitions[i - 1];
-        const char *equals = definition ? strchr(definition, '=') : nullptr;
-        if (!equals || (size_t)(equals - definition) != name.u8_bytes
-            || (name.u8_bytes
-                && memcmp(definition, name.data, name.u8_bytes))) continue;
-        *raw = core_string_borrow(equals + 1, strlen(equals + 1));
+        core_string_t definition = ctx->options->definitions[i - 1];
+        int64_t equals = definition.data
+            ? core_string_find_byte(definition, '=') : -1;
+        if (equals < 0
+            || !core_string_eq(core_string_slice(definition, 0,
+                                                 (size_t)equals), name))
+            continue;
+        *raw = core_string_slice(definition, (size_t)equals + 1,
+                                 definition.u8_bytes - (size_t)equals - 1);
         return true;
     }
     return false;
@@ -727,15 +734,13 @@ external_definition_kind(core_string_t raw)
     __int128 integer;
     if (parse_integer(raw, &integer)) return PP_INT;
     if (integer_syntax(raw)) return PP_INT;
-    char *copy = core_strndup(raw.data, raw.u8_bytes);
-    char *end = nullptr;
-    errno = 0;
-    (void)strtod(copy, &end);
-    bool float_value = end && end != copy && *end == '\0'
-        && (memchr(copy, '.', raw.u8_bytes)
-            || memchr(copy, 'e', raw.u8_bytes)
-            || memchr(copy, 'E', raw.u8_bytes));
-    core_free(copy);
+    size_t consumed = 0;
+    double ignored = 0;
+    bool float_value = core_string_parse_f64(raw, &ignored, &consumed)
+        && consumed == raw.u8_bytes
+        && (core_string_find_byte(raw, '.') >= 0
+            || core_string_find_byte(raw, 'e') >= 0
+            || core_string_find_byte(raw, 'E') >= 0);
     return float_value ? PP_FLOAT : PP_STRING;
 }
 
@@ -746,11 +751,11 @@ parse_float_text(core_string_t text, double *value)
     size_t length = 0;
     for (size_t i = 0; i < text.u8_bytes; i++)
         if (text.data[i] != '_') digits[length++] = text.data[i];
-    digits[length] = 0;
-    char *end = nullptr;
+    size_t consumed = 0;
     errno = 0;
-    *value = strtod(digits, &end);
-    bool valid = end && *end == '\0' && end != digits && errno != ERANGE;
+    bool valid = core_string_parse_f64(core_string_borrow(digits, length),
+                                       value, &consumed)
+        && consumed == length && errno != ERANGE;
     core_free(digits);
     return valid;
 }
@@ -844,12 +849,13 @@ parse_literal(pp_context_t *ctx, parse_tree_t *node, pp_value_t *out)
         size_t content_end = 0;
         if (token && parse_token_content_span(token, &content_start,
                                               &content_end)) {
-            const char *source = core_source_file_contents(&ctx->unit->source);
+            core_string_t source = core_source_file_contents(
+                &ctx->unit->source);
             size_t size = core_source_file_size(&ctx->unit->source);
             if (content_start <= content_end && content_end <= size) {
                 *out = (pp_value_t){.kind = PP_STRING,
                     .as.string = core_string_from_raw(
-                        source + content_start,
+                        source.data + content_start,
                         (int64_t)(content_end - content_start))};
                 return true;
             }
@@ -942,13 +948,16 @@ is_literal_node(parse_grammar_t *g, parse_tree_t *node)
 static bool
 is_binary_operator_node(parse_grammar_t *g, parse_tree_t *node)
 {
-    static const char *names[] = {
-        "or-expr", "and-expr", "equality-expr", "compare-expr",
-        "bitor-expr", "bitxor-expr", "bitand-expr", "shift-expr",
-        "add-expr", "mul-expr", nullptr,
+    static const core_string_t names[] = {
+        CORE_STRING_STATIC("or-expr"), CORE_STRING_STATIC("and-expr"),
+        CORE_STRING_STATIC("equality-expr"),
+        CORE_STRING_STATIC("compare-expr"), CORE_STRING_STATIC("bitor-expr"),
+        CORE_STRING_STATIC("bitxor-expr"), CORE_STRING_STATIC("bitand-expr"),
+        CORE_STRING_STATIC("shift-expr"), CORE_STRING_STATIC("add-expr"),
+        CORE_STRING_STATIC("mul-expr"),
     };
-    for (size_t i = 0; names[i]; i++)
-        if (is_name(g, node, names[i])) return true;
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++)
+        if (node_named(g, node, names[i])) return true;
     return false;
 }
 
@@ -1151,7 +1160,7 @@ eval_builtin(pp_context_t *ctx, parse_tree_t *call, pp_value_t *out)
         return true;
     }
 #define PP_INT(v) do { *out = (pp_value_t){.kind = PP_INT, .as.integer = (v)}; return true; } while (0)
-#define PP_STRING(v) do { *out = (pp_value_t){.kind = PP_STRING, .as.string = own_string(ctx, core_string_from_cstr(v))}; return true; } while (0)
+#define PP_STRING(v) do { *out = (pp_value_t){.kind = PP_STRING, .as.string = own_string(ctx, core_string_dup(CORE_STRING_STATIC(v)))}; return true; } while (0)
     if (core_string_eq(name, CORE_STRING_STATIC("target_os"))) {
 #if defined(__APPLE__)
         PP_STRING("macos");
@@ -1232,20 +1241,22 @@ eval_builtin(pp_context_t *ctx, parse_tree_t *call, pp_value_t *out)
     if (core_string_eq(name, CORE_STRING_STATIC("n00b_impl"))) PP_STRING("n00bb");
     if (core_string_eq(name, CORE_STRING_STATIC("source_dir"))) {
         core_string_t path = core_source_file_path(&ctx->unit->source);
-        char *copy = path.data ? core_strndup(path.data, path.u8_bytes)
-                               : nullptr;
-        char *resolved = copy ? realpath(copy, nullptr) : nullptr;
+        char *copy = core_string_to_cstr(path);
+        char *native = copy ? realpath(copy, nullptr) : nullptr;
         core_free(copy);
-        char *slash = resolved ? strrchr(resolved, '/') : nullptr;
-        if (!slash) {
-            free(resolved);
+        core_string_t resolved = core_string_from_cstr(native);
+        free(native);
+        int64_t slash = resolved.data
+            ? core_string_rfind_byte(resolved, '/') : -1;
+        if (slash < 0) {
+            core_free(resolved.data);
             pp_error(ctx, call, "source_dir() has no resolvable source file");
             return false;
         }
-        *slash = 0;
+        resolved.u8_bytes = (size_t)slash;
+        resolved.data[slash] = 0;
         *out = (pp_value_t){.kind = PP_STRING,
-            .as.string = own_string(ctx, core_string_from_cstr(resolved))};
-        free(resolved);
+            .as.string = own_string(ctx, resolved)};
         return true;
     }
 #undef PP_INT
@@ -1257,16 +1268,19 @@ eval_builtin(pp_context_t *ctx, parse_tree_t *call, pp_value_t *out)
     }
     if (core_string_eq(name, CORE_STRING_STATIC("preproc_env"))
         || core_string_eq(name, CORE_STRING_STATIC("preproc_env_defines"))) {
-        char *key = core_strndup(argument.data, argument.u8_bytes);
-        const char *value = getenv(key);
-        bool defines = value != nullptr;
-        if (core_string_eq(name, CORE_STRING_STATIC("preproc_env_defines")))
+        char *key = core_string_to_cstr(argument.data ? argument
+                                                      : CORE_STRING_STATIC(""));
+        core_string_t value = core_string_from_cstr(getenv(key));
+        core_free(key);
+        bool defines = value.data != nullptr;
+        if (core_string_eq(name, CORE_STRING_STATIC("preproc_env_defines"))) {
+            core_free(value.data);
             *out = (pp_value_t){.kind = PP_BOOL, .as.boolean = defines};
+        }
         else
             *out = (pp_value_t){.kind = PP_STRING,
-                .as.string = own_string(ctx,
-                    core_string_from_cstr(value ? value : ""))};
-        core_free(key);
+                .as.string = own_string(ctx, defines ? value
+                    : core_string_dup(CORE_STRING_STATIC("")))};
         return true;
     }
     if (core_string_eq(name, CORE_STRING_STATIC("preproc_defines"))
@@ -1297,26 +1311,23 @@ eval_builtin(pp_context_t *ctx, parse_tree_t *call, pp_value_t *out)
                      "external integer value is outside the preprocessor i128 range");
             return false;
         }
-        char *copy = core_strndup(raw.data, raw.u8_bytes);
-        char *end = nullptr;
+        double real = 0;
+        size_t consumed = 0;
         errno = 0;
-        double real = strtod(copy, &end);
-        bool float_value = end && end != copy && *end == '\0'
-            && (memchr(copy, '.', raw.u8_bytes)
-                || memchr(copy, 'e', raw.u8_bytes)
-                || memchr(copy, 'E', raw.u8_bytes));
+        bool float_value = core_string_parse_f64(raw, &real, &consumed)
+            && consumed == raw.u8_bytes
+            && (core_string_find_byte(raw, '.') >= 0
+                || core_string_find_byte(raw, 'e') >= 0
+                || core_string_find_byte(raw, 'E') >= 0);
         if (float_value) {
             if (errno == ERANGE || !isfinite(real)) {
-                core_free(copy);
                 pp_error(ctx, call,
                          "external float value is outside the preprocessor f64 range");
                 return false;
             }
-            core_free(copy);
             *out = (pp_value_t){.kind = PP_FLOAT, .as.real = real};
             return true;
         }
-        core_free(copy);
         if (raw.u8_bytes && raw.data[0] == '"') {
             core_string_t decoded;
             if (!decode_quoted_string(ctx, raw, &decoded)) return false;
@@ -1360,7 +1371,7 @@ eval_expr(pp_context_t *ctx, parse_tree_t *node, pp_value_t *out)
     if (core_string_eq(name, CORE_STRING_STATIC("postfix-expr"))) {
         if (core_tree_num_children(node) == 1)
             return eval_expr(ctx, core_tree_child(node, 0), out);
-        if (postfix_has_token(node, ".")) {
+        if (postfix_has_token(node, CORE_STRING_STATIC("."))) {
             pp_lookup_t lookup = qualified_binding_lookup(ctx, node, out);
             if (lookup == PP_LOOKUP_FOUND) return true;
             if (lookup == PP_LOOKUP_AMBIGUOUS) {
@@ -1371,7 +1382,7 @@ eval_expr(pp_context_t *ctx, parse_tree_t *node, pp_value_t *out)
             pp_error(ctx, node, "preprocessor expression refers to an ineligible imported const");
             return false;
         }
-        if (postfix_has_token(node, "("))
+        if (postfix_has_token(node, CORE_STRING_STATIC("(")))
             return eval_builtin(ctx, node, out);
         goto invalid;
     }
@@ -1665,20 +1676,21 @@ selected_when_body(pp_context_t *ctx, parse_tree_t *when)
 bool
 n00bb_preprocessor_builtin_name(core_string_t name)
 {
-    static const char *names[] = {
-        "target_os", "target_os_major", "target_os_minor", "target_os_patch",
-        "target_arch", "target_alu", "target_is_little_endian",
-        "debug_enabled", "comptime",
-        "preproc_utc_year", "preproc_utc_month", "preproc_utc_day",
-        "preproc_utc_hour", "preproc_utc_minute", "preproc_utc_second",
-        "n00b_major", "n00b_minor", "n00b_patch", "n00b_impl", "source_dir",
-        "preproc_env", "preproc_env_defines", "preproc_defines",
-        "preproc_value", "compile_warning", "compile_error", nullptr,
+#define S CORE_STRING_STATIC
+    static const core_string_t names[] = {
+        S("target_os"), S("target_os_major"), S("target_os_minor"),
+        S("target_os_patch"), S("target_arch"), S("target_alu"),
+        S("target_is_little_endian"), S("debug_enabled"), S("comptime"),
+        S("preproc_utc_year"), S("preproc_utc_month"), S("preproc_utc_day"),
+        S("preproc_utc_hour"), S("preproc_utc_minute"),
+        S("preproc_utc_second"), S("n00b_major"), S("n00b_minor"),
+        S("n00b_patch"), S("n00b_impl"), S("source_dir"), S("preproc_env"),
+        S("preproc_env_defines"), S("preproc_defines"), S("preproc_value"),
+        S("compile_warning"), S("compile_error"),
     };
-    for (size_t i = 0; names[i]; i++)
-        if (core_string_eq(name,
-                           core_string_borrow(names[i], strlen(names[i]))))
-            return true;
+#undef S
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++)
+        if (core_string_eq(name, names[i])) return true;
     return false;
 }
 
@@ -1711,16 +1723,19 @@ evaluate_when_condition(pp_context_t *ctx, parse_tree_t *condition,
 static bool
 validate_expr_forms(pp_context_t *ctx, parse_tree_t *node)
 {
-    static const char *allowed[] = {
-        "expression", "or-expr", "and-expr", "or-rhs", "and-rhs", "equality-expr",
-        "compare-expr", "bitor-expr", "bitxor-expr", "bitand-expr",
-        "shift-expr", "add-expr", "mul-expr", "unary-expr",
-        "postfix-expr", "primary", "literal-expr", "tuple-or-paren",
-        "simple-lit", "bool-lit", "int-lit", "float-lit", "string-lit",
-        "call-args",
-        "positional-args", "equality-op", "compare-op", "shift-op",
-        "add-op", "mul-op", nullptr,
+#define S CORE_STRING_STATIC
+    static const core_string_t allowed[] = {
+        S("expression"), S("or-expr"), S("and-expr"), S("or-rhs"),
+        S("and-rhs"), S("equality-expr"), S("compare-expr"),
+        S("bitor-expr"), S("bitxor-expr"), S("bitand-expr"),
+        S("shift-expr"), S("add-expr"), S("mul-expr"), S("unary-expr"),
+        S("postfix-expr"), S("primary"), S("literal-expr"),
+        S("tuple-or-paren"), S("simple-lit"), S("bool-lit"), S("int-lit"),
+        S("float-lit"), S("string-lit"), S("call-args"),
+        S("positional-args"), S("equality-op"), S("compare-op"),
+        S("shift-op"), S("add-op"), S("mul-op"),
     };
+#undef S
     if (!node || core_tree_is_leaf(node)) return true;
     core_string_t name = node_name(ctx->grammar, node);
     if (!name.data) {
@@ -1730,19 +1745,20 @@ validate_expr_forms(pp_context_t *ctx, parse_tree_t *node)
         return true;
     }
     bool permitted = false;
-    for (size_t i = 0; allowed[i]; i++) {
-        if (core_string_eq(name,
-                           core_string_borrow(allowed[i], strlen(allowed[i])))) {
+    for (size_t i = 0; i < sizeof(allowed) / sizeof(allowed[0]); i++) {
+        if (core_string_eq(name, allowed[i])) {
             permitted = true;
             break;
         }
     }
     if (!permitted) {
         char message[192];
-        snprintf(message, sizeof(message),
+        int length = snprintf(message, sizeof(message),
             "expression form '%.*s' is not allowed in a preprocessor condition",
             (int)name.u8_bytes, name.data);
-        pp_error(ctx, node, message);
+        if (length < 0) length = 0;
+        if ((size_t)length >= sizeof(message)) length = sizeof(message) - 1;
+        pp_report(ctx, node, core_string_borrow(message, (size_t)length));
         return false;
     }
 
@@ -1938,7 +1954,9 @@ make_value_literal(pp_context_t *ctx, pp_value_t value)
         char number[64];
         int length = snprintf(number, sizeof(number), "%.17g", value.as.real);
         if (length <= 0 || (size_t)length >= sizeof(number)) return nullptr;
-        if (!strchr(number, '.') && !strchr(number, 'e') && !strchr(number, 'E')) {
+        if (!memchr(number, '.', (size_t)length)
+            && !memchr(number, 'e', (size_t)length)
+            && !memchr(number, 'E', (size_t)length)) {
             if ((size_t)length + 2 >= sizeof(number)) return nullptr;
             number[length++] = '.';
             number[length++] = '0';
@@ -2350,7 +2368,7 @@ preprocess_prepare(parse_visit_t *visit)
         return PARSE_VISIT_CONTINUE;
     }
     bool invocation = is_name(ctx->grammar, node, "postfix-expr")
-        && postfix_has_token(node, "(");
+        && postfix_has_token(node, CORE_STRING_STATIC("("));
     core_string_t processor_name = invocation ? builtin_name(ctx, node)
                                                : (core_string_t){0};
     if (core_string_eq(processor_name, CORE_STRING_STATIC("compile_warning"))

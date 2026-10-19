@@ -241,7 +241,7 @@ static int
 requirement_target(const n00bb_abi_selected_objects_t *selected,
                    const n00bb_abi_index_plan_t *plan, size_t input,
                    uint32_t row, n00bb_abi_string_view_t *wanted,
-                   requirement_match_t *found, const char **mismatch)
+                   requirement_match_t *found, core_string_t *mismatch)
 {
     const n00bb_abi_object_view_t *requester = &selected->views[input];
     const n00b_abi_module_v1 *requesting_module =
@@ -323,13 +323,15 @@ requirement_target(const n00bb_abi_selected_objects_t *selected,
                 return -1;
             if (definition->kind != contract->kind
                 || definition->typehash != contract->typehash) {
-                *mismatch = "typed requirement signature mismatch";
+                *mismatch = CORE_STRING_STATIC(
+                    "typed requirement signature mismatch");
                 continue;
             }
             if ((provider->header.artifact_capabilities
                     & request->required_capabilities)
                     != request->required_capabilities) {
-                *mismatch = "typed requirement capability mismatch";
+                *mismatch = CORE_STRING_STATIC(
+                    "typed requirement capability mismatch");
                 continue;
             }
             if (!n00bb_abi_index_plan_map(plan, provider_input,
@@ -338,17 +340,22 @@ requirement_target(const n00bb_abi_selected_objects_t *selected,
             if (definition_index != contract_index) {
                 *mismatch = ((definition->flags ^ contract->flags)
                     & N00B_ABI_TYPE_FLAG_NON_CONCRETE)
-                    ? "typed requirement non-concrete classification mismatch"
+                    ? CORE_STRING_STATIC(
+                        "typed requirement non-concrete classification mismatch")
                     : definition->components.count
                         != contract->components.count
-                        ? "typed requirement component count mismatch"
+                        ? CORE_STRING_STATIC(
+                            "typed requirement component count mismatch")
                     : !!definition->call_signature_index
                         != !!contract->call_signature_index
-                        ? "typed requirement call-signature presence mismatch"
+                        ? CORE_STRING_STATIC(
+                            "typed requirement call-signature presence mismatch")
                     : definition->named_arguments.count
                         != contract->named_arguments.count
-                        ? "typed requirement generic argument count mismatch"
-                    : "typed requirement type-variable origin mismatch";
+                        ? CORE_STRING_STATIC(
+                            "typed requirement generic argument count mismatch")
+                    : CORE_STRING_STATIC(
+                        "typed requirement type-variable origin mismatch");
                 continue;
             }
             uint32_t function_row = 0;
@@ -364,7 +371,8 @@ requirement_target(const n00bb_abi_selected_objects_t *selected,
                         function_row = k;
                 }
                 if (!function_row) {
-                    *mismatch = "typed requirement has no function body";
+                    *mismatch = CORE_STRING_STATIC(
+                        "typed requirement has no function body");
                     continue;
                 }
             }
@@ -416,7 +424,7 @@ typed_requirements_resolved(const n00bb_abi_selected_objects_t *selected,
             if (request->symbol_kind == N00B_ABI_SYMBOL_MODULE) continue;
             n00bb_abi_string_view_t wanted = {0};
             requirement_match_t found;
-            const char *mismatch = nullptr;
+            core_string_t mismatch = {};
             int matches = requirement_target(selected, plan, input, i,
                                              &wanted, &found, &mismatch);
             if (matches < 0) return false;
@@ -426,8 +434,10 @@ typed_requirements_resolved(const n00bb_abi_selected_objects_t *selected,
                     .table_kind = N00B_ABI_TABLE_REQUIREMENT,
                     .row_index = i,
                     .name = wanted,
-                    .reason = matches ? "ambiguous typed requirement"
-                        : mismatch ? mismatch : "unresolved typed requirement",
+                    .reason = matches
+                        ? CORE_STRING_STATIC("ambiguous typed requirement")
+                        : mismatch.data ? mismatch
+                        : CORE_STRING_STATIC("unresolved typed requirement"),
                 };
                 return false;
             }
@@ -463,7 +473,7 @@ baked_requirement_remap(const n00bb_abi_selected_objects_t *selected,
         }
         n00bb_abi_string_view_t wanted = {0};
         requirement_match_t found;
-        const char *mismatch = nullptr;
+        core_string_t mismatch = {};
         uint32_t final_index;
         if (requirement_target(selected, plan, input, i, &wanted, &found,
                 &mismatch) != 1
@@ -777,11 +787,11 @@ link_selected_objects(
     n00bb_abi_link_semantics_fn semantics, void *context,
     n00bb_abi_link_validation_fn validate, void *validation_context,
     uint8_t **out_object, size_t *out_object_bytes,
-    const char **failure_stage,
+    core_string_t *failure_stage,
     n00bb_abi_index_plan_failure_t *plan_failure,
     n00bb_abi_native_rebase_failure_t *rebase_failure)
 {
-    const char *stage = "input validation";
+    core_string_t stage = CORE_STRING_STATIC("input validation");
     n00bb_abi_image_key_t key;
     uint64_t capabilities = 0;
     if (!selected || !selected->views || !selected->count || !target
@@ -790,7 +800,7 @@ link_selected_objects(
         || !link_only_inputs_resolved(selected, &key, &capabilities))
         return false;
 
-    stage = "index plan";
+    stage = CORE_STRING_STATIC("index plan");
     n00bb_abi_index_plan_t *plan =
         n00bb_abi_index_plan_build_detailed(selected, plan_failure);
     n00bb_abi_merged_rows_t merged = {0};
@@ -808,39 +818,39 @@ link_selected_objects(
     size_t object_bytes = 0;
     bool valid = plan != nullptr;
     if (valid) {
-        stage = "typed requirements";
+        stage = CORE_STRING_STATIC("typed requirements");
         valid = typed_requirements_resolved(selected, plan, plan_failure);
     }
     if (valid) {
-        stage = "table merge";
+        stage = CORE_STRING_STATIC("table merge");
         valid = n00bb_abi_merge_rows(selected, plan, &merged);
     }
     if (valid) {
-        stage = "specialization links";
+        stage = CORE_STRING_STATIC("specialization links");
         valid = n00bb_abi_rebuild_specialization_links(selected, plan,
                                                       &merged);
     }
     if (valid) {
-        stage = "name slots";
+        stage = CORE_STRING_STATIC("name slots");
         valid = rebuild_name_slots(selected, plan, &merged);
     }
     if (valid) {
-        stage = "native sections";
+        stage = CORE_STRING_STATIC("native sections");
         valid = n00bb_abi_collect_native_sections(selected, target,
                                                   &sections);
     }
     if (valid) {
-        stage = "index patches";
+        stage = CORE_STRING_STATIC("index patches");
         valid = n00bb_abi_apply_link_patches(selected, plan, &merged,
                                              &sections);
     }
     if (valid) {
-        stage = "native relocations";
+        stage = CORE_STRING_STATIC("native relocations");
         valid = n00bb_abi_collect_native_relocations(selected, &sections,
                                                      &native);
     }
     if (valid) {
-        stage = "string consolidation";
+        stage = CORE_STRING_STATIC("string consolidation");
         valid = n00bb_abi_consolidate_native_strings(target, merged.strings,
                                                      &sections, &native);
     }
@@ -852,25 +862,25 @@ link_selected_objects(
     };
     bool has_pool = valid && n00bb_abi_name_pool_size(merged.strings) != 0;
     if (valid && has_pool) {
-        stage = "string pool section index";
+        stage = CORE_STRING_STATIC("string pool section index");
         valid = sections.count < UINT32_MAX - 2
             && core_object_emit_native_section_index(target,
                 2 + sections.count, (uint32_t)(2 + sections.count),
                 &string_storage.final_section_index);
     }
     if (valid) {
-        stage = "native reference rebasing";
+        stage = CORE_STRING_STATIC("native reference rebasing");
         valid = n00bb_abi_rebase_native_references(&merged, sections.maps,
             sections.map_count, has_pool ? &string_storage : nullptr,
             rebase_failure);
     }
     if (valid) {
-        stage = "native binding consolidation";
+        stage = CORE_STRING_STATIC("native binding consolidation");
         valid = n00bb_abi_add_native_bindings(selected, &merged, &sections,
                                               &native);
     }
     if (valid && semantics) {
-        stage = "semantic dispatch tables";
+        stage = CORE_STRING_STATIC("semantic dispatch tables");
         valid = semantics(selected, plan, &merged, context);
     }
     if (valid)
@@ -881,7 +891,7 @@ link_selected_objects(
 
     size_t row_count = 0;
     if (valid) {
-        stage = "table packing";
+        stage = CORE_STRING_STATIC("table packing");
         rows = core_alloc_array(n00bb_abi_table_rows_t,
                                 merged.table_count);
         for (size_t i = 0; i < merged.table_count; i++) {
@@ -904,7 +914,7 @@ link_selected_objects(
         n00bb_abi_v1_table_schemas(&schema_count);
     n00bb_abi_image_header_t header;
     if (valid) {
-        stage = "container validation";
+        stage = CORE_STRING_STATIC("container validation");
         entries = core_alloc_array(n00bb_abi_directory_entry_t,
                                    row_count);
         valid = n00bb_abi_container_read(packed.bytes,
@@ -913,13 +923,13 @@ link_selected_objects(
     }
     size_t pool_relocation_count = 0;
     if (valid)
-        stage = "string pool relocations";
+        stage = CORE_STRING_STATIC("string pool relocations");
     if (valid)
         valid = n00bb_abi_name_pool_relocations(merged.strings, entries,
             row_count, &pool_relocations, &pool_relocation_count);
 
     if (valid && validate) {
-        stage = "final metadata validation";
+        stage = CORE_STRING_STATIC("final metadata validation");
         uint8_t *resolved = core_alloc_size(1, packed.byte_count);
         if (resolved) memcpy(resolved, packed.bytes, packed.byte_count);
         const uint8_t *pool = n00bb_abi_name_pool_bytes(merged.strings);
@@ -961,7 +971,7 @@ link_selected_objects(
     size_t section_base_bytes = sizeof(uint64_t)
         + (size_t)section_base_count * sizeof(uint64_t);
     if (valid) {
-        stage = "native object emission";
+        stage = CORE_STRING_STATIC("native object emission");
         valid = (has_pool || !pool_relocation_count)
             && sections.count < UINT32_MAX - 3
             && native.symbol_count < UINT32_MAX - (size_t)has_pool
@@ -998,28 +1008,31 @@ link_selected_objects(
             extra_sections[sections.count] =
                 (core_object_emit_section_t){
                     .name = target->object_format == CORE_TARGET_OBJECT_MACH_O
-                        ? "__n00b_strings"
+                        ? CORE_STRING_STATIC("__n00b_strings")
                         : target->object_format == CORE_TARGET_OBJECT_COFF
-                            ? ".rdata$S" : ".rodata.n00b_strings",
+                            ? CORE_STRING_STATIC(".rdata$S")
+                            : CORE_STRING_STATIC(".rodata.n00b_strings"),
                     .segment = target->object_format
-                        == CORE_TARGET_OBJECT_MACH_O ? "__TEXT" : nullptr,
+                        == CORE_TARGET_OBJECT_MACH_O
+                        ? CORE_STRING_STATIC("__TEXT") : (core_string_t){},
                     .bytes = n00bb_abi_name_pool_bytes(merged.strings),
                     .size = pool_size,
                     .alignment = 1,
                 };
             symbols[native.symbol_count] = (core_object_emit_symbol_t){
-                .name = "n00b_string_pool",
+                .name = CORE_STRING_STATIC("n00b_string_pool"),
                 .section_index = (uint32_t)(2 + sections.count),
             };
         }
         size_t map_section = sections.count + (size_t)has_pool;
         extra_sections[map_section] = (core_object_emit_section_t){
             .name = target->object_format == CORE_TARGET_OBJECT_MACH_O
-                ? "__n00b_bases"
+                ? CORE_STRING_STATIC("__n00b_bases")
                 : target->object_format == CORE_TARGET_OBJECT_COFF
-                    ? ".n00b$B" : ".data.rel.ro.n00b_bases",
+                    ? CORE_STRING_STATIC(".n00b$B")
+                    : CORE_STRING_STATIC(".data.rel.ro.n00b_bases"),
             .segment = target->object_format == CORE_TARGET_OBJECT_MACH_O
-                ? "__DATA_CONST" : nullptr,
+                ? CORE_STRING_STATIC("__DATA_CONST") : (core_string_t){},
             .bytes = section_bases,
             .size = section_base_bytes,
             .alignment = 8,
@@ -1029,9 +1042,10 @@ link_selected_objects(
         for (size_t i = 0; i < sections.count; i++) {
             if (sections.sections[i].is_thread_local) continue;
             char name[64];
-            snprintf(name, sizeof(name), "__n00bb_gc_section_%zu", i);
+            int written = snprintf(name, sizeof(name),
+                                   "__n00bb_gc_section_%zu", i);
             symbols[base_symbols + base_ordinal] = (core_object_emit_symbol_t){
-                .name = core_strdup(name),
+                .name = core_string_from_raw(name, written),
                 .section_index = (uint32_t)(i + 2),
             };
             relocations[native.relocation_count + pool_relocation_count
@@ -1047,13 +1061,15 @@ link_selected_objects(
         }
         symbols[symbol_count - 2] = (core_object_emit_symbol_t){
             .name = target->object_format == CORE_TARGET_OBJECT_MACH_O
-                ? "_n00b_abi_section_bases" : "n00b_abi_section_bases",
+                ? CORE_STRING_STATIC("_n00b_abi_section_bases")
+                : CORE_STRING_STATIC("n00b_abi_section_bases"),
             .section_index = (uint32_t)(map_section + 2),
             .exported = true,
         };
         symbols[symbol_count - 1] = (core_object_emit_symbol_t){
             .name = target->object_format == CORE_TARGET_OBJECT_MACH_O
-                ? "_n00b_abi_metadata" : "n00b_abi_metadata",
+                ? CORE_STRING_STATIC("_n00b_abi_metadata")
+                : CORE_STRING_STATIC("n00b_abi_metadata"),
             .section_index = 1,
             .exported = true,
         };
@@ -1066,7 +1082,7 @@ link_selected_objects(
             extra_sections, extra_count, symbols, symbol_count,
             relocations, relocation_count, &object, &object_bytes);
         for (size_t i = 0; i < addressable_section_count; i++)
-            core_free((void *)symbols[base_symbols + i].name);
+            core_free(symbols[base_symbols + i].name.data);
     }
 
     core_free(section_bases);
@@ -1109,11 +1125,12 @@ n00bb_abi_link_objects_with_semantics(
     n00bb_abi_link_semantics_fn semantics, void *context,
     n00bb_abi_link_validation_fn validate, void *validation_context,
     uint8_t **out_object, size_t *out_object_bytes,
-    const char **failure_stage,
+    core_string_t *failure_stage,
     n00bb_abi_index_plan_failure_t *plan_failure,
     n00bb_abi_native_rebase_failure_t *rebase_failure)
 {
-    if (failure_stage) *failure_stage = "object selection";
+    if (failure_stage)
+        *failure_stage = CORE_STRING_STATIC("object selection");
     if (!out_object || !out_object_bytes) return false;
     n00bb_abi_selected_objects_t selected = {0};
     if (!n00bb_abi_select_objects(link, target, candidates,

@@ -10,20 +10,23 @@ int
 main(void)
 {
     ir_ctx_t *context = ir_ctx_new();
-    const ir_profile_t profile = {.name = "n00b"};
-    ir_module_t *module = ir_module_new(context, "example", &profile,
-                                        "x86_64-linux");
+    const ir_profile_t profile = {.name = CORE_STRING_STATIC("n00b")};
+    ir_module_t *module = ir_module_new(context,
+                                        CORE_STRING_STATIC("example"),
+                                        &profile,
+                                        CORE_STRING_STATIC("x86_64-linux"));
     assert(module);
     th_ctx *types = ir_ctx_types(context);
-    th_type *nil = th_name(types, "nil");
-    th_type *string = th_name(types, "string");
+    th_type *nil = th_name(types, CORE_STRING_STATIC("nil"));
+    th_type *string = th_name(types, CORE_STRING_STATIC("string"));
     th_type *number = th_bitint(types, 32, true);
     th_param positional[] = {
         {.mode = TH_IN, .type = string},
         {.mode = TH_OUT, .type = number},
     };
     th_param rest = {.mode = TH_CONSUME, .type = string};
-    const char *keyword_name = "extraordinary_named_argument";
+    const core_string_t keyword_name =
+        CORE_STRING_STATIC("extraordinary_named_argument");
     th_kwparam keywords[] = {{
         .name = keyword_name, .mode = TH_INOUT, .type = number,
     }};
@@ -86,7 +89,7 @@ main(void)
     assert(n00bb_abi_string_decode((const uint8_t *)&keyword->name,
         sizeof(keyword->name), &decoded)
         && decoded.tag == N00BB_ABI_STRING_LONG
-        && decoded.length == strlen(keyword_name));
+        && decoded.length == keyword_name.u8_bytes);
     n00bb_abi_directory_entry_t directory[] = {
         {.kind = N00B_ABI_TABLE_TYPE,
          .record_bytes = sizeof(n00b_abi_type_v1),
@@ -107,10 +110,10 @@ main(void)
     for (size_t i = 0; i < relocation_count; i++) {
         if (relocations[i].section_offset != keyword_offset) continue;
         keyword_relocated = relocations[i].addend_bits
-            <= n00bb_abi_name_pool_size(names) - strlen(keyword_name)
+            <= n00bb_abi_name_pool_size(names) - keyword_name.u8_bytes
             && !memcmp(n00bb_abi_name_pool_bytes(names)
                     + relocations[i].addend_bits,
-                keyword_name, strlen(keyword_name));
+                keyword_name.data, keyword_name.u8_bytes);
     }
     assert(keyword_relocated);
     core_free(relocations);

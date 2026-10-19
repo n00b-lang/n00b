@@ -49,7 +49,7 @@ bool n00bb_abi_write_object(
 
 /* Emits one finalized TU. The caller owns outputs. */
 typedef struct {
-    char *symbol;
+    core_string_t symbol;
     uint64_t *type_hashes;
     size_t type_count;
     ir_func_t **functions;

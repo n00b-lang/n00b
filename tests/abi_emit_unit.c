@@ -19,6 +19,9 @@
 #include "lib/module.h"
 #include "lib/object_section.h"
 
+#define S(x) CORE_STRING_STATIC(x)
+#define ARRAY_STRING(a) core_string_borrow((a), sizeof(a) - 1)
+
 static const n00bb_abi_directory_entry_t *
 find_entry(const n00bb_abi_directory_entry_t *entries, size_t count,
            uint32_t kind)
@@ -71,7 +74,7 @@ check_type_descriptor_storage(void)
     static const char source_text[] = "selected_type";
     assert(core_module_spec_init(&spec, CORE_STRING_STATIC("example"))
         && core_source_file_init(&source, CORE_STRING_STATIC("example.n00b"),
-                                 source_text, sizeof(source_text) - 1)
+                                 ARRAY_STRING(source_text))
         && core_translation_unit_init(&unit, &spec, &source));
     core_module_spec_release(&spec);
     assert(core_translation_unit_finalize_imports(&unit));
@@ -79,14 +82,15 @@ check_type_descriptor_storage(void)
     assert(link && core_link_unit_add_root(link, &unit)
         && core_link_unit_collect(link));
     ir_ctx_t *context = ir_ctx_new();
-    const ir_profile_t profile = {.name = "n00b"};
-    ir_module_t *runtime = ir_module_new(context, "example", &profile,
-                                        "x86_64-linux");
+    const ir_profile_t profile = {.name = S("n00b")};
+    ir_module_t *runtime = ir_module_new(context, S("example"), &profile,
+                                        S("x86_64-linux"));
     assert(runtime);
     th_ctx *types = ir_ctx_types(context);
-    th_type *typespec = th_name(types, "typespec");
+    th_type *typespec = th_name(types, S("typespec"));
     th_type *referred = th_bitint(types, 32, true);
-    ir_global_t *global = ir_global_add(runtime, "selected_type", typespec);
+    ir_global_t *global = ir_global_add(runtime, S("selected_type"),
+                                        typespec);
     ir_global_init_value_t value = {
         .kind = IR_GLOBAL_INIT_TYPE, .descriptor_type = referred,
     };
@@ -130,7 +134,7 @@ check_type_descriptor_storage(void)
     assert(n00bb_abi_type_index_find(index, referred, &referred_index)
         && referred_index != 0);
     core_target_desc_t target = {0};
-    assert(core_target_profile("x86_64-linux", 0, &target));
+    assert(core_target_profile(S("x86_64-linux"), 0, &target));
     for (size_t i = 0; i < n00bb_abi_type_index_count(index); i++) {
         bool handled = false;
         assert(n00bb_abi_publish_direct_layout(runtime,
@@ -181,7 +185,8 @@ check_type_descriptor_storage(void)
         &packed, nullptr, &object, &object_bytes));
     core_object_section_t metadata;
     assert(core_object_section_find(object, object_bytes,
-        target.object_format, nullptr, ".data.rel.ro.n00b_meta", &metadata));
+        target.object_format, (core_string_t){}, S(".data.rel.ro.n00b_meta"),
+        &metadata));
     n00bb_abi_image_key_t key = {
         .target_id = N00BB_ABI_TARGET_X86_64_LINUX,
         .abi_profile_id = N00BB_ABI_PROFILE_ID,
@@ -216,12 +221,12 @@ check_type_descriptor_storage(void)
     core_translation_unit_t prior_unit = {0};
     assert(core_module_spec_init(&prior_spec, CORE_STRING_STATIC("prior"))
         && core_source_file_init(&prior_source,
-            CORE_STRING_STATIC("prior.n00b"), "", 0)
+            CORE_STRING_STATIC("prior.n00b"), S(""))
         && core_translation_unit_init(&prior_unit, &prior_spec,
                                       &prior_source));
     core_module_spec_release(&prior_spec);
     assert(core_translation_unit_finalize_imports(&prior_unit));
-    ir_module_t *prior_runtime = ir_module_new(context, "prior", &profile,
+    ir_module_t *prior_runtime = ir_module_new(context, S("prior"), &profile,
                                                target.triple);
     assert(prior_runtime
         && ir_type_intern(prior_runtime, th_bitint(types, 16, true)));
@@ -262,7 +267,7 @@ check_type_descriptor_storage(void)
         &linked_object, &linked_bytes));
     core_object_section_t linked_storage;
     assert(core_object_section_find(linked_object, linked_bytes,
-        target.object_format, nullptr, ".data.n00b_static",
+        target.object_format, (core_string_t){}, S(".data.n00b_static"),
         &linked_storage)
         && linked_storage.size >= patch->byte_offset + sizeof(uint32_t)
         && core_le_load_u32(linked_storage.bytes + patch->byte_offset)
@@ -299,9 +304,9 @@ check_type_descriptor_storage(void)
 }
 
 static void
-check_empty_unit(const char *triple, uint32_t target_id,
-                 const char *metadata_segment, const char *metadata_name,
-                 const char *pool_segment, const char *pool_name)
+check_empty_unit(core_string_t triple, uint32_t target_id,
+                 core_string_t metadata_segment, core_string_t metadata_name,
+                 core_string_t pool_segment, core_string_t pool_name)
 {
     static const char module_name[] = "default.long_identity_module_name";
     static const char source_path[] = "/tmp/project/long_identity_module_name.n00b";
@@ -309,18 +314,18 @@ check_empty_unit(const char *triple, uint32_t target_id,
     core_target_desc_t target;
     assert(core_target_profile(triple, 0, &target));
     core_module_spec_t spec = {0};
-    assert(core_module_spec_init(&spec, CORE_STRING_STATIC(module_name)));
+    assert(core_module_spec_init(&spec, ARRAY_STRING(module_name)));
     core_source_file_t source = {0};
-    assert(core_source_file_init(&source, CORE_STRING_STATIC(source_path),
-                                 source_text, sizeof(source_text) - 1));
+    assert(core_source_file_init(&source, ARRAY_STRING(source_path),
+                                 ARRAY_STRING(source_text)));
     core_translation_unit_t unit = {0};
     assert(core_translation_unit_init(&unit, &spec, &source));
     core_module_spec_release(&spec);
     assert(core_translation_unit_finalize_imports(&unit));
 
     ir_ctx_t *context = ir_ctx_new();
-    const ir_profile_t profile = {.name = "n00b"};
-    ir_module_t *runtime = ir_module_new(context, module_name,
+    const ir_profile_t profile = {.name = S("n00b")};
+    ir_module_t *runtime = ir_module_new(context, ARRAY_STRING(module_name),
                                         &profile, target.triple);
     assert(runtime);
     parse_symtab_t *symbols = parse_symtab_new();
@@ -415,7 +420,7 @@ check_empty_unit(const char *triple, uint32_t target_id,
     assert(nil->kind == N00B_ABI_TYPE_NIL && nil->size_bits == 0
         && nil->alignment_bytes == 1
         && nil->typehash == th_hash(ir_ctx_types(context),
-                                   th_name(ir_ctx_types(context), "nil")));
+                                   th_name(ir_ctx_types(context), S("nil"))));
     assert(n00bb_abi_string_decode((const uint8_t *)&nil->canonical_name,
         sizeof(nil->canonical_name), &decoded));
     assert(decoded.tag == N00BB_ABI_STRING_SHORT && decoded.length == 3);
@@ -495,12 +500,13 @@ main(void)
 {
     n00bb_register_builtin_types();
     check_type_descriptor_storage();
-    check_empty_unit("x86_64-linux", N00BB_ABI_TARGET_X86_64_LINUX,
-        nullptr, ".data.rel.ro.n00b_meta", nullptr,
-        ".rodata.n00b_strings");
-    check_empty_unit("arm64-macos", N00BB_ABI_TARGET_ARM64_MACOS,
-        "__DATA_CONST", "__n00b_meta", "__TEXT", "__n00b_strings");
-    check_empty_unit("x86_64-windows", N00BB_ABI_TARGET_X86_64_WINDOWS,
-        nullptr, ".n00b$M", nullptr, ".rdata$S");
+    check_empty_unit(S("x86_64-linux"), N00BB_ABI_TARGET_X86_64_LINUX,
+        (core_string_t){}, S(".data.rel.ro.n00b_meta"), (core_string_t){},
+        S(".rodata.n00b_strings"));
+    check_empty_unit(S("arm64-macos"), N00BB_ABI_TARGET_ARM64_MACOS,
+        S("__DATA_CONST"), S("__n00b_meta"), S("__TEXT"),
+        S("__n00b_strings"));
+    check_empty_unit(S("x86_64-windows"), N00BB_ABI_TARGET_X86_64_WINDOWS,
+        (core_string_t){}, S(".n00b$M"), (core_string_t){}, S(".rdata$S"));
     return 0;
 }

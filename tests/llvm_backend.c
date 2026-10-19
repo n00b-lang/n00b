@@ -14,6 +14,21 @@
 #include "n00b-abi-v1.h"
 #include "runtime_native_roots.h"
 
+#define S(x) CORE_STRING_STATIC(x)
+#define TYPE_PARSE(module, lit) ir_type_parse((module), S(lit))
+#define BLOCK_ADD(function, lit) ir_block_add((function), S(lit))
+#define PARAM_ADD(function, lit, type) \
+    ir_param_add((function), S(lit), (type))
+#define LOCAL_ADD(function, lit, type) \
+    ir_local_add((function), S(lit), (type))
+#define SET_DEST(instr, lit, type) ir_instr_set_dest((instr), S(lit), (type))
+#define GLOBAL_ADD(module, lit, type) \
+    ir_global_add((module), S(lit), (type))
+#define OPERAND_NAME(instr, lit) ir_instr_operand_name((instr), S(lit))
+#define FUNC_ADD(module, lit, type, linkage) \
+    ir_func_add((module), S(lit), (type), (linkage))
+#define ADD_MOD(instr, lit) ir_instr_add_mod((instr), S(lit))
+
 static uint64_t
 index_operand(LLVMValueRef value)
 {
@@ -36,8 +51,12 @@ main(void)
     for (size_t i = 0; i < n00bb_runtime_native_root_count; i++) {
         const n00bb_runtime_native_root_t *root =
             &n00bb_runtime_native_roots[i];
-        if (strcmp(root->qualified_name,
-            "sys.internal.gc.alloc.allocate_runtime_known_on_mutator")) continue;
+        core_string_t qualified_name =
+            core_string_from_cstr(root->qualified_name);
+        bool allocator = core_string_eq(qualified_name,
+            S("sys.internal.gc.alloc.allocate_runtime_known_on_mutator"));
+        core_free(qualified_name.data);
+        if (!allocator) continue;
         assert(!root->c_alias && root->unmanaged_parameter_count == 1
             && root->unmanaged_parameters[0] == 0);
         allocator_root = true;
@@ -46,36 +65,37 @@ main(void)
 
     ir_ctx_t *context = ir_ctx_new();
     const ir_scalar_t scalars[] = {
-        {.type_text = "nil", .class = IR_CLASS_VOID},
-        {.type_text = "uint", .class = IR_CLASS_UINT, .width = 64},
-        {.type_text = "i128", .class = IR_CLASS_SINT, .width = 128},
-        {.type_text = "bool", .class = IR_CLASS_BOOL, .width = 1},
-        {.type_text = "f64", .class = IR_CLASS_FLOAT, .width = 64},
+        {.type_text = S("nil"), .class = IR_CLASS_VOID},
+        {.type_text = S("uint"), .class = IR_CLASS_UINT, .width = 64},
+        {.type_text = S("i128"), .class = IR_CLASS_SINT, .width = 128},
+        {.type_text = S("bool"), .class = IR_CLASS_BOOL, .width = 1},
+        {.type_text = S("f64"), .class = IR_CLASS_FLOAT, .width = 64},
     };
     const ir_profile_t profile = {
-        .name = "llvm-test", .scalars = scalars, .n_scalars = 5,
+        .name = S("llvm-test"), .scalars = scalars, .n_scalars = 5,
     };
-    const char *target = "x86_64-unknown-linux-gnu";
-    ir_module_t *runtime = ir_module_new(context, "probe", &profile, target);
-    ir_func_t *function = ir_func_add(runtime, "entry",
-        ir_type_parse(runtime, "() -> nil"), IR_LINK_INTERNAL);
+    const core_string_t target = S("x86_64-unknown-linux-gnu");
+    ir_module_t *runtime = ir_module_new(context, S("probe"), &profile,
+                                         target);
+    ir_func_t *function = FUNC_ADD(runtime, "entry",
+        TYPE_PARSE(runtime, "() -> nil"), IR_LINK_INTERNAL);
     assert(function);
-    ir_block_t *block = ir_block_add(function, "entry");
+    ir_block_t *block = BLOCK_ADD(function, "entry");
     assert(block);
-    th_type *wide = ir_type_parse(runtime, "i128");
-    th_type *unsigned_type = ir_type_parse(runtime, "uint");
+    th_type *wide = TYPE_PARSE(runtime, "i128");
+    th_type *unsigned_type = TYPE_PARSE(runtime, "uint");
     const ir_final_layout_t unsigned_layout = {
         .intrinsic_bits = 64, .alignment_bytes = 8,
     };
     assert(ir_layout_publish_final(runtime, unsigned_type, target,
                                    &unsigned_layout));
-    ir_global_t *thread_counter = ir_global_add(runtime,
+    ir_global_t *thread_counter = GLOBAL_ADD(runtime,
                                                 "thread_counter", unsigned_type);
     assert(thread_counter && ir_global_set_storage_duration(context,
         thread_counter, IR_STORAGE_DURATION_THREAD));
-    ir_global_t *static_global = ir_global_add(runtime,
+    ir_global_t *static_global = GLOBAL_ADD(runtime,
                                               "static_global", unsigned_type);
-    ir_global_t *dynamic_global = ir_global_add(runtime,
+    ir_global_t *dynamic_global = GLOBAL_ADD(runtime,
                                                "dynamic_global", unsigned_type);
     const ir_global_init_value_t static_value = {
         .kind = IR_GLOBAL_INIT_INT, .integer = {.mag = 42},
@@ -84,23 +104,24 @@ main(void)
         && ir_global_set_static_initializer(runtime, static_global,
                                             &static_value));
     ir_global_t *read_globals[] = {static_global, dynamic_global};
-    const char *reader_names[] = {"read_static", "read_dynamic"};
+    const core_string_t reader_names[] = {S("read_static"),
+                                          S("read_dynamic")};
     for (size_t i = 0; i < 2; i++) {
         ir_func_t *reader = ir_func_add(runtime, reader_names[i],
-            ir_type_parse(runtime, "() -> uint"), IR_LINK_INTERNAL);
-        ir_block_t *entry = reader ? ir_block_add(reader, "entry") : nullptr;
+            TYPE_PARSE(runtime, "() -> uint"), IR_LINK_INTERNAL);
+        ir_block_t *entry = reader ? BLOCK_ADD(reader, "entry") : nullptr;
         ir_instr_t *load = entry ? ir_instr_add(entry, IR_OP_COPY) : nullptr;
         ir_instr_t *ret = entry ? ir_instr_add(entry, IR_OP_RETURN) : nullptr;
         assert(load && ret
-            && ir_instr_set_dest(load, "global.value", unsigned_type)
+            && SET_DEST(load, "global.value", unsigned_type)
             && ir_instr_operand_value(load,
                 ir_global_address(runtime, read_globals[i]))
             && ir_instr_operand_value(ret, load->dest));
     }
-    ir_local_t *wide_local = ir_local_add(function, "wide", wide);
+    ir_local_t *wide_local = LOCAL_ADD(function, "wide", wide);
     ir_instr_t *wide_constant = ir_instr_add(block, IR_OP_CONST);
     assert(wide_local && wide_constant
-        && ir_instr_set_dest(wide_constant, "wide.constant", wide)
+        && SET_DEST(wide_constant, "wide.constant", wide)
         && ir_instr_operand_int_lit(wide_constant,
             (ir_lit_t){.mag = (ir_uint_t)1 << 100}));
     ir_instr_t *wide_copy = ir_instr_add(block, IR_OP_COPY);
@@ -109,34 +130,34 @@ main(void)
     ir_instr_t *left = ir_instr_add(block, IR_OP_CONST);
     ir_instr_t *right = ir_instr_add(block, IR_OP_CONST);
     assert(left && right
-        && ir_instr_set_dest(left, "left", unsigned_type)
+        && SET_DEST(left, "left", unsigned_type)
         && ir_instr_operand_uint(left, UINT64_MAX)
-        && ir_instr_set_dest(right, "right", unsigned_type)
+        && SET_DEST(right, "right", unsigned_type)
         && ir_instr_operand_uint(right, 1));
     ir_instr_t *sum = ir_instr_add(block, IR_OP_ADD);
-    assert(sum && ir_instr_set_dest(sum, "sum", unsigned_type)
-        && ir_instr_add_mod(sum, "trap")
+    assert(sum && SET_DEST(sum, "sum", unsigned_type)
+        && ADD_MOD(sum, "trap")
         && ir_instr_operand_value(sum, left->dest)
         && ir_instr_operand_value(sum, right->dest));
-    ir_func_t *helper = ir_func_add(runtime, "helper",
-        ir_type_parse(runtime, "(uint) -> uint"), IR_LINK_INTERNAL);
+    ir_func_t *helper = FUNC_ADD(runtime, "helper",
+        TYPE_PARSE(runtime, "(uint) -> uint"), IR_LINK_INTERNAL);
     assert(helper);
     ir_instr_t *call = ir_instr_add(block, IR_OP_CALL);
-    assert(call && ir_instr_set_dest(call, "called", unsigned_type)
+    assert(call && SET_DEST(call, "called", unsigned_type)
         && ir_instr_operand_value(call, ir_func_address(runtime, helper))
         && ir_instr_operand_value(call, right->dest)
         && ir_instr_set_call_signature(call, helper->type));
     assert(ir_instr_add(block, IR_OP_RETURN));
-    ir_value_t *parameter = ir_param_add(helper, "value", unsigned_type);
-    ir_block_t *helper_entry = ir_block_add(helper, "entry");
+    ir_value_t *parameter = PARAM_ADD(helper, "value", unsigned_type);
+    ir_block_t *helper_entry = BLOCK_ADD(helper, "entry");
     ir_instr_t *helper_return = ir_instr_add(helper_entry, IR_OP_RETURN);
     assert(parameter && helper_entry && helper_return
         && ir_instr_operand_value(helper_return, parameter));
-    th_type *array_type = ir_type_parse(runtime, "array[uint]");
-    ir_func_t *array_function = ir_func_add(runtime, "array_literal",
-        ir_type_parse(runtime, "() -> array[uint]"), IR_LINK_INTERNAL);
+    th_type *array_type = TYPE_PARSE(runtime, "array[uint]");
+    ir_func_t *array_function = FUNC_ADD(runtime, "array_literal",
+        TYPE_PARSE(runtime, "() -> array[uint]"), IR_LINK_INTERNAL);
     ir_block_t *array_entry = array_function
-        ? ir_block_add(array_function, "entry") : nullptr;
+        ? BLOCK_ADD(array_function, "entry") : nullptr;
     ir_instr_t *array_item = array_entry
         ? ir_instr_add(array_entry, IR_OP_CONST) : nullptr;
     ir_instr_t *array = array_entry
@@ -144,23 +165,23 @@ main(void)
     ir_instr_t *array_return = array_entry
         ? ir_instr_add(array_entry, IR_OP_RETURN) : nullptr;
     assert(array_type && th_kind_of(array_type) == TH_SEQUENCE
-        && array_item && ir_instr_set_dest(array_item, "item", unsigned_type)
+        && array_item && SET_DEST(array_item, "item", unsigned_type)
         && ir_instr_operand_uint(array_item, 7)
-        && array && ir_instr_set_dest(array, "array", array_type)
+        && array && SET_DEST(array, "array", array_type)
         && ir_instr_set_aggregate_form(array, IR_AGGREGATE_ELEMENTS)
         && ir_instr_operand_value(array, array_item->dest)
         && array_return && ir_instr_operand_value(array_return,
                                                   array->dest));
-    th_type *array_reference = ir_type_parse(runtime, "ref[array[uint]]");
-    ir_func_t *index_function = ir_func_add(runtime, "array_index",
-        ir_type_parse(runtime, "(array[uint], uint) -> uint"),
+    th_type *array_reference = TYPE_PARSE(runtime, "ref[array[uint]]");
+    ir_func_t *index_function = FUNC_ADD(runtime, "array_index",
+        TYPE_PARSE(runtime, "(array[uint], uint) -> uint"),
         IR_LINK_INTERNAL);
     ir_value_t *index_array = index_function
-        ? ir_param_add(index_function, "array", array_type) : nullptr;
+        ? PARAM_ADD(index_function, "array", array_type) : nullptr;
     ir_value_t *index_position = index_function
-        ? ir_param_add(index_function, "position", unsigned_type) : nullptr;
+        ? PARAM_ADD(index_function, "position", unsigned_type) : nullptr;
     ir_block_t *index_entry = index_function
-        ? ir_block_add(index_function, "entry") : nullptr;
+        ? BLOCK_ADD(index_function, "entry") : nullptr;
     ir_instr_t *index_storage = index_entry
         ? ir_instr_add(index_entry, IR_OP_ALLOC) : nullptr;
     ir_instr_t *index_store = index_entry
@@ -174,55 +195,55 @@ main(void)
     assert(array_reference && index_array && index_position
         && index_storage && index_store && index_address && index_load
         && index_return
-        && ir_instr_set_dest(index_storage, "array.storage", array_reference)
+        && SET_DEST(index_storage, "array.storage", array_reference)
         && ir_instr_operand_type(index_storage, array_type)
         && ir_instr_operand_value(index_store, index_storage->dest)
         && ir_instr_operand_value(index_store, index_array)
-        && ir_instr_set_dest(index_address, "array.item.address",
-            ir_type_parse(runtime, "ref[uint]"))
+        && SET_DEST(index_address, "array.item.address",
+            TYPE_PARSE(runtime, "ref[uint]"))
         && ir_instr_operand_value(index_address, index_storage->dest)
         && ir_instr_operand_value(index_address, index_position)
-        && ir_instr_set_dest(index_load, "array.item", unsigned_type)
+        && SET_DEST(index_load, "array.item", unsigned_type)
         && ir_instr_operand_value(index_load, index_address->dest)
         && ir_instr_operand_value(index_return, index_load->dest));
-    th_type *string_type = ir_type_parse(runtime, "string");
-    ir_func_t *binary_function = ir_func_add(runtime, "binary_literal",
-        ir_type_parse(runtime, "() -> string"), IR_LINK_INTERNAL);
+    th_type *string_type = TYPE_PARSE(runtime, "string");
+    ir_func_t *binary_function = FUNC_ADD(runtime, "binary_literal",
+        TYPE_PARSE(runtime, "() -> string"), IR_LINK_INTERNAL);
     ir_block_t *binary_entry = binary_function
-        ? ir_block_add(binary_function, "entry") : nullptr;
+        ? BLOCK_ADD(binary_function, "entry") : nullptr;
     ir_instr_t *binary_value = binary_entry
         ? ir_instr_add(binary_entry, IR_OP_CONST) : nullptr;
     ir_instr_t *binary_return = binary_entry
         ? ir_instr_add(binary_entry, IR_OP_RETURN) : nullptr;
     assert(string_type && binary_value
-        && ir_instr_set_dest(binary_value, "binary", string_type)
+        && SET_DEST(binary_value, "binary", string_type)
         && ir_instr_set_const_bytes(binary_value,
             (const uint8_t *)"abc", 3)
         && ir_annot_set(context, &binary_value->annots, (ir_annot_t){
-            .key = "n00bb.literal.modifier", .kind = IR_ANNOT_STR,
-            .s = "binary",
+            .key = S("n00bb.literal.modifier"), .kind = IR_ANNOT_STR,
+            .s = S("binary"),
         })
         && binary_return
         && ir_instr_operand_value(binary_return, binary_value->dest));
-    th_type *reference_type = ir_type_parse(runtime, "ref[uint]");
-    ir_func_t *ref_address_builtin = ir_func_add(runtime, "ref_address_builtin",
-        ir_type_parse(runtime, "(ref[uint]) -> uint"), IR_LINK_EXTERN);
-    ir_func_t *ref_address_function = ir_func_add(runtime, "ref_address",
-        ir_type_parse(runtime, "(ref[uint]) -> uint"), IR_LINK_INTERNAL);
+    th_type *reference_type = TYPE_PARSE(runtime, "ref[uint]");
+    ir_func_t *ref_address_builtin = FUNC_ADD(runtime, "ref_address_builtin",
+        TYPE_PARSE(runtime, "(ref[uint]) -> uint"), IR_LINK_EXTERN);
+    ir_func_t *ref_address_function = FUNC_ADD(runtime, "ref_address",
+        TYPE_PARSE(runtime, "(ref[uint]) -> uint"), IR_LINK_INTERNAL);
     ir_value_t *ref_address_parameter = ref_address_function
-        ? ir_param_add(ref_address_function, "value", reference_type) : nullptr;
+        ? PARAM_ADD(ref_address_function, "value", reference_type) : nullptr;
     ir_block_t *ref_address_entry = ref_address_function
-        ? ir_block_add(ref_address_function, "entry") : nullptr;
+        ? BLOCK_ADD(ref_address_function, "entry") : nullptr;
     ir_instr_t *ref_address_call = ref_address_entry
         ? ir_instr_add(ref_address_entry, IR_OP_CALL) : nullptr;
     ir_instr_t *ref_address_return = ref_address_entry
         ? ir_instr_add(ref_address_entry, IR_OP_RETURN) : nullptr;
     assert(ref_address_builtin && ref_address_parameter && ref_address_call
         && ir_annot_set(context, &ref_address_builtin->annots, (ir_annot_t){
-            .key = "n00bb.abi.native", .kind = IR_ANNOT_STR,
-            .s = "n00b_builtin_abi_ref_address",
+            .key = S("n00bb.abi.native"), .kind = IR_ANNOT_STR,
+            .s = S("n00b_builtin_abi_ref_address"),
         })
-        && ir_instr_set_dest(ref_address_call, "address", unsigned_type)
+        && SET_DEST(ref_address_call, "address", unsigned_type)
         && ir_instr_operand_value(ref_address_call,
             ir_func_address(runtime, ref_address_builtin))
         && ir_instr_operand_value(ref_address_call, ref_address_parameter)
@@ -231,75 +252,75 @@ main(void)
         && ref_address_return
         && ir_instr_operand_value(ref_address_return,
             ref_address_call->dest));
-    ir_func_t *barrier_function = ir_func_add(runtime, "barrier_store",
-        ir_type_parse(runtime, "(ref[uint]) -> nil"), IR_LINK_INTERNAL);
+    ir_func_t *barrier_function = FUNC_ADD(runtime, "barrier_store",
+        TYPE_PARSE(runtime, "(ref[uint]) -> nil"), IR_LINK_INTERNAL);
     ir_value_t *barrier_parameter = barrier_function
-        ? ir_param_add(barrier_function, "source", reference_type) : nullptr;
+        ? PARAM_ADD(barrier_function, "source", reference_type) : nullptr;
     ir_local_t *barrier_local = barrier_function
-        ? ir_local_add(barrier_function, "target", reference_type) : nullptr;
+        ? LOCAL_ADD(barrier_function, "target", reference_type) : nullptr;
     ir_block_t *barrier_entry = barrier_function
-        ? ir_block_add(barrier_function, "entry") : nullptr;
+        ? BLOCK_ADD(barrier_function, "entry") : nullptr;
     ir_instr_t *barrier_copy = barrier_entry
         ? ir_instr_add(barrier_entry, IR_OP_COPY) : nullptr;
     assert(barrier_parameter && barrier_local && barrier_copy
         && ir_instr_set_dest_local(barrier_copy, barrier_local)
         && ir_instr_operand_value(barrier_copy, barrier_parameter)
         && ir_instr_add(barrier_entry, IR_OP_RETURN));
-    th_type *reference_storage = ir_type_parse(runtime, "ref[ref[uint]]");
-    ir_func_t *heap_store_function = ir_func_add(runtime, "barrier_heap_store",
-        ir_type_parse(runtime, "(ref[ref[uint]], ref[uint]) -> nil"),
+    th_type *reference_storage = TYPE_PARSE(runtime, "ref[ref[uint]]");
+    ir_func_t *heap_store_function = FUNC_ADD(runtime, "barrier_heap_store",
+        TYPE_PARSE(runtime, "(ref[ref[uint]], ref[uint]) -> nil"),
         IR_LINK_INTERNAL);
     ir_value_t *heap_target = heap_store_function
-        ? ir_param_add(heap_store_function, "target", reference_storage)
+        ? PARAM_ADD(heap_store_function, "target", reference_storage)
         : nullptr;
     ir_value_t *heap_source = heap_store_function
-        ? ir_param_add(heap_store_function, "source", reference_type)
+        ? PARAM_ADD(heap_store_function, "source", reference_type)
         : nullptr;
     ir_block_t *heap_store_entry = heap_store_function
-        ? ir_block_add(heap_store_function, "entry") : nullptr;
+        ? BLOCK_ADD(heap_store_function, "entry") : nullptr;
     ir_instr_t *heap_store = heap_store_entry
         ? ir_instr_add(heap_store_entry, IR_OP_STORE) : nullptr;
     assert(reference_storage && heap_target && heap_source && heap_store
         && ir_instr_operand_value(heap_store, heap_target)
         && ir_instr_operand_value(heap_store, heap_source)
         && ir_instr_add(heap_store_entry, IR_OP_RETURN));
-    ir_func_t *stack_store_function = ir_func_add(runtime,
-        "stack_promoted_store", ir_type_parse(runtime,
+    ir_func_t *stack_store_function = FUNC_ADD(runtime,
+        "stack_promoted_store", TYPE_PARSE(runtime,
             "(ref[uint]) -> nil"), IR_LINK_INTERNAL);
     ir_value_t *stack_source = stack_store_function
-        ? ir_param_add(stack_store_function, "source", reference_type)
+        ? PARAM_ADD(stack_store_function, "source", reference_type)
         : nullptr;
     ir_block_t *stack_store_entry = stack_store_function
-        ? ir_block_add(stack_store_function, "entry") : nullptr;
+        ? BLOCK_ADD(stack_store_function, "entry") : nullptr;
     ir_instr_t *stack_allocation = stack_store_entry
         ? ir_instr_add(stack_store_entry, IR_OP_ALLOC) : nullptr;
     ir_instr_t *stack_store = stack_store_entry
         ? ir_instr_add(stack_store_entry, IR_OP_STORE) : nullptr;
     assert(stack_source && stack_allocation && stack_store
-        && ir_instr_set_dest(stack_allocation, "stack.promoted",
+        && SET_DEST(stack_allocation, "stack.promoted",
             reference_storage)
         && ir_instr_operand_type(stack_allocation, reference_type)
         && ir_instr_operand_value(stack_store, stack_allocation->dest)
         && ir_instr_operand_value(stack_store, stack_source)
         && ir_instr_add(stack_store_entry, IR_OP_RETURN));
-    ir_func_t *allocation_function = ir_func_add(runtime, "heap_ref",
-        ir_type_parse(runtime, "() -> ref[uint]"), IR_LINK_INTERNAL);
+    ir_func_t *allocation_function = FUNC_ADD(runtime, "heap_ref",
+        TYPE_PARSE(runtime, "() -> ref[uint]"), IR_LINK_INTERNAL);
     ir_block_t *allocation_entry = allocation_function
-        ? ir_block_add(allocation_function, "entry") : nullptr;
+        ? BLOCK_ADD(allocation_function, "entry") : nullptr;
     ir_instr_t *allocation = allocation_entry
         ? ir_instr_add(allocation_entry, IR_OP_ALLOC) : nullptr;
     ir_instr_t *allocation_return = allocation_entry
         ? ir_instr_add(allocation_entry, IR_OP_RETURN) : nullptr;
     assert(reference_type && allocation && allocation_return
-        && ir_instr_set_dest(allocation, "heap.storage", reference_type)
+        && SET_DEST(allocation, "heap.storage", reference_type)
         && ir_instr_operand_type(allocation, unsigned_type)
         && ir_instr_operand_value(allocation_return, allocation->dest));
-    ir_func_t *local_callee = ir_func_add(runtime, "write_local",
-        ir_type_parse(runtime, "(ref[uint]) -> nil"), IR_LINK_INTERNAL);
+    ir_func_t *local_callee = FUNC_ADD(runtime, "write_local",
+        TYPE_PARSE(runtime, "(ref[uint]) -> nil"), IR_LINK_INTERNAL);
     ir_value_t *local_parameter = local_callee
-        ? ir_param_add(local_callee, "address", reference_type) : nullptr;
+        ? PARAM_ADD(local_callee, "address", reference_type) : nullptr;
     ir_block_t *local_callee_entry = local_callee
-        ? ir_block_add(local_callee, "entry") : nullptr;
+        ? BLOCK_ADD(local_callee, "entry") : nullptr;
     ir_instr_t *local_alias = local_callee_entry
         ? ir_instr_add(local_callee_entry, IR_OP_BITCAST) : nullptr;
     ir_instr_t *local_constant = local_callee_entry
@@ -310,16 +331,16 @@ main(void)
         ? ir_instr_add(local_callee_entry, IR_OP_RETURN) : nullptr;
     assert(local_parameter && local_alias && local_constant && local_store
         && local_callee_return
-        && ir_instr_set_dest(local_alias, "derived.address", reference_type)
+        && SET_DEST(local_alias, "derived.address", reference_type)
         && ir_instr_operand_value(local_alias, local_parameter)
-        && ir_instr_set_dest(local_constant, "stored.value", unsigned_type)
+        && SET_DEST(local_constant, "stored.value", unsigned_type)
         && ir_instr_operand_uint(local_constant, 17)
         && ir_instr_operand_value(local_store, local_alias->dest)
         && ir_instr_operand_value(local_store, local_constant->dest));
-    ir_func_t *local_caller = ir_func_add(runtime, "stack_call",
-        ir_type_parse(runtime, "() -> nil"), IR_LINK_INTERNAL);
+    ir_func_t *local_caller = FUNC_ADD(runtime, "stack_call",
+        TYPE_PARSE(runtime, "() -> nil"), IR_LINK_INTERNAL);
     ir_block_t *local_caller_entry = local_caller
-        ? ir_block_add(local_caller, "entry") : nullptr;
+        ? BLOCK_ADD(local_caller, "entry") : nullptr;
     ir_instr_t *local_storage = local_caller_entry
         ? ir_instr_add(local_caller_entry, IR_OP_ALLOC) : nullptr;
     ir_instr_t *local_call = local_caller_entry
@@ -327,20 +348,20 @@ main(void)
     ir_instr_t *local_caller_return = local_caller_entry
         ? ir_instr_add(local_caller_entry, IR_OP_RETURN) : nullptr;
     assert(local_storage && local_call && local_caller_return
-        && ir_instr_set_dest(local_storage, "stack.storage", reference_type)
+        && SET_DEST(local_storage, "stack.storage", reference_type)
         && ir_instr_operand_type(local_storage, unsigned_type)
         && ir_instr_operand_value(local_call,
             ir_func_address(runtime, local_callee))
         && ir_instr_operand_value(local_call, local_storage->dest)
         && ir_instr_set_call_signature(local_call, local_callee->type));
-    ir_global_t *escaped_address = ir_global_add(runtime, "escaped_address",
+    ir_global_t *escaped_address = GLOBAL_ADD(runtime, "escaped_address",
                                                  reference_type);
-    ir_func_t *escaping_callee = ir_func_add(runtime, "capture_address",
-        ir_type_parse(runtime, "(ref[uint]) -> nil"), IR_LINK_INTERNAL);
+    ir_func_t *escaping_callee = FUNC_ADD(runtime, "capture_address",
+        TYPE_PARSE(runtime, "(ref[uint]) -> nil"), IR_LINK_INTERNAL);
     ir_value_t *escaping_parameter = escaping_callee
-        ? ir_param_add(escaping_callee, "address", reference_type) : nullptr;
+        ? PARAM_ADD(escaping_callee, "address", reference_type) : nullptr;
     ir_block_t *escaping_callee_entry = escaping_callee
-        ? ir_block_add(escaping_callee, "entry") : nullptr;
+        ? BLOCK_ADD(escaping_callee, "entry") : nullptr;
     ir_instr_t *escaped_root_address = escaping_callee_entry
         ? ir_instr_add(escaping_callee_entry, IR_OP_ADDRESS_OF) : nullptr;
     ir_instr_t *capture = escaping_callee_entry
@@ -352,7 +373,7 @@ main(void)
     assert(escaped_address && escaping_parameter && escaped_root_address
         && capture && capture_direct
         && escaping_callee_return
-        && ir_instr_set_dest(escaped_root_address, "escaped.root.address",
+        && SET_DEST(escaped_root_address, "escaped.root.address",
             reference_storage)
         && ir_instr_operand_value(escaped_root_address,
             ir_global_address(runtime, escaped_address))
@@ -361,14 +382,14 @@ main(void)
         && ir_instr_operand_value(capture_direct,
             ir_global_address(runtime, escaped_address))
         && ir_instr_operand_value(capture_direct, escaping_parameter));
-    ir_global_t *thread_root = ir_global_add(runtime, "thread_root",
+    ir_global_t *thread_root = GLOBAL_ADD(runtime, "thread_root",
                                             reference_type);
-    ir_func_t *thread_capture = ir_func_add(runtime, "capture_thread_root",
-        ir_type_parse(runtime, "(ref[uint]) -> nil"), IR_LINK_INTERNAL);
+    ir_func_t *thread_capture = FUNC_ADD(runtime, "capture_thread_root",
+        TYPE_PARSE(runtime, "(ref[uint]) -> nil"), IR_LINK_INTERNAL);
     ir_value_t *thread_parameter = thread_capture
-        ? ir_param_add(thread_capture, "address", reference_type) : nullptr;
+        ? PARAM_ADD(thread_capture, "address", reference_type) : nullptr;
     ir_block_t *thread_entry = thread_capture
-        ? ir_block_add(thread_capture, "entry") : nullptr;
+        ? BLOCK_ADD(thread_capture, "entry") : nullptr;
     ir_instr_t *thread_root_address = thread_entry
         ? ir_instr_add(thread_entry, IR_OP_ADDRESS_OF) : nullptr;
     ir_instr_t *thread_store = thread_entry
@@ -376,17 +397,17 @@ main(void)
     assert(thread_root && ir_global_set_storage_duration(context,
         thread_root, IR_STORAGE_DURATION_THREAD) && thread_parameter
         && thread_root_address && thread_store
-        && ir_instr_set_dest(thread_root_address, "thread.root.address",
+        && SET_DEST(thread_root_address, "thread.root.address",
             reference_storage)
         && ir_instr_operand_value(thread_root_address,
             ir_global_address(runtime, thread_root))
         && ir_instr_operand_value(thread_store, thread_root_address->dest)
         && ir_instr_operand_value(thread_store, thread_parameter)
         && ir_instr_add(thread_entry, IR_OP_RETURN));
-    ir_func_t *escaping_caller = ir_func_add(runtime, "escaping_call",
-        ir_type_parse(runtime, "() -> nil"), IR_LINK_INTERNAL);
+    ir_func_t *escaping_caller = FUNC_ADD(runtime, "escaping_call",
+        TYPE_PARSE(runtime, "() -> nil"), IR_LINK_INTERNAL);
     ir_block_t *escaping_caller_entry = escaping_caller
-        ? ir_block_add(escaping_caller, "entry") : nullptr;
+        ? BLOCK_ADD(escaping_caller, "entry") : nullptr;
     ir_instr_t *escaping_storage = escaping_caller_entry
         ? ir_instr_add(escaping_caller_entry, IR_OP_ALLOC) : nullptr;
     ir_instr_t *escaping_call = escaping_caller_entry
@@ -394,15 +415,15 @@ main(void)
     ir_instr_t *escaping_caller_return = escaping_caller_entry
         ? ir_instr_add(escaping_caller_entry, IR_OP_RETURN) : nullptr;
     assert(escaping_storage && escaping_call && escaping_caller_return
-        && ir_instr_set_dest(escaping_storage, "captured.storage",
+        && SET_DEST(escaping_storage, "captured.storage",
             reference_type)
         && ir_instr_operand_type(escaping_storage, unsigned_type)
         && ir_instr_operand_value(escaping_call,
             ir_func_address(runtime, escaping_callee))
         && ir_instr_operand_value(escaping_call, escaping_storage->dest)
         && ir_instr_set_call_signature(escaping_call, escaping_callee->type));
-    th_type *record_type = ir_type_parse(runtime, "Point");
-    th_type *record_definition = ir_type_parse(runtime,
+    th_type *record_type = TYPE_PARSE(runtime, "Point");
+    th_type *record_definition = TYPE_PARSE(runtime,
         "(x: uint, y: uint)");
     const ir_layout_bit_run_t first_run[] = {{.offset = 0, .width = 64}};
     const ir_layout_bit_run_t second_run[] = {{.offset = 64, .width = 64}};
@@ -410,9 +431,9 @@ main(void)
         {.offset = 0, .width = 128},
     };
     const ir_final_member_layout_t record_members[] = {
-        {.name = "x", .type = unsigned_type, .ordinal = 0,
+        {.name = S("x"), .type = unsigned_type, .ordinal = 0,
          .bit_offset = 0, .occupied = first_run, .n_occupied = 1},
-        {.name = "y", .type = unsigned_type, .ordinal = 1,
+        {.name = S("y"), .type = unsigned_type, .ordinal = 1,
          .bit_offset = 64, .occupied = second_run, .n_occupied = 1},
     };
     const ir_final_layout_t record_layout = {
@@ -424,10 +445,10 @@ main(void)
     assert(ir_type_define(runtime, record_type, record_definition));
     assert(ir_layout_publish_final(runtime, record_type, target,
                                    &record_layout));
-    ir_func_t *field_function = ir_func_add(runtime, "record_field",
-        ir_type_parse(runtime, "() -> uint"), IR_LINK_INTERNAL);
+    ir_func_t *field_function = FUNC_ADD(runtime, "record_field",
+        TYPE_PARSE(runtime, "() -> uint"), IR_LINK_INTERNAL);
     ir_block_t *field_entry = field_function
-        ? ir_block_add(field_function, "entry") : nullptr;
+        ? BLOCK_ADD(field_function, "entry") : nullptr;
     ir_instr_t *record_storage = field_entry
         ? ir_instr_add(field_entry, IR_OP_ALLOC) : nullptr;
     ir_instr_t *field_address = field_entry
@@ -446,35 +467,35 @@ main(void)
         ? ir_instr_add(field_entry, IR_OP_RETURN) : nullptr;
     assert(record_storage && field_address && field_constant && field_store
         && field_load && record_value && field_extract && field_return
-        && ir_instr_set_dest(record_storage, "point.storage",
-            ir_type_parse(runtime, "ref[Point]"))
+        && SET_DEST(record_storage, "point.storage",
+            TYPE_PARSE(runtime, "ref[Point]"))
         && ir_instr_operand_type(record_storage, record_type)
-        && ir_instr_set_dest(field_address, "point.y.address",
-            ir_type_parse(runtime, "ref[uint]"))
+        && SET_DEST(field_address, "point.y.address",
+            TYPE_PARSE(runtime, "ref[uint]"))
         && ir_instr_operand_value(field_address, record_storage->dest)
-        && ir_instr_operand_name(field_address, "y")
-        && ir_instr_set_dest(field_constant, "point.y.value", unsigned_type)
+        && OPERAND_NAME(field_address, "y")
+        && SET_DEST(field_constant, "point.y.value", unsigned_type)
         && ir_instr_operand_uint(field_constant, 42)
         && ir_instr_operand_value(field_store, field_address->dest)
         && ir_instr_operand_value(field_store, field_constant->dest)
-        && ir_instr_set_dest(field_load, "point.y.loaded", unsigned_type)
+        && SET_DEST(field_load, "point.y.loaded", unsigned_type)
         && ir_instr_operand_value(field_load, field_address->dest)
-        && ir_instr_set_dest(record_value, "point.value", record_type)
+        && SET_DEST(record_value, "point.value", record_type)
         && ir_instr_operand_value(record_value, record_storage->dest)
-        && ir_instr_set_dest(field_extract, "point.y.extracted", unsigned_type)
+        && SET_DEST(field_extract, "point.y.extracted", unsigned_type)
         && ir_instr_operand_value(field_extract, record_value->dest)
-        && ir_instr_operand_name(field_extract, "y")
+        && OPERAND_NAME(field_extract, "y")
         && ir_instr_operand_value(field_return, field_extract->dest));
-    th_type *indexable_uint = ir_type_parse(runtime, "ptr[uint]");
-    ir_func_t *offset_function = ir_func_add(runtime, "offset_load",
-        ir_type_parse(runtime, "(ptr[uint], uint) -> uint"),
+    th_type *indexable_uint = TYPE_PARSE(runtime, "ptr[uint]");
+    ir_func_t *offset_function = FUNC_ADD(runtime, "offset_load",
+        TYPE_PARSE(runtime, "(ptr[uint], uint) -> uint"),
         IR_LINK_INTERNAL);
     ir_value_t *base = offset_function
-        ? ir_param_add(offset_function, "base", indexable_uint) : nullptr;
+        ? PARAM_ADD(offset_function, "base", indexable_uint) : nullptr;
     ir_value_t *index = offset_function
-        ? ir_param_add(offset_function, "index", unsigned_type) : nullptr;
+        ? PARAM_ADD(offset_function, "index", unsigned_type) : nullptr;
     ir_block_t *offset_entry = offset_function
-        ? ir_block_add(offset_function, "entry") : nullptr;
+        ? BLOCK_ADD(offset_function, "entry") : nullptr;
     ir_instr_t *offset_value = offset_entry
         ? ir_instr_add(offset_entry, IR_OP_OFFSET) : nullptr;
     ir_instr_t *cast_value = offset_entry
@@ -485,23 +506,23 @@ main(void)
         ? ir_instr_add(offset_entry, IR_OP_RETURN) : nullptr;
     assert(base && index && offset_value && cast_value && loaded_value
         && offset_return
-        && ir_instr_set_dest(offset_value, "element", indexable_uint)
+        && SET_DEST(offset_value, "element", indexable_uint)
         && ir_instr_operand_value(offset_value, base)
         && ir_instr_operand_value(offset_value, index)
-        && ir_instr_set_dest(cast_value, "reference", reference_type)
+        && SET_DEST(cast_value, "reference", reference_type)
         && ir_instr_operand_value(cast_value, offset_value->dest)
-        && ir_instr_set_dest(loaded_value, "element.value", unsigned_type)
+        && SET_DEST(loaded_value, "element.value", unsigned_type)
         && ir_instr_operand_value(loaded_value, cast_value->dest)
         && ir_instr_operand_value(offset_return, loaded_value->dest));
-    th_type *atomic_uint = ir_type_parse(runtime, "atomic[uint]");
-    th_type *atomic_ref = ir_type_parse(runtime, "ref[atomic[uint]]");
-    ir_func_t *atomic_function = ir_func_add(runtime, "atomic_round_trip",
-        ir_type_parse(runtime, "(ref[atomic[uint]]) -> uint"),
+    th_type *atomic_uint = TYPE_PARSE(runtime, "atomic[uint]");
+    th_type *atomic_ref = TYPE_PARSE(runtime, "ref[atomic[uint]]");
+    ir_func_t *atomic_function = FUNC_ADD(runtime, "atomic_round_trip",
+        TYPE_PARSE(runtime, "(ref[atomic[uint]]) -> uint"),
         IR_LINK_INTERNAL);
     ir_value_t *atomic_address = atomic_function
-        ? ir_param_add(atomic_function, "address", atomic_ref) : nullptr;
+        ? PARAM_ADD(atomic_function, "address", atomic_ref) : nullptr;
     ir_block_t *atomic_entry = atomic_function
-        ? ir_block_add(atomic_function, "entry") : nullptr;
+        ? BLOCK_ADD(atomic_function, "entry") : nullptr;
     ir_instr_t *atomic_read = atomic_entry
         ? ir_instr_add(atomic_entry, IR_OP_LOAD) : nullptr;
     ir_instr_t *atomic_write = atomic_entry
@@ -529,56 +550,56 @@ main(void)
         && atomic_or_relaxed && atomic_return
         && ir_layout_publish_final(runtime, atomic_uint, target,
             &unsigned_layout)
-        && ir_instr_set_dest(atomic_read, "atomic.value", unsigned_type)
+        && SET_DEST(atomic_read, "atomic.value", unsigned_type)
         && ir_instr_operand_value(atomic_read, atomic_address)
-        && ir_instr_add_mod(atomic_read, "atomic")
+        && ADD_MOD(atomic_read, "atomic")
         && ir_instr_operand_value(atomic_write, atomic_address)
         && ir_instr_operand_value(atomic_write, atomic_read->dest)
-        && ir_instr_add_mod(atomic_write, "atomic")
-        && ir_instr_set_dest(atomic_read_relaxed, "atomic.relaxed.value",
+        && ADD_MOD(atomic_write, "atomic")
+        && SET_DEST(atomic_read_relaxed, "atomic.relaxed.value",
                              unsigned_type)
         && ir_instr_operand_value(atomic_read_relaxed, atomic_address)
-        && ir_instr_add_mod(atomic_read_relaxed, "atomic")
-        && ir_instr_add_mod(atomic_read_relaxed, "relaxed")
-        && ir_instr_set_dest(atomic_read_acquire, "atomic.acquire.value",
+        && ADD_MOD(atomic_read_relaxed, "atomic")
+        && ADD_MOD(atomic_read_relaxed, "relaxed")
+        && SET_DEST(atomic_read_acquire, "atomic.acquire.value",
                              unsigned_type)
         && ir_instr_operand_value(atomic_read_acquire, atomic_address)
-        && ir_instr_add_mod(atomic_read_acquire, "atomic")
-        && ir_instr_add_mod(atomic_read_acquire, "acquire")
+        && ADD_MOD(atomic_read_acquire, "atomic")
+        && ADD_MOD(atomic_read_acquire, "acquire")
         && ir_instr_operand_value(atomic_write_relaxed, atomic_address)
         && ir_instr_operand_value(atomic_write_relaxed,
                                   atomic_read_relaxed->dest)
-        && ir_instr_add_mod(atomic_write_relaxed, "atomic")
-        && ir_instr_add_mod(atomic_write_relaxed, "relaxed")
+        && ADD_MOD(atomic_write_relaxed, "atomic")
+        && ADD_MOD(atomic_write_relaxed, "relaxed")
         && ir_instr_operand_value(atomic_write_release, atomic_address)
         && ir_instr_operand_value(atomic_write_release,
                                   atomic_read_acquire->dest)
-        && ir_instr_add_mod(atomic_write_release, "atomic")
-        && ir_instr_add_mod(atomic_write_release, "release")
-        && ir_instr_set_dest(atomic_or, "atomic.previous", unsigned_type)
+        && ADD_MOD(atomic_write_release, "atomic")
+        && ADD_MOD(atomic_write_release, "release")
+        && SET_DEST(atomic_or, "atomic.previous", unsigned_type)
         && ir_instr_operand_value(atomic_or, atomic_address)
-        && ir_instr_operand_name(atomic_or, "or")
+        && OPERAND_NAME(atomic_or, "or")
         && ir_instr_operand_value(atomic_or, atomic_read->dest)
-        && ir_instr_set_dest(atomic_or_release, "atomic.release.previous",
+        && SET_DEST(atomic_or_release, "atomic.release.previous",
                              unsigned_type)
         && ir_instr_operand_value(atomic_or_release, atomic_address)
-        && ir_instr_operand_name(atomic_or_release, "or")
+        && OPERAND_NAME(atomic_or_release, "or")
         && ir_instr_operand_value(atomic_or_release, atomic_read->dest)
-        && ir_instr_add_mod(atomic_or_release, "release")
-        && ir_instr_set_dest(atomic_or_relaxed, "atomic.relaxed.previous",
+        && ADD_MOD(atomic_or_release, "release")
+        && SET_DEST(atomic_or_relaxed, "atomic.relaxed.previous",
                              unsigned_type)
         && ir_instr_operand_value(atomic_or_relaxed, atomic_address)
-        && ir_instr_operand_name(atomic_or_relaxed, "or")
+        && OPERAND_NAME(atomic_or_relaxed, "or")
         && ir_instr_operand_value(atomic_or_relaxed, atomic_read->dest)
-        && ir_instr_add_mod(atomic_or_relaxed, "relaxed")
+        && ADD_MOD(atomic_or_relaxed, "relaxed")
         && ir_instr_operand_value(atomic_return, atomic_or_relaxed->dest));
-    th_type *boolean_type = ir_type_parse(runtime, "bool");
-    ir_func_t *arithmetic_function = ir_func_add(runtime, "arithmetic",
-        ir_type_parse(runtime, "(i128) -> uint"), IR_LINK_INTERNAL);
+    th_type *boolean_type = TYPE_PARSE(runtime, "bool");
+    ir_func_t *arithmetic_function = FUNC_ADD(runtime, "arithmetic",
+        TYPE_PARSE(runtime, "(i128) -> uint"), IR_LINK_INTERNAL);
     ir_value_t *wide_parameter = arithmetic_function
-        ? ir_param_add(arithmetic_function, "wide", wide) : nullptr;
+        ? PARAM_ADD(arithmetic_function, "wide", wide) : nullptr;
     ir_block_t *arithmetic_block = arithmetic_function
-        ? ir_block_add(arithmetic_function, "entry") : nullptr;
+        ? BLOCK_ADD(arithmetic_function, "entry") : nullptr;
     ir_instr_t *nine = ir_instr_add(arithmetic_block, IR_OP_CONST);
     ir_instr_t *two = ir_instr_add(arithmetic_block, IR_OP_CONST);
     ir_instr_t *difference = ir_instr_add(arithmetic_block, IR_OP_SUB);
@@ -593,71 +614,71 @@ main(void)
     assert(boolean_type && wide_parameter && nine && two && difference
         && product && quotient && remainder && unequal && greater && narrowed
         && arithmetic_return
-        && ir_instr_set_dest(nine, "nine", unsigned_type)
+        && SET_DEST(nine, "nine", unsigned_type)
         && ir_instr_operand_uint(nine, 9)
-        && ir_instr_set_dest(two, "two", unsigned_type)
+        && SET_DEST(two, "two", unsigned_type)
         && ir_instr_operand_uint(two, 2)
-        && ir_instr_set_dest(difference, "difference", unsigned_type)
+        && SET_DEST(difference, "difference", unsigned_type)
         && ir_instr_operand_value(difference, nine->dest)
         && ir_instr_operand_value(difference, two->dest)
-        && ir_instr_add_mod(difference, "trap")
-        && ir_instr_set_dest(product, "product", unsigned_type)
+        && ADD_MOD(difference, "trap")
+        && SET_DEST(product, "product", unsigned_type)
         && ir_instr_operand_value(product, difference->dest)
         && ir_instr_operand_value(product, two->dest)
-        && ir_instr_add_mod(product, "trap")
-        && ir_instr_set_dest(quotient, "quotient", unsigned_type)
+        && ADD_MOD(product, "trap")
+        && SET_DEST(quotient, "quotient", unsigned_type)
         && ir_instr_operand_value(quotient, product->dest)
         && ir_instr_operand_value(quotient, two->dest)
-        && ir_instr_add_mod(quotient, "trap")
-        && ir_instr_set_dest(remainder, "remainder", unsigned_type)
+        && ADD_MOD(quotient, "trap")
+        && SET_DEST(remainder, "remainder", unsigned_type)
         && ir_instr_operand_value(remainder, quotient->dest)
         && ir_instr_operand_value(remainder, two->dest)
-        && ir_instr_add_mod(remainder, "trap")
-        && ir_instr_set_dest(unequal, "unequal", boolean_type)
+        && ADD_MOD(remainder, "trap")
+        && SET_DEST(unequal, "unequal", boolean_type)
         && ir_instr_operand_value(unequal, quotient->dest)
         && ir_instr_operand_value(unequal, remainder->dest)
-        && ir_instr_set_dest(greater, "greater", boolean_type)
+        && SET_DEST(greater, "greater", boolean_type)
         && ir_instr_operand_value(greater, quotient->dest)
         && ir_instr_operand_value(greater, remainder->dest)
-        && ir_instr_set_dest(narrowed, "narrowed", unsigned_type)
+        && SET_DEST(narrowed, "narrowed", unsigned_type)
         && ir_instr_operand_value(narrowed, wide_parameter)
-        && ir_instr_add_mod(narrowed, "trap")
+        && ADD_MOD(narrowed, "trap")
         && ir_instr_operand_value(arithmetic_return, narrowed->dest));
-    th_type *float_type = ir_type_parse(runtime, "f64");
+    th_type *float_type = TYPE_PARSE(runtime, "f64");
     const struct {
-        const char *name;
-        const char *signature;
+        core_string_t name;
+        core_string_t signature;
         th_type *source;
         th_type *target;
-        const char *rounding;
+        core_string_t rounding;
         bool checked;
     } casts[] = {
-        {"uint_to_float", "(uint) -> f64", unsigned_type, float_type,
-         "nearest", false},
-        {"signed_to_float", "(i128) -> f64", wide, float_type,
-         "nearest", false},
-        {"float_to_uint", "(f64) -> uint", float_type, unsigned_type,
-         "to_zero", true},
-        {"float_to_signed", "(f64) -> i128", float_type, wide,
-         "to_zero", true},
+        {S("uint_to_float"), S("(uint) -> f64"), unsigned_type, float_type,
+         S("nearest"), false},
+        {S("signed_to_float"), S("(i128) -> f64"), wide, float_type,
+         S("nearest"), false},
+        {S("float_to_uint"), S("(f64) -> uint"), float_type, unsigned_type,
+         S("to_zero"), true},
+        {S("float_to_signed"), S("(f64) -> i128"), float_type, wide,
+         S("to_zero"), true},
     };
     assert(float_type);
     for (size_t i = 0; i < sizeof(casts) / sizeof(casts[0]); i++) {
         ir_func_t *cast_function = ir_func_add(runtime, casts[i].name,
             ir_type_parse(runtime, casts[i].signature), IR_LINK_INTERNAL);
         ir_value_t *argument = cast_function
-            ? ir_param_add(cast_function, "source", casts[i].source) : nullptr;
+            ? PARAM_ADD(cast_function, "source", casts[i].source) : nullptr;
         ir_block_t *entry = cast_function
-            ? ir_block_add(cast_function, "entry") : nullptr;
+            ? BLOCK_ADD(cast_function, "entry") : nullptr;
         ir_instr_t *conversion = entry
             ? ir_instr_add(entry, IR_OP_CAST) : nullptr;
         ir_instr_t *return_value = entry
             ? ir_instr_add(entry, IR_OP_RETURN) : nullptr;
         assert(argument && conversion && return_value
-            && ir_instr_set_dest(conversion, "converted", casts[i].target)
+            && SET_DEST(conversion, "converted", casts[i].target)
             && ir_instr_operand_value(conversion, argument)
             && ir_instr_add_mod(conversion, casts[i].rounding)
-            && (!casts[i].checked || ir_instr_add_mod(conversion, "trap"))
+            && (!casts[i].checked || ADD_MOD(conversion, "trap"))
             && ir_instr_operand_value(return_value, conversion->dest));
     }
     core_diagnostics_t *diagnostics = core_diagnostics_new();
@@ -682,7 +703,8 @@ main(void)
         for (size_t i = 0; i < core_diagnostics_count(diagnostics); i++) {
             const core_diagnostic_t *diagnostic =
                 core_diagnostics_at(diagnostics, i);
-            fprintf(stderr, "%s\n", diagnostic->message.data);
+            fprintf(stderr, "%.*s\n", (int)diagnostic->message.u8_bytes,
+                    diagnostic->message.data);
         }
     assert(wrote);
     assert(bytes.byte_len > 0);
@@ -694,7 +716,9 @@ main(void)
     LLVMModuleRef parsed = nullptr;
     assert(!LLVMParseBitcodeInContext2(reader, source, &parsed));
     assert(parsed);
-    assert(strcmp(LLVMGetTarget(parsed), target) == 0);
+    core_string_t parsed_target = core_string_from_cstr(LLVMGetTarget(parsed));
+    assert(core_string_eq(parsed_target, target));
+    core_free(parsed_target.data);
     LLVMValueRef lowered_thread = LLVMGetNamedGlobal(parsed,
         "thread_counter");
     assert(lowered_thread && LLVMIsThreadLocal(lowered_thread));
@@ -1086,17 +1110,17 @@ main(void)
     n00bb_llvm_backend_free(backend);
 
     ir_module_t *native_runtime = ir_module_new(context,
-        "sys.internal.gc.alloc", &profile, target);
-    ir_func_t *native_function = ir_func_add(native_runtime,
-        "allocate_runtime", ir_type_parse(native_runtime, "() -> nil"),
+        S("sys.internal.gc.alloc"), &profile, target);
+    ir_func_t *native_function = FUNC_ADD(native_runtime,
+        "allocate_runtime", TYPE_PARSE(native_runtime, "() -> nil"),
         IR_LINK_INTERNAL);
     ir_block_t *native_entry = native_function
-        ? ir_block_add(native_function, "entry") : nullptr;
-    ir_func_t *native_mutator = ir_func_add(native_runtime,
-        "mutator_for_native", ir_type_parse(native_runtime,
+        ? BLOCK_ADD(native_function, "entry") : nullptr;
+    ir_func_t *native_mutator = FUNC_ADD(native_runtime,
+        "mutator_for_native", TYPE_PARSE(native_runtime,
             "() -> nil"), IR_LINK_INTERNAL);
     ir_block_t *native_mutator_entry = native_mutator
-        ? ir_block_add(native_mutator, "entry") : nullptr;
+        ? BLOCK_ADD(native_mutator, "entry") : nullptr;
     assert(native_entry
         && native_mutator_entry
         && ir_instr_add(native_entry, IR_OP_RETURN)
@@ -1118,9 +1142,9 @@ main(void)
         && !LLVMParseBitcodeInContext2(native_reader, native_source,
                                        &native_parsed));
     assert(LLVMGetNamedGlobalAlias(native_parsed, "n00b_gc_allocate",
-                                   strlen("n00b_gc_allocate")));
+                                   sizeof("n00b_gc_allocate") - 1));
     assert(LLVMGetNamedGlobalAlias(native_parsed, "n00b_gc_mutator",
-                                   strlen("n00b_gc_mutator")));
+                                   sizeof("n00b_gc_mutator") - 1));
     LLVMDisposeModule(native_parsed);
     LLVMContextDispose(native_reader);
     LLVMDisposeMemoryBuffer(native_source);

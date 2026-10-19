@@ -13,17 +13,23 @@ report_call_type_error(core_translation_unit_t *unit, parse_tree_t *call,
                        th_ctx *types, th_type *actual, th_type *expected)
 {
     core_buffer_t message = {0};
-    const char *detail = th_last_error(types);
+    core_string_t detail = th_last_error(types);
+    core_string_t actual_text = actual ? n00bb_print_type(types, actual)
+                                       : CORE_STRING_STATIC("unknown");
+    core_string_t expected_text = expected
+        ? n00bb_print_type(types, expected) : CORE_STRING_STATIC("unknown");
+    bool has_detail = detail.data && detail.u8_bytes;
     core_buffer_printf(&message,
-                       "call type does not match its function (%s vs %s)%s%s",
-                       actual ? n00bb_print_type(types, actual) : "unknown",
-                       expected ? n00bb_print_type(types, expected) : "unknown",
-                       detail && *detail ? ": " : "",
-                       detail && *detail ? detail : "");
+                       "call type does not match its function (%.*s vs %.*s)%s%.*s",
+                       (int)actual_text.u8_bytes, actual_text.data,
+                       (int)expected_text.u8_bytes, expected_text.data,
+                       has_detail ? ": " : "",
+                       has_detail ? (int)detail.u8_bytes : 0,
+                       has_detail ? detail.data : "");
     parse_token_info_t *site = parse_tree_find_first_terminal(call);
     core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit,
         CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0002"),
-        core_string_from_cstr(message.data),
+        core_buffer_string(&message),
         site ? (core_diag_location_t){
             .line = parse_token_line(site),
             .column = parse_token_column(site),
@@ -85,7 +91,7 @@ typedef struct {
     th_type *source;
     th_type *instance;
     bool channels;
-    const char *requirement_trait;
+    core_string_t requirement_trait;
 } n00bb_call_signature_t;
 
 typedef struct {
@@ -97,7 +103,7 @@ static th_type *
 call_site_signature_instance(n00bb_call_site_index_t *index,
                              parse_cf_label_t *label, th_ctx *types,
                              th_type *source, bool channels,
-                             const char *requirement_trait)
+                             core_string_t requirement_trait)
 {
     if (!source) return nullptr;
     n00bb_call_signature_t *cached = core_dict_get(
@@ -106,12 +112,12 @@ call_site_signature_instance(n00bb_call_site_index_t *index,
      * Its trait name identifies the same frozen contract across inference
      * rounds; using the fresh pointer as the cache key would create another
      * type variable and rebind the receiver on every round. */
-    bool same_requirement = requirement_trait && cached
-        && cached->requirement_trait
-        && !strcmp(cached->requirement_trait, requirement_trait);
+    bool same_requirement = requirement_trait.data && cached
+        && cached->requirement_trait.data
+        && core_string_eq(cached->requirement_trait, requirement_trait);
     if (cached && cached->channels == channels
         && (same_requirement
-            || (!requirement_trait && !cached->requirement_trait
+            || (!requirement_trait.data && !cached->requirement_trait.data
                 && cached->source == source)))
         return cached->instance;
     th_type *instance = nullptr;
@@ -146,13 +152,13 @@ call_site_signature(n00bb_call_site_index_t *index, parse_cf_label_t *label,
                     th_ctx *types, th_type *source)
 {
     return call_site_signature_instance(index, label, types, source, false,
-                                        nullptr);
+                                        (core_string_t){0});
 }
 
 static th_type *
 call_site_requirement_signature(n00bb_call_site_index_t *index,
                                 parse_cf_label_t *label, th_ctx *types,
-                                th_type *source, const char *trait_name)
+                                th_type *source, core_string_t trait_name)
 {
     return call_site_signature_instance(index, label, types, source, false,
                                         trait_name);
@@ -163,7 +169,7 @@ call_site_channels(n00bb_call_site_index_t *index, parse_cf_label_t *label,
                    th_ctx *types, th_type *source)
 {
     return call_site_signature_instance(index, label, types, source, true,
-                                        nullptr);
+                                        (core_string_t){0});
 }
 
 static void
@@ -295,11 +301,10 @@ unify_call_argument(core_translation_unit_t *unit, n00bb_tu_state_t *state,
 
 static void
 report_call_binding_error(core_translation_unit_t *unit, parse_tree_t *node,
-                          const char *code, const char *message)
+                          core_string_t code, core_string_t message)
 {
     core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit,
-        CORE_DIAG_ERROR, core_string_from_cstr(code),
-        core_string_from_cstr(message), link_source_location(node));
+        CORE_DIAG_ERROR, code, message, link_source_location(node));
 }
 
 static void
@@ -308,13 +313,12 @@ report_missing_parameter(parse_grammar_t *grammar,
                          parse_sym_entry_t *callee, parse_tree_t *formals,
                          size_t index, parse_tree_t *site)
 {
-    const char *name = nullptr;
-    size_t name_size = 0;
+    core_string_t name = {0};
     (void)function_parameter_info(grammar, callee, formals, index, nullptr,
-                                  &name, &name_size, nullptr, nullptr);
+                                  &name, nullptr, nullptr);
     core_buffer_t message = {0};
     core_buffer_printf(&message, "call omits the required parameter '%.*s'",
-                       (int)name_size, name ? name : "");
+                       (int)name.u8_bytes, name.data ? name.data : "");
     core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit,
         CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0040"),
         core_string_borrow(message.data, message.byte_len),
@@ -342,15 +346,17 @@ n00bb_bind_call_arguments(parse_grammar_t *grammar,
     core_list_t(n00bb_tree_ptr_t) positional =
         core_list_new(n00bb_tree_ptr_t);
     collect_positional_nodes(grammar,
-        child_nt(grammar, call_args, "positional-args"), &positional);
+        child_nt(grammar, call_args, CORE_STRING_STATIC("positional-args")),
+        &positional);
     for (size_t i = 0; i < positional.len; i++) {
         size_t index = i + offset;
         const th_param *parameter = index < parameter_count
             ? th_func_param(signature, index) : rest;
         if (!parameter) {
             report_call_binding_error(unit, positional.data[i],
-                "N00BB-T0039",
-                "call passes more arguments than its function has parameters");
+                CORE_STRING_STATIC("N00BB-T0039"),
+                CORE_STRING_STATIC(
+                    "call passes more arguments than its function has parameters"));
             valid = false;
             break;
         }
@@ -365,10 +371,12 @@ n00bb_bind_call_arguments(parse_grammar_t *grammar,
     core_list_t(n00bb_tree_ptr_t) keywords = core_list_new(n00bb_tree_ptr_t);
     if (callee)
         collect_keyword_nodes(grammar,
-            child_nt(grammar, call_args, "keyword-args"), &keywords);
+            child_nt(grammar, call_args, CORE_STRING_STATIC("keyword-args")),
+            &keywords);
     for (size_t i = 0; i < keywords.len; i++) {
         parse_tree_t *keyword = keywords.data[i];
-        parse_tree_t *argument = child_nt(grammar, keyword, "expression");
+        parse_tree_t *argument = child_nt(grammar, keyword,
+                                          CORE_STRING_STATIC("expression"));
         size_t index = 0;
         th_type *expected = nullptr;
         if (function_parameter_named(grammar, callee, formals,
@@ -380,14 +388,16 @@ n00bb_bind_call_arguments(parse_grammar_t *grammar,
                 : option ? option->type : nullptr;
         }
         if (!expected) {
-            report_call_binding_error(unit, keyword, "N00BB-T0037",
-                "named argument does not match a parameter");
+            report_call_binding_error(unit, keyword,
+                CORE_STRING_STATIC("N00BB-T0037"),
+                CORE_STRING_STATIC("named argument does not match a parameter"));
             valid = false;
             continue;
         }
         if (index < parameter_count && bound[index]) {
-            report_call_binding_error(unit, keyword, "N00BB-T0038",
-                "a parameter is supplied more than once");
+            report_call_binding_error(unit, keyword,
+                CORE_STRING_STATIC("N00BB-T0038"),
+                CORE_STRING_STATIC("a parameter is supplied more than once"));
             valid = false;
             continue;
         }
@@ -400,7 +410,7 @@ n00bb_bind_call_arguments(parse_grammar_t *grammar,
     for (size_t i = 0; valid && callee && i < parameter_count; i++) {
         uint8_t flags = 0;
         if (bound[i] || !function_parameter_info(grammar, callee, formals,
-                i, nullptr, nullptr, nullptr, &flags, nullptr)
+                i, nullptr, nullptr, &flags, nullptr)
             || (flags & 1u)) continue;
         report_missing_parameter(grammar, unit, callee, formals, i, site);
         valid = false;
@@ -421,8 +431,7 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
     if (!state || !state->annotations || !state->types) return;
     if (resolve_member_calls
         && !th_ctx_set_environment_scope(state->types,
-            unit->module.identifier.data,
-            n00bb_package_id(unit).data)) {
+            unit->module.identifier, n00bb_package_id(unit))) {
         core_diagnostics_report(core_translation_unit_diagnostics(unit),
             unit, CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0004"),
             CORE_STRING_STATIC("could not set call-site type-environment scope"));
@@ -450,7 +459,7 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
                 || !core_link_reference_is_deferred(reference)) continue;
         }
         parse_sym_entry_t *context_target =
-            nt_is(grammar, label->self, "context-call")
+            nt_is(grammar, label->self, CORE_STRING_STATIC("context-call"))
                 ? attached_symbol(grammar, unit, label->cond) : nullptr;
         bool context_call = context_symbol(grammar, context_target);
         if (callee_symbol && !context_call) {
@@ -513,18 +522,14 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
                 callee_symbol = member_site->symbol;
             }
             else if (generic_open_receiver) {
-                char *method_name = method_text.data
-                    ? core_strndup(method_text.data,
-                                   method_text.u8_bytes) : nullptr;
-                size_t requirement_count = method_name
-                    ? th_env_method_requirements(state->types, method_name,
+                size_t requirement_count = method_text.data
+                    ? th_env_method_requirements(state->types, method_text,
                                                   nullptr, 0) : 0;
                 th_env_method_requirement_t *requirements =
                     requirement_count ? core_alloc_array(
                         th_env_method_requirement_t, requirement_count)
                         : nullptr;
                 if (requirement_count && !requirements) {
-                    core_free(method_name);
                     core_diagnostics_report_at(
                         core_translation_unit_diagnostics(unit), unit,
                         CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0004"),
@@ -534,7 +539,7 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
                     continue;
                 }
                 if (requirement_count)
-                    th_env_method_requirements(state->types, method_name,
+                    th_env_method_requirements(state->types, method_text,
                         requirements, requirement_count);
                 size_t matched = SIZE_MAX;
                 parse_sym_entry_t *matched_requirement = nullptr;
@@ -546,7 +551,7 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
                     parse_sym_entry_t *requirement =
                         trait_method_requirement_symbol(grammar,
                             state->link_analysis, unit,
-                            core_string_from_cstr(requirements[r].trait_name),
+                            requirements[r].trait_name,
                             method_text);
                     if (requirement && requirement != sole_requirement) {
                         sole_requirement = requirement;
@@ -593,13 +598,11 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
                     site->resolved_trait_name =
                         requirements[matched].trait_name;
                 core_free(requirements);
-                core_free(method_name);
             }
             else if (receiver_type && method_text.data) {
-                char *method_name = core_strndup(method_text.data,
-                                                 method_text.u8_bytes);
+                core_string_t method_name = method_text;
                 th_env_method_t method = {0};
-                const char *trait_name = nullptr;
+                core_string_t trait_name = {0};
                 th_env_method_status_t method_status =
                     th_env_method_resolve_by_name(state->types,
                         receiver_type, method_name, &method, &trait_name);
@@ -621,7 +624,7 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
                     : nullptr;
                 if (coerced) {
                     th_env_method_t target = {0};
-                    const char *target_trait = nullptr;
+                    core_string_t target_trait = {0};
                     th_env_method_status_t target_status =
                         th_env_method_resolve_by_name(state->types, coerced,
                             method_name, &target, &target_trait);
@@ -662,7 +665,6 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
                                 CORE_STRING_STATIC(
                                     "resolved trait target has no callable signature"),
                                 link_source_location(member));
-                            core_free(method_name);
                             continue;
                         }
                     }
@@ -670,11 +672,13 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
                 else if (receiver_type &&
                          th_kind_of(th_resolve(receiver_type)) != TH_VAR) {
                     core_buffer_t message = {0};
+                    core_string_t receiver_text = n00bb_print_type(
+                        state->types, receiver_type);
                     core_buffer_printf(&message,
-                        "no matching trait method '%.*s' for receiver type %s",
+                        "no matching trait method '%.*s' for receiver type %.*s",
                         (int)method_text.u8_bytes,
                         method_text.data ? method_text.data : "",
-                        n00bb_print_type(state->types, receiver_type));
+                        (int)receiver_text.u8_bytes, receiver_text.data);
                     core_diagnostics_report_at(
                         core_translation_unit_diagnostics(unit), unit,
                         CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0003"),
@@ -682,7 +686,6 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
                         link_source_location(member));
                     core_buffer_release(&message);
                 }
-                core_free(method_name);
             }
         }
         th_type *result = label->self ? parse_tree_type(label->self) : nullptr;
@@ -962,8 +965,9 @@ call_argument_for_parameter(parse_grammar_t *grammar, parse_tree_t *call,
                            bool trait_dispatch)
 {
     parse_tree_t *signature = child_nt(grammar, function->decl_node,
-                                       "func-type-signature");
-    parse_tree_t *param_decl = child_nt(grammar, signature, "param-decl");
+                                       CORE_STRING_STATIC("func-type-signature"));
+    parse_tree_t *param_decl = child_nt(grammar, signature,
+                                        CORE_STRING_STATIC("param-decl"));
     core_list_t(parse_sym_entry_ptr_t) formals =
         core_list_new(parse_sym_entry_ptr_t);
     parse_sym_entry_t *rest = nullptr;
@@ -1002,7 +1006,8 @@ call_argument_for_parameter(parse_grammar_t *grammar, parse_tree_t *call,
         }
     }
     parse_tree_t *args = call_arguments_node(grammar, call);
-    parse_tree_t *positional = child_nt(grammar, args, "positional-args");
+    parse_tree_t *positional = child_nt(grammar, args,
+                                        CORE_STRING_STATIC("positional-args"));
     core_list_t(n00bb_tree_ptr_t) positional_nodes =
         core_list_new(n00bb_tree_ptr_t);
     if (positional)
@@ -1010,7 +1015,8 @@ call_argument_for_parameter(parse_grammar_t *grammar, parse_tree_t *call,
     parse_tree_t *found = target < positional_nodes.len
         ? positional_nodes.data[target] : nullptr;
     if (!found) {
-        parse_tree_t *keyword_args = child_nt(grammar, args, "keyword-args");
+        parse_tree_t *keyword_args = child_nt(grammar, args,
+                                              CORE_STRING_STATIC("keyword-args"));
         core_list_t(n00bb_tree_ptr_t) keywords =
             core_list_new(n00bb_tree_ptr_t);
         if (keyword_args)
@@ -1018,7 +1024,7 @@ call_argument_for_parameter(parse_grammar_t *grammar, parse_tree_t *call,
         for (size_t i = 0; !found && i < keywords.len; i++) {
             core_string_t name = call_keyword_name(keywords.data[i]);
             parse_tree_t *expression = child_nt(grammar, keywords.data[i],
-                                                 "expression");
+                                                 CORE_STRING_STATIC("expression"));
             if (target_name.data && name.data && expression
                 && core_string_eq(name, target_name))
                 found = expression;

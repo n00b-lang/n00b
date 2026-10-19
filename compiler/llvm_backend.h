@@ -21,7 +21,7 @@ typedef struct {
 
 typedef struct {
     const ir_global_t *global;
-    const char *native_name;
+    core_string_t native_name;
     uint32_t storage_index;
 } n00bb_llvm_global_binding_t;
 
@@ -36,7 +36,7 @@ typedef struct {
 } n00bb_llvm_function_binding_t;
 
 typedef struct {
-    const char *symbol;
+    core_string_t symbol;
     const uint64_t *type_hashes;
     size_t type_count;
     ir_func_t *const *functions;
@@ -74,7 +74,7 @@ typedef struct {
 void n00bb_llvm_backend_bind_mutator_classifier(n00bb_llvm_backend_t *backend,
     const n00bb_llvm_mutator_classifier_t *classifier);
 size_t n00bb_llvm_backend_mutator_count(const n00bb_llvm_backend_t *backend);
-const char *n00bb_llvm_backend_mutator_name(
+core_string_t n00bb_llvm_backend_mutator_name(
     const n00bb_llvm_backend_t *backend, size_t index);
 
 bool n00bb_llvm_backend_write_bitcode(
@@ -84,12 +84,12 @@ bool n00bb_llvm_backend_bind_index_table(n00bb_llvm_backend_t *backend,
     const n00bb_llvm_index_table_t *table);
 bool n00bb_llvm_backend_emit_object(
     n00bb_llvm_backend_t *backend,
-    const char *const *entry_initializers, size_t initializer_count,
+    const core_string_t *entry_initializers, size_t initializer_count,
     size_t metadata_bytes,
     core_buffer_t *out, core_diagnostics_t *diagnostics);
 bool n00bb_llvm_backend_emit_linkable_bitcode(
     n00bb_llvm_backend_t *backend,
-    const char *const *entry_initializers, size_t initializer_count,
+    const core_string_t *entry_initializers, size_t initializer_count,
     size_t metadata_bytes, core_buffer_t *out,
     core_diagnostics_t *diagnostics);
 

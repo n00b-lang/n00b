@@ -26,7 +26,7 @@ append_module_initializer(n00bb_abi_type_index_t *index,
         ir_func_t *function = ir_func_at(module, i);
         if (!function) return false;
         if (!ir_func_is_initializer(function)) continue;
-        if (!scope_index || *initializer_index || !function->name
+        if (!scope_index || *initializer_index || !function->name.data
             || !function->type
             || function->owner != module || function->n_params
             || th_func_nparams(function->type)
@@ -49,8 +49,7 @@ append_module_initializer(n00bb_abi_type_index_t *index,
             .variadic_type_index = N00B_ABI_V1_NO_TYPE_INDEX,
         };
         uint32_t next = (uint32_t)rows->len;
-        if (!n00bb_abi_name_pool_encode(names,
-                core_string_borrow(function->name, strlen(function->name)),
+        if (!n00bb_abi_name_pool_encode(names, function->name,
                 N00B_ABI_TABLE_FUNCTION, next,
                 offsetof(n00b_abi_function_v1, name), &row.name))
             return false;
@@ -170,8 +169,7 @@ n00bb_abi_function_rows_build(
         };
         core_string_t row_name = parse_sym_binding(symbol,
             CORE_STRING_STATIC("n00bb.litmod.declaration"))
-            ? core_string_borrow(function->name, strlen(function->name))
-            : symbol->name;
+            ? function->name : symbol->name;
         valid = n00bb_abi_name_pool_encode(names, row_name,
             N00B_ABI_TABLE_FUNCTION, (uint32_t)rows.len,
             offsetof(n00b_abi_function_v1, name), &row.name);

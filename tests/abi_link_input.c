@@ -12,15 +12,38 @@
 #include "lib/byteorder.h"
 #include "lib/hash.h"
 
-static const char *
+#define S(x) CORE_STRING_STATIC(x)
+#define NONE ((core_string_t){})
+#define IS(s, lit) core_string_eq((s), S(lit))
+#define VIEW_IS(view, lit) IS(view_text(view), lit)
+#define FIXTURE_REQUIREMENT(view, kind, lit) \
+    fixture_requirement((view), (kind), S(lit))
+#define FIND_SYMBOL(view, lit, kind) find_symbol((view), S(lit), (kind))
+#define FIND_SYMBOL_IN_MODULE(view, lit, kind, module_index) \
+    find_symbol_in_module((view), S(lit), (kind), (module_index))
+#define GENERIC_FUNCTION_TYPE(view, lit) generic_function_type((view), S(lit))
+
+static core_string_t
+view_text(n00bb_abi_string_view_t view)
+{
+    return core_string_borrow((const char *)view.bytes, view.length);
+}
+
+static core_string_t
+bytes_text(const uint8_t *bytes, size_t length)
+{
+    return core_string_borrow((const char *)bytes, length);
+}
+
+static core_string_t
 host_triple(void)
 {
 #if defined(__APPLE__) && defined(__aarch64__)
-    return "arm64-macos";
+    return S("arm64-macos");
 #elif defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
-    return "x86_64-windows";
+    return S("x86_64-windows");
 #else
-    return "x86_64-linux";
+    return S("x86_64-linux");
 #endif
 }
 
@@ -28,10 +51,10 @@ static size_t
 count_string_pool_sections(const uint8_t *object, size_t object_bytes,
                            const core_target_desc_t *target)
 {
-    const char *name = target->object_format == CORE_TARGET_OBJECT_MACH_O
-        ? "__n00b_strings"
+    core_string_t name = target->object_format == CORE_TARGET_OBJECT_MACH_O
+        ? S("__n00b_strings")
         : target->object_format == CORE_TARGET_OBJECT_COFF
-            ? ".rdata$S" : ".rodata.n00b_strings";
+            ? S(".rdata$S") : S(".rodata.n00b_strings");
     uint32_t section_count = 0;
     assert(core_object_section_count(object, object_bytes,
         target->object_format, &section_count));
@@ -40,20 +63,21 @@ count_string_pool_sections(const uint8_t *object, size_t object_bytes,
         core_object_section_t section;
         if (!core_object_section_at(object, object_bytes,
             target->object_format, i, &section)) continue;
-        matches += section.name_length == strlen(name)
-            && !memcmp(section.name, name, section.name_length)
+        matches += core_string_eq(bytes_text(section.name,
+                                             section.name_length), name)
             && (target->object_format != CORE_TARGET_OBJECT_MACH_O
-                || (section.segment_length == strlen("__TEXT")
-                    && !memcmp(section.segment, "__TEXT",
-                        section.segment_length)));
+                || IS(bytes_text(section.segment, section.segment_length),
+                      "__TEXT"));
     }
     return matches;
 }
 
 static uint8_t *
-read_object(const char *path, size_t *object_bytes)
+read_object(core_string_t path, size_t *object_bytes)
 {
-    FILE *file = fopen(path, "rb");
+    char *c_path = core_string_to_cstr(path);
+    FILE *file = fopen(c_path, "rb");
+    core_free(c_path);
     assert(file && !fseek(file, 0, SEEK_END));
     long length = ftell(file);
     assert(length > 0 && !fseek(file, 0, SEEK_SET));
@@ -129,12 +153,12 @@ test_static_string_identity(void)
 }
 
 static bool
-init_unit(core_translation_unit_t *unit, const char *name)
+init_unit(core_translation_unit_t *unit, core_string_t name)
 {
     core_module_spec_t spec = {0};
     core_source_file_t source = {0};
-    bool valid = core_module_spec_init(&spec, core_string_from_cstr(name))
-        && core_source_file_init(&source, core_string_from_cstr(name), "", 0)
+    bool valid = core_module_spec_init(&spec, name)
+        && core_source_file_init(&source, name, S(""))
         && core_translation_unit_init(unit, &spec, &source);
     core_module_spec_release(&spec);
     core_source_file_release(&source);
@@ -145,7 +169,7 @@ typedef struct {
     core_translation_unit_t unit;
     uint8_t *object;
     size_t object_bytes;
-    char *name;
+    core_string_t name;
 } abi_fixture_object_t;
 
 typedef struct {
@@ -158,7 +182,7 @@ typedef struct {
 } abi_fixture_graph_t;
 
 static void
-select_fixture_graph(abi_fixture_graph_t *graph, const char **paths,
+select_fixture_graph(abi_fixture_graph_t *graph, const core_string_t *paths,
                      size_t count)
 {
     assert(graph && paths && count);
@@ -180,10 +204,8 @@ select_fixture_graph(abi_fixture_graph_t *graph, const char **paths,
         n00bb_abi_string_view_t name;
         assert(module && n00bb_abi_object_string(&view,
             &module->full_path, &name));
-        item->name = malloc(name.length + 1);
-        assert(item->name);
-        memcpy(item->name, name.bytes, name.length);
-        item->name[name.length] = 0;
+        item->name = core_string_dup(view_text(name));
+        assert(item->name.data);
         assert(init_unit(&item->unit, item->name));
         graph->inputs[count - i - 1] = (n00bb_abi_object_input_t){
             .module = item->unit.module.identifier,
@@ -212,9 +234,8 @@ select_fixture_graph(abi_fixture_graph_t *graph, const char **paths,
                 &requirement->full_path, &name));
             size_t imported = 0;
             while (imported < count
-                && !(strlen(graph->objects[imported].name) == name.length
-                    && !memcmp(graph->objects[imported].name, name.bytes,
-                        name.length))) imported++;
+                && !core_string_eq(graph->objects[imported].name,
+                    view_text(name))) imported++;
             assert(imported < count
                 && core_translation_unit_add_import(
                     &graph->objects[i].unit,
@@ -246,7 +267,7 @@ fixture_view(const abi_fixture_graph_t *graph, size_t object_index)
 
 static const n00b_abi_requirement_v1 *
 fixture_requirement(const n00bb_abi_object_view_t *view, uint32_t kind,
-                    const char *wanted)
+                    core_string_t wanted)
 {
     const n00bb_abi_directory_entry_t *requirements =
         n00bb_abi_object_table(view, N00B_ABI_TABLE_REQUIREMENT);
@@ -257,8 +278,8 @@ fixture_requirement(const n00bb_abi_object_view_t *view, uint32_t kind,
             N00B_ABI_TABLE_REQUIREMENT, i);
         n00bb_abi_string_view_t name;
         assert(row && n00bb_abi_object_string(view, &row->full_path, &name));
-        if (row->symbol_kind != kind || name.length != strlen(wanted)
-            || memcmp(name.bytes, wanted, name.length)) continue;
+        if (row->symbol_kind != kind
+            || !core_string_eq(view_text(name), wanted)) continue;
         assert(!found);
         found = row;
     }
@@ -272,7 +293,7 @@ release_fixture_graph(abi_fixture_graph_t *graph)
     core_link_unit_free(graph->link);
     for (size_t i = 0; i < graph->count; i++) {
         core_translation_unit_release(&graph->objects[i].unit);
-        free(graph->objects[i].name);
+        core_free(graph->objects[i].name.data);
         free(graph->objects[i].object);
     }
     free(graph->inputs);
@@ -367,10 +388,11 @@ check_remapped_rows(const n00bb_abi_selected_objects_t *selected,
 }
 
 static void
-test_cycle_selection(char **paths, const char *linked_path)
+test_cycle_selection(const core_string_t *paths, core_string_t linked_path)
 {
-    const char *names[] = {"builtin.cycle_long_a", "builtin.cycle_long_b",
-                           "builtin.cycle_long_c"};
+    const core_string_t names[] = {S("builtin.cycle_long_a"),
+                                   S("builtin.cycle_long_b"),
+                                   S("builtin.cycle_long_c")};
     core_translation_unit_t units[3] = {0};
     n00bb_abi_object_input_t inputs[4] = {0};
     uint8_t *objects[3];
@@ -379,8 +401,7 @@ test_cycle_selection(char **paths, const char *linked_path)
         assert(init_unit(&units[i], names[i]));
         objects[i] = read_object(paths[i], &object_sizes[i]);
         inputs[2 - i] = (n00bb_abi_object_input_t){
-            .module = i == 2 ? (core_string_t){0}
-                             : core_string_from_cstr(names[i]),
+            .module = i == 2 ? (core_string_t){0} : names[i],
             .object = objects[i], .object_bytes = object_sizes[i],
         };
     }
@@ -558,16 +579,16 @@ test_cycle_selection(char **paths, const char *linked_path)
         const n00bb_abi_native_section_map_t *map =
             &native_sections.maps[i];
         core_object_section_t source;
-        const char *name = map->section < native_sections.count
-            ? native_sections.sections[map->section].name : nullptr;
-        assert(name && map->input < selected.count
+        core_string_t name = map->section < native_sections.count
+            ? native_sections.sections[map->section].name : NONE;
+        assert(name.data && map->input < selected.count
             && map->local_section_index !=
                 selected.views[map->input].metadata.native_index
             && core_object_section_at(selected.views[map->input].object,
                 selected.views[map->input].object_bytes, target.object_format,
                 map->local_section_index, &source)
-            && source.name_length == strlen(name)
-            && !memcmp(source.name, name, source.name_length)
+            && core_string_eq(bytes_text(source.name, source.name_length),
+                              name)
             && map->base_offset + map->size
                 <= native_sections.sections[map->section].size);
     }
@@ -647,8 +668,10 @@ test_cycle_selection(char **paths, const char *linked_path)
         n00bb_abi_object_table(&wrapped_view, N00B_ABI_TABLE_MODULE);
     assert(wrapped_modules && wrapped_modules->record_count == 4);
     n00bb_abi_object_close(&wrapped_view);
-    if (linked_path) {
-        FILE *file = fopen(linked_path, "wb");
+    if (linked_path.data) {
+        char *c_linked_path = core_string_to_cstr(linked_path);
+        FILE *file = fopen(c_linked_path, "wb");
+        core_free(c_linked_path);
         assert(file && fwrite(wrapped, 1, wrapped_bytes, file) == wrapped_bytes
             && !fclose(file));
     }
@@ -710,10 +733,10 @@ test_cycle_selection(char **paths, const char *linked_path)
 }
 
 static void
-test_self_import_selection(const char *path)
+test_self_import_selection(core_string_t path)
 {
     core_translation_unit_t unit = {0};
-    assert(init_unit(&unit, "builtin.cycle_self")
+    assert(init_unit(&unit, S("builtin.cycle_self"))
         && core_translation_unit_add_import(&unit, &unit));
     core_link_unit_t *link = core_link_unit_new();
     assert(link && core_link_unit_add_root(link, &unit)
@@ -758,7 +781,7 @@ test_self_import_selection(const char *path)
 }
 
 static uint32_t
-find_named_type(const n00bb_abi_object_view_t *view, const char *spelling)
+find_named_type(const n00bb_abi_object_view_t *view, core_string_t spelling)
 {
     const n00bb_abi_directory_entry_t *table = n00bb_abi_object_table(
         view, N00B_ABI_TABLE_TYPE);
@@ -768,14 +791,13 @@ find_named_type(const n00bb_abi_object_view_t *view, const char *spelling)
             N00B_ABI_TABLE_TYPE, i);
         n00bb_abi_string_view_t name;
         if (n00bb_abi_object_string(view, &type->canonical_name, &name)
-            && name.length == strlen(spelling)
-            && !memcmp(name.bytes, spelling, name.length)) return i;
+            && core_string_eq(view_text(name), spelling)) return i;
     }
     return 0;
 }
 
 static void
-test_duplicate_record_field(const char *path)
+test_duplicate_record_field(core_string_t path)
 {
     size_t left_bytes, right_bytes;
     uint8_t *left_object = read_object(path, &left_bytes);
@@ -797,7 +819,7 @@ test_duplicate_record_field(const char *path)
         && merged_fields == fields->record_count);
     n00bb_abi_index_plan_free(plan);
     uint32_t type_index = find_named_type(&views[1],
-        "record_dep.SharedRecord");
+        S("record_dep.SharedRecord"));
     const n00b_abi_type_v1 *owned = n00bb_abi_object_row(
         &views[1], N00B_ABI_TABLE_TYPE, type_index);
     assert(type_index && owned && owned->fields_or_arms.count == 1);
@@ -817,13 +839,13 @@ test_duplicate_record_field(const char *path)
 }
 
 static void
-test_imported_record_selection(const char **paths, size_t object_count)
+test_imported_record_selection(const core_string_t *paths, size_t object_count)
 {
     assert(object_count >= 2);
     abi_fixture_graph_t graph = {0};
     select_fixture_graph(&graph, paths, object_count);
-    assert(!strcmp(graph.objects[0].name, "record_root")
-        && !strcmp(graph.objects[1].name, "record_dep"));
+    assert(IS(graph.objects[0].name, "record_root")
+        && IS(graph.objects[1].name, "record_dep"));
     n00bb_abi_selected_objects_t selected = graph.selected;
     core_target_desc_t target = graph.target;
     uint8_t *root_object = graph.objects[0].object;
@@ -837,9 +859,9 @@ test_imported_record_selection(const char **paths, size_t object_count)
     const n00bb_abi_object_view_t *root_view = &selected.views[root_input];
     const n00bb_abi_object_view_t *dep_view = &selected.views[dep_input];
     uint32_t root_type = find_named_type(root_view,
-        "record_dep.SharedRecord");
+        S("record_dep.SharedRecord"));
     uint32_t dep_type = find_named_type(dep_view,
-        "record_dep.SharedRecord");
+        S("record_dep.SharedRecord"));
     const n00b_abi_type_v1 *reference = n00bb_abi_object_row(root_view,
         N00B_ABI_TABLE_TYPE, root_type);
     const n00b_abi_type_v1 *definition = n00bb_abi_object_row(dep_view,
@@ -850,7 +872,7 @@ test_imported_record_selection(const char **paths, size_t object_count)
         && definition->layout_index);
     const n00b_abi_requirement_v1 *type_requirement =
         fixture_requirement(root_view, N00B_ABI_SYMBOL_TYPE,
-            "record_dep.SharedRecord");
+            S("record_dep.SharedRecord"));
     assert(type_requirement
         && type_requirement->symbol_kind == N00B_ABI_SYMBOL_TYPE
         && type_requirement->contract_type_index == root_type
@@ -886,7 +908,7 @@ test_imported_record_selection(const char **paths, size_t object_count)
     mutable_requirement->required_capabilities = saved_capabilities;
     uint32_t saved_contract = mutable_requirement->contract_type_index;
     mutable_requirement->contract_type_index = find_named_type(root_view,
-        "record_root.SharedRecord");
+        S("record_root.SharedRecord"));
     assert(mutable_requirement->contract_type_index
         && mutable_requirement->contract_type_index != saved_contract);
     assert(!n00bb_abi_link_selected_objects(&selected, &target,
@@ -899,7 +921,7 @@ test_imported_record_selection(const char **paths, size_t object_count)
 }
 
 static const n00b_abi_symbol_v1 *
-find_symbol(const n00bb_abi_object_view_t *view, const char *wanted,
+find_symbol(const n00bb_abi_object_view_t *view, core_string_t wanted,
             uint32_t kind)
 {
     const n00bb_abi_directory_entry_t *symbols = n00bb_abi_object_table(
@@ -910,15 +932,15 @@ find_symbol(const n00bb_abi_object_view_t *view, const char *wanted,
             N00B_ABI_TABLE_SYMBOL, i);
         n00bb_abi_string_view_t name;
         assert(symbol && n00bb_abi_object_string(view, &symbol->name, &name));
-        if (symbol->kind == kind && name.length == strlen(wanted)
-            && !memcmp(name.bytes, wanted, name.length)) return symbol;
+        if (symbol->kind == kind
+            && core_string_eq(view_text(name), wanted)) return symbol;
     }
     return nullptr;
 }
 
 static const n00b_abi_symbol_v1 *
 find_symbol_in_module(const n00bb_abi_object_view_t *view,
-                      const char *wanted, uint32_t kind,
+                      core_string_t wanted, uint32_t kind,
                       uint32_t module_index)
 {
     const n00bb_abi_directory_entry_t *symbols = n00bb_abi_object_table(
@@ -931,14 +953,13 @@ find_symbol_in_module(const n00bb_abi_object_view_t *view,
         if (symbol && symbol->kind == kind
             && symbol->module_index == module_index
             && n00bb_abi_object_string(view, &symbol->name, &name)
-            && name.length == strlen(wanted)
-            && !memcmp(name.bytes, wanted, name.length)) return symbol;
+            && core_string_eq(view_text(name), wanted)) return symbol;
     }
     return nullptr;
 }
 
 static void
-test_trait_type_requirement(const char *path)
+test_trait_type_requirement(core_string_t path)
 {
     size_t object_bytes;
     uint8_t *object = read_object(path, &object_bytes);
@@ -957,17 +978,14 @@ test_trait_type_requirement(const char *path)
         assert(row && n00bb_abi_object_string(&view, &row->full_path,
             &path_name));
         if (row->symbol_kind == N00B_ABI_SYMBOL_MODULE) {
-            module |= path_name.length == strlen("trait_methods")
-                && !memcmp(path_name.bytes, "trait_methods", path_name.length);
+            module |= VIEW_IS(path_name, "trait_methods");
         }
         else if (row->symbol_kind == N00B_ABI_SYMBOL_TYPE) {
             const n00b_abi_type_v1 *type = n00bb_abi_object_row(&view,
                 N00B_ABI_TABLE_TYPE, row->contract_type_index);
             trait |= type && type->kind == N00B_ABI_TYPE_TRAIT
                 && !type->owner_module_index
-                && path_name.length == strlen("trait_methods.Readable")
-                && !memcmp(path_name.bytes, "trait_methods.Readable",
-                    path_name.length);
+                && VIEW_IS(path_name, "trait_methods.Readable");
         }
     }
     assert(module && trait);
@@ -976,7 +994,7 @@ test_trait_type_requirement(const char *path)
 }
 
 static void
-test_trait_type_import(const char *path)
+test_trait_type_import(core_string_t path)
 {
     size_t object_bytes;
     uint8_t *object = read_object(path, &object_bytes);
@@ -996,9 +1014,9 @@ test_trait_type_import(const char *path)
         assert(requirement
             && requirement->symbol_kind != N00B_ABI_SYMBOL_MODULE);
     }
-    const n00b_abi_symbol_v1 *trait = find_symbol(&view, "Readable",
+    const n00b_abi_symbol_v1 *trait = FIND_SYMBOL(&view, "Readable",
         N00B_ABI_SYMBOL_TYPE);
-    const n00b_abi_symbol_v1 *function = find_symbol(&view, "take",
+    const n00b_abi_symbol_v1 *function = FIND_SYMBOL(&view, "take",
         N00B_ABI_SYMBOL_FUNCTION);
     assert(trait && function && trait->module_index != function->module_index);
     const n00b_abi_type_v1 *trait_type = n00bb_abi_object_row(&view,
@@ -1042,14 +1060,13 @@ test_trait_type_import(const char *path)
     n00bb_abi_string_view_t name;
     assert(constraint && constraint->kind == N00B_ABI_CONSTRAINT_IMPLEMENTS
         && n00bb_abi_object_string(&view, &constraint->name, &name)
-        && name.length == strlen("trait_methods.Readable")
-        && !memcmp(name.bytes, "trait_methods.Readable", name.length));
+        && VIEW_IS(name, "trait_methods.Readable"));
     n00bb_abi_object_close(&view);
     free(object);
 }
 
 static void
-test_linked_library_object(const char *path)
+test_linked_library_object(core_string_t path)
 {
     size_t object_bytes;
     uint8_t *object = read_object(path, &object_bytes);
@@ -1069,12 +1086,8 @@ test_linked_library_object(const char *path)
         n00bb_abi_string_view_t name;
         assert(module && n00bb_abi_object_string(&view,
             &module->full_path, &name));
-        if (name.length == strlen("abi_value_root")
-            && !memcmp(name.bytes, "abi_value_root", name.length))
-            root_index = i;
-        if (name.length == strlen("abi_value_dep")
-            && !memcmp(name.bytes, "abi_value_dep", name.length))
-            dep_index = i;
+        if (VIEW_IS(name, "abi_value_root")) root_index = i;
+        if (VIEW_IS(name, "abi_value_dep")) dep_index = i;
     }
     assert(root_index && dep_index && root_index != dep_index);
     const n00b_abi_module_v1 *root = n00bb_abi_object_row(&view,
@@ -1088,9 +1101,9 @@ test_linked_library_object(const char *path)
         imports_dep |= core_le_load_u32(import) == dep_index;
     }
     assert(imports_dep);
-    const n00b_abi_symbol_v1 *reader = find_symbol_in_module(&view,
+    const n00b_abi_symbol_v1 *reader = FIND_SYMBOL_IN_MODULE(&view,
         "read_value", N00B_ABI_SYMBOL_FUNCTION, root_index);
-    const n00b_abi_symbol_v1 *value = find_symbol_in_module(&view,
+    const n00b_abi_symbol_v1 *value = FIND_SYMBOL_IN_MODULE(&view,
         "value", N00B_ABI_SYMBOL_VARIABLE, dep_index);
     assert(reader && reader->module_index == root_index
         && value && value->module_index == dep_index);
@@ -1111,12 +1124,12 @@ test_linked_library_object(const char *path)
             assert(!slot->ambiguous);
             found_reader = slot->name_hash == core_xxh3_64bits_raw(
                 "abi_value_root.read_value",
-                strlen("abi_value_root.read_value"));
+                sizeof("abi_value_root.read_value") - 1);
         }
         if (slot->symbol_index == value_index) {
             assert(!slot->ambiguous);
             found_value = slot->name_hash == core_xxh3_64bits_raw(
-                "abi_value_dep.value", strlen("abi_value_dep.value"));
+                "abi_value_dep.value", sizeof("abi_value_dep.value") - 1);
         }
     }
     assert(found_reader && found_value && found_empty);
@@ -1125,7 +1138,7 @@ test_linked_library_object(const char *path)
 }
 
 static void
-test_linked_flagset(const char *path)
+test_linked_flagset(core_string_t path)
 {
     size_t object_bytes;
     uint8_t *object = read_object(path, &object_bytes);
@@ -1148,12 +1161,10 @@ test_linked_flagset(const char *path)
         n00bb_abi_string_view_t name;
         assert(module && n00bb_abi_object_string(&view,
             &module->full_path, &name));
-        if (name.length == strlen("flagset_archive_dep.impl")
-            && !memcmp(name.bytes, "flagset_archive_dep.impl", name.length))
-            provider_index = i;
+        if (VIEW_IS(name, "flagset_archive_dep.impl")) provider_index = i;
     }
     assert(provider_index);
-    const n00b_abi_symbol_v1 *symbol = find_symbol(&view, "FilePerms",
+    const n00b_abi_symbol_v1 *symbol = FIND_SYMBOL(&view, "FilePerms",
         N00B_ABI_SYMBOL_TYPE);
     assert(symbol && symbol->module_index == provider_index);
     const n00b_abi_type_v1 *type = n00bb_abi_object_row(&view,
@@ -1162,7 +1173,9 @@ test_linked_flagset(const char *path)
         && type->owner_module_index == provider_index
         && type->semantic_width_bits == 2
         && type->fields_or_arms.count == 4);
-    const char *names[] = {"read", "write", "read_write", "none"};
+    const core_string_t names[] = {
+        S("read"), S("write"), S("read_write"), S("none"),
+    };
     const uint64_t masks[] = {1, 2, 3, 0};
     for (uint32_t i = 0; i < 4; i++) {
         const uint8_t *slot = n00bb_abi_object_row(&view,
@@ -1172,8 +1185,7 @@ test_linked_flagset(const char *path)
             N00B_ABI_TABLE_ENUM_ITEM, core_le_load_u32(slot));
         n00bb_abi_string_view_t name;
         assert(item && n00bb_abi_object_string(&view, &item->name, &name)
-            && name.length == strlen(names[i])
-            && !memcmp(name.bytes, names[i], name.length));
+            && core_string_eq(view_text(name), names[i]));
         assert(item->parent_type_index == symbol->type_index
             && item->declaration_ordinal == i
             && item->value_low == masks[i] && !item->value_high
@@ -1184,15 +1196,17 @@ test_linked_flagset(const char *path)
 }
 
 static void
-test_imported_function_requirement(const char **paths, size_t object_count)
+test_imported_function_requirement(const core_string_t *paths,
+                                   size_t object_count)
 {
-    const char *names[] = {"shared_link_first", "shared_link_dep.facade",
-                           "shared_link_dep.impl"};
+    const core_string_t names[] = {S("shared_link_first"),
+                                   S("shared_link_dep.facade"),
+                                   S("shared_link_dep.impl")};
     assert(object_count >= 3);
     abi_fixture_graph_t graph = {0};
     select_fixture_graph(&graph, paths, object_count);
     for (size_t i = 0; i < 3; i++)
-        assert(!strcmp(graph.objects[i].name, names[i]));
+        assert(core_string_eq(graph.objects[i].name, names[i]));
     n00bb_abi_selected_objects_t selected = graph.selected;
     core_target_desc_t target = graph.target;
     const n00bb_abi_object_view_t *views[3] = {
@@ -1200,7 +1214,7 @@ test_imported_function_requirement(const char **paths, size_t object_count)
         fixture_view(&graph, 2),
     };
     n00b_abi_requirement_v1 *function_requirement = (void *)
-        fixture_requirement(views[0], N00B_ABI_SYMBOL_FUNCTION,
+        FIXTURE_REQUIREMENT(views[0], N00B_ABI_SYMBOL_FUNCTION,
             "shared_link_dep.impl.shared_link_value");
     n00bb_abi_string_view_t path;
     assert(function_requirement
@@ -1208,15 +1222,13 @@ test_imported_function_requirement(const char **paths, size_t object_count)
         && function_requirement->requesting_module_index == 1
         && n00bb_abi_object_string(views[0],
             &function_requirement->full_path, &path)
-        && path.length == strlen("shared_link_dep.impl.shared_link_value")
-        && !memcmp(path.bytes, "shared_link_dep.impl.shared_link_value",
-            path.length));
+        && VIEW_IS(path, "shared_link_dep.impl.shared_link_value"));
     const n00b_abi_type_v1 *contract = n00bb_abi_object_row(views[0],
         N00B_ABI_TABLE_TYPE, function_requirement->contract_type_index);
     assert(contract && contract->kind == N00B_ABI_TYPE_FUNCTION);
-    assert(!find_symbol(views[1], "shared_link_value",
+    assert(!FIND_SYMBOL(views[1], "shared_link_value",
         N00B_ABI_SYMBOL_FUNCTION));
-    const n00b_abi_symbol_v1 *definition = find_symbol(views[2],
+    const n00b_abi_symbol_v1 *definition = FIND_SYMBOL(views[2],
         "shared_link_value", N00B_ABI_SYMBOL_FUNCTION);
     assert(definition && definition->flags & N00B_ABI_SYMBOL_FLAG_EXPORTED);
     uint8_t *linked = nullptr;
@@ -1235,19 +1247,20 @@ test_imported_function_requirement(const char **paths, size_t object_count)
 }
 
 static void
-test_imported_value_requirement(const char **paths, size_t object_count)
+test_imported_value_requirement(const core_string_t *paths,
+                                size_t object_count)
 {
     assert(object_count >= 2);
     abi_fixture_graph_t graph = {0};
     select_fixture_graph(&graph, paths, object_count);
-    assert(!strcmp(graph.objects[0].name, "abi_value_root")
-        && !strcmp(graph.objects[1].name, "abi_value_dep"));
+    assert(IS(graph.objects[0].name, "abi_value_root")
+        && IS(graph.objects[1].name, "abi_value_dep"));
     n00bb_abi_selected_objects_t selected = graph.selected;
     core_target_desc_t target = graph.target;
     const n00bb_abi_object_view_t *root_view = fixture_view(&graph, 0);
     const n00bb_abi_object_view_t *dep_view = fixture_view(&graph, 1);
     n00b_abi_requirement_v1 *value_requirement = (void *)
-        fixture_requirement(root_view, N00B_ABI_SYMBOL_VARIABLE,
+        FIXTURE_REQUIREMENT(root_view, N00B_ABI_SYMBOL_VARIABLE,
             "abi_value_dep.value");
     n00bb_abi_string_view_t path;
     assert(value_requirement
@@ -1256,9 +1269,8 @@ test_imported_value_requirement(const char **paths, size_t object_count)
         && value_requirement->required_layout_index
         && n00bb_abi_object_string(root_view,
             &value_requirement->full_path, &path)
-        && path.length == strlen("abi_value_dep.value")
-        && !memcmp(path.bytes, "abi_value_dep.value", path.length));
-    const n00b_abi_symbol_v1 *symbol = find_symbol(dep_view, "value",
+        && VIEW_IS(path, "abi_value_dep.value"));
+    const n00b_abi_symbol_v1 *symbol = FIND_SYMBOL(dep_view, "value",
         N00B_ABI_SYMBOL_VARIABLE);
     assert(symbol && symbol->type_index
         && symbol->flags & N00B_ABI_SYMBOL_FLAG_EXPORTED);
@@ -1332,7 +1344,7 @@ test_imported_value_requirement(const char **paths, size_t object_count)
 
 static void
 test_duplicate_component(const core_target_desc_t *target,
-                         const char *path, const uint8_t *object,
+                         core_string_t path, const uint8_t *object,
                          size_t object_bytes)
 {
     size_t duplicate_bytes;
@@ -1366,7 +1378,7 @@ test_duplicate_component(const core_target_desc_t *target,
 }
 
 static void
-test_duplicate_member(const char *path, bool variant)
+test_duplicate_member(core_string_t path, bool variant)
 {
     size_t left_bytes, right_bytes;
     uint8_t *left_object = read_object(path, &left_bytes);
@@ -1419,8 +1431,8 @@ test_duplicate_member(const char *path, bool variant)
 }
 
 static void
-test_imported_callback_reference(const char *provider_path,
-                                 const char *consumer_path)
+test_imported_callback_reference(core_string_t provider_path,
+                                 core_string_t consumer_path)
 {
     size_t left_bytes, right_bytes;
     uint8_t *left_object = read_object(provider_path, &left_bytes);
@@ -1431,7 +1443,7 @@ test_imported_callback_reference(const char *provider_path,
     assert(n00bb_abi_object_open(&target, left_object, left_bytes, &views[0])
         && n00bb_abi_object_open(&target, right_object, right_bytes,
                                   &views[1]));
-    const n00b_abi_symbol_v1 *symbol = find_symbol(&views[0],
+    const n00b_abi_symbol_v1 *symbol = FIND_SYMBOL(&views[0],
         "Archived_Callback", N00B_ABI_SYMBOL_TYPE);
     const n00b_abi_type_v1 *definition = symbol
         ? n00bb_abi_object_row(&views[0], N00B_ABI_TABLE_TYPE,
@@ -1471,7 +1483,7 @@ test_imported_callback_reference(const char *provider_path,
 }
 
 static void
-test_duplicate_signature(const char *path)
+test_duplicate_signature(core_string_t path)
 {
     size_t left_bytes, right_bytes;
     uint8_t *left_object = read_object(path, &left_bytes);
@@ -1582,8 +1594,8 @@ test_duplicate_signature(const char *path)
 static void
 test_native_string_pool_consolidation(void)
 {
-    const char *triples[] = {
-        "x86_64-linux", "arm64-macos", "x86_64-windows",
+    const core_string_t triples[] = {
+        S("x86_64-linux"), S("arm64-macos"), S("x86_64-windows"),
     };
     const core_string_t value =
         CORE_STRING_STATIC("the same complete immutable string");
@@ -1593,9 +1605,9 @@ test_native_string_pool_consolidation(void)
         core_target_desc_t target;
         assert(core_target_profile(triples[target_index], 0, &target));
         bool mach = target.object_format == CORE_TARGET_OBJECT_MACH_O;
-        const char *pool_name = mach ? "__n00b_strings"
+        core_string_t pool_name = mach ? S("__n00b_strings")
             : target.object_format == CORE_TARGET_OBJECT_COFF
-                ? ".rdata$S" : ".rodata.n00b_strings";
+                ? S(".rdata$S") : S(".rodata.n00b_strings");
         n00bb_abi_name_pool_t *source_pool = n00bb_abi_name_pool_new();
         n00bb_abi_name_pool_t *merged_pool = n00bb_abi_name_pool_new();
         n00b_abi_string_v1 encoded;
@@ -1628,15 +1640,16 @@ test_native_string_pool_consolidation(void)
             memcpy(bytes, value.data, value.u8_bytes);
             sections.sections[data_index] =
                 (core_object_emit_section_t){
-                    .name = core_strndup(input ? ".data_b" : ".data_a", 7),
-                    .segment = mach ? core_strndup("__DATA", 6) : nullptr,
+                    .name = core_string_dup(input ? S(".data_b")
+                                                  : S(".data_a")),
+                    .segment = mach ? core_string_dup(S("__DATA")) : NONE,
                     .bytes = data, .size = sizeof(encoded), .alignment = 8,
                     .writable = true,
                 };
             sections.sections[pool_index] =
                 (core_object_emit_section_t){
-                    .name = core_strndup(pool_name, strlen(pool_name)),
-                    .segment = mach ? core_strndup("__TEXT", 6) : nullptr,
+                    .name = core_string_dup(pool_name),
+                    .segment = mach ? core_string_dup(S("__TEXT")) : NONE,
                     .bytes = bytes, .size = value.u8_bytes, .alignment = 1,
                 };
             sections.maps[data_index] =
@@ -1652,7 +1665,7 @@ test_native_string_pool_consolidation(void)
                     .size = value.u8_bytes,
                 };
             native.symbols[input] = (core_object_emit_symbol_t){
-                .name = core_strndup("n00b_string_pool", 16),
+                .name = core_string_dup(S("n00b_string_pool")),
                 .section_index = (uint32_t)(3 + 2 * input),
             };
             native.relocations[input] =
@@ -1748,7 +1761,7 @@ test_link_index_patch(void)
     uint8_t copied_bytes[4];
     core_le_store_u32(copied_bytes, 1);
     core_object_emit_section_t section = {
-        .name = ".data", .bytes = copied_bytes, .size = sizeof(copied_bytes),
+        .name = S(".data"), .bytes = copied_bytes, .size = sizeof(copied_bytes),
         .alignment = 4,
     };
     n00bb_abi_native_section_map_t map = {
@@ -1931,7 +1944,7 @@ test_specialization_rebuild(void)
     uint8_t copied_bytes[4];
     core_le_store_u32(copied_bytes, 1);
     core_object_emit_section_t section = {
-        .name = ".data", .bytes = copied_bytes, .size = sizeof(copied_bytes),
+        .name = S(".data"), .bytes = copied_bytes, .size = sizeof(copied_bytes),
         .alignment = 4,
     };
     n00bb_abi_native_section_map_t map = {
@@ -2761,8 +2774,8 @@ test_storage_shape_type(void)
 static void
 test_metadata_string_uses_relocation_pool(void)
 {
-    const char *triples[] = {
-        "x86_64-linux", "arm64-macos", "x86_64-windows",
+    const core_string_t triples[] = {
+        S("x86_64-linux"), S("arm64-macos"), S("x86_64-windows"),
     };
     for (size_t i = 0; i < sizeof(triples) / sizeof(*triples); i++) {
         core_target_desc_t target;
@@ -2804,25 +2817,25 @@ test_metadata_string_uses_relocation_pool(void)
             &relocations, &relocation_count) && relocation_count == 1);
 
         bool mach = target.object_format == CORE_TARGET_OBJECT_MACH_O;
-        const char *section_name = mach ? "__n00b_strings"
+        core_string_t section_name = mach ? S("__n00b_strings")
             : target.object_format == CORE_TARGET_OBJECT_COFF
-                ? ".rdata$S" : ".rodata.n00b_strings";
+                ? S(".rdata$S") : S(".rodata.n00b_strings");
         core_object_emit_section_t sections[] = {
-            {.name = mach ? "__n00b_meta"
+            {.name = mach ? S("__n00b_meta")
                     : target.object_format == CORE_TARGET_OBJECT_COFF
-                        ? ".n00b$M" : ".data.rel.ro.n00b_meta",
-             .segment = mach ? "__DATA_CONST" : nullptr,
+                        ? S(".n00b$M") : S(".data.rel.ro.n00b_meta"),
+             .segment = mach ? S("__DATA_CONST") : NONE,
              .bytes = metadata, .size = sizeof(metadata),
              .alignment = header.required_alignment},
-            {.name = section_name, .segment = mach ? "__TEXT" : nullptr,
+            {.name = section_name, .segment = mach ? S("__TEXT") : NONE,
              .bytes = (const uint8_t *)"wrong-pool", .size = 10,
              .alignment = 1},
-            {.name = section_name, .segment = mach ? "__TEXT" : nullptr,
+            {.name = section_name, .segment = mach ? S("__TEXT") : NONE,
              .bytes = n00bb_abi_name_pool_bytes(pool),
              .size = n00bb_abi_name_pool_size(pool), .alignment = 1},
         };
         core_object_emit_symbol_t symbol = {
-            .name = "n00b_string_pool", .section_index = 3,
+            .name = S("n00b_string_pool"), .section_index = 3,
         };
         uint8_t *object = nullptr;
         size_t object_bytes = 0;
@@ -2831,7 +2844,7 @@ test_metadata_string_uses_relocation_pool(void)
             &object, &object_bytes));
         core_object_section_t object_metadata;
         assert(core_object_section_find(object, object_bytes,
-            target.object_format, mach ? "__DATA_CONST" : nullptr,
+            target.object_format, mach ? S("__DATA_CONST") : NONE,
             sections[0].name, &object_metadata)
             && n00bb_abi_container_write((uint8_t *)object_metadata.bytes,
                 object_metadata.size, &header, &entry, schemas,
@@ -2854,8 +2867,8 @@ test_metadata_string_uses_relocation_pool(void)
 static void
 test_native_relocation_transfer(void)
 {
-    const char *triples[] = {
-        "x86_64-linux", "arm64-macos", "x86_64-windows",
+    const core_string_t triples[] = {
+        S("x86_64-linux"), S("arm64-macos"), S("x86_64-windows"),
     };
     for (size_t target_index = 0;
          target_index < sizeof(triples) / sizeof(*triples);
@@ -2865,21 +2878,21 @@ test_native_relocation_transfer(void)
         bool mach = target.object_format == CORE_TARGET_OBJECT_MACH_O;
         uint8_t metadata[8] = {0}, data[24] = {0}, pool[8] = {0};
         core_object_emit_section_t inputs[] = {
-            {.name = mach ? "__meta" : ".meta",
-             .segment = mach ? "__DATA_CONST" : nullptr,
+            {.name = mach ? S("__meta") : S(".meta"),
+             .segment = mach ? S("__DATA_CONST") : NONE,
              .bytes = metadata, .size = sizeof(metadata), .alignment = 8},
-            {.name = mach ? "__data" : ".data",
-             .segment = mach ? "__DATA" : nullptr,
+            {.name = mach ? S("__data") : S(".data"),
+             .segment = mach ? S("__DATA") : NONE,
              .bytes = data, .size = sizeof(data), .alignment = 8,
              .writable = true},
-            {.name = mach ? "__pool" : ".rodata",
-             .segment = mach ? "__DATA_CONST" : nullptr,
+            {.name = mach ? S("__pool") : S(".rodata"),
+             .segment = mach ? S("__DATA_CONST") : NONE,
              .bytes = pool, .size = sizeof(pool), .alignment = 8},
         };
         core_object_emit_symbol_t symbols[] = {
-            {.name = "external", .exported = true},
-            {.name = "local_pool", .section_index = 3},
-            {.name = "public_data", .section_index = 2,
+            {.name = S("external"), .exported = true},
+            {.name = S("local_pool"), .section_index = 3},
+            {.name = S("public_data"), .section_index = 2,
              .exported = true},
         };
         core_object_emit_absolute64_t relocations[] = {
@@ -2934,8 +2947,8 @@ test_native_relocation_transfer(void)
             &linked, &linked_bytes));
         core_object_section_t output_data;
         assert(core_object_section_find(linked, linked_bytes,
-            target.object_format, mach ? "__DATA" : nullptr,
-            mach ? "__data" : ".data", &output_data)
+            target.object_format, mach ? S("__DATA") : NONE,
+            mach ? S("__data") : S(".data"), &output_data)
             && output_data.relocation_count == 3);
         for (uint32_t i = 0; i < output_data.relocation_count; i++) {
             core_object_absolute64_relocation_t decoded;
@@ -2951,7 +2964,7 @@ test_native_relocation_transfer(void)
 }
 
 static void
-test_string_storage_link(const char *path)
+test_string_storage_link(core_string_t path)
 {
     size_t linked_bytes;
     uint8_t *linked = read_object(path, &linked_bytes);
@@ -2968,22 +2981,22 @@ test_string_storage_link(const char *path)
             N00B_ABI_TABLE_MODULE, i);
         n00bb_abi_string_view_t name;
         if (!module || !n00bb_abi_object_string(&view, &module->full_path,
-                &name) || name.length != strlen("string_storage")
-            || memcmp(name.bytes, "string_storage", name.length)) continue;
+                &name) || !VIEW_IS(name, "string_storage")) continue;
         assert(!module_index);
         module_index = i;
     }
     assert(module_index);
     bool mach = target.object_format == CORE_TARGET_OBJECT_MACH_O;
-    const char *pool_name = mach ? "__n00b_strings"
+    core_string_t pool_name = mach ? S("__n00b_strings")
         : target.object_format == CORE_TARGET_OBJECT_COFF
-            ? ".rdata$S" : ".rodata.n00b_strings";
+            ? S(".rdata$S") : S(".rodata.n00b_strings");
     core_object_section_t pool;
     assert(core_object_section_find(linked, linked_bytes,
-        target.object_format, mach ? "__TEXT" : nullptr,
+        target.object_format, mach ? S("__TEXT") : NONE,
         pool_name, &pool));
-    const char *literal = "a longer immutable string value";
-    const char *other_literal = "a different long TLS string value";
+    const core_string_t literal = S("a longer immutable string value");
+    const core_string_t other_literal =
+        S("a different long TLS string value");
     size_t offsets[2] = {0};
     bool found[2] = {false, false};
     const n00bb_abi_directory_entry_t *table = n00bb_abi_object_table(
@@ -2997,16 +3010,16 @@ test_string_storage_link(const char *path)
         assert(storage);
         if (storage->module_index != module_index) continue;
         if (!storage->symbol_index) {
-            bool primary = storage->byte_length == strlen(literal)
+            bool primary = storage->byte_length == literal.u8_bytes
                 && storage->byte_offset <= pool.size
                 && storage->byte_length <= pool.size - storage->byte_offset
-                && !memcmp(pool.bytes + storage->byte_offset, literal,
-                    strlen(literal));
-            bool other = storage->byte_length == strlen(other_literal)
+                && !memcmp(pool.bytes + storage->byte_offset, literal.data,
+                    literal.u8_bytes);
+            bool other = storage->byte_length == other_literal.u8_bytes
                 && storage->byte_offset <= pool.size
                 && storage->byte_length <= pool.size - storage->byte_offset
-                && !memcmp(pool.bytes + storage->byte_offset, other_literal,
-                    strlen(other_literal));
+                && !memcmp(pool.bytes + storage->byte_offset,
+                    other_literal.data, other_literal.u8_bytes);
             assert(primary != other
                 && storage->segment_kind == N00B_ABI_STORAGE_READ_ONLY
                 && storage->segment_index == pool.native_index);
@@ -3031,17 +3044,10 @@ test_string_storage_link(const char *path)
         n00bb_abi_string_view_t name;
         assert(symbol && n00bb_abi_object_string(&view,
             &symbol->name, &name));
-        int which = name.length == strlen("long_label")
-            && !memcmp(name.bytes, "long_label", name.length) ? 0
-            : name.length == strlen("repeated_label")
-                && !memcmp(name.bytes, "repeated_label", name.length)
-                ? 1 : -1;
-        if (name.length == strlen("tls_long_label")
-            && !memcmp(name.bytes, "tls_long_label", name.length))
-            tls_storage_indexes[0] = i;
-        if (name.length == strlen("tls_other")
-            && !memcmp(name.bytes, "tls_other", name.length))
-            tls_storage_indexes[1] = i;
+        int which = VIEW_IS(name, "long_label") ? 0
+            : VIEW_IS(name, "repeated_label") ? 1 : -1;
+        if (VIEW_IS(name, "tls_long_label")) tls_storage_indexes[0] = i;
+        if (VIEW_IS(name, "tls_other")) tls_storage_indexes[1] = i;
         if (which < 0) continue;
         core_object_section_t section;
         assert(!found[which] && storage->segment_index
@@ -3055,7 +3061,7 @@ test_string_storage_link(const char *path)
             section.bytes + storage->byte_offset,
             sizeof(n00b_abi_string_v1), &header)
             && header.tag == N00BB_ABI_STRING_LONG
-            && header.length == strlen(literal));
+            && header.length == literal.u8_bytes);
         bool relocated = false;
         for (uint32_t j = 0; j < section.relocation_count; j++) {
             core_object_absolute64_relocation_t relocation;
@@ -3081,9 +3087,9 @@ test_string_storage_link(const char *path)
                     + relocation.addend_bits;
             }
             assert(offset <= pool.size
-                && strlen(literal) <= pool.size - offset
-                && !memcmp(pool.bytes + offset, literal,
-                    strlen(literal)));
+                && literal.u8_bytes <= pool.size - offset
+                && !memcmp(pool.bytes + offset, literal.data,
+                    literal.u8_bytes));
             offsets[which] = (size_t)offset;
             relocated = true;
         }
@@ -3117,13 +3123,13 @@ test_string_storage_link(const char *path)
 }
 
 static void
-test_semantic_rows_link(const char *path, bool trait)
+test_semantic_rows_link(core_string_t path, bool trait)
 {
     size_t source_bytes;
     uint8_t *source = read_object(path, &source_bytes);
     core_translation_unit_t unit = {0};
     core_target_desc_t target;
-    const char *name = trait ? "trait_methods" : "where_excludes";
+    core_string_t name = trait ? S("trait_methods") : S("where_excludes");
     assert(init_unit(&unit, name)
         && core_target_profile(host_triple(), 0, &target));
     core_link_unit_t *link = core_link_unit_new();
@@ -3164,7 +3170,7 @@ test_semantic_rows_link(const char *path, bool trait)
             && owner->fields_or_arms.first < stream->record_count
             && owner->fields_or_arms.count <= stream->record_count
                 - owner->fields_or_arms.first);
-        const char *names[] = {"read", "reset"};
+        const core_string_t names[] = {S("read"), S("reset")};
         uint32_t read_method_index = 0;
         for (uint32_t ordinal = 0; ordinal < 2; ordinal++) {
             const uint8_t *slot = n00bb_abi_object_row(&view,
@@ -3184,8 +3190,7 @@ test_semantic_rows_link(const char *path, bool trait)
                 && symbol && symbol->type_index
                     == method->signature_type_index
                 && n00bb_abi_object_string(&view, &symbol->name, &text)
-                && text.length == strlen(names[ordinal])
-                && !memcmp(text.bytes, names[ordinal], text.length));
+                && core_string_eq(view_text(text), names[ordinal]));
             if (!ordinal) read_method_index = index;
         }
         uint8_t *changed = malloc(source_bytes);
@@ -3287,7 +3292,7 @@ test_semantic_rows_link(const char *path, bool trait)
 }
 
 static uint32_t
-generic_function_type(const n00bb_abi_object_view_t *view, const char *name)
+generic_function_type(const n00bb_abi_object_view_t *view, core_string_t name)
 {
     const n00bb_abi_directory_entry_t *functions = n00bb_abi_object_table(
         view, N00B_ABI_TABLE_FUNCTION);
@@ -3299,16 +3304,14 @@ generic_function_type(const n00bb_abi_object_view_t *view, const char *name)
             N00B_ABI_TABLE_SYMBOL, function->symbol_index);
         n00bb_abi_string_view_t text;
         assert(symbol && n00bb_abi_object_string(view, &symbol->name, &text));
-        if (text.length == strlen(name)
-            && !memcmp(text.bytes, name, text.length))
-            return symbol->type_index;
+        if (core_string_eq(view_text(text), name)) return symbol->type_index;
     }
     assert(false);
     return 0;
 }
 
 static void
-test_generic_type_identity(const char *path, const char *linked_path)
+test_generic_type_identity(core_string_t path, core_string_t linked_path)
 {
     size_t source_bytes;
     uint8_t *source = read_object(path, &source_bytes);
@@ -3316,8 +3319,8 @@ test_generic_type_identity(const char *path, const char *linked_path)
     assert(core_target_profile(host_triple(), 0, &target));
     n00bb_abi_object_view_t original = {0};
     assert(n00bb_abi_object_open(&target, source, source_bytes, &original));
-    uint32_t first = generic_function_type(&original, "first");
-    uint32_t second = generic_function_type(&original, "second");
+    uint32_t first = GENERIC_FUNCTION_TYPE(&original, "first");
+    uint32_t second = GENERIC_FUNCTION_TYPE(&original, "second");
     const n00b_abi_type_v1 *a = n00bb_abi_object_row(&original,
         N00B_ABI_TABLE_TYPE, first);
     const n00b_abi_type_v1 *b = n00bb_abi_object_row(&original,
@@ -3330,8 +3333,8 @@ test_generic_type_identity(const char *path, const char *linked_path)
     uint8_t *linked = read_object(linked_path, &linked_bytes);
     n00bb_abi_object_view_t final = {0};
     assert(n00bb_abi_object_open(&target, linked, linked_bytes, &final));
-    assert(generic_function_type(&final, "first")
-        != generic_function_type(&final, "second"));
+    assert(GENERIC_FUNCTION_TYPE(&final, "first")
+        != GENERIC_FUNCTION_TYPE(&final, "second"));
     n00bb_abi_object_close(&final);
     core_free(linked);
     n00bb_abi_object_close(&original);
@@ -3339,13 +3342,13 @@ test_generic_type_identity(const char *path, const char *linked_path)
 }
 
 static void
-test_imported_generic_owner(const char *consumer_path,
-                            const char *provider_path,
-                            const char *linked_path)
+test_imported_generic_owner(core_string_t consumer_path,
+                            core_string_t provider_path,
+                            core_string_t linked_path)
 {
     core_target_desc_t target;
     assert(core_target_profile(host_triple(), 0, &target));
-    const char *paths[] = {consumer_path, provider_path, linked_path};
+    core_string_t paths[] = {consumer_path, provider_path, linked_path};
     for (size_t file = 0; file < 3; file++) {
         size_t bytes = 0;
         uint8_t *object = read_object(paths[file], &bytes);
@@ -3368,9 +3371,8 @@ test_imported_generic_owner(const char *consumer_path,
                 n00bb_abi_string_view_t path;
                 assert(n00bb_abi_object_string(&view,
                     &requirement->full_path, &path));
-                if (path.length == strlen("where_excludes.keep")
-                    && !memcmp(path.bytes, "where_excludes.keep",
-                        path.length)) requirement_index = i;
+                if (VIEW_IS(path, "where_excludes.keep"))
+                    requirement_index = i;
             }
             assert(requirement_index);
         }
@@ -3392,9 +3394,8 @@ test_imported_generic_owner(const char *consumer_path,
                         &name)
                     || !n00bb_abi_object_string(&view, &module->full_path,
                         &path)
-                    || name.length != 4 || memcmp(name.bytes, "keep", 4)
-                    || path.length != strlen("where_excludes")
-                    || memcmp(path.bytes, "where_excludes", path.length))
+                    || !VIEW_IS(name, "keep")
+                    || !VIEW_IS(path, "where_excludes"))
                     continue;
                 assert(!keep_scope_index);
                 keep_scope_index = function->scope_index;
@@ -3431,9 +3432,7 @@ test_imported_generic_owner(const char *consumer_path,
                 n00bb_abi_string_view_t name;
                 assert(module && n00bb_abi_object_string(&view,
                     &module->full_path, &name));
-                if (name.length != strlen("where_excludes")
-                    || memcmp(name.bytes, "where_excludes", name.length))
-                    continue;
+                if (!VIEW_IS(name, "where_excludes")) continue;
             }
             variables++;
             assert(type->typevar_ordinal == 0
@@ -3608,10 +3607,12 @@ test_call_shape_ownership(void)
 int
 main(int argc, char **argv)
 {
+    core_string_t *args = core_alloc_array(core_string_t, (size_t)argc);
+    for (int i = 0; i < argc; i++) args[i] = core_string_from_cstr(argv[i]);
     assert(argc == 2 || argc == 3 || argc == 4 || argc == 5
-        || (argc > 5 && (!strcmp(argv[1], "--records")
-            || !strcmp(argv[1], "--function-import")
-            || !strcmp(argv[1], "--value-import"))));
+        || (argc > 5 && (IS(args[1], "--records")
+            || IS(args[1], "--function-import")
+            || IS(args[1], "--value-import"))));
     test_native_string_pool_consolidation();
     test_link_index_patch();
     test_type_variable_shape();
@@ -3632,72 +3633,72 @@ main(int argc, char **argv)
     test_native_relocation_transfer();
     test_static_string_identity();
     test_call_shape_ownership();
-    if (argc == 2 && !strcmp(argv[1], "--strings")) return 0;
-    if (argc >= 5 && !strcmp(argv[1], "--function-import")) {
-        test_imported_function_requirement((const char **)argv + 2,
+    if (argc == 2 && IS(args[1], "--strings")) return 0;
+    if (argc >= 5 && IS(args[1], "--function-import")) {
+        test_imported_function_requirement(args + 2,
             (size_t)argc - 2);
         return 0;
     }
-    if (argc == 5 && !strcmp(argv[1], "--generic-import")) {
-        test_imported_generic_owner(argv[2], argv[3], argv[4]);
+    if (argc == 5 && IS(args[1], "--generic-import")) {
+        test_imported_generic_owner(args[2], args[3], args[4]);
         return 0;
     }
     if (argc == 5) {
-        test_cycle_selection(argv + 1, argv[4]);
+        test_cycle_selection(args + 1, args[4]);
         return 0;
     }
-    if (argc >= 4 && !strcmp(argv[1], "--value-import")) {
-        test_imported_value_requirement((const char **)argv + 2,
+    if (argc >= 4 && IS(args[1], "--value-import")) {
+        test_imported_value_requirement(args + 2,
             (size_t)argc - 2);
         return 0;
     }
-    if (argc >= 4 && !strcmp(argv[1], "--records")) {
-        test_imported_record_selection((const char **)argv + 2,
+    if (argc >= 4 && IS(args[1], "--records")) {
+        test_imported_record_selection(args + 2,
             (size_t)argc - 2);
         return 0;
     }
     if (argc == 4) {
-        if (!strcmp(argv[1], "--callback")) {
-            test_imported_callback_reference(argv[2], argv[3]);
+        if (IS(args[1], "--callback")) {
+            test_imported_callback_reference(args[2], args[3]);
             return 0;
         }
-        if (!strcmp(argv[1], "--generic-collision")) {
-            test_generic_type_identity(argv[2], argv[3]);
+        if (IS(args[1], "--generic-collision")) {
+            test_generic_type_identity(args[2], args[3]);
             return 0;
         }
-        test_cycle_selection(argv + 1, nullptr);
+        test_cycle_selection(args + 1, NONE);
         return 0;
     }
     if (argc == 3) {
-        if (!strcmp(argv[1], "--self"))
-            test_self_import_selection(argv[2]);
-        else if (!strcmp(argv[1], "--linked-library"))
-            test_linked_library_object(argv[2]);
-        else if (!strcmp(argv[1], "--trait-type-import"))
-            test_trait_type_import(argv[2]);
-        else if (!strcmp(argv[1], "--trait-type-requirement"))
-            test_trait_type_requirement(argv[2]);
-        else if (!strcmp(argv[1], "--linked-flagset"))
-            test_linked_flagset(argv[2]);
-        else if (!strcmp(argv[1], "--string-storage"))
-            test_string_storage_link(argv[2]);
-        else if (!strcmp(argv[1], "--constraint"))
-            test_semantic_rows_link(argv[2], false);
-        else if (!strcmp(argv[1], "--trait-methods"))
-            test_semantic_rows_link(argv[2], true);
-        else if (!strcmp(argv[1], "--variant"))
-            test_duplicate_member(argv[2], true);
-        else if (!strcmp(argv[1], "--enum"))
-            test_duplicate_member(argv[2], false);
-        else if (!strcmp(argv[1], "--field"))
-            test_duplicate_record_field(argv[2]);
-        else if (!strcmp(argv[1], "--signature"))
-            test_duplicate_signature(argv[2]);
+        if (IS(args[1], "--self"))
+            test_self_import_selection(args[2]);
+        else if (IS(args[1], "--linked-library"))
+            test_linked_library_object(args[2]);
+        else if (IS(args[1], "--trait-type-import"))
+            test_trait_type_import(args[2]);
+        else if (IS(args[1], "--trait-type-requirement"))
+            test_trait_type_requirement(args[2]);
+        else if (IS(args[1], "--linked-flagset"))
+            test_linked_flagset(args[2]);
+        else if (IS(args[1], "--string-storage"))
+            test_string_storage_link(args[2]);
+        else if (IS(args[1], "--constraint"))
+            test_semantic_rows_link(args[2], false);
+        else if (IS(args[1], "--trait-methods"))
+            test_semantic_rows_link(args[2], true);
+        else if (IS(args[1], "--variant"))
+            test_duplicate_member(args[2], true);
+        else if (IS(args[1], "--enum"))
+            test_duplicate_member(args[2], false);
+        else if (IS(args[1], "--field"))
+            test_duplicate_record_field(args[2]);
+        else if (IS(args[1], "--signature"))
+            test_duplicate_signature(args[2]);
         else assert(false);
         return 0;
     }
     size_t length;
-    uint8_t *object = read_object(argv[1], &length);
+    uint8_t *object = read_object(args[1], &length);
     core_target_desc_t target;
     assert(core_target_profile(host_triple(), 0, &target));
     n00bb_abi_object_view_t view = {0};
@@ -3727,15 +3728,12 @@ main(int argc, char **argv)
         && !n00bb_abi_object_row(&view, N00B_ABI_TABLE_TYPE,
                                  types->record_count));
     assert(n00bb_abi_object_string(&view, &module->full_path, &name)
-        && name.length == strlen("array_storage")
-        && !memcmp(name.bytes, "array_storage", name.length));
+        && VIEW_IS(name, "array_storage"));
     assert(binding && n00bb_abi_object_string(&view,
         &binding->native_name, &name)
         && name.length > N00BB_ABI_STRING_SHORT_CAPACITY
-        && name.length >= strlen("values")
-        && !memcmp(name.bytes + name.length - strlen("values"),
-                   "values", strlen("values")));
-    test_duplicate_component(&target, argv[1], object, length);
+        && core_string_ends_with(view_text(name), S("values")));
+    test_duplicate_component(&target, args[1], object, length);
     n00bb_abi_name_pool_t *pool = n00bb_abi_name_pool_new();
     assert(pool);
     n00b_abi_module_v1 pooled_module = *module;
@@ -3749,7 +3747,7 @@ main(int argc, char **argv)
     assert(n00bb_abi_string_decode((const uint8_t *)&pooled_module.full_path,
         sizeof(pooled_module.full_path), &pooled_header)
         && pooled_header.tag == N00BB_ABI_STRING_SHORT
-        && pooled_header.length == strlen("array_storage"));
+        && pooled_header.length == sizeof("array_storage") - 1);
     assert(n00bb_abi_string_decode(
         (const uint8_t *)&pooled_binding.native_name,
         sizeof(pooled_binding.native_name), &pooled_header)
@@ -3796,7 +3794,7 @@ main(int argc, char **argv)
         n00bb_abi_object_table(&view, N00B_ABI_TABLE_REQUIREMENT);
     if (!requirements || requirements->record_count <= 1) {
     core_translation_unit_t unit = {0};
-    assert(init_unit(&unit, "array_storage"));
+    assert(init_unit(&unit, S("array_storage")));
     core_link_unit_t *link = core_link_unit_new();
     assert(link && core_link_unit_add_root(link, &unit)
         && core_link_unit_finalize_graph(link));
@@ -3926,8 +3924,7 @@ main(int argc, char **argv)
         .symbol_count = 1,
     };
     unresolved.symbols[0] = (core_object_emit_symbol_t){
-        .name = core_strndup((const char *)first_name.bytes,
-                             first_name.length),
+        .name = core_string_dup(view_text(first_name)),
         .exported = true,
     };
     assert(n00bb_abi_add_native_bindings(&selected, &exports_merged,
@@ -3939,8 +3936,7 @@ main(int argc, char **argv)
         .symbol_count = 1,
     };
     conflicting.symbols[0] = (core_object_emit_symbol_t){
-        .name = core_strndup((const char *)first_name.bytes,
-                             first_name.length),
+        .name = core_string_dup(view_text(first_name)),
         .section_index = 1, .exported = true,
     };
     assert(!n00bb_abi_add_native_bindings(&selected, &exports_merged,
@@ -3967,8 +3963,7 @@ main(int argc, char **argv)
         for (size_t j = 0; j < native_relocations.symbol_count; j++) {
             const core_object_emit_symbol_t *symbol =
                 &native_relocations.symbols[j];
-            if (strlen(symbol->name) != name.length
-                || memcmp(symbol->name, name.bytes, name.length)) continue;
+            if (!core_string_eq(symbol->name, view_text(name))) continue;
             uint32_t expected_ordinal = 0;
             for (size_t k = 0; k < native_sections.count; k++)
                 if (native_sections.maps[k].final_section_index
@@ -3995,11 +3990,9 @@ main(int argc, char **argv)
         assert(map->input == 0 && map->base_offset == 0
             && core_object_section_at(object, length, target.object_format,
                 map->local_section_index, &source_section)
-            && source_section.name_length ==
-                strlen(native_sections.sections[i].name)
-            && !memcmp(source_section.name,
-                native_sections.sections[i].name,
-                source_section.name_length)
+            && core_string_eq(bytes_text(source_section.name,
+                                         source_section.name_length),
+                              native_sections.sections[i].name)
             && source_section.size == native_sections.sections[i].size
             && (!source_section.size || !memcmp(source_section.bytes,
                 native_sections.sections[i].bytes, source_section.size))
@@ -4119,7 +4112,7 @@ main(int argc, char **argv)
     }
     else {
         core_translation_unit_t unit = {0};
-        assert(init_unit(&unit, "array_storage"));
+        assert(init_unit(&unit, S("array_storage")));
         core_link_unit_t *link = core_link_unit_new();
         assert(link && core_link_unit_add_root(link, &unit)
             && core_link_unit_finalize_graph(link));
@@ -4141,8 +4134,8 @@ main(int argc, char **argv)
 
     core_target_desc_t wrong_target;
     assert(core_target_profile(
-        !strcmp(host_triple(), "arm64-macos") ? "x86_64-linux"
-        : "arm64-macos", 0, &wrong_target));
+        IS(host_triple(), "arm64-macos") ? S("x86_64-linux")
+        : S("arm64-macos"), 0, &wrong_target));
     n00bb_abi_object_view_t unchanged = {.object = object};
     assert(!n00bb_abi_object_open(&wrong_target, object, length,
                                   &unchanged)

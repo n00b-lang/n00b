@@ -49,6 +49,39 @@ typedef struct {
     size_t object_bytes;
 } n00bb_abi_artifact_t;
 
+static core_string_t
+view_text(n00bb_abi_string_view_t view)
+{
+    return core_string_borrow((const char *)view.bytes, view.length);
+}
+
+static char *
+temporary_object_argument(const void *bytes, size_t length)
+{
+    core_string_t path = n00bb_write_temporary_object(bytes, length);
+    char *argument = core_string_to_cstr(path);
+    core_free(path.data);
+    return argument;
+}
+
+static core_string_t
+qualified_function_name(core_string_t module, core_string_t function)
+{
+    core_buffer_t *name = core_buffer_empty();
+    core_buffer_append_string(name, module);
+    core_buffer_putc(name, '.');
+    core_buffer_append_string(name, function);
+    return core_buffer_take_string(name);
+}
+
+static bool
+name_matches_function(core_string_t name, core_string_t function)
+{
+    return core_string_starts_with(name, function)
+        && (name.u8_bytes == function.u8_bytes
+            || name.data[function.u8_bytes] == '#');
+}
+
 static bool
 n00bb_linked_global_bindings(const n00bb_abi_object_view_t *view,
                              const n00bb_cache_t *cache,
@@ -107,23 +140,21 @@ n00bb_linked_global_bindings(const n00bb_abi_object_view_t *view,
                         units[u % unit_count]->module.identifier)
                     : nullptr;
             if (!runtime) continue;
-            const char *name = ir_module_name(runtime);
-            if (strlen(name) != module_name.length
-                || memcmp(name, module_name.bytes, module_name.length))
+            if (!core_string_eq(ir_module_name(runtime),
+                                view_text(module_name)))
                 continue;
             for (size_t g = 0; g < ir_global_count(runtime); g++) {
                 ir_global_t *global = ir_global_at(runtime, g);
-                size_t global_length = strlen(global->name);
-                bool simple = global_length == symbol_name.length
-                    && !memcmp(global->name, symbol_name.bytes,
-                               symbol_name.length);
-                bool qualified = global_length == module_name.length + 1
+                core_string_t global_name = global->name;
+                bool simple = core_string_eq(global_name,
+                                             view_text(symbol_name));
+                bool qualified = global_name.u8_bytes == module_name.length + 1
                         + symbol_name.length
-                    && !memcmp(global->name, module_name.bytes,
-                               module_name.length)
-                    && global->name[module_name.length] == '.'
-                    && !memcmp(global->name + module_name.length + 1,
-                               symbol_name.bytes, symbol_name.length);
+                    && core_string_starts_with(global_name,
+                                               view_text(module_name))
+                    && global_name.data[module_name.length] == '.'
+                    && core_string_ends_with(global_name,
+                                             view_text(symbol_name));
                 if (!simple && !qualified) continue;
                 if (matched) { valid = false; break; }
                 matched = global;
@@ -148,9 +179,10 @@ n00bb_linked_global_bindings(const n00bb_abi_object_view_t *view,
         valid = native_name.length > prefix
             && (!prefix || native_name.bytes[0] == '_');
         if (!valid) break;
-        char *name = core_strndup((const char *)native_name.bytes + prefix,
-                                  native_name.length - prefix);
-        valid = name != nullptr;
+        core_string_t name = core_string_from_raw(
+            (const char *)native_name.bytes + prefix,
+            (int64_t)(native_name.length - prefix));
+        valid = name.data != nullptr;
         if (valid) bindings[count++] = (n00bb_llvm_global_binding_t){
             .global = matched, .native_name = name, .storage_index = i,
         };
@@ -169,8 +201,10 @@ n00bb_linked_global_bindings(const n00bb_abi_object_view_t *view,
             if (!found) {
                 core_buffer_t message = {0};
                 core_buffer_printf(&message,
-                    "runtime global '%s.%s' has no linked storage row",
-                    ir_module_name(runtime), global->name);
+                    "runtime global '%.*s.%.*s' has no linked storage row",
+                    (int)ir_module_name(runtime).u8_bytes,
+                    ir_module_name(runtime).data,
+                    (int)global->name.u8_bytes, global->name.data);
                 core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
                     CORE_STRING_STATIC("N00BB-B0010"),
                     core_string_borrow(message.data, message.byte_len));
@@ -181,7 +215,7 @@ n00bb_linked_global_bindings(const n00bb_abi_object_view_t *view,
     }
     if (!valid) {
         for (size_t i = 0; i < count; i++)
-            core_free((void *)bindings[i].native_name);
+            core_free(bindings[i].native_name.data);
         free(bindings);
         return false;
     }
@@ -194,7 +228,8 @@ static ir_func_t *
 linked_body(ir_func_t *function)
 {
     if (function->n_blocks) return function;
-    ir_annot_t *body = ir_annot_get(&function->annots, "n00bb.cached_body");
+    ir_annot_t *body = ir_annot_get(&function->annots,
+                                    CORE_STRING_STATIC("n00bb.cached_body"));
     return body && body->kind == IR_ANNOT_VALUE && body->v
         && body->v->kind == IR_VAL_FUNC ? body->v->owner : function;
 }
@@ -235,21 +270,17 @@ n00bb_linked_function_indices(const n00bb_abi_object_view_t *view,
         for (size_t u = 0; u < unit_count; u++) {
             n00bb_tu_state_t *state = tu_state(units[u]);
             ir_module_t *runtime = state ? state->ir_module : nullptr;
-            const char *name = runtime ? ir_module_name(runtime) : nullptr;
-            if (!name || strlen(name) != module_name.length
-                || memcmp(name, module_name.bytes, module_name.length))
+            if (!runtime || !core_string_eq(ir_module_name(runtime),
+                                            view_text(module_name)))
                 continue;
             for (size_t f = 0; f < ir_func_count(runtime); f++) {
                 ir_func_t *candidate = ir_func_at(runtime, f);
                 ir_func_t *body = linked_body(candidate);
-                size_t length = strlen(candidate->name);
                 if (!body->n_blocks
-                    || strstr(candidate->name, "$spec$")
-                    || length < function_name.length
-                    || memcmp(candidate->name, function_name.bytes,
-                              function_name.length)
-                    || (length != function_name.length
-                        && candidate->name[function_name.length] != '#')
+                    || core_string_find(candidate->name,
+                                        CORE_STRING_STATIC("$spec$")) >= 0
+                    || !name_matches_function(candidate->name,
+                                              view_text(function_name))
                     || th_hash(ir_module_types(runtime), body->type)
                         != signature->typehash) continue;
                 if (matched) { free(bindings); return false; }
@@ -306,20 +337,15 @@ n00bb_linked_finalizers(const n00bb_abi_object_view_t *view,
         for (size_t u = 0; valid && u < unit_count; u++) {
             n00bb_tu_state_t *state = tu_state(units[u]);
             ir_module_t *runtime = state ? state->ir_module : nullptr;
-            const char *name = runtime ? ir_module_name(runtime) : nullptr;
-            if (!name || strlen(name) != module_name.length
-                || memcmp(name, module_name.bytes, module_name.length))
+            if (!runtime || !core_string_eq(ir_module_name(runtime),
+                                            view_text(module_name)))
                 continue;
             for (size_t f = 0; f < ir_func_count(runtime); f++) {
                 ir_func_t *candidate = ir_func_at(runtime, f);
                 ir_func_t *body = linked_body(candidate);
-                size_t length = strlen(candidate->name);
                 if (!body->n_blocks
-                    || length < function_name.length
-                    || memcmp(candidate->name, function_name.bytes,
-                              function_name.length)
-                    || (length != function_name.length
-                        && candidate->name[function_name.length] != '#')
+                    || !name_matches_function(candidate->name,
+                                              view_text(function_name))
                     || th_hash(ir_module_types(runtime), body->type)
                         != signature->typehash) continue;
                 if (matched) { valid = false; break; }
@@ -349,11 +375,10 @@ n00bb_native_unmanaged_parameter(const ir_value_t *parameter, void *context)
     if (!parameter || parameter->kind != IR_VAL_PARAM
         || !parameter->owner || !parameter->owner->owner
         || !origin || origin->has_user_native_objects) return false;
-    const char *module = ir_module_name(parameter->owner->owner);
-    const char *function = parameter->owner->name;
-    const n00bb_runtime_native_root_t *root = module && function
-        ? n00bb_native_root_named(module, strlen(module), function,
-                                  strlen(function)) : nullptr;
+    core_string_t module = ir_module_name(parameter->owner->owner);
+    core_string_t function = parameter->owner->name;
+    const n00bb_runtime_native_root_t *root = module.data && function.data
+        ? n00bb_native_root_named(module, function) : nullptr;
     for (size_t j = 0; root && j < root->unmanaged_parameter_count; j++)
         if (root->unmanaged_parameters[j] == parameter->index) return true;
     return false;
@@ -366,11 +391,12 @@ n00bb_closed_callers(const ir_func_t *function, void *context)
     const n00bb_storage_origin_context_t *origin = context;
     if (!function || !function->owner || !origin
         || origin->has_user_native_objects) return false;
-    if (!strcmp(function->name, "__finalize")
-        || !strncmp(function->name, "__finalize#", 11)) return false;
-    const char *module = ir_module_name(function->owner);
-    return !module || !n00bb_native_root_named(module, strlen(module),
-        function->name, strlen(function->name));
+    if (core_string_eq(function->name, CORE_STRING_STATIC("__finalize"))
+        || core_string_starts_with(function->name,
+                                   CORE_STRING_STATIC("__finalize#")))
+        return false;
+    core_string_t module = ir_module_name(function->owner);
+    return !module.data || !n00bb_native_root_named(module, function->name);
 }
 
 static bool
@@ -384,9 +410,12 @@ n00bb_unmanaged_os_mapping(const ir_value_t *value, void *context)
     const ir_value_t *callee = ir_operand_value(&value->def->operands[0]);
     return callee && callee->kind == IR_VAL_FUNC && callee->owner
         && callee->owner->owner
-        && !strcmp(ir_module_name(callee->owner->owner), "sys.internal.memory")
-        && (!strcmp(callee->owner->name, "map_zeroed")
-            || !strcmp(callee->owner->name, "__os_map_zeroed"));
+        && core_string_eq(ir_module_name(callee->owner->owner),
+                          CORE_STRING_STATIC("sys.internal.memory"))
+        && (core_string_eq(callee->owner->name,
+                           CORE_STRING_STATIC("map_zeroed"))
+            || core_string_eq(callee->owner->name,
+                              CORE_STRING_STATIC("__os_map_zeroed")));
 }
 
 static bool
@@ -395,19 +424,20 @@ n00bb_validate_executable_completeness(core_link_unit_t *link,
                                         core_diagnostics_t *diagnostics)
 {
     core_link_contribution_view_t contribution;
-    static const char *required[] = {
-        "n00bb.semantic-ready",
-        "n00bb.bootstrap-pipeline-ran",
-        "n00bb.initializer-dependencies",
-        N00BB_INITIALIZER_ORDER_DOMAIN,
+    static const core_string_t required[] = {
+        CORE_STRING_STATIC("n00bb.semantic-ready"),
+        CORE_STRING_STATIC("n00bb.bootstrap-pipeline-ran"),
+        CORE_STRING_STATIC("n00bb.initializer-dependencies"),
+        CORE_STRING_STATIC(N00BB_INITIALIZER_ORDER_DOMAIN),
     };
     for (size_t i = 0; i < sizeof(required) / sizeof(required[0]); i++) {
         if (core_link_unit_require_contribution(link, (core_string_t){0},
-                core_string_from_cstr(required[i]), 1, &contribution))
+                required[i], 1, &contribution))
             continue;
         core_buffer_t message = {0};
         core_buffer_printf(&message,
-            "executable build requires complete %s facts", required[i]);
+            "executable build requires complete %.*s facts",
+            (int)required[i].u8_bytes, required[i].data);
         core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
             CORE_STRING_STATIC("N00BB-B0012"),
             core_string_borrow(message.data, message.byte_len));
@@ -447,12 +477,16 @@ n00bb_validate_executable_completeness(core_link_unit_t *link,
         }
         if (valid) continue;
         core_buffer_t message = {0};
+        core_string_t owner_name = function && function->owner
+            ? ir_module_name(function->owner)
+            : CORE_STRING_STATIC("<unknown>");
+        core_string_t function_name = function && function->name.data
+            ? function->name : CORE_STRING_STATIC("<unknown>");
         core_buffer_printf(&message,
-            "executable build has incomplete %s for reachable function %s.%s",
+            "executable build has incomplete %s for reachable function %.*s.%.*s",
             missing ? missing : "facts",
-            function && function->owner
-                ? ir_module_name(function->owner) : "<unknown>",
-            function && function->name ? function->name : "<unknown>");
+            (int)owner_name.u8_bytes, owner_name.data,
+            (int)function_name.u8_bytes, function_name.data);
         core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
             CORE_STRING_STATIC("N00BB-B0012"),
             core_string_borrow(message.data, message.byte_len));
@@ -475,7 +509,8 @@ bool
 n00bb_build_time_run_needed(const n00bb_link_analysis_t *analysis)
 {
     return analysis && (analysis->build_time_capture
-        || n00bb_root_entry(analysis, N00BB_COMPTIME_START_NAME));
+        || n00bb_root_entry(analysis,
+                            CORE_STRING_STATIC(N00BB_COMPTIME_START_NAME)));
 }
 
 typedef struct {
@@ -498,7 +533,7 @@ typedef struct {
 } module_emission_t;
 
 typedef struct {
-    const char *const *initializers;
+    const core_string_t *initializers;
     size_t initializer_count;
     size_t metadata_bytes;
     const n00bb_llvm_finalizer_binding_t *finalizers;
@@ -519,11 +554,12 @@ emit_module_object(const module_emission_t *emission, ir_module_t *module,
     n00bb_llvm_backend_bind_native_cache(backend, emission->native_cache);
     n00bb_llvm_backend_bind_mutator_classifier(backend,
         n00bb_cache_mutator_classifier(analysis->cache));
-    const char *table_symbol = artifact
-        ? artifact->index_table.symbol : nullptr;
-    if (table_symbol && table_symbol[0] == '_'
+    core_string_t table_symbol = artifact
+        ? artifact->index_table.symbol : (core_string_t){};
+    if (table_symbol.u8_bytes && table_symbol.data[0] == '_'
         && analysis->target.object_format == CORE_TARGET_OBJECT_MACH_O)
-        table_symbol++;
+        table_symbol = core_string_slice(table_symbol, 1,
+                                         table_symbol.u8_bytes - 1);
     n00bb_llvm_index_table_t index_table = {
         .symbol = table_symbol,
         .type_hashes = artifact ? artifact->index_table.type_hashes : nullptr,
@@ -532,7 +568,7 @@ emit_module_object(const module_emission_t *emission, ir_module_t *module,
         .function_count = artifact
             ? artifact->index_table.function_count : 0,
     };
-    bool ok = (!table_symbol
+    bool ok = (!table_symbol.data
             || n00bb_llvm_backend_bind_index_table(backend, &index_table))
         && n00bb_llvm_backend_bind_reachable_functions(backend,
             analysis->emitted_functions.data,
@@ -551,7 +587,7 @@ emit_module_object(const module_emission_t *emission, ir_module_t *module,
         && (!entry || n00bb_llvm_backend_bind_finalizers(backend,
             entry->finalizers, entry->finalizer_count));
     core_buffer_t object = {0};
-    const char *const *initializers = entry ? entry->initializers : nullptr;
+    const core_string_t *initializers = entry ? entry->initializers : nullptr;
     size_t initializer_count = entry ? entry->initializer_count : 0;
     size_t metadata_bytes = entry ? entry->metadata_bytes : 0;
     if (ok && emission->lto)
@@ -564,8 +600,8 @@ emit_module_object(const module_emission_t *emission, ir_module_t *module,
             emission->diagnostics);
     core_buffer_t mutators = {0};
     for (size_t i = 0; i < n00bb_llvm_backend_mutator_count(backend); i++) {
-        core_buffer_puts(&mutators, n00bb_llvm_backend_mutator_name(backend,
-                                                                    i));
+        core_buffer_append_string(&mutators,
+            n00bb_llvm_backend_mutator_name(backend, i));
         core_buffer_putc(&mutators, '\n');
     }
     n00bb_llvm_backend_free(backend);
@@ -591,7 +627,7 @@ emit_module_object(const module_emission_t *emission, ir_module_t *module,
     core_buffer_release(&mutators);
     if (ok) ok = n00bb_native_frames_add(emission->native_frames,
         object.data, object.byte_len);
-    if (ok) *object_path = n00bb_write_temporary_object(object.data,
+    if (ok) *object_path = temporary_object_argument(object.data,
         object.byte_len);
     core_buffer_release(&object);
     return ok && *object_path;
@@ -601,12 +637,13 @@ bool
 n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
                        parse_cmdr_result_t *args, bool debug_enabled,
                        bool native_cpu,
-                       const char *compiler_path,
+                       core_string_t compiler_path,
                        const n00bb_native_inputs_t *native,
                        core_diagnostics_t *diagnostics)
 {
     ir_func_t *start = analysis
-        ? n00bb_root_entry(analysis, N00BB_START_NAME) : nullptr;
+        ? n00bb_root_entry(analysis, CORE_STRING_STATIC(N00BB_START_NAME))
+        : nullptr;
     th_type *start_type = start ? th_resolve(start->type) : nullptr;
     if (start_type && (th_func_nparams(start_type)
                        || !th_is_nil(th_func_ret(start_type)))) {
@@ -638,7 +675,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     size_t count = order.len;
     size_t modules = count + analysis->specializations.len;
     bool lto = parse_cmdr_flag_present(args, CORE_STRING_STATIC("--lto"));
-    char **names = calloc(2 * count + 2, sizeof(*names));
+    core_string_t *names = calloc(2 * count + 2, sizeof(*names));
     char **objects = calloc(modules + 4, sizeof(*objects));
     core_buffer_t *lto_modules = lto
         ? calloc(modules + 1, sizeof(*lto_modules)) : nullptr;
@@ -716,19 +753,21 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     if (ok) ok = core_object_section_find(linked_abi, linked_abi_bytes,
         analysis->target.object_format,
         analysis->target.object_format == CORE_TARGET_OBJECT_MACH_O
-            ? "__DATA_CONST" : nullptr,
+            ? CORE_STRING_STATIC("__DATA_CONST") : (core_string_t){},
         analysis->target.object_format == CORE_TARGET_OBJECT_MACH_O
-            ? "__n00b_meta" : analysis->target.object_format
-                == CORE_TARGET_OBJECT_COFF ? ".n00b$M"
-                                       : ".data.rel.ro.n00b_meta",
+            ? CORE_STRING_STATIC("__n00b_meta")
+            : analysis->target.object_format == CORE_TARGET_OBJECT_COFF
+                ? CORE_STRING_STATIC(".n00b$M")
+                : CORE_STRING_STATIC(".data.rel.ro.n00b_meta"),
         &metadata);
-    if (ok) objects[modules] = n00bb_write_temporary_object(
+    if (ok) objects[modules] = temporary_object_argument(
         linked_abi, linked_abi_bytes);
     ok = ok && objects[modules];
     core_free(linked_abi);
     size_t initializer_count = 0;
-    const char *initializers[] = {
-        N00BB_LITERAL_INIT_NAME, N00BB_MODULE_INIT_NAME,
+    const core_string_t initializers[] = {
+        CORE_STRING_STATIC(N00BB_LITERAL_INIT_NAME),
+        CORE_STRING_STATIC(N00BB_MODULE_INIT_NAME),
     };
     for (size_t i = 0; ok && i < count; i++) {
         n00bb_tu_state_t *state = tu_state(order.data[i]);
@@ -742,34 +781,30 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         if (state->interface_module && state->package_interface) continue;
         for (size_t k = 0; ok && k < 2; k++) {
             if (!ir_func_find(state->ir_module, initializers[k])) continue;
-            core_buffer_t name = {0};
-            core_buffer_printf(&name, "%s.%s",
+            names[initializer_count] = qualified_function_name(
                 ir_module_name(state->ir_module), initializers[k]);
-            names[initializer_count] = core_strndup(name.data,
-                                                    name.byte_len);
-            core_buffer_release(&name);
-            ok = names[initializer_count++] != nullptr;
+            ok = names[initializer_count++].data != nullptr;
         }
     }
     bool build_time = n00bb_compile_phase() == PARSE_SYM_PHASE_COMPTIME;
     ir_func_t *entry = ok ? n00bb_root_entry(analysis, build_time
-        ? N00BB_COMPTIME_START_NAME : N00BB_START_NAME) : nullptr;
+        ? CORE_STRING_STATIC(N00BB_COMPTIME_START_NAME)
+        : CORE_STRING_STATIC(N00BB_START_NAME)) : nullptr;
     if (entry) {
-        core_buffer_t name = {0};
-        core_buffer_printf(&name, "%s.%s", ir_module_name(entry->owner),
-                           entry->name);
-        names[initializer_count] = core_strndup(name.data, name.byte_len);
-        core_buffer_release(&name);
-        ok = names[initializer_count++] != nullptr;
+        names[initializer_count] = qualified_function_name(
+            ir_module_name(entry->owner), entry->name);
+        ok = names[initializer_count++].data != nullptr;
     }
     for (size_t i = 0; ok && i < count && build_time; i++) {
         n00bb_tu_state_t *state = tu_state(order.data[i]);
-        if (strcmp(ir_module_name(state->ir_module), N00BB_CAPTURE_MODULE)
-            || !ir_func_find(state->ir_module, N00BB_CAPTURE_FUNCTION))
+        if (!core_string_eq(ir_module_name(state->ir_module),
+                            CORE_STRING_STATIC(N00BB_CAPTURE_MODULE))
+            || !ir_func_find(state->ir_module,
+                             CORE_STRING_STATIC(N00BB_CAPTURE_FUNCTION)))
             continue;
-        names[initializer_count] = core_strdup(
-            N00BB_CAPTURE_MODULE "." N00BB_CAPTURE_FUNCTION);
-        ok = names[initializer_count++] != nullptr;
+        names[initializer_count] = core_string_dup(CORE_STRING_STATIC(
+            N00BB_CAPTURE_MODULE "." N00BB_CAPTURE_FUNCTION));
+        ok = names[initializer_count++].data != nullptr;
     }
     n00bb_storage_origin_context_t origin_context = {
         .has_user_native_objects = parse_cmdr_flag_value_count(args,
@@ -791,11 +826,11 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     n00bb_native_frames_t *native_frames = ok
         ? n00bb_native_frames_new(analysis->target.object_format) : nullptr;
     if (ok && !native_frames) ok = false;
-    char *executable_path = ok && !lto
-        ? n00bb_executable_path(compiler_path) : nullptr;
-    n00bb_native_cache_t *native_cache = executable_path
+    core_string_t executable_path = ok && !lto
+        ? n00bb_executable_path(compiler_path) : (core_string_t){};
+    n00bb_native_cache_t *native_cache = executable_path.data
         ? n00bb_native_cache_open(executable_path) : nullptr;
-    core_free(executable_path);
+    core_free(executable_path.data);
     core_list_t(n00bb_cache_module_object_t) kept =
         core_list_new(n00bb_cache_module_object_t);
     module_emission_t emission = {
@@ -819,7 +854,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
                 CORE_STRING_STATIC("n00bb.abi.object"), 1, &artifact_view)
             ? artifact_view.payload : nullptr;
         module_entry_t root_entry = {
-            .initializers = (const char *const *)names,
+            .initializers = names,
             .initializer_count = initializer_count,
             .metadata_bytes = metadata.size,
             .finalizers = finalizers, .finalizer_count = finalizer_count,
@@ -830,7 +865,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
                 ir_module_name(tu_state(order.data[i])->ir_module), &cached)) {
             ok = n00bb_native_frames_add(native_frames, cached.native,
                                          cached.native_bytes);
-            if (ok) objects[i] = n00bb_write_temporary_object(cached.native,
+            if (ok) objects[i] = temporary_object_argument(cached.native,
                                                               cached.native_bytes);
             ok = ok && objects[i];
             continue;
@@ -849,14 +884,14 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
                 analysis, &analysis->specializations.data[i], &cached)) {
             ok = n00bb_native_frames_add(native_frames, cached.native,
                                          cached.native_bytes);
-            if (ok) objects[count + i] = n00bb_write_temporary_object(
+            if (ok) objects[count + i] = temporary_object_argument(
                 cached.native, cached.native_bytes);
             ok = ok && objects[count + i];
             continue;
         }
         core_link_artifact_view_t artifact_view = {0};
         ok = core_link_unit_require_artifact(link,
-                core_string_from_cstr(ir_module_name(module)),
+                ir_module_name(module),
                 CORE_STRING_STATIC("n00bb.abi.object"), 1, &artifact_view)
             && emit_module_object(&emission, module, diagnostics,
                 artifact_view.payload, nullptr, &objects[count + i],
@@ -864,11 +899,11 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     }
     if (ok && lto) {
         build_stage = "link-time optimization";
-        char *runtime_path = n00bb_archive_path(compiler_path,
-            "libn00b-abi-runtime.bc");
-        ok = runtime_path && n00bb_read_bitcode(runtime_path,
+        core_string_t runtime_path = n00bb_archive_path(compiler_path,
+            CORE_STRING_STATIC("libn00b-abi-runtime.bc"));
+        ok = runtime_path.data && n00bb_read_bitcode(runtime_path,
             &lto_modules[modules]);
-        core_free(runtime_path);
+        core_free(runtime_path.data);
         size_t input_count = modules + 1 + native->bitcode_count;
         n00bb_llvm_bitcode_input_t *inputs = ok
             ? calloc(input_count, sizeof(*inputs)) : nullptr;
@@ -892,7 +927,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             &object, diagnostics);
         if (ok) ok = n00bb_native_frames_add(native_frames,
             object.data, object.byte_len);
-        if (ok) objects[0] = n00bb_write_temporary_object(
+        if (ok) objects[0] = temporary_object_argument(
             object.data, object.byte_len);
         ok = ok && objects[0];
         core_buffer_release(&object);
@@ -912,7 +947,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         if (ok) ok = n00bb_llvm_backend_link_bitcode(inputs,
             native->bitcode_count, debug_enabled, native_cpu, false,
             &object, diagnostics);
-        if (ok) objects[modules + 3] = n00bb_write_temporary_object(
+        if (ok) objects[modules + 3] = temporary_object_argument(
             object.data, object.byte_len);
         ok = ok && objects[modules + 3];
         core_buffer_release(&object);
@@ -923,20 +958,24 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         size_t frame_object_bytes = 0;
         ok = n00bb_native_frames_emit(native_frames, &analysis->target,
             &frame_object, &frame_object_bytes);
-        if (ok) objects[modules + 1] = n00bb_write_temporary_object(
+        if (ok) objects[modules + 1] = temporary_object_argument(
             frame_object, frame_object_bytes);
         core_free(frame_object);
         ok = ok && objects[modules + 1];
     }
     core_string_t requested = parse_cmdr_flag_str(args,
         CORE_STRING_STATIC("--output"));
-    char *output = requested.data
-        ? core_strndup(requested.data, requested.u8_bytes)
-        : core_strdup("a.out");
-    char *staging = output ? malloc(strlen(output) + sizeof(".XXXXXX"))
-                           : nullptr;
+    core_string_t output_name = requested.data
+        ? requested : CORE_STRING_STATIC("a.out");
+    char *output = core_string_to_cstr(output_name);
+    core_buffer_t staging_template = {0};
+    core_buffer_append_string(&staging_template, output_name);
+    core_buffer_puts(&staging_template, ".XXXXXX");
+    char *staging = output
+        ? core_string_to_cstr(core_buffer_string(&staging_template))
+        : nullptr;
+    core_buffer_release(&staging_template);
     if (staging) {
-        sprintf(staging, "%s.XXXXXX", output);
         int staging_fd = mkstemp(staging);
         if (staging_fd < 0) ok = false;
         else {
@@ -944,8 +983,10 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             unlink(staging);
         }
     } else ok = false;
-    char *archive = n00bb_archive_path(compiler_path,
-        "libn00b-abi-runtime.a");
+    core_string_t archive_name = n00bb_archive_path(compiler_path,
+        CORE_STRING_STATIC("libn00b-abi-runtime.a"));
+    char *archive = core_string_to_cstr(archive_name);
+    core_free(archive_name.data);
     int link_spawn_error = 0;
     int link_exit_status = -1;
     int output_rename_error = 0;
@@ -978,7 +1019,8 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             native_arguments[native_used++] = n00bb_flag_argument("-l",
                 native->libraries[i]);
         for (size_t i = 0; ok && i < native->framework_count; i++) {
-            native_arguments[native_used++] = core_strdup("-framework");
+            native_arguments[native_used++] = core_string_to_cstr(
+                CORE_STRING_STATIC("-framework"));
             native_arguments[native_used++] = n00bb_flag_argument("",
                 native->frameworks[i]);
         }
@@ -1031,7 +1073,8 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
 #ifdef __APPLE__
             if (ok && debug_enabled) {
                 core_buffer_t bundle = {0};
-                core_buffer_printf(&bundle, "%s.dSYM", output);
+                core_buffer_append_string(&bundle, output_name);
+                core_buffer_puts(&bundle, ".dSYM");
                 char *dsymutil[] = {"/usr/bin/dsymutil", (char *)output, "-o",
                                     bundle.data, nullptr};
                 pid_t child = 0;
@@ -1069,7 +1112,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         }
     }
     for (size_t i = 0; i < 2 * count + 1; i++)
-        if (names) core_free(names[i]);
+        if (names) core_free(names[i].data);
     free(objects);
     if (lto_modules) {
         for (size_t i = 0; i < modules + 1; i++)
@@ -1079,7 +1122,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     free(names);
     free(type_indices);
     for (size_t i = 0; i < global_binding_count; i++)
-        core_free((void *)global_bindings[i].native_name);
+        core_free(global_bindings[i].native_name.data);
     free(global_bindings);
     free(finalizers);
     free(function_indices);
@@ -1102,7 +1145,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
                 strerror(output_rename_error));
         core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
             CORE_STRING_STATIC("N00BB-B0011"),
-            core_string_from_cstr(message.data));
+            core_buffer_string(&message));
         core_buffer_release(&message);
     }
     core_free(output);
@@ -1131,15 +1174,11 @@ abi_type_owner(void *context, th_type *type)
     parse_sym_entry_t *owner = core_dict_get(&sources->type_owners,
         (uintptr_t)typehash, nullptr);
     if (owner) return canonical_symbol(owner);
-    const char *name = nullptr;
-    size_t name_length = 0;
+    core_string_t name = {};
     size_t arguments = 0;
-    if (!th_named_info(th_resolve(type), &name, &name_length, nullptr,
-                       &arguments) || !arguments) return nullptr;
-    char *base_name = core_strndup(name, name_length);
-    th_type *base = base_name
-        ? th_name(sources->types, base_name) : nullptr;
-    core_free(base_name);
+    if (!th_named_info(th_resolve(type), &name, nullptr, &arguments)
+        || !arguments) return nullptr;
+    th_type *base = th_name(sources->types, name);
     if (!base) return nullptr;
     typehash = th_hash(sources->types, base);
     owner = core_dict_get(&sources->callback_type_owners,
@@ -1238,13 +1277,13 @@ free_abi_artifact(void *payload)
 }
 
 static bool
-abi_graph_root(void *context, const char *identifier, size_t *index)
+abi_graph_root(void *context, core_string_t identifier, size_t *index)
 {
     n00bb_link_analysis_t *analysis = context;
-    if (!analysis || !identifier || !index) return false;
+    if (!analysis || !identifier.data || !index) return false;
     for (size_t i = 0; i < analysis->baked_roots.len; i++) {
         const n00bb_baked_root_t *root = &analysis->baked_roots.data[i];
-        if (!strcmp(root->identifier, identifier)
+        if (core_string_eq(root->identifier, identifier)
             && root->root_index < analysis->static_graph_nodes.len) {
             *index = root->root_index;
             return true;
@@ -1286,7 +1325,7 @@ abi_graph_edge(void *context, size_t index, size_t *source,
     return true;
 }
 
-static const char *
+static core_string_t
 abi_graph_type_name(void *context, size_t index)
 {
     n00bb_link_analysis_t *analysis = context;
@@ -1314,7 +1353,9 @@ abi_graph_slot(void *context, size_t index, n00bb_abi_graph_slot_t *out)
         : n00bb_baked_function(analysis, slot->module, slot->name);
     if (!type && !function) return false;
     ir_annot_t *body = function && !function->n_blocks
-        ? ir_annot_get(&function->annots, "n00bb.cached_body") : nullptr;
+        ? ir_annot_get(&function->annots,
+                       CORE_STRING_STATIC("n00bb.cached_body"))
+        : nullptr;
     if (body && body->kind == IR_ANNOT_VALUE && body->v
         && body->v->kind == IR_VAL_FUNC)
         function = body->v->owner;
@@ -1324,9 +1365,9 @@ abi_graph_slot(void *context, size_t index, n00bb_abi_graph_slot_t *out)
         .table = slot->table,
         .kind = slot->kind,
         .typehash = slot->typehash,
-        .type_name = type ? slot->name : nullptr,
-        .module = type ? nullptr : slot->module,
-        .function = type ? nullptr : slot->name,
+        .type_name = type ? slot->name : (core_string_t){},
+        .module = type ? (core_string_t){} : slot->module,
+        .function = type ? (core_string_t){} : slot->name,
         .function_type = function ? function->type : nullptr,
     };
     return true;
@@ -1346,12 +1387,11 @@ abi_graph_flags(void *context, size_t index)
 static core_translation_unit_t *
 module_unit(n00bb_link_analysis_t *analysis, const ir_module_t *module)
 {
-    const char *name = ir_module_name(module);
+    core_string_t name = ir_module_name(module);
     for (size_t i = 0; i < analysis->units.len; i++) {
         core_string_t identifier = analysis->units.data[i]->module.identifier;
         if (tu_state(analysis->units.data[i])->ir_module == module
-            || (identifier.u8_bytes == strlen(name)
-                && !memcmp(identifier.data, name, identifier.u8_bytes)))
+            || core_string_eq(identifier, name))
             return analysis->units.data[i];
     }
     return nullptr;
@@ -1367,7 +1407,7 @@ emit_specialization_abi(core_link_unit_t *link,
     ir_module_t *module = specialization->instance->owner;
     core_translation_unit_t *generic = module_unit(analysis,
         specialization->generic->owner);
-    core_string_t name = core_string_from_cstr(ir_module_name(module));
+    core_string_t name = core_string_dup(ir_module_name(module));
     core_source_file_t source = {0};
     core_translation_unit_t unit = {0};
     parse_symtab_t *symbols = parse_symtab_new();
@@ -1377,8 +1417,7 @@ emit_specialization_abi(core_link_unit_t *link,
         && generic_state->lex->tokens && symbols && artifact
         && core_source_file_init(&source,
             core_source_file_path(&generic->source),
-            core_source_file_contents(&generic->source),
-            core_source_file_size(&generic->source))
+            core_source_file_contents(&generic->source))
         && core_translation_unit_init(&unit,
             &(core_module_spec_t){.identifier = name}, &source)
         && core_translation_unit_finalize_imports(&unit)
@@ -1518,13 +1557,14 @@ n00bb_write_abi_bytes(core_string_t requested, const uint8_t *object,
 {
     if (!requested.data || !requested.u8_bytes || !object || !object_bytes)
         return false;
-    char *path = core_strndup(requested.data, requested.u8_bytes);
+    char *path = core_string_to_cstr(requested);
     FILE *file = fopen(path, "wb");
     bool saved = file && fwrite(object, 1, object_bytes, file) == object_bytes;
     if (file && fclose(file)) saved = false;
     if (!saved) {
         core_buffer_t message = {0};
-        core_buffer_printf(&message, "could not write ABI metadata '%s'", path);
+        core_buffer_printf(&message, "could not write ABI metadata '%.*s'",
+                           (int)requested.u8_bytes, requested.data);
         core_diagnostics_report(diagnostics, unit, CORE_DIAG_FATAL,
             CORE_STRING_STATIC("N00BB-B0008"),
             core_string_borrow(message.data, message.byte_len));
@@ -1594,8 +1634,8 @@ n00bb_link_abi_artifact(core_link_unit_t *link,
         core_translation_unit_t *unit = i < unit_count
             ? core_link_unit_translation_unit(link, i) : nullptr;
         core_string_t module = unit ? unit->module.identifier
-            : core_string_from_cstr(ir_module_name(analysis->specializations
-                .data[i - unit_count].instance->owner));
+            : ir_module_name(analysis->specializations
+                .data[i - unit_count].instance->owner);
         core_link_artifact_view_t view = {0};
         if ((i < unit_count && !unit)
             || !core_link_unit_require_artifact(link, module,
@@ -1640,7 +1680,7 @@ n00bb_link_abi_artifact(core_link_unit_t *link,
         .modules = modules,
         .module_count = count,
     };
-    const char *failure_stage = nullptr;
+    core_string_t failure_stage = {};
     n00bb_abi_index_plan_failure_t plan_failure = {0};
     n00bb_abi_native_rebase_failure_t rebase_failure = {0};
     n00b_abi_error_v1 validation_error = {0};
@@ -1654,27 +1694,28 @@ n00bb_link_abi_artifact(core_link_unit_t *link,
     core_free(inputs);
     if (!valid) {
         core_buffer_t message = {0};
-        core_buffer_printf(&message, "could not link library ABI objects%s%s",
-            failure_stage ? " at " : "",
-            failure_stage ? failure_stage : "");
-        if (plan_failure.reason)
+        core_buffer_printf(&message, "could not link library ABI objects%s%.*s",
+            failure_stage.data ? " at " : "",
+            (int)failure_stage.u8_bytes, failure_stage.data);
+        if (plan_failure.reason.data)
             core_buffer_printf(&message,
-                ": input %zu table %u row %u (%s)",
+                ": input %zu table %u row %u (%.*s)",
                 plan_failure.input, plan_failure.table_kind,
-                plan_failure.row_index, plan_failure.reason);
-        if (plan_failure.reason
+                plan_failure.row_index, (int)plan_failure.reason.u8_bytes,
+                plan_failure.reason.data);
+        if (plan_failure.reason.data
             && plan_failure.table_kind == N00B_ABI_TABLE_LAYOUT)
             core_buffer_printf(&message,
                 "; owner type %u points to layout %u",
                 plan_failure.owner_type_index,
                 plan_failure.owner_row_index);
-        if (plan_failure.reason
+        if (plan_failure.reason.data
             && plan_failure.table_kind == N00B_ABI_TABLE_TYPE)
             core_buffer_printf(&message,
                 "; type kind %u flags %u hash %llu",
                 plan_failure.type_kind, plan_failure.type_flags,
                 (unsigned long long)plan_failure.typehash);
-        if (plan_failure.reason && plan_failure.input < count) {
+        if (plan_failure.reason.data && plan_failure.input < count) {
             core_translation_unit_t *requester =
                 core_link_unit_translation_unit(link, plan_failure.input);
             if (requester && requester->module.identifier.data)
@@ -1683,10 +1724,10 @@ n00bb_link_abi_artifact(core_link_unit_t *link,
                     requester->module.identifier.data);
         }
         if (plan_failure.name.bytes) {
-            const char *label = plan_failure.table_kind
+            core_buffer_append_string(&message, plan_failure.table_kind
                     == N00B_ABI_TABLE_REQUIREMENT
-                ? "; required symbol " : "; current type ";
-            core_buffer_append(&message, label, strlen(label));
+                ? CORE_STRING_STATIC("; required symbol ")
+                : CORE_STRING_STATIC("; current type "));
             core_buffer_append(&message,
                 (const char *)plan_failure.name.bytes,
                 plan_failure.name.length);
@@ -1709,12 +1750,13 @@ n00bb_link_abi_artifact(core_link_unit_t *link,
                     plan_failure.prior_name.length);
             }
         }
-        if (rebase_failure.reason)
+        if (rebase_failure.reason.data)
             core_buffer_printf(&message,
-                ": table %u row %u input %zu section %u (%s)",
+                ": table %u row %u input %zu section %u (%.*s)",
                 rebase_failure.table_kind, rebase_failure.row_index,
                 rebase_failure.input, rebase_failure.local_section,
-                rebase_failure.reason);
+                (int)rebase_failure.reason.u8_bytes,
+                rebase_failure.reason.data);
         if (validation_error.status)
             core_buffer_printf(&message,
                 ": status %u table %u row %u offset %llu",

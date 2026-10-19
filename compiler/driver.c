@@ -77,9 +77,14 @@ struct n00bb_resolver_t {
     pthread_mutex_t generated_lock;
 };
 
-static char *join_path(const char *a, const char *b);
-static size_t source_suffix_length(const char *path);
-static uint64_t package_syntax_profile(const char *argv0);
+static const core_string_t source_extensions[] = {
+    CORE_STRING_STATIC(".n"),
+    CORE_STRING_STATIC(".n00b"),
+};
+
+static core_string_t join_path(core_string_t a, core_string_t b);
+static size_t source_suffix_length(core_string_t path);
+static uint64_t package_syntax_profile(core_string_t argv0);
 static void set_source_origin(core_source_file_t *source,
                               core_string_t package_id,
                               core_string_t package_namespace,
@@ -89,72 +94,88 @@ static bool
 accept_source_path(void *context, core_string_t relative)
 {
     (void)context;
-    size_t length = relative.u8_bytes;
-    return (length >= 2 && !memcmp(relative.data + length - 2, ".n", 2))
-        || (length >= 5
-            && !memcmp(relative.data + length - 5, ".n00b", 5));
+    return core_string_ends_with(relative, CORE_STRING_STATIC(".n"))
+        || core_string_ends_with(relative, CORE_STRING_STATIC(".n00b"));
 }
 #ifdef _WIN32
-static char *wide_to_utf8(const wchar_t *wide, int length);
-static wchar_t *utf8_to_wide(const char *utf8);
+static core_string_t wide_to_utf8(const wchar_t *wide, int length);
+static wchar_t *utf8_to_wide(core_string_t utf8);
 #endif
 
 #ifdef _WIN32
-static char *
+static core_string_t
 wide_to_utf8(const wchar_t *wide, int length)
 {
     int bytes = WideCharToMultiByte(CP_UTF8, 0, wide, length, nullptr, 0,
                                    nullptr, nullptr);
-    if (bytes <= 0) return nullptr;
+    if (bytes <= 0) return (core_string_t){0};
     char *utf8 = core_alloc_size(1, (size_t)bytes + 1);
     WideCharToMultiByte(CP_UTF8, 0, wide, length, utf8, bytes, nullptr, nullptr);
     utf8[bytes] = '\0';
-    return utf8;
+    size_t used = length < 0 ? (size_t)bytes - 1 : (size_t)bytes;
+    return (core_string_t){.data = utf8, .u8_bytes = used};
 }
 
 static wchar_t *
-utf8_to_wide(const char *utf8)
+utf8_to_wide(core_string_t utf8)
 {
-    int chars = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8, -1,
-                                    nullptr, 0);
-    if (chars <= 0) return nullptr;
-    wchar_t *wide = core_alloc_array(wchar_t, chars);
-    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8, -1, wide, chars);
+    if (!utf8.data || utf8.u8_bytes > INT32_MAX) return nullptr;
+    int chars = utf8.u8_bytes
+        ? MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8.data,
+                              (int)utf8.u8_bytes, nullptr, 0)
+        : 0;
+    if (chars < 0 || (utf8.u8_bytes && !chars)) return nullptr;
+    wchar_t *wide = core_alloc_array(wchar_t, (size_t)chars + 1);
+    if (chars)
+        MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8.data,
+                            (int)utf8.u8_bytes, wide, chars);
+    wide[chars] = 0;
     return wide;
 }
 #endif
 
 static bool
-path_is_absolute(const char *path)
+is_path_separator(char c)
+{
+    return c == '/' || c == '\\';
+}
+
+static bool
+path_is_absolute(core_string_t path)
 {
 #ifdef _WIN32
-    return path[0] == '/' || path[0] == '\\'
-        || (path[0] && path[1] == ':'
-            && (path[2] == '/' || path[2] == '\\'));
+    return (path.u8_bytes && is_path_separator(path.data[0]))
+        || (path.u8_bytes >= 3 && path.data[1] == ':'
+            && is_path_separator(path.data[2]));
 #else
-    return path[0] == '/';
+    return path.u8_bytes && path.data[0] == '/';
 #endif
 }
 
-static char *
-canonical_path(const char *path)
+static core_string_t
+canonical_path(core_string_t path)
 {
 #ifdef _WIN32
     wchar_t *wide = utf8_to_wide(path);
-    if (!wide) return nullptr;
+    if (!wide) return (core_string_t){0};
     wchar_t *full = _wfullpath(nullptr, wide, 0);
     core_free(wide);
-    if (!full) return nullptr;
-    char *result = wide_to_utf8(full, -1);
+    if (!full) return (core_string_t){0};
+    core_string_t result = wide_to_utf8(full, -1);
     free(full);
     return result;
 #else
-    return realpath(path, nullptr);
+    char *native = core_string_to_cstr(path);
+    char *resolved = native ? realpath(native, nullptr) : nullptr;
+    core_free(native);
+    core_string_t result = core_string_from_cstr(resolved);
+    free(resolved);
+    return result;
 #endif
 }
 
 static FILE *
-open_source(const char *path)
+open_source(core_string_t path)
 {
 #ifdef _WIN32
     wchar_t *wide = utf8_to_wide(path);
@@ -163,69 +184,72 @@ open_source(const char *path)
     core_free(wide);
     return file;
 #else
-    return fopen(path, "rb");
+    char *native = core_string_to_cstr(path);
+    FILE *file = native ? fopen(native, "rb") : nullptr;
+    int saved = errno;
+    core_free(native);
+    errno = saved;
+    return file;
 #endif
 }
 
-static char *
-join_path(const char *a, const char *b)
+static core_string_t
+join_path(core_string_t a, core_string_t b)
 {
     core_buffer_t *out = core_buffer_empty();
-    core_buffer_puts(out, a);
-    if (out->byte_len && out->data[out->byte_len - 1] != '/'
-        && out->data[out->byte_len - 1] != '\\')
+    core_buffer_append_string(out, a);
+    if (out->byte_len && !is_path_separator(out->data[out->byte_len - 1]))
         core_buffer_putc(out, N00BB_PATH_SEP);
-    core_buffer_puts(out, b);
-    return core_buffer_take(out);
+    core_buffer_append_string(out, b);
+    return core_buffer_take_string(out);
 }
 
-static char *
-parent_path(const char *path)
+static core_string_t
+parent_path(core_string_t path)
 {
-    char *copy = core_strdup(path);
-    size_t len = strlen(copy);
-    while (len > 1 && (copy[len - 1] == '/' || copy[len - 1] == '\\'))
-        copy[--len] = '\0';
+    size_t len = path.u8_bytes;
+    while (len > 1 && is_path_separator(path.data[len - 1])) len--;
 #ifdef _WIN32
-    if (len == 2 && copy[1] == ':') {
-        copy = core_realloc(copy, 4);
-        copy[2] = '\\';
-        copy[3] = '\0';
-        return copy;
+    if (len == 2 && path.data[1] == ':') {
+        core_buffer_t *drive = core_buffer_empty();
+        core_buffer_append(drive, path.data, 2);
+        core_buffer_putc(drive, '\\');
+        return core_buffer_take_string(drive);
     }
 #endif
-    char *slash = strrchr(copy, '/');
-    char *backslash = strrchr(copy, '\\');
-    if (!slash || (backslash && backslash > slash)) slash = backslash;
-    if (!slash) {
-        core_free(copy);
-        return core_strdup(".");
-    }
-    if (slash == copy) slash[1] = '\0';
+    core_string_t trimmed = core_string_slice(path, 0, len);
+    int64_t slash = core_string_rfind_byte(trimmed, '/');
+    int64_t backslash = core_string_rfind_byte(trimmed, '\\');
+    if (slash < 0 || (backslash >= 0 && backslash > slash)) slash = backslash;
+    if (slash < 0) return core_string_dup(CORE_STRING_STATIC("."));
+    size_t keep = slash == 0 ? 1 : (size_t)slash;
 #ifdef _WIN32
-    else if (slash == copy + 2 && copy[1] == ':') slash[1] = '\0';
+    if (slash == 2 && path.data[1] == ':') keep = 3;
 #endif
-    else *slash = '\0';
-    return copy;
+    return core_string_from_raw(path.data, (int64_t)keep);
 }
 
-static char *
+static core_string_t
 cwd_path(void)
 {
 #ifdef _WIN32
     DWORD cap = GetCurrentDirectoryW(0, nullptr);
     wchar_t *wide = core_alloc_array(wchar_t, cap);
     DWORD n = GetCurrentDirectoryW(cap, wide);
-    char *path = n && n < cap ? wide_to_utf8(wide, (int)n) : nullptr;
+    core_string_t path = n && n < cap ? wide_to_utf8(wide, (int)n)
+                                      : (core_string_t){0};
     core_free(wide);
     return path;
 #else
-    return getcwd(nullptr, 0);
+    char *native = getcwd(nullptr, 0);
+    core_string_t path = core_string_from_cstr(native);
+    free(native);
+    return path;
 #endif
 }
 
-char *
-n00bb_executable_path(const char *argv0)
+core_string_t
+n00bb_executable_path(core_string_t argv0)
 {
 #ifdef _WIN32
     DWORD cap = 256;
@@ -235,28 +259,28 @@ n00bb_executable_path(const char *argv0)
         DWORD n = GetModuleFileNameW(nullptr, wide, cap);
         if (!n) break;
         if (n < cap - 1) {
-            char *path = wide_to_utf8(wide, (int)n);
+            core_string_t path = wide_to_utf8(wide, (int)n);
             core_free(wide);
             return path;
         }
         cap *= 2;
     }
     core_free(wide);
-    return argv0 ? canonical_path(argv0) : nullptr;
+    return argv0.data ? canonical_path(argv0) : (core_string_t){0};
 #elif defined(__APPLE__)
     uint32_t cap = 0;
     _NSGetExecutablePath(nullptr, &cap);
     char *path = core_alloc_size(1, cap + 1);
     if (_NSGetExecutablePath(path, &cap) == 0) {
         char *resolved = realpath(path, nullptr);
-        if (resolved) {
-            core_free(path);
-            return resolved;
-        }
-        return path;
+        core_string_t result = core_string_from_cstr(resolved ? resolved
+                                                              : path);
+        free(resolved);
+        core_free(path);
+        return result;
     }
     core_free(path);
-    return argv0 ? canonical_path(argv0) : nullptr;
+    return argv0.data ? canonical_path(argv0) : (core_string_t){0};
 #elif defined(__linux__)
     size_t cap = 256;
     char *path = nullptr;
@@ -265,120 +289,112 @@ n00bb_executable_path(const char *argv0)
         ssize_t n = readlink("/proc/self/exe", path, cap);
         if (n < 0) break;
         if ((size_t)n < cap) {
-            path[n] = '\0';
-            return path;
+            core_string_t result = core_string_from_raw(path, (int64_t)n);
+            core_free(path);
+            return result;
         }
         cap *= 2;
     }
     core_free(path);
-    return argv0 ? canonical_path(argv0) : nullptr;
+    return argv0.data ? canonical_path(argv0) : (core_string_t){0};
 #else
-    return argv0 ? canonical_path(argv0) : nullptr;
+    return argv0.data ? canonical_path(argv0) : (core_string_t){0};
 #endif
 }
 
 static void
-add_root(n00bb_resolver_t *resolver, const char *path,
+add_root(n00bb_resolver_t *resolver, core_string_t path,
          bool is_default_package)
 {
-    if (!path || !*path) return;
-    char *canonical = canonical_path(path);
+    if (!path.data || !path.u8_bytes) return;
+    core_string_t canonical = canonical_path(path);
     n00bb_root_t root = {
-        .path = core_string_from_cstr(canonical ? canonical : path),
+        .path = canonical.data ? canonical : core_string_dup(path),
         .is_default_package = is_default_package,
     };
-    core_free(canonical);
     core_list_push(resolver->roots, root);
 }
 
 static void
-add_environment_roots(n00bb_resolver_t *resolver, const char *cwd)
+add_environment_root(n00bb_resolver_t *resolver, core_string_t cwd,
+                     core_string_t entry)
+{
+    core_string_t absolute = path_is_absolute(entry) ? core_string_dup(entry)
+                                                     : join_path(cwd, entry);
+    add_root(resolver, absolute, false);
+    core_free(absolute.data);
+}
+
+static void
+add_environment_roots(n00bb_resolver_t *resolver, core_string_t cwd)
 {
 #ifdef _WIN32
     DWORD cap = GetEnvironmentVariableW(L"N00B_PATH", nullptr, 0);
     if (!cap) return;
     wchar_t *wide = core_alloc_array(wchar_t, cap);
     DWORD n = GetEnvironmentVariableW(L"N00B_PATH", wide, cap);
-    char *value = n && n < cap ? wide_to_utf8(wide, (int)n) : nullptr;
+    core_string_t value = n && n < cap ? wide_to_utf8(wide, (int)n)
+                                       : (core_string_t){0};
     core_free(wide);
 #else
-    const char *value = getenv("N00B_PATH");
+    core_string_t value = core_string_from_cstr(getenv("N00B_PATH"));
 #endif
-    if (!value) return;
-    if (!*value) {
-#ifdef _WIN32
-        core_free(value);
-#endif
-        return;
+    if (!value.data) return;
+    size_t start = 0;
+    for (size_t i = 0; i <= value.u8_bytes; i++) {
+        if (i < value.u8_bytes && value.data[i] != N00BB_LIST_SEP) continue;
+        if (i > start)
+            add_environment_root(resolver, cwd,
+                core_string_slice(value, start, i - start));
+        start = i + 1;
     }
-    const char *part = value;
-    const char *end;
-    while ((end = strchr(part, N00BB_LIST_SEP))) {
-        if (end > part) {
-            char *entry = core_strndup(part, (size_t)(end - part));
-            char *absolute = path_is_absolute(entry)
-                                 ? core_strdup(entry) : join_path(cwd, entry);
-            add_root(resolver, absolute, false);
-            core_free(absolute);
-            core_free(entry);
-        }
-        part = end + 1;
-    }
-    if (*part) {
-        char *absolute = path_is_absolute(part)
-                             ? core_strdup(part) : join_path(cwd, part);
-        add_root(resolver, absolute, false);
-        core_free(absolute);
-    }
-#ifdef _WIN32
-    core_free(value);
-#endif
+    core_free(value.data);
 }
 
 static void
-add_executable_library_roots(n00bb_resolver_t *resolver, const char *argv0)
+add_executable_library_roots(n00bb_resolver_t *resolver, core_string_t argv0)
 {
-    char *exe = n00bb_executable_path(argv0);
-    if (!exe) return;
-    char *dir = parent_path(exe);
+    core_string_t exe = n00bb_executable_path(argv0);
+    if (!exe.data) return;
+    core_string_t dir = parent_path(exe);
     for (;;) {
-        char *n00b = join_path(dir, "n00b");
-        char *lib = join_path(n00b, "lib");
+        core_string_t n00b = join_path(dir, CORE_STRING_STATIC("n00b"));
+        core_string_t lib = join_path(n00b, CORE_STRING_STATIC("lib"));
         add_root(resolver, lib, false);
-        core_free(lib);
-        core_free(n00b);
-        char *parent = parent_path(dir);
-        if (!strcmp(parent, dir)) {
-            core_free(parent);
+        core_free(lib.data);
+        core_free(n00b.data);
+        core_string_t parent = parent_path(dir);
+        if (core_string_eq(parent, dir)) {
+            core_free(parent.data);
             break;
         }
-        core_free(dir);
+        core_free(dir.data);
         dir = parent;
     }
-    core_free(dir);
-    core_free(exe);
+    core_free(dir.data);
+    core_free(exe.data);
 }
 
 static void
-add_bundled_library_root(n00bb_resolver_t *resolver, const char *argv0)
+add_bundled_library_root(n00bb_resolver_t *resolver, core_string_t argv0)
 {
-    char *exe = n00bb_executable_path(argv0);
-    if (!exe) return;
-    char *bin = parent_path(exe);
-    char *prefix = parent_path(bin);
-    char *lib = join_path(prefix, "lib");
+    core_string_t exe = n00bb_executable_path(argv0);
+    if (!exe.data) return;
+    core_string_t bin = parent_path(exe);
+    core_string_t prefix = parent_path(bin);
+    core_string_t lib = join_path(prefix, CORE_STRING_STATIC("lib"));
     add_root(resolver, lib, false);
-    core_free(lib);
-    core_free(prefix);
-    core_free(bin);
-    core_free(exe);
+    core_free(lib.data);
+    core_free(prefix.data);
+    core_free(bin.data);
+    core_free(exe.data);
 }
 
 n00bb_resolver_t *
-n00bb_resolver_new(const char *argv0)
+n00bb_resolver_new(core_string_t argv0)
 {
-    char *cwd = cwd_path();
-    if (!cwd) return nullptr;
+    core_string_t cwd = cwd_path();
+    if (!cwd.data) return nullptr;
     n00bb_resolver_t *resolver = core_alloc(n00bb_resolver_t);
     resolver->roots = core_list_new(n00bb_root_t);
     resolver->manifests = core_list_new(n00bb_manifest_candidate_t);
@@ -400,7 +416,7 @@ n00bb_resolver_new(const char *argv0)
                 resolver->inventory, CORE_STRING_STATIC(".n00b-cache"), 1))
             resolver->package_syntax_profile = package_syntax_profile(argv0);
     core_free(roots);
-    core_free(cwd);
+    core_free(cwd.data);
     if (!resolver->inventory) {
         n00bb_resolver_free(resolver);
         return nullptr;
@@ -489,11 +505,12 @@ static const n00bb_line_origin_t *
 generated_origin(const n00bb_generated_module_t *module, core_string_t path,
                  uint32_t line)
 {
-    size_t prefix = strlen("<generated:");
-    if (path.u8_bytes != prefix + module->identifier.u8_bytes + 1
-        || memcmp(path.data, "<generated:", prefix)
-        || memcmp(path.data + prefix, module->identifier.data,
-                  module->identifier.u8_bytes)) return nullptr;
+    core_string_t prefix = CORE_STRING_STATIC("<generated:");
+    if (path.u8_bytes != prefix.u8_bytes + module->identifier.u8_bytes + 1
+        || !core_string_starts_with(path, prefix)
+        || !core_string_eq(core_string_slice(path, prefix.u8_bytes,
+                                             module->identifier.u8_bytes),
+                           module->identifier)) return nullptr;
     const n00bb_line_origin_t *nearest = nullptr;
     for (size_t i = 0; i < module->origins.count; i++)
         if (module->origins.items[i].line <= line
@@ -551,18 +568,19 @@ n00bb_source_natives(const core_translation_unit_t *unit)
 }
 
 static core_module_resolve_status_t
-read_generated_source(n00bb_resolver_t *resolver, const char *operand, core_source_file_t *source_out)
+read_generated_source(n00bb_resolver_t *resolver, core_string_t operand, core_source_file_t *source_out)
 {
     core_module_resolve_status_t status = CORE_MODULE_NOT_FOUND;
     pthread_mutex_lock(&resolver->generated_lock);
     for (size_t i = 0; i < resolver->generated.len; i++) {
         n00bb_generated_module_t *module = &resolver->generated.data[i];
-        if (strlen(operand) != module->identifier.u8_bytes
-            || memcmp(operand, module->identifier.data, module->identifier.u8_bytes)) continue;
+        if (!core_string_eq(operand, module->identifier)) continue;
         core_buffer_t path = {0};
-        core_buffer_printf(&path, "<generated:%s>", operand);
-        bool ok = core_source_file_init(source_out, core_string_borrow(path.data, path.byte_len),
-                                        module->text.data, module->text.u8_bytes);
+        core_buffer_puts(&path, "<generated:");
+        core_buffer_append_string(&path, operand);
+        core_buffer_putc(&path, '>');
+        bool ok = core_source_file_init(source_out, core_buffer_string(&path),
+                                        module->text);
         core_buffer_release(&path);
         if (ok) set_source_origin(source_out, module->package, module->package_namespace,
                                   module->is_default_package);
@@ -576,24 +594,24 @@ read_generated_source(n00bb_resolver_t *resolver, const char *operand, core_sour
     return status;
 }
 
-static char *
+static core_string_t
 module_relative_path(const core_module_spec_t *module)
 {
     core_string_t id = module->identifier;
     if (!id.data || !id.u8_bytes || memchr(id.data, '\0', id.u8_bytes))
-        return nullptr;
+        return (core_string_t){0};
     core_buffer_t *relative = core_buffer_empty();
     size_t segment_start = 0;
     for (size_t i = 0; i <= id.u8_bytes; i++) {
         if (i < id.u8_bytes && id.data[i] != '.') {
             if (id.data[i] == '/' || id.data[i] == '\\') {
                 core_buffer_free(relative);
-                return nullptr;
+                return (core_string_t){0};
             }
 #ifdef _WIN32
             if (id.data[i] == ':') {
                 core_buffer_free(relative);
-                return nullptr;
+                return (core_string_t){0};
             }
 #endif
             continue;
@@ -603,54 +621,59 @@ module_relative_path(const core_module_spec_t *module)
             || (segment_len == 2 && id.data[segment_start] == '.'
                 && id.data[segment_start + 1] == '.')) {
             core_buffer_free(relative);
-            return nullptr;
+            return (core_string_t){0};
         }
         if (segment_start) core_buffer_putc(relative, N00BB_PATH_SEP);
         core_buffer_append(relative, id.data + segment_start, segment_len);
         segment_start = i + 1;
     }
-    return core_buffer_take(relative);
+    return core_buffer_take_string(relative);
 }
 
 static bool
-has_path_separator(const char *path)
+has_path_separator(core_string_t path)
 {
-    return strchr(path, '/') || strchr(path, '\\');
+    return core_string_find_byte(path, '/') >= 0
+        || core_string_find_byte(path, '\\') >= 0;
 }
 
 static size_t
-source_suffix_length(const char *path)
+source_suffix_length(core_string_t path)
 {
-    size_t len = strlen(path);
-    if (len >= 2 && !strcmp(path + len - 2, ".n")) return 2;
-    if (len >= 5 && !strcmp(path + len - 5, ".n00b")) return 5;
+    if (core_string_ends_with(path, CORE_STRING_STATIC(".n"))) return 2;
+    if (core_string_ends_with(path, CORE_STRING_STATIC(".n00b"))) return 5;
     return 0;
 }
 
-static core_string_t
-locator_scheme(const char *operand)
+static bool
+scheme_letter(char c)
 {
-    if (!operand || (!(operand[0] >= 'A' && operand[0] <= 'Z')
-            && !(operand[0] >= 'a' && operand[0] <= 'z')))
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+}
+
+static core_string_t
+locator_scheme(core_string_t operand)
+{
+    if (!operand.data || !operand.u8_bytes || !scheme_letter(operand.data[0]))
         return (core_string_t){0};
     size_t i = 1;
-    while ((operand[i] >= 'A' && operand[i] <= 'Z')
-           || (operand[i] >= 'a' && operand[i] <= 'z')
-           || (operand[i] >= '0' && operand[i] <= '9')
-           || operand[i] == '+' || operand[i] == '-'
-           || operand[i] == '.') i++;
-    return operand[i] == ':' && operand[i + 1] == '/'
-            && operand[i + 2] == '/'
-        ? core_string_borrow(operand, i) : (core_string_t){0};
+    while (i < operand.u8_bytes
+           && (scheme_letter(operand.data[i])
+               || (operand.data[i] >= '0' && operand.data[i] <= '9')
+               || operand.data[i] == '+' || operand.data[i] == '-'
+               || operand.data[i] == '.')) i++;
+    return i + 2 < operand.u8_bytes && operand.data[i] == ':'
+            && operand.data[i + 1] == '/' && operand.data[i + 2] == '/'
+        ? core_string_slice(operand, 0, i) : (core_string_t){0};
 }
 
 bool
 n00bb_resolver_supports_locator(n00bb_resolver_t *resolver,
-                                const char *operand,
+                                core_string_t operand,
                                 core_string_t *unsupported_scheme)
 {
     if (unsupported_scheme) *unsupported_scheme = (core_string_t){0};
-    if (!resolver || !operand) return false;
+    if (!resolver || !operand.data) return false;
     core_string_t scheme = locator_scheme(operand);
     if (!scheme.data) return true;
     if (unsupported_scheme) *unsupported_scheme = scheme;
@@ -658,26 +681,27 @@ n00bb_resolver_supports_locator(n00bb_resolver_t *resolver,
 }
 
 static void
-set_file_operand_origin(const n00bb_resolver_t *resolver, const char *operand,
+set_file_operand_origin(const n00bb_resolver_t *resolver, core_string_t operand,
                         core_source_file_t *source)
 {
-    char *canonical = canonical_path(operand);
-    char *directory = canonical ? parent_path(canonical) : nullptr;
+    core_string_t canonical = canonical_path(operand);
+    core_string_t directory = canonical.data ? parent_path(canonical)
+                                             : (core_string_t){0};
     const n00bb_root_t *owner = nullptr;
-    for (size_t i = 0; directory && !owner && i < resolver->roots.len; i++)
-        if (!strcmp(resolver->roots.data[i].path.data, directory))
+    for (size_t i = 0; directory.data && !owner && i < resolver->roots.len; i++)
+        if (core_string_eq(resolver->roots.data[i].path, directory))
             owner = &resolver->roots.data[i];
     if (owner)
         set_source_origin(source, owner->path, (core_string_t){0},
                           owner->is_default_package);
     else set_source_origin(source, (core_string_t){0}, (core_string_t){0},
                            true);
-    core_free(directory);
-    core_free(canonical);
+    core_free(directory.data);
+    core_free(canonical.data);
 }
 
 static bool
-is_file_operand(const char *operand)
+is_file_operand(core_string_t operand)
 {
     if (has_path_separator(operand) || source_suffix_length(operand)) return true;
     FILE *file = open_source(operand);
@@ -687,27 +711,27 @@ is_file_operand(const char *operand)
 }
 
 bool
-n00bb_operand_module_spec(const char *operand, core_module_spec_t *out)
+n00bb_operand_module_spec(core_string_t operand, core_module_spec_t *out)
 {
-    if (!operand || !*operand || !out) return false;
-    const char *name = operand;
+    if (!operand.data || !operand.u8_bytes || !out) return false;
     if (is_file_operand(operand)) {
-        const char *slash = strrchr(name, '/');
-        const char *backslash = strrchr(name, '\\');
-        if (!slash || (backslash && backslash > slash)) slash = backslash;
-        name = slash ? slash + 1 : name;
-        size_t len = strlen(name);
-        len -= source_suffix_length(name);
-        if (!th_name_syntax_valid(name, len)) return false;
-        return core_module_spec_init(out, core_string_borrow(name, len));
+        int64_t slash = core_string_rfind_byte(operand, '/');
+        int64_t backslash = core_string_rfind_byte(operand, '\\');
+        if (slash < 0 || (backslash >= 0 && backslash > slash))
+            slash = backslash;
+        size_t start = slash >= 0 ? (size_t)slash + 1 : 0;
+        core_string_t name = core_string_slice(operand, start,
+                                               operand.u8_bytes - start);
+        name.u8_bytes -= source_suffix_length(name);
+        if (!th_name_syntax_valid(name)) return false;
+        return core_module_spec_init(out, name);
     }
-    size_t len = strlen(operand);
-    return th_name_syntax_valid(operand, len)
-        && core_module_spec_init(out, core_string_borrow(operand, len));
+    return th_name_syntax_valid(operand)
+        && core_module_spec_init(out, operand);
 }
 
 static core_module_resolve_status_t
-read_source_path(const char *path, core_source_file_t *out)
+read_source_path(core_string_t path, core_source_file_t *out)
 {
     FILE *file = open_source(path);
     if (!file) {
@@ -731,13 +755,11 @@ read_source_path(const char *path, core_source_file_t *out)
         core_free(contents);
         return CORE_MODULE_RESOLVE_ERROR;
     }
-    char *physical = canonical_path(path);
-    core_string_t resolved_path =
-        core_string_from_cstr(physical ? physical : path);
-    bool initialized = core_source_file_init(out, resolved_path, contents,
-                                            (size_t)length);
-    core_free(resolved_path.data);
-    core_free(physical);
+    core_string_t physical = canonical_path(path);
+    bool initialized = core_source_file_init(out,
+        physical.data ? physical : path,
+        core_string_borrow(contents, (size_t)length));
+    core_free(physical.data);
     core_free(contents);
     return initialized ? CORE_MODULE_RESOLVED : CORE_MODULE_RESOLVE_ERROR;
 }
@@ -765,17 +787,17 @@ set_source_origin(core_source_file_t *source, core_string_t package_id,
 
 void
 n00bb_source_file_set_package(core_source_file_t *source,
-                              const char *package_id)
+                              core_string_t package_id)
 {
-    core_string_t id = core_string_from_cstr(package_id ? package_id : "");
-    bool is_default = !package_id || !strcmp(package_id, "default");
+    core_string_t id = package_id.data ? package_id : CORE_STRING_STATIC("");
+    bool is_default = !package_id.data
+        || core_string_eq(package_id, CORE_STRING_STATIC("default"));
     size_t base = id.u8_bytes;
     while (base && id.data[base - 1] != '/' && id.data[base - 1] != '\\')
         base--;
     core_string_t package_namespace = is_default ? (core_string_t){0}
         : core_string_borrow(id.data + base, id.u8_bytes - base);
     set_source_origin(source, id, package_namespace, is_default);
-    core_free(id.data);
 }
 
 core_string_t
@@ -832,9 +854,10 @@ read_inventory_source(n00bb_resolver_t *resolver, size_t root_index,
     const core_source_snapshot_t *snapshot = core_snapshot_inventory_find(
         resolver->inventory, root_index, relative);
     if (!snapshot) return CORE_MODULE_NOT_FOUND;
+    core_string_t contents = core_source_snapshot_contents(snapshot);
     return core_source_file_init(out, core_source_snapshot_path(snapshot),
-                                 core_source_snapshot_contents(snapshot),
-                                 core_source_snapshot_size(snapshot))
+                                 core_string_borrow(contents.data,
+                                     core_source_snapshot_size(snapshot)))
         ? CORE_MODULE_RESOLVED : CORE_MODULE_RESOLVE_ERROR;
 }
 
@@ -843,58 +866,56 @@ resolve_file(void *context, const core_module_spec_t *module,
              core_source_file_t *out)
 {
     n00bb_resolver_t *resolver = context;
-    char *relative = module_relative_path(module);
-    if (!relative) return CORE_MODULE_RESOLVE_ERROR;
+    core_string_t relative = module_relative_path(module);
+    if (!relative.data) return CORE_MODULE_RESOLVE_ERROR;
 
     for (size_t i = 0; i < resolver->roots.len; i++) {
         n00bb_root_t *root = &resolver->roots.data[i];
-        static const char *extensions[] = {".n", ".n00b"};
-        for (size_t e = 0; e < sizeof(extensions) / sizeof(extensions[0]); e++) {
+        for (size_t e = 0; e < sizeof(source_extensions) / sizeof(source_extensions[0]); e++) {
             core_buffer_t path = {0};
-            core_buffer_printf(&path, "%s%s", relative, extensions[e]);
-            char *candidate = join_path(resolver->roots.data[i].path.data,
-                                        path.data);
+            core_buffer_append_string(&path, relative);
+            core_buffer_append_string(&path, source_extensions[e]);
+            core_string_t candidate = join_path(resolver->roots.data[i].path,
+                                                core_buffer_string(&path));
             core_module_resolve_status_t status = resolver->manifests_indexed
                 ? read_inventory_source(resolver, i,
-                    core_string_borrow(path.data, path.byte_len), out)
+                    core_buffer_string(&path), out)
                 : read_source_path(candidate, out);
             core_buffer_release(&path);
-            core_free(candidate);
+            core_free(candidate.data);
             if (status == CORE_MODULE_NOT_FOUND) continue;
             if (status == CORE_MODULE_RESOLVED) {
                 core_string_t name = module->identifier;
-                const char *separator = memchr(name.data, '.', name.u8_bytes);
-                if (separator) {
+                int64_t separator = core_string_find_byte(name, '.');
+                if (separator >= 0) {
                     core_buffer_t package = {0};
                     core_buffer_printf(&package, "%.*s/%.*s",
                         (int)root->path.u8_bytes, root->path.data,
-                        (int)(separator - name.data), name.data);
-                    set_source_origin(out,
-                        core_string_borrow(package.data, package.byte_len),
-                        core_string_borrow(name.data,
-                            (size_t)(separator - name.data)),
+                        (int)separator, name.data);
+                    set_source_origin(out, core_buffer_string(&package),
+                        core_string_slice(name, 0, (size_t)separator),
                         false);
                     core_buffer_release(&package);
                 }
                 else set_source_origin(out, root->path, (core_string_t){0},
                                        root->is_default_package);
             }
-            core_free(relative);
+            core_free(relative.data);
             return status;
         }
     }
-    core_free(relative);
+    core_free(relative.data);
     return CORE_MODULE_NOT_FOUND;
 }
 
 static bool
 snapshot_may_contain_package(const core_source_snapshot_t *snapshot)
 {
-    const char *bytes = core_source_snapshot_contents(snapshot);
+    core_string_t contents = core_source_snapshot_contents(snapshot);
     size_t size = core_source_snapshot_size(snapshot);
     static const char keyword[] = "package";
     for (size_t i = 0; i + sizeof(keyword) - 1 <= size; i++)
-        if (!memcmp(bytes + i, keyword, sizeof(keyword) - 1))
+        if (!memcmp(contents.data + i, keyword, sizeof(keyword) - 1))
             return true;
     return false;
 }
@@ -906,8 +927,7 @@ index_manifest_module(void *opaque, size_t root_index,
 {
     n00bb_resolver_t *resolver = opaque;
     if (!snapshot_may_contain_package(snapshot)) return true;
-    size_t suffix = relative.u8_bytes >= 2
-        && !memcmp(relative.data + relative.u8_bytes - 2, ".n", 2)
+    size_t suffix = core_string_ends_with(relative, CORE_STRING_STATIC(".n"))
         ? 2 : 5;
     core_buffer_t identifier = {0};
     for (size_t i = 0; i < relative.u8_bytes - suffix; i++)
@@ -916,8 +936,7 @@ index_manifest_module(void *opaque, size_t root_index,
                 ? '.' : relative.data[i]);
     core_module_spec_t module = {0};
     bool initialized = identifier.byte_len
-        && core_module_spec_init(&module,
-            core_string_borrow(identifier.data, identifier.byte_len));
+        && core_module_spec_init(&module, core_buffer_string(&identifier));
     core_buffer_release(&identifier);
     if (!initialized) return false;
     core_string_t path = core_source_snapshot_path(snapshot);
@@ -1063,6 +1082,16 @@ n00bb_resolver_has_source_module(n00bb_resolver_t *resolver,
     return found;
 }
 
+static bool
+regular_file_exists(core_string_t path)
+{
+    char *native = core_string_to_cstr(path);
+    struct stat info = {0};
+    bool found = native && !stat(native, &info) && S_ISREG(info.st_mode);
+    core_free(native);
+    return found;
+}
+
 bool
 n00bb_resolver_internal_import(n00bb_resolver_t *resolver,
                                const core_translation_unit_t *importer,
@@ -1075,22 +1104,22 @@ n00bb_resolver_internal_import(n00bb_resolver_t *resolver,
     if (!origin || origin->is_default_package) return false;
     core_module_spec_t requested = {0};
     if (!core_module_spec_init(&requested, name)) return false;
-    char *relative = module_relative_path(&requested);
+    core_string_t relative = module_relative_path(&requested);
     core_module_spec_release(&requested);
-    if (!relative) return false;
+    if (!relative.data) return false;
     bool found = false;
-    static const char *extensions[] = {".n", ".n00b"};
-    for (size_t i = 0; i < sizeof(extensions) / sizeof(extensions[0]); i++) {
+    for (size_t i = 0; i < sizeof(source_extensions) / sizeof(source_extensions[0]); i++) {
         core_buffer_t path = {0};
-        core_buffer_printf(&path, "%s%s", relative, extensions[i]);
-        char *candidate = join_path(origin->package_id.data, path.data);
-        struct stat info = {0};
-        found = candidate && !stat(candidate, &info) && S_ISREG(info.st_mode);
-        core_free(candidate);
+        core_buffer_append_string(&path, relative);
+        core_buffer_append_string(&path, source_extensions[i]);
+        core_string_t candidate = join_path(origin->package_id,
+                                            core_buffer_string(&path));
+        found = candidate.data && regular_file_exists(candidate);
+        core_free(candidate.data);
         core_buffer_release(&path);
         if (found) break;
     }
-    core_free(relative);
+    core_free(relative.data);
     if (!found) return false;
     core_string_t package_namespace = n00bb_package_namespace(importer);
     core_buffer_t canonical = {0};
@@ -1098,14 +1127,13 @@ n00bb_resolver_internal_import(n00bb_resolver_t *resolver,
                        (int)package_namespace.u8_bytes, package_namespace.data,
                        package_namespace.u8_bytes ? "." : "",
                        (int)name.u8_bytes, name.data);
-    bool ok = core_module_spec_init(resolved,
-        core_string_borrow(canonical.data, canonical.byte_len));
+    bool ok = core_module_spec_init(resolved, core_buffer_string(&canonical));
     core_buffer_release(&canonical);
     return ok;
 }
 
 core_module_resolve_status_t
-n00bb_locate_operand(n00bb_resolver_t *resolver, const char *operand,
+n00bb_locate_operand(n00bb_resolver_t *resolver, core_string_t operand,
                     core_module_spec_t *module_out,
                     core_source_file_t *source_out)
 {
@@ -1130,10 +1158,10 @@ n00bb_locate_operand(n00bb_resolver_t *resolver, const char *operand,
 
 core_string_t
 n00bb_resolver_search_description(n00bb_resolver_t *resolver,
-                                 const char *operand)
+                                 core_string_t operand)
 {
     core_buffer_t description = {0};
-    if (!resolver || !operand) return (core_string_t){0};
+    if (!resolver || !operand.data) return (core_string_t){0};
     core_string_t scheme = {0};
     if (!n00bb_resolver_supports_locator(resolver, operand, &scheme)) {
         core_buffer_printf(&description,
@@ -1143,73 +1171,93 @@ n00bb_resolver_search_description(n00bb_resolver_t *resolver,
                                     (int64_t)description.byte_len);
     }
     if (is_file_operand(operand)) {
-        core_buffer_printf(&description, "  checked: %s", operand);
+        core_buffer_printf(&description, "  checked: %.*s",
+                           (int)operand.u8_bytes, operand.data);
     }
     else {
         core_module_spec_t module = {0};
-        char *relative = nullptr;
+        core_string_t relative = {0};
         if (n00bb_operand_module_spec(operand, &module))
             relative = module_relative_path(&module);
-        if (relative) {
+        if (relative.data) {
             for (size_t i = 0; i < resolver->roots.len; i++) {
-                static const char *extensions[] = {".n", ".n00b"};
-                for (size_t e = 0; e < sizeof(extensions) / sizeof(extensions[0]); e++) {
+                for (size_t e = 0; e < sizeof(source_extensions) / sizeof(source_extensions[0]); e++) {
                     core_buffer_t path = {0};
-                    core_buffer_printf(&path, "%s%s", relative, extensions[e]);
-                    char *candidate = join_path(resolver->roots.data[i].path.data,
-                                                path.data);
+                    core_buffer_append_string(&path, relative);
+                    core_buffer_append_string(&path, source_extensions[e]);
+                    core_string_t candidate = join_path(
+                        resolver->roots.data[i].path,
+                        core_buffer_string(&path));
                     core_buffer_release(&path);
-                    core_buffer_printf(&description, "%s  checked: %s",
-                        description.byte_len ? "\n" : "", candidate);
-                    core_free(candidate);
+                    core_buffer_printf(&description, "%s  checked: %.*s",
+                        description.byte_len ? "\n" : "",
+                        (int)candidate.u8_bytes, candidate.data);
+                    core_free(candidate.data);
                 }
             }
         }
-        core_free(relative);
+        core_free(relative.data);
         core_module_spec_release(&module);
     }
     return core_string_from_raw(description.data,
                                 (int64_t)description.byte_len);
 }
 
-char *
-n00bb_grammar_path(const char *argv0)
+static bool
+readable_file(core_string_t path)
+{
+    char *native = core_string_to_cstr(path);
+    FILE *file = native ? fopen(native, "rb") : nullptr;
+    core_free(native);
+    if (!file) return false;
+    fclose(file);
+    return true;
+}
+
+core_string_t
+n00bb_grammar_path(core_string_t argv0)
 {
 #ifdef N00BB_GRAMMAR_PATH
     FILE *source = fopen(N00BB_GRAMMAR_PATH, "rb");
     if (source) {
         fclose(source);
-        return core_strdup(N00BB_GRAMMAR_PATH);
+        return core_string_dup(CORE_STRING_STATIC(N00BB_GRAMMAR_PATH));
     }
 #endif
-    char *exe = n00bb_executable_path(argv0);
-    if (!exe) return nullptr;
-    char *bin_dir = parent_path(exe);
-    char *prefix = parent_path(bin_dir);
-    char *candidate = join_path(prefix, "share/n00bb/n00b.bnf");
-    FILE *installed = fopen(candidate, "rb");
-    core_free(prefix);
-    core_free(bin_dir);
-    core_free(exe);
+    core_string_t exe = n00bb_executable_path(argv0);
+    if (!exe.data) return (core_string_t){0};
+    core_string_t bin_dir = parent_path(exe);
+    core_string_t prefix = parent_path(bin_dir);
+    core_string_t candidate = join_path(prefix,
+        CORE_STRING_STATIC("share/n00bb/n00b.bnf"));
+    bool installed = readable_file(candidate);
+    core_free(prefix.data);
+    core_free(bin_dir.data);
+    core_free(exe.data);
     if (!installed) {
-        core_free(candidate);
-        return nullptr;
+        core_free(candidate.data);
+        return (core_string_t){0};
     }
-    fclose(installed);
     return candidate;
 }
 
 static uint64_t
-package_syntax_profile(const char *argv0)
+package_syntax_profile(core_string_t argv0)
 {
-    char *grammar_path = n00bb_grammar_path(argv0);
-    char *executable_path = n00bb_executable_path(argv0);
-    FILE *grammar = grammar_path ? fopen(grammar_path, "rb") : nullptr;
+    core_string_t grammar_path = n00bb_grammar_path(argv0);
+    core_string_t executable_path = n00bb_executable_path(argv0);
+    char *native_grammar = core_string_to_cstr(grammar_path);
+    char *native_executable = core_string_to_cstr(executable_path);
+    FILE *grammar = native_grammar ? fopen(native_grammar, "rb") : nullptr;
     struct stat executable = {0};
-    if (!grammar || !executable_path || stat(executable_path, &executable)) {
+    bool missing = !grammar || !native_executable
+        || stat(native_executable, &executable);
+    core_free(native_grammar);
+    core_free(native_executable);
+    core_free(grammar_path.data);
+    core_free(executable_path.data);
+    if (missing) {
         if (grammar) fclose(grammar);
-        core_free(grammar_path);
-        core_free(executable_path);
         return 0;
     }
     core_buffer_t fingerprint = {0};
@@ -1235,8 +1283,6 @@ package_syntax_profile(const char *argv0)
         core_buffer_append(&fingerprint, chunk, count);
     bool ok = !ferror(grammar);
     fclose(grammar);
-    core_free(grammar_path);
-    core_free(executable_path);
     uint64_t profile = ok
         ? core_xxh3_64bits_raw(fingerprint.data, fingerprint.byte_len) : 0;
     core_buffer_release(&fingerprint);

@@ -63,14 +63,15 @@ publish_known_scalar_layouts(n00bb_link_analysis_t *analysis)
                         flagset_info->atomic_count);
                 if (layout_ok) continue;
                 core_buffer_t message = {0};
+                core_string_t printed = n00bb_print_type(
+                    ir_module_types(module), type ? type : symbol->type);
                 core_buffer_printf(&message,
-                    "could not finalize ABI layout for type '%s'",
-                    n00bb_print_type(ir_module_types(module),
-                                     type ? type : symbol->type));
+                    "could not finalize ABI layout for type '%.*s'",
+                    (int)printed.u8_bytes, printed.data);
                 core_diagnostics_report_at(
                     core_translation_unit_diagnostics(unit), unit,
                     CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0067"),
-                    core_string_from_cstr(message.data),
+                    core_buffer_string(&message),
                     symbol->decl_node
                         ? link_source_location(symbol->decl_node)
                         : (core_diag_location_t){0});
@@ -82,14 +83,16 @@ publish_known_scalar_layouts(n00bb_link_analysis_t *analysis)
         if (n00bb_abi_publish_interned_direct_layouts(
                 module, &analysis->target, &failed_type)) continue;
         core_buffer_t message = {0};
+        core_string_t printed = failed_type
+            ? n00bb_print_type(ir_module_types(module), failed_type)
+            : CORE_STRING_STATIC("unknown");
         core_buffer_printf(&message,
-            "could not finalize ABI layout for IR type '%s'",
-            failed_type ? n00bb_print_type(ir_module_types(module),
-                                            failed_type) : "unknown");
+            "could not finalize ABI layout for IR type '%.*s'",
+            (int)printed.u8_bytes, printed.data);
         core_diagnostics_report_at(
             core_translation_unit_diagnostics(unit), unit,
             CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0067"),
-            core_string_from_cstr(message.data),
+            core_buffer_string(&message),
             (core_diag_location_t){0});
         core_buffer_release(&message);
         return false;
@@ -98,13 +101,14 @@ publish_known_scalar_layouts(n00bb_link_analysis_t *analysis)
 }
 
 static bool
-inline_layout_cycle(ir_module_t *module, th_type *type, const char *via,
+inline_layout_cycle(ir_module_t *module, th_type *type, core_string_t via,
                     core_list_t(th_type_ptr_t) *active,
                     core_list_t(core_string_t) *edges,
                     core_buffer_t *message)
 {
     type = th_resolve(type);
     if (!type) return false;
+    core_string_t edge = via.data ? via : CORE_STRING_STATIC("value");
     if (th_kind_of(type) == TH_NAMED) {
         th_type *definition = ir_type_definition(module, type);
         size_t argument_count = th_named_nargs(type);
@@ -112,30 +116,33 @@ inline_layout_cycle(ir_module_t *module, th_type *type, const char *via,
         if (!definition && !inline_wrapper) return false;
         for (size_t i = 0; i < active->len; i++) {
             if (active->data[i] != type) continue;
+            core_string_t printed = n00bb_print_type(
+                ir_module_types(module), type);
             core_buffer_puts(message, "inline layout cycle: ");
-            core_buffer_puts(message, n00bb_print_type(
-                ir_module_types(module), type));
+            core_buffer_append_string(message, printed);
             for (size_t j = i + 1; j < active->len; j++) {
-                core_buffer_printf(message, ".%.*s -> %s",
+                core_string_t step = n00bb_print_type(
+                    ir_module_types(module), active->data[j]);
+                core_buffer_printf(message, ".%.*s -> %.*s",
                     (int)edges->data[j].u8_bytes, edges->data[j].data,
-                    n00bb_print_type(ir_module_types(module),
-                                     active->data[j]));
+                    (int)step.u8_bytes, step.data);
             }
-            core_buffer_printf(message, ".%s -> %s", via ? via : "value",
-                n00bb_print_type(ir_module_types(module), type));
+            core_buffer_printf(message, ".%.*s -> %.*s",
+                (int)edge.u8_bytes, edge.data,
+                (int)printed.u8_bytes, printed.data);
             return true;
         }
         core_list_push(*active, type);
-        core_list_push(*edges, core_string_from_cstr(via ? via : "value"));
+        core_list_push(*edges, edge);
         bool cycle = definition
-            ? inline_layout_cycle(module, definition, nullptr, active,
-                                  edges, message) : false;
+            ? inline_layout_cycle(module, definition, (core_string_t){},
+                                  active, edges, message) : false;
         for (size_t i = 0; inline_wrapper && !cycle
              && i < argument_count; i++) {
             const th_arg *argument = th_named_arg(type, i);
             if (argument && argument->kind == TH_ARG_TYPE)
                 cycle = inline_layout_cycle(module, argument->type,
-                    "value", active, edges, message);
+                    CORE_STRING_STATIC("value"), active, edges, message);
         }
         active->len--;
         edges->len--;
@@ -150,8 +157,9 @@ inline_layout_cycle(ir_module_t *module, th_type *type, const char *via,
     }
     else if (th_kind_of(type) == TH_SUM) {
         for (size_t i = 0; i < th_sum_len(type); i++)
-            if (inline_layout_cycle(module, th_sum_arm(type, i), "arm",
-                                    active, edges, message)) return true;
+            if (inline_layout_cycle(module, th_sum_arm(type, i),
+                    CORE_STRING_STATIC("arm"), active, edges, message))
+                return true;
     }
     return false;
 }
@@ -178,14 +186,14 @@ validate_inline_layout_cycles(n00bb_link_analysis_t *analysis)
                     core_list_new(core_string_t);
                 core_buffer_t message = {0};
                 bool cycle = inline_layout_cycle(module, symbol->type,
-                    nullptr, &active, &edges, &message);
+                    (core_string_t){}, &active, &edges, &message);
                 core_list_free(active);
                 core_list_free(edges);
                 if (cycle)
                     core_diagnostics_report_at(
                         core_translation_unit_diagnostics(unit), unit,
                         CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0068"),
-                        core_string_borrow(message.data, message.byte_len),
+                        core_buffer_string(&message),
                         symbol->decl_node
                             ? link_source_location(symbol->decl_node)
                             : (core_diag_location_t){0});
@@ -235,9 +243,9 @@ record_field_has_c_scalar_representation(ir_module_t *module, th_type *type)
     core_list_t(th_type_ptr_t) seen = core_list_new(th_type_ptr_t);
     bool compatible = false;
     while (type && th_kind_of(type) == TH_NAMED) {
-        const char *name = nullptr;
+        core_string_t name = {};
         size_t argument_count = 0;
-        th_named_info(type, &name, nullptr, nullptr, &argument_count);
+        th_named_info(type, &name, nullptr, &argument_count);
         if (argument_count) break;
         th_type *definition = ir_type_definition(module, type);
         if (definition) {
@@ -414,14 +422,14 @@ publish_c_record_symbol(n00bb_link_analysis_t *analysis,
             core_diagnostics_report_at(core_translation_unit_diagnostics(
                 owner), owner, CORE_DIAG_FATAL,
                 CORE_STRING_STATIC("N00BB-L0069"),
-                core_string_from_cstr(message.data),
+                core_buffer_string(&message),
                 link_source_location(field->decl_node));
             core_buffer_release(&message);
             valid = false;
             break;
         }
         members[i] = (n00bb_abi_record_member_t){
-            .name = field->name.data,
+            .name = field->name,
             .type = type,
             .ordinal = (uint32_t)i,
             .c_compatible = true,
@@ -586,7 +594,7 @@ publish_declared_aggregate_layouts(n00bb_link_analysis_t *analysis)
                 size_t count = th_record_len(definition);
                 if (count > UINT32_MAX) { valid = false; break; }
                 bool variant = false;
-                th_named_info(type, nullptr, nullptr, &variant, nullptr);
+                th_named_info(type, nullptr, &variant, nullptr);
                 n00bb_abi_record_member_t *members = count
                     ? core_alloc_array(n00bb_abi_record_member_t, count)
                     : nullptr;
@@ -604,8 +612,7 @@ publish_declared_aggregate_layouts(n00bb_link_analysis_t *analysis)
                         ? th_apply_subst(ir_module_types(module),
                                          member->type) : nullptr;
                     parse_sym_entry_t *field = member && member_scope
-                        ? parse_symtab_lookup_in(member_scope,
-                            core_string_from_cstr(member->name))
+                        ? parse_symtab_lookup_in(member_scope, member->name)
                         : nullptr;
                     th_type *inline_element = nullptr;
                     uint64_t inline_count = 0;
@@ -624,7 +631,7 @@ publish_declared_aggregate_layouts(n00bb_link_analysis_t *analysis)
                     const ir_final_layout_t *child = physical
                         ? ir_layout_final(module, physical,
                                           analysis->target.triple) : nullptr;
-                    if (!member || !member->name || !child) {
+                    if (!member || !member->name.data || !child) {
                         ready = false;
                         break;
                     }
@@ -710,8 +717,8 @@ publish_interned_variant_layouts(n00bb_link_analysis_t *analysis)
             for (size_t i = 0; i < ir_type_count(module); i++) {
                 th_type *type = ir_type_at(module, i);
                 bool variant = false;
-                if (!th_named_info(type, nullptr, nullptr, &variant,
-                                   nullptr) || !variant
+                if (!th_named_info(type, nullptr, &variant, nullptr)
+                    || !variant
                     || ir_layout_final(module, type,
                                        analysis->target.triple)) continue;
                 th_type *definition = ir_type_definition(module, type);
@@ -730,7 +737,7 @@ publish_interned_variant_layouts(n00bb_link_analysis_t *analysis)
                         ? th_apply_subst(ir_module_types(module),
                                          member->type) : nullptr;
                     bool handled = false;
-                    ready = member && member->name && child
+                    ready = member && member->name.data && child
                         && n00bb_abi_publish_direct_layout(module,
                             child, &analysis->target, &handled)
                         && ir_layout_final(module, child,

@@ -5,10 +5,13 @@
 
 #include "lib/byteorder.h"
 
+#define EXPECT(lit, condition) expect(CORE_STRING_STATIC(lit), (condition))
+
 static bool
-expect(const char *label, bool condition)
+expect(core_string_t label, bool condition)
 {
-    if (!condition) fprintf(stderr, "%s failed\n", label);
+    if (!condition)
+        fprintf(stderr, "%.*s failed\n", (int)label.u8_bytes, label.data);
     return condition;
 }
 
@@ -29,7 +32,7 @@ main(void)
     core_index_remap_t *type_remap = core_index_remap_new(4, 3);
     const uint32_t final_indexes[] = {0, 2, 3, 1};
     for (uint32_t i = 0; i < 4; i++)
-        ok &= expect("assign remap", core_index_remap_set(
+        ok &= EXPECT("assign remap", core_index_remap_set(
             type_remap, i, final_indexes[i]));
     const n00bb_abi_patch_table_t table = {
         .kind = N00B_ABI_TABLE_TYPE,
@@ -58,11 +61,11 @@ main(void)
         7, 0, 0, 0, 4, 0, 0, 0, 0x20, 0, 0, 0, 0, 0, 0, 0,
         1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     };
-    ok &= expect("patch record matches ABI byte vector",
+    ok &= EXPECT("patch record matches ABI byte vector",
                  !memcmp(patches, first_vector, sizeof(first_vector)));
     n00bb_abi_index_patch_t decoded = {0};
     n00bb_abi_index_patch_decode(patches, &decoded);
-    ok &= expect("patch record decoded", decoded.target_section_index == 7
+    ok &= EXPECT("patch record decoded", decoded.target_section_index == 7
         && decoded.referenced_table_kind == N00B_ABI_TABLE_TYPE
         && decoded.target_byte_offset == 0x20
         && decoded.local_index == 1 && decoded.patch_kind == 1);
@@ -70,7 +73,7 @@ main(void)
     core_le_store_u32(section_bytes + 0x20, 1);
     core_le_store_u32(section_bytes + 0x28, UINT32_C(0x80000001));
     size_t failed = 0;
-    ok &= expect("nonidentity type and box patch",
+    ok &= EXPECT("nonidentity type and box patch",
         n00bb_abi_index_patches_apply(patches, sizeof(patches),
             &section, 1, &table, 1, &failed) == N00BB_ABI_PATCH_OK
         && failed == SIZE_MAX
@@ -81,7 +84,7 @@ main(void)
     core_le_store_u32(section_bytes + 0x28, UINT32_C(0x80000001));
     second.target_byte_offset = first.target_byte_offset;
     encode_pair(patches, first, second);
-    ok &= expect("duplicate target rejected atomically",
+    ok &= EXPECT("duplicate target rejected atomically",
         n00bb_abi_index_patches_apply(patches, sizeof(patches),
             &section, 1, &table, 1, &failed)
                 == N00BB_ABI_PATCH_DUPLICATE_TARGET
@@ -90,7 +93,7 @@ main(void)
     second.target_byte_offset = 0x28;
     second.local_index = 3;
     encode_pair(patches, first, second);
-    ok &= expect("stale local index rejected atomically",
+    ok &= EXPECT("stale local index rejected atomically",
         n00bb_abi_index_patches_apply(patches, sizeof(patches),
             &section, 1, &table, 1, &failed)
                 == N00BB_ABI_PATCH_TARGET_MISMATCH
@@ -99,7 +102,7 @@ main(void)
 
     second.target_byte_offset = sizeof(section_bytes) - 3;
     encode_pair(patches, first, second);
-    ok &= expect("misaligned/out-of-bounds target rejected atomically",
+    ok &= EXPECT("misaligned/out-of-bounds target rejected atomically",
         n00bb_abi_index_patches_apply(patches, sizeof(patches),
             &section, 1, &table, 1, &failed)
                 == N00BB_ABI_PATCH_INVALID_TARGET
@@ -108,7 +111,7 @@ main(void)
 
     second.reserved_zero = 1;
     encode_pair(patches, first, second);
-    ok &= expect("nonzero reserved field rejected atomically",
+    ok &= EXPECT("nonzero reserved field rejected atomically",
         n00bb_abi_index_patches_apply(patches, sizeof(patches),
             &section, 1, &table, 1, &failed)
                 == N00BB_ABI_PATCH_INVALID_RECORD
@@ -118,7 +121,7 @@ main(void)
     second.patch_kind = N00BB_ABI_PATCH_INDEX;
     second.referenced_table_kind = 32;
     encode_pair(patches, first, second);
-    ok &= expect("stream table cannot be patched",
+    ok &= EXPECT("stream table cannot be patched",
         n00bb_abi_index_patches_apply(patches, sizeof(patches),
             &section, 1, &table, 1, &failed)
                 == N00BB_ABI_PATCH_UNKNOWN_TABLE
@@ -128,7 +131,7 @@ main(void)
 
     second.local_index = 4;
     encode_pair(patches, first, second);
-    ok &= expect("missing local row rejected",
+    ok &= EXPECT("missing local row rejected",
         n00bb_abi_index_patches_apply(patches, sizeof(patches),
             &section, 1, &table, 1, &failed)
                 == N00BB_ABI_PATCH_INVALID_INDEX
@@ -136,7 +139,7 @@ main(void)
     second.local_index = 1;
 
     core_index_remap_t *module_remap = core_index_remap_new(2, 1);
-    ok &= expect("assign module remap",
+    ok &= EXPECT("assign module remap",
         core_index_remap_set(module_remap, 0, 0)
         && core_index_remap_set(module_remap, 1, 1));
     const n00bb_abi_patch_table_t tables[] = {
@@ -149,7 +152,7 @@ main(void)
     second.local_index = 0;
     core_le_store_u32(section_bytes + 0x28, 0);
     encode_pair(patches, first, second);
-    ok &= expect("non-type row zero rejected atomically",
+    ok &= EXPECT("non-type row zero rejected atomically",
         n00bb_abi_index_patches_apply(patches, sizeof(patches),
             &section, 1, tables, 2, &failed)
                 == N00BB_ABI_PATCH_INVALID_INDEX
@@ -159,7 +162,7 @@ main(void)
     second.local_index = 1;
     core_le_store_u32(section_bytes + 0x28, UINT32_C(0x80000001));
     core_index_remap_t *nil_remap = core_index_remap_new(2, 3);
-    ok &= expect("assign invalid nil remap",
+    ok &= EXPECT("assign invalid nil remap",
         core_index_remap_set(nil_remap, 0, 0)
         && core_index_remap_set(nil_remap, 1, 0));
     const n00bb_abi_patch_table_t nil_table = {
@@ -167,7 +170,7 @@ main(void)
         .final_row_count = 4,
     };
     encode_pair(patches, first, second);
-    ok &= expect("nonzero type cannot remap to nil",
+    ok &= EXPECT("nonzero type cannot remap to nil",
         n00bb_abi_index_patches_apply(patches, sizeof(patches),
             &section, 1, &nil_table, 1, &failed)
                 == N00BB_ABI_PATCH_INVALID_INDEX
@@ -178,7 +181,7 @@ main(void)
     first.local_index = 0;
     core_le_store_u32(section_bytes + 0x20, 0);
     n00bb_abi_index_patch_encode(patches, &first);
-    ok &= expect("type row zero remains valid",
+    ok &= EXPECT("type row zero remains valid",
         n00bb_abi_index_patches_apply(patches, N00BB_ABI_INDEX_PATCH_BYTES,
             &section, 1, &table, 1, &failed) == N00BB_ABI_PATCH_OK
         && core_le_load_u32(section_bytes + 0x20) == 0);
@@ -187,7 +190,7 @@ main(void)
 
     second.target_section_index = 8;
     encode_pair(patches, first, second);
-    ok &= expect("unknown native section rejected",
+    ok &= EXPECT("unknown native section rejected",
         n00bb_abi_index_patches_apply(patches, sizeof(patches),
             &section, 1, &table, 1, &failed)
                 == N00BB_ABI_PATCH_UNKNOWN_SECTION
@@ -195,7 +198,7 @@ main(void)
     second.target_section_index = 7;
 
     encode_pair(patches, first, second);
-    ok &= expect("truncated patch table rejected",
+    ok &= EXPECT("truncated patch table rejected",
         n00bb_abi_index_patches_apply(patches, sizeof(patches) - 1,
             &section, 1, &table, 1, &failed)
                 == N00BB_ABI_PATCH_INVALID_INPUT

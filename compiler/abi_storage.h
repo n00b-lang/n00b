@@ -14,11 +14,11 @@ typedef struct {
     uint32_t table;
     uint32_t kind;
     uint64_t typehash;
-    const char *type_name;
-    const char *module;
-    const char *function;
+    core_string_t type_name;
+    core_string_t module;
+    core_string_t function;
     th_type *function_type;
-    const char *native;
+    core_string_t native;
 } n00bb_abi_graph_slot_t;
 
 typedef struct {
@@ -26,14 +26,14 @@ typedef struct {
     size_t node_count;
     size_t edge_count;
     size_t slot_count;
-    bool (*root)(void *context, const char *identifier, size_t *index);
+    bool (*root)(void *context, core_string_t identifier, size_t *index);
     bool (*node)(void *context, size_t index, const uint8_t **bytes,
                  size_t *size, uint32_t *alignment, uint64_t *typehash);
     bool (*edge)(void *context, size_t index, size_t *source,
                  size_t *source_offset, size_t *target,
                  size_t *target_offset);
     uint32_t (*flags)(void *context, size_t index);
-    const char *(*type_name)(void *context, size_t index);
+    core_string_t (*type_name)(void *context, size_t index);
     bool (*slot)(void *context, size_t index, n00bb_abi_graph_slot_t *out);
 } n00bb_abi_graph_source_t;
 
@@ -42,7 +42,7 @@ typedef struct {
     uint64_t byte_offset;
     uint32_t target_kind;
     uint64_t target_offset;
-    const char *native;
+    core_string_t native;
 } n00bb_abi_storage_relocation_t;
 
 typedef struct {
@@ -87,7 +87,7 @@ typedef struct {
 } n00bb_abi_storage_rows_t;
 
 typedef struct {
-    char **paths;
+    core_string_t *paths;
     size_t count;
     uint32_t first_requirement;
 } n00bb_abi_baked_functions_t;

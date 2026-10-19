@@ -1,5 +1,6 @@
 #pragma once
 
+#include "lib/string.h"
 #include "lib/target.h"
 
 #include <stdbool.h>
@@ -10,8 +11,8 @@ typedef struct {
     const uint8_t *bytes;
     size_t size;
     uint32_t alignment;
-    const char *symbol;
-    const char *const *aliases;
+    core_string_t symbol;
+    const core_string_t *aliases;
     size_t alias_count;
 } n00bb_static_graph_node_t;
 

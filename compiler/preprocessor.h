@@ -43,7 +43,7 @@ typedef struct {
 } n00bb_preprocessor_value_t;
 
 typedef struct {
-    const char *const *definitions;
+    const core_string_t *definitions;
     size_t definition_count;
     bool release_mode;
     bool build_time;

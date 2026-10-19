@@ -16,7 +16,7 @@
 #include "th/environment.h"
 
 typedef struct {
-    const char *module;
+    core_string_t module;
     const uint8_t *native;
     size_t native_bytes;
     const uint8_t *abi;
@@ -28,10 +28,10 @@ core_list_decl(n00bb_cache_module_object_t);
 
 typedef struct n00bb_cache_t n00bb_cache_t;
 
-n00bb_cache_t *n00bb_cache_open(const char *root_path,
+n00bb_cache_t *n00bb_cache_open(core_string_t root_path,
                                 parse_cmdr_result_t *args,
-                                const char *compiler_path,
-                                const char *triple, ir_ctx_t *ir_context);
+                                core_string_t compiler_path,
+                                core_string_t triple, ir_ctx_t *ir_context);
 void n00bb_cache_free(n00bb_cache_t *cache);
 size_t n00bb_cache_interface_count(const n00bb_cache_t *cache);
 const th_env *n00bb_cache_interface(const n00bb_cache_t *cache,
@@ -48,7 +48,7 @@ bool n00bb_cache_assumptions_hold(const n00bb_cache_t *cache,
                                   core_link_unit_t *link,
                                   n00bb_link_analysis_t *analysis);
 typedef bool (*n00bb_cache_module_used_fn)(void *context,
-                                           const char *module);
+                                           core_string_t module);
 bool n00bb_cache_load_ir(n00bb_cache_t *cache, ir_module_lookup_fn lookup,
                          n00bb_cache_module_used_fn used, void *context);
 bool n00bb_cache_interface_has_module(const n00bb_cache_t *cache,
@@ -56,7 +56,7 @@ bool n00bb_cache_interface_has_module(const n00bb_cache_t *cache,
 ir_module_t *n00bb_cache_module(const n00bb_cache_t *cache,
                                 core_string_t module);
 bool n00bb_cache_module_object(const n00bb_cache_t *cache,
-                               const char *module,
+                               core_string_t module,
                                n00bb_cache_module_object_t *object);
 core_list_decl(n00bb_specialization_seed_t);
 const n00bb_llvm_mutator_classifier_t *n00bb_cache_mutator_classifier(

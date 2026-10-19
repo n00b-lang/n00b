@@ -8,14 +8,18 @@
 #include "ir/doms.h"
 #include "ir/pass.h"
 
-static const char borrow_diagnostic_text[] =
+static const core_string_t borrow_diagnostic_text = CORE_STRING_STATIC(
     "this use of a Buffer as a string outlives a safe borrow; consume it "
-    "with to_string(b), or keep b with to_string(buffer_from_string(b))";
+    "with to_string(b), or keep b with to_string(buffer_from_string(b))");
 
-static const char write_lock_name[] = "builtin.containers.buffer.write_lock";
+static const core_string_t write_lock_name =
+    CORE_STRING_STATIC("builtin.containers.buffer.write_lock");
 
-static const char buffer_state_type_name[] =
-    "builtin.containers.buffer.Buffer_State";
+static const core_string_t buffer_state_type_name =
+    CORE_STRING_STATIC("builtin.containers.buffer.Buffer_State");
+
+static const core_string_t buffer_borrow_pass =
+    CORE_STRING_STATIC("n00bb.buffer-borrow");
 
 static ir_value_t nonlocal_root;
 
@@ -188,12 +192,12 @@ contents_type(th_type *type)
 static bool
 is_buffer_type(th_type *type)
 {
-    const char *name = nullptr;
-    size_t length = 0, args = 0;
+    core_string_t name = {};
+    size_t args = 0;
     return th_kind_of(type) == TH_NAMED
-        && th_named_info(type, &name, &length, nullptr, &args) && !args
-        && length == sizeof(n00bb_buffer_type_name) - 1
-        && !memcmp(name, n00bb_buffer_type_name, length);
+        && th_named_info(type, &name, nullptr, &args) && !args
+        && core_string_eq(name, core_string_borrow(n00bb_buffer_type_name,
+               sizeof(n00bb_buffer_type_name) - 1));
 }
 
 static bool
@@ -201,12 +205,11 @@ may_be_buffer_state(th_type *type)
 {
     type = type ? th_resolve(type) : nullptr;
     if (!type || th_kind_of(type) == TH_VAR) return true;
-    const char *name = nullptr;
-    size_t length = 0, args = 0;
+    core_string_t name = {};
+    size_t args = 0;
     return th_kind_of(type) == TH_NAMED
-        && th_named_info(type, &name, &length, nullptr, &args) && !args
-        && length == sizeof(buffer_state_type_name) - 1
-        && !memcmp(name, buffer_state_type_name, length);
+        && th_named_info(type, &name, nullptr, &args) && !args
+        && core_string_eq(name, buffer_state_type_name);
 }
 
 
@@ -217,7 +220,7 @@ static bool
 arguments_may_hold_buffer(th_ctx *types, th_type *type, uint32_t depth)
 {
     size_t args = 0;
-    if (!th_named_info(type, nullptr, nullptr, nullptr, &args)) return false;
+    if (!th_named_info(type, nullptr, nullptr, &args)) return false;
     for (size_t i = 0; i < args; i++) {
         const th_arg *argument = th_named_arg(type, i);
         if (argument && argument->kind == TH_ARG_TYPE
@@ -324,7 +327,7 @@ contents_root(effects_table_t *table, ir_value_t *base)
     if (!root) return nullptr;
     *root = (ir_value_t){
         .kind = IR_VAL_LOCAL,
-        .name = "<contents>",
+        .name = CORE_STRING_STATIC("<contents>"),
         .type = base->type,
         .owner = base->owner,
     };
@@ -383,27 +386,30 @@ effects_table_free(effects_table_t *table)
 static bool
 function_is_native(const ir_func_t *function)
 {
-    return ir_annot_get((ir_annots_t *)&function->annots, "n00bb.abi.native")
-        != nullptr;
+    return ir_annot_get((ir_annots_t *)&function->annots,
+                        CORE_STRING_STATIC("n00bb.abi.native")) != nullptr;
 }
 
 static bool
 native_calls_n00b(const ir_func_t *function)
 {
     return ir_annot_get((ir_annots_t *)&function->annots,
-                        "n00bb.native.calls-n00b") != nullptr;
+                        CORE_STRING_STATIC("n00bb.native.calls-n00b"))
+        != nullptr;
 }
 
 static bool
 function_is_write_lock(const ir_func_t *function)
 {
-    const char *module = function->owner ? ir_module_name(function->owner)
-                                         : nullptr;
-    if (!module || !function->name) return false;
-    size_t module_len = strlen(module);
-    return !strncmp(write_lock_name, module, module_len)
-        && write_lock_name[module_len] == '.'
-        && !strcmp(write_lock_name + module_len + 1, function->name);
+    core_string_t module = function->owner ? ir_module_name(function->owner)
+                                           : (core_string_t){};
+    if (!module.data || !function->name.data) return false;
+    size_t module_len = module.u8_bytes;
+    return write_lock_name.u8_bytes > module_len
+        && core_string_starts_with(write_lock_name, module)
+        && write_lock_name.data[module_len] == '.'
+        && core_string_eq(core_string_slice(write_lock_name, module_len + 1,
+               write_lock_name.u8_bytes - module_len - 1), function->name);
 }
 
 static th_type *
@@ -1092,7 +1098,7 @@ writes_memory(const ir_instr_t *instruction)
 {
     switch (instruction->op) {
     case IR_OP_STORE:
-        return !ir_instr_has_mod(instruction, "atomic");
+        return !ir_instr_has_mod(instruction, CORE_STRING_STATIC("atomic"));
     case IR_OP_SEQUENCE_SET:
     case IR_OP_MEMCPY:
     case IR_OP_MEMMOVE:
@@ -1343,26 +1349,34 @@ typedef struct {
 
 static void
 report_borrow(window_t *window, const ir_instr_t *offender,
-              const char *label)
+              core_string_t label)
 {
     ir_diag_t *diagnostic = ir_diag_begin_at(window->diagnostics,
-        label ? IR_DIAG_VERIFY_LIFETIME : IR_DIAG_INTERNAL,
+        label.data ? IR_DIAG_VERIFY_LIFETIME : IR_DIAG_INTERNAL,
         window->conversion, window->conversion->block, window->function,
-        "this Buffer is borrowed as a string here");
-    char message[512];
-    if (!label)
-        snprintf(message, sizeof(message),
-                 "the Buffer borrow analysis could not complete for this "
-                 "conversion");
+        CORE_STRING_STATIC("this Buffer is borrowed as a string here"));
+    core_buffer_t message = {0};
+    if (!label.data)
+        core_buffer_puts(&message,
+                         "the Buffer borrow analysis could not complete for this "
+                         "conversion");
     else if (offender && offender->span.start_line)
-        snprintf(message, sizeof(message), "%s (%s, at line %u, column %u)",
-                 borrow_diagnostic_text, label, offender->span.start_line,
-                 offender->span.start_col);
+        core_buffer_printf(&message, "%.*s (%.*s, at line %u, column %u)",
+                           (int)borrow_diagnostic_text.u8_bytes,
+                           borrow_diagnostic_text.data,
+                           (int)label.u8_bytes, label.data,
+                           offender->span.start_line,
+                           offender->span.start_col);
     else
-        snprintf(message, sizeof(message), "%s (%s)", borrow_diagnostic_text,
-                 label);
-    ir_diag_message(diagnostic, window->diagnostics, message);
-    if (offender && label)
+        core_buffer_printf(&message, "%.*s (%.*s)",
+                           (int)borrow_diagnostic_text.u8_bytes,
+                           borrow_diagnostic_text.data,
+                           (int)label.u8_bytes, label.data);
+    core_string_t text = core_buffer_string(&message);
+    if (text.u8_bytes > 511) text.u8_bytes = 511;
+    ir_diag_message(diagnostic, window->diagnostics, text);
+    core_buffer_release(&message);
+    if (offender && label.data)
         ir_diag_secondary(window->diagnostics, diagnostic, offender->span,
                           label);
 }
@@ -1628,12 +1642,14 @@ split_edge(ir_func_t *function, ir_block_t *from, ir_block_t *to,
            ir_span_t span)
 {
     char name[64];
-    snprintf(name, sizeof(name), "__n00bb_borrow_edge_%u_%u", from->index,
-             to->index);
-    ir_block_t *middle = ir_block_add(function, name);
+    int length = snprintf(name, sizeof(name), "__n00bb_borrow_edge_%u_%u",
+                          from->index, to->index);
+    if (length < 0 || (size_t)length >= sizeof(name)) return nullptr;
+    ir_block_t *middle = ir_block_add(function,
+        core_string_borrow(name, (size_t)length));
     if (!middle) return nullptr;
     ir_instr_t *jump = ir_instr_generated(middle, IR_OP_JUMP, span,
-        "n00bb.buffer-borrow", 0);
+        buffer_borrow_pass, 0);
     if (!jump || !ir_instr_operand_block(jump, to)) return nullptr;
     ir_instr_t *terminator = ir_block_terminator(from);
     for (uint32_t o = 0; terminator && o < terminator->n_operands; o++) {
@@ -1669,15 +1685,17 @@ insert_held_assignment(window_t *window, held_t *held, ir_block_t *block,
                        uint32_t at, ir_value_t *buffer)
 {
     char name[64];
-    snprintf(name, sizeof(name), "__n00bb_borrow_held_%u_%u", held->ordinal,
-             held->serial++);
+    int length = snprintf(name, sizeof(name), "__n00bb_borrow_held_%u_%u",
+                          held->ordinal, held->serial++);
+    if (length < 0 || (size_t)length >= sizeof(name)) return false;
     ir_instr_t *wrap = ir_instr_generated(block,
         buffer ? IR_OP_OPTION_SOME : IR_OP_OPTION_NONE,
-        window->conversion->span, "n00bb.buffer-borrow", at);
-    if (!wrap || !ir_instr_set_dest(wrap, name, held->type)
+        window->conversion->span, buffer_borrow_pass, at);
+    if (!wrap || !ir_instr_set_dest(wrap,
+            core_string_borrow(name, (size_t)length), held->type)
         || (buffer && !ir_instr_operand_value(wrap, buffer))) return false;
     ir_instr_t *copy = ir_instr_generated(block, IR_OP_COPY,
-        window->conversion->span, "n00bb.buffer-borrow", at + 1);
+        window->conversion->span, buffer_borrow_pass, at + 1);
     return copy && ir_instr_set_dest_local(copy, held->local)
         && ir_instr_operand_value(copy, wrap->dest);
 }
@@ -1686,7 +1704,7 @@ static bool
 insert_end(window_t *window, ir_block_t *block, uint32_t at, held_t *held)
 {
     ir_instr_t *end = ir_instr_generated(block, IR_OP_BUFFER_BORROW_END,
-        window->conversion->span, "n00bb.buffer-borrow", at);
+        window->conversion->span, buffer_borrow_pass, at);
     if (!end) return false;
     if (!held) return ir_instr_operand_value(end, window->buffer);
     return ir_instr_operand_value(end,
@@ -1733,10 +1751,13 @@ insert_held_ends(window_t *window, end_sites_t *sites)
                               window->buffer->type);
     uint32_t ordinal = function->n_locals;
     char name[64];
-    snprintf(name, sizeof(name), "__n00bb_borrow_held_local_%u", ordinal);
+    int length = snprintf(name, sizeof(name), "__n00bb_borrow_held_local_%u",
+                          ordinal);
+    if (length < 0 || (size_t)length >= sizeof(name)) length = 0;
     held_t held = {
         .ordinal = ordinal,
-        .local = type ? ir_local_add(function, name, type) : nullptr,
+        .local = type && length ? ir_local_add(function,
+            core_string_borrow(name, (size_t)length), type) : nullptr,
         .type = type,
     };
     ir_block_t *entry = ir_block_entry(function);
@@ -1765,7 +1786,7 @@ typedef struct {
     uint64_t *scratch;
     uint32_t after_cap;
     ir_instr_t *offender;
-    const char *reason;
+    core_string_t reason;
     root_set_t source;
     bool source_global;
     bool conditional;
@@ -1811,7 +1832,7 @@ roots_reach_global(const walk_t *walk, const root_set_t *roots)
 }
 
 static void
-blame(walk_t *walk, ir_instr_t *offender, const char *reason)
+blame(walk_t *walk, ir_instr_t *offender, core_string_t reason)
 {
     if (walk->offender) return;
     walk->offender = offender;
@@ -1901,16 +1922,17 @@ check_instruction(walk_t *walk, ir_instr_t *instruction)
     window_t *window = walk->window;
     if (stores_into_aggregate(window, instruction)
         || call_wraps_view(window, instruction))
-        blame(walk, instruction,
+        blame(walk, instruction, CORE_STRING_STATIC(
               "the borrowed string is stored into a field, element or "
-              "container here");
+              "container here"));
     if (instruction->op == IR_OP_RETURN || instruction->op == IR_OP_FAIL) {
         uint32_t index = 0;
         for (uint32_t o = 0; o < instruction->n_operands; o++)
             if (tracked_index(window, operand_at(instruction, o), &index))
                 blame(walk, instruction, instruction->op == IR_OP_RETURN
-                      ? "the borrowed string is returned here"
-                      : "the borrowed string is the failure value here");
+                      ? CORE_STRING_STATIC("the borrowed string is returned here")
+                      : CORE_STRING_STATIC(
+                          "the borrowed string is the failure value here"));
         return true;
     }
     bool call = is_call(instruction);
@@ -1919,8 +1941,8 @@ check_instruction(walk_t *walk, ir_instr_t *instruction)
     effects_t *effects = callee
         ? effects_for(window->origins->effects, callee) : nullptr;
     if (call && (!effects || effects->opaque)) {
-        blame(walk, instruction,
-              "this indirect or unknown call may write the borrowed Buffer");
+        blame(walk, instruction, CORE_STRING_STATIC(
+              "this indirect or unknown call may write the borrowed Buffer"));
         return true;
     }
     root_set_t written = {0};
@@ -1933,8 +1955,8 @@ check_instruction(walk_t *walk, ir_instr_t *instruction)
                    && (writes_nonlocal
                        || roots_reach_global(walk, &written)))))
         blame(walk, instruction, call
-              ? "this call may write the borrowed Buffer"
-              : "this store may write the borrowed Buffer");
+              ? CORE_STRING_STATIC("this call may write the borrowed Buffer")
+              : CORE_STRING_STATIC("this store may write the borrowed Buffer"));
     free(written.items);
     return ok;
 }
@@ -2034,8 +2056,8 @@ walk_window(walk_t *walk)
                         + frame->block->index] = true;
         if (walk->state[successor->index] == BLOCK_ACTIVE
             || successor == origin) {
-            blame(walk, terminator,
-                  "the borrow is still live around this loop");
+            blame(walk, terminator, CORE_STRING_STATIC(
+                  "the borrow is still live around this loop"));
             break;
         }
         if (walk->state[successor->index] == BLOCK_DONE) continue;
@@ -2078,13 +2100,14 @@ check_escapes(window_t *window, walk_t *walk)
             if (!escapes_at(window, block->instrs[i], &escapes))
                 return false;
             if (!escapes) continue;
-            blame(walk, block->instrs[i],
+            blame(walk, block->instrs[i], CORE_STRING_STATIC(
                   "the borrowed string is stored or passed where it may be "
-                  "kept");
+                  "kept"));
             return true;
         }
     }
-    blame(walk, window->conversion, "the borrowed string may be kept");
+    blame(walk, window->conversion,
+          CORE_STRING_STATIC("the borrowed string may be kept"));
     return true;
 }
 
@@ -2097,11 +2120,13 @@ capture_buffer(window_t *window)
         return true;
     uint32_t at = instruction_position(conversion);
     char name[64];
-    snprintf(name, sizeof(name), "__n00bb_borrow_source_%u_%u",
-             conversion->block->index, at);
+    int length = snprintf(name, sizeof(name), "__n00bb_borrow_source_%u_%u",
+                          conversion->block->index, at);
+    if (length < 0 || (size_t)length >= sizeof(name)) return false;
     ir_instr_t *copy = ir_instr_generated(conversion->block, IR_OP_COPY,
-        conversion->span, "n00bb.buffer-borrow", at);
-    if (!copy || !ir_instr_set_dest(copy, name, buffer->type)
+        conversion->span, buffer_borrow_pass, at);
+    if (!copy || !ir_instr_set_dest(copy,
+            core_string_borrow(name, (size_t)length), buffer->type)
         || !ir_instr_operand_value(copy, buffer)) return false;
     conversion->operands[0] = (ir_operand_t){
         .kind = IR_OPD_VALUE, .value = copy->dest,
@@ -2140,7 +2165,7 @@ borrow_conversion(ir_diags_t *diagnostics, ir_func_t *function,
         ok = capture_buffer(&window)
             && insert_ends(&window, &walk.sites, nullptr);
     if (!ok)
-        report_borrow(&window, nullptr, nullptr);
+        report_borrow(&window, nullptr, (core_string_t){});
     bool accepted = ok && !walk.offender;
     free(walk.sites.items);
     free(walk.state);

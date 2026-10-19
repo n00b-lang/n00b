@@ -34,11 +34,16 @@ n00bb_range_store_fact(core_csp_store_t *store, parse_tree_t *node,
 bool
 n00bb_integer_range_wrapper(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    static const char *const wrappers[] = {
-        "expression", "or-expr", "and-expr", "or-rhs", "and-rhs", "equality-expr",
-        "compare-expr", "bitor-expr", "bitxor-expr", "bitand-expr",
-        "shift-expr", "add-expr", "mul-expr", "unary-expr",
-        "postfix-expr", "primary", "tuple-or-paren",
+    static const core_string_t wrappers[] = {
+        CORE_STRING_STATIC("expression"), CORE_STRING_STATIC("or-expr"),
+        CORE_STRING_STATIC("and-expr"), CORE_STRING_STATIC("or-rhs"),
+        CORE_STRING_STATIC("and-rhs"), CORE_STRING_STATIC("equality-expr"),
+        CORE_STRING_STATIC("compare-expr"), CORE_STRING_STATIC("bitor-expr"),
+        CORE_STRING_STATIC("bitxor-expr"), CORE_STRING_STATIC("bitand-expr"),
+        CORE_STRING_STATIC("shift-expr"), CORE_STRING_STATIC("add-expr"),
+        CORE_STRING_STATIC("mul-expr"), CORE_STRING_STATIC("unary-expr"),
+        CORE_STRING_STATIC("postfix-expr"), CORE_STRING_STATIC("primary"),
+        CORE_STRING_STATIC("tuple-or-paren"),
     };
     for (size_t i = 0; i < sizeof(wrappers) / sizeof(wrappers[0]); i++)
         if (nt_is(grammar, node, wrappers[i])) return true;
@@ -193,7 +198,7 @@ static parse_tree_t *
 n00bb_range_if_owner(parse_grammar_t *grammar, parse_tree_t *node)
 {
     for (parse_tree_t *at = node; at; at = parse_tree_parent(at))
-        if (nt_is(grammar, at, "if-stmt")) return at;
+        if (nt_is(grammar, at, CORE_STRING_STATIC("if-stmt"))) return at;
     return nullptr;
 }
 
@@ -202,8 +207,8 @@ n00bb_range_direct_comparison(parse_grammar_t *grammar,
                               parse_tree_t *condition)
 {
     for (parse_tree_t *node = condition; node && !core_tree_is_leaf(node);) {
-        if ((nt_is(grammar, node, "equality-expr")
-                || nt_is(grammar, node, "compare-expr"))
+        if ((nt_is(grammar, node, CORE_STRING_STATIC("equality-expr"))
+                || nt_is(grammar, node, CORE_STRING_STATIC("compare-expr")))
             && core_tree_num_children(node) == 3) return node;
         if (core_tree_num_children(node) != 1) return nullptr;
         node = core_tree_child(node, 0);
@@ -216,7 +221,7 @@ n00bb_range_simple_integer_literal(parse_grammar_t *grammar,
                                    parse_tree_t *node, int64_t *value)
 {
     while (node && !core_tree_is_leaf(node)) {
-        if (nt_is(grammar, node, "simple-lit")) {
+        if (nt_is(grammar, node, CORE_STRING_STATIC("simple-lit"))) {
             ir_lit_t literal = {0};
             if (!n00bb_parse_switch_integer(first_token_text(node), &literal)
                 || literal.mag > (ir_uint_t)INT64_MAX) return false;
@@ -323,7 +328,7 @@ static void
 n00bb_range_enter_if(parse_grammar_t *grammar, n00bb_tu_state_t *state,
                      parse_tree_t *node)
 {
-    if (!state || !nt_is(grammar, node, "if-stmt")) return;
+    if (!state || !nt_is(grammar, node, CORE_STRING_STATIC("if-stmt"))) return;
     n00bb_range_branch_frame_t frame = {
         .node = node,
         .incoming = n00bb_range_copy(&state->integer_symbol_ranges),
@@ -336,9 +341,9 @@ n00bb_range_begin_branch(parse_grammar_t *grammar, n00bb_tu_state_t *state,
                         parse_tree_t *parent)
 {
     if (!state || !parent) return false;
-    bool is_if = nt_is(grammar, parent, "if-stmt");
-    bool is_elif = nt_is(grammar, parent, "elif-clause");
-    bool is_else = nt_is(grammar, parent, "else-clause");
+    bool is_if = nt_is(grammar, parent, CORE_STRING_STATIC("if-stmt"));
+    bool is_elif = nt_is(grammar, parent, CORE_STRING_STATIC("elif-clause"));
+    bool is_else = nt_is(grammar, parent, CORE_STRING_STATIC("else-clause"));
     if (!is_if && !is_elif && !is_else) return false;
     parse_tree_t *owner = n00bb_range_if_owner(grammar, parent);
     n00bb_range_branch_frame_t *frame = n00bb_range_branch_top(state, owner);
@@ -347,14 +352,14 @@ n00bb_range_begin_branch(parse_grammar_t *grammar, n00bb_tu_state_t *state,
     frame->branch_active = true;
     if (is_else) {
         frame->has_else = true;
-        parse_tree_t *chain = child_nt(grammar, owner, "elif-chain");
-        if (!child_nt(grammar, chain, "elif-clause"))
+        parse_tree_t *chain = child_nt(grammar, owner, CORE_STRING_STATIC("elif-chain"));
+        if (!child_nt(grammar, chain, CORE_STRING_STATIC("elif-clause")))
             n00bb_range_refine_comparison(grammar, state,
-                child_nt(grammar, owner, "expression"), false);
+                child_nt(grammar, owner, CORE_STRING_STATIC("expression")), false);
     }
     else {
         n00bb_range_refine_comparison(grammar, state,
-            child_nt(grammar, parent, "expression"), true);
+            child_nt(grammar, parent, CORE_STRING_STATIC("expression")), true);
     }
     return true;
 }
@@ -365,9 +370,9 @@ n00bb_range_end_branch(parse_grammar_t *grammar, n00bb_tu_state_t *state,
 {
     (void)body;
     if (!state || !parent) return false;
-    if (!nt_is(grammar, parent, "if-stmt")
-        && !nt_is(grammar, parent, "elif-clause")
-        && !nt_is(grammar, parent, "else-clause")) return false;
+    if (!nt_is(grammar, parent, CORE_STRING_STATIC("if-stmt"))
+        && !nt_is(grammar, parent, CORE_STRING_STATIC("elif-clause"))
+        && !nt_is(grammar, parent, CORE_STRING_STATIC("else-clause"))) return false;
     parse_tree_t *owner = n00bb_range_if_owner(grammar, parent);
     n00bb_range_branch_frame_t *frame = n00bb_range_branch_top(state, owner);
     if (!frame || !frame->branch_active) return false;
@@ -400,17 +405,18 @@ n00bb_range_in_active_branch(parse_grammar_t *grammar,
     parse_tree_t *owner = nullptr;
     for (parse_tree_t *at = node ? parse_tree_parent(node) : nullptr;
          at; at = parse_tree_parent(at)) {
-        if (nt_is(grammar, at, "while-stmt")
-            || nt_is(grammar, at, "for-stmt")
-            || nt_is(grammar, at, "labeled-while")
-            || nt_is(grammar, at, "labeled-for")
-            || nt_is(grammar, at, "switch-stmt")
-            || nt_is(grammar, at, "typecase-stmt")
-            || nt_is(grammar, at, "typecase-value-expr")
-            || nt_is(grammar, at, "try-stmt")
-            || nt_is(grammar, at, "with-stmt")
-            || nt_is(grammar, at, "if-value-expr")) return false;
-        if (nt_is(grammar, at, "if-stmt")) {
+        if (nt_is(grammar, at, CORE_STRING_STATIC("while-stmt"))
+            || nt_is(grammar, at, CORE_STRING_STATIC("for-stmt"))
+            || nt_is(grammar, at, CORE_STRING_STATIC("labeled-while"))
+            || nt_is(grammar, at, CORE_STRING_STATIC("labeled-for"))
+            || nt_is(grammar, at, CORE_STRING_STATIC("switch-stmt"))
+            || nt_is(grammar, at, CORE_STRING_STATIC("typecase-stmt"))
+            || nt_is(grammar, at, CORE_STRING_STATIC("typecase-value-expr"))
+            || nt_is(grammar, at, CORE_STRING_STATIC("try-stmt"))
+            || nt_is(grammar, at, CORE_STRING_STATIC("with-stmt"))
+            || nt_is(grammar, at, CORE_STRING_STATIC("if-value-expr")))
+            return false;
+        if (nt_is(grammar, at, CORE_STRING_STATIC("if-stmt"))) {
             owner = at;
             break;
         }
@@ -422,11 +428,14 @@ n00bb_range_in_active_branch(parse_grammar_t *grammar,
 static bool
 n00bb_range_control_node(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    static const char *const controls[] = {
-        "if-stmt", "if-value-expr", "elif-clause", "else-clause",
-        "while-stmt", "for-stmt", "labeled-while", "labeled-for",
-        "switch-stmt", "typecase-stmt", "typecase-value-expr",
-        "try-stmt", "with-stmt",
+    static const core_string_t controls[] = {
+        CORE_STRING_STATIC("if-stmt"), CORE_STRING_STATIC("if-value-expr"),
+        CORE_STRING_STATIC("elif-clause"), CORE_STRING_STATIC("else-clause"),
+        CORE_STRING_STATIC("while-stmt"), CORE_STRING_STATIC("for-stmt"),
+        CORE_STRING_STATIC("labeled-while"), CORE_STRING_STATIC("labeled-for"),
+        CORE_STRING_STATIC("switch-stmt"), CORE_STRING_STATIC("typecase-stmt"),
+        CORE_STRING_STATIC("typecase-value-expr"),
+        CORE_STRING_STATIC("try-stmt"), CORE_STRING_STATIC("with-stmt"),
     };
     for (size_t i = 0; i < sizeof(controls) / sizeof(controls[0]); i++)
         if (nt_is(grammar, node, controls[i])) return true;
@@ -447,8 +456,8 @@ n00bb_range_inside_function(parse_grammar_t *grammar, parse_tree_t *node)
 {
     for (parse_tree_t *parent = node ? parse_tree_parent(node) : nullptr;
          parent; parent = parse_tree_parent(parent))
-        if (nt_is(grammar, parent, "func-def")
-            || nt_is(grammar, parent, "context-def")) return true;
+        if (nt_is(grammar, parent, CORE_STRING_STATIC("func-def"))
+            || nt_is(grammar, parent, CORE_STRING_STATIC("context-def"))) return true;
     return false;
 }
 
@@ -480,7 +489,7 @@ n00bb_range_constant_uint64(parse_grammar_t *grammar, parse_tree_t *node,
 {
     if (!node || core_tree_is_leaf(node)) return false;
     size_t count = core_tree_num_children(node);
-    if (nt_is(grammar, node, "simple-lit")) {
+    if (nt_is(grammar, node, CORE_STRING_STATIC("simple-lit"))) {
         ir_lit_t literal = {0};
         if (!n00bb_parse_switch_integer(first_token_text(node), &literal)
             || literal.mag > UINT64_MAX) return false;
@@ -502,7 +511,7 @@ n00bb_range_constant_uint64(parse_grammar_t *grammar, parse_tree_t *node,
     bool unsigned64 = n00bb_integer_representation(
         parse_tree_type(node), &width, &is_signed)
         && width == 64 && !is_signed;
-    if (unsigned64 && nt_is(grammar, node, "unary-expr") && count == 2
+    if (unsigned64 && nt_is(grammar, node, CORE_STRING_STATIC("unary-expr")) && count == 2
         && parse_tree_leaf_is(core_tree_child(node, 0),
                               CORE_STRING_STATIC("~"))
         && n00bb_range_constant_uint64(grammar, core_tree_child(node, 1),
@@ -510,7 +519,7 @@ n00bb_range_constant_uint64(parse_grammar_t *grammar, parse_tree_t *node,
         *value = ~*value;
         return true;
     }
-    if (unsigned64 && nt_is(grammar, node, "unary-expr") && count == 5
+    if (unsigned64 && nt_is(grammar, node, CORE_STRING_STATIC("unary-expr")) && count == 5
         && parse_tree_leaf_is(core_tree_child(node, 0),
                               CORE_STRING_STATIC("cast")))
         return n00bb_range_constant_uint64(grammar, core_tree_child(node, 4),
@@ -529,7 +538,7 @@ n00bb_range_proven_above_int64(parse_grammar_t *grammar,
     uint64_t constant = 0;
     if (n00bb_range_constant_uint64(grammar, node, &constant))
         return constant > INT64_MAX;
-    if (nt_is(grammar, node, "primary")) {
+    if (nt_is(grammar, node, CORE_STRING_STATIC("primary"))) {
         parse_sym_entry_t *symbol = n00bb_integer_reference_symbol(node);
         const n00bb_symbol_range_t *known = n00bb_range_for_symbol(state,
                                                                    symbol);
@@ -544,7 +553,7 @@ n00bb_range_proven_above_int64(parse_grammar_t *grammar,
 static parse_sym_entry_t *
 n00bb_range_binding_symbol(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    if (!nt_is(grammar, node, "primary")
+    if (!nt_is(grammar, node, CORE_STRING_STATIC("primary"))
         || core_tree_num_children(node) != 1) return nullptr;
     parse_token_info_t *token = parse_tree_find_first_terminal(node);
     return token && parse_token_tid(token) == PARSE_TOK_IDENTIFIER
@@ -683,7 +692,7 @@ n00bb_propagate_integer_range_node(parse_grammar_t *grammar,
     int64_t type_minimum = 0, type_maximum = 0;
     core_csp_var_id_t result = -1;
     parse_sym_entry_t *symbol = nullptr;
-    if (nt_is(grammar, node, "simple-lit")) {
+    if (nt_is(grammar, node, CORE_STRING_STATIC("simple-lit"))) {
         ir_lit_t literal = {0};
         if (n00bb_parse_switch_integer(first_token_text(node), &literal)
             && literal.mag <= (ir_uint_t)INT64_MAX
@@ -718,7 +727,7 @@ n00bb_propagate_integer_range_node(parse_grammar_t *grammar,
         int64_t minimum = 0, maximum = 0;
         if (is_integer_type(node_type)
             && state->integer_range_use_symbol_facts
-            && nt_is(grammar, node, "primary")) {
+            && nt_is(grammar, node, CORE_STRING_STATIC("primary"))) {
             const n00bb_symbol_range_t *known = n00bb_range_for_symbol(
                 state, n00bb_integer_reference_symbol(node));
             if (known && !known->proven_above_int64)
@@ -733,7 +742,7 @@ n00bb_propagate_integer_range_node(parse_grammar_t *grammar,
         goto done;
     }
 
-    if (nt_is(grammar, node, "add-expr") && child_count == 3
+    if (nt_is(grammar, node, CORE_STRING_STATIC("add-expr")) && child_count == 3
         && child_ranges.data[0] >= 0 && child_ranges.data[2] >= 0) {
         core_string_t op = first_token_text(core_tree_child(node, 1));
         if (core_string_eq(op, CORE_STRING_STATIC("+"))
@@ -749,7 +758,7 @@ n00bb_propagate_integer_range_node(parse_grammar_t *grammar,
                 result = -1;
         }
     }
-    else if (nt_is(grammar, node, "shift-expr") && child_count == 3
+    else if (nt_is(grammar, node, CORE_STRING_STATIC("shift-expr")) && child_count == 3
         && child_ranges.data[0] >= 0 && child_ranges.data[2] >= 0
         && core_string_eq(first_token_text(core_tree_child(node, 1)),
                           CORE_STRING_STATIC("<<"))) {
@@ -766,7 +775,7 @@ n00bb_propagate_integer_range_node(parse_grammar_t *grammar,
                     core_csp_dom_singleton(value));
         }
     }
-    else if (nt_is(grammar, node, "mul-expr") && child_count == 3
+    else if (nt_is(grammar, node, CORE_STRING_STATIC("mul-expr")) && child_count == 3
         && child_ranges.data[0] >= 0 && child_ranges.data[2] >= 0
         && core_string_eq(first_token_text(core_tree_child(node, 1)),
                           CORE_STRING_STATIC("*"))) {
@@ -787,7 +796,7 @@ n00bb_propagate_integer_range_node(parse_grammar_t *grammar,
                 result = -1;
         }
     }
-    else if (nt_is(grammar, node, "unary-expr") && child_count == 2
+    else if (nt_is(grammar, node, CORE_STRING_STATIC("unary-expr")) && child_count == 2
         && child_ranges.data[1] >= 0) {
         core_string_t op = parse_tree_leaf_text(core_tree_child(node, 0));
         parse_tree_t *operand = core_tree_child(node, 1);
@@ -812,7 +821,7 @@ n00bb_propagate_integer_range_node(parse_grammar_t *grammar,
                     child_ranges.data[1])) result = -1;
         }
     }
-    else if (nt_is(grammar, node, "primary")
+    else if (nt_is(grammar, node, CORE_STRING_STATIC("primary"))
         && child_count == 1 && child_ranges.data[0] < 0) {
         parse_token_info_t *token = parse_tree_find_first_terminal(node);
         if (token && parse_token_tid(token) == PARSE_TOK_IDENTIFIER) {
@@ -933,16 +942,16 @@ void
 n00bb_range_enter_node(parse_grammar_t *grammar, n00bb_tu_state_t *state,
                        parse_tree_t *node, parse_tree_t *parent)
 {
-    if (nt_is(grammar, node, "func-def")
-        || nt_is(grammar, node, "context-def")) {
+    if (nt_is(grammar, node, CORE_STRING_STATIC("func-def"))
+        || nt_is(grammar, node, CORE_STRING_STATIC("context-def"))) {
         n00bb_range_clear(&state->integer_symbol_ranges);
     }
-    if (nt_is(grammar, node, "if-stmt"))
+    if (nt_is(grammar, node, CORE_STRING_STATIC("if-stmt")))
         n00bb_range_enter_if(grammar, state, node);
-    if (nt_is(grammar, node, "body"))
+    if (nt_is(grammar, node, CORE_STRING_STATIC("body")))
         (void)n00bb_range_begin_branch(grammar, state, parent);
     if (!state->integer_range_store
-        && nt_is(grammar, node, "expression")) {
+        && nt_is(grammar, node, CORE_STRING_STATIC("expression"))) {
         state->integer_range_store = core_csp_store_new();
         state->integer_range_root = state->integer_range_store ? node : nullptr;
         state->integer_range_use_symbol_facts =
@@ -970,15 +979,15 @@ n00bb_range_after_annotation(parse_grammar_t *grammar,
                              n00bb_tu_state_t *state,
                              parse_tree_t *node, parse_tree_t *parent)
 {
-    if (nt_is(grammar, node, "sym-decl")
-        || nt_is(grammar, node, "assign-stmt"))
+    if (nt_is(grammar, node, CORE_STRING_STATIC("sym-decl"))
+        || nt_is(grammar, node, CORE_STRING_STATIC("assign-stmt")))
         n00bb_range_update_symbol(grammar, node, state,
-            nt_is(grammar, node, "sym-decl"), false);
-    if (nt_is(grammar, node, "binop-assign-stmt"))
+            nt_is(grammar, node, CORE_STRING_STATIC("sym-decl")), false);
+    if (nt_is(grammar, node, CORE_STRING_STATIC("binop-assign-stmt")))
         n00bb_range_update_symbol(grammar, node, state, false, true);
-    if (nt_is(grammar, node, "body"))
+    if (nt_is(grammar, node, CORE_STRING_STATIC("body")))
         (void)n00bb_range_end_branch(grammar, state, node, parent);
-    if (nt_is(grammar, node, "if-stmt"))
+    if (nt_is(grammar, node, CORE_STRING_STATIC("if-stmt")))
         n00bb_range_end_if(state, node);
     const parse_rule_t *rule = parse_tree_rule(grammar, node);
     if (rule && parse_rule_find_annot(grammar, rule, PARSE_ANNOT_CALL)) {
@@ -989,11 +998,11 @@ n00bb_range_after_annotation(parse_grammar_t *grammar,
             n00bb_range_invalidate_static_symbols(state);
     }
     if ((n00bb_range_control_node(grammar, node)
-            && !nt_is(grammar, node, "if-stmt")
-            && !nt_is(grammar, node, "elif-clause")
-            && !nt_is(grammar, node, "else-clause"))
-        || nt_is(grammar, node, "func-def")
-        || nt_is(grammar, node, "context-def")) {
+            && !nt_is(grammar, node, CORE_STRING_STATIC("if-stmt"))
+            && !nt_is(grammar, node, CORE_STRING_STATIC("elif-clause"))
+            && !nt_is(grammar, node, CORE_STRING_STATIC("else-clause")))
+        || nt_is(grammar, node, CORE_STRING_STATIC("func-def"))
+        || nt_is(grammar, node, CORE_STRING_STATIC("context-def"))) {
         n00bb_range_clear(&state->integer_symbol_ranges);
     }
 }

@@ -49,9 +49,10 @@ source_index(location_context_t *context,
     if (context->files.len >= UINT32_MAX) return false;
     uint32_t index = (uint32_t)context->files.len;
     n00b_abi_source_file_v1 row = {0};
-    const char *bytes = core_source_file_contents(&unit->source);
+    core_string_t contents = core_source_file_contents(&unit->source);
     size_t size = core_source_file_size(&unit->source);
-    row.source_identity = core_xxh3_64bits_raw(bytes ? bytes : "", size);
+    row.source_identity = core_xxh3_64bits_raw(
+        contents.data ? contents.data : "", size);
     if (!n00bb_abi_name_pool_encode(context->names,
             core_source_file_path(&unit->source), N00B_ABI_TABLE_SOURCE_FILE,
             index, offsetof(n00b_abi_source_file_v1, path), &row.path))

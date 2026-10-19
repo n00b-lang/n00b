@@ -5,7 +5,7 @@
 
 static const uint8_t *
 interface_function_lifetime_metadata(n00bb_link_analysis_t *analysis,
-                                     const char *qualified_name,
+                                     core_string_t qualified_name,
                                      size_t *size)
 {
     if (size) *size = 0;
@@ -16,8 +16,9 @@ interface_function_lifetime_metadata(n00bb_link_analysis_t *analysis,
         th_env_metadata_view_t metadata = {0};
         if (!th_env_metadata_at(environment, i, &metadata)
             || metadata.owner_kind != TH_ENV_METADATA_FUNCTION
-            || strcmp(metadata.owner_name, qualified_name)
-            || strcmp(metadata.key, "n00b.function-lifetime")
+            || !core_string_eq(metadata.owner_name, qualified_name)
+            || !core_string_eq(metadata.key,
+                               CORE_STRING_STATIC("n00b.function-lifetime"))
             || metadata.version != 1) continue;
         if (size) *size = metadata.size;
         return metadata.data;
@@ -28,8 +29,9 @@ interface_function_lifetime_metadata(n00bb_link_analysis_t *analysis,
             th_env_metadata_view_t metadata = {0};
             if (!th_env_metadata_at(environment, i, &metadata)
                 || metadata.owner_kind != TH_ENV_METADATA_FUNCTION
-                || strcmp(metadata.owner_name, qualified_name)
-                || strcmp(metadata.key, "n00b.function-lifetime")
+                || !core_string_eq(metadata.owner_name, qualified_name)
+                || !core_string_eq(metadata.key,
+                       CORE_STRING_STATIC("n00b.function-lifetime"))
                 || metadata.version != 1) continue;
             if (size) *size = metadata.size;
             return metadata.data;
@@ -75,8 +77,9 @@ decode_function_lifetime_effects(const uint8_t *data, size_t size,
         .parameter_count = count,
         .return_kind = (n00bb_return_alias_kind_t)return_kind,
         .return_parameter = return_parameter,
-        .return_global = global_size ? (const char *)data + offset : nullptr,
-        .return_global_size = global_size,
+        .return_global = global_size
+            ? core_string_borrow((const char *)data + offset, global_size)
+            : (core_string_t){0},
     };
     return true;
 }
@@ -239,7 +242,7 @@ function_lifetime_effects_for_symbol(n00bb_link_analysis_t *analysis,
         (int)function->name.u8_bytes, function->name.data);
     size_t size = 0;
     const uint8_t *data = interface_function_lifetime_metadata(analysis,
-        qualified.data, &size);
+        core_buffer_string(&qualified), &size);
     bool ok = data && decode_function_lifetime_effects(data, size, function,
                                                        out);
     core_buffer_release(&qualified);
@@ -339,7 +342,7 @@ returned_source_matches_formal(parse_grammar_t *grammar,
         }
         return false;
     }
-    if (callee->decl_node && nt_is(grammar, callee->decl_node, "func-def"))
+    if (callee->decl_node && nt_is(grammar, callee->decl_node, CORE_STRING_STATIC("func-def")))
         return false;
     n00bb_function_lifetime_effects_t effects = {0};
     if (!function_lifetime_effects_for_symbol(analysis, callee, &effects)
@@ -370,16 +373,16 @@ compute_returned_parameters(parse_grammar_t *grammar,
                  symbol = symbol->next_in_scope) {
                 if (symbol->kind != PARSE_SYM_FUNCTION
                     || !symbol->decl_node
-                    || !nt_is(grammar, symbol->decl_node, "func-def")
+                    || !nt_is(grammar, symbol->decl_node, CORE_STRING_STATIC("func-def"))
                     || return_candidate_for_symbol(&candidates, symbol))
                     continue;
                 n00bb_function_return_facts_t *facts = parse_sym_binding(
                     symbol, facts_key);
                 if (!facts || !facts->return_expression_count) continue;
                 parse_tree_t *signature = child_nt(grammar,
-                    symbol->decl_node, "func-type-signature");
+                    symbol->decl_node, CORE_STRING_STATIC("func-type-signature"));
                 parse_tree_t *params = child_nt(grammar, signature,
-                                                "param-decl");
+                                                CORE_STRING_STATIC("param-decl"));
                 core_list_t(parse_sym_entry_ptr_t) formals =
                     core_list_new(parse_sym_entry_ptr_t);
                 parse_sym_entry_t *rest = nullptr;
@@ -456,7 +459,7 @@ function_returned_parameter(parse_grammar_t *grammar,
 {
     if (!grammar || !analysis || !function) return false;
     if (!function->decl_node
-        || !nt_is(grammar, function->decl_node, "func-def")) {
+        || !nt_is(grammar, function->decl_node, CORE_STRING_STATIC("func-def"))) {
         n00bb_function_lifetime_effects_t effects = {0};
         if (!function_lifetime_effects_for_symbol(analysis, function,
                                                    &effects)
@@ -625,8 +628,8 @@ record_function_aggregate_aliases(parse_grammar_t *grammar,
         ? n00bb_node_alias_edges(node) : nullptr;
     if (!facts) return true;
     parse_tree_t *signature = child_nt(grammar, function->decl_node,
-                                       "func-type-signature");
-    parse_tree_t *param_decl = child_nt(grammar, signature, "param-decl");
+                                       CORE_STRING_STATIC("func-type-signature"));
+    parse_tree_t *param_decl = child_nt(grammar, signature, CORE_STRING_STATIC("param-decl"));
     core_list_t(parse_sym_entry_ptr_t) formals =
         core_list_new(parse_sym_entry_ptr_t);
     parse_sym_entry_t *rest = nullptr;
@@ -701,7 +704,7 @@ record_function_return_aliases(parse_grammar_t *grammar,
                                core_list_t(parse_tree_ptr_t) *active)
 {
     if (!function || !function->decl_node
-        || !nt_is(grammar, function->decl_node, "func-def")) return false;
+        || !nt_is(grammar, function->decl_node, CORE_STRING_STATIC("func-def"))) return false;
     core_translation_unit_t *owner = unit_for_symbol(grammar,
         &analysis->units, function);
     if (!owner) return false;
@@ -735,15 +738,14 @@ record_function_return_aliases(parse_grammar_t *grammar,
 parse_sym_entry_t *
 global_symbol_from_qualified_name(parse_grammar_t *grammar,
                                  n00bb_link_analysis_t *analysis,
-                                 const char *name, size_t name_size)
+                                 core_string_t name)
 {
-    if (!grammar || !analysis || !name || !name_size) return nullptr;
-    size_t dot = name_size;
-    while (dot && name[dot - 1] != '.') dot--;
-    if (!dot || dot == name_size) return nullptr;
-    core_string_t module = core_string_borrow(name, dot - 1);
-    core_string_t root = core_string_borrow(name + dot,
-                                             name_size - dot);
+    if (!grammar || !analysis || !name.data || !name.u8_bytes) return nullptr;
+    int64_t dot = core_string_rfind_byte(name, '.');
+    if (dot < 0 || (size_t)dot + 1 == name.u8_bytes) return nullptr;
+    core_string_t module = core_string_slice(name, 0, (size_t)dot);
+    core_string_t root = core_string_slice(name, (size_t)dot + 1,
+                                           name.u8_bytes - (size_t)dot - 1);
     for (size_t i = 0; i < analysis->units.len; i++) {
         core_translation_unit_t *unit = analysis->units.data[i];
         if (!core_string_eq(unit->module.identifier, module)) continue;
@@ -766,8 +768,7 @@ global_symbol_from_qualified_name(parse_grammar_t *grammar,
                 || !is_module_global_symbol(grammar, symbol)) continue;
             n00bb_export_origin_t *origin = parse_sym_binding(symbol,
                 CORE_STRING_STATIC("n00bb.export-origin"));
-            if (origin && origin->declaration.u8_bytes == name_size
-                && !memcmp(origin->declaration.data, name, name_size))
+            if (origin && core_string_eq(origin->declaration, name))
                 return symbol;
         }
     }
@@ -834,7 +835,7 @@ record_returned_call_alias_body(parse_grammar_t *grammar,
         }
         if (!callee || callee->kind != PARSE_SYM_FUNCTION) return false;
         if (!callee->decl_node
-            || !nt_is(grammar, callee->decl_node, "func-def")) {
+            || !nt_is(grammar, callee->decl_node, CORE_STRING_STATIC("func-def"))) {
             n00bb_function_lifetime_effects_t effects = {0};
             if (!function_lifetime_effects_for_symbol(analysis, callee,
                                                        &effects)) return false;
@@ -843,8 +844,7 @@ record_returned_call_alias_body(parse_grammar_t *grammar,
                 return true;
             if (effects.return_kind == N00BB_RETURN_ALIAS_GLOBAL) {
                 parse_sym_entry_t *global = global_symbol_from_qualified_name(
-                    grammar, analysis, effects.return_global,
-                    effects.return_global_size);
+                    grammar, analysis, effects.return_global);
                 if (!global) return false;
                 parse_token_info_t *site =
                     parse_tree_find_first_terminal(expression);
@@ -1013,7 +1013,7 @@ source_function_parameter(parse_grammar_t *grammar,
                           parse_sym_entry_t *function, size_t index)
 {
     if (!function || !function->decl_node
-        || !nt_is(grammar, function->decl_node, "func-def")) return nullptr;
+        || !nt_is(grammar, function->decl_node, CORE_STRING_STATIC("func-def"))) return nullptr;
     n00bb_function_parameter_facts_t *facts = parse_sym_binding(function,
         N00BB_PARAMETER_FACTS_KEY);
     parse_tree_t *node = facts && index < facts->param_count
@@ -1030,7 +1030,7 @@ source_parameter_may_escape(n00bb_link_analysis_t *analysis,
     if (n00bb_builtin_native_function(function))
         return index >= th_func_nparams(function->type);
     if (!function->decl_node
-        || !nt_is(grammar, function->decl_node, "func-def")) {
+        || !nt_is(grammar, function->decl_node, CORE_STRING_STATIC("func-def"))) {
         n00bb_function_lifetime_effects_t effects = {0};
         if (!function_lifetime_effects_for_symbol(analysis, function,
                                                    &effects)
@@ -1062,7 +1062,7 @@ source_parameter_referent_value_may_escape(n00bb_link_analysis_t *analysis,
     if (!function) return true;
     if (n00bb_builtin_native_function(function)) return false;
     if (function->decl_node
-        && nt_is(grammar, function->decl_node, "func-def")) {
+        && nt_is(grammar, function->decl_node, CORE_STRING_STATIC("func-def"))) {
         parse_sym_entry_t *formal = source_function_parameter(grammar,
                                                                function, index);
         return !formal || formal->lifetime.referent_value_escapes;
@@ -1146,13 +1146,12 @@ simple_returned_global(parse_grammar_t *grammar,
         trait_dispatch ? call : core_tree_child(call, 0));
     if (!callee || callee->kind != PARSE_SYM_FUNCTION) return false;
     if (!callee->decl_node
-        || !nt_is(grammar, callee->decl_node, "func-def")) {
+        || !nt_is(grammar, callee->decl_node, CORE_STRING_STATIC("func-def"))) {
         n00bb_function_lifetime_effects_t effects = {0};
         if (!function_lifetime_effects_for_symbol(analysis, callee, &effects))
             return false;
         if (effects.return_kind == N00BB_RETURN_ALIAS_GLOBAL) {
-            core_buffer_append(global_name, effects.return_global,
-                               effects.return_global_size);
+            core_buffer_append_string(global_name, effects.return_global);
             return true;
         }
         if (effects.return_kind != N00BB_RETURN_ALIAS_PARAMETER)
@@ -1185,7 +1184,7 @@ function_returned_global_inner(parse_grammar_t *grammar,
 {
     if (!grammar || !analysis || !unit || !function
         || !function->decl_node
-        || !nt_is(grammar, function->decl_node, "func-def")) return false;
+        || !nt_is(grammar, function->decl_node, CORE_STRING_STATIC("func-def"))) return false;
     for (size_t i = 0; i < visited->len; i++)
         if (visited->data[i] == function) return false;
     core_list_push(*visited, function);
@@ -1286,9 +1285,9 @@ append_function_lifetime_effects(n00bb_link_analysis_t *analysis,
     if (!grammar || !environment || !unit || !function || !signature
         || th_kind_of(signature) != TH_FUNCTION) return false;
     parse_tree_t *signature_node = child_nt(grammar, function->decl_node,
-                                            "func-type-signature");
+                                            CORE_STRING_STATIC("func-type-signature"));
     parse_tree_t *param_decl = child_nt(grammar, signature_node,
-                                        "param-decl");
+                                        CORE_STRING_STATIC("param-decl"));
     core_list_t(parse_sym_entry_ptr_t) parameters =
         core_list_new(parse_sym_entry_ptr_t);
     parse_sym_entry_t *rest = nullptr;
@@ -1380,7 +1379,8 @@ append_function_lifetime_effects(n00bb_link_analysis_t *analysis,
                                                &qualified);
     if (ok)
         ok = th_env_register_metadata(environment, TH_ENV_METADATA_FUNCTION,
-            qualified.data, "n00b.function-lifetime", 1, metadata.data,
+            core_buffer_string(&qualified),
+            CORE_STRING_STATIC("n00b.function-lifetime"), 1, metadata.data,
             metadata.byte_len);
     core_buffer_release(&qualified);
     core_buffer_release(&metadata);
@@ -1417,7 +1417,7 @@ build_function_lifetime_environment(n00bb_link_analysis_t *analysis)
                 if (symbol->kind != PARSE_SYM_FUNCTION || !symbol->type
                     || !symbol->decl_node
                     || !nt_is(analysis->grammar, symbol->decl_node,
-                              "func-def")) continue;
+                              CORE_STRING_STATIC("func-def"))) continue;
                 ok = append_function_lifetime_effects(analysis, environment,
                                                        unit, symbol);
             }
@@ -1461,7 +1461,7 @@ record_call_argument_escape_facts_once(n00bb_link_analysis_t *analysis)
             }
             parse_sym_entry_t *function = bound_function_symbol(label->cond);
             bool source_function = function && function->decl_node
-                && nt_is(grammar, function->decl_node, "func-def");
+                && nt_is(grammar, function->decl_node, CORE_STRING_STATIC("func-def"));
             n00bb_function_lifetime_effects_t interface_effects = {0};
             bool has_interface_effects = !source_function && function
                 && function_lifetime_effects_for_symbol(analysis, function,
@@ -1481,9 +1481,9 @@ record_call_argument_escape_facts_once(n00bb_link_analysis_t *analysis)
             bool has_rest = false;
             if (source_function) {
                 parse_tree_t *signature = child_nt(grammar,
-                    function->decl_node, "func-type-signature");
+                    function->decl_node, CORE_STRING_STATIC("func-type-signature"));
                 parse_tree_t *param_decl = child_nt(grammar, signature,
-                                                    "param-decl");
+                                                    CORE_STRING_STATIC("param-decl"));
                 collect_ir_parameters(grammar, param_decl, &formals, &rest);
                 fixed_count = formals.len;
                 has_rest = rest != nullptr;

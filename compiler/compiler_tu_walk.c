@@ -2,6 +2,9 @@
 #include "compiler_link.h"
 #include "flagset_value.h"
 
+#define NT_IS(g, n, lit) nt_is((g), (n), CORE_STRING_STATIC(lit))
+#define CHILD_NT(g, n, lit) child_nt((g), (n), CORE_STRING_STATIC(lit))
+
 typedef struct {
     parse_grammar_t *grammar;
     th_ctx *types;
@@ -58,29 +61,29 @@ static th_type *
 range_binding_type(parse_grammar_t *grammar, parse_tree_t *parts)
 {
     parse_tree_t *loop = parse_tree_parent(parts);
-    parse_tree_t *statement = nt_is(grammar, loop, "range-loop")
+    parse_tree_t *statement = NT_IS(grammar, loop, "range-loop")
         ? parse_tree_parent(loop) : nullptr;
-    parse_tree_t *binding = child_nt(grammar,
-        child_nt(grammar, statement, "for-range-var"), "for-binding");
-    parse_tree_t *spec = child_nt(grammar, binding, "type-spec");
+    parse_tree_t *binding = CHILD_NT(grammar,
+        CHILD_NT(grammar, statement, "for-range-var"), "for-binding");
+    parse_tree_t *spec = CHILD_NT(grammar, binding, "type-spec");
     return spec ? parse_tree_type(spec) : nullptr;
 }
 
 static void
 report_literal_failure(core_translation_unit_t *unit, parse_tree_t *node,
-                       size_t before, const char *code, const char *message)
+                       size_t before, core_string_t code,
+                       core_string_t message)
 {
     core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
     if (core_diagnostics_count(diagnostics) == before)
         core_diagnostics_report_at(diagnostics, unit, CORE_DIAG_ERROR,
-            core_string_from_cstr(code), core_string_from_cstr(message),
-            link_source_location(node));
+            code, message, link_source_location(node));
 }
 
 static bool
 infer_literal_reporting(parse_grammar_t *grammar,
                         core_translation_unit_t *unit, parse_tree_t *node,
-                        const char *code, const char *message)
+                        core_string_t code, core_string_t message)
 {
     size_t before = core_diagnostics_count(
         core_translation_unit_diagnostics(unit));
@@ -104,7 +107,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
     n00bb_tu_state_t *state = tu_state(unit);
     if (!state || !node) return;
     if (before_annotations) {
-    if (entering && nt_is(grammar, node, "assign-stmt")
+    if (entering && NT_IS(grammar, node, "assign-stmt")
         && core_tree_num_children(node) == 3
         && n00bb_index_expression_node(grammar,
             core_tree_child(node, 0))) {
@@ -112,19 +115,19 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         if (!core_tree_is_leaf(value) && !parse_tree_argument_type(value))
             parse_tree_set_argument_type(value, th_var(state->types));
     }
-    if (entering && nt_is(grammar, node, "postfix-expr")
+    if (entering && NT_IS(grammar, node, "postfix-expr")
         && core_tree_num_children(node) >= 3
         && parse_tree_leaf_is(core_tree_child(node, 1),
                               CORE_STRING_STATIC("("))
         && member_access_node(grammar, core_tree_child(node, 0))) {
         parse_tree_t *args = core_tree_child(node, 2);
-        parse_tree_t *positional = child_nt(grammar, args,
+        parse_tree_t *positional = CHILD_NT(grammar, args,
                                             "positional-args");
-        parse_tree_t *keywords = child_nt(grammar, args, "keyword-args");
+        parse_tree_t *keywords = CHILD_NT(grammar, args, "keyword-args");
         for (size_t i = 0; positional
                 && i < core_tree_num_children(positional); i++) {
             parse_tree_t *arg = core_tree_child(positional, i);
-            if (nt_is(grammar, arg, "expression")
+            if (NT_IS(grammar, arg, "expression")
                 && !parse_tree_argument_type(arg)) {
                 parse_tree_set_argument_type(arg, th_var(state->types));
             }
@@ -132,7 +135,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         for (size_t i = 0; keywords
                 && i < core_tree_num_children(keywords); i++) {
             parse_tree_t *keyword = core_tree_child(keywords, i);
-            parse_tree_t *value = child_nt(grammar, keyword, "expression");
+            parse_tree_t *value = CHILD_NT(grammar, keyword, "expression");
             if (value && !parse_tree_argument_type(value))
                 parse_tree_set_argument_type(value, th_var(state->types));
         }
@@ -162,7 +165,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
     bool intrinsic_unary = !entering
         && unary_operator_dispatch_for_node(grammar, node,
             &operator_trait, &operator_method);
-    parse_token_info_t *literal_token = nt_is(grammar, node, "simple-lit")
+    parse_token_info_t *literal_token = NT_IS(grammar, node, "simple-lit")
         ? parse_tree_find_first_terminal(node) : nullptr;
     core_string_t literal_terminal = literal_token
         ? parse_terminal_name(grammar, parse_token_tid(literal_token))
@@ -216,7 +219,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         (void)parse_visit_suppress_annotation(visit, PARSE_ANNOT_LITERAL);
     if (type_reference)
         (void)parse_visit_suppress_annotation(visit, PARSE_ANNOT_VARREF);
-    if (step == SEMANTIC_PREPARE_EXIT && nt_is(grammar, node, "tspec-tvar")
+    if (step == SEMANTIC_PREPARE_EXIT && NT_IS(grammar, node, "tspec-tvar")
         && !signature_typevar_for_node(grammar, unit, node))
         core_diagnostics_report_at(
             core_translation_unit_diagnostics(unit), unit,
@@ -232,7 +235,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
     core_string_t literal_terminal = cache
         ? cache->literal_terminal : (core_string_t){0};
     if (entering) {
-        if (nt_is(grammar, node, "postfix-expr"))
+        if (NT_IS(grammar, node, "postfix-expr"))
             parse_tree_set_index_address_access(node,
                 n00bb_index_reference_storage(grammar, node));
         if (field_record_declaration(grammar, node)) {
@@ -257,7 +260,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             }
             parse_tree_set_type(node, named);
         }
-        if (nt_is(grammar, node, "body")
+        if (NT_IS(grammar, node, "body")
             && !n00bb_bind_option_branch_shadow(grammar, unit, node, parent))
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit), unit,
@@ -270,7 +273,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         if (step == SEMANTIC_AFTER_EXIT)
             n00bb_defer_overloaded_callee(grammar, unit, node);
         if (step == SEMANTIC_AFTER_REFERENCE_EXIT) {
-        if (nt_is(grammar, node, "tuple-or-paren")
+        if (NT_IS(grammar, node, "tuple-or-paren")
             && core_tree_num_children(node) == 3) {
             parse_tree_t *inner = core_tree_child(node, 1);
             parse_sym_entry_t *symbol = attached_symbol(grammar, unit, inner);
@@ -339,7 +342,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 link_source_location(node));
             return;
         }
-        if (nt_is(grammar, node, "simple-lit")) {
+        if (NT_IS(grammar, node, "simple-lit")) {
             th_type *expected = n00bb_integer_literal_context(grammar,
                 state, node);
             th_type *element = nullptr;
@@ -351,15 +354,15 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             if (expected && is_float_type(expected))
                 n00bb_contextual_float_literal(node, expected);
         }
-        if (nt_is(grammar, node, "range-loop")) {
-            parse_tree_t *parts = child_nt(grammar, node, "range-parts");
-            parse_tree_t *step = child_nt(grammar,
-                child_nt(grammar, node, "range-step"), "expression");
+        if (NT_IS(grammar, node, "range-loop")) {
+            parse_tree_t *parts = CHILD_NT(grammar, node, "range-parts");
+            parse_tree_t *step = CHILD_NT(grammar,
+                CHILD_NT(grammar, node, "range-step"), "expression");
             th_type *bound = parts ? parse_tree_type(parts) : nullptr;
             if (step && bound && is_integer_type(th_resolve(bound)))
                 (void)n00bb_contextual_integer_literal(state, step, bound);
         }
-        th_type *declared = nt_is(grammar, node, "range-parts")
+        th_type *declared = NT_IS(grammar, node, "range-parts")
             ? range_binding_type(grammar, node) : nullptr;
         if (declared && is_integer_type(th_resolve(declared))
             && core_tree_num_children(node) == 3) {
@@ -368,7 +371,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             (void)n00bb_contextual_integer_literal(state,
                 core_tree_child(node, 2), declared);
         }
-        if (nt_is(grammar, node, "range-parts")
+        if (NT_IS(grammar, node, "range-parts")
             && core_tree_num_children(node) == 3) {
             parse_tree_t *start = core_tree_child(node, 0);
             parse_tree_t *bound = core_tree_child(node, 2);
@@ -383,12 +386,12 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                                                      start_type);
         }
         if (core_tree_num_children(node) == 3
-            && (nt_is(grammar, node, "range-parts")
-                || (nt_is(grammar, node, "compare-expr")
-                    && nt_is(grammar, core_tree_child(node, 1),
+            && (NT_IS(grammar, node, "range-parts")
+                || (NT_IS(grammar, node, "compare-expr")
+                    && NT_IS(grammar, core_tree_child(node, 1),
                              "compare-op"))
-                || (nt_is(grammar, node, "equality-expr")
-                    && nt_is(grammar, core_tree_child(node, 1),
+                || (NT_IS(grammar, node, "equality-expr")
+                    && NT_IS(grammar, core_tree_child(node, 1),
                              "equality-op")))) {
             parse_tree_t *left = core_tree_child(node, 0);
             parse_tree_t *right = core_tree_child(node, 2);
@@ -401,22 +404,22 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 && !n00bb_contextual_integer_literal(state, left, right_type))
                 n00bb_float_literal_adopts(left, right_type);
         }
-        if (nt_is(grammar, node, "sym-decl")) {
-            parse_tree_t *type_spec = child_nt(grammar, node, "type-spec");
+        if (NT_IS(grammar, node, "sym-decl")) {
+            parse_tree_t *type_spec = CHILD_NT(grammar, node, "type-spec");
             contextualize_record_literal(grammar, unit, state,
-                child_nt(grammar, node, "expression"),
+                CHILD_NT(grammar, node, "expression"),
                 type_spec ? parse_tree_type(type_spec) : nullptr);
         }
-        if (nt_is(grammar, node, "assign-stmt")
+        if (NT_IS(grammar, node, "assign-stmt")
             && core_tree_num_children(node) == 3) {
             contextualize_record_literal(grammar, unit, state,
                 core_tree_child(node, 2),
                 record_literal_expected_type(grammar, state->types,
                     core_tree_child(node, 2)));
         }
-        if (nt_is(grammar, node, "return-stmt")) {
+        if (NT_IS(grammar, node, "return-stmt")) {
             parse_tree_t *function = node;
-            while (function && !nt_is(grammar, function, "func-def"))
+            while (function && !NT_IS(grammar, function, "func-def"))
                 function = parse_tree_parent(function);
             parse_sym_entry_t *symbol = function
                 ? parse_tree_sym(function) : nullptr;
@@ -425,7 +428,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 : nullptr;
             if (declared)
                 contextualize_record_literal(grammar, unit, state,
-                    child_nt(grammar, node, "expression"),
+                    CHILD_NT(grammar, node, "expression"),
                     th_func_ret(declared));
         }
         return;
@@ -447,7 +450,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 facts->record_literal_origin = origin;
             }
         }
-        if (nt_is(grammar, node, "assign-stmt")
+        if (NT_IS(grammar, node, "assign-stmt")
             && core_tree_num_children(node) == 3) {
             parse_tree_t *target = core_tree_child(node, 0);
             parse_tree_t *value = core_tree_child(node, 2);
@@ -459,14 +462,17 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 ? th_resolve(parse_tree_type(value)) : nullptr;
             if (target_type && value_type
                 && th_kind_of(target_type) == TH_VAR
-                && th_var_name(target_type)
+                && th_var_name(target_type).data
                 && th_kind_of(value_type) != TH_VAR
                 && th_is_closed(state->types, value_type)) {
                 core_buffer_t message = {0};
+                core_string_t value_text = n00bb_print_type(state->types,
+                                                            value_type);
+                core_string_t variable = th_var_name(target_type);
                 core_buffer_printf(&message,
-                    "cannot assign %s to a value of type parameter `%s; a declared type parameter stays generic",
-                    n00bb_print_type(state->types, value_type),
-                    th_var_name(target_type));
+                    "cannot assign %.*s to a value of type parameter `%.*s; a declared type parameter stays generic",
+                    (int)value_text.u8_bytes, value_text.data,
+                    (int)variable.u8_bytes, variable.data);
                 core_diagnostics_report_at(
                     core_translation_unit_diagnostics(unit), unit,
                     CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0036"),
@@ -476,7 +482,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             }
         }
         cache_wrapped_symbol_resolution(grammar, unit, node);
-        if (nt_is(grammar, node, "unary-expr")
+        if (NT_IS(grammar, node, "unary-expr")
             && core_string_eq(first_token_text(node),
                               CORE_STRING_STATIC("ref"))) {
             parse_tree_t *operand = nullptr;
@@ -497,7 +503,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             || !refine_intrinsic_binary_result(grammar, unit, state, node)
             || !refine_intrinsic_unary_result(grammar, unit, state, node))
             return;
-        if (nt_is(grammar, node, "alias-stmt")
+        if (NT_IS(grammar, node, "alias-stmt")
             && alias_declaration_is_transparent(node)) {
             parse_sym_entry_t *alias = parse_tree_sym(node);
             if (alias && !alias->type) alias->type = th_var(state->types);
@@ -509,7 +515,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                                                 target);
             if (alias) parse_tree_set_type(node, alias->type);
         }
-        else if (nt_is(grammar, node, "alias-stmt")) {
+        else if (NT_IS(grammar, node, "alias-stmt")) {
             parse_sym_entry_t *named = parse_tree_sym(node);
             th_type *representation = declared_type_from_node(grammar, unit,
                                                               node);
@@ -521,13 +527,14 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 core_buffer_t qualified = {0};
                 append_module_type_name(unit, named->name, &qualified);
                 th_type *type = named->type ? named->type
-                    : qualified.data ? th_name(state->types, qualified.data)
-                                     : nullptr;
+                    : qualified.data
+                        ? th_name(state->types, core_buffer_string(&qualified))
+                        : nullptr;
                 if (type) th_type_define(state->types, type, representation);
                 core_buffer_release(&qualified);
             }
         }
-        if (nt_is(grammar, node, "import-stmt")
+        if (NT_IS(grammar, node, "import-stmt")
             && !untyped_module_name(state, node)) {
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit), unit,
@@ -586,7 +593,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                     parse_tree_type(node));
         }
     }
-    if (!entering && nt_is(grammar, node, "enum-item")
+    if (!entering && NT_IS(grammar, node, "enum-item")
         && !cache_enum_item_value(grammar, state, node)) {
         core_diagnostics_report_at(core_translation_unit_diagnostics(unit),
             unit, CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0018"),
@@ -619,7 +626,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         }
         return;
     }
-    if (!entering && nt_is(grammar, node, "simple-lit")
+    if (!entering && NT_IS(grammar, node, "simple-lit")
         && !modified_numeric
         && !refine_integer_literal_type(grammar, unit, node, state))
         return;
@@ -640,20 +647,20 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         return;
     }
     if (entering
-        && (nt_is(grammar, node, "body")
-            || nt_is(grammar, node, "value-body")) && parent
-        && (nt_is(grammar, parent, "typecase-case-block")
-            || nt_is(grammar, parent, "typecase-value-case-block")))
+        && (NT_IS(grammar, node, "body")
+            || NT_IS(grammar, node, "value-body")) && parent
+        && (NT_IS(grammar, parent, "typecase-case-block")
+            || NT_IS(grammar, parent, "typecase-value-case-block")))
         prepare_typecase_arm(grammar, unit, parent);
     if (!entering) {
         cache_type_syntax_node(grammar, node);
         th_type *composed = compose_type_syntax_node(grammar, unit, node);
         if (composed) parse_tree_set_type(node, composed);
-        else if (nt_is(grammar, node, "tspec-application"))
+        else if (NT_IS(grammar, node, "tspec-application"))
             parse_tree_set_type(node, nullptr);
-        if (nt_is(grammar, node, "variant-decl-one")) {
+        if (NT_IS(grammar, node, "variant-decl-one")) {
             parse_sym_entry_t *arm = parse_tree_sym(node);
-            parse_tree_t *type_node = child_nt(grammar, node, "type-spec");
+            parse_tree_t *type_node = CHILD_NT(grammar, node, "type-spec");
             th_type *type = type_node ? parse_tree_type(type_node) : nullptr;
             if (!arm || !type) {
                 core_diagnostics_report_at(
@@ -680,12 +687,12 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             parse_tree_set_type(node, type);
         }
     }
-    if (!entering && (nt_is(grammar, node, "simple-lit")
-        || nt_is(grammar, node, "list-lit")
-        || nt_is(grammar, node, "dict-or-set-lit")
-        || nt_is(grammar, node, "embed-lit"))) {
+    if (!entering && (NT_IS(grammar, node, "simple-lit")
+        || NT_IS(grammar, node, "list-lit")
+        || NT_IS(grammar, node, "dict-or-set-lit")
+        || NT_IS(grammar, node, "embed-lit"))) {
         core_string_t modifier = literal_modifier(grammar, node);
-        bool string_literal = nt_is(grammar, node, "simple-lit")
+        bool string_literal = NT_IS(grammar, node, "simple-lit")
             && parse_tree_find_first_terminal(node)
             && core_string_eq(parse_terminal_name(grammar,
                 parse_token_tid(parse_tree_find_first_terminal(node))),
@@ -693,8 +700,9 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         if (!modifier.data) {
             th_type *default_type = nullptr;
             if (string_literal)
-                default_type = th_name(state->types, "string");
-            else if (nt_is(grammar, node, "list-lit")) {
+                default_type = th_name(state->types,
+                                       CORE_STRING_STATIC("string"));
+            else if (NT_IS(grammar, node, "list-lit")) {
                 th_type *list_type = parse_tree_type(node);
                 bool array_context = list_type
                     && th_kind_of(th_resolve(list_type)) == TH_SEQUENCE;
@@ -715,24 +723,28 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                     && user_litmod(state, CORE_STRING_STATIC("list"),
                                    CORE_STRING_STATIC("array"), nullptr);
                 if (user_literal && !infer_literal_reporting(grammar, unit,
-                        node, "N00BB-T0010",
-                        "could not infer the bracket literal element type"))
+                        node, CORE_STRING_STATIC("N00BB-T0010"),
+                        CORE_STRING_STATIC(
+                            "could not infer the bracket literal element type")))
                     return;
                 size_t before = core_diagnostics_count(
                     core_translation_unit_diagnostics(unit));
                 if (!user_literal && !infer_sequence_modifier_type(grammar,
                         node, unit, state)) {
-                    report_literal_failure(unit, node, before, "N00BB-T0010",
-                        "could not infer the bracket literal element type");
+                    report_literal_failure(unit, node, before,
+                        CORE_STRING_STATIC("N00BB-T0010"),
+                        CORE_STRING_STATIC(
+                            "could not infer the bracket literal element type"));
                     return;
                 }
             }
-            else if (nt_is(grammar, node, "dict-or-set-lit")) {
-                bool entries = child_nt(grammar, node, "dict-entries")
-                    || child_nt(grammar, node, "set-entries");
+            else if (NT_IS(grammar, node, "dict-or-set-lit")) {
+                bool entries = CHILD_NT(grammar, node, "dict-entries")
+                    || CHILD_NT(grammar, node, "set-entries");
                 if (entries && !infer_literal_reporting(grammar, unit, node,
-                        "N00BB-T0010",
-                        "could not infer the brace literal element types"))
+                        CORE_STRING_STATIC("N00BB-T0010"),
+                        CORE_STRING_STATIC(
+                            "could not infer the brace literal element types")))
                     return;
                 if (!entries && dict_only_empty_literal(grammar, node)) {
                     th_arg args[] = {
@@ -740,7 +752,8 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                         {.kind = TH_ARG_TYPE, .type = th_var(state->types)},
                     };
                     default_type = th_apply(state->types,
-                        "builtin.containers.dict.Dict", args, 2);
+                        CORE_STRING_STATIC("builtin.containers.dict.Dict"),
+                        args, 2);
                 }
             }
             if (default_type) {
@@ -764,12 +777,12 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                         CORE_STRING_STATIC("false"))
                     || core_string_eq(first_token_text(node),
                         CORE_STRING_STATIC("nil")));
-            if (nt_is(grammar, node, "simple-lit")
+            if (NT_IS(grammar, node, "simple-lit")
                 && !string_literal && !numeric_literal) {
                 return;
             }
-            bool sequence = nt_is(grammar, node, "list-lit");
-            bool braces = nt_is(grammar, node, "dict-or-set-lit");
+            bool sequence = NT_IS(grammar, node, "list-lit");
+            bool braces = NT_IS(grammar, node, "dict-or-set-lit");
             const n00bb_literal_registration_t *builtin =
                 sequence ? n00bb_literal_handler(modifier,
                              N00BB_LITERAL_SEQUENCE_SHAPE)
@@ -793,12 +806,13 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 }
             }
             else if (!infer_literal_reporting(grammar, unit, node,
-                    "N00BB-T0030",
-                    "literal handler cannot specialize for this payload"))
+                    CORE_STRING_STATIC("N00BB-T0030"),
+                    CORE_STRING_STATIC(
+                        "literal handler cannot specialize for this payload")))
                 return;
         }
     }
-    if (!entering && nt_is(grammar, node, "new-expr")
+    if (!entering && NT_IS(grammar, node, "new-expr")
         && !infer_new_expression_type(grammar, node, state)) {
         core_diagnostics_report_at(
             core_translation_unit_diagnostics(unit), unit,
@@ -807,12 +821,12 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             link_source_location(node));
         return;
     }
-    if (!entering && nt_is(grammar, node, "callback-expr")
+    if (!entering && NT_IS(grammar, node, "callback-expr")
         && !infer_callback_expression_type(grammar, unit, node, state))
         return;
-    if (!entering && (nt_is(grammar, node, "pos-param")
-        || nt_is(grammar, node, "default-param")
-        || nt_is(grammar, node, "vargs-param"))) {
+    if (!entering && (NT_IS(grammar, node, "pos-param")
+        || NT_IS(grammar, node, "default-param")
+        || NT_IS(grammar, node, "vargs-param"))) {
         bind_declared_parameter(grammar, unit, node, state);
         parse_sym_entry_t *symbol = parse_tree_sym(node);
         if (symbol) validate_builtin_generic_type_arity(grammar, node, unit,
@@ -827,10 +841,10 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             return;
         }
     }
-    if (entering && (nt_is(grammar, node, "func-def")
-                     || nt_is(grammar, node, "callback-role")
-                     || nt_is(grammar, node, "trait-spec")
-                     || nt_is(grammar, node, "context-def"))) {
+    if (entering && (NT_IS(grammar, node, "func-def")
+                     || NT_IS(grammar, node, "callback-role")
+                     || NT_IS(grammar, node, "trait-spec")
+                     || NT_IS(grammar, node, "context-def"))) {
         parse_sym_entry_t *symbol = parse_tree_sym(node);
         if (symbol) {
             n00bb_function_parameter_facts_t *parameter_facts =
@@ -850,7 +864,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         }
     }
 
-    if (!entering && nt_is(grammar, node, "trait-spec")) {
+    if (!entering && NT_IS(grammar, node, "trait-spec")) {
         parse_sym_entry_t *symbol = parse_tree_sym(node);
         if (symbol) {
             th_type *failure = nullptr;
@@ -860,14 +874,14 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 symbol->type = signature;
                 symbol->error_type = failure
                     ? failure
-                    : th_name(state->types, "nil");
+                    : th_name(state->types, CORE_STRING_STATIC("nil"));
                 th_type *contract = th_env_signature_contract(
                     state->types, symbol->type, symbol->error_type);
                 symbol->callable_contract = contract;
             }
         }
     }
-    if (!entering && nt_is(grammar, node, "trait-decl")) {
+    if (!entering && NT_IS(grammar, node, "trait-decl")) {
         parse_sym_entry_t *symbol = parse_tree_sym(node);
         core_list_t(n00bb_typevar_binding_t) variables =
             core_list_new(n00bb_typevar_binding_t);
@@ -875,7 +889,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             core_list_new(th_trait_requirement);
         signature_typevars_for_symbol(symbol, &variables);
         bool valid = apply_signature_constraints(grammar, unit,
-            child_nt(grammar, node, "where-clause"), state->types,
+            CHILD_NT(grammar, node, "where-clause"), state->types,
             &variables, &declared);
         core_list_free(variables);
         if (valid && symbol) {
@@ -907,14 +921,14 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         }
     }
 
-    if (!entering && nt_is(grammar, node, "callback-role"))
+    if (!entering && NT_IS(grammar, node, "callback-role"))
         record_callback_role_signature(grammar, unit, node, state);
-    if (!entering && nt_is(grammar, node, "callback-decl"))
+    if (!entering && NT_IS(grammar, node, "callback-decl"))
         finalize_callback_contract(grammar, unit, node, state);
 
-    if (!entering && nt_is(grammar, node, "func-def"))
+    if (!entering && NT_IS(grammar, node, "func-def"))
         record_function_signature(grammar, unit, node, state, true);
-    if (entering && nt_is(grammar, node, "context-enter"))
+    if (entering && NT_IS(grammar, node, "context-enter"))
         record_context_hook_signature(grammar, unit, node, state);
 
     if (!entering) {
@@ -928,7 +942,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 link_source_location(node));
             return;
         }
-        if (nt_is(grammar, node, "top-level-stmt")) {
+        if (NT_IS(grammar, node, "top-level-stmt")) {
             parse_tree_t *statement = top_level_statement_child(grammar, node);
             if (!statement) {
                 core_diagnostics_report_at(
@@ -941,10 +955,10 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             }
             core_list_push(state->module_top_level_statements, statement);
         }
-        if (nt_is(grammar, node, "sym-decl")) {
-            parse_tree_t *type_spec = child_nt(grammar, node, "type-spec");
+        if (NT_IS(grammar, node, "sym-decl")) {
+            parse_tree_t *type_spec = CHILD_NT(grammar, node, "type-spec");
             parse_sym_entry_t *symbol = parse_tree_sym(node);
-            parse_tree_t *initializer = child_nt(grammar, node, "expression");
+            parse_tree_t *initializer = CHILD_NT(grammar, node, "expression");
             if (symbol && initializer
                 && !parse_sym_set_binding(symbol,
                     CORE_STRING_STATIC("n00bb.initializer-expression"),
@@ -966,8 +980,8 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                                                     declared);
             }
         }
-        if (nt_is(grammar, node, "variable-decl")) {
-            parse_tree_t *decl_list = child_nt(grammar, node,
+        if (NT_IS(grammar, node, "variable-decl")) {
+            parse_tree_t *decl_list = CHILD_NT(grammar, node,
                                                "sym-decl-list");
             for (size_t i = 0; decl_list
                     && i < core_tree_num_children(decl_list); i++) {
@@ -992,14 +1006,15 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 symbol->has_comptime_value = true;
             }
         }
-        if (nt_is(grammar, node, "tuple-or-paren")
+        if (NT_IS(grammar, node, "tuple-or-paren")
             && literal_modifier(grammar, node).data) {
-            bool shape = child_nt(grammar, node, "named-field-list")
+            bool shape = CHILD_NT(grammar, node, "named-field-list")
                 || core_tree_num_children(node) == 5;
             if (shape)
                 (void)infer_literal_reporting(grammar, unit, node,
-                    "N00BB-T0030",
-                    "literal handler cannot specialize for this payload");
+                    CORE_STRING_STATIC("N00BB-T0030"),
+                    CORE_STRING_STATIC(
+                        "literal handler cannot specialize for this payload"));
             else
                 core_diagnostics_report_at(
                     core_translation_unit_diagnostics(unit), unit,
@@ -1008,8 +1023,8 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                         "literal modifier requires a tuple or record literal"),
                     link_source_location(node));
         }
-        else if (nt_is(grammar, node, "tuple-or-paren")
-            && child_nt(grammar, node, "named-field-list")
+        else if (NT_IS(grammar, node, "tuple-or-paren")
+            && CHILD_NT(grammar, node, "named-field-list")
             && (!contextualize_record_fields_before_inference(grammar,
                     unit, state, node)
                 || !infer_anonymous_record(grammar, node, state))) {
@@ -1021,9 +1036,9 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 link_source_location(node));
             return;
         }
-        if (nt_is(grammar, node, "tuple-or-paren")
+        if (NT_IS(grammar, node, "tuple-or-paren")
             && !literal_modifier(grammar, node).data
-            && !child_nt(grammar, node, "named-field-list")
+            && !CHILD_NT(grammar, node, "named-field-list")
             && !infer_tuple_literal_type(grammar, node, state)) {
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit), unit,
@@ -1066,7 +1081,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 return;
             }
         }
-        if (nt_is(grammar, node, "variant-decl")
+        if (NT_IS(grammar, node, "variant-decl")
             && !finalize_variant_symbol_type(grammar, node, unit, state)) {
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit), unit,
@@ -1076,7 +1091,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 link_source_location(node));
             return;
         }
-        if (nt_is(grammar, node, "enum-stmt")
+        if (NT_IS(grammar, node, "enum-stmt")
             && !finalize_enum_symbol_type(grammar, node, unit, state)) {
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit), unit,
@@ -1086,7 +1101,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 link_source_location(node));
             return;
         }
-        if (nt_is(grammar, node, "flagset-stmt")
+        if (NT_IS(grammar, node, "flagset-stmt")
             && !finalize_flagset_symbol_type(grammar, node, unit, state)) {
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit), unit,
@@ -1135,7 +1150,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         }
     }
     if (!entering) n00bb_range_after_children(grammar, state, node);
-    if (!entering && nt_is(grammar, node, "expression")) {
+    if (!entering && NT_IS(grammar, node, "expression")) {
         th_type *argument = parse_tree_argument_type(node);
         if (argument) {
             int64_t minimum = 0, maximum = 0;
@@ -1181,18 +1196,21 @@ static bool
 type_declaration_node(parse_grammar_t *grammar, parse_tree_t *node)
 {
     return field_record_declaration(grammar, node)
-        || nt_is(grammar, node, "variant-decl")
-        || nt_is(grammar, node, "enum-stmt")
-        || nt_is(grammar, node, "flagset-stmt")
-        || nt_is(grammar, node, "alias-stmt");
+        || NT_IS(grammar, node, "variant-decl")
+        || NT_IS(grammar, node, "enum-stmt")
+        || NT_IS(grammar, node, "flagset-stmt")
+        || NT_IS(grammar, node, "alias-stmt");
 }
 
 static bool
 executable_scope_node(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    static const char *const executable[] = {
-        "block", "if", "for", "switch", "try", "try-error", "typecase",
-        "while", "with",
+    static const core_string_t executable[] = {
+        CORE_STRING_STATIC("block"), CORE_STRING_STATIC("if"),
+        CORE_STRING_STATIC("for"), CORE_STRING_STATIC("switch"),
+        CORE_STRING_STATIC("try"), CORE_STRING_STATIC("try-error"),
+        CORE_STRING_STATIC("typecase"), CORE_STRING_STATIC("while"),
+        CORE_STRING_STATIC("with"),
     };
     const parse_rule_t *rule = node && !core_tree_is_leaf(node)
         ? parse_tree_rule(grammar, node) : nullptr;
@@ -1201,8 +1219,7 @@ executable_scope_node(parse_grammar_t *grammar, parse_tree_t *node)
         : nullptr;
     for (size_t i = 0; scope
          && i < sizeof(executable) / sizeof(executable[0]); i++)
-        if (core_string_eq(scope->scope_tag,
-                           core_string_from_cstr(executable[i])))
+        if (core_string_eq(scope->scope_tag, executable[i]))
             return true;
     return false;
 }
@@ -1221,8 +1238,8 @@ enclosing_array_element_type(parse_grammar_t *grammar, parse_tree_t *node)
     parse_tree_t *child = node;
     for (parse_tree_t *parent = parse_tree_parent(child); parent;
          child = parent, parent = parse_tree_parent(parent)) {
-        if (nt_is(grammar, parent, "list-lit")) {
-            if (child != child_nt(grammar, parent, "list-elems"))
+        if (NT_IS(grammar, parent, "list-lit")) {
+            if (child != CHILD_NT(grammar, parent, "list-elems"))
                 return nullptr;
             th_type *type = parse_tree_type(parent);
             type = type ? th_resolve(type) : nullptr;
@@ -1230,9 +1247,9 @@ enclosing_array_element_type(parse_grammar_t *grammar, parse_tree_t *node)
                 ? th_seq_elem(type) : nullptr;
         }
         bool grouped = parse_tree_is_group(parent)
-            && nt_is(grammar, parse_tree_parent(parent), "list-elems");
-        if (grouped || nt_is(grammar, parent, "list-elems")) {
-            if (!nt_is(grammar, child, "expression")
+            && NT_IS(grammar, parse_tree_parent(parent), "list-elems");
+        if (grouped || NT_IS(grammar, parent, "list-elems")) {
+            if (!NT_IS(grammar, child, "expression")
                 && !parse_tree_is_group(child)) return nullptr;
             continue;
         }
@@ -1283,16 +1300,16 @@ semantic_walk_prepare(parse_visit_t *visit)
                                                    : visit->node));
         return semantic_walk_status(walk);
     }
-    if (nt_is(context->grammar, visit->node, "list-lit")
+    if (NT_IS(context->grammar, visit->node, "list-lit")
         && !parse_tree_type(visit->node)) {
         th_type *expected = frame->expected ? frame->expected
             : enclosing_array_element_type(context->grammar, visit->node);
         if (expected && th_kind_of(th_resolve(expected)) == TH_SEQUENCE)
             parse_tree_set_type(visit->node, expected);
     }
-    frame->in_expression |= nt_is(context->grammar, visit->node,
+    frame->in_expression |= NT_IS(context->grammar, visit->node,
                                    "expression");
-    if (nt_is(context->grammar, visit->node, "flagset-stmt")
+    if (NT_IS(context->grammar, visit->node, "flagset-stmt")
         && tu_state(unit))
         tu_state(unit)->flagset_scope = visit->node;
     semantic_annotation_node(context, unit, visit->node, visit->parent,
@@ -1376,12 +1393,12 @@ switch_variant_case_names(parse_grammar_t *grammar, parse_tree_t *node,
                           core_list_t(core_string_t) *names)
 {
     if (!node || core_tree_is_leaf(node)) return true;
-    if (nt_is(grammar, node, "body") || nt_is(grammar, node, "value-body"))
+    if (NT_IS(grammar, node, "body") || NT_IS(grammar, node, "value-body"))
         return true;
-    if (nt_is(grammar, node, "case-expr-item")) {
+    if (NT_IS(grammar, node, "case-expr-item")) {
         core_string_t name = {0};
-        parse_tree_t *expression = child_nt(grammar, node, "expression");
-        if (child_nt(grammar, node, "range-sep")
+        parse_tree_t *expression = CHILD_NT(grammar, node, "expression");
+        if (CHILD_NT(grammar, node, "range-sep")
             || !simple_identifier_expression(grammar, expression, &name))
             return false;
         core_list_push(*names, name);
@@ -1446,9 +1463,9 @@ infer_indexed_switch_variant_subject(parse_grammar_t *grammar,
                                      parse_tree_t *switch_node,
                                      parse_tree_t *subject_expression)
 {
-    if ((!nt_is(grammar, switch_node, "switch-stmt")
-         && !nt_is(grammar, switch_node, "switch-value-expr"))
-        || !nt_is(grammar, subject_expression, "expression")) return true;
+    if ((!NT_IS(grammar, switch_node, "switch-stmt")
+         && !NT_IS(grammar, switch_node, "switch-value-expr"))
+        || !NT_IS(grammar, subject_expression, "expression")) return true;
     parse_tree_t *subject = n00bb_simple_lvalue(subject_expression);
     parse_sym_entry_t *symbol = subject
         ? attached_symbol(grammar, unit, subject) : nullptr;
@@ -1460,8 +1477,9 @@ infer_indexed_switch_variant_subject(parse_grammar_t *grammar,
         || !symbol->type
         || th_kind_of(th_resolve(symbol->type)) != TH_VAR) return true;
     parse_tree_t *cases = child_nt(grammar, switch_node,
-        nt_is(grammar, switch_node, "switch-stmt")
-            ? "switch-cases" : "switch-value-cases");
+        NT_IS(grammar, switch_node, "switch-stmt")
+            ? CORE_STRING_STATIC("switch-cases")
+            : CORE_STRING_STATIC("switch-value-cases"));
     core_list_t(core_string_t) names = core_list_new(core_string_t);
     bool named_cases = switch_variant_case_names(grammar, cases, &names);
     th_type *candidate = nullptr;
@@ -1499,35 +1517,35 @@ semantic_walk_child_complete(parse_visit_t *visit)
     if (!infer_indexed_switch_variant_subject(context->grammar, unit,
                                                node, child))
         return PARSE_VISIT_ERROR;
-    bool body_statement_sequence = nt_is(context->grammar, node,
+    bool body_statement_sequence = NT_IS(context->grammar, node,
             "body-stmt-list")
-        || nt_is(context->grammar, node, "other-top-stmts")
+        || NT_IS(context->grammar, node, "other-top-stmts")
         || (parse_tree_is_group(node) && visit->parent
-            && (nt_is(context->grammar, visit->parent, "body-stmt-list")
-                || nt_is(context->grammar, visit->parent,
+            && (NT_IS(context->grammar, visit->parent, "body-stmt-list")
+                || NT_IS(context->grammar, visit->parent,
                          "other-top-stmts")));
-    bool top_level = nt_is(context->grammar, node, "other-top-stmts")
+    bool top_level = NT_IS(context->grammar, node, "other-top-stmts")
         || (parse_tree_is_group(node) && visit->parent
-            && nt_is(context->grammar, visit->parent, "other-top-stmts"));
+            && NT_IS(context->grammar, visit->parent, "other-top-stmts"));
     bool short_circuit = core_tree_num_children(node) == 3
         && core_tree_child(node, 0) == child
-        && (nt_is(context->grammar, node, "and-expr")
-            || nt_is(context->grammar, node, "or-expr"));
+        && (NT_IS(context->grammar, node, "and-expr")
+            || NT_IS(context->grammar, node, "or-expr"));
     if (short_circuit || (body_statement_sequence
-                          && (nt_is(context->grammar, child, "body-stmt")
-                              || nt_is(context->grammar, child,
+                          && (NT_IS(context->grammar, child, "body-stmt")
+                              || NT_IS(context->grammar, child,
                                        "top-level-stmt")))) {
         bool condition_truth = short_circuit
-            && nt_is(context->grammar, node, "and-expr");
+            && NT_IS(context->grammar, node, "and-expr");
         parse_tree_t *condition = short_circuit ? child
             : n00bb_exiting_guard_condition(context->grammar, child);
         if (!condition) {
-            parse_tree_t *assertion = child_nt(context->grammar, child,
+            parse_tree_t *assertion = CHILD_NT(context->grammar, child,
                                                "assert-stmt");
             if (assertion
                 && core_string_eq(first_token_text(assertion),
                                   CORE_STRING_STATIC("require"))) {
-                condition = child_nt(context->grammar, assertion,
+                condition = CHILD_NT(context->grammar, assertion,
                                      "expression");
                 condition_truth = true;
             }
@@ -1562,20 +1580,20 @@ semantic_walk_child_complete(parse_visit_t *visit)
             frame->flow_scope = new_scope;
         }
     }
-    if (nt_is(context->grammar, node, "func-def")
-        && nt_is(context->grammar, child, "func-type-signature")) {
+    if (NT_IS(context->grammar, node, "func-def")
+        && NT_IS(context->grammar, child, "func-type-signature")) {
         record_cached_declared_function_signature(context->grammar,
             unit, child, tu_state(unit));
         bind_function_body_signature(unit, child, tu_state(unit));
     }
-    if (nt_is(context->grammar, node, "context-def")
-        && nt_is(context->grammar, child, "context-spec"))
+    if (NT_IS(context->grammar, node, "context-def")
+        && NT_IS(context->grammar, child, "context-spec"))
         record_context_signature(context->grammar, unit, node,
                                  tu_state(unit));
-    if ((nt_is(context->grammar, node, "context-exit")
-         || nt_is(context->grammar, node, "context-error")
-         || nt_is(context->grammar, node, "context-ensure"))
-        && nt_is(context->grammar, child, "context-hook-params"))
+    if ((NT_IS(context->grammar, node, "context-exit")
+         || NT_IS(context->grammar, node, "context-error")
+         || NT_IS(context->grammar, node, "context-ensure"))
+        && NT_IS(context->grammar, child, "context-hook-params"))
         record_context_hook_signature(context->grammar, unit, node,
                                       tu_state(unit));
     return semantic_walk_status(walk);
@@ -1590,7 +1608,7 @@ run_semantic_walk(parse_grammar_t *grammar, th_ctx *types,
     n00bb_tu_state_t *state = tu_state(unit);
     if (!root || !state || !state->annotations) return false;
     core_string_t package = n00bb_package_id(unit);
-    if (!th_ctx_set_scope(types, unit->module.identifier.data, package.data))
+    if (!th_ctx_set_scope(types, unit->module.identifier, package))
         return false;
     annotation_context_t context = {
         .grammar = grammar,
@@ -1648,9 +1666,9 @@ static void
 collect_import_statements(parse_grammar_t *grammar, parse_tree_t *node,
                           core_list_t(n00bb_tree_ptr_t) *imports)
 {
-    if (!node || core_tree_is_leaf(node) || nt_is(grammar, node, "func-def"))
+    if (!node || core_tree_is_leaf(node) || NT_IS(grammar, node, "func-def"))
         return;
-    if (nt_is(grammar, node, "import-stmt")) {
+    if (NT_IS(grammar, node, "import-stmt")) {
         core_list_push(*imports, node);
         return;
     }
@@ -1700,7 +1718,7 @@ reject_imported_module_names(parse_grammar_t *grammar,
     bool distinct = true;
     for (size_t i = 0; i < imports.len; i++) {
         core_string_t name = first_token_text(
-            child_nt(grammar, imports.data[i], "member-chain"));
+            CHILD_NT(grammar, imports.data[i], "member-chain"));
         if (!name.u8_bytes) continue;
         for (size_t s = 0; s < sizeof(scopes) / sizeof(scopes[0]); s++)
             for (parse_sym_entry_t *symbol = scopes[s]
@@ -1732,8 +1750,7 @@ declare_unit(parse_grammar_t *grammar, th_ctx *types,
     n00bb_tu_state_t *state = tu_state(unit);
     parse_tree_t *tree = state ? n00bb_tu_parsed_tree(state) : nullptr;
     core_string_t package = n00bb_package_id(unit);
-    if (!tree || !th_ctx_set_scope(types, unit->module.identifier.data,
-                                   package.data)
+    if (!tree || !th_ctx_set_scope(types, unit->module.identifier, package)
         || !prepare_initial_symbols(unit, types)) return false;
     state->semantic_annotation_started = true;
     parse_annot_result_set_node_callback(state->annotations,
@@ -1756,18 +1773,18 @@ declare_unit(parse_grammar_t *grammar, th_ctx *types,
 
 static th_type *
 nominal_declaration_type(parse_grammar_t *grammar, th_ctx *types,
-                         parse_tree_t *declaration, const char *qualified)
+                         parse_tree_t *declaration, core_string_t qualified)
 {
-    if (nt_is(grammar, declaration, "variant-decl"))
+    if (NT_IS(grammar, declaration, "variant-decl"))
         return th_variant(types, qualified, nullptr, 0);
-    if (nt_is(grammar, declaration, "alias-stmt")
+    if (NT_IS(grammar, declaration, "alias-stmt")
         && alias_declaration_is_transparent(declaration))
         return th_var(types);
     bool nominal = field_record_declaration(grammar, declaration)
-        || nt_is(grammar, declaration, "enum-stmt")
-        || nt_is(grammar, declaration, "flagset-stmt")
-        || nt_is(grammar, declaration, "callback-decl")
-        || nt_is(grammar, declaration, "alias-stmt");
+        || NT_IS(grammar, declaration, "enum-stmt")
+        || NT_IS(grammar, declaration, "flagset-stmt")
+        || NT_IS(grammar, declaration, "callback-decl")
+        || NT_IS(grammar, declaration, "alias-stmt");
     return nominal ? th_name(types, qualified) : nullptr;
 }
 
@@ -1786,7 +1803,7 @@ declare_nominal_types(parse_grammar_t *grammar, th_ctx *types,
             append_module_type_name(unit, symbol->name, &qualified);
             if (qualified.data)
                 symbol->type = nominal_declaration_type(grammar, types,
-                    symbol->decl_node, qualified.data);
+                    symbol->decl_node, core_buffer_string(&qualified));
             core_buffer_release(&qualified);
         }
 }
@@ -1799,18 +1816,18 @@ static parse_tree_t *
 module_constant_declaration(parse_grammar_t *grammar, parse_sym_entry_t *symbol)
 {
     if (!symbol || symbol->kind != PARSE_SYM_VARIABLE || !symbol->decl_node
-        || !nt_is(grammar, symbol->decl_node, "sym-decl")) return nullptr;
+        || !NT_IS(grammar, symbol->decl_node, "sym-decl")) return nullptr;
     parse_tree_t *declaration = symbol->decl_node;
-    while (declaration && !nt_is(grammar, declaration, "variable-decl"))
+    while (declaration && !NT_IS(grammar, declaration, "variable-decl"))
         declaration = parse_tree_parent(declaration);
-    parse_tree_t *prefix = child_nt(grammar, declaration,
+    parse_tree_t *prefix = CHILD_NT(grammar, declaration,
                                     "declaration-prefix");
-    if (!prefix || !core_string_eq(first_token_text(child_nt(grammar, prefix,
+    if (!prefix || !core_string_eq(first_token_text(CHILD_NT(grammar, prefix,
             "binding-kind")), CORE_STRING_STATIC("const"))) return nullptr;
     for (parse_tree_t *at = parse_tree_parent(declaration); at;
          at = parse_tree_parent(at))
         if (executable_scope_node(grammar, at)
-            || nt_is(grammar, at, "func-def")) return nullptr;
+            || NT_IS(grammar, at, "func-def")) return nullptr;
     return declaration;
 }
 

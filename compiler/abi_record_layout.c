@@ -38,7 +38,8 @@ compare_fields(const n00bb_record_field_t *fields, size_t a, size_t b,
         && left->occupied_bits != right->occupied_bits)
         return left->occupied_bits > right->occupied_bits ? -1 : 1;
     if (structural && kind != SORT_DECLARATION) {
-        int names = strcmp(left->normalized_name, right->normalized_name);
+        int names = core_string_cmp(left->normalized_name,
+                                    right->normalized_name);
         if (names) return names;
         if (left->child_typehash != right->child_typehash)
             return left->child_typehash < right->child_typehash ? -1 : 1;
@@ -186,7 +187,7 @@ n00bb_abi_place_record(const n00bb_record_field_t *fields, size_t count,
     uint64_t alignment = 8;
     for (size_t i = 0; i < count; i++) {
         const n00bb_record_field_t *field = &fields[i];
-        if (!field->normalized_name || !field->child_typehash
+        if (!field->normalized_name.data || !field->child_typehash
             || !power_of_two(field->alignment_bits)
             || (field->alignment_bits != 1 && field->alignment_bits < 8)
             || field->occupied_bits > field->extent_bits
@@ -198,8 +199,8 @@ n00bb_abi_place_record(const n00bb_record_field_t *fields, size_t count,
             alignment = field->alignment_bits;
         for (size_t j = 0; j < i; j++)
             if (fields[j].declaration_ordinal == field->declaration_ordinal
-                || !strcmp(fields[j].normalized_name,
-                           field->normalized_name)) return false;
+                || core_string_eq(fields[j].normalized_name,
+                                  field->normalized_name)) return false;
     }
     size_t *aligned = core_alloc_array(size_t, count);
     size_t *unaligned = core_alloc_array(size_t, count);

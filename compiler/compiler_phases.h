@@ -28,6 +28,6 @@ bool n00bb_build_executable(core_link_unit_t *link,
                             n00bb_link_analysis_t *analysis,
                             parse_cmdr_result_t *args,
                             bool debug_enabled, bool native_cpu,
-                            const char *compiler_path,
+                            core_string_t compiler_path,
                             const n00bb_native_inputs_t *native,
                             core_diagnostics_t *diagnostics);

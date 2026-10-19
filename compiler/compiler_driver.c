@@ -86,7 +86,7 @@ enum { N00BB_JOB_LOCATE_TU = 1, N00BB_JOB_PREPROCESS = 2 };
 
 typedef struct {
     core_work_job_t *job;
-    char *operand;
+    core_string_t operand;
     bool root_input;
     core_module_resolve_status_t resolve_status;
     bool resolve_attempted;
@@ -148,12 +148,12 @@ request_for_job(locate_requests_t *requests, core_work_job_t *job)
 static bool
 request_snapshot(locate_requests_t *requests,
                  pthread_mutex_t *requests_lock, core_work_job_t *job,
-                 char **operand, bool *root_input)
+                 core_string_t *operand, bool *root_input)
 {
     if (requests_lock) pthread_mutex_lock(requests_lock);
     locate_request_t *request = request_for_job(requests, job);
     if (request) {
-        *operand = core_strdup(request->operand);
+        *operand = core_string_dup(request->operand);
         *root_input = request->root_input;
     }
     if (requests_lock) pthread_mutex_unlock(requests_lock);
@@ -164,7 +164,7 @@ static bool
 add_locate_request_for_module(core_work_queue_t *queue,
                    locate_requests_t *requests,
                    pthread_mutex_t *requests_lock,
-                   const core_module_spec_t *module, const char *operand,
+                   const core_module_spec_t *module, core_string_t operand,
                    bool root_input, bool allow_existing,
                    core_work_job_t **job_out)
 {
@@ -175,10 +175,11 @@ add_locate_request_for_module(core_work_queue_t *queue,
     if (submitted == CORE_WORK_INVALID
         || submitted == CORE_WORK_DEPENDENCY_FAILED) {
         core_buffer_t message = {0};
-        core_buffer_printf(&message, "cannot schedule '%s'", operand);
+        core_buffer_printf(&message, "cannot schedule '%.*s'",
+                           (int)operand.u8_bytes, operand.data);
         core_diagnostics_report(requests->diagnostics, nullptr,
             CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-B0020"),
-            core_string_from_cstr(message.data));
+            core_buffer_string(&message));
         core_buffer_release(&message);
         if (requests_lock) pthread_mutex_unlock(requests_lock);
         return false;
@@ -186,7 +187,7 @@ add_locate_request_for_module(core_work_queue_t *queue,
 
     locate_request_t *prior = request_for_job(requests, job);
     if (prior) {
-        if (!allow_existing && strcmp(prior->operand, operand)) {
+        if (!allow_existing && !core_string_eq(prior->operand, operand)) {
             core_string_t name = core_work_job_module(job)->identifier;
             core_buffer_t message = {0};
             core_buffer_printf(&message,
@@ -194,7 +195,7 @@ add_locate_request_for_module(core_work_queue_t *queue,
                 (int)name.u8_bytes, name.data);
             core_diagnostics_report(requests->diagnostics, nullptr,
                 CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-B0021"),
-                core_string_from_cstr(message.data));
+                core_buffer_string(&message));
             core_buffer_release(&message);
             if (requests_lock) pthread_mutex_unlock(requests_lock);
             return false;
@@ -206,7 +207,7 @@ add_locate_request_for_module(core_work_queue_t *queue,
     }
     core_list_push(requests->ordered, ((locate_request_t){
         .job = job,
-        .operand = core_strdup(operand),
+        .operand = core_string_dup(operand),
         .root_input = root_input,
     }));
     core_dict_add(&requests->by_job, job,
@@ -219,16 +220,16 @@ add_locate_request_for_module(core_work_queue_t *queue,
 static bool
 add_locate_request(core_work_queue_t *queue,
                    locate_requests_t *requests,
-                   const char *operand)
+                   core_string_t operand)
 {
     core_module_spec_t module = {0};
     if (!n00bb_operand_module_spec(operand, &module)) {
         core_buffer_t message = {0};
-        core_buffer_printf(&message, "invalid module or file name '%s'",
-                           operand);
+        core_buffer_printf(&message, "invalid module or file name '%.*s'",
+                           (int)operand.u8_bytes, operand.data);
         core_diagnostics_report(requests->diagnostics, nullptr,
             CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-B0022"),
-            core_string_from_cstr(message.data));
+            core_buffer_string(&message));
         core_buffer_release(&message);
         return false;
     }
@@ -243,7 +244,7 @@ dump_token(parse_grammar_t *grammar, core_translation_unit_t *unit,
            parse_token_info_t *token)
 {
     core_string_t path = core_source_file_path(&unit->source);
-    const char *source = core_source_file_contents(&unit->source);
+    const char *source = core_source_file_contents(&unit->source).data;
     size_t source_size = core_source_file_size(&unit->source);
     core_string_t name = parse_terminal_name(grammar, parse_token_tid(token));
     size_t token_end = parse_token_end_byte(token);
@@ -275,52 +276,71 @@ dump_token(parse_grammar_t *grammar, core_translation_unit_t *unit,
 static void
 dump_tree(parse_grammar_t *grammar, parse_tree_t *tree)
 {
-    char *text = parse_tree_dump_str(grammar, tree, false);
-    if (text) {
-        fputs(text, stdout);
-        core_free(text);
+    core_string_t text = parse_tree_dump_str(grammar, tree, false);
+    if (text.data) {
+        fwrite(text.data, 1, text.u8_bytes, stdout);
+        core_free(text.data);
     }
 }
 
-static const char *
+#define TEXT_ARGS(text) (int)(text).u8_bytes, (text).data
+
+static core_string_t
 symbol_kind_name(parse_sym_kind_t kind)
 {
-    static const char *names[] = {
-        "variable", "function", "type", "tag", "enum-constant", "label",
-        "parameter", "module",
+    static const core_string_t names[] = {
+        CORE_STRING_STATIC("variable"), CORE_STRING_STATIC("function"),
+        CORE_STRING_STATIC("type"), CORE_STRING_STATIC("tag"),
+        CORE_STRING_STATIC("enum-constant"), CORE_STRING_STATIC("label"),
+        CORE_STRING_STATIC("parameter"), CORE_STRING_STATIC("module"),
     };
-    return (size_t)kind < sizeof(names) / sizeof(names[0]) ? names[kind]
-                                                           : "unknown";
+    return (size_t)kind < sizeof(names) / sizeof(names[0])
+        ? names[kind] : CORE_STRING_STATIC("unknown");
 }
 
-static const char *
+static core_string_t
 symbol_mutability_name(parse_sym_mutability_t mutability)
 {
-    static const char *names[] = {"mutable", "immutable", "const", "global"};
+    static const core_string_t names[] = {
+        CORE_STRING_STATIC("mutable"), CORE_STRING_STATIC("immutable"),
+        CORE_STRING_STATIC("const"), CORE_STRING_STATIC("global"),
+    };
     return (size_t)mutability < sizeof(names) / sizeof(names[0])
-        ? names[mutability] : "unknown";
+        ? names[mutability] : CORE_STRING_STATIC("unknown");
 }
 
-static const char *
+static core_string_t
 symbol_phase_name(parse_sym_phase_t phase)
 {
     switch (phase) {
-    case PARSE_SYM_PHASE_NONE: return "none";
-    case PARSE_SYM_PHASE_COMPTIME: return "comptime";
-    case PARSE_SYM_PHASE_RUNTIME: return "runtime";
-    case PARSE_SYM_PHASE_BOTH: return "comptime+runtime";
+    case PARSE_SYM_PHASE_NONE: return CORE_STRING_STATIC("none");
+    case PARSE_SYM_PHASE_COMPTIME: return CORE_STRING_STATIC("comptime");
+    case PARSE_SYM_PHASE_RUNTIME: return CORE_STRING_STATIC("runtime");
+    case PARSE_SYM_PHASE_BOTH: return CORE_STRING_STATIC("comptime+runtime");
     }
-    return "invalid";
+    return CORE_STRING_STATIC("invalid");
 }
 
-static const char *
+static core_string_t
 static_value_kind_name(n00bb_static_value_kind_t kind)
 {
-    static const char *names[] = {
-        "bool", "int", "float", "string", "sequence", "tuple",
-        "record", "nil", "variant"};
+    static const core_string_t names[] = {
+        CORE_STRING_STATIC("bool"), CORE_STRING_STATIC("int"),
+        CORE_STRING_STATIC("float"), CORE_STRING_STATIC("string"),
+        CORE_STRING_STATIC("sequence"), CORE_STRING_STATIC("tuple"),
+        CORE_STRING_STATIC("record"), CORE_STRING_STATIC("nil"),
+        CORE_STRING_STATIC("variant")};
     return (size_t)kind < sizeof(names) / sizeof(names[0])
-        ? names[kind] : "invalid";
+        ? names[kind] : CORE_STRING_STATIC("invalid");
+}
+
+static core_string_t
+shape_extent_kind_name(ir_shape_extent_kind_t kind)
+{
+    return kind == IR_SHAPE_EXTENT_STATIC ? CORE_STRING_STATIC("static")
+        : kind == IR_SHAPE_EXTENT_COMPTIME ? CORE_STRING_STATIC("comptime")
+        : kind == IR_SHAPE_EXTENT_RUNTIME ? CORE_STRING_STATIC("runtime")
+        : CORE_STRING_STATIC("unresolved");
 }
 
 static void
@@ -370,7 +390,8 @@ static void
 dump_static_value(const n00bb_static_value_t *value)
 {
     if (!value) return;
-    printf(" static-value=%s:", static_value_kind_name(value->kind));
+    printf(" static-value=%.*s:",
+           TEXT_ARGS(static_value_kind_name(value->kind)));
     dump_static_value_contents(value, 0);
 }
 
@@ -405,11 +426,17 @@ dump_symbols(core_translation_unit_t *unit)
             core_list_push(symbols, symbol);
         for (size_t i = symbols.len; i > 0; i--) {
             parse_sym_entry_t *symbol = symbols.data[i - 1];
-            printf("    %.*s: %s, %s", (int)symbol->name.u8_bytes,
-                   symbol->name.data, symbol_kind_name(symbol->kind),
-                   symbol_mutability_name(symbol->mutability));
-            if (symbol->type && state->types)
-                printf(", type=%s", n00bb_print_type(state->types, symbol->type));
+            core_string_t kind_name = symbol_kind_name(symbol->kind);
+            core_string_t mutability_name =
+                symbol_mutability_name(symbol->mutability);
+            printf("    %.*s: %.*s, %.*s", (int)symbol->name.u8_bytes,
+                   symbol->name.data, TEXT_ARGS(kind_name),
+                   TEXT_ARGS(mutability_name));
+            if (symbol->type && state->types) {
+                core_string_t printed = n00bb_print_type(state->types,
+                                                         symbol->type);
+                printf(", type=%.*s", TEXT_ARGS(printed));
+            }
             else if (symbol->type)
                 printf(", type=<known>");
             else
@@ -422,17 +449,14 @@ dump_symbols(core_translation_unit_t *unit)
                 for (uint32_t d = 0; d < ir_shape_rank(array_shape); d++) {
                     ir_shape_extent_t extent;
                     if (!ir_shape_extent(array_shape, d, &extent)) continue;
-                    const char *kind = extent.kind == IR_SHAPE_EXTENT_STATIC
-                        ? "static"
-                        : extent.kind == IR_SHAPE_EXTENT_COMPTIME
-                            ? "comptime"
-                        : extent.kind == IR_SHAPE_EXTENT_RUNTIME
-                            ? "runtime" : "unresolved";
-                    printf(", dim%u=%s", d, kind);
+                    core_string_t kind = shape_extent_kind_name(extent.kind);
+                    printf(", dim%u=%.*s", d, TEXT_ARGS(kind));
                     if (extent.producer)
-                        printf("(producer=%s)", extent.producer->name);
-                    else if (extent.producer_identifier)
-                        printf("(producer=%s)", extent.producer_identifier);
+                        printf("(producer=%.*s)",
+                               TEXT_ARGS(extent.producer->name));
+                    else if (extent.producer_identifier.data)
+                        printf("(producer=%.*s)",
+                               TEXT_ARGS(extent.producer_identifier));
                 }
             }
             if (symbol->member_scope)
@@ -481,9 +505,11 @@ dump_symbols(core_translation_unit_t *unit)
             if (symbol->visibility.data)
                 printf(", visibility=%.*s", (int)symbol->visibility.u8_bytes,
                        symbol->visibility.data);
-            if (symbol->error_type && state->types)
-                printf(", error=%s", n00bb_print_type(state->types,
-                                               symbol->error_type));
+            if (symbol->error_type && state->types) {
+                core_string_t printed = n00bb_print_type(state->types,
+                                                         symbol->error_type);
+                printf(", error=%.*s", TEXT_ARGS(printed));
+            }
             if (symbol->direction.data)
                 printf(", direction=%.*s", (int)symbol->direction.u8_bytes,
                        symbol->direction.data);
@@ -492,9 +518,11 @@ dump_symbols(core_translation_unit_t *unit)
                        symbol->pass_by.data);
             if (symbol->is_optional) printf(", optional");
             if (symbol->is_variadic) printf(", variadic");
-            if (symbol->error_type && state->types)
-                printf(", error=%s", n00bb_print_type(state->types,
-                                               symbol->error_type));
+            if (symbol->error_type && state->types) {
+                core_string_t printed = n00bb_print_type(state->types,
+                                                         symbol->error_type);
+                printf(", error=%.*s", TEXT_ARGS(printed));
+            }
             if (symbol->direction.data)
                 printf(", direction=%.*s", (int)symbol->direction.u8_bytes,
                        symbol->direction.data);
@@ -502,13 +530,17 @@ dump_symbols(core_translation_unit_t *unit)
                 printf(", pass_by=%.*s", (int)symbol->pass_by.u8_bytes,
                        symbol->pass_by.data);
             if (symbol->is_thread_local) printf(", thread-local");
-            printf(", phases=%s, mutable-in=%s, initializer-in=%s",
-                   symbol_phase_name(symbol->phases),
-                   symbol_phase_name(symbol->mutable_phases),
-                   symbol_phase_name(symbol->initializer_phases));
-            printf(", storage-duration=%s",
-                   parse_sym_storage_duration_name(
-                       symbol->storage_duration));
+            core_string_t phases = symbol_phase_name(symbol->phases);
+            core_string_t mutable_phases =
+                symbol_phase_name(symbol->mutable_phases);
+            core_string_t initializer_phases =
+                symbol_phase_name(symbol->initializer_phases);
+            printf(", phases=%.*s, mutable-in=%.*s, initializer-in=%.*s",
+                   TEXT_ARGS(phases), TEXT_ARGS(mutable_phases),
+                   TEXT_ARGS(initializer_phases));
+            core_string_t storage_duration = parse_sym_storage_duration_name(
+                symbol->storage_duration);
+            printf(", storage-duration=%.*s", TEXT_ARGS(storage_duration));
             printf(", lifetime-region=%llu, aliases=%zu, aliased-by=%zu",
                    (unsigned long long)symbol->lifetime.region,
                    parse_sym_alias_count(symbol),
@@ -600,53 +632,58 @@ dump_symbols(core_translation_unit_t *unit)
     }
 }
 
-static const char *
+static core_string_t
 link_stage_state_name(core_link_stage_state_t state)
 {
     switch (state) {
-    case CORE_LINK_STAGE_PENDING: return "pending";
-    case CORE_LINK_STAGE_RUNNING: return "running";
-    case CORE_LINK_STAGE_COMPLETE: return "complete";
-    case CORE_LINK_STAGE_UNAVAILABLE: return "unavailable";
-    case CORE_LINK_STAGE_FAILED: return "failed";
+    case CORE_LINK_STAGE_PENDING: return CORE_STRING_STATIC("pending");
+    case CORE_LINK_STAGE_RUNNING: return CORE_STRING_STATIC("running");
+    case CORE_LINK_STAGE_COMPLETE: return CORE_STRING_STATIC("complete");
+    case CORE_LINK_STAGE_UNAVAILABLE: return CORE_STRING_STATIC("unavailable");
+    case CORE_LINK_STAGE_FAILED: return CORE_STRING_STATIC("failed");
     }
-    return "invalid";
+    return CORE_STRING_STATIC("invalid");
 }
 
-static const char *
+static core_string_t
 link_contribution_state_name(core_link_contribution_state_t state)
 {
     switch (state) {
-    case CORE_LINK_CONTRIBUTION_PENDING: return "pending";
-    case CORE_LINK_CONTRIBUTION_COMPLETE: return "complete";
-    case CORE_LINK_CONTRIBUTION_UNAVAILABLE: return "unavailable";
-    case CORE_LINK_CONTRIBUTION_FAILED: return "failed";
+    case CORE_LINK_CONTRIBUTION_PENDING: return CORE_STRING_STATIC("pending");
+    case CORE_LINK_CONTRIBUTION_COMPLETE:
+        return CORE_STRING_STATIC("complete");
+    case CORE_LINK_CONTRIBUTION_UNAVAILABLE:
+        return CORE_STRING_STATIC("unavailable");
+    case CORE_LINK_CONTRIBUTION_FAILED: return CORE_STRING_STATIC("failed");
     }
-    return "invalid";
+    return CORE_STRING_STATIC("invalid");
 }
 
-static const char *
+static core_string_t
 link_dependency_state_name(core_link_dependency_state_t state)
 {
     switch (state) {
-    case CORE_LINK_DEPENDENCY_RESOLVED: return "resolved";
-    case CORE_LINK_DEPENDENCY_DEFERRED: return "deferred";
-    case CORE_LINK_DEPENDENCY_EXTERNAL: return "external";
-    case CORE_LINK_DEPENDENCY_UNAVAILABLE: return "unavailable";
-    case CORE_LINK_DEPENDENCY_FAILED: return "failed";
+    case CORE_LINK_DEPENDENCY_RESOLVED: return CORE_STRING_STATIC("resolved");
+    case CORE_LINK_DEPENDENCY_DEFERRED: return CORE_STRING_STATIC("deferred");
+    case CORE_LINK_DEPENDENCY_EXTERNAL: return CORE_STRING_STATIC("external");
+    case CORE_LINK_DEPENDENCY_UNAVAILABLE:
+        return CORE_STRING_STATIC("unavailable");
+    case CORE_LINK_DEPENDENCY_FAILED: return CORE_STRING_STATIC("failed");
     }
-    return "invalid";
+    return CORE_STRING_STATIC("invalid");
 }
 
-static const char *
+static core_string_t
 cleanup_release_policy_name(n00bb_cleanup_release_policy_t policy)
 {
     switch (policy) {
-    case N00BB_CLEANUP_RELEASE_NONE: return "none";
-    case N00BB_CLEANUP_RELEASE_RUNTIME_MANAGED: return "runtime-managed";
-    case N00BB_CLEANUP_RELEASE_POLICY_UNAVAILABLE: return "unavailable";
+    case N00BB_CLEANUP_RELEASE_NONE: return CORE_STRING_STATIC("none");
+    case N00BB_CLEANUP_RELEASE_RUNTIME_MANAGED:
+        return CORE_STRING_STATIC("runtime-managed");
+    case N00BB_CLEANUP_RELEASE_POLICY_UNAVAILABLE:
+        return CORE_STRING_STATIC("unavailable");
     }
-    return "invalid";
+    return CORE_STRING_STATIC("invalid");
 }
 
 static void
@@ -659,8 +696,9 @@ dump_link_unit(core_link_unit_t *link)
         uint32_t kind = core_link_unit_stage_kind(link, i);
         core_string_t provenance = core_link_unit_stage_provenance(link,
                                                                     kind);
-        printf("    %u %s (%.*s)\n", kind,
-               link_stage_state_name(core_link_unit_stage_state(link, kind)),
+        core_string_t state_name = link_stage_state_name(
+            core_link_unit_stage_state(link, kind));
+        printf("    %u %.*s (%.*s)\n", kind, TEXT_ARGS(state_name),
                (int)provenance.u8_bytes,
                provenance.data ? provenance.data : "");
     }
@@ -668,25 +706,26 @@ dump_link_unit(core_link_unit_t *link)
     for (size_t i = 0; i < core_link_unit_contribution_count(link); i++) {
         core_link_contribution_view_t fact;
         if (!core_link_unit_contribution_at(link, i, &fact)) continue;
-        printf("    %.*s:%.*s v%u %s (%.*s)\n",
+        core_string_t state_name = link_contribution_state_name(fact.state);
+        printf("    %.*s:%.*s v%u %.*s (%.*s)\n",
                (int)(fact.module.data ? fact.module.u8_bytes : 11),
                fact.module.data ? fact.module.data : "<link-unit>",
                (int)fact.domain.u8_bytes, fact.domain.data, fact.version,
-               link_contribution_state_name(fact.state),
+               TEXT_ARGS(state_name),
                (int)fact.provenance.u8_bytes,
                fact.provenance.data ? fact.provenance.data : "");
     }
-    static const char *binding_roles[] = {
-        "n00bb.ir.function",
-        "n00bb.ir.comptime.function",
-        "n00bb.ir.global",
-        "n00bb.semantic.type",
-        "ir.array-shape",
-        "n00bb.semantic.declaration-facts",
-        "n00bb.ir.context.enter",
-        "n00bb.ir.context.exit",
-        "n00bb.ir.context.error",
-        "n00bb.ir.context.ensure",
+    static const core_string_t binding_roles[] = {
+        CORE_STRING_STATIC("n00bb.ir.function"),
+        CORE_STRING_STATIC("n00bb.ir.comptime.function"),
+        CORE_STRING_STATIC("n00bb.ir.global"),
+        CORE_STRING_STATIC("n00bb.semantic.type"),
+        CORE_STRING_STATIC("ir.array-shape"),
+        CORE_STRING_STATIC("n00bb.semantic.declaration-facts"),
+        CORE_STRING_STATIC("n00bb.ir.context.enter"),
+        CORE_STRING_STATIC("n00bb.ir.context.exit"),
+        CORE_STRING_STATIC("n00bb.ir.context.error"),
+        CORE_STRING_STATIC("n00bb.ir.context.ensure"),
     };
     puts("  declarations:");
     for (size_t i = 0; i < core_link_unit_declaration_count(link); i++) {
@@ -700,26 +739,27 @@ dump_link_unit(core_link_unit_t *link)
                core_link_declaration_kind(declaration));
         for (size_t r = 0;
              r < sizeof(binding_roles) / sizeof(binding_roles[0]); r++) {
-            if (core_link_declaration_binding(declaration,
-                    core_string_from_cstr(binding_roles[r])))
-                printf(" binding %s", binding_roles[r]);
+            if (core_link_declaration_binding(declaration, binding_roles[r]))
+                printf(" binding %.*s", TEXT_ARGS(binding_roles[r]));
         }
         bool has_context_hooks = false;
         for (size_t r = 6; r < sizeof(binding_roles) / sizeof(binding_roles[0]);
              r++)
             has_context_hooks |= core_link_declaration_binding(declaration,
-                core_string_from_cstr(binding_roles[r])) != nullptr;
+                binding_roles[r]) != nullptr;
         n00bb_link_payload_t *facts = core_link_declaration_binding(
             declaration,
             CORE_STRING_STATIC("n00bb.semantic.declaration-facts"));
         if (facts) {
-            printf(" facts[dimensions=%u, initializers=%zu, phases=%s, "
-                   "storage=%s, alias-analysis=%s]",
+            core_string_t phases = symbol_phase_name(facts->phases);
+            core_string_t storage = parse_sym_storage_duration_name(
+                facts->storage_duration);
+            printf(" facts[dimensions=%u, initializers=%zu, phases=%.*s, "
+                   "storage=%.*s, alias-analysis=%s]",
                    ir_shape_rank(parse_sym_binding(facts->symbol,
                        CORE_STRING_STATIC("ir.array-shape"))),
                    facts->initializers.len,
-                   symbol_phase_name(facts->phases),
-                   parse_sym_storage_duration_name(facts->storage_duration),
+                   TEXT_ARGS(phases), TEXT_ARGS(storage),
                    facts->alias_analysis_complete ? "complete" : "incomplete");
             if (facts->symbol
                 && (facts->symbol->kind == PARSE_SYM_FUNCTION
@@ -768,18 +808,23 @@ dump_link_unit(core_link_unit_t *link)
                 for (size_t c = 0; c < facts->cleanup_facts.len; c++) {
                     const n00bb_cleanup_fact_t *cleanup =
                         &facts->cleanup_facts.data[c];
-                    printf(" cleanup-range[%.*s,phase=%s,storage=%s,"
-                           "release=%s,cfg-edges=%zu,endpoints=%zu,point-endpoints=%zu,"
+                    core_string_t cleanup_phase =
+                        symbol_phase_name(cleanup->phase);
+                    core_string_t cleanup_storage =
+                        parse_sym_storage_duration_name(
+                            cleanup->storage_duration);
+                    core_string_t cleanup_release =
+                        cleanup_release_policy_name(cleanup->release_policy);
+                    printf(" cleanup-range[%.*s,phase=%.*s,storage=%.*s,"
+                           "release=%.*s,cfg-edges=%zu,endpoints=%zu,point-endpoints=%zu,"
                            "edge-endpoints=%zu,exits=%zu,safe-exits=%zu,"
                            "live-exits=%zu,unknown-exits=%zu,evidence=%s,"
                            "finalizer=unspecified]",
                            (int)cleanup->symbol->name.u8_bytes,
                            cleanup->symbol->name.data,
-                           symbol_phase_name(cleanup->phase),
-                           parse_sym_storage_duration_name(
-                               cleanup->storage_duration),
-                           cleanup_release_policy_name(
-                               cleanup->release_policy),
+                           TEXT_ARGS(cleanup_phase),
+                           TEXT_ARGS(cleanup_storage),
+                           TEXT_ARGS(cleanup_release),
                            cleanup->cfg_edges,
                            cleanup->safe_endpoints,
                            cleanup->point_endpoints,
@@ -809,17 +854,13 @@ dump_link_unit(core_link_unit_t *link)
             for (uint32_t d = 0; d < ir_shape_rank(array_shape); d++) {
                 ir_shape_extent_t extent;
                 if (!ir_shape_extent(array_shape, d, &extent)) continue;
-                const char *kind = extent.kind == IR_SHAPE_EXTENT_STATIC
-                    ? "static"
-                    : extent.kind == IR_SHAPE_EXTENT_COMPTIME
-                        ? "comptime"
-                    : extent.kind == IR_SHAPE_EXTENT_RUNTIME
-                        ? "runtime" : "unresolved";
-                printf(",dim%u=%s", d, kind);
+                core_string_t kind = shape_extent_kind_name(extent.kind);
+                printf(",dim%u=%.*s", d, TEXT_ARGS(kind));
                 if (extent.producer)
-                    printf(":producer=%s", extent.producer->name);
-                else if (extent.producer_identifier)
-                    printf(":producer=%s", extent.producer_identifier);
+                    printf(":producer=%.*s", TEXT_ARGS(extent.producer->name));
+                else if (extent.producer_identifier.data)
+                    printf(":producer=%.*s",
+                           TEXT_ARGS(extent.producer_identifier));
             }
             printf("]");
             ir_shape_measure_t element_count;
@@ -827,7 +868,8 @@ dump_link_unit(core_link_unit_t *link)
                 && element_count.kind == IR_SHAPE_MEASURE_COMPTIME) {
                 printf(" array-element-count=comptime");
                 if (element_count.producer)
-                    printf(":producer=%s", element_count.producer->name);
+                    printf(":producer=%.*s",
+                           TEXT_ARGS(element_count.producer->name));
             }
         }
         for (size_t site_index = 0;
@@ -836,10 +878,12 @@ dump_link_unit(core_link_unit_t *link)
             core_link_declaration_site_view_t site = {0};
             if (!core_link_declaration_site(declaration, site_index, &site))
                 continue;
-            const char *origin = site.origin == CORE_LINK_ORIGIN_SOURCE
-                ? "source" : site.origin == CORE_LINK_ORIGIN_LIBRARY
-                ? "library" : "external-requirement";
-            printf(" site-provenance[%s]=%.*s", origin,
+            core_string_t origin = site.origin == CORE_LINK_ORIGIN_SOURCE
+                ? CORE_STRING_STATIC("source")
+                : site.origin == CORE_LINK_ORIGIN_LIBRARY
+                ? CORE_STRING_STATIC("library")
+                : CORE_STRING_STATIC("external-requirement");
+            printf(" site-provenance[%.*s]=%.*s", TEXT_ARGS(origin),
                    (int)site.provenance.u8_bytes,
                    site.provenance.data ? site.provenance.data : "");
         }
@@ -860,10 +904,11 @@ dump_link_unit(core_link_unit_t *link)
         core_string_t target_key = target
             ? core_link_declaration_key(target)
             : core_link_reference_key(reference);
-        const char *state = target ? "resolved"
-            : core_link_reference_is_deferred(reference) ? "deferred"
-            : "unresolved";
-        printf("    %s %.*s -> %.*s:%.*s", state,
+        core_string_t state = target ? CORE_STRING_STATIC("resolved")
+            : core_link_reference_is_deferred(reference)
+            ? CORE_STRING_STATIC("deferred")
+            : CORE_STRING_STATIC("unresolved");
+        printf("    %.*s %.*s -> %.*s:%.*s", TEXT_ARGS(state),
                (int)(referrer ? referrer->module.identifier.u8_bytes : 0),
                referrer ? referrer->module.identifier.data : "",
                (int)(target_module.data ? target_module.u8_bytes : 9),
@@ -892,38 +937,40 @@ dump_link_unit(core_link_unit_t *link)
             ? core_link_declaration_key(edge.from) : (core_string_t){0};
         core_string_t to_module = core_link_declaration_module(edge.to);
         core_string_t to_key = core_link_declaration_key(edge.to);
-        const char *kind = edge.kind == N00BB_LINK_DEPENDENCY_CALL
-            ? "call" : edge.kind == N00BB_LINK_DEPENDENCY_TRAIT_DISPATCH
-            ? "trait-dispatch"
+#define S CORE_STRING_STATIC
+        core_string_t kind = edge.kind == N00BB_LINK_DEPENDENCY_CALL
+            ? S("call") : edge.kind == N00BB_LINK_DEPENDENCY_TRAIT_DISPATCH
+            ? S("trait-dispatch")
             : edge.kind == N00BB_LINK_DEPENDENCY_CONTEXT_CALL
-            ? "context-call"
+            ? S("context-call")
             : edge.kind == N00BB_LINK_DEPENDENCY_INITIALIZER_USE
-            ? "initializer-use"
+            ? S("initializer-use")
             : edge.kind == N00BB_LINK_DEPENDENCY_INITIALIZER_ORDER
-            ? "initializer-order"
+            ? S("initializer-order")
             : edge.kind == N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_READ
-            ? "function-global-read"
+            ? S("function-global-read")
             : edge.kind == N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_WRITE
-            ? "function-global-write"
+            ? S("function-global-write")
             : edge.kind == N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_READ_WRITE
-            ? "function-global-read-write"
+            ? S("function-global-read-write")
             : edge.kind == N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_ALIAS
-            ? "function-global-alias"
+            ? S("function-global-alias")
             : edge.kind == N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_UNKNOWN
-            ? "function-global-unknown"
+            ? S("function-global-unknown")
             : edge.kind == N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_READ_SUMMARY
-            ? "function-global-read-summary"
+            ? S("function-global-read-summary")
             : edge.kind == N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_WRITE_SUMMARY
-            ? "function-global-write-summary"
+            ? S("function-global-write-summary")
             : edge.kind == N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_READ_WRITE_SUMMARY
-            ? "function-global-read-write-summary"
+            ? S("function-global-read-write-summary")
             : edge.kind == N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_ALIAS_SUMMARY
-            ? "function-global-alias-summary"
+            ? S("function-global-alias-summary")
             : edge.kind == N00BB_LINK_DEPENDENCY_TRAIT_SPECIALIZATION
-            ? "trait-specialization" : "other";
-        printf("    %s[%s] %.*s:%.*s -> %.*s:%.*s",
-               kind,
-               link_dependency_state_name(edge.state),
+            ? S("trait-specialization") : S("other");
+#undef S
+        core_string_t edge_state = link_dependency_state_name(edge.state);
+        printf("    %.*s[%.*s] %.*s:%.*s -> %.*s:%.*s",
+               TEXT_ARGS(kind), TEXT_ARGS(edge_state),
                (int)(from_module.data ? from_module.u8_bytes : 13),
                from_module.data ? from_module.data : "<initializer>",
                (int)from_key.u8_bytes,
@@ -939,9 +986,11 @@ dump_link_unit(core_link_unit_t *link)
             n00bb_trait_specialization_t *fact =
                 (n00bb_trait_specialization_t *)edge.source_site;
             n00bb_tu_state_t *state = tu_state(edge.source_unit);
-            if (fact->receiver_type && state && state->types)
-                printf(" (receiver=%s",
-                       n00bb_print_type(state->types, fact->receiver_type));
+            if (fact->receiver_type && state && state->types) {
+                core_string_t receiver = n00bb_print_type(state->types,
+                                                          fact->receiver_type);
+                printf(" (receiver=%.*s", TEXT_ARGS(receiver));
+            }
             else printf(" (");
             if (fact->trait_site) {
                 core_diag_location_t trait_location =
@@ -997,12 +1046,13 @@ record_resolve_status(locate_worker_context_t *context,
 }
 
 static bool
-n00bb_type_bracket_disambiguator(void *opaque, const char *predicate,
+n00bb_type_bracket_disambiguator(void *opaque, core_string_t predicate,
                                  parse_token_info_t *token)
 {
     (void)opaque;
     (void)token;
-    return !strcmp(predicate, "n00bb_prefer_type_application");
+    return core_string_eq(predicate,
+        CORE_STRING_STATIC("n00bb_prefer_type_application"));
 }
 
 static bool
@@ -1010,14 +1060,14 @@ make_interface_module_source(locate_worker_context_t *context,
                              const core_module_spec_t *module,
                              core_source_file_t *source)
 {
-    const char *package = interface_package_for_module(
+    core_string_t package = interface_package_for_module(
         &context->interfaces, module->identifier);
-    if (!package) return false;
+    if (!package.data) return false;
     core_buffer_t path = {0};
     core_buffer_printf(&path, "<interface:%.*s>",
         (int)module->identifier.u8_bytes, module->identifier.data);
     bool initialized = core_source_file_init(source,
-        core_string_borrow(path.data, path.byte_len), "", 0);
+        core_buffer_string(&path), CORE_STRING_STATIC(""));
     core_buffer_release(&path);
     if (!initialized) return false;
     n00bb_source_file_set_package(source, package);
@@ -1027,7 +1077,7 @@ make_interface_module_source(locate_worker_context_t *context,
 static bool
 process_locate_job(locate_worker_context_t *context, core_work_job_t *job)
 {
-    char *operand = nullptr;
+    core_string_t operand = {0};
     bool root_input = false;
     if (!request_snapshot(context->requests, context->requests_lock, job,
                           &operand, &root_input)) {
@@ -1041,12 +1091,9 @@ process_locate_job(locate_worker_context_t *context, core_work_job_t *job)
     bool interface_allowed = !context->cache
         || (module && n00bb_cache_has_module(context->cache,
                                              module->identifier));
-    bool logical_import = !root_input && module && operand
+    bool logical_import = !root_input && module && operand.data
         && interface_allowed
-        && ((strlen(operand) == module->identifier.u8_bytes
-             && !memcmp(operand, module->identifier.data,
-                        module->identifier.u8_bytes))
-            || context->cache);
+        && (core_string_eq(operand, module->identifier) || context->cache);
     core_module_resolve_status_t status = CORE_MODULE_NOT_FOUND;
     if (logical_import
         && make_interface_module_source(context, module, &source)) {
@@ -1070,7 +1117,7 @@ process_locate_job(locate_worker_context_t *context, core_work_job_t *job)
             }
         }
     }
-    core_free(operand);
+    core_free(operand.data);
     record_resolve_status(context, job, status);
     if (status != CORE_MODULE_RESOLVED) {
         core_module_spec_release(&resolved);
@@ -1092,11 +1139,12 @@ process_locate_job(locate_worker_context_t *context, core_work_job_t *job)
 
     bool ok = true;
     if (context->lex) {
-        const char *contents = core_source_file_contents(&unit->source);
+        core_string_t contents = core_source_file_contents(&unit->source);
         size_t length = core_source_file_size(&unit->source);
         n00bb_lex_result_t *result = core_alloc(n00bb_lex_result_t);
         memset(result, 0, sizeof(*result));
-        result->tokens = scan_tokenize_owned(context->grammar, contents, length);
+        result->tokens = scan_tokenize_owned(context->grammar,
+            core_string_borrow(contents.data, length));
         if (!result->tokens) {
             core_free(result);
             ok = false;
@@ -1172,7 +1220,7 @@ process_locate_job(locate_worker_context_t *context, core_work_job_t *job)
                     core_diagnostics_report(
                         core_translation_unit_diagnostics(unit), unit,
                         CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-P0001"),
-                        core_string_from_cstr(message.data));
+                        core_buffer_string(&message));
                     core_buffer_release(&message);
                     ok = false;
                 }
@@ -1212,10 +1260,10 @@ append_import_names(parse_grammar_t *grammar, parse_tree_t *node,
         }
         return;
     }
-    if (!nt_is(grammar, node, "member-chain")) return;
+    if (!nt_is(grammar, node, CORE_STRING_STATIC("member-chain"))) return;
     for (size_t i = 0; i < core_tree_num_children(node); i++) {
         parse_tree_t *child = core_tree_child(node, i);
-        if (nt_is(grammar, child, "member-chain"))
+        if (nt_is(grammar, child, CORE_STRING_STATIC("member-chain")))
             append_import_names(grammar, child, name, has_name);
         else if (core_tree_is_leaf(child))
             append_import_names(grammar, child, name, has_name);
@@ -1247,16 +1295,19 @@ find_string_token(parse_grammar_t *grammar, parse_tree_t *node)
     return nullptr;
 }
 
+#define import_error(unit, statement, lit) \
+    import_report((unit), (statement), CORE_STRING_STATIC(lit))
+
 static void
-import_error(core_translation_unit_t *unit, parse_tree_t *statement,
-             const char *message)
+import_report(core_translation_unit_t *unit, parse_tree_t *statement,
+              core_string_t message)
 {
     parse_token_info_t *token = parse_tree_find_first_terminal(statement);
     core_buffer_t *text = core_buffer_empty();
+    core_buffer_append_string(text, message);
     if (token)
-        core_buffer_printf(text, "%s at line %u, column %u", message,
+        core_buffer_printf(text, " at line %u, column %u",
                            parse_token_line(token), parse_token_column(token));
-    else core_buffer_append(text, message, strlen(message));
     core_diagnostics_report(core_translation_unit_diagnostics(unit), unit,
         CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-PP0004"),
         core_string_borrow(text->data, text->byte_len));
@@ -1267,7 +1318,7 @@ static bool
 reject_unsupported_import_locator(n00bb_resolver_t *resolver,
                                   core_translation_unit_t *unit,
                                   parse_tree_t *statement,
-                                  const char *operand)
+                                  core_string_t operand)
 {
     core_string_t scheme = {0};
     if (n00bb_resolver_supports_locator(resolver, operand, &scheme))
@@ -1276,7 +1327,7 @@ reject_unsupported_import_locator(n00bb_resolver_t *resolver,
     core_buffer_printf(&message,
         "unsupported source locator scheme '%.*s'",
         (int)scheme.u8_bytes, scheme.data);
-    import_error(unit, statement, message.data);
+    import_report(unit, statement, core_buffer_string(&message));
     core_buffer_release(&message);
     return true;
 }
@@ -1285,8 +1336,8 @@ static bool
 import_request_details(n00bb_resolver_t *resolver, parse_grammar_t *grammar,
                       parse_tree_t *statement,
                       core_translation_unit_t *importer,
-                      core_module_spec_t *module, char **operand_out,
-                      char **source_name_out)
+                      core_module_spec_t *module, core_string_t *operand_out,
+                      core_string_t *source_name_out)
 {
     parse_tree_t *member = parse_tree_find_flat_child_by_nt_name(
         grammar, statement, CORE_STRING_STATIC("member-chain"));
@@ -1328,13 +1379,12 @@ import_request_details(n00bb_resolver_t *resolver, parse_grammar_t *grammar,
         resolver, importer, source_name, module);
     bool initialized = internal || core_module_spec_init(module, source_name);
     if (initialized) {
-        *operand_out = internal
-            ? core_strndup(module->identifier.data, module->identifier.u8_bytes)
-            : core_strndup(operand.data, operand.u8_bytes);
-        *source_name_out = core_strndup(source_name.data, source_name.u8_bytes);
+        *operand_out = core_string_dup(internal ? module->identifier
+                                                : operand);
+        *source_name_out = core_string_dup(source_name);
     }
     core_buffer_free(name);
-    if (!initialized || !*operand_out || !*source_name_out) {
+    if (!initialized || !operand_out->data || !source_name_out->data) {
         import_error(importer, statement, "cannot form imported module identity");
         return false;
     }
@@ -1347,14 +1397,14 @@ prepare_import(void *opaque, parse_grammar_t *grammar, parse_tree_t *statement,
 {
     import_driver_t *driver = opaque;
     core_module_spec_t module = {0};
-    char *operand = nullptr;
-    char *source_name = nullptr;
+    core_string_t operand = {0};
+    core_string_t source_name = {0};
     if (!import_request_details(driver->resolver, grammar, statement, importer,
                                 &module, &operand, &source_name)) return false;
     if (reject_unsupported_import_locator(driver->resolver, importer,
                                           statement, operand)) {
-        core_free(operand);
-        core_free(source_name);
+        core_free(operand.data);
+        core_free(source_name.data);
         core_module_spec_release(&module);
         return false;
     }
@@ -1362,8 +1412,8 @@ prepare_import(void *opaque, parse_grammar_t *grammar, parse_tree_t *statement,
     bool scheduled = add_locate_request_for_module(driver->queue,
         driver->requests, driver->requests_lock, &module, operand, false,
         true, &job);
-    core_free(operand);
-    core_free(source_name);
+    core_free(operand.data);
+    core_free(source_name.data);
     core_module_spec_release(&module);
     if (!scheduled)
         import_error(importer, statement, "cannot schedule imported module");
@@ -1477,13 +1527,10 @@ discover_package_import(import_driver_t *driver,
     for (size_t i = 0; status == CORE_MODULE_RESOLVED
             && i < candidates.modules.len; i++) {
         core_module_spec_t *candidate = &candidates.modules.data[i];
-        char *operand = core_strndup(candidate->identifier.data,
-                                     candidate->identifier.u8_bytes);
         core_work_job_t *job = nullptr;
         bool scheduled = add_locate_request_for_module(driver->queue,
-            driver->requests, driver->requests_lock, candidate, operand,
-            false, true, &job);
-        core_free(operand);
+            driver->requests, driver->requests_lock, candidate,
+            candidate->identifier, false, true, &job);
         if (!scheduled || !wait_for_locate_job(driver, job)) continue;
         core_translation_unit_t *unit = core_work_job_result(driver->queue,
                                                               job);
@@ -1513,7 +1560,7 @@ discover_package_import(import_driver_t *driver,
                 "package interface '%.*s' has multiple declarations",
                 (int)logical->identifier.u8_bytes,
                 logical->identifier.data);
-            import_error(importer, statement, message.data);
+            import_report(importer, statement, core_buffer_string(&message));
             core_buffer_release(&message);
             selected_job = nullptr;
             selected = nullptr;
@@ -1602,8 +1649,8 @@ load_interface_imports(import_driver_t *driver, parse_grammar_t *grammar,
 static bool
 load_import_module(import_driver_t *driver, parse_grammar_t *grammar,
                    parse_tree_t *statement, core_translation_unit_t *importer,
-                   core_module_spec_t *module, const char *operand,
-                   const char *source_name,
+                   core_module_spec_t *module, core_string_t operand,
+                   core_string_t source_name,
                    core_translation_unit_t **imported_out,
                    parse_tree_t **tree_out)
 {
@@ -1648,10 +1695,10 @@ load_import_module(import_driver_t *driver, parse_grammar_t *grammar,
         return false;
     }
     core_string_t imported_name = module->identifier;
-    if (statement && source_name && strcmp(source_name, operand)
+    if (statement && source_name.data
+        && !core_string_eq(source_name, operand)
         && n00bb_same_package(importer, imported)
-        && !record_import_alias(importer,
-            core_string_from_cstr(source_name), imported)) {
+        && !record_import_alias(importer, source_name, imported)) {
         import_error(importer, statement,
                      "cannot retain internal module import");
         return false;
@@ -1669,7 +1716,7 @@ load_import_module(import_driver_t *driver, parse_grammar_t *grammar,
     }
     if (statement && n00bb_same_package(importer, imported)
         && find_package_declaration(imported,
-            core_string_from_cstr(source_name ? source_name : ""))) {
+            source_name.data ? source_name : CORE_STRING_STATIC(""))) {
         import_error(importer, statement,
             "a package cannot import its own external namespace; use its internal module name");
         return false;
@@ -1755,15 +1802,13 @@ load_package_reference(import_driver_t *driver, parse_grammar_t *grammar,
         core_string_t child_name = core_string_borrow(path.data, child_end);
         if (find_direct_import(unit, child_name)) continue;
         core_module_spec_t module = {0};
-        char *operand = core_strndup(child_name.data, child_name.u8_bytes);
         core_translation_unit_t *imported = nullptr;
         parse_tree_t *imported_tree = nullptr;
-        bool loaded = operand && core_module_spec_init(&module, child_name)
+        bool loaded = core_module_spec_init(&module, child_name)
             && load_import_module(driver, grammar, node, unit, &module,
-                                  operand, operand, &imported,
+                                  child_name, child_name, &imported,
                                   &imported_tree);
         core_module_spec_release(&module);
-        core_free(operand);
         if (!loaded) return false;
     }
     return true;
@@ -1810,15 +1855,16 @@ collect_postprune_package_syntax(parse_grammar_t *grammar,
     core_list_t(parse_tree_ptr_t) *references)
 {
     if (!node || core_tree_is_leaf(node)) return;
-    bool package = nt_is(grammar, node, "package-decl");
+    bool package = nt_is(grammar, node, CORE_STRING_STATIC("package-decl"));
     if (package && !inside_package) core_list_push(*declarations, node);
-    if (nt_is(grammar, node, "export-stmt")) core_list_push(*exports, node);
+    if (nt_is(grammar, node, CORE_STRING_STATIC("export-stmt")))
+        core_list_push(*exports, node);
     for (size_t i = 0; i < core_tree_num_children(node); i++)
         collect_postprune_package_syntax(grammar, core_tree_child(node, i),
             inside_package || package, declarations, exports, references);
-    if (nt_is(grammar, node, "postfix-expr")
-        || nt_is(grammar, node, "member-chain")
-        || nt_is(grammar, node, "dotted-name"))
+    if (nt_is(grammar, node, CORE_STRING_STATIC("postfix-expr"))
+        || nt_is(grammar, node, CORE_STRING_STATIC("member-chain"))
+        || nt_is(grammar, node, CORE_STRING_STATIC("dotted-name")))
         core_list_push(*references, node);
 }
 
@@ -1869,15 +1915,13 @@ static bool
 restore_interface_import_aliases(import_driver_t *driver,
                                  core_translation_unit_t *unit)
 {
-    char *module_name = core_strndup(unit->module.identifier.data,
-                                     unit->module.identifier.u8_bytes);
+    core_string_t module_name = unit->module.identifier;
     size_t size = 0;
-    const uint8_t *data = module_name
+    const uint8_t *data = module_name.data
         ? interface_owned_metadata(&driver->loader->interfaces,
             TH_ENV_METADATA_ENVIRONMENT, module_name,
-            "n00b.module-import-aliases", 1, &size)
+            CORE_STRING_STATIC("n00b.module-import-aliases"), 1, &size)
         : nullptr;
-    core_free(module_name);
     if (!data) return true;
     if (size < 4) return false;
     uint32_t count = read_u32_le(data);
@@ -1915,24 +1959,23 @@ load_interface_imports(import_driver_t *driver, parse_grammar_t *grammar,
                      "interface module has malformed package declarations");
         return false;
     }
-    char *module_name = core_strndup(module.data, module.u8_bytes);
+    core_string_t module_name = module;
     size_t size = 0;
-    const uint8_t *data = module_name
+    const uint8_t *data = module_name.data
         ? interface_owned_metadata(&driver->loader->interfaces,
             TH_ENV_METADATA_ENVIRONMENT, module_name,
-            "n00b.module-imports", 1, &size)
+            CORE_STRING_STATIC("n00b.module-imports"), 1, &size)
         : nullptr;
-    if (!data && module_name)
+    if (!data && module_name.data)
         data = interface_owned_metadata(&driver->loader->interfaces,
             TH_ENV_METADATA_ENVIRONMENT, module_name,
-            "n00b.package-imports", 1, &size);
-    bool module_interface = module_name
+            CORE_STRING_STATIC("n00b.package-imports"), 1, &size);
+    bool module_interface = module_name.data
         && interface_owned_metadata(&driver->loader->interfaces,
             TH_ENV_METADATA_ENVIRONMENT, module_name,
-            "n00b.module-interface", 1, nullptr);
-    bool package_only = !data && module_name && !module_interface;
+            CORE_STRING_STATIC("n00b.module-interface"), 1, nullptr);
+    bool package_only = !data && module_name.data && !module_interface;
     tu_state(unit)->package_interface = !module_interface;
-    core_free(module_name);
     if (package_only) return true;
     if (!data || size < 4) {
         import_error(unit, nullptr, "interface module has no import graph");
@@ -1949,14 +1992,12 @@ load_interface_imports(import_driver_t *driver, parse_grammar_t *grammar,
         core_string_t name = core_string_borrow(
             (const char *)data + offset, length);
         core_module_spec_t spec = {0};
-        char *operand = core_strndup(name.data, name.u8_bytes);
         core_translation_unit_t *imported = nullptr;
         parse_tree_t *tree = nullptr;
-        bool ok = operand && core_module_spec_init(&spec, name)
+        bool ok = core_module_spec_init(&spec, name)
             && load_import_module(driver, grammar, nullptr, unit, &spec,
-                                  operand, nullptr, &imported, &tree);
+                                  name, (core_string_t){0}, &imported, &tree);
         core_module_spec_release(&spec);
-        core_free(operand);
         if (!ok) return false;
         offset += length;
         if (i + 1 == count && offset == size)
@@ -1971,7 +2012,7 @@ load_interface_imports(import_driver_t *driver, parse_grammar_t *grammar,
 static n00bb_literal_origin_t
 literal_origin(core_translation_unit_t *unit, parse_token_info_t *token)
 {
-    const char *contents = core_source_file_contents(&unit->source);
+    const char *contents = core_source_file_contents(&unit->source).data;
     uint32_t line = parse_token_line(token);
     uint32_t column = parse_token_column(token);
     size_t content_start = 0;
@@ -2037,7 +2078,7 @@ load_module_literal(void *opaque, parse_grammar_t *grammar,
             generator = &driver->generators->items[i];
     parse_token_info_t *token = parse_node_token(literal);
     if (!generator || !token) return false;
-    const char *contents = core_source_file_contents(&importer->source);
+    const char *contents = core_source_file_contents(&importer->source).data;
     size_t content_start = 0;
     size_t content_end = 0;
     parse_token_content_span(token, &content_start, &content_end);
@@ -2065,7 +2106,8 @@ load_module_literal(void *opaque, parse_grammar_t *grammar,
                   importer, natives, origins)
         && core_module_spec_init(&module, id)
         && load_import_module(driver, grammar, literal, importer, &module,
-               identifier.data, nullptr, module_out, tree_out)
+               core_buffer_string(&identifier), (core_string_t){0},
+               module_out, tree_out)
         && record_import_alias(importer, name, *module_out);
     core_module_spec_release(&module);
     core_buffer_release(&identifier);
@@ -2081,14 +2123,14 @@ load_import(void *opaque, parse_grammar_t *grammar, parse_tree_t *statement,
 {
     import_driver_t *driver = opaque;
     core_module_spec_t module = {0};
-    char *operand = nullptr;
-    char *source_name = nullptr;
+    core_string_t operand = {0};
+    core_string_t source_name = {0};
     if (!import_request_details(driver->resolver, grammar, statement, importer,
                                 &module, &operand, &source_name)) return false;
     bool loaded = load_import_module(driver, grammar, statement, importer,
         &module, operand, source_name, imported_out, tree_out);
-    core_free(operand);
-    core_free(source_name);
+    core_free(operand.data);
+    core_free(source_name.data);
     core_module_spec_release(&module);
     return loaded;
 }
@@ -2108,16 +2150,10 @@ load_implicit_builtin(void *opaque, parse_grammar_t *grammar,
     import_driver_t *driver = opaque;
     core_module_spec_t module = {0};
     if (!core_module_spec_init(&module, module_name)) return false;
-    char *operand = core_strndup(module_name.data, module_name.u8_bytes);
-    if (!operand) {
-        core_module_spec_release(&module);
-        return false;
-    }
     core_translation_unit_t *imported = nullptr;
     parse_tree_t *tree = nullptr;
     bool loaded = load_import_module(driver, grammar, nullptr, importer,
-        &module, operand, nullptr, &imported, &tree);
-    core_free(operand);
+        &module, module_name, (core_string_t){0}, &imported, &tree);
     core_module_spec_release(&module);
     return loaded;
 }
@@ -2214,21 +2250,24 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
         core_translation_unit_t *unit = core_work_job_result(queue, job);
         if (!job_ok) success = false;
         if (!unit) {
-            const char *operand = request->operand;
+            core_string_t operand = request->operand;
             core_module_resolve_status_t status = request->resolve_attempted
                 ? request->resolve_status : CORE_MODULE_RESOLVE_ERROR;
             core_string_t searched = n00bb_resolver_search_description(
                 resolver, operand);
             core_buffer_t message = {0};
-            core_buffer_printf(&message, "%s '%s'",
+            core_buffer_printf(&message, "%s '%.*s'",
                 status == CORE_MODULE_NOT_FOUND ? "cannot locate" : "cannot read",
-                operand);
-            if (searched.data) core_buffer_printf(&message, "\n%s", searched.data);
+                TEXT_ARGS(operand));
+            if (searched.data) {
+                core_buffer_putc(&message, '\n');
+                core_buffer_append_string(&message, searched);
+            }
             core_diagnostics_report(diags, nullptr, CORE_DIAG_ERROR,
                 status == CORE_MODULE_NOT_FOUND
                     ? CORE_STRING_STATIC("N00BB-B0001")
                     : CORE_STRING_STATIC("N00BB-B0002"),
-                core_string_from_cstr(message.data));
+                core_buffer_string(&message));
             core_buffer_release(&message);
             core_free(searched.data);
             continue;
@@ -2473,8 +2512,11 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
     if (!diagnostics_have_outer_owner && core_diagnostics_count(diags)) {
         fflush(stdout);
         n00bb_resolver_remap_diagnostics(resolver, diags);
-        char *text = core_diagnostics_render_text(diags);
-        if (text) { fputs(text, stderr); core_free(text); }
+        core_string_t text = core_diagnostics_render_text(diags);
+        if (text.data) {
+            fwrite(text.data, 1, text.u8_bytes, stderr);
+            core_free(text.data);
+        }
     }
     core_diagnostics_free(diags);
     return success;
@@ -2491,7 +2533,7 @@ release_requests(core_work_queue_t *queue,
             core_translation_unit_release(unit);
             core_free(unit);
         }
-        core_free(requests->ordered.data[i].operand);
+        core_free(requests->ordered.data[i].operand.data);
     }
     core_list_free(requests->ordered);
     core_dict_free(&requests->by_job);
@@ -2506,18 +2548,29 @@ n00bb_profile_seconds(void)
 }
 
 static bool
-n00bb_format_write(const char *path, const char *text, size_t length)
+n00bb_format_write(core_string_t target, core_string_t contents)
 {
+    const char *text = contents.data;
+    size_t length = contents.u8_bytes;
+    char *path = core_string_to_cstr(target);
+    if (!path) return false;
     struct stat info;
     mode_t mode = 0644;
     if (!stat(path, &info)) {
-        if (!S_ISREG(info.st_mode)) return false;
+        if (!S_ISREG(info.st_mode)) {
+            core_free(path);
+            return false;
+        }
         mode = info.st_mode & 07777;
     }
-    else if (errno != ENOENT) return false;
-    size_t path_len = strlen(path);
-    char *temporary = core_alloc_array(char, path_len + 16);
-    snprintf(temporary, path_len + 16, "%s.fmt.XXXXXX", path);
+    else if (errno != ENOENT) {
+        core_free(path);
+        return false;
+    }
+    core_buffer_t temporary_name = {0};
+    core_buffer_append_string(&temporary_name, target);
+    core_buffer_puts(&temporary_name, ".fmt.XXXXXX");
+    char *temporary = temporary_name.data;
     int fd = mkstemp(temporary);
     bool ok = fd >= 0 && !fchmod(fd, mode);
     for (size_t written = 0; ok && written < length;) {
@@ -2528,7 +2581,8 @@ n00bb_format_write(const char *path, const char *text, size_t length)
     if (fd >= 0 && close(fd)) ok = false;
     if (ok) ok = !rename(temporary, path);
     if (!ok && fd >= 0) unlink(temporary);
-    core_free(temporary);
+    core_buffer_release(&temporary_name);
+    core_free(path);
     return ok;
 }
 
@@ -2563,19 +2617,19 @@ n00bb_format_newline_count(const char *text, size_t length)
     return count;
 }
 
-static char *
+static core_string_t
 n00bb_format_restore_breaks(parse_grammar_t *grammar,
-                            core_string_t source, const char *printed)
+                            core_string_t source, core_string_t printed_text)
 {
-    size_t printed_len = strlen(printed);
-    parse_token_stream_t *original = scan_tokenize_owned(grammar,
-        source.data, source.u8_bytes);
+    const char *printed = printed_text.data;
+    size_t printed_len = printed_text.u8_bytes;
+    parse_token_stream_t *original = scan_tokenize_owned(grammar, source);
     parse_token_stream_t *rendered = scan_tokenize_owned(grammar,
-        printed, printed_len);
+                                                         printed_text);
     if (!original || !rendered) {
         scan_token_stream_free(original);
         scan_token_stream_free(rendered);
-        return nullptr;
+        return (core_string_t){0};
     }
     while (scan_stream_next(original)) {}
     while (scan_stream_next(rendered)) {}
@@ -2704,9 +2758,9 @@ n00bb_format_restore_breaks(parse_grammar_t *grammar,
     scan_token_stream_free(rendered);
     if (!valid) {
         core_buffer_release(&result);
-        return nullptr;
+        return (core_string_t){0};
     }
-    return result.data;
+    return core_buffer_string(&result);
 }
 
 typedef struct {
@@ -2721,12 +2775,15 @@ typedef struct {
     int kind;
 } n00bb_format_line_t;
 
+#define n00bb_format_word(text, length, at, lit) \
+    n00bb_format_word_text((text), (length), (at), CORE_STRING_STATIC(lit))
+
 static bool
-n00bb_format_word(const char *text, size_t length, size_t *at,
-                  const char *word)
+n00bb_format_word_text(const char *text, size_t length, size_t *at,
+                       core_string_t word)
 {
-    size_t count = strlen(word);
-    if (*at + count > length || memcmp(text + *at, word, count))
+    size_t count = word.u8_bytes;
+    if (*at + count > length || memcmp(text + *at, word.data, count))
         return false;
     if (*at + count < length) {
         char c = text[*at + count];
@@ -2808,10 +2865,11 @@ n00bb_format_line_classify(n00bb_format_line_t *line, bool in_record)
             }
 }
 
-static char *
-n00bb_format_align(const char *text)
+static core_string_t
+n00bb_format_align(core_string_t input)
 {
-    size_t length = strlen(text), count = 0;
+    const char *text = input.data;
+    size_t length = input.u8_bytes, count = 0;
     for (size_t i = 0; i < length; i++)
         if (text[i] == '\n') count++;
     n00bb_format_line_t *lines = core_alloc_array(n00bb_format_line_t,
@@ -2893,7 +2951,7 @@ n00bb_format_align(const char *text)
         i = end;
     }
     core_free(lines);
-    return result.data;
+    return core_buffer_string(&result);
 }
 
 typedef struct {
@@ -2968,10 +3026,11 @@ n00bb_signature_row(const char *text, n00bb_signature_line_t *line,
     while (*end > *start && text[*end - 1] == ' ') (*end)--;
 }
 
-static char *
-n00bb_format_signatures(const char *text)
+static core_string_t
+n00bb_format_signatures(core_string_t input)
 {
-    size_t length = strlen(text);
+    const char *text = input.data;
+    size_t length = input.u8_bytes;
     size_t count = n00bb_format_newline_count(text, length) + 1;
     n00bb_signature_line_t *lines = core_alloc_array(
         n00bb_signature_line_t, count);
@@ -3099,14 +3158,15 @@ n00bb_format_signatures(const char *text)
         first = last + 1;
     }
     core_free(lines);
-    return result.data;
+    return core_buffer_string(&result);
 }
 
-static char *
-n00bb_format_channels(const char *text)
+static core_string_t
+n00bb_format_channels(core_string_t input)
 {
+    const char *text = input.data;
     core_buffer_t result = {0};
-    size_t length = strlen(text), start = 0, paren_column = 0;
+    size_t length = input.u8_bytes, start = 0, paren_column = 0;
     size_t signature_close = SIZE_MAX;
     for (size_t i = 0; i <= length; i++) {
         if (i != length && text[i] != '\n') continue;
@@ -3162,8 +3222,12 @@ n00bb_format_channels(const char *text)
                 prior_len--;
             bool previous_closes_params = prior_len
                 && result.data[prior_start + prior_len - 1] == ')';
+            core_string_t prior_text = core_string_slice(
+                core_buffer_string(&result), prior_start,
+                result.byte_len - prior_start);
             bool previous_has_channel = prior_len
-                && strstr(result.data + prior_start, "-> ")
+                && core_string_find(prior_text,
+                                    CORE_STRING_STATIC("-> ")) >= 0
                 && !memchr(result.data + prior_start, '{', prior_len);
             if (((channel && previous_closes_params)
                  || (opening_brace && (previous_closes_params
@@ -3189,15 +3253,14 @@ n00bb_format_channels(const char *text)
         if (i < length) core_buffer_putc(&result, '\n');
         start = i + 1;
     }
-    return result.data;
+    return core_buffer_string(&result);
 }
 
 static parse_pwz_parser_t *
-n00bb_format_parse(parse_grammar_t *grammar, const char *text,
+n00bb_format_parse(parse_grammar_t *grammar, core_string_t text,
                    parse_token_stream_t **tokens_out)
 {
-    parse_token_stream_t *tokens = scan_tokenize_owned(grammar,
-        text, strlen(text));
+    parse_token_stream_t *tokens = scan_tokenize_owned(grammar, text);
     if (!tokens) return nullptr;
     while (scan_stream_next(tokens)) {}
     bool ok = discard_ignored_layout(grammar, tokens);
@@ -3225,7 +3288,7 @@ n00bb_format_parse(parse_grammar_t *grammar, const char *text,
 }
 
 static bool
-n00bb_format_parses(parse_grammar_t *grammar, const char *text)
+n00bb_format_parses(parse_grammar_t *grammar, core_string_t text)
 {
     parse_token_stream_t *tokens = nullptr;
     parse_pwz_parser_t *parser = n00bb_format_parse(grammar, text, &tokens);
@@ -3238,7 +3301,7 @@ n00bb_format_parses(parse_grammar_t *grammar, const char *text)
 typedef struct {
     size_t at;
     size_t end;
-    char *type;
+    core_string_t type;
 } n00bb_format_type_insertion_t;
 
 static int
@@ -3257,8 +3320,9 @@ n00bb_format_type_names(parse_grammar_t *grammar, parse_tree_t *node,
 {
     if (!node) return;
     if (!core_tree_is_leaf(node)) {
-        in_type = in_type || nt_is(grammar, node, "type-spec")
-            || nt_is(grammar, node, "one-tspec");
+        in_type = in_type
+            || nt_is(grammar, node, CORE_STRING_STATIC("type-spec"))
+            || nt_is(grammar, node, CORE_STRING_STATIC("one-tspec"));
         for (size_t i = 0; i < core_tree_num_children(node); i++)
             n00bb_format_type_names(grammar, core_tree_child(node, i),
                 source, insertions, used, capacity, in_type);
@@ -3272,55 +3336,57 @@ n00bb_format_type_names(parse_grammar_t *grammar, parse_tree_t *node,
     if (end > source.u8_bytes || (start && source.data[start - 1] == '.'))
         return;
     size_t length = end - start;
-    const char *replacement = nullptr;
+    core_string_t replacement = {0};
     if (length == 3 && !memcmp(source.data + start, "u64", 3))
-        replacement = "uint";
+        replacement = CORE_STRING_STATIC("uint");
     else if (length == 3
              && !memcmp(source.data + start, "i64", 3))
-        replacement = "int";
-    if (replacement)
+        replacement = CORE_STRING_STATIC("int");
+    if (replacement.data)
         insertions[(*used)++] = (n00bb_format_type_insertion_t){
             .at = start,
             .end = end,
-            .type = core_strdup(replacement),
+            .type = core_string_dup(replacement),
         };
 }
 
-static char *
-n00bb_format_canonical_type(const char *type)
+static core_string_t
+n00bb_format_canonical_type(core_string_t printed)
 {
     core_buffer_t result = {0};
-    size_t length = strlen(type);
+    const char *type = printed.data;
+    size_t length = printed.u8_bytes;
     for (size_t i = 0; i < length;) {
         bool left = i == 0 || !(type[i - 1] == '.'
             || type[i - 1] == '_'
             || (type[i - 1] >= 'a' && type[i - 1] <= 'z')
             || (type[i - 1] >= 'A' && type[i - 1] <= 'Z')
             || (type[i - 1] >= '0' && type[i - 1] <= '9'));
-        bool right = i + 3 <= length && !(type[i + 3] == '_'
-            || (type[i + 3] >= 'a' && type[i + 3] <= 'z')
-            || (type[i + 3] >= 'A' && type[i + 3] <= 'Z')
-            || (type[i + 3] >= '0' && type[i + 3] <= '9'));
-        if (left && right && !strncmp(type + i, "u64", 3)) {
+        bool right = i + 3 <= length && (i + 3 == length
+            || !(type[i + 3] == '_'
+                 || (type[i + 3] >= 'a' && type[i + 3] <= 'z')
+                 || (type[i + 3] >= 'A' && type[i + 3] <= 'Z')
+                 || (type[i + 3] >= '0' && type[i + 3] <= '9')));
+        if (left && right && !memcmp(type + i, "u64", 3)) {
             core_buffer_puts(&result, "uint");
             i += 3;
         }
-        else if (left && right && !strncmp(type + i, "i64", 3)) {
+        else if (left && right && !memcmp(type + i, "i64", 3)) {
             core_buffer_puts(&result, "int");
             i += 3;
         }
         else core_buffer_putc(&result, type[i++]);
     }
-    return result.data;
+    return core_buffer_string(&result);
 }
 
-static char *
+static core_string_t
 n00bb_format_inferred_types(parse_grammar_t *grammar,
                             n00bb_tu_state_t *state, core_string_t source)
 {
     parse_symtab_t *symtab = state->annotations
         ? state->annotations->symtab : nullptr;
-    if (!symtab) return core_strndup(source.data, source.u8_bytes);
+    if (!symtab) return core_string_dup(source);
     size_t capacity = state->lex && state->lex->tokens
         ? (size_t)scan_stream_token_count(state->lex->tokens) : 0;
     for (parse_scope_t *scope = symtab->all_scopes; scope;
@@ -3341,8 +3407,10 @@ n00bb_format_inferred_types(parse_grammar_t *grammar,
              symbol = symbol->next_in_scope) {
             if (symbol->kind != PARSE_SYM_VARIABLE || !symbol->type
                 || !symbol->decl_node
-                || !nt_is(grammar, symbol->decl_node, "sym-decl")
-                || child_nt(grammar, symbol->decl_node, "type-spec")
+                || !nt_is(grammar, symbol->decl_node,
+                          CORE_STRING_STATIC("sym-decl"))
+                || child_nt(grammar, symbol->decl_node,
+                            CORE_STRING_STATIC("type-spec"))
                 || !core_tree_num_children(symbol->decl_node))
                 continue;
             parse_tree_t *name = core_tree_child(symbol->decl_node, 0);
@@ -3356,10 +3424,12 @@ n00bb_format_inferred_types(parse_grammar_t *grammar,
                 || memcmp(source.data + start,
                           symbol->name.data, symbol->name.u8_bytes))
                 continue;
-            const char *printed = n00bb_print_type(state->types,
-                                                   symbol->type);
-            if (!printed || !*printed || strchr(printed, '<')
-                || strchr(printed, '$') || strchr(printed, '%'))
+            core_string_t printed = n00bb_print_type(state->types,
+                                                     symbol->type);
+            if (!printed.data || !printed.u8_bytes
+                || core_string_find_byte(printed, '<') >= 0
+                || core_string_find_byte(printed, '$') >= 0
+                || core_string_find_byte(printed, '%') >= 0)
                 continue;
             if (used == capacity) continue;
             insertions[used++] = (n00bb_format_type_insertion_t){
@@ -3379,16 +3449,16 @@ n00bb_format_inferred_types(parse_grammar_t *grammar,
                                insertions[i].at - cursor);
             if (insertions[i].at == insertions[i].end)
                 core_buffer_puts(&result, ": ");
-            core_buffer_puts(&result, insertions[i].type);
+            core_buffer_append_string(&result, insertions[i].type);
             cursor = insertions[i].end;
         }
-        core_free(insertions[i].type);
+        core_free(insertions[i].type.data);
     }
     core_buffer_append(&result, source.data + cursor,
                        source.u8_bytes - cursor);
     core_free(insertions);
-    return result.data ? result.data
-        : core_strndup(source.data, source.u8_bytes);
+    return result.data ? core_buffer_string(&result)
+                       : core_string_dup(source);
 }
 
 static bool
@@ -3419,71 +3489,69 @@ n00bb_format_units(parse_grammar_t *grammar, core_work_queue_t *queue,
         }
         core_string_t path = core_source_file_path(&unit->source);
         core_string_t source = core_string_borrow(
-            core_source_file_contents(&unit->source),
+            core_source_file_contents(&unit->source).data,
             core_source_file_size(&unit->source));
-        char *normalized = normalize
-            ? n00bb_format_inferred_types(grammar, state, source) : nullptr;
+        core_string_t normalized = normalize
+            ? n00bb_format_inferred_types(grammar, state, source)
+            : (core_string_t){0};
         parse_token_stream_t *normalized_tokens = nullptr;
-        parse_pwz_parser_t *normalized_parser = normalized
+        parse_pwz_parser_t *normalized_parser = normalized.data
             ? n00bb_format_parse(grammar, normalized, &normalized_tokens)
             : nullptr;
-        if (normalized && !normalized_parser) {
+        if (normalized.data && !normalized_parser) {
             fprintf(stderr, "n00bb fmt: cannot normalize %.*s\n",
                 (int)path.u8_bytes, path.data);
-            core_free(normalized);
+            core_free(normalized.data);
             ok = false;
             continue;
         }
-        core_string_t print_source = normalized
-            ? core_string_borrow(normalized, strlen(normalized)) : source;
+        core_string_t print_source = normalized.data ? normalized : source;
         if (normalized_parser) tree = parse_pwz_get_tree(normalized_parser);
         parse_print_opts_t options = {
             .source = print_source,
             .width = 88,
             .indent = 4,
         };
-        char *printed = parse_tree_print(grammar, tree, &options);
-        char *restored = printed
+        core_string_t printed = parse_tree_print(grammar, tree, &options);
+        core_string_t restored = printed.data
             ? n00bb_format_restore_breaks(grammar, print_source, printed)
-            : nullptr;
+            : (core_string_t){0};
         parse_pwz_free(normalized_parser);
         scan_token_stream_free(normalized_tokens);
-        core_free(normalized);
-        core_free(printed);
-        char *aligned = restored ? n00bb_format_align(restored) : nullptr;
-        core_free(restored);
-        char *signatures = aligned ? n00bb_format_signatures(aligned) : nullptr;
-        core_free(aligned);
-        char *formatted = signatures
-            ? n00bb_format_channels(signatures) : nullptr;
-        core_free(signatures);
-        if (!formatted || !n00bb_format_parses(grammar, formatted)) {
+        core_free(normalized.data);
+        core_free(printed.data);
+        core_string_t aligned = restored.data ? n00bb_format_align(restored)
+                                              : (core_string_t){0};
+        core_free(restored.data);
+        core_string_t signatures = aligned.data
+            ? n00bb_format_signatures(aligned) : (core_string_t){0};
+        core_free(aligned.data);
+        core_string_t formatted = signatures.data
+            ? n00bb_format_channels(signatures) : (core_string_t){0};
+        core_free(signatures.data);
+        if (!formatted.data || !n00bb_format_parses(grammar, formatted)) {
             fprintf(stderr, "n00bb fmt: cannot print %.*s\n",
                 (int)path.u8_bytes, path.data);
-            core_free(formatted);
+            core_free(formatted.data);
             ok = false;
             continue;
         }
-        size_t length = strlen(formatted);
-        bool changed = length != source.u8_bytes
-            || memcmp(formatted, source.data, length);
+        bool changed = !core_string_eq(formatted, source);
         if (changed || output.data) {
             if (check) {
                 printf("%.*s\n", (int)path.u8_bytes, path.data);
                 ok = false;
             }
             else {
-                char *target = output.data
-                    ? core_strndup(output.data, output.u8_bytes)
-                    : core_strndup(path.data, path.u8_bytes);
-                if (!n00bb_format_write(target, formatted, length)) {
-                    fprintf(stderr, "n00bb fmt: cannot write %s\n", target);
+                core_string_t target = output.data ? output : path;
+                if (!n00bb_format_write(target, formatted)) {
+                    fprintf(stderr, "n00bb fmt: cannot write %.*s\n",
+                            TEXT_ARGS(target));
                     ok = false;
                 }
-                core_free(target);
             }
         }
-        core_free(formatted);
+        core_free(formatted.data);
     }
     return ok;
 }
@@ -3491,10 +3559,10 @@ n00bb_format_units(parse_grammar_t *grammar, core_work_queue_t *queue,
 extern char **environ;
 
 static bool
-build_time_failure(core_diagnostics_t *diagnostics, const char *message)
+build_time_failure(core_diagnostics_t *diagnostics, core_string_t message)
 {
     core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
-        CORE_STRING_STATIC("N00BB-B0027"), core_string_from_cstr(message));
+        CORE_STRING_STATIC("N00BB-B0027"), message);
     return false;
 }
 
@@ -3518,58 +3586,79 @@ pass_build_time_capture(void)
 }
 
 static void
-restart_with_strict_cache(char **argv)
+exec_compiler(core_string_t compiler, char **argv)
 {
-    char *compiler = n00bb_executable_path(argv[0]);
-    if (!compiler || setenv("N00BB_CACHE_STRICT", "1", 1)) {
-        core_free(compiler);
-        return;
-    }
+    char *native = core_string_to_cstr(compiler);
+    if (!native) return;
     pass_build_time_capture();
     fflush(stdout);
     fflush(stderr);
-    execv(compiler, argv);
-    core_free(compiler);
+    execv(native, argv);
+    core_free(native);
 }
 
 static void
-restart_excluding_cached(char **argv, const core_buffer_t *stale)
+restart_with_strict_cache(char **argv, core_string_t argv0)
 {
-    const char *previous = getenv("N00BB_CACHE_EXCLUDE");
-    core_buffer_t excluded = {0};
-    core_buffer_printf(&excluded, "%s%s%.*s", previous ? previous : "",
-        previous && *previous ? "," : "", (int)stale->byte_len, stale->data);
-    char *compiler = excluded.data
-        && !setenv("N00BB_CACHE_EXCLUDE", excluded.data, 1)
-        ? n00bb_executable_path(argv[0]) : nullptr;
-    core_buffer_release(&excluded);
-    if (!compiler) return;
-    pass_build_time_capture();
-    fflush(stdout);
-    fflush(stderr);
-    execv(compiler, argv);
-    core_free(compiler);
+    core_string_t compiler = n00bb_executable_path(argv0);
+    if (!compiler.data || setenv("N00BB_CACHE_STRICT", "1", 1)) {
+        core_free(compiler.data);
+        return;
+    }
+    exec_compiler(compiler, argv);
+    core_free(compiler.data);
 }
 
-static bool
-compile_build_time_program(int argc, char **argv, const char *executable)
+static void
+restart_excluding_cached(char **argv, core_string_t argv0,
+                         const core_buffer_t *stale)
 {
-    char *compiler = n00bb_executable_path(argv[0]);
+    core_string_t previous = core_string_from_cstr(
+        getenv("N00BB_CACHE_EXCLUDE"));
+    core_buffer_t excluded = {0};
+    core_buffer_append_string(&excluded, previous);
+    if (previous.u8_bytes) core_buffer_putc(&excluded, ',');
+    core_buffer_append(&excluded, stale->data, stale->byte_len);
+    core_free(previous.data);
+    core_string_t compiler = excluded.data
+        && !setenv("N00BB_CACHE_EXCLUDE", excluded.data, 1)
+        ? n00bb_executable_path(argv0) : (core_string_t){0};
+    core_buffer_release(&excluded);
+    if (!compiler.data) return;
+    exec_compiler(compiler, argv);
+    core_free(compiler.data);
+}
+
+
+static bool
+compile_build_time_program(int argc, char **argv, core_string_t argv0,
+                           core_string_t executable)
+{
+    core_string_t compiler_path = n00bb_executable_path(argv0);
+    char *compiler = core_string_to_cstr(compiler_path);
+    core_free(compiler_path.data);
+    char *native_executable = core_string_to_cstr(executable);
     char **arguments = calloc((size_t)argc + 5, sizeof(*arguments));
-    bool ok = compiler && arguments;
+    bool ok = compiler && arguments && native_executable;
     size_t count = 0;
     if (ok) {
         arguments[count++] = compiler;
         arguments[count++] = "build";
     }
     for (int i = 1; ok && i < argc; i++) {
-        if (!strcmp(argv[i], "--output") || !strcmp(argv[i], "-o")) {
+        core_string_t argument = core_string_from_cstr(argv[i]);
+        bool output = core_string_eq(argument, CORE_STRING_STATIC("--output"))
+            || core_string_eq(argument, CORE_STRING_STATIC("-o"));
+        bool dropped = (i == 1
+                && (core_string_eq(argument, CORE_STRING_STATIC("build"))
+                    || core_string_eq(argument, CORE_STRING_STATIC("lower"))))
+            || core_string_starts_with(argument, CORE_STRING_STATIC("--dump-"));
+        core_free(argument.data);
+        if (output) {
             i++;
             continue;
         }
-        if ((i == 1 && (!strcmp(argv[i], "build")
-                        || !strcmp(argv[i], "lower")))
-            || !strncmp(argv[i], "--dump-", 7)) continue;
+        if (dropped) continue;
         arguments[count++] = argv[i];
     }
     char log_path[] = "/tmp/n00bb-build-time-log-XXXXXX";
@@ -3582,7 +3671,7 @@ compile_build_time_program(int argc, char **argv, const char *executable)
     if (actions_ready) {
         arguments[count++] = "--build-time";
         arguments[count++] = "--output";
-        arguments[count++] = (char *)executable;
+        arguments[count++] = native_executable;
         ok = !posix_spawn_file_actions_adddup2(&actions, log_fd, 1)
             && !posix_spawn_file_actions_adddup2(&actions, log_fd, 2)
             && !posix_spawn(&child, compiler, &actions, nullptr, arguments,
@@ -3598,22 +3687,29 @@ compile_build_time_program(int argc, char **argv, const char *executable)
     }
     if (log_fd >= 0) close(log_fd);
     free(arguments);
+    core_free(native_executable);
     core_free(compiler);
     return ok;
 }
 
 static bool
-run_build_time_program(const char *executable, int capture_fd)
+run_build_time_program(core_string_t executable, int capture_fd)
 {
-    char *arguments[] = {(char *)executable, nullptr};
+    char *native = core_string_to_cstr(executable);
+    if (!native) return false;
+    char *arguments[] = {native, nullptr};
     posix_spawn_file_actions_t actions;
-    if (posix_spawn_file_actions_init(&actions)) return false;
+    if (posix_spawn_file_actions_init(&actions)) {
+        core_free(native);
+        return false;
+    }
     pid_t child = 0;
     bool ok = !posix_spawn_file_actions_adddup2(&actions, capture_fd, 3)
-        && !posix_spawn(&child, executable, &actions, nullptr, arguments,
+        && !posix_spawn(&child, native, &actions, nullptr, arguments,
                         environ)
         && wait_for_child(child);
     posix_spawn_file_actions_destroy(&actions);
+    core_free(native);
     return ok;
 }
 
@@ -3633,38 +3729,45 @@ read_capture(int capture_fd)
 }
 
 static bool
-run_build_time_stage(int argc, char **argv, core_diagnostics_t *diagnostics)
+run_build_time_stage(int argc, char **argv, core_string_t argv0,
+                     core_diagnostics_t *diagnostics)
 {
-    const char *inherited = getenv("N00BB_BUILD_TIME_CAPTURE_FD");
-    if (inherited) {
-        build_time_capture = atoi(inherited);
+    core_string_t inherited = core_string_from_cstr(
+        getenv("N00BB_BUILD_TIME_CAPTURE_FD"));
+    if (inherited.data) {
+        build_time_capture = (int)core_string_strtoll(inherited, 10);
+        core_free(inherited.data);
         unsetenv("N00BB_BUILD_TIME_CAPTURE_FD");
         return read_capture(build_time_capture)
-            || build_time_failure(diagnostics,
-                "could not read the build-time capture");
+            || build_time_failure(diagnostics, CORE_STRING_STATIC(
+                "could not read the build-time capture"));
     }
     char executable[] = "/tmp/n00bb-build-time-XXXXXX";
     int executable_fd = mkstemp(executable);
     if (executable_fd < 0)
-        return build_time_failure(diagnostics,
-            "could not create the build-time executable path");
+        return build_time_failure(diagnostics, CORE_STRING_STATIC(
+            "could not create the build-time executable path"));
     close(executable_fd);
+    core_string_t executable_path = core_string_borrow(executable,
+        sizeof(executable) - 1);
     char capture_path[] = "/tmp/n00bb-build-time-capture-XXXXXX";
     int capture_fd = mkstemp(capture_path);
     if (capture_fd >= 0) unlink(capture_path);
     bool ok = capture_fd >= 0;
-    if (!ok) build_time_failure(diagnostics,
-        "could not create the build-time capture file");
-    if (ok && !compile_build_time_program(argc, argv, executable))
-        ok = build_time_failure(diagnostics,
-            "the build-time compile failed");
+    if (!ok) build_time_failure(diagnostics, CORE_STRING_STATIC(
+        "could not create the build-time capture file"));
+    if (ok && !compile_build_time_program(argc, argv, argv0,
+                                          executable_path))
+        ok = build_time_failure(diagnostics, CORE_STRING_STATIC(
+            "the build-time compile failed"));
     struct stat program = {0};
     bool needed = ok && !stat(executable, &program) && program.st_size;
-    if (ok && needed && !run_build_time_program(executable, capture_fd))
-        ok = build_time_failure(diagnostics, "the build-time run failed");
-    if (ok && !read_capture(capture_fd))
+    if (ok && needed && !run_build_time_program(executable_path, capture_fd))
         ok = build_time_failure(diagnostics,
-            "could not read the build-time capture");
+            CORE_STRING_STATIC("the build-time run failed"));
+    if (ok && !read_capture(capture_fd))
+        ok = build_time_failure(diagnostics, CORE_STRING_STATIC(
+            "could not read the build-time capture"));
     if (ok) build_time_capture = capture_fd;
     else if (capture_fd >= 0) close(capture_fd);
     unlink(executable);
@@ -3673,26 +3776,23 @@ run_build_time_stage(int argc, char **argv, core_diagnostics_t *diagnostics)
 
 static n00bb_cache_t *
 open_object_cache(n00bb_resolver_t *resolver, parse_cmdr_result_t *args,
-                  const char *argv0, ir_ctx_t *ir_context)
+                  core_string_t argv0, ir_ctx_t *ir_context)
 {
     core_target_desc_t target;
     core_string_t input = parse_cmdr_arg_str(args, 0);
-    char *operand = core_strndup(input.data, input.u8_bytes);
+    core_string_t operand = input.data ? input : CORE_STRING_STATIC("");
     core_module_spec_t module = {0};
     core_source_file_t source = {0};
-    bool located = operand && resolver && n00bb_host_target_profile(&target)
+    bool located = resolver && n00bb_host_target_profile(&target)
         && n00bb_locate_operand(resolver, operand, &module, &source)
             == CORE_MODULE_RESOLVED;
-    core_free(operand);
     n00bb_cache_t *cache = nullptr;
     if (located) {
-        core_string_t path = core_source_file_path(&source);
-        char *root = core_strndup(path.data, path.u8_bytes);
-        char *compiler = n00bb_executable_path(argv0);
+        core_string_t root = core_source_file_path(&source);
+        core_string_t compiler = n00bb_executable_path(argv0);
         cache = n00bb_cache_open(root, args, compiler, target.triple,
                                  ir_context);
-        core_free(compiler);
-        core_free(root);
+        core_free(compiler.data);
         core_source_file_release(&source);
         core_module_spec_release(&module);
     }
@@ -3728,14 +3828,14 @@ specialize_calls(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         && publish_interned_variant_layouts(analysis);
     if (!ok) core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
         CORE_STRING_STATIC("N00BB-B0012"),
-        core_string_from_cstr(failure.data ? failure.data
-                                           : "could not specialize calls"));
+        failure.data ? core_buffer_string(&failure)
+                     : CORE_STRING_STATIC("could not specialize calls"));
     core_buffer_release(&failure);
     return ok;
 }
 
 int
-n00bb_compiler_main(int argc, char **argv)
+n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
 {
     setvbuf(stdout, nullptr, _IOLBF, 0);
     n00bb_register_builtin_types();
@@ -3788,12 +3888,11 @@ n00bb_compiler_main(int argc, char **argv)
     bool scheduled = true;
     for (int32_t i = 0; i < input_count; i++) {
         core_string_t input = parse_cmdr_arg_str(args, i);
-        char *operand = core_strndup(input.data, input.u8_bytes);
-        scheduled = add_locate_request(queue, &requests, operand) && scheduled;
-        core_free(operand);
+        scheduled = add_locate_request(queue, &requests,
+            input.data ? input : CORE_STRING_STATIC("")) && scheduled;
     }
 
-    n00bb_resolver_t *resolver = n00bb_resolver_new(argv[0]);
+    n00bb_resolver_t *resolver = n00bb_resolver_new(argv0);
     if (!resolver) {
         core_diagnostics_report(cli_diagnostics, nullptr, CORE_DIAG_ERROR,
             CORE_STRING_STATIC("N00BB-B0023"),
@@ -3834,7 +3933,7 @@ n00bb_compiler_main(int argc, char **argv)
         CORE_STRING_STATIC("--build-time"));
     n00bb_set_build_time(build_time);
     if (options_valid && (build_command || lower_command) && !build_time
-        && !run_build_time_stage(argc, argv, cli_diagnostics))
+        && !run_build_time_stage(argc, argv, argv0, cli_diagnostics))
         options_valid = false;
     int32_t native_root_count = parse_cmdr_flag_value_count(args,
         CORE_STRING_STATIC("--native-root"));
@@ -3844,25 +3943,20 @@ n00bb_compiler_main(int argc, char **argv)
     for (int32_t i = 0; i < native_root_count; i++) {
         core_string_t root = parse_cmdr_flag_str_at(args,
             CORE_STRING_STATIC("--native-root"), i);
-        const char *alias = root.data
-            ? memchr(root.data, '=', root.u8_bytes) : nullptr;
-        if (!alias) {
+        int64_t alias = root.data ? core_string_find_byte(root, '=') : -1;
+        if (alias < 0) {
             native_roots[named_root_count++] = root;
             continue;
         }
-        char *qualified = core_strndup(root.data,
-                                       (size_t)(alias - root.data));
-        char *symbol = core_strndup(alias + 1,
-            root.u8_bytes - (size_t)(alias - root.data) - 1);
-        if (!qualified || !symbol
-            || !n00bb_native_root_register(qualified, symbol)) {
+        core_string_t qualified = core_string_slice(root, 0, (size_t)alias);
+        core_string_t symbol = core_string_slice(root, (size_t)alias + 1,
+            root.u8_bytes - (size_t)alias - 1);
+        if (!n00bb_native_root_register(qualified, symbol)) {
             core_diagnostics_report(cli_diagnostics, nullptr, CORE_DIAG_ERROR,
                 CORE_STRING_STATIC("N00BB-B0003"),
                 CORE_STRING_STATIC("--native-root NAME=SYMBOL could not register the alias"));
             options_valid = false;
         }
-        core_free(qualified);
-        core_free(symbol);
     }
     native_root_count = named_root_count;
     if (emit_interface && !library_command) {
@@ -3878,21 +3972,24 @@ n00bb_compiler_main(int argc, char **argv)
     for (int32_t i = 0; i < interface_count; i++) {
         core_string_t argument = parse_cmdr_flag_str_at(args,
             CORE_STRING_STATIC("--link-interface"), i);
-        char *path = core_strndup(argument.data, argument.u8_bytes);
+        core_string_t path = argument.data ? argument
+                                           : CORE_STRING_STATIC("");
         core_object_archive_error_t archive_error =
             CORE_OBJECT_ARCHIVE_OK;
         linked_interfaces[i] = th_env_load(path, &archive_error);
         if (!linked_interfaces[i]) {
+            core_string_t reason =
+                core_object_archive_error_string(archive_error);
             core_buffer_t message = {0};
-            core_buffer_printf(&message, "cannot load semantic interface '%s': %s",
-                path, core_object_archive_error_string(archive_error));
+            core_buffer_printf(&message,
+                "cannot load semantic interface '%.*s': %.*s",
+                TEXT_ARGS(path), TEXT_ARGS(reason));
             core_diagnostics_report(cli_diagnostics, nullptr, CORE_DIAG_ERROR,
                 CORE_STRING_STATIC("N00BB-B0004"),
-                core_string_borrow(message.data, message.byte_len));
+                core_buffer_string(&message));
             core_buffer_release(&message);
             options_valid = false;
         }
-        core_free(path);
     }
     bool show_tokens = lex_command || parse_cmdr_flag_present(
         args, CORE_STRING_STATIC("--dump-tokens"));
@@ -3911,11 +4008,11 @@ n00bb_compiler_main(int argc, char **argv)
     }
     int32_t define_count = parse_cmdr_flag_value_count(
         args, CORE_STRING_STATIC("--define"));
-    const char **definitions = define_count
-        ? core_alloc_array(const char *, (size_t)define_count) : nullptr;
+    core_string_t *definitions = define_count
+        ? core_alloc_array(core_string_t, (size_t)define_count) : nullptr;
     for (int32_t i = 0; i < define_count; i++)
         definitions[i] = parse_cmdr_flag_str_at(
-            args, CORE_STRING_STATIC("--define"), i).data;
+            args, CORE_STRING_STATIC("--define"), i);
     n00bb_ffi_t *ffi = n00bb_ffi_new();
     int32_t contract_dir_count = parse_cmdr_flag_value_count(
         args, CORE_STRING_STATIC("--contract-dir"));
@@ -3948,7 +4045,7 @@ n00bb_compiler_main(int argc, char **argv)
     th_install_nfc(types);
     n00bb_cache_t *cache = build_command && scheduled && options_valid
         && input_count == 1 && !interface_count
-        ? open_object_cache(resolver, args, argv[0], ir_context) : nullptr;
+        ? open_object_cache(resolver, args, argv0, ir_context) : nullptr;
     size_t linked_count = (size_t)interface_count
         + n00bb_cache_interface_count(cache);
     if (linked_count > (size_t)interface_count) {
@@ -3965,24 +4062,26 @@ n00bb_compiler_main(int argc, char **argv)
     if (!locate_only) {
         grammar = parse_grammar_new();
         parse_grammar_set_error_recovery(grammar, false);
-        char *grammar_path = n00bb_grammar_path(argv[0]);
-        if (!grammar_path || !parse_bnf_load_file(
+        core_string_t grammar_path = n00bb_grammar_path(argv0);
+        if (!grammar_path.data || !parse_bnf_load_file(
                 grammar_path, CORE_STRING_STATIC("module"), grammar)) {
-            const char *error = parse_bnf_error();
-            fprintf(stderr, "n00bb: cannot load n00b grammar%s%s\n",
-                    error ? ": " : "", error ? error : "");
+            core_string_t error = parse_bnf_error();
+            fprintf(stderr, "n00bb: cannot load n00b grammar%s%.*s\n",
+                    error.data ? ": " : "",
+                    (int)error.u8_bytes, error.data ? error.data : "");
             scheduled = false;
         }
         else {
             parse_grammar_finalize(grammar);
             if (!scan_grammar_lex_compiled(grammar)) {
-                const char *error = scan_lex_compile_error();
-                fprintf(stderr, "n00bb: cannot compile lexer%s%s\n",
-                        error ? ": " : "", error ? error : "");
+                core_string_t error = scan_lex_compile_error();
+                fprintf(stderr, "n00bb: cannot compile lexer%s%.*s\n",
+                        error.data ? ": " : "",
+                        (int)error.u8_bytes, error.data ? error.data : "");
                 scheduled = false;
             }
         }
-        core_free(grammar_path);
+        core_free(grammar_path.data);
     }
     bool profile_compile = getenv("N00BB_PROFILE_COMPILE") != nullptr;
     double profile_tick = profile_compile ? n00bb_profile_seconds() : 0;
@@ -4013,18 +4112,20 @@ n00bb_compiler_main(int argc, char **argv)
     bool optimistic_cache = n00bb_cache_optimistic(cache);
     if (optimistic_cache && (!located
             || !n00bb_cache_assumptions_hold(cache, link, link_analysis)))
-        restart_with_strict_cache(argv);
+        restart_with_strict_cache(argv, argv0);
     if (cache && located) {
         core_buffer_t stale = {0};
         n00bb_cache_stale_modules(cache, &stale);
-        if (stale.byte_len) restart_excluding_cached(argv, &stale);
+        if (stale.byte_len) restart_excluding_cached(argv, argv0, &stale);
         core_buffer_release(&stale);
     }
     if (parse_cmdr_flag_present(args, CORE_STRING_STATIC("--show-ffi"))
         && !show_module_literal(resolver, CORE_STRING_STATIC("ffi"),
                parse_cmdr_flag_str(args, CORE_STRING_STATIC("--show-ffi")))) {
-        fprintf(stderr, "n00bb: no 'ffi literal named %s\n",
-                parse_cmdr_flag_str(args, CORE_STRING_STATIC("--show-ffi")).data);
+        core_string_t requested = parse_cmdr_flag_str(args,
+            CORE_STRING_STATIC("--show-ffi"));
+        fprintf(stderr, "n00bb: no 'ffi literal named %.*s\n",
+                TEXT_ARGS(requested));
         located = false;
     }
     if (located && fmt_command)
@@ -4073,8 +4174,8 @@ n00bb_compiler_main(int argc, char **argv)
                     "could not archive compile-time IR metadata"));
     }
     if (located && library_command && emit_interface) {
-        char *path = core_strndup(interface_output.data,
-                                  interface_output.u8_bytes);
+        core_string_t path = interface_output.data ? interface_output
+                                                   : CORE_STRING_STATIC("");
         core_object_archive_error_t archive_error =
             CORE_OBJECT_ARCHIVE_OK;
         th_env *interface_environment = link_analysis
@@ -4082,16 +4183,18 @@ n00bb_compiler_main(int argc, char **argv)
         bool saved = interface_environment
             && th_env_save(interface_environment, path, 0, &archive_error);
         if (!saved) {
+            core_string_t reason =
+                core_object_archive_error_string(archive_error);
             core_buffer_t message = {0};
-            core_buffer_printf(&message, "cannot write semantic interface '%s': %s",
-                path, core_object_archive_error_string(archive_error));
+            core_buffer_printf(&message,
+                "cannot write semantic interface '%.*s': %.*s",
+                TEXT_ARGS(path), TEXT_ARGS(reason));
             core_diagnostics_report(cli_diagnostics, nullptr, CORE_DIAG_ERROR,
                 CORE_STRING_STATIC("N00BB-B0005"),
-                core_string_borrow(message.data, message.byte_len));
+                core_buffer_string(&message));
             core_buffer_release(&message);
             located = false;
         }
-        core_free(path);
     }
     bool abi_emitted = false;
     bool specialize = !parse_cmdr_flag_present(args,
@@ -4123,16 +4226,17 @@ n00bb_compiler_main(int argc, char **argv)
         }
         core_list_t(core_buffer_t) shim_bitcode =
             core_list_new(core_buffer_t);
-        char *compiler_executable = located
-            ? n00bb_executable_path(argv[0]) : nullptr;
+        core_string_t compiler_executable = located
+            ? n00bb_executable_path(argv0) : (core_string_t){0};
         if (located) {
             core_list_t(n00bb_ir_func_ptr_t) *reachable =
                 &link_analysis->emitted_functions;
-            const char **externs = core_alloc_array(const char *,
+            core_string_t *externs = core_alloc_array(core_string_t,
                 reachable->len + 1);
             size_t extern_count = 0;
             for (size_t i = 0; externs && i < reachable->len; i++)
-                if (!reachable->data[i]->n_blocks && reachable->data[i]->name)
+                if (!reachable->data[i]->n_blocks
+                    && reachable->data[i]->name.data)
                     externs[extern_count++] = reachable->data[i]->name;
             n00bb_ffi_select(ffi, externs, extern_count);
             core_free(externs);
@@ -4141,7 +4245,7 @@ n00bb_compiler_main(int argc, char **argv)
             located = n00bb_ffi_compile_shims(ffi,
                 link_analysis->target.triple, compiler_executable,
                 &shim_bitcode, cli_diagnostics);
-        core_free(compiler_executable);
+        core_free(compiler_executable.data);
         core_list_t(core_string_t) archives = core_list_new(core_string_t);
         core_list_t(core_string_t) libraries = core_list_new(core_string_t);
         core_list_t(core_string_t) frameworks = core_list_new(core_string_t);
@@ -4169,7 +4273,7 @@ n00bb_compiler_main(int argc, char **argv)
         };
         if (located)
             located = n00bb_build_executable(link, link_analysis, args,
-                !preprocessor_options.release_mode, native_cpu, argv[0],
+                !preprocessor_options.release_mode, native_cpu, argv0,
                 &native_inputs, cli_diagnostics);
         for (size_t i = 0; i < shim_bitcode.len; i++)
             core_buffer_release(&shim_bitcode.data[i]);
@@ -4235,11 +4339,14 @@ n00bb_compiler_main(int argc, char **argv)
         th_env_free((th_env *)linked_interfaces[i]);
     core_free(linked_interfaces);
     core_free(native_roots);
-    if (optimistic_cache && !located) restart_with_strict_cache(argv);
+    if (optimistic_cache && !located) restart_with_strict_cache(argv, argv0);
     if (core_diagnostics_count(cli_diagnostics)) {
         n00bb_resolver_remap_diagnostics(resolver, cli_diagnostics);
-        char *text = core_diagnostics_render_text(cli_diagnostics);
-        if (text) { fputs(text, stderr); core_free(text); }
+        core_string_t text = core_diagnostics_render_text(cli_diagnostics);
+        if (text.data) {
+            fwrite(text.data, 1, text.u8_bytes, stderr);
+            core_free(text.data);
+        }
     }
     core_diagnostics_free(cli_diagnostics);
     ir_ctx_free(ir_context);

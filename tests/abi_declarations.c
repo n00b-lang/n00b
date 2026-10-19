@@ -45,7 +45,8 @@ main(void)
     core_translation_unit_t unit = {0};
     assert(core_module_spec_init(&spec, CORE_STRING_STATIC("example"))
         && core_source_file_init(&file, CORE_STRING_STATIC("example.n00b"),
-                                 source, sizeof(source) - 1)
+                                 core_string_borrow(source,
+                                                    sizeof(source) - 1))
         && core_translation_unit_init(&unit, &spec, &file));
     core_module_spec_release(&spec);
     parse_token_info_t *first = source_token(0, 4, 1, 1, 5);
@@ -70,8 +71,8 @@ main(void)
     assert(core_module_spec_init(&foreign_spec,
         CORE_STRING_STATIC("consumer"))
         && core_source_file_init(&foreign_file,
-            CORE_STRING_STATIC("consumer.n00b"), foreign_text,
-            sizeof(foreign_text) - 1)
+            CORE_STRING_STATIC("consumer.n00b"),
+            core_string_borrow(foreign_text, sizeof(foreign_text) - 1))
         && core_translation_unit_init(&foreign_unit, &foreign_spec,
             &foreign_file));
     core_module_spec_release(&foreign_spec);
@@ -109,12 +110,14 @@ main(void)
     field_symbol->owner_type = type_symbol;
     assert(parse_sym_add_use(field_symbol, &foreign_use));
     ir_ctx_t *context = ir_ctx_new();
-    const ir_profile_t profile = {.name = "n00b"};
-    ir_module_t *module = ir_module_new(context, "example", &profile,
-                                        "x86_64-linux");
+    const ir_profile_t profile = {.name = CORE_STRING_STATIC("n00b")};
+    ir_module_t *module = ir_module_new(context,
+                                        CORE_STRING_STATIC("example"),
+                                        &profile,
+                                        CORE_STRING_STATIC("x86_64-linux"));
     assert(module);
     th_ctx *types = ir_ctx_types(context);
-    type_symbol->type = th_name(types, "example.Item");
+    type_symbol->type = th_name(types, CORE_STRING_STATIC("example.Item"));
     field_symbol->type = th_bitint(types, 32, true);
     n00bb_abi_type_index_t *type_index = n00bb_abi_type_index_new(module);
     assert(type_index && n00bb_abi_type_index_collect_symbols(type_index,

@@ -145,7 +145,7 @@ bool
 n00bb_host_target_profile(core_target_desc_t *target)
 {
 #if defined(__APPLE__) && defined(__aarch64__)
-    return core_target_profile("arm64-macos", 0, target);
+    return core_target_profile(CORE_STRING_STATIC("arm64-macos"), 0, target);
 #elif defined(__linux__) && defined(__x86_64__)
     return core_target_profile("x86_64-linux", 0, target);
 #elif defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
@@ -197,19 +197,32 @@ typedef struct {
 } n00bb_thread_read_site_t;
 core_list_decl(n00bb_thread_read_site_t);
 
+[[gnu::format(printf, 3, 4)]] static core_string_t
+n00bb_format_name(char *buffer, size_t size, const char *format, ...)
+{
+    if (!buffer || !size) return (core_string_t){};
+    va_list arguments;
+    va_start(arguments, format);
+    int written = vsnprintf(buffer, size, format, arguments);
+    va_end(arguments);
+    if (written < 0) written = 0;
+    size_t length = (size_t)written < size ? (size_t)written : size - 1;
+    return core_string_borrow(buffer, length);
+}
+
 static bool context_hook_ir_name(parse_grammar_t *grammar,
                                  parse_sym_entry_t *symbol,
-                                 parse_tree_t *hook,
-                                 char *buffer, size_t buffer_size);
-static bool context_default_role(size_t index, char *buffer, size_t size);
+                                 parse_tree_t *hook, core_buffer_t *out);
+static bool context_default_role(size_t index, char *buffer, size_t size,
+                                 core_string_t *out);
 static bool context_interface_dependencies(parse_sym_entry_t *symbol,
                                            size_t target, size_t *indices,
                                            size_t capacity, size_t *count);
-static const char *context_hook_binding_role(parse_grammar_t *grammar,
-                                              parse_tree_t *hook);
+static core_string_t context_hook_binding_role(parse_grammar_t *grammar,
+                                               parse_tree_t *hook);
 static bool n00bb_context_has_hook(parse_grammar_t *grammar,
                                     parse_sym_entry_t *symbol,
-                                    const char *name);
+                                    core_string_t name);
 static bool n00bb_emit_with_success(ir_lower_context_t *context,
                                     parse_tree_t *exit_node);
 static bool n00bb_emit_with_failure(ir_lower_context_t *context,
@@ -236,7 +249,7 @@ static th_type *lowered_rest_type(th_ctx *types, const th_param *source,
                                   th_mode mode, th_param *lowered);
 static ir_value_t *n00bb_emit_outcome_payload(ir_lower_context_t *context,
                                                ir_value_t *outcome,
-                                               const char *arm,
+                                               core_string_t arm,
                                                th_type *type,
                                                ir_span_t span);
 static bool n00bb_unwrap_call_outcome(ir_lower_context_t *context,
@@ -580,9 +593,10 @@ unit_module(n00bb_tu_state_t *state)
 static parse_tree_t *
 value_body_expression(parse_grammar_t *grammar, parse_tree_t *body)
 {
-    parse_tree_t *statements = child_nt(grammar, body, "value-body-stmts");
-    parse_tree_t *value = child_nt(grammar, statements, "value-stmt");
-    return child_nt(grammar, value, "expression");
+    parse_tree_t *statements = child_nt(grammar, body, CORE_STRING_STATIC("value-body-stmts"));
+    parse_tree_t *value = child_nt(grammar, statements,
+                                   CORE_STRING_STATIC("value-stmt"));
+    return child_nt(grammar, value, CORE_STRING_STATIC("expression"));
 }
 
 
@@ -590,21 +604,21 @@ static parse_tree_t *
 n00bb_switch_tag_primary(parse_grammar_t *grammar, parse_tree_t *expression)
 {
     parse_tree_t *node = expression;
-    while (node && !core_tree_is_leaf(node) && !nt_is(grammar, node, "primary")
+    while (node && !core_tree_is_leaf(node) && !nt_is(grammar, node, CORE_STRING_STATIC("primary"))
            && core_tree_num_children(node) == 1)
         node = core_tree_child(node, 0);
-    return nt_is(grammar, node, "primary") ? node : nullptr;
+    return nt_is(grammar, node, CORE_STRING_STATIC("primary")) ? node : nullptr;
 }
 
 
 static core_string_t
 n00bb_control_label(parse_grammar_t *grammar, parse_tree_t *node,
-                    const char *labeled_form)
+                    core_string_t labeled_form)
 {
     parse_tree_t *parent = node
         ? parse_tree_parent(node) : nullptr;
     if (!nt_is(grammar, parent, labeled_form)) return (core_string_t){0};
-    return first_token_text(child_nt(grammar, parent, "label"));
+    return first_token_text(child_nt(grammar, parent, CORE_STRING_STATIC("label")));
 }
 
 
@@ -650,16 +664,19 @@ function_with_return_type(th_ctx *types, th_type *function,
 
 
 static ir_lower_result_t
-lower_error(ir_lower_context_t *context, ir_diagcode_t code, ir_span_t span,
-            const char *message)
+lower_error_text(ir_lower_context_t *context, ir_diagcode_t code,
+                 ir_span_t span, core_string_t message)
 {
     if (context && context->diagnostics) {
         ir_diag_t *diagnostic = ir_diag_begin(context->diagnostics, code,
-                                              span, nullptr);
+                                              span, (core_string_t){});
         ir_diag_message(diagnostic, context->diagnostics, message);
     }
     return (ir_lower_result_t){.status = IR_LOWER_FAILED};
 }
+
+#define lower_error(context, code, span, literal) \
+    lower_error_text((context), (code), (span), CORE_STRING_STATIC(literal))
 
 static parse_token_info_t *
 last_tree_terminal(parse_tree_t *node)
@@ -691,14 +708,18 @@ lower_span_for_tree(ir_lower_context_t *context, parse_tree_t *node)
 }
 
 static ir_block_t *
-n00bb_branch_block(ir_lower_context_t *context, n00bb_lower_context_t *lower,
-                   const char *role)
+n00bb_branch_block_named(ir_lower_context_t *context,
+                         n00bb_lower_context_t *lower, core_string_t role)
 {
-    char name[64];
-    snprintf(name, sizeof(name), "__n00bb_%s_%llu", role,
-             (unsigned long long)lower->next_block_id++);
+    char buffer[64];
+    core_string_t name = n00bb_format_name(buffer, sizeof(buffer),
+        "__n00bb_%.*s_%llu", (int)role.u8_bytes, role.data,
+        (unsigned long long)lower->next_block_id++);
     return ir_block_add(context->function, name);
 }
+
+#define n00bb_branch_block(context, lower, literal) \
+    n00bb_branch_block_named((context), (lower), CORE_STRING_STATIC(literal))
 
 static ir_value_t *n00bb_emit_indirect_read(
     ir_lower_context_t *context, ir_value_t *address, th_type *type,
@@ -729,7 +750,8 @@ n00bb_atomic_native_support(ir_module_t *module, th_type *atomic_type,
                                             &handled)
         || !handled
         || !ir_layout_compute(module, atomic_type, nullptr)) return false;
-    ir_descriptor_t *layout = ir_layout_of(module, atomic_type, nullptr);
+    ir_descriptor_t *layout = ir_layout_of(module, atomic_type,
+                                           (core_string_t){});
     return layout && ir_layout_is_settled(&layout->size)
         && ir_layout_is_settled(&layout->align)
         && layout->size.value > 0
@@ -757,7 +779,7 @@ n00bb_atomic_binding_address(ir_lower_context_t *context,
                                            IR_OP_ADDRESS_OF, span);
     if (!address_type || !instruction
         || !ir_lower_set_temp_dest(context, instruction,
-                                   "__n00bb_atomic_address_", address_type)
+                                   CORE_STRING_STATIC("__n00bb_atomic_address_"), address_type)
         || !(local ? ir_instr_operand_local(instruction, local)
                    : ir_instr_operand_value(instruction, binding)))
         return nullptr;
@@ -798,7 +820,7 @@ n00bb_emit_local_read(ir_lower_context_t *context, ir_local_t *local,
     ir_instr_t *instruction = ir_lower_emit_instruction(context, IR_OP_COPY,
                                                         span);
     if (!instruction || !ir_lower_set_temp_dest(context, instruction,
-                                                "__n00bb_", local->type)
+                                                CORE_STRING_STATIC("__n00bb_"), local->type)
         || !ir_instr_operand_local(instruction, local)) return nullptr;
     return instruction->dest;
 }
@@ -910,9 +932,9 @@ n00bb_emit_local_write(ir_lower_context_t *context, ir_local_t *local,
         ir_value_t *binding = ir_local_value(context->function, local);
         ir_annots_t *annots = binding ? ir_value_annots(binding) : nullptr;
         ir_annot_t *count = annots
-            ? ir_annot_get(annots, "ir.alias_count") : nullptr;
+            ? ir_annot_get(annots, CORE_STRING_STATIC("ir.alias_count")) : nullptr;
         ir_annot_t *complete = annots
-            ? ir_annot_get(annots, "ir.alias_analysis_complete") : nullptr;
+            ? ir_annot_get(annots, CORE_STRING_STATIC("ir.alias_analysis_complete")) : nullptr;
         ir_alias_target_t source = {.value = value};
         bool immutable = binding
             && !ir_value_can_write(binding,
@@ -950,10 +972,10 @@ n00bb_emit_indirect_read(ir_lower_context_t *context, ir_value_t *address,
     ir_instr_t *instruction = ir_lower_emit_instruction(context, IR_OP_LOAD,
                                                         span);
     if (!instruction || !ir_lower_set_temp_dest(context, instruction,
-                                                "__n00bb_", result_type)
+                                                CORE_STRING_STATIC("__n00bb_"), result_type)
         || !ir_instr_operand_value(instruction, address)
         || (atomic_element
-            && !ir_instr_add_mod(instruction, "atomic"))) return nullptr;
+            && !ir_instr_add_mod(instruction, CORE_STRING_STATIC("atomic")))) return nullptr;
     if (th_kind_of(th_resolve(result_type)) == TH_INDIRECTION) {
         n00bb_lower_context_t *lower = context->user;
         if (!lower || !ir_value_set_indirect_access(lower->ir_context,
@@ -972,7 +994,7 @@ n00bb_emit_atomic_wrap(ir_lower_context_t *context, ir_value_t *value,
                                                         IR_OP_ATOMIC_WRAP,
                                                         span);
     if (!instruction || !ir_lower_set_temp_dest(context, instruction,
-                                                "__n00bb_", atomic_type)
+                                                CORE_STRING_STATIC("__n00bb_"), atomic_type)
         || !ir_instr_operand_value(instruction, value)) return nullptr;
     return instruction->dest;
 }
@@ -990,7 +1012,7 @@ n00bb_emit_indirect_write(ir_lower_context_t *context, ir_value_t *address,
         || !ir_instr_operand_value(instruction, address)
         || !ir_instr_operand_value(instruction, value)
         || (n00bb_atomic_element_type(referent)
-            && !ir_instr_add_mod(instruction, "atomic"))) return false;
+            && !ir_instr_add_mod(instruction, CORE_STRING_STATIC("atomic")))) return false;
     return true;
 }
 
@@ -1092,11 +1114,11 @@ n00bb_bind_local(ir_lower_context_t *context, parse_sym_entry_t *symbol,
     ir_instr_t *allocation = address_type
         ? ir_lower_emit_instruction(context, IR_OP_ALLOC, span) : nullptr;
     return allocation
-        && ir_lower_set_temp_dest(context, allocation, "__n00bb_storage_",
+        && ir_lower_set_temp_dest(context, allocation, CORE_STRING_STATIC("__n00bb_storage_"),
                                   address_type)
         && ir_instr_operand_type(allocation, local->type)
         && ((!storage_class.data || !storage_class.u8_bytes)
-            || ir_instr_set_storage_class(allocation, storage_class.data,
+            || ir_instr_set_storage_class(allocation, storage_class,
                                           symbol->storage_class_required))
         && ir_lower_bind_local_storage(context, symbol, local,
                                        allocation->dest)
@@ -1110,7 +1132,7 @@ n00bb_emit_binary_ir_with(ir_lower_context_t *context, ir_op_t op,
 {
     ir_instr_t *instruction = ir_lower_emit_instruction(context, op, span);
     if (!instruction || !ir_lower_set_temp_dest(context, instruction,
-                                                "__n00bb_", result_type)
+                                                CORE_STRING_STATIC("__n00bb_"), result_type)
         || !ir_instr_operand_value(instruction, left)
         || !ir_instr_operand_value(instruction, right)) return nullptr;
     ir_class_t result_class = ir_machine_of(context->module, result_type).class;
@@ -1119,21 +1141,21 @@ n00bb_emit_binary_ir_with(ir_lower_context_t *context, ir_op_t op,
         || result_class == IR_CLASS_UINT || operand_class == IR_CLASS_SINT
         || operand_class == IR_CLASS_UINT;
     if (wrapping)
-        return integer_operation && (!ir_op_accepts_mod(op, "wrap")
-                || ir_instr_add_mod(instruction, "wrap"))
+        return integer_operation && (!ir_op_accepts_mod(op, CORE_STRING_STATIC("wrap"))
+                || ir_instr_add_mod(instruction, CORE_STRING_STATIC("wrap")))
             ? instruction->dest : nullptr;
     if (integer_operation
-        && ir_op_accepts_mod(op, "trap")) {
-        if (!ir_instr_add_mod(instruction, "trap")) return nullptr;
+        && ir_op_accepts_mod(op, CORE_STRING_STATIC("trap"))) {
+        if (!ir_instr_add_mod(instruction, CORE_STRING_STATIC("trap"))) return nullptr;
         if ((op == IR_OP_DIV || op == IR_OP_REM)
             && (result_class == IR_CLASS_SINT
                 || operand_class == IR_CLASS_SINT)
-            && !ir_instr_add_mod(instruction, "trap")) return nullptr;
+            && !ir_instr_add_mod(instruction, CORE_STRING_STATIC("trap"))) return nullptr;
     }
     if (operand_class == IR_CLASS_FLOAT
         && (op == IR_OP_EQ || op == IR_OP_NE || op == IR_OP_LT
             || op == IR_OP_LE || op == IR_OP_GT || op == IR_OP_GE)
-        && !ir_instr_add_mod(instruction, "ordered")) return nullptr;
+        && !ir_instr_add_mod(instruction, CORE_STRING_STATIC("ordered"))) return nullptr;
     return instruction->dest;
 }
 
@@ -1147,10 +1169,10 @@ n00bb_emit_binary_ir(ir_lower_context_t *context, ir_op_t op,
 }
 
 static th_type *
-n00bb_ir_builtin_type(ir_module_t *module, const char *name)
+n00bb_ir_builtin_type(ir_module_t *module, core_string_t name)
 {
     th_ctx *types = module ? ir_module_types(module) : nullptr;
-    th_type *type = types && name ? th_name(types, name) : nullptr;
+    th_type *type = types && name.data ? th_name(types, name) : nullptr;
     return type ? ir_type_intern(module, type) : nullptr;
 }
 
@@ -1159,20 +1181,20 @@ n00bb_branch_on_outcome(ir_lower_context_t *context, ir_value_t *outcome,
                         ir_block_t *ok_block, ir_block_t *error_block,
                         ir_span_t span)
 {
-    th_type *uint_type = n00bb_ir_builtin_type(context->module, "uint");
-    th_type *bool_type = n00bb_ir_builtin_type(context->module, "bool");
+    th_type *uint_type = n00bb_ir_builtin_type(context->module, CORE_STRING_STATIC("uint"));
+    th_type *bool_type = n00bb_ir_builtin_type(context->module, CORE_STRING_STATIC("bool"));
     ir_instr_t *tag = ir_lower_emit_instruction(context, IR_OP_VARIANT_TAG,
                                                 span);
     ir_instr_t *literal = ir_lower_emit_instruction(context, IR_OP_CONST, span);
     ir_instr_t *test = ir_lower_emit_instruction(context, IR_OP_EQ, span);
     bool emitted = uint_type && bool_type
-        && tag && ir_lower_set_temp_dest(context, tag, "__n00bb_tag_",
+        && tag && ir_lower_set_temp_dest(context, tag, CORE_STRING_STATIC("__n00bb_tag_"),
                                           uint_type)
         && ir_instr_operand_value(tag, outcome)
         && literal && ir_lower_set_temp_dest(context, literal,
-                                              "__n00bb_tag_lit_", uint_type)
-        && ir_instr_operand_uint(literal, th_arm_tag("ok"))
-        && test && ir_lower_set_temp_dest(context, test, "__n00bb_is_ok_",
+                                              CORE_STRING_STATIC("__n00bb_tag_lit_"), uint_type)
+        && ir_instr_operand_uint(literal, th_arm_tag(CORE_STRING_STATIC("ok")))
+        && test && ir_lower_set_temp_dest(context, test, CORE_STRING_STATIC("__n00bb_is_ok_"),
                                           bool_type)
         && ir_instr_operand_value(test, tag->dest)
         && ir_instr_operand_value(test, literal->dest);
@@ -1185,18 +1207,21 @@ n00bb_branch_on_outcome(ir_lower_context_t *context, ir_value_t *outcome,
 
 static bool
 collect_elif_arms(parse_grammar_t *grammar, parse_annot_result_t *annotations,
-                  parse_tree_t *node, const char *clause_kind,
+                  parse_tree_t *node, core_string_t clause_kind,
                   core_list_t(n00bb_branch_arm_t) *arms,
                   parse_tree_t **else_body, bool *has_else_clause)
 {
     if (!node || core_tree_is_leaf(node)) return true;
-    const char *else_kind = !strcmp(clause_kind, "value-elif-clause")
-        ? "value-else-clause" : "else-clause";
+    bool value_form = core_string_eq(clause_kind,
+                                     CORE_STRING_STATIC("value-elif-clause"));
+    core_string_t else_kind = value_form
+        ? CORE_STRING_STATIC("value-else-clause")
+        : CORE_STRING_STATIC("else-clause");
     if (nt_is(grammar, node, else_kind)) {
         *has_else_clause = true;
         *else_body = child_nt(grammar, node,
-            !strcmp(else_kind, "value-else-clause")
-                ? "value-body" : "body");
+            value_form ? CORE_STRING_STATIC("value-body")
+                       : CORE_STRING_STATIC("body"));
         return true;
     }
     if (nt_is(grammar, node, clause_kind)) {
@@ -1240,7 +1265,7 @@ n00bb_lower_branch_annotation(ir_lower_context_t *context,
                 if (frame.expression && frame.join_reachable) {
                     ir_instr_t *read = ir_instr_add(frame.join, IR_OP_COPY);
                     if (!read || !ir_lower_set_temp_dest(context, read,
-                        "__n00bb_if_value_", frame.result_local->type)
+                        CORE_STRING_STATIC("__n00bb_if_value_"), frame.result_local->type)
                         || !ir_instr_operand_local(read, frame.result_local)
                         || !ir_lower_set_node_value(context, frame.node,
                                                     read->dest)) {
@@ -1260,22 +1285,22 @@ n00bb_lower_branch_annotation(ir_lower_context_t *context,
         return true;
     }
 
-    if (nt_is(visit->grammar, visit->node, "elif-clause")
-        || nt_is(visit->grammar, visit->node, "value-elif-clause")) {
+    if (nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("elif-clause"))
+        || nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("value-elif-clause"))) {
         for (parse_tree_t *parent = parse_tree_parent(visit->node);
              parent; parent = parse_tree_parent(parent)) {
-            if (nt_is(visit->grammar, visit->node, "elif-clause")
-                && nt_is(visit->grammar, parent, "if-stmt")) return true;
-            if (nt_is(visit->grammar, visit->node, "value-elif-clause")
-                && nt_is(visit->grammar, parent, "if-value-expr")) return true;
+            if (nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("elif-clause"))
+                && nt_is(visit->grammar, parent, CORE_STRING_STATIC("if-stmt"))) return true;
+            if (nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("value-elif-clause"))
+                && nt_is(visit->grammar, parent, CORE_STRING_STATIC("if-value-expr"))) return true;
         }
     }
-    bool short_circuit = nt_is(visit->grammar, visit->node, "and-expr")
-        || nt_is(visit->grammar, visit->node, "or-expr");
+    bool short_circuit = nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("and-expr"))
+        || nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("or-expr"));
     bool expression_form = short_circuit
-        || nt_is(visit->grammar, visit->node, "if-value-expr");
+        || nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("if-value-expr"));
     if (!expression_form
-        && !nt_is(visit->grammar, visit->node, "if-stmt")) {
+        && !nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("if-stmt"))) {
         lower_error(context, IR_DIAG_VERIFY_PARSED,
                     lower_span_for_tree(context, visit->node),
                     "this branch form is not lowered yet");
@@ -1298,8 +1323,9 @@ n00bb_lower_branch_annotation(ir_lower_context_t *context,
     }));
     if (!collect_elif_arms(visit->grammar, tu->annotations,
                            label->else_body,
-                           expression_form ? "value-elif-clause"
-                                           : "elif-clause",
+                           expression_form
+                               ? CORE_STRING_STATIC("value-elif-clause")
+                               : CORE_STRING_STATIC("elif-clause"),
                            &arms, &else_body, &has_else_clause)) {
         core_list_free(arms);
         return false;
@@ -1336,9 +1362,10 @@ n00bb_lower_branch_annotation(ir_lower_context_t *context,
         ? parse_tree_type(visit->node) : nullptr;
     ir_local_t *result_local = nullptr;
     if (expression_form && result_type) {
-        char name[48];
-        snprintf(name, sizeof(name), "__n00bb_if_result_%llu",
-                 (unsigned long long)context->next_value_id++);
+        char name_buffer[48];
+        core_string_t name = n00bb_format_name(name_buffer,
+            sizeof(name_buffer), "__n00bb_if_result_%llu",
+            (unsigned long long)context->next_value_id++);
         result_local = ir_local_add(context->function, name, result_type);
     }
     bool blocks_ready = join && (!else_body || else_block)
@@ -1381,10 +1408,10 @@ n00bb_lower_range_body_enter(ir_lower_context_t *context,
     ir_value_t *step = frame->range_step
         ? ir_lower_node_value(context, frame->range_step) : nullptr;
     th_type *iterator_type = frame->iterator ? frame->iterator->type : nullptr;
-    th_type *bool_type = th_name(tu_state(lower->unit)->types, "bool");
+    th_type *bool_type = th_name(tu_state(lower->unit)->types, CORE_STRING_STATIC("bool"));
     if (!frame->range_step && iterator_type) {
         ir_instr_t *one = ir_lower_emit_instruction(context, IR_OP_CONST, span);
-        if (one && ir_lower_set_temp_dest(context, one, "__n00bb_",
+        if (one && ir_lower_set_temp_dest(context, one, CORE_STRING_STATIC("__n00bb_"),
                                            iterator_type)
             && ir_instr_operand_int_lit(one, ir_lit_of(1))) {
             step = one->dest;
@@ -1419,7 +1446,7 @@ n00bb_lower_range_body_enter(ir_lower_context_t *context,
     }
     ir_machine_t step_machine = ir_machine_of(context->module, step->type);
     ir_instr_t *zero = ir_lower_emit_instruction(context, IR_OP_CONST, span);
-    bool zero_ok = zero && ir_lower_set_temp_dest(context, zero, "__n00bb_",
+    bool zero_ok = zero && ir_lower_set_temp_dest(context, zero, CORE_STRING_STATIC("__n00bb_"),
                                                  iterator_type)
         && ir_instr_operand_int_lit(zero, ir_lit_of(0));
     ir_value_t *is_zero = zero_ok
@@ -1459,7 +1486,7 @@ n00bb_lower_range_body_enter(ir_lower_context_t *context,
     if (step_machine.class == IR_CLASS_SINT) {
         ir_instr_t *selected = ir_lower_emit_instruction(context, IR_OP_SELECT,
                                                          span);
-        if (selected && ir_lower_set_temp_dest(context, selected, "__n00bb_",
+        if (selected && ir_lower_set_temp_dest(context, selected, CORE_STRING_STATIC("__n00bb_"),
                                                bool_type)
             && ir_instr_operand_value(selected, negative)
             && ir_instr_operand_value(selected, descending)
@@ -1570,7 +1597,7 @@ n00bb_lower_container_body_enter(ir_lower_context_t *context,
                                                             span);
     ir_value_t *current = frame->iteration_cursor_phi
         && ir_lower_set_temp_dest(context, frame->iteration_cursor_phi,
-                                  "__n00bb_cursor_",
+                                  CORE_STRING_STATIC("__n00bb_cursor_"),
                                   frame->iteration_plan->cursor_type)
         && ir_instr_operand_phi_arm(frame->iteration_cursor_phi, entry_block,
                                     cursor)
@@ -1588,7 +1615,7 @@ n00bb_lower_container_body_enter(ir_lower_context_t *context,
             frame->iteration_plan->next_site, current, TH_INOUT,
             option_type, &frame->iteration_cursor_value, frame->node)
         : nullptr;
-    th_type *bool_type = th_name(ir_module_types(context->module), "bool");
+    th_type *bool_type = th_name(ir_module_types(context->module), CORE_STRING_STATIC("bool"));
     ir_block_t *cleanup = n00bb_branch_block(context, lower,
                                               "for_cleanup");
     ir_instr_t *test = option && bool_type && cleanup
@@ -1597,7 +1624,7 @@ n00bb_lower_container_body_enter(ir_lower_context_t *context,
     ir_instr_t *branch = test ? ir_instr_add(context->block, IR_OP_BRANCH)
                               : nullptr;
     bool emitted = test
-        && ir_lower_set_temp_dest(context, test, "__n00bb_iteration_done_",
+        && ir_lower_set_temp_dest(context, test, CORE_STRING_STATIC("__n00bb_iteration_done_"),
                                   bool_type)
         && ir_instr_operand_value(test, option)
         && branch && ir_instr_operand_value(branch, test->dest)
@@ -1627,7 +1654,7 @@ n00bb_lower_container_body_enter(ir_lower_context_t *context,
     ir_instr_t *get = ir_lower_emit_instruction(context, IR_OP_OPTION_GET,
                                                 span);
     if (!get || !ir_lower_set_temp_dest(context, get,
-                                        "__n00bb_iteration_item_",
+                                        CORE_STRING_STATIC("__n00bb_iteration_item_"),
                                         frame->iteration_plan->item_type)
         || !ir_instr_operand_value(get, option)) {
         lower_error(context, IR_DIAG_INTERNAL, span,
@@ -1647,7 +1674,7 @@ n00bb_lower_container_body_enter(ir_lower_context_t *context,
                 projection->positional ? IR_OP_EXTRACT_INDEX : IR_OP_EXTRACT,
                 span);
             if (!extract || !ir_lower_set_temp_dest(context, extract,
-                                                    "__n00bb_iteration_field_",
+                                                    CORE_STRING_STATIC("__n00bb_iteration_field_"),
                                                     binding->type)
                 || !ir_instr_operand_value(extract, get->dest)
                 || (projection->positional
@@ -1737,9 +1764,10 @@ n00bb_route_try_error(ir_lower_context_t *context, parse_tree_t *source,
     }
     symbol->type = bound_type;
     if (!frame->error_value) {
-        char name[48];
-        snprintf(name, sizeof(name), "__n00bb_try_error_%llu",
-                 (unsigned long long)context->next_value_id++);
+        char name_buffer[48];
+        core_string_t name = n00bb_format_name(name_buffer,
+            sizeof(name_buffer), "__n00bb_try_error_%llu",
+            (unsigned long long)context->next_value_id++);
         frame->error_value = ir_local_add(context->function, name,
                                           bound_type);
         if (!frame->error_value) {
@@ -1784,10 +1812,12 @@ n00bb_lower_try_scope(ir_lower_context_t *context, parse_visit_t *visit,
             n00bb_try_frame_t frame = {
                 .node = visit->node,
                 .body = child_nt(visit->grammar, visit->node,
-                    try_expression ? "value-body" : "try-body"),
+                    try_expression ? CORE_STRING_STATIC("value-body")
+                                   : CORE_STRING_STATIC("try-body")),
                 .error_clause = child_nt(visit->grammar, visit->node,
-                    try_expression ? "try-value-error-clause"
-                                   : "try-error-clause"),
+                    try_expression
+                        ? CORE_STRING_STATIC("try-value-error-clause")
+                        : CORE_STRING_STATIC("try-error-clause")),
                 .error_symbol = nullptr,
                 .expression = try_expression,
                 .active = context->reachable,
@@ -1807,10 +1837,11 @@ n00bb_lower_try_scope(ir_lower_context_t *context, parse_visit_t *visit,
                 if (frame.expression) {
                     th_type *result_type =
                         parse_tree_type(visit->node);
-                    char local_name[48];
-                    snprintf(local_name, sizeof(local_name),
-                             "__n00bb_try_value_%llu",
-                             (unsigned long long)context->next_value_id++);
+                    char local_buffer[48];
+                    core_string_t local_name = n00bb_format_name(
+                        local_buffer, sizeof(local_buffer),
+                        "__n00bb_try_value_%llu",
+                        (unsigned long long)context->next_value_id++);
                     frame.result_value = result_type
                         ? ir_local_add(context->function, local_name,
                                        result_type) : nullptr;
@@ -1832,10 +1863,10 @@ n00bb_lower_try_scope(ir_lower_context_t *context, parse_visit_t *visit,
         if (!frame.active) return true;
         if (frame.expression && frame.join_reachable) {
             ir_instr_t *read = ir_instr_add(frame.join, IR_OP_COPY);
-            char result_name[48];
-            snprintf(result_name, sizeof(result_name),
-                     "__n00bb_try_result_%llu",
-                     (unsigned long long)context->next_value_id++);
+            char result_buffer[48];
+            core_string_t result_name = n00bb_format_name(result_buffer,
+                sizeof(result_buffer), "__n00bb_try_result_%llu",
+                (unsigned long long)context->next_value_id++);
             if (!read || !ir_instr_set_dest(read, result_name,
                                             frame.result_value->type)
                 || !ir_instr_operand_local(read, frame.result_value)
@@ -1916,7 +1947,7 @@ n00bb_lower_try_scope(ir_lower_context_t *context, parse_visit_t *visit,
         if (context->reachable) {
             if (frame->expression) {
                 parse_tree_t *body = child_nt(visit->grammar, visit->node,
-                                               "value-body");
+                                               CORE_STRING_STATIC("value-body"));
                 if (!n00bb_store_try_value(context, frame, visit->grammar,
                                            body))
                     return false;
@@ -1944,13 +1975,13 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
 {
     (void)state;
     n00bb_lower_context_t *lower = context->user;
-    bool logical_rhs = nt_is(visit->grammar, visit->node, "and-rhs")
-        || nt_is(visit->grammar, visit->node, "or-rhs");
+    bool logical_rhs = nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("and-rhs"))
+        || nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("or-rhs"));
     if (!lower || (!logical_rhs
         && (!visit->annot || !core_string_eq(visit->annot->scope_tag,
                                              CORE_STRING_STATIC("block")))))
         return true;
-    if (nt_is(visit->grammar, visit->node, "block-value-expr")) {
+    if (nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("block-value-expr"))) {
         if (entering) {
             n00bb_value_block_frame_t frame = {
                 .node = visit->node,
@@ -1958,10 +1989,10 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
             };
             if (frame.active) {
                 th_type *result_type = parse_tree_type(visit->node);
-                char local_name[48];
-                snprintf(local_name, sizeof(local_name),
-                         "__n00bb_block_value_%llu",
-                         (unsigned long long)context->next_value_id++);
+                char local_buffer[48];
+                core_string_t local_name = n00bb_format_name(local_buffer,
+                    sizeof(local_buffer), "__n00bb_block_value_%llu",
+                    (unsigned long long)context->next_value_id++);
                 frame.result = result_type
                     ? ir_local_add(context->function, local_name, result_type)
                     : nullptr;
@@ -1992,7 +2023,7 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
         ir_instr_t *read = ir_lower_emit_instruction(context, IR_OP_COPY,
             lower_span_for_tree(context, visit->node));
         if (!read || !ir_lower_set_temp_dest(context, read,
-                                             "__n00bb_block_result_",
+                                             CORE_STRING_STATIC("__n00bb_block_result_"),
                                              frame.result->type)
             || !ir_instr_operand_local(read, frame.result)
             || !ir_lower_set_node_value(context, visit->node, read->dest)) {
@@ -2023,7 +2054,7 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
             n00bb_branch_arm_t *arm = &frame->arms.data[arm_index];
             ir_value_t *condition =
                 ir_lower_node_value(context, arm->condition);
-            th_type *bool_type = th_name(tu_state(lower->unit)->types, "bool");
+            th_type *bool_type = th_name(tu_state(lower->unit)->types, CORE_STRING_STATIC("bool"));
             if (!condition || !bool_type
                 || !ir_type_eq(context->module, condition->type, bool_type)) {
                 lower_error(context, IR_DIAG_TYPE_MISMATCH,
@@ -2042,7 +2073,7 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                     || !ir_instr_operand_value(store, condition)) return false;
             }
             bool shortcut_true = frame->short_circuit
-                && nt_is(visit->grammar, frame->node, "or-expr");
+                && nt_is(visit->grammar, frame->node, CORE_STRING_STATIC("or-expr"));
             ir_instr_t *branch = ir_instr_add(context->block, IR_OP_BRANCH);
             bool emitted = branch
                 && ir_instr_operand_value(branch, condition)
@@ -2152,7 +2183,7 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                                                         frame);
             ir_value_t *condition = ir_lower_node_value(
                 context, frame->condition);
-            th_type *bool_type = th_name(tu_state(lower->unit)->types, "bool");
+            th_type *bool_type = th_name(tu_state(lower->unit)->types, CORE_STRING_STATIC("bool"));
             if (!condition || !bool_type
                 || !ir_type_eq(context->module, condition->type, bool_type)) {
                 lower_error(context, IR_DIAG_TYPE_MISMATCH,
@@ -2239,7 +2270,7 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                     ir_block_t *test_block = context->block;
                     th_type *scrutinee_type = scrutinee->type;
                     th_type *bool_type = th_name(
-                        tu_state(lower->unit)->types, "bool");
+                        tu_state(lower->unit)->types, CORE_STRING_STATIC("bool"));
                     for (size_t c = 0; emitted && c < frame->cases.len; c++) {
                         n00bb_switch_case_t *item = &frame->cases.data[c];
                         for (size_t p = 0; emitted
@@ -2247,8 +2278,9 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                             n00bb_switch_pattern_t *pattern =
                                 &item->patterns.data[p];
                             bool has_next = ++ordinal < total;
-                            char next_name[64];
-                            snprintf(next_name, sizeof(next_name),
+                            char next_buffer[64];
+                            core_string_t next_name = n00bb_format_name(
+                                next_buffer, sizeof(next_buffer),
                                 "__n00bb_switch_test_%llu",
                                 (unsigned long long)context->next_value_id++);
                             ir_block_t *next = has_next
@@ -2259,11 +2291,13 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                                 break;
                             }
                             uint64_t id = context->next_value_id++;
-                            char first_name[48], first_cmp_name[48];
-                            snprintf(first_name, sizeof(first_name),
+                            char first_buffer[48], first_cmp_buffer[48];
+                            core_string_t first_name = n00bb_format_name(
+                                first_buffer, sizeof(first_buffer),
                                 "__n00bb_case_bound_%llu",
                                 (unsigned long long)id);
-                            snprintf(first_cmp_name, sizeof(first_cmp_name),
+                            core_string_t first_cmp_name = n00bb_format_name(
+                                first_cmp_buffer, sizeof(first_cmp_buffer),
                                 "__n00bb_case_test_%llu",
                                 (unsigned long long)id);
                             ir_instr_t *first_const = nullptr;
@@ -2304,8 +2338,9 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                             ir_block_t *upper_test = nullptr;
                             ir_instr_t *lower_branch = nullptr;
                             if (emitted && pattern->is_range) {
-                                char upper_name[64];
-                                snprintf(upper_name, sizeof(upper_name),
+                                char upper_buffer[64];
+                                core_string_t upper_name = n00bb_format_name(
+                                    upper_buffer, sizeof(upper_buffer),
                                     "__n00bb_switch_upper_%llu",
                                     (unsigned long long)
                                         context->next_value_id++);
@@ -2319,13 +2354,15 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                                         pattern->inclusive
                                             ? IR_OP_LE : IR_OP_LT)
                                     : nullptr;
-                                char last_name[48], last_cmp_name[48];
-                                snprintf(last_name, sizeof(last_name),
+                                char last_buffer[48], last_cmp_buffer[48];
+                                core_string_t last_name = n00bb_format_name(
+                                    last_buffer, sizeof(last_buffer),
                                     "__n00bb_case_bound_%llu",
                                     (unsigned long long)
                                         context->next_value_id++);
-                                snprintf(last_cmp_name,
-                                    sizeof(last_cmp_name),
+                                core_string_t last_cmp_name =
+                                    n00bb_format_name(last_cmp_buffer,
+                                    sizeof(last_cmp_buffer),
                                     "__n00bb_case_test_%llu",
                                     (unsigned long long)
                                         context->next_value_id++);
@@ -2388,7 +2425,7 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                     }
                 }
                 else if (frame->variant_switch) {
-                    th_type *tag_type = n00bb_ir_builtin_type(context->module, "uint");
+                    th_type *tag_type = n00bb_ir_builtin_type(context->module, CORE_STRING_STATIC("uint"));
                     ir_instr_t *tag = tag_type
                         ? ir_lower_emit_instruction(context,
                             IR_OP_VARIANT_TAG,
@@ -2398,7 +2435,7 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                         ? ir_instr_add(context->block, IR_OP_SWITCH) : nullptr;
                     emitted = tag && instruction
                         && ir_lower_set_temp_dest(context, tag,
-                            "__n00bb_variant_tag_", tag_type)
+                            CORE_STRING_STATIC("__n00bb_variant_tag_"), tag_type)
                         && ir_instr_operand_value(tag, scrutinee)
                         && ir_instr_operand_value(instruction, tag->dest)
                         && ir_instr_operand_default(instruction,
@@ -2533,12 +2570,14 @@ n00bb_switch_integer_scrutinee(ir_lower_context_t *context,
         : nullptr;
     if (!range) return scrutinee;
     th_type *target = n00bb_ir_builtin_type(context->module,
-                                            range->is_signed ? "int" : "uint");
+                                            range->is_signed
+                                                ? CORE_STRING_STATIC("int")
+                                                : CORE_STRING_STATIC("uint"));
     ir_instr_t *conversion = target
         ? ir_lower_emit_instruction(context, IR_OP_ENUM_VALUE, span)
         : nullptr;
     if (!conversion
-        || !ir_lower_set_temp_dest(context, conversion, "__n00bb_", target)
+        || !ir_lower_set_temp_dest(context, conversion, CORE_STRING_STATIC("__n00bb_"), target)
         || !ir_instr_operand_value(conversion, scrutinee)) return nullptr;
     return conversion->dest;
 }
@@ -2553,9 +2592,9 @@ n00bb_prune_enum_case(ir_lower_context_t *context, parse_visit_t *visit,
     n00bb_switch_frame_t *frame =
         &lower->switches.data[lower->switches.len - 1];
     if (frame->variant_scope
-        || child_nt(visit->grammar, visit->node, "range-sep")) return true;
+        || child_nt(visit->grammar, visit->node, CORE_STRING_STATIC("range-sep"))) return true;
     parse_tree_t *expression = child_nt(visit->grammar, visit->node,
-                                        "expression");
+                                        CORE_STRING_STATIC("expression"));
     if (!n00bb_switch_enum_member(visit->grammar, lower, frame, expression))
         return true;
     return ir_lower_prune_node(context, visit->node);
@@ -2566,16 +2605,16 @@ n00bb_switch_collect(parse_grammar_t *grammar, parse_tree_t *node,
                      n00bb_switch_frame_t *frame, ir_lower_context_t *context)
 {
     if (!node || core_tree_is_leaf(node)) return true;
-    if (nt_is(grammar, node, "switch-case-block")
-        || nt_is(grammar, node, "switch-value-case-block")) {
-        bool expression = nt_is(grammar, node, "switch-value-case-block");
+    if (nt_is(grammar, node, CORE_STRING_STATIC("switch-case-block"))
+        || nt_is(grammar, node, CORE_STRING_STATIC("switch-value-case-block"))) {
+        bool expression = nt_is(grammar, node, CORE_STRING_STATIC("switch-value-case-block"));
         n00bb_switch_case_t item = {
             .body = child_nt(grammar, node,
-                             expression ? "value-body" : "body"),
+                             expression ? CORE_STRING_STATIC("value-body") : CORE_STRING_STATIC("body")),
             .block = n00bb_branch_block(context, context->user, "switch_case"),
             .patterns = core_list_new(n00bb_switch_pattern_t),
         };
-        parse_tree_t *list = child_nt(grammar, node, "case-expr-list");
+        parse_tree_t *list = child_nt(grammar, node, CORE_STRING_STATIC("case-expr-list"));
         if (!item.body || !item.block || !list) {
             core_list_free(item.patterns);
             return false;
@@ -2584,16 +2623,16 @@ n00bb_switch_collect(parse_grammar_t *grammar, parse_tree_t *node,
         core_list_push(stack, list);
         while (stack.len) {
             parse_tree_t *current = stack.data[--stack.len];
-            if (nt_is(grammar, current, "case-expr-item")) {
+            if (nt_is(grammar, current, CORE_STRING_STATIC("case-expr-item"))) {
                 parse_tree_t *separator = child_nt(
-                    grammar, current, "range-sep");
+                    grammar, current, CORE_STRING_STATIC("range-sep"));
                 if (separator) {
                     parse_tree_t *bounds[2] = {0};
                     size_t bound_count = 0;
                     for (size_t i = 0; i < core_tree_num_children(current);
                          i++) {
                         parse_tree_t *child = core_tree_child(current, i);
-                        if (nt_is(grammar, child, "expression")
+                        if (nt_is(grammar, child, CORE_STRING_STATIC("expression"))
                             && bound_count < 2)
                             bounds[bound_count++] = child;
                     }
@@ -2622,7 +2661,7 @@ n00bb_switch_collect(parse_grammar_t *grammar, parse_tree_t *node,
                         grammar, current, &(bool){false}, &(bool){false});
                     core_string_t text = first_token_text(literal);
                     parse_tree_t *expression = child_nt(
-                        grammar, current, "expression");
+                        grammar, current, CORE_STRING_STATIC("expression"));
                     bool literal_pattern = false;
                     if (core_string_eq(text, CORE_STRING_STATIC("true"))) {
                         value.mag = 1;
@@ -2657,7 +2696,7 @@ n00bb_switch_collect(parse_grammar_t *grammar, parse_tree_t *node,
                         if (n00bb_variant_arm_symbol(grammar, variant_arm)
                             && variant_arm->scope == frame->variant_scope) {
                             variant_arm_name = variant_arm->name;
-                            value.mag = th_arm_tag(variant_arm_name.data);
+                            value.mag = th_arm_tag(variant_arm_name);
                             literal_pattern = true;
                         }
                     }
@@ -2697,11 +2736,11 @@ n00bb_switch_collect(parse_grammar_t *grammar, parse_tree_t *node,
         core_list_push(frame->cases, item);
         return true;
     }
-    if (nt_is(grammar, node, "case-else")
-        || nt_is(grammar, node, "switch-value-else")) {
+    if (nt_is(grammar, node, CORE_STRING_STATIC("case-else"))
+        || nt_is(grammar, node, CORE_STRING_STATIC("switch-value-else"))) {
         frame->else_body = child_nt(grammar, node,
-            nt_is(grammar, node, "switch-value-else")
-                ? "value-body" : "body");
+            nt_is(grammar, node, CORE_STRING_STATIC("switch-value-else"))
+                ? CORE_STRING_STATIC("value-body") : CORE_STRING_STATIC("body"));
         return frame->else_body != nullptr;
     }
     for (size_t i = 0; i < core_tree_num_children(node); i++)
@@ -2728,7 +2767,7 @@ n00bb_variant_switch_exhaustive(parse_grammar_t *grammar,
     for (parse_sym_entry_t *arm = variant_scope->first_in_scope; arm;
          arm = arm->next_in_scope) {
         if (!arm->decl_node
-            || !nt_is(grammar, arm->decl_node, "variant-decl-one"))
+            || !nt_is(grammar, arm->decl_node, CORE_STRING_STATIC("variant-decl-one")))
             continue;
         bool covered = false;
         for (size_t c = 0; c < cases.len; c++)
@@ -2744,8 +2783,8 @@ n00bb_typecase_collect(parse_grammar_t *grammar, parse_tree_t *node,
                        n00bb_typecase_frame_t *frame,
                        ir_lower_context_t *context)
 {
-    if (nt_is(grammar, node, "typecase-case-block")
-        || nt_is(grammar, node, "typecase-value-case-block")) {
+    if (nt_is(grammar, node, CORE_STRING_STATIC("typecase-case-block"))
+        || nt_is(grammar, node, CORE_STRING_STATIC("typecase-value-case-block"))) {
         n00bb_lower_context_t *lower = context->user;
         n00bb_tu_state_t *state = lower ? tu_state(lower->unit) : nullptr;
         n00bb_node_facts_t *facts = n00bb_node_facts(node);
@@ -2755,8 +2794,8 @@ n00bb_typecase_collect(parse_grammar_t *grammar, parse_tree_t *node,
             ? types->count == 1 ? types->types[0]
                 : th_sum(state->types, TH_UNION, types->types, types->count)
             : nullptr;
-        parse_tree_t *body = child_nt(grammar, node, "body");
-        if (!body) body = child_nt(grammar, node, "value-body");
+        parse_tree_t *body = child_nt(grammar, node, CORE_STRING_STATIC("body"));
+        if (!body) body = child_nt(grammar, node, CORE_STRING_STATIC("value-body"));
         ir_block_t *block = frame->active
             ? n00bb_branch_block(context, context->user, "typecase_arm")
             : nullptr;
@@ -2777,11 +2816,11 @@ n00bb_typecase_collect(parse_grammar_t *grammar, parse_tree_t *node,
         }));
         return true;
     }
-    if (nt_is(grammar, node, "case-else")
-        || nt_is(grammar, node, "typecase-value-else")) {
-        frame->else_body = child_nt(grammar, node, "body");
+    if (nt_is(grammar, node, CORE_STRING_STATIC("case-else"))
+        || nt_is(grammar, node, CORE_STRING_STATIC("typecase-value-else"))) {
+        frame->else_body = child_nt(grammar, node, CORE_STRING_STATIC("body"));
         if (!frame->else_body)
-            frame->else_body = child_nt(grammar, node, "value-body");
+            frame->else_body = child_nt(grammar, node, CORE_STRING_STATIC("value-body"));
         return frame->else_body != nullptr;
     }
     if (!node || core_tree_is_leaf(node)) return true;
@@ -2877,7 +2916,7 @@ n00bb_typecase_emit_dispatch(ir_lower_context_t *context,
 {
     ir_value_t *subject = ir_lower_node_value(context, frame->subject_node);
     th_type *bool_type = th_name(tu_state(
-        ((n00bb_lower_context_t *)context->user)->unit)->types, "bool");
+        ((n00bb_lower_context_t *)context->user)->unit)->types, CORE_STRING_STATIC("bool"));
     if (!subject || !bool_type) return false;
     frame->subject_value = subject;
     ir_block_t *test_block = context->block;
@@ -2891,7 +2930,7 @@ n00bb_typecase_emit_dispatch(ir_lower_context_t *context,
         ir_instr_t *branch = test
             ? ir_instr_add(test_block, IR_OP_BRANCH) : nullptr;
         if (!next || !test || !ir_lower_set_temp_dest(context, test,
-            "__n00bb_type_test_", bool_type)
+            CORE_STRING_STATIC("__n00bb_type_test_"), bool_type)
             || !ir_instr_operand_value(test, subject)
             || !ir_instr_operand_type(test, arm->type)
             || !branch || !ir_instr_operand_value(branch, test->dest)
@@ -2949,7 +2988,7 @@ n00bb_lower_typecase_scope(ir_lower_context_t *context, parse_visit_t *visit,
             ir_instr_t *narrow = ir_lower_emit_instruction(context,
                 IR_OP_TYPE_NARROW, lower_span_for_tree(context, visit->node));
             if (!narrow || !ir_lower_set_temp_dest(context, narrow,
-                                                    "__n00bb_narrow_",
+                                                    CORE_STRING_STATIC("__n00bb_narrow_"),
                                                     arm->type)
                 || !ir_instr_operand_value(narrow, frame->subject_value)
                 || !ir_instr_operand_type(narrow, arm->type)) {
@@ -3023,7 +3062,7 @@ n00bb_lower_typecase_annotation(ir_lower_context_t *context,
     n00bb_lower_context_t *lower = context->user;
     if (entering) {
         bool expression = nt_is(visit->grammar, visit->node,
-                                "typecase-value-expr");
+                                CORE_STRING_STATIC("typecase-value-expr"));
         parse_cf_label_t *label = parse_cf_label_lookup(
             tu_state(lower->unit)->annotations, visit->node);
         parse_tree_t *subject_node = label
@@ -3041,7 +3080,7 @@ n00bb_lower_typecase_annotation(ir_lower_context_t *context,
         n00bb_typecase_frame_t frame = {
             .node = visit->node,
             .label = n00bb_control_label(visit->grammar, visit->node,
-                                         "labeled-typecase"),
+                                         CORE_STRING_STATIC("labeled-typecase")),
             .subject_node = subject_node,
             .subject_symbol = symbol,
             .arms = core_list_new(n00bb_typecase_arm_t),
@@ -3086,10 +3125,10 @@ n00bb_lower_typecase_annotation(ir_lower_context_t *context,
             frame.join = n00bb_branch_block(context, lower, "typecase_join");
             if (expression) {
                 th_type *result_type = parse_tree_type(visit->node);
-                char local_name[64];
-                snprintf(local_name, sizeof(local_name),
-                         "__n00bb_typecase_result_%llu",
-                         (unsigned long long)context->next_value_id++);
+                char local_buffer[64];
+                core_string_t local_name = n00bb_format_name(local_buffer,
+                    sizeof(local_buffer), "__n00bb_typecase_result_%llu",
+                    (unsigned long long)context->next_value_id++);
                 frame.result_local = result_type
                     ? ir_local_add(context->function, local_name, result_type)
                     : nullptr;
@@ -3132,7 +3171,7 @@ n00bb_lower_typecase_annotation(ir_lower_context_t *context,
     if (frame.expression && frame.join_reachable) {
         ir_instr_t *read = ir_instr_add(frame.join, IR_OP_COPY);
         if (!read || !ir_lower_set_temp_dest(context, read,
-            "__n00bb_typecase_value_", frame.result_local->type)
+            CORE_STRING_STATIC("__n00bb_typecase_value_"), frame.result_local->type)
             || !ir_instr_operand_local(read, frame.result_local)
             || !ir_lower_set_node_value(context, frame.node, read->dest)) {
             lower_error(context, IR_DIAG_INTERNAL,
@@ -3154,8 +3193,8 @@ n00bb_lower_switch_annotation(ir_lower_context_t *context,
     (void)state;
     n00bb_lower_context_t *lower = context->user;
     if (!lower) return false;
-    if (nt_is(visit->grammar, visit->node, "typecase-stmt")
-        || nt_is(visit->grammar, visit->node, "typecase-value-expr"))
+    if (nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("typecase-stmt"))
+        || nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("typecase-value-expr")))
         return n00bb_lower_typecase_annotation(context, visit, entering);
     if (!entering) {
         if (!lower->switches.len
@@ -3181,7 +3220,7 @@ n00bb_lower_switch_annotation(ir_lower_context_t *context,
             if (frame.expression && frame.join_reachable) {
                 ir_instr_t *read = ir_instr_add(frame.join, IR_OP_COPY);
                 if (!read || !ir_lower_set_temp_dest(context, read,
-                    "__n00bb_switch_value_", frame.result_local->type)
+                    CORE_STRING_STATIC("__n00bb_switch_value_"), frame.result_local->type)
                     || !ir_instr_operand_local(read, frame.result_local)
                     || !ir_lower_set_node_value(context, frame.node,
                                                 read->dest)) {
@@ -3198,8 +3237,8 @@ n00bb_lower_switch_annotation(ir_lower_context_t *context,
         return true;
     }
     bool expression = nt_is(visit->grammar, visit->node,
-                            "switch-value-expr");
-    if (!expression && !nt_is(visit->grammar, visit->node, "switch-stmt")) {
+                            CORE_STRING_STATIC("switch-value-expr"));
+    if (!expression && !nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("switch-stmt"))) {
         lower_error(context, IR_DIAG_VERIFY_PARSED,
             lower_span_for_tree(context, visit->node),
             "typecase is not currently lowered");
@@ -3212,7 +3251,7 @@ n00bb_lower_switch_annotation(ir_lower_context_t *context,
     n00bb_switch_frame_t frame = {
         .node = visit->node,
         .label = n00bb_control_label(visit->grammar, visit->node,
-                                    "labeled-switch"),
+                                    CORE_STRING_STATIC("labeled-switch")),
         .scrutinee = label->cond,
         .cases = core_list_new(n00bb_switch_case_t),
         .order = ++lower->next_control_order,
@@ -3247,10 +3286,10 @@ n00bb_lower_switch_annotation(ir_lower_context_t *context,
     frame.join = n00bb_branch_block(context, lower, "switch_join");
     if (expression) {
         th_type *result_type = parse_tree_type(visit->node);
-        char local_name[48];
-        snprintf(local_name, sizeof(local_name),
-                 "__n00bb_switch_result_%llu",
-                 (unsigned long long)context->next_value_id++);
+        char local_buffer[48];
+        core_string_t local_name = n00bb_format_name(local_buffer,
+            sizeof(local_buffer), "__n00bb_switch_result_%llu",
+            (unsigned long long)context->next_value_id++);
         frame.result_local = result_type
             ? ir_local_add(context->function, local_name, result_type) : nullptr;
         if (!frame.result_local) {
@@ -3305,7 +3344,7 @@ n00bb_lower_switch_annotation(ir_lower_context_t *context,
             core_list_free(frame.cases);
             return false;
         }
-        th_type *tag_type = n00bb_ir_builtin_type(context->module, "uint");
+        th_type *tag_type = n00bb_ir_builtin_type(context->module, CORE_STRING_STATIC("uint"));
         for (size_t c = 0; tag_type && c < frame.cases.len; c++) {
             for (size_t p = 0; p < frame.cases.data[c].patterns.len; p++) {
                 n00bb_switch_pattern_t *pattern =
@@ -3322,9 +3361,9 @@ n00bb_lower_switch_annotation(ir_lower_context_t *context,
                         lower_span_for_tree(context, pattern->expression))
                     : nullptr;
                 if (!tag_value || !ir_lower_set_temp_dest(context, tag_value,
-                        "__n00bb_arm_tag_", tag_type)
+                        CORE_STRING_STATIC("__n00bb_arm_tag_"), tag_type)
                     || !ir_instr_operand_name(tag_value,
-                        pattern->variant_arm_name.data)
+                        pattern->variant_arm_name)
                     || !ir_lower_set_node_value(context, primary,
                                                 tag_value->dest)) {
                     lower_error(context, IR_DIAG_INTERNAL,
@@ -3374,7 +3413,7 @@ n00bb_lower_variant_payload(ir_lower_context_t *context, parse_visit_t *visit,
                             bool entering, void *state)
 {
     (void)state;
-    if (entering || !nt_is(visit->grammar, visit->node, "postfix-expr")
+    if (entering || !nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("postfix-expr"))
         || core_tree_num_children(visit->node) < 3
         || !parse_tree_leaf_is(core_tree_child(visit->node, 1),
                                CORE_STRING_STATIC("."))) return true;
@@ -3419,10 +3458,10 @@ n00bb_lower_variant_payload(ir_lower_context_t *context, parse_visit_t *visit,
                         lower_span_for_tree(context, visit->node));
                     if (!payload || !pattern->variant_arm || !payload_type
                         || !ir_lower_set_temp_dest(context, payload,
-                            "__n00bb_payload_", payload_type)
+                            CORE_STRING_STATIC("__n00bb_payload_"), payload_type)
                         || !ir_instr_operand_value(payload, value)
                         || !ir_instr_operand_name(payload,
-                            pattern->variant_arm_name.data)
+                            pattern->variant_arm_name)
                         || !ir_lower_set_node_value(context, visit->node,
                                                     payload->dest)) {
                         lower_error(context, IR_DIAG_INTERNAL,
@@ -3475,11 +3514,11 @@ n00bb_lower_loop_annotation(ir_lower_context_t *context, parse_visit_t *visit,
         return true;
     }
 
-    bool while_loop = nt_is(visit->grammar, visit->node, "while-stmt");
-    bool range_loop = nt_is(visit->grammar, visit->node, "for-stmt")
-        && nt_is(visit->grammar, label->cond, "range-loop");
-    bool container_loop = nt_is(visit->grammar, visit->node, "for-stmt")
-        && child_nt(visit->grammar, visit->node, "for-in-target-list");
+    bool while_loop = nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("while-stmt"));
+    bool range_loop = nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("for-stmt"))
+        && nt_is(visit->grammar, label->cond, CORE_STRING_STATIC("range-loop"));
+    bool container_loop = nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("for-stmt"))
+        && child_nt(visit->grammar, visit->node, CORE_STRING_STATIC("for-in-target-list"));
     if (!while_loop && !range_loop && !container_loop) {
         lower_error(context, IR_DIAG_VERIFY_PARSED,
                     lower_span_for_tree(context, visit->node),
@@ -3500,11 +3539,11 @@ n00bb_lower_loop_annotation(ir_lower_context_t *context, parse_visit_t *visit,
     bool inclusive = false;
     if (range_loop) {
         parse_tree_t *vars = child_nt(visit->grammar, visit->node,
-                                      "for-range-var");
+                                      CORE_STRING_STATIC("for-range-var"));
         parse_tree_t *parts = child_nt(visit->grammar, label->cond,
-                                       "range-parts");
+                                       CORE_STRING_STATIC("range-parts"));
         parse_tree_t *step_node = child_nt(visit->grammar, label->cond,
-                                           "range-step");
+                                           CORE_STRING_STATIC("range-step"));
         core_list_t(parse_tree_ptr_t) range_bindings =
             core_list_new(parse_tree_ptr_t);
         collect_for_bindings(visit->grammar, vars, &range_bindings);
@@ -3518,16 +3557,16 @@ n00bb_lower_loop_annotation(ir_lower_context_t *context, parse_visit_t *visit,
         }
         for (size_t i = 0; i < core_tree_num_children(parts); i++) {
             parse_tree_t *child = core_tree_child(parts, i);
-            if (nt_is(visit->grammar, child, "expression")) {
+            if (nt_is(visit->grammar, child, CORE_STRING_STATIC("expression"))) {
                 if (!range_start) range_start = child;
                 else range_end = child;
             }
-            if (nt_is(visit->grammar, child, "range-sep"))
+            if (nt_is(visit->grammar, child, CORE_STRING_STATIC("range-sep")))
                 inclusive = core_string_eq(first_token_text(child),
                                              CORE_STRING_STATIC("to"));
         }
         range_step = step_node
-            ? child_nt(visit->grammar, step_node, "expression") : nullptr;
+            ? child_nt(visit->grammar, step_node, CORE_STRING_STATIC("expression")) : nullptr;
         iterator_symbol = parse_tree_sym(range_bindings.data[0]);
         core_list_free(range_bindings);
         th_type *iterator_type = iterator_symbol
@@ -3538,12 +3577,14 @@ n00bb_lower_loop_annotation(ir_lower_context_t *context, parse_visit_t *visit,
                 "range loop variable or endpoint types are unresolved");
             return false;
         }
-        char local_name[48];
-        snprintf(local_name, sizeof(local_name), "__n00bb_for_%llu",
-                 (unsigned long long)context->next_value_id++);
+        char local_buffer[48];
+        core_string_t local_name = n00bb_format_name(local_buffer,
+            sizeof(local_buffer), "__n00bb_for_%llu",
+            (unsigned long long)context->next_value_id++);
         iterator = ir_local_add(context->function, local_name, iterator_type);
-        snprintf(local_name, sizeof(local_name), "__n00bb_for_binding_%llu",
-                 (unsigned long long)context->next_value_id++);
+        local_name = n00bb_format_name(local_buffer, sizeof(local_buffer),
+            "__n00bb_for_binding_%llu",
+            (unsigned long long)context->next_value_id++);
         range_binding = iterator
             ? ir_local_add(context->function, local_name, iterator_type)
             : nullptr;
@@ -3557,22 +3598,22 @@ n00bb_lower_loop_annotation(ir_lower_context_t *context, parse_visit_t *visit,
     }
     if (container_loop) {
         parse_tree_t *target = child_nt(visit->grammar, visit->node,
-                                         "for-in-target-list");
-        iteration_source = child_nt(visit->grammar, target, "expression");
+                                         CORE_STRING_STATIC("for-in-target-list"));
+        iteration_source = child_nt(visit->grammar, target, CORE_STRING_STATIC("expression"));
         n00bb_node_facts_t *facts = n00bb_node_facts(visit->node);
         iteration_plan = facts ? facts->iteration_plan : nullptr;
         parse_tree_t *vars = child_nt(visit->grammar, visit->node,
-                                      "for-var-list");
+                                      CORE_STRING_STATIC("for-var-list"));
         core_list_t(parse_tree_ptr_t) binding_nodes =
             core_list_new(parse_tree_ptr_t);
         collect_for_bindings(visit->grammar, vars, &binding_nodes);
         bool valid = iteration_source && iteration_plan && binding_nodes.len;
         for (size_t i = 0; valid && i < binding_nodes.len; i++) {
             parse_sym_entry_t *symbol = parse_tree_sym(binding_nodes.data[i]);
-            char local_name[64];
-            snprintf(local_name, sizeof(local_name),
-                     "__n00bb_for_item_%llu",
-                     (unsigned long long)context->next_value_id++);
+            char local_buffer[64];
+            core_string_t local_name = n00bb_format_name(local_buffer,
+                sizeof(local_buffer), "__n00bb_for_item_%llu",
+                (unsigned long long)context->next_value_id++);
             ir_local_t *local = symbol && symbol->type
                 ? ir_local_add(context->function, local_name, symbol->type)
                 : nullptr;
@@ -3612,8 +3653,9 @@ n00bb_lower_loop_annotation(ir_lower_context_t *context, parse_visit_t *visit,
     core_list_push(lower->loops, ((n00bb_loop_frame_t){
         .node = visit->node,
         .label = n00bb_control_label(visit->grammar, visit->node,
-                                    while_loop ? "labeled-while"
-                                               : "labeled-for"),
+                                    while_loop
+                                        ? CORE_STRING_STATIC("labeled-while")
+                                        : CORE_STRING_STATIC("labeled-for")),
         .condition = label->cond,
         .body = label->then_body,
         .range_start = range_start,
@@ -3654,7 +3696,7 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
         && !entering && context->reachable) {
         n00bb_lower_context_t *lower = context->user;
         parse_tree_t *expression = child_nt(visit->grammar, visit->node,
-                                            "expression");
+                                            CORE_STRING_STATIC("expression"));
         ir_shape_t *expected = lower && lower->bound_return_shape
             ? lower->bound_return_shape
             : lower && lower->function_symbol
@@ -3679,7 +3721,7 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
             if (!frame->active
                 || !node_is_within(visit->node, frame->node)) continue;
             parse_tree_t *expression = child_nt(visit->grammar, visit->node,
-                                                "expression");
+                                                CORE_STRING_STATIC("expression"));
             ir_value_t *value = expression
                 ? n00bb_result_value(context, expression, frame->result)
                 : nullptr;
@@ -3748,9 +3790,9 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
         bool nested_value_body = false;
         for (parse_tree_t *ancestor = parse_tree_parent(visit->node);
              ancestor; ancestor = parse_tree_parent(ancestor)) {
-            if (nt_is(visit->grammar, ancestor, "value-body"))
+            if (nt_is(visit->grammar, ancestor, CORE_STRING_STATIC("value-body")))
                 nested_value_body = true;
-            if (nt_is(visit->grammar, ancestor, "body")) {
+            if (nt_is(visit->grammar, ancestor, CORE_STRING_STATIC("body"))) {
                 function_body_value = ancestor == lower->function_body;
                 break;
             }
@@ -3762,7 +3804,7 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
             return false;
         }
         parse_tree_t *expression = child_nt(visit->grammar, visit->node,
-                                            "expression");
+                                            CORE_STRING_STATIC("expression"));
         ir_value_t *value = expression
             ? ir_lower_node_value(context, expression) : nullptr;
         th_type *result_type = lower->function_symbol
@@ -3789,7 +3831,7 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
         if (entering || !context->reachable) return true;
         n00bb_lower_context_t *lower = context->user;
         parse_tree_t *expression = child_nt(visit->grammar, visit->node,
-                                            "expression");
+                                            CORE_STRING_STATIC("expression"));
         ir_value_t *value = expression
             ? ir_lower_node_value(context, expression) : nullptr;
         ir_span_t span = lower_span_for_tree(context, visit->node);
@@ -3883,11 +3925,11 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
         }
     }
     if (!target && !switch_target && !typecase_target) {
-        lower_error(context, IR_DIAG_VERIFY_PARSED,
+        lower_error_text(context, IR_DIAG_VERIFY_PARSED,
                     lower_span_for_tree(context, visit->node),
                     target_name.data
-                        ? "jump target does not name an active lowered construct"
-                        : "loop jump appears outside a lowered loop, switch, or typecase");
+                        ? CORE_STRING_STATIC("jump target does not name an active lowered construct")
+                        : CORE_STRING_STATIC("loop jump appears outside a lowered loop, switch, or typecase"));
         return false;
     }
     ir_block_t *destination = typecase_target ? typecase_target->join
@@ -3943,7 +3985,7 @@ n00bb_lower_return(ir_lower_context_t *context, parse_visit_t *visit,
     th_type *expected = lower->function_symbol
         ? th_func_ret(lower->function_symbol->type) : nullptr;
     parse_tree_t *expression = visit
-        ? child_nt(visit->grammar, visit->node, "expression") : nullptr;
+        ? child_nt(visit->grammar, visit->node, CORE_STRING_STATIC("expression")) : nullptr;
     if (value && expected) {
         value = n00bb_materialize(context, expression, value, expected, span);
         if (!value)
@@ -3970,14 +4012,14 @@ n00bb_emit_comparison_test(ir_lower_context_t *context, ir_value_t *value,
     ir_instr_t *constant = ir_lower_emit_instruction(context,
                                                      IR_OP_ENUM_CONST, span);
     ir_instr_t *test = ir_lower_emit_instruction(context, IR_OP_EQ, span);
-    th_type *bool_type = n00bb_ir_builtin_type(context->module, "bool");
+    th_type *bool_type = n00bb_ir_builtin_type(context->module, CORE_STRING_STATIC("bool"));
     if (!constant || !test || !bool_type
         || !ir_lower_set_temp_dest(context, constant,
-                                   "__n00bb_", member->type)
-        || !ir_instr_operand_name(constant, member->name.data)
+                                   CORE_STRING_STATIC("__n00bb_"), member->type)
+        || !ir_instr_operand_name(constant, member->name)
         || !ir_instr_operand_int_lit(constant,
             (ir_lit_t){.mag = ordinal->magnitude, .neg = ordinal->negative})
-        || !ir_lower_set_temp_dest(context, test, "__n00bb_", bool_type)
+        || !ir_lower_set_temp_dest(context, test, CORE_STRING_STATIC("__n00bb_"), bool_type)
         || !ir_instr_operand_value(test, value)
         || !ir_instr_operand_value(test, constant->dest))
         return lower_error(context, IR_DIAG_INTERNAL, span,
@@ -3987,9 +4029,9 @@ n00bb_emit_comparison_test(ir_lower_context_t *context, ir_value_t *value,
 
 static parse_sym_entry_t *
 n00bb_comparison_member(n00bb_link_analysis_t *analysis, th_type *type,
-                        const char *name)
+                        core_string_t name)
 {
-    if (!analysis || !type || !name) return nullptr;
+    if (!analysis || !type || !name.data) return nullptr;
     for (size_t i = 0; i < analysis->units.len; i++) {
         n00bb_tu_state_t *state = tu_state(analysis->units.data[i]);
         parse_symtab_t *symtab = state && state->annotations
@@ -4007,7 +4049,7 @@ n00bb_comparison_member(n00bb_link_analysis_t *analysis, th_type *type,
                     || th_hash(state->types, symbol->type)
                         != th_hash(state->types, type)) continue;
                 parse_sym_entry_t *member = parse_symtab_lookup_in(
-                    symbol->member_scope, core_string_from_cstr(name));
+                    symbol->member_scope, name);
                 if (member && member->kind == PARSE_SYM_ENUM_CONST)
                     return member;
             }
@@ -4042,9 +4084,9 @@ n00bb_lower_comparison(ir_lower_context_t *context, parse_visit_t *visit,
     n00bb_link_analysis_t *analysis = caller
         ? caller->link_analysis : nullptr;
     th_type *comparison_type = direct_equal ? result_type
-        : th_name(ir_module_types(context->module), "Comparison");
+        : th_name(ir_module_types(context->module), CORE_STRING_STATIC("Comparison"));
     if (!comparison_type || !ir_type_eq(context->module, result_type,
-            n00bb_ir_builtin_type(context->module, "bool")))
+            n00bb_ir_builtin_type(context->module, CORE_STRING_STATIC("bool"))))
         return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
             "comparison expression must yield bool");
     ir_lower_result_t called = n00bb_lower_operator_method(context, visit,
@@ -4056,7 +4098,7 @@ n00bb_lower_comparison(ir_lower_context_t *context, parse_visit_t *visit,
         ir_lower_result_t equal = {IR_LOWER_VALUE, comparison};
         if (!direct_equal) {
             parse_sym_entry_t *member = n00bb_comparison_member(
-                analysis, comparison_type, "equal");
+                analysis, comparison_type, CORE_STRING_STATIC("equal"));
             equal = member
                 ? n00bb_emit_comparison_test(context, comparison, member, span)
                 : lower_error(context, IR_DIAG_UNDEFINED_SYMBOL, span,
@@ -4070,7 +4112,7 @@ n00bb_lower_comparison(ir_lower_context_t *context, parse_visit_t *visit,
                                                              span);
         if (!false_value
             || !ir_lower_set_temp_dest(context, false_value,
-                                       "__n00bb_", result_type)
+                                       CORE_STRING_STATIC("__n00bb_"), result_type)
             || !ir_instr_operand_int(false_value, 0))
             return lower_error(context, IR_DIAG_INTERNAL, span,
                 "could not emit inequality's false value");
@@ -4078,7 +4120,7 @@ n00bb_lower_comparison(ir_lower_context_t *context, parse_visit_t *visit,
                                                            span);
         if (!not_equal
             || !ir_lower_set_temp_dest(context, not_equal,
-                                       "__n00bb_", result_type)
+                                       CORE_STRING_STATIC("__n00bb_"), result_type)
             || !ir_instr_operand_value(not_equal, equal.value)
             || !ir_instr_operand_value(not_equal, false_value->dest))
             return lower_error(context, IR_DIAG_INTERNAL, span,
@@ -4086,9 +4128,9 @@ n00bb_lower_comparison(ir_lower_context_t *context, parse_visit_t *visit,
         return (ir_lower_result_t){IR_LOWER_VALUE, not_equal->dest};
     }
 
-    const char *first = core_string_eq(spelling, CORE_STRING_STATIC("<"))
+    core_string_t first = core_string_eq(spelling, CORE_STRING_STATIC("<"))
         || core_string_eq(spelling, CORE_STRING_STATIC("<="))
-            ? "less" : "greater";
+            ? CORE_STRING_STATIC("less") : CORE_STRING_STATIC("greater");
     parse_sym_entry_t *first_member = n00bb_comparison_member(
         analysis, comparison_type, first);
     ir_lower_result_t test = first_member
@@ -4100,7 +4142,7 @@ n00bb_lower_comparison(ir_lower_context_t *context, parse_visit_t *visit,
         && !core_string_eq(spelling, CORE_STRING_STATIC(">=")))
         return test;
     parse_sym_entry_t *equal_member = n00bb_comparison_member(
-        analysis, comparison_type, "equal");
+        analysis, comparison_type, CORE_STRING_STATIC("equal"));
     ir_lower_result_t equal = equal_member
         ? n00bb_emit_comparison_test(context, comparison, equal_member, span)
         : lower_error(context, IR_DIAG_UNDEFINED_SYMBOL, span,
@@ -4111,10 +4153,10 @@ n00bb_lower_comparison(ir_lower_context_t *context, parse_visit_t *visit,
                                                    span);
     if (!truth || !either
         || !ir_lower_set_temp_dest(context, truth,
-                                   "__n00bb_", result_type)
+                                   CORE_STRING_STATIC("__n00bb_"), result_type)
         || !ir_instr_operand_int(truth, 1)
         || !ir_lower_set_temp_dest(context, either,
-                                   "__n00bb_", result_type)
+                                   CORE_STRING_STATIC("__n00bb_"), result_type)
         || !ir_instr_operand_value(either, test.value)
         || !ir_instr_operand_value(either, truth->dest)
         || !ir_instr_operand_value(either, equal.value))
@@ -4143,16 +4185,19 @@ n00bb_abstract_trait_requirement(ir_lower_context_t *context,
 {
     th_ctx *types = ir_module_types(context->module);
     core_buffer_t requirement_name = {0};
-    core_buffer_printf(&requirement_name, "__trait_req_%s_%.*s",
-        site->resolved_trait_name,
+    core_buffer_printf(&requirement_name, "__trait_req_%.*s_%.*s",
+        (int)site->resolved_trait_name.u8_bytes,
+        site->resolved_trait_name.data,
         (int)site->dispatch_method.u8_bytes,
         site->dispatch_method.data);
     ir_func_t *requirement = requirement_name.data
-        ? ir_func_find(context->module, requirement_name.data) : nullptr;
+        ? ir_func_find(context->module,
+                       core_buffer_string(&requirement_name)) : nullptr;
     if (!requirement && requirement_name.data) {
         th_type *requirement_type = th_type_clone(types, requirement_contract);
         requirement = ir_func_add(context->module,
-            requirement_name.data, requirement_type, IR_LINK_EXTERN);
+            core_buffer_string(&requirement_name), requirement_type,
+            IR_LINK_EXTERN);
         if (requirement && !th_is_closed(types, requirement_contract)
             && !ir_func_set_callable_contract(requirement,
                                               requirement_contract))
@@ -4165,9 +4210,9 @@ n00bb_abstract_trait_requirement(ir_lower_context_t *context,
         ? ir_lower_emit_instruction(context, IR_OP_TRAIT_METHOD, span)
         : nullptr;
     if (!selection || !ir_lower_set_temp_dest(context, selection,
-                                              "__n00bb_", signature)
+                                              CORE_STRING_STATIC("__n00bb_"), signature)
         || !ir_instr_operand_name(selection, site->resolved_trait_name)
-        || !ir_instr_operand_name(selection, site->dispatch_method.data)
+        || !ir_instr_operand_name(selection, site->dispatch_method)
         || !ir_instr_operand_value(selection, receiver)
         || !ir_instr_operand_value(selection, requirement_address))
         return nullptr;
@@ -4224,9 +4269,9 @@ n00bb_lower_operator_method(ir_lower_context_t *context,
     n00bb_link_analysis_t *analysis = caller
         ? caller->link_analysis : nullptr;
     parse_sym_entry_t *symbol = site ? site->symbol : nullptr;
-    bool builtin_operator_trait = site && site->resolved_trait_name
+    bool builtin_operator_trait = site && site->resolved_trait_name.data
         && site->dispatch_trait.data
-        && !strcmp(site->resolved_trait_name, site->dispatch_trait.data);
+        && core_string_eq(site->resolved_trait_name, site->dispatch_trait);
     bool open_dispatch = n00bb_open_dispatch(analysis);
     parse_sym_entry_t *requirement = linkable_trait_requirement(analysis,
         lower->unit, site, symbol);
@@ -4374,7 +4419,7 @@ n00bb_lower_operator_method(ir_lower_context_t *context,
     ir_instr_t *call = call_type
         ? ir_lower_emit_instruction(context, IR_OP_CALL, span) : nullptr;
     bool call_ok = call && ir_lower_set_temp_dest(context, call,
-                                                  "__n00bb_", call_type)
+                                                  CORE_STRING_STATIC("__n00bb_"), call_type)
         && ir_instr_operand_value(call, callee);
     for (size_t i = 0; call_ok && i < operand_count; i++)
         call_ok = ir_instr_operand_value(call, operands[i]);
@@ -4446,7 +4491,7 @@ n00bb_lower_in_place_method(ir_lower_context_t *context, parse_visit_t *visit,
         : th_func_ret(signature);
     ir_instr_t *call = call_type
         ? ir_lower_emit_instruction(context, IR_OP_CALL, span) : nullptr;
-    if (!call || !ir_lower_set_temp_dest(context, call, "__n00bb_", call_type)
+    if (!call || !ir_lower_set_temp_dest(context, call, CORE_STRING_STATIC("__n00bb_"), call_type)
         || !ir_instr_operand_value(call, callee)
         || !ir_instr_operand_value(call, operands[0])
         || !ir_instr_operand_value(call, operands[1])
@@ -4459,7 +4504,7 @@ n00bb_lower_in_place_method(ir_lower_context_t *context, parse_visit_t *visit,
         return (ir_lower_result_t){IR_LOWER_FAILED, nullptr};
     ir_instr_t *updated = ir_lower_emit_instruction(context,
                                                     IR_OP_CALL_OUTPUT, span);
-    if (!updated || !ir_lower_set_temp_dest(context, updated, "__n00bb_",
+    if (!updated || !ir_lower_set_temp_dest(context, updated, CORE_STRING_STATIC("__n00bb_"),
                                             target_type)
         || !ir_instr_operand_value(updated, completed)
         || !ir_instr_operand_uint(updated, 0))
@@ -4489,10 +4534,10 @@ n00bb_lower_shift_count(ir_lower_context_t *context, parse_tree_t *node,
     ir_machine_t source = ir_machine_of(context->module, value->type);
     ir_machine_t destination = ir_machine_of(context->module, target);
     ir_instr_t *cast = ir_lower_emit_instruction(context, IR_OP_CAST, span);
-    if (!cast || !ir_lower_set_temp_dest(context, cast, "__n00bb_", target)
+    if (!cast || !ir_lower_set_temp_dest(context, cast, CORE_STRING_STATIC("__n00bb_"), target)
         || !ir_instr_operand_value(cast, value)
         || (source.width > destination.width
-            && !ir_instr_add_mod(cast, "trap"))) {
+            && !ir_instr_add_mod(cast, CORE_STRING_STATIC("trap")))) {
         lower_error(context, IR_DIAG_INTERNAL, span,
             "could not lower the shift count conversion");
         return nullptr;
@@ -4561,7 +4606,7 @@ n00bb_lower_binary(ir_lower_context_t *context, parse_visit_t *visit,
                                                      IR_OP_OPTION_IS_NIL,
                                                      span);
         if (!test || !ir_lower_set_temp_dest(context, test,
-                                             "__n00bb_", result_type)
+                                             CORE_STRING_STATIC("__n00bb_"), result_type)
             || !ir_instr_operand_value(test, option))
             return lower_error(context, IR_DIAG_INTERNAL, span,
                                "could not lower option comparison with nil");
@@ -4572,12 +4617,12 @@ n00bb_lower_binary(ir_lower_context_t *context, parse_visit_t *visit,
                                                              span);
         bool constant_ok = false_value
             && ir_lower_set_temp_dest(context, false_value,
-                                      "__n00bb_", result_type)
+                                      CORE_STRING_STATIC("__n00bb_"), result_type)
             && ir_instr_operand_int(false_value, 0);
         ir_instr_t *negated = constant_ok
             ? ir_lower_emit_instruction(context, IR_OP_EQ, span) : nullptr;
         if (!negated || !ir_lower_set_temp_dest(context, negated,
-                                                "__n00bb_", result_type)
+                                                CORE_STRING_STATIC("__n00bb_"), result_type)
             || !ir_instr_operand_value(negated, test->dest)
             || !ir_instr_operand_value(negated, false_value->dest))
             return lower_error(context, IR_DIAG_INTERNAL, span,
@@ -4589,7 +4634,7 @@ n00bb_lower_binary(ir_lower_context_t *context, parse_visit_t *visit,
                                                      span);
         bool is_equal = op == IR_OP_EQ;
         if (!same || !ir_lower_set_temp_dest(context, same,
-                                             "__n00bb_", result_type)
+                                             CORE_STRING_STATIC("__n00bb_"), result_type)
             || !ir_instr_operand_int(same, is_equal ? 1 : 0))
             return lower_error(context, IR_DIAG_INTERNAL, span,
                                "could not lower nil equality");
@@ -4674,8 +4719,8 @@ n00bb_lower_nil_literal(ir_lower_context_t *context, parse_visit_t *visit,
     for (parse_tree_t *parent = visit && visit->node
             ? parse_tree_parent(visit->node) : nullptr;
          lower && parent; parent = parse_tree_parent(parent)) {
-        if (!nt_is(visit->grammar, parent, "sym-decl")
-            && !nt_is(visit->grammar, parent, "assign-stmt")) continue;
+        if (!nt_is(visit->grammar, parent, CORE_STRING_STATIC("sym-decl"))
+            && !nt_is(visit->grammar, parent, CORE_STRING_STATIC("assign-stmt"))) continue;
         const parse_rule_t *rule = parse_tree_rule(visit->grammar, parent);
         parse_annotation_t *assignment = rule
             ? parse_rule_find_annot(visit->grammar, rule,
@@ -4704,8 +4749,8 @@ n00bb_lower_nil_literal(ir_lower_context_t *context, parse_visit_t *visit,
                                                           IR_OP_BITSET_CONST,
                                                           span);
         if (!constant || !ir_lower_set_temp_dest(context, constant,
-                                                 "__n00bb_", flagset_type)
-            || !ir_instr_operand_name(constant, "nil")
+                                                 CORE_STRING_STATIC("__n00bb_"), flagset_type)
+            || !ir_instr_operand_name(constant, CORE_STRING_STATIC("nil"))
             || !ir_instr_operand_uint(constant, 0))
             return lower_error(context, IR_DIAG_INTERNAL, span,
                                "could not emit an empty flagset value");
@@ -4718,7 +4763,7 @@ n00bb_lower_nil_literal(ir_lower_context_t *context, parse_visit_t *visit,
     ir_instr_t *instruction = ir_lower_emit_instruction(context, IR_OP_NIL,
                                                         span);
     if (!instruction || !ir_lower_set_temp_dest(context, instruction,
-                                                "__n00bb_", result_type))
+                                                CORE_STRING_STATIC("__n00bb_"), result_type))
         return lower_error(context, IR_DIAG_INTERNAL, span,
                            "could not emit the nil sentinel");
     return (ir_lower_result_t){IR_LOWER_VALUE, instruction->dest};
@@ -4737,7 +4782,7 @@ n00bb_lower_typeof(ir_lower_context_t *context, parse_visit_t *visit,
     ir_instr_t *instruction = ir_lower_emit_instruction(context, IR_OP_TYPE_OF,
                                                         span);
     if (!instruction || !ir_lower_set_temp_dest(context, instruction,
-                                                "__n00bb_", result_type)
+                                                CORE_STRING_STATIC("__n00bb_"), result_type)
         || !ir_instr_operand_value(instruction, operands[0]))
         return lower_error(context, IR_DIAG_INTERNAL, span,
                            "could not emit typeof expression");
@@ -4763,7 +4808,7 @@ n00bb_emit_value_instruction(ir_lower_context_t *context, ir_op_t op,
 {
     ir_instr_t *instruction = ir_lower_emit_instruction(context, op, span);
     if (!instruction
-        || !ir_lower_set_temp_dest(context, instruction, "__n00bb_", type)
+        || !ir_lower_set_temp_dest(context, instruction, CORE_STRING_STATIC("__n00bb_"), type)
         || (left && !ir_instr_operand_value(instruction, left))
         || (right && !ir_instr_operand_value(instruction, right)))
         return nullptr;
@@ -4777,7 +4822,7 @@ n00bb_lower_enum_from_value(ir_lower_context_t *context,
                             ir_value_t *operand, th_type *target,
                             ir_span_t span)
 {
-    th_type *bool_type = n00bb_ir_builtin_type(context->module, "bool");
+    th_type *bool_type = n00bb_ir_builtin_type(context->module, CORE_STRING_STATIC("bool"));
     ir_machine_t machine = ir_machine_of(context->module, operand->type);
     ir_block_t *join = n00bb_branch_block(context, lower, "enum_cast_join");
     ir_block_t *failure = n00bb_branch_block(context, lower,
@@ -4798,7 +4843,7 @@ n00bb_lower_enum_from_value(ir_lower_context_t *context,
         ir_instr_t *constant = ir_lower_emit_instruction(context, IR_OP_CONST,
                                                          span);
         if (!constant
-            || !ir_lower_set_temp_dest(context, constant, "__n00bb_",
+            || !ir_lower_set_temp_dest(context, constant, CORE_STRING_STATIC("__n00bb_"),
                                        operand->type)
             || !ir_instr_operand_int_lit(constant, literal))
             return lower_error(context, IR_DIAG_INTERNAL, span,
@@ -4849,7 +4894,7 @@ n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
                  th_type *result_type, ir_span_t span, void *state)
 {
     (void)state;
-    parse_tree_t *spec = child_nt(visit->grammar, visit->node, "type-spec");
+    parse_tree_t *spec = child_nt(visit->grammar, visit->node, CORE_STRING_STATIC("type-spec"));
     th_type *target = spec ? parse_tree_type(spec) : nullptr;
     if (operand_count != 1 || !operands || !operands[0] || !result_type
         || !target || !ir_type_eq(context->module, target, result_type))
@@ -4860,7 +4905,7 @@ n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
             return (ir_lower_result_t){IR_LOWER_VALUE, operands[0]};
         ir_instr_t *copy = ir_lower_emit_instruction(context, IR_OP_COPY,
                                                      span);
-        if (!copy || !ir_lower_set_temp_dest(context, copy, "__n00bb_cast_",
+        if (!copy || !ir_lower_set_temp_dest(context, copy, CORE_STRING_STATIC("__n00bb_cast_"),
                                              target)
             || !ir_instr_operand_value(copy, operands[0]))
             return lower_error(context, IR_DIAG_INTERNAL, span,
@@ -4889,10 +4934,10 @@ n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
     if (unsafe_cast && is_integer_type(from) && is_integer_type(target)) {
         ir_instr_t *cast = ir_lower_emit_instruction(context, IR_OP_CAST,
                                                      span);
-        if (!cast || !ir_lower_set_temp_dest(context, cast, "__n00bb_",
+        if (!cast || !ir_lower_set_temp_dest(context, cast, CORE_STRING_STATIC("__n00bb_"),
                                              target)
             || !ir_instr_operand_value(cast, operands[0])
-            || !ir_instr_add_mod(cast, "wrap"))
+            || !ir_instr_add_mod(cast, CORE_STRING_STATIC("wrap")))
             return lower_error(context, IR_DIAG_INTERNAL, span,
                                "could not emit an unchecked integer cast");
         return (ir_lower_result_t){IR_LOWER_VALUE, cast->dest};
@@ -4930,9 +4975,9 @@ n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
             source_flagset ? IR_OP_BITSET_VALUE
                            : IR_OP_BITSET_FROM_VALUE, span);
         if (!conversion || !ir_lower_set_temp_dest(context, conversion,
-                                                   "__n00bb_", target)
+                                                   CORE_STRING_STATIC("__n00bb_"), target)
             || !ir_instr_operand_value(conversion, operands[0])
-            || !ir_instr_add_mod(conversion, "trap"))
+            || !ir_instr_add_mod(conversion, CORE_STRING_STATIC("trap")))
             return lower_error(context, IR_DIAG_INTERNAL, span,
                                "could not emit the flagset integer conversion");
         return (ir_lower_result_t){IR_LOWER_VALUE, conversion->dest};
@@ -4955,9 +5000,9 @@ n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
                                                             span);
         if (!range || !conversion
             || !ir_lower_set_temp_dest(context, conversion,
-                                       "__n00bb_", target)
+                                       CORE_STRING_STATIC("__n00bb_"), target)
             || !ir_instr_operand_value(conversion, operands[0])
-            || (!represents_range && !ir_instr_add_mod(conversion, "trap")))
+            || (!represents_range && !ir_instr_add_mod(conversion, CORE_STRING_STATIC("trap"))))
             return lower_error(context, IR_DIAG_INTERNAL, span,
                 "could not emit the semantic enum-to-integer conversion");
         return (ir_lower_result_t){IR_LOWER_VALUE, conversion->dest};
@@ -4977,7 +5022,7 @@ n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
             .escapes = n00bb_tree_returns_value(visit->grammar, visit->node),
         };
         if (!cast || !ir_lower_set_temp_dest(context, cast,
-                                             "__n00bb_", target)
+                                             CORE_STRING_STATIC("__n00bb_"), target)
             || !ir_instr_operand_value(cast, operands[0])
             || !ir_value_set_alias_targets(lower->ir_context, cast->dest,
                                            &alias, 1, true)
@@ -5003,7 +5048,7 @@ n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
         ir_instr_t *conversion = ir_lower_emit_instruction(context,
             boxing ? IR_OP_BOX : IR_OP_NOMINAL_CAST, span);
         if (!conversion || !ir_lower_set_temp_dest(context, conversion,
-                                                   "__n00bb_", target)
+                                                   CORE_STRING_STATIC("__n00bb_"), target)
             || !ir_instr_operand_value(conversion, operands[0])
             || !ir_value_copy_alias_targets(lower->ir_context,
                 conversion->dest, operands[0]))
@@ -5033,7 +5078,7 @@ n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
         || destination.class == IR_CLASS_UINT;
     bool source_float = source.class == IR_CLASS_FLOAT;
     bool target_float = destination.class == IR_CLASS_FLOAT;
-    if (ir_type_eq(context->module, from, th_name(types, "byte")))
+    if (ir_type_eq(context->module, from, th_name(types, CORE_STRING_STATIC("byte"))))
         target_integer = is_integer_type(target);
     bool float_to_float = source_float && target_float;
     if (!(source_integer && target_integer)
@@ -5046,15 +5091,17 @@ n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
     bool needs_check = (source_float && !float_to_float)
         || (source_integer && target_integer
             && (destination.width < source.width || signedness_change));
-    const char *rounding = float_to_float
-        ? destination.width < source.width ? "nearest" : nullptr
-        : source_float ? "to_zero" : target_float ? "nearest" : nullptr;
+    core_string_t rounding = float_to_float
+        ? destination.width < source.width ? CORE_STRING_STATIC("nearest")
+                                           : (core_string_t){}
+        : source_float ? CORE_STRING_STATIC("to_zero")
+        : target_float ? CORE_STRING_STATIC("nearest") : (core_string_t){};
     ir_instr_t *cast = ir_lower_emit_instruction(context, IR_OP_CAST, span);
     if (!cast || !ir_lower_set_temp_dest(context, cast,
-                                         "__n00bb_", target)
+                                         CORE_STRING_STATIC("__n00bb_"), target)
         || !ir_instr_operand_value(cast, operands[0])
-        || (needs_check && !ir_instr_add_mod(cast, "trap"))
-        || (rounding && !ir_instr_add_mod(cast, rounding)))
+        || (needs_check && !ir_instr_add_mod(cast, CORE_STRING_STATIC("trap")))
+        || (rounding.data && !ir_instr_add_mod(cast, rounding)))
         return lower_error(context, IR_DIAG_INTERNAL, span,
                            "could not emit a checked cast");
     return (ir_lower_result_t){IR_LOWER_VALUE, cast->dest};
@@ -5071,14 +5118,14 @@ n00bb_lower_bool_not(ir_lower_context_t *context, parse_visit_t *visit,
     if (caller && operand_count == 1 && operands && operands[0]
         && result_type && n00bb_flagset_type(lower->unit, caller,
                                              operands[0]->type, nullptr)) {
-        th_type *bool_type = n00bb_ir_builtin_type(context->module, "bool");
+        th_type *bool_type = n00bb_ir_builtin_type(context->module, CORE_STRING_STATIC("bool"));
         ir_instr_t *test = bool_type
             && ir_type_eq(context->module, result_type, bool_type)
                 ? ir_lower_emit_instruction(context, IR_OP_BITSET_IS_EMPTY,
                                             span)
                 : nullptr;
         if (!test || !ir_lower_set_temp_dest(context, test,
-                                             "__n00bb_", result_type)
+                                             CORE_STRING_STATIC("__n00bb_"), result_type)
             || !ir_instr_operand_value(test, operands[0]))
             return lower_error(context, IR_DIAG_TYPE_CLASS, span,
                                "flagset ! requires a flagset operand and bool result");
@@ -5094,7 +5141,7 @@ n00bb_lower_bool_not(ir_lower_context_t *context, parse_visit_t *visit,
         return n00bb_lower_operator_method(context, visit, operands, 1,
                                            result_type, span);
     }
-    th_type *bool_type = n00bb_ir_builtin_type(context->module, "bool");
+    th_type *bool_type = n00bb_ir_builtin_type(context->module, CORE_STRING_STATIC("bool"));
     if (operand_count != 1 || !operands || !operands[0] || !result_type
         || !bool_type
         || !ir_type_eq(context->module, operands[0]->type, bool_type)
@@ -5105,13 +5152,13 @@ n00bb_lower_bool_not(ir_lower_context_t *context, parse_visit_t *visit,
                                                          span);
     if (!false_value
         || !ir_lower_set_temp_dest(context, false_value,
-                                   "__n00bb_", bool_type)
+                                   CORE_STRING_STATIC("__n00bb_"), bool_type)
         || !ir_instr_operand_int(false_value, 0))
         return lower_error(context, IR_DIAG_INTERNAL, span,
                            "could not emit false for logical negation");
     ir_instr_t *equal = ir_lower_emit_instruction(context, IR_OP_EQ, span);
     if (!equal || !ir_lower_set_temp_dest(context, equal,
-                                          "__n00bb_", bool_type)
+                                          CORE_STRING_STATIC("__n00bb_"), bool_type)
         || !ir_instr_operand_value(equal, operands[0])
         || !ir_instr_operand_value(equal, false_value->dest))
         return lower_error(context, IR_DIAG_INTERNAL, span,
@@ -5144,7 +5191,7 @@ n00bb_lower_complement(ir_lower_context_t *context,
     ir_instr_t *instruction = ir_lower_emit_instruction(context, flagset
         ? IR_OP_BITSET_COMPLEMENT : IR_OP_NOT, span);
     if (!instruction || !ir_lower_set_temp_dest(context, instruction,
-                                                "__n00bb_", result_type)
+                                                CORE_STRING_STATIC("__n00bb_"), result_type)
         || !ir_instr_operand_value(instruction, operands[0]))
         return lower_error(context, IR_DIAG_INTERNAL, span,
                            "could not emit complement");
@@ -5186,9 +5233,9 @@ n00bb_lower_negate(ir_lower_context_t *context, parse_visit_t *visit,
     bool checked_integer = operand_class == IR_CLASS_SINT
         || operand_class == IR_CLASS_UINT;
     if (!instruction || !ir_lower_set_temp_dest(context, instruction,
-                                                "__n00bb_", result_type)
+                                                CORE_STRING_STATIC("__n00bb_"), result_type)
         || !ir_instr_operand_value(instruction, operands[0])
-        || (checked_integer && !ir_instr_add_mod(instruction, "trap")))
+        || (checked_integer && !ir_instr_add_mod(instruction, CORE_STRING_STATIC("trap"))))
         return lower_error(context, IR_DIAG_INTERNAL, span,
                            "could not emit unary negation");
     return (ir_lower_result_t){IR_LOWER_VALUE, instruction->dest};
@@ -5240,7 +5287,7 @@ n00bb_skip_i128_min_magnitude(ir_lower_context_t *context,
                            CORE_STRING_STATIC("literal"))) return true;
     n00bb_lower_context_t *lower = context ? context->user : nullptr;
     if (!lower || !lower->grammar
-        || !nt_is(lower->grammar, visit->node, "simple-lit")) return true;
+        || !nt_is(lower->grammar, visit->node, CORE_STRING_STATIC("simple-lit"))) return true;
     bool negative = false;
     bool saw_sign = false;
     ir_lit_t magnitude = {0};
@@ -5248,7 +5295,7 @@ n00bb_skip_i128_min_magnitude(ir_lower_context_t *context,
     for (parse_tree_t *ancestor = parse_tree_parent(visit->node);
          ancestor && !literal;
          ancestor = parse_tree_parent(ancestor)) {
-        if (!nt_is(lower->grammar, ancestor, "unary-expr")) continue;
+        if (!nt_is(lower->grammar, ancestor, CORE_STRING_STATIC("unary-expr"))) continue;
         bool candidate_negative = false;
         bool candidate_saw_sign = false;
         parse_tree_t *candidate = n00bb_simple_switch_literal(
@@ -5269,7 +5316,7 @@ n00bb_skip_i128_min_magnitude(ir_lower_context_t *context,
     ir_span_t span = lower_span_for_tree(context, visit->node);
     ir_instr_t *constant = ir_lower_emit_instruction(context, IR_OP_CONST,
                                                      span);
-    if (!constant || !ir_lower_set_temp_dest(context, constant, "__n00bb_",
+    if (!constant || !ir_lower_set_temp_dest(context, constant, CORE_STRING_STATIC("__n00bb_"),
                                               type)
         || !ir_instr_operand_int_lit(constant, (ir_lit_t){
             .mag = magnitude.mag, .neg = true})) return false;
@@ -5283,13 +5330,13 @@ collect_sequence_literal_values(ir_lower_context_t *context,
 {
     if (!node) return true;
     parse_tree_t *entries = nullptr;
-    if (nt_is(visit->grammar, node, "list-lit")) {
-        entries = child_nt(visit->grammar, node, "list-elems");
+    if (nt_is(visit->grammar, node, CORE_STRING_STATIC("list-lit"))) {
+        entries = child_nt(visit->grammar, node, CORE_STRING_STATIC("list-elems"));
     }
-    else if (nt_is(visit->grammar, node, "dict-or-set-lit")) {
-        entries = child_nt(visit->grammar, node, "set-entries");
+    else if (nt_is(visit->grammar, node, CORE_STRING_STATIC("dict-or-set-lit"))) {
+        entries = child_nt(visit->grammar, node, CORE_STRING_STATIC("set-entries"));
         if (!entries)
-            entries = child_nt(visit->grammar, node, "dict-entries");
+            entries = child_nt(visit->grammar, node, CORE_STRING_STATIC("dict-entries"));
     }
     else return false;
     if (!entries) return true;
@@ -5330,7 +5377,7 @@ n00bb_lower_tuple_parts(ir_lower_context_t *context, parse_visit_t *visit,
                         bool entering, void *state)
 {
     (void)state;
-    if (entering || !nt_is(visit->grammar, visit->node, "expr-comma-list"))
+    if (entering || !nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("expr-comma-list")))
         return true;
     n00bb_lower_context_t *lower = context->user;
     size_t child_count = core_tree_num_children(visit->node);
@@ -5368,13 +5415,13 @@ n00bb_lower_named_field_parts(ir_lower_context_t *context,
 {
     (void)state;
     if (entering || !nt_is(visit->grammar, visit->node,
-                           "named-field-list")) return true;
+                           CORE_STRING_STATIC("named-field-list"))) return true;
     n00bb_lower_context_t *lower = context->user;
     n00bb_tuple_parts_t *parts = n00bb_tuple_parts(lower, visit->node, true);
     if (!parts) return false;
     for (size_t i = 0; i < core_tree_num_children(visit->node); i++) {
         parse_tree_t *child = core_tree_child(visit->node, i);
-        if (nt_is(visit->grammar, child, "named-field-list")) {
+        if (nt_is(visit->grammar, child, CORE_STRING_STATIC("named-field-list"))) {
             n00bb_tuple_parts_t *tail = n00bb_tuple_parts(lower, child, false);
             if (!tail) return false;
             for (size_t j = 0; j < tail->expressions.len; j++) {
@@ -5382,11 +5429,11 @@ n00bb_lower_named_field_parts(ir_lower_context_t *context,
                 core_list_push(parts->values, tail->values.data[j]);
             }
         }
-        else if (nt_is(visit->grammar, child, "named-field")) {
+        else if (nt_is(visit->grammar, child, CORE_STRING_STATIC("named-field"))) {
             parse_tree_t *expression = nullptr;
             for (size_t j = 0; j < core_tree_num_children(child); j++) {
                 parse_tree_t *part = core_tree_child(child, j);
-                if (nt_is(visit->grammar, part, "expression")) {
+                if (nt_is(visit->grammar, part, CORE_STRING_STATIC("expression"))) {
                     expression = part;
                     break;
                 }
@@ -5421,7 +5468,7 @@ n00bb_union_filler(ir_lower_context_t *context, th_type *type, ir_span_t span)
     if (machine.class == IR_CLASS_SINT || machine.class == IR_CLASS_UINT) {
         ir_instr_t *zero = ir_lower_emit_instruction(context, IR_OP_CONST,
                                                      span);
-        return zero && ir_lower_set_temp_dest(context, zero, "__n00bb_", type)
+        return zero && ir_lower_set_temp_dest(context, zero, CORE_STRING_STATIC("__n00bb_"), type)
             && ir_instr_operand_int_lit(zero, ir_lit_of(0))
             ? zero->dest : nullptr;
     }
@@ -5442,7 +5489,7 @@ n00bb_union_filler(ir_lower_context_t *context, th_type *type, ir_span_t span)
     }
     ir_instr_t *aggregate = ok
         ? ir_lower_emit_instruction(context, IR_OP_AGGREGATE, span) : nullptr;
-    ok = aggregate && ir_lower_set_temp_dest(context, aggregate, "__n00bb_",
+    ok = aggregate && ir_lower_set_temp_dest(context, aggregate, CORE_STRING_STATIC("__n00bb_"),
                                              type);
     for (size_t i = 0; ok && i < count; i++)
         ok = ir_instr_operand_value(aggregate, members[i]);
@@ -5462,7 +5509,7 @@ n00bb_lower_union_record_literal(ir_lower_context_t *context,
     ir_instr_t *aggregate = ir_lower_emit_instruction(context,
                                                        IR_OP_AGGREGATE, span);
     bool ok = aggregate && ir_lower_set_temp_dest(context, aggregate,
-                                                   "__n00bb_", type);
+                                                   CORE_STRING_STATIC("__n00bb_"), type);
     ir_value_t **operands = count
         ? core_alloc_array(ir_value_t *, count) : nullptr;
     ok = ok && (!count || operands);
@@ -5475,13 +5522,11 @@ n00bb_lower_union_record_literal(ir_lower_context_t *context,
                 parts->expressions.data[i]);
             core_string_t name = field ? first_token_text(field)
                                        : (core_string_t){0};
-            if (name.data && core_string_eq(name,
-                    core_string_from_cstr(member->name)))
+            if (name.data && core_string_eq(name, member->name))
                 operands[j] = parts->values.data[i];
         }
         if (operands[j] || !member) continue;
-        if (!n00bb_union_arm_group(record_hash,
-                core_string_from_cstr(member->name))) {
+        if (!n00bb_union_arm_group(record_hash, member->name)) {
             ok = false;
             break;
         }
@@ -5489,25 +5534,29 @@ n00bb_lower_union_record_literal(ir_lower_context_t *context,
         if (!operands[j]) {
             core_buffer_t message = {0};
             core_buffer_printf(&message,
-                "union arm '%s' cannot be left out of this literal",
-                member->name);
-            lower_error(context, IR_DIAG_TYPE_LITERAL, span, message.data);
+                "union arm '%.*s' cannot be left out of this literal",
+                (int)member->name.u8_bytes, member->name.data);
+            lower_error_text(context, IR_DIAG_TYPE_LITERAL, span,
+                             core_buffer_string(&message));
             core_buffer_release(&message);
             core_free(operands);
             core_buffer_release(&absent);
             return false;
         }
-        core_buffer_printf(&absent, "%s%zu", absent.byte_len ? "," : "", j);
+        core_buffer_printf(&absent, "%.*s%zu", absent.byte_len ? 1 : 0, ",",
+                           j);
     }
     for (size_t j = 0; ok && j < count; j++)
         ok = ir_instr_operand_value(aggregate, operands[j]);
     core_free(operands);
-    char *absent_text = ok && absent.byte_len
-        ? ir_strdup(lower->ir_context, absent.data) : nullptr;
+    core_string_t absent_text = ok && absent.byte_len
+        ? ir_strdup(lower->ir_context, core_buffer_string(&absent))
+        : (core_string_t){};
     if (ok && absent.byte_len)
-        ok = absent_text && ir_annot_set(lower->ir_context,
+        ok = absent_text.data && ir_annot_set(lower->ir_context,
             &aggregate->annots, (ir_annot_t){
-                .key = "n00bb.union_absent", .kind = IR_ANNOT_STR,
+                .key = CORE_STRING_STATIC("n00bb.union_absent"),
+                .kind = IR_ANNOT_STR,
                 .s = absent_text,
             });
     core_buffer_release(&absent);
@@ -5524,7 +5573,7 @@ n00bb_lower_tuple_literal(ir_lower_context_t *context, parse_visit_t *visit,
                           bool entering, void *state)
 {
     (void)state;
-    if (entering || !nt_is(visit->grammar, visit->node, "tuple-or-paren"))
+    if (entering || !nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("tuple-or-paren")))
         return true;
     n00bb_lower_context_t *lower = context->user;
     n00bb_tu_state_t *tu = lower ? tu_state(lower->unit) : nullptr;
@@ -5542,7 +5591,7 @@ n00bb_lower_tuple_literal(ir_lower_context_t *context, parse_visit_t *visit,
     }
     size_t child_count = core_tree_num_children(visit->node);
     parse_tree_t *named_fields = child_nt(visit->grammar, visit->node,
-                                          "named-field-list");
+                                          CORE_STRING_STATIC("named-field-list"));
     if (named_fields) {
         bool compound = false;
         if (n00bb_assignment_target(visit->grammar, visit->node, &compound))
@@ -5557,8 +5606,7 @@ n00bb_lower_tuple_literal(ir_lower_context_t *context, parse_visit_t *visit,
                 .status != IR_LOWER_FAILED;
         ir_span_t span = lower_span_for_tree(context, visit->node);
         bool variant = false;
-        (void)th_named_info(th_resolve(type), nullptr, nullptr, &variant,
-                            nullptr);
+        (void)th_named_info(th_resolve(type), nullptr, &variant, nullptr);
         if (variant) {
             n00bb_ordered_nodes_t *ordered = tu
                 ? n00bb_node_ordered_nodes(named_fields) : nullptr;
@@ -5574,8 +5622,8 @@ n00bb_lower_tuple_literal(ir_lower_context_t *context, parse_visit_t *visit,
                                                           IR_OP_VARIANT_MAKE,
                                                           span);
             bool ok = make && ir_lower_set_temp_dest(context, make,
-                "__n00bb_variant_", type)
-                && ir_instr_operand_name(make, arm.data)
+                CORE_STRING_STATIC("__n00bb_variant_"), type)
+                && ir_instr_operand_name(make, arm)
                 && ir_instr_operand_value(make, parts->values.data[0])
                 && ir_value_copy_alias_targets(lower->ir_context,
                     make->dest, parts->values.data[0]);
@@ -5607,9 +5655,8 @@ n00bb_lower_tuple_literal(ir_lower_context_t *context, parse_visit_t *visit,
         bool unions = false;
         for (size_t j = 0; definition && j < th_record_len(definition); j++) {
             const th_member *member = th_record_member(definition, j);
-            unions = unions || (member && member->name
-                && n00bb_union_arm_group(record_hash,
-                    core_string_from_cstr(member->name)));
+            unions = unions || (member && member->name.data
+                && n00bb_union_arm_group(record_hash, member->name));
         }
         if (unions)
             return n00bb_lower_union_record_literal(context, visit, parts,
@@ -5618,7 +5665,7 @@ n00bb_lower_tuple_literal(ir_lower_context_t *context, parse_visit_t *visit,
                                                            IR_OP_AGGREGATE,
                                                            span);
         bool ok = aggregate && ir_lower_set_temp_dest(context, aggregate,
-                                                       "__n00bb_", type);
+                                                       CORE_STRING_STATIC("__n00bb_"), type);
         for (size_t i = 0; ok && i < parts->values.len; i++)
             ok = ir_instr_operand_value(aggregate, parts->values.data[i]);
         if (!ok)
@@ -5630,7 +5677,7 @@ n00bb_lower_tuple_literal(ir_lower_context_t *context, parse_visit_t *visit,
     }
     if (child_count == 3
         && nt_is(visit->grammar, core_tree_child(visit->node, 1),
-                 "expression")) {
+                 CORE_STRING_STATIC("expression"))) {
         bool compound = false;
         if (n00bb_assignment_target(visit->grammar, visit->node, &compound))
             return true;
@@ -5640,7 +5687,7 @@ n00bb_lower_tuple_literal(ir_lower_context_t *context, parse_visit_t *visit,
     }
     if (child_count != 5
         || !nt_is(visit->grammar, core_tree_child(visit->node, 1),
-                  "expression")) return true;
+                  CORE_STRING_STATIC("expression"))) return true;
     bool compound = false;
     if (n00bb_assignment_target(visit->grammar, visit->node, &compound))
         return true;
@@ -5665,7 +5712,7 @@ n00bb_lower_tuple_literal(ir_lower_context_t *context, parse_visit_t *visit,
     ir_instr_t *aggregate = ir_lower_emit_instruction(context,
                                                        IR_OP_AGGREGATE, span);
     bool ok = aggregate && ir_lower_set_temp_dest(context, aggregate,
-                                                   "__n00bb_", type);
+                                                   CORE_STRING_STATIC("__n00bb_"), type);
     for (size_t i = 0; ok && i < parts->values.len; i++) {
         if (!parts->values.data[i]) ok = false;
         else ok = ir_instr_operand_value(aggregate, parts->values.data[i]);
@@ -5696,7 +5743,7 @@ n00bb_lower_char_literal(ir_lower_context_t *context, parse_visit_t *visit,
                            "character literal has no valid scalar value");
     ir_instr_t *constant = ir_lower_emit_instruction(context, IR_OP_CONST,
                                                      span);
-    if (!constant || !ir_lower_set_temp_dest(context, constant, "__n00bb_",
+    if (!constant || !ir_lower_set_temp_dest(context, constant, CORE_STRING_STATIC("__n00bb_"),
                                               result_type)
         || !ir_instr_operand_uint(constant, scalar))
         return lower_error(context, IR_DIAG_INTERNAL, span,
@@ -5732,10 +5779,10 @@ n00bb_lower_string_literal(ir_lower_context_t *context,
         return n00bb_lower_user_literal(context, visit, user_site,
                                         result_type, span);
     if (modifier.data && !registration && !user_site)
-        return lower_error(context, IR_DIAG_TYPE_LITERAL, span,
+        return lower_error_text(context, IR_DIAG_TYPE_LITERAL, span,
             n00bb_literal_prefix_registered(modifier)
-                ? "literal modifier does not support a string payload"
-                : "no literal handler is registered for this string payload shape");
+                ? CORE_STRING_STATIC("literal modifier does not support a string payload")
+                : CORE_STRING_STATIC("no literal handler is registered for this string payload shape"));
     if (!result_type)
         return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
                            "string literal has no inferred result type");
@@ -5771,7 +5818,7 @@ n00bb_lower_string_literal(ir_lower_context_t *context,
                                                               IR_OP_CONST,
                                                               span);
             ok = constant
-                && ir_lower_set_temp_dest(context, constant, "__n00bb_",
+                && ir_lower_set_temp_dest(context, constant, CORE_STRING_STATIC("__n00bb_"),
                                            element_type)
                 && ir_instr_operand_uint(constant, (uint32_t)codepoint);
             if (ok) {
@@ -5782,7 +5829,7 @@ n00bb_lower_string_literal(ir_lower_context_t *context,
             ? ir_lower_emit_instruction(context, IR_OP_AGGREGATE, span)
             : nullptr;
         ok = ok && aggregate
-            && ir_lower_set_temp_dest(context, aggregate, "__n00bb_",
+            && ir_lower_set_temp_dest(context, aggregate, CORE_STRING_STATIC("__n00bb_"),
                                       result_type);
         for (size_t i = 0; ok && i < values.len; i++)
             ok = ir_instr_operand_value(aggregate, values.data[i]);
@@ -5804,13 +5851,13 @@ n00bb_lower_string_literal(ir_lower_context_t *context,
     ir_instr_t *instruction = ir_lower_emit_instruction(context, IR_OP_CONST,
                                                         span);
     ok = instruction && ir_lower_set_temp_dest(context, instruction,
-                                                "__n00bb_", result_type)
+                                                CORE_STRING_STATIC("__n00bb_"), result_type)
         && ir_instr_set_const_bytes(instruction,
             (const uint8_t *)decoded->data, decoded->byte_len);
     if (ok && registration && lower && lower->ir_context)
         ok = ir_annot_set(lower->ir_context, &instruction->annots,
             (ir_annot_t){
-                .key = "n00bb.literal.modifier",
+                .key = CORE_STRING_STATIC("n00bb.literal.modifier"),
                 .kind = IR_ANNOT_STR,
                 .s = ir_strdup(lower->ir_context,
                                registration->canonical_name),
@@ -5860,8 +5907,8 @@ n00bb_lower_literal_constructor(ir_lower_context_t *context,
     core_buffer_t constraint_failure = {0};
     if (!probe || !analysis->environment
         || !th_ctx_set_environment(probe, analysis->environment,
-                lower->unit->module.identifier.data,
-                n00bb_package_id(lower->unit).data)) {
+                lower->unit->module.identifier,
+                n00bb_package_id(lower->unit))) {
         th_ctx_free(probe);
         return lower_error(context, IR_DIAG_INTERNAL, span,
                            "could not check the literal constructor contract");
@@ -5904,13 +5951,16 @@ n00bb_lower_literal_constructor(ir_lower_context_t *context,
                         && th_error_count(probe) > errors_before
                         && th_error_at(probe, th_error_count(probe) - 1,
                                        &detail)
-                        && detail.constraint)
+                        && detail.constraint.data) {
+                        core_string_t printed = detail.got
+                            ? n00bb_print_type(probe, detail.got)
+                            : n00bb_print_type(types, result_type);
                         core_buffer_printf(&constraint_failure,
-                            "literal constructor requires trait '%s' for %s",
-                            detail.constraint,
-                            detail.got
-                                ? n00bb_print_type(probe, detail.got)
-                                : n00bb_print_type(types, result_type));
+                            "literal constructor requires trait '%.*s' for %.*s",
+                            (int)detail.constraint.u8_bytes,
+                            detail.constraint.data,
+                            (int)printed.u8_bytes, printed.data);
+                    }
                     continue;
                 }
                 if (selected) {
@@ -5937,11 +5987,12 @@ n00bb_lower_literal_constructor(ir_lower_context_t *context,
     }
     th_ctx_free(probe);
     if (!selected) {
-        ir_lower_result_t error = lower_error(context,
+        ir_lower_result_t error = lower_error_text(context,
             constraint_failure.data ? IR_DIAG_TYPE_ARGS
                                     : IR_DIAG_UNDEFINED_SYMBOL,
-            span, constraint_failure.data ? constraint_failure.data
-                : "no visible literal constructor accepts the seed");
+            span, constraint_failure.data
+                ? core_buffer_string(&constraint_failure)
+                : CORE_STRING_STATIC("no visible literal constructor accepts the seed"));
         core_buffer_release(&constraint_failure);
         return error;
     }
@@ -5959,13 +6010,13 @@ n00bb_lower_literal_constructor(ir_lower_context_t *context,
         ? ir_lower_emit_instruction(context, IR_OP_ALLOC, span) : nullptr;
     bool ok = callee && allocation
         && ir_lower_set_temp_dest(context, allocation,
-                                  "__n00bb_literal_storage_", address_type)
+                                  CORE_STRING_STATIC("__n00bb_literal_storage_"), address_type)
         && ir_instr_operand_type(allocation, result_type);
     ir_instr_t *call = ok
         ? ir_lower_emit_instruction(context, IR_OP_CALL, span) : nullptr;
-    th_type *nil_type = th_name(types, "nil");
+    th_type *nil_type = th_name(types, CORE_STRING_STATIC("nil"));
     ok = call && nil_type && ir_lower_set_temp_dest(context, call,
-        "__n00bb_literal_init_", nil_type)
+        CORE_STRING_STATIC("__n00bb_literal_init_"), nil_type)
         && ir_instr_operand_value(call, callee)
         && ir_instr_operand_fresh(call, allocation->dest)
         && ir_instr_operand_value(call, seed)
@@ -6033,7 +6084,7 @@ n00bb_lower_sequence_aggregate(ir_lower_context_t *context,
         ? ir_lower_emit_instruction(context, IR_OP_AGGREGATE, span)
         : nullptr;
     ok = instruction && ir_lower_set_temp_dest(context, instruction,
-                                                "__n00bb_", aggregate_type);
+                                                CORE_STRING_STATIC("__n00bb_"), aggregate_type);
     if (ok) ok = ir_instr_set_aggregate_form(instruction,
                                              IR_AGGREGATE_ELEMENTS);
     for (size_t i = 0; ok && i < promoted_values.len; i++)
@@ -6203,7 +6254,7 @@ n00bb_lower_brace_payload(ir_lower_context_t *context,
             ir_instr_t *pair = ir_lower_emit_instruction(context,
                 IR_OP_AGGREGATE, span);
             ok = pair && ir_lower_set_temp_dest(context, pair,
-                                                 "__n00bb_pair_", element_type)
+                                                 CORE_STRING_STATIC("__n00bb_pair_"), element_type)
                 && ir_instr_operand_value(pair, item)
                 && ir_instr_operand_value(pair, second.value);
             if (!ok) break;
@@ -6215,7 +6266,7 @@ n00bb_lower_brace_payload(ir_lower_context_t *context,
     ir_instr_t *array = ok
         ? ir_lower_emit_instruction(context, IR_OP_AGGREGATE, span) : nullptr;
     ok = array && ir_lower_set_temp_dest(context, array,
-        "__n00bb_brace_payload_", payload_type)
+        CORE_STRING_STATIC("__n00bb_brace_payload_"), payload_type)
         && ir_instr_set_aggregate_form(array, IR_AGGREGATE_ELEMENTS);
     for (size_t i = 0; ok && i < items.len; i++)
         ok = ir_instr_operand_value(array, items.data[i]);
@@ -6249,7 +6300,7 @@ n00bb_lower_user_parenthesized_payload(ir_lower_context_t *context,
     n00bb_lower_context_t *lower = context->user;
     n00bb_tu_state_t *tu = lower ? tu_state(lower->unit) : nullptr;
     parse_tree_t *fields = record
-        ? child_nt(visit->grammar, visit->node, "named-field-list")
+        ? child_nt(visit->grammar, visit->node, CORE_STRING_STATIC("named-field-list"))
         : visit->node;
     core_list_t(parse_tree_ptr_t) expressions =
         core_list_new(parse_tree_ptr_t);
@@ -6259,12 +6310,12 @@ n00bb_lower_user_parenthesized_payload(ir_lower_context_t *context,
     th_type *element_type = site->payload_type
         ? th_seq_elem(th_resolve(site->payload_type)) : nullptr;
     th_type *string_type = record && tu
-        ? th_name(tu->types, "string") : nullptr;
+        ? th_name(tu->types, CORE_STRING_STATIC("string")) : nullptr;
     ok = ok && element_type && (!record || string_type);
     for (size_t i = 0; ok && i < expressions.len; i++) {
         parse_tree_t *item = expressions.data[i];
         parse_tree_t *expression = record
-            ? child_nt(visit->grammar, item, "expression") : item;
+            ? child_nt(visit->grammar, item, CORE_STRING_STATIC("expression")) : item;
         ir_value_t *value = expression
             ? ir_lower_node_value(context, expression) : nullptr;
         if (!value) { ok = false; break; }
@@ -6288,14 +6339,14 @@ n00bb_lower_user_parenthesized_payload(ir_lower_context_t *context,
                 ? ir_lower_emit_instruction(context, IR_OP_CONST, span)
                 : nullptr;
             ok = name && ir_lower_set_temp_dest(context, name,
-                                                 "__n00bb_field_", string_type)
+                                                 CORE_STRING_STATIC("__n00bb_field_"), string_type)
                 && ir_instr_set_const_bytes(name,
                     (const uint8_t *)field.data, field.u8_bytes);
             if (!ok) break;
             ir_instr_t *pair = ir_lower_emit_instruction(context,
                 IR_OP_AGGREGATE, span);
             ok = pair && ir_lower_set_temp_dest(context, pair,
-                "__n00bb_field_pair_", element_type)
+                CORE_STRING_STATIC("__n00bb_field_pair_"), element_type)
                 && ir_instr_operand_value(pair, name->dest)
                 && ir_instr_operand_value(pair, value);
             if (!ok) break;
@@ -6306,7 +6357,7 @@ n00bb_lower_user_parenthesized_payload(ir_lower_context_t *context,
     ir_instr_t *array = ok
         ? ir_lower_emit_instruction(context, IR_OP_AGGREGATE, span) : nullptr;
     ok = array && ir_lower_set_temp_dest(context, array,
-        "__n00bb_parenthesized_", site->payload_type)
+        CORE_STRING_STATIC("__n00bb_parenthesized_"), site->payload_type)
         && ir_instr_set_aggregate_form(array, IR_AGGREGATE_ELEMENTS);
     for (size_t i = 0; ok && i < values.len; i++)
         ok = ir_instr_operand_value(array, values.data[i]);
@@ -6378,7 +6429,7 @@ n00bb_lower_user_literal(ir_lower_context_t *context,
             ir_instr_t *constant = ir_lower_emit_instruction(context,
                 IR_OP_CONST, span);
             if (constant && ir_lower_set_temp_dest(context, constant,
-                "__n00bb_litmod_bool_", site->payload_type)
+                CORE_STRING_STATIC("__n00bb_litmod_bool_"), site->payload_type)
                 && ir_instr_operand_int(constant, value ? 1 : 0)) {
                 payload = (ir_lower_result_t){IR_LOWER_VALUE, constant->dest};
             }
@@ -6422,7 +6473,7 @@ n00bb_lower_user_literal(ir_lower_context_t *context,
         ir_instr_t *constant = valid
             ? ir_lower_emit_instruction(context, IR_OP_CONST, span) : nullptr;
         if (constant && ir_lower_set_temp_dest(context, constant,
-            "__n00bb_litmod_raw_", site->payload_type)
+            CORE_STRING_STATIC("__n00bb_litmod_raw_"), site->payload_type)
             && ir_instr_set_const_bytes(constant,
                 (const uint8_t *)decoded->data, decoded->byte_len)) {
             payload = (ir_lower_result_t){IR_LOWER_VALUE, constant->dest};
@@ -6451,7 +6502,7 @@ n00bb_lower_user_literal(ir_lower_context_t *context,
             ir_instr_t *constant = ir_lower_emit_instruction(context,
                 IR_OP_CONST, span);
             if (constant && ir_lower_set_temp_dest(context, constant,
-                "__n00bb_fence_", site->payload_type)
+                CORE_STRING_STATIC("__n00bb_fence_"), site->payload_type)
                 && ir_instr_set_const_bytes(constant,
                     (const uint8_t *)spelling.data + start, end - start)) {
                 payload = (ir_lower_result_t){IR_LOWER_VALUE,
@@ -6467,7 +6518,7 @@ n00bb_lower_user_literal(ir_lower_context_t *context,
     ir_instr_t *call = outcome_type
         ? ir_lower_emit_instruction(context, IR_OP_CALL, span) : nullptr;
     if (!call || !ir_lower_set_temp_dest(context, call,
-                                        "__n00bb_litmod_call_", outcome_type)
+                                        CORE_STRING_STATIC("__n00bb_litmod_call_"), outcome_type)
         || !ir_instr_operand_value(call, callee)
         || (!no_payload && !ir_instr_operand_value(call, payload.value))
         || !ir_instr_set_call_signature(call, site->signature))
@@ -6507,8 +6558,8 @@ static bool
 n00bb_default_container_literal(parse_grammar_t *grammar,
                                 parse_tree_t *node, th_type *type)
 {
-    bool sequence = nt_is(grammar, node, "list-lit");
-    bool braces = nt_is(grammar, node, "dict-or-set-lit");
+    bool sequence = nt_is(grammar, node, CORE_STRING_STATIC("list-lit"));
+    bool braces = nt_is(grammar, node, CORE_STRING_STATIC("dict-or-set-lit"));
     if (!sequence && !braces) return false;
     return sequence
         ? th_builtin_applied(type, TH_BUILTIN_CONTAINER_LIST, 1) != nullptr
@@ -6541,7 +6592,7 @@ n00bb_declare_literal_constant(n00bb_lower_context_t *lower,
                                              : nullptr;
     parse_scope_t *scope = module_scope(tu);
     if (!symtab || !scope) return false;
-    core_string_t name = core_string_from_cstr(global->name);
+    core_string_t name = global->name;
     parse_scope_t *saved = parse_symtab_current_scope(symtab,
                                                       CORE_STRING_STATIC(""));
     parse_symtab_enter_scope_all(symtab, scope);
@@ -6566,9 +6617,9 @@ n00bb_declare_literal_constant(n00bb_lower_context_t *lower,
         tu->link_analysis->build_time_capture = true;
         return true;
     }
-    const char *identifier = n00bb_baked_root_identifier(tu->link_analysis,
+    core_string_t identifier = n00bb_baked_root_identifier(tu->link_analysis,
         unit->module.identifier, name);
-    if (!identifier) {
+    if (!identifier.data) {
         core_diagnostics_report(core_translation_unit_diagnostics(unit), unit,
             CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-B0026"),
             CORE_STRING_STATIC(
@@ -6593,8 +6644,10 @@ n00bb_record_literal_constant(n00bb_lower_context_t *lower,
     ir_global_t *global = nullptr;
     if (type) {
         core_buffer_t name = {0};
-        core_buffer_printf(&name, "%s_value", producer->name);
-        global = name.data ? ir_global_add(tu->ir_module, name.data, type)
+        core_buffer_printf(&name, "%.*s_value",
+            (int)producer->name.u8_bytes, producer->name.data);
+        global = name.data ? ir_global_add(tu->ir_module,
+                                           core_buffer_string(&name), type)
                            : nullptr;
         core_buffer_release(&name);
         if (!global || !n00bb_declare_literal_constant(lower, global))
@@ -6628,10 +6681,10 @@ n00bb_bind_static_literal_result(ir_lower_context_t *context,
         : nullptr;
     n00bb_lower_context_t *lower = context->user;
     return load
-        && ir_lower_set_temp_dest(context, load, "__n00bb_literal_", type)
+        && ir_lower_set_temp_dest(context, load, CORE_STRING_STATIC("__n00bb_literal_"), type)
         && ir_instr_operand_value(load, address)
         && ir_annot_set(lower->ir_context, &load->annots, (ir_annot_t){
-            .key = "n00bb.literal_copy", .kind = IR_ANNOT_BOOL, .b = true})
+            .key = CORE_STRING_STATIC("n00bb.literal_copy"), .kind = IR_ANNOT_BOOL, .b = true})
         && ir_lower_set_node_value(context, visit->node, load->dest);
 }
 
@@ -6685,8 +6738,9 @@ n00bb_lower_static_litmod(ir_lower_context_t *context,
                 .status != IR_LOWER_FAILED;
         parse_token_info_t *token =
             parse_tree_find_first_terminal(visit->node);
-        char name[96];
-        snprintf(name, sizeof(name), "__n00bb_litmod_%llu",
+        char name_buffer[96];
+        core_string_t name = n00bb_format_name(name_buffer,
+            sizeof(name_buffer), "__n00bb_litmod_%llu",
             (unsigned long long)(token ? parse_token_start_byte(token) : 0));
         ir_module_t *module = tu->ir_module;
         ir_func_t *existing = module ? ir_func_find(module, name) : nullptr;
@@ -6697,12 +6751,12 @@ n00bb_lower_static_litmod(ir_lower_context_t *context,
                                                      existing);
         }
         th_type *signature = th_func_with_error(tu->types, result_type,
-            n00bb_ir_builtin_type(module, "nil"), nullptr, 0, nullptr,
+            n00bb_ir_builtin_type(module, CORE_STRING_STATIC("nil")), nullptr, 0, nullptr,
             nullptr, 0);
         ir_func_t *producer = signature && module
             ? ir_func_add(module, name, signature, IR_LINK_INTERNAL)
             : nullptr;
-        ir_block_t *entry = producer ? ir_block_add(producer, "entry")
+        ir_block_t *entry = producer ? ir_block_add(producer, CORE_STRING_STATIC("entry"))
                                      : nullptr;
         if (!entry)
             return lower_error(context, IR_DIAG_INTERNAL,
@@ -6737,7 +6791,7 @@ n00bb_lower_static_litmod(ir_lower_context_t *context,
     ir_lower_result_t result = site
         ? n00bb_lower_literal_handler(context, visit, nullptr, 0,
                                       result_type, span, nullptr)
-        : nt_is(visit->grammar, visit->node, "list-lit")
+        : nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("list-lit"))
             ? n00bb_lower_sequence_aggregate(context, visit, nullptr, 0,
                                               result_type, span, nullptr)
             : n00bb_lower_brace_literal(context, visit, nullptr, 0,
@@ -6780,7 +6834,7 @@ n00bb_emit_contextual_integer_constant(ir_lower_context_t *context,
     ir_instr_t *constant = ir_lower_emit_instruction(context, IR_OP_CONST,
                                                      span);
     if (constant
-        && ir_lower_set_temp_dest(context, constant, "__n00bb_constant_",
+        && ir_lower_set_temp_dest(context, constant, CORE_STRING_STATIC("__n00bb_constant_"),
                                   type)
         && ir_instr_operand_int(constant, (ir_int_t)value)
         && ir_lower_set_node_value(context, visit->node, constant->dest)
@@ -6821,11 +6875,12 @@ n00bb_lower_folded_integer_expression(ir_lower_context_t *context,
 
 static ir_instr_t *
 n00bb_emit_uint_constant(ir_lower_context_t *context, th_type *uint_type,
-                         uint64_t value, ir_span_t span, const char *prefix)
+                         uint64_t value, ir_span_t span, core_string_t prefix)
 {
-    char name[64];
-    snprintf(name, sizeof(name), "%s_%llu", prefix,
-             (unsigned long long)context->next_value_id++);
+    char name_buffer[64];
+    core_string_t name = n00bb_format_name(name_buffer, sizeof(name_buffer),
+        "%.*s_%llu", (int)prefix.u8_bytes, prefix.data,
+        (unsigned long long)context->next_value_id++);
     ir_instr_t *constant = ir_lower_emit_instruction(context, IR_OP_CONST,
                                                      span);
     if (!constant || !ir_instr_set_dest(constant, name, uint_type)
@@ -6844,7 +6899,7 @@ n00bb_emit_retained_reference(ir_lower_context_t *context,
                                                    span);
     n00bb_lower_context_t *lower = context->user;
     if (!retain || !ir_lower_set_temp_dest(context, retain,
-                                           "__n00bb_retained_ref_",
+                                           CORE_STRING_STATIC("__n00bb_retained_ref_"),
                                            reference->type)
         || !ir_instr_operand_value(retain, reference)
         || !lower || !ir_value_add_alias_target(lower->ir_context, retain->dest,
@@ -6875,15 +6930,15 @@ n00bb_lower_callback_create(ir_lower_context_t *context,
         return lower_error(context, IR_DIAG_TYPE_CLASS, span,
             "callback construction has no registered value representation");
 
-    parse_tree_t *args = child_nt(visit->grammar, visit->node, "call-args");
+    parse_tree_t *args = child_nt(visit->grammar, visit->node, CORE_STRING_STATIC("call-args"));
     core_list_t(n00bb_tree_ptr_t) positional =
         core_list_new(n00bb_tree_ptr_t);
     core_list_t(n00bb_tree_ptr_t) keywords =
         core_list_new(n00bb_tree_ptr_t);
     collect_positional_nodes(visit->grammar,
-        child_nt(visit->grammar, args, "positional-args"), &positional);
+        child_nt(visit->grammar, args, CORE_STRING_STATIC("positional-args")), &positional);
     collect_keyword_nodes(visit->grammar,
-        child_nt(visit->grammar, args, "keyword-args"), &keywords);
+        child_nt(visit->grammar, args, CORE_STRING_STATIC("keyword-args")), &keywords);
     size_t hidden = contract->stateful ? 2u : 1u;
     bool emitted = positional.len >= hidden;
     ir_value_t *handler = emitted
@@ -6932,10 +6987,10 @@ n00bb_lower_callback_create(ir_lower_context_t *context,
     if (can_fail != propagated) {
         core_list_free(positional);
         core_list_free(keywords);
-        return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
+        return lower_error_text(context, IR_DIAG_VERIFY_TYPED, span,
             can_fail
-                ? "callback setup failure must be propagated with postfix !"
-                : "postfix ! requires a callback setup failure channel");
+                ? CORE_STRING_STATIC("callback setup failure must be propagated with postfix !")
+                : CORE_STRING_STATIC("postfix ! requires a callback setup failure channel"));
     }
     th_type *construction_signature = nullptr;
     th_type *ir_result = result_type;
@@ -6957,7 +7012,7 @@ n00bb_lower_callback_create(ir_lower_context_t *context,
         ? n00bb_specialize_callback_role(state->types, contract,
                                           result_type, setup_type) : nullptr;
     emitted = instruction && ir_lower_set_temp_dest(context, instruction,
-        "__n00bb_callback_", ir_result)
+        CORE_STRING_STATIC("__n00bb_callback_"), ir_result)
         && call_contract && handler_contract
         && (!setup_type || setup_contract)
         && ir_instr_set_callback_contract(instruction, call_contract,
@@ -6973,15 +7028,12 @@ n00bb_lower_callback_create(ir_lower_context_t *context,
     }
     for (size_t i = 0; emitted && i < keywords.len; i++) {
         parse_tree_t *expression = child_nt(visit->grammar,
-            keywords.data[i], "expression");
+            keywords.data[i], CORE_STRING_STATIC("expression"));
         core_string_t keyword = call_keyword_name(keywords.data[i]);
-        char *keyword_text = keyword.data
-            ? core_strndup(keyword.data, keyword.u8_bytes) : nullptr;
         ir_value_t *value = expression
             ? ir_lower_node_value(context, expression) : nullptr;
-        emitted = keyword_text && value
-            && ir_instr_operand_named(instruction, keyword_text, value);
-        core_free(keyword_text);
+        emitted = keyword.data && value
+            && ir_instr_operand_named(instruction, keyword, value);
     }
     core_list_free(positional);
     core_list_free(keywords);
@@ -7005,11 +7057,11 @@ n00bb_emit_checked_product(ir_lower_context_t *context, ir_value_t *left,
 {
     ir_instr_t *product = ir_lower_emit_instruction(context, IR_OP_MUL, span);
     if (!product || !ir_lower_set_temp_dest(context, product,
-                                            "__n00bb_array_product_",
+                                            CORE_STRING_STATIC("__n00bb_array_product_"),
                                             uint_type)
         || !ir_instr_operand_value(product, left)
         || !ir_instr_operand_value(product, right)
-        || !ir_instr_add_mod(product, "trap")) return nullptr;
+        || !ir_instr_add_mod(product, CORE_STRING_STATIC("trap"))) return nullptr;
     return product;
 }
 
@@ -7030,17 +7082,17 @@ n00bb_coerce_array_dimension_value(ir_lower_context_t *context,
     bool needs_fit = source_machine.width > target_machine.width
         || source_machine.class != target_machine.class;
     if (!cast || !ir_lower_set_temp_dest(context, cast,
-                                         "__n00bb_array_extent_", uint_type)
+                                         CORE_STRING_STATIC("__n00bb_array_extent_"), uint_type)
         || !ir_instr_operand_value(cast, value)
-        || (needs_fit && !ir_instr_add_mod(cast, "trap"))) return nullptr;
+        || (needs_fit && !ir_instr_add_mod(cast, CORE_STRING_STATIC("trap")))) return nullptr;
     if (!require_positive) return cast->dest;
     ir_instr_t *check = ir_lower_emit_instruction(context, IR_OP_SUB, span);
     if (!check || !ir_lower_set_temp_dest(context, check,
-                                          "__n00bb_array_positive_",
+                                          CORE_STRING_STATIC("__n00bb_array_positive_"),
                                           uint_type)
         || !ir_instr_operand_value(check, cast->dest)
         || !ir_instr_operand_value(check, one)
-        || !ir_instr_add_mod(check, "trap")) return nullptr;
+        || !ir_instr_add_mod(check, CORE_STRING_STATIC("trap"))) return nullptr;
     return cast->dest;
 }
 
@@ -7065,16 +7117,16 @@ n00bb_emit_array_allocation(ir_lower_context_t *context, th_type *leaf,
                             th_type *result_type, ir_span_t span)
 {
     n00bb_lower_context_t *lower = context->user;
-    th_type *uint_type = n00bb_ir_builtin_type(context->module, "uint");
+    th_type *uint_type = n00bb_ir_builtin_type(context->module, CORE_STRING_STATIC("uint"));
     ir_instr_t *one = uint_type
         ? n00bb_emit_uint_constant(context, uint_type, 1, span,
-                                   "__n00bb_array_one") : nullptr;
+                                   CORE_STRING_STATIC("__n00bb_array_one")) : nullptr;
     if (!lower || !lower->ir_context || !one) return nullptr;
     for (uint32_t i = 0; i < rank; i++) {
         if (extents[i].value || extents[i].kind != IR_SHAPE_EXTENT_STATIC)
             continue;
         ir_instr_t *constant = n00bb_emit_uint_constant(context, uint_type,
-            extents[i].static_value, span, "__n00bb_array_extent");
+            extents[i].static_value, span, CORE_STRING_STATIC("__n00bb_array_extent"));
         if (!constant) return nullptr;
         extents[i].value = constant->dest;
     }
@@ -7116,7 +7168,7 @@ n00bb_emit_array_allocation(ir_lower_context_t *context, th_type *leaf,
         ? ir_lower_emit_instruction(context, IR_OP_ARRAY_NEW, span) : nullptr;
     ok = ok && instruction
         && ir_lower_set_temp_dest(context, instruction,
-                                  "__n00bb_array_new_", result_type)
+                                  CORE_STRING_STATIC("__n00bb_array_new_"), result_type)
         && ir_instr_set_array_init(lower->ir_context, instruction,
                                    IR_ARRAY_INIT_LANGUAGE_ZERO);
     for (uint32_t i = 0; ok && i < known_prefix; i++)
@@ -7138,17 +7190,17 @@ n00bb_lower_array_new(ir_lower_context_t *context, parse_visit_t *visit,
                            "new has no resolved result type");
     th_type *resolved_type = th_resolve(result_type);
     bool is_variant = false;
-    if (th_named_info(resolved_type, nullptr, nullptr,
-                      &is_variant, nullptr) && is_variant) {
+    if (th_named_info(resolved_type, nullptr, &is_variant, nullptr)
+        && is_variant) {
         parse_tree_t *call_args = child_nt(visit->grammar, visit->node,
-                                           "call-args");
+                                           CORE_STRING_STATIC("call-args"));
         core_list_t(n00bb_tree_ptr_t) positional =
             core_list_new(n00bb_tree_ptr_t);
         collect_positional_nodes(visit->grammar,
-            child_nt(visit->grammar, call_args, "positional-args"),
+            child_nt(visit->grammar, call_args, CORE_STRING_STATIC("positional-args")),
             &positional);
         bool has_keywords = child_nt(visit->grammar, call_args,
-                                     "keyword-args") != nullptr;
+                                     CORE_STRING_STATIC("keyword-args")) != nullptr;
         if (positional.len || has_keywords) {
             core_list_free(positional);
             return lower_error(context, IR_DIAG_TYPE_ARGS, span,
@@ -7160,7 +7212,7 @@ n00bb_lower_array_new(ir_lower_context_t *context, parse_visit_t *visit,
                                                              span);
         if (!instruction
             || !ir_lower_set_temp_dest(context, instruction,
-                "__n00bb_variant_new_", resolved_type))
+                CORE_STRING_STATIC("__n00bb_variant_new_"), resolved_type))
             return lower_error(context, IR_DIAG_INTERNAL, span,
                 "could not emit unset variant storage");
         return (ir_lower_result_t){IR_LOWER_VALUE, instruction->dest};
@@ -7176,8 +7228,8 @@ n00bb_lower_array_new(ir_lower_context_t *context, parse_visit_t *visit,
                                                           IR_OP_BITSET_CONST,
                                                           span);
         if (!constant || !ir_lower_set_temp_dest(context, constant,
-                                                 "__n00bb_", result_type)
-            || !ir_instr_operand_name(constant, "nil")
+                                                 CORE_STRING_STATIC("__n00bb_"), result_type)
+            || !ir_instr_operand_name(constant, CORE_STRING_STATIC("nil"))
             || !ir_instr_operand_uint(constant, 0))
             return lower_error(context, IR_DIAG_INTERNAL, span,
                                "could not emit default flagset construction");
@@ -7192,7 +7244,7 @@ n00bb_lower_array_new(ir_lower_context_t *context, parse_visit_t *visit,
         return lower_error(context, IR_DIAG_INTERNAL, span,
                            "array construction has no LinkUnit analysis");
     parse_tree_t *type_node = child_nt(visit->grammar, visit->node,
-                                       "type-spec");
+                                       CORE_STRING_STATIC("type-spec"));
     core_list_t(n00bb_tree_ptr_t) type_dimensions =
         core_list_new(n00bb_tree_ptr_t);
     bool type_shape_ok = !type_node
@@ -7215,8 +7267,8 @@ n00bb_lower_array_new(ir_lower_context_t *context, parse_visit_t *visit,
         rank++;
     }
     parse_tree_t *call_args = child_nt(visit->grammar, visit->node,
-                                       "call-args");
-    if (child_nt(visit->grammar, call_args, "keyword-args")) {
+                                       CORE_STRING_STATIC("call-args"));
+    if (child_nt(visit->grammar, call_args, CORE_STRING_STATIC("keyword-args"))) {
         core_list_free(type_dimensions);
         return lower_error(context, IR_DIAG_TYPE_ARGS, span,
                            "array dimensions must be positional arguments");
@@ -7224,7 +7276,7 @@ n00bb_lower_array_new(ir_lower_context_t *context, parse_visit_t *visit,
     core_list_t(n00bb_tree_ptr_t) arguments =
         core_list_new(n00bb_tree_ptr_t);
     collect_positional_nodes(visit->grammar,
-        child_nt(visit->grammar, call_args, "positional-args"),
+        child_nt(visit->grammar, call_args, CORE_STRING_STATIC("positional-args")),
         &arguments);
     size_t argument_offset = 0;
     size_t dimension_argument_count = arguments.len - argument_offset;
@@ -7237,7 +7289,7 @@ n00bb_lower_array_new(ir_lower_context_t *context, parse_visit_t *visit,
     uint32_t unsized_count = rank;
     for (size_t i = 0; i < type_dimensions.len; i++)
         if (child_nt(visit->grammar, type_dimensions.data[i],
-                     "expression")) unsized_count--;
+                     CORE_STRING_STATIC("expression"))) unsized_count--;
     if (dimension_argument_count > unsized_count
         || (!dimension_argument_count && unsized_count)) {
         core_list_free(arguments);
@@ -7246,10 +7298,10 @@ n00bb_lower_array_new(ir_lower_context_t *context, parse_visit_t *visit,
             "array construction requires dimensions for a prefix of the unsized extents");
     }
 
-    th_type *uint_type = n00bb_ir_builtin_type(context->module, "uint");
+    th_type *uint_type = n00bb_ir_builtin_type(context->module, CORE_STRING_STATIC("uint"));
     ir_instr_t *one = uint_type
         ? n00bb_emit_uint_constant(context, uint_type, 1, span,
-                                   "__n00bb_array_one") : nullptr;
+                                   CORE_STRING_STATIC("__n00bb_array_one")) : nullptr;
     if (!one) {
         core_list_free(arguments);
         core_list_free(type_dimensions);
@@ -7267,7 +7319,7 @@ n00bb_lower_array_new(ir_lower_context_t *context, parse_visit_t *visit,
     bool ok = true;
     for (size_t i = 0; ok && i < type_dimensions.len; i++) {
         parse_tree_t *expression = child_nt(visit->grammar,
-            type_dimensions.data[i], "expression");
+            type_dimensions.data[i], CORE_STRING_STATIC("expression"));
         if (!expression) continue;
         dimension_expressions.data[i] = expression;
         ir_shape_extent_t declared_extent = array_dimension_extent(
@@ -7276,7 +7328,7 @@ n00bb_lower_array_new(ir_lower_context_t *context, parse_visit_t *visit,
             ir_instr_t *constant = n00bb_emit_uint_constant(context,
                 uint_type, declared_extent.static_value,
                 lower_span_for_tree(context, expression),
-                "__n00bb_array_extent");
+                CORE_STRING_STATIC("__n00bb_array_extent"));
             if (!constant) {
                 ok = false;
                 break;
@@ -7297,9 +7349,10 @@ n00bb_lower_array_new(ir_lower_context_t *context, parse_visit_t *visit,
         core_buffer_printf(&message,
             "array extent '%.*s' is not a constant the compiler can fold",
             (int)name.u8_bytes, name.data ? name.data : "");
-        lower_error(context, IR_DIAG_TYPE_ARGS,
+        lower_error_text(context, IR_DIAG_TYPE_ARGS,
             lower_span_for_tree(context, expression),
-            message.data ? message.data : "array extent is not foldable");
+            message.data ? core_buffer_string(&message)
+                         : CORE_STRING_STATIC("array extent is not foldable"));
         core_buffer_release(&message);
         ok = false;
     }
@@ -7428,7 +7481,7 @@ n00bb_emit_call_copyout(ir_lower_context_t *context,
         ? ir_lower_emit_instruction(context, IR_OP_CALL_OUTPUT, span)
         : nullptr;
     if (!projection || !ir_lower_set_temp_dest(context, projection,
-        "__n00bb_copyout_", type)
+        CORE_STRING_STATIC("__n00bb_copyout_"), type)
         || !ir_instr_operand_value(projection, successful_result)
         || !ir_instr_operand_uint(projection, copyout->output_index))
         return false;
@@ -7438,49 +7491,55 @@ n00bb_emit_call_copyout(ir_lower_context_t *context,
 
 static bool
 n00bb_context_has_hook(parse_grammar_t *grammar, parse_sym_entry_t *symbol,
-                       const char *name)
+                       core_string_t name)
 {
     if (!context_symbol(grammar, symbol)) return false;
-    const char *role = n00bb_context_hook_role(name);
+    core_string_t role = n00bb_context_hook_role(name);
     if (symbol->decl_node)
-        return role && parse_sym_binding(symbol,
-            core_string_borrow(role, strlen(role))) != nullptr;
-    const char *suffix = !strcmp(name, "context-enter") ? "enter"
-        : !strcmp(name, "context-exit") ? "exit"
-        : !strcmp(name, "context-error") ? "error"
-        : !strcmp(name, "context-ensure") ? "ensure" : nullptr;
-    char hook_name[256];
-    if (!suffix || !context_hook_name(symbol, suffix, hook_name,
-                                      sizeof(hook_name))) return false;
+        return role.data && parse_sym_binding(symbol, role) != nullptr;
+    core_string_t suffix =
+        core_string_eq(name, CORE_STRING_STATIC("context-enter"))
+            ? CORE_STRING_STATIC("enter")
+        : core_string_eq(name, CORE_STRING_STATIC("context-exit"))
+            ? CORE_STRING_STATIC("exit")
+        : core_string_eq(name, CORE_STRING_STATIC("context-error"))
+            ? CORE_STRING_STATIC("error")
+        : core_string_eq(name, CORE_STRING_STATIC("context-ensure"))
+            ? CORE_STRING_STATIC("ensure") : (core_string_t){};
+    core_buffer_t hook_name = {0};
+    if (!suffix.data || !context_hook_name(symbol, suffix, &hook_name)) {
+        core_buffer_release(&hook_name);
+        return false;
+    }
+    bool found = false;
     for (parse_sym_entry_t *candidate = symbol->scope
             ? symbol->scope->first_in_scope : nullptr;
-         candidate; candidate = candidate->next_in_scope)
-        if (candidate->kind == PARSE_SYM_FUNCTION
-            && candidate->name.u8_bytes == strlen(hook_name)
-            && !memcmp(candidate->name.data, hook_name,
-                       candidate->name.u8_bytes)) return true;
-    return false;
+         !found && candidate; candidate = candidate->next_in_scope)
+        found = candidate->kind == PARSE_SYM_FUNCTION
+            && core_string_eq(candidate->name,
+                              core_buffer_string(&hook_name));
+    core_buffer_release(&hook_name);
+    return found;
 }
 
 static bool
 n00bb_emit_context_hook_call(ir_lower_context_t *context,
                              n00bb_with_item_t *item,
-                             const char *hook_kind, ir_value_t *hook_value,
+                             core_string_t hook_kind, ir_value_t *hook_value,
                              ir_span_t span, ir_value_t **outcome,
                              th_type **failure)
 {
     n00bb_lower_context_t *lower = context->user;
     n00bb_tu_state_t *state = item->context_unit
         ? tu_state(item->context_unit) : nullptr;
-    const char *role = n00bb_context_hook_role(hook_kind);
+    core_string_t role = n00bb_context_hook_role(hook_kind);
     if (!lower || !n00bb_context_has_hook(lower->grammar, item->context_symbol,
                                 hook_kind)
-        || !state || !state->ir_module || !role) return false;
+        || !state || !state->ir_module || !role.data) return false;
     core_link_declaration_t *declaration = link_declaration_for_symbol(
         state->link_analysis, item->context_symbol);
-    ir_func_t *function = declaration && role
-        ? core_link_declaration_binding(declaration,
-                                        core_string_from_cstr(role))
+    ir_func_t *function = declaration
+        ? core_link_declaration_binding(declaration, role)
         : nullptr;
     ir_value_t *address = function
         ? ir_func_address(state->ir_module, function) : nullptr;
@@ -7512,10 +7571,11 @@ n00bb_emit_context_hook_call(ir_lower_context_t *context,
         return false;
     }
     ir_instr_t *call = ir_lower_emit_instruction(context, IR_OP_CALL, span);
-    char result_name[48];
-    if (can_fail)
-        snprintf(result_name, sizeof(result_name), "__n00bb_hook_%llu",
-                 (unsigned long long)context->next_value_id++);
+    char result_buffer[48];
+    core_string_t result_name = can_fail
+        ? n00bb_format_name(result_buffer, sizeof(result_buffer),
+            "__n00bb_hook_%llu", (unsigned long long)context->next_value_id++)
+        : (core_string_t){};
     th_type *context_type = th_resolve(item->context_symbol->type);
     size_t fixed_captures = context_type
         ? th_func_nparams(context_type) : 0;
@@ -7545,7 +7605,7 @@ n00bb_emit_context_hook_call(ir_lower_context_t *context,
 
 static bool
 n00bb_emit_context_hook(ir_lower_context_t *context,
-                        n00bb_with_item_t *item, const char *hook_kind,
+                        n00bb_with_item_t *item, core_string_t hook_kind,
                         ir_value_t *hook_value, ir_span_t span)
 {
     n00bb_lower_context_t *lower = context->user;
@@ -7562,22 +7622,25 @@ n00bb_emit_context_hook_outcome_branch(ir_lower_context_t *context,
                                       ir_block_t **error_block)
 {
     uint64_t id = context->next_value_id++;
-    char ok_name[48], error_name[48], tag_name[48], literal_name[48];
-    char test_name[48];
-    snprintf(ok_name, sizeof(ok_name), "__n00bb_hook_ok_%llu",
-             (unsigned long long)id);
-    snprintf(error_name, sizeof(error_name), "__n00bb_hook_error_%llu",
-             (unsigned long long)id);
-    snprintf(tag_name, sizeof(tag_name), "__n00bb_hook_tag_%llu",
-             (unsigned long long)id);
-    snprintf(literal_name, sizeof(literal_name), "__n00bb_hook_tag_lit_%llu",
-             (unsigned long long)id);
-    snprintf(test_name, sizeof(test_name), "__n00bb_hook_is_ok_%llu",
-             (unsigned long long)id);
+    char ok_buffer[48], error_buffer[48], tag_buffer[48];
+    char literal_buffer[48], test_buffer[48];
+    core_string_t ok_name = n00bb_format_name(ok_buffer, sizeof(ok_buffer),
+        "__n00bb_hook_ok_%llu", (unsigned long long)id);
+    core_string_t error_name = n00bb_format_name(error_buffer,
+        sizeof(error_buffer), "__n00bb_hook_error_%llu",
+        (unsigned long long)id);
+    core_string_t tag_name = n00bb_format_name(tag_buffer, sizeof(tag_buffer),
+        "__n00bb_hook_tag_%llu", (unsigned long long)id);
+    core_string_t literal_name = n00bb_format_name(literal_buffer,
+        sizeof(literal_buffer), "__n00bb_hook_tag_lit_%llu",
+        (unsigned long long)id);
+    core_string_t test_name = n00bb_format_name(test_buffer,
+        sizeof(test_buffer), "__n00bb_hook_is_ok_%llu",
+        (unsigned long long)id);
     *ok_block = ir_block_add(context->function, ok_name);
     *error_block = ir_block_add(context->function, error_name);
-    th_type *uint_type = n00bb_ir_builtin_type(context->module, "uint");
-    th_type *bool_type = n00bb_ir_builtin_type(context->module, "bool");
+    th_type *uint_type = n00bb_ir_builtin_type(context->module, CORE_STRING_STATIC("uint"));
+    th_type *bool_type = n00bb_ir_builtin_type(context->module, CORE_STRING_STATIC("bool"));
     ir_instr_t *tag = ir_lower_emit_instruction(context, IR_OP_VARIANT_TAG,
                                                 span);
     ir_instr_t *literal = ir_lower_emit_instruction(context, IR_OP_CONST, span);
@@ -7586,7 +7649,7 @@ n00bb_emit_context_hook_outcome_branch(ir_lower_context_t *context,
         && tag && ir_instr_set_dest(tag, tag_name, uint_type)
         && ir_instr_operand_value(tag, outcome)
         && literal && ir_instr_set_dest(literal, literal_name, uint_type)
-        && ir_instr_operand_uint(literal, th_arm_tag("ok"))
+        && ir_instr_operand_uint(literal, th_arm_tag(CORE_STRING_STATIC("ok")))
         && test && ir_instr_set_dest(test, test_name, bool_type)
         && ir_instr_operand_value(test, tag->dest)
         && ir_instr_operand_value(test, literal->dest);
@@ -7641,13 +7704,13 @@ n00bb_emit_context_error_handler(ir_lower_context_t *context,
 {
     n00bb_lower_context_t *lower = context->user;
     if (!lower || !n00bb_context_has_hook(lower->grammar,
-            item->context_symbol, "context-error"))
+            item->context_symbol, CORE_STRING_STATIC("context-error")))
         return n00bb_propagate_context_hook_failure(context, source, error,
                                                     span, item->order);
 
     ir_value_t *outcome = nullptr;
     th_type *failure = nullptr;
-    if (!n00bb_emit_context_hook_call(context, item, "context-error", error,
+    if (!n00bb_emit_context_hook_call(context, item, CORE_STRING_STATIC("context-error"), error,
                                       span, &outcome, &failure)
         || !outcome || !failure)
         return false;
@@ -7658,9 +7721,9 @@ n00bb_emit_context_error_handler(ir_lower_context_t *context,
 
     context->block = failed;
     ir_value_t *handler_error = n00bb_emit_outcome_payload(context, outcome,
-        "error", failure, span);
+        CORE_STRING_STATIC("error"), failure, span);
     if (!handler_error || !n00bb_emit_context_hook(context, item,
-            "context-ensure", item->provided_value, span)
+            CORE_STRING_STATIC("context-ensure"), item->provided_value, span)
         || !n00bb_propagate_context_hook_failure(context, source,
                                                   handler_error, span,
                                                   item->order))
@@ -7668,7 +7731,7 @@ n00bb_emit_context_error_handler(ir_lower_context_t *context,
 
     context->block = handled;
     context->reachable = true;
-    if (!n00bb_emit_context_hook(context, item, "context-ensure",
+    if (!n00bb_emit_context_hook(context, item, CORE_STRING_STATIC("context-ensure"),
                                  item->provided_value, span)
         || !n00bb_propagate_context_hook_failure(context, source, error,
                                                   span, item->order))
@@ -7683,42 +7746,43 @@ n00bb_emit_context_exit(ir_lower_context_t *context,
 {
     n00bb_lower_context_t *lower = context->user;
     if (!lower || !n00bb_context_has_hook(lower->grammar,
-            item->context_symbol, "context-exit"))
-        return n00bb_emit_context_hook(context, item, "context-ensure",
+            item->context_symbol, CORE_STRING_STATIC("context-exit")))
+        return n00bb_emit_context_hook(context, item, CORE_STRING_STATIC("context-ensure"),
                                        item->provided_value, span);
 
     ir_value_t *outcome = nullptr;
     th_type *failure = nullptr;
-    if (!n00bb_emit_context_hook_call(context, item, "context-exit",
+    if (!n00bb_emit_context_hook_call(context, item, CORE_STRING_STATIC("context-exit"),
             item->provided_value, span, &outcome, &failure)) return false;
     if (!outcome)
-        return n00bb_emit_context_hook(context, item, "context-ensure",
+        return n00bb_emit_context_hook(context, item, CORE_STRING_STATIC("context-ensure"),
                                        item->provided_value, span);
 
     ir_block_t *normal = nullptr, *failed = nullptr;
     if (!failure || !n00bb_emit_context_hook_outcome_branch(context, outcome,
             span, &normal, &failed)) return false;
     uint64_t id = context->next_value_id++;
-    char join_name[48];
-    snprintf(join_name, sizeof(join_name), "__n00bb_hook_join_%llu",
-             (unsigned long long)id);
+    char join_buffer[48];
+    core_string_t join_name = n00bb_format_name(join_buffer,
+        sizeof(join_buffer), "__n00bb_hook_join_%llu",
+        (unsigned long long)id);
     ir_block_t *join = ir_block_add(context->function, join_name);
     if (!join) return false;
 
     context->block = normal;
     context->reachable = true;
-    if (!n00bb_emit_context_hook(context, item, "context-ensure",
+    if (!n00bb_emit_context_hook(context, item, CORE_STRING_STATIC("context-ensure"),
                                  item->provided_value, span)
         || !n00bb_emit_jump(context, join, span)) return false;
 
     context->block = failed;
     context->reachable = true;
-    ir_value_t *error = n00bb_emit_outcome_payload(context, outcome, "error",
+    ir_value_t *error = n00bb_emit_outcome_payload(context, outcome, CORE_STRING_STATIC("error"),
                                                     failure, span);
     if (!error) return false;
     if (!n00bb_context_has_hook(lower->grammar, item->context_symbol,
-                                "context-error")) {
-        if (!n00bb_emit_context_hook(context, item, "context-ensure",
+                                CORE_STRING_STATIC("context-error"))) {
+        if (!n00bb_emit_context_hook(context, item, CORE_STRING_STATIC("context-ensure"),
                                      item->provided_value, span)
             || !n00bb_propagate_context_hook_failure(context, source, error,
                                                       span, item->order))
@@ -7789,7 +7853,7 @@ n00bb_emit_scoped_cleanups(ir_lower_context_t *context,
                 return false;
         }
         else if (!n00bb_emit_context_hook(context, with_item,
-                "context-ensure", with_item->provided_value, span))
+                CORE_STRING_STATIC("context-ensure"), with_item->provided_value, span))
             return false;
     }
     return true;
@@ -7905,9 +7969,10 @@ n00bb_call_context_default(ir_lower_context_t *context,
     th_type *outcome_type = can_fail
         ? ir_call_outcome_type(context->module, signature) : result_type;
     uint64_t id = context->next_value_id++;
-    char call_name[48];
-    snprintf(call_name, sizeof(call_name), "__n00bb_context_default_%llu",
-             (unsigned long long)id);
+    char call_buffer[48];
+    core_string_t call_name = n00bb_format_name(call_buffer,
+        sizeof(call_buffer), "__n00bb_context_default_%llu",
+        (unsigned long long)id);
     ir_instr_t *call = outcome_type
         ? ir_lower_emit_instruction(context, IR_OP_CALL, span) : nullptr;
     bool emitted = call && ir_instr_set_dest(call, call_name, outcome_type)
@@ -7923,31 +7988,34 @@ n00bb_call_context_default(ir_lower_context_t *context,
 
     th_type *definition = ir_type_definition(context->module, outcome_type);
     bool variant = false;
-    th_type *ok_type = th_record_lookup(definition, "ok");
-    th_type *error_payload_type = th_record_lookup(definition, "error");
+    th_type *ok_type = th_record_lookup(definition, CORE_STRING_STATIC("ok"));
+    th_type *error_payload_type = th_record_lookup(definition, CORE_STRING_STATIC("error"));
     if (!definition || th_kind_of(definition) != TH_RECORD
-        || !th_named_info(outcome_type, nullptr, nullptr, &variant, nullptr)
+        || !th_named_info(outcome_type, nullptr, &variant, nullptr)
         || !variant || !ok_type || !error_payload_type) {
         lower_error(context, IR_DIAG_TYPE_CLASS, span,
             "context default outcome is not a complete variant");
         return nullptr;
     }
-    char ok_name[48], error_name[48], tag_name[48], literal_name[48];
-    char test_name[48];
-    snprintf(ok_name, sizeof(ok_name), "__n00bb_default_ok_%llu",
-             (unsigned long long)id);
-    snprintf(error_name, sizeof(error_name), "__n00bb_default_error_%llu",
-             (unsigned long long)id);
-    snprintf(tag_name, sizeof(tag_name), "__n00bb_default_tag_%llu",
-             (unsigned long long)id);
-    snprintf(literal_name, sizeof(literal_name),
-             "__n00bb_default_tag_lit_%llu", (unsigned long long)id);
-    snprintf(test_name, sizeof(test_name), "__n00bb_default_is_ok_%llu",
-             (unsigned long long)id);
+    char ok_buffer[48], error_buffer[48], tag_buffer[48];
+    char literal_buffer[48], test_buffer[48];
+    core_string_t ok_name = n00bb_format_name(ok_buffer, sizeof(ok_buffer),
+        "__n00bb_default_ok_%llu", (unsigned long long)id);
+    core_string_t error_name = n00bb_format_name(error_buffer,
+        sizeof(error_buffer), "__n00bb_default_error_%llu",
+        (unsigned long long)id);
+    core_string_t tag_name = n00bb_format_name(tag_buffer, sizeof(tag_buffer),
+        "__n00bb_default_tag_%llu", (unsigned long long)id);
+    core_string_t literal_name = n00bb_format_name(literal_buffer,
+        sizeof(literal_buffer), "__n00bb_default_tag_lit_%llu",
+        (unsigned long long)id);
+    core_string_t test_name = n00bb_format_name(test_buffer,
+        sizeof(test_buffer), "__n00bb_default_is_ok_%llu",
+        (unsigned long long)id);
     ir_block_t *ok_block = ir_block_add(context->function, ok_name);
     ir_block_t *error_block = ir_block_add(context->function, error_name);
-    th_type *uint_type = n00bb_ir_builtin_type(context->module, "uint");
-    th_type *bool_type = n00bb_ir_builtin_type(context->module, "bool");
+    th_type *uint_type = n00bb_ir_builtin_type(context->module, CORE_STRING_STATIC("uint"));
+    th_type *bool_type = n00bb_ir_builtin_type(context->module, CORE_STRING_STATIC("bool"));
     ir_instr_t *tag = ir_lower_emit_instruction(context, IR_OP_VARIANT_TAG,
                                                 span);
     ir_instr_t *literal = ir_lower_emit_instruction(context, IR_OP_CONST, span);
@@ -7956,7 +8024,7 @@ n00bb_call_context_default(ir_lower_context_t *context,
         && tag && ir_instr_set_dest(tag, tag_name, uint_type)
         && ir_instr_operand_value(tag, call->dest)
         && literal && ir_instr_set_dest(literal, literal_name, uint_type)
-        && ir_instr_operand_uint(literal, th_arm_tag("ok"))
+        && ir_instr_operand_uint(literal, th_arm_tag(CORE_STRING_STATIC("ok")))
         && test && ir_instr_set_dest(test, test_name, bool_type)
         && ir_instr_operand_value(test, tag->dest)
         && ir_instr_operand_value(test, literal->dest);
@@ -7974,14 +8042,14 @@ n00bb_call_context_default(ir_lower_context_t *context,
     branch->span = span;
     context->block = error_block;
     ir_value_t *error = n00bb_emit_outcome_payload(context, call->dest,
-        "error", error_payload_type, span);
+        CORE_STRING_STATIC("error"), error_payload_type, span);
     if (!n00bb_propagate_context_computation_failure(context, source, error,
                                                        failure, span))
         return nullptr;
     context->block = ok_block;
     context->reachable = true;
     ir_value_t *value = n00bb_emit_outcome_payload(context, call->dest,
-        "ok", ok_type, span);
+        CORE_STRING_STATIC("ok"), ok_type, span);
     if (th_is_nil(ok_type))
         value = nullptr;
     if (!value) {
@@ -8016,7 +8084,7 @@ n00bb_context_ensure_default(
                            &(size_t){0});
     uint8_t archived_flags = 0;
     bool optional = interface_context
-        ? context_interface_parameter(symbol, index, nullptr, nullptr,
+        ? context_interface_parameter(symbol, index, nullptr,
             &archived_flags, nullptr) && (archived_flags & 1u)
         : formal && formal->is_optional;
     if (!optional) {
@@ -8027,7 +8095,7 @@ n00bb_context_ensure_default(
     }
 
     parse_tree_t *default_expr = formal
-        ? child_nt(visit->grammar, formal->decl_node, "expression") : nullptr;
+        ? child_nt(visit->grammar, formal->decl_node, CORE_STRING_STATIC("expression")) : nullptr;
     core_list_t(size_t) dependencies = core_list_new(size_t);
     bool valid = true;
     if (interface_context) {
@@ -8074,12 +8142,14 @@ n00bb_context_ensure_default(
             valid = false;
     }
 
-    char role[64];
+    char role_buffer[64];
+    core_string_t role = {};
     core_link_declaration_t *declaration = link_declaration_for_symbol(
         tu_state(owner)->link_analysis, symbol);
-    ir_func_t *helper = context_default_role(index, role, sizeof(role))
-        && declaration ? core_link_declaration_binding(declaration,
-            core_string_from_cstr(role)) : nullptr;
+    ir_func_t *helper = context_default_role(index, role_buffer,
+                                             sizeof(role_buffer), &role)
+        && declaration ? core_link_declaration_binding(declaration, role)
+        : nullptr;
     ir_value_t **dependency_values = valid
         ? core_alloc_array(ir_value_t *, dependencies.len) : nullptr;
     for (size_t d = 0; valid && d < dependencies.len; d++) {
@@ -8123,14 +8193,14 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
                                                       lower->units, symbol);
     n00bb_tu_state_t *owner_state = owner ? tu_state(owner) : nullptr;
     bool has_enter = n00bb_context_has_hook(visit->grammar, symbol,
-                                            "context-enter");
-    const char *hook_role = n00bb_context_hook_role("context-enter");
+                                            CORE_STRING_STATIC("context-enter"));
+    core_string_t hook_role =
+        n00bb_context_hook_role(CORE_STRING_STATIC("context-enter"));
     core_link_declaration_t *context_declaration = owner_state
         ? link_declaration_for_symbol(owner_state->link_analysis, symbol)
         : nullptr;
-    ir_func_t *function = context_declaration && hook_role
-        ? core_link_declaration_binding(context_declaration,
-                                        core_string_from_cstr(hook_role))
+    ir_func_t *function = context_declaration && hook_role.data
+        ? core_link_declaration_binding(context_declaration, hook_role)
         : nullptr;
     if (!owner_state || !has_enter || !function) {
         lower_error(context, IR_DIAG_UNDEFINED_SYMBOL, span,
@@ -8155,7 +8225,7 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
     size_t parameter_count = th_func_nparams(signature);
     bool interface_context = !symbol->decl_node && symbol->user_data;
     parse_tree_t *formal_params = interface_context ? nullptr
-        : child_nt(visit->grammar, symbol->decl_node, "param-decl");
+        : child_nt(visit->grammar, symbol->decl_node, CORE_STRING_STATIC("param-decl"));
     size_t rest_index = 0;
     parse_sym_entry_t *rest_symbol = interface_context ? nullptr
         : formal_symbol_at(visit->grammar, formal_params, parameter_count,
@@ -8166,7 +8236,7 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
         context_interface_parameter_count(symbol) > parameter_count) {
         uint8_t flags = 0;
         archived_rest = context_interface_parameter(symbol, parameter_count,
-            nullptr, nullptr, &flags, nullptr) && (flags & 2u);
+            nullptr, &flags, nullptr) && (flags & 2u);
     }
     bool has_rest = (rest_symbol || archived_rest) && rest_parameter;
     if (interface_context &&
@@ -8192,7 +8262,7 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
         ir_value_t *, argument_count);
     bool *provided_by_parameter = core_alloc_array(bool, parameter_count);
     parse_tree_t *positional = child_nt(visit->grammar, args,
-                                        "positional-args");
+                                        CORE_STRING_STATIC("positional-args"));
     core_list_t(n00bb_tree_ptr_t) positional_nodes =
         core_list_new(n00bb_tree_ptr_t);
     if (positional)
@@ -8212,7 +8282,7 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
     }
     core_list_free(positional_nodes);
     parse_tree_t *keyword_args = child_nt(visit->grammar, args,
-                                          "keyword-args");
+                                          CORE_STRING_STATIC("keyword-args"));
     core_list_t(n00bb_tree_ptr_t) keyword_nodes =
         core_list_new(n00bb_tree_ptr_t);
     if (keyword_args)
@@ -8227,7 +8297,7 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
             ? context_interface_parameter_named(symbol, name, &index)
             : formal != nullptr;
         parse_tree_t *argument = child_nt(visit->grammar,
-            keyword_nodes.data[i], "expression");
+            keyword_nodes.data[i], CORE_STRING_STATIC("expression"));
         if (!named_parameter || !argument || index >= parameter_count) {
             lower_error(context, IR_DIAG_UNDEFINED_SYMBOL, span,
                         "named context argument does not match a parameter");
@@ -8253,7 +8323,7 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
         const th_param *param = th_func_param(signature, i);
         uint8_t archived_flags = 0, archived_mode = TH_IN;
         if (interface_context && !context_interface_parameter(symbol, i,
-                nullptr, nullptr, &archived_flags, &archived_mode))
+                nullptr, &archived_flags, &archived_mode))
             mapped = false;
         bool optional = interface_context
             ? (archived_flags & 1u) != 0
@@ -8275,8 +8345,8 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
     if (interface_context && mapped) {
         for (size_t i = 0; i < parameter_count; i++) {
             uint8_t flags = 0;
-            context_interface_parameter(symbol, i, nullptr, nullptr,
-                                        &flags, nullptr);
+            context_interface_parameter(symbol, i, nullptr, &flags,
+                                        nullptr);
             if ((flags & 1u) && !(flags & 4u)) {
                 lower_error(context, IR_DIAG_TYPE_ARGS, span,
                     "the imported context interface does not provide its default computation");
@@ -8323,9 +8393,10 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
     if (collected && has_rest) {
         th_type *array_type = th_array(ir_module_types(context->module),
                                        rest_parameter->type);
-        char array_name[48];
-        snprintf(array_name, sizeof(array_name), "__n00bb_context_rest_%llu",
-                 (unsigned long long)context->next_value_id++);
+        char array_buffer[48];
+        core_string_t array_name = n00bb_format_name(array_buffer,
+            sizeof(array_buffer), "__n00bb_context_rest_%llu",
+            (unsigned long long)context->next_value_id++);
         ir_instr_t *array = array_type
             ? ir_lower_emit_instruction(context, IR_OP_AGGREGATE, span)
             : nullptr;
@@ -8407,12 +8478,16 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
         core_list_free(captures);
         core_buffer_t message = {0};
         th_ctx *types = ir_module_types(context->module);
+        core_string_t provided_text = n00bb_print_type(types, provided_type);
+        core_string_t result_text = n00bb_print_type(types, result_type);
         core_buffer_printf(&message,
-            "context enter result type %s does not match inferred context-call type %s",
-            n00bb_print_type(types, provided_type), n00bb_print_type(types, result_type));
+            "context enter result type %.*s does not match inferred context-call type %.*s",
+            (int)provided_text.u8_bytes, provided_text.data,
+            (int)result_text.u8_bytes, result_text.data);
         ir_diag_t *diagnostic = ir_diag_begin(context->diagnostics,
-            IR_DIAG_TYPE_MISMATCH, span, nullptr);
-        ir_diag_message(diagnostic, context->diagnostics, message.data);
+            IR_DIAG_TYPE_MISMATCH, span, (core_string_t){});
+        ir_diag_message(diagnostic, context->diagnostics,
+                        core_buffer_string(&message));
         core_buffer_release(&message);
         core_list_free(captures);
         return -1;
@@ -8428,9 +8503,10 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
     }
     ir_instr_t *call = ir_lower_emit_instruction(context, IR_OP_CALL, span);
     ir_value_t *provided = nullptr;
-    char value_name[48];
-    snprintf(value_name, sizeof(value_name), "__n00bb_context_%llu",
-             (unsigned long long)context->next_value_id++);
+    char value_buffer[48];
+    core_string_t value_name = n00bb_format_name(value_buffer,
+        sizeof(value_buffer), "__n00bb_context_%llu",
+        (unsigned long long)context->next_value_id++);
     bool emitted = call && ir_instr_set_dest(call, value_name, outcome_type)
         && ir_instr_operand_value(call, address);
     for (size_t i = 0; emitted && i < captures.len; i++)
@@ -8447,33 +8523,37 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
         th_type *definition = ir_type_definition(context->module,
                                                   outcome_type);
         bool variant = false;
-        th_type *ok_type = th_record_lookup(definition, "ok");
-        th_type *error_type = th_record_lookup(definition, "error");
+        th_type *ok_type = th_record_lookup(definition, CORE_STRING_STATIC("ok"));
+        th_type *error_type = th_record_lookup(definition, CORE_STRING_STATIC("error"));
         if (!definition || th_kind_of(definition) != TH_RECORD
-            || !th_named_info(outcome_type, nullptr, nullptr, &variant,
-                              nullptr)
+            || !th_named_info(outcome_type, nullptr, &variant, nullptr)
             || !variant || !ok_type || !error_type) {
             lower_error(context, IR_DIAG_TYPE_CLASS, span,
                         "context enter outcome is not a complete variant");
             return -1;
         }
         uint64_t id = context->next_value_id++;
-        char ok_name[48], error_name[48];
-        snprintf(ok_name, sizeof(ok_name), "__n00bb_enter_ok_%llu",
-                 (unsigned long long)id);
-        snprintf(error_name, sizeof(error_name), "__n00bb_enter_error_%llu",
-                 (unsigned long long)id);
+        char ok_buffer[48], error_buffer[48];
+        core_string_t ok_name = n00bb_format_name(ok_buffer,
+            sizeof(ok_buffer), "__n00bb_enter_ok_%llu",
+            (unsigned long long)id);
+        core_string_t error_name = n00bb_format_name(error_buffer,
+            sizeof(error_buffer), "__n00bb_enter_error_%llu",
+            (unsigned long long)id);
         ir_block_t *ok_block = ir_block_add(context->function, ok_name);
         ir_block_t *error_block = ir_block_add(context->function, error_name);
-        th_type *uint_type = n00bb_ir_builtin_type(context->module, "uint");
-        th_type *bool_type = n00bb_ir_builtin_type(context->module, "bool");
-        char tag_name[48], literal_name[48], test_name[48];
-        snprintf(tag_name, sizeof(tag_name), "__n00bb_enter_tag_%llu",
-                 (unsigned long long)id);
-        snprintf(literal_name, sizeof(literal_name),
-                 "__n00bb_enter_tag_lit_%llu", (unsigned long long)id);
-        snprintf(test_name, sizeof(test_name), "__n00bb_enter_is_ok_%llu",
-                 (unsigned long long)id);
+        th_type *uint_type = n00bb_ir_builtin_type(context->module, CORE_STRING_STATIC("uint"));
+        th_type *bool_type = n00bb_ir_builtin_type(context->module, CORE_STRING_STATIC("bool"));
+        char tag_buffer[48], literal_buffer[48], test_buffer[48];
+        core_string_t tag_name = n00bb_format_name(tag_buffer,
+            sizeof(tag_buffer), "__n00bb_enter_tag_%llu",
+            (unsigned long long)id);
+        core_string_t literal_name = n00bb_format_name(literal_buffer,
+            sizeof(literal_buffer), "__n00bb_enter_tag_lit_%llu",
+            (unsigned long long)id);
+        core_string_t test_name = n00bb_format_name(test_buffer,
+            sizeof(test_buffer), "__n00bb_enter_is_ok_%llu",
+            (unsigned long long)id);
         ir_instr_t *tag = ir_lower_emit_instruction(context,
             IR_OP_VARIANT_TAG, span);
         ir_instr_t *literal = ir_lower_emit_instruction(context,
@@ -8483,7 +8563,7 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
             && tag && ir_instr_set_dest(tag, tag_name, uint_type)
             && ir_instr_operand_value(tag, call->dest)
             && literal && ir_instr_set_dest(literal, literal_name, uint_type)
-            && ir_instr_operand_uint(literal, th_arm_tag("ok"))
+            && ir_instr_operand_uint(literal, th_arm_tag(CORE_STRING_STATIC("ok")))
             && test && ir_instr_set_dest(test, test_name, bool_type)
             && ir_instr_operand_value(test, tag->dest)
             && ir_instr_operand_value(test, literal->dest);
@@ -8501,7 +8581,7 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
         branch->span = span;
         context->block = error_block;
         ir_value_t *enter_error = n00bb_emit_outcome_payload(
-            context, call->dest, "error", error_type, span);
+            context, call->dest, CORE_STRING_STATIC("error"), error_type, span);
         if (!enter_error || !n00bb_emit_with_failure(context,
                                                      visit->node)) {
             lower_error(context, IR_DIAG_INTERNAL, span,
@@ -8532,7 +8612,7 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
         context->reachable = true;
         if (!th_is_nil(ok_type))
             provided = n00bb_emit_outcome_payload(context, call->dest,
-                                                   "ok", ok_type, span);
+                                                   CORE_STRING_STATIC("ok"), ok_type, span);
         if (!th_is_nil(ok_type)
             && !provided) {
             lower_error(context, IR_DIAG_INTERNAL, span,
@@ -8579,9 +8659,10 @@ n00bb_bind_with_manager(ir_lower_context_t *context, parse_tree_t *node)
             "named context binding has no inferred type");
         return false;
     }
-    char local_name[48];
-    snprintf(local_name, sizeof(local_name), "__n00bb_context_value_%llu",
-             (unsigned long long)context->next_value_id++);
+    char local_buffer[48];
+    core_string_t local_name = n00bb_format_name(local_buffer,
+        sizeof(local_buffer), "__n00bb_context_value_%llu",
+        (unsigned long long)context->next_value_id++);
     ir_local_t *local = ir_local_add(context->function, local_name,
                                      binding->type);
     if (!local || !ir_lower_bind_local(context, binding, local)) {
@@ -8599,7 +8680,7 @@ n00bb_bind_with_managers(ir_lower_context_t *context, parse_tree_t *node,
 {
     if (!node || node == body || core_tree_is_leaf(node)) return true;
     n00bb_lower_context_t *lower = context->user;
-    if (nt_is(lower->grammar, node, "context-manager"))
+    if (nt_is(lower->grammar, node, CORE_STRING_STATIC("context-manager")))
         return n00bb_bind_with_manager(context, node);
     for (size_t i = 0; i < core_tree_num_children(node); i++)
         if (!n00bb_bind_with_managers(context, core_tree_child(node, i),
@@ -8614,12 +8695,12 @@ n00bb_lower_with_scope(ir_lower_context_t *context, parse_visit_t *visit,
 {
     (void)state;
     n00bb_lower_context_t *lower = context->user;
-    if (!lower || !nt_is(visit->grammar, visit->node, "with-stmt"))
+    if (!lower || !nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("with-stmt")))
         return true;
     if (entering) {
         n00bb_with_frame_t frame = {
             .node = visit->node,
-            .body = child_nt(visit->grammar, visit->node, "body"),
+            .body = child_nt(visit->grammar, visit->node, CORE_STRING_STATIC("body")),
             .items = core_list_new(n00bb_with_item_t),
             .active = context->reachable,
         };
@@ -8724,7 +8805,7 @@ n00bb_mark_call_lvalues(ir_lower_context_t *context, parse_visit_t *visit,
 {
     (void)state;
     if (!entering || !visit->annot || !visit->node
-        || nt_is(visit->grammar, visit->node, "context-call")) return true;
+        || nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("context-call"))) return true;
     n00bb_lower_context_t *lower = context->user;
     n00bb_tu_state_t *tu = lower ? tu_state(lower->unit) : nullptr;
     n00bb_link_use_site_t *call_site = tu
@@ -8756,7 +8837,7 @@ n00bb_mark_call_lvalues(ir_lower_context_t *context, parse_visit_t *visit,
 
     parse_tree_t *args = call_arguments_node(visit->grammar, visit->node);
     parse_tree_t *positional = args
-        ? child_nt(visit->grammar, args, "positional-args") : nullptr;
+        ? child_nt(visit->grammar, args, CORE_STRING_STATIC("positional-args")) : nullptr;
     core_list_t(n00bb_tree_ptr_t) actuals = core_list_new(n00bb_tree_ptr_t);
     if (positional)
         collect_positional_nodes(visit->grammar, positional, &actuals);
@@ -8788,7 +8869,7 @@ n00bb_mark_call_lvalues(ir_lower_context_t *context, parse_visit_t *visit,
             continue;
         }
         if (!function_parameter_info(visit->grammar, symbol, formals,
-                index, nullptr, nullptr, nullptr, &flags, &mode)
+                index, nullptr, nullptr,&flags, &mode)
             || !th_mode_produces_output(mode)) continue;
         ok = n00bb_mark_addressable_argument(context, visit->grammar,
             visit->node, actuals.data[i], mode);
@@ -8798,7 +8879,7 @@ n00bb_mark_call_lvalues(ir_lower_context_t *context, parse_visit_t *visit,
                 "out and modify arguments must be writable storage locations of the parameter type");
     }
     core_list_free(actuals);
-    parse_tree_t *keywords = child_nt(visit->grammar, args, "keyword-args");
+    parse_tree_t *keywords = child_nt(visit->grammar, args, CORE_STRING_STATIC("keyword-args"));
     core_list_t(n00bb_tree_ptr_t) named = core_list_new(n00bb_tree_ptr_t);
     if (keywords) collect_keyword_nodes(visit->grammar, keywords, &named);
     for (size_t i = 0; ok && i < named.len; i++) {
@@ -8809,10 +8890,10 @@ n00bb_mark_call_lvalues(ir_lower_context_t *context, parse_visit_t *visit,
         if (!function_parameter_named(visit->grammar, symbol, formals,
                                       name, &index)
             || !function_parameter_info(visit->grammar, symbol, formals,
-                index, nullptr, nullptr, nullptr, &flags, &mode)
+                index, nullptr, nullptr,&flags, &mode)
             || !th_mode_produces_output(mode)) continue;
         parse_tree_t *argument = child_nt(visit->grammar, named.data[i],
-                                           "expression");
+                                           CORE_STRING_STATIC("expression"));
         ok = n00bb_mark_addressable_argument(context, visit->grammar,
             visit->node, argument, mode);
         if (!ok)
@@ -8847,14 +8928,14 @@ n00bb_mark_constructor_lvalues(ir_lower_context_t *context,
         return true;
 
     parse_tree_t *formal_signature = child_nt(visit->grammar,
-        symbol->decl_node, "func-type-signature");
+        symbol->decl_node, CORE_STRING_STATIC("func-type-signature"));
     parse_tree_t *formals = child_nt(visit->grammar, formal_signature,
-                                     "param-decl");
-    parse_tree_t *args = child_nt(visit->grammar, visit->node, "call-args");
+                                     CORE_STRING_STATIC("param-decl"));
+    parse_tree_t *args = child_nt(visit->grammar, visit->node, CORE_STRING_STATIC("call-args"));
     core_list_t(n00bb_tree_ptr_t) positional =
         core_list_new(n00bb_tree_ptr_t);
     collect_positional_nodes(visit->grammar,
-        child_nt(visit->grammar, args, "positional-args"), &positional);
+        child_nt(visit->grammar, args, CORE_STRING_STATIC("positional-args")), &positional);
     size_t fixed_count = th_func_nparams(signature);
     const th_param *rest = th_func_rest(signature);
     bool ok = true;
@@ -8874,7 +8955,7 @@ n00bb_mark_constructor_lvalues(ir_lower_context_t *context,
         th_mode mode = TH_IN;
         if (site->init_call && index == 0) mode = TH_INOUT;
         else if (function_parameter_info(visit->grammar, symbol, formals,
-                index, nullptr, nullptr, nullptr, nullptr, &mode)
+                index, nullptr, nullptr,nullptr, &mode)
             && !th_mode_produces_output(mode)) continue;
         if (th_mode_produces_output(mode)) {
             ok = n00bb_mark_addressable_argument(context, visit->grammar,
@@ -8890,7 +8971,7 @@ n00bb_mark_constructor_lvalues(ir_lower_context_t *context,
     core_list_t(n00bb_tree_ptr_t) keywords =
         core_list_new(n00bb_tree_ptr_t);
     collect_keyword_nodes(visit->grammar,
-        child_nt(visit->grammar, args, "keyword-args"), &keywords);
+        child_nt(visit->grammar, args, CORE_STRING_STATIC("keyword-args")), &keywords);
     for (size_t i = 0; ok && i < keywords.len; i++) {
         size_t index = 0;
         th_mode mode = TH_IN;
@@ -8898,10 +8979,10 @@ n00bb_mark_constructor_lvalues(ir_lower_context_t *context,
         if (!function_parameter_named(visit->grammar, symbol, formals,
                                       name, &index)
             || !function_parameter_info(visit->grammar, symbol, formals,
-                index, nullptr, nullptr, nullptr, nullptr, &mode)
+                index, nullptr, nullptr,nullptr, &mode)
             || !th_mode_produces_output(mode)) continue;
         parse_tree_t *argument = child_nt(visit->grammar, keywords.data[i],
-                                           "expression");
+                                           CORE_STRING_STATIC("expression"));
         ok = argument && n00bb_mark_addressable_argument(context,
             visit->grammar, visit->node, argument, mode);
         if (!ok)
@@ -8955,11 +9036,11 @@ n00bb_lower_module_member(ir_lower_context_t *context, parse_visit_t *visit,
                 ? ir_lower_emit_instruction(context, IR_OP_BITSET_CONTAINS,
                                             span) : nullptr;
             if (!base || !value || !mask || !test
-                || !ir_lower_set_temp_dest(context, mask, "__n00bb_",
+                || !ir_lower_set_temp_dest(context, mask, CORE_STRING_STATIC("__n00bb_"),
                     member->type)
-                || !ir_instr_operand_name(mask, member->name.data)
+                || !ir_instr_operand_name(mask, member->name)
                 || !ir_instr_operand_uint(mask, value->mask)
-                || !ir_lower_set_temp_dest(context, test, "__n00bb_",
+                || !ir_lower_set_temp_dest(context, test, CORE_STRING_STATIC("__n00bb_"),
                     result_type)
                 || !ir_instr_operand_value(test, base)
                 || !ir_instr_operand_value(test, mask->dest))
@@ -8976,8 +9057,8 @@ n00bb_lower_module_member(ir_lower_context_t *context, parse_visit_t *visit,
             ir_instr_t *constant = ir_lower_emit_instruction(context,
                 IR_OP_BITSET_CONST, span);
             if (!constant || !ir_lower_set_temp_dest(context, constant,
-                "__n00bb_", result_type)
-                || !ir_instr_operand_name(constant, member->name.data)
+                CORE_STRING_STATIC("__n00bb_"), result_type)
+                || !ir_instr_operand_name(constant, member->name)
                 || !ir_instr_operand_uint(constant, value->mask))
                 return lower_error(context, IR_DIAG_INTERNAL, span,
                     "could not emit the flagset constant");
@@ -8992,8 +9073,8 @@ n00bb_lower_module_member(ir_lower_context_t *context, parse_visit_t *visit,
         ir_instr_t *constant = ir_lower_emit_instruction(context,
             IR_OP_ENUM_CONST, span);
         if (!constant || !ir_lower_set_temp_dest(context, constant,
-            "__n00bb_", result_type)
-            || !ir_instr_operand_name(constant, member->name.data)
+            CORE_STRING_STATIC("__n00bb_"), result_type)
+            || !ir_instr_operand_name(constant, member->name)
             || !ir_instr_operand_int_lit(constant,
                 (ir_lit_t){.mag = value->magnitude, .neg = value->negative}))
             return lower_error(context, IR_DIAG_INTERNAL, span,
@@ -9045,7 +9126,7 @@ n00bb_lower_module_member(ir_lower_context_t *context, parse_visit_t *visit,
                 ? ir_lower_emit_instruction(context, IR_OP_LOAD, span)
                 : nullptr;
             if (!load || !ir_lower_set_temp_dest(context, load,
-                "__n00bb_", result_type)
+                CORE_STRING_STATIC("__n00bb_"), result_type)
                 || !ir_instr_operand_value(load, address)
                 || !n00bb_set_reference_access(lower->ir_context,
                                                load->dest, result_type))
@@ -9056,9 +9137,9 @@ n00bb_lower_module_member(ir_lower_context_t *context, parse_visit_t *visit,
         ir_instr_t *extract = ir_lower_emit_instruction(context, IR_OP_EXTRACT,
                                                         span);
         if (!extract || !ir_lower_set_temp_dest(context, extract,
-            "__n00bb_", result_type)
+            CORE_STRING_STATIC("__n00bb_"), result_type)
             || !ir_instr_operand_value(extract, base)
-            || !ir_instr_operand_name(extract, member->name.data)
+            || !ir_instr_operand_name(extract, member->name)
             || !n00bb_set_reference_access(lower->ir_context,
                                            extract->dest, result_type))
             return lower_error(context, IR_DIAG_INTERNAL, span,
@@ -9073,18 +9154,22 @@ n00bb_lower_module_member(ir_lower_context_t *context, parse_visit_t *visit,
     if (!binding || !ir_type_eq(context->module, binding->type, result_type)) {
         th_ctx *types = ir_ctx_types(lower->ir_context);
         core_buffer_t message = {0};
+        core_string_t node_text = n00bb_print_type(types, result_type);
+        core_string_t binding_text = binding
+            ? n00bb_print_type(types, binding->type)
+            : CORE_STRING_STATIC("<missing>");
         core_buffer_printf(&message,
-            "resolved module variable has no matching canonical IR binding (node: %s, binding: %s)",
-            n00bb_print_type(types, result_type),
-            binding ? n00bb_print_type(types, binding->type) : "<missing>");
-        ir_lower_result_t failed = lower_error(context, IR_DIAG_VERIFY_TYPED,
-            span, message.data);
+            "resolved module variable has no matching canonical IR binding (node: %.*s, binding: %.*s)",
+            (int)node_text.u8_bytes, node_text.data,
+            (int)binding_text.u8_bytes, binding_text.data);
+        ir_lower_result_t failed = lower_error_text(context,
+            IR_DIAG_VERIFY_TYPED, span, core_buffer_string(&message));
         core_buffer_release(&message);
         return failed;
     }
 
     ir_instr_t *copy = ir_lower_emit_instruction(context, IR_OP_COPY, span);
-    if (!copy || !ir_lower_set_temp_dest(context, copy, "__n00bb_",
+    if (!copy || !ir_lower_set_temp_dest(context, copy, CORE_STRING_STATIC("__n00bb_"),
                                          result_type)
         || !ir_instr_operand_value(copy, binding))
         return lower_error(context, IR_DIAG_INTERNAL, span,
@@ -9129,20 +9214,20 @@ n00bb_attach_call_return_alias(ir_lower_context_t *context,
         size_t index = effects.return_parameter;
         parse_tree_t *signature_node = function->decl_node
             ? child_nt(lower->grammar, function->decl_node,
-                       "func-type-signature") : nullptr;
+                       CORE_STRING_STATIC("func-type-signature")) : nullptr;
         parse_tree_t *formals = signature_node
-            ? child_nt(lower->grammar, signature_node, "param-decl")
+            ? child_nt(lower->grammar, signature_node, CORE_STRING_STATIC("param-decl"))
             : nullptr;
         for (size_t depth = 0; depth < argument_count; depth++) {
             target = arguments[index];
             if (target) break;
             parse_sym_entry_t *formal = nullptr;
             if (!function_parameter_info(lower->grammar, function, formals,
-                    index, &formal, nullptr, nullptr, nullptr, nullptr)
+                    index, &formal, nullptr, nullptr, nullptr)
                 || !formal || !formal->is_optional || !formal->decl_node)
                 return false;
             parse_tree_t *expression = child_nt(lower->grammar,
-                formal->decl_node, "expression");
+                formal->decl_node, CORE_STRING_STATIC("expression"));
             parse_sym_entry_t *source = simple_expression_symbol(expression);
             if (!source) return false;
             if (source->kind == PARSE_SYM_VARIABLE) {
@@ -9159,7 +9244,7 @@ n00bb_attach_call_return_alias(ir_lower_context_t *context,
             for (size_t next = 0; next < argument_count; next++) {
                 parse_sym_entry_t *candidate = nullptr;
                 if (function_parameter_info(lower->grammar, function,
-                        formals, next, &candidate, nullptr, nullptr, nullptr,
+                        formals, next, &candidate, nullptr, nullptr,
                         nullptr) && candidate == source) {
                     index = next;
                     found = true;
@@ -9171,8 +9256,7 @@ n00bb_attach_call_return_alias(ir_lower_context_t *context,
     }
     else {
         parse_sym_entry_t *symbol = global_symbol_from_qualified_name(
-            lower->grammar, analysis, effects.return_global,
-            effects.return_global_size);
+            lower->grammar, analysis, effects.return_global);
         target = symbol ? ir_lower_bound_value(context, symbol) : nullptr;
         if (!target && symbol) {
             ir_global_t *global = link_ir_global_for_symbol(analysis, symbol);
@@ -9190,7 +9274,8 @@ static bool
 n00bb_tree_returns_value(parse_grammar_t *grammar, parse_tree_t *node)
 {
     for (parse_tree_t *at = node; at; at = parse_tree_parent(at))
-        if (nt_is(grammar, at, "return-stmt")) return true;
+        if (nt_is(grammar, at, CORE_STRING_STATIC("return-stmt")))
+            return true;
     return false;
 }
 
@@ -9270,20 +9355,20 @@ n00bb_select_trait_method(ir_lower_context_t *context,
             owner->module.identifier.data,
             (int)requirement->scope->name.u8_bytes,
             requirement->scope->name.data);
-    char *method_name = core_strndup(requirement->name.data,
-                                     requirement->name.u8_bytes);
+    core_string_t method_name = requirement->name;
     ir_instr_t *selection = ir_lower_emit_instruction(context,
         IR_OP_TRAIT_METHOD, span);
-    bool selected = selection && method_name;
+    bool selected = selection != nullptr;
     if (!selected)
         return (lower_error(context, IR_DIAG_INTERNAL, span,
             "trait method selection could not create an instruction"),
             nullptr);
-    if (selected && !ir_lower_set_temp_dest(context, selection, "__n00bb_",
+    if (selected && !ir_lower_set_temp_dest(context, selection, CORE_STRING_STATIC("__n00bb_"),
                                              method_type))
         return (lower_error(context, IR_DIAG_INTERNAL, span,
             "trait method selection could not define a result"), nullptr);
-    if (selected && !ir_instr_operand_name(selection, trait_name.data))
+    if (selected && !ir_instr_operand_name(selection,
+                                           core_buffer_string(&trait_name)))
         return (lower_error(context, IR_DIAG_INTERNAL, span,
             "trait method selection could not name its trait"), nullptr);
     if (selected && !ir_instr_operand_name(selection, method_name))
@@ -9296,7 +9381,6 @@ n00bb_select_trait_method(ir_lower_context_t *context,
         return (lower_error(context, IR_DIAG_INTERNAL, span,
             "trait method selection could not bind its contract"), nullptr);
     core_buffer_release(&trait_name);
-    core_free(method_name);
     if (!selected) return nullptr;
     return selection->dest;
 }
@@ -9327,7 +9411,7 @@ static ir_value_t *
 n00bb_record_field_call(ir_lower_context_t *context, ir_block_t *block,
                         const th_env_method_t *selected,
                         ir_value_t *left, ir_value_t *right,
-                        th_type *result_type, const char *name)
+                        th_type *result_type, core_string_t name)
 {
     ir_module_t *owner = nullptr;
     ir_func_t *function = n00bb_record_field_method(context, selected,
@@ -9394,30 +9478,37 @@ n00bb_record_equal_function(ir_lower_context_t *context, th_type *receiver)
         return nullptr;
     ir_func_t *function = context->function;
     if (!function || function->n_blocks) return nullptr;
-    th_type *boolean = th_name(types, "bool");
-    ir_value_t *left = ir_param_add(function, "left", receiver);
-    ir_value_t *right = ir_param_add(function, "right", receiver);
-    ir_block_t *current = ir_block_add(function, "entry");
-    ir_block_t *mismatch = ir_block_add(function, "mismatch");
-    ir_block_t *match = ir_block_add(function, "match");
+    th_type *boolean = th_name(types, CORE_STRING_STATIC("bool"));
+    ir_value_t *left = ir_param_add(function, CORE_STRING_STATIC("left"), receiver);
+    ir_value_t *right = ir_param_add(function, CORE_STRING_STATIC("right"), receiver);
+    ir_block_t *current = ir_block_add(function, CORE_STRING_STATIC("entry"));
+    ir_block_t *mismatch = ir_block_add(function, CORE_STRING_STATIC("mismatch"));
+    ir_block_t *match = ir_block_add(function, CORE_STRING_STATIC("match"));
     if (!left || !right || !current || !mismatch || !match) return nullptr;
     for (size_t i = 0; i < th_record_len(shape); i++) {
         const th_member *field = th_record_member(shape, i);
         th_env_method_t selected = {0};
         if (!field || th_env_method_resolve(state->types, field->type,
-                "Equal", "__equal", &selected) != TH_ENV_METHOD_FOUND
+                CORE_STRING_STATIC("Equal"), CORE_STRING_STATIC("__equal"),
+                &selected) != TH_ENV_METHOD_FOUND
             || (selected.error_type
                 && !th_is_nil(selected.error_type)))
             return nullptr;
-        char left_name[64], right_name[64], test_name[64], next_name[64];
-        snprintf(left_name, sizeof left_name, "field_%zu_left", i);
-        snprintf(right_name, sizeof right_name, "field_%zu_right", i);
-        snprintf(test_name, sizeof test_name, "field_%zu_equal", i);
-        snprintf(next_name, sizeof next_name, "field_%zu_next", i);
+        char left_buffer[64], right_buffer[64], test_buffer[64];
+        char next_buffer[64];
+        core_string_t left_name = n00bb_format_name(left_buffer,
+            sizeof left_buffer, "field_%zu_left", i);
+        core_string_t right_name = n00bb_format_name(right_buffer,
+            sizeof right_buffer, "field_%zu_right", i);
+        core_string_t test_name = n00bb_format_name(test_buffer,
+            sizeof test_buffer, "field_%zu_equal", i);
+        core_string_t next_name = n00bb_format_name(next_buffer,
+            sizeof next_buffer, "field_%zu_next", i);
         ir_instr_t *left_field = ir_instr_add(current, IR_OP_EXTRACT);
         ir_instr_t *right_field = ir_instr_add(current, IR_OP_EXTRACT);
-        bool builtin = selected.module
-            && !strcmp(selected.module, "builtins");
+        bool builtin = selected.module.data
+            && core_string_eq(selected.module,
+                              CORE_STRING_STATIC("builtins"));
         ir_instr_t *equal = builtin
             ? ir_instr_add(current, IR_OP_EQ) : nullptr;
         ir_block_t *next = ir_block_add(function, next_name);
@@ -9436,7 +9527,7 @@ n00bb_record_equal_function(ir_lower_context_t *context, th_type *receiver)
                 && ir_instr_operand_value(equal, right_field->dest)
                 && (ir_machine_of(context->module, field->type).class
                         != IR_CLASS_FLOAT
-                    || ir_instr_add_mod(equal, "ordered")))
+                    || ir_instr_add_mod(equal, CORE_STRING_STATIC("ordered"))))
                 test = equal->dest;
         }
         else test = n00bb_record_field_call(context, current, &selected,
@@ -9454,11 +9545,15 @@ n00bb_record_equal_function(ir_lower_context_t *context, th_type *receiver)
     ir_instr_t *true_value = ir_instr_add(match, IR_OP_CONST);
     ir_instr_t *true_return = ir_instr_add(match, IR_OP_RETURN);
     if (!success || !ir_instr_operand_block(success, match)) return nullptr;
-    if (!false_value || !ir_instr_set_dest(false_value, "false", boolean)
+    if (!false_value || !ir_instr_set_dest(false_value,
+                                           CORE_STRING_STATIC("false"),
+                                           boolean)
         || !ir_instr_operand_int(false_value, 0)) return nullptr;
     if (!false_return || !ir_instr_operand_value(false_return,
                                                 false_value->dest)) return nullptr;
-    if (!true_value || !ir_instr_set_dest(true_value, "true", boolean)
+    if (!true_value || !ir_instr_set_dest(true_value,
+                                          CORE_STRING_STATIC("true"),
+                                          boolean)
         || !ir_instr_operand_int(true_value, 1)) return nullptr;
     if (!true_return || !ir_instr_operand_value(true_return,
                                                true_value->dest)) return nullptr;
@@ -9477,37 +9572,43 @@ n00bb_record_hash_function(ir_lower_context_t *context, th_type *receiver)
         return nullptr;
     ir_func_t *function = context->function;
     if (!function || function->n_blocks) return nullptr;
-    th_type *hash_type = th_name(types, "u128");
-    ir_value_t *self = ir_param_add(function, "self", receiver);
-    ir_block_t *block = ir_block_add(function, "entry");
+    th_type *hash_type = th_name(types, CORE_STRING_STATIC("u128"));
+    ir_value_t *self = ir_param_add(function, CORE_STRING_STATIC("self"), receiver);
+    ir_block_t *block = ir_block_add(function, CORE_STRING_STATIC("entry"));
     ir_instr_t *zero = block ? ir_instr_add(block, IR_OP_CONST) : nullptr;
-    if (!self || !zero || !ir_instr_set_dest(zero, "hash_zero", hash_type)
+    if (!self || !zero || !ir_instr_set_dest(zero, CORE_STRING_STATIC("hash_zero"), hash_type)
         || !ir_instr_operand_int(zero, 0)) return nullptr;
     ir_value_t *accumulator = zero->dest;
-    th_type *count_type = th_name(types, "u8");
+    th_type *count_type = th_name(types, CORE_STRING_STATIC("u8"));
     ir_instr_t *one = ir_instr_add(block, IR_OP_CONST);
     ir_instr_t *last = ir_instr_add(block, IR_OP_CONST);
-    if (!one || !last || !ir_instr_set_dest(one, "rotate_one", count_type)
+    if (!one || !last || !ir_instr_set_dest(one, CORE_STRING_STATIC("rotate_one"), count_type)
         || !ir_instr_operand_int(one, 1)
-        || !ir_instr_set_dest(last, "rotate_last", count_type)
+        || !ir_instr_set_dest(last, CORE_STRING_STATIC("rotate_last"), count_type)
         || !ir_instr_operand_int(last, 127)) return nullptr;
     for (size_t i = 0; i < th_record_len(shape); i++) {
         const th_member *field = th_record_member(shape, i);
         th_env_method_t selected = {0};
         if (!field || th_env_method_resolve(state->types, field->type,
-                "builtin.hashing.Hash", "hash", &selected)
+                CORE_STRING_STATIC("builtin.hashing.Hash"), CORE_STRING_STATIC("hash"), &selected)
                 != TH_ENV_METHOD_FOUND
             || (selected.error_type
                 && !th_is_nil(selected.error_type)))
             return nullptr;
-        char field_name[64], hash_name[64], left_name[64], right_name[64];
-        char rotated_name[64], mixed_name[64];
-        snprintf(field_name, sizeof field_name, "field_%zu", i);
-        snprintf(hash_name, sizeof hash_name, "field_%zu_hash", i);
-        snprintf(left_name, sizeof left_name, "hash_%zu_left", i);
-        snprintf(right_name, sizeof right_name, "hash_%zu_right", i);
-        snprintf(rotated_name, sizeof rotated_name, "hash_%zu_rotated", i);
-        snprintf(mixed_name, sizeof mixed_name, "hash_%zu_mixed", i);
+        char field_buffer[64], hash_buffer[64], left_buffer[64];
+        char right_buffer[64], rotated_buffer[64], mixed_buffer[64];
+        core_string_t field_name = n00bb_format_name(field_buffer,
+            sizeof field_buffer, "field_%zu", i);
+        core_string_t hash_name = n00bb_format_name(hash_buffer,
+            sizeof hash_buffer, "field_%zu_hash", i);
+        core_string_t left_name = n00bb_format_name(left_buffer,
+            sizeof left_buffer, "hash_%zu_left", i);
+        core_string_t right_name = n00bb_format_name(right_buffer,
+            sizeof right_buffer, "hash_%zu_right", i);
+        core_string_t rotated_name = n00bb_format_name(rotated_buffer,
+            sizeof rotated_buffer, "hash_%zu_rotated", i);
+        core_string_t mixed_name = n00bb_format_name(mixed_buffer,
+            sizeof mixed_buffer, "hash_%zu_mixed", i);
         ir_instr_t *extract = ir_instr_add(block, IR_OP_EXTRACT);
         if (!extract || !ir_instr_set_dest(extract, field_name, field->type)
             || !ir_instr_operand_value(extract, self)
@@ -9549,7 +9650,7 @@ n00bb_scalar_hash_function(ir_lower_context_t *context, th_type *receiver)
     if (!lower || !lower->ir_context || !types || !function
         || function->n_blocks) return nullptr;
     n00bb_tu_state_t *state = tu_state(lower->unit);
-    th_type *hash_type = th_name(types, "u128");
+    th_type *hash_type = th_name(types, CORE_STRING_STATIC("u128"));
     bool flagset = n00bb_flagset_type(lower->unit, state, receiver, nullptr);
     parse_sym_entry_t *enum_symbol = flagset ? nullptr
         : n00bb_enum_type_symbol(state->link_analysis, receiver);
@@ -9558,21 +9659,21 @@ n00bb_scalar_hash_function(ir_lower_context_t *context, th_type *receiver)
             CORE_STRING_STATIC("n00bb.enum-range")) : nullptr;
     if (!flagset && !range) return nullptr;
     th_type *integer_type = th_name(types,
-        range && range->is_signed ? "i128" : "u128");
+        range && range->is_signed ? CORE_STRING_STATIC("i128") :CORE_STRING_STATIC("u128"));
     th_env_method_t selected = {0};
     if (th_env_method_resolve(state->types, integer_type,
-            "builtin.hashing.Hash", "hash", &selected) != TH_ENV_METHOD_FOUND)
+            CORE_STRING_STATIC("builtin.hashing.Hash"), CORE_STRING_STATIC("hash"), &selected) != TH_ENV_METHOD_FOUND)
         return nullptr;
-    ir_value_t *self = ir_param_add(function, "self", receiver);
-    ir_block_t *block = ir_block_add(function, "entry");
+    ir_value_t *self = ir_param_add(function, CORE_STRING_STATIC("self"), receiver);
+    ir_block_t *block = ir_block_add(function, CORE_STRING_STATIC("entry"));
     ir_instr_t *integer = block ? ir_instr_add(block,
         flagset ? IR_OP_BITSET_VALUE : IR_OP_ENUM_VALUE) : nullptr;
     if (!self || !integer
-        || !ir_instr_set_dest(integer, "value", integer_type)
+        || !ir_instr_set_dest(integer, CORE_STRING_STATIC("value"), integer_type)
         || !ir_instr_operand_value(integer, self)
-        || (flagset && !ir_instr_add_mod(integer, "trap"))) return nullptr;
+        || (flagset && !ir_instr_add_mod(integer, CORE_STRING_STATIC("trap")))) return nullptr;
     ir_value_t *hashed = n00bb_record_field_call(context, block, &selected,
-        integer->dest, nullptr, hash_type, "hash");
+        integer->dest, nullptr, hash_type, CORE_STRING_STATIC("hash"));
     ir_instr_t *ret = hashed ? ir_instr_add(block, IR_OP_RETURN) : nullptr;
     return ret && ir_instr_operand_value(ret, hashed) ? function : nullptr;
 }
@@ -9592,11 +9693,11 @@ n00bb_generate_value_methods(n00bb_link_analysis_t *analysis)
                     CORE_STRING_STATIC("n00bb.generated-value-method"));
                 if (!receiver) continue;
                 bool record_hash = symbol->name.data
-                    && !strncmp(symbol->name.data,
-                        "__n00bb_record_hash_", 20);
+                    && core_string_starts_with(symbol->name,
+                        CORE_STRING_STATIC("__n00bb_record_hash_"));
                 bool scalar_hash = symbol->name.data
-                    && !strncmp(symbol->name.data,
-                        "__n00bb_scalar_hash_", 20);
+                    && core_string_starts_with(symbol->name,
+                        CORE_STRING_STATIC("__n00bb_scalar_hash_"));
                 ir_func_t *function = link_ir_function_for_symbol(analysis, symbol);
                 ir_module_t *module = unit_module(state);
                 n00bb_lower_context_t lower = {
@@ -9645,13 +9746,15 @@ n00bb_closed_builtin_operator(ir_lower_context_t *context,
     (void)receiver_type;
     if (!parse_sym_binding(implementation,
             CORE_STRING_STATIC("n00bb.builtin-operator"))) return nullptr;
-    const char *method = requirement->name.data;
+    core_string_t method = requirement->name;
+    bool compare = core_string_eq(method, CORE_STRING_STATIC("__cmp"));
     const n00bb_binary_operator_t *operator =
         n00bb_binary_operator_method(requirement->name);
     ir_op_t op;
     if (operator && !operator->shift) op = operator->op;
-    else if (!strcmp(method, "__equal")) op = IR_OP_EQ;
-    else if (!strcmp(method, "__cmp")) op = IR_OP_LT;
+    else if (core_string_eq(method, CORE_STRING_STATIC("__equal")))
+        op = IR_OP_EQ;
+    else if (compare) op = IR_OP_LT;
     else return nullptr;
 
     th_type *signature = th_resolve(implementation->type);
@@ -9667,36 +9770,40 @@ n00bb_closed_builtin_operator(ir_lower_context_t *context,
     core_buffer_printf(&name, "__dispatch_%.*s",
         (int)implementation->name.u8_bytes, implementation->name.data);
     ir_func_t *existing = name.data
-        ? ir_func_find(context->module, name.data) : nullptr;
+        ? ir_func_find(context->module, core_buffer_string(&name)) : nullptr;
     ir_func_t *function = existing ? existing : name.data
-        ? ir_func_add(context->module, name.data, signature,
+        ? ir_func_add(context->module, core_buffer_string(&name), signature,
                       IR_LINK_INTERNAL) : nullptr;
     core_buffer_release(&name);
     if (!function || existing) return function;
-    ir_value_t *left = ir_param_add(function, "left", left_type->type);
-    ir_value_t *right = ir_param_add(function, "right", right_type->type);
-    ir_block_t *entry = ir_block_add(function, "entry");
-    if (!strcmp(method, "__cmp")) {
+    ir_value_t *left = ir_param_add(function, CORE_STRING_STATIC("left"), left_type->type);
+    ir_value_t *right = ir_param_add(function, CORE_STRING_STATIC("right"), right_type->type);
+    ir_block_t *entry = ir_block_add(function, CORE_STRING_STATIC("entry"));
+    if (compare) {
         static const struct {
             ir_op_t op;
-            const char *name;
+            core_string_t name;
         } outcomes[] = {
-            {IR_OP_LT, "less"},
-            {IR_OP_GT, "greater"},
-            {IR_OP_EQ, "equal"},
+            {IR_OP_LT, CORE_STRING_STATIC("less")},
+            {IR_OP_GT, CORE_STRING_STATIC("greater")},
+            {IR_OP_EQ, CORE_STRING_STATIC("equal")},
         };
         th_type *bool_type = th_name(ir_module_types(context->module),
-                                     "bool");
+                                     CORE_STRING_STATIC("bool"));
         ir_block_t *test_block = entry;
         if (!left || !right || !entry || !bool_type) return nullptr;
         for (size_t i = 0; i < sizeof(outcomes) / sizeof(outcomes[0]); i++) {
-            char block_name[32], next_name[32], value_name[32];
-            snprintf(block_name, sizeof(block_name), "matched_%s",
-                     outcomes[i].name);
-            snprintf(next_name, sizeof(next_name), "next_%s",
-                     outcomes[i].name);
-            snprintf(value_name, sizeof(value_name), "test_%s",
-                     outcomes[i].name);
+            char block_buffer[32], next_buffer[32], value_buffer[32];
+            core_string_t outcome = outcomes[i].name;
+            core_string_t block_name = n00bb_format_name(block_buffer,
+                sizeof(block_buffer), "matched_%.*s",
+                (int)outcome.u8_bytes, outcome.data);
+            core_string_t next_name = n00bb_format_name(next_buffer,
+                sizeof(next_buffer), "next_%.*s",
+                (int)outcome.u8_bytes, outcome.data);
+            core_string_t value_name = n00bb_format_name(value_buffer,
+                sizeof(value_buffer), "test_%.*s",
+                (int)outcome.u8_bytes, outcome.data);
             ir_block_t *matched = ir_block_add(function, block_name);
             ir_block_t *next = ir_block_add(function, next_name);
             ir_instr_t *test = ir_instr_add(test_block, outcomes[i].op);
@@ -9719,32 +9826,32 @@ n00bb_closed_builtin_operator(ir_lower_context_t *context,
                 return nullptr;
             if (ir_machine_of(context->module, left_type->type).class
                     == IR_CLASS_FLOAT
-                && !ir_instr_add_mod(test, "ordered")) return nullptr;
+                && !ir_instr_add_mod(test, CORE_STRING_STATIC("ordered"))) return nullptr;
             test_block = next;
         }
         ir_instr_t *unordered = ir_instr_add(test_block, IR_OP_ENUM_CONST);
         ir_instr_t *ret = ir_instr_add(test_block, IR_OP_RETURN);
         return unordered && ret
-            && ir_instr_set_dest(unordered, "unordered", return_type)
-            && ir_instr_operand_name(unordered, "unordered")
+            && ir_instr_set_dest(unordered, CORE_STRING_STATIC("unordered"), return_type)
+            && ir_instr_operand_name(unordered, CORE_STRING_STATIC("unordered"))
             && ir_instr_operand_int_lit(unordered, (ir_lit_t){.mag = 3})
             && ir_instr_operand_value(ret, unordered->dest)
             ? function : nullptr;
     }
     ir_instr_t *value = entry ? ir_instr_add(entry, op) : nullptr;
     if (!left || !right || !value
-        || !ir_instr_set_dest(value, "result", return_type)
+        || !ir_instr_set_dest(value, CORE_STRING_STATIC("result"), return_type)
         || !ir_instr_operand_value(value, left)
         || !ir_instr_operand_value(value, right)) return nullptr;
     ir_class_t result_class = ir_machine_of(context->module,
                                            return_type).class;
     if ((result_class == IR_CLASS_SINT || result_class == IR_CLASS_UINT)
-        && ir_op_accepts_mod(op, "trap")
-        && !ir_instr_add_mod(value, "trap")) return nullptr;
+        && ir_op_accepts_mod(op, CORE_STRING_STATIC("trap"))
+        && !ir_instr_add_mod(value, CORE_STRING_STATIC("trap"))) return nullptr;
     if (op == IR_OP_EQ
         && ir_machine_of(context->module, left_type->type).class
             == IR_CLASS_FLOAT
-        && !ir_instr_add_mod(value, "ordered")) return nullptr;
+        && !ir_instr_add_mod(value, CORE_STRING_STATIC("ordered"))) return nullptr;
     ir_instr_t *ret = ir_instr_add(entry, IR_OP_RETURN);
     return ret && ir_instr_operand_value(ret, value->dest)
         ? function : nullptr;
@@ -9797,7 +9904,7 @@ n00bb_emit_closed_trait_arm(ir_lower_context_t *context,
     ir_instr_t *call = callee && call_signature && call_result
         ? ir_lower_emit_instruction(context, IR_OP_CALL, span) : nullptr;
     bool emitted = call
-        && ir_lower_set_temp_dest(context, call, "__n00bb_", call_result)
+        && ir_lower_set_temp_dest(context, call, CORE_STRING_STATIC("__n00bb_"), call_result)
         && ir_instr_operand_value(call, callee);
     for (size_t p = 0; emitted && p < values->len; p++) {
         ir_value_t *argument = p == 0 ? receiver : values->data[p];
@@ -9809,7 +9916,7 @@ n00bb_emit_closed_trait_arm(ir_lower_context_t *context,
         th_mode mode = TH_IN;
         bool known = p < parameter_count
             && function_parameter_info(grammar, requirement,
-                formal_params, p, nullptr, nullptr, nullptr, &flags, &mode);
+                formal_params, p, nullptr, nullptr, &flags, &mode);
         emitted = known && (flags & 1u) && th_mode_is_input_only(mode)
             ? ir_instr_operand_missing(call)
             : known && mode == TH_OUT
@@ -9834,7 +9941,7 @@ static th_type *
 closed_receiver_failure(th_ctx *types, const n00bb_link_use_site_t *site,
                         th_type *receiver)
 {
-    if (!types || !site || !site->resolved_trait_name
+    if (!types || !site || !site->resolved_trait_name.data
         || !site->dispatch_method.data) return nullptr;
     receiver = receiver ? th_resolve(receiver) : nullptr;
     while (receiver && th_kind_of(receiver) == TH_INDIRECTION)
@@ -9842,10 +9949,10 @@ closed_receiver_failure(th_ctx *types, const n00bb_link_use_site_t *site,
     if (!receiver || !th_is_closed(types, receiver)) return nullptr;
     th_env_method_t method = {0};
     if (th_env_method_resolve(types, receiver, site->resolved_trait_name,
-            site->dispatch_method.data, &method) != TH_ENV_METHOD_FOUND
+            site->dispatch_method, &method) != TH_ENV_METHOD_FOUND
         || !method.signature) return nullptr;
     th_type *failure = th_func_error(method.signature);
-    return failure ? th_type_clone(types, failure) : th_name(types, "nil");
+    return failure ? th_type_clone(types, failure) : th_name(types, CORE_STRING_STATIC("nil"));
 }
 
 static ir_instr_t *
@@ -9872,9 +9979,10 @@ n00bb_emit_closed_trait_call(ir_lower_context_t *context,
             values, values->data[0], span);
         return emitted.result;
     }
-    char local_name[48];
-    snprintf(local_name, sizeof(local_name), "__n00bb_dispatch_%llu",
-             (unsigned long long)context->next_value_id++);
+    char local_buffer[48];
+    core_string_t local_name = n00bb_format_name(local_buffer,
+        sizeof(local_buffer), "__n00bb_dispatch_%llu",
+        (unsigned long long)context->next_value_id++);
     bool void_result = th_is_nil(result_type);
     ir_local_t *result = void_result ? nullptr
         : ir_local_add(context->function, local_name, result_type);
@@ -9883,7 +9991,7 @@ n00bb_emit_closed_trait_call(ir_lower_context_t *context,
     bool has_fallback = plan->entries[plan->count - 1].generic_fallback;
     ir_block_t *unmatched = has_fallback ? nullptr
         : n00bb_branch_block(context, lower, "trait_dispatch_unmatched");
-    th_type *bool_type = th_name(ir_module_types(context->module), "bool");
+    th_type *bool_type = th_name(ir_module_types(context->module), CORE_STRING_STATIC("bool"));
     if ((!void_result && !result) || !join
         || (!has_fallback && !unmatched) || !bool_type)
         return nullptr;
@@ -9906,7 +10014,7 @@ n00bb_emit_closed_trait_call(ir_lower_context_t *context,
             emitted = ir_instr_operand_block(branch, arm);
         else if (emitted) {
             emitted = next && test
-                && ir_lower_set_temp_dest(context, test, "__n00bb_",
+                && ir_lower_set_temp_dest(context, test, CORE_STRING_STATIC("__n00bb_"),
                                            bool_type)
                 && ir_instr_operand_value(test, values->data[0])
                 && ir_instr_operand_type(test, entry->receiver_type)
@@ -9921,7 +10029,7 @@ n00bb_emit_closed_trait_call(ir_lower_context_t *context,
         ir_instr_t *narrow = entry->generic_fallback ? nullptr
             : ir_instr_add(arm, IR_OP_TYPE_NARROW);
         if (narrow) {
-            emitted = ir_lower_set_temp_dest(context, narrow, "__n00bb_",
+            emitted = ir_lower_set_temp_dest(context, narrow, CORE_STRING_STATIC("__n00bb_"),
                                               entry->receiver_type)
                 && ir_instr_operand_value(narrow, values->data[0])
                 && ir_instr_operand_type(narrow, entry->receiver_type);
@@ -9957,7 +10065,7 @@ n00bb_emit_closed_trait_call(ir_lower_context_t *context,
             context->block = copied;
         }
         ir_value_t *call_outputs = guarded && emitted
-            ? n00bb_emit_outcome_payload(context, call->dest, "ok",
+            ? n00bb_emit_outcome_payload(context, call->dest, CORE_STRING_STATIC("ok"),
                 th_func_ret(call_signature), span)
             : emitted ? call->dest : nullptr;
         emitted = emitted && call_outputs;
@@ -9970,7 +10078,7 @@ n00bb_emit_closed_trait_call(ir_lower_context_t *context,
                 ? ir_lower_emit_instruction(context, IR_OP_CALL_OUTPUT, span)
                 : nullptr;
             emitted = projection
-                && ir_lower_set_temp_dest(context, projection, "__n00bb_",
+                && ir_lower_set_temp_dest(context, projection, CORE_STRING_STATIC("__n00bb_"),
                                           formal->type)
                 && ir_instr_operand_value(projection, call_outputs)
                 && ir_instr_operand_uint(projection, copyout->output_index);
@@ -10011,7 +10119,7 @@ n00bb_emit_closed_trait_call(ir_lower_context_t *context,
     context->block = join;
     ir_instr_t *read = ir_instr_add(join,
         void_result ? IR_OP_NIL : IR_OP_COPY);
-    if (!read || !ir_lower_set_temp_dest(context, read, "__n00bb_",
+    if (!read || !ir_lower_set_temp_dest(context, read, CORE_STRING_STATIC("__n00bb_"),
                                          result_type)
         || (!void_result && !ir_instr_operand_local(read, result)))
         return nullptr;
@@ -10082,19 +10190,22 @@ n00bb_emit_iteration_trait_call(ir_lower_context_t *context,
                 nullptr);
 
     failure = th_func_error(signature);
+    core_string_t requirement_trait = site->resolved_trait_name.data
+        ? site->resolved_trait_name : site->dispatch_trait;
     if (trait_requirement && !callee) {
         core_buffer_t requirement_name = {0};
-        core_buffer_printf(&requirement_name, "__trait_req_%s_%.*s",
-            site->resolved_trait_name ? site->resolved_trait_name
-                                      : site->dispatch_trait.data,
+        core_buffer_printf(&requirement_name, "__trait_req_%.*s_%.*s",
+            (int)requirement_trait.u8_bytes, requirement_trait.data,
             (int)site->dispatch_method.u8_bytes,
             site->dispatch_method.data);
         ir_func_t *requirement = requirement_name.data
-            ? ir_func_find(context->module, requirement_name.data) : nullptr;
+            ? ir_func_find(context->module,
+                           core_buffer_string(&requirement_name)) : nullptr;
         if (!requirement && requirement_name.data) {
             th_type *requirement_type = th_type_clone(types, contract);
             requirement = requirement_type
-                ? ir_func_add(context->module, requirement_name.data,
+                ? ir_func_add(context->module,
+                              core_buffer_string(&requirement_name),
                               requirement_type, IR_LINK_EXTERN) : nullptr;
             if (requirement && !th_is_closed(types, contract)
                 && !ir_func_set_callable_contract(requirement, contract))
@@ -10110,12 +10221,9 @@ n00bb_emit_iteration_trait_call(ir_lower_context_t *context,
             : nullptr;
         bool selected = selection
             && ir_lower_set_temp_dest(context, selection,
-                "__n00bb_iteration_method_", signature)
-            && ir_instr_operand_name(selection,
-                site->resolved_trait_name ? site->resolved_trait_name
-                                          : site->dispatch_trait.data)
-            && ir_instr_operand_name(selection,
-                                     site->dispatch_method.data)
+                CORE_STRING_STATIC("__n00bb_iteration_method_"), signature)
+            && ir_instr_operand_name(selection, requirement_trait)
+            && ir_instr_operand_name(selection, site->dispatch_method)
             && ir_instr_operand_value(selection, receiver)
             && ir_instr_operand_value(selection, callee);
         callee = selected ? selection->dest : nullptr;
@@ -10135,7 +10243,7 @@ n00bb_emit_iteration_trait_call(ir_lower_context_t *context,
     ir_instr_t *call = ir_lower_emit_instruction(context, IR_OP_CALL, span);
     bool emitted = call && call_type
         && ir_lower_set_temp_dest(context, call,
-            "__n00bb_iteration_call_", call_type)
+            CORE_STRING_STATIC("__n00bb_iteration_call_"), call_type)
         && ir_instr_operand_value(call, callee)
         && ir_instr_operand_value(call, receiver)
         && ir_instr_set_call_signature(call, signature);
@@ -10156,7 +10264,7 @@ n00bb_emit_iteration_trait_call(ir_lower_context_t *context,
         ir_instr_t *output = ir_lower_emit_instruction(context,
             IR_OP_CALL_OUTPUT, span);
         if (!output || !ir_lower_set_temp_dest(context, output,
-            "__n00bb_iteration_cursor_", receiver->type)
+            CORE_STRING_STATIC("__n00bb_iteration_cursor_"), receiver->type)
             || !ir_instr_operand_value(output, result)
             || !ir_instr_operand_uint(output, 0)) {
             lower_error(context, IR_DIAG_INTERNAL, span,
@@ -10175,7 +10283,7 @@ n00bb_emit_iteration_cleanup(ir_lower_context_t *context,
 {
     if (!frame || !frame->cleanup_active || !frame->iteration_plan
         || !frame->iteration_cursor_value) return true;
-    th_type *nil_type = th_name(ir_module_types(context->module), "nil");
+    th_type *nil_type = th_name(ir_module_types(context->module), CORE_STRING_STATIC("nil"));
     return nil_type
         && n00bb_emit_iteration_trait_call(context, frame,
             frame->iteration_plan->cleanup_site,
@@ -10205,7 +10313,7 @@ n00bb_emit_consume_value(ir_lower_context_t *context, ir_value_t *value,
     ir_instr_t *consume = ir_lower_emit_instruction(context, IR_OP_CONSUME,
                                                     span);
     if (!consume || !ir_lower_set_temp_dest(context, consume,
-        "__n00bb_consumed_", value->type)
+        CORE_STRING_STATIC("__n00bb_consumed_"), value->type)
         || !ir_instr_operand_value(consume, value)
         || (binding && binding != value
             && !ir_instr_operand_value(consume, binding))) {
@@ -10299,13 +10407,13 @@ n00bb_typed_integer_value(ir_lower_context_t *context,
         ir_span_t span = lower_span_for_tree(context, node);
         ir_instr_t *cast = ir_lower_emit_instruction(context, IR_OP_CAST,
                                                      span);
-        if (!cast || !ir_lower_set_temp_dest(context, cast, "__n00bb_",
+        if (!cast || !ir_lower_set_temp_dest(context, cast, CORE_STRING_STATIC("__n00bb_"),
                                              target)
             || !ir_instr_operand_value(cast, value)
             || ((source.width > destination.width
                  || source.class != destination.class)
                 && !ir_instr_add_mod(cast,
-                    widening ? "trap" : "wrap")))
+                    widening ? CORE_STRING_STATIC("trap") : CORE_STRING_STATIC("wrap"))))
             return nullptr;
         return cast->dest;
     }
@@ -10337,7 +10445,7 @@ n00bb_typed_integer_value(ir_lower_context_t *context,
     }
     ir_span_t span = lower_span_for_tree(context, node);
     ir_instr_t *typed = ir_lower_emit_instruction(context, IR_OP_CONST, span);
-    if (!typed || !ir_lower_set_temp_dest(context, typed, "__n00bb_",
+    if (!typed || !ir_lower_set_temp_dest(context, typed, CORE_STRING_STATIC("__n00bb_"),
                                           target)
         || !ir_instr_operand_int_lit(typed, literal)) return nullptr;
     return typed->dest;
@@ -10360,7 +10468,7 @@ n00bb_emit_wrapping(ir_lower_context_t *context, ir_op_t op,
 {
     ir_instr_t *instruction = ir_lower_emit_instruction(context, op, span);
     if (!instruction || !ir_lower_set_temp_dest(context, instruction,
-                                                "__n00bb_", target)
+                                                CORE_STRING_STATIC("__n00bb_"), target)
         || (payload && !ir_instr_operand_value(instruction, payload)))
         return nullptr;
     return instruction->dest;
@@ -10443,9 +10551,10 @@ n00bb_materialize(ir_lower_context_t *context, parse_tree_t *node,
         parse_tree_t *site = node && lower
             ? n00bb_string_where_buffer_site(lower->grammar, types, node,
                                              target) : nullptr;
-        lower_error(context, IR_DIAG_TYPE_MISMATCH,
+        lower_error_text(context, IR_DIAG_TYPE_MISMATCH,
                     site ? lower_span_for_tree(context, site) : span,
-                    n00bb_string_to_buffer_text);
+                    core_string_borrow(n00bb_string_to_buffer_text,
+                        sizeof(n00bb_string_to_buffer_text) - 1));
         return nullptr;
     }
     if (!th_is_closed(types, target) && th_is_closed(types, value->type)
@@ -10634,7 +10743,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         return (ir_lower_result_t){IR_LOWER_FAILED, nullptr};
     if (context_call > 0)
         return context_result;
-    if (nt_is(visit->grammar, visit->node, "context-call"))
+    if (nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("context-call")))
         return lower_error(context, IR_DIAG_VERIFY_PARSED, span,
             "context call is not inside an active with scope or did not resolve to a context declaration");
     n00bb_lower_context_t *lower = context->user;
@@ -10709,16 +10818,16 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                            "trait-dispatched calls are not lowered yet");
     if (!symbol) {
         ir_diag_t *diagnostic = ir_diag_begin(context->diagnostics,
-            IR_DIAG_UNDEFINED_SYMBOL, span, nullptr);
+            IR_DIAG_UNDEFINED_SYMBOL, span, (core_string_t){});
         ir_diag_message(diagnostic, context->diagnostics,
-                        "call target did not resolve to a declared function");
+                        CORE_STRING_STATIC("call target did not resolve to a declared function"));
         return (ir_lower_result_t){.status = IR_LOWER_FAILED};
     }
     if (index_call && n00bb_builtin_array_read_function(symbol)) {
         parse_tree_t *contents = core_tree_num_children(call_node) > 2
             ? core_tree_child(call_node, 2) : nullptr;
         parse_tree_t *subscript = child_nt(visit->grammar, contents,
-                                           "expression");
+                                           CORE_STRING_STATIC("expression"));
         th_type *receiver_type = receiver_node
             ? n00bb_dereferenced_type(ir_module_types(context->module),
                 parse_tree_type(receiver_node)) : nullptr;
@@ -10764,7 +10873,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         ir_instr_t *read = ir_lower_emit_instruction(context,
             IR_OP_SEQUENCE_GET, span);
         if (!read || !ir_lower_set_temp_dest(context, read,
-            "__n00bb_array_element_", result_type)
+            CORE_STRING_STATIC("__n00bb_array_element_"), result_type)
             || !ir_instr_operand_value(read, receiver)
             || !ir_instr_operand_value(read, index))
             return lower_error(context, IR_DIAG_INTERNAL, span,
@@ -10894,18 +11003,22 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                            "call result does not match the resolved function return type");
     if (builtin_trait_call) {
         core_buffer_t requirement_name = {0};
-        core_buffer_printf(&requirement_name, "__trait_req_%s_%.*s",
-            dispatch_site && dispatch_site->resolved_trait_name
-                ? dispatch_site->resolved_trait_name
-                : symbol->scope->name.data,
+        core_string_t trait = dispatch_site
+                && dispatch_site->resolved_trait_name.data
+            ? dispatch_site->resolved_trait_name
+            : symbol->scope->name;
+        core_buffer_printf(&requirement_name, "__trait_req_%.*s_%.*s",
+            (int)trait.u8_bytes, trait.data,
             (int)symbol->name.u8_bytes, symbol->name.data);
         ir_func_t *requirement = requirement_name.data
-            ? ir_func_find(context->module, requirement_name.data) : nullptr;
+            ? ir_func_find(context->module,
+                           core_buffer_string(&requirement_name)) : nullptr;
         if (!requirement && requirement_name.data) {
             th_type *requirement_type = th_type_clone(
                 ir_module_types(context->module), callable);
             requirement = requirement_type
-                ? ir_func_add(context->module, requirement_name.data,
+                ? ir_func_add(context->module,
+                              core_buffer_string(&requirement_name),
                               requirement_type, IR_LINK_EXTERN) : nullptr;
             if (requirement && !th_is_closed(ir_module_types(context->module),
                     callable) && !ir_func_set_callable_contract(requirement,
@@ -10920,8 +11033,10 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                 "could not retain builtin trait method requirement");
     }
     if (native_builtin) {
-        const char *ir_name = parse_sym_binding(symbol,
+        const core_string_t *native_name = parse_sym_binding(symbol,
             CORE_STRING_STATIC("n00bb.abi.native"));
+        core_string_t ir_name = native_name ? *native_name
+                                            : (core_string_t){};
         ir_func_t *function = ir_func_find(context->module, ir_name);
         if (!function) {
             th_type *declaration = th_type_clone(
@@ -10932,7 +11047,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         }
         if (function && !ir_annot_set(lower->ir_context,
                 &function->annots, (ir_annot_t){
-                    .key = "n00bb.abi.native",
+                    .key = CORE_STRING_STATIC("n00bb.abi.native"),
                     .kind = IR_ANNOT_STR,
                     .s = ir_name,
                 })) return lower_error(context, IR_DIAG_INTERNAL, span,
@@ -10941,7 +11056,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                 CORE_STRING_STATIC("n00bb.native.collection-free"))
             && !ir_annot_set(lower->ir_context, &function->annots,
                 (ir_annot_t){
-                    .key = "n00bb.native.collection-free",
+                    .key = CORE_STRING_STATIC("n00bb.native.collection-free"),
                     .kind = IR_ANNOT_BOOL,
                     .b = true,
                 })) return lower_error(context, IR_DIAG_INTERNAL, span,
@@ -10950,7 +11065,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                 CORE_STRING_STATIC("n00bb.native.calls-n00b"))
             && !ir_annot_set(lower->ir_context, &function->annots,
                 (ir_annot_t){
-                    .key = "n00bb.native.calls-n00b",
+                    .key = CORE_STRING_STATIC("n00bb.native.calls-n00b"),
                     .kind = IR_ANNOT_BOOL,
                     .b = true,
                 })) return lower_error(context, IR_DIAG_INTERNAL, span,
@@ -10992,21 +11107,21 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         }
     }
     parse_tree_t *positional = child_nt(visit->grammar, args,
-                                        "positional-args");
+                                        CORE_STRING_STATIC("positional-args"));
     core_list_t(n00bb_tree_ptr_t) positional_nodes =
         core_list_new(n00bb_tree_ptr_t);
     if (index_call) {
         parse_tree_t *contents = core_tree_num_children(call_node) > 2
             ? core_tree_child(call_node, 2) : nullptr;
-        if (nt_is(visit->grammar, contents, "index-contents")) {
+        if (nt_is(visit->grammar, contents, CORE_STRING_STATIC("index-contents"))) {
             parse_tree_t *index = child_nt(visit->grammar, contents,
-                                           "expression");
+                                           CORE_STRING_STATIC("expression"));
             if (index) core_list_push(positional_nodes, index);
         }
-        else if (nt_is(visit->grammar, contents, "slice-contents")) {
+        else if (nt_is(visit->grammar, contents, CORE_STRING_STATIC("slice-contents"))) {
             for (size_t i = 0; i < core_tree_num_children(contents); i++) {
                 parse_tree_t *child = core_tree_child(contents, i);
-                if (nt_is(visit->grammar, child, "expression"))
+                if (nt_is(visit->grammar, child, CORE_STRING_STATIC("expression")))
                     core_list_push(positional_nodes, child);
             }
         }
@@ -11014,7 +11129,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
             || core_string_eq(index_trait,
                               CORE_STRING_STATIC("Index_Slice_Write"))) {
             parse_tree_t *parent = parse_tree_parent(call_node);
-            while (parent && !nt_is(visit->grammar, parent, "assign-stmt"))
+            while (parent && !nt_is(visit->grammar, parent, CORE_STRING_STATIC("assign-stmt")))
                 parent = parse_tree_parent(parent);
             const parse_rule_t *rule = parent
                 ? parse_tree_rule(visit->grammar, parent) : nullptr;
@@ -11055,7 +11170,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     }
     core_list_free(positional_nodes);
     parse_tree_t *keyword_args = child_nt(visit->grammar, args,
-                                          "keyword-args");
+                                          CORE_STRING_STATIC("keyword-args"));
     core_list_t(n00bb_tree_ptr_t) keyword_nodes =
         core_list_new(n00bb_tree_ptr_t);
     if (keyword_args)
@@ -11066,7 +11181,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         bool has_formal = function_parameter_named(visit->grammar, symbol,
             formal_params, name, &index);
         parse_tree_t *argument = child_nt(visit->grammar,
-            keyword_nodes.data[i], "expression");
+            keyword_nodes.data[i], CORE_STRING_STATIC("expression"));
         if (!has_formal || !argument || index >= parameter_count) {
             lower_error(context, IR_DIAG_UNDEFINED_SYMBOL, span,
                         "named argument does not match a parameter");
@@ -11090,7 +11205,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         uint8_t flags = 0;
         if ((!reference_builtin
                 && !function_parameter_info(visit->grammar, symbol,
-                    formal_params, i, nullptr, nullptr, nullptr, &flags,
+                    formal_params, i, nullptr, nullptr,&flags,
                     nullptr))
             || !(flags & 1u)) {
             if (!provided[i]) missing_required++;
@@ -11213,14 +11328,14 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         parse_tree_t *argument = actuals.data[i].node;
         th_mode mode = parameter ? parameter->mode : TH_IN;
         function_parameter_info(visit->grammar, symbol, formal_params,
-            index, nullptr, nullptr, nullptr, nullptr, &mode);
+            index, nullptr, nullptr,nullptr, &mode);
         if (!parameter || !argument) {
             collected = false;
             break;
         }
         parse_sym_entry_t *formal = nullptr;
         function_parameter_info(visit->grammar, symbol, formal_params,
-            index, &formal, nullptr, nullptr, nullptr, nullptr);
+            index, &formal, nullptr, nullptr, nullptr);
         ir_shape_t *required_shape = formal
             ? parse_sym_binding(formal,
                 CORE_STRING_STATIC("ir.array-shape"))
@@ -11346,7 +11461,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
             || atomic_access_builtin
             || native_builtin
             || function_parameter_info(visit->grammar, symbol,
-                formal_params, i, &formal, nullptr, nullptr, &flags, &mode);
+                formal_params, i, &formal, nullptr, &flags, &mode);
         const th_param *parameter = th_func_param(signature, i);
         if (!has_formal || !parameter) {
             collected = false;
@@ -11373,7 +11488,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
             parse_tree_t *shape_source = argument_by_parameter[i]
                 ? argument_by_parameter[i]
                 : formal ? child_nt(visit->grammar, formal->decl_node,
-                                    "expression") : nullptr;
+                                    CORE_STRING_STATIC("expression")) : nullptr;
             if (th_mode_is_input_only(parameter->mode)
                 && ((!n00bb_attach_expression_shape(context,
                         visit->grammar, shape_source, value)
@@ -11437,7 +11552,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
             ? ir_lower_emit_instruction(context, IR_OP_SEQUENCE_LENGTH, span)
             : nullptr;
         bool emitted = length
-            && ir_lower_set_temp_dest(context, length, "__n00bb_",
+            && ir_lower_set_temp_dest(context, length, CORE_STRING_STATIC("__n00bb_"),
                                        result_type)
             && ir_instr_operand_value(length, values.data[0]);
         core_list_free(values);
@@ -11560,10 +11675,10 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     if (has_error != propagated) {
         core_list_free(values);
         core_list_free(copyouts);
-        return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
+        return lower_error_text(context, IR_DIAG_VERIFY_TYPED, span,
             has_error
-                ? "a call with an error channel must be used with postfix ! and its return type must match"
-                : "postfix ! requires a failable expression; this call is infallible");
+                ? CORE_STRING_STATIC("a call with an error channel must be used with postfix ! and its return type must match")
+                : CORE_STRING_STATIC("postfix ! requires a failable expression; this call is infallible"));
     }
     th_type *call_result_type = has_error
         ? ir_call_outcome_type(context->module, signature)
@@ -11581,9 +11696,10 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
             if (!receiver_value || !callee_value) {
                 core_list_free(values);
                 core_list_free(copyouts);
-                return lower_error(context, IR_DIAG_INTERNAL, span,
-                    !receiver_value ? "trait receiver has no lowered value"
-                                    : "trait requirement has no lowered address");
+                return lower_error_text(context, IR_DIAG_INTERNAL, span,
+                    !receiver_value
+                        ? CORE_STRING_STATIC("trait receiver has no lowered value")
+                        : CORE_STRING_STATIC("trait requirement has no lowered address"));
             }
             callee_value = n00bb_select_trait_method(context,
                 visit->grammar, callee_unit, symbol, signature,
@@ -11610,7 +11726,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         ir_instr_t *instruction = valid
             ? ir_lower_emit_instruction(context, option_op, span) : nullptr;
         bool emitted = instruction
-            && ir_lower_set_temp_dest(context, instruction, "__n00bb_",
+            && ir_lower_set_temp_dest(context, instruction, CORE_STRING_STATIC("__n00bb_"),
                                       call_result_type);
         for (size_t i = 0; emitted && i < values.len; i++)
             emitted = ir_instr_operand_value(instruction, values.data[i]);
@@ -11665,7 +11781,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     }
     if (byte_offset_builtin) {
         th_ctx *types = ir_module_types(context->module);
-        th_type *byte = th_name(types, "byte");
+        th_type *byte = th_name(types, CORE_STRING_STATIC("byte"));
         th_type *indexable = byte ? th_ind(types, TH_INDEXABLE, byte)
                                   : nullptr;
         bool valid = values.len == 2 && !copyouts.len && indexable
@@ -11681,18 +11797,18 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         ir_instr_t *cast = ir_lower_emit_instruction(context,
             IR_OP_BITCAST, span);
         bool emitted = cast && ir_lower_set_temp_dest(context, cast,
-            "__n00bb_", indexable)
+            CORE_STRING_STATIC("__n00bb_"), indexable)
             && ir_instr_operand_value(cast, values.data[0]);
         ir_instr_t *offset = emitted ? ir_lower_emit_instruction(context,
             IR_OP_OFFSET, span) : nullptr;
         emitted = offset && ir_lower_set_temp_dest(context, offset,
-            "__n00bb_", indexable)
+            CORE_STRING_STATIC("__n00bb_"), indexable)
             && ir_instr_operand_value(offset, cast->dest)
             && ir_instr_operand_value(offset, values.data[1]);
         ir_instr_t *result = emitted ? ir_lower_emit_instruction(context,
             IR_OP_BITCAST, span) : nullptr;
         emitted = result && ir_lower_set_temp_dest(context, result,
-            "__n00bb_", call_result_type)
+            CORE_STRING_STATIC("__n00bb_"), call_result_type)
             && ir_instr_operand_value(result, offset->dest);
         core_list_free(values);
         core_list_free(copyouts);
@@ -11709,7 +11825,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         ir_instr_t *difference = valid
             ? ir_lower_emit_instruction(context, IR_OP_DIFF, span) : nullptr;
         bool emitted = difference
-            && ir_lower_set_temp_dest(context, difference, "__n00bb_",
+            && ir_lower_set_temp_dest(context, difference, CORE_STRING_STATIC("__n00bb_"),
                                       call_result_type)
             && ir_instr_operand_value(difference, values.data[0])
             && ir_instr_operand_value(difference, values.data[1]);
@@ -11763,8 +11879,8 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                 span, "unsafe arithmetic requires integer operands of one type");
     }
     if (bit_count_builtin) {
-        th_type *uint_type = th_name(ir_module_types(context->module), "uint");
-        th_type *u32_type = th_name(ir_module_types(context->module), "u32");
+        th_type *uint_type = th_name(ir_module_types(context->module), CORE_STRING_STATIC("uint"));
+        th_type *u32_type = th_name(ir_module_types(context->module), CORE_STRING_STATIC("u32"));
         bool valid = values.len == 1 && !copyouts.len && uint_type
             && u32_type && ir_type_eq(context->module, call_result_type,
                                       u32_type)
@@ -11775,7 +11891,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         ir_instr_t *count = valid
             ? ir_lower_emit_instruction(context, op, span) : nullptr;
         bool emitted = count
-            && ir_lower_set_temp_dest(context, count, "__n00bb_",
+            && ir_lower_set_temp_dest(context, count, CORE_STRING_STATIC("__n00bb_"),
                                       call_result_type)
             && ir_instr_operand_value(count, values.data[0]);
         core_list_free(values);
@@ -11802,11 +11918,11 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         core_list_free(copyouts);
         return emitted
             ? (ir_lower_result_t){IR_LOWER_NO_VALUE, nullptr}
-            : lower_error(context, valid ? IR_DIAG_INTERNAL
-                                         : IR_DIAG_TYPE_MISMATCH,
+            : lower_error_text(context, valid ? IR_DIAG_INTERNAL
+                                              : IR_DIAG_TYPE_MISMATCH,
                 span, copy
-                    ? "memory copy requires destination, source, and length"
-                    : "memory fill requires an address, byte, and length");
+                    ? CORE_STRING_STATIC("memory copy requires destination, source, and length")
+                    : CORE_STRING_STATIC("memory fill requires an address, byte, and length"));
     }
     if (volatile_load_builtin) {
         bool valid = values.len == 1 && !copyouts.len
@@ -11816,9 +11932,9 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         ir_instr_t *load = valid
             ? ir_lower_emit_instruction(context, IR_OP_LOAD, span) : nullptr;
         bool emitted = load && ir_lower_set_temp_dest(context, load,
-            "__n00bb_", call_result_type)
+            CORE_STRING_STATIC("__n00bb_"), call_result_type)
             && ir_instr_operand_value(load, values.data[0])
-            && ir_instr_add_mod(load, "volatile")
+            && ir_instr_add_mod(load, CORE_STRING_STATIC("volatile"))
             && n00bb_set_reference_access(lower->ir_context,
                 load->dest, call_result_type);
         core_list_free(values);
@@ -11874,7 +11990,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         ir_instr_t *rmw = ir_lower_emit_instruction(context,
             IR_OP_ATOMIC_RMW, span);
         bool emitted = rmw && ir_lower_set_temp_dest(context, rmw,
-            "__n00bb_", element)
+            CORE_STRING_STATIC("__n00bb_"), element)
             && ir_instr_operand_value(rmw, values.data[0])
             && ir_instr_operand_name(rmw,
                 core_string_eq(symbol->name,
@@ -11883,29 +11999,30 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                         CORE_STRING_STATIC("__atomic_exchange_acquire"))
                     || core_string_eq(symbol->name,
                         CORE_STRING_STATIC("__atomic_exchange_relaxed"))
-                    ? "xchg" : core_string_eq(symbol->name,
+                    ? CORE_STRING_STATIC("xchg") : core_string_eq(symbol->name,
                         CORE_STRING_STATIC("__atomic_fetch_add"))
                         || core_string_eq(symbol->name,
                             CORE_STRING_STATIC("__atomic_fetch_add_relaxed"))
-                            ? "add" : core_string_eq(symbol->name,
+                            ? CORE_STRING_STATIC("add") : core_string_eq(symbol->name,
                                 CORE_STRING_STATIC("__atomic_fetch_sub"))
-                                    ? "sub" : core_string_eq(symbol->name,
+                                    ? CORE_STRING_STATIC("sub") : core_string_eq(symbol->name,
                                         CORE_STRING_STATIC("__atomic_fetch_and"))
-                                            ? "and" : "or")
+                                            ? CORE_STRING_STATIC("and")
+                                            : CORE_STRING_STATIC("or"))
             && ir_instr_operand_value(rmw, values.data[1])
             && (!core_string_eq(symbol->name,
                     CORE_STRING_STATIC("__atomic_fetch_or_release"))
-                || ir_instr_add_mod(rmw, "release"))
+                || ir_instr_add_mod(rmw, CORE_STRING_STATIC("release")))
             && ((!core_string_eq(symbol->name,
                     CORE_STRING_STATIC("__atomic_fetch_or_relaxed"))
                 && !core_string_eq(symbol->name,
                     CORE_STRING_STATIC("__atomic_exchange_relaxed"))
                 && !core_string_eq(symbol->name,
                     CORE_STRING_STATIC("__atomic_fetch_add_relaxed")))
-                || ir_instr_add_mod(rmw, "relaxed"));
+                || ir_instr_add_mod(rmw, CORE_STRING_STATIC("relaxed")));
         if (emitted && core_string_eq(symbol->name,
                 CORE_STRING_STATIC("__atomic_exchange_acquire")))
-            emitted = ir_instr_add_mod(rmw, "acquire");
+            emitted = ir_instr_add_mod(rmw, CORE_STRING_STATIC("acquire"));
         core_list_free(values);
         core_list_free(copyouts);
         return emitted
@@ -11922,7 +12039,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
             && ir_type_eq(context->module, element, values.data[1]->type)
             && ir_type_eq(context->module, element, values.data[2]->type)
             && ir_type_eq(context->module, call_result_type,
-                          th_name(ir_module_types(context->module), "bool"));
+                          th_name(ir_module_types(context->module), CORE_STRING_STATIC("bool")));
         if (!valid) {
             core_list_free(values);
             core_list_free(copyouts);
@@ -11932,7 +12049,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         ir_instr_t *cas = ir_lower_emit_instruction(context,
             IR_OP_ATOMIC_CAS, span);
         bool emitted = cas && ir_lower_set_temp_dest(context, cas,
-            "__n00bb_", call_result_type)
+            CORE_STRING_STATIC("__n00bb_"), call_result_type)
             && ir_instr_operand_value(cas, values.data[0])
             && ir_instr_operand_value(cas, values.data[1])
             && ir_instr_operand_value(cas, values.data[2]);
@@ -11972,12 +12089,14 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
             loading ? IR_OP_LOAD : IR_OP_STORE, span) : nullptr;
         bool emitted = access
             && (!loading || ir_lower_set_temp_dest(context, access,
-                                                   "__n00bb_", element))
+                                                   CORE_STRING_STATIC("__n00bb_"), element))
             && ir_instr_operand_value(access, values.data[0])
             && (loading || ir_instr_operand_value(access, values.data[1]))
-            && ir_instr_add_mod(access, "atomic")
+            && ir_instr_add_mod(access, CORE_STRING_STATIC("atomic"))
             && (!ordered || ir_instr_add_mod(access,
-                relaxed ? "relaxed" : loading ? "acquire" : "release"))
+                relaxed ? CORE_STRING_STATIC("relaxed")
+                : loading ? CORE_STRING_STATIC("acquire")
+                : CORE_STRING_STATIC("release")))
             && (!loading || n00bb_set_reference_access(lower->ir_context,
                 access->dest, element));
         core_list_free(values);
@@ -11996,7 +12115,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     bool emitted = dispatch_site && dispatch_site->closed_dispatch
         ? instruction != nullptr
         : instruction && ir_lower_set_temp_dest(context, instruction,
-                                                 "__n00bb_", call_result_type)
+                                                 CORE_STRING_STATIC("__n00bb_"), call_result_type)
             && ir_instr_operand_value(instruction, callee_value);
     for (size_t i = 0; emitted
          && !(dispatch_site && dispatch_site->closed_dispatch)
@@ -12009,7 +12128,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         th_mode mode = TH_IN;
         bool known = i < parameter_count
             && function_parameter_info(visit->grammar, symbol,
-                formal_params, i, nullptr, nullptr, nullptr, &flags, &mode);
+                formal_params, i, nullptr, nullptr,&flags, &mode);
         emitted = known && (flags & 1u) && th_mode_is_input_only(mode)
             ? ir_instr_operand_missing(instruction)
             : known && mode == TH_OUT
@@ -12023,7 +12142,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
             th_mode mode = parameter ? parameter->mode : TH_IN;
             if (!builtin_trait_call && !reference_builtin && !native_builtin
                 && !function_parameter_info(visit->grammar, symbol,
-                    formal_params, i, nullptr, nullptr, nullptr, nullptr,
+                    formal_params, i, nullptr, nullptr,nullptr,
                     &mode)) {
                 signature_ok = false;
                 break;
@@ -12155,8 +12274,8 @@ n00bb_constructor_assignment_target(ir_lower_context_t *context,
     for (parse_tree_t *parent = parse_tree_parent(child);
          parent && !core_tree_is_leaf(parent);
          child = parent, parent = parse_tree_parent(parent)) {
-        if (nt_is(visit->grammar, parent, "sym-decl")) {
-            if (child_nt(visit->grammar, parent, "expression") != child)
+        if (nt_is(visit->grammar, parent, CORE_STRING_STATIC("sym-decl"))) {
+            if (child_nt(visit->grammar, parent, CORE_STRING_STATIC("expression")) != child)
                 break;
             parse_sym_entry_t *symbol = parse_tree_sym(parent);
             ir_value_t *storage = symbol
@@ -12171,20 +12290,20 @@ n00bb_constructor_assignment_target(ir_lower_context_t *context,
             break;
         }
         if (core_tree_num_children(parent) != 1) break;
-        if (!nt_is(visit->grammar, parent, "primary")
-            && !nt_is(visit->grammar, parent, "postfix-expr")
-            && !nt_is(visit->grammar, parent, "unary-expr")
-            && !nt_is(visit->grammar, parent, "mul-expr")
-            && !nt_is(visit->grammar, parent, "add-expr")
-            && !nt_is(visit->grammar, parent, "shift-expr")
-            && !nt_is(visit->grammar, parent, "bitand-expr")
-            && !nt_is(visit->grammar, parent, "bitxor-expr")
-            && !nt_is(visit->grammar, parent, "bitor-expr")
-            && !nt_is(visit->grammar, parent, "compare-expr")
-            && !nt_is(visit->grammar, parent, "equality-expr")
-            && !nt_is(visit->grammar, parent, "and-expr")
-            && !nt_is(visit->grammar, parent, "or-expr")
-            && !nt_is(visit->grammar, parent, "expression")) break;
+        if (!nt_is(visit->grammar, parent, CORE_STRING_STATIC("primary"))
+            && !nt_is(visit->grammar, parent, CORE_STRING_STATIC("postfix-expr"))
+            && !nt_is(visit->grammar, parent, CORE_STRING_STATIC("unary-expr"))
+            && !nt_is(visit->grammar, parent, CORE_STRING_STATIC("mul-expr"))
+            && !nt_is(visit->grammar, parent, CORE_STRING_STATIC("add-expr"))
+            && !nt_is(visit->grammar, parent, CORE_STRING_STATIC("shift-expr"))
+            && !nt_is(visit->grammar, parent, CORE_STRING_STATIC("bitand-expr"))
+            && !nt_is(visit->grammar, parent, CORE_STRING_STATIC("bitxor-expr"))
+            && !nt_is(visit->grammar, parent, CORE_STRING_STATIC("bitor-expr"))
+            && !nt_is(visit->grammar, parent, CORE_STRING_STATIC("compare-expr"))
+            && !nt_is(visit->grammar, parent, CORE_STRING_STATIC("equality-expr"))
+            && !nt_is(visit->grammar, parent, CORE_STRING_STATIC("and-expr"))
+            && !nt_is(visit->grammar, parent, CORE_STRING_STATIC("or-expr"))
+            && !nt_is(visit->grammar, parent, CORE_STRING_STATIC("expression"))) break;
     }
 }
 
@@ -12234,9 +12353,9 @@ n00bb_lower_constructor_new(ir_lower_context_t *context, parse_visit_t *visit,
 
     size_t parameter_count = th_func_nparams(source_type);
     parse_tree_t *function_signature = child_nt(visit->grammar,
-        symbol->decl_node, "func-type-signature");
+        symbol->decl_node, CORE_STRING_STATIC("func-type-signature"));
     parse_tree_t *formal_params = child_nt(visit->grammar,
-        function_signature, "param-decl");
+        function_signature, CORE_STRING_STATIC("param-decl"));
     core_list_t(parse_sym_entry_ptr_t) formals =
         core_list_new(parse_sym_entry_ptr_t);
     parse_sym_entry_t *rest_formal = nullptr;
@@ -12263,16 +12382,16 @@ n00bb_lower_constructor_new(ir_lower_context_t *context, parse_visit_t *visit,
         provided[0] = true;
     }
     parse_tree_t *call_args = child_nt(visit->grammar, visit->node,
-                                       "call-args");
+                                       CORE_STRING_STATIC("call-args"));
     core_list_t(n00bb_tree_ptr_t) positional =
         core_list_new(n00bb_tree_ptr_t);
     core_list_t(n00bb_tree_ptr_t) keywords =
         core_list_new(n00bb_tree_ptr_t);
     collect_positional_nodes(visit->grammar,
-        child_nt(visit->grammar, call_args, "positional-args"),
+        child_nt(visit->grammar, call_args, CORE_STRING_STATIC("positional-args")),
         &positional);
     collect_keyword_nodes(visit->grammar,
-        child_nt(visit->grammar, call_args, "keyword-args"), &keywords);
+        child_nt(visit->grammar, call_args, CORE_STRING_STATIC("keyword-args")), &keywords);
 
     core_list_t(n00bb_tree_ptr_t) rest_arguments =
         core_list_new(n00bb_tree_ptr_t);
@@ -12293,7 +12412,7 @@ n00bb_lower_constructor_new(ir_lower_context_t *context, parse_visit_t *visit,
     for (size_t i = 0; mapped && i < keywords.len; i++) {
         core_string_t name = call_keyword_name(keywords.data[i]);
         parse_tree_t *argument = child_nt(visit->grammar, keywords.data[i],
-                                          "expression");
+                                          CORE_STRING_STATIC("expression"));
         size_t index = 0;
         bool found = function_parameter_named(visit->grammar, symbol,
             formal_params, name, &index);
@@ -12327,7 +12446,7 @@ n00bb_lower_constructor_new(ir_lower_context_t *context, parse_visit_t *visit,
         uint8_t flags = 0;
         if (!parameter
             || !function_parameter_info(visit->grammar, symbol,
-                formal_params, i, nullptr, nullptr, nullptr, &flags, &mode)) {
+                formal_params, i, nullptr, nullptr,&flags, &mode)) {
             collected = false;
             break;
         }
@@ -12404,7 +12523,7 @@ n00bb_lower_constructor_new(ir_lower_context_t *context, parse_visit_t *visit,
         for (size_t previous = 1; previous < i; previous++) {
             th_mode previous_mode = TH_IN;
             if (!function_parameter_info(visit->grammar, symbol,
-                    formal_params, previous, nullptr, nullptr, nullptr,
+                    formal_params, previous, nullptr, nullptr,
                     nullptr, &previous_mode)) {
                 collected = false;
                 break;
@@ -12426,7 +12545,7 @@ n00bb_lower_constructor_new(ir_lower_context_t *context, parse_visit_t *visit,
         th_mode mode = TH_IN;
         const th_param *parameter = th_func_param(source_type, i);
         if (!function_parameter_info(visit->grammar, symbol, formal_params,
-                i, nullptr, nullptr, nullptr, &flags, &mode) || !parameter) {
+                i, nullptr, nullptr, &flags, &mode) || !parameter) {
             collected = false;
             break;
         }
@@ -12454,9 +12573,9 @@ n00bb_lower_constructor_new(ir_lower_context_t *context, parse_visit_t *visit,
                                             &allocation_address);
     if (collected && !allocation_address) {
         th_type *address_type = n00bb_indirect_type(types, result_type);
-        char allocation_name[48];
-        snprintf(allocation_name, sizeof(allocation_name),
-            "__n00bb_construct_storage_%llu",
+        char allocation_buffer[48];
+        core_string_t allocation_name = n00bb_format_name(allocation_buffer,
+            sizeof(allocation_buffer), "__n00bb_construct_storage_%llu",
             (unsigned long long)context->next_value_id++);
         ir_instr_t *allocation = address_type
             ? ir_lower_emit_instruction(context, IR_OP_ALLOC, span) : nullptr;
@@ -12513,10 +12632,11 @@ n00bb_lower_constructor_new(ir_lower_context_t *context, parse_visit_t *visit,
     }
     core_list_free(rest_arguments);
 
-    char call_name[48];
-    snprintf(call_name, sizeof(call_name), "__n00bb_init_%llu",
-             (unsigned long long)context->next_value_id++);
-    th_type *nil_type = th_name(types, "nil");
+    char call_buffer[48];
+    core_string_t call_name = n00bb_format_name(call_buffer,
+        sizeof(call_buffer), "__n00bb_init_%llu",
+        (unsigned long long)context->next_value_id++);
+    th_type *nil_type = th_name(types, CORE_STRING_STATIC("nil"));
     ir_instr_t *call = collected && nil_type
         ? ir_lower_emit_instruction(context, IR_OP_CALL, span) : nullptr;
     collected = call && ir_instr_set_dest(call, call_name, nil_type)
@@ -12532,7 +12652,7 @@ n00bb_lower_constructor_new(ir_lower_context_t *context, parse_visit_t *visit,
         th_mode mode = TH_IN;
         bool known = parameter_index < parameter_count
             && function_parameter_info(visit->grammar, symbol,
-                formal_params, parameter_index, nullptr, nullptr, nullptr,
+                formal_params, parameter_index, nullptr, nullptr,
                 &flags, &mode);
         collected = known && (flags & 1u) && th_mode_is_input_only(mode)
             ? ir_instr_operand_missing(call)
@@ -12551,7 +12671,7 @@ n00bb_lower_constructor_new(ir_lower_context_t *context, parse_visit_t *visit,
         const th_param *parameter = th_func_param(source_type, i);
         th_mode mode = TH_IN;
         collected = parameter && function_parameter_info(visit->grammar,
-            symbol, formal_params, i, nullptr, nullptr, nullptr, nullptr,
+            symbol, formal_params, i, nullptr, nullptr,nullptr,
             &mode);
         if (collected) core_list_push(call_params, ((th_param){
             .mode = mode, .type = parameter->type,
@@ -12609,33 +12729,38 @@ n00bb_lower_constructor_new(ir_lower_context_t *context, parse_visit_t *visit,
 
 static ir_value_t *
 n00bb_emit_outcome_payload(ir_lower_context_t *context, ir_value_t *outcome,
-                          const char *arm, th_type *type, ir_span_t span)
+                          core_string_t arm, th_type *type, ir_span_t span)
 {
     ir_instr_t *payload = ir_lower_emit_instruction(context,
         IR_OP_VARIANT_PAYLOAD, span);
     if (!payload || !ir_lower_set_temp_dest(context, payload,
-                                            "__n00bb_outcome_", type)
+                                            CORE_STRING_STATIC("__n00bb_outcome_"), type)
         || !ir_instr_operand_value(payload, outcome)
         || !ir_instr_operand_name(payload, arm))
         return nullptr;
     n00bb_lower_context_t *lower = context->user;
-    if (!strcmp(arm, "ok")
+    bool ok_arm = core_string_eq(arm, CORE_STRING_STATIC("ok"));
+    if (ok_arm
         && (!lower || !ir_value_copy_alias_targets(lower->ir_context,
                                         payload->dest,
                                         outcome))) return nullptr;
-    if (!strcmp(arm, "ok") && ir_value_shape(outcome)
+    if (ok_arm && ir_value_shape(outcome)
         && !ir_value_set_shape(payload->dest, ir_value_shape(outcome)))
         return nullptr;
     return payload->dest;
 }
 
 static bool
-n00bb_operator_error(ir_lower_context_t *context, ir_diagcode_t code,
-                     ir_span_t span, const char *message)
+n00bb_operator_error_text(ir_lower_context_t *context, ir_diagcode_t code,
+                          ir_span_t span, core_string_t message)
 {
-    lower_error(context, code, span, message);
+    lower_error_text(context, code, span, message);
     return false;
 }
+
+#define n00bb_operator_error(context, code, span, literal) \
+    n00bb_operator_error_text((context), (code), (span), \
+                              CORE_STRING_STATIC(literal))
 
 static bool
 names_symbol_directly(parse_tree_t *node)
@@ -12658,23 +12783,25 @@ n00bb_unwrap_call_outcome(ir_lower_context_t *context, parse_visit_t *visit,
     bool variant = false;
     th_type *definition = outcome
         ? ir_type_definition(context->module, outcome->type) : nullptr;
-    if (!outcome || !th_named_info(outcome->type, nullptr, nullptr, &variant,
-                                   nullptr) || !variant
+    if (!outcome || !th_named_info(outcome->type, nullptr, &variant, nullptr)
+        || !variant
         || !definition || th_kind_of(definition) != TH_RECORD)
         return n00bb_operator_error(context, IR_DIAG_TYPE_CLASS, span,
             "failure propagation requires a complete call outcome");
-    th_type *ok_type = th_record_lookup(definition, "ok");
-    th_type *error_type = th_record_lookup(definition, "error");
+    th_type *ok_type = th_record_lookup(definition, CORE_STRING_STATIC("ok"));
+    th_type *error_type = th_record_lookup(definition, CORE_STRING_STATIC("error"));
     if (!ok_type || !error_type)
         return n00bb_operator_error(context, IR_DIAG_TYPE_CLASS, span,
             "failure propagation requires a complete call outcome");
 
     uint64_t block_id = context->next_value_id++;
-    char ok_block_name[48], error_block_name[48];
-    snprintf(ok_block_name, sizeof(ok_block_name),
-             "__n00bb_unwrap_ok_%llu", (unsigned long long)block_id);
-    snprintf(error_block_name, sizeof(error_block_name),
-             "__n00bb_unwrap_error_%llu", (unsigned long long)block_id);
+    char ok_block_buffer[48], error_block_buffer[48];
+    core_string_t ok_block_name = n00bb_format_name(ok_block_buffer,
+        sizeof(ok_block_buffer), "__n00bb_unwrap_ok_%llu",
+        (unsigned long long)block_id);
+    core_string_t error_block_name = n00bb_format_name(error_block_buffer,
+        sizeof(error_block_buffer), "__n00bb_unwrap_error_%llu",
+        (unsigned long long)block_id);
     ir_block_t *ok_block = ir_block_add(context->function, ok_block_name);
     ir_block_t *error_block = ir_block_add(context->function,
                                            error_block_name);
@@ -12690,7 +12817,7 @@ n00bb_unwrap_call_outcome(ir_lower_context_t *context, parse_visit_t *visit,
 
     context->block = error_block;
     ir_value_t *error = n00bb_emit_outcome_payload(
-        context, outcome, "error", error_type, span);
+        context, outcome, CORE_STRING_STATIC("error"), error_type, span);
     if (!error || !n00bb_emit_with_failure(context, visit->node))
         return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
             "could not unwind active context managers");
@@ -12737,7 +12864,7 @@ n00bb_unwrap_call_outcome(ir_lower_context_t *context, parse_visit_t *visit,
         && ir_machine_of(context->module, ok_type).class == IR_CLASS_VOID)
         return true;
     ir_value_t *value = n00bb_emit_outcome_payload(
-        context, outcome, "ok", ok_type, span);
+        context, outcome, CORE_STRING_STATIC("ok"), ok_type, span);
     if (!value)
         return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
             "could not extract the successful call value");
@@ -12834,7 +12961,7 @@ n00bb_lower_operator_annotation(ir_lower_context_t *context,
                     span, "ref cannot address a derived rectangular Array suffix");
             if (!ir_annot_set(lower->ir_context, &storage->def->annots,
                     (ir_annot_t){
-                        .key = "n00bb.array.direct_ref",
+                        .key = CORE_STRING_STATIC("n00bb.array.direct_ref"),
                         .kind = IR_ANNOT_BOOL,
                         .b = true,
                     }))
@@ -12932,7 +13059,7 @@ n00bb_bind_runtime_array_shape(ir_lower_context_t *context,
     if (!shape) return true;
     ir_shape_storage_t storage;
     if (!ir_shape_storage(shape, &storage)) return false;
-    th_type *uint_type = n00bb_ir_builtin_type(context->module, "uint");
+    th_type *uint_type = n00bb_ir_builtin_type(context->module, CORE_STRING_STATIC("uint"));
     ir_value_t *one = nullptr;
     bool has_runtime = false;
     for (uint32_t i = 0; i < storage.flat_prefix_rank; i++) {
@@ -12945,7 +13072,7 @@ n00bb_bind_runtime_array_shape(ir_lower_context_t *context,
         if (!one) {
             ir_instr_t *constant = uint_type
                 ? n00bb_emit_uint_constant(context, uint_type, 1,
-                    IR_SPAN_UNKNOWN, "__n00bb_array_one") : nullptr;
+                    IR_SPAN_UNKNOWN, CORE_STRING_STATIC("__n00bb_array_one")) : nullptr;
             one = constant ? constant->dest : nullptr;
             if (!one) return false;
         }
@@ -12964,7 +13091,7 @@ n00bb_bind_runtime_array_shape(ir_lower_context_t *context,
     if (!one) {
         ir_instr_t *constant = uint_type
             ? n00bb_emit_uint_constant(context, uint_type, 1,
-                IR_SPAN_UNKNOWN, "__n00bb_array_one") : nullptr;
+                IR_SPAN_UNKNOWN, CORE_STRING_STATIC("__n00bb_array_one")) : nullptr;
         one = constant ? constant->dest : nullptr;
         if (!one) return false;
     }
@@ -12976,7 +13103,7 @@ n00bb_bind_runtime_array_shape(ir_lower_context_t *context,
         if (extent.kind == IR_SHAPE_EXTENT_STATIC) {
             ir_instr_t *constant = n00bb_emit_uint_constant(context,
                 uint_type, extent.static_value, IR_SPAN_UNKNOWN,
-                "__n00bb_array_extent");
+                CORE_STRING_STATIC("__n00bb_array_extent"));
             value = constant ? constant->dest : nullptr;
         }
         if (!value) return false;
@@ -12997,7 +13124,7 @@ n00bb_lower_signature_array_shape(ir_lowerer_t *lowerer,
                                   parse_grammar_t *grammar,
                                   ir_shape_t *shape)
 {
-    th_type *uint_type = n00bb_ir_builtin_type(context->module, "uint");
+    th_type *uint_type = n00bb_ir_builtin_type(context->module, CORE_STRING_STATIC("uint"));
     ir_value_t *one = nullptr;
     for (uint32_t d = 0; shape && d < ir_shape_rank(shape); d++) {
         ir_shape_extent_t extent;
@@ -13013,7 +13140,7 @@ n00bb_lower_signature_array_shape(ir_lowerer_t *lowerer,
         if (!one) {
             ir_instr_t *constant = uint_type
                 ? n00bb_emit_uint_constant(context, uint_type, 1,
-                    IR_SPAN_UNKNOWN, "__n00bb_array_one") : nullptr;
+                    IR_SPAN_UNKNOWN, CORE_STRING_STATIC("__n00bb_array_one")) : nullptr;
             one = constant ? constant->dest : nullptr;
             if (!one) return false;
         }
@@ -13062,12 +13189,12 @@ n00bb_lower_declare_local(ir_lower_context_t *context, parse_visit_t *visit,
                           bool entering, void *state)
 {
     (void)state;
-    if (!nt_is(visit->grammar, visit->node, "sym-decl"))
+    if (!nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("sym-decl")))
         return true;
     parse_sym_entry_t *symbol = parse_tree_sym(visit->node);
     if (!entering) {
         parse_tree_t *expression = child_nt(visit->grammar, visit->node,
-                                            "expression");
+                                            CORE_STRING_STATIC("expression"));
         ir_local_t *local = symbol
             ? ir_lower_bound_local(context, symbol) : nullptr;
         ir_shape_t *shape = local ? ir_local_shape(local) : nullptr;
@@ -13099,9 +13226,9 @@ n00bb_lower_declare_local(ir_lower_context_t *context, parse_visit_t *visit,
             "local declaration has no resolved type");
         return false;
     }
-    char name[48];
-    snprintf(name, sizeof(name), "__n00bb_local_%llu",
-             (unsigned long long)context->next_value_id++);
+    char name_buffer[48];
+    core_string_t name = n00bb_format_name(name_buffer, sizeof(name_buffer),
+        "__n00bb_local_%llu", (unsigned long long)context->next_value_id++);
     th_type *type = th_apply_subst(ir_module_types(context->module),
                                    symbol->type);
     th_comb combination;
@@ -13175,7 +13302,7 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
     parse_tree_t *index_node = n00bb_index_expression_node(grammar, target);
     bool slice = nt_is(grammar, index_node
         && core_tree_num_children(index_node) > 2
-            ? core_tree_child(index_node, 2) : nullptr, "slice-contents");
+            ? core_tree_child(index_node, 2) : nullptr, CORE_STRING_STATIC("slice-contents"));
     n00bb_link_use_site_t *site = caller
         ? link_use_site_for_dispatch(caller, index_node,
             slice ? CORE_STRING_STATIC("Index_Slice_Write")
@@ -13188,7 +13315,7 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
         && core_tree_num_children(index_node)
             ? core_tree_child(index_node, 0) : nullptr;
     parse_tree_t *index_arg = child_nt(grammar, contents,
-                                       "expression");
+                                       CORE_STRING_STATIC("expression"));
     parse_sym_entry_t *symbol = site ? site->symbol : nullptr;
     if (!slice && n00bb_builtin_array_write_function(symbol)) {
         ir_value_t *index_value = index_arg
@@ -13278,17 +13405,18 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
         for (size_t i = 0; contents && i < core_tree_num_children(contents);
              i++) {
             parse_tree_t *part = core_tree_child(contents, i);
-            if (nt_is(grammar, part, "range-sep")
+            if (nt_is(grammar, part, CORE_STRING_STATIC("range-sep"))
                 || parse_tree_leaf_is(part, CORE_STRING_STATIC(":"))) {
                 position = 1;
                 separator_seen = true;
                 inclusive = core_string_eq(first_token_text(part),
                                            CORE_STRING_STATIC("to"));
             }
-            else if (nt_is(grammar, part, "expression"))
+            else if (nt_is(grammar, part, CORE_STRING_STATIC("expression")))
                 bounds[position] = part;
         }
-        th_type *integer = n00bb_ir_builtin_type(context->module, "int");
+        th_type *integer = n00bb_ir_builtin_type(context->module,
+                                                 CORE_STRING_STATIC("int"));
         th_type *bound_type = integer
             ? th_option(ir_module_types(context->module), integer) : nullptr;
         ir_span_t span = lower_span_for_tree(context, contents);
@@ -13298,11 +13426,11 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
         arguments[2] = separator_seen
             ? n00bb_lower_slice_bound(context, bounds[1], bound_type, span)
             : nullptr;
-        th_type *bool_type = n00bb_ir_builtin_type(context->module, "bool");
+        th_type *bool_type = n00bb_ir_builtin_type(context->module, CORE_STRING_STATIC("bool"));
         ir_instr_t *flag = separator_seen && bool_type
             ? ir_lower_emit_instruction(context, IR_OP_CONST, span) : nullptr;
         if (flag && ir_lower_set_temp_dest(context, flag,
-            "__n00bb_slice_inclusive_", bool_type)
+            CORE_STRING_STATIC("__n00bb_slice_inclusive_"), bool_type)
             && ir_instr_operand_int(flag, inclusive ? 1 : 0)) {
             arguments[3] = flag->dest;
         }
@@ -13389,8 +13517,8 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
                                        callable);
     bool abstract_requirement = !callee
         && n00bb_open_dispatch(caller->link_analysis)
-        && site->resolved_trait_name && site->dispatch_trait.data
-        && !strcmp(site->resolved_trait_name, site->dispatch_trait.data);
+        && site->resolved_trait_name.data && site->dispatch_trait.data
+        && core_string_eq(site->resolved_trait_name, site->dispatch_trait);
     if ((!callee && !abstract_requirement) || !signature
         || th_kind_of(signature) != TH_FUNCTION
         || th_func_nparams(signature) != argument_count
@@ -13467,7 +13595,7 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
         th_type *enclosing = th_func_error(context->function->type);
         if (!th_unify_in_place(ir_module_types(context->module), failure,
                 enclosing ? enclosing
-                          : th_name(ir_module_types(context->module), "nil"))) {
+                          : th_name(ir_module_types(context->module), CORE_STRING_STATIC("nil")))) {
             lower_error(context, IR_DIAG_TYPE_MISMATCH,
                 lower_span_for_tree(context, site_node),
                 "an uncaught indexed write failure must match the enclosing function's failure channel");
@@ -13483,7 +13611,7 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
         parse_tree_t *formal_params = callable_formal_parameters(grammar,
                                                                  symbol);
         function_parameter_info(grammar, symbol, formal_params, i,
-                                nullptr, nullptr, nullptr, nullptr, &mode);
+                                nullptr, nullptr, nullptr, &mode);
         if (i > 0 && parameter && th_mode_is_input_only(mode)) {
             bool literal_source = !slice && i == argument_count - 1
                 && source && !source_value;
@@ -13535,7 +13663,7 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
         ? ir_call_outcome_type(context->module, signature) : return_type;
     bool emitted = call && return_type
         && call_result_type
-        && ir_lower_set_temp_dest(context, call, "__n00bb_index_store_",
+        && ir_lower_set_temp_dest(context, call, CORE_STRING_STATIC("__n00bb_index_store_"),
                                   call_result_type)
         && ir_instr_operand_value(call, callee);
     for (size_t i = 0; emitted && i < argument_count; i++)
@@ -13563,26 +13691,28 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
     }
     if (has_failure) {
         uint64_t branch_id = context->next_value_id++;
-        char ok_name[48], error_name[48], tag_name[48];
-        char literal_name[48], test_name[48];
-        snprintf(ok_name, sizeof(ok_name), "__n00bb_index_store_ok_%llu",
-                 (unsigned long long)branch_id);
-        snprintf(error_name, sizeof(error_name),
-                 "__n00bb_index_store_error_%llu",
-                 (unsigned long long)branch_id);
-        snprintf(tag_name, sizeof(tag_name), "__n00bb_index_store_tag_%llu",
-                 (unsigned long long)branch_id);
-        snprintf(literal_name, sizeof(literal_name),
-                 "__n00bb_index_store_ok_tag_%llu",
-                 (unsigned long long)branch_id);
-        snprintf(test_name, sizeof(test_name),
-                 "__n00bb_index_store_is_ok_%llu",
-                 (unsigned long long)branch_id);
+        char ok_buffer[48], error_buffer[48], tag_buffer[48];
+        char literal_buffer[48], test_buffer[48];
+        core_string_t ok_name = n00bb_format_name(ok_buffer,
+            sizeof(ok_buffer), "__n00bb_index_store_ok_%llu",
+            (unsigned long long)branch_id);
+        core_string_t error_name = n00bb_format_name(error_buffer,
+            sizeof(error_buffer), "__n00bb_index_store_error_%llu",
+            (unsigned long long)branch_id);
+        core_string_t tag_name = n00bb_format_name(tag_buffer,
+            sizeof(tag_buffer), "__n00bb_index_store_tag_%llu",
+            (unsigned long long)branch_id);
+        core_string_t literal_name = n00bb_format_name(literal_buffer,
+            sizeof(literal_buffer), "__n00bb_index_store_ok_tag_%llu",
+            (unsigned long long)branch_id);
+        core_string_t test_name = n00bb_format_name(test_buffer,
+            sizeof(test_buffer), "__n00bb_index_store_is_ok_%llu",
+            (unsigned long long)branch_id);
         ir_block_t *ok_block = ir_block_add(context->function, ok_name);
         ir_block_t *error_block = ir_block_add(context->function,
                                                 error_name);
-        th_type *uint_type = n00bb_ir_builtin_type(context->module, "uint");
-        th_type *bool_type = n00bb_ir_builtin_type(context->module, "bool");
+        th_type *uint_type = n00bb_ir_builtin_type(context->module, CORE_STRING_STATIC("uint"));
+        th_type *bool_type = n00bb_ir_builtin_type(context->module, CORE_STRING_STATIC("bool"));
         ir_span_t span = lower_span_for_tree(context, index_node);
         ir_instr_t *tag = ir_lower_emit_instruction(context,
             IR_OP_VARIANT_TAG, span);
@@ -13593,7 +13723,7 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
             && tag && ir_instr_set_dest(tag, tag_name, uint_type)
             && ir_instr_operand_value(tag, call->dest)
             && literal && ir_instr_set_dest(literal, literal_name, uint_type)
-            && ir_instr_operand_uint(literal, th_arm_tag("ok"))
+            && ir_instr_operand_uint(literal, th_arm_tag(CORE_STRING_STATIC("ok")))
             && test && ir_instr_set_dest(test, test_name, bool_type)
             && ir_instr_operand_value(test, tag->dest)
             && ir_instr_operand_value(test, literal->dest);
@@ -13614,7 +13744,7 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
         context->block = error_block;
         context->reachable = true;
         ir_value_t *error = n00bb_emit_outcome_payload(context, call->dest,
-            "error", failure, span);
+            CORE_STRING_STATIC("error"), failure, span);
         if (!error || !n00bb_emit_with_failure(context, site_node)) {
             lower_error(context, IR_DIAG_INTERNAL, span,
                         "could not unwind contexts for indexed write failure");
@@ -13648,7 +13778,7 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
     }
     ir_span_t span = lower_span_for_tree(context, index_node);
     ir_value_t *successful = has_failure
-        ? n00bb_emit_outcome_payload(context, call->dest, "ok",
+        ? n00bb_emit_outcome_payload(context, call->dest, CORE_STRING_STATIC("ok"),
                                       return_type, span)
         : call->dest;
     if (!successful || !n00bb_emit_call_copyout(context,
@@ -13818,7 +13948,7 @@ n00bb_assignment_symbol(ir_lower_context_t *context, parse_visit_t *visit,
                         parse_tree_t *target)
 {
     n00bb_lower_context_t *lower = context->user;
-    if (nt_is(visit->grammar, visit->node, "sym-decl"))
+    if (nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("sym-decl")))
         return parse_tree_sym(visit->node);
     parse_tree_t *lvalue = n00bb_simple_lvalue(target);
     return lvalue && lower
@@ -13876,7 +14006,7 @@ n00bb_reference_view(ir_lower_context_t *context, ir_value_t *value,
     ir_instr_t *conversion = ir_lower_emit_instruction(context,
         IR_OP_NOMINAL_CAST, span);
     if (!conversion || !ir_lower_set_temp_dest(context, conversion,
-                                               "__n00bb_", definition)
+                                               CORE_STRING_STATIC("__n00bb_"), definition)
         || !ir_instr_operand_value(conversion, value)
         || !ir_value_copy_alias_targets(lower->ir_context, conversion->dest,
                                         value)
@@ -13916,7 +14046,7 @@ n00bb_record_field_address(ir_lower_context_t *context,
             ir_instr_t *load = ir_lower_emit_instruction(context, IR_OP_LOAD,
                                                           span);
             if (!load || !ir_lower_set_temp_dest(context, load,
-                "__n00bb_deref_", referent)
+                CORE_STRING_STATIC("__n00bb_deref_"), referent)
                 || !ir_instr_operand_value(load, base)
                 || !n00bb_set_reference_access(lower->ir_context,
                     load->dest, referent)) return nullptr;
@@ -13932,9 +14062,9 @@ n00bb_record_field_address(ir_lower_context_t *context,
         ir_instr_t *address = pointer_type
             ? ir_lower_emit_instruction(context, IR_OP_FIELD, span) : nullptr;
         if (!address || !ir_lower_set_temp_dest(context, address,
-            "__n00bb_field_address_", pointer_type)
+            CORE_STRING_STATIC("__n00bb_field_address_"), pointer_type)
             || !ir_instr_operand_value(address, base)
-            || !ir_instr_operand_name(address, field->name.data))
+            || !ir_instr_operand_name(address, field->name))
             return nullptr;
         ir_shape_t *field_shape = parse_sym_binding(field,
             CORE_STRING_STATIC("ir.array-shape"));
@@ -13957,7 +14087,7 @@ n00bb_record_field_address(ir_lower_context_t *context,
             ? ir_lower_emit_instruction(context, IR_OP_ADDRESS_OF, span)
             : nullptr;
         return take && ir_lower_set_temp_dest(context, take,
-            "__n00bb_local_address_", pointer_type)
+            CORE_STRING_STATIC("__n00bb_local_address_"), pointer_type)
             && ir_instr_operand_local(take, local) ? take->dest : nullptr;
     }
     ir_value_t *binding = symbol
@@ -13969,7 +14099,7 @@ n00bb_record_field_address(ir_lower_context_t *context,
             ? ir_lower_emit_instruction(context, IR_OP_ADDRESS_OF, span)
             : nullptr;
         return take && ir_lower_set_temp_dest(context, take,
-            "__n00bb_global_address_", pointer_type)
+            CORE_STRING_STATIC("__n00bb_global_address_"), pointer_type)
             && ir_instr_operand_value(take, binding) ? take->dest : nullptr;
     }
     if (binding && th_kind_of(th_resolve(binding->type)) == TH_INDIRECTION)
@@ -13983,7 +14113,7 @@ n00bb_record_field_address(ir_lower_context_t *context,
             ? ir_lower_emit_instruction(context, IR_OP_ADDRESS_OF, span)
             : nullptr;
         return take && ir_lower_set_temp_dest(context, take,
-            "__n00bb_value_address_", pointer_type)
+            CORE_STRING_STATIC("__n00bb_value_address_"), pointer_type)
             && ir_instr_operand_value(take, binding) ? take->dest : nullptr;
     }
     return nullptr;
@@ -14015,7 +14145,7 @@ n00bb_addressable_expression_address(ir_lower_context_t *context,
             ? ir_lower_emit_instruction(context, IR_OP_ADDRESS_OF, span)
             : nullptr;
         return take && ir_lower_set_temp_dest(context, take,
-            "__n00bb_member_address_", address_type)
+            CORE_STRING_STATIC("__n00bb_member_address_"), address_type)
             && (local ? ir_instr_operand_local(take, local)
                       : binding && ir_instr_operand_value(take, binding))
             ? take->dest : nullptr;
@@ -14030,7 +14160,7 @@ n00bb_addressable_expression_address(ir_lower_context_t *context,
             ? core_tree_child(index, 0) : nullptr;
         parse_tree_t *contents = core_tree_num_children(index) > 2
             ? core_tree_child(index, 2) : nullptr;
-        parse_tree_t *subscript = child_nt(grammar, contents, "expression");
+        parse_tree_t *subscript = child_nt(grammar, contents, CORE_STRING_STATIC("expression"));
         ir_value_t *base = n00bb_addressable_expression_address(
             context, grammar, unit, receiver, span);
         ir_value_t *offset = subscript
@@ -14050,7 +14180,7 @@ n00bb_addressable_expression_address(ir_lower_context_t *context,
         ir_instr_t *address = base && offset && address_type
             ? ir_lower_emit_instruction(context, IR_OP_INDEX, span) : nullptr;
         if (!address || !ir_lower_set_temp_dest(context, address,
-            "__n00bb_index_address_", address_type)
+            CORE_STRING_STATIC("__n00bb_index_address_"), address_type)
             || !ir_instr_operand_value(address, base)
             || !ir_instr_operand_value(address, offset)) return nullptr;
         if (lower && element
@@ -14113,14 +14243,14 @@ n00bb_lower_flagset_field_assignment(ir_lower_context_t *context,
     ir_instr_t *updated = mask
         ? ir_lower_emit_instruction(context, IR_OP_BITSET_SET, span)
         : nullptr;
-    th_type *bool_type = n00bb_ir_builtin_type(context->module, "bool");
+    th_type *bool_type = n00bb_ir_builtin_type(context->module, CORE_STRING_STATIC("bool"));
     if (!assigned || !bool_type
         || !ir_type_eq(context->module, assigned->type, bool_type)
         || !mask || !updated
-        || !ir_lower_set_temp_dest(context, mask, "__n00bb_", flagset_type)
-        || !ir_instr_operand_name(mask, flag->name.data)
+        || !ir_lower_set_temp_dest(context, mask, CORE_STRING_STATIC("__n00bb_"), flagset_type)
+        || !ir_instr_operand_name(mask, flag->name)
         || !ir_instr_operand_uint(mask, value->mask)
-        || !ir_lower_set_temp_dest(context, updated, "__n00bb_",
+        || !ir_lower_set_temp_dest(context, updated, CORE_STRING_STATIC("__n00bb_"),
                                    flagset_type)
         || !ir_instr_operand_value(updated, current)
         || !ir_instr_operand_value(updated, mask->dest)
@@ -14189,14 +14319,17 @@ n00bb_lower_record_field_assignment(ir_lower_context_t *context,
     if (!th_unify_in_place(ir_module_types(context->module),
                            th_ind_referent(address->type), value->type)) {
         core_buffer_t message = {0};
+        core_string_t field_text = th_print(ir_module_types(context->module),
+                                            th_ind_referent(address->type));
+        core_string_t value_text = th_print(ir_module_types(context->module),
+                                            value->type);
         core_buffer_printf(&message,
             "record field assignment value does not match its resolved type "
-            "(field %s, value %s)",
-            th_print(ir_module_types(context->module),
-                     th_ind_referent(address->type)),
-            th_print(ir_module_types(context->module), value->type));
-        lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
-            message.data);
+            "(field %.*s, value %.*s)",
+            (int)field_text.u8_bytes, field_text.data,
+            (int)value_text.u8_bytes, value_text.data);
+        lower_error_text(context, IR_DIAG_TYPE_MISMATCH, span,
+            core_buffer_string(&message));
         core_buffer_release(&message);
         return false;
     }
@@ -14267,8 +14400,8 @@ n00bb_lower_variant_arm_assignment(ir_lower_context_t *context,
     th_type *variant_type = th_apply_subst(types, receiver->type);
     bool is_variant = false;
     if (!variant_type
-        || !th_named_info(th_resolve(variant_type), nullptr, nullptr,
-                          &is_variant, nullptr)
+        || !th_named_info(th_resolve(variant_type), nullptr, &is_variant,
+                          nullptr)
         || !is_variant) {
         lower_error(context, IR_DIAG_TYPE_CLASS, span,
             "variant arm assignment target does not have a variant type");
@@ -14281,11 +14414,18 @@ n00bb_lower_variant_arm_assignment(ir_lower_context_t *context,
         || !n00bb_variant_payload_compatible(context, arm_type,
                                                        payload->type)) {
         core_buffer_t message = {0};
+        core_string_t arm_text = arm_type
+            ? n00bb_print_type(types, arm_type)
+            : CORE_STRING_STATIC("unresolved");
+        core_string_t payload_text = payload
+            ? n00bb_print_type(types, payload->type)
+            : CORE_STRING_STATIC("no value");
         core_buffer_printf(&message,
-            "variant arm assignment requires payload type %s, but got %s",
-            arm_type ? n00bb_print_type(types, arm_type) : "unresolved",
-            payload ? n00bb_print_type(types, payload->type) : "no value");
-        lower_error(context, IR_DIAG_TYPE_MISMATCH, span, message.data);
+            "variant arm assignment requires payload type %.*s, but got %.*s",
+            (int)arm_text.u8_bytes, arm_text.data,
+            (int)payload_text.u8_bytes, payload_text.data);
+        lower_error_text(context, IR_DIAG_TYPE_MISMATCH, span,
+                         core_buffer_string(&message));
         core_buffer_release(&message);
         return false;
     }
@@ -14293,8 +14433,8 @@ n00bb_lower_variant_arm_assignment(ir_lower_context_t *context,
     ir_instr_t *make = ir_lower_emit_instruction(context, IR_OP_VARIANT_MAKE,
                                                  span);
     if (!make || !ir_lower_set_temp_dest(context, make,
-        "__n00bb_variant_", variant_type)
-        || !ir_instr_operand_name(make, arm->name.data)
+        CORE_STRING_STATIC("__n00bb_variant_"), variant_type)
+        || !ir_instr_operand_name(make, arm->name)
         || !ir_instr_operand_value(make, payload)) {
         lower_error(context, IR_DIAG_INTERNAL, span,
             "could not construct the selected variant arm");
@@ -14322,7 +14462,7 @@ n00bb_check_assignment(ir_lower_context_t *context, parse_visit_t *visit,
                        bool entering, void *state)
 {
     (void)state;
-    if (nt_is(visit->grammar, visit->node, "sym-decl")) {
+    if (nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("sym-decl"))) {
         parse_tree_t *target = parse_tree_resolve_child_ref(
             visit->grammar, visit->node, visit->annot->name_ref);
         parse_tree_t *source = parse_tree_resolve_child_ref(
@@ -14355,8 +14495,8 @@ n00bb_check_assignment(ir_lower_context_t *context, parse_visit_t *visit,
         return !ir_diags_failed(context->diagnostics);
     }
     bool compound = nt_is(visit->grammar, visit->node,
-                          "binop-assign-stmt");
-    if (!compound && !nt_is(visit->grammar, visit->node, "assign-stmt"))
+                          CORE_STRING_STATIC("binop-assign-stmt"));
+    if (!compound && !nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("assign-stmt")))
         return true;
     parse_tree_t *target = parse_tree_resolve_child_ref(
         visit->grammar, visit->node, visit->annot->name_ref);
@@ -14425,7 +14565,7 @@ n00bb_check_assignment(ir_lower_context_t *context, parse_visit_t *visit,
                 nt_is(visit->grammar, index
                     && core_tree_num_children(index) > 2
                         ? core_tree_child(index, 2) : nullptr,
-                      "slice-contents")
+                      CORE_STRING_STATIC("slice-contents"))
                     ? CORE_STRING_STATIC("Index_Slice_Write")
                     : CORE_STRING_STATIC("Index_Write"))
             : nullptr;
@@ -14464,9 +14604,10 @@ n00bb_check_assignment(ir_lower_context_t *context, parse_visit_t *visit,
                 "inferred assignment has no resolved type");
             return false;
         }
-        char name[48];
-        snprintf(name, sizeof(name), "__n00bb_local_%llu",
-                 (unsigned long long)context->next_value_id++);
+        char name_buffer[48];
+        core_string_t name = n00bb_format_name(name_buffer,
+            sizeof(name_buffer), "__n00bb_local_%llu",
+            (unsigned long long)context->next_value_id++);
         th_type *type = th_apply_subst(ir_module_types(context->module),
                                        symbol->type);
         ir_local_t *local = type
@@ -14555,8 +14696,8 @@ n00bb_simple_assignment_field_target(parse_grammar_t *grammar,
 {
     for (parse_tree_t *parent = parse_tree_parent(node);
          parent; parent = parse_tree_parent(parent)) {
-        if (nt_is(grammar, parent, "binop-assign-stmt")) return false;
-        if (!nt_is(grammar, parent, "assign-stmt")) continue;
+        if (nt_is(grammar, parent, CORE_STRING_STATIC("binop-assign-stmt"))) return false;
+        if (!nt_is(grammar, parent, CORE_STRING_STATIC("assign-stmt"))) continue;
         const parse_rule_t *rule = parse_tree_rule(grammar, parent);
         parse_annotation_t *assign = rule
             ? parse_rule_find_annot(grammar, rule, PARSE_ANNOT_ASSIGNS)
@@ -14734,7 +14875,7 @@ n00bb_capture_compound_target(ir_lower_context_t *context,
     (void)state;
     parse_tree_t *parent = parse_tree_parent(visit->node);
     if (entering || !context->reachable || !parent
-        || !nt_is(visit->grammar, parent, "binop-assign-stmt")
+        || !nt_is(visit->grammar, parent, CORE_STRING_STATIC("binop-assign-stmt"))
         || core_tree_child(parent, 0) != visit->node) return true;
     parse_sym_entry_t *symbol = n00bb_compound_target_symbol(context, visit->node);
     ir_local_t *local = ir_lower_bound_local(context, symbol);
@@ -14756,7 +14897,7 @@ n00bb_capture_compound_target(ir_lower_context_t *context,
         ir_instr_t *snapshot = ir_lower_emit_instruction(context, IR_OP_COPY,
                                                           span);
         if (snapshot && ir_lower_set_temp_dest(context, snapshot,
-            "__n00bb_", binding->type)
+            CORE_STRING_STATIC("__n00bb_"), binding->type)
             && ir_instr_operand_value(snapshot, binding)) {
             value = snapshot->dest;
         }
@@ -14771,47 +14912,58 @@ n00bb_capture_compound_target(ir_lower_context_t *context,
 static const parse_sym_entry_t *
 function_symbol_at(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    return node && nt_is(grammar, node, "func-def")
+    return node && nt_is(grammar, node, CORE_STRING_STATIC("func-def"))
         ? parse_tree_sym(node) : nullptr;
 }
 
-static const char *
+static core_string_t
 context_hook_suffix(parse_grammar_t *grammar, parse_tree_t *hook)
 {
-    if (nt_is(grammar, hook, "context-enter")) return "enter";
-    if (nt_is(grammar, hook, "context-exit")) return "exit";
-    if (nt_is(grammar, hook, "context-error")) return "error";
-    if (nt_is(grammar, hook, "context-ensure")) return "ensure";
-    return nullptr;
+    if (nt_is(grammar, hook, CORE_STRING_STATIC("context-enter")))
+        return CORE_STRING_STATIC("enter");
+    if (nt_is(grammar, hook, CORE_STRING_STATIC("context-exit")))
+        return CORE_STRING_STATIC("exit");
+    if (nt_is(grammar, hook, CORE_STRING_STATIC("context-error")))
+        return CORE_STRING_STATIC("error");
+    if (nt_is(grammar, hook, CORE_STRING_STATIC("context-ensure")))
+        return CORE_STRING_STATIC("ensure");
+    return (core_string_t){};
 }
 
-static const char *
+static core_string_t
 context_hook_binding_role(parse_grammar_t *grammar, parse_tree_t *hook)
 {
-    const char *suffix = context_hook_suffix(grammar, hook);
-    if (!suffix) return nullptr;
-    if (strcmp(suffix, "enter") == 0) return "n00bb.ir.context.enter";
-    if (strcmp(suffix, "exit") == 0) return "n00bb.ir.context.exit";
-    if (strcmp(suffix, "error") == 0) return "n00bb.ir.context.error";
-    if (strcmp(suffix, "ensure") == 0) return "n00bb.ir.context.ensure";
-    return nullptr;
+    core_string_t suffix = context_hook_suffix(grammar, hook);
+    if (!suffix.data) return (core_string_t){};
+    if (core_string_eq(suffix, CORE_STRING_STATIC("enter")))
+        return CORE_STRING_STATIC("n00bb.ir.context.enter");
+    if (core_string_eq(suffix, CORE_STRING_STATIC("exit")))
+        return CORE_STRING_STATIC("n00bb.ir.context.exit");
+    if (core_string_eq(suffix, CORE_STRING_STATIC("error")))
+        return CORE_STRING_STATIC("n00bb.ir.context.error");
+    if (core_string_eq(suffix, CORE_STRING_STATIC("ensure")))
+        return CORE_STRING_STATIC("n00bb.ir.context.ensure");
+    return (core_string_t){};
 }
 
 static bool
 context_hook_ir_name(parse_grammar_t *grammar, parse_sym_entry_t *symbol,
-                     parse_tree_t *hook, char *buffer, size_t size)
+                     parse_tree_t *hook, core_buffer_t *out)
 {
-    const char *suffix = context_hook_suffix(grammar, hook);
-    return suffix && context_hook_name(symbol, suffix, buffer, size);
+    core_string_t suffix = context_hook_suffix(grammar, hook);
+    return suffix.data && context_hook_name(symbol, suffix, out);
 }
 
 static bool
-context_default_role(size_t index, char *buffer, size_t size)
+context_default_role(size_t index, char *buffer, size_t size,
+                     core_string_t *out)
 {
-    if (!buffer || !size) return false;
+    if (!buffer || !size || !out) return false;
     int written = snprintf(buffer, size, "n00bb.ir.context.default.%zu",
                            index);
-    return written > 0 && (size_t)written < size;
+    if (written <= 0 || (size_t)written >= size) return false;
+    *out = core_string_borrow(buffer, (size_t)written);
+    return true;
 }
 
 static bool
@@ -14918,26 +15070,31 @@ add_context_hook_functions(parse_grammar_t *grammar,
                 core_link_declaration_t *context_declaration =
                     link_declaration_for_symbol(analysis, symbol);
                 static const struct {
-                    const char *suffix;
-                    const char *role;
+                    core_string_t suffix;
+                    core_string_t role;
                 } interface_hooks[] = {
-                    {"enter", "n00bb.ir.context.enter"},
-                    {"exit", "n00bb.ir.context.exit"},
-                    {"error", "n00bb.ir.context.error"},
-                    {"ensure", "n00bb.ir.context.ensure"},
+                    {CORE_STRING_STATIC("enter"),
+                     CORE_STRING_STATIC("n00bb.ir.context.enter")},
+                    {CORE_STRING_STATIC("exit"),
+                     CORE_STRING_STATIC("n00bb.ir.context.exit")},
+                    {CORE_STRING_STATIC("error"),
+                     CORE_STRING_STATIC("n00bb.ir.context.error")},
+                    {CORE_STRING_STATIC("ensure"),
+                     CORE_STRING_STATIC("n00bb.ir.context.ensure")},
                 };
                 for (size_t h = 0; ok && h <
                      sizeof(interface_hooks) / sizeof(interface_hooks[0]); h++) {
-                    char name[256];
+                    core_buffer_t name = {0};
                     if (!context_hook_name(symbol, interface_hooks[h].suffix,
-                                           name, sizeof(name))) {
+                                           &name)) {
+                        core_buffer_release(&name);
                         ok = false;
                         break;
                     }
                     parse_sym_entry_t *hook_symbol = parse_symtab_lookup_scoped(
                         state->annotations->symtab, symbol->scope,
-                        CORE_STRING_STATIC(""),
-                        core_string_borrow(name, strlen(name)));
+                        CORE_STRING_STATIC(""), core_buffer_string(&name));
+                    core_buffer_release(&name);
                     if (!hook_symbol) continue;
                     core_link_declaration_t *hook_declaration =
                         link_declaration_for_symbol(analysis, hook_symbol);
@@ -14946,30 +15103,33 @@ add_context_hook_functions(parse_grammar_t *grammar,
                             CORE_STRING_STATIC("n00bb.ir.function")) : nullptr;
                     ok = context_declaration && function
                         && core_link_declaration_set_binding(link,
-                            context_declaration,
-                            core_string_from_cstr(interface_hooks[h].role),
+                            context_declaration, interface_hooks[h].role,
                             producer_stage, function);
                 }
                 for (size_t p = 0; ok && p <
                      context_interface_parameter_count(symbol); p++) {
                     uint8_t flags = 0;
                     if (!context_interface_parameter(symbol, p, nullptr,
-                                                     nullptr, &flags, nullptr)) {
+                                                     &flags, nullptr)) {
                         ok = false;
                         break;
                     }
                     if (!(flags & 4u)) continue;
-                    char name[256], role[64];
-                    if (!context_default_name(symbol, p, name,
-                                              sizeof(name))
-                        || !context_default_role(p, role, sizeof(role))) {
+                    core_buffer_t name = {0};
+                    char role_buffer[64];
+                    core_string_t role = {};
+                    if (!context_default_name(symbol, p, &name)
+                        || !context_default_role(p, role_buffer,
+                                                 sizeof(role_buffer), &role)) {
+                        core_buffer_release(&name);
                         ok = false;
                         break;
                     }
                     parse_sym_entry_t *helper_symbol =
                         parse_symtab_lookup_scoped(state->annotations->symtab,
                             symbol->scope, CORE_STRING_STATIC(""),
-                            core_string_borrow(name, strlen(name)));
+                            core_buffer_string(&name));
+                    core_buffer_release(&name);
                     core_link_declaration_t *helper_declaration =
                         link_declaration_for_symbol(analysis, helper_symbol);
                     ir_func_t *function = helper_declaration
@@ -14977,70 +15137,75 @@ add_context_hook_functions(parse_grammar_t *grammar,
                             CORE_STRING_STATIC("n00bb.ir.function")) : nullptr;
                     ok = helper_symbol && context_declaration && function
                         && core_link_declaration_set_binding(link,
-                            context_declaration,
-                            core_string_from_cstr(role), producer_stage,
+                            context_declaration, role, producer_stage,
                             function);
                 }
                 continue;
             }
-            static const char *hooks[] = {
-                "context-enter", "context-exit", "context-error",
-                "context-ensure",
+            static const core_string_t hooks[] = {
+                CORE_STRING_STATIC("context-enter"),
+                CORE_STRING_STATIC("context-exit"),
+                CORE_STRING_STATIC("context-error"),
+                CORE_STRING_STATIC("context-ensure"),
             };
             for (size_t i = 0; ok && i < sizeof(hooks) / sizeof(hooks[0]);
                  i++) {
-                const char *hook_role = n00bb_context_hook_role(hooks[i]);
-                parse_tree_t *hook = hook_role ? parse_sym_binding(symbol,
-                    core_string_borrow(hook_role, strlen(hook_role))) : nullptr;
+                core_string_t hook_role = n00bb_context_hook_role(hooks[i]);
+                parse_tree_t *hook = hook_role.data
+                    ? parse_sym_binding(symbol, hook_role) : nullptr;
                 if (!hook) continue;
-                char name[256];
+                core_buffer_t name = {0};
                 th_type *type = context_hook_ir_type(state->types,
                     parse_tree_type(hook));
                 ir_func_t *function = context_hook_ir_name(
-                        grammar, symbol, hook, name, sizeof(name))
-                    && type && !ir_func_find(state->ir_module, name)
-                    ? ir_func_add(state->ir_module, name, type,
-                                  IR_LINK_INTERNAL) : nullptr;
+                        grammar, symbol, hook, &name)
+                    && type && !ir_func_find(state->ir_module,
+                                             core_buffer_string(&name))
+                    ? ir_func_add(state->ir_module, core_buffer_string(&name),
+                                  type, IR_LINK_INTERNAL) : nullptr;
+                core_buffer_release(&name);
                 core_link_declaration_t *declaration =
                     link_declaration_for_symbol(analysis, symbol);
-                const char *role = context_hook_binding_role(grammar, hook);
-                ok = function && declaration && role
+                core_string_t role = context_hook_binding_role(grammar, hook);
+                ok = function && declaration && role.data
                     && core_link_declaration_set_binding(link, declaration,
-                        core_string_from_cstr(role), producer_stage,
-                        function);
+                        role, producer_stage, function);
             }
             core_list_t(parse_sym_entry_ptr_t) parameters =
                 core_list_new(parse_sym_entry_ptr_t);
             parse_sym_entry_t *rest = nullptr;
             collect_ir_parameters(grammar,
-                child_nt(grammar, symbol->decl_node, "param-decl"),
+                child_nt(grammar, symbol->decl_node, CORE_STRING_STATIC("param-decl")),
                 &parameters, &rest);
             if (rest) core_list_push(parameters, rest);
             for (size_t i = 0; ok && i < parameters.len; i++) {
                 parse_sym_entry_t *parameter = parameters.data[i];
                 if (!parameter || !parameter->is_optional) continue;
                 parse_tree_t *default_expr = child_nt(grammar,
-                    parameter->decl_node, "expression");
+                    parameter->decl_node, CORE_STRING_STATIC("expression"));
                 core_list_t(parse_sym_entry_ptr_t) dependencies =
                     core_list_new(parse_sym_entry_ptr_t);
                 context_default_dependencies(default_expr,
                     &parameters, &dependencies);
                 th_type *type = context_default_ir_type(state->types,
                     symbol->type, &dependencies, parameter->type);
-                char name[256], role[64];
-                bool named = context_default_name(symbol, i, name,
-                                                   sizeof(name))
-                    && context_default_role(i, role, sizeof(role));
+                core_buffer_t name = {0};
+                char role_buffer[64];
+                core_string_t role = {};
+                bool named = context_default_name(symbol, i, &name)
+                    && context_default_role(i, role_buffer,
+                                            sizeof(role_buffer), &role);
                 ir_func_t *function = named && type
-                    && !ir_func_find(state->ir_module, name)
-                    ? ir_func_add(state->ir_module, name, type,
-                                  IR_LINK_INTERNAL) : nullptr;
+                    && !ir_func_find(state->ir_module,
+                                     core_buffer_string(&name))
+                    ? ir_func_add(state->ir_module, core_buffer_string(&name),
+                                  type, IR_LINK_INTERNAL) : nullptr;
+                core_buffer_release(&name);
                 core_link_declaration_t *declaration =
                     link_declaration_for_symbol(analysis, symbol);
                 ok = function && declaration
                     && core_link_declaration_set_binding(link, declaration,
-                        core_string_from_cstr(role), producer_stage,
-                        function);
+                        role, producer_stage, function);
                 core_list_free(dependencies);
             }
             core_list_free(parameters);
@@ -15097,8 +15262,8 @@ register_nominal_types(parse_grammar_t *grammar,
                                CORE_STRING_STATIC("callback"))) {
                 th_ctx *types = ir_module_types(module);
                 th_type *fields[] = {
-                    th_name(types, "u32"), th_name(types, "u32"),
-                    th_ind(types, 0, th_name(types, "byte")),
+                    th_name(types, CORE_STRING_STATIC("u32")), th_name(types, CORE_STRING_STATIC("u32")),
+                    th_ind(types, 0, th_name(types, CORE_STRING_STATIC("byte"))),
                 };
                 th_type *representation = fields[2]
                     ? th_tuple(types, fields, 3) : nullptr;
@@ -15146,7 +15311,7 @@ register_nominal_types(parse_grammar_t *grammar,
                 continue;
             }
             bool nominal = symbol->decl_node
-                ? nt_is(grammar, symbol->decl_node, "alias-stmt")
+                ? nt_is(grammar, symbol->decl_node, CORE_STRING_STATIC("alias-stmt"))
                     && !alias_declaration_is_transparent(symbol->decl_node)
                 : core_string_eq(symbol->adt_kind, CORE_STRING_STATIC("nominal"));
             if (!nominal) continue;
@@ -15188,7 +15353,7 @@ register_variant_types(parse_grammar_t *grammar,
                 : arm->type;
             if (!payload) { ok = false; break; }
             core_list_push(members, ((th_member){
-                .name = arm->name.data,
+                .name = arm->name,
                 .type = payload,
             }));
         }
@@ -15197,7 +15362,8 @@ register_variant_types(parse_grammar_t *grammar,
         parse_sym_entry_t *symbol = scope->node
             ? parse_tree_sym(scope->node) : nullptr;
         th_type *variant = ok
-            ? variant_template_type(state->types, qualified.data, symbol)
+            ? variant_template_type(state->types,
+                                    core_buffer_string(&qualified), symbol)
             : nullptr;
         th_type *definition = ok
             ? th_record(state->types, members.data, members.len) : nullptr;
@@ -15233,7 +15399,7 @@ register_record_types(parse_grammar_t *grammar,
                     CORE_STRING_STATIC("n00bb.export-origin"));
                 th_type *template = origin
                     ? record_template_type(state->types,
-                        origin->declaration.data, symbol) : nullptr;
+                        origin->declaration, symbol) : nullptr;
                 th_type *record = th_type_definition(state->types,
                                                      template);
                 valid = record && th_kind_of(record) == TH_RECORD &&
@@ -15244,7 +15410,7 @@ register_record_types(parse_grammar_t *grammar,
                         !(field->has_bit_offset || field->has_bit_width))
                         continue;
                     valid = ir_layout_pin_member(destination, template,
-                        field->name.data, field->bit_offset, field->bit_width);
+                        field->name, field->bit_offset, field->bit_width);
                 }
                 if (!valid) break;
             }
@@ -15273,7 +15439,7 @@ register_record_types(parse_grammar_t *grammar,
                                                            field->decl_node);
             if (!field_type) { valid = false; break; }
             core_list_push(members, ((th_member){
-                .name = field->name.data,
+                .name = field->name,
                 .type = field_type,
             }));
         }
@@ -15281,7 +15447,8 @@ register_record_types(parse_grammar_t *grammar,
         core_buffer_t qualified = {0};
         append_module_type_name(unit, scope->name, &qualified);
         th_type *named = valid && symbol
-            ? record_template_type(state->types, qualified.data, symbol)
+            ? record_template_type(state->types,
+                                   core_buffer_string(&qualified), symbol)
             : nullptr;
         th_type *record = valid
             ? th_record(state->types, members.data, members.len) : nullptr;
@@ -15293,7 +15460,7 @@ register_record_types(parse_grammar_t *grammar,
             if (!field->is_field
                 || !(field->has_bit_offset || field->has_bit_width)) continue;
             valid = ir_layout_pin_member(destination, named,
-                field->name.data, field->bit_offset, field->bit_width);
+                field->name, field->bit_offset, field->bit_width);
         }
         core_list_free(fields);
         core_list_free(members);
@@ -15304,9 +15471,9 @@ register_record_types(parse_grammar_t *grammar,
                 core_translation_unit_diagnostics(unit), unit);
             ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
                 IR_DIAG_TYPE_MISMATCH, ir_module_span(state->ir_module),
-                "this record declaration");
+                CORE_STRING_STATIC("this record declaration"));
             ir_diag_message(diagnostic, diagnostics,
-                "could not register the record representation in Lantern IR");
+                CORE_STRING_STATIC("could not register the record representation in Lantern IR"));
             return false;
         }
     }
@@ -15338,7 +15505,8 @@ register_imported_record_layouts(parse_grammar_t *grammar,
                 append_module_type_name(unit, symbol->name, &qualified);
             th_type *template = (origin || !state->interface_module)
                 ? record_template_type(state->types,
-                    origin ? origin->declaration.data : qualified.data,
+                    origin ? origin->declaration
+                           : core_buffer_string(&qualified),
                     symbol) : nullptr;
             th_type *shape = template
                 ? th_type_definition(state->types, template) : nullptr;
@@ -15353,7 +15521,7 @@ register_imported_record_layouts(parse_grammar_t *grammar,
                  valid && field; field = field->next_in_scope) {
                 if (!(field->has_bit_offset || field->has_bit_width)) continue;
                 valid = ir_layout_pin_member(destination, template,
-                    field->name.data, field->bit_offset, field->bit_width);
+                    field->name, field->bit_offset, field->bit_width);
             }
             if (valid)
                 valid = ir_layout_ensure(destination, template,
@@ -15485,8 +15653,9 @@ zero_record_initializer(core_translation_unit_t *unit, ir_module_t *module,
         parse_sym_entry_t *field = nullptr;
         for (parse_sym_entry_t *candidate = owner->member_scope->first_in_scope;
              candidate && member && !field; candidate = candidate->next_in_scope)
-            if (candidate->is_field && core_string_eq(candidate->name,
-                    core_string_from_cstr(member->name))) field = candidate;
+            if (candidate->is_field
+                && core_string_eq(candidate->name, member->name))
+                field = candidate;
         valid = member && zero_member_initializer(unit, module, member->type,
             field ? parse_sym_binding(field,
                 CORE_STRING_STATIC("ir.array-shape")) : nullptr,
@@ -15555,8 +15724,8 @@ initialize_static_global(parse_grammar_t *grammar,
                          ir_diags_t *diagnostics, int32_t file_id)
 {
     parse_tree_t *declaration = symbol->decl_node;
-    parse_tree_t *initializer = nt_is(grammar, declaration, "sym-decl")
-        ? child_nt(grammar, declaration, "expression") : nullptr;
+    parse_tree_t *initializer = nt_is(grammar, declaration, CORE_STRING_STATIC("sym-decl"))
+        ? child_nt(grammar, declaration, CORE_STRING_STATIC("expression")) : nullptr;
     if (!initializer && (!symbol->has_comptime_value
                          || !symbol->comptime_value)) {
         if (symbol->mutability == PARSE_SYM_CONST) {
@@ -15564,9 +15733,9 @@ initialize_static_global(parse_grammar_t *grammar,
                 IR_DIAG_VERIFY_TYPED,
                 lower_span_for_tree(&(ir_lower_context_t){.file_id = file_id},
                                     declaration),
-                "this module global");
+                CORE_STRING_STATIC("this module global"));
             ir_diag_message(diagnostic, diagnostics,
-                "const globals require a compile-time initializer");
+                CORE_STRING_STATIC("const globals require a compile-time initializer"));
             return false;
         }
         ir_global_init_value_t *zero = zero_fixed_shape_initializer(module,
@@ -15609,9 +15778,9 @@ initialize_static_global(parse_grammar_t *grammar,
         if (symbol->mutability != PARSE_SYM_CONST) return true;
         if (!th_is_nil(static_type)) return true;
         ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
-            IR_DIAG_TYPE_LITERAL, span, "this global initializer");
+            IR_DIAG_TYPE_LITERAL, span, CORE_STRING_STATIC("this global initializer"));
         ir_diag_message(diagnostic, diagnostics,
-            "nil cannot be stored as an ordinary value");
+            CORE_STRING_STATIC("nil cannot be stored as an ordinary value"));
         return false;
     }
     return true;
@@ -15633,23 +15802,32 @@ bake_const_global(core_translation_unit_t *source, ir_module_t *destination,
                   parse_sym_entry_t *symbol, ir_global_t *global,
                   n00bb_link_analysis_t *analysis)
 {
-    if (analysis->baked_failure_root) {
+    if (analysis->baked_failure_root.data) {
+        core_string_t failure_root = analysis->baked_failure_root;
+        core_string_t failure_path = analysis->baked_failure_path;
+        core_string_t failure_message = analysis->baked_failure_message;
         core_buffer_t root = {0};
         core_buffer_printf(&root, "%.*s:%.*s",
             (int)source->module.identifier.u8_bytes,
             source->module.identifier.data, (int)symbol->name.u8_bytes,
             symbol->name.data);
         bool failed = root.data
-            && !strcmp(root.data, analysis->baked_failure_root);
+            && core_string_eq(core_buffer_string(&root), failure_root);
         core_buffer_release(&root);
-        const char *colon = strrchr(analysis->baked_failure_root, ':');
-        const char *name = colon ? colon + 1 : analysis->baked_failure_root;
+        int64_t colon = core_string_rfind_byte(failure_root, ':');
+        core_string_t name = colon >= 0
+            ? core_string_slice(failure_root, (size_t)colon + 1,
+                                failure_root.u8_bytes - (size_t)colon - 1)
+            : failure_root;
+        bool dotted = failure_path.u8_bytes && failure_path.data[0] != '[';
         core_buffer_t message = {0};
         core_buffer_printf(&message,
-            "const '%s' cannot be baked: field '%s%s%s' %s", name, name,
-            *analysis->baked_failure_path
-                && *analysis->baked_failure_path != '[' ? "." : "",
-            analysis->baked_failure_path, analysis->baked_failure_message);
+            "const '%.*s' cannot be baked: field '%.*s%.*s%.*s' %.*s",
+            (int)name.u8_bytes, name.data,
+            (int)name.u8_bytes, name.data,
+            dotted ? 1 : 0, ".",
+            (int)failure_path.u8_bytes, failure_path.data,
+            (int)failure_message.u8_bytes, failure_message.data);
         if (failed && !analysis->baked_failure_reported)
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(source), source,
@@ -15665,9 +15843,9 @@ bake_const_global(core_translation_unit_t *source, ir_module_t *destination,
         core_buffer_release(&message);
         return false;
     }
-    const char *identifier = n00bb_baked_root_identifier(analysis,
+    core_string_t identifier = n00bb_baked_root_identifier(analysis,
         source->module.identifier, symbol->name);
-    if (identifier)
+    if (identifier.data)
         return ir_global_set_phase_result_initializer(destination, global,
                                                       identifier);
     core_buffer_t message = {0};
@@ -15732,7 +15910,8 @@ register_module_globals(parse_grammar_t *grammar,
             th_type *global_type = static_global_type(grammar, source,
                                                        symbol);
             ir_global_t *global = global_type
-                ? ir_global_add(destination, name.data, global_type) : nullptr;
+                ? ir_global_add(destination, core_buffer_string(&name),
+                                global_type) : nullptr;
             ir_shape_t *array_shape = parse_sym_binding(symbol,
                 CORE_STRING_STATIC("ir.array-shape"));
             bool local_owner = destination == source_state->ir_module;
@@ -15785,12 +15964,12 @@ register_module_globals(parse_grammar_t *grammar,
                     ok = ir_global_set_storage_duration(
                         ir_context, global, duration)
                         && ir_global_set_storage_class(ir_context, global,
-                            symbol->requested_storage_class.data,
+                            symbol->requested_storage_class,
                             symbol->storage_class_required,
-                            symbol->selected_storage_class.data);
+                            symbol->selected_storage_class);
                 if (symbol->is_thread_local)
                     ir_annot_set(ir_context, &global->annots,
-                        (ir_annot_t){.key = "n00b.thread_local",
+                        (ir_annot_t){.key = CORE_STRING_STATIC("n00b.thread_local"),
                                      .kind = IR_ANNOT_BOOL, .b = true});
                 if (local_owner) {
                     if (symbol->decl_node)
@@ -15828,9 +16007,9 @@ register_module_globals(parse_grammar_t *grammar,
                             lower_span_for_tree(
                                 &(ir_lower_context_t){.file_id = source_file},
                                 symbol->decl_node),
-                            "this module global");
+                            CORE_STRING_STATIC("this module global"));
                         ir_diag_message(diagnostic, diagnostics,
-                            "could not bind its IR global to the canonical declaration");
+                            CORE_STRING_STATIC("could not bind its IR global to the canonical declaration"));
                         ok = false;
                     }
                 }
@@ -15841,9 +16020,9 @@ register_module_globals(parse_grammar_t *grammar,
                     lower_span_for_tree(
                         &(ir_lower_context_t){.file_id = source_file},
                         symbol->decl_node),
-                    "this module global");
+                    CORE_STRING_STATIC("this module global"));
                 ir_diag_message(diagnostic, diagnostics,
-                    "could not create its IR global declaration");
+                    CORE_STRING_STATIC("could not create its IR global declaration"));
                 ok = false;
             }
             core_buffer_release(&name);
@@ -15881,7 +16060,8 @@ bind_module_global_identities(ir_ctx_t *ir_context,
                     ir_module_t *module = unit_module(
                         tu_state(analysis->units.data[j]));
                     ir_global_t *view = module
-                        ? ir_global_find(module, name.data) : nullptr;
+                        ? ir_global_find(module, core_buffer_string(&name))
+                        : nullptr;
                     if (view)
                         ok = ir_global_set_identity(ir_context, view,
                                                     canonical);
@@ -15896,14 +16076,15 @@ bind_module_global_identities(ir_ctx_t *ir_context,
 }
 
 static ir_global_t *
-canonical_unit_global(n00bb_link_analysis_t *analysis, const char *name)
+canonical_unit_global(n00bb_link_analysis_t *analysis, core_string_t name)
 {
-    for (size_t u = 0; name && u < analysis->units.len; u++) {
+    for (size_t u = 0; name.data && u < analysis->units.len; u++) {
         ir_module_t *module = unit_module(tu_state(analysis->units.data[u]));
-        const char *module_name = module ? ir_module_name(module) : nullptr;
-        size_t prefix = module_name ? strlen(module_name) : 0;
-        if (!prefix || strncmp(name, module_name, prefix)
-            || name[prefix] != '.') continue;
+        core_string_t module_name = module ? ir_module_name(module)
+                                           : (core_string_t){};
+        size_t prefix = module_name.u8_bytes;
+        if (!prefix || !core_string_starts_with(name, module_name)
+            || name.u8_bytes <= prefix || name.data[prefix] != '.') continue;
         ir_global_t *global = ir_global_find(module, name);
         if (global) return ir_global_identity(global);
     }
@@ -15960,7 +16141,7 @@ function_semantic_shape(parse_grammar_t *grammar, core_translation_unit_t *unit,
             CORE_STRING_STATIC("n00bb.generated-value-method")))
         return source_type;
     parse_tree_t *signature = child_nt(grammar, symbol->decl_node,
-                                       "func-type-signature");
+                                       CORE_STRING_STATIC("func-type-signature"));
     core_list_t(parse_sym_entry_ptr_t) formals =
         core_list_new(parse_sym_entry_ptr_t);
     parse_sym_entry_t *rest_symbol = nullptr;
@@ -16050,10 +16231,10 @@ trait_method_semantic_shape(parse_grammar_t *grammar,
     n00bb_tu_state_t *state = tu_state(unit);
     source = th_resolve(source);
     parse_tree_t *signature = symbol && symbol->decl_node
-        ? child_nt(grammar, symbol->decl_node, "trait-func-type-signature")
+        ? child_nt(grammar, symbol->decl_node, CORE_STRING_STATIC("trait-func-type-signature"))
         : nullptr;
     parse_tree_t *parameters_node = signature
-        ? child_nt(grammar, signature, "trait-param-decl") : nullptr;
+        ? child_nt(grammar, signature, CORE_STRING_STATIC("trait-param-decl")) : nullptr;
     if (!state || !source || th_kind_of(source) != TH_FUNCTION
         || !parameters_node) return nullptr;
     core_list_t(parse_sym_entry_ptr_t) formals =
@@ -16139,7 +16320,7 @@ interface_function_semantic_type(th_ctx *types, parse_sym_entry_t *symbol)
         const th_param *source = th_func_param(signature, i);
         uint8_t flags = 0, mode = 0;
         if (!source || !function_interface_parameter(symbol, i, nullptr,
-                nullptr, &flags, &mode) || (flags & ~1u)
+                &flags, &mode) || (flags & ~1u)
             || !th_mode_is_valid((th_mode)mode)
             || ((flags & 1u) && !th_mode_is_input_only((th_mode)mode))) {
             ok = false;
@@ -16155,7 +16336,7 @@ interface_function_semantic_type(th_ctx *types, parse_sym_entry_t *symbol)
     if (ok && source_rest) {
         uint8_t flags = 0, mode = 0;
         if (!function_interface_parameter(symbol,
-                th_func_nparams(signature), nullptr, nullptr, &flags, &mode)
+                th_func_nparams(signature), nullptr, &flags, &mode)
             || flags != 2u || !th_mode_is_valid((th_mode)mode)) ok = false;
         else {
             rest = lowered_rest_type(types, source_rest, (th_mode)mode,
@@ -16172,15 +16353,18 @@ interface_function_semantic_type(th_ctx *types, parse_sym_entry_t *symbol)
 }
 
 static bool
-ir_initialization_error(core_translation_unit_t *unit, const char *code,
-                        const char *message)
+ir_initialization_error_text(core_translation_unit_t *unit,
+                             core_string_t code, core_string_t message)
 {
     if (!core_diagnostics_failed(core_translation_unit_diagnostics(unit)))
         core_diagnostics_report(core_translation_unit_diagnostics(unit), unit,
-            CORE_DIAG_FATAL, core_string_from_cstr(code),
-            core_string_from_cstr(message));
+            CORE_DIAG_FATAL, code, message);
     return false;
 }
+
+#define ir_initialization_error(unit, code, literal) \
+    ir_initialization_error_text((unit), CORE_STRING_STATIC(code), \
+                                 CORE_STRING_STATIC(literal))
 
 static bool
 register_optional_parameter_metadata(parse_grammar_t *grammar,
@@ -16189,17 +16373,17 @@ register_optional_parameter_metadata(parse_grammar_t *grammar,
 {
     if (!symbol || !function) return false;
     parse_tree_t *signature = child_nt(grammar, symbol->decl_node,
-                                       "func-type-signature");
+                                       CORE_STRING_STATIC("func-type-signature"));
     if (!signature)
         signature = child_nt(grammar, symbol->decl_node,
-                             "trait-func-type-signature");
-    parse_tree_t *formals = child_nt(grammar, signature, "param-decl");
+                             CORE_STRING_STATIC("trait-func-type-signature"));
+    parse_tree_t *formals = child_nt(grammar, signature, CORE_STRING_STATIC("param-decl"));
     if (!formals)
-        formals = child_nt(grammar, signature, "trait-param-decl");
+        formals = child_nt(grammar, signature, CORE_STRING_STATIC("trait-param-decl"));
     for (size_t i = 0; i < th_func_nparams(function->type); i++) {
         uint8_t flags = 0;
         if (!function_parameter_info(grammar, symbol, formals, i,
-                nullptr, nullptr, nullptr, &flags, nullptr)) return false;
+                nullptr, nullptr, &flags, nullptr)) return false;
         if ((flags & 1u)
             && !ir_func_set_parameter_optional(function, (uint32_t)i, true))
             return false;
@@ -16209,32 +16393,32 @@ register_optional_parameter_metadata(parse_grammar_t *grammar,
 
 static ir_func_t *
 cached_function_body(n00bb_link_analysis_t *analysis,
-                     core_translation_unit_t *unit, const char *semantic_name,
+                     core_translation_unit_t *unit,
+                     core_string_t semantic_name,
                      bool overloaded, core_string_t declaration_key)
 {
     ir_module_t *cached = analysis
         ? n00bb_cache_module(analysis->cache, unit->module.identifier)
         : nullptr;
-    if (!cached || !semantic_name) return nullptr;
-    core_buffer_t local = {0};
-    const char *separator = overloaded && declaration_key.data
-        ? memchr(declaration_key.data, ':', declaration_key.u8_bytes)
-        : nullptr;
-    if (separator)
-        core_buffer_append(&local, separator + 1, declaration_key.u8_bytes
-            - (size_t)(separator + 1 - declaration_key.data));
+    if (!cached || !semantic_name.data) return nullptr;
+    core_string_t local = {};
+    int64_t separator = overloaded && declaration_key.data
+        ? core_string_find_byte(declaration_key, ':') : -1;
+    if (separator >= 0)
+        local = core_string_slice(declaration_key, (size_t)separator + 1,
+            declaration_key.u8_bytes - (size_t)separator - 1);
     else {
         size_t prefix = unit->module.identifier.u8_bytes;
-        const char *start = semantic_name;
-        if (!strncmp(start, unit->module.identifier.data, prefix)
-            && start[prefix] == '.')
-            start += prefix + 1;
-        const char *identity = strchr(start, '#');
-        core_buffer_append(&local, start,
-            identity ? (size_t)(identity - start) : strlen(start));
+        core_string_t start = semantic_name;
+        if (core_string_starts_with(start, unit->module.identifier)
+            && start.u8_bytes > prefix && start.data[prefix] == '.')
+            start = core_string_slice(start, prefix + 1,
+                                      start.u8_bytes - prefix - 1);
+        int64_t identity = core_string_find_byte(start, '#');
+        local = identity >= 0
+            ? core_string_slice(start, 0, (size_t)identity) : start;
     }
-    ir_func_t *body = local.data ? ir_func_find(cached, local.data) : nullptr;
-    core_buffer_release(&local);
+    ir_func_t *body = local.u8_bytes ? ir_func_find(cached, local) : nullptr;
     return body && body->n_blocks ? body : nullptr;
 }
 
@@ -16243,36 +16427,32 @@ attach_cached_body(ir_ctx_t *ir_context, ir_func_t *function, ir_func_t *body)
 {
     ir_value_t *address = body ? ir_func_address(body->owner, body) : nullptr;
     return !body || (address && ir_annot_set(ir_context, &function->annots,
-        (ir_annot_t){.key = "n00bb.cached_body", .kind = IR_ANNOT_VALUE,
+        (ir_annot_t){.key = CORE_STRING_STATIC("n00bb.cached_body"), .kind = IR_ANNOT_VALUE,
                      .v = address}));
 }
 
 static ir_module_t *
-source_unit_module(void *context, const char *name)
+source_unit_module(void *context, core_string_t name)
 {
     n00bb_link_analysis_t *analysis = context;
-    for (size_t i = 0; name && i < analysis->units.len; i++) {
+    for (size_t i = 0; name.data && i < analysis->units.len; i++) {
         core_translation_unit_t *unit = analysis->units.data[i];
         n00bb_tu_state_t *state = tu_state(unit);
         if (!state->interface_module
-            && strlen(name) == unit->module.identifier.u8_bytes
-            && !memcmp(name, unit->module.identifier.data,
-                       unit->module.identifier.u8_bytes))
+            && core_string_eq(name, unit->module.identifier))
             return state->ir_module;
     }
     return nullptr;
 }
 
 static bool
-program_interface_module(void *context, const char *name)
+program_interface_module(void *context, core_string_t name)
 {
     n00bb_link_analysis_t *analysis = context;
-    for (size_t i = 0; name && i < analysis->units.len; i++) {
+    for (size_t i = 0; name.data && i < analysis->units.len; i++) {
         core_translation_unit_t *unit = analysis->units.data[i];
         if (tu_state(unit)->interface_module
-            && strlen(name) == unit->module.identifier.u8_bytes
-            && !memcmp(name, unit->module.identifier.data,
-                       unit->module.identifier.u8_bytes))
+            && core_string_eq(name, unit->module.identifier))
             return true;
     }
     return false;
@@ -16301,12 +16481,12 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
             return ir_initialization_error(unit, "N00BB-L0024",
                 "translation unit has no annotated tree for Lantern IR");
         state->ir_module = ir_module_new(ir_context,
-            unit->module.identifier.data, n00bb_type_profile(), target.triple);
+            unit->module.identifier, n00bb_type_profile(), target.triple);
         if (!state->ir_module)
             return ir_initialization_error(unit, "N00BB-L0024",
                 "could not allocate the Lantern IR module");
         core_string_t path = core_source_file_path(&unit->source);
-        int32_t file_id = ir_file_add(state->ir_module, path.data);
+        int32_t file_id = ir_file_add(state->ir_module, path);
         ir_module_set_span(state->ir_module, ir_span_make(file_id, 0,
             (uint32_t)core_source_file_size(&unit->source), 1, 1, 1, 1));
         ir_module_set_tree(state->ir_module, grammar, tree);
@@ -16394,10 +16574,10 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
                     || (!state->interface_module && parse_sym_binding(symbol,
                         CORE_STRING_STATIC("n00bb.generated-value-method")));
                 parse_tree_t *prelude = definition
-                    ? child_nt(grammar, symbol->decl_node, "func-prelude")
+                    ? child_nt(grammar, symbol->decl_node, CORE_STRING_STATIC("func-prelude"))
                     : nullptr;
                 bool always_inline = prelude
-                    && child_nt(grammar, prelude, "func-inline");
+                    && child_nt(grammar, prelude, CORE_STRING_STATIC("func-inline"));
                 ir_linkage_t linkage = !definition ? IR_LINK_EXTERN
                     : symbol_visibility(symbol) == TH_ENV_PRIVATE
                         && !core_string_eq(symbol->name,
@@ -16424,17 +16604,20 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
                 bool overloaded = declaration && overload_group.data
                     && core_link_unit_overload_member_count(link,
                         unit->module.identifier, overload_group) > 1;
-                const char *semantic_name = symbol->name.data;
+                core_string_t semantic_name = symbol->name;
                 if (state->interface_module) {
                     n00bb_export_origin_t *origin = parse_sym_binding(symbol,
                         CORE_STRING_STATIC("n00bb.export-origin"));
-                    if (origin) semantic_name = origin->declaration.data;
+                    if (origin) semantic_name = origin->declaration;
                 }
                 if (!state->interface_module && overloaded
                     && declaration_key.data) {
-                    const char *separator = memchr(declaration_key.data, ':',
-                                                   declaration_key.u8_bytes);
-                    if (separator) semantic_name = separator + 1;
+                    int64_t separator = core_string_find_byte(
+                        declaration_key, ':');
+                    if (separator >= 0)
+                        semantic_name = core_string_slice(declaration_key,
+                            (size_t)separator + 1,
+                            declaration_key.u8_bytes - (size_t)separator - 1);
                 }
                 ir_func_t *function = declaration
                     ? core_link_declaration_binding(declaration,
@@ -16525,8 +16708,8 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
                 if (state->interface_module && !symbol->decl_node)
                     contract = symbol->callable_contract;
                 ir_func_t *function = semantic_type
-                    ? ir_func_add(state->ir_module, name.data, semantic_type,
-                                  IR_LINK_EXTERN) : nullptr;
+                    ? ir_func_add(state->ir_module, core_buffer_string(&name),
+                                  semantic_type, IR_LINK_EXTERN) : nullptr;
                 uint64_t contract_arity = 0;
                 bool polymorphic_contract = contract
                     && th_binder_arity(contract, &contract_arity)
@@ -16581,11 +16764,11 @@ validate_module_declarations(parse_grammar_t *grammar,
                 || symbol->kind == PARSE_SYM_MODULE
                 || context_symbol(grammar, symbol)
                 || (symbol->decl_node
-                    && nt_is(grammar, symbol->decl_node, "trait-decl"))
+                    && nt_is(grammar, symbol->decl_node, CORE_STRING_STATIC("trait-decl")))
                 || (symbol->decl_node
                     && (field_record_declaration(grammar, symbol->decl_node)
-                        || nt_is(grammar, symbol->decl_node, "variant-decl")
-                        || nt_is(grammar, symbol->decl_node, "enum-stmt")))
+                        || nt_is(grammar, symbol->decl_node, CORE_STRING_STATIC("variant-decl"))
+                        || nt_is(grammar, symbol->decl_node, CORE_STRING_STATIC("enum-stmt"))))
                 || (symbol->decl_node
                     && nested_module_declaration_owner(grammar,
                                                         symbol->decl_node))
@@ -16593,8 +16776,8 @@ validate_module_declarations(parse_grammar_t *grammar,
                 continue;
             if (symbol->kind == PARSE_SYM_VARIABLE
                 && symbol->type
-                && (nt_is(grammar, binding, "sym-decl")
-                    || nt_is(grammar, binding, "assign-stmt"))) {
+                && (nt_is(grammar, binding, CORE_STRING_STATIC("sym-decl"))
+                    || nt_is(grammar, binding, CORE_STRING_STATIC("assign-stmt")))) {
                 bool registered = link_ir_global_for_symbol(
                     state->link_analysis, symbol) != nullptr;
                 if (registered) continue;
@@ -16602,9 +16785,9 @@ validate_module_declarations(parse_grammar_t *grammar,
             ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
                 IR_DIAG_VERIFY_PARSED,
                 lower_span_for_tree(&span_context, binding),
-                "this module-level binding");
+                CORE_STRING_STATIC("this module-level binding"));
             ir_diag_message(diagnostic, diagnostics,
-                "module-level variable bindings are not lowered yet");
+                CORE_STRING_STATIC("module-level variable bindings are not lowered yet"));
             valid = false;
             break;
         }
@@ -16637,18 +16820,22 @@ n00bb_emit_default_param(ir_lowerer_t *lowerer,
             return false;
     }
     ir_span_t span = lower_span_for_tree(context, parameter->symbol->decl_node);
-    th_type *bool_type = n00bb_ir_builtin_type(context->module, "bool");
+    th_type *bool_type = n00bb_ir_builtin_type(context->module, CORE_STRING_STATIC("bool"));
     uint64_t id = context->next_value_id++;
-    char provided_name[48], missing_name[48], join_name[48];
-    char present_name[48];
-    snprintf(provided_name, sizeof(provided_name),
-             "__n00bb_default_provided_%llu", (unsigned long long)id);
-    snprintf(missing_name, sizeof(missing_name),
-             "__n00bb_default_missing_%llu", (unsigned long long)id);
-    snprintf(join_name, sizeof(join_name), "__n00bb_default_join_%llu",
-             (unsigned long long)id);
-    snprintf(present_name, sizeof(present_name),
-             "__n00bb_default_present_%llu", (unsigned long long)id);
+    char provided_buffer[48], missing_buffer[48], join_buffer[48];
+    char present_buffer[48];
+    core_string_t provided_name = n00bb_format_name(provided_buffer,
+        sizeof(provided_buffer), "__n00bb_default_provided_%llu",
+        (unsigned long long)id);
+    core_string_t missing_name = n00bb_format_name(missing_buffer,
+        sizeof(missing_buffer), "__n00bb_default_missing_%llu",
+        (unsigned long long)id);
+    core_string_t join_name = n00bb_format_name(join_buffer,
+        sizeof(join_buffer), "__n00bb_default_join_%llu",
+        (unsigned long long)id);
+    core_string_t present_name = n00bb_format_name(present_buffer,
+        sizeof(present_buffer), "__n00bb_default_present_%llu",
+        (unsigned long long)id);
     ir_block_t *provided = ir_block_add(context->function, provided_name);
     ir_block_t *missing = ir_block_add(context->function, missing_name);
     ir_block_t *join = ir_block_add(context->function, join_name);
@@ -16786,8 +16973,8 @@ bind_missing_external(ir_lower_context_t *context,
     n00bb_tu_state_t *owner_state = owner ? tu_state(owner) : nullptr;
     parse_tree_t *binding = symbol_binding_node(symbol);
     if (!owner_state || (!owner_state->interface_module && (!binding
-        || (!nt_is(lower->grammar, binding, "sym-decl")
-            && !nt_is(lower->grammar, binding, "assign-stmt")))))
+        || (!nt_is(lower->grammar, binding, CORE_STRING_STATIC("sym-decl"))
+            && !nt_is(lower->grammar, binding, CORE_STRING_STATIC("assign-stmt"))))))
         return false;
     ir_global_t *global = link_ir_global_for_symbol(
         state->link_analysis, symbol);
@@ -16824,13 +17011,13 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
     if (parameters->len + collected_rest !=
         th_func_nparams(function_type)) {
         ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
-            IR_DIAG_VERIFY_TYPED, IR_SPAN_UNKNOWN, "these parameters");
+            IR_DIAG_VERIFY_TYPED, IR_SPAN_UNKNOWN, CORE_STRING_STATIC("these parameters"));
         ir_diag_message(diagnostic, diagnostics,
-                        "parameter declarations do not match the callable type");
+                        CORE_STRING_STATIC("parameter declarations do not match the callable type"));
         return false;
     }
 
-    ir_block_t *entry = ir_block_add(function, "entry");
+    ir_block_t *entry = ir_block_add(function, CORE_STRING_STATIC("entry"));
     if (!entry) {
         return false;
     }
@@ -16874,10 +17061,10 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
             || (parameter->is_optional && !th_mode_is_input_only(mode))
             || !th_mode_is_valid(mode)) {
             ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
-                IR_DIAG_VERIFY_TYPED, IR_SPAN_UNKNOWN, "this parameter");
+                IR_DIAG_VERIFY_TYPED, IR_SPAN_UNKNOWN, CORE_STRING_STATIC("this parameter"));
             ir_diag_message(diagnostic, diagnostics,
-                "the parameter has an invalid passing mode, or a copy-out "
-                "parameter has a default");
+                CORE_STRING_STATIC("the parameter has an invalid passing mode, or a copy-out "
+                "parameter has a default"));
             goto cleanup;
         }
         th_type *signature_parameter_type = type_param->type;
@@ -16895,12 +17082,12 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
             parse_tree_set_type(parameter->decl_node, parameter_type);
         if (th_mode_is_input_only(mode)) {
             if (ir_func_parameter_is_optional(function, (uint32_t)i)) {
-                char local_name[48];
-                snprintf(local_name, sizeof(local_name),
-                         "__n00bb_default_local_%llu",
-                         (unsigned long long)context.next_value_id++);
+                char local_buffer[48];
+                core_string_t local_name = n00bb_format_name(local_buffer,
+                    sizeof(local_buffer), "__n00bb_default_local_%llu",
+                    (unsigned long long)context.next_value_id++);
                 ir_value_t *argument = ir_param_add(function,
-                    parameter->name.data, parameter_type);
+                    parameter->name, parameter_type);
                 bool optional_set = argument
                     && ir_param_set_optional(argument, true);
                 ir_local_t *local = ir_local_add(function, local_name,
@@ -16930,13 +17117,13 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
                     ((n00bb_default_param_t){
                         .symbol = parameter,
                         .expression = child_nt(grammar, parameter->decl_node,
-                                               "expression"),
+                                               CORE_STRING_STATIC("expression")),
                         .local = local,
                         .argument = argument,
                     }));
                 continue;
             }
-            ir_value_t *value = ir_param_add(function, parameter->name.data,
+            ir_value_t *value = ir_param_add(function, parameter->name,
                                              parameter_type);
             if (!value || !n00bb_set_reference_access(ir_context, value,
                                                        parameter_type)) {
@@ -16949,10 +17136,10 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
             if (parameter->storage_duration == PARSE_SYM_STORAGE_DYNAMIC
                 || (parameter->selected_storage_class.data
                     && parameter->selected_storage_class.u8_bytes)) {
-                char local_name[48];
-                snprintf(local_name, sizeof(local_name),
-                         "__n00bb_param_local_%llu",
-                         (unsigned long long)context.next_value_id++);
+                char local_buffer[48];
+                core_string_t local_name = n00bb_format_name(local_buffer,
+                    sizeof(local_buffer), "__n00bb_param_local_%llu",
+                    (unsigned long long)context.next_value_id++);
                 ir_local_t *local = ir_local_add(function, local_name,
                                                  parameter_type);
                 ir_value_t *local_value = local
@@ -16983,11 +17170,12 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
         bool mode_matches = parameter->has_mode
             && (mode == TH_OUT || mode == TH_INOUT);
         ir_value_t *input = mode_matches && mode == TH_INOUT
-            ? ir_param_add(function, parameter->name.data, parameter_type)
+            ? ir_param_add(function, parameter->name, parameter_type)
             : nullptr;
-        char local_name[48];
-        snprintf(local_name, sizeof(local_name), "__n00bb_param_%llu",
-                 (unsigned long long)context.next_value_id++);
+        char local_buffer[48];
+        core_string_t local_name = n00bb_format_name(local_buffer,
+            sizeof(local_buffer), "__n00bb_param_%llu",
+            (unsigned long long)context.next_value_id++);
         ir_local_t *local = mode_matches
             ? ir_local_add(function, local_name, parameter_type) : nullptr;
         ir_value_t *local_value = local ? ir_local_value(function, local)
@@ -17037,12 +17225,12 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
         ir_value_t *rest = nullptr;
         ir_value_t *rest_binding = nullptr;
         if (rest_contract) {
-            rest = ir_restparam_add(function, rest_parameter->name.data,
+            rest = ir_restparam_add(function, rest_parameter->name,
                                     rest_contract->type);
-            char collected_name[48];
-            snprintf(collected_name, sizeof(collected_name),
-                     "__n00bb_rest_collect_%llu",
-                     (unsigned long long)context.next_value_id++);
+            char collected_buffer[48];
+            core_string_t collected_name = n00bb_format_name(collected_buffer,
+                sizeof(collected_buffer), "__n00bb_rest_collect_%llu",
+                (unsigned long long)context.next_value_id++);
             ir_instr_t *collect = rest && rest_array_type
                 && th_kind_of(rest_array_type) == TH_SEQUENCE
                     ? ir_instr_add(context.block, IR_OP_REST_COLLECT) : nullptr;
@@ -17055,7 +17243,7 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
             }
         }
         else {
-            rest = ir_param_add(function, rest_parameter->name.data,
+            rest = ir_param_add(function, rest_parameter->name,
                                 rest_parameter->type);
             rest_binding = rest;
         }
@@ -17078,10 +17266,10 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
     for (size_t i = 0; i < lower_data.default_params.len; i++) {
         n00bb_default_param_t *parameter =
             &lower_data.default_params.data[i];
-        char local_name[48];
-        snprintf(local_name, sizeof(local_name),
-                 "__n00bb_default_bound_%llu",
-                 (unsigned long long)context.next_value_id++);
+        char local_buffer[48];
+        core_string_t local_name = n00bb_format_name(local_buffer,
+            sizeof(local_buffer), "__n00bb_default_bound_%llu",
+            (unsigned long long)context.next_value_id++);
         ir_local_t *bound = ir_local_add(function, local_name,
                                          parameter->local->type);
         ir_value_t *bound_value = bound
@@ -17168,7 +17356,7 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
                 lowered.status = IR_LOWER_FAILED;
                 break;
             }
-            lower_data.function_body = nt_is(grammar, roots->data[i], "body")
+            lower_data.function_body = nt_is(grammar, roots->data[i], CORE_STRING_STATIC("body"))
                 ? roots->data[i] : body;
             lowered = ir_lower_tree(lowerer, &context, grammar,
                                     roots->data[i]);
@@ -17183,9 +17371,9 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
             ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
                 IR_DIAG_VERIFY_TYPED,
                 lower_span_for_tree(&context, body),
-                "this context default expression");
+                CORE_STRING_STATIC("this context default expression"));
             ir_diag_message(diagnostic, diagnostics,
-                "the default expression does not produce a value on every successful path");
+                CORE_STRING_STATIC("the default expression does not produce a value on every successful path"));
             goto cleanup;
         }
         if (expression_result_hook
@@ -17202,12 +17390,13 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
         if (!th_is_nil(th_func_ret(function_type))) {
             ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
                 IR_DIAG_VERIFY_TYPED, lower_span_for_tree(&context, body),
-                "this function body");
-            char message[256];
-            snprintf(message, sizeof(message),
-                     "function '%.*s' can reach its end without returning a value",
-                     symbol ? (int)symbol->name.u8_bytes : 0,
-                     symbol ? symbol->name.data : "");
+                CORE_STRING_STATIC("this function body"));
+            char message_buffer[256];
+            core_string_t message = n00bb_format_name(message_buffer,
+                sizeof(message_buffer),
+                "function '%.*s' can reach its end without returning a value",
+                symbol ? (int)symbol->name.u8_bytes : 0,
+                symbol ? symbol->name.data : "");
             ir_diag_message(diagnostic, diagnostics, message);
             goto cleanup;
         }
@@ -17264,7 +17453,7 @@ lower_function_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
     n00bb_tu_state_t *state = tu_state(unit);
     ir_module_t *module = unit_module(state);
     parse_tree_t *declaration = symbol ? symbol->decl_node : nullptr;
-    parse_tree_t *body = child_nt(grammar, declaration, "body");
+    parse_tree_t *body = child_nt(grammar, declaration, CORE_STRING_STATIC("body"));
     ir_func_t *function = state && module && symbol
         ? link_ir_function_for_symbol(state->link_analysis, symbol)
         : nullptr;
@@ -17272,7 +17461,7 @@ lower_function_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
         core_list_new(parse_sym_entry_ptr_t);
     parse_sym_entry_t *rest = nullptr;
     parse_tree_t *signature = child_nt(grammar, declaration,
-                                       "func-type-signature");
+                                       CORE_STRING_STATIC("func-type-signature"));
     collect_ir_parameters(grammar, signature, &parameters, &rest);
     bool ok = lower_ir_body(lowerer, grammar, unit, symbol, body,
         function, &parameters, nullptr, rest, false, ir_context, units,
@@ -17397,10 +17586,10 @@ n00bb_lower_assert_statement(ir_lower_context_t *context,
         return false;
     }
 
-    parse_tree_t *expression = child_nt(visit->grammar, node, "expression");
+    parse_tree_t *expression = child_nt(visit->grammar, node, CORE_STRING_STATIC("expression"));
     ir_value_t *condition = expression
         ? ir_lower_node_value(context, expression) : nullptr;
-    th_type *bool_type = n00bb_ir_builtin_type(context->module, "bool");
+    th_type *bool_type = n00bb_ir_builtin_type(context->module, CORE_STRING_STATIC("bool"));
     if (!condition || !bool_type
         || !ir_type_eq(context->module, condition->type, bool_type)) {
         lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
@@ -17448,24 +17637,23 @@ lower_context_hook(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
                    core_list_t(core_translation_unit_ptr_t) *units)
 {
     n00bb_tu_state_t *state = tu_state(unit);
-    const char *role = context_hook_binding_role(grammar, hook);
+    core_string_t role = context_hook_binding_role(grammar, hook);
     core_link_declaration_t *declaration = state
         ? link_declaration_for_symbol(state->link_analysis, context_symbol)
         : nullptr;
-    ir_func_t *function = declaration && role
-        ? core_link_declaration_binding(declaration,
-                                        core_string_from_cstr(role))
+    ir_func_t *function = declaration && role.data
+        ? core_link_declaration_binding(declaration, role)
         : nullptr;
-    parse_tree_t *body = child_nt(grammar, hook, "body");
+    parse_tree_t *body = child_nt(grammar, hook, CORE_STRING_STATIC("body"));
     th_type *type = parse_tree_type(hook);
     if (!function || !body || !type) return false;
 
     core_list_t(parse_sym_entry_ptr_t) parameters =
         core_list_new(parse_sym_entry_ptr_t);
     parse_tree_t *context_params = child_nt(grammar, context_symbol->decl_node,
-                                             "param-decl");
+                                             CORE_STRING_STATIC("param-decl"));
     parse_tree_t *hook_params = child_nt(grammar, hook,
-                                          "context-hook-params");
+                                          CORE_STRING_STATIC("context-hook-params"));
     parse_sym_entry_t *rest = nullptr;
     collect_ir_parameters(grammar, context_params, &parameters, &rest);
     collect_ir_parameters(grammar, hook_params, &parameters, &rest);
@@ -17493,15 +17681,19 @@ lower_context_default(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
     core_link_declaration_t *declaration = state
         ? link_declaration_for_symbol(state->link_analysis, context_symbol)
         : nullptr;
-    char role[64], name[256];
+    char role_buffer[64];
+    core_string_t role = {};
+    core_buffer_t name = {0};
     if (!state || !declaration
-        || !context_default_role(parameter_index, role, sizeof(role))
-        || !context_default_name(context_symbol, parameter_index,
-                                 name, sizeof(name))) return false;
-    ir_func_t *function = core_link_declaration_binding(declaration,
-                                                        core_string_from_cstr(role));
+        || !context_default_role(parameter_index, role_buffer,
+                                 sizeof(role_buffer), &role)
+        || !context_default_name(context_symbol, parameter_index, &name)) {
+        core_buffer_release(&name);
+        return false;
+    }
+    ir_func_t *function = core_link_declaration_binding(declaration, role);
     parse_tree_t *param_decl = child_nt(grammar, context_symbol->decl_node,
-                                         "param-decl");
+                                         CORE_STRING_STATIC("param-decl"));
     core_list_t(parse_sym_entry_ptr_t) parameters =
         core_list_new(parse_sym_entry_ptr_t);
     parse_sym_entry_t *rest = nullptr;
@@ -17510,18 +17702,19 @@ lower_context_default(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
     parse_sym_entry_t *target = parameter_index < parameters.len
         ? parameters.data[parameter_index] : nullptr;
     parse_tree_t *expression = target
-        ? child_nt(grammar, target->decl_node, "expression") : nullptr;
+        ? child_nt(grammar, target->decl_node, CORE_STRING_STATIC("expression")) : nullptr;
     core_list_t(parse_sym_entry_ptr_t) dependencies =
         core_list_new(parse_sym_entry_ptr_t);
     context_default_dependencies(expression, &parameters,
                                  &dependencies);
     if (!function || !target || !expression) {
+        core_buffer_release(&name);
         core_list_free(dependencies);
         core_list_free(parameters);
         return false;
     }
     parse_sym_entry_t function_symbol = {
-        .name = core_string_borrow(name, strlen(name)),
+        .name = core_buffer_string(&name),
         .kind = PARSE_SYM_FUNCTION,
         .type = function->type,
         .decl_node = target->decl_node,
@@ -17529,6 +17722,7 @@ lower_context_default(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
     bool ok = lower_ir_body(lowerer, grammar, unit, &function_symbol,
         expression, function, &dependencies, nullptr, nullptr,
         true, ir_context, units, nullptr, nullptr);
+    core_buffer_release(&name);
     core_list_free(dependencies);
     core_list_free(parameters);
     return ok;
@@ -17540,8 +17734,8 @@ collect_dynamic_sym_declarations(parse_grammar_t *grammar,
                                  n00bb_tu_state_t *state, parse_tree_t *node,
                                  core_list_t(n00bb_tree_ptr_t) *roots)
 {
-    if (nt_is(grammar, node, "sym-decl")) {
-        if (!child_nt(grammar, node, "expression") || !state
+    if (nt_is(grammar, node, CORE_STRING_STATIC("sym-decl"))) {
+        if (!child_nt(grammar, node, CORE_STRING_STATIC("expression")) || !state
             || !state->ir_module) return;
         parse_sym_entry_t *symbol = parse_tree_sym(node);
         ir_global_t *global = symbol
@@ -17551,11 +17745,11 @@ collect_dynamic_sym_declarations(parse_grammar_t *grammar,
             core_list_push(*roots, node);
         return;
     }
-    if (!nt_is(grammar, node, "sym-decl-list")) return;
+    if (!nt_is(grammar, node, CORE_STRING_STATIC("sym-decl-list"))) return;
     for (size_t i = 0; i < core_tree_num_children(node); i++) {
         parse_tree_t *child = core_tree_child(node, i);
-        if (nt_is(grammar, child, "sym-decl")
-            || nt_is(grammar, child, "sym-decl-list"))
+        if (nt_is(grammar, child, CORE_STRING_STATIC("sym-decl"))
+            || nt_is(grammar, child, CORE_STRING_STATIC("sym-decl-list")))
             collect_dynamic_sym_declarations(grammar, state, child, roots);
     }
 }
@@ -17566,8 +17760,8 @@ collect_dynamic_global_initializers(parse_grammar_t *grammar,
                                     parse_tree_t *node,
                                     core_list_t(n00bb_tree_ptr_t) *roots)
 {
-    if (!nt_is(grammar, node, "variable-decl")) return;
-    parse_tree_t *list = child_nt(grammar, node, "sym-decl-list");
+    if (!nt_is(grammar, node, CORE_STRING_STATIC("variable-decl"))) return;
+    parse_tree_t *list = child_nt(grammar, node, CORE_STRING_STATIC("sym-decl-list"));
     collect_dynamic_sym_declarations(grammar, tu_state(unit), list, roots);
 }
 
@@ -17590,7 +17784,7 @@ n00bb_root_without_start(parse_grammar_t *grammar,
         || unit != core_link_unit_root(state->link, 0)) return false;
     for (size_t i = 0; i < state->module_top_level_statements.len; i++) {
         parse_tree_t *statement = state->module_top_level_statements.data[i];
-        parse_tree_t *name = nt_is(grammar, statement, "func-def")
+        parse_tree_t *name = nt_is(grammar, statement, CORE_STRING_STATIC("func-def"))
             && core_tree_num_children(statement) > 1
             ? core_tree_child(statement, 1) : nullptr;
         if (name && core_tree_is_leaf(name)
@@ -17609,12 +17803,12 @@ collect_one_module_initializer_root(parse_grammar_t *grammar,
 {
     if (!statement || module_initializer_declaration(grammar, statement))
         return true;
-    if (nt_is(grammar, statement, "variable-decl")) {
+    if (nt_is(grammar, statement, CORE_STRING_STATIC("variable-decl"))) {
         parse_tree_t *prefix = child_nt(grammar, statement,
-                                        "declaration-prefix");
-        if (child_nt(grammar, prefix, "storage-class")) return true;
+                                        CORE_STRING_STATIC("declaration-prefix"));
+        if (child_nt(grammar, prefix, CORE_STRING_STATIC("storage-class"))) return true;
         bool is_const = core_string_eq(first_token_text(child_nt(grammar,
-            prefix, "binding-kind")), CORE_STRING_STATIC("const"));
+            prefix, CORE_STRING_STATIC("binding-kind"))), CORE_STRING_STATIC("const"));
         if ((is_const && n00bb_compile_phase() != PARSE_SYM_PHASE_COMPTIME)
             || (!is_const && consts_only)) return true;
         collect_dynamic_global_initializers(grammar, unit, statement, roots);
@@ -17642,7 +17836,7 @@ collect_module_initializer_roots(parse_grammar_t *grammar,
 
 static ir_func_t *
 add_module_initializer(ir_ctx_t *ir_context, core_translation_unit_t *unit,
-                       const char *name, bool initializer)
+                       core_string_t name, bool initializer)
 {
     n00bb_tu_state_t *state = tu_state(unit);
     ir_module_t *module = unit_module(state);
@@ -17652,12 +17846,12 @@ add_module_initializer(ir_ctx_t *ir_context, core_translation_unit_t *unit,
             ir_context, nullptr, core_translation_unit_diagnostics(unit), unit);
         ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
             IR_DIAG_VERIFY_PARSED, ir_module_span(module),
-            "this generated initializer");
+            CORE_STRING_STATIC("this generated initializer"));
         ir_diag_message(diagnostic, diagnostics,
-            "a module declaration uses a reserved initializer name");
+            CORE_STRING_STATIC("a module declaration uses a reserved initializer name"));
         return nullptr;
     }
-    th_type *nil_type = n00bb_ir_builtin_type(module, "nil");
+    th_type *nil_type = n00bb_ir_builtin_type(module, CORE_STRING_STATIC("nil"));
     th_type *type = nil_type
         ? th_func_with_error(state->types, nil_type, nil_type,
                              nullptr, 0, nullptr, nullptr, 0)
@@ -17707,10 +17901,10 @@ validate_script_root(parse_grammar_t *grammar, core_translation_unit_t *unit)
     bool ok = true;
     for (size_t i = 0; i < state->module_top_level_statements.len; i++) {
         parse_tree_t *statement = state->module_top_level_statements.data[i];
-        parse_tree_t *prefix = nt_is(grammar, statement, "variable-decl")
-            ? child_nt(grammar, statement, "declaration-prefix") : nullptr;
+        parse_tree_t *prefix = nt_is(grammar, statement, CORE_STRING_STATIC("variable-decl"))
+            ? child_nt(grammar, statement, CORE_STRING_STATIC("declaration-prefix")) : nullptr;
         if (!prefix || !core_string_eq(first_token_text(child_nt(grammar,
-                prefix, "binding-kind")), CORE_STRING_STATIC("const")))
+                prefix, CORE_STRING_STATIC("binding-kind"))), CORE_STRING_STATIC("const")))
             continue;
         parse_sym_entry_t *read = root_global_read(grammar, unit,
                                                    statement);
@@ -17734,14 +17928,14 @@ lower_initializer_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
                        core_translation_unit_t *unit,
                        core_list_t(core_translation_unit_ptr_t) *units,
                        ir_ctx_t *ir_context, ir_func_t *function,
-                       const char *name, bool consts_only)
+                       core_string_t name, bool consts_only)
 {
     parse_tree_t *tree = n00bb_tu_parsed_tree(tu_state(unit));
     core_list_t(n00bb_tree_ptr_t) roots = core_list_new(n00bb_tree_ptr_t);
     bool ok = tree && collect_module_initializer_roots(grammar, unit,
                                                        consts_only, &roots);
     parse_sym_entry_t symbol = {
-        .name = core_string_from_cstr(name),
+        .name = name,
         .kind = PARSE_SYM_FUNCTION,
         .type = function->type,
     };
@@ -17765,18 +17959,18 @@ lower_module_initializer(ir_lowerer_t *lowerer,
     n00bb_tu_state_t *state = tu_state(unit);
     if (!n00bb_tu_parsed_tree(state)) return false;
     ir_func_t *function = add_module_initializer(ir_context, unit,
-        N00BB_MODULE_INIT_NAME, true);
+        CORE_STRING_STATIC(N00BB_MODULE_INIT_NAME), true);
     if (!function) return false;
     if (state->interface_module) return true;
     if (!validate_script_root(grammar, unit)) return false;
     bool script = script_build_time(grammar, unit);
     if (!lower_initializer_body(lowerer, grammar, unit, units, ir_context,
-            function, N00BB_MODULE_INIT_NAME, script)) return false;
+            function, CORE_STRING_STATIC(N00BB_MODULE_INIT_NAME), script)) return false;
     if (!script) return true;
     ir_func_t *literals = add_module_initializer(ir_context, unit,
-        N00BB_SCRIPT_BODY_NAME, false);
+        CORE_STRING_STATIC(N00BB_SCRIPT_BODY_NAME), false);
     return literals && lower_initializer_body(lowerer, grammar, unit, units,
-        ir_context, literals, N00BB_SCRIPT_BODY_NAME, false);
+        ir_context, literals, CORE_STRING_STATIC(N00BB_SCRIPT_BODY_NAME), false);
 }
 
 static bool
@@ -17858,16 +18052,17 @@ lower_literal_initializer(ir_ctx_t *ir_context, core_translation_unit_t *unit)
         return false;
     }
     ir_func_t *function = add_module_initializer(ir_context, unit,
-        N00BB_LITERAL_INIT_NAME, false);
-    ir_block_t *block = function ? ir_block_add(function, "entry") : nullptr;
+        CORE_STRING_STATIC(N00BB_LITERAL_INIT_NAME), false);
+    ir_block_t *block = function ? ir_block_add(function, CORE_STRING_STATIC("entry")) : nullptr;
     bool ok = block != nullptr;
     for (size_t s = 0; ok && s < sequence.len; s++) {
         size_t i = sequence.data[s];
         n00bb_literal_constant_t *constant = &state->literal_constants.data[i];
         ir_instr_t *call = ir_instr_add(block, IR_OP_CALL);
         th_type *result = th_func_ret(constant->producer->type);
-        char name[48];
-        snprintf(name, sizeof(name), "__n00bb_literal_%zu", i);
+        char name_buffer[48];
+        core_string_t name = n00bb_format_name(name_buffer,
+            sizeof(name_buffer), "__n00bb_literal_%zu", i);
         ok = call
             && ir_instr_operand_value(call,
                 ir_func_address(state->ir_module, constant->producer))
@@ -17972,7 +18167,7 @@ build_initializer_graph(
     if (previous_function != UINT32_MAX) return true;
     uint32_t empty_success;
     return ir_exec_graph_add_phase_exit(graph, phase_id,
-            "empty-initialization", IR_EXEC_GRAPH_OUTCOME_SUCCESS,
+            CORE_STRING_STATIC("empty-initialization"), IR_EXEC_GRAPH_OUTCOME_SUCCESS,
             &empty_success)
         && ir_exec_graph_add_edge(graph, phase_entry, empty_success,
                                   IR_EXEC_GRAPH_EDGE_SEQUENCE);
@@ -18114,7 +18309,7 @@ collect_phase_reachable_function(ir_func_t *function, void *raw)
 }
 
 ir_func_t *
-n00bb_root_entry(const n00bb_link_analysis_t *analysis, const char *name)
+n00bb_root_entry(const n00bb_link_analysis_t *analysis, core_string_t name)
 {
     n00bb_tu_state_t *any = analysis && analysis->units.len
         ? tu_state(analysis->units.data[0]) : nullptr;
@@ -18129,17 +18324,18 @@ static bool
 function_has_body(ir_func_t *function)
 {
     return function->n_blocks
-        || ir_annot_get(&function->annots, "n00bb.cached_body");
+        || ir_annot_get(&function->annots, CORE_STRING_STATIC("n00bb.cached_body"));
 }
 
 ir_func_t *
 n00bb_baked_function(const n00bb_link_analysis_t *analysis,
-                     const char *module, const char *name)
+                     core_string_t module, core_string_t name)
 {
-    for (size_t i = 0; analysis && module && name
+    for (size_t i = 0; analysis && module.data && name.data
          && i < analysis->units.len; i++) {
         ir_module_t *candidate = unit_module(tu_state(analysis->units.data[i]));
-        if (!candidate || strcmp(ir_module_name(candidate), module)) continue;
+        if (!candidate || !core_string_eq(ir_module_name(candidate), module))
+            continue;
         ir_func_t *function = ir_func_find(candidate, name);
         return function && function_has_body(function) ? function : nullptr;
     }
@@ -18154,8 +18350,9 @@ build_reachable_functions(
 {
     core_list_t(n00bb_ir_func_ptr_t) roots =
         core_list_new(n00bb_ir_func_ptr_t);
-    const char *initializers[] = {
-        N00BB_LITERAL_INIT_NAME, N00BB_MODULE_INIT_NAME,
+    const core_string_t initializers[] = {
+        CORE_STRING_STATIC(N00BB_LITERAL_INIT_NAME),
+        CORE_STRING_STATIC(N00BB_MODULE_INIT_NAME),
     };
     for (size_t i = 0; i < initializer_order->len; i++) {
         ir_module_t *module = unit_module(
@@ -18166,11 +18363,16 @@ build_reachable_functions(
         }
         ir_func_t *capture = module
             && n00bb_compile_phase() == PARSE_SYM_PHASE_COMPTIME
-            && !strcmp(ir_module_name(module), N00BB_CAPTURE_MODULE)
-            ? ir_func_find(module, N00BB_CAPTURE_FUNCTION) : nullptr;
+            && core_string_eq(ir_module_name(module),
+                              CORE_STRING_STATIC(N00BB_CAPTURE_MODULE))
+            ? ir_func_find(module, CORE_STRING_STATIC(N00BB_CAPTURE_FUNCTION))
+            : nullptr;
         if (capture) core_list_push(roots, capture);
     }
-    const char *entries[] = {N00BB_START_NAME, N00BB_COMPTIME_START_NAME};
+    const core_string_t entries[] = {
+        CORE_STRING_STATIC(N00BB_START_NAME),
+        CORE_STRING_STATIC(N00BB_COMPTIME_START_NAME),
+    };
     for (size_t i = 0; i < 2; i++) {
         ir_func_t *entry = n00bb_root_entry(analysis, entries[i]);
         if (entry) core_list_push(roots, entry);
@@ -18178,19 +18380,22 @@ build_reachable_functions(
     for (size_t i = 0; i < initializer_order->len; i++) {
         n00bb_tu_state_t *state = tu_state(initializer_order->data[i]);
         ir_module_t *module = unit_module(state);
-        const char *module_name = module ? ir_module_name(module) : nullptr;
-        if (!module_name) continue;
+        core_string_t module_name = module ? ir_module_name(module)
+                                           : (core_string_t){};
+        if (!module_name.data) continue;
         for (size_t j = 0; j < ir_func_count(module); j++) {
             ir_func_t *function = ir_func_at(module, j);
             if (!function || !function_has_body(function)) continue;
-            if (!strcmp(function->name, "__finalize")
-                || !strncmp(function->name, "__finalize#", 11))
+            if (core_string_eq(function->name,
+                               CORE_STRING_STATIC("__finalize"))
+                || core_string_starts_with(function->name,
+                                           CORE_STRING_STATIC("__finalize#")))
                 core_list_push(roots, function);
         }
-        size_t prefix = strlen(module_name);
+        size_t prefix = module_name.u8_bytes;
         size_t cursor = 0;
         const n00bb_runtime_native_root_t *native;
-        while ((native = n00bb_native_root_in_module(module_name, prefix,
+        while ((native = n00bb_native_root_in_module(module_name,
                                                      &cursor))) {
             ir_func_t *function = ir_func_find(module,
                 n00bb_native_root_function(native, prefix));
@@ -18203,15 +18408,14 @@ build_reachable_functions(
         for (size_t i = 0; i < initializer_order->len && !found; i++) {
             n00bb_tu_state_t *state = tu_state(initializer_order->data[i]);
             ir_module_t *module = unit_module(state);
-            const char *module_name = module
-                ? ir_module_name(module) : nullptr;
-            if (!module_name) continue;
-            core_string_t owner = core_string_from_cstr(module_name);
+            core_string_t owner = module ? ir_module_name(module)
+                                         : (core_string_t){};
+            if (!owner.data) continue;
             for (size_t j = 0; j < ir_func_count(module); j++) {
                 ir_func_t *function = ir_func_at(module, j);
                 if (!function || !function_has_body(function)
                     || !native_root_matches(analysis->native_roots[r],
-                        owner, core_string_from_cstr(function->name)))
+                        owner, function->name))
                     continue;
                 core_list_push(roots, function);
                 found = true;
@@ -18233,30 +18437,36 @@ build_reachable_functions(
         }
     }
     for (size_t r = 0; r < n00bb_native_root_registered_count(); r++) {
-        const char *name = n00bb_native_root_registered_at(r)->qualified_name;
+        core_string_t name = core_string_from_cstr(
+            n00bb_native_root_registered_at(r)->qualified_name);
         bool found = false;
         for (size_t i = 0; i < initializer_order->len && !found; i++) {
             ir_module_t *module = unit_module(
                 tu_state(initializer_order->data[i]));
-            const char *module_name = module
-                ? ir_module_name(module) : nullptr;
-            size_t prefix = module_name ? strlen(module_name) : 0;
-            ir_func_t *function = prefix && !strncmp(name, module_name, prefix)
-                && name[prefix] == '.'
-                ? ir_func_find(module, name + prefix + 1) : nullptr;
+            core_string_t module_name = module ? ir_module_name(module)
+                                               : (core_string_t){};
+            size_t prefix = module_name.u8_bytes;
+            ir_func_t *function = prefix
+                && core_string_starts_with(name, module_name)
+                && name.u8_bytes > prefix && name.data[prefix] == '.'
+                ? ir_func_find(module, core_string_slice(name, prefix + 1,
+                    name.u8_bytes - prefix - 1)) : nullptr;
             found = function && function_has_body(function);
         }
         if (!found) {
             core_buffer_t message = {0};
             core_buffer_printf(&message,
-                "provided function '%s' has no lowered function body", name);
+                "provided function '%.*s' has no lowered function body",
+                (int)name.u8_bytes, name.data);
             core_diagnostics_report(diagnostics, nullptr,
                 CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-B0019"),
                 core_string_borrow(message.data, message.byte_len));
             core_buffer_release(&message);
+            core_free(name.data);
             core_list_free(roots);
             return false;
         }
+        core_free(name.data);
     }
     for (size_t s = 0; s < analysis->static_graph_slots.len; s++) {
         const n00bb_static_graph_slot_t *slot =
@@ -18267,8 +18477,9 @@ build_reachable_functions(
         if (!function) {
             core_buffer_t message = {0};
             core_buffer_printf(&message,
-                "baked function '%s.%s' has no lowered function body",
-                slot->module, slot->name);
+                "baked function '%.*s.%.*s' has no lowered function body",
+                (int)slot->module.u8_bytes, slot->module.data,
+                (int)slot->name.u8_bytes, slot->name.data);
             core_diagnostics_report(diagnostics, nullptr,
                 CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-B0019"),
                 core_string_borrow(message.data, message.byte_len));
@@ -18299,7 +18510,8 @@ build_emitted_functions(n00bb_link_analysis_t *analysis)
         core_translation_unit_t *unit = analysis->units.data[i];
         n00bb_tu_state_t *state = tu_state(unit);
         core_string_t path = core_source_file_path(&unit->source);
-        bool generated = path.data && !strncmp(path.data, "<generated:", 11);
+        bool generated = path.data && core_string_starts_with(path,
+            CORE_STRING_STATIC("<generated:"));
         bool root = state && state->link
             && unit == core_link_unit_root(state->link, 0);
         if (generated || root) continue;
@@ -18348,7 +18560,7 @@ effect_branch_outcome_call(ir_instr_t *terminator,
             || literal->n_operands != 1
             || literal->operands[0].kind != IR_OPD_CONST
             || literal->operands[0].lit.i.neg
-            || literal->operands[0].lit.i.mag != th_arm_tag("ok"))
+            || literal->operands[0].lit.i.mag != th_arm_tag(CORE_STRING_STATIC("ok")))
             continue;
         if (true_is_success) *true_is_success = comparison->op == IR_OP_EQ;
         return tag->operands[0].value->def;
@@ -18802,9 +19014,12 @@ build_n00bb_execution_graph(
 {
     ir_exec_graph_t *graph = ir_exec_graph_new(analysis->ir_context);
     uint32_t phase, entry;
-    if (!graph || !ir_exec_graph_add_phase(graph, "initialization", &phase,
+    if (!graph || !ir_exec_graph_add_phase(graph, CORE_STRING_STATIC("initialization"), &phase,
                                            &entry)) return false;
-    const char *names[] = {N00BB_LITERAL_INIT_NAME, N00BB_MODULE_INIT_NAME};
+    const core_string_t names[] = {
+        CORE_STRING_STATIC(N00BB_LITERAL_INIT_NAME),
+        CORE_STRING_STATIC(N00BB_MODULE_INIT_NAME),
+    };
     core_list_t(n00bb_ir_func_ptr_t) initializers =
         core_list_new(n00bb_ir_func_ptr_t);
     for (size_t i = 0; i < order->len; i++) {
@@ -18843,9 +19058,13 @@ lower_ordered_module_initializers(
 static void
 dump_ir_instr(FILE *out, const ir_instr_t *instr)
 {
-    fprintf(out, "@%s:%s#%u (%s)", instr->block->owner->name,
-            instr->block->name, instr->index,
-            ir_op_spelling(instr->op));
+    core_string_t function = instr->block->owner->name;
+    core_string_t block = instr->block->name;
+    core_string_t spelling = ir_op_spelling(instr->op);
+    fprintf(out, "@%.*s:%.*s#%u (%.*s)",
+            (int)function.u8_bytes, function.data,
+            (int)block.u8_bytes, block.data, instr->index,
+            (int)spelling.u8_bytes, spelling.data);
 }
 
 static void
@@ -18855,7 +19074,8 @@ dump_ir_analysis(ir_module_t *module, bool control_flow, bool full_pdg)
         ir_func_t *function = ir_func_at(module, f);
         if (control_flow) {
             ir_pdg_t *pdg = ir_pdg_of(function);
-            fprintf(stdout, "control-flow @%s\n", function->name);
+            fprintf(stdout, "control-flow @%.*s\n",
+                    (int)function->name.u8_bytes, function->name.data);
             for (uint32_t b = 0; b < function->n_blocks; b++) {
                 ir_block_t *block = function->blocks[b];
                 ir_instr_t *term = ir_block_terminator(block);
@@ -18863,19 +19083,26 @@ dump_ir_analysis(ir_module_t *module, bool control_flow, bool full_pdg)
                 for (uint32_t s = 0; term && s < term->n_operands; s++) {
                     ir_block_t *target = ir_succ_of(&term->operands[s]);
                     if (!target) continue;
-                    fprintf(stdout, "  %s -> %s [%s]\n", block->name,
-                            target->name,
-                            ir_edge_kind_name(ir_edge_kind(pdg, block, s)));
+                    core_string_t kind = ir_edge_kind_name(
+                        ir_edge_kind(pdg, block, s));
+                    fprintf(stdout, "  %.*s -> %.*s [%.*s]\n",
+                            (int)block->name.u8_bytes, block->name.data,
+                            (int)target->name.u8_bytes, target->name.data,
+                            (int)kind.u8_bytes, kind.data);
                     has_successor = true;
                 }
                 if (!has_successor)
-                    fprintf(stdout, "  %s -> exit\n", block->name);
+                    fprintf(stdout, "  %.*s -> exit\n",
+                            (int)block->name.u8_bytes, block->name.data);
             }
         }
         if (full_pdg) {
             ir_pdg_t *pdg = ir_pdg_of(function);
-            fprintf(stdout, "pdg @%s (%s)\n", function->name,
-                    ir_pdg_is_exact(pdg) ? "exact" : "may");
+            core_string_t certainty = ir_pdg_is_exact(pdg)
+                ? CORE_STRING_STATIC("exact") : CORE_STRING_STATIC("may");
+            fprintf(stdout, "pdg @%.*s (%.*s)\n",
+                    (int)function->name.u8_bytes, function->name.data,
+                    (int)certainty.u8_bytes, certainty.data);
             for (uint32_t e = 0; e < ir_pdg_edge_count(pdg); e++) {
                 const ir_dep_edge_t *edge = ir_pdg_edge_at(pdg, e);
                 fputs(edge->kind == IR_DEP_CONTROL ? "  control " : "  data ",
@@ -18884,7 +19111,10 @@ dump_ir_analysis(ir_module_t *module, bool control_flow, bool full_pdg)
                 fputs(edge->certainty == IR_DEP_EXACT ? " => " : " ~> ",
                       stdout);
                 dump_ir_instr(stdout, edge->to);
-                if (edge->via) fprintf(stdout, " via $%s", edge->via->name);
+                if (edge->via)
+                    fprintf(stdout, " via $%.*s",
+                            (int)edge->via->name.u8_bytes,
+                            edge->via->name.data);
                 fputc('\n', stdout);
             }
         }
@@ -18897,7 +19127,7 @@ dump_layout_for_unit(parse_grammar_t *grammar, core_translation_unit_t *unit)
     n00bb_tu_state_t *state = tu_state(unit);
     if (!state || !state->annotations || !state->annotations->symtab ||
         !state->ir_module) return;
-    const char *target = ir_module_target(state->ir_module);
+    core_string_t target = ir_module_target(state->ir_module);
     core_list_t(parse_scope_ptr_t) scopes = module_scopes_in_namespace(
         state, CORE_STRING_STATIC("type"));
     for (size_t s = 0; s < scopes.len; s++) {
@@ -18908,8 +19138,13 @@ dump_layout_for_unit(parse_grammar_t *grammar, core_translation_unit_t *unit)
             ir_descriptor_t *descriptor = ir_layout_of(state->ir_module,
                 symbol->type, target);
             if (!descriptor) continue;
-            printf("layout %s target=%s size=", n00bb_print_type(state->types,
-                symbol->type), target ? target : "<none>");
+            core_string_t printed = n00bb_print_type(state->types,
+                                                     symbol->type);
+            core_string_t target_text = target.data
+                ? target : CORE_STRING_STATIC("<none>");
+            printf("layout %.*s target=%.*s size=",
+                   (int)printed.u8_bytes, printed.data,
+                   (int)target_text.u8_bytes, target_text.data);
             if (ir_layout_is_settled(&descriptor->size))
                 printf("%llu", (unsigned long long)descriptor->size.value);
             else fputs("<unresolved>", stdout);
@@ -18920,7 +19155,8 @@ dump_layout_for_unit(parse_grammar_t *grammar, core_translation_unit_t *unit)
             putchar('\n');
             for (uint32_t m = 0; m < descriptor->n_members; m++) {
                 const ir_member_layout_t *member = &descriptor->members[m];
-                printf("  member %s bit-offset=", member->name);
+                printf("  member %.*s bit-offset=",
+                       (int)member->name.u8_bytes, member->name.data);
                 if (ir_layout_is_settled(&member->bit_offset))
                     printf("%llu", (unsigned long long)
                         member->bit_offset.value);
@@ -18975,10 +19211,10 @@ prepare_ir_type_layouts(parse_grammar_t *grammar,
     bool ok = true;
     switch (th_kind_of(type)) {
     case TH_NAMED: {
-        const char *name = nullptr;
+        core_string_t name = {};
         size_t argument_count = 0;
         bool is_variant = false;
-        th_named_info(type, &name, nullptr, &is_variant, &argument_count);
+        th_named_info(type, &name, &is_variant, &argument_count);
         int expected = !is_variant
             ? builtin_generic_type_arity(name) : -1;
         if (expected >= 0 && argument_count != (size_t)expected) {
@@ -19394,7 +19630,7 @@ thread_runtime_entry_function(parse_grammar_t *grammar,
                               parse_sym_entry_t *symbol)
 {
     return symbol && symbol->kind == PARSE_SYM_FUNCTION
-        && symbol->decl_node && nt_is(grammar, symbol->decl_node, "func-def")
+        && symbol->decl_node && nt_is(grammar, symbol->decl_node, CORE_STRING_STATIC("func-def"))
         && (symbol->phases & PARSE_SYM_PHASE_RUNTIME)
         && symbol_visibility(symbol) != TH_ENV_PRIVATE;
 }
@@ -19492,7 +19728,7 @@ runtime_init_analysis_build(
     for (size_t i = 0; i < runtime_initializer_order->len; i++) {
         n00bb_tu_state_t *state = tu_state(runtime_initializer_order->data[i]);
         ir_func_t *initializer = state && state->ir_module
-            ? ir_func_find(state->ir_module, N00BB_MODULE_INIT_NAME) : nullptr;
+            ? ir_func_find(state->ir_module, CORE_STRING_STATIC(N00BB_MODULE_INIT_NAME)) : nullptr;
         if (!initializer
             || !effect_function_list_add(&runtime->initializer_roots,
                                            initializer)
@@ -19570,7 +19806,7 @@ initializer_write_precedes_read(
         &runtime->target_indices, ir_global_identity(global), nullptr) : 0;
     n00bb_tu_state_t *target_state = tu_state(target_unit);
     ir_func_t *initializer = target_state && target_state->ir_module
-        ? ir_func_find(target_state->ir_module, N00BB_MODULE_INIT_NAME)
+        ? ir_func_find(target_state->ir_module, CORE_STRING_STATIC(N00BB_MODULE_INIT_NAME))
         : nullptr;
     ir_value_t *target_value = global
         ? ir_global_address(global->owner, ir_global_identity(global))
@@ -19586,7 +19822,7 @@ initializer_write_precedes_read(
     }
     n00bb_tu_state_t *source_state = tu_state(source_unit);
     ir_func_t *source_initializer = source_state && source_state->ir_module
-        ? ir_func_find(source_state->ir_module, N00BB_MODULE_INIT_NAME)
+        ? ir_func_find(source_state->ir_module, CORE_STRING_STATIC(N00BB_MODULE_INIT_NAME))
         : nullptr;
     ir_instr_t *read_instruction = runtime_global_read_at(
         source_initializer, target_value, read->source_location);
@@ -19917,7 +20153,7 @@ static bool
 n00bb_validate_consumed_binding(parse_sym_entry_t *symbol,
                                 ir_func_t *function, ir_value_t *binding,
                                 ir_diags_t *diagnostics,
-                                const char *binding_name)
+                                core_string_t binding_name)
 {
     if (!function || !binding || !diagnostics || !function->n_blocks)
         return false;
@@ -19972,14 +20208,18 @@ n00bb_validate_consumed_binding(parse_sym_entry_t *symbol,
         if (!bad) continue;
         ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
             IR_DIAG_TYPE_ARGS, bad->span,
-            bad_consume ? "this consume" : "this use");
+            bad_consume ? CORE_STRING_STATIC("this consume")
+                        : CORE_STRING_STATIC("this use"));
+        core_string_t shown = binding_name.data ? binding_name
+                                                : binding->name;
         core_buffer_t message = {0};
         core_buffer_printf(&message,
             bad_consume
-                ? "binding '%s' is consumed more than once or is not available on every incoming path"
-                : "binding '%s' is used after consume or is not available on every incoming path",
-            binding_name ? binding_name : binding->name);
-        ir_diag_message(diagnostic, diagnostics, message.data);
+                ? "binding '%.*s' is consumed more than once or is not available on every incoming path"
+                : "binding '%.*s' is used after consume or is not available on every incoming path",
+            (int)shown.u8_bytes, shown.data);
+        ir_diag_message(diagnostic, diagnostics,
+                        core_buffer_string(&message));
         core_buffer_release(&message);
         ok = false;
     }
@@ -20014,7 +20254,7 @@ n00bb_validate_consume_states(n00bb_link_analysis_t *analysis,
                     if (!n00bb_validate_consumed_binding(
                             symbol, binding->function, binding->binding,
                             diagnostics,
-                            symbol->name.data)) ok = false;
+                            symbol->name)) ok = false;
                 }
             }
         }
@@ -20027,11 +20267,11 @@ bool
 n00bb_dump_ir(const n00bb_link_analysis_t *analysis)
 {
     for (size_t i = 0; analysis && i < analysis->units.len; i++) {
-        char *text = ir_module_print(
+        core_string_t text = ir_module_print(
             unit_module(tu_state(analysis->units.data[i])));
-        if (!text) return false;
-        fputs(text, stdout);
-        core_free(text);
+        if (!text.data) return false;
+        fwrite(text.data, 1, text.u8_bytes, stdout);
+        core_free(text.data);
     }
     return analysis != nullptr;
 }
@@ -20069,17 +20309,17 @@ field_extents_hold(core_list_t(core_translation_unit_ptr_t) *units)
                     ? parse_sym_binding(symbol, N00BB_FIELD_EXTENT_KEY)
                     : nullptr;
                 if (!extent) continue;
-                const char *problem = !foreign_pointer_type(symbol->type)
-                    ? "an extent clause needs a Foreign[...] field"
+                core_string_t problem = !foreign_pointer_type(symbol->type)
+                    ? CORE_STRING_STATIC("an extent clause needs a Foreign[...] field")
                     : extent->count_field && !is_integer_type(
                         th_resolve(extent->count_field->type))
-                    ? "a 'count' field must have an integer type"
-                    : nullptr;
-                if (!problem) continue;
+                    ? CORE_STRING_STATIC("a 'count' field must have an integer type")
+                    : (core_string_t){};
+                if (!problem.data) continue;
                 core_diagnostics_report_at(
                     core_translation_unit_diagnostics(unit), unit,
                     CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0037"),
-                    core_string_from_cstr(problem),
+                    problem,
                     link_source_location(extent->node));
                 ok = false;
             }
@@ -20115,10 +20355,12 @@ rigid_type_parameters_hold(core_list_t(core_translation_unit_ptr_t) *units)
                     th_type *bound = th_resolve(map->body[i]);
                     if (!parameter || th_kind_of(bound) == TH_VAR) continue;
                     core_buffer_t message = {0};
+                    core_string_t bound_text = n00bb_print_type(state->types,
+                                                                bound);
                     core_buffer_printf(&message,
-                        "a type parameter of '%.*s' is fixed to %s by the function's own body; a declared type parameter stays generic",
+                        "a type parameter of '%.*s' is fixed to %.*s by the function's own body; a declared type parameter stays generic",
                         (int)symbol->name.u8_bytes, symbol->name.data,
-                        n00bb_print_type(state->types, bound));
+                        (int)bound_text.u8_bytes, bound_text.data);
                     core_diagnostics_report_at(
                         core_translation_unit_diagnostics(unit), unit,
                         CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0036"),
@@ -20173,40 +20415,42 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
     }
     ir_lowerer_t *lowerer = ir_lowerer_new(ir_context);
     ok = ok && lowerer
-        && ir_lowerer_register(lowerer, "binary", n00bb_lower_binary,
+        && ir_lowerer_register(lowerer, CORE_STRING_STATIC("binary"), n00bb_lower_binary,
                                nullptr)
-        && ir_lowerer_register(lowerer, "nil_literal",
+        && ir_lowerer_register(lowerer, CORE_STRING_STATIC("nil_literal"),
                                n00bb_lower_nil_literal, nullptr)
-        && ir_lowerer_register(lowerer, "cast", n00bb_lower_cast, nullptr)
-        && ir_lowerer_register(lowerer, "unsafe_cast", n00bb_lower_cast,
+        && ir_lowerer_register(lowerer, CORE_STRING_STATIC("cast"), n00bb_lower_cast, nullptr)
+        && ir_lowerer_register(lowerer, CORE_STRING_STATIC("unsafe_cast"),
+                               n00bb_lower_cast,
                                nullptr)
-        && ir_lowerer_register(lowerer, "typeof", n00bb_lower_typeof,
+        && ir_lowerer_register(lowerer, CORE_STRING_STATIC("typeof"), n00bb_lower_typeof,
                                nullptr)
-        && ir_lowerer_register(lowerer, "bool_not", n00bb_lower_bool_not,
+        && ir_lowerer_register(lowerer, CORE_STRING_STATIC("bool_not"), n00bb_lower_bool_not,
                                nullptr)
-        && ir_lowerer_register(lowerer, "complement",
+        && ir_lowerer_register(lowerer, CORE_STRING_STATIC("complement"),
                                n00bb_lower_complement, nullptr)
-        && ir_lowerer_register(lowerer, "negate", n00bb_lower_negate,
+        && ir_lowerer_register(lowerer, CORE_STRING_STATIC("negate"), n00bb_lower_negate,
                                nullptr)
-        && ir_lowerer_register(lowerer, "string_literal",
+        && ir_lowerer_register(lowerer, CORE_STRING_STATIC("string_literal"),
                                n00bb_lower_string_literal, nullptr)
-        && ir_lowerer_register(lowerer, "char_literal",
+        && ir_lowerer_register(lowerer, CORE_STRING_STATIC("char_literal"),
                                n00bb_lower_char_literal, nullptr)
-        && ir_lowerer_register(lowerer, "sequence_literal",
+        && ir_lowerer_register(lowerer, CORE_STRING_STATIC("sequence_literal"),
                                n00bb_lower_sequence_literal, nullptr)
-        && ir_lowerer_register(lowerer, "brace_literal",
+        && ir_lowerer_register(lowerer, CORE_STRING_STATIC("brace_literal"),
                                n00bb_lower_brace_literal, nullptr)
-        && ir_lowerer_register(lowerer, "array_new",
+        && ir_lowerer_register(lowerer, CORE_STRING_STATIC("array_new"),
                                n00bb_lower_array_new, nullptr)
-        && ir_lowerer_register(lowerer, "callback_create",
+        && ir_lowerer_register(lowerer, CORE_STRING_STATIC("callback_create"),
                                n00bb_lower_callback_create, nullptr)
-        && ir_lowerer_register(lowerer, "compound_assign",
+        && ir_lowerer_register(lowerer, CORE_STRING_STATIC("compound_assign"),
                                n00bb_lower_compound_assignment, nullptr)
-        && ir_lowerer_register(lowerer, "module_member",
+        && ir_lowerer_register(lowerer, CORE_STRING_STATIC("module_member"),
                                n00bb_lower_module_member, nullptr)
-        && ir_lowerer_register(lowerer, "return", n00bb_lower_return,
+        && ir_lowerer_register(lowerer, CORE_STRING_STATIC("return"), n00bb_lower_return,
                                nullptr)
-        && ir_lowerer_register(lowerer, "call", n00bb_lower_call, nullptr)
+        && ir_lowerer_register(lowerer, CORE_STRING_STATIC("call"),
+                               n00bb_lower_call, nullptr)
         && ir_lowerer_register_visit(lowerer, PARSE_ANNOT_BRANCH,
                                      n00bb_lower_branch_annotation, nullptr)
         && ir_lowerer_register_visit(lowerer, PARSE_ANNOT_LOOP,
@@ -20242,45 +20486,46 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         && ir_lowerer_register_visit(lowerer, PARSE_ANNOT_SCOPE_OPEN,
                                      n00bb_lower_try_scope, nullptr);
     ok = ok && ir_lowerer_register_nt_visit(lowerer,
-        "simple-lit", n00bb_lower_static_litmod, nullptr)
+        CORE_STRING_STATIC("simple-lit"), n00bb_lower_static_litmod, nullptr)
         && ir_lowerer_register_nt_visit(lowerer,
-        "list-lit", n00bb_lower_static_litmod, nullptr)
+        CORE_STRING_STATIC("list-lit"), n00bb_lower_static_litmod, nullptr)
         && ir_lowerer_register_nt_visit(lowerer,
-        "dict-or-set-lit", n00bb_lower_static_litmod, nullptr)
+        CORE_STRING_STATIC("dict-or-set-lit"), n00bb_lower_static_litmod, nullptr)
         && ir_lowerer_register_nt_visit(lowerer,
-        "embed-lit", n00bb_lower_static_litmod, nullptr)
+        CORE_STRING_STATIC("embed-lit"), n00bb_lower_static_litmod, nullptr)
         && ir_lowerer_register_nt_visit(lowerer,
-        "tuple-or-paren", n00bb_lower_static_litmod, nullptr);
+        CORE_STRING_STATIC("tuple-or-paren"), n00bb_lower_static_litmod, nullptr);
     ok = ok && ir_lowerer_register_nt_visit(lowerer,
-        "new-expr", n00bb_mark_constructor_lvalues, nullptr);
-    static const char *const folded_kinds[] = {
-        "add-expr", "mul-expr", "shift-expr", "bitand-expr", "bitxor-expr",
-        "bitor-expr",
+        CORE_STRING_STATIC("new-expr"), n00bb_mark_constructor_lvalues, nullptr);
+    static const core_string_t folded_kinds[] = {
+        CORE_STRING_STATIC("add-expr"), CORE_STRING_STATIC("mul-expr"),
+        CORE_STRING_STATIC("shift-expr"), CORE_STRING_STATIC("bitand-expr"),
+        CORE_STRING_STATIC("bitxor-expr"), CORE_STRING_STATIC("bitor-expr"),
     };
     for (size_t i = 0; ok && i < sizeof(folded_kinds) / sizeof(*folded_kinds);
          i++)
         ok = ir_lowerer_register_nt_visit(lowerer, folded_kinds[i],
             n00bb_lower_folded_integer_expression, nullptr);
     ok = ok && ir_lowerer_register_nt_visit(lowerer,
-        "primary", n00bb_lower_integer_constant_reference, nullptr)
+        CORE_STRING_STATIC("primary"), n00bb_lower_integer_constant_reference, nullptr)
         && ir_lowerer_register_nt_visit(lowerer,
-        "postfix-expr", n00bb_lower_integer_constant_reference, nullptr);
+        CORE_STRING_STATIC("postfix-expr"), n00bb_lower_integer_constant_reference, nullptr);
     ok = ok && ir_lowerer_register_nt_visit(lowerer,
-        "assert-stmt", n00bb_lower_assert_statement, nullptr);
+        CORE_STRING_STATIC("assert-stmt"), n00bb_lower_assert_statement, nullptr);
     ok = ok && ir_lowerer_register_nt_visit(lowerer,
-        "expression", n00bb_capture_compound_target, nullptr);
+        CORE_STRING_STATIC("expression"), n00bb_capture_compound_target, nullptr);
     ok = ok && ir_lowerer_register_nt_visit(lowerer,
-        "case-expr-item", n00bb_prune_enum_case, nullptr);
+        CORE_STRING_STATIC("case-expr-item"), n00bb_prune_enum_case, nullptr);
     ok = ok && ir_lowerer_register_nt_visit(lowerer,
-        "and-rhs", n00bb_lower_branch_body, nullptr)
+        CORE_STRING_STATIC("and-rhs"), n00bb_lower_branch_body, nullptr)
         && ir_lowerer_register_nt_visit(lowerer,
-            "or-rhs", n00bb_lower_branch_body, nullptr);
+            CORE_STRING_STATIC("or-rhs"), n00bb_lower_branch_body, nullptr);
     ok = ok && ir_lowerer_register_nt_visit(lowerer,
-        "expr-comma-list", n00bb_lower_tuple_parts, nullptr)
+        CORE_STRING_STATIC("expr-comma-list"), n00bb_lower_tuple_parts, nullptr)
         && ir_lowerer_register_nt_visit(lowerer,
-            "named-field-list", n00bb_lower_named_field_parts, nullptr)
+            CORE_STRING_STATIC("named-field-list"), n00bb_lower_named_field_parts, nullptr)
         && ir_lowerer_register_nt_visit(lowerer,
-            "tuple-or-paren", n00bb_lower_tuple_literal, nullptr);
+            CORE_STRING_STATIC("tuple-or-paren"), n00bb_lower_tuple_literal, nullptr);
     ok = ok && ir_lowerer_register_visit(lowerer, PARSE_ANNOT_SCOPE_OPEN,
                                          n00bb_lower_with_scope, nullptr);
     ok = ok && ir_lowerer_register_visit(lowerer, PARSE_ANNOT_OPERATOR,
@@ -20316,16 +20561,17 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
             for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
                  ok && symbol; symbol = symbol->next_in_scope) {
                 if (!context_symbol(grammar, symbol)) continue;
-                static const char *hooks[] = {
-                    "context-enter", "context-exit", "context-error",
-                    "context-ensure",
+                static const core_string_t hooks[] = {
+                    CORE_STRING_STATIC("context-enter"),
+                    CORE_STRING_STATIC("context-exit"),
+                    CORE_STRING_STATIC("context-error"),
+                    CORE_STRING_STATIC("context-ensure"),
                 };
                 for (size_t h = 0; ok
                     && h < sizeof(hooks) / sizeof(hooks[0]); h++) {
-                    const char *role = n00bb_context_hook_role(hooks[h]);
-                    parse_tree_t *hook = symbol->decl_node && role
-                        ? parse_sym_binding(symbol,
-                            core_string_borrow(role, strlen(role))) : nullptr;
+                    core_string_t role = n00bb_context_hook_role(hooks[h]);
+                    parse_tree_t *hook = symbol->decl_node && role.data
+                        ? parse_sym_binding(symbol, role) : nullptr;
                     if (hook)
                         ok = lower_context_hook(lowerer, grammar, unit,
                             symbol, hook, ir_context, &units);
@@ -20334,7 +20580,7 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
                     core_list_new(parse_sym_entry_ptr_t);
                 parse_sym_entry_t *rest = nullptr;
                 collect_ir_parameters(grammar,
-                    child_nt(grammar, symbol->decl_node, "param-decl"),
+                    child_nt(grammar, symbol->decl_node, CORE_STRING_STATIC("param-decl")),
                     &parameters, &rest);
                 for (size_t p = 0; ok && p < parameters.len; p++)
                     if (parameters.data[p]->is_optional)
@@ -20400,9 +20646,9 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
     if (ok) {
         ir_policy_t *policy = ir_policy_new(ir_context);
         ok = policy
-            && ir_policy_set(policy, "IR-W0027", IR_POLICY_DENY)
-            && ir_policy_set(policy, "IR-W0030", IR_POLICY_ALLOW)
-            && ir_policy_set(policy, "IR-W0031", IR_POLICY_ALLOW);
+            && ir_policy_set(policy, CORE_STRING_STATIC("IR-W0027"), IR_POLICY_DENY)
+            && ir_policy_set(policy, CORE_STRING_STATIC("IR-W0030"), IR_POLICY_ALLOW)
+            && ir_policy_set(policy, CORE_STRING_STATIC("IR-W0031"), IR_POLICY_ALLOW);
         for (size_t i = 0; ok && i < units.len; i++) {
             core_translation_unit_t *unit = units.data[i];
             ir_diags_t *diagnostics = ir_diags_new_attached(
@@ -20465,9 +20711,9 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
                 if (result == IR_PASS_UNMET) {
                     ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
                         IR_DIAG_VERIFY_TYPED, ir_module_span(module),
-                        "this lowered module");
+                        CORE_STRING_STATIC("this lowered module"));
                     ir_diag_message(diagnostic, diagnostics,
-                        "Lantern pass prerequisites are not satisfied");
+                        CORE_STRING_STATIC("Lantern pass prerequisites are not satisfied"));
                 }
                 ok = false;
             }
@@ -20489,9 +20735,9 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
             if (function->n_blocks && !ir_pdg_of(function)) {
                 ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
                     IR_DIAG_INTERNAL, ir_module_span(module),
-                    "this lowered function");
+                    CORE_STRING_STATIC("this lowered function"));
                 ir_diag_message(diagnostic, diagnostics,
-                    "Lantern could not construct its dependence graph");
+                    CORE_STRING_STATIC("Lantern could not construct its dependence graph"));
                 ok = false;
             }
         }
@@ -20521,8 +20767,9 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
                                  dump_control_flow, dump_pdg);
         }
         if (dump_control_flow) {
-            char *text = ir_exec_graph_print(analysis->execution_graph);
-            if (!text) {
+            core_string_t text = ir_exec_graph_print(
+                analysis->execution_graph);
+            if (!text.data) {
                 core_diagnostics_report(
                     core_translation_unit_diagnostics(units.data[0]),
                     units.data[0], CORE_DIAG_FATAL,
@@ -20532,13 +20779,15 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
                 ok = false;
             }
             else {
-                fputs(text, stdout);
-                core_free(text);
+                fwrite(text.data, 1, text.u8_bytes, stdout);
+                core_free(text.data);
                 for (size_t f = 0; f < analysis->reachable_functions.len;
                      f++) {
                     ir_func_t *function = analysis->reachable_functions.data[f];
-                    printf("reachable @%s.%s\n",
-                        ir_module_name(function->owner), function->name);
+                    core_string_t owner = ir_module_name(function->owner);
+                    printf("reachable @%.*s.%.*s\n",
+                        (int)owner.u8_bytes, owner.data,
+                        (int)function->name.u8_bytes, function->name.data);
                 }
             }
         }
@@ -20552,15 +20801,12 @@ n00bb_register_callback_representation(ir_module_t *module, th_type *type)
 {
     if (!module || !type) return false;
     if (ir_type_definition(module, type)) return true;
-    const char *name = nullptr;
-    size_t name_length = 0;
+    core_string_t name = {};
     size_t arguments = 0;
-    if (!th_named_info(th_resolve(type), &name, &name_length, nullptr,
-                       &arguments) || !arguments) return false;
-    char *base_name = core_strndup(name, name_length);
-    th_type *base = base_name
-        ? th_name(ir_module_types(module), base_name) : nullptr;
-    core_free(base_name);
+    if (!th_named_info(th_resolve(type), &name, nullptr, &arguments)
+        || !arguments) return false;
+    th_type *base = name.data
+        ? th_name(ir_module_types(module), name) : nullptr;
     th_type *definition = base ? ir_type_definition(module, base) : nullptr;
     return definition && ir_type_define(module, type, definition);
 }
@@ -20605,8 +20851,7 @@ n00bb_static_value_to_ir_initializer(const n00bb_static_value_t *value,
         return true;
     case N00BB_STATIC_VALUE_STRING:
         out->kind = IR_GLOBAL_INIT_STRING;
-        out->string.bytes = value->as.string.data;
-        out->string.length = value->as.string.u8_bytes;
+        out->string = value->as.string;
         return true;
     case N00BB_STATIC_VALUE_NIL:
         if (!th_is_nil(type)
@@ -20616,13 +20861,12 @@ n00bb_static_value_to_ir_initializer(const n00bb_static_value_t *value,
     case N00BB_STATIC_VALUE_VARIANT: {
         bool variant = false;
         th_type *shape = static_record_shape(state, type);
-        if (!th_named_info(type, nullptr, nullptr, &variant, nullptr)
+        if (!th_named_info(type, nullptr, &variant, nullptr)
             || !variant || !shape || th_kind_of(shape) != TH_RECORD
             || !value->as.variant.payload) return false;
         for (size_t i = 0; i < th_record_len(shape); i++) {
             const th_member *arm = th_record_member(shape, i);
-            if (!arm || !core_string_eq(value->as.variant.arm,
-                                        core_string_from_cstr(arm->name)))
+            if (!arm || !core_string_eq(value->as.variant.arm, arm->name))
                 continue;
             ir_global_init_value_t *payload = core_arena_alloc(
                 &state->semantic_values, sizeof(*payload));

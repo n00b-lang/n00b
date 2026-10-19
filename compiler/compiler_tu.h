@@ -39,16 +39,16 @@ typedef parse_tree_t *n00bb_tree_ptr_t;
 core_list_decl(n00bb_tree_ptr_t);
 typedef struct {
     size_t index;
-    const char *name;
+    core_string_t name;
     bool positional;
 } n00bb_loop_binding_projection_t;
 void collect_for_bindings(parse_grammar_t *grammar, parse_tree_t *node,
                           core_list_t(parse_tree_ptr_t) *bindings);
 bool measure_static_shape_prefix(ir_shape_t *shape,
                                  uint32_t flat_prefix_rank);
-th_type *record_template_type(th_ctx *types, const char *name,
+th_type *record_template_type(th_ctx *types, core_string_t name,
                               parse_sym_entry_t *symbol);
-th_type *variant_template_type(th_ctx *types, const char *name,
+th_type *variant_template_type(th_ctx *types, core_string_t name,
                                parse_sym_entry_t *symbol);
 th_type *n00bb_variant_arm_payload_type(th_ctx *types, th_type *variant,
                                         parse_sym_entry_t *arm);
@@ -88,7 +88,7 @@ bool function_parameter_info(parse_grammar_t *grammar,
                              parse_sym_entry_t *symbol,
                              parse_tree_t *formals, size_t index,
                              parse_sym_entry_t **formal_out,
-                             const char **name, size_t *name_size,
+                             core_string_t *name,
                              uint8_t *flags, th_mode *mode);
 bool function_parameter_named(parse_grammar_t *grammar,
                               parse_sym_entry_t *symbol,
@@ -112,10 +112,10 @@ typedef enum {
 } n00bb_literal_handler_t;
 
 typedef struct {
-    const char *prefix;
+    core_string_t prefix;
     n00bb_literal_shape_t shape;
     n00bb_literal_handler_t handler;
-    const char *canonical_name;
+    core_string_t canonical_name;
 } n00bb_literal_registration_t;
 const n00bb_literal_registration_t *n00bb_literal_handler(
     core_string_t prefix, n00bb_literal_shape_t shape);
@@ -132,18 +132,18 @@ th_type *n00bb_operand_value_type(th_type *operand, th_type *other,
                                   bool comparison);
 enum { N00BB_MAX_SIZED_BITS = sizeof(ir_uint_t) * CHAR_BIT };
 typedef struct {
-    const char *spelling;
-    const char *assign_spelling;
-    const char *trait;
-    const char *method;
-    const char *in_place_trait;
-    const char *in_place;
+    core_string_t spelling;
+    core_string_t assign_spelling;
+    core_string_t trait;
+    core_string_t method;
+    core_string_t in_place_trait;
+    core_string_t in_place;
     ir_op_t op;
     bool unsigned_only;
     bool shift;
 } n00bb_binary_operator_t;
 typedef struct {
-    const char *name;
+    core_string_t name;
     ir_op_t op;
     bool shift;
     bool unary;
@@ -177,12 +177,12 @@ parse_tree_t *n00bb_addressable_root_lvalue(parse_grammar_t *grammar,
                                             parse_tree_t *target);
 parse_sym_entry_t *direct_ref_target(parse_grammar_t *grammar,
                                      parse_tree_t *node);
-const char *canonical_builtin_type_name(const char *name);
+core_string_t canonical_builtin_type_name(core_string_t name);
 bool dotted_symbol_path_node(parse_grammar_t *grammar, parse_tree_t *node);
 bool simple_member_chain_name(parse_grammar_t *grammar,
                               parse_tree_t *node, core_string_t *name);
-int builtin_generic_type_arity(const char *name);
-bool builtin_type_name(const char *name);
+int builtin_generic_type_arity(core_string_t name);
+bool builtin_type_name(core_string_t name);
 bool is_named_type_symbol(parse_grammar_t *grammar,
                           parse_sym_entry_t *symbol);
 bool is_trait_type_symbol(parse_grammar_t *grammar,
@@ -431,8 +431,8 @@ typedef struct {
 } n00bb_trait_dispatch_plan_t;
 
 typedef struct {
-    char *trait;
-    char *method;
+    core_string_t trait;
+    core_string_t method;
     uint64_t fingerprint;
 } n00bb_dispatch_record_t;
 core_list_decl(n00bb_dispatch_record_t);
@@ -459,7 +459,7 @@ typedef struct {
     parse_sym_entry_t *initializer_owner;
     core_string_t dispatch_trait;
     core_string_t dispatch_method;
-    const char *resolved_trait_name;
+    core_string_t resolved_trait_name;
     th_type *dispatch_receiver_type;
     n00bb_trait_dispatch_plan_t *closed_dispatch;
     bool dotted_path;
@@ -858,10 +858,10 @@ bool register_native_declarations(parse_annot_result_t *annotations,
 bool register_builtin_symbols(parse_annot_result_t *annotations,
                               n00bb_tu_state_t *state, th_ctx *types);
 bool n00bb_register_operator_function(th_env *environment, th_ctx *types,
-                                      const char *trait, const char *method,
-                                      const char *owner, th_type *self,
+                                      core_string_t trait, core_string_t method,
+                                      core_string_t owner, th_type *self,
                                       th_type *other, th_type *result,
-                                      const char *module, const char *package,
+                                      core_string_t module, core_string_t package,
                                       th_env_visibility_t visibility);
 bool register_builtin_traits(th_env *environment, th_ctx *types,
                              core_arena_t *arena);
@@ -917,7 +917,7 @@ n00bb_callback_contract_t *n00bb_callback_contract_for_type(
 th_type *n00bb_specialize_callback_role(th_ctx *types,
     n00bb_callback_contract_t *contract, th_type *receiver, th_type *role);
 th_type *n00bb_callback_method_signature(
-    th_ctx *types, th_type *receiver, const char *name, void *context);
+    th_ctx *types, th_type *receiver, core_string_t name, void *context);
 bool prepare_callback_call_symbols(core_translation_unit_t *unit);
 bool n00bb_bind_callback_call(n00bb_tu_state_t *state,
                               n00bb_link_use_site_t *site);
@@ -996,11 +996,11 @@ bool node_is_within(parse_tree_t *node, parse_tree_t *ancestor);
 void collect_ir_parameters(parse_grammar_t *grammar, parse_tree_t *node,
     core_list_t(parse_sym_entry_ptr_t) *parameters,
     parse_sym_entry_t **rest);
-bool context_hook_name(parse_sym_entry_t *symbol, const char *suffix,
-    char *buffer, size_t size);
+bool context_hook_name(parse_sym_entry_t *symbol, core_string_t suffix,
+    core_buffer_t *out);
 bool context_default_name(parse_sym_entry_t *symbol, size_t index,
-    char *buffer, size_t size);
-bool callback_protocol_name(const char *type_name, const char *marker,
+    core_buffer_t *out);
+bool callback_protocol_name(core_string_t type_name, core_string_t marker,
     core_buffer_t *out);
 n00bb_node_facts_t *n00bb_node_facts(parse_tree_t *node);
 n00bb_ordered_nodes_t *n00bb_node_ordered_nodes(parse_tree_t *node);
@@ -1014,7 +1014,7 @@ n00bb_node_facts_t *n00bb_ensure_node_facts(n00bb_tu_state_t *state,
 n00bb_return_source_t *n00bb_node_return_source(parse_tree_t *node);
 n00bb_alias_edges_t *n00bb_node_alias_edges(parse_tree_t *node);
 n00bb_alias_edges_t *n00bb_node_escape_edges(parse_tree_t *node);
-const char *n00bb_context_hook_role(const char *name);
+core_string_t n00bb_context_hook_role(core_string_t name);
 bool alias_declaration_is_transparent(parse_tree_t *declaration);
 th_type *declared_type_from_node(parse_grammar_t *grammar,
     core_translation_unit_t *unit, parse_tree_t *node);
@@ -1058,7 +1058,7 @@ void bind_function_body_signature(core_translation_unit_t *unit,
 bool resolve_function_parameter_facts(parse_grammar_t *grammar,
     n00bb_tu_state_t *state, n00bb_function_parameter_facts_t *facts,
     core_list_t(th_param) *params, th_param *rest, bool *has_rest);
-const char *n00bb_print_type(th_ctx *types, th_type *type);
+core_string_t n00bb_print_type(th_ctx *types, th_type *type);
 th_type *function_with_error_channel(th_ctx *types, th_type *function,
     th_type *error_type);
 parse_sym_entry_t *formal_symbol_at(parse_grammar_t *grammar,
@@ -1178,18 +1178,16 @@ tu_state(core_translation_unit_t *unit)
 }
 
 static inline bool
-nt_is(parse_grammar_t *grammar, parse_tree_t *node, const char *name)
+nt_is(parse_grammar_t *grammar, parse_tree_t *node, core_string_t name)
 {
     return node && !core_tree_is_leaf(node)
-        && core_string_eq(parse_tree_nt_name(grammar, node),
-                          core_string_borrow(name, strlen(name)));
+        && core_string_eq(parse_tree_nt_name(grammar, node), name);
 }
 
 static inline parse_tree_t *
-child_nt(parse_grammar_t *grammar, parse_tree_t *node, const char *name)
+child_nt(parse_grammar_t *grammar, parse_tree_t *node, core_string_t name)
 {
-    return parse_tree_find_flat_child_by_nt_name(grammar, node,
-        core_string_borrow(name, strlen(name)));
+    return parse_tree_find_flat_child_by_nt_name(grammar, node, name);
 }
 
 static inline core_string_t
@@ -1206,18 +1204,12 @@ static inline th_type *
 record_lookup_text(th_ctx *types, const th_type *record, core_string_t name)
 {
     if (!record || !name.data) return nullptr;
-    char *text = core_strndup(name.data, name.u8_bytes);
-    th_type *field = types ? th_record_lookup_in(types, record, text)
-                           : th_record_lookup(record, text);
-    core_free(text);
-    return field;
+    return types ? th_record_lookup_in(types, record, name)
+                 : th_record_lookup(record, name);
 }
 
 static inline th_type *
 var_named_text(th_ctx *types, core_string_t name)
 {
-    char *text = core_strndup(name.data, name.u8_bytes);
-    th_type *variable = th_var_named(types, text);
-    core_free(text);
-    return variable;
+    return th_var_named(types, name);
 }

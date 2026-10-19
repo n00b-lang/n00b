@@ -7,13 +7,15 @@
 #include "record_layout_request.h"
 #include "signature_typevars.h"
 
+#define S(x) CORE_STRING_STATIC(x)
+
 int
 main(void)
 {
     ir_ctx_t *context = ir_ctx_new();
-    const ir_profile_t profile = {.name = "n00b"};
-    ir_module_t *runtime = ir_module_new(context, "example", &profile,
-                                          "x86_64-linux");
+    const ir_profile_t profile = {.name = S("n00b")};
+    ir_module_t *runtime = ir_module_new(context, S("example"), &profile,
+                                          S("x86_64-linux"));
     assert(runtime);
     th_ctx *types = ir_ctx_types(context);
     th_type *i3 = th_bitint(types, 3, true);
@@ -24,7 +26,7 @@ main(void)
         .occupied = &occupied, .n_occupied = 1,
         .reserved = &reserved, .n_reserved = 1,
     };
-    assert(i3 && ir_layout_publish_final(runtime, i3, "x86_64-linux",
+    assert(i3 && ir_layout_publish_final(runtime, i3, S("x86_64-linux"),
                                           &final));
     n00bb_abi_type_index_t *index = n00bb_abi_type_index_new(runtime);
     uint32_t i3_index = 0;
@@ -59,21 +61,21 @@ main(void)
     n00bb_abi_name_pool_free(names);
     n00bb_abi_type_index_free(index);
 
-    th_type *item = th_var_named(types, "T");
+    th_type *item = th_var_named(types, S("T"));
     th_arg template_arg = {.kind = TH_ARG_TYPE, .type = item};
-    th_type *template = th_apply(types, "example.Pair", &template_arg, 1);
-    th_member template_member = {.name = "value", .type = item};
+    th_type *template = th_apply(types, S("example.Pair"), &template_arg, 1);
+    th_member template_member = {.name = S("value"), .type = item};
     th_type *template_record = th_record(types, &template_member, 1);
     th_type *integer = th_bitint(types, 64, true);
     th_arg concrete_arg = {.kind = TH_ARG_TYPE, .type = integer};
-    th_type *concrete = th_apply(types, "example.Pair", &concrete_arg, 1);
+    th_type *concrete = th_apply(types, S("example.Pair"), &concrete_arg, 1);
     ir_layout_bit_run_t concrete_bits = {.offset = 0, .width = 64};
     ir_layout_access_t concrete_access = {
         .unit_bit_offset = 0, .unit_width_bits = 64,
         .value_width_bits = 64,
     };
     ir_final_member_layout_t concrete_member = {
-        .name = "value", .type = integer, .ordinal = 0,
+        .name = S("value"), .type = integer, .ordinal = 0,
         .occupied = &concrete_bits, .n_occupied = 1,
         .accesses = &concrete_access, .n_accesses = 1,
     };
@@ -85,7 +87,7 @@ main(void)
     assert(th_type_define(types, template, template_record)
         && ir_type_define(runtime, template, template_record)
         && ir_type_definition(runtime, concrete)
-        && ir_layout_publish_final(runtime, concrete, "x86_64-linux",
+        && ir_layout_publish_final(runtime, concrete, S("x86_64-linux"),
                                    &concrete_layout));
     parse_symtab_t *generic_symbols = parse_symtab_new();
     parse_tree_t generic_node = {0};
@@ -102,7 +104,7 @@ main(void)
         .data = &parameter, .len = 1,
     };
     assert(generic_owner);
-    generic_owner->type = th_name(types, "example.Pair");
+    generic_owner->type = th_name(types, S("example.Pair"));
     generic_owner->adt_kind = CORE_STRING_STATIC("record");
     assert(parse_sym_set_binding(generic_owner,
         N00BB_SIGNATURE_TYPEVARS_KEY, &type_parameters));
@@ -143,7 +145,7 @@ main(void)
         .n_occupied = 1,
     };
     assert(large && ir_layout_publish_final(runtime, large,
-                                             "x86_64-linux", &large_final));
+                                             S("x86_64-linux"), &large_final));
     index = n00bb_abi_type_index_new(runtime);
     assert(index && n00bb_abi_type_index_add(index, large, nullptr));
     names = n00bb_abi_name_pool_new();
@@ -174,7 +176,7 @@ main(void)
     parse_sym_entry_t *owner = parse_symtab_add(symbols,
         CORE_STRING_STATIC("type"), CORE_STRING_STATIC("Item"),
         PARSE_SYM_TYPEDEF, &type_node);
-    owner->type = th_name(types, "example.Item");
+    owner->type = th_name(types, S("example.Item"));
     owner->adt_kind = CORE_STRING_STATIC("record");
     owner->visibility = CORE_STRING_STATIC("public");
     n00bb_record_layout_request_t request = {
@@ -198,7 +200,7 @@ main(void)
         .lsb = 0, .value_width_bits = 64,
     };
     ir_final_member_layout_t member = {
-        .name = "value", .type = field->type, .ordinal = 0,
+        .name = S("value"), .type = field->type, .ordinal = 0,
         .bit_offset = 0, .occupied = &field_bits, .n_occupied = 1,
         .accesses = &access, .n_accesses = 1,
     };
@@ -208,7 +210,7 @@ main(void)
         .members = &member, .n_members = 1,
     };
     assert(ir_layout_publish_final(runtime, owner->type,
-        "x86_64-linux", &record_final));
+        S("x86_64-linux"), &record_final));
     index = n00bb_abi_type_index_new(runtime);
     uint32_t record_index = 0;
     assert(index && n00bb_abi_type_index_add(index, owner->type,

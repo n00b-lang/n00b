@@ -17,7 +17,7 @@ dispatch_argument_nodes(parse_grammar_t *grammar, parse_tree_t *node,
         for (size_t i = 0; !core_tree_is_leaf(contents)
              && i < core_tree_num_children(contents); i++) {
             parse_tree_t *child = core_tree_child(contents, i);
-            if (nt_is(grammar, child, "expression"))
+            if (nt_is(grammar, child, CORE_STRING_STATIC("expression")))
                 core_list_push(*arguments, child);
         }
         parse_tree_t *value = n00bb_index_stored_value(grammar, node);
@@ -25,22 +25,22 @@ dispatch_argument_nodes(parse_grammar_t *grammar, parse_tree_t *node,
         return;
     }
     parse_tree_t *call = parse_tree_parent(node);
-    if (!nt_is(grammar, call, "postfix-expr")
+    if (!nt_is(grammar, call, CORE_STRING_STATIC("postfix-expr"))
         || core_tree_child(call, 0) != node) return;
     collect_positional_nodes(grammar,
         child_nt(grammar, call_arguments_node(grammar, call),
-                 "positional-args"), arguments);
+                 CORE_STRING_STATIC("positional-args")), arguments);
 }
 
 static parse_tree_t *
 dispatch_string_where_buffer_expected(parse_grammar_t *grammar,
                                       th_ctx *types, parse_tree_t *site,
                                       th_type *receiver,
-                                      const char *method_name)
+                                      core_string_t method_name)
 {
     th_env_method_t method = {0};
-    const char *trait = nullptr;
-    if (!site || core_tree_is_leaf(site) || !method_name
+    core_string_t trait = {0};
+    if (!site || core_tree_is_leaf(site) || !method_name.data
         || th_env_method_resolve_by_name(types, receiver, method_name,
                &method, &trait) != TH_ENV_METHOD_FOUND
         || !method.signature) return nullptr;
@@ -68,18 +68,18 @@ dispatch_string_where_buffer_expected(parse_grammar_t *grammar,
 static bool
 detail_spans_unit(const th_error_t *detail, core_translation_unit_t *unit)
 {
-    return detail->span.file && detail->span.start_line
+    return detail->span.file.data && detail->span.start_line
         && core_string_eq(core_source_file_path(&unit->source),
-                          core_string_from_cstr(detail->span.file));
+                          detail->span.file);
 }
 
 static bool
 site_dispatches_method(const n00bb_link_use_site_t *site,
-                       const char *method_name)
+                       core_string_t method_name)
 {
     core_string_t name = site->dispatch_method.data ? site->dispatch_method
         : site->receiver_node ? site->member_name : (core_string_t){0};
-    return core_string_eq(name, core_string_from_cstr(method_name));
+    return core_string_eq(name, method_name);
 }
 
 th_env *
@@ -123,15 +123,17 @@ build_import_environment(parse_grammar_t *grammar,
                 || core_string_eq(registration->kind,
                                    CORE_STRING_STATIC("set"));
             if (!bracket && !brace) continue;
-            const char *trait = bracket ? "Bracket_Literal"
-                                        : "Brace_Literal";
+            core_string_t trait = bracket
+                ? CORE_STRING_STATIC("Bracket_Literal")
+                : CORE_STRING_STATIC("Brace_Literal");
             bool *declared = bracket ? &bracket_trait : &brace_trait;
             core_list_t(th_type_ptr_t) *seen = bracket
                 ? &bracket_results : &brace_results;
             if (!*declared) {
                 th_type *methods = th_record(root_state->types, nullptr, 0);
                 ok = methods && th_env_register_trait_contracts(
-                    source_environment, trait, "builtins", "default",
+                    source_environment, trait, CORE_STRING_STATIC("builtins"),
+                    CORE_STRING_STATIC("default"),
                     TH_ENV_PUBLIC, methods);
                 if (!ok) break;
                 *declared = true;
@@ -250,11 +252,9 @@ build_import_environment(parse_grammar_t *grammar,
         n00bb_register_value_coercions(state->types);
         bool attached = environment_attached
             ? th_ctx_set_environment_scope(state->types,
-                unit->module.identifier.data,
-                n00bb_package_id(unit).data)
+                unit->module.identifier, n00bb_package_id(unit))
             : th_ctx_set_environment(state->types, environment,
-                unit->module.identifier.data,
-                n00bb_package_id(unit).data);
+                unit->module.identifier, n00bb_package_id(unit));
         if (!attached) {
             size_t error_count = th_error_count(state->types);
             th_error_t detail = {0};
@@ -266,7 +266,8 @@ build_import_environment(parse_grammar_t *grammar,
             parse_tree_t *open_site = nullptr;
             core_translation_unit_t *open_unit = nullptr;
             for (size_t pass = 0; pass < 2; pass++)
-            for (size_t u = 0; has_detail && detail.constraint && detail.got
+            for (size_t u = 0; has_detail && detail.constraint.data
+                 && detail.got
                  && !failure_site && u < units->len; u++) {
                 n00bb_tu_state_t *owner = tu_state(units->data[u]);
                 if (!pass && !detail_spans_unit(&detail, units->data[u]))
@@ -304,11 +305,10 @@ build_import_environment(parse_grammar_t *grammar,
                 failure_unit = open_unit;
             }
             for (size_t u = 0; !failure_unit && has_detail
-                 && detail.span.file && u < units->len; u++) {
+                 && detail.span.file.data && u < units->len; u++) {
                 core_string_t path = core_source_file_path(
                     &units->data[u]->source);
-                if (core_string_eq(path,
-                        core_string_from_cstr(detail.span.file)))
+                if (core_string_eq(path, detail.span.file))
                     failure_unit = units->data[u];
             }
             if (failure_unit) unit = failure_unit;
@@ -321,23 +321,31 @@ build_import_environment(parse_grammar_t *grammar,
                 core_diagnostics_report_at(
                     core_translation_unit_diagnostics(unit), unit,
                     CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0036"),
-                    CORE_STRING_STATIC(n00bb_string_to_buffer_text),
+                    core_string_borrow(n00bb_string_to_buffer_text,
+                        sizeof(n00bb_string_to_buffer_text) - 1),
                     link_source_location(string_argument));
                 ok = false;
                 break;
             }
             core_buffer_t message = {0};
-            if (has_detail && detail.constraint) {
+            if (has_detail && detail.constraint.data) {
+                core_string_t got = detail.got
+                    ? n00bb_print_type(state->types, detail.got)
+                    : CORE_STRING_STATIC("this type");
+                core_string_t reason = detail.message.data
+                    ? detail.message
+                    : CORE_STRING_STATIC("constraint failure");
                 core_buffer_printf(&message,
-                    "trait constraint '%s' is not satisfied for %s: %s",
-                    detail.constraint,
-                    detail.got ? n00bb_print_type(state->types, detail.got)
-                               : "this type",
-                    detail.message ? detail.message
-                                   : "constraint failure");
-                if (detail.expected)
-                    core_buffer_printf(&message, " (expected %s)",
-                        n00bb_print_type(state->types, detail.expected));
+                    "trait constraint '%.*s' is not satisfied for %.*s: %.*s",
+                    (int)detail.constraint.u8_bytes, detail.constraint.data,
+                    (int)got.u8_bytes, got.data,
+                    (int)reason.u8_bytes, reason.data);
+                if (detail.expected) {
+                    core_string_t expected = n00bb_print_type(state->types,
+                                                              detail.expected);
+                    core_buffer_printf(&message, " (expected %.*s)",
+                        (int)expected.u8_bytes, expected.data);
+                }
                 th_env_method_requirement_t requirements[16] = {0};
                 size_t requirement_count = th_env_method_requirements(
                     state->types, detail.constraint, requirements, 16);
@@ -346,19 +354,24 @@ build_import_environment(parse_grammar_t *grammar,
                         state->types, requirements[r].trait_name,
                         detail.constraint, nullptr, 0);
                     core_buffer_printf(&message,
-                        "; %s has %zu matching candidate%s",
-                        requirements[r].trait_name, candidates,
+                        "; %.*s has %zu matching candidate%s",
+                        (int)requirements[r].trait_name.u8_bytes,
+                        requirements[r].trait_name.data, candidates,
                         candidates == 1 ? "" : "s");
                 }
             }
             else {
                 core_buffer_puts(&message,
                     "trait constraint is not satisfied in the loaded module graph");
-                if (has_detail && detail.message)
-                    core_buffer_printf(&message, ": %s", detail.message);
-                if (has_detail && detail.got)
-                    core_buffer_printf(&message, " (for %s)",
-                        n00bb_print_type(state->types, detail.got));
+                if (has_detail && detail.message.data)
+                    core_buffer_printf(&message, ": %.*s",
+                        (int)detail.message.u8_bytes, detail.message.data);
+                if (has_detail && detail.got) {
+                    core_string_t got = n00bb_print_type(state->types,
+                                                         detail.got);
+                    core_buffer_printf(&message, " (for %.*s)",
+                        (int)got.u8_bytes, got.data);
+                }
             }
             if (failure_site)
                 core_diagnostics_report_at(

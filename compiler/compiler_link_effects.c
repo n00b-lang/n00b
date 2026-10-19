@@ -211,8 +211,7 @@ publish_builtin_reference_global_effects(
             continue;
         }
         parse_sym_entry_t *global = global_symbol_from_qualified_name(
-            analysis->grammar, analysis, global_name.data,
-            global_name.byte_len);
+            analysis->grammar, analysis, core_buffer_string(&global_name));
         core_link_declaration_t *target = global
             ? link_declaration_for_symbol(analysis, global) : nullptr;
         core_buffer_release(&global_name);
@@ -414,13 +413,13 @@ n00bb_use_writes_root(core_translation_unit_t *unit, parse_grammar_t *grammar,
 {
     for (parse_tree_t *at = parse_tree_parent(use);
          at && at != region; at = parse_tree_parent(at)) {
-        if ((nt_is(grammar, at, "assign-stmt")
-             || nt_is(grammar, at, "binop-assign-stmt"))
+        if ((nt_is(grammar, at, CORE_STRING_STATIC("assign-stmt"))
+             || nt_is(grammar, at, CORE_STRING_STATIC("binop-assign-stmt")))
             && node_is_within(use, core_tree_child(at, 0))) return true;
-        if (nt_is(grammar, at, "unary-expr")
+        if (nt_is(grammar, at, CORE_STRING_STATIC("unary-expr"))
             && core_string_eq(first_token_text(at), CORE_STRING_STATIC("ref")))
             return true;
-        if (!nt_is(grammar, at, "postfix-expr")
+        if (!nt_is(grammar, at, CORE_STRING_STATIC("postfix-expr"))
             || core_tree_num_children(at) < 3
             || !parse_tree_leaf_is(core_tree_child(at, 1),
                                    CORE_STRING_STATIC("("))) continue;

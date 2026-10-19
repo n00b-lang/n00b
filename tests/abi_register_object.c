@@ -6,25 +6,29 @@
 
 #include "abi_directory.h"
 #include "n00b-abi-v1.h"
+#include "lib/alloc.h"
+#include "lib/buffer.h"
 #include "lib/object_section.h"
 #include "lib/target.h"
 
-static const char *
+static core_string_t
 host_triple(void)
 {
 #if defined(__APPLE__) && defined(__aarch64__)
-    return "arm64-macos";
+    return CORE_STRING_STATIC("arm64-macos");
 #elif defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
-    return "x86_64-windows";
+    return CORE_STRING_STATIC("x86_64-windows");
 #else
-    return "x86_64-linux";
+    return CORE_STRING_STATIC("x86_64-linux");
 #endif
 }
 
 static uint8_t *
-read_object(const char *path, size_t *length_out)
+read_object(core_string_t path, size_t *length_out)
 {
-    FILE *file = fopen(path, "rb");
+    char *c_path = core_string_to_cstr(path);
+    FILE *file = fopen(c_path, "rb");
+    core_free(c_path);
     assert(file && !fseek(file, 0, SEEK_END));
     long length = ftell(file);
     assert(length > 0 && !fseek(file, 0, SEEK_SET));
@@ -37,24 +41,25 @@ read_object(const char *path, size_t *length_out)
 
 static bool
 string_is(const n00b_abi_snapshot_v1 *snapshot,
-          const n00b_abi_string_v1 *value, const char *text, size_t length)
+          const n00b_abi_string_v1 *value, core_string_t text)
 {
     const uint8_t *bytes = nullptr;
     uint64_t size = 0;
     return n00b_abi_v1_string_bytes(snapshot, value, &bytes, &size) == 1
-        && size == length && (!length || !memcmp(bytes, text, length));
+        && core_string_eq(core_string_borrow((const char *)bytes,
+                                             (size_t)size), text);
 }
 
 static void
-check_ffi_module(const n00b_abi_snapshot_v1 *snapshot, const char *path,
-                 char **names, int name_count)
+check_ffi_module(const n00b_abi_snapshot_v1 *snapshot, core_string_t path,
+                 const core_string_t *names, int name_count)
 {
     uint32_t module_index = 0;
     uint32_t module_count = n00b_abi_v1_table_count(snapshot,
         N00B_ABI_TABLE_MODULE);
     for (uint32_t i = 1; i < module_count; i++)
         if (string_is(snapshot, &n00b_abi_v1_module(snapshot, i)->full_path,
-                      path, strlen(path))) module_index = i;
+                      path)) module_index = i;
     assert(module_index);
     bool has_module_scope = false;
     uint32_t scope_count = n00b_abi_v1_table_count(snapshot,
@@ -63,78 +68,96 @@ check_ffi_module(const n00b_abi_snapshot_v1 *snapshot, const char *path,
         const n00b_abi_scope_v1 *scope = n00b_abi_v1_scope(snapshot, i);
         has_module_scope = has_module_scope
             || (scope->module_index == module_index
-                && string_is(snapshot, &scope->kind_name, "module", 6));
+                && string_is(snapshot, &scope->kind_name,
+                             CORE_STRING_STATIC("module")));
     }
     assert(has_module_scope);
     uint32_t symbol_count = n00b_abi_v1_table_count(snapshot,
         N00B_ABI_TABLE_SYMBOL);
     for (int n = 0; n < name_count; n++) {
-        const char *equals = strchr(names[n], '=');
-        const char *at = strchr(names[n], '@');
-        size_t length = equals ? (size_t)(equals - names[n])
-            : at ? (size_t)(at - names[n]) : strlen(names[n]);
+        core_string_t spec = names[n];
+        int64_t equals = core_string_find_byte(spec, '=');
+        int64_t at = core_string_find_byte(spec, '@');
+        core_string_t symbol_name = core_string_slice(spec, 0,
+            equals >= 0 ? (size_t)equals
+                : at >= 0 ? (size_t)at : spec.u8_bytes);
         const n00b_abi_symbol_v1 *found = nullptr;
         for (uint32_t i = 1; i < symbol_count; i++) {
             const n00b_abi_symbol_v1 *symbol = n00b_abi_v1_symbol(snapshot, i);
             const n00b_abi_scope_v1 *scope = n00b_abi_v1_scope(snapshot,
                 symbol->scope_index);
             if (symbol->module_index == module_index && scope
-                && string_is(snapshot, &scope->kind_name, "module", 6)
-                && string_is(snapshot, &symbol->name, names[n], length))
+                && string_is(snapshot, &scope->kind_name,
+                             CORE_STRING_STATIC("module"))
+                && string_is(snapshot, &symbol->name, symbol_name))
                 found = symbol;
         }
         if (!found) fprintf(stderr, "no symbol row for %.*s\n",
-                            (int)length, names[n]);
+                            (int)symbol_name.u8_bytes, symbol_name.data);
         assert(found);
-        if (at) {
+        if (at >= 0) {
             const n00b_abi_source_location_v1 *location =
                 n00b_abi_v1_source_location(snapshot,
                     found->declaration_location_index);
             const n00b_abi_source_file_v1 *file = location
                 ? n00b_abi_v1_record(snapshot, N00B_ABI_TABLE_SOURCE_FILE,
                     location->file_index, nullptr) : nullptr;
-            char generated[256];
-            snprintf(generated, sizeof(generated), "<generated:%s>", path);
+            core_buffer_t generated = {0};
+            core_buffer_puts(&generated, "<generated:");
+            core_buffer_append_string(&generated, path);
+            core_buffer_putc(&generated, '>');
+            core_string_t line = core_string_slice(spec, (size_t)at + 1,
+                spec.u8_bytes - (size_t)at - 1);
             assert(location && file
-                && location->start_line == strtoul(at + 1, nullptr, 10)
-                && string_is(snapshot, &file->path, generated,
-                             strlen(generated)));
+                && location->start_line == core_string_strtoull(line, 10)
+                && string_is(snapshot, &file->path,
+                             core_buffer_string(&generated)));
+            core_buffer_release(&generated);
         }
-        if (!equals) continue;
+        if (equals < 0) continue;
         const n00b_abi_native_binding_v1 *binding = n00b_abi_v1_record(
             snapshot, N00B_ABI_TABLE_NATIVE_BINDING,
             found->native_binding_index, nullptr);
-        char expected[256];
-        snprintf(expected, sizeof(expected), "%s%s",
-                 strcmp(host_triple(), "arm64-macos") ? "" : "_", equals + 1);
+        core_buffer_t expected = {0};
+        if (core_string_eq(host_triple(), CORE_STRING_STATIC("arm64-macos")))
+            core_buffer_putc(&expected, '_');
+        core_buffer_append_string(&expected, core_string_slice(spec,
+            (size_t)equals + 1, spec.u8_bytes - (size_t)equals - 1));
         assert(found->native_binding_index && binding
             && binding->kind == N00B_ABI_NATIVE_EXTERNAL_NAME
-            && string_is(snapshot, &binding->native_name, expected,
-                         strlen(expected)));
+            && string_is(snapshot, &binding->native_name,
+                         core_buffer_string(&expected)));
+        core_buffer_release(&expected);
     }
 }
 
 int
 main(int argc, char **argv)
 {
-    bool ffi_module = argc >= 5 && !strcmp(argv[3], "--ffi-module");
+    core_string_t *args = calloc((size_t)argc, sizeof(*args));
+    assert(args);
+    for (int i = 0; i < argc; i++) args[i] = core_string_from_cstr(argv[i]);
+    bool ffi_module = argc >= 5
+        && core_string_eq(args[3], CORE_STRING_STATIC("--ffi-module"));
     assert(argc == 3 || argc == 4 || argc == 5 || ffi_module);
     size_t object_bytes = 0;
-    uint8_t *object = read_object(argv[1], &object_bytes);
+    uint8_t *object = read_object(args[1], &object_bytes);
     core_target_desc_t target;
     assert(core_target_profile(host_triple(), 0, &target));
     uint32_t section_count = 0;
     assert(core_object_section_count(object, object_bytes,
         target.object_format, &section_count));
-    const char *segment = nullptr;
-    const char *name;
+    core_string_t segment = {};
+    core_string_t name;
     switch (target.object_format) {
-    case CORE_TARGET_OBJECT_ELF: name = ".data.rel.ro.n00b_meta"; break;
-    case CORE_TARGET_OBJECT_MACH_O:
-        segment = "__DATA_CONST";
-        name = "__n00b_meta";
+    case CORE_TARGET_OBJECT_ELF:
+        name = CORE_STRING_STATIC(".data.rel.ro.n00b_meta");
         break;
-    case CORE_TARGET_OBJECT_COFF: name = ".n00b$M"; break;
+    case CORE_TARGET_OBJECT_MACH_O:
+        segment = CORE_STRING_STATIC("__DATA_CONST");
+        name = CORE_STRING_STATIC("__n00b_meta");
+        break;
+    case CORE_TARGET_OBJECT_COFF: name = CORE_STRING_STATIC(".n00b$M"); break;
     default: assert(false);
     }
     core_object_section_t metadata;
@@ -204,25 +227,29 @@ main(int argc, char **argv)
         uint64_t generation = 0;
         assert(n00b_abi_v1_register_image(&image, &generation, &error)
             == N00B_ABI_OK);
-        check_ffi_module(n00b_abi_v1_current_snapshot(), argv[4],
-                         argv + 5, argc - 5);
+        check_ffi_module(n00b_abi_v1_current_snapshot(), args[4],
+                         args + 5, argc - 5);
         free(object);
         return 0;
     }
     bool bad_argument = argc == 4
-        && !strcmp(argv[3], "--bad-named-argument");
+        && core_string_eq(args[3], CORE_STRING_STATIC("--bad-named-argument"));
     bool missing_constructor = argc == 4
-        && !strcmp(argv[3], "--missing-named-constructor");
+        && core_string_eq(args[3],
+                          CORE_STRING_STATIC("--missing-named-constructor"));
     bool bad_shape = argc == 4
-        && !strcmp(argv[3], "--bad-shape-total");
+        && core_string_eq(args[3], CORE_STRING_STATIC("--bad-shape-total"));
     bool non_array_shape = argc == 4
-        && !strcmp(argv[3], "--shape-on-non-array");
+        && core_string_eq(args[3], CORE_STRING_STATIC("--shape-on-non-array"));
     bool bad_field_visibility = argc == 4
-        && !strcmp(argv[3], "--bad-field-visibility");
+        && core_string_eq(args[3],
+                          CORE_STRING_STATIC("--bad-field-visibility"));
     bool bad_export_visibility = argc == 4
-        && !strcmp(argv[3], "--bad-export-visibility");
+        && core_string_eq(args[3],
+                          CORE_STRING_STATIC("--bad-export-visibility"));
     bool bad_storage_binding = argc == 4
-        && !strcmp(argv[3], "--bad-storage-binding");
+        && core_string_eq(args[3],
+                          CORE_STRING_STATIC("--bad-storage-binding"));
     if (bad_argument || missing_constructor || bad_shape
         || non_array_shape || bad_field_visibility
         || bad_export_visibility || bad_storage_binding) {
@@ -391,9 +418,12 @@ main(int argc, char **argv)
     assert(snapshot && n00b_abi_v1_generation(snapshot) == generation);
     uint32_t module_count = n00b_abi_v1_table_count(snapshot,
         N00B_ABI_TABLE_MODULE);
-    bool minimum_modules = !strncmp(argv[2], ">=", 2);
-    uint32_t expected_modules = (uint32_t)strtoul(
-        argv[2] + (minimum_modules ? 2 : 0), nullptr, 10) + 1;
+    bool minimum_modules = core_string_starts_with(args[2],
+                                                   CORE_STRING_STATIC(">="));
+    size_t count_start = minimum_modules ? 2 : 0;
+    uint32_t expected_modules = (uint32_t)core_string_strtoull(
+        core_string_slice(args[2], count_start,
+                          args[2].u8_bytes - count_start), 10) + 1;
     assert(minimum_modules ? module_count >= expected_modules
                            : module_count == expected_modules);
     for (uint32_t i = 1; i < module_count; i++) {
@@ -430,7 +460,7 @@ main(int argc, char **argv)
     }
     if (argc == 5) {
         uint32_t matches = 0;
-        uint32_t expected_args = (uint32_t)strtoul(argv[4], nullptr, 10);
+        uint32_t expected_args = (uint32_t)core_string_strtoull(args[4], 10);
         uint32_t type_count = n00b_abi_v1_table_count(snapshot,
             N00B_ABI_TABLE_TYPE);
         for (uint32_t i = 0; i < type_count; i++) {
@@ -442,8 +472,9 @@ main(int argc, char **argv)
                                  sizeof(empty))) continue;
             assert(type && n00b_abi_v1_string_bytes(snapshot,
                 &type->named_constructor, &name, &length) == 1);
-            if (length != strlen(argv[3])
-                || memcmp(name, argv[3], (size_t)length)) continue;
+            if (!core_string_eq(core_string_borrow((const char *)name,
+                                                   (size_t)length), args[3]))
+                continue;
             assert(type->named_arguments.count == expected_args);
             for (uint32_t j = 0; j < expected_args; j++) {
                 const n00b_abi_type_argument_v1 *arg =
@@ -465,8 +496,9 @@ main(int argc, char **argv)
             uint64_t length = 0;
             assert(type && n00b_abi_v1_string_bytes(snapshot,
                 &type->canonical_name, &name, &length) == 1);
-            if (length != strlen(argv[3])
-                || memcmp(name, argv[3], (size_t)length)) continue;
+            if (!core_string_eq(core_string_borrow((const char *)name,
+                                                   (size_t)length), args[3]))
+                continue;
             assert(type->layout_index);
             matches++;
         }

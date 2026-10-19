@@ -33,6 +33,6 @@ size_t           n00bb_ffi_framework_count(const n00bb_ffi_t *ffi);
 core_string_t    n00bb_ffi_framework_at(const n00bb_ffi_t *ffi, size_t index);
 size_t           n00bb_ffi_search_path_count(const n00bb_ffi_t *ffi);
 core_string_t    n00bb_ffi_search_path_at(const n00bb_ffi_t *ffi, size_t index);
-void             n00bb_ffi_select(n00bb_ffi_t *ffi, const char *const *symbols, size_t count);
-bool             n00bb_ffi_compile_shims(n00bb_ffi_t *ffi, const char *triple, const char *executable_path,
+void             n00bb_ffi_select(n00bb_ffi_t *ffi, const core_string_t *symbols, size_t count);
+bool             n00bb_ffi_compile_shims(n00bb_ffi_t *ffi, core_string_t triple, core_string_t executable_path,
                                          core_list_t(core_buffer_t) *bitcode, core_diagnostics_t *diagnostics);

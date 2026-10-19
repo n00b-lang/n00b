@@ -8,16 +8,18 @@
 #include <string.h>
 
 static void
-check_target(const char *triple, const char *segment, const char *name)
+check_target(core_string_t triple, core_string_t segment, core_string_t name)
 {
     core_target_desc_t target;
     assert(core_target_profile(triple, 0, &target));
     const uint8_t root[16] = {1, 2, 3, 4};
     const uint8_t child[16] = {5, 6, 7, 8};
-    const char *aliases[] = {"n00bb_test_root_alias"};
+    const core_string_t aliases[] = {
+        CORE_STRING_STATIC("n00bb_test_root_alias"),
+    };
     const n00bb_static_graph_node_t nodes[] = {
         {.bytes = root, .size = sizeof root, .alignment = 8,
-         .symbol = "n00bb_test_root", .aliases = aliases,
+         .symbol = CORE_STRING_STATIC("n00bb_test_root"), .aliases = aliases,
          .alias_count = 1},
         {.bytes = child, .size = sizeof child, .alignment = 32},
     };
@@ -39,26 +41,24 @@ check_target(const char *triple, const char *segment, const char *name)
     assert(section.alignment == 32);
     assert(section.relocation_count == 2);
     bool found_root = false, found_alias = false;
-    const char *prefix = target.object_format == CORE_TARGET_OBJECT_MACH_O
-        ? "_" : "";
-    char native_root[64], native_alias[64];
-    assert(snprintf(native_root, sizeof native_root, "%sn00bb_test_root",
-                    prefix) > 0);
-    assert(snprintf(native_alias, sizeof native_alias,
-                    "%sn00bb_test_root_alias", prefix) > 0);
+    bool mach_o = target.object_format == CORE_TARGET_OBJECT_MACH_O;
+    core_string_t native_root = mach_o
+        ? CORE_STRING_STATIC("_n00bb_test_root")
+        : CORE_STRING_STATIC("n00bb_test_root");
+    core_string_t native_alias = mach_o
+        ? CORE_STRING_STATIC("_n00bb_test_root_alias")
+        : CORE_STRING_STATIC("n00bb_test_root_alias");
     for (uint32_t i = 0; i < 8; i++) {
         core_object_symbol_t symbol;
         if (!core_object_symbol_at(object, object_size,
                 target.object_format, &section, i, &symbol)) continue;
-        if (symbol.name.length == strlen(native_root)
-            && !memcmp(symbol.name.bytes, native_root,
-                       symbol.name.length)) {
+        core_string_t symbol_name = core_string_borrow(
+            (const char *)symbol.name.bytes, symbol.name.length);
+        if (core_string_eq(symbol_name, native_root)) {
             assert(symbol.section_offset == 0 && symbol.exported);
             found_root = true;
         }
-        if (symbol.name.length == strlen(native_alias)
-            && !memcmp(symbol.name.bytes, native_alias,
-                       symbol.name.length)) {
+        if (core_string_eq(symbol_name, native_alias)) {
             assert(symbol.section_offset == 0 && symbol.exported);
             found_alias = true;
         }
@@ -116,8 +116,12 @@ check_target(const char *triple, const char *segment, const char *name)
 
 int main(void)
 {
-    check_target("x86_64-linux", nullptr, ".data.rel.ro.n00b_lit");
-    check_target("arm64-macos", "__DATA_CONST", "__n00b_lits");
-    check_target("x86_64-windows", nullptr, ".rdata$n00b");
+    check_target(CORE_STRING_STATIC("x86_64-linux"), (core_string_t){},
+                 CORE_STRING_STATIC(".data.rel.ro.n00b_lit"));
+    check_target(CORE_STRING_STATIC("arm64-macos"),
+                 CORE_STRING_STATIC("__DATA_CONST"),
+                 CORE_STRING_STATIC("__n00b_lits"));
+    check_target(CORE_STRING_STATIC("x86_64-windows"), (core_string_t){},
+                 CORE_STRING_STATIC(".rdata$n00b"));
     return 0;
 }

@@ -11,8 +11,8 @@
 #include "lib/object_emit.h"
 
 typedef struct {
-    char *function;
-    char *descriptor;
+    core_string_t function;
+    core_string_t descriptor;
     bool has_sentinel;
     bool invalid;
     int32_t sentinel_offset;
@@ -32,9 +32,9 @@ add_location(void *opaque, const n00bb_llvm_stack_location_t *location)
     native_frame_t *frame = nullptr;
     for (size_t i = 0; i < frames->functions.len; i++) {
         native_frame_t *candidate = &frames->functions.data[i];
-        if (strlen(candidate->function) == location->function.length
-            && !memcmp(candidate->function, location->function.bytes,
-                       location->function.length)) {
+        if (core_string_eq(candidate->function, core_string_borrow(
+                (const char *)location->function.bytes,
+                location->function.length))) {
             frame = candidate;
             break;
         }
@@ -53,14 +53,16 @@ add_location(void *opaque, const n00bb_llvm_stack_location_t *location)
             + (frames->format == CORE_TARGET_OBJECT_MACH_O),
             length - (frames->format == CORE_TARGET_OBJECT_MACH_O));
         native_frame_t next = {
-            .function = core_strndup((const char *)name, length),
-            .descriptor = core_strdup(descriptor.data),
+            .function = core_string_from_raw((const char *)name,
+                                             (int64_t)length),
+            .descriptor = core_string_dup(core_buffer_string(&descriptor)),
             .roots = core_list_new(int32_t),
         };
         core_buffer_release(&descriptor);
-        if (!next.function || !next.descriptor || !next.roots.data) {
-            core_free(next.function);
-            core_free(next.descriptor);
+        if (!next.function.data || !next.descriptor.data
+            || !next.roots.data) {
+            core_free(next.function.data);
+            core_free(next.descriptor.data);
             core_list_free(next.roots);
             return false;
         }
@@ -185,15 +187,18 @@ n00bb_native_frames_emit(const n00bb_native_frames_t *frames,
     }
     symbols[count * 2] = (core_object_emit_symbol_t){
         .name = frames->format == CORE_TARGET_OBJECT_MACH_O
-            ? "___n00bb_gc_native_frames" : "__n00bb_gc_native_frames",
+            ? CORE_STRING_STATIC("___n00bb_gc_native_frames")
+            : CORE_STRING_STATIC("__n00bb_gc_native_frames"),
         .section_index = 1, .exported = true,
     };
     const core_object_emit_section_t section = {
         .name = frames->format == CORE_TARGET_OBJECT_MACH_O
-            ? "__n00b_frames" : frames->format == CORE_TARGET_OBJECT_COFF
-                ? ".n00b$F" : ".data.rel.ro.n00b_frames",
+            ? CORE_STRING_STATIC("__n00b_frames")
+            : frames->format == CORE_TARGET_OBJECT_COFF
+                ? CORE_STRING_STATIC(".n00b$F")
+                : CORE_STRING_STATIC(".data.rel.ro.n00b_frames"),
         .segment = frames->format == CORE_TARGET_OBJECT_MACH_O
-            ? "__DATA_CONST" : nullptr,
+            ? CORE_STRING_STATIC("__DATA_CONST") : (core_string_t){},
         .bytes = data, .size = bytes, .alignment = 8,
     };
     bool ok = core_object_emit(target, &section, 1, symbols,
@@ -210,8 +215,8 @@ n00bb_native_frames_free(n00bb_native_frames_t *frames)
     if (!frames) return;
     for (size_t i = 0; i < frames->functions.len; i++) {
         native_frame_t *frame = &frames->functions.data[i];
-        core_free(frame->function);
-        core_free(frame->descriptor);
+        core_free(frame->function.data);
+        core_free(frame->descriptor.data);
         core_list_free(frame->roots);
     }
     core_list_free(frames->functions);
