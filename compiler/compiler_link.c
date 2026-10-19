@@ -333,8 +333,8 @@ resolve_inferred_field_references(core_link_unit_t *link,
             if (th_kind_of(receiver_type) == TH_RECORD) {
                 core_string_t member = first_token_text(
                     core_tree_child(node, 2));
-                th_type *member_type = th_record_lookup_in(state->types,
-                    receiver_type, member.data);
+                th_type *member_type = record_lookup_text(state->types,
+                    receiver_type, member);
                 if (!member_type) {
                     core_buffer_t message = {0};
                     core_buffer_printf(&message,
@@ -2384,8 +2384,8 @@ build_initializer_order(core_link_unit_t *link,
                                 symbol_binding_node(target_symbol)) : nullptr;
                         core_diag_location_t target_location = target_token
                             ? (core_diag_location_t){
-                                .line = target_token->line,
-                                .column = target_token->column,
+                                .line = parse_token_line(target_token),
+                                .column = parse_token_column(target_token),
                                 .has_location = true,
                             } : (core_diag_location_t){0};
                         if (diag_location_precedes(edge.source_location,

@@ -680,11 +680,14 @@ lower_span_for_tree(ir_lower_context_t *context, parse_tree_t *node)
     parse_token_info_t *first = parse_tree_find_first_terminal(node);
     parse_token_info_t *last = last_tree_terminal(node);
     if (!context || context->file_id < 0 || !first || !last
-        || first->start_byte > UINT32_MAX || last->end_byte > UINT32_MAX)
+        || parse_token_start_byte(first) > UINT32_MAX
+        || parse_token_end_byte(last) > UINT32_MAX)
         return IR_SPAN_UNKNOWN;
-    return ir_span_make(context->file_id, (uint32_t)first->start_byte,
-                        (uint32_t)last->end_byte, first->line, first->column,
-                        last->endline, last->endcol);
+    return ir_span_make(context->file_id,
+                        (uint32_t)parse_token_start_byte(first),
+                        (uint32_t)parse_token_end_byte(last),
+                        parse_token_line(first), parse_token_column(first),
+                        parse_token_endline(last), parse_token_endcol(last));
 }
 
 static ir_block_t *
@@ -5590,8 +5593,8 @@ n00bb_lower_tuple_literal(ir_lower_context_t *context, parse_visit_t *visit,
                 parts->expressions.data[i]);
             core_string_t name = field ? first_token_text(field)
                                        : (core_string_t){0};
-            th_type *field_type = name.data
-                ? th_record_lookup(definition, name.data) : nullptr;
+            th_type *field_type = record_lookup_text(nullptr, definition,
+                                                     name);
             if (!field_type) continue;
             ir_lower_result_t promoted = n00bb_lower_literal_element(context,
                 parts->values.data[i], field_type, span);
@@ -5684,9 +5687,11 @@ n00bb_lower_char_literal(ir_lower_context_t *context, parse_visit_t *visit,
     parse_token_info_t *token = visit && visit->node
         ? parse_tree_find_first_terminal(visit->node) : nullptr;
     uint32_t scalar = 0;
+    core_option_t(core_string_t) literal = token
+        ? parse_token_value(token) : core_option_none(core_string_t);
     if (operand_count || !result_type || !token
-        || !core_option_is_set(token->value)
-        || !n00bb_decode_char_literal(core_option_get(token->value), &scalar))
+        || !core_option_is_set(literal)
+        || !n00bb_decode_char_literal(core_option_get(literal), &scalar))
         return lower_error(context, IR_DIAG_TYPE_LITERAL, span,
                            "character literal has no valid scalar value");
     ir_instr_t *constant = ir_lower_emit_instruction(context, IR_OP_CONST,
@@ -5709,10 +5714,12 @@ n00bb_lower_string_literal(ir_lower_context_t *context,
     (void)operands;
     (void)state;
     parse_token_info_t *token = parse_tree_find_first_terminal(visit->node);
-    if (operand_count || !token || !core_option_is_set(token->value))
+    core_option_t(core_string_t) literal = token
+        ? parse_token_value(token) : core_option_none(core_string_t);
+    if (operand_count || !token || !core_option_is_set(literal))
         return lower_error(context, IR_DIAG_TYPE_LITERAL, span,
                            "string literal has no decoded token value");
-    core_string_t spelling = core_option_get(token->value);
+    core_string_t spelling = core_option_get(literal);
     core_string_t modifier = literal_modifier(visit->grammar, visit->node);
     const n00bb_literal_registration_t *registration = modifier.data
         ? n00bb_literal_handler(modifier, N00BB_LITERAL_STRING_SHAPE)
@@ -6362,8 +6369,10 @@ n00bb_lower_user_literal(ir_lower_context_t *context,
     else if (core_string_eq(site->registration->kind,
                             CORE_STRING_STATIC("bool"))) {
         parse_token_info_t *token = parse_tree_find_first_terminal(visit->node);
-        core_string_t spelling = token && core_option_is_set(token->value)
-            ? core_option_get(token->value) : (core_string_t){0};
+        core_option_t(core_string_t) literal = token
+            ? parse_token_value(token) : core_option_none(core_string_t);
+        core_string_t spelling = core_option_is_set(literal)
+            ? core_option_get(literal) : (core_string_t){0};
         bool value = core_string_eq(spelling, CORE_STRING_STATIC("true"));
         if (value || core_string_eq(spelling, CORE_STRING_STATIC("false"))) {
             ir_instr_t *constant = ir_lower_emit_instruction(context,
@@ -6388,8 +6397,10 @@ n00bb_lower_user_literal(ir_lower_context_t *context,
         core_buffer_t *decoded = core_buffer_empty();
         bool quotes = core_string_eq(site->registration->kind,
                                      CORE_STRING_STATIC("quotes"));
-        core_string_t spelling = token && core_option_is_set(token->value)
-            ? core_option_get(token->value) : (core_string_t){0};
+        core_option_t(core_string_t) literal = token
+            ? parse_token_value(token) : core_option_none(core_string_t);
+        core_string_t spelling = core_option_is_set(literal)
+            ? core_option_get(literal) : (core_string_t){0};
         bool valid = token && decoded && spelling.data;
         if (valid && quotes) {
             valid = spelling.u8_bytes >= 2 && spelling.data[0] == '"'
@@ -6422,17 +6433,21 @@ n00bb_lower_user_literal(ir_lower_context_t *context,
                             CORE_STRING_STATIC("fence"))) {
         parse_token_info_t *token =
             parse_tree_find_first_terminal(visit->node);
-        if (token && token->has_content_span
-            && core_option_is_set(token->value)) {
-            core_string_t spelling = core_option_get(token->value);
-            if (token->content_start_byte < token->start_byte
-                || token->content_end_byte < token->content_start_byte
-                || token->content_end_byte - token->start_byte
-                    > spelling.u8_bytes)
+        size_t content_start = 0;
+        size_t content_end = 0;
+        core_option_t(core_string_t) literal = token
+            ? parse_token_value(token) : core_option_none(core_string_t);
+        if (token && parse_token_content_span(token, &content_start,
+                                              &content_end)
+            && core_option_is_set(literal)) {
+            core_string_t spelling = core_option_get(literal);
+            size_t token_start = parse_token_start_byte(token);
+            if (content_start < token_start || content_end < content_start
+                || content_end - token_start > spelling.u8_bytes)
                 return lower_error(context, IR_DIAG_TYPE_LITERAL, span,
                     "fence literal has invalid content offsets");
-            size_t start = token->content_start_byte - token->start_byte;
-            size_t end = token->content_end_byte - token->start_byte;
+            size_t start = content_start - token_start;
+            size_t end = content_end - token_start;
             ir_instr_t *constant = ir_lower_emit_instruction(context,
                 IR_OP_CONST, span);
             if (constant && ir_lower_set_temp_dest(context, constant,
@@ -6672,7 +6687,7 @@ n00bb_lower_static_litmod(ir_lower_context_t *context,
             parse_tree_find_first_terminal(visit->node);
         char name[96];
         snprintf(name, sizeof(name), "__n00bb_litmod_%llu",
-            (unsigned long long)(token ? token->start_byte : 0));
+            (unsigned long long)(token ? parse_token_start_byte(token) : 0));
         ir_module_t *module = tu->ir_module;
         ir_func_t *existing = module ? ir_func_find(module, name) : nullptr;
         if (existing) {

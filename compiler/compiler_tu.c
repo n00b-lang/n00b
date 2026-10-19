@@ -188,7 +188,7 @@ bind_resolved_reference_alias(parse_grammar_t *grammar,
             && holder->kind != PARSE_SYM_PARAM)) return true;
 
     parse_token_info_t *site = parse_tree_find_first_terminal(value);
-    uint64_t derivation = site ? site->start_byte : 0;
+    uint64_t derivation = site ? parse_token_start_byte(site) : 0;
     bool outlives_target = scope_has_lexical_lifetime(referent->scope)
         && !scope_is_within(holder->scope, referent->scope);
     return parse_symtab_add_alias(holder, referent,
@@ -1372,7 +1372,7 @@ semantic_static_scalar_value(parse_grammar_t *grammar, parse_tree_t *literal,
         return false;
     parse_token_info_t *token = parse_tree_find_first_terminal(literal);
     if (!token) return false;
-    core_string_t terminal = parse_terminal_name(grammar, token->tid);
+    core_string_t terminal = parse_terminal_name(grammar, parse_token_tid(token));
     core_string_t spelling = first_token_text(literal);
     if (core_string_eq(terminal, CORE_STRING_STATIC("STRING_LIT"))) {
         core_buffer_t *decoded = core_buffer_empty();
@@ -1411,9 +1411,13 @@ semantic_static_scalar_value(parse_grammar_t *grammar, parse_tree_t *literal,
         return true;
     }
     if (core_string_eq(terminal, CORE_STRING_STATIC("FLOAT_LIT"))) {
+        if (!spelling.data) return false;
+        char *text = core_strndup(spelling.data, spelling.u8_bytes);
         char *end = nullptr;
-        double value = strtod(spelling.data, &end);
-        if (!end || end == spelling.data || *end) return false;
+        double value = strtod(text, &end);
+        bool parsed = end && end != text && !*end;
+        core_free(text);
+        if (!parsed) return false;
         if (probe.negative)
             value = -value;
         *out = (n00bb_static_value_t){
@@ -1457,7 +1461,7 @@ named_field_identifier(parse_grammar_t *grammar, parse_tree_t *field)
         || !core_tree_num_children(field)) return (core_string_t){0};
     parse_tree_t *name = core_tree_child(field, 0);
     parse_token_info_t *token = parse_node_token(name);
-    if (!token || !core_string_eq(parse_terminal_name(grammar, token->tid),
+    if (!token || !core_string_eq(parse_terminal_name(grammar, parse_token_tid(token)),
                                   CORE_STRING_STATIC("IDENTIFIER")))
         return (core_string_t){0};
     return parse_tree_leaf_text(name);
@@ -2016,7 +2020,8 @@ infer_user_literal_type(parse_grammar_t *grammar,
     parse_token_info_t *scalar = nt_is(grammar, node, "simple-lit")
         ? parse_tree_find_first_terminal(node) : nullptr;
     core_string_t scalar_kind = scalar
-        ? parse_terminal_name(grammar, scalar->tid) : (core_string_t){0};
+        ? parse_terminal_name(grammar, parse_token_tid(scalar))
+        : (core_string_t){0};
     parse_tree_t *fence = nt_is(grammar, node, "embed-lit") ? node : nullptr;
     parse_tree_t *braces = nt_is(grammar, node, "dict-or-set-lit")
         ? node : nullptr;
@@ -2679,13 +2684,13 @@ infer_anonymous_record(parse_grammar_t *grammar, parse_tree_t *node,
         parse_tree_t *name_node = core_tree_child(field, 0);
         parse_token_info_t *name_token = parse_node_token(name_node);
         if (!name_token || !core_string_eq(
-                parse_terminal_name(grammar, name_token->tid),
+                parse_terminal_name(grammar, parse_token_tid(name_token)),
                 CORE_STRING_STATIC("IDENTIFIER"))) continue;
         core_string_t name = parse_tree_leaf_text(name_node);
         th_type *field_type = parse_tree_type(field);
         if (!field_type) field_type = th_var(state->types);
         core_list_push(members, ((th_member){
-            .name = name.data,
+            .name = store_semantic_string(state, name).data,
             .type = field_type,
         }));
     }
@@ -2768,7 +2773,7 @@ contextualize_record_literal(parse_grammar_t *grammar,
             break;
         }
         core_string_t name = parse_tree_leaf_text(name_node);
-        th_type *field_type = th_record_lookup(definition, name.data);
+        th_type *field_type = record_lookup_text(nullptr, definition, name);
         if (!field_type
             || !contextualize_record_literal(grammar, unit, state, value_node,
                                              field_type)) {
@@ -2783,7 +2788,8 @@ contextualize_record_literal(parse_grammar_t *grammar,
             break;
         }
         core_list_push(members, ((th_member){
-            .name = name.data, .type = field_type,
+            .name = store_semantic_string(state, name).data,
+            .type = field_type,
         }));
         parse_tree_set_type(field, field_type);
     }
@@ -2831,7 +2837,7 @@ named_field_expected_type(parse_grammar_t *grammar, th_ctx *types,
     th_type *definition = outer ? th_type_definition(types, outer) : nullptr;
     definition = definition ? th_resolve(definition) : nullptr;
     return definition && th_kind_of(definition) == TH_RECORD
-        ? th_record_lookup(definition, name.data) : nullptr;
+        ? record_lookup_text(nullptr, definition, name) : nullptr;
 }
 
 static th_type *
@@ -2925,7 +2931,7 @@ contextualize_record_fields_before_inference(parse_grammar_t *grammar,
             core_tree_num_children(field) - 1);
         if (!value || core_tree_is_leaf(value)) continue;
         core_string_t name = parse_tree_leaf_text(core_tree_child(field, 0));
-        th_type *field_type = th_record_lookup(definition, name.data);
+        th_type *field_type = record_lookup_text(nullptr, definition, name);
         th_type *value_type = parse_tree_type(value);
         bool record_literal = n00bb_node_record_literal_origin(value);
         bool converted = false;
@@ -4432,7 +4438,7 @@ cache_alias_edges(parse_grammar_t *grammar, parse_tree_t *node,
     }
     if (direct) {
         parse_token_info_t *token = parse_tree_find_first_terminal(node);
-        single.derived_at = token ? token->start_byte : 0;
+        single.derived_at = token ? parse_token_start_byte(token) : 0;
         n00bb_alias_edges_t *result = core_arena_alloc(
             &state->semantic_values, sizeof(*result));
         n00bb_alias_edge_t *edge = core_arena_alloc(
@@ -5484,7 +5490,7 @@ refine_integer_literal_type(parse_grammar_t *grammar,
     (void)unit;
     parse_token_info_t *token = parse_tree_find_first_terminal(node);
     if (!token) return true;
-    core_string_t terminal = parse_terminal_name(grammar, token->tid);
+    core_string_t terminal = parse_terminal_name(grammar, parse_token_tid(token));
     if (!core_string_eq(terminal, CORE_STRING_STATIC("INT_LIT"))
         && !core_string_eq(terminal, CORE_STRING_STATIC("HEX_LIT")))
         return true;
@@ -5567,7 +5573,7 @@ cache_enum_item_value(parse_grammar_t *grammar, n00bb_tu_state_t *state,
     parse_token_info_t *token = terminal_node && core_tree_is_leaf(terminal_node)
         ? core_tree_leaf_value(terminal_node) : nullptr;
     core_string_t terminal = token
-        ? parse_terminal_name(grammar, token->tid) : (core_string_t){0};
+        ? parse_terminal_name(grammar, parse_token_tid(token)) : (core_string_t){0};
     parse_sym_entry_t *symbol = parse_tree_sym(node);
     ir_lit_t value = {0};
     if (!symbol || (!core_string_eq(terminal, CORE_STRING_STATIC("INT_LIT"))
@@ -6215,7 +6221,7 @@ signature_typevar_for_node(parse_grammar_t *grammar,
 
     th_type *type = parse_tree_type(node);
     if (!type || th_kind_of(th_resolve(type)) != TH_VAR)
-        type = th_var_named(state->types, name.data);
+        type = var_named_text(state->types, name);
     if (!type) return nullptr;
     if (!core_arena_try_reserve_raw(&state->semantic_values,
             (void **)&variables->data, &variables->cap,
@@ -6627,8 +6633,10 @@ record_function_signature(parse_grammar_t *grammar,
                 unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0001"),
                 core_string_from_cstr(message.data),
                 site ? (core_diag_location_t){
-                    .line = site->line, .column = site->column,
-                    .end_line = site->endline, .end_column = site->endcol,
+                    .line = parse_token_line(site),
+                    .column = parse_token_column(site),
+                    .end_line = parse_token_endline(site),
+                    .end_column = parse_token_endcol(site),
                     .has_location = true,
                 } : (core_diag_location_t){0});
             core_buffer_release(&message);
@@ -7743,8 +7751,10 @@ static core_string_t
 flagset_operator_spelling(parse_tree_t *node)
 {
     parse_token_info_t *token = parse_tree_find_first_terminal(node);
-    return token && core_option_is_set(token->value)
-        ? core_option_get(token->value) : (core_string_t){0};
+    core_option_t(core_string_t) value = token
+        ? parse_token_value(token) : core_option_none(core_string_t);
+    return core_option_is_set(value) ? core_option_get(value)
+                                     : (core_string_t){0};
 }
 
 bool
@@ -7983,8 +7993,8 @@ context_default_dependencies(parse_tree_t *expr,
             parse_tree_t *use = parameter->use_nodes[u];
             if (!node_is_within(use, expr)) continue;
             parse_token_info_t *token = parse_tree_find_first_terminal(use);
-            if (token && token->start_byte < offset)
-                offset = token->start_byte;
+            if (token && parse_token_start_byte(token) < offset)
+                offset = parse_token_start_byte(token);
         }
         size_t at = ordered.len;
         while (at && offsets.data[at - 1] > offset) at--;
@@ -8349,7 +8359,8 @@ float_literal_leaf(parse_tree_t *node, th_type *retype)
         else return nullptr;
     }
     parse_token_info_t *token = node ? parse_node_token(node) : nullptr;
-    if (!token || core_option_is_set(token->postfix_modifier)) return nullptr;
+    if (!token || core_option_is_set(parse_token_postfix_modifier(token)))
+        return nullptr;
     core_string_t text = parse_tree_leaf_text(node);
     if (!text.u8_bytes || text.data[0] < '0' || text.data[0] > '9'
         || memchr(text.data, 'x', text.u8_bytes)
@@ -9917,7 +9928,7 @@ simple_identifier_expression(parse_grammar_t *grammar, parse_tree_t *node,
     if (!primary || core_tree_num_children(primary) != 1) return false;
     parse_tree_t *identifier = core_tree_child(primary, 0);
     parse_token_info_t *token = parse_node_token(identifier);
-    if (!token || !core_string_eq(parse_terminal_name(grammar, token->tid),
+    if (!token || !core_string_eq(parse_terminal_name(grammar, parse_token_tid(token)),
                                   CORE_STRING_STATIC("IDENTIFIER")))
         return false;
     if (name) *name = parse_tree_leaf_text(identifier);
@@ -10465,10 +10476,10 @@ link_source_location(parse_tree_t *node)
     parse_token_info_t *token = node
         ? parse_tree_find_first_terminal(node) : nullptr;
     return token ? (core_diag_location_t){
-        .line = token->line,
-        .column = token->column,
-        .end_line = token->endline,
-        .end_column = token->endcol,
+        .line = parse_token_line(token),
+        .column = parse_token_column(token),
+        .end_line = parse_token_endline(token),
+        .end_column = parse_token_endcol(token),
         .has_location = true,
     } : (core_diag_location_t){0};
 }
@@ -10517,7 +10528,7 @@ append_dotted_name(parse_grammar_t *grammar, parse_tree_t *node,
     if (!node) return false;
     if (core_tree_is_leaf(node)) {
         parse_token_info_t *token = parse_node_token(node);
-        if (!token || !core_string_eq(parse_terminal_name(grammar, token->tid),
+        if (!token || !core_string_eq(parse_terminal_name(grammar, parse_token_tid(token)),
                                       CORE_STRING_STATIC("IDENTIFIER")))
             return true;
         if (name->byte_len) core_buffer_putc(name, '.');
@@ -12139,10 +12150,10 @@ register_user_litmod(void *context, core_translation_unit_t *unit,
     };
     parse_token_info_t *token = parse_tree_find_first_terminal(declaration);
     if (token) registration.location = (core_diag_location_t){
-        .line = token->line,
-        .column = token->column,
-        .end_line = token->endline,
-        .end_column = token->endcol,
+        .line = parse_token_line(token),
+        .column = parse_token_column(token),
+        .end_line = parse_token_endline(token),
+        .end_column = parse_token_endcol(token),
         .has_location = true,
     };
     if (!registration.modifier.data || !registration.kind.data) {
@@ -12266,8 +12277,8 @@ literal_modifier(parse_grammar_t *grammar, parse_tree_t *node)
         last = count ? core_tree_child(last, count - 1) : nullptr;
     }
     parse_token_info_t *token = parse_node_token(last);
-    if (token && core_option_is_set(token->postfix_modifier))
-        return core_option_get(token->postfix_modifier);
+    if (token && core_option_is_set(parse_token_postfix_modifier(token)))
+        return core_option_get(parse_token_postfix_modifier(token));
     return nt_is(grammar, node, "embed-lit") ? CORE_STRING_STATIC("string")
                                              : (core_string_t){0};
 }
@@ -12278,7 +12289,7 @@ dict_only_empty_literal(parse_grammar_t *grammar, parse_tree_t *node)
     if (!nt_is(grammar, node, "dict-or-set-lit")
         || core_tree_num_children(node) != 3) return false;
     parse_token_info_t *marker = parse_node_token(core_tree_child(node, 1));
-    return marker && marker->tid == ':';
+    return marker && parse_token_tid(marker) == ':';
 }
 
 bool
@@ -12287,7 +12298,7 @@ literal_modifier_terminal(parse_grammar_t *grammar, parse_tree_t *leaf,
 {
     parse_token_info_t *token = parse_node_token(leaf);
     if (!token || !parent) return false;
-    core_string_t terminal = parse_terminal_name(grammar, token->tid);
+    core_string_t terminal = parse_terminal_name(grammar, parse_token_tid(token));
     if (nt_is(grammar, parent, "simple-lit"))
         return core_string_eq(terminal, CORE_STRING_STATIC("INT_LIT"))
             || core_string_eq(terminal, CORE_STRING_STATIC("HEX_LIT"))
@@ -12666,7 +12677,7 @@ simple_member_chain_name(parse_grammar_t *grammar, parse_tree_t *node,
         || core_tree_num_children(node) != 1) return false;
     parse_tree_t *identifier = core_tree_child(node, 0);
     parse_token_info_t *token = parse_node_token(identifier);
-    if (!token || !core_string_eq(parse_terminal_name(grammar, token->tid),
+    if (!token || !core_string_eq(parse_terminal_name(grammar, parse_token_tid(token)),
                                   CORE_STRING_STATIC("IDENTIFIER")))
         return false;
     if (name) *name = parse_tree_leaf_text(identifier);

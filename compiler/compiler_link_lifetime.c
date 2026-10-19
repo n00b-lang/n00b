@@ -579,7 +579,7 @@ call_argument_aliases(parse_grammar_t *grammar,
             && !scope_is_within(holder->scope, referent->scope);
         parse_token_info_t *site = parse_tree_find_first_terminal(argument);
         return parse_symtab_add_alias(holder, referent, PARSE_SYM_ALIAS_MAY,
-            site ? site->start_byte : 0, escapes);
+            site ? parse_token_start_byte(site) : 0, escapes);
     }
 
     parse_sym_entry_t *source = simple_expression_symbol(argument);
@@ -589,7 +589,7 @@ call_argument_aliases(parse_grammar_t *grammar,
         if (!source->alias_count) {
             parse_token_info_t *site = parse_tree_find_first_terminal(argument);
             return parse_symtab_add_alias(holder, source,
-                PARSE_SYM_ALIAS_MAY, site ? site->start_byte : 0,
+                PARSE_SYM_ALIAS_MAY, site ? parse_token_start_byte(site) : 0,
                 source->lifetime.escapes);
         }
         for (size_t i = 0; i < source->alias_count; i++) {
@@ -791,7 +791,7 @@ record_returned_call_alias_body(parse_grammar_t *grammar,
             && !scope_is_within(holder->scope, referent->scope);
         parse_token_info_t *site = parse_tree_find_first_terminal(expression);
         return parse_symtab_add_alias(holder, referent,
-            PARSE_SYM_ALIAS_DERIVED, site ? site->start_byte : 0,
+            PARSE_SYM_ALIAS_DERIVED, site ? parse_token_start_byte(site) : 0,
             escapes);
     }
 
@@ -850,7 +850,7 @@ record_returned_call_alias_body(parse_grammar_t *grammar,
                     parse_tree_find_first_terminal(expression);
                 return parse_symtab_add_alias(holder, global,
                     PARSE_SYM_ALIAS_DERIVED,
-                    site ? site->start_byte : 0, false);
+                    site ? parse_token_start_byte(site) : 0, false);
             }
             if (effects.return_kind != N00BB_RETURN_ALIAS_PARAMETER)
                 return false;

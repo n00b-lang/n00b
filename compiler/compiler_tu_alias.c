@@ -436,7 +436,7 @@ record_reference_facts(parse_grammar_t *grammar,
     parse_sym_entry_t *referent = direct_reference
         ? direct_ref_target(grammar, direct_reference) : nullptr;
     parse_token_info_t *site = parse_tree_find_first_terminal(value_node);
-    uint64_t derivation = site ? site->start_byte : 0;
+    uint64_t derivation = site ? parse_token_start_byte(site) : 0;
     if (referent) {
         if (holder == referent) return;
         bool outlives_target = scope_has_lexical_lifetime(referent->scope)

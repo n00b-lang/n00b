@@ -245,11 +245,14 @@ dump_token(parse_grammar_t *grammar, core_translation_unit_t *unit,
     core_string_t path = core_source_file_path(&unit->source);
     const char *source = core_source_file_contents(&unit->source);
     size_t source_size = core_source_file_size(&unit->source);
-    core_string_t name = parse_terminal_name(grammar, token->tid);
-    size_t end = token->end_byte > source_size ? source_size : token->end_byte;
-    size_t start = token->start_byte <= end ? token->start_byte : end;
+    core_string_t name = parse_terminal_name(grammar, parse_token_tid(token));
+    size_t token_end = parse_token_end_byte(token);
+    size_t token_start = parse_token_start_byte(token);
+    size_t end = token_end > source_size ? source_size : token_end;
+    size_t start = token_start <= end ? token_start : end;
     printf("%.*s:%u:%u %.*s ", (int)path.u8_bytes, path.data,
-           token->line, token->column, (int)name.u8_bytes, name.data);
+           parse_token_line(token), parse_token_column(token),
+           (int)name.u8_bytes, name.data);
     fputc('"', stdout);
     for (size_t j = start; j < end; j++) {
         unsigned char ch = (unsigned char)source[j];
@@ -261,8 +264,9 @@ dump_token(parse_grammar_t *grammar, core_translation_unit_t *unit,
         else fputc(ch, stdout);
     }
     fputc('"', stdout);
-    if (core_option_is_set(token->postfix_modifier)) {
-        core_string_t modifier = core_option_get(token->postfix_modifier);
+    if (core_option_is_set(parse_token_postfix_modifier(token))) {
+        core_string_t modifier =
+            core_option_get(parse_token_postfix_modifier(token));
         printf(" modifier='%.*s", (int)modifier.u8_bytes, modifier.data);
     }
     fputc('\n', stdout);
@@ -547,14 +551,16 @@ dump_symbols(core_translation_unit_t *unit)
             parse_token_info_t *token = symbol->decl_node
                 ? parse_tree_find_first_terminal(symbol->decl_node) : nullptr;
             if (token)
-                printf(", declaration=%u:%u", token->line, token->column);
+                printf(", declaration=%u:%u", parse_token_line(token),
+                       parse_token_column(token));
             else printf(", declaration=none");
             printf(", definitions=[");
             for (size_t d = 0; d < symbol->definition_count; d++) {
                 parse_token_info_t *site = parse_tree_find_first_terminal(
                     symbol->definition_nodes[d]);
                 if (d) printf(", ");
-                if (site) printf("%u:%u", site->line, site->column);
+                if (site) printf("%u:%u", parse_token_line(site),
+                                 parse_token_column(site));
                 else printf("?");
             }
             printf("], use-sites=[");
@@ -562,7 +568,8 @@ dump_symbols(core_translation_unit_t *unit)
                 parse_token_info_t *site = parse_tree_find_first_terminal(
                     symbol->use_nodes[u]);
                 if (u) printf(", ");
-                if (site) printf("%u:%u", site->line, site->column);
+                if (site) printf("%u:%u", parse_token_line(site),
+                                 parse_token_column(site));
                 else printf("?");
             }
             printf("]");
@@ -576,7 +583,8 @@ dump_symbols(core_translation_unit_t *unit)
                     parse_token_info_t *site =
                         parse_tree_find_first_terminal(use);
                     if (u) printf(", ");
-                    if (site) printf("%u:%u", site->line, site->column);
+                    if (site) printf("%u:%u", parse_token_line(site),
+                                     parse_token_column(site));
                     else printf("?");
                     printf("->%s", resolution.kind
                             == PARSE_NODE_RESOLUTION_SYMBOL
@@ -963,8 +971,9 @@ discard_ignored_layout(parse_grammar_t *grammar, parse_token_stream_t *tokens)
         grammar, CORE_STRING_STATIC("DEDENT"));
     for (int32_t i = 0; i < scan_stream_token_count(tokens);) {
         parse_token_info_t *token = scan_stream_get(tokens, i);
-        if (token && token->ignore_if_no_match
-            && (token->tid == indent || token->tid == dedent)) {
+        if (token && parse_token_ignore_if_no_match(token)
+            && (parse_token_tid(token) == indent
+                || parse_token_tid(token) == dedent)) {
             if (!scan_stream_token_to_trivia(tokens, i)) return false;
             continue;
         }
@@ -1126,28 +1135,31 @@ process_locate_job(locate_worker_context_t *context, core_work_job_t *job)
                         ? scan_stream_get(result->tokens, error_pos) : nullptr;
                     core_buffer_t message = {0};
                     if (error_token) {
+                        int32_t error_tid = parse_token_tid(error_token);
+                        uint32_t error_line = parse_token_line(error_token);
+                        uint32_t error_column =
+                            parse_token_column(error_token);
                         core_string_t token_name = parse_terminal_name(
-                            context->grammar, error_token->tid);
+                            context->grammar, error_tid);
                         if (token_name.data)
                             core_buffer_printf(&message,
                                 "syntax error at line %u, column %u near %.*s",
-                                error_token->line, error_token->column,
+                                error_line, error_column,
                                 (int)token_name.u8_bytes, token_name.data);
-                        else if (error_token->tid > 0 && error_token->tid < 128)
+                        else if (error_tid > 0 && error_tid < 128)
                             core_buffer_printf(&message,
                                 "syntax error at line %u, column %u near '%c'",
-                                error_token->line, error_token->column,
-                                error_token->tid);
+                                error_line, error_column, error_tid);
                         else core_buffer_printf(&message,
                                 "syntax error at line %u, column %u near token",
-                                error_token->line, error_token->column);
+                                error_line, error_column);
                         parse_token_info_t *previous = error_pos > 0
                             ? scan_stream_get(result->tokens, error_pos - 1)
                             : nullptr;
-                        if (error_token->tid == '{' && previous
-                            && core_option_is_set(previous->value)
+                        if (error_tid == '{' && previous
+                            && core_option_is_set(parse_token_value(previous))
                             && core_string_eq(
-                                core_option_get(previous->value),
+                                core_option_get(parse_token_value(previous)),
                                 CORE_STRING_STATIC("comptime")))
                             core_buffer_printf(&message,
                                 "; write 'if comptime() { } else { }'");
@@ -1190,7 +1202,8 @@ append_import_names(parse_grammar_t *grammar, parse_tree_t *node,
     if (!node) return;
     if (core_tree_is_leaf(node)) {
         parse_token_info_t *token = parse_node_token(node);
-        if (token && core_string_eq(parse_terminal_name(grammar, token->tid),
+        if (token && core_string_eq(parse_terminal_name(grammar,
+                                        parse_token_tid(token)),
                                     CORE_STRING_STATIC("IDENTIFIER"))) {
             if (*has_name) core_buffer_putc(name, '.');
             core_string_t text = parse_tree_leaf_text(node);
@@ -1220,13 +1233,14 @@ find_string_token(parse_grammar_t *grammar, parse_tree_t *node)
                 parse_tree_t *item = core_tree_child(child, j);
                 parse_token_info_t *token = parse_node_token(item);
                 if (token && core_string_eq(
-                        parse_terminal_name(grammar, token->tid),
+                        parse_terminal_name(grammar, parse_token_tid(token)),
                         CORE_STRING_STATIC("STRING_LIT"))) return item;
             }
             continue;
         }
         parse_token_info_t *token = parse_node_token(child);
-        if (token && core_string_eq(parse_terminal_name(grammar, token->tid),
+        if (token && core_string_eq(parse_terminal_name(grammar,
+                                        parse_token_tid(token)),
                                     CORE_STRING_STATIC("STRING_LIT")))
             return child;
     }
@@ -1241,7 +1255,7 @@ import_error(core_translation_unit_t *unit, parse_tree_t *statement,
     core_buffer_t *text = core_buffer_empty();
     if (token)
         core_buffer_printf(text, "%s at line %u, column %u", message,
-                           token->line, token->column);
+                           parse_token_line(token), parse_token_column(token));
     else core_buffer_append(text, message, strlen(message));
     core_diagnostics_report(core_translation_unit_diagnostics(unit), unit,
         CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-PP0004"),
@@ -1691,7 +1705,8 @@ append_dotted_reference(parse_grammar_t *grammar, parse_tree_t *node,
     if (core_tree_is_leaf(node)) {
         parse_token_info_t *token = parse_node_token(node);
         if (!token || !core_string_eq(parse_terminal_name(grammar,
-                token->tid), CORE_STRING_STATIC("IDENTIFIER"))) return false;
+                parse_token_tid(token)), CORE_STRING_STATIC("IDENTIFIER")))
+            return false;
         core_string_t text = parse_tree_leaf_text(node);
         core_buffer_append(name, text.data, text.u8_bytes);
         return true;
@@ -1702,7 +1717,7 @@ append_dotted_reference(parse_grammar_t *grammar, parse_tree_t *node,
                                        name);
     parse_token_info_t *separator = count == 3
         ? parse_node_token(core_tree_child(node, 1)) : nullptr;
-    if (!separator || separator->tid != '.') return false;
+    if (!separator || parse_token_tid(separator) != '.') return false;
     if (!append_dotted_reference(grammar, core_tree_child(node, 0), name))
         return false;
     core_buffer_putc(name, '.');
@@ -1957,9 +1972,11 @@ static n00bb_literal_origin_t
 literal_origin(core_translation_unit_t *unit, parse_token_info_t *token)
 {
     const char *contents = core_source_file_contents(&unit->source);
-    uint32_t line = token->line;
-    uint32_t column = token->column;
-    for (size_t at = token->start_byte; at < token->content_start_byte; at++) {
+    uint32_t line = parse_token_line(token);
+    uint32_t column = parse_token_column(token);
+    size_t content_start = 0;
+    parse_token_content_span(token, &content_start, nullptr);
+    for (size_t at = parse_token_start_byte(token); at < content_start; at++) {
         if (contents[at] == '\n') {
             line++;
             column = 1;
@@ -1970,7 +1987,7 @@ literal_origin(core_translation_unit_t *unit, parse_token_info_t *token)
         .host_path = core_source_file_path(&unit->source),
         .line = line,
         .column = column,
-        .byte = token->content_start_byte,
+        .byte = content_start,
     };
 }
 
@@ -2021,8 +2038,11 @@ load_module_literal(void *opaque, parse_grammar_t *grammar,
     parse_token_info_t *token = parse_node_token(literal);
     if (!generator || !token) return false;
     const char *contents = core_source_file_contents(&importer->source);
-    core_string_t text = core_string_borrow(contents + token->content_start_byte,
-        token->content_end_byte - token->content_start_byte);
+    size_t content_start = 0;
+    size_t content_end = 0;
+    parse_token_content_span(token, &content_start, &content_end);
+    core_string_t text = core_string_borrow(contents + content_start,
+        content_end - content_start);
     core_buffer_t identifier = {0};
     module_literal_identifier(&identifier, importer->module.identifier,
                               modifier, name);
@@ -2516,9 +2536,10 @@ static bool
 n00bb_format_layout_token(parse_token_info_t *token, int64_t newline,
                           int64_t indent, int64_t dedent)
 {
-    return !token || token->tid == PARSE_TOK_EOF
-        || token->tid == newline || token->tid == indent
-        || token->tid == dedent;
+    if (!token) return true;
+    int32_t tid = parse_token_tid(token);
+    return tid == PARSE_TOK_EOF || tid == newline || tid == indent
+        || tid == dedent;
 }
 
 static parse_token_info_t *
@@ -2578,51 +2599,59 @@ n00bb_format_restore_breaks(parse_grammar_t *grammar,
             valid = from == to;
             break;
         }
-        size_t from_len = from->end_byte - from->start_byte;
-        size_t to_len = to->end_byte - to->start_byte;
-        if (from->tid != to->tid || from_len != to_len
-            || from->end_byte > source.u8_bytes
-            || to->end_byte > printed_len
-            || memcmp(source.data + from->start_byte,
-                      printed + to->start_byte, from_len)) {
+        size_t from_start = parse_token_start_byte(from);
+        size_t from_end = parse_token_end_byte(from);
+        size_t to_start = parse_token_start_byte(to);
+        size_t to_end = parse_token_end_byte(to);
+        size_t prior_original_start = prior_original
+            ? parse_token_start_byte(prior_original) : 0;
+        size_t prior_original_end = prior_original
+            ? parse_token_end_byte(prior_original) : 0;
+        size_t from_len = from_end - from_start;
+        size_t to_len = to_end - to_start;
+        if (parse_token_tid(from) != parse_token_tid(to) || from_len != to_len
+            || from_end > source.u8_bytes
+            || to_end > printed_len
+            || memcmp(source.data + from_start,
+                      printed + to_start, from_len)) {
             valid = false;
             break;
         }
-        size_t gap_start = prior_rendered ? prior_rendered->end_byte : 0;
-        size_t gap_end = to->start_byte;
+        size_t gap_start = prior_rendered
+            ? parse_token_end_byte(prior_rendered) : 0;
+        size_t gap_end = to_start;
         if (gap_end < gap_start) { valid = false; break; }
         size_t gap_len = gap_end - gap_start;
         size_t printed_lines = n00bb_format_newline_count(
             printed + gap_start, gap_len);
         size_t source_lines = prior_original
             ? n00bb_format_newline_count(
-                source.data + prior_original->end_byte,
-                from->start_byte - prior_original->end_byte) : 0;
+                source.data + prior_original_end,
+                from_start - prior_original_end) : 0;
         bool has_comment = false;
         for (size_t j = 0; j < gap_len; j++)
             if (printed[gap_start + j] == '/' || printed[gap_start + j] == '#')
                 has_comment = true;
-        bool comma = to_len == 1 && printed[to->start_byte] == ',';
+        bool comma = to_len == 1 && printed[to_start] == ',';
         bool aligned_colon = prior_original && to_len == 1
-            && printed[to->start_byte] == ':'
+            && printed[to_start] == ':'
             && source_lines == 0 && printed_lines == 0;
         bool channel_break = (to_len == 2
-                              && !memcmp(printed + to->start_byte, "->", 2))
+                              && !memcmp(printed + to_start, "->", 2))
             || (to_len == 4
-                && !memcmp(printed + to->start_byte, "fail", 4))
+                && !memcmp(printed + to_start, "fail", 4))
             || (prior_original
-                && prior_original->end_byte - prior_original->start_byte == 2
-                && !memcmp(source.data + prior_original->start_byte,
+                && prior_original_end - prior_original_start == 2
+                && !memcmp(source.data + prior_original_start,
                            "->", 2));
-        if (aligned_colon && from->start_byte >= prior_original->end_byte) {
-            size_t original_gap = from->start_byte
-                - prior_original->end_byte;
+        if (aligned_colon && from_start >= prior_original_end) {
+            size_t original_gap = from_start - prior_original_end;
             bool spaces_only = original_gap > gap_len;
             for (size_t j = 0; j < original_gap && spaces_only; j++)
-                spaces_only = source.data[prior_original->end_byte + j] == ' ';
+                spaces_only = source.data[prior_original_end + j] == ' ';
             if (spaces_only)
                 core_buffer_append(&result,
-                    source.data + prior_original->end_byte, original_gap);
+                    source.data + prior_original_end, original_gap);
             else core_buffer_append(&result, printed + gap_start, gap_len);
         }
         else if (comma && !printed_lines && !has_comment) {
@@ -2649,7 +2678,7 @@ n00bb_format_restore_breaks(parse_grammar_t *grammar,
                 }
             }
             else {
-                size_t j = from->start_byte;
+                size_t j = from_start;
                 while (j > 0 && source.data[j - 1] == ' ') {
                     spaces++;
                     j--;
@@ -2659,12 +2688,13 @@ n00bb_format_restore_breaks(parse_grammar_t *grammar,
                 core_buffer_putc(&result, ' ');
         }
         else core_buffer_append(&result, printed + gap_start, gap_len);
-        core_buffer_append(&result, printed + to->start_byte, to_len);
+        core_buffer_append(&result, printed + to_start, to_len);
         prior_original = from;
         prior_rendered = to;
     }
     if (valid) {
-        size_t suffix = prior_rendered ? prior_rendered->end_byte : 0;
+        size_t suffix = prior_rendered ? parse_token_end_byte(prior_rendered)
+                                       : 0;
         core_buffer_append(&result, printed + suffix, printed_len - suffix);
         while (result.byte_len && result.data[result.byte_len - 1] == '\n')
             result.data[--result.byte_len] = '\0';
@@ -3236,20 +3266,22 @@ n00bb_format_type_names(parse_grammar_t *grammar, parse_tree_t *node,
     }
     if (!in_type || *used == capacity) return;
     parse_token_info_t *token = parse_node_token(node);
-    if (!token || token->end_byte > source.u8_bytes
-        || (token->start_byte && source.data[token->start_byte - 1] == '.'))
+    if (!token) return;
+    size_t start = parse_token_start_byte(token);
+    size_t end = parse_token_end_byte(token);
+    if (end > source.u8_bytes || (start && source.data[start - 1] == '.'))
         return;
-    size_t length = token->end_byte - token->start_byte;
+    size_t length = end - start;
     const char *replacement = nullptr;
-    if (length == 3 && !memcmp(source.data + token->start_byte, "u64", 3))
+    if (length == 3 && !memcmp(source.data + start, "u64", 3))
         replacement = "uint";
     else if (length == 3
-             && !memcmp(source.data + token->start_byte, "i64", 3))
+             && !memcmp(source.data + start, "i64", 3))
         replacement = "int";
     if (replacement)
         insertions[(*used)++] = (n00bb_format_type_insertion_t){
-            .at = token->start_byte,
-            .end = token->end_byte,
+            .at = start,
+            .end = end,
             .type = core_strdup(replacement),
         };
 }
@@ -3316,11 +3348,12 @@ n00bb_format_inferred_types(parse_grammar_t *grammar,
             parse_tree_t *name = core_tree_child(symbol->decl_node, 0);
             parse_token_info_t *token = core_tree_is_leaf(name)
                 ? parse_node_token(name) : nullptr;
-            if (!token || token->end_byte <= token->start_byte
-                || token->end_byte > source.u8_bytes
-                || token->end_byte - token->start_byte
-                    != symbol->name.u8_bytes
-                || memcmp(source.data + token->start_byte,
+            size_t start = token ? parse_token_start_byte(token) : 0;
+            size_t end = token ? parse_token_end_byte(token) : 0;
+            if (!token || end <= start
+                || end > source.u8_bytes
+                || end - start != symbol->name.u8_bytes
+                || memcmp(source.data + start,
                           symbol->name.data, symbol->name.u8_bytes))
                 continue;
             const char *printed = n00bb_print_type(state->types,
@@ -3330,8 +3363,8 @@ n00bb_format_inferred_types(parse_grammar_t *grammar,
                 continue;
             if (used == capacity) continue;
             insertions[used++] = (n00bb_format_type_insertion_t){
-                .at = token->end_byte,
-                .end = token->end_byte,
+                .at = end,
+                .end = end,
                 .type = n00bb_format_canonical_type(printed),
             };
         }

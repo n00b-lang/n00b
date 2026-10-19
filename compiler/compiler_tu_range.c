@@ -547,7 +547,7 @@ n00bb_range_binding_symbol(parse_grammar_t *grammar, parse_tree_t *node)
     if (!nt_is(grammar, node, "primary")
         || core_tree_num_children(node) != 1) return nullptr;
     parse_token_info_t *token = parse_tree_find_first_terminal(node);
-    return token && token->tid == PARSE_TOK_IDENTIFIER
+    return token && parse_token_tid(token) == PARSE_TOK_IDENTIFIER
         ? n00bb_integer_reference_symbol(node) : nullptr;
 }
 
@@ -815,7 +815,7 @@ n00bb_propagate_integer_range_node(parse_grammar_t *grammar,
     else if (nt_is(grammar, node, "primary")
         && child_count == 1 && child_ranges.data[0] < 0) {
         parse_token_info_t *token = parse_tree_find_first_terminal(node);
-        if (token && token->tid == PARSE_TOK_IDENTIFIER) {
+        if (token && parse_token_tid(token) == PARSE_TOK_IDENTIFIER) {
             symbol = n00bb_integer_reference_symbol(node);
             result = n00bb_range_new_var(store, node, type_minimum,
                                          type_maximum);

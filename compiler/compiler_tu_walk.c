@@ -165,10 +165,10 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
     parse_token_info_t *literal_token = nt_is(grammar, node, "simple-lit")
         ? parse_tree_find_first_terminal(node) : nullptr;
     core_string_t literal_terminal = literal_token
-        ? parse_terminal_name(grammar, literal_token->tid)
+        ? parse_terminal_name(grammar, parse_token_tid(literal_token))
         : (core_string_t){0};
     bool modified_numeric = literal_token
-        && core_option_is_set(literal_token->postfix_modifier)
+        && core_option_is_set(parse_token_postfix_modifier(literal_token))
         && (core_string_eq(literal_terminal, CORE_STRING_STATIC("INT_LIT"))
             || core_string_eq(literal_terminal, CORE_STRING_STATIC("HEX_LIT"))
             || core_string_eq(literal_terminal,
@@ -688,7 +688,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         bool string_literal = nt_is(grammar, node, "simple-lit")
             && parse_tree_find_first_terminal(node)
             && core_string_eq(parse_terminal_name(grammar,
-                parse_tree_find_first_terminal(node)->tid),
+                parse_token_tid(parse_tree_find_first_terminal(node))),
                 CORE_STRING_STATIC("STRING_LIT"));
         if (!modifier.data) {
             th_type *default_type = nullptr;
@@ -1272,7 +1272,7 @@ semantic_walk_prepare(parse_visit_t *visit)
     }
     if (core_tree_is_leaf(visit->node)) {
         parse_token_info_t *token = parse_node_token(visit->node);
-        if (token && core_option_is_set(token->postfix_modifier)
+        if (token && core_option_is_set(parse_token_postfix_modifier(token))
             && !literal_modifier_terminal(context->grammar, visit->node,
                                           visit->parent))
             core_diagnostics_report_at(

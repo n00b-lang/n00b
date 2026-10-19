@@ -25,8 +25,10 @@ report_call_type_error(core_translation_unit_t *unit, parse_tree_t *call,
         CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0002"),
         core_string_from_cstr(message.data),
         site ? (core_diag_location_t){
-            .line = site->line, .column = site->column,
-            .end_line = site->endline, .end_column = site->endcol,
+            .line = parse_token_line(site),
+            .column = parse_token_column(site),
+            .end_line = parse_token_endline(site),
+            .end_column = parse_token_endcol(site),
             .has_location = true,
         } : (core_diag_location_t){0});
     core_buffer_release(&message);

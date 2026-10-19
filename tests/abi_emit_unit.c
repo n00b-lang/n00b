@@ -110,12 +110,10 @@ check_type_descriptor_storage(void)
     module_scope->scope_tag = CORE_STRING_STATIC("module");
     parse_tree_t node = {0};
     core_tree_node_value(&node).end = 1;
-    parse_token_info_t *token = core_alloc(parse_token_info_t);
-    *token = (parse_token_info_t){
-        .origin = PARSE_TOKEN_SOURCE, .line = 1, .column = 1,
-        .endline = 1, .endcol = sizeof(source_text),
-        .start_byte = 0, .end_byte = sizeof(source_text) - 1,
-    };
+    parse_token_info_t *token = parse_token_new();
+    parse_token_set_origin(token, PARSE_TOKEN_SOURCE);
+    parse_token_set_span(token, 0, sizeof(source_text) - 1);
+    parse_token_set_position(token, 1, 1, 1, sizeof(source_text));
     parse_token_info_t *token_array[] = {token};
     parse_token_stream_t *tokens = scan_token_stream_from_array(token_array, 1);
     assert(tokens);

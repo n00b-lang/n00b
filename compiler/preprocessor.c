@@ -257,14 +257,16 @@ leaf_text(pp_context_t *ctx, parse_tree_t *node)
 {
     parse_token_info_t *token = parse_node_token(node);
     if (!token) return (core_string_t){0};
-    if (core_option_is_set(token->value))
-        return core_option_get(token->value);
+    core_option_t(core_string_t) value = parse_token_value(token);
+    if (core_option_is_set(value))
+        return core_option_get(value);
     const char *source = core_source_file_contents(&ctx->unit->source);
     size_t size = core_source_file_size(&ctx->unit->source);
-    if (token->start_byte > token->end_byte || token->end_byte > size)
+    size_t start = parse_token_start_byte(token);
+    size_t end = parse_token_end_byte(token);
+    if (start > end || end > size)
         return (core_string_t){0};
-    return core_string_from_raw(source + token->start_byte,
-                                (int64_t)(token->end_byte - token->start_byte));
+    return core_string_from_raw(source + start, (int64_t)(end - start));
 }
 
 static core_string_t
@@ -281,7 +283,7 @@ pp_error(pp_context_t *ctx, parse_tree_t *at, const char *message)
     char text[320];
     if (token) {
         snprintf(text, sizeof(text), "%s at line %u, column %u", message,
-                 token->line, token->column);
+                 parse_token_line(token), parse_token_column(token));
     }
     else snprintf(text, sizeof(text), "%s", message);
     core_diagnostics_report(core_translation_unit_diagnostics(ctx->unit),
@@ -439,7 +441,8 @@ pp_warn_cycle_dependency(pp_context_t *ctx, parse_tree_t *at,
         parse_token_info_t *token = parse_tree_find_first_terminal(at);
         if (token)
             core_buffer_printf(message, "line %u, column %u: ",
-                               token->line, token->column);
+                               parse_token_line(token),
+                               parse_token_column(token));
         core_buffer_printf(message,
             "preprocessor value depends on cyclic import '%.*s'; results follow deterministic import order",
             (int)module.u8_bytes, module.data);
@@ -491,7 +494,8 @@ collect_name_chain(pp_context_t *ctx, parse_tree_t *node, core_buffer_t *name)
         parse_tree_t *child = core_tree_child(node, 0);
         if (!core_tree_is_leaf(child)) return false;
         parse_token_info_t *token = parse_node_token(child);
-        if (!token || !core_string_eq(parse_terminal_name(ctx->grammar, token->tid),
+        if (!token || !core_string_eq(parse_terminal_name(ctx->grammar,
+                                          parse_token_tid(token)),
                                       CORE_STRING_STATIC("IDENTIFIER")))
             return false;
         core_string_t text = leaf_text(ctx, child);
@@ -513,7 +517,8 @@ collect_name_chain(pp_context_t *ctx, parse_tree_t *node, core_buffer_t *name)
     if (dot && core_tree_num_children(node) == 3) {
         parse_tree_t *member = core_tree_child(node, 2);
         parse_token_info_t *token = parse_node_token(member);
-        if (!token || !core_string_eq(parse_terminal_name(ctx->grammar, token->tid),
+        if (!token || !core_string_eq(parse_terminal_name(ctx->grammar,
+                                          parse_token_tid(token)),
                                       CORE_STRING_STATIC("IDENTIFIER")))
             return false;
         if (!collect_name_chain(ctx, core_tree_child(node, 0), name)) return false;
@@ -648,7 +653,8 @@ register_litmod_aliases(pp_context_t *ctx, parse_tree_t *function,
     if (core_tree_is_leaf(node)) {
         parse_token_info_t *token = parse_node_token(node);
         if (!token || !core_string_eq(parse_terminal_name(ctx->grammar,
-                token->tid), CORE_STRING_STATIC("IDENTIFIER"))) return true;
+                parse_token_tid(token)), CORE_STRING_STATIC("IDENTIFIER")))
+            return true;
         return register_litmod_name(ctx, function, node, leaf_text(ctx, node),
                                     kind);
     }
@@ -756,12 +762,13 @@ parse_literal(pp_context_t *ctx, parse_tree_t *node, pp_value_t *out)
         parse_tree_t *leaf = node ? core_tree_first_leaf_node(node) : nullptr;
         parse_token_info_t *token = leaf ? parse_node_token(leaf) : nullptr;
         if (!token) return false;
-        if (core_option_is_set(token->postfix_modifier)) {
+        if (core_option_is_set(parse_token_postfix_modifier(token))) {
             pp_error(ctx, node,
                      "literal modifiers are not allowed in a preprocessor condition");
             return false;
         }
-        core_string_t terminal = parse_terminal_name(ctx->grammar, token->tid);
+        core_string_t terminal = parse_terminal_name(ctx->grammar,
+                                                     parse_token_tid(token));
         core_string_t text = leaf_text(ctx, leaf);
         if (core_string_eq(terminal, CORE_STRING_STATIC("INT_LIT"))
             || core_string_eq(terminal, CORE_STRING_STATIC("HEX_LIT"))) {
@@ -833,15 +840,17 @@ parse_literal(pp_context_t *ctx, parse_tree_t *node, pp_value_t *out)
     if (is_name(ctx->grammar, node, "string-lit")) {
         parse_tree_t *leaf = node ? core_tree_first_leaf_node(node) : nullptr;
         parse_token_info_t *token = leaf ? parse_node_token(leaf) : nullptr;
-        if (token && token->has_content_span) {
+        size_t content_start = 0;
+        size_t content_end = 0;
+        if (token && parse_token_content_span(token, &content_start,
+                                              &content_end)) {
             const char *source = core_source_file_contents(&ctx->unit->source);
             size_t size = core_source_file_size(&ctx->unit->source);
-            if (token->content_start_byte <= token->content_end_byte
-                && token->content_end_byte <= size) {
+            if (content_start <= content_end && content_end <= size) {
                 *out = (pp_value_t){.kind = PP_STRING,
                     .as.string = core_string_from_raw(
-                        source + token->content_start_byte,
-                        (int64_t)(token->content_end_byte - token->content_start_byte))};
+                        source + content_start,
+                        (int64_t)(content_end - content_start))};
                 return true;
             }
         }
@@ -877,7 +886,8 @@ integer_literal_text(pp_context_t *ctx, parse_tree_t *node,
     parse_tree_t *leaf = node ? core_tree_first_leaf_node(node) : nullptr;
     parse_token_info_t *token = parse_node_token(leaf);
     if (!token) return false;
-    core_string_t terminal = parse_terminal_name(ctx->grammar, token->tid);
+    core_string_t terminal = parse_terminal_name(ctx->grammar,
+                                                 parse_token_tid(token));
     if (!core_string_eq(terminal, CORE_STRING_STATIC("INT_LIT"))
         && !core_string_eq(terminal, CORE_STRING_STATIC("HEX_LIT")))
         return false;
@@ -987,9 +997,10 @@ const_literal_kind(pp_context_t *ctx, parse_tree_t *node)
     if (is_name(ctx->grammar, node, "simple-lit")) {
         parse_tree_t *leaf = node ? core_tree_first_leaf_node(node) : nullptr;
         parse_token_info_t *token = parse_node_token(leaf);
-        if (!token || core_option_is_set(token->postfix_modifier))
+        if (!token || core_option_is_set(parse_token_postfix_modifier(token)))
             return PP_INVALID;
-        core_string_t terminal = parse_terminal_name(ctx->grammar, token->tid);
+        core_string_t terminal = parse_terminal_name(ctx->grammar,
+                                                     parse_token_tid(token));
         if (core_string_eq(terminal, CORE_STRING_STATIC("INT_LIT"))
             || core_string_eq(terminal, CORE_STRING_STATIC("HEX_LIT")))
             return PP_INT;
@@ -1126,7 +1137,8 @@ eval_builtin(pp_context_t *ctx, parse_tree_t *call, pp_value_t *out)
         core_buffer_t *message = core_buffer_empty();
         if (token)
             core_buffer_printf(message, "line %u, column %u: ",
-                               token->line, token->column);
+                               parse_token_line(token),
+                               parse_token_column(token));
         core_buffer_append(message, argument.data, argument.u8_bytes);
         core_diagnostics_report(core_translation_unit_diagnostics(ctx->unit),
             ctx->unit, fatal ? CORE_DIAG_FATAL : CORE_DIAG_WARNING,
@@ -1871,26 +1883,26 @@ format_string_literal(core_string_t value)
 }
 
 static void
-anchor_synthetic_tokens(parse_tree_t *node, const parse_token_info_t *source)
+anchor_synthetic_tokens(parse_tree_t *node, const parse_token_info_t *source,
+                        const parse_token_info_t *end)
 {
     if (!node) return;
     if (core_tree_is_leaf(node)) {
         parse_token_info_t *token = core_tree_leaf_value(node);
-        token->line = source->line;
-        token->column = source->column;
-        token->endline = source->endline;
-        token->endcol = source->endcol;
-        token->start_byte = source->start_byte;
-        token->end_byte = source->end_byte;
-        if (core_option_is_set(source->file)) {
-            token->file = core_option_set(core_string_t,
-                core_string_dup(core_option_get(source->file)));
-            token->owns_file = true;
+        parse_token_copy_location(token, source);
+        if (end) {
+            parse_token_set_span(token, parse_token_start_byte(source),
+                                 parse_token_end_byte(end));
+            if (!parse_token_source(token))
+                parse_token_set_position(token, parse_token_line(source),
+                                         parse_token_column(source),
+                                         parse_token_endline(end),
+                                         parse_token_endcol(end));
         }
         return;
     }
     for (size_t i = 0; i < core_tree_num_children(node); i++)
-        anchor_synthetic_tokens(core_tree_child(node, i), source);
+        anchor_synthetic_tokens(core_tree_child(node, i), source, end);
 }
 
 static parse_tree_t *
@@ -1988,13 +2000,7 @@ replace_builtin(pp_context_t *ctx, parse_visit_t *visit)
         parse_tree_t *last = parse_tree_scan_leaves(node, true,
                                                    nullptr, nullptr);
         parse_token_info_t *end = parse_node_token(last);
-        parse_token_info_t span = *source;
-        if (end) {
-            span.endline = end->endline;
-            span.endcol = end->endcol;
-            span.end_byte = end->end_byte;
-        }
-        anchor_synthetic_tokens(primary, &span);
+        anchor_synthetic_tokens(primary, source, end);
     }
     if (is_name(ctx->grammar, node, "primary")) {
         parse_tree_t *old = core_tree_remove_child(node, 0);
@@ -2061,10 +2067,12 @@ module_literal_leaf(pp_context_t *ctx, parse_tree_t *node, core_string_t *modifi
         node = core_tree_child(node, 0);
     }
     parse_token_info_t *token = node ? parse_node_token(node) : nullptr;
-    if (!token || !core_string_eq(parse_terminal_name(ctx->grammar, token->tid),
+    if (!token || !core_string_eq(parse_terminal_name(ctx->grammar,
+                                      parse_token_tid(token)),
                                   CORE_STRING_STATIC("EMBED"))
-        || !core_option_is_set(token->postfix_modifier)) return nullptr;
-    core_string_t name = core_option_get(token->postfix_modifier);
+        || !core_option_is_set(parse_token_postfix_modifier(token)))
+        return nullptr;
+    core_string_t name = core_option_get(parse_token_postfix_modifier(token));
     for (size_t i = 0; ctx->options && i < ctx->options->module_modifier_count; i++) {
         if (core_string_eq(name, ctx->options->module_modifiers[i])) {
             *modifier = name;

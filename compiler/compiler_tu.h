@@ -1196,6 +1196,28 @@ static inline core_string_t
 first_token_text(parse_tree_t *node)
 {
     parse_token_info_t *token = parse_tree_find_first_terminal(node);
-    return token && core_option_is_set(token->value)
-        ? core_option_get(token->value) : (core_string_t){0};
+    core_option_t(core_string_t) value = token
+        ? parse_token_value(token) : core_option_none(core_string_t);
+    return core_option_is_set(value) ? core_option_get(value)
+                                     : (core_string_t){0};
+}
+
+static inline th_type *
+record_lookup_text(th_ctx *types, const th_type *record, core_string_t name)
+{
+    if (!record || !name.data) return nullptr;
+    char *text = core_strndup(name.data, name.u8_bytes);
+    th_type *field = types ? th_record_lookup_in(types, record, text)
+                           : th_record_lookup(record, text);
+    core_free(text);
+    return field;
+}
+
+static inline th_type *
+var_named_text(th_ctx *types, core_string_t name)
+{
+    char *text = core_strndup(name.data, name.u8_bytes);
+    th_type *variable = th_var_named(types, text);
+    core_free(text);
+    return variable;
 }

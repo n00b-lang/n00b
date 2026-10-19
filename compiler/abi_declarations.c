@@ -81,17 +81,23 @@ node_location(location_context_t *context, parse_tree_t *node,
         first = scan_stream_get(tokens, value.start);
         last = scan_stream_get(tokens, value.end - 1);
     }
-    if (!first || !last || first->origin != PARSE_TOKEN_SOURCE
-        || last->origin != PARSE_TOKEN_SOURCE
-        || !first->line || !first->column || !last->endline
-        || !last->endcol || first->start_byte > last->end_byte
-        || last->end_byte > core_source_file_size(&unit->source)) return false;
+    if (!first || !last || parse_token_origin(first) != PARSE_TOKEN_SOURCE
+        || parse_token_origin(last) != PARSE_TOKEN_SOURCE) return false;
+    uint32_t start_line = parse_token_line(first);
+    uint32_t start_column = parse_token_column(first);
+    uint32_t end_line = parse_token_endline(last);
+    uint32_t end_column = parse_token_endcol(last);
+    size_t start_byte = parse_token_start_byte(first);
+    size_t end_byte = parse_token_end_byte(last);
+    if (!start_line || !start_column || !end_line || !end_column
+        || start_byte > end_byte
+        || end_byte > core_source_file_size(&unit->source)) return false;
     *out = (n00b_abi_source_location_v1){
         .file_index = file_index,
-        .start_line = first->line, .start_column = first->column,
-        .end_line = last->endline, .end_column = last->endcol,
-        .start_byte_offset = first->start_byte,
-        .end_byte_offset = last->end_byte,
+        .start_line = start_line, .start_column = start_column,
+        .end_line = end_line, .end_column = end_column,
+        .start_byte_offset = start_byte,
+        .end_byte_offset = end_byte,
     };
     return true;
 }

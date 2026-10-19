@@ -25,6 +25,17 @@ source_of_node(void *context, parse_tree_t *node,
     return true;
 }
 
+static parse_token_info_t *
+source_token(size_t start, size_t end, uint32_t line, uint32_t column,
+             uint32_t endcol)
+{
+    parse_token_info_t *token = parse_token_new();
+    parse_token_set_origin(token, PARSE_TOKEN_SOURCE);
+    parse_token_set_span(token, start, end);
+    parse_token_set_position(token, line, column, line, endcol);
+    return token;
+}
+
 int
 main(void)
 {
@@ -37,16 +48,8 @@ main(void)
                                  source, sizeof(source) - 1)
         && core_translation_unit_init(&unit, &spec, &file));
     core_module_spec_release(&spec);
-    parse_token_info_t *first = core_alloc(parse_token_info_t);
-    parse_token_info_t *second = core_alloc(parse_token_info_t);
-    *first = (parse_token_info_t){
-        .origin = PARSE_TOKEN_SOURCE, .line = 1, .column = 1,
-        .endline = 1, .endcol = 5, .start_byte = 0, .end_byte = 4,
-    };
-    *second = (parse_token_info_t){
-        .origin = PARSE_TOKEN_SOURCE, .line = 1, .column = 13,
-        .endline = 1, .endcol = 18, .start_byte = 12, .end_byte = 17,
-    };
+    parse_token_info_t *first = source_token(0, 4, 1, 1, 5);
+    parse_token_info_t *second = source_token(12, 17, 1, 13, 18);
     parse_token_info_t *tokens_array[] = {first, second};
     parse_token_stream_t *tokens = scan_token_stream_from_array(
         tokens_array, 2);
@@ -72,11 +75,7 @@ main(void)
         && core_translation_unit_init(&foreign_unit, &foreign_spec,
             &foreign_file));
     core_module_spec_release(&foreign_spec);
-    parse_token_info_t *foreign_token = core_alloc(parse_token_info_t);
-    *foreign_token = (parse_token_info_t){
-        .origin = PARSE_TOKEN_SOURCE, .line = 1, .column = 1,
-        .endline = 1, .endcol = 6, .start_byte = 0, .end_byte = 5,
-    };
+    parse_token_info_t *foreign_token = source_token(0, 5, 1, 1, 6);
     parse_token_info_t *foreign_tokens_array[] = {foreign_token};
     parse_token_stream_t *foreign_tokens = scan_token_stream_from_array(
         foreign_tokens_array, 1);
