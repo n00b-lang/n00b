@@ -375,6 +375,25 @@ write_whole_file(core_string_t path, core_string_t contents)
     return fclose(file) == 0 && ok;
 }
 
+static void
+unlink_path(core_string_t path)
+{
+    char *native_path = core_string_to_cstr(path);
+    if (native_path) {
+        unlink(native_path);
+    }
+    core_free(native_path);
+}
+
+static bool
+make_directory(core_string_t path)
+{
+    char *native_path = core_string_to_cstr(path);
+    bool ok = native_path && (!mkdir(native_path, 0700) || errno == EEXIST);
+    core_free(native_path);
+    return ok;
+}
+
 static bool
 read_whole_file(core_string_t path, core_buffer_t *out)
 {
@@ -447,16 +466,23 @@ library_found(n00bb_ffi_t *ffi, core_string_t library)
     arguments[next++] = "-x";
     arguments[next++] = "c";
     arguments[next++] = "/dev/null";
+    size_t first_owned = next;
     for (size_t i = 0; i < flags.len; i++) {
-        arguments[next++] = flags.data[i].data;
+        arguments[next++] = core_string_to_cstr(core_buffer_string(&flags.data[i]));
     }
-    arguments[next++] = named.data;
+    arguments[next++] = core_string_to_cstr(core_buffer_string(&named));
+    size_t owned_end = next;
+    char *native_output = core_string_to_cstr(core_buffer_string(&output));
     arguments[next++] = "-o";
-    arguments[next++] = output.data;
+    arguments[next++] = native_output;
     arguments[next] = nullptr;
     bool found = run_logged(arguments, (core_string_t){});
-    unlink(output.data);
+    unlink(native_output);
     rmdir(directory);
+    for (size_t i = first_owned; i < owned_end; i++) {
+        core_free(arguments[i]);
+    }
+    core_free(native_output);
     core_free(arguments);
     for (size_t i = 0; i < flags.len; i++) {
         core_buffer_release(&flags.data[i]);
@@ -510,9 +536,7 @@ write_crate(core_string_t directory, const capture_t *crate)
         core_buffer_append_string(&path, file->name);
         for (size_t at = directory.u8_bytes + 1; ok && at < path.byte_len; at++) {
             if (path.data[at] == '/') {
-                path.data[at] = '\0';
-                ok = !mkdir(path.data, 0700) || errno == EEXIST;
-                path.data[at] = '/';
+                ok = make_directory(core_string_borrow(path.data, at));
             }
         }
         ok = ok && write_whole_file(core_buffer_string(&path), file->contents);
@@ -527,7 +551,9 @@ staticlib_name(core_string_t directory)
     core_buffer_t release = {0};
     core_buffer_append_string(&release, directory);
     core_buffer_puts(&release, "/target/release");
-    DIR *listing = opendir(release.data);
+    char *native_release = core_string_to_cstr(core_buffer_string(&release));
+    DIR *listing = native_release ? opendir(native_release) : nullptr;
+    core_free(native_release);
     core_buffer_release(&release);
     if (!listing) {
         return (core_string_t){};
@@ -554,9 +580,11 @@ build_crate(core_string_t directory)
     core_buffer_puts(&manifest, "/Cargo.toml");
     core_buffer_append_string(&log, directory);
     core_buffer_puts(&log, "/cargo.log");
+    char *native_manifest = core_string_to_cstr(core_buffer_string(&manifest));
     char *arguments[] = {N00BB_CARGO, "rustc", "--release", "--lib", "--crate-type", "staticlib", "--manifest-path",
-                         manifest.data, "--", "--print", "native-static-libs", nullptr};
+                         native_manifest, "--", "--print", "native-static-libs", nullptr};
     bool ok = run_logged(arguments, core_buffer_string(&log)) && read_whole_file(core_buffer_string(&log), &text);
+    core_free(native_manifest);
     core_string_t output = core_buffer_string(&text);
     core_string_t marker = CORE_STRING_STATIC("native-static-libs:");
     int64_t found = ok ? core_string_find(output, marker) : -1;
@@ -686,17 +714,25 @@ keep_transport(n00bb_ffi_t *ffi, ffi_literal_t *record, core_translation_unit_t 
         core_uint128_t key = core_xxh3_128bits_raw(payload.data, payload.byte_len);
         core_buffer_append_string(&directory, root);
         core_buffer_puts(&directory, "/rust");
-        ok = !mkdir(directory.data, 0700) || errno == EEXIST;
+        ok = make_directory(core_buffer_string(&directory));
         core_buffer_printf(&directory, "/%016llx%016llx", (unsigned long long)(key >> 64), (unsigned long long)key);
         if (ok && !keep_crate(ffi, record, core_buffer_string(&directory))) {
             core_buffer_t staging = {0};
             core_buffer_append_string(&staging, core_buffer_string(&directory));
             core_buffer_puts(&staging, ".XXXXXX");
-            ok = mkdtemp(staging.data) && write_crate(core_buffer_string(&staging), &crate);
-            bool built = ok && build_crate(core_buffer_string(&staging));
-            if (built && rename(staging.data, directory.data)) {
-                nftw(staging.data, remove_entry, 16, FTW_DEPTH | FTW_PHYS);
+            char *native_staging = core_string_to_cstr(core_buffer_string(&staging));
+            ok = native_staging && mkdtemp(native_staging);
+            if (ok) {
+                memcpy(staging.data, native_staging, staging.byte_len);
             }
+            ok = ok && write_crate(core_buffer_string(&staging), &crate);
+            bool built = ok && build_crate(core_buffer_string(&staging));
+            char *native_directory = core_string_to_cstr(core_buffer_string(&directory));
+            if (built && rename(native_staging, native_directory)) {
+                nftw(native_staging, remove_entry, 16, FTW_DEPTH | FTW_PHYS);
+            }
+            core_free(native_directory);
+            core_free(native_staging);
             if (ok && !built) {
                 core_buffer_t message = {0};
                 core_buffer_puts(&message, "building the Rust transport crate failed; cargo output is in ");
@@ -1044,7 +1080,7 @@ run_clang(const n00bb_ffi_t *ffi, core_string_t triple, core_string_t directory,
     core_buffer_t target = {0};
     core_buffer_puts(&target, "--target=");
     core_buffer_append_string(&target, triple);
-    size_t owned_count = ffi->contract_dirs.len + 4;
+    size_t owned_count = ffi->contract_dirs.len + 5;
     char **owned = core_alloc_array(char *, owned_count);
     char **arguments = core_alloc_array(char *, 16 + 2 * ffi->contract_dirs.len);
     if (!arguments || !owned) {
@@ -1055,7 +1091,8 @@ run_clang(const n00bb_ffi_t *ffi, core_string_t triple, core_string_t directory,
     }
     size_t held = 0;
     char *native_directory = owned[held++] = core_string_to_cstr(directory);
-    char *fixed[] = {(char *)compiler, target.data, "-std=c11", "-O2", "-fPIC", "-c", "-emit-llvm",
+    char *native_target = owned[held++] = core_string_to_cstr(core_buffer_string(&target));
+    char *fixed[] = {(char *)compiler, native_target, "-std=c11", "-O2", "-fPIC", "-c", "-emit-llvm",
                      "-I", native_directory};
     size_t next = 0;
     for (; next < sizeof(fixed) / sizeof(fixed[0]); next++) {
@@ -1142,9 +1179,9 @@ compile_uncached(const n00bb_ffi_t *ffi, core_string_t triple, size_t index, cor
     ok = ok
       && run_clang(ffi, triple, directory_text, core_buffer_string(&source), core_buffer_string(&output))
       && read_whole_file(core_buffer_string(&output), bitcode);
-    unlink(output.data);
+    unlink_path(core_buffer_string(&output));
     for (size_t i = 0; i < written.len; i++) {
-        unlink(written.data[i].data);
+        unlink_path(core_buffer_string(&written.data[i]));
         core_buffer_release(&written.data[i]);
     }
     core_list_free(written);

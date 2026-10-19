@@ -44,6 +44,15 @@ n00bb_write_temporary_object(const void *bytes, size_t length)
     return result;
 }
 
+static bool
+readable_path(const core_buffer_t *path)
+{
+    char *native_path = core_string_to_cstr(core_buffer_string(path));
+    bool readable = native_path && !access(native_path, R_OK);
+    core_free(native_path);
+    return readable;
+}
+
 core_string_t
 n00bb_archive_path(core_string_t compiler_path, core_string_t archive_name)
 {
@@ -55,14 +64,14 @@ n00bb_archive_path(core_string_t compiler_path, core_string_t archive_name)
         core_buffer_printf(&archive, "%.*s/%.*s",
             (int)slash, executable.data,
             (int)archive_name.u8_bytes, archive_name.data);
-        if (access(archive.data, R_OK)) {
+        if (!readable_path(&archive)) {
             core_buffer_release(&archive);
             core_buffer_printf(&archive, "%.*s/../lib/%.*s",
                 (int)slash, executable.data,
                 (int)archive_name.u8_bytes, archive_name.data);
         }
     }
-    core_string_t path = archive.data && !access(archive.data, R_OK)
+    core_string_t path = readable_path(&archive)
         ? core_string_dup(core_buffer_string(&archive)) : (core_string_t){};
     core_buffer_release(&archive);
     core_free(executable.data);

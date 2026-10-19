@@ -181,7 +181,9 @@ n00bb_native_cache_read(const n00bb_native_cache_t *cache,
 #else
     if (!cache || !key || !object) return false;
     core_buffer_t path = cache_file_path(cache, key);
-    FILE *file = path.data ? fopen(path.data, "rb") : nullptr;
+    char *native_path = core_string_to_cstr(core_buffer_string(&path));
+    FILE *file = native_path ? fopen(native_path, "rb") : nullptr;
+    core_free(native_path);
     core_buffer_release(&path);
     if (!file) return false;
     bool ok = !fseek(file, 0, SEEK_END);
@@ -223,7 +225,9 @@ n00bb_native_cache_write(const n00bb_native_cache_t *cache,
     core_buffer_t temp = {0};
     core_buffer_append_string(&temp, core_buffer_string(&path));
     core_buffer_puts(&temp, ".XXXXXX");
-    int fd = temp.data ? mkstemp(temp.data) : -1;
+    char *native_path = core_string_to_cstr(core_buffer_string(&path));
+    char *native_temp = core_string_to_cstr(core_buffer_string(&temp));
+    int fd = native_temp ? mkstemp(native_temp) : -1;
     FILE *file = fd >= 0 ? fdopen(fd, "wb") : nullptr;
     if (!file && fd >= 0) close(fd);
     core_uint128_t hash = core_xxh3_128bits_raw(object, object_bytes);
@@ -239,8 +243,10 @@ n00bb_native_cache_write(const n00bb_native_cache_t *cache,
         && fwrite(&header, 1, sizeof header, file) == sizeof header
         && fwrite(object, 1, object_bytes, file) == object_bytes;
     if (file && fclose(file)) ok = false;
-    if (ok && rename(temp.data, path.data)) ok = false;
-    if (temp.data) unlink(temp.data);
+    if (ok && rename(native_temp, native_path)) ok = false;
+    if (native_temp) unlink(native_temp);
+    core_free(native_temp);
+    core_free(native_path);
     core_buffer_release(&temp);
     core_buffer_release(&path);
 #else

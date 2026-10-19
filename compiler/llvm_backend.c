@@ -73,36 +73,17 @@ static _Thread_local const n00bb_llvm_mutator_classifier_t
 static _Thread_local core_list_t(core_string_t)
     *active_selected_mutators;
 
-enum { LLVM_NAME_INLINE = 128 };
-
-typedef struct {
-    char *heap;
-    char inline_text[LLVM_NAME_INLINE];
-} llvm_name_t;
-
-static const char *
-llvm_name(llvm_name_t *storage, core_string_t text)
+static char *
+llvm_text(core_string_t text)
 {
-    storage->heap = nullptr;
-    if (!text.data) {
-        storage->inline_text[0] = '\0';
-        return storage->inline_text;
-    }
-    if (text.u8_bytes < LLVM_NAME_INLINE) {
-        if (text.u8_bytes) memcpy(storage->inline_text, text.data,
-                                  text.u8_bytes);
-        storage->inline_text[text.u8_bytes] = '\0';
-        return storage->inline_text;
-    }
-    storage->heap = core_string_to_cstr(text);
-    return storage->heap;
+    return core_string_to_cstr(text.data ? text : CORE_STRING_STATIC(""));
 }
 
 static void
-llvm_name_release(llvm_name_t *storage)
+set_value_name(LLVMValueRef value, core_string_t name)
 {
-    core_free(storage->heap);
-    storage->heap = nullptr;
+    if (value && name.data && name.u8_bytes)
+        LLVMSetValueName2(value, name.data, name.u8_bytes);
 }
 
 static LLVMValueRef
@@ -124,20 +105,16 @@ named_global(LLVMModuleRef module, core_string_t name)
 static LLVMValueRef
 add_function(LLVMModuleRef module, core_string_t name, LLVMTypeRef type)
 {
-    llvm_name_t storage;
-    LLVMValueRef function = LLVMAddFunction(module,
-        llvm_name(&storage, name), type);
-    llvm_name_release(&storage);
+    LLVMValueRef function = LLVMAddFunction(module, "", type);
+    set_value_name(function, name);
     return function;
 }
 
 static LLVMValueRef
 add_global(LLVMModuleRef module, LLVMTypeRef type, core_string_t name)
 {
-    llvm_name_t storage;
-    LLVMValueRef global = LLVMAddGlobal(module, type,
-        llvm_name(&storage, name));
-    llvm_name_release(&storage);
+    LLVMValueRef global = LLVMAddGlobal(module, type, "");
+    set_value_name(global, name);
     return global;
 }
 
@@ -450,11 +427,18 @@ static LLVMValueRef
 global_string_ptr(LLVMBuilderRef builder, core_string_t text,
                   const char *label)
 {
-    llvm_name_t storage;
-    LLVMValueRef value = LLVMBuildGlobalStringPtr(builder,
-        llvm_name(&storage, text), label);
-    llvm_name_release(&storage);
-    return value;
+    LLVMModuleRef module = LLVMGetGlobalParent(
+        LLVMGetBasicBlockParent(LLVMGetInsertBlock(builder)));
+    LLVMValueRef contents = LLVMConstStringInContext2(
+        LLVMGetModuleContext(module), text.data ? text.data : "",
+        text.data ? text.u8_bytes : 0, false);
+    LLVMValueRef global = LLVMAddGlobal(module, LLVMTypeOf(contents), label);
+    LLVMSetInitializer(global, contents);
+    LLVMSetGlobalConstant(global, true);
+    LLVMSetLinkage(global, LLVMPrivateLinkage);
+    LLVMSetUnnamedAddress(global, LLVMGlobalUnnamedAddr);
+    LLVMSetAlignment(global, 1);
+    return global;
 }
 
 static void
@@ -558,14 +542,13 @@ static LLVMTypeRef
 identified_struct_type(LLVMContextRef context, core_string_t name,
                        LLVMTypeRef *fields, unsigned count)
 {
-    llvm_name_t storage;
-    const char *native = llvm_name(&storage, name);
+    char *native = llvm_text(name);
     LLVMTypeRef type = LLVMGetTypeByName2(context, native);
     if (!type) {
         type = LLVMStructCreateNamed(context, native);
         LLVMStructSetBody(type, fields, count, false);
     }
-    llvm_name_release(&storage);
+    core_free(native);
     return type;
 }
 
@@ -1561,8 +1544,8 @@ lowered_value(lower_state_t *state, const ir_value_t *value)
             LLVMTypeRef signature = function_type(state->module,
                                                   value->owner);
             if (signature)
-                function = LLVMAddFunction(state->module, symbol.data,
-                                           signature);
+                function = add_function(state->module,
+                    core_buffer_string(&symbol), signature);
         }
         core_buffer_release(&symbol);
         return function;
@@ -1852,10 +1835,8 @@ emit_trap_reason(lower_state_t *state, core_string_t reason)
             LLVMAddAttributeAtIndex(trap, LLVMAttributeFunctionIndex,
                 LLVMCreateEnumAttribute(context, kinds[i], 0));
     }
-    llvm_name_t storage;
-    LLVMValueRef text = LLVMBuildGlobalString(state->builder,
-        llvm_name(&storage, reason), "trap.reason");
-    llvm_name_release(&storage);
+    LLVMValueRef text = global_string_ptr(state->builder, reason,
+                                          "trap.reason");
     LLVMValueRef arguments[] = {text,
         LLVMConstInt(i64, reason.u8_bytes, false)};
     LLVMBuildCall2(state->builder, trap_type, trap, arguments, 2, "");
@@ -10360,8 +10341,8 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                                                          target);
                 core_buffer_t name = {0};
                 mutator_symbol(&name, target);
-                if (type) callee = LLVMAddFunction(state->module,
-                    name.data, type);
+                if (type) callee = add_function(state->module,
+                    core_buffer_string(&name), type);
                 core_buffer_release(&name);
             }
         } else callee = lowered_value(state, operands[0].value);
@@ -11533,11 +11514,10 @@ lower_function(LLVMModuleRef target, const ir_module_t *source,
         && state.values && state.builder && ordered;
     if (ok) {
         for (uint32_t i = 0; i < function->n_blocks; i++) {
-            llvm_name_t block_name;
             state.blocks[i] = LLVMAppendBasicBlockInContext(context,
-                target_function,
-                llvm_name(&block_name, function->blocks[i]->name));
-            llvm_name_release(&block_name);
+                target_function, "");
+            set_value_name(LLVMBasicBlockAsValue(state.blocks[i]),
+                           function->blocks[i]->name);
         }
         LLVMPositionBuilderAtEnd(state.builder, state.blocks[0]);
         for (uint32_t i = 0; i < function->n_locals; i++) {
@@ -11550,10 +11530,8 @@ lower_function(LLVMModuleRef target, const ir_module_t *source,
                     "LLVM backend cannot lower this local declaration yet");
                 break;
             }
-            llvm_name_t local_name;
-            state.locals[i] = LLVMBuildAlloca(state.builder, type,
-                llvm_name(&local_name, local->name));
-            llvm_name_release(&local_name);
+            state.locals[i] = LLVMBuildAlloca(state.builder, type, "");
+            set_value_name(state.locals[i], local->name);
         }
         if (ok && emit_frame_maps && !prepare_frame_map(&state))
             ok = backend_error(diagnostics,
@@ -11978,8 +11956,8 @@ lower_module(LLVMModuleRef target, const ir_module_t *source,
         core_buffer_append_string(&symbol, ir_module_name(source));
         core_buffer_putc(&symbol, '.');
         core_buffer_append_string(&symbol, function->name);
-        LLVMValueRef declared = LLVMAddFunction(target, symbol.data,
-            signature);
+        LLVMValueRef declared = add_function(target,
+            core_buffer_string(&symbol), signature);
         core_buffer_release(&symbol);
         if (!declared)
             return backend_error(diagnostics,
@@ -12042,7 +12020,8 @@ lower_module(LLVMModuleRef target, const ir_module_t *source,
         if (!declared) {
             LLVMTypeRef signature = function_type(target, function);
             declared = signature
-                ? LLVMAddFunction(target, symbol.data, signature) : nullptr;
+                ? add_function(target, core_buffer_string(&symbol), signature)
+                : nullptr;
         }
         core_buffer_release(&symbol);
         if (!declared) {
@@ -12081,7 +12060,8 @@ lower_module(LLVMModuleRef target, const ir_module_t *source,
         LLVMValueRef declared = signature
             ? named_function(target, core_buffer_string(&name)) : nullptr;
         if (!declared && signature)
-            declared = LLVMAddFunction(target, name.data, signature);
+            declared = add_function(target, core_buffer_string(&name),
+                                    signature);
         core_buffer_release(&name);
         if (declared) {
             core_buffer_t source_name = {0};
@@ -12190,15 +12170,13 @@ set_native_layout(LLVMModuleRef module, core_string_t cpu,
     LLVMTargetRef target = nullptr;
     char *message = nullptr;
     bool ok = triple && !LLVMGetTargetFromTriple(triple, &target, &message);
-    llvm_name_t cpu_text, feature_text;
+    char *cpu_text = ok ? llvm_text(cpu) : nullptr;
+    char *feature_text = ok ? llvm_text(features) : nullptr;
     LLVMTargetMachineRef machine = ok ? LLVMCreateTargetMachine(target,
-        triple, llvm_name(&cpu_text, cpu),
-        llvm_name(&feature_text, features), LLVMCodeGenLevelDefault,
+        triple, cpu_text, feature_text, LLVMCodeGenLevelDefault,
         LLVMRelocDefault, LLVMCodeModelDefault) : nullptr;
-    if (ok) {
-        llvm_name_release(&cpu_text);
-        llvm_name_release(&feature_text);
-    }
+    core_free(cpu_text);
+    core_free(feature_text);
     LLVMTargetDataRef layout = machine
         ? LLVMCreateTargetDataLayout(machine) : nullptr;
     char *layout_text = layout ? LLVMCopyStringRepOfTargetData(layout)
@@ -12239,14 +12217,18 @@ n00bb_llvm_backend_prepare(const ir_module_t *ir, bool debug_enabled,
     backend->source = ir;
     backend->context = LLVMContextCreate();
     if (!backend->context) goto fail;
-    llvm_name_t module_name, target_name;
-    backend->module = LLVMModuleCreateWithNameInContext(
-        llvm_name(&module_name, ir_module_name(ir)), backend->context);
-    llvm_name_release(&module_name);
+    backend->module = LLVMModuleCreateWithNameInContext("", backend->context);
     if (!backend->module) goto fail;
-    LLVMSetTarget(backend->module,
-                  llvm_name(&target_name, ir_module_target(ir)));
-    llvm_name_release(&target_name);
+    core_string_t module_name = ir_module_name(ir);
+    if (module_name.data) {
+        LLVMSetModuleIdentifier(backend->module, module_name.data,
+                                module_name.u8_bytes);
+        LLVMSetSourceFileName(backend->module, module_name.data,
+                              module_name.u8_bytes);
+    }
+    char *target_name = llvm_text(ir_module_target(ir));
+    LLVMSetTarget(backend->module, target_name);
+    core_free(target_name);
     if (!set_native_layout(backend->module,
             native_cpu ? backend->cpu_name : CORE_STRING_STATIC("generic"),
             native_cpu ? backend->cpu_features : CORE_STRING_STATIC("")))
@@ -12550,8 +12532,8 @@ emit_finalizer_bridge(n00bb_llvm_backend_t *backend,
         append_function_symbol(&name, function);
         LLVMValueRef target = named_function(module,
                                              core_buffer_string(&name));
-        if (!target) target = LLVMAddFunction(module, name.data,
-                                              target_signature);
+        if (!target) target = add_function(module, core_buffer_string(&name),
+                                           target_signature);
         core_buffer_release(&name);
         if (!target) { valid = false; break; }
         LLVMBasicBlockRef body = LLVMAppendBasicBlockInContext(context,
@@ -13236,8 +13218,8 @@ emit_frame_sentinels(LLVMModuleRef module,
         core_buffer_t symbol = {0};
         core_buffer_printf(&symbol, "__n00bb_gc_frame.%.*s",
                            (int)length, function_name);
-        LLVMValueRef descriptor = LLVMAddGlobal(module,
-            LLVMInt8TypeInContext(context), symbol.data);
+        LLVMValueRef descriptor = add_global(module,
+            LLVMInt8TypeInContext(context), core_buffer_string(&symbol));
         core_buffer_release(&symbol);
         if (!descriptor) { ok = false; break; }
         LLVMValueRef slot = LLVMBuildAlloca(builder, pointer,
@@ -13295,7 +13277,8 @@ runtime_function_address_table(n00bb_llvm_backend_t *backend,
         LLVMValueRef target = signature && name.data
             ? named_function(module, core_buffer_string(&name)) : nullptr;
         if (!target && signature && name.data)
-            target = LLVMAddFunction(module, name.data, signature);
+            target = add_function(module, core_buffer_string(&name),
+                                  signature);
         core_buffer_release(&name);
         if (!target || LLVMGlobalGetValueType(target) != signature) {
             free(addresses);
@@ -13593,17 +13576,17 @@ emit_native_module(n00bb_llvm_backend_t *backend, LLVMModuleRef module,
     }
     if (message) LLVMDisposeMessage(message);
     message = nullptr;
-    llvm_name_t cpu_text, feature_text;
+    char *cpu_text = llvm_text(backend->cpu_name.data ? backend->cpu_name
+                                   : CORE_STRING_STATIC("generic"));
+    char *feature_text = llvm_text(backend->cpu_features);
     LLVMTargetMachineRef machine = LLVMCreateTargetMachine(target, triple,
-        llvm_name(&cpu_text, backend->cpu_name.data ? backend->cpu_name
-                                  : CORE_STRING_STATIC("generic")),
-        llvm_name(&feature_text, backend->cpu_features),
+        cpu_text, feature_text,
         backend->debug_enabled ? LLVMCodeGenLevelDefault
                                : LLVMCodeGenLevelAggressive,
         LLVMRelocPIC,
         LLVMCodeModelDefault);
-    llvm_name_release(&cpu_text);
-    llvm_name_release(&feature_text);
+    core_free(cpu_text);
+    core_free(feature_text);
     LLVMSetTarget(module, triple);
     LLVMDisposeMessage(triple);
     if (!machine)

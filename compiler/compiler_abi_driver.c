@@ -502,7 +502,9 @@ n00bb_flag_argument(const char *prefix, core_string_t value)
     core_buffer_t argument = {0};
     core_buffer_printf(&argument, "%s%.*s", prefix, (int)value.u8_bytes,
                        value.data);
-    return argument.data;
+    char *native = core_string_to_cstr(core_buffer_string(&argument));
+    core_buffer_release(&argument);
+    return native;
 }
 
 bool
@@ -1034,8 +1036,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             for (int32_t i = 0; i < extra_count; i++) {
                 core_string_t value = parse_cmdr_flag_str_at(args,
                     CORE_STRING_STATIC("--link-object"), i);
-                arguments[next + (size_t)i] = core_strndup(value.data,
-                    value.u8_bytes);
+                arguments[next + (size_t)i] = core_string_to_cstr(value);
                 if (!arguments[next + (size_t)i]) ok = false;
             }
             if (ok) {
@@ -1075,14 +1076,17 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
                 core_buffer_t bundle = {0};
                 core_buffer_append_string(&bundle, output_name);
                 core_buffer_puts(&bundle, ".dSYM");
+                char *native_bundle = core_string_to_cstr(
+                    core_buffer_string(&bundle));
                 char *dsymutil[] = {"/usr/bin/dsymutil", (char *)output, "-o",
-                                    bundle.data, nullptr};
+                                    native_bundle, nullptr};
                 pid_t child = 0;
-                if (!posix_spawn(&child, dsymutil[0], nullptr, nullptr,
-                                 dsymutil, environ)) {
+                if (native_bundle && !posix_spawn(&child, dsymutil[0], nullptr,
+                                                  nullptr, dsymutil, environ)) {
                     int status = 0;
                     (void)waitpid(child, &status, 0);
                 }
+                core_free(native_bundle);
                 core_buffer_release(&bundle);
             }
 #endif

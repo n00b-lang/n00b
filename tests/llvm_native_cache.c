@@ -46,12 +46,14 @@ int main(int argc, char **argv)
         && !memcmp(readback.data, object, sizeof object));
     core_buffer_release(&readback);
 
-    char path[256];
-    int length = snprintf(path, sizeof path, "%.*s/%016llx%016llx.o",
+    core_buffer_t text = {0};
+    core_buffer_printf(&text, "%.*s/%016llx%016llx.o",
         (int)directory_name.u8_bytes, directory_name.data,
         (unsigned long long)(key >> 64),
         (unsigned long long)key);
-    assert(length > 0 && (size_t)length < sizeof path);
+    char *path = core_string_to_cstr(core_buffer_string(&text));
+    core_buffer_release(&text);
+    assert(path);
     FILE *damaged = fopen(path, "r+b");
     assert(damaged && !fseek(damaged, -1, SEEK_END)
         && fputc('x', damaged) != EOF && !fclose(damaged));
@@ -66,25 +68,30 @@ int main(int argc, char **argv)
     assert(n00bb_native_cache_read(cache, key, &readback));
     core_buffer_release(&readback);
     n00bb_native_cache_close(cache);
-    char blocked[256];
-    length = snprintf(blocked, sizeof blocked, "%.*s/not-a-directory",
+    core_buffer_printf(&text, "%.*s/not-a-directory",
         (int)directory_name.u8_bytes, directory_name.data);
-    assert(length > 0 && (size_t)length < sizeof blocked);
+    char *blocked = core_string_to_cstr(core_buffer_string(&text));
+    core_buffer_release(&text);
+    assert(blocked);
     file = fopen(blocked, "wb");
     assert(file && !fclose(file));
     assert(!setenv("N00BB_NATIVE_CACHE_DIR", blocked, 1));
     assert(!n00bb_native_cache_open(executable));
     assert(!unlink(blocked));
-    char nested[256];
-    length = snprintf(nested, sizeof nested, "%.*s/new-directory",
+    core_buffer_printf(&text, "%.*s/new-directory",
         (int)directory_name.u8_bytes, directory_name.data);
-    assert(length > 0 && (size_t)length < sizeof nested);
+    char *nested = core_string_to_cstr(core_buffer_string(&text));
+    core_buffer_release(&text);
+    assert(nested);
     assert(!setenv("N00BB_NATIVE_CACHE_DIR", nested, 1));
     cache = n00bb_native_cache_open(executable);
     assert(cache);
     n00bb_native_cache_close(cache);
     assert(!rmdir(nested));
     assert(!unlink(path) && !rmdir(directory));
+    core_free(nested);
+    core_free(blocked);
+    core_free(path);
     core_free(executable.data);
     core_free(directory_name.data);
 #endif

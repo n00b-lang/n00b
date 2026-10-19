@@ -2570,8 +2570,8 @@ n00bb_format_write(core_string_t target, core_string_t contents)
     core_buffer_t temporary_name = {0};
     core_buffer_append_string(&temporary_name, target);
     core_buffer_puts(&temporary_name, ".fmt.XXXXXX");
-    char *temporary = temporary_name.data;
-    int fd = mkstemp(temporary);
+    char *temporary = core_string_to_cstr(core_buffer_string(&temporary_name));
+    int fd = temporary ? mkstemp(temporary) : -1;
     bool ok = fd >= 0 && !fchmod(fd, mode);
     for (size_t written = 0; ok && written < length;) {
         ssize_t count = write(fd, text + written, length - written);
@@ -2581,6 +2581,7 @@ n00bb_format_write(core_string_t target, core_string_t contents)
     if (fd >= 0 && close(fd)) ok = false;
     if (ok) ok = !rename(temporary, path);
     if (!ok && fd >= 0) unlink(temporary);
+    core_free(temporary);
     core_buffer_release(&temporary_name);
     core_free(path);
     return ok;
@@ -3620,9 +3621,11 @@ restart_excluding_cached(char **argv, core_string_t argv0,
     if (previous.u8_bytes) core_buffer_putc(&excluded, ',');
     core_buffer_append(&excluded, stale->data, stale->byte_len);
     core_free(previous.data);
-    core_string_t compiler = excluded.data
-        && !setenv("N00BB_CACHE_EXCLUDE", excluded.data, 1)
+    char *native_excluded = core_string_to_cstr(core_buffer_string(&excluded));
+    core_string_t compiler = native_excluded
+        && !setenv("N00BB_CACHE_EXCLUDE", native_excluded, 1)
         ? n00bb_executable_path(argv0) : (core_string_t){0};
+    core_free(native_excluded);
     core_buffer_release(&excluded);
     if (!compiler.data) return;
     exec_compiler(compiler, argv);

@@ -130,12 +130,14 @@ write_file_atomic(core_string_t path, const void *data, size_t length)
     core_buffer_append_string(&temporary, path);
     core_buffer_printf(&temporary, ".tmp.%ld", (long)getpid());
     char *native = core_string_to_cstr(path);
-    FILE *file = temporary.data && native ? fopen(temporary.data, "wb")
-                                          : nullptr;
+    char *native_temporary = core_string_to_cstr(core_buffer_string(&temporary));
+    FILE *file = native_temporary && native ? fopen(native_temporary, "wb")
+                                            : nullptr;
     bool ok = file && (!length || fwrite(data, 1, length, file) == length);
     if (file && fclose(file)) ok = false;
-    if (ok) ok = !rename(temporary.data, native);
-    else if (temporary.data) unlink(temporary.data);
+    if (ok) ok = !rename(native_temporary, native);
+    else if (native_temporary) unlink(native_temporary);
+    core_free(native_temporary);
     core_free(native);
     core_buffer_release(&temporary);
     return ok;
@@ -950,7 +952,9 @@ read_module_keys(n00bb_cache_t *cache)
     core_buffer_t path = {0};
     core_buffer_append_string(&path, cache->directory);
     core_buffer_puts(&path, "/modules");
-    DIR *directory = path.data ? opendir(path.data) : nullptr;
+    char *native_path = core_string_to_cstr(core_buffer_string(&path));
+    DIR *directory = native_path ? opendir(native_path) : nullptr;
+    core_free(native_path);
     core_buffer_t suffix = {0};
     core_buffer_putc(&suffix, '.');
     core_buffer_append_string(&suffix, phase_name());
