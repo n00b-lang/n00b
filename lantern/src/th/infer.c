@@ -964,6 +964,11 @@ void th_register_coercion_target(th_ctx *ctx, th_coerce_target_fn fn)
     if (ctx) ctx->custom_target = fn;
 }
 
+void th_register_receiver_view(th_ctx *ctx, th_coerce_target_fn fn)
+{
+    if (ctx) ctx->receiver_view = fn;
+}
+
 void th_register_conversion(th_ctx *ctx, th_convert_fn fn, void *user)
 {
     if (ctx) {
@@ -1041,6 +1046,23 @@ static th_type *resolve_constraint_method(th_ctx *ctx, th_type *receiver,
     return *status == TH_ENV_METHOD_FOUND ? method.signature : nullptr;
 }
 
+static th_type *custom_referent(th_ctx *ctx, th_type *resolved)
+{
+    return (ctx->method_argument_coercions & TH_COERCE_CUSTOM)
+            && ctx->custom_target
+        ? ctx->custom_target(ctx, resolved, ctx->custom_user) : nullptr;
+}
+
+static bool blanket_signature(th_type *signature)
+{
+    th_type *resolved = signature ? th_resolve(signature) : nullptr;
+    const th_param *receiver = resolved && th_kind_of(resolved) == TH_FUNCTION
+            && th_func_nparams(resolved)
+        ? th_func_param(resolved, 0) : nullptr;
+    return receiver && receiver->type
+        && th_kind_of(th_resolve(receiver->type)) == TH_VAR;
+}
+
 static th_type *receiver_method_signature(th_ctx *ctx, th_type *bound_to,
                                           core_string_t name,
                                           th_type **receiver_type,
@@ -1050,14 +1072,23 @@ static th_type *receiver_method_signature(th_ctx *ctx, th_type *bound_to,
     th_type *signature = resolve_constraint_method(ctx, bound_to, name,
                                                    status);
     th_type *resolved = th_resolve(bound_to);
-    if (signature || *status == TH_ENV_METHOD_AMBIGUOUS) return signature;
+    if (*status == TH_ENV_METHOD_AMBIGUOUS
+        || (signature && !blanket_signature(signature))) return signature;
+    th_type *viewed = ctx->receiver_view
+        ? ctx->receiver_view(ctx, resolved, ctx->custom_user) : nullptr;
+    if (viewed) {
+        th_env_method_status_t viewed_status = TH_ENV_METHOD_NOT_FOUND;
+        th_type *through = resolve_constraint_method(ctx, viewed, name,
+                                                     &viewed_status);
+        if (through && (!signature || !blanket_signature(through))) {
+            *receiver_type = viewed;
+            *status = viewed_status;
+            return through;
+        }
+    }
+    if (signature) return signature;
     th_type *inner = th_kind_of(resolved) == TH_INDIRECTION
-        ? th_ind_referent(resolved)
-        : ctx->method_argument_coercions & TH_COERCE_OPTION_UNWRAP
-            ? th_option_item(resolved) : nullptr;
-    if (!inner && (ctx->method_argument_coercions & TH_COERCE_CUSTOM)
-        && ctx->custom_target && th_is_closed(ctx, resolved))
-        inner = ctx->custom_target(ctx, resolved, ctx->custom_user);
+        ? th_ind_referent(resolved) : custom_referent(ctx, resolved);
     if (!inner) return signature;
     *receiver_type = inner;
     return resolve_constraint_method(ctx, *receiver_type, name, status);
@@ -1070,9 +1101,7 @@ static th_type *dereferenced_argument(th_ctx *ctx, th_type *actual,
     th_type *resolved_formal = th_resolve(formal);
     th_type *referent = th_kind_of(resolved_actual) == TH_INDIRECTION
         ? th_ind_referent(resolved_actual)
-        : ctx->method_argument_coercions & TH_COERCE_OPTION_UNWRAP
-            && !th_option_item(resolved_formal)
-            ? th_option_item(resolved_actual) : nullptr;
+        : custom_referent(ctx, resolved_actual);
     if (mode != TH_IN || !referent
         || th_kind_of(resolved_formal) == TH_INDIRECTION
         || th_kind_of(resolved_formal) == TH_VAR

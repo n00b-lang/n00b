@@ -488,7 +488,6 @@ typedef enum : uint8_t {
     TH_COERCE_CUSTOM      = 1 << 3,
     TH_COERCE_NIL_OPTION  = 1 << 4,
     TH_COERCE_RECORD_CONSTRUCT = 1 << 5,
-    TH_COERCE_OPTION_UNWRAP = 1 << 6,
 } th_coerce_flag;
 
 void th_ctx_set_method_argument_coercions(th_ctx *ctx, uint8_t allowed);
@@ -516,6 +515,7 @@ th_type *th_coerce(th_ctx *ctx, th_type *from, th_coerce_policy policy);
 
 void   th_register_coercion(th_ctx *ctx, th_coerce_fn fn, void *user);
 void   th_register_coercion_target(th_ctx *ctx, th_coerce_target_fn fn);
+void   th_register_receiver_view(th_ctx *ctx, th_coerce_target_fn fn);
 void   th_register_conversion(th_ctx *ctx, th_convert_fn fn, void *user);
 bool   th_converts(th_ctx *ctx, th_type *from, th_type *to, void *site,
                    void *context);

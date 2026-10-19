@@ -235,6 +235,7 @@ struct th_ctx {
   core_list_t(th_active_constraint_t) active_environment_constraints;
   th_coerce_fn custom;
   th_coerce_target_fn custom_target;
+  th_coerce_target_fn receiver_view;
   void *custom_user;
   th_convert_fn conversion;
   void *conversion_user;
