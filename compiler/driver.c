@@ -44,6 +44,7 @@ typedef struct {
     core_string_t package_id;
     core_string_t package_namespace;
     bool is_default_package;
+    bool interface_module;
     n00bb_native_declarations_t natives;
 } n00bb_source_origin_t;
 
@@ -835,6 +836,63 @@ n00bb_same_package(const core_translation_unit_t *left,
             && right_root == right_name.u8_bytes;
     return left_root == right_root
         && !memcmp(left_name.data, right_name.data, left_root);
+}
+
+static size_t
+unit_root_index(const n00bb_resolver_t *resolver,
+                const core_translation_unit_t *unit)
+{
+    const n00bb_source_origin_t *origin = unit
+        ? core_source_file_user_data(&unit->source) : nullptr;
+    if (!resolver || !origin) return SIZE_MAX;
+    size_t best = SIZE_MAX;
+    size_t best_length = 0;
+    for (size_t i = 0; i < resolver->roots.len; i++) {
+        const n00bb_root_t *root = &resolver->roots.data[i];
+        if (origin->is_default_package) {
+            if (root->is_default_package) return i;
+            continue;
+        }
+        core_string_t id = origin->package_id;
+        size_t length = root->path.u8_bytes;
+        bool prefix = id.u8_bytes >= length
+            && !memcmp(id.data, root->path.data, length)
+            && (id.u8_bytes == length || is_path_separator(id.data[length]));
+        if (prefix && (best == SIZE_MAX || length > best_length)) {
+            best = i;
+            best_length = length;
+        }
+    }
+    return best;
+}
+
+bool
+n00bb_resolver_same_root(const n00bb_resolver_t *resolver,
+                         const core_translation_unit_t *left,
+                         const core_translation_unit_t *right)
+{
+    size_t left_root = unit_root_index(resolver, left);
+    return left_root != SIZE_MAX
+        && left_root == unit_root_index(resolver, right);
+}
+
+void
+n00bb_source_file_mark_interface(core_source_file_t *source,
+                                 uint64_t source_hash)
+{
+    n00bb_source_origin_t *origin = source
+        ? core_source_file_user_data(source) : nullptr;
+    if (!origin) return;
+    origin->interface_module = true;
+    core_source_file_set_identity(source, source_hash);
+}
+
+bool
+n00bb_source_file_is_interface(const core_source_file_t *source)
+{
+    const n00bb_source_origin_t *origin = source
+        ? core_source_file_user_data(source) : nullptr;
+    return origin && origin->interface_module;
 }
 
 core_string_t

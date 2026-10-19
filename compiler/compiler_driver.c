@@ -99,6 +99,67 @@ typedef struct {
     core_diagnostics_t *diagnostics;
 } locate_requests_t;
 
+typedef struct {
+    n00bb_resolver_t *resolver;
+    const n00bb_cache_t *cache;
+    bool package_warnings;
+    bool changed_files_only;
+} warning_policy_t;
+
+static bool
+same_diagnostic(const core_diagnostic_t *left, const core_diagnostic_t *right)
+{
+    return left->severity == right->severity
+        && core_string_eq(left->code, right->code)
+        && core_string_eq(left->message, right->message)
+        && core_string_eq(left->path, right->path)
+        && left->location.line == right->location.line
+        && left->location.column == right->location.column;
+}
+
+static bool
+already_reported(const core_diagnostics_t *diagnostics,
+                 const core_diagnostic_t *item)
+{
+    for (size_t i = 0; i < core_diagnostics_count(diagnostics); i++)
+        if (same_diagnostic(core_diagnostics_at(diagnostics, i), item))
+            return true;
+    return false;
+}
+
+static void
+append_diagnostics(core_diagnostics_t *into, const core_diagnostics_t *from,
+                   bool keep_warnings, bool skip_reported)
+{
+    bool keep = true;
+    for (size_t i = 0; i < core_diagnostics_count(from); i++) {
+        const core_diagnostic_t *item = core_diagnostics_at(from, i);
+        bool attached = item->severity == CORE_DIAG_NOTE
+            || item->severity == CORE_DIAG_HELP;
+        if (!attached)
+            keep = (item->severity != CORE_DIAG_WARNING || keep_warnings)
+                && !(skip_reported && already_reported(into, item));
+        if (keep) core_diagnostics_append(into, item);
+    }
+}
+
+static void
+merge_unit_diagnostics(core_diagnostics_t *into,
+                       const warning_policy_t *policy,
+                       const core_translation_unit_t *unit, bool local)
+{
+    append_diagnostics(into, core_translation_unit_diagnostics(unit),
+                       local || policy->package_warnings, false);
+    n00bb_tu_state_t *state = tu_state(unit);
+    if (!local || policy->changed_files_only || !policy->cache || !state
+        || !state->interface_module)
+        return;
+    core_diagnostics_t *replayed = core_diagnostics_new();
+    if (n00bb_cache_replay_warnings(policy->cache, unit, replayed))
+        append_diagnostics(into, replayed, true, true);
+    core_diagnostics_free(replayed);
+}
+
 typedef core_work_job_t *core_work_job_ptr_t;
 core_list_decl(core_work_job_ptr_t);
 core_list_decl(size_t);
@@ -1063,14 +1124,21 @@ make_interface_module_source(locate_worker_context_t *context,
     core_string_t package = interface_package_for_module(
         &context->interfaces, module->identifier);
     if (!package.data) return false;
+    core_string_t cached_path = {0};
+    uint64_t source_hash = 0;
     core_buffer_t path = {0};
-    core_buffer_printf(&path, "<interface:%.*s>",
-        (int)module->identifier.u8_bytes, module->identifier.data);
+    if (!n00bb_cache_module_source(context->cache, module->identifier,
+                                   &cached_path, &source_hash)
+        || !cached_path.data)
+        core_buffer_printf(&path, "<interface:%.*s>",
+            (int)module->identifier.u8_bytes, module->identifier.data);
+    else core_buffer_append_string(&path, cached_path);
     bool initialized = core_source_file_init(source,
         core_buffer_string(&path), CORE_STRING_STATIC(""));
     core_buffer_release(&path);
     if (!initialized) return false;
     n00bb_source_file_set_package(source, package);
+    n00bb_source_file_mark_interface(source, source_hash);
     return true;
 }
 
@@ -2235,6 +2303,7 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
                 const core_string_t *native_roots, size_t native_root_count,
                 const th_env *const *linked_interfaces,
                 size_t linked_interface_count, const n00bb_cache_t *cache,
+                const warning_policy_t *warnings,
                 const n00bb_preprocessor_options_t *preprocessor_options,
                 ir_ctx_t *ir_context, th_ctx *types, size_t worker_limit,
                 th_env **environment_out, core_link_unit_t **link_out,
@@ -2566,9 +2635,14 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
         core_translation_unit_t *unit = core_work_job_result(
             queue, requests->ordered.data[i].job);
         if (unit && show_symbols) dump_symbols(unit);
-        if (unit)
-            core_diagnostics_merge(diags,
-                core_translation_unit_diagnostics(unit));
+        bool local = false;
+        for (size_t r = 0; unit && !local && r < requests->ordered.len; r++) {
+            core_translation_unit_t *root = requests->ordered.data[r].root_input
+                ? core_work_job_result(queue, requests->ordered.data[r].job)
+                : nullptr;
+            local = root && n00bb_resolver_same_root(resolver, root, unit);
+        }
+        if (unit) merge_unit_diagnostics(diags, warnings, unit, local);
     }
 
     n00bb_preprocessor_free(preprocessor);
@@ -3880,6 +3954,21 @@ run_build_time_stage(int argc, char **argv, core_string_t argv0,
     return ok;
 }
 
+static bool
+locate_cached_module(void *context, core_string_t module, core_string_t *path)
+{
+    core_module_spec_t spec = {0};
+    core_source_file_t source = {0};
+    bool found = n00bb_locate_operand(context, module, &spec, &source)
+        == CORE_MODULE_RESOLVED;
+    if (found) {
+        *path = core_string_dup(core_source_file_path(&source));
+        core_source_file_release(&source);
+    }
+    core_module_spec_release(&spec);
+    return found;
+}
+
 static n00bb_cache_t *
 open_object_cache(n00bb_resolver_t *resolver, parse_cmdr_result_t *args,
                   core_string_t argv0, ir_ctx_t *ir_context)
@@ -3897,7 +3986,7 @@ open_object_cache(n00bb_resolver_t *resolver, parse_cmdr_result_t *args,
         core_string_t root = core_source_file_path(&source);
         core_string_t compiler = n00bb_executable_path(argv0);
         cache = n00bb_cache_open(root, args, compiler, target.triple,
-                                 ir_context);
+                                 ir_context, locate_cached_module, resolver);
         core_free(compiler.data);
         core_source_file_release(&source);
         core_module_spec_release(&module);
@@ -4216,6 +4305,14 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
             CORE_STRING_STATIC("cannot refresh the package source inventory"));
         scheduled = false;
     }
+    warning_policy_t warnings = {
+        .resolver = resolver,
+        .cache = cache,
+        .package_warnings = parse_cmdr_flag_present(args,
+            CORE_STRING_STATIC("--package-warnings")),
+        .changed_files_only = parse_cmdr_flag_present(args,
+            CORE_STRING_STATIC("--warn-changed-files-only")),
+    };
     bool located = scheduled && options_valid && run_locate_jobs(queue, resolver, &requests,
         grammar, !locate_only, show_tokens,
         !locate_only && !lex_command, show_tree,
@@ -4225,7 +4322,7 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         library_command || compile_command,
         build_command,
         native_roots, (size_t)native_root_count,
-        linked_interfaces, linked_count, cache,
+        linked_interfaces, linked_count, cache, &warnings,
         &preprocessor_options,
         ir_context, types, (size_t)requested_jobs, &environment, &link,
         &link_analysis);
@@ -4441,10 +4538,13 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         || library_command || compile_command;
     if (diagnostics_deferred) {
         if (link_analysis) {
-            for (size_t i = 0; i < link_analysis->units.len; i++)
-                core_diagnostics_merge(cli_diagnostics,
-                    core_translation_unit_diagnostics(
-                        link_analysis->units.data[i]));
+            core_translation_unit_t *root = link_analysis->units.len
+                ? link_analysis->units.data[0] : nullptr;
+            for (size_t i = 0; i < link_analysis->units.len; i++) {
+                core_translation_unit_t *unit = link_analysis->units.data[i];
+                merge_unit_diagnostics(cli_diagnostics, &warnings, unit,
+                    n00bb_resolver_same_root(resolver, root, unit));
+            }
         }
         if (link)
             core_diagnostics_merge(cli_diagnostics,

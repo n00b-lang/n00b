@@ -28,6 +28,12 @@ bool n00bb_resolver_generated_text(n00bb_resolver_t *resolver,
 core_module_resolve_status_t n00bb_locate_operand(
     n00bb_resolver_t *resolver, core_string_t operand,
     core_module_spec_t *module_out, core_source_file_t *source_out);
+bool n00bb_resolver_same_root(const n00bb_resolver_t *resolver,
+                              const core_translation_unit_t *left,
+                              const core_translation_unit_t *right);
+void n00bb_source_file_mark_interface(core_source_file_t *source,
+                                      uint64_t source_hash);
+bool n00bb_source_file_is_interface(const core_source_file_t *source);
 bool n00bb_same_package(const core_translation_unit_t *left,
                         const core_translation_unit_t *right);
 core_string_t n00bb_package_id(const core_translation_unit_t *unit);

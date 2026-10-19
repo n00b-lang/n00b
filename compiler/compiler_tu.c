@@ -10686,10 +10686,7 @@ n00bb_tu_state_new(core_translation_unit_t *unit, n00bb_lex_result_t *lex,
     state->lex = lex;
     state->unit = unit;
     state->types = types;
-    core_string_t source_path = core_source_file_path(&unit->source);
-    state->interface_module = source_path.u8_bytes >= 12
-        && core_string_starts_with(source_path,
-                                   CORE_STRING_STATIC("<interface:"));
+    state->interface_module = n00bb_source_file_is_interface(&unit->source);
     core_translation_unit_set_user_data(unit, state, free_tu_state);
     return state;
 }

@@ -617,6 +617,8 @@ struct n00bb_cache_t {
     bool prepare_failed;
     bool strict;
     core_list_t(cache_instance_t) instances;
+    n00bb_cache_locate_fn locate;
+    void *locate_context;
 };
 
 static uint64_t
@@ -836,6 +838,20 @@ entry_for_module(n00bb_cache_t *cache, core_string_t module)
 }
 
 static bool
+member_still_located(const n00bb_cache_t *cache, const cache_member_t *member)
+{
+    if (!cache->locate) return true;
+    core_string_t located = {0};
+    if (!cache->locate(cache->locate_context, member->name, &located))
+        return false;
+    core_string_t canonical = canonical_path(located);
+    bool same = core_string_eq(canonical, member->path);
+    core_free(canonical.data);
+    core_free(located.data);
+    return same;
+}
+
+static bool
 entry_fresh(const n00bb_cache_t *cache, const cache_entry_t *entry)
 {
     bool ok = entry->members.len != 0;
@@ -848,6 +864,7 @@ entry_fresh(const n00bb_cache_t *cache, const cache_entry_t *entry)
         ok = module_key(cache, member->name) == entry->key
             && (!cache->root_path.data
                 || !core_string_eq(member->path, cache->root_path))
+            && member_still_located(cache, member)
             && read_file(member->path, &source, &source_bytes)
             && core_xxh3_64bits_raw(source ? (const void *)source : "",
                                     source_bytes) == member->source_hash;
@@ -1042,7 +1059,8 @@ member_names(const cache_entry_t *entry, core_buffer_t *out)
 n00bb_cache_t *
 n00bb_cache_open(core_string_t root_path, parse_cmdr_result_t *args,
                  core_string_t compiler_path, core_string_t triple,
-                 ir_ctx_t *ir_context)
+                 ir_ctx_t *ir_context, n00bb_cache_locate_fn locate,
+                 void *locate_context)
 {
     if (!root_path.data || !root_path.u8_bytes || root_path.data[0] == '<'
         || !triple.data
@@ -1064,6 +1082,8 @@ n00bb_cache_open(core_string_t root_path, parse_cmdr_result_t *args,
     cache->compiler = compiler_identity(compiler_path);
     append_flags(&cache->flags, args);
     cache->ir_context = ir_context;
+    cache->locate = locate;
+    cache->locate_context = locate_context;
     cache->module_keys = core_list_new(cache_link_t);
     cache->entries = core_list_new(cache_entry_t);
     cache->interfaces = core_list_new(cache_environment_t);
@@ -1206,6 +1226,54 @@ bool
 n00bb_cache_has_module(const n00bb_cache_t *cache, core_string_t module)
 {
     return loaded_member(cache, module, nullptr) != nullptr;
+}
+
+bool
+n00bb_cache_module_source(const n00bb_cache_t *cache, core_string_t module,
+                          core_string_t *path, uint64_t *source_hash)
+{
+    const cache_member_t *member = loaded_member(cache, module, nullptr);
+    if (!member) return false;
+    *path = member->path;
+    *source_hash = member->source_hash;
+    return true;
+}
+
+bool
+n00bb_cache_replay_warnings(const n00bb_cache_t *cache,
+                            const core_translation_unit_t *unit,
+                            core_diagnostics_t *into)
+{
+    const cache_entry_t *entry = nullptr;
+    const cache_member_t *member = unit
+        ? loaded_member(cache, unit->module.identifier, &entry) : nullptr;
+    const cache_section_t *section = member
+        ? phase_section(entry, CORE_STRING_STATIC("warnings"), member->name)
+        : nullptr;
+    if (!section) return false;
+    manifest_reader_t reader = {
+        .data = section->data, .length = section->length,
+    };
+    uint32_t count = read_u32(&reader);
+    for (uint32_t i = 0; !reader.failed && i < count; i++) {
+        core_diagnostic_t item = {
+            .severity = (core_diag_severity_t)read_u32(&reader),
+            .code = read_text(&reader),
+            .message = read_text(&reader),
+            .module = unit->module.identifier,
+        };
+        item.path = read_text(&reader);
+        item.location.line = read_u32(&reader);
+        item.location.column = read_u32(&reader);
+        item.location.end_line = read_u32(&reader);
+        item.location.end_column = read_u32(&reader);
+        item.location.has_location = read_u32(&reader) != 0;
+        if (!reader.failed) core_diagnostics_append(into, &item);
+        core_free(item.code.data);
+        core_free(item.message.data);
+        core_free(item.path.data);
+    }
+    return !reader.failed;
 }
 
 bool
@@ -1730,6 +1798,36 @@ phase_section_name(core_buffer_t *out, core_string_t kind)
     phase_name_into(out, kind);
 }
 
+static void
+put_warnings(core_buffer_t *out, core_translation_unit_t *unit)
+{
+    const core_diagnostics_t *diagnostics =
+        core_translation_unit_diagnostics(unit);
+    core_buffer_t items = {0};
+    uint32_t count = 0;
+    bool attached = false;
+    for (size_t i = 0; i < core_diagnostics_count(diagnostics); i++) {
+        const core_diagnostic_t *item = core_diagnostics_at(diagnostics, i);
+        bool note = item->severity == CORE_DIAG_NOTE
+            || item->severity == CORE_DIAG_HELP;
+        attached = item->severity == CORE_DIAG_WARNING || (note && attached);
+        if (!attached) continue;
+        put_u32(&items, (uint32_t)item->severity);
+        put_text(&items, item->code);
+        put_text(&items, item->message);
+        put_text(&items, item->path);
+        put_u32(&items, item->location.line);
+        put_u32(&items, item->location.column);
+        put_u32(&items, item->location.end_line);
+        put_u32(&items, item->location.end_column);
+        put_u32(&items, item->location.has_location);
+        count++;
+    }
+    put_u32(out, count);
+    if (items.byte_len) core_buffer_append(out, items.data, items.byte_len);
+    core_buffer_release(&items);
+}
+
 static bool
 store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
           const core_list_t(cache_scc_t) *sccs,
@@ -1858,6 +1956,14 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
                                 object->mutators ? object->mutators
                                                  : (const uint8_t *)"",
                                 object->mutator_bytes);
+        core_buffer_t warnings = {0};
+        put_warnings(&warnings, scc->members.data[m]);
+        module_section_name(&name, CORE_STRING_STATIC("warnings"), module);
+        ok = ok && sections_set(&sections, core_buffer_string(&name),
+                                warnings.data ? (const uint8_t *)warnings.data
+                                              : (const uint8_t *)"",
+                                warnings.byte_len);
+        core_buffer_release(&warnings);
     }
     core_buffer_release(&name);
     core_buffer_t serialized = {0};

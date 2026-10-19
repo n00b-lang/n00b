@@ -28,10 +28,21 @@ core_list_decl(n00bb_cache_module_object_t);
 
 typedef struct n00bb_cache_t n00bb_cache_t;
 
+typedef bool (*n00bb_cache_locate_fn)(void *context, core_string_t module,
+                                      core_string_t *path);
+
 n00bb_cache_t *n00bb_cache_open(core_string_t root_path,
                                 parse_cmdr_result_t *args,
                                 core_string_t compiler_path,
-                                core_string_t triple, ir_ctx_t *ir_context);
+                                core_string_t triple, ir_ctx_t *ir_context,
+                                n00bb_cache_locate_fn locate,
+                                void *locate_context);
+bool n00bb_cache_module_source(const n00bb_cache_t *cache,
+                               core_string_t module, core_string_t *path,
+                               uint64_t *source_hash);
+bool n00bb_cache_replay_warnings(const n00bb_cache_t *cache,
+                                 const core_translation_unit_t *unit,
+                                 core_diagnostics_t *into);
 void n00bb_cache_free(n00bb_cache_t *cache);
 size_t n00bb_cache_interface_count(const n00bb_cache_t *cache);
 const th_env *n00bb_cache_interface(const n00bb_cache_t *cache,

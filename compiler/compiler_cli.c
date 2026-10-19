@@ -46,6 +46,10 @@ static const parse_cmdr_flag_t GLOBAL_FLAGS[] = {
          "directory searched for writ contracts"),
     FLAG("--release", NO_ALIAS, BOOL, false,
          "disable debug assertions and optimize at LLVM O3"),
+    FLAG("--warn-changed-files-only", NO_ALIAS, BOOL, false,
+         "report warnings only for modules compiled in this build"),
+    FLAG("--package-warnings", NO_ALIAS, BOOL, false,
+         "report warnings from imported packages"),
     END_FLAGS,
 };
 

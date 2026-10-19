@@ -1421,7 +1421,11 @@ emit_specialization_abi(core_link_unit_t *link,
         && generic_state->lex->tokens && symbols && artifact
         && core_source_file_init(&source,
             core_source_file_path(&generic->source),
-            core_source_file_contents(&generic->source))
+            core_source_file_contents(&generic->source));
+    if (valid)
+        core_source_file_set_identity(&source,
+            core_source_file_identity(&generic->source));
+    valid = valid
         && core_translation_unit_init(&unit,
             &(core_module_spec_t){.identifier = name}, &source)
         && core_translation_unit_finalize_imports(&unit)
