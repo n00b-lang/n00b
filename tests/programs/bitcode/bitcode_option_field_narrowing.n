@@ -68,6 +68,9 @@ func promoted(entry: Entry?, items: Array[int]?) -> int {
     if entry == nil or items == nil {
         return 0
     }
+    if entry.value == nil or entry.inner.value == nil {
+        return 0
+    }
     return twice(entry.value.get()) + entry.inner.value.get() +
         cast[int]items.len() + items[1] + 1 + entry.value.get()
 }
