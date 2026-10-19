@@ -354,6 +354,8 @@ typedef struct {
     bool selected_when_body;
     bool proven_above_int64;
     bool unsigned_literal;
+    bool shape_literal_pending;
+    bool shape_literal_resolved;
 } n00bb_node_facts_t;
 typedef core_translation_unit_t *core_translation_unit_ptr_t;
 core_list_decl(core_translation_unit_ptr_t);
@@ -656,6 +658,9 @@ bool infer_user_literal_type(parse_grammar_t *grammar,
 bool n00bb_defer_shape_literal(parse_grammar_t *grammar,
                                core_translation_unit_t *unit,
                                parse_tree_t *node);
+bool n00bb_type_shape_literal(parse_grammar_t *grammar,
+                              core_translation_unit_t *unit,
+                              parse_tree_t *node);
 bool n00bb_resolve_shape_literal(parse_grammar_t *grammar,
                                  core_translation_unit_t *unit,
                                  parse_tree_t *node);

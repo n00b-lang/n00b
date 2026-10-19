@@ -953,6 +953,11 @@ finalize_module_group_contracts(void *context,
     parse_grammar_t *grammar = inference->grammar;
     if (!unify_calls_until_stable(grammar, nullptr, members, member_count,
             true, false, false)) return false;
+    bool shaped = true;
+    for (size_t i = 0; i < member_count; i++)
+        shaped = n00bb_resolve_shape_literals(grammar, members[i]) && shaped;
+    if (!shaped || !unify_calls_until_stable(grammar, nullptr, members,
+            member_count, true, false, false)) return false;
 
     for (size_t i = 0; i < member_count; i++) {
         n00bb_tu_state_t *state = tu_state(members[i]);

@@ -2229,6 +2229,255 @@ infer_user_literal_type(parse_grammar_t *grammar,
     return true;
 }
 
+static core_string_t
+shape_literal_kind(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    if (NT_IS(grammar, node, "list-lit")) return CORE_STRING_STATIC("sequence");
+    if (!NT_IS(grammar, node, "dict-or-set-lit")) return (core_string_t){0};
+    if (CHILD_NT(grammar, node, "dict-entries")
+        || dict_only_empty_literal(grammar, node))
+        return CORE_STRING_STATIC("dict");
+    if (CHILD_NT(grammar, node, "set-entries"))
+        return CORE_STRING_STATIC("set");
+    return (core_string_t){0};
+}
+
+bool
+n00bb_defer_shape_literal(parse_grammar_t *grammar,
+                          core_translation_unit_t *unit, parse_tree_t *node)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    n00bb_node_facts_t *facts = state ? n00bb_ensure_node_facts(state, node)
+                                      : nullptr;
+    if (!facts) return false;
+    if (facts->shape_literal_pending) return true;
+    core_string_t kind = shape_literal_kind(grammar, node);
+    core_string_t trait = kind.data ? n00bb_literal_shape_trait(kind)
+                                    : CORE_STRING_STATIC("Brace_Literal");
+    th_type *shape = th_var(state->types);
+    if (!shape || !th_var_constrain(state->types, shape,
+            (th_constraint){.kind = TH_CON_IMPLEMENTS, .iface = trait}))
+        return false;
+    th_type *existing = parse_tree_type(node);
+    th_type *typed = existing
+        ? th_unify_in_place(state->types, existing, shape) : shape;
+    if (!typed || !core_list_try_push(state->shape_literal_nodes, node))
+        return false;
+    parse_tree_set_type(node, typed);
+    facts->shape_literal_pending = true;
+    return true;
+}
+
+static th_type *
+default_shape_container(n00bb_tu_state_t *state, core_string_t kind)
+{
+    th_arg args[] = {
+        {.kind = TH_ARG_TYPE, .type = th_var(state->types)},
+        {.kind = TH_ARG_TYPE, .type = th_var(state->types)},
+    };
+    if (core_string_eq(kind, CORE_STRING_STATIC("sequence")))
+        return th_apply(state->types,
+            CORE_STRING_STATIC("builtin.containers.list.List"), args, 1);
+    if (core_string_eq(kind, CORE_STRING_STATIC("set")))
+        return th_apply(state->types,
+            CORE_STRING_STATIC("builtin.containers.set.Set"), args, 1);
+    return th_apply(state->types,
+        CORE_STRING_STATIC("builtin.containers.dict.Dict"), args, 2);
+}
+
+static void
+collect_shape_handlers(n00bb_tu_state_t *state, core_string_t kind,
+                       th_type *container,
+                       core_list_t(n00bb_user_litmod_ptr_t) *matches)
+{
+    core_list_t(n00bb_user_litmod_ptr_t) visible =
+        n00bb_visible_litmods(state, kind);
+    for (size_t i = 0; i < visible.len; i++) {
+        n00bb_user_litmod_t *registration = visible.data[i];
+        parse_sym_entry_t *function = registration->declaration
+            ? parse_tree_sym(registration->declaration)
+            : registration->function;
+        th_type *signature = function && function->type
+            ? th_resolve(function->type) : nullptr;
+        bool alias = false;
+        for (size_t m = 0; m < matches->len; m++) {
+            n00bb_user_litmod_t *seen = matches->data[m];
+            alias |= (seen->declaration ? parse_tree_sym(seen->declaration)
+                                        : seen->function) == function;
+        }
+        if (!alias && signature && th_kind_of(signature) == TH_FUNCTION
+            && th_unify_probe(state->types, th_func_ret(signature),
+                              container))
+            core_list_push(*matches, registration);
+    }
+    core_list_free(visible);
+}
+
+static void
+report_shape_literal(core_translation_unit_t *unit, parse_tree_t *node,
+                     core_string_t message)
+{
+    core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit,
+        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0010"), message,
+        link_source_location(node));
+}
+
+bool
+n00bb_resolve_shape_literal(parse_grammar_t *grammar,
+                            core_translation_unit_t *unit, parse_tree_t *node)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    n00bb_node_facts_t *facts = state ? n00bb_ensure_node_facts(state, node)
+                                      : nullptr;
+    if (!facts) return false;
+    if (facts->shape_literal_resolved) return true;
+    facts->shape_literal_resolved = true;
+    core_string_t kind = shape_literal_kind(grammar, node);
+    th_type *container = parse_tree_type(node)
+        ? th_resolve(parse_tree_type(node)) : nullptr;
+    if (!container || th_kind_of(container) == TH_VAR) {
+        if (!kind.data) {
+            report_shape_literal(unit, node, CORE_STRING_STATIC(
+                "nothing tells whether this empty `{}` is a set or a "
+                "dictionary; give it a type, or write `{:}` for an empty "
+                "dictionary"));
+            return false;
+        }
+        th_type *fallback = default_shape_container(state, kind);
+        th_type *typed = fallback && parse_tree_type(node)
+            ? th_unify_in_place(state->types, parse_tree_type(node),
+                                fallback) : fallback;
+        if (!typed) {
+            core_string_t shown = n00bb_print_type(state->types, fallback);
+            th_error_t detail = {0};
+            bool explained = th_error_count(state->types)
+                && th_error_at(state->types,
+                               th_error_count(state->types) - 1, &detail)
+                && detail.message.data && detail.got;
+            core_string_t got = explained
+                ? n00bb_print_type(state->types, detail.got)
+                : (core_string_t){0};
+            core_buffer_t message = {0};
+            core_buffer_printf(&message,
+                "nothing gives this literal a type, so it becomes %.*s, "
+                "but a use of it then conflicts",
+                (int)shown.u8_bytes, shown.data);
+            if (explained)
+                core_buffer_printf(&message, ": %.*s for %.*s",
+                    (int)detail.message.u8_bytes, detail.message.data,
+                    (int)got.u8_bytes, got.data);
+            report_shape_literal(unit, node,
+                core_string_borrow(message.data, message.byte_len));
+            core_buffer_release(&message);
+            return false;
+        }
+        parse_tree_set_type(node, typed);
+        container = th_resolve(typed);
+    }
+    if (core_string_eq(kind, CORE_STRING_STATIC("sequence"))
+        && th_kind_of(container) == TH_SEQUENCE)
+        return infer_sequence_modifier_type(grammar, node, unit, state);
+    core_list_t(n00bb_user_litmod_ptr_t) matches =
+        core_list_new(n00bb_user_litmod_ptr_t);
+    if (kind.data) collect_shape_handlers(state, kind, container, &matches);
+    else {
+        collect_shape_handlers(state, CORE_STRING_STATIC("set"), container,
+                               &matches);
+        collect_shape_handlers(state, CORE_STRING_STATIC("dict"), container,
+                               &matches);
+    }
+    bool ok = matches.len == 1;
+    core_string_t shown = n00bb_print_type(state->types, container);
+    if (!ok) {
+        core_buffer_t message = {0};
+        core_buffer_printf(&message, matches.len
+                ? "more than one visible literal modifier produces %.*s"
+                : "no visible literal modifier produces %.*s from this "
+                  "literal",
+            (int)shown.u8_bytes, shown.data);
+        report_shape_literal(unit, node,
+            core_string_borrow(message.data, message.byte_len));
+        core_buffer_release(&message);
+    }
+    else {
+        size_t before = core_diagnostics_count(
+            core_translation_unit_diagnostics(unit));
+        ok = infer_user_literal_type(grammar, unit, node, matches.data[0]);
+        if (!ok && core_diagnostics_count(
+                core_translation_unit_diagnostics(unit)) == before) {
+            core_buffer_t message = {0};
+            core_buffer_printf(&message,
+                "this literal's items do not fit %.*s",
+                (int)shown.u8_bytes, shown.data);
+            report_shape_literal(unit, node,
+                core_string_borrow(message.data, message.byte_len));
+            core_buffer_release(&message);
+        }
+    }
+    core_list_free(matches);
+    return ok;
+}
+
+static bool
+shape_literal_produces(parse_grammar_t *grammar, n00bb_tu_state_t *state,
+                       parse_tree_t *node, th_type *container)
+{
+    core_string_t kind = shape_literal_kind(grammar, node);
+    if (core_string_eq(kind, CORE_STRING_STATIC("sequence"))
+        && th_kind_of(container) == TH_SEQUENCE) return true;
+    core_list_t(n00bb_user_litmod_ptr_t) matches =
+        core_list_new(n00bb_user_litmod_ptr_t);
+    if (kind.data) collect_shape_handlers(state, kind, container, &matches);
+    else {
+        collect_shape_handlers(state, CORE_STRING_STATIC("set"), container,
+                               &matches);
+        collect_shape_handlers(state, CORE_STRING_STATIC("dict"), container,
+                               &matches);
+    }
+    bool produces = matches.len != 0;
+    core_list_free(matches);
+    return produces;
+}
+
+bool
+n00bb_type_shape_literal(parse_grammar_t *grammar,
+                         core_translation_unit_t *unit, parse_tree_t *node)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    if (!state) return false;
+    th_type *existing = parse_tree_type(node)
+        ? th_resolve(parse_tree_type(node)) : nullptr;
+    th_type *context = existing && th_kind_of(existing) != TH_VAR
+        ? existing : nullptr;
+    if (!context) {
+        th_type *expected = record_literal_expected_type(grammar,
+                                                         state->types, node);
+        expected = expected ? th_resolve(expected) : nullptr;
+        if (expected && th_kind_of(expected) != TH_VAR)
+            context = expected;
+    }
+    if (!context || !shape_literal_produces(grammar, state, node, context))
+        return n00bb_defer_shape_literal(grammar, unit, node);
+    th_type *typed = parse_tree_type(node)
+        ? th_unify_in_place(state->types, parse_tree_type(node), context)
+        : context;
+    if (!typed) return n00bb_defer_shape_literal(grammar, unit, node);
+    parse_tree_set_type(node, typed);
+    return n00bb_resolve_shape_literal(grammar, unit, node);
+}
+
+bool
+n00bb_resolve_shape_literals(parse_grammar_t *grammar,
+                             core_translation_unit_t *unit)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    bool ok = true;
+    for (size_t i = 0; state && i < state->shape_literal_nodes.len; i++)
+        ok = n00bb_resolve_shape_literal(grammar, unit,
+                 state->shape_literal_nodes.data[i]) && ok;
+    return ok;
+}
+
 bool
 resolve_forward_literal_sites(core_translation_unit_t *unit,
                               n00bb_tu_state_t *state)

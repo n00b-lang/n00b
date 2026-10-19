@@ -756,58 +756,16 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             if (string_literal)
                 default_type = th_name(state->types,
                                        CORE_STRING_STATIC("string"));
-            else if (NT_IS(grammar, node, "list-lit")) {
-                th_type *list_type = parse_tree_type(node);
-                bool array_context = list_type
-                    && th_kind_of(th_resolve(list_type)) == TH_SEQUENCE;
-                if (!array_context) {
-                    th_type *expected = record_literal_expected_type(grammar,
-                        state->types, node);
-                    th_type *unified = expected
-                        && th_kind_of(th_resolve(expected)) == TH_SEQUENCE
-                        ? (list_type ? th_unify_in_place(state->types,
-                               list_type, expected) : expected)
-                        : nullptr;
-                    if (unified) {
-                        parse_tree_set_type(node, unified);
-                        array_context = true;
-                    }
-                }
-                bool user_literal = !array_context
-                    && user_litmod(state, CORE_STRING_STATIC("list"),
-                                   CORE_STRING_STATIC("sequence"), nullptr);
-                if (user_literal && !infer_literal_reporting(grammar, unit,
-                        node, CORE_STRING_STATIC("N00BB-T0010"),
-                        CORE_STRING_STATIC(
-                            "could not infer the bracket literal element type")))
-                    return;
+            else if (NT_IS(grammar, node, "list-lit")
+                     || NT_IS(grammar, node, "dict-or-set-lit")) {
                 size_t before = core_diagnostics_count(
                     core_translation_unit_diagnostics(unit));
-                if (!user_literal && !infer_sequence_modifier_type(grammar,
-                        node, unit, state)) {
+                if (!n00bb_type_shape_literal(grammar, unit, node)) {
                     report_literal_failure(unit, node, before,
                         CORE_STRING_STATIC("N00BB-T0010"),
                         CORE_STRING_STATIC(
-                            "could not infer the bracket literal element type"));
+                            "could not infer the container literal's type"));
                     return;
-                }
-            }
-            else if (NT_IS(grammar, node, "dict-or-set-lit")) {
-                bool entries = CHILD_NT(grammar, node, "dict-entries")
-                    || CHILD_NT(grammar, node, "set-entries");
-                if (entries && !infer_literal_reporting(grammar, unit, node,
-                        CORE_STRING_STATIC("N00BB-T0010"),
-                        CORE_STRING_STATIC(
-                            "could not infer the brace literal element types")))
-                    return;
-                if (!entries && dict_only_empty_literal(grammar, node)) {
-                    th_arg args[] = {
-                        {.kind = TH_ARG_TYPE, .type = th_var(state->types)},
-                        {.kind = TH_ARG_TYPE, .type = th_var(state->types)},
-                    };
-                    default_type = th_apply(state->types,
-                        CORE_STRING_STATIC("builtin.containers.dict.Dict"),
-                        args, 2);
                 }
             }
             if (default_type) {

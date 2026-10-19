@@ -613,7 +613,7 @@
             | <tuple-or-paren>
 
 <list-lit> @emit("sequence_literal") @infer("`t") @nospace($1) @nospace($2) ::= %"[" <list-elems> %"]"
-<list-lit> @emit("sequence_literal") @infer("`t") @constrain($0, Bracket_Literal) @nospace ::= %"[" %"]"
+<list-lit> @emit("sequence_literal") @infer("`t") @constrain($0, Sequence_Like) @nospace ::= %"[" %"]"
 
 <list-elems> ::= <expression> (%"," <expression>)* %","?
 
@@ -624,7 +624,7 @@
        %"{" <dict-entries> %"}"
 <dict-or-set-lit> @emit("brace_literal") @infer("`t") ::=
        %"{" <set-entries> %"}"
-<dict-or-set-lit> @emit("brace_literal") @infer("`t") ::=
+<dict-or-set-lit> @emit("brace_literal") @infer("`t") @constrain($0, Dict_Like) ::=
        %"{" %":" %"}"
 <dict-or-set-lit> @emit("brace_literal") @infer("`t") @constrain($0, Brace_Literal) ::= %"{" %"}"
 
