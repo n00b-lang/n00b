@@ -16,6 +16,7 @@ typedef enum : uint8_t {
     ROOT_VALUE,
     ROOT_LOCAL,
     ROOT_CELL,
+    ROOT_REFERENCE,
 } root_kind_t;
 
 typedef struct {
@@ -85,6 +86,12 @@ static option_key_t key_of(ir_value_t *v)
 
             if (cell && cell->def && cell->def->op == IR_OP_ALLOC) {
                 key.kind  = ROOT_CELL;
+                key.value = cell;
+                key.read  = def;
+                break;
+            }
+            if (cell && cell->kind == IR_VAL_PARAM) {
+                key.kind  = ROOT_REFERENCE;
                 key.value = cell;
                 key.read  = def;
                 break;
@@ -291,7 +298,7 @@ static bool stable(proof_t *p, const option_key_t *key, ir_instr_t *test,
     if (key->kind == ROOT_VALUE) {
         return true;
     }
-    if (!test || !use) {
+    if (key->kind == ROOT_REFERENCE || !test || !use) {
         return false;
     }
     if (key->kind == ROOT_CELL && cell_escapes(p->f, key->value)) {
@@ -392,7 +399,8 @@ static ir_value_t *cell_source(ir_func_t *f, ir_value_t *cell)
 static core_string_t key_name(ir_func_t *f, const option_key_t *key)
 {
     core_buffer_t name = {0};
-    ir_value_t *param = key->kind == ROOT_VALUE
+    ir_value_t *param = (key->kind == ROOT_VALUE
+                         || key->kind == ROOT_REFERENCE)
             && key->value->kind == IR_VAL_PARAM ? key->value
         : key->kind == ROOT_CELL ? cell_source(f, key->value) : nullptr;
 
@@ -428,7 +436,14 @@ static void report(ir_diags_t *d, proof_t *p, ir_instr_t *get,
     core_string_t name = key_name(p->f, key);
     core_buffer_t message = {0};
 
-    if (name.data) {
+    if (name.data && key->kind == ROOT_REFERENCE) {
+        core_buffer_append_string(&message, CORE_STRING_STATIC("'"));
+        core_buffer_append_string(&message, name);
+        core_buffer_append_string(&message, CORE_STRING_STATIC(
+            "' is read through a reference, so a test against nil does not "
+            "keep it non-nil; copy it into a local with `let` and test the "
+            "local"));
+    } else if (name.data) {
         core_buffer_append_string(&message, CORE_STRING_STATIC("'"));
         core_buffer_append_string(&message, name);
         core_buffer_append_string(&message, CORE_STRING_STATIC(
