@@ -11,6 +11,7 @@
 typedef struct {
     uint32_t at;
     uint32_t on;
+    uint32_t slot;
 } ir_cdp_t;
 
 struct ir_pdg_t {
@@ -31,6 +32,8 @@ struct ir_pdg_t {
     uint32_t      *in_at;
     uint32_t      *cd_off;
     uint32_t      *cd_at;
+    uint32_t      *cd_slot;
+    uint64_t      *slot_stamp;
     uint32_t      *loop_of;
     uint32_t      *loop_parent;
     ir_rd_t       *rd;
@@ -263,11 +266,13 @@ static bool control_block(ir_visit_t *vi)
     for (uint32_t s = 0; s < t->n_operands; s++) {
         ir_block_t *at = ir_succ_of(&t->operands[s]);
 
+        uint64_t key = ((uint64_t)a->index << 32) | s;
+
         for (; at && at != stop; at = ir_ipdom_of(g->dom, at)) {
-            if (g->stamp[at->index] == a->index) {
+            if (g->slot_stamp[at->index] == key) {
                 break;
             }
-            g->stamp[at->index] = a->index;
+            g->slot_stamp[at->index] = key;
 
             g->cdp = ir_grow(ctx, g->cdp, &g->cap_cdp, g->n_cdp + 1u,
                              sizeof(ir_cdp_t));
@@ -275,7 +280,13 @@ static bool control_block(ir_visit_t *vi)
             if (!g->cdp) {
                 return false;
             }
-            g->cdp[g->n_cdp++] = (ir_cdp_t){.at = at->index, .on = a->index};
+            g->cdp[g->n_cdp++] = (ir_cdp_t){.at = at->index, .on = a->index,
+                                            .slot = s};
+
+            if (g->stamp[at->index] == a->index) {
+                continue;
+            }
+            g->stamp[at->index] = a->index;
 
             for (uint32_t k = 0; k < at->n_instrs; k++) {
                 add_edge(g, t, at->instrs[k], IR_DEP_CONTROL, IR_DEP_EXACT,
@@ -293,11 +304,15 @@ static void control_edges(ir_pdg_t *g)
     ir_ctx_t  *ctx   = f->owner->ctx;
     uint32_t  *stamp = ir_alloc(ctx, f->n_blocks * sizeof(uint32_t));
 
+    uint64_t  *slot_stamp = ir_alloc(ctx, f->n_blocks * sizeof(uint64_t));
+
     for (uint32_t i = 0; i < f->n_blocks; i++) {
-        stamp[i] = UINT32_MAX;
+        stamp[i]      = UINT32_MAX;
+        slot_stamp[i] = UINT64_MAX;
     }
 
-    g->stamp = stamp;
+    g->stamp      = stamp;
+    g->slot_stamp = slot_stamp;
 
     ir_walk_t *w = ir_walk_new(g);
 
@@ -401,9 +416,13 @@ static void index_edges(ir_pdg_t *g)
 
     memcpy(fc, g->cd_off, (nb + 1) * sizeof(uint32_t));
     g->cd_at = ir_alloc(ctx, (g->n_cdp ? g->n_cdp : 1) * sizeof(uint32_t));
+    g->cd_slot = ir_alloc(ctx, (g->n_cdp ? g->n_cdp : 1) * sizeof(uint32_t));
 
     for (uint32_t i = 0; i < g->n_cdp; i++) {
-        g->cd_at[fc[g->cdp[i].at]++] = g->cdp[i].on;
+        uint32_t at = fc[g->cdp[i].at]++;
+
+        g->cd_at[at]   = g->cdp[i].on;
+        g->cd_slot[at] = g->cdp[i].slot;
     }
 }
 
@@ -515,6 +534,15 @@ ir_block_t *ir_controller_at(const ir_pdg_t *g, ir_block_t *b, uint32_t i)
     }
 
     return g->f->blocks[g->cd_at[g->cd_off[b->index] + i]];
+}
+
+uint32_t ir_controller_slot_at(const ir_pdg_t *g, ir_block_t *b, uint32_t i)
+{
+    if (i >= ir_controllers_of(g, b)) {
+        return UINT32_MAX;
+    }
+
+    return g->cd_slot[g->cd_off[b->index] + i];
 }
 
 

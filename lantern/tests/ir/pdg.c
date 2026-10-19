@@ -568,6 +568,11 @@ static void test_the_cdg_is_over_blocks(void)
           controlled_by(g, f->blocks[1], f->blocks[0])
               && controlled_by(g, f->blocks[2], f->blocks[1])
               && !controlled_by(g, f->blocks[3], f->blocks[0]));
+    check("each dependence names the edge it rides on",
+          ir_controllers_of(g, f->blocks[1]) == 1
+              && ir_edge_kind(g, f->blocks[0],
+                              ir_controller_slot_at(g, f->blocks[1], 0))
+                     == IR_EDGE_BRANCH_TRUE);
 
     uint32_t control = 0;
 

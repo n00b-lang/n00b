@@ -41,6 +41,8 @@ const ir_dep_edge_t *ir_pdg_in_at(const ir_pdg_t *g, ir_instr_t *in,
 
 uint32_t    ir_controllers_of(const ir_pdg_t *g, ir_block_t *b);
 ir_block_t *ir_controller_at(const ir_pdg_t *g, ir_block_t *b, uint32_t i);
+uint32_t    ir_controller_slot_at(const ir_pdg_t *g, ir_block_t *b,
+                                  uint32_t i);
 
 bool ir_pdg_is_exact(const ir_pdg_t *g);
 
