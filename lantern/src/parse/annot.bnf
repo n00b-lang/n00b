@@ -27,6 +27,8 @@
 
 <a-tag> ::= <tag>
 
+<a-tags> ::= <tag> (%"," <tag>)*
+
 <a-capture> ::= <tag> | <tag> %"," <tag>
 
 <a-adt> ::= <tag> %"," <ref> %"," <tag> %"," <ref>

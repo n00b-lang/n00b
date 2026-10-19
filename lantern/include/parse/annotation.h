@@ -56,7 +56,8 @@
     X(ALIGNMENT, "alignment") \
     X(OFFSET, "offset") \
     X(WIDTH, "width") \
-    X(DECLARATION_POINT, "declaration_point")
+    X(DECLARATION_POINT, "declaration_point") \
+    X(STATEMENT_END, "statement_end")     X(CONTINUE_AFTER, "continue_after")
 
 typedef enum {
 #define PARSE_ANNOT_ENUM(sym, spelling) PARSE_ANNOT_##sym,
@@ -131,6 +132,7 @@ struct parse_annotation_t {
     core_string_t     emit_action;
     core_list_t(parse_child_ref_t) emit_operands;
     core_list_t(parse_con_spec_t) constraints;
+    core_list_t(core_string_t) tags;
 
     parse_child_ref_t  val_ref;
     int64_t          val_int;

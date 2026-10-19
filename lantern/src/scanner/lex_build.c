@@ -1492,6 +1492,22 @@ build_layout(lex_build_t *b, const scan_lex_decl_t *a)
         else if (named(o, "brackets")) {
             b->spec.brackets = arg(o, 0);
         }
+        else if (named(o, "dedent_newline")) {
+            if (core_list_len(o->args) != 1 ||
+                (!string_is(arg(o, 0), "emit") &&
+                 !string_is(arg(o, 0), "none"))) {
+                oops(b, "layout dedent_newline", arg(o, 0));
+            }
+            else b->spec.dedent_newline = string_is(arg(o, 0), "emit");
+        }
+        else if (named(o, "bracket_newlines")) {
+            if (core_list_len(o->args) != 1 ||
+                (!string_is(arg(o, 0), "keep") &&
+                 !string_is(arg(o, 0), "drop"))) {
+                oops(b, "layout bracket_newlines", arg(o, 0));
+            }
+            else b->spec.bracket_newlines = string_is(arg(o, 0), "keep");
+        }
         else if (named(o, "tab_width")) {
             layout_tab_width(b, o, &b->spec.indent_tab_width);
         }

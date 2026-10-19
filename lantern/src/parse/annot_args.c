@@ -481,6 +481,8 @@ static struct {
     {PARSE_ANNOT_WIDTH,      CORE_STRING_STATIC("a-val")},
     {PARSE_ANNOT_LEXER,      CORE_STRING_STATIC("a-tag")},
     {PARSE_ANNOT_DECLARATION_POINT, CORE_STRING_STATIC("a-tag")},
+    {PARSE_ANNOT_STATEMENT_END, CORE_STRING_STATIC("a-tags")},
+    {PARSE_ANNOT_CONTINUE_AFTER, CORE_STRING_STATIC("a-tags")},
 };
 
 core_string_t
@@ -523,6 +525,7 @@ install(parse_tree_walk_t *w, aa_ctx *c)
         REG(SIGS[i].nt, r_args);
     }
     REG(CORE_STRING_STATIC("a-emit"), r_emit_args);
+    REG(CORE_STRING_STATIC("a-tags"), r_emit_args);
 
 #undef REG
 }
@@ -690,6 +693,16 @@ decode(parse_annotation_t *a, aa_node *args)
             && !core_string_eq(a->scope_tag,
                                CORE_STRING_STATIC("after_initializer")))
             return false;
+        break;
+
+    case PARSE_ANNOT_STATEMENT_END:
+    case PARSE_ANNOT_CONTINUE_AFTER:
+        if (!args->n) return false;
+        a->tags = core_list_new(core_string_t);
+        for (size_t i = 0; i < args->n; i++) {
+            if (!arg_is(args, i, AA_TAG)) return false;
+            core_list_push(a->tags, arg_tag(args, i));
+        }
         break;
 
     case PARSE_ANNOT_VISIBILITY:

@@ -62,6 +62,12 @@ parse_annot_clone(const parse_annotation_t *a)
     c->emit_action          = core_string_dup(a->emit_action);
     c->val_expr             = core_string_dup(a->val_expr);
 
+    if (core_list_len(a->tags) > 0) {
+        c->tags = core_list_new(core_string_t);
+        for (size_t i = 0; i < core_list_len(a->tags); i++)
+            core_list_push(c->tags, core_string_dup(a->tags.data[i]));
+    }
+
     if (core_list_len(a->emit_operands) > 0) {
         c->emit_operands = core_list_new(parse_child_ref_t);
         for (size_t i = 0; i < core_list_len(a->emit_operands); i++) {
@@ -154,6 +160,10 @@ parse_annot_free(parse_annotation_t *a)
     for (size_t i = 0; i < core_list_len(a->emit_operands); i++)
         core_free(a->emit_operands.data[i].name.data);
     core_list_free(a->emit_operands);
+
+    for (size_t i = 0; i < core_list_len(a->tags); i++)
+        core_free(a->tags.data[i].data);
+    core_list_free(a->tags);
 
     core_free(a);
 }

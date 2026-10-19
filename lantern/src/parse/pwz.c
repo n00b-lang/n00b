@@ -9,6 +9,7 @@
 #include "lib/array.h"
 #include "lib/list.h"
 #include "scanner/token_stream.h"
+#include "scanner/lex.h"
 
 #include <assert.h>
 #include <stdint.h>
@@ -1038,6 +1039,256 @@ init_parse(parse_pwz_parser_t *p)
 }
 
 static bool
+tid_in(core_list_t(int32_t) tids, parse_token_info_t *tok)
+{
+    if (!tok) {
+        return false;
+    }
+
+    int32_t tid = parse_token_tid(tok);
+
+    for (size_t i = 0; i < core_list_len(tids); i++) {
+        if (tids.data[i] == tid) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool
+skipped_at(parse_pwz_parser_t *p, int32_t pos)
+{
+    size_t lo = 0;
+    size_t hi = core_list_len(p->skipped);
+
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        if (p->skipped.data[mid] < pos) {
+            lo = mid + 1;
+        }
+        else {
+            hi = mid;
+        }
+    }
+
+    return lo < core_list_len(p->skipped) && p->skipped.data[lo] == pos;
+}
+
+static int32_t
+live_pos(parse_pwz_parser_t *p, int32_t pos)
+{
+    while (skipped_at(p, pos)) {
+        pos++;
+    }
+
+    return pos;
+}
+
+static void
+release_worklist(parse_pwz_parser_t *p, size_t wl_len)
+{
+    for (size_t i = 0; i < wl_len; i++) {
+        mem_release(p, p->worklist.data[i].mem);
+    }
+}
+
+static void
+retain_worklist(parse_pwz_parser_t *p, int32_t pos, size_t wl_len)
+{
+    core_list_push(p->skipped, pos);
+    for (size_t i = 0; i < wl_len; i++) {
+        pwz_zipper_t *z = &p->worklist.data[i];
+        core_list_push(p->worklist_swap,
+                       ((pwz_zipper_t){
+                           .result = z->result,
+                           .mem = mem_retain(z->mem),
+                       }));
+    }
+    release_worklist(p, wl_len);
+}
+
+static void
+continue_line(parse_pwz_parser_t *p, int32_t pos, size_t wl_len)
+{
+    parse_token_info_t *next = get_token(p, pos + 1);
+
+    if (next && parse_token_tid(next) == p->indent_tid) {
+        p->continuation_indent_pos = pos + 1;
+    }
+    p->end_run = PWZ_RUN_CONTINUED;
+    retain_worklist(p, pos, wl_len);
+}
+
+static bool
+trivia_has_comment(parse_trivia_t *trivia)
+{
+    for (parse_trivia_t *item = trivia; item; item = item->next) {
+        if (item->kind == PARSE_TRIVIA_COMMENT) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool
+newline_has_comment(parse_pwz_parser_t *p, int32_t pos)
+{
+    parse_token_info_t *before = get_token(p, pos - 1);
+    parse_token_info_t *newline = get_token(p, pos);
+    parse_token_info_t *after = get_token(p, pos + 1);
+
+    return (before && trivia_has_comment(parse_token_trailing_trivia(before)))
+        || trivia_has_comment(parse_token_leading_trivia(newline))
+        || trivia_has_comment(parse_token_trailing_trivia(newline))
+        || (after && trivia_has_comment(parse_token_leading_trivia(after)));
+}
+
+static void
+drop_continuation(parse_pwz_parser_t *p)
+{
+    for (size_t i = 0; i < core_list_len(p->held); i++) {
+        mem_release(p, p->held.data[i].mem);
+    }
+    core_list_clear(p->held);
+    p->held_pos = -1;
+}
+
+static void
+hold_continuation(parse_pwz_parser_t *p, int32_t pos, size_t wl_len)
+{
+    drop_continuation(p);
+    for (size_t i = 0; i < wl_len; i++) {
+        pwz_zipper_t *z = &p->worklist.data[i];
+        core_list_push(p->held, ((pwz_zipper_t){
+                                    .result = z->result,
+                                    .mem = mem_retain(z->mem),
+                                }));
+    }
+    p->held_pos = pos;
+}
+
+static bool
+apply_layout(parse_pwz_parser_t *p, int32_t pos, parse_token_info_t *tok,
+             size_t wl_len)
+{
+    int32_t tid = parse_token_tid(tok);
+
+    if (tid == p->indent_tid && pos == p->continuation_indent_pos) {
+        p->continuation_indents++;
+        retain_worklist(p, pos, wl_len);
+        return true;
+    }
+
+    if (tid == p->dedent_tid && p->continuation_indents > 0) {
+        p->continuation_indents--;
+        retain_worklist(p, pos, wl_len);
+        return true;
+    }
+
+    if (!tid_in(p->statement_ends, tok)) {
+        return false;
+    }
+
+    bool newline = tid == p->newline_tid;
+    bool commented = newline && newline_has_comment(p, pos);
+
+    if (newline && !commented && p->end_run == PWZ_RUN_NONE
+        && tid_in(p->continue_after, get_token(p, pos - 1))) {
+        continue_line(p, pos, wl_len);
+        return true;
+    }
+
+    for (size_t i = 0; i < wl_len; i++) {
+        pwz_zipper_t *z = &p->worklist.data[i];
+        d_u(p, pos, z->result, z->mem);
+    }
+
+    if (p->worklist_swap.len || p->tops.len) {
+        if (newline && !commented && p->end_run == PWZ_RUN_NONE) {
+            hold_continuation(p, pos, wl_len);
+        }
+        p->end_run = PWZ_RUN_ENDED;
+        release_worklist(p, wl_len);
+        if (core_list_len(p->tops) > 0) {
+            p->longest_top = p->tops.data[0];
+            p->longest_end = pos;
+        }
+        return true;
+    }
+
+    if (p->end_run == PWZ_RUN_ENDED) {
+        retain_worklist(p, pos, wl_len);
+        return true;
+    }
+
+    if (newline && !commented && p->end_run == PWZ_RUN_NONE) {
+        continue_line(p, pos, wl_len);
+        return true;
+    }
+
+    p->error_unterminated = p->end_run == PWZ_RUN_CONTINUED;
+    p->error_commented = commented && p->end_run == PWZ_RUN_NONE;
+    release_worklist(p, wl_len);
+    return true;
+}
+
+static void
+step_input(parse_pwz_parser_t *p, int32_t complete_pos,
+           parse_token_info_t *input, size_t wl_len)
+{
+    if (input && core_list_len(p->statement_ends)
+        && apply_layout(p, complete_pos, input, wl_len)) {
+        return;
+    }
+    p->end_run = PWZ_RUN_NONE;
+
+    for (size_t i = 0; i < wl_len; i++) {
+        pwz_zipper_t *z = &p->worklist.data[i];
+        size_t before = p->worklist_swap.len;
+        size_t before_tops = p->tops.len;
+        d_u(p, complete_pos, z->result, z->mem);
+        if (input && parse_token_ignore_if_no_match(input)
+            && p->worklist_swap.len == before
+            && p->tops.len == before_tops) {
+            core_list_push(p->worklist_swap,
+                           ((pwz_zipper_t){
+                               .result = z->result,
+                               .mem = mem_retain(z->mem),
+                           }));
+        }
+    }
+
+    release_worklist(p, wl_len);
+
+    if (core_list_len(p->tops) > 0) {
+        p->longest_top = p->tops.data[0];
+        p->longest_end = complete_pos;
+    }
+}
+
+static void
+resume_continuation(parse_pwz_parser_t *p, int32_t complete_pos,
+                    parse_token_info_t *input)
+{
+    core_list_push(p->skipped, p->held_pos);
+    core_list_clear(p->worklist);
+    for (size_t i = 0; i < core_list_len(p->held); i++) {
+        core_list_push(p->worklist, p->held.data[i]);
+    }
+    core_list_clear(p->held);
+    p->held_pos = -1;
+    p->end_run = PWZ_RUN_CONTINUED;
+    p->error_unterminated = false;
+    if (input && parse_token_tid(input) == p->indent_tid) {
+        p->continuation_indent_pos = complete_pos;
+        p->held_indent_pos = complete_pos;
+    }
+    step_input(p, complete_pos, input, core_list_len(p->worklist));
+}
+
+static bool
 run_parse(parse_pwz_parser_t *p)
 {
     if (core_list_len(p->tops) > 0 && scan_stream_token_count(p->stream) == 0) {
@@ -1068,7 +1319,8 @@ run_parse(parse_pwz_parser_t *p)
                 core_list_push(p->tops, p->longest_top);
                 return true;
             }
-            p->error_pos = pos;
+            p->error_pos = p->held_indent_pos >= 0
+                && pos == p->held_indent_pos + 1 ? p->held_indent_pos : pos;
             return false;
         }
 
@@ -1077,29 +1329,18 @@ run_parse(parse_pwz_parser_t *p)
         bool have_next = (scan_stream_get(p->stream, complete_pos) != nullptr);
         parse_token_info_t *input = get_token(p, complete_pos);
 
-        for (size_t i = 0; i < wl_len; i++) {
-            pwz_zipper_t *z = &p->worklist.data[i];
-            size_t before = p->worklist_swap.len;
-            size_t before_tops = p->tops.len;
-            d_u(p, complete_pos, z->result, z->mem);
-            if (input && parse_token_ignore_if_no_match(input)
-                && p->worklist_swap.len == before
-                && p->tops.len == before_tops) {
-                core_list_push(p->worklist_swap,
-                               ((pwz_zipper_t){
-                                   .result = z->result,
-                                   .mem = mem_retain(z->mem),
-                               }));
+        step_input(p, complete_pos, input, wl_len);
+
+        if (p->held_pos >= 0 && p->held_pos == complete_pos - 1) {
+            if (p->worklist_swap.len || p->tops.len) {
+                drop_continuation(p);
+            }
+            else {
+                resume_continuation(p, complete_pos, input);
             }
         }
-
-        for (size_t i = 0; i < wl_len; i++) {
-            mem_release(p, p->worklist.data[i].mem);
-        }
-
-        if (core_list_len(p->tops) > 0) {
-            p->longest_top = p->tops.data[0];
-            p->longest_end = complete_pos;
+        else if (p->held_pos >= 0 && p->held_pos != complete_pos) {
+            drop_continuation(p);
         }
 
         if (!have_next) {
@@ -1398,6 +1639,7 @@ score_exp(parse_pwz_parser_t *p, pwz_exp_t *root, int32_t *pos)
                 continue;
             }
 
+            *pos = live_pos(p, *pos);
             pwz_score_entry_t *cached = score_cache_entry(p, f->exp, *pos);
 
             if (cached->done) {
@@ -1614,6 +1856,7 @@ convert_exp_to_tree(parse_pwz_parser_t *p, pwz_exp_t *exp,
 
         if (!f->entered) {
             f->entered = true;
+            st->pos    = live_pos(p, st->pos);
             f->exp     = resolve_alts(p, f->exp, st->pos);
 
             pwz_exp_t *e = f->exp;
@@ -1652,6 +1895,7 @@ convert_exp_to_tree(parse_pwz_parser_t *p, pwz_exp_t *exp,
 
             if (e->kind == PWZ_TOK || e->kind == PWZ_CLASS
                 || e->kind == PWZ_ANY || e->kind == PWZ_SET) {
+                st->pos = live_pos(p, st->pos);
                 parse_token_info_t *tok = get_token(p, st->pos);
 
                 if (!tok) {
@@ -1964,6 +2208,65 @@ enumerate_trees(parse_pwz_parser_t   *p,
     (*out)[0]  = build_result_tree(p, top_result);
 }
 
+static int32_t
+layout_tid(parse_grammar_t *g, core_string_t name)
+{
+    int64_t tid = name.data ? parse_terminal_id(g, name) : 0;
+
+    return tid ? (int32_t)tid : -1;
+}
+
+static core_list_t(int32_t)
+layout_tids(parse_grammar_t *g, parse_annotation_t *a)
+{
+    core_list_t(int32_t) tids = core_list_new(int32_t);
+
+    for (size_t i = 0; a && i < core_list_len(a->tags); i++) {
+        int32_t tid = layout_tid(g, a->tags.data[i]);
+        if (tid >= 0) {
+            core_list_push(tids, tid);
+        }
+    }
+
+    return tids;
+}
+
+static void
+load_statement_ends(parse_pwz_parser_t *p, parse_grammar_t *g)
+{
+    p->statement_ends          = (core_list_t(int32_t)){0};
+    p->continue_after          = (core_list_t(int32_t)){0};
+    p->skipped                 = core_list_new(int32_t);
+    p->held                    = core_list_new(pwz_zipper_t);
+    p->held_pos                = -1;
+    p->held_indent_pos         = -1;
+    p->end_run                 = PWZ_RUN_NONE;
+    p->newline_tid             = -1;
+    p->indent_tid              = -1;
+    p->dedent_tid              = -1;
+    p->continuation_indent_pos = -1;
+    p->continuation_indents    = 0;
+
+    parse_annotation_t *ends = parse_grammar_find_annot(
+        g, PARSE_ANNOT_STATEMENT_END);
+
+    if (!ends || !core_list_len(ends->tags)) {
+        return;
+    }
+
+    p->statement_ends = layout_tids(g, ends);
+    p->continue_after = layout_tids(
+        g, parse_grammar_find_annot(g, PARSE_ANNOT_CONTINUE_AFTER));
+
+    const scan_lex_spec_t *spec = scan_grammar_lex(g);
+
+    if (spec) {
+        p->newline_tid = layout_tid(g, spec->tok_newline);
+        p->indent_tid  = layout_tid(g, spec->tok_indent);
+        p->dedent_tid  = layout_tid(g, spec->tok_dedent);
+    }
+}
+
 parse_pwz_parser_t *
 parse_pwz_new_for_start(parse_grammar_t *g, parse_nt_id_t start)
 {
@@ -1994,6 +2297,7 @@ parse_pwz_new_for_start(parse_grammar_t *g, parse_nt_id_t start)
     p->mem_bottom->end_pos   = PWZ_POS_BOTTOM;
 
     build_exp_graph(p, g, start);
+    load_statement_ends(p, g);
 
     return p;
 }
@@ -2024,6 +2328,10 @@ parse_pwz_free(parse_pwz_parser_t *p)
     }
 
     core_list_free(p->all_exps);
+    core_list_free(p->statement_ends);
+    core_list_free(p->continue_after);
+    core_list_free(p->skipped);
+    core_list_free(p->held);
     core_free(p->nt_exps);
     core_free(p->exp_bottom);
     core_free(p->mem_bottom);
@@ -2101,6 +2409,15 @@ parse_pwz_reset(parse_pwz_parser_t *p)
     p->result_tree  = nullptr;
     p->result_trees = (parse_tree_array_t){0};
     p->error_pos    = -1;
+    p->error_unterminated = false;
+    p->error_commented = false;
+    p->continuation_indent_pos = -1;
+    p->continuation_indents = 0;
+    p->end_run = PWZ_RUN_NONE;
+    core_list_clear(p->skipped);
+    core_list_clear(p->held);
+    p->held_pos = -1;
+    p->held_indent_pos = -1;
     p->score_predicate_calls = 0;
     p->score_tie_count = 0;
 }
@@ -2166,6 +2483,18 @@ int32_t
 parse_pwz_error_pos(parse_pwz_parser_t *p)
 {
     return p ? p->error_pos : -1;
+}
+
+bool
+parse_pwz_error_unterminated(parse_pwz_parser_t *p)
+{
+    return p && p->error_unterminated;
+}
+
+bool
+parse_pwz_error_commented(parse_pwz_parser_t *p)
+{
+    return p && p->error_commented;
 }
 
 void

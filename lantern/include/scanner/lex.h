@@ -329,6 +329,8 @@ typedef struct {
 
     core_string_t line_continue;
     core_string_t brackets;
+    bool          bracket_newlines;
+    bool          dedent_newline;
 
     const scan_lex_directive_t *directives;
 

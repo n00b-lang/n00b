@@ -31,6 +31,8 @@ bool parse_pwz_parse_prefix(parse_pwz_parser_t   *p,
 parse_tree_t *parse_pwz_get_tree(parse_pwz_parser_t *p);
 
 int32_t parse_pwz_error_pos(parse_pwz_parser_t *p);
+bool parse_pwz_error_unterminated(parse_pwz_parser_t *p);
+bool parse_pwz_error_commented(parse_pwz_parser_t *p);
 
 void parse_pwz_set_disambiguator(parse_pwz_parser_t    *p,
                                parse_pwz_disambig_fn  cb,

@@ -166,6 +166,12 @@ typedef struct {
 
 core_list_decl(pwz_step_t);
 
+typedef enum {
+    PWZ_RUN_NONE,
+    PWZ_RUN_ENDED,
+    PWZ_RUN_CONTINUED,
+} pwz_end_run_t;
+
 struct parse_pwz_parser_t {
     parse_grammar_t              *grammar;
     parse_nt_id_t                 start_nt;
@@ -204,6 +210,21 @@ struct parse_pwz_parser_t {
     pwz_exp_t                   *exp_bottom;
 
     int32_t                     error_pos;
+    bool                        error_unterminated;
+    bool                        error_commented;
+
+    core_list_t(int32_t)        statement_ends;
+    core_list_t(int32_t)        continue_after;
+    core_list_t(int32_t)        skipped;
+    core_list_t(pwz_zipper_t)   held;
+    int32_t                     held_pos;
+    int32_t                     held_indent_pos;
+    pwz_end_run_t               end_run;
+    int32_t                     newline_tid;
+    int32_t                     indent_tid;
+    int32_t                     dedent_tid;
+    int32_t                     continuation_indent_pos;
+    int32_t                     continuation_indents;
 
     parse_pwz_disambig_fn         disambig_cb;
     void                       *disambig_ud;

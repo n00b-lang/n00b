@@ -671,6 +671,7 @@ struct scan_lex_session_t {
   core_list_t(int32_t) layout_blocks;
   int32_t pending_dedents;
   bool pending_dedent_mismatch;
+  bool pending_block_newline;
   bool pending_layout_block;
 
   int32_t bracket_depth;
@@ -1826,6 +1827,7 @@ void scan_lex_reset_state(parse_scanner_t *s) {
   lex->modes.len = 0;
   lex->indents.len = 0;
   lex->pending_dedents = 0;
+  lex->pending_block_newline = false;
   lex->bracket_depth = 0;
   lex->line_start = true;
   lex->continued_line = false;
@@ -3001,6 +3003,8 @@ static void emit_dedent(parse_scanner_t *s, scan_lex_session_t *run) {
          depth <
              (uint32_t)run->layout_blocks.data[run->layout_blocks.len - 1]) {
     run->layout_blocks.len--;
+    run->pending_block_newline = lex->spec->dedent_newline &&
+                                 lex->tid_newline != PARSE_TOK_IGNORED;
   }
   run->pending_dedents--;
   if (!run->pending_dedents) {
@@ -3015,6 +3019,11 @@ static void emit_dedent(parse_scanner_t *s, scan_lex_session_t *run) {
     parse_token_set_layout_mismatch(token, mismatch);
     parse_token_set_ignore_if_no_match(token, !in_block);
   }
+}
+
+static bool newlines_visible(const scan_lex_t *lex,
+                             const scan_lex_session_t *run) {
+  return run->bracket_depth == 0 || lex->spec->bracket_newlines;
 }
 
 static void emit_layout_newline(parse_scanner_t *s, scan_lex_session_t *run) {
@@ -3043,7 +3052,7 @@ static bool finish_embedded_layout(parse_scanner_t *s,
   }
 
   if (lex->tid_newline != PARSE_TOK_IGNORED && run->line_has_token &&
-      run->bracket_depth == 0) {
+      newlines_visible(lex, run)) {
     run->line_has_token = false;
     emit_layout_newline(s, run);
     return true;
@@ -5562,6 +5571,14 @@ static bool scan_lex_scan_one(parse_scanner_t *s) {
     return true;
   }
 
+  if (run->pending_block_newline) {
+    run->pending_block_newline = false;
+    scan_mark(s);
+    scan_emit_marked(s, lex->tid_newline);
+
+    return true;
+  }
+
   if (run->outside) {
     if (scan_outside(s)) {
       return true;
@@ -5615,7 +5632,7 @@ static bool scan_lex_scan_one(parse_scanner_t *s) {
     if (is_line_terminator(c)) {
       bool significant = (lex->spec->layout &
                           (SCAN_LEX_LAYOUT_NEWLINE | SCAN_LEX_LAYOUT_INDENT)) &&
-                         run->bracket_depth == 0 &&
+                         newlines_visible(lex, run) &&
                          (run->line_has_token ||
                           ((lex->spec->layout & SCAN_LEX_LAYOUT_NEWLINE) &&
                            lex->spec->newline_each_line));
@@ -5785,7 +5802,7 @@ static bool scan_lex_scan_one(parse_scanner_t *s) {
     }
 
     if (lex->tid_newline != PARSE_TOK_IGNORED && run->line_has_token &&
-        run->bracket_depth == 0) {
+        newlines_visible(lex, run)) {
       run->line_has_token = false;
       emit_layout_newline(s, run);
 
