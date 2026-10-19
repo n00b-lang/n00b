@@ -3231,17 +3231,32 @@ n00bb_format_channels(core_string_t input)
             size_t channel_start = signature_close + 1;
             while (channel_start < i && text[channel_start] == ' ')
                 channel_start++;
-            bool has_channel = channel_start + 1 < i
+            bool arrow = channel_start + 1 < i
                 && text[channel_start] == '-'
                 && text[channel_start + 1] == '>';
-            has_channel = has_channel || (channel_start + 4 < i
-                && !memcmp(text + channel_start, "fail:", 5));
+            bool fail_channel = channel_start + 4 < i
+                && !memcmp(text + channel_start, "fail:", 5);
             size_t body_end = i;
             while (body_end > channel_start && text[body_end - 1] == ' ')
                 body_end--;
             bool opens_body = body_end > channel_start
                 && text[body_end - 1] == '{';
-            if (has_channel && opens_body) {
+            if (arrow) {
+                size_t result_start = channel_start + 2;
+                while (result_start < i && text[result_start] == ' ')
+                    result_start++;
+                core_buffer_append(&result, line,
+                    signature_close + 1 - start);
+                core_buffer_append(&result, " ->\n", 4);
+                for (size_t j = 0; j <= paren_column; j++)
+                    core_buffer_putc(&result, ' ');
+                core_buffer_append(&result, text + result_start,
+                    i - result_start);
+                if (i < length) core_buffer_putc(&result, '\n');
+                start = i + 1;
+                continue;
+            }
+            if (fail_channel && opens_body) {
                 core_buffer_append(&result, line,
                     signature_close + 1 - start);
                 core_buffer_putc(&result, '\n');
@@ -3290,6 +3305,24 @@ n00bb_format_channels(core_string_t input)
                                    line_length - indent);
                 joined = true;
             }
+        }
+        bool leading_arrow = channel && line[indent] == '-';
+        if (!joined && leading_arrow && result.byte_len
+            && result.data[result.byte_len - 1] == '\n') {
+            size_t prior_end = result.byte_len - 1;
+            while (prior_end && result.data[prior_end - 1] == ' ')
+                prior_end--;
+            result.byte_len = prior_end;
+            result.data[result.byte_len] = '\0';
+            core_buffer_append(&result, " ->\n", 4);
+            size_t result_start = indent + 2;
+            while (result_start < line_length && line[result_start] == ' ')
+                result_start++;
+            for (size_t j = 0; j <= paren_column; j++)
+                core_buffer_putc(&result, ' ');
+            core_buffer_append(&result, line + result_start,
+                               line_length - result_start);
+            joined = true;
         }
         if (!joined) {
             if (channel && paren_column) {

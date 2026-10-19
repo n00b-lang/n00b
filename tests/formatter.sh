@@ -17,14 +17,14 @@ func short(value: int) -> int fail: string {
 }
 
 func a_very_long_function_name_that_should_wrap(first_parameter_with_a_long_name : int,
-                                                second_parameter_with_a_long_name: int)
-                                               -> int fail: string {
+                                                second_parameter_with_a_long_name: int) ->
+                                                int fail: string {
     return first_parameter_with_a_long_name
 }
 
 func elaborate(a_parameter_with_a_very_long_name      : int,
-               another_parameter_with_a_very_long_name: int)
-              -> Ref[AnExtraordinarilyLongNamedRecord] fail: string {
+               another_parameter_with_a_very_long_name: int) ->
+               Ref[AnExtraordinarilyLongNamedRecord] fail: string {
     return nil
 }
 
@@ -49,7 +49,8 @@ func initialize_array_backing(payload      : Ref[byte],
 trait LongResult {
     func select(self                             : `T,
                 first_parameter_with_a_long_name : int,
-                second_parameter_with_a_long_name: int) -> Ref[AnExtraordinarilyLongNamedRecord] fail: string
+                second_parameter_with_a_long_name: int) ->
+                Ref[AnExtraordinarilyLongNamedRecord] fail: string
 }
 EOF
 diff -u "$tmp/channels.expected" "$tmp/channels.n00b"
