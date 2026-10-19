@@ -449,6 +449,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs'
                / 'containers' / 'readiness' / 'dict_basic.n'],
+    suite: 'slow',
 )
 
 test(
@@ -485,6 +486,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs'
                / 'containers' / 'readiness' / 'tree_basic.n'],
+    suite: 'slow',
 )
 
 test(
@@ -946,6 +948,7 @@ test(
            meson.current_source_dir() / 'tests' / 'programs'
                / 'type_visibility'],
     timeout: 120,
+    suite: 'slow',
 )
 
 test(
@@ -1128,6 +1131,7 @@ test(
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_require_trace.n'],
     timeout: 120,
+    suite: 'slow',
 )
 
 test(
@@ -1198,7 +1202,7 @@ foreach conformance_suite : ['grapheme', 'word', 'sentence', 'line',
         workdir: meson.current_source_dir() / 'tests' / 'programs'
             / 'unicode',
         timeout: 600,
-        suite: 'conformance',
+        suite: ['conformance', 'slow'],
     )
 endforeach
 
@@ -1536,6 +1540,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'incremental'],
     timeout: 900,
+    suite: 'slow',
 )
 
 test(
@@ -1992,6 +1997,7 @@ test(
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_numeric_cast_trap.n'],
     timeout: 120,
+    suite: 'slow',
 )
 
 test(
@@ -2061,6 +2067,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs'
                / 'option_narrowing'],
+    suite: 'slow',
 )
 
 test(
