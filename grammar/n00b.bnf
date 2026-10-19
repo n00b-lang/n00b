@@ -76,7 +76,10 @@
                          | <discard-stmt>
                          | <assign-stmt>
                          | <binop-assign-stmt>
+                         | <pass-stmt>
                          | <expression-stmt>
+
+<pass-stmt> ::= %"pass"
 
 <label> ::= %IDENTIFIER %":"
 
@@ -197,7 +200,8 @@
 <context-body> ::= <block-start> <context-hooks>? <block-end>
 <context-hooks> ::= <context-hook> (<eos>+ <context-hook>)*
 
-<context-hook> ::= <context-enter>
+<context-hook> ::= <pass-stmt>
+                 | <context-enter>
                  | <context-exit>
                  | <context-error>
                  | <context-ensure>
@@ -281,7 +285,7 @@
 <package-decl> ::= %"package" <dotted-name> <package-body>
 <package-body> ::= <block-start> <package-items>? <block-end>
 <package-items> ::= <package-item> (<eos>+ <package-item>)*
-<package-item> ::= <export-stmt> | <when-stmt>
+<package-item> ::= <export-stmt> | <when-stmt> | <pass-stmt>
 <export-stmt> ::= %"export" <dotted-name> (<export-alias>)? (<export-grantee>)?
 <export-stmt> ::= %"export" %"package" <dotted-name>
 <export-alias> ::= %"as" %IDENTIFIER
@@ -746,6 +750,8 @@
 <field-union> ::= %"union" %"by" %IDENTIFIER <union-arms>
 <union-arms> @hardline($1) @indent($1) @hardline($2) ::=
        <block-start> (<union-arm> (<eos>+ <union-arm>)*)? <block-end>
+<union-arms> @hardline($1) @indent($1) @hardline($2) ::=
+       <block-start> <pass-stmt> <block-end>
 <union-arm> @field($2, $4) @nospace($3) ::=
        <expression> %"=>" %IDENTIFIER %":" <type-spec>
 <union-arm> @field($2, $4) @nospace($3) ::=

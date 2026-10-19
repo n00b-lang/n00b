@@ -1160,12 +1160,26 @@ process_locate_job(locate_worker_context_t *context, core_work_job_t *job)
                     CORE_STRING_STATIC("cannot normalize layout tokens"));
                 ok = false;
             }
+            parse_scanner_t *scanner = result->tokens->scanner;
+            core_string_t text = core_string_borrow(contents.data, length);
+            for (size_t w = 0; w < scan_warning_count(scanner); w++) {
+                const scan_warning_t *warning = scan_warning_at(scanner, w);
+                core_diagnostics_report_at(
+                    core_translation_unit_diagnostics(unit), unit,
+                    CORE_DIAG_WARNING, CORE_STRING_STATIC("N00BB-L0070"),
+                    warning->message,
+                    core_diag_location_span(text, warning->start_byte,
+                                            warning->end_byte));
+            }
             scan_diagnostic_t diagnostic = {0};
-            if (scan_diagnostic(result->tokens->scanner, &diagnostic) &&
+            if (scan_diagnostic(scanner, &diagnostic) &&
                 diagnostic.status != SCAN_STATUS_COMPLETE) {
-                core_diagnostics_report(core_translation_unit_diagnostics(unit),
-                    unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-L0001"),
-                    diagnostic.message);
+                core_diagnostics_report_at(
+                    core_translation_unit_diagnostics(unit), unit,
+                    CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-L0001"),
+                    diagnostic.message,
+                    core_diag_location_span(text, diagnostic.start_byte,
+                                            diagnostic.end_byte));
                 ok = false;
             }
             if (ok && context->parse) {
@@ -1212,6 +1226,13 @@ process_locate_job(locate_worker_context_t *context, core_work_job_t *job)
                                      CORE_STRING_STATIC("INDENT")))
                             core_buffer_printf(&message,
                                 "unexpected indentation");
+                        else if (error_tid == parse_terminal_id(
+                                     context->grammar,
+                                     CORE_STRING_STATIC("pass")))
+                            core_buffer_printf(&message,
+                                "'pass' cannot appear here; it may only stand"
+                                " for the body of a statement block, case"
+                                " branch, context, package, or union");
                         else if (token_name.data)
                             core_buffer_printf(&message,
                                 "syntax error near %.*s",

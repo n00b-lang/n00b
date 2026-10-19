@@ -285,15 +285,22 @@ pp_report(pp_context_t *ctx, parse_tree_t *at, core_string_t message)
     parse_token_info_t *token = parse_tree_find_first_terminal(at);
     core_buffer_t text = {0};
     core_buffer_append_string(&text, message);
-    if (token)
-        core_buffer_printf(&text, " at line %u, column %u",
-                           parse_token_line(token), parse_token_column(token));
     core_string_t report = core_buffer_string(&text);
     if (report.u8_bytes > 319) report.u8_bytes = 319;
-    core_diagnostics_report(core_translation_unit_diagnostics(ctx->unit),
-                            ctx->unit, CORE_DIAG_ERROR,
-                            CORE_STRING_STATIC("N00BB-PP0001"),
-                            report.data ? report : CORE_STRING_STATIC(""));
+    core_diag_location_t location = token
+        ? (core_diag_location_t){
+              .line = parse_token_line(token),
+              .column = parse_token_column(token),
+              .end_line = parse_token_endline(token),
+              .end_column = parse_token_endcol(token),
+              .has_location = true,
+          }
+        : (core_diag_location_t){0};
+    core_diagnostics_report_at(core_translation_unit_diagnostics(ctx->unit),
+                               ctx->unit, CORE_DIAG_ERROR,
+                               CORE_STRING_STATIC("N00BB-PP0001"),
+                               report.data ? report : CORE_STRING_STATIC(""),
+                               location);
     core_buffer_release(&text);
     ctx->failed = true;
 }
@@ -2456,6 +2463,65 @@ process_deferred_statement(pp_context_t *ctx, parse_tree_walk_t *walk,
 }
 
 static bool
+block_item(pp_context_t *ctx, parse_tree_t *node)
+{
+    return is_name(ctx->grammar, node, "body-stmt")
+        || is_name(ctx->grammar, node, "value-stmt")
+        || is_name(ctx->grammar, node, "context-hook")
+        || is_name(ctx->grammar, node, "package-item")
+        || is_name(ctx->grammar, node, "union-arm")
+        || is_name(ctx->grammar, node, "pass-stmt");
+}
+
+static size_t
+count_block_items(pp_context_t *ctx, parse_tree_t *node)
+{
+    if (!node || core_tree_is_leaf(node)) return 0;
+    if (block_item(ctx, node)) return 1;
+    size_t count = 0;
+    for (size_t i = 0; i < core_tree_num_children(node); i++)
+        count += count_block_items(ctx, core_tree_child(node, i));
+    return count;
+}
+
+static bool
+opens_block(pp_context_t *ctx, parse_tree_t *node)
+{
+    for (size_t i = 0; i < core_tree_num_children(node); i++)
+        if (is_name(ctx->grammar, core_tree_child(node, i), "block-start"))
+            return true;
+    return false;
+}
+
+static void
+check_pass_statements(pp_context_t *ctx, parse_tree_t *node,
+                      parse_tree_t *block, size_t items)
+{
+    if (!node || core_tree_is_leaf(node) || ctx->failed) return;
+    if (is_name(ctx->grammar, node, "pass-stmt")) {
+        if (!block)
+            pp_error(ctx, node,
+                     "'pass' may only appear as the only statement of a block");
+        else if (items > 1)
+            pp_error(ctx, node,
+                     "'pass' must be the only statement in its block");
+        return;
+    }
+    if (opens_block(ctx, node)) {
+        block = node;
+        items = 0;
+        for (size_t i = 0; i < core_tree_num_children(node); i++) {
+            parse_tree_t *child = core_tree_child(node, i);
+            if (!is_name(ctx->grammar, child, "block-start")
+                && !is_name(ctx->grammar, child, "block-end"))
+                items += count_block_items(ctx, child);
+        }
+    }
+    for (size_t i = 0; i < core_tree_num_children(node); i++)
+        check_pass_statements(ctx, core_tree_child(node, i), block, items);
+}
+
+static bool
 process_module(pp_context_t *ctx, core_translation_unit_t *unit,
                parse_tree_t *tree)
 {
@@ -2529,6 +2595,7 @@ process_module(pp_context_t *ctx, core_translation_unit_t *unit,
     core_list_free(evaluation.frames);
     core_list_free(imports);
     core_list_free(deferred);
+    if (!ctx->failed) check_pass_statements(ctx, tree, nullptr, 0);
     bool succeeded = !ctx->failed
         && !core_diagnostics_failed(core_translation_unit_diagnostics(unit));
     if (!succeeded) ctx->failed = true;

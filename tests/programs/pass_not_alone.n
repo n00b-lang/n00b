@@ -1,0 +1,4 @@
+func start() {
+    pass
+    let unused = 1
+}

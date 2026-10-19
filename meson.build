@@ -1415,6 +1415,38 @@ test(
 )
 
 test(
+    'pass-statement',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'pass_statement.n'],
+    suite: 'slow',
+)
+
+test(
+    'pass-not-alone', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'pass_not_alone.n',
+           'N00BB-PP0001',
+           'pass_not_alone.n:2:5'],
+    timeout: 120,
+)
+
+test(
+    'bidi-control-rejected', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'bidi_control_rejected.n',
+           'N00BB-L0001',
+           'bidi_control_rejected.n:2:22'],
+    timeout: 120,
+)
+
+test(
     'operator-newline-parse',
     find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'operator_newline.sh',
