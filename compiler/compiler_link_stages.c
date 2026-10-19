@@ -3,6 +3,16 @@
 #include "compiler_link_lifetime.h"
 #include "compiler_ir_setup.h"
 
+static void
+report_stage_failure(core_translation_unit_t *const *units, size_t count,
+                     core_translation_unit_t *unit, core_string_t code,
+                     core_string_t text)
+{
+    if (!call_units_failed(units, count))
+        core_diagnostics_report(core_translation_unit_diagnostics(unit),
+            unit, CORE_DIAG_FATAL, code, text);
+}
+
 core_link_stage_result_t
 n00bb_link_stage_ir_bindings(core_link_unit_t *link, uint32_t stage_kind,
                              void *opaque)
@@ -30,11 +40,10 @@ n00bb_link_stage_semantics(core_link_unit_t *link, uint32_t stage_kind,
         core_translation_unit_t *unit = units->data[i];
         n00bb_tu_state_t *state = tu_state(unit);
         if (!state || !state->semantic_annotation_complete) {
-            core_diagnostics_report(
-                core_translation_unit_diagnostics(unit), unit,
-                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0047"),
+            report_stage_failure(units->data, units->len, unit,
+                CORE_STRING_STATIC("N00BB-L0047"),
                 CORE_STRING_STATIC(
-                    "link-unit semantic analysis requires every module to complete semantic annotation"));
+                    "internal error: a module reached link-unit analysis without completing semantic annotation"));
             return CORE_LINK_STAGE_RESULT_FAILED;
         }
         if (core_diagnostics_failed(
@@ -42,10 +51,9 @@ n00bb_link_stage_semantics(core_link_unit_t *link, uint32_t stage_kind,
             return CORE_LINK_STAGE_RESULT_FAILED;
     }
     if (!module_type_universe_is_shared(units)) {
-        core_diagnostics_report(core_translation_unit_diagnostics(
-            units->data[0]), units->data[0], CORE_DIAG_FATAL,
+        report_stage_failure(units->data, units->len, units->data[0],
             CORE_STRING_STATIC("N00BB-L0054"),
-            CORE_STRING_STATIC("link-unit modules do not share a type universe"));
+            CORE_STRING_STATIC("internal error: link-unit modules do not share a type universe"));
         return CORE_LINK_STAGE_RESULT_FAILED;
     }
     for (size_t i = 0; i < units->len; i++)
@@ -55,40 +63,34 @@ n00bb_link_stage_semantics(core_link_unit_t *link, uint32_t stage_kind,
     for (size_t i = 0; i < units->len; i++)
         finalize_module_inference(units->data[i]);
     if (!finalize_named_declaration_types(analysis->grammar, units)) {
-        core_diagnostics_report(core_translation_unit_diagnostics(
-            units->data[0]), units->data[0], CORE_DIAG_FATAL,
+        report_stage_failure(units->data, units->len, units->data[0],
             CORE_STRING_STATIC("N00BB-L0055"),
-            CORE_STRING_STATIC("could not finalize named declaration types"));
+            CORE_STRING_STATIC("internal error: could not finalize named declaration types"));
         return CORE_LINK_STAGE_RESULT_FAILED;
     }
 
     for (size_t i = 0; i < units->len; i++)
         if (!populate_unit_symbol_shapes(analysis->grammar,
                 analysis->ir_context, units->data[i])) {
-            core_diagnostics_report(core_translation_unit_diagnostics(
-                units->data[i]), units->data[i], CORE_DIAG_FATAL,
+            report_stage_failure(units->data, units->len, units->data[i],
                 CORE_STRING_STATIC("N00BB-L0056"),
-                CORE_STRING_STATIC("could not populate canonical symbol shapes"));
+                CORE_STRING_STATIC("internal error: could not populate canonical symbol shapes"));
             return CORE_LINK_STAGE_RESULT_FAILED;
         }
 
     th_env *environment = build_import_environment(analysis->grammar,
                                                    link, analysis);
     if (!environment) {
-        if (!call_units_failed(units->data, units->len))
-            core_diagnostics_report(core_translation_unit_diagnostics(
-                units->data[0]), units->data[0], CORE_DIAG_FATAL,
-                CORE_STRING_STATIC("N00BB-L0057"),
-                CORE_STRING_STATIC("could not build the link-unit type environment"));
+        report_stage_failure(units->data, units->len, units->data[0],
+            CORE_STRING_STATIC("N00BB-L0057"),
+            CORE_STRING_STATIC("internal error: could not build the link-unit type environment"));
         return CORE_LINK_STAGE_RESULT_FAILED;
     }
     if (!generalize_link_unit(analysis->grammar, link, units)) {
-        if (!call_units_failed(units->data, units->len))
-            core_diagnostics_report(core_translation_unit_diagnostics(
-                units->data[0]), units->data[0], CORE_DIAG_FATAL,
-                CORE_STRING_STATIC("N00BB-L0058"),
-                CORE_STRING_STATIC(
-                    "could not finalize link-unit signatures"));
+        report_stage_failure(units->data, units->len, units->data[0],
+            CORE_STRING_STATIC("N00BB-L0058"),
+            CORE_STRING_STATIC(
+                "internal error: could not finalize link-unit signatures"));
         th_env_free(environment);
         return CORE_LINK_STAGE_RESULT_FAILED;
     }
@@ -98,9 +100,9 @@ n00bb_link_stage_semantics(core_link_unit_t *link, uint32_t stage_kind,
         if (!state || !state->types) continue;
         if (!th_ctx_set_environment_scope(state->types,
                 unit->module.identifier, n00bb_package_id(unit))) {
-            core_diagnostics_report(core_translation_unit_diagnostics(unit),
-                unit, CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0059"),
-                CORE_STRING_STATIC("could not set module type-environment scope"));
+            report_stage_failure(units->data, units->len, unit,
+                CORE_STRING_STATIC("N00BB-L0059"),
+                CORE_STRING_STATIC("internal error: could not set module type-environment scope"));
             th_env_free(environment);
             return CORE_LINK_STAGE_RESULT_FAILED;
         }
@@ -117,10 +119,9 @@ n00bb_link_stage_semantics(core_link_unit_t *link, uint32_t stage_kind,
             return CORE_LINK_STAGE_RESULT_FAILED;
     }
     if (!resolve_variant_case_references(link, analysis)) {
-        core_diagnostics_report(core_translation_unit_diagnostics(
-            units->data[0]), units->data[0], CORE_DIAG_FATAL,
+        report_stage_failure(units->data, units->len, units->data[0],
             CORE_STRING_STATIC("N00BB-L0050"),
-            CORE_STRING_STATIC("variant case resolution failed"));
+            CORE_STRING_STATIC("internal error: variant case resolution failed"));
         th_env_free(environment);
         return CORE_LINK_STAGE_RESULT_FAILED;
     }
@@ -129,20 +130,18 @@ n00bb_link_stage_semantics(core_link_unit_t *link, uint32_t stage_kind,
         return CORE_LINK_STAGE_RESULT_FAILED;
     }
     if (!resolve_inferred_field_references(link, analysis)) {
-        core_diagnostics_report(core_translation_unit_diagnostics(
-            units->data[0]), units->data[0], CORE_DIAG_FATAL,
+        report_stage_failure(units->data, units->len, units->data[0],
             CORE_STRING_STATIC("N00BB-L0051"),
-            CORE_STRING_STATIC("field reference resolution failed"));
+            CORE_STRING_STATIC("internal error: field reference resolution failed"));
         th_env_free(environment);
         return CORE_LINK_STAGE_RESULT_FAILED;
     }
     mark_resolved_flagset_operator_sites(analysis->grammar, units);
     if (!resolve_inferred_trait_references(analysis->grammar, link,
                                            analysis, environment)) {
-        core_diagnostics_report(core_translation_unit_diagnostics(
-            units->data[0]), units->data[0], CORE_DIAG_FATAL,
+        report_stage_failure(units->data, units->len, units->data[0],
             CORE_STRING_STATIC("N00BB-L0052"),
-            CORE_STRING_STATIC("trait reference resolution failed"));
+            CORE_STRING_STATIC("internal error: trait reference resolution failed"));
         th_env_free(environment);
         return CORE_LINK_STAGE_RESULT_FAILED;
     }
@@ -153,10 +152,9 @@ n00bb_link_stage_semantics(core_link_unit_t *link, uint32_t stage_kind,
     }
     if (!resolve_generic_trait_specializations(link, analysis,
                                                 stage_kind)) {
-        core_diagnostics_report(core_translation_unit_diagnostics(
-            units->data[0]), units->data[0], CORE_DIAG_FATAL,
+        report_stage_failure(units->data, units->len, units->data[0],
             CORE_STRING_STATIC("N00BB-L0053"),
-            CORE_STRING_STATIC("generic trait specialization failed"));
+            CORE_STRING_STATIC("internal error: generic trait specialization failed"));
         th_env_free(environment);
         return CORE_LINK_STAGE_RESULT_FAILED;
     }
@@ -217,11 +215,10 @@ n00bb_link_stage_semantics(core_link_unit_t *link, uint32_t stage_kind,
                 CORE_STRING_STATIC("n00bb.semantic.declaration-facts"),
                 stage_kind, payload)) {
             if (owner)
-                core_diagnostics_report(
-                    core_translation_unit_diagnostics(owner), owner,
-                    CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0045"),
+                report_stage_failure(units->data, units->len, owner,
+                    CORE_STRING_STATIC("N00BB-L0045"),
                     CORE_STRING_STATIC(
-                        "could not publish complete canonical declaration facts"));
+                        "internal error: could not publish complete canonical declaration facts"));
             th_env_free(environment);
             return CORE_LINK_STAGE_RESULT_FAILED;
         }
@@ -231,11 +228,10 @@ n00bb_link_stage_semantics(core_link_unit_t *link, uint32_t stage_kind,
             && !core_link_declaration_set_binding(link, declaration,
                 CORE_STRING_STATIC("ir.array-shape"), stage_kind,
                 array_shape)) {
-            core_diagnostics_report(
-                core_translation_unit_diagnostics(owner), owner,
-                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0045"),
+            report_stage_failure(units->data, units->len, owner,
+                CORE_STRING_STATIC("N00BB-L0045"),
                 CORE_STRING_STATIC(
-                    "could not publish canonical array shape metadata"));
+                    "internal error: could not publish canonical array shape metadata"));
             th_env_free(environment);
             return CORE_LINK_STAGE_RESULT_FAILED;
         }

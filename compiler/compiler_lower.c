@@ -4892,6 +4892,26 @@ foreign_pointer_type(th_type *type)
 }
 
 static ir_lower_result_t
+report_undefined_cast(ir_lower_context_t *context, th_ctx *types,
+                      th_type *from, th_type *target, ir_span_t span)
+{
+    core_string_t from_text = n00bb_print_type(types, from);
+    core_string_t target_text = n00bb_print_type(types, target);
+    bool references = th_kind_of(th_resolve(from)) == TH_INDIRECTION
+        && th_kind_of(th_resolve(target)) == TH_INDIRECTION;
+    core_buffer_t message = {0};
+    core_buffer_printf(&message,
+        "cannot cast %.*s to %.*s: no conversion is defined between them%s",
+        (int)from_text.u8_bytes, from_text.data,
+        (int)target_text.u8_bytes, target_text.data,
+        references ? "; reinterpreting a reference needs `unsafe_cast`" : "");
+    ir_lower_result_t result = lower_error_text(context, IR_DIAG_TYPE_CLASS,
+        span, core_string_borrow(message.data, message.byte_len));
+    core_buffer_release(&message);
+    return result;
+}
+
+static ir_lower_result_t
 n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
                  ir_value_t *const *operands, size_t operand_count,
                  th_type *result_type, ir_span_t span, void *state)
@@ -5071,8 +5091,7 @@ n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
         return (ir_lower_result_t){IR_LOWER_VALUE, conversion->dest};
     }
     if (from_definition || to_definition)
-        return lower_error(context, IR_DIAG_TYPE_CLASS, span,
-                           "this cast has no defined conversion");
+        return report_undefined_cast(context, types, from, target, span);
     ir_machine_t source = ir_machine_of(context->module, operands[0]->type);
     ir_machine_t destination = ir_machine_of(context->module, target);
     bool source_integer = source.class == IR_CLASS_SINT
@@ -5088,8 +5107,7 @@ n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
         && !(source_integer && target_float)
         && !(source_float && target_integer)
         && !float_to_float)
-        return lower_error(context, IR_DIAG_TYPE_CLASS, span,
-                           "this cast has no defined conversion");
+        return report_undefined_cast(context, types, from, target, span);
     bool signedness_change = source.class != destination.class;
     bool needs_check = (source_float && !float_to_float)
         || (source_integer && target_integer
@@ -10509,6 +10527,25 @@ n00bb_option_value_proven(n00bb_lower_context_t *lower,
         || n00bb_option_path_proven(lower, grammar, value);
 }
 
+static ir_lower_result_t
+report_unproven_option(ir_lower_context_t *context,
+                       n00bb_lower_context_t *lower, parse_tree_t *option,
+                       ir_span_t span)
+{
+    core_string_t text = n00bb_node_source_text(lower ? lower->unit : nullptr,
+        option, CORE_STRING_STATIC("this option"));
+    core_buffer_t message = {0};
+    core_buffer_printf(&message,
+        "'%.*s' may be nil here; take its value only where a check such as "
+        "`%.*s != nil` proves it, with no assignment to it in between",
+        (int)text.u8_bytes, text.data, (int)text.u8_bytes, text.data);
+    ir_lower_result_t result = lower_error_text(context,
+        IR_DIAG_TYPE_MISMATCH, span,
+        core_string_borrow(message.data, message.byte_len));
+    core_buffer_release(&message);
+    return result;
+}
+
 static ir_value_t *
 n00bb_promote_option(ir_lower_context_t *context, parse_tree_t *node,
                      ir_value_t *value, th_type *item, ir_span_t span)
@@ -10516,9 +10553,7 @@ n00bb_promote_option(ir_lower_context_t *context, parse_tree_t *node,
     n00bb_lower_context_t *lower = context->user;
     if (!n00bb_option_value_proven(lower, lower ? lower->grammar : nullptr,
                                    node)) {
-        lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
-            "an option's value requires it to be proven non-nil by the "
-            "active branch");
+        report_unproven_option(context, lower, node, span);
         return nullptr;
     }
     ir_value_t *promoted = n00bb_emit_wrapping(context, IR_OP_OPTION_GET,
@@ -10923,9 +10958,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     if (option_builtin
         && core_string_eq(symbol->name, CORE_STRING_STATIC("__option_get"))
         && !n00bb_option_value_proven(lower, visit->grammar, receiver_node))
-        return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
-            "an option's value requires it to be proven non-nil by the "
-            "active branch");
+        return report_unproven_option(context, lower, receiver_node, span);
     bool no_function_body = native_builtin
         || reference_builtin || byte_offset_builtin || byte_diff_builtin
         || unsafe_arithmetic
@@ -19274,7 +19307,7 @@ prepare_ir_type_layouts(parse_grammar_t *grammar,
             && !n00bb_atomic_native_support(module, type, target)) {
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit), unit,
-                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0018"),
+                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0051"),
                 CORE_STRING_STATIC(
                     "atomic type is not supported by the selected target"),
                 link_source_location(owner));

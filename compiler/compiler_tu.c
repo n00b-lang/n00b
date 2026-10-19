@@ -6887,7 +6887,7 @@ record_function_signature(parse_grammar_t *grammar,
         if (!th_is_nil(symbol->error_type)) {
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit), unit,
-                CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0018"),
+                CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0049"),
                 CORE_STRING_STATIC(
                     "__init cannot declare or infer a failure channel; use a fallible factory function"),
                 link_source_location(func));
@@ -6898,7 +6898,7 @@ record_function_signature(parse_grammar_t *grammar,
         if (!th_is_nil(constructor_result)) {
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit), unit,
-                CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0019"),
+                CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0050"),
                 CORE_STRING_STATIC(
                     "__init must return no value; use a factory function to produce a value"),
                 link_source_location(func));
@@ -7980,7 +7980,8 @@ flagset_operator_spelling(parse_tree_t *node)
 bool
 cache_flagset_semantics(parse_grammar_t *grammar,
                         core_translation_unit_t *unit,
-                        n00bb_tu_state_t *state, parse_tree_t *node)
+                        n00bb_tu_state_t *state, parse_tree_t *node,
+                        core_buffer_t *reason)
 {
     parse_tree_t *declaration = flagset_declaration_ancestor(grammar, node);
     if (!declaration) return true;
@@ -7990,7 +7991,11 @@ cache_flagset_semantics(parse_grammar_t *grammar,
     n00bb_flagset_info_t *info = owner ? parse_sym_binding(owner,
         CORE_STRING_STATIC("n00bb.flagset-info")) : nullptr;
     if (!owner || !info) return false;
-    if (node == declaration && !info->atomic_count) return false;
+    if (node == declaration && !info->atomic_count) {
+        core_buffer_puts(reason,
+            "a flagset needs at least one primitive flag");
+        return false;
+    }
 
     if (NT_IS(grammar, node, "flagset-name")) {
         parse_tree_t *name_node = core_tree_num_children(node) == 1
@@ -8001,6 +8006,12 @@ cache_flagset_semantics(parse_grammar_t *grammar,
             : nullptr;
         n00bb_flagset_value_t *value = symbol && symbol->has_comptime_value
             ? symbol->comptime_value : nullptr;
+        if (!value && name_node && core_tree_is_leaf(name_node)) {
+            core_string_t name = parse_tree_leaf_text(name_node);
+            core_buffer_printf(reason,
+                "'%.*s' is not an earlier flag of this flagset",
+                (int)name.u8_bytes, name.data);
+        }
         if (!value || !symbol->type
             || !parse_tree_set_resolution_symbol(node, symbol)) return false;
         parse_tree_set_type(node, owner->type);
@@ -8070,7 +8081,11 @@ cache_flagset_semantics(parse_grammar_t *grammar,
         uint32_t order = info->atomic_count;
         int32_t declaration_start = core_tree_node_value(node).start;
         if (atomic) {
-            if (order >= 128) return false;
+            if (order >= 128) {
+                core_buffer_puts(reason,
+                    "a flagset holds at most 128 primitive flags");
+                return false;
+            }
             mask = (ir_uint_t)1 << order;
         }
         else if (!flagset_node_mask(state,
@@ -8082,7 +8097,14 @@ cache_flagset_semantics(parse_grammar_t *grammar,
                        >= declaration_start) continue;
             n00bb_flagset_value_t *prior = item->has_comptime_value
                 ? item->comptime_value : nullptr;
-            if (prior && prior->mask == mask) return false;
+            if (prior && prior->mask == mask) {
+                core_buffer_printf(reason,
+                    "'%.*s' has the same value as '%.*s'; each flagset "
+                    "value must be distinct",
+                    (int)symbol->name.u8_bytes, symbol->name.data,
+                    (int)item->name.u8_bytes, item->name.data);
+                return false;
+            }
         }
         n00bb_flagset_value_t *value = core_arena_alloc(
             &state->semantic_values, sizeof(*value));

@@ -903,9 +903,13 @@ bool finalize_flagset_symbol_type(parse_grammar_t *grammar,
                                   parse_tree_t *node,
                                   core_translation_unit_t *unit,
                                   n00bb_tu_state_t *state);
+core_string_t n00bb_node_source_text(core_translation_unit_t *unit,
+                                     parse_tree_t *node,
+                                     core_string_t fallback);
 bool cache_flagset_semantics(parse_grammar_t *grammar,
                              core_translation_unit_t *unit,
-                             n00bb_tu_state_t *state, parse_tree_t *node);
+                             n00bb_tu_state_t *state, parse_tree_t *node,
+                             core_buffer_t *reason);
 void n00bb_range_enter_node(parse_grammar_t *grammar,
                             n00bb_tu_state_t *state, parse_tree_t *node,
                             parse_tree_t *parent);

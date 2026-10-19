@@ -335,29 +335,41 @@ build_import_environment(parse_grammar_t *grammar,
                 core_string_t reason = detail.message.data
                     ? detail.message
                     : CORE_STRING_STATIC("constraint failure");
-                core_buffer_printf(&message,
-                    "trait constraint '%.*s' is not satisfied for %.*s: %.*s",
-                    (int)detail.constraint.u8_bytes, detail.constraint.data,
-                    (int)got.u8_bytes, got.data,
-                    (int)reason.u8_bytes, reason.data);
-                if (detail.expected) {
-                    core_string_t expected = n00bb_print_type(state->types,
-                                                              detail.expected);
-                    core_buffer_printf(&message, " (expected %.*s)",
-                        (int)expected.u8_bytes, expected.data);
-                }
                 th_env_method_requirement_t requirements[16] = {0};
                 size_t requirement_count = th_env_method_requirements(
                     state->types, detail.constraint, requirements, 16);
-                for (size_t r = 0; r < requirement_count && r < 16; r++) {
-                    size_t candidates = th_env_method_candidates(
-                        state->types, requirements[r].trait_name,
-                        detail.constraint, nullptr, 0);
+                if (!requirement_count) {
                     core_buffer_printf(&message,
-                        "; %.*s has %zu matching candidate%s",
-                        (int)requirements[r].trait_name.u8_bytes,
-                        requirements[r].trait_name.data, candidates,
-                        candidates == 1 ? "" : "s");
+                        "trait constraint '%.*s' is not satisfied for %.*s: %.*s",
+                        (int)detail.constraint.u8_bytes, detail.constraint.data,
+                        (int)got.u8_bytes, got.data,
+                        (int)reason.u8_bytes, reason.data);
+                }
+                else {
+                    core_string_t trait = requirements[0].trait_name;
+                    size_t candidates = th_env_method_candidates(
+                        state->types, trait, detail.constraint, nullptr, 0);
+                    if (core_string_eq(reason, CORE_STRING_STATIC(
+                            "method dispatch is ambiguous")))
+                        core_buffer_printf(&message,
+                            "more than one `%.*s` implementation fits %.*s here",
+                            (int)trait.u8_bytes, trait.data,
+                            (int)got.u8_bytes, got.data);
+                    else if (detail.got
+                             && n00bb_option_type_element(detail.got,
+                                                          nullptr))
+                        core_buffer_printf(&message,
+                            "%.*s may be nil, and options do not implement "
+                            "`%.*s`; narrow it to a value first",
+                            (int)got.u8_bytes, got.data,
+                            (int)trait.u8_bytes, trait.data);
+                    else
+                        core_buffer_printf(&message,
+                            "no `%.*s` implementation fits %.*s with these "
+                            "arguments (%zu candidate%s considered)",
+                            (int)trait.u8_bytes, trait.data,
+                            (int)got.u8_bytes, got.data, candidates,
+                            candidates == 1 ? "" : "s");
                 }
             }
             else {

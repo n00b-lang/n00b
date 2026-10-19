@@ -13,7 +13,7 @@ for program in assigned modified referenced through_ref wrong_branch \
         echo "$program: unsound option narrowing was accepted" >&2
         exit 1
     fi
-    if ! grep -q "an option's value requires it to be proven non-nil" \
+    if ! grep -q "may be nil here; take its value only where a check" \
         "$tmp/$program.err"; then
         cat "$tmp/$program.err" >&2
         exit 1

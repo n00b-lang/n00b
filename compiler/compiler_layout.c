@@ -792,7 +792,7 @@ finalize_atomic_aggregate_layouts(n00bb_link_analysis_t *analysis)
                     }
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit), unit,
-                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0018"),
+                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0051"),
                 CORE_STRING_STATIC(
                     "atomic type is not supported by the selected target"),
                 location);

@@ -54,18 +54,18 @@ last_leaf(parse_tree_t *node)
     return node;
 }
 
-static core_string_t
-node_source_text(core_translation_unit_t *unit, parse_tree_t *node)
+core_string_t
+n00bb_node_source_text(core_translation_unit_t *unit, parse_tree_t *node,
+                       core_string_t fallback)
 {
     parse_token_info_t *first = parse_tree_find_first_terminal(node);
     parse_tree_t *leaf = last_leaf(node);
     parse_token_info_t *last = leaf ? parse_node_token(leaf) : nullptr;
+    if (!unit || !first || !last) return fallback;
     core_string_t contents = core_source_file_contents(&unit->source);
-    if (!first || !last) return CORE_STRING_STATIC("this target");
     size_t start = parse_token_start_byte(first);
     size_t end = parse_token_end_byte(last);
-    if (end <= start || end > contents.u8_bytes)
-        return CORE_STRING_STATIC("this target");
+    if (end <= start || end > contents.u8_bytes) return fallback;
     return core_string_slice(contents, start, end - start);
 }
 
@@ -522,7 +522,8 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 core_string_t value_text = n00bb_print_type(state->types,
                                                             value_type);
                 core_string_t variable = th_var_name(target_type);
-                core_string_t target_text = node_source_text(unit, target);
+                core_string_t target_text = n00bb_node_source_text(unit,
+                    target, CORE_STRING_STATIC("this target"));
                 core_buffer_printf(&message,
                     "cannot assign %.*s to '%.*s': its type is the type parameter `%.*s, which can be any type",
                     (int)value_text.u8_bytes, value_text.data,
@@ -656,8 +657,10 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             link_source_location(node));
         return;
     }
+    core_buffer_t flagset_reason = {0};
     if (!entering && state->flagset_scope
-        && !cache_flagset_semantics(grammar, unit, state, node)) {
+        && !cache_flagset_semantics(grammar, unit, state, node,
+                                    &flagset_reason)) {
         parse_tree_t *declaration = state->flagset_scope;
         parse_sym_entry_t *owner = declaration
             ? parse_tree_sym(declaration) : nullptr;
@@ -665,20 +668,16 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 CORE_STRING_STATIC("n00bb.flagset-invalid"))) {
             parse_sym_set_binding(owner,
                 CORE_STRING_STATIC("n00bb.flagset-invalid"), owner);
-            n00bb_flagset_info_t *info = parse_sym_binding(owner,
-                CORE_STRING_STATIC("n00bb.flagset-info"));
-            bool missing_primitive = node == declaration && info
-                && !info->atomic_count;
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit), unit,
                 CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0019"),
-                missing_primitive
-                    ? CORE_STRING_STATIC(
-                        "flagset requires at least one primitive flag")
-                    : CORE_STRING_STATIC(
-                        "invalid flagset declaration; values must be unique combinations of earlier flags and no more than 128 atomic flags are allowed"),
+                flagset_reason.byte_len
+                    ? core_string_borrow(flagset_reason.data,
+                                         flagset_reason.byte_len)
+                    : CORE_STRING_STATIC("invalid flagset value"),
                 link_source_location(node));
         }
+        core_buffer_release(&flagset_reason);
         return;
     }
     if (!entering && NT_IS(grammar, node, "simple-lit")

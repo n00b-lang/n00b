@@ -11,7 +11,7 @@ if "$compiler" lower "$program_dir/bitcode_array_noninteger_index_rejected.n" \
     echo 'non-integer array index unexpectedly compiled' >&2
     exit 1
 fi
-grep -Fq "trait constraint '__read' is not satisfied" "$tmp/invalid.log"
+grep -Fq "no \`Index_Read\` implementation fits Array[int]" "$tmp/invalid.log"
 
 "$compiler" build --no-specialize --output "$tmp/high" \
     "$program_dir/bitcode_array_uint_high_trap.n" >"$tmp/high.log" 2>&1

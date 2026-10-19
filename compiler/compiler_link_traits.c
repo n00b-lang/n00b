@@ -1616,9 +1616,20 @@ resolve_constructor_use_site(parse_grammar_t *grammar, core_link_unit_t *link,
                 failed_constraint_type ? " for " : "",
                 (int)failed_type.u8_bytes, failed_type.data);
         }
-        else
-            core_buffer_puts(&message,
-                "no visible __init matches this constructed type and its arguments");
+        else {
+            core_string_t constructed = n00bb_print_type(state->types,
+                                                         target);
+            if (!pattern_matches)
+                core_buffer_printf(&message,
+                    "%.*s has no visible `__init`",
+                    (int)constructed.u8_bytes, constructed.data);
+            else
+                core_buffer_printf(&message,
+                    "no visible `__init` for %.*s accepts these arguments "
+                    "(%zu considered)",
+                    (int)constructed.u8_bytes, constructed.data,
+                    pattern_matches);
+        }
         core_diagnostics_report_at(
             core_translation_unit_diagnostics(unit), unit,
             CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0020"),
