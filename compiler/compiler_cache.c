@@ -1287,6 +1287,23 @@ n00bb_cache_optimistic(const n00bb_cache_t *cache)
     return false;
 }
 
+bool
+n00bb_cache_module_speculative(const n00bb_cache_t *cache,
+                               core_string_t module)
+{
+    const cache_entry_t *entry = nullptr;
+    return loaded_member(cache, module, &entry)
+        && (entry->deferred || entry->assumed.len);
+}
+
+void
+n00bb_cache_log_restart(core_string_t reason)
+{
+    core_string_t phase = phase_name();
+    cache_log("%.*s restart %.*s", (int)phase.u8_bytes, phase.data,
+              (int)reason.u8_bytes, reason.data);
+}
+
 static bool
 entry_used(const cache_entry_t *entry, n00bb_cache_module_used_fn used,
            void *context)

@@ -146,7 +146,7 @@ append_diagnostics(core_diagnostics_t *into, const core_diagnostics_t *from,
 static void
 merge_unit_diagnostics(core_diagnostics_t *into,
                        const warning_policy_t *policy,
-                       const core_translation_unit_t *unit, bool local)
+                       core_translation_unit_t *unit, bool local)
 {
     append_diagnostics(into, core_translation_unit_diagnostics(unit),
                        local || policy->package_warnings, false);
@@ -2646,9 +2646,12 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
     }
 
     n00bb_preprocessor_free(preprocessor);
-    bool diagnostics_have_outer_owner = (defer_diagnostics
-        && analysis_out && *analysis_out) || n00bb_cache_optimistic(cache);
-    if (!diagnostics_have_outer_owner && core_diagnostics_count(diags)) {
+    bool analysis_owns_diagnostics = defer_diagnostics
+        && analysis_out && *analysis_out;
+    bool optimistic = n00bb_cache_optimistic(cache);
+    if (!analysis_owns_diagnostics && optimistic)
+        core_diagnostics_merge(requests->diagnostics, diags);
+    else if (!analysis_owns_diagnostics && core_diagnostics_count(diags)) {
         fflush(stdout);
         n00bb_resolver_remap_diagnostics(resolver, diags);
         core_string_t text = core_diagnostics_render_text(diags);
@@ -3775,6 +3778,70 @@ exec_compiler(core_string_t compiler, char **argv)
     core_free(native);
 }
 
+static bool
+reaches_speculative_module(const n00bb_cache_t *cache,
+                           core_translation_unit_t *unit, core_dict_t *seen)
+{
+    if (!unit || core_dict_contains(seen, unit)) return false;
+    core_dict_put(seen, unit, (void *)1);
+    n00bb_tu_state_t *state = tu_state(unit);
+    if (state && state->interface_module
+        && n00bb_cache_module_speculative(cache, unit->module.identifier))
+        return true;
+    for (size_t i = 0; i < core_translation_unit_import_count(unit); i++)
+        if (reaches_speculative_module(cache,
+                core_translation_unit_import(unit, i), seen))
+            return true;
+    return false;
+}
+
+static core_translation_unit_t *
+requested_unit_named(core_work_queue_t *queue,
+                     const locate_requests_t *requests, core_string_t module)
+{
+    for (size_t r = 0; module.data && r < requests->ordered.len; r++) {
+        core_translation_unit_t *unit = core_work_job_result(queue,
+            requests->ordered.data[r].job);
+        if (unit && core_string_eq(unit->module.identifier, module))
+            return unit;
+    }
+    return nullptr;
+}
+
+static core_string_t
+strict_retry_reason(const n00bb_cache_t *cache, core_work_queue_t *queue,
+                    const locate_requests_t *requests,
+                    const core_diagnostics_t *outer)
+{
+    bool any_error = core_diagnostics_failed(outer);
+    bool speculative = false;
+    core_dict_t seen;
+    core_dict_init(&seen, nullptr, nullptr);
+    for (size_t r = 0; !speculative && r < requests->ordered.len; r++) {
+        core_translation_unit_t *unit = core_work_job_result(queue,
+            requests->ordered.data[r].job);
+        if (!unit || !core_diagnostics_failed(
+                core_translation_unit_diagnostics(unit)))
+            continue;
+        any_error = true;
+        speculative = reaches_speculative_module(cache, unit, &seen);
+    }
+    for (size_t i = 0; !speculative && i < core_diagnostics_count(outer); i++) {
+        const core_diagnostic_t *item = core_diagnostics_at(outer, i);
+        if (item->severity == CORE_DIAG_ERROR
+            || item->severity == CORE_DIAG_FATAL)
+            speculative = reaches_speculative_module(cache,
+                requested_unit_named(queue, requests, item->module), &seen);
+    }
+    core_dict_free(&seen);
+    if (speculative)
+        return CORE_STRING_STATIC(
+            "an error depends on a module reused from an optimistic cache entry");
+    if (!any_error)
+        return CORE_STRING_STATIC("the optimistic build failed without a diagnostic");
+    return (core_string_t){0};
+}
+
 static void
 restart_with_strict_cache(char **argv, core_string_t argv0)
 {
@@ -4328,9 +4395,17 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         &link_analysis);
     if (link_analysis) link_analysis->cache = cache;
     bool optimistic_cache = n00bb_cache_optimistic(cache);
-    if (optimistic_cache && (!located
-            || !n00bb_cache_assumptions_hold(cache, link, link_analysis)))
-        restart_with_strict_cache(argv, argv0);
+    if (optimistic_cache) {
+        core_string_t reason = !located
+            ? strict_retry_reason(cache, queue, &requests, cli_diagnostics)
+            : !n00bb_cache_assumptions_hold(cache, link, link_analysis)
+                ? CORE_STRING_STATIC("cached interface assumptions do not hold")
+                : (core_string_t){0};
+        if (reason.data) {
+            n00bb_cache_log_restart(reason);
+            restart_with_strict_cache(argv, argv0);
+        }
+    }
     if (cache && located) {
         core_buffer_t stale = {0};
         n00bb_cache_stale_modules(cache, &stale);
@@ -4550,6 +4625,9 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
             core_diagnostics_merge(cli_diagnostics,
                                    core_link_unit_diagnostics(link));
     }
+    core_string_t late_retry = optimistic_cache && !located
+        ? strict_retry_reason(cache, queue, &requests, cli_diagnostics)
+        : (core_string_t){0};
 
     core_link_unit_free(link);
     th_env_free(environment);
@@ -4560,7 +4638,10 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         th_env_free((th_env *)linked_interfaces[i]);
     core_free(linked_interfaces);
     core_free(native_roots);
-    if (optimistic_cache && !located) restart_with_strict_cache(argv, argv0);
+    if (late_retry.data) {
+        n00bb_cache_log_restart(late_retry);
+        restart_with_strict_cache(argv, argv0);
+    }
     if (core_diagnostics_count(cli_diagnostics)) {
         n00bb_resolver_remap_diagnostics(resolver, cli_diagnostics);
         core_string_t text = core_diagnostics_render_text(cli_diagnostics);

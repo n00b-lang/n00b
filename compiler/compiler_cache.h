@@ -50,6 +50,9 @@ const th_env *n00bb_cache_interface(const n00bb_cache_t *cache,
 bool n00bb_cache_has_module(const n00bb_cache_t *cache,
                             core_string_t module);
 bool n00bb_cache_optimistic(const n00bb_cache_t *cache);
+bool n00bb_cache_module_speculative(const n00bb_cache_t *cache,
+                                    core_string_t module);
+void n00bb_cache_log_restart(core_string_t reason);
 bool n00bb_cache_check_dispatch(n00bb_cache_t *cache,
                                 n00bb_link_analysis_t *analysis,
                                 const th_env *environment);
