@@ -24,9 +24,8 @@ func no_records() -> List[text.Style_Record] {
     return new[List[text.Style_Record]]()
 }
 
-var plain_body: text.Rich_Body
-plain_body.s = "hello"
-plain_body.style_info = no_records()
+var plain_body: text.Rich_Body = (s = "hello", style_info = no_records(),
+                                  base_style = nil, opaque = false)
 var based_body: text.Rich_Body = (s = "hello", style_info = no_records(),
                                   base_style = nil, opaque = false)
 var opaque_body: text.Rich_Body = (s = "hello", style_info = no_records(),
@@ -50,8 +49,12 @@ func style_fields_probe_main() {
     check(plain_body.base_style == nil, "1")
     check(!plain_body.opaque, "2")
 
-    var bold: text.Text_Style
-    bold.bold = true
+    let bold: text.Text_Style = (
+        bold = true, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = text.Text_Case.none, font_hint = text.Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil)
     based_body.base_style = bold
 
     check(plain_s != based_s, "3")

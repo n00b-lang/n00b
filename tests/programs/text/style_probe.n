@@ -26,34 +26,42 @@ func tag_sets_bold(tag: string) -> bool {
     return is_state(s.bold, true)
 }
 
+func empty_style() -> text.Text_Style {
+    return (bold = nil, italic = nil, underline = nil, double_underline = nil,
+            strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+            text_case = text.Text_Case.none,
+            font_hint = text.Font_Hint.default, font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+            fg_rgb = nil, bg_rgb = nil, font_size = nil)
+}
+
 func style_probe_main() {
-    var empty: text.Text_Style
+    let empty: text.Text_Style = empty_style()
     check(text.is_empty(empty), "1")
     check(text.merge(empty, empty) == empty, "2")
 
-    var bold: text.Text_Style
+    var bold: text.Text_Style = empty_style()
     bold.bold = true
-    var italic: text.Text_Style
+    var italic: text.Text_Style = empty_style()
     italic.italic = true
     let both: text.Text_Style = text.merge(bold, italic)
     check(is_state(both.bold, true) and is_state(both.italic, true), "3")
 
-    var bold_off: text.Text_Style
+    var bold_off: text.Text_Style = empty_style()
     bold_off.bold = false
     let off: text.Text_Style = text.merge(bold, bold_off)
     check(is_state(off.bold, false), "4")
     check(is_state(text.merge(bold, empty).bold, true), "5")
 
-    var upper: text.Text_Style
+    var upper: text.Text_Style = empty_style()
     upper.text_case = text.Text_Case.upper
-    var lower: text.Text_Style
+    var lower: text.Text_Style = empty_style()
     lower.text_case = text.Text_Case.lower
     check(text.merge(upper, lower).text_case == text.Text_Case.lower, "6")
     check(text.merge(upper, empty).text_case == text.Text_Case.upper, "7")
 
-    var red: text.Text_Style
+    var red: text.Text_Style = empty_style()
     red.fg_rgb = 0xff0000
-    var blue: text.Text_Style
+    var blue: text.Text_Style = empty_style()
     blue.fg_rgb = 0x0000ff
     let won: text.Text_Style = text.merge(red, blue)
     check(is_color(won.fg_rgb, 0x0000ff), "8")
