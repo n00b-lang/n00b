@@ -1546,6 +1546,22 @@ collect_discovery_candidate(void *opaque,
 }
 
 static bool
+failure_already_reported(core_translation_unit_t *unit)
+{
+    n00bb_tu_state_t *state = unit ? tu_state(unit) : nullptr;
+    return unit && (core_diagnostics_failed(
+                        core_translation_unit_diagnostics(unit))
+                    || (state && state->import_failure_reported));
+}
+
+static void
+mark_import_failure_reported(core_translation_unit_t *importer)
+{
+    n00bb_tu_state_t *state = importer ? tu_state(importer) : nullptr;
+    if (state) state->import_failure_reported = true;
+}
+
+static bool
 locate_job_resolved(import_driver_t *driver, core_work_job_t *job)
 {
     pthread_mutex_lock(driver->requests_lock);
@@ -1794,6 +1810,8 @@ load_import_module(import_driver_t *driver, parse_grammar_t *grammar,
 
     bool located = wait_for_locate_job(driver, locate_job);
     bool resolved = locate_job_resolved(driver, locate_job);
+    core_translation_unit_t *attempted = core_work_job_result(driver->queue,
+                                                              locate_job);
     core_translation_unit_t *direct = located
         ? core_work_job_result(driver->queue, locate_job) : nullptr;
     if (!direct || (statement && !n00bb_same_package(importer, direct))) {
@@ -1801,6 +1819,10 @@ load_import_module(import_driver_t *driver, parse_grammar_t *grammar,
             driver, importer, statement, module, true);
         if (package_job) locate_job = package_job;
         else if (!located) locate_job = nullptr;
+    }
+    if (!locate_job && resolved && failure_already_reported(attempted)) {
+        mark_import_failure_reported(importer);
+        return false;
     }
     if (!locate_job) {
         core_buffer_t message = {0};
@@ -1842,8 +1864,10 @@ load_import_module(import_driver_t *driver, parse_grammar_t *grammar,
 
     if (!ensure_preprocessed_import(driver, grammar, locate_job,
                                     imported, tree)) {
-        import_error(importer, statement,
-                     "imported module failed preprocessing");
+        if (failure_already_reported(imported))
+            mark_import_failure_reported(importer);
+        else import_error(importer, statement,
+                          "imported module failed preprocessing");
         return false;
     }
     if (statement && n00bb_same_package(importer, imported)
@@ -2356,6 +2380,7 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
     n00bb_preprocessor_options_t active_options = *preprocessor_options;
     active_options.load_import = load_import;
     active_options.load_implicit_import = load_implicit_builtin;
+    active_options.import_failure_reported = failure_already_reported;
     active_options.import_context = &import_driver;
     active_options.prepare_import = prepare_import;
     active_options.selected_body = n00bb_tu_remember_selected_when_body;

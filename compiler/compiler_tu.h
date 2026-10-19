@@ -577,6 +577,7 @@ typedef struct {
     bool integer_range_use_symbol_facts;
     bool inference_finalized;
     bool interface_module;
+    bool import_failure_reported;
     bool package_interface;
     bool package_manifest_restored;
     bool semantic_annotation_started;

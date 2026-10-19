@@ -49,6 +49,7 @@ typedef struct {
     bool build_time;
     n00bb_preprocessor_import_fn load_import;
     n00bb_preprocessor_implicit_import_fn load_implicit_import;
+    bool (*import_failure_reported)(core_translation_unit_t *unit);
     void *import_context;
     n00bb_preprocessor_prepare_import_fn prepare_import;
     n00bb_preprocessor_selected_body_fn selected_body;

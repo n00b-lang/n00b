@@ -2215,7 +2215,10 @@ process_import(pp_context_t *ctx, parse_tree_t *statement)
     if (!ctx->options->load_import(ctx->options->import_context,
             ctx->grammar, statement, ctx->unit, &imported, &tree)
         || !imported || !tree) {
-        if (core_diagnostics_count(diags) == diagnostic_count)
+        bool reported = core_diagnostics_count(diags) != diagnostic_count
+            || (ctx->options->import_failure_reported
+                && ctx->options->import_failure_reported(ctx->unit));
+        if (!reported)
             pp_error(ctx, statement, "cannot load imported module");
         else ctx->failed = true;
         return false;
