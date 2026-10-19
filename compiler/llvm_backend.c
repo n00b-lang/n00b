@@ -3418,6 +3418,47 @@ generic_array_new(lower_state_t *state, th_type *type,
 }
 
 static LLVMValueRef
+boxed_array_literal(lower_state_t *state, ir_instr_t *instruction,
+                    th_type *type)
+{
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMTypeRef box = box_llvm_type(context);
+    LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
+    LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
+    LLVMValueRef count = LLVMConstInt(i64, instruction->n_operands, false);
+    LLVMValueRef extent = entry_alloca(state, i64);
+    if (!extent) return nullptr;
+    LLVMBuildStore(state->builder, count, extent);
+    LLVMValueRef array = generic_array_new(state, type, count, 1, 1, extent);
+    if (!array || !instruction->n_operands) return array;
+    LLVMValueRef array_slot = entry_alloca(state, box);
+    LLVMValueRef value_slot = entry_alloca(state, box);
+    LLVMTypeRef parameters[] = {pointer, i64, pointer};
+    LLVMTypeRef signature = LLVMFunctionType(
+        LLVMVoidTypeInContext(context), parameters, 3, false);
+    LLVMValueRef helper = LLVMGetNamedFunction(state->module,
+        "n00bb_bootstrap_array_write_box");
+    if (!helper) helper = LLVMAddFunction(state->module,
+        "n00bb_bootstrap_array_write_box", signature);
+    if (!array_slot || !value_slot || !helper
+        || LLVMGlobalGetValueType(helper) != signature) return nullptr;
+    LLVMBuildStore(state->builder, array, array_slot);
+    for (uint32_t i = 0; i < instruction->n_operands; i++) {
+        ir_operand_t *operand = &instruction->operands[i];
+        if (operand->kind != IR_OPD_VALUE || !operand->value) return nullptr;
+        LLVMValueRef element = lowered_value(state, operand->value);
+        if (element && LLVMTypeOf(element) != box)
+            element = box_value(state, element, operand->value->type);
+        if (!element || LLVMTypeOf(element) != box) return nullptr;
+        LLVMBuildStore(state->builder, element, value_slot);
+        LLVMValueRef arguments[] = {array_slot, LLVMConstInt(i64, i, false),
+                                    value_slot};
+        LLVMBuildCall2(state->builder, signature, helper, arguments, 3, "");
+    }
+    return LLVMBuildLoad2(state->builder, box, array_slot, "array.literal");
+}
+
+static LLVMValueRef
 dynamic_array(lower_state_t *state, ir_instr_t *instruction)
 {
     ir_aggregate_form_t form;
@@ -3430,15 +3471,8 @@ dynamic_array(lower_state_t *state, ir_instr_t *instruction)
                      && form != IR_AGGREGATE_ELEMENTS)) return nullptr;
     ir_module_t *source = state->function->owner;
     LLVMContextRef context = LLVMGetModuleContext(state->module);
-    if (!instruction->n_operands
-        && value_type(source, type, context) == box_llvm_type(context)) {
-        LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
-        LLVMValueRef extent = LLVMBuildAlloca(state->builder, i64,
-                                               "array.empty.extent");
-        LLVMBuildStore(state->builder, LLVMConstNull(i64), extent);
-        return generic_array_new(state, type, LLVMConstNull(i64), 1, 1,
-                                 extent);
-    }
+    if (value_type(source, type, context) == box_llvm_type(context))
+        return boxed_array_literal(state, instruction, type);
     const ir_final_layout_t *layout = ir_layout_final(source, element,
         ir_module_target(source));
     LLVMTypeRef element_type = value_type(source, element, context);
@@ -9645,6 +9679,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         if (th_named_info(th_resolve(operands[0].value->type), nullptr,
                           &named_variant, nullptr)
             && named_variant
+            && !native_call_outcome(owner, operands[0].value)
             && value_type(owner, operands[0].value->type,
                    LLVMGetModuleContext(state->module))
                 == box_llvm_type(LLVMGetModuleContext(state->module))) {
