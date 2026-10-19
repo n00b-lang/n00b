@@ -6036,18 +6036,18 @@ bool scan_lex_scan(parse_scanner_t *s) {
 }
 
 #define BIDI_CONTROLS(X)                                                       \
-  X(0x061C, "U+061C")                                                          \
-  X(0x200E, "U+200E")                                                          \
-  X(0x200F, "U+200F")                                                          \
-  X(0x202A, "U+202A")                                                          \
-  X(0x202B, "U+202B")                                                          \
-  X(0x202C, "U+202C")                                                          \
-  X(0x202D, "U+202D")                                                          \
-  X(0x202E, "U+202E")                                                          \
-  X(0x2066, "U+2066")                                                          \
-  X(0x2067, "U+2067")                                                          \
-  X(0x2068, "U+2068")                                                          \
-  X(0x2069, "U+2069")
+  X(0x061C, "U+061C (ARABIC LETTER MARK)")                                     \
+  X(0x200E, "U+200E (LEFT-TO-RIGHT MARK)")                                     \
+  X(0x200F, "U+200F (RIGHT-TO-LEFT MARK)")                                     \
+  X(0x202A, "U+202A (LEFT-TO-RIGHT EMBEDDING)")                                \
+  X(0x202B, "U+202B (RIGHT-TO-LEFT EMBEDDING)")                                \
+  X(0x202C, "U+202C (POP DIRECTIONAL FORMATTING)")                             \
+  X(0x202D, "U+202D (LEFT-TO-RIGHT OVERRIDE)")                                 \
+  X(0x202E, "U+202E (RIGHT-TO-LEFT OVERRIDE)")                                 \
+  X(0x2066, "U+2066 (LEFT-TO-RIGHT ISOLATE)")                                  \
+  X(0x2067, "U+2067 (RIGHT-TO-LEFT ISOLATE)")                                  \
+  X(0x2068, "U+2068 (FIRST STRONG ISOLATE)")                                   \
+  X(0x2069, "U+2069 (POP DIRECTIONAL ISOLATE)")
 
 typedef struct {
   core_codepoint_t codepoint;
@@ -6058,11 +6058,13 @@ typedef struct {
 static const bidi_control_t bidi_controls[] = {
 #define BIDI_ENTRY(cp, name)                                                   \
   {cp,                                                                         \
-   CORE_STRING_STATIC("bidirectional control character " name                 \
-                      " is not allowed in source text; a string literal can "  \
-                      "write it as an escape"),                                \
-   CORE_STRING_STATIC("fence literal contains bidirectional control "         \
-                      "character " name)},
+   CORE_STRING_STATIC("invisible bidirectional control character " name       \
+                      " can make code display differently from how it "        \
+                      "compiles, so it is not allowed in source text; a "      \
+                      "string literal can write it as an escape"),             \
+   CORE_STRING_STATIC("fence literal contains invisible bidirectional "       \
+                      "control character " name ", which can make it display " \
+                      "differently from its contents")},
     BIDI_CONTROLS(BIDI_ENTRY)
 #undef BIDI_ENTRY
 };
