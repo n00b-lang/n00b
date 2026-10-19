@@ -5515,14 +5515,6 @@ n00bb_bind_option_condition_shadows(parse_grammar_t *grammar,
             condition = core_tree_child(condition, 0);
             continue;
         }
-        if (count == 2
-            && (NT_IS(grammar, condition, "and-rhs")
-                || NT_IS(grammar, condition, "or-rhs"))
-            && NT_IS(grammar, core_tree_child(condition, 0),
-                     "operator-continuation")) {
-            condition = core_tree_child(condition, 1);
-            continue;
-        }
         break;
     }
     if (!condition) return true;

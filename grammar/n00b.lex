@@ -41,6 +41,7 @@
 	   label,
 	   as("EMBED"))
 @lex-layout(indent("INDENT", "DEDENT"), newline("NEWLINE", "each"),
-	    tabs("reject"), mixed_indent("reject"), brackets("()[]"))
+	    tabs("reject"), mixed_indent("reject"), brackets("()[]"),
+	    bracket_newlines("keep"), dedent_newline("emit"))
 @lex-fallback("reject")
 @lex-operators(add(".."))

@@ -1179,6 +1179,10 @@ process_locate_job(locate_worker_context_t *context, core_work_job_t *job)
                     n00bb_type_bracket_disambiguator, nullptr);
                 if (!parse_pwz_parse(result->parser, result->tokens)) {
                     int32_t error_pos = parse_pwz_error_pos(result->parser);
+                    if ((parse_pwz_error_unterminated(result->parser)
+                         || parse_pwz_error_commented(result->parser))
+                        && error_pos > 0)
+                        error_pos--;
                     parse_token_info_t *error_token = error_pos >= 0
                         ? scan_stream_get(result->tokens, error_pos) : nullptr;
                     core_buffer_t message = {0};
@@ -1196,7 +1200,19 @@ process_locate_job(locate_worker_context_t *context, core_work_job_t *job)
                             .end_column = parse_token_endcol(error_token),
                             .has_location = true,
                         };
-                        if (token_name.data)
+                        if (parse_pwz_error_unterminated(result->parser))
+                            core_buffer_printf(&message,
+                                "unfinished statement before this blank line");
+                        else if (parse_pwz_error_commented(result->parser))
+                            core_buffer_printf(&message,
+                                "unfinished statement before a comment; a line"
+                                " next to a comment cannot continue");
+                        else if (error_tid == parse_terminal_id(
+                                     context->grammar,
+                                     CORE_STRING_STATIC("INDENT")))
+                            core_buffer_printf(&message,
+                                "unexpected indentation");
+                        else if (token_name.data)
                             core_buffer_printf(&message,
                                 "syntax error near %.*s",
                                 (int)token_name.u8_bytes, token_name.data);
@@ -1441,6 +1457,17 @@ collect_discovery_candidate(void *opaque,
 }
 
 static bool
+locate_job_resolved(import_driver_t *driver, core_work_job_t *job)
+{
+    pthread_mutex_lock(driver->requests_lock);
+    locate_request_t *request = request_for_job(driver->requests, job);
+    bool resolved = request && request->resolve_attempted
+        && request->resolve_status == CORE_MODULE_RESOLVED;
+    pthread_mutex_unlock(driver->requests_lock);
+    return resolved;
+}
+
+static bool
 wait_for_locate_job(import_driver_t *driver, core_work_job_t *job)
 {
     while (!driver->worker_count
@@ -1677,6 +1704,7 @@ load_import_module(import_driver_t *driver, parse_grammar_t *grammar,
     }
 
     bool located = wait_for_locate_job(driver, locate_job);
+    bool resolved = locate_job_resolved(driver, locate_job);
     core_translation_unit_t *direct = located
         ? core_work_job_result(driver->queue, locate_job) : nullptr;
     if (!direct || (statement && !n00bb_same_package(importer, direct))) {
@@ -1687,8 +1715,9 @@ load_import_module(import_driver_t *driver, parse_grammar_t *grammar,
     }
     if (!locate_job) {
         core_buffer_t message = {0};
-        core_buffer_printf(&message,
-            "cannot find imported module '%.*s' on the module search path",
+        core_buffer_printf(&message, resolved
+            ? "imported module '%.*s' failed to load"
+            : "cannot find imported module '%.*s' on the module search path",
             (int)operand.u8_bytes, operand.data);
         import_report(importer, statement, core_buffer_string(&message));
         core_buffer_release(&message);
@@ -3207,7 +3236,12 @@ n00bb_format_channels(core_string_t input)
                 && text[channel_start + 1] == '>';
             has_channel = has_channel || (channel_start + 4 < i
                 && !memcmp(text + channel_start, "fail:", 5));
-            if (has_channel) {
+            size_t body_end = i;
+            while (body_end > channel_start && text[body_end - 1] == ' ')
+                body_end--;
+            bool opens_body = body_end > channel_start
+                && text[body_end - 1] == '{';
+            if (has_channel && opens_body) {
                 core_buffer_append(&result, line,
                     signature_close + 1 - start);
                 core_buffer_putc(&result, '\n');

@@ -49,8 +49,7 @@ func initialize_array_backing(payload      : Ref[byte],
 trait LongResult {
     func select(self                             : `T,
                 first_parameter_with_a_long_name : int,
-                second_parameter_with_a_long_name: int)
-               -> Ref[AnExtraordinarilyLongNamedRecord] fail: string
+                second_parameter_with_a_long_name: int) -> Ref[AnExtraordinarilyLongNamedRecord] fail: string
 }
 EOF
 diff -u "$tmp/channels.expected" "$tmp/channels.n00b"

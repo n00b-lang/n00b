@@ -113,3 +113,27 @@ func sample(x: uint =
 func blank_line_before_indent() -> int:
 
     return 1
+
+trait Measured {
+    func measure(self: `T)
+        -> int
+}
+
+func layout_continuations(flag: bool) -> int:
+    var total = 1 +
+        2
+    if flag
+    {
+        total += 1
+    }
+    let pairs = {
+        "a": 1
+    }
+    let items = [
+        total,
+        2
+    ]
+    total = sample(
+        total
+    )
+    return total

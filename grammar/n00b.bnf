@@ -1,12 +1,14 @@
 @lexer("n00b.lex")
 @declaration_point("after_initializer")
+@statement_end("NEWLINE", ";")
+@continue_after("(", "[", "{")
 
 <module> @scope("module") ::= <other-top-stmts>? <eos>*
 
 <eos> ::= %NEWLINE | %";"
 
 <block-start> @trivia_indent($1) ::= %"{" <eos>*
-<block-start> @trivia_indent($1) ::= %":" %NEWLINE+ %INDENT
+<block-start> @trivia_indent($1) ::= %":" %NEWLINE %INDENT
 <block-end> @trivia_indent($0) ::= <eos>* %"}"
 <block-end> @trivia_indent($0) ::= <eos>* %DEDENT
 
@@ -260,10 +262,10 @@
 <range-parts> @infer("$0 unify $2") ::= <expression> <range-sep> <expression>
 <range-loop> @infer("$0") ::= <range-parts> <range-step>?
 <range-step> ::= %"step" <expression>
-<range-sep> ::= %"to" <operator-continuation>?
-              | %"until" <operator-continuation>?
-              | %".." <operator-continuation>?
-              | %":" <operator-continuation>?
+<range-sep> ::= %"to"
+              | %"until"
+              | %".."
+              | %":"
 
 <break-stmt> @jump("break") ::= %"break" %IDENTIFIER?
 <continue-stmt> @jump("continue") ::= %"continue" %IDENTIFIER?
@@ -307,7 +309,7 @@
 <sym-decl> @declares($0) @assigns($0, $2) @infer("$0 unify $2") ::= %IDENTIFIER <assign-op> <expression>
 <sym-decl> @declares($0) ::= %IDENTIFIER
 
-<assign-op> ::= %"=" <operator-continuation>?
+<assign-op> ::= %"="
 
 <func-def> @scope("function", $1) @declares($1, "function") @nospace($2) @align($2) ::=
     <func-prelude> %IDENTIFIER <func-type-signature> <body>
@@ -318,19 +320,19 @@
 <litmod-kind> ::= %IDENTIFIER | %"record" | %"nil"
 <litmod-aliases> ::= %"," %IDENTIFIER (%"," %IDENTIFIER)*
 
-<member-visibility> @visibility("public") ::= %"public" %NEWLINE?
-<member-visibility> @visibility("private") ::= %"private" %NEWLINE?
+<member-visibility> @visibility("public") ::= %"public"
+<member-visibility> @visibility("private") ::= %"private"
 
-<func-visibility> @visibility("public") ::= %"public" %NEWLINE?
-<func-visibility> @visibility("private") ::= %"private" %NEWLINE?
+<func-visibility> @visibility("public") ::= %"public"
+<func-visibility> @visibility("private") ::= %"private"
 
-<func-prelude> ::= %"func" %NEWLINE?
-<func-prelude> ::= <func-visibility> %"func" %NEWLINE?
-<func-prelude> ::= <func-inline> %"func" %NEWLINE?
-<func-prelude> ::= <func-visibility> <func-inline> %"func" %NEWLINE?
-<func-inline> ::= %"inline" %NEWLINE?
-<func-type-signature> @newline($2) ::=
-    <param-decl> %NEWLINE? <function-result>? <where-clause>? %NEWLINE?
+<func-prelude> ::= %"func"
+<func-prelude> ::= <func-visibility> %"func"
+<func-prelude> ::= <func-inline> %"func"
+<func-prelude> ::= <func-visibility> <func-inline> %"func"
+<func-inline> ::= %"inline"
+<func-type-signature> @newline($1) ::=
+    <param-decl> <function-result>? <where-clause>?
 
 <param-decl> @group @nospace($0) @nospace($1) @nospace($2) ::= %"(" <formals>? %")"
 
@@ -382,9 +384,9 @@
 <vargs-param> @declares($2, "param") @direction($2, "consume") @pass_by("consume") ::=
     %"consume" %"*" %IDENTIFIER
 
-<function-result> ::= <return-type>? %NEWLINE? <error-type>?
+<function-result> ::= <return-type>? <error-type>?
 
-<return-type> ::= <return-sigil> %NEWLINE? <union-tspec>
+<return-type> ::= <return-sigil> <union-tspec>
 
 <return-sigil> ::= %"->"
                  | %"return" %":"
@@ -450,28 +452,24 @@
 <or-expr> @branch($0, $2) @infer("bool") ::= <or-expr> %"or" <or-rhs>
 <or-expr> @emit("identity", $0) ::= <and-expr>
 <or-rhs> @emit("identity", $0) ::= <and-expr>
-<or-rhs> @emit("identity", $1) @infer("$1") ::= <operator-continuation> <and-expr>
 
 <and-expr> @branch($0, $2) @infer("bool") ::= <and-expr> %"and" <and-rhs>
 <and-expr> @emit("identity", $0) ::= <equality-expr>
 <and-rhs> @emit("identity", $0) ::= <equality-expr>
-<and-rhs> @emit("identity", $1) @infer("$1") ::= <operator-continuation> <equality-expr>
-
-<operator-continuation> ::= %NEWLINE
 
 <equality-expr> @emit("binary", $0, $2) @infer("bool") ::=
     <compare-expr> <equality-op> <compare-expr>
 <equality-expr> @emit("identity", $0) ::= <compare-expr>
-<equality-op> ::= %"==" <operator-continuation>?
-                | %"!=" <operator-continuation>?
+<equality-op> ::= %"=="
+                | %"!="
 
 <compare-expr> @emit("binary", $0, $2) @infer("compare($0, $2, __cmp, Comparison)") ::=
     <bitor-expr> <compare-op> <bitor-expr>
 <compare-expr> @emit("identity", $0) ::= <bitor-expr>
-<compare-op> ::= %"<" <operator-continuation>?
-               | %"<=" <operator-continuation>?
-               | %">" <operator-continuation>?
-               | %">=" <operator-continuation>?
+<compare-op> ::= %"<"
+               | %"<="
+               | %">"
+               | %">="
 
 <bitor-expr> @emit("binary", $0, $2) @infer("method_result($0, $2, __bit_or)") ::= <bitor-expr> <pipe-op> <bitxor-expr>
 <bitor-expr> @emit("identity", $0) ::= <bitxor-expr>
@@ -495,27 +493,27 @@
 <mul-expr> @emit("binary", $0, $2) @infer("method_result($0, $2, __remainder)") ::= <mul-expr> <remainder-op> <unary-expr>
 <mul-expr> @emit("identity", $0) ::= <unary-expr>
 
-<plus-op> ::= %"+" <operator-continuation>?
-<minus-op> ::= %"-" <operator-continuation>?
-<multiply-op> ::= %"*" <operator-continuation>?
-<divide-op> ::= %"/" <operator-continuation>?
-<remainder-op> ::= %"%" <operator-continuation>?
-<amp-op> ::= %"&" <operator-continuation>?
-<pipe-op> ::= %"|" <operator-continuation>?
-<xor-op> ::= %"^" <operator-continuation>?
-<left-shift-op> ::= %"<<" <operator-continuation>?
-<right-shift-op> ::= %">>" <operator-continuation>?
+<plus-op> ::= %"+"
+<minus-op> ::= %"-"
+<multiply-op> ::= %"*"
+<divide-op> ::= %"/"
+<remainder-op> ::= %"%"
+<amp-op> ::= %"&"
+<pipe-op> ::= %"|"
+<xor-op> ::= %"^"
+<left-shift-op> ::= %"<<"
+<right-shift-op> ::= %">>"
 
-<plus-assign-op> ::= %"+=" <operator-continuation>?
-<minus-assign-op> ::= %"-=" <operator-continuation>?
-<multiply-assign-op> ::= %"*=" <operator-continuation>?
-<divide-assign-op> ::= %"/=" <operator-continuation>?
-<remainder-assign-op> ::= %"%=" <operator-continuation>?
-<amp-assign-op> ::= %"&=" <operator-continuation>?
-<pipe-assign-op> ::= %"|=" <operator-continuation>?
-<xor-assign-op> ::= %"^=" <operator-continuation>?
-<left-shift-assign-op> ::= %"<<=" <operator-continuation>?
-<right-shift-assign-op> ::= %">>=" <operator-continuation>?
+<plus-assign-op> ::= %"+="
+<minus-assign-op> ::= %"-="
+<multiply-assign-op> ::= %"*="
+<divide-assign-op> ::= %"/="
+<remainder-assign-op> ::= %"%="
+<amp-assign-op> ::= %"&="
+<pipe-assign-op> ::= %"|="
+<xor-assign-op> ::= %"^="
+<left-shift-assign-op> ::= %"<<="
+<right-shift-assign-op> ::= %">>="
 
 <unary-expr> @emit("bool_not", $1) @infer("bool unify method_return($1, __not)") @nospace ::= %"!" <unary-expr>
 <unary-expr> @emit("complement", $1) @infer("$1") @nospace ::= %"~" <unary-expr>
@@ -772,8 +770,8 @@
 <trait-func-prelude> ::= %"func"
 <trait-func-prelude> ::= <func-visibility> %"func"
 
-<trait-func-type-signature> @newline($2) ::=
-    <trait-param-decl> %NEWLINE? <function-result>
+<trait-func-type-signature> ::=
+    <trait-param-decl> <function-result>
 <trait-param-decl> @group @newline($3) @nospace($0) @nospace($1) @nospace($2) @nospace($4) ::=
     %"(" <trait-obj-tref> %"," <formals> %")"
 <trait-param-decl> @group @nospace($0) @nospace($1) @nospace($2) ::=
