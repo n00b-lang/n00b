@@ -3,6 +3,7 @@
 #include "lib/alloc.h"
 #include "lib/diagnostic.h"
 #include "lib/dict.h"
+#include "lib/hash.h"
 #include "lib/list.h"
 
 typedef core_translation_unit_t *core_tu_ptr_t;
@@ -178,6 +179,24 @@ size_t
 core_source_file_size(const core_source_file_t *file)
 {
     return file && file->contents ? file->contents->byte_len : 0;
+}
+
+void
+core_source_file_set_identity(core_source_file_t *file, uint64_t identity)
+{
+    if (!file) return;
+    file->identity = identity;
+    file->has_identity = true;
+}
+
+uint64_t
+core_source_file_identity(const core_source_file_t *file)
+{
+    if (!file) return 0;
+    if (file->has_identity) return file->identity;
+    core_string_t contents = core_source_file_contents(file);
+    return core_xxh3_64bits_raw(contents.data ? contents.data : "",
+                                core_source_file_size(file));
 }
 
 bool

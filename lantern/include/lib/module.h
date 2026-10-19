@@ -24,6 +24,8 @@ typedef struct {
     core_buffer_t *contents;
     void *user_data;
     core_module_user_data_free_fn user_data_free;
+    uint64_t identity;
+    bool has_identity;
 } core_source_file_t;
 
 /* TU initialization copies module identity and takes the source file. */
@@ -84,6 +86,8 @@ void core_source_file_release(core_source_file_t *file);
 core_string_t core_source_file_path(const core_source_file_t *file);
 core_string_t core_source_file_contents(const core_source_file_t *file);
 size_t core_source_file_size(const core_source_file_t *file);
+void core_source_file_set_identity(core_source_file_t *file, uint64_t identity);
+uint64_t core_source_file_identity(const core_source_file_t *file);
 void core_source_file_set_user_data(core_source_file_t *file, void *data,
                                     core_module_user_data_free_fn free_fn);
 void *core_source_file_user_data(const core_source_file_t *file);
