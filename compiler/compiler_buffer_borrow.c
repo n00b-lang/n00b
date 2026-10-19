@@ -4,6 +4,7 @@
 
 #include "compiler_buffer_borrow.h"
 #include "compiler_tu.h"
+#include "cached_body.h"
 
 #include "ir/doms.h"
 #include "ir/pass.h"
@@ -500,7 +501,8 @@ direct_callee(const ir_instr_t *instruction)
     if (instruction->op != IR_OP_CALL || !instruction->n_operands)
         return nullptr;
     ir_value_t *target = operand_at(instruction, 0);
-    return target && target->kind == IR_VAL_FUNC ? target->owner : nullptr;
+    return target && target->kind == IR_VAL_FUNC
+        ? n00bb_cached_body(target->owner) : nullptr;
 }
 
 static bool

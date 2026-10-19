@@ -1,4 +1,5 @@
 #include "llvm_backend.h"
+#include "cached_body.h"
 
 #include "ir/layout.h"
 #include "ir/doms.h"
@@ -335,16 +336,6 @@ inline_list_contains(const core_list_t(inline_function_ptr_t) *functions,
 }
 
 static ir_func_t *
-cached_function_body(ir_func_t *function)
-{
-    if (!function || function->n_blocks) return function;
-    ir_annot_t *body = ir_annot_get(&function->annots,
-                                    CORE_STRING_STATIC("n00bb.cached_body"));
-    return body && body->kind == IR_ANNOT_VALUE && body->v
-        && body->v->kind == IR_VAL_FUNC ? body->v->owner : function;
-}
-
-static ir_func_t *
 direct_call_target(const ir_instr_t *instruction)
 {
     if (instruction->op != IR_OP_CALL || !instruction->n_operands
@@ -352,7 +343,7 @@ direct_call_target(const ir_instr_t *instruction)
         || !instruction->operands[0].value
         || instruction->operands[0].value->kind != IR_VAL_FUNC)
         return nullptr;
-    return cached_function_body(instruction->operands[0].value->owner);
+    return n00bb_cached_body(instruction->operands[0].value->owner);
 }
 
 typedef struct {
@@ -1536,13 +1527,13 @@ lowered_value(lower_state_t *state, const ir_value_t *value)
                                      "copyin") : nullptr;
     }
     if (value->kind == IR_VAL_FUNC && value->owner) {
+        ir_func_t *target = n00bb_cached_body(value->owner);
         core_buffer_t symbol = {0};
-        append_function_symbol(&symbol, value->owner);
+        append_function_symbol(&symbol, target);
         LLVMValueRef function = named_function(state->module,
             core_buffer_string(&symbol));
-        if (!function && value->owner->owner != state->source_module) {
-            LLVMTypeRef signature = function_type(state->module,
-                                                  value->owner);
+        if (!function && target->owner != state->source_module) {
+            LLVMTypeRef signature = function_type(state->module, target);
             if (signature)
                 function = add_function(state->module,
                     core_buffer_string(&symbol), signature);
@@ -10180,7 +10171,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         if (!count || operands[0].kind != IR_OPD_VALUE
             || !operands[0].value) break;
         ir_func_t *target = operands[0].value->kind == IR_VAL_FUNC
-            ? cached_function_body(operands[0].value->owner) : nullptr;
+            ? n00bb_cached_body(operands[0].value->owner) : nullptr;
         ir_annot_t *native_call = target
             ? ir_annot_get(&target->annots,
                            CORE_STRING_STATIC("n00bb.abi.native")) : nullptr;
@@ -11694,7 +11685,7 @@ collect_inline_callees(ir_func_t *function,
                 const ir_operand_t *used = &instruction->operands[operand];
                 ir_func_t *value = used->kind == IR_OPD_VALUE && used->value
                     && used->value->kind == IR_VAL_FUNC
-                    ? cached_function_body(used->value->owner) : nullptr;
+                    ? n00bb_cached_body(used->value->owner) : nullptr;
                 if (value && ir_func_is_always_inline(value)
                     && (instruction->op != IR_OP_CALL || operand != 0))
                     return inline_error(diagnostics, value,
@@ -13265,7 +13256,7 @@ runtime_function_address_table(n00bb_llvm_backend_t *backend,
         addresses[i] = LLVMConstNull(pointer);
     for (size_t i = 0; i < backend->function_index_count; i++) {
         ir_func_t *function = backend->function_indices[i].function;
-        ir_func_t *body = cached_function_body(function);
+        ir_func_t *body = n00bb_cached_body(function);
         if (body == function
             ? !function_body_emitted(function, backend->reachable,
                   backend->reachable_count, backend->reachable_bound)

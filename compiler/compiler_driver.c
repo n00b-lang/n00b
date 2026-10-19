@@ -3815,18 +3815,33 @@ specialize_calls(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         core_list_new(n00bb_specialization_seed_t);
     n00bb_cache_seeds(analysis->cache, ir_ctx_types(analysis->ir_context),
                       n00bb_source_unit_module, analysis, &seeds);
-    bool ok = n00bb_specialize_calls(analysis->ir_context, &callers,
-        seeds.data, seeds.len, &analysis->specializations,
-        &analysis->specialization_requests, &failure);
+    core_list_t(core_translation_unit_ptr_t) order =
+        core_list_new(core_translation_unit_ptr_t);
+    core_list_t(n00bb_ir_func_ptr_t) visited =
+        core_list_new(n00bb_ir_func_ptr_t);
+    bool ok = n00bb_collect_initializer_order(link, &order);
+    size_t seed_count = seeds.len;
+    while (ok && callers.len) {
+        ok = n00bb_specialize_calls(analysis->ir_context, &callers,
+                seeds.data, seed_count, &analysis->specializations,
+                &analysis->specialization_requests, &failure)
+            && build_reachable_functions(analysis, &order, diagnostics);
+        seed_count = 0;
+        for (size_t i = 0; i < callers.len; i++)
+            core_list_push(visited, callers.data[i]);
+        callers.len = 0;
+        for (size_t i = 0; ok && i < analysis->emitted_functions.len; i++) {
+            ir_func_t *function = analysis->emitted_functions.data[i];
+            bool seen = false;
+            for (size_t v = 0; !seen && v < visited.len; v++)
+                seen = visited.data[v] == function;
+            if (!seen) core_list_push(callers, function);
+        }
+    }
+    core_list_free(visited);
+    core_list_free(order);
     core_list_free(seeds);
     core_list_free(callers);
-    if (ok) {
-        core_list_t(core_translation_unit_ptr_t) order =
-            core_list_new(core_translation_unit_ptr_t);
-        ok = n00bb_collect_initializer_order(link, &order)
-            && build_reachable_functions(analysis, &order, diagnostics);
-        core_list_free(order);
-    }
     if (ok) ok = publish_declared_aggregate_layouts(analysis)
         && publish_interned_variant_layouts(analysis);
     if (!ok) core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,

@@ -3919,10 +3919,30 @@ n00bb_untyped_integer_const(parse_grammar_t *grammar,
                             parse_sym_entry_t *symbol,
                             int64_t *minimum, int64_t *maximum)
 {
+    const n00bb_untyped_integer_t *restored = symbol
+        ? parse_sym_binding(symbol, CORE_STRING_STATIC("n00bb.untyped-integer"))
+        : nullptr;
+    if (restored) {
+        *minimum = *maximum = restored->value;
+        return true;
+    }
     parse_tree_t *initializer = untyped_const_initializer(grammar, symbol);
     return initializer
         && parse_tree_integer_range(initializer, minimum, maximum)
         && *minimum == *maximum;
+}
+
+bool
+n00bb_untyped_integer_const_unsigned(parse_grammar_t *grammar,
+                                     parse_sym_entry_t *symbol)
+{
+    const n00bb_untyped_integer_t *restored = symbol
+        ? parse_sym_binding(symbol, CORE_STRING_STATIC("n00bb.untyped-integer"))
+        : nullptr;
+    if (restored) return restored->is_unsigned;
+    parse_tree_t *initializer = untyped_const_initializer(grammar, symbol);
+    return initializer && n00bb_unsigned_literal_origin(
+        parse_tree_integer_literal_origin(initializer));
 }
 
 static parse_sym_entry_t *
@@ -3949,10 +3969,8 @@ n00bb_integer_constant_reference(parse_grammar_t *grammar, parse_tree_t *node,
 static bool
 unsigned_integer_constant(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    parse_tree_t *initializer = untyped_const_initializer(grammar,
+    return n00bb_untyped_integer_const_unsigned(grammar,
         integer_constant_symbol(grammar, node));
-    return initializer && n00bb_unsigned_literal_origin(
-        parse_tree_integer_literal_origin(initializer));
 }
 
 static bool
@@ -9496,11 +9514,11 @@ exported_type_shape(parse_grammar_t *grammar, core_translation_unit_t *unit,
     }
     if (NT_IS(grammar, declaration, "variant-decl") && members) {
         core_list_t(th_member) arms = core_list_new(th_member);
+        core_list_t(parse_sym_entry_ptr_t) ordered =
+            variant_arms_in_source_order(grammar, members);
         bool valid = true;
-        for (parse_sym_entry_t *arm = members->first_in_scope; arm;
-             arm = arm->next_in_scope) {
-            if (!arm->decl_node ||
-                !NT_IS(grammar, arm->decl_node, "variant-decl-one")) continue;
+        for (size_t i = 0; i < ordered.len; i++) {
+            parse_sym_entry_t *arm = ordered.data[i];
             th_type *payload = declared_type_from_node(grammar, unit,
                                                         arm->decl_node);
             if (!payload) { valid = false; break; }
@@ -9511,6 +9529,7 @@ exported_type_shape(parse_grammar_t *grammar, core_translation_unit_t *unit,
         }
         *shape_kind = TH_ENV_TYPE_SHAPE_VARIANT;
         *shape = valid ? th_record(state->types, arms.data, arms.len) : nullptr;
+        core_list_free(ordered);
         core_list_free(arms);
         return *shape != nullptr;
     }

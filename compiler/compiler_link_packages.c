@@ -1048,6 +1048,19 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
                         CORE_STRING_STATIC("n00b.global"), 1, payload.data, payload.byte_len);
                     core_buffer_release(&payload);
                 }
+                int64_t untyped = 0;
+                if (ok && n00bb_untyped_integer_const(grammar, symbol,
+                        &untyped, &untyped)) {
+                    uint8_t encoded[9];
+                    for (int i = 0; i < 8; i++)
+                        encoded[i] = (uint8_t)((uint64_t)untyped >> (8 * i));
+                    encoded[8] = n00bb_untyped_integer_const_unsigned(grammar,
+                        symbol) ? 1 : 0;
+                    ok = th_env_register_metadata(environment,
+                        TH_ENV_METADATA_VALUE, core_buffer_string(&qualified),
+                        CORE_STRING_STATIC("n00b.untyped-integer"), 1,
+                        encoded, sizeof(encoded));
+                }
                 core_buffer_release(&qualified);
                 continue;
             }

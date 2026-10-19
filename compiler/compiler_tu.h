@@ -792,9 +792,16 @@ bool n00bb_constrain_integer_fit(n00bb_tu_state_t *state, th_type *type,
 bool n00bb_cache_contextual_integer(parse_grammar_t *grammar,
                                     n00bb_tu_state_t *state,
                                     parse_tree_t *node);
+typedef struct {
+    int64_t value;
+    bool is_unsigned;
+} n00bb_untyped_integer_t;
+
 bool n00bb_untyped_integer_const(parse_grammar_t *grammar,
                                  parse_sym_entry_t *symbol,
                                  int64_t *minimum, int64_t *maximum);
+bool n00bb_untyped_integer_const_unsigned(parse_grammar_t *grammar,
+                                          parse_sym_entry_t *symbol);
 bool n00bb_integer_constant_reference(parse_grammar_t *grammar,
                                       parse_tree_t *node, int64_t *value);
 bool n00bb_folded_integer_expression(parse_grammar_t *grammar,

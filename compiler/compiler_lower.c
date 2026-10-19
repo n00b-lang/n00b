@@ -18039,8 +18039,18 @@ static bool
 lower_literal_initializer(ir_ctx_t *ir_context, core_translation_unit_t *unit)
 {
     n00bb_tu_state_t *state = tu_state(unit);
-    if (!state->literal_constants.len
-        || n00bb_compile_phase() != PARSE_SYM_PHASE_COMPTIME) return true;
+    if (n00bb_compile_phase() != PARSE_SYM_PHASE_COMPTIME) return true;
+    if (state->interface_module) {
+        ir_module_t *cached = state->link_analysis
+            ? n00bb_cache_module(state->link_analysis->cache,
+                                 unit->module.identifier)
+            : nullptr;
+        return !cached || !ir_func_find(cached,
+                CORE_STRING_STATIC(N00BB_LITERAL_INIT_NAME))
+            || add_module_initializer(ir_context, unit,
+                CORE_STRING_STATIC(N00BB_LITERAL_INIT_NAME), true);
+    }
+    if (!state->literal_constants.len) return true;
     uint8_t *marks = core_alloc_array(uint8_t, state->literal_constants.len);
     core_list_t(size_t) sequence = core_list_new(size_t);
     bool ordered = marks != nullptr;

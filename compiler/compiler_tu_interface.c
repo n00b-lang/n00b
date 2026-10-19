@@ -1000,6 +1000,27 @@ restore_interface_value_semantics(n00bb_interface_context_t *loader,
     if (data[7] && !parse_sym_set_binding(symbol,
             CORE_STRING_STATIC("n00bb.global-explicit-initializer"),
             symbol)) return false;
+    size_t untyped_size = 0;
+    const uint8_t *untyped = interface_owned_metadata(loader,
+        TH_ENV_METADATA_VALUE, qualified_name,
+        CORE_STRING_STATIC("n00b.untyped-integer"), 1, &untyped_size);
+    if (untyped) {
+        n00bb_tu_state_t *owner_state = tu_state(unit);
+        n00bb_untyped_integer_t *restored = untyped_size == 9 && untyped[8] <= 1
+            && owner_state
+            ? core_arena_alloc(&owner_state->semantic_values,
+                               sizeof(*restored))
+            : nullptr;
+        if (!restored) return false;
+        uint64_t value = 0;
+        for (int i = 0; i < 8; i++) value |= (uint64_t)untyped[i] << (8 * i);
+        *restored = (n00bb_untyped_integer_t){
+            .value = (int64_t)value, .is_unsigned = untyped[8] != 0,
+        };
+        if (!parse_sym_set_binding(symbol,
+                CORE_STRING_STATIC("n00bb.untyped-integer"), restored))
+            return false;
+    }
     if (data[10] > 1 || data[11] > N00BB_STATIC_VALUE_VARIANT)
         return false;
     bool has_value = data[10] != 0;

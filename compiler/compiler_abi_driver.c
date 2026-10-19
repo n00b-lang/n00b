@@ -17,6 +17,7 @@ extern char **environ;
 #include "compiler_phases.h"
 #include "compiler_abi_driver.h"
 #include "compiler_cache.h"
+#include "cached_body.h"
 #include "compiler_object_io.h"
 #include "abi_emit.h"
 #include "abi_link.h"
@@ -224,16 +225,6 @@ n00bb_linked_global_bindings(const n00bb_abi_object_view_t *view,
     return true;
 }
 
-static ir_func_t *
-linked_body(ir_func_t *function)
-{
-    if (function->n_blocks) return function;
-    ir_annot_t *body = ir_annot_get(&function->annots,
-                                    CORE_STRING_STATIC("n00bb.cached_body"));
-    return body && body->kind == IR_ANNOT_VALUE && body->v
-        && body->v->kind == IR_VAL_FUNC ? body->v->owner : function;
-}
-
 static bool
 n00bb_linked_function_indices(const n00bb_abi_object_view_t *view,
                               core_translation_unit_t *const *units,
@@ -275,7 +266,7 @@ n00bb_linked_function_indices(const n00bb_abi_object_view_t *view,
                 continue;
             for (size_t f = 0; f < ir_func_count(runtime); f++) {
                 ir_func_t *candidate = ir_func_at(runtime, f);
-                ir_func_t *body = linked_body(candidate);
+                ir_func_t *body = n00bb_cached_body(candidate);
                 if (!body->n_blocks
                     || core_string_find(candidate->name,
                                         CORE_STRING_STATIC("$spec$")) >= 0
@@ -342,7 +333,7 @@ n00bb_linked_finalizers(const n00bb_abi_object_view_t *view,
                 continue;
             for (size_t f = 0; f < ir_func_count(runtime); f++) {
                 ir_func_t *candidate = ir_func_at(runtime, f);
-                ir_func_t *body = linked_body(candidate);
+                ir_func_t *body = n00bb_cached_body(candidate);
                 if (!body->n_blocks
                     || !name_matches_function(candidate->name,
                                               view_text(function_name))
@@ -1356,13 +1347,7 @@ abi_graph_slot(void *context, size_t index, n00bb_abi_graph_slot_t *out)
     ir_func_t *function = type ? nullptr
         : n00bb_baked_function(analysis, slot->module, slot->name);
     if (!type && !function) return false;
-    ir_annot_t *body = function && !function->n_blocks
-        ? ir_annot_get(&function->annots,
-                       CORE_STRING_STATIC("n00bb.cached_body"))
-        : nullptr;
-    if (body && body->kind == IR_ANNOT_VALUE && body->v
-        && body->v->kind == IR_VAL_FUNC)
-        function = body->v->owner;
+    function = n00bb_cached_body(function);
     *out = (n00bb_abi_graph_slot_t){
         .node = slot->node,
         .offset = slot->offset,

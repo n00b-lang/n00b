@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "specialize.h"
+#include "cached_body.h"
 #include "ir/typelang.h"
 #include "lib/hash.h"
 #include "th/environment.h"
@@ -277,16 +278,6 @@ instantiate(ir_ctx_t *context, ir_func_t *target, th_type *actual,
 }
 
 static ir_func_t *
-function_body(ir_func_t *function)
-{
-    if (!function || function->n_blocks) return function;
-    ir_annot_t *body = ir_annot_get(&function->annots,
-        CORE_STRING_STATIC("n00bb.cached_body"));
-    return body && body->kind == IR_ANNOT_VALUE && body->v
-        && body->v->kind == IR_VAL_FUNC ? body->v->owner : function;
-}
-
-static ir_func_t *
 find_instance(const core_list_t(specialization_t) *specializations,
               ir_func_t *target, uint64_t hash, th_ctx *types)
 {
@@ -319,8 +310,12 @@ bool n00bb_specialize_calls(ir_ctx_t *context,
     core_list_t(n00bb_ir_func_ptr_t) inline_bodies =
         core_list_new(n00bb_ir_func_ptr_t);
     bool valid = true;
+    for (size_t i = 0; i < instances->len; i++)
+        core_list_push(specializations, ((specialization_t){
+            instances->data[i].generic, instances->data[i].instance,
+            instances->data[i].signature, SIZE_MAX}));
     for (size_t s = 0; valid && s < seed_count; s++) {
-        ir_func_t *target = function_body(seeds[s].generic);
+        ir_func_t *target = n00bb_cached_body(seeds[s].generic);
         th_type *actual = seeds[s].signature;
         th_ctx *types = target ? ir_module_types(target->owner) : nullptr;
         if (!target || !target->n_blocks || !actual
@@ -354,7 +349,7 @@ bool n00bb_specialize_calls(ir_ctx_t *context,
                 if (call->op != IR_OP_CALL || !call->n_operands) continue;
                 ir_value_t *callee = ir_operand_value(&call->operands[0]);
                 ir_func_t *target = callee && callee->kind == IR_VAL_FUNC
-                    ? function_body(callee->owner) : nullptr;
+                    ? n00bb_cached_body(callee->owner) : nullptr;
                 if (!target || !target->n_blocks
                     || is_instance(&specializations, target)) continue;
                 th_ctx *types = ir_module_types(target->owner);
