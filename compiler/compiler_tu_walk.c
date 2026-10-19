@@ -311,14 +311,6 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             }
             parse_tree_set_type(node, named);
         }
-        if (NT_IS(grammar, node, "body")
-            && !n00bb_bind_option_branch_shadow(grammar, unit, node, parent))
-            core_diagnostics_report_at(
-                core_translation_unit_diagnostics(unit), unit,
-                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0015"),
-                CORE_STRING_STATIC(
-                    "could not bind the option refinement in this branch"),
-                link_source_location(node));
     }
     else {
         if (step == SEMANTIC_AFTER_EXIT)
@@ -337,15 +329,6 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                     link_source_location(node));
                 return;
             }
-        }
-        if (!n00bb_apply_option_branch_shadow(grammar, unit, node)) {
-            core_diagnostics_report_at(
-                core_translation_unit_diagnostics(unit), unit,
-                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0015"),
-                CORE_STRING_STATIC(
-                    "could not bind a reference to its option refinement"),
-                link_source_location(node));
-            return;
         }
         if (!apply_typecase_narrowing(grammar, node)) {
             core_diagnostics_report_at(
@@ -1190,8 +1173,6 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
 
 typedef struct {
     th_type *expected;
-    parse_scope_t *flow_scope;
-    parse_scope_t *previous_scope;
     semantic_annotation_cache_t annotation_cache;
     bool in_expression;
 } semantic_walk_frame_t;
@@ -1278,7 +1259,6 @@ semantic_walk_prepare(parse_visit_t *visit)
     annotation_context_t *context = walk->context;
     core_translation_unit_t *unit = walk->unit;
     n00bb_tu_state_t *state = tu_state(unit);
-    parse_symtab_t *symtab = state->annotations->symtab;
     while (walk->frames.len <= (size_t)visit->depth)
         core_list_push(walk->frames, ((semantic_walk_frame_t){0}));
     semantic_walk_frame_t *frame = &walk->frames.data[visit->depth];
@@ -1293,11 +1273,6 @@ semantic_walk_prepare(parse_visit_t *visit)
         frame->expected = expected_expression_child_type(context->grammar,
             visit->parent, visit->node, parent->expected);
         frame->in_expression = parent->in_expression;
-        if (parent->flow_scope) {
-            frame->previous_scope = parse_symtab_current_scope(symtab,
-                CORE_STRING_STATIC(""));
-            parse_symtab_enter_scope_all(symtab, parent->flow_scope);
-        }
     }
     if (core_tree_is_leaf(visit->node)) {
         parse_token_info_t *token = parse_node_token(visit->node);
@@ -1346,12 +1321,7 @@ semantic_walk_before_exit(parse_visit_t *visit)
 {
     semantic_walk_context_t *walk = visit->user;
     semantic_walk_frame_t *frame = &walk->frames.data[visit->depth];
-    if (core_tree_is_leaf(visit->node)) {
-        if (frame->previous_scope)
-            parse_symtab_enter_scope_all(tu_state(walk->unit)->annotations->symtab,
-                                         frame->previous_scope);
-        return PARSE_VISIT_CONTINUE;
-    }
+    if (core_tree_is_leaf(visit->node)) return PARSE_VISIT_CONTINUE;
     semantic_annotation_node(walk->context, walk->unit, visit->node,
                              visit->parent, SEMANTIC_PREPARE_EXIT, visit,
                              &frame->annotation_cache);
@@ -1394,9 +1364,6 @@ semantic_walk_after_exit(parse_visit_t *visit)
             walk->unit, CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0004"),
             CORE_STRING_STATIC("could not retain escape edges"),
             link_source_location(visit->node));
-    if (frame->previous_scope)
-        parse_symtab_enter_scope_all(tu_state(walk->unit)->annotations->symtab,
-                                     frame->previous_scope);
     return semantic_walk_status(walk);
 }
 
@@ -1524,74 +1491,9 @@ semantic_walk_child_complete(parse_visit_t *visit)
     core_translation_unit_t *unit = walk->unit;
     parse_tree_t *node = visit->node;
     parse_tree_t *child = visit->completed_child;
-    semantic_walk_frame_t *frame = &walk->frames.data[visit->depth];
-    parse_symtab_t *symtab = tu_state(unit)->annotations->symtab;
     if (!infer_indexed_switch_variant_subject(context->grammar, unit,
                                                node, child))
         return PARSE_VISIT_ERROR;
-    bool body_statement_sequence = NT_IS(context->grammar, node,
-            "body-stmt-list")
-        || NT_IS(context->grammar, node, "other-top-stmts")
-        || (parse_tree_is_group(node) && visit->parent
-            && (NT_IS(context->grammar, visit->parent, "body-stmt-list")
-                || NT_IS(context->grammar, visit->parent,
-                         "other-top-stmts")));
-    bool top_level = NT_IS(context->grammar, node, "other-top-stmts")
-        || (parse_tree_is_group(node) && visit->parent
-            && NT_IS(context->grammar, visit->parent, "other-top-stmts"));
-    bool short_circuit = core_tree_num_children(node) == 3
-        && core_tree_child(node, 0) == child
-        && (NT_IS(context->grammar, node, "and-expr")
-            || NT_IS(context->grammar, node, "or-expr"));
-    if (short_circuit || (body_statement_sequence
-                          && (NT_IS(context->grammar, child, "body-stmt")
-                              || NT_IS(context->grammar, child,
-                                       "top-level-stmt")))) {
-        bool condition_truth = short_circuit
-            && NT_IS(context->grammar, node, "and-expr");
-        parse_tree_t *condition = short_circuit ? child
-            : n00bb_exiting_guard_condition(context->grammar, child);
-        if (!condition) {
-            parse_tree_t *assertion = CHILD_NT(context->grammar, child,
-                                               "assert-stmt");
-            if (assertion
-                && core_string_eq(first_token_text(assertion),
-                                  CORE_STRING_STATIC("require"))) {
-                condition = CHILD_NT(context->grammar, assertion,
-                                     "expression");
-                condition_truth = true;
-            }
-        }
-        if (condition && top_level && !short_circuit) {
-            if (!n00bb_bind_option_condition_shadows(context->grammar, unit,
-                    symtab, nullptr, condition, condition_truth, node, child,
-                    true)) return PARSE_VISIT_ERROR;
-        }
-        else if (condition) {
-            parse_scope_t *saved = parse_symtab_current_scope(symtab,
-                CORE_STRING_STATIC(""));
-            if (frame->flow_scope)
-                parse_symtab_enter_scope_all(symtab, frame->flow_scope);
-            parse_symtab_push_scope_all(symtab, CORE_STRING_STATIC("flow"));
-            parse_scope_t *new_scope = parse_symtab_current_scope(symtab,
-                CORE_STRING_STATIC(""));
-            bool bound = new_scope
-                && n00bb_bind_option_condition_shadows(context->grammar,
-                    unit, symtab, new_scope, condition, condition_truth,
-                    node, child, false);
-            parse_symtab_enter_scope_all(symtab, saved);
-            if (!bound) {
-                core_diagnostics_report_at(
-                    core_translation_unit_diagnostics(unit), unit,
-                    CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0015"),
-                    CORE_STRING_STATIC(
-                        "could not bind the option refinement after this guard"),
-                    link_source_location(child));
-                return PARSE_VISIT_ERROR;
-            }
-            frame->flow_scope = new_scope;
-        }
-    }
     if (NT_IS(context->grammar, node, "func-def")
         && NT_IS(context->grammar, child, "func-type-signature")) {
         record_cached_declared_function_signature(context->grammar,

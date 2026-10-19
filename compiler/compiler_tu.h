@@ -218,22 +218,6 @@ parse_sym_entry_t *attached_symbol(parse_grammar_t *grammar,
                                    core_translation_unit_t *unit,
                                    parse_tree_t *node);
 bool n00bb_is_nil_literal(parse_grammar_t *grammar, parse_tree_t *node);
-bool n00bb_bind_option_condition_shadows(parse_grammar_t *grammar,
-                                         core_translation_unit_t *unit,
-                                         parse_symtab_t *symtab,
-                                         parse_scope_t *scope,
-                                         parse_tree_t *condition, bool truth,
-                                         parse_tree_t *region,
-                                         parse_tree_t *after,
-                                         bool paths_only);
-bool n00bb_bind_option_branch_shadow(parse_grammar_t *grammar,
-                                     core_translation_unit_t *unit,
-                                     parse_tree_t *body, parse_tree_t *branch);
-parse_tree_t *n00bb_exiting_guard_condition(parse_grammar_t *grammar,
-                                           parse_tree_t *statement);
-bool n00bb_apply_option_branch_shadow(parse_grammar_t *grammar,
-                                      core_translation_unit_t *unit,
-                                      parse_tree_t *node);
 
 typedef struct n00bb_link_analysis_t n00bb_link_analysis_t;
 typedef enum {
@@ -533,13 +517,6 @@ typedef struct {
 } n00bb_import_alias_t;
 core_list_decl(n00bb_import_alias_t);
 
-typedef struct {
-    parse_sym_entry_t *root;
-    core_string_t path;
-    parse_tree_t *region;
-    parse_tree_t *after;
-} n00bb_option_path_t;
-core_list_decl(n00bb_option_path_t);
 
 typedef struct {
     ir_func_t *producer;
@@ -562,7 +539,6 @@ typedef struct {
     core_list_t(n00bb_dispatch_record_t) dispatch_records;
     bool needs_build_time_capture;
     core_list_t(n00bb_deferred_conversion_t) deferred_conversions;
-    core_list_t(n00bb_option_path_t) option_paths;
     core_list_t(parse_tree_ptr_t) literal_site_nodes;
     core_list_t(parse_tree_ptr_t) shape_literal_nodes;
     core_dict_t flagset_values;

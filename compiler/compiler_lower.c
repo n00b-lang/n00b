@@ -10782,51 +10782,12 @@ n00bb_union_admits(ir_module_t *module, th_type *target, th_type *value)
     return false;
 }
 
-static bool n00bb_option_path_proven(n00bb_lower_context_t *lower,
-                                     parse_grammar_t *grammar,
-                                     parse_tree_t *receiver);
-
-static bool
-n00bb_option_value_proven(n00bb_lower_context_t *lower,
-                          parse_grammar_t *grammar, parse_tree_t *value)
-{
-    if (!lower || !grammar || !value) return false;
-    parse_sym_entry_t *symbol = call_receiver_symbol(grammar, lower->unit,
-                                                     value);
-    return parse_sym_binding(symbol,
-               CORE_STRING_STATIC("n00bb.option-set-element"))
-        || n00bb_option_path_proven(lower, grammar, value);
-}
-
-static ir_lower_result_t
-report_unproven_option(ir_lower_context_t *context,
-                       n00bb_lower_context_t *lower, parse_tree_t *option,
-                       ir_span_t span)
-{
-    core_string_t text = n00bb_node_source_text(lower ? lower->unit : nullptr,
-        option, CORE_STRING_STATIC("this option"));
-    core_buffer_t message = {0};
-    core_buffer_printf(&message,
-        "'%.*s' may be nil here; take its value only where a check such as "
-        "`%.*s != nil` proves it, with no assignment to it in between",
-        (int)text.u8_bytes, text.data, (int)text.u8_bytes, text.data);
-    ir_lower_result_t result = lower_error_text(context,
-        IR_DIAG_TYPE_MISMATCH, span,
-        core_string_borrow(message.data, message.byte_len));
-    core_buffer_release(&message);
-    return result;
-}
-
 static ir_value_t *
 n00bb_promote_option(ir_lower_context_t *context, parse_tree_t *node,
                      ir_value_t *value, th_type *item, ir_span_t span)
 {
+    (void)node;
     n00bb_lower_context_t *lower = context->user;
-    if (!n00bb_option_value_proven(lower, lower ? lower->grammar : nullptr,
-                                   node)) {
-        report_unproven_option(context, lower, node, span);
-        return nullptr;
-    }
     ir_value_t *promoted = n00bb_emit_wrapping(context, IR_OP_OPTION_GET,
                                                value, item, span);
     return promoted && n00bb_set_reference_access(lower->ir_context,
@@ -11034,9 +10995,6 @@ static bool n00bb_nominal_value_as(ir_lower_context_t *context,
                                    parse_visit_t *visit,
                                    th_type *target_type,
                                    parse_tree_t *source);
-static bool n00bb_option_path_proven(n00bb_lower_context_t *lower,
-                                     parse_grammar_t *grammar,
-                                     parse_tree_t *receiver);
 
 static ir_lower_result_t
 n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
@@ -11226,10 +11184,6 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                           CORE_STRING_STATIC("trait"));
     bool builtin_trait_call = semantic_trait_call && parse_sym_binding(
         symbol, CORE_STRING_STATIC("n00bb.builtin-trait-method"));
-    if (option_builtin
-        && core_string_eq(symbol->name, CORE_STRING_STATIC("__option_get"))
-        && !n00bb_option_value_proven(lower, visit->grammar, receiver_node))
-        return report_unproven_option(context, lower, receiver_node, span);
     bool no_function_body = native_builtin
         || reference_builtin || byte_offset_builtin || byte_diff_builtin
         || unsafe_arithmetic
@@ -17792,86 +17746,6 @@ lower_function_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
     return ok;
 }
 
-static parse_tree_t *
-n00bb_region_child(parse_tree_t *node, parse_tree_t *region)
-{
-    while (node && parse_tree_parent(node) != region)
-        node = parse_tree_parent(node);
-    return node;
-}
-
-static bool
-n00bb_region_includes(parse_tree_t *node, parse_tree_t *region,
-                      parse_tree_t *after)
-{
-    if (!node_is_within(node, region) || node == region) return false;
-    if (!after) return true;
-    parse_tree_t *child = n00bb_region_child(node, region);
-    parse_tree_t *guard = n00bb_region_child(after, region);
-    for (size_t i = 0; i < core_tree_num_children(region); i++) {
-        parse_tree_t *at = core_tree_child(region, i);
-        if (at == guard) return child != guard;
-        if (at == child) return false;
-    }
-    return false;
-}
-
-static bool
-n00bb_option_path_stable(n00bb_lower_context_t *lower,
-                         parse_grammar_t *grammar, parse_tree_t *receiver,
-                         const n00bb_option_path_t *path)
-{
-    n00bb_tu_state_t *state = tu_state(lower->unit);
-    for (parse_tree_t *access = member_access_node(grammar, receiver);
-         access; access = member_access_node(grammar,
-                              core_tree_child(access, 0))) {
-        th_type *base = th_resolve(parse_tree_type(
-            core_tree_child(access, 0)));
-        th_type *definition = n00bb_reference_definition(state->types, base);
-        if (!base || th_kind_of(definition ? definition : base)
-                         == TH_INDIRECTION)
-            return false;
-    }
-    parse_sym_entry_t *root = path->root;
-    bool writable_param = root->kind == PARSE_SYM_PARAM && root->has_mode
-        && th_mode_produces_output(root->mode);
-    if ((root->kind == PARSE_SYM_PARAM && !writable_param)
-        || (root->kind == PARSE_SYM_VARIABLE
-            && root->mutability == PARSE_SYM_IMMUTABLE)) return true;
-    if (root->kind == PARSE_SYM_VARIABLE
-        && root->storage_duration != PARSE_SYM_STORAGE_AUTOMATIC) return false;
-    for (size_t i = 0; i < root->use_count; i++) {
-        parse_tree_t *use = root->use_nodes[i];
-        if (n00bb_region_includes(use, path->region, path->after)
-            && n00bb_use_writes_root(lower->unit, grammar, use, path->region))
-            return false;
-    }
-    return true;
-}
-
-static bool
-n00bb_option_path_proven(n00bb_lower_context_t *lower,
-                         parse_grammar_t *grammar, parse_tree_t *receiver)
-{
-    n00bb_tu_state_t *state = lower ? tu_state(lower->unit) : nullptr;
-    parse_sym_entry_t *root = nullptr;
-    core_buffer_t name = {0};
-    if (!state || !receiver
-        || !n00bb_member_path(grammar, lower->unit, receiver, &root, &name)) {
-        core_buffer_release(&name);
-        return false;
-    }
-    core_string_t spelling = core_string_borrow(name.data, name.byte_len);
-    bool proven = false;
-    for (size_t i = 0; !proven && i < state->option_paths.len; i++) {
-        const n00bb_option_path_t *path = &state->option_paths.data[i];
-        proven = path->root == root && core_string_eq(path->path, spelling)
-            && n00bb_region_includes(receiver, path->region, path->after)
-            && n00bb_option_path_stable(lower, grammar, receiver, path);
-    }
-    core_buffer_release(&name);
-    return proven;
-}
 
 static bool
 n00bb_assert_has_known_side_effect(n00bb_lower_context_t *lower,
