@@ -2002,6 +2002,20 @@ report_literal_item_conflict(core_translation_unit_t *unit,
     core_buffer_t message = {0};
     core_string_t item_text = n00bb_print_type(state->types, item);
     core_string_t slot_text = n00bb_print_type(state->types, group->slot);
+    if (item_node != node && parse_tree_integer_literal_origin(item_node)
+        && is_integer_type(group->slot)) {
+        core_string_t spelled = n00bb_node_source_text(unit, item_node,
+            CORE_STRING_STATIC("this constant"));
+        core_buffer_printf(&message, "integer constant %.*s does not fit %.*s",
+            (int)spelled.u8_bytes, spelled.data,
+            (int)slot_text.u8_bytes, slot_text.data);
+        core_diagnostics_report_at(core_translation_unit_diagnostics(unit),
+            unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0041"),
+            core_string_borrow(message.data, message.byte_len),
+            link_source_location(item_node));
+        core_buffer_release(&message);
+        return;
+    }
     core_buffer_printf(&message,
         "literal items must share one type, but %.*s does not match %.*s",
         (int)item_text.u8_bytes, item_text.data,
@@ -2141,9 +2155,13 @@ infer_user_literal_type(parse_grammar_t *grammar,
     }
     bool no_payload = core_string_eq(kind, CORE_STRING_STATIC("nil"));
     th_param param = {.mode = TH_IN, .type = input_type};
+    th_type *known = parse_tree_type(node) ? th_resolve(parse_tree_type(node))
+                                           : nullptr;
+    th_type *expected_result = known && th_kind_of(known) != TH_VAR
+        ? known : th_var(state->types);
     th_type *expected = ok && (input_type || no_payload)
         ? th_func_with_error(state->types,
-            th_var(state->types),
+            expected_result,
             th_name(state->types, CORE_STRING_STATIC("string")),
             no_payload ? nullptr : &param, no_payload ? 0 : 1,
             nullptr, nullptr, 0) : nullptr;
@@ -3933,7 +3951,7 @@ static bool
 n00bb_constrain_literal_fit(parse_grammar_t *grammar,
                            n00bb_tu_state_t *state, parse_tree_t *origin,
                            parse_tree_t *node, th_type *type,
-                           bool unsigned_only)
+                           bool unsigned_only, bool option_alternatives)
 {
     const ir_profile_t *profile = n00bb_type_profile();
     if (!origin || !node || !type || th_kind_of(th_resolve(type)) != TH_VAR)
@@ -3960,7 +3978,8 @@ n00bb_constrain_literal_fit(parse_grammar_t *grammar,
                                   CORE_STRING_STATIC("-")))
             negative = !negative;
     size_t scalar_count = profile->n_scalars;
-    size_t capacity = scalar_count + 2 * N00BB_MAX_SIZED_BITS;
+    size_t capacity = (scalar_count + 2 * N00BB_MAX_SIZED_BITS)
+        * (option_alternatives ? 2 : 1);
     th_type **alternatives = core_arena_alloc(&state->semantic_values,
         capacity * sizeof(*alternatives));
     if (!alternatives) return false;
@@ -3988,6 +4007,12 @@ n00bb_constrain_literal_fit(parse_grammar_t *grammar,
             alternatives[count++] = candidate;
         }
     }
+    size_t values = count;
+    for (size_t i = 0; option_alternatives && i < values; i++) {
+        th_type *candidate = th_option(state->types, alternatives[i]);
+        if (!candidate) return false;
+        alternatives[count++] = candidate;
+    }
     return th_var_constrain(state->types, type,
         (th_constraint){.kind = TH_CON_ONE_OF,
             .one_of = {.types = alternatives, .n = count}});
@@ -4002,7 +4027,7 @@ n00bb_literal_adopts_open_type(parse_grammar_t *grammar,
         ? parse_tree_integer_literal_origin(node) : nullptr;
     if (!origin || n00bb_unsigned_literal_origin(origin)
         || !n00bb_constrain_literal_fit(grammar, state, origin, node, type,
-                                        false)) return false;
+                                        false, false)) return false;
     for (parse_tree_t *current = origin; current;
          current = parse_tree_parent(current)) {
         parse_tree_set_type(current, type);
@@ -4093,7 +4118,7 @@ mark_unsigned_literal(parse_grammar_t *grammar, n00bb_tu_state_t *state,
     th_type *type = parse_tree_type(node);
     return !type || th_kind_of(th_resolve(type)) != TH_VAR
         || n00bb_constrain_literal_fit(grammar, state, node, node, type,
-                                       true);
+                                       true, false);
 }
 
 static void
@@ -4149,7 +4174,8 @@ unify_literal_operand(parse_grammar_t *grammar, n00bb_tu_state_t *state,
                                       : th_resolve(other_type);
         if (!literal_type || !n00bb_constrain_literal_fit(grammar, state,
                 origin, operand, literal_type,
-                unsigned_only || n00bb_unsigned_literal_origin(origin)))
+                unsigned_only || n00bb_unsigned_literal_origin(origin),
+                comparison))
             return false;
         for (parse_tree_t *at = origin; at;
              at = parse_tree_parent(at)) {
@@ -4560,7 +4586,7 @@ n00bb_cache_contextual_integer(parse_grammar_t *grammar,
         && type && th_kind_of(type) == TH_VAR
         && n00bb_contextual_method_argument(grammar, node))
         return n00bb_constrain_literal_fit(grammar, state, origin, node, type,
-                                           false);
+                                           false, false);
 
     return true;
 }
@@ -12097,6 +12123,41 @@ refine_flagset_operator_result(parse_grammar_t *grammar,
     return true;
 }
 
+static bool
+option_compared_with_value(core_translation_unit_t *unit,
+                           n00bb_tu_state_t *state, parse_tree_t *node,
+                           parse_tree_t *left, th_type *left_type,
+                           th_type *right_type)
+{
+    th_type *left_resolved = left_type ? th_resolve(left_type) : nullptr;
+    th_type *right_resolved = right_type ? th_resolve(right_type) : nullptr;
+    if (!left_resolved || !right_resolved
+        || th_is_nil(left_resolved) || th_is_nil(right_resolved))
+        return false;
+    bool left_option = th_option_item(left_resolved) != nullptr;
+    bool right_option = th_option_item(right_resolved) != nullptr;
+    if (!left_option && !right_option) return false;
+    parse_tree_t *right = core_tree_child(node, 2);
+    bool name_left = left_option
+        && !(right_option && parse_tree_integer_literal_origin(left));
+    parse_tree_t *option = name_left ? left : right;
+    core_string_t text = n00bb_node_source_text(unit, option,
+        CORE_STRING_STATIC("this operand"));
+    core_string_t shown = n00bb_print_type(state->types,
+        name_left ? left_resolved : right_resolved);
+    core_buffer_t message = {0};
+    core_buffer_printf(&message,
+        "'%.*s' is %.*s, and an option can only be compared with nil; "
+        "check it for nil, or take its value first",
+        (int)text.u8_bytes, text.data, (int)shown.u8_bytes, shown.data);
+    core_diagnostics_report_at(core_translation_unit_diagnostics(unit),
+        unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0045"),
+        core_string_borrow(message.data, message.byte_len),
+        link_source_location(node));
+    core_buffer_release(&message);
+    return true;
+}
+
 bool
 refine_intrinsic_binary_result(parse_grammar_t *grammar,
                                core_translation_unit_t *unit,
@@ -12111,13 +12172,16 @@ refine_intrinsic_binary_result(parse_grammar_t *grammar,
         .dispatch_method = method,
         .operator_dispatch = true,
     };
-    if (!primitive_operator_site(state, &site)) return true;
     bool comparison = core_string_eq(trait, CORE_STRING_STATIC("Equal"))
         || core_string_eq(trait, CORE_STRING_STATIC("Comparable"));
     parse_tree_t *left = core_tree_child(node, 0);
     parse_tree_t *right = core_tree_child(node, 2);
     th_type *left_type = parse_tree_type(left);
     th_type *right_type = parse_tree_type(right);
+    if (comparison && option_compared_with_value(unit, state, node, left,
+                                                 left_type, right_type))
+        return false;
+    if (!primitive_operator_site(state, &site)) return true;
     th_type *result = parse_tree_type(node);
     if (comparison && !is_integer_type(left_type)
         && !is_integer_type(right_type)
