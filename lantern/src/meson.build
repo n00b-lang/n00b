@@ -147,6 +147,7 @@ ir_sources = files(
     'ir/lifetime.c',
     'ir/lower.c',
     'ir/ops.c',
+    'ir/option_proof.c',
     'ir/pass.c',
     'ir/pdg.c',
     'ir/print.c',
