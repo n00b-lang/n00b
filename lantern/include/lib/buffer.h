@@ -88,7 +88,7 @@ core_buffer_string(const core_buffer_t *buf)
     return (core_string_t){.data = buf->data, .u8_bytes = buf->byte_len};
 }
 
-static inline void
+[[gnu::format(printf, 2, 0)]] static inline void
 core_buffer_vprintf(core_buffer_t *buf, const char *fmt, va_list ap)
 {
     va_list copy;
@@ -113,7 +113,7 @@ core_buffer_vprintf(core_buffer_t *buf, const char *fmt, va_list ap)
     }
 }
 
-static inline void
+[[gnu::format(printf, 2, 3)]] static inline void
 core_buffer_printf(core_buffer_t *buf, const char *fmt, ...)
 {
     va_list ap;

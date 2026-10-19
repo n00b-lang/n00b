@@ -5,8 +5,6 @@
 #include "lib/macros.h"
 
 typedef void       *core_voidptr_t;
-typedef char       *core_charptr_t;
-typedef const char *core_const_charptr_t;
 
 #define core_option_tid(T) typeid(core_option, T)
 #define core_option_t(T)   struct core_option_tid(T)
@@ -65,5 +63,3 @@ core_option_decl(int64_t);
 core_option_decl(size_t);
 core_option_decl(core_codepoint_t);
 core_option_decl(core_voidptr_t);
-core_option_decl(core_charptr_t);
-core_option_decl(core_const_charptr_t);

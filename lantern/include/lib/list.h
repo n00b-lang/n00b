@@ -26,7 +26,6 @@
 core_list_decl(int);
 core_list_decl(int32_t);
 core_list_decl(core_string_t);
-core_list_decl(core_const_charptr_t);
 
 static inline bool
 core_list_reserve_raw(void **data, size_t *capacity, size_t needed,
