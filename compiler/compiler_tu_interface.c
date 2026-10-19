@@ -1,4 +1,5 @@
 #include "compiler_tu_interface.h"
+#include "compiler_cache.h"
 #include "compiler_link.h"
 #include "abi_layout.h"
 #include "enum_value.h"
@@ -1701,6 +1702,25 @@ interface_root_package(n00bb_interface_context_t *loader,
     n00bb_package_declaration_t *existing =
         find_package_declaration(unit, root);
     if (existing) return existing;
+    for (size_t e = 0; e < loader->linked_interface_count; e++) {
+        const th_env *environment = loader->linked_interfaces[e];
+        for (size_t m = 0; m < th_env_metadata_count(environment); m++) {
+            th_env_metadata_view_t metadata = {0};
+            if (!th_env_metadata_at(environment, m, &metadata)
+                || metadata.owner_kind != TH_ENV_METADATA_ENVIRONMENT
+                || !core_string_eq(metadata.key,
+                       CORE_STRING_STATIC("n00b.package-manifest"))
+                || !core_string_eq(metadata.owner_name, root)
+                || metadata.size < 4) continue;
+            uint32_t length = read_u32_le(metadata.data);
+            if (length > metadata.size - 4) continue;
+            core_string_t declarer = core_string_borrow(
+                (const char *)metadata.data + 4, length);
+            if (!core_string_eq(declarer, root)
+                && n00bb_cache_has_module(loader->cache, declarer))
+                return nullptr;
+        }
+    }
     bool archived = false;
     for (size_t e = 0; !archived && e < loader->linked_interface_count; e++) {
         const th_env *environment = loader->linked_interfaces[e];

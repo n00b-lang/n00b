@@ -2,10 +2,13 @@
 
 #include "compiler_tu.h"
 
+typedef struct n00bb_cache_t n00bb_cache_t;
+
 typedef struct {
     const th_env *const *linked_interfaces;
     size_t linked_interface_count;
     ir_ctx_t *ir_context;
+    const n00bb_cache_t *cache;
 } n00bb_interface_context_t;
 
 core_string_t interface_package_for_module(
