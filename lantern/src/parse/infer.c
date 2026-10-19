@@ -16,6 +16,7 @@
 
 static int64_t tid_int;
 static int64_t tid_unify;
+static int64_t tid_converts;
 static int64_t tid_return_of;
 static int64_t tid_element_of;
 static int64_t tid_slice_of;
@@ -35,6 +36,7 @@ learn_tids(parse_grammar_t *g)
 
     tid_int           = PARSE_TOK_INTEGER;
     tid_unify         = TID("unify");
+    tid_converts      = TID("converts");
     tid_return_of     = TID("return_of");
     tid_element_of    = TID("element_of");
     tid_slice_of      = TID("slice_of");
@@ -199,7 +201,9 @@ r_tail(parse_reduce_t *r)
     in_node *n    = node_new(r->thunk, IN_TAIL);
     parse_infer_expr_t *e = expr_new(op && op->tid == tid_unify
                                        ? PARSE_INFER_UNIFY
-                                       : PARSE_INFER_SUM);
+                                       : op && op->tid == tid_converts
+                                           ? PARSE_INFER_CONVERT
+                                           : PARSE_INFER_SUM);
 
     e->rhs  = kid_expr(r, 1);
     n->tail = e;
@@ -704,6 +708,7 @@ parse_infer_kind_name(parse_infer_kind_t k)
     case PARSE_INFER_METHOD_RESULT:
         return CORE_STRING_STATIC("method-result");
     case PARSE_INFER_UNIFY:     return CORE_STRING_STATIC("unify");
+    case PARSE_INFER_CONVERT:   return CORE_STRING_STATIC("converts");
     case PARSE_INFER_SUM:       return CORE_STRING_STATIC("sum");
     case PARSE_INFER_CHILDREN:  return CORE_STRING_STATIC("children");
     }
@@ -858,6 +863,14 @@ print_one(sbuf *b, const parse_infer_expr_t *e)
         emit(b, "(");
         print_one(b, e->lhs);
         emit(b, " unify ");
+        print_one(b, e->rhs);
+        emit(b, ")");
+        break;
+
+    case PARSE_INFER_CONVERT:
+        emit(b, "(");
+        print_one(b, e->lhs);
+        emit(b, " converts ");
         print_one(b, e->rhs);
         emit(b, ")");
         break;

@@ -286,6 +286,18 @@ static parse_tree_t *assignment_target(parse_visit_t *visit)
     }
 }
 
+static bool indexed_target(parse_tree_t *node)
+{
+    while (node && !core_tree_is_leaf(node)
+           && core_tree_num_children(node) == 1)
+        node = core_tree_child(node, 0);
+    return node && !core_tree_is_leaf(node)
+        && core_tree_num_children(node) >= 4
+        && core_tree_is_leaf(core_tree_child(node, 1))
+        && parse_tree_leaf_is(core_tree_child(node, 1),
+                              CORE_STRING_STATIC("["));
+}
+
 static th_type *index_store_call_shape(ictx *c, th_type *result,
                                        parse_tree_t *assignment)
 {
@@ -1256,6 +1268,25 @@ eval(ictx *c, const parse_infer_expr_t *e)
         if (th_custom_coerces(c->tc, l, r)) return r;
         if (th_custom_coerces(c->tc, r, l)) return l;
         return th_unify_in_place(c->tc, l, r);
+    }
+
+    case PARSE_INFER_CONVERT: {
+        th_type *value = eval(c, e->lhs);
+        th_type *target = eval(c, e->rhs);
+
+        if (!value || !target) {
+            c->failed = true;
+
+            return target;
+        }
+
+        parse_tree_t *site = e->lhs && e->lhs->kind == PARSE_INFER_CHILD
+            ? child(c, e->lhs->index) : nullptr;
+        if (e->rhs && e->rhs->kind == PARSE_INFER_CHILD
+            && indexed_target(child(c, e->rhs->index))) return target;
+        if (th_converts(c->tc, value, target, site, c->v->grammar)
+            || th_custom_coerces(c->tc, value, target)) return target;
+        return th_unify_in_place(c->tc, value, target);
     }
 
     case PARSE_INFER_SUM: {

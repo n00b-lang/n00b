@@ -460,6 +460,7 @@ ir_storage_duration_t ir_global_storage_duration(
 
 struct ir_local_t {
     core_string_t   name;
+    core_string_t   source_name;
     th_type        *type;
     ir_value_t     *value;
     ir_mutability_t mutability;
@@ -647,6 +648,10 @@ ir_value_t  *ir_kwparam_add(ir_func_t *f, core_string_t name, th_type *type);
 ir_value_t  *ir_restparam_add(ir_func_t *f, core_string_t name,
                               th_type *type);
 ir_local_t  *ir_local_add(ir_func_t *f, core_string_t name, th_type *type);
+bool         ir_local_set_source_name(ir_func_t *f, ir_local_t *local,
+                                      core_string_t name);
+core_string_t ir_local_display_name(const ir_local_t *local);
+core_string_t ir_value_display_name(const ir_value_t *value);
 ir_local_t  *ir_local_find(ir_func_t *f, core_string_t name);
 ir_value_t  *ir_value_find(ir_func_t *f, core_string_t name);
 ir_value_t  *ir_local_value(ir_func_t *f, ir_local_t *local);

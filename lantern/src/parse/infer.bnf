@@ -2,7 +2,7 @@
 
 <infer-tail> ::= <infer-op> <infer-term>
 
-<infer-op> ::= %"unify" | %"|"
+<infer-op> ::= %"unify" | %"converts" | %"|"
 
 <infer-term> ::= <self-ref>
                | <children-ref>

@@ -32,8 +32,10 @@ static void warn_unset(P *p, const ir_local_t *l)
 
     core_buffer_t *b = core_buffer_empty();
 
-    core_buffer_puts(b, "$");
-    core_buffer_append_string(b, l->name);
+    if (l->source_name.data) core_buffer_puts(b, "'");
+    else core_buffer_puts(b, "$");
+    core_buffer_append_string(b, ir_local_display_name(l));
+    if (l->source_name.data) core_buffer_puts(b, "'");
     core_buffer_puts(b, " is read on a path that does not assign it, so "
                         "promote supplied undef");
 

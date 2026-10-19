@@ -75,8 +75,13 @@ static bool analyze_operand(ir_visit_t *vi)
     if (l && !ir_local_read_earlier(vi->instr, vi->index, l)
         && ir_rd_maybe_unset(a->rd, vi->instr, l)) {
         say(a->d, IR_DIAG_UNSET_LOCAL, vi->instr, vi->block, vi->func,
-            CORE_STRING_STATIC("this read"), CORE_STRING_STATIC("$"), l->name,
-            CORE_STRING_STATIC(" is read on a path that does not assign it"));
+            CORE_STRING_STATIC("this read"),
+            l->source_name.data ? CORE_STRING_STATIC("'")
+                                : CORE_STRING_STATIC("$"),
+            ir_local_display_name(l),
+            l->source_name.data
+                ? CORE_STRING_STATIC("' is read on a path that does not assign it")
+                : CORE_STRING_STATIC(" is read on a path that does not assign it"));
     }
 
     return true;

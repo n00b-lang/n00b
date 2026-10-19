@@ -916,8 +916,7 @@ static void verify_binding_initialization_events(
 {
     uint32_t block_count = function->n_blocks;
     ir_execution_phase_t phase = ir_func_execution_phase(function);
-    core_string_t name = binding->name.data
-        ? binding->name : CORE_STRING_STATIC("(unnamed)");
+    core_string_t name = ir_value_display_name(binding);
     if (initialization_binding_can_write(binding, phase)
         || !initialization_binding_can_initialize(binding, phase)) return;
 

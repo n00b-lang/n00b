@@ -964,6 +964,24 @@ void th_register_coercion_target(th_ctx *ctx, th_coerce_target_fn fn)
     if (ctx) ctx->custom_target = fn;
 }
 
+void th_register_conversion(th_ctx *ctx, th_convert_fn fn, void *user)
+{
+    if (ctx) {
+        ctx->conversion      = fn;
+        ctx->conversion_user = user;
+    }
+}
+
+bool th_converts(th_ctx *ctx, th_type *from, th_type *to, void *site,
+                 void *context)
+{
+    from = from ? th_resolve(from) : nullptr;
+    to = to ? th_resolve(to) : nullptr;
+    return ctx && ctx->conversion && from && to
+        && ctx->conversion(ctx, from, to, site, context,
+                           ctx->conversion_user);
+}
+
 static bool custom_coerces(th_ctx *ctx, th_type *from, th_type *to)
 {
     return (ctx->method_argument_coercions & TH_COERCE_CUSTOM) && ctx->custom

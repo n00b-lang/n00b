@@ -269,8 +269,6 @@ static void plan_sum(pctx *c, core_buffer_t *b, core_list_t(witem) *w, const th_
 
 static void plan_function(pctx *c, core_buffer_t *b, core_list_t(witem) *w, const th_type *t)
 {
-    (void)c;
-
     th_kwparam *kw = nullptr;
 
     if (t->fn.nkw) {
@@ -281,7 +279,8 @@ static void plan_function(pctx *c, core_buffer_t *b, core_list_t(witem) *w, cons
 
     core_buffer_puts(b, "(");
 
-    if (t->fn.error) {
+    if (t->fn.error && !(c->options && c->options->omit_nil_failure
+                         && th_is_nil(t->fn.error))) {
         wtype(w, t->fn.error);
         wlit(w, " fail: ");
     }

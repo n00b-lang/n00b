@@ -236,6 +236,8 @@ struct th_ctx {
   th_coerce_fn custom;
   th_coerce_target_fn custom_target;
   void *custom_user;
+  th_convert_fn conversion;
+  void *conversion_user;
   uint8_t method_argument_coercions;
   th_span_t span;
   th_span_t related;

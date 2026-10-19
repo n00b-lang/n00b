@@ -1055,6 +1055,29 @@ bool ir_value_copy_alias_targets(ir_ctx_t *ctx, ir_value_t *destination,
     return copied;
 }
 
+bool ir_local_set_source_name(ir_func_t *f, ir_local_t *local,
+                              core_string_t name)
+{
+    if (!f || !local || !name.data) return false;
+    local->source_name = ir_strdup(f->owner->ctx, name);
+    return local->source_name.data != nullptr;
+}
+
+core_string_t ir_local_display_name(const ir_local_t *local)
+{
+    if (!local) return CORE_STRING_STATIC("?");
+    return local->source_name.data ? local->source_name : local->name;
+}
+
+core_string_t ir_value_display_name(const ir_value_t *value)
+{
+    if (!value) return CORE_STRING_STATIC("?");
+    if (value->kind == IR_VAL_LOCAL && value->local
+        && value->local->source_name.data)
+        return value->local->source_name;
+    return value->name.data ? value->name : CORE_STRING_STATIC("(unnamed)");
+}
+
 ir_local_t *ir_local_add(ir_func_t *f, core_string_t name, th_type *type)
 {
     if (!f || !name.data || !type || ir_local_find(f, name)) {

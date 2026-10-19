@@ -98,6 +98,7 @@ typedef struct {
     core_string_t    reference;
     core_string_t    option_suffix;
     bool             omit_constraints;
+    bool             omit_nil_failure;
 } th_print_options_t;
 
 typedef th_type *(*th_method_resolver_fn)(th_ctx *ctx, th_type *receiver,
@@ -508,11 +509,16 @@ typedef bool (*th_coerce_fn)(th_ctx *ctx, th_type *from, th_type *to,
                              void *user);
 typedef th_type *(*th_coerce_target_fn)(th_ctx *ctx, th_type *from,
                                         void *user);
+typedef bool (*th_convert_fn)(th_ctx *ctx, th_type *from, th_type *to,
+                              void *site, void *context, void *user);
 
 th_type *th_coerce(th_ctx *ctx, th_type *from, th_coerce_policy policy);
 
 void   th_register_coercion(th_ctx *ctx, th_coerce_fn fn, void *user);
 void   th_register_coercion_target(th_ctx *ctx, th_coerce_target_fn fn);
+void   th_register_conversion(th_ctx *ctx, th_convert_fn fn, void *user);
+bool   th_converts(th_ctx *ctx, th_type *from, th_type *to, void *site,
+                   void *context);
 bool   th_custom_coerces(th_ctx *ctx, th_type *from, th_type *to);
 size_t th_coercion_count(const th_ctx *ctx);
 bool   th_coercion_at(const th_ctx *ctx, size_t i, th_coercion_t *out);
